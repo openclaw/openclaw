@@ -1,4 +1,4 @@
-import { expectDefined } from "@openclaw/normalization-core";
+// Signal tests cover event handler.inbound context plugin behavior.
 import { expectChannelInboundContextContract as expectInboundContextContract } from "openclaw/plugin-sdk/channel-contract-testing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
@@ -6,7 +6,8 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSignalReplyContextWithPersistence } from "../reply-authors.js";
 import { resetSignalReplyAuthorsForTests } from "../reply-authors.test-helpers.js";
 import {
@@ -69,7 +70,9 @@ vi.mock("../send.js", () => ({
   sendReadReceiptSignal: sendReadReceiptMock,
 }));
 
-vi.mock("../send-reactions.js", () => ({ sendReactionSignal: sendReactionSignalMock }));
+vi.mock("../send-reactions.js", () => ({
+  sendReactionSignal: sendReactionSignalMock,
+}));
 
 vi.mock("openclaw/plugin-sdk/channel-feedback", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-feedback")>();
@@ -91,8 +94,10 @@ vi.mock("openclaw/plugin-sdk/channel-feedback", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
+vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
+    "openclaw/plugin-sdk/channel-inbound",
+  );
   type RunParams = Parameters<typeof actual.runChannelInboundEvent>[0];
   return {
     ...actual,
@@ -106,87 +111,160 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
         previousTimestamp: undefined,
       })),
     runChannelInboundEvent: async (params: RunParams) => {
-      const { createSignalPreparedDispatchRunner } =
-        await import("./event-handler.test-harness.js");
-      let onIdle: (() => void) | undefined;
-      try {
-        return await createSignalPreparedDispatchRunner(
-          actual.runChannelInboundEvent,
-          recordInboundSessionMock,
-          async (resolved) => {
-            onIdle = resolved.dispatcherOptions?.typingCallbacks?.onIdle;
-            const pending: Promise<unknown>[] = [];
-            const result = await dispatchInboundMessageMock({
+      const input = await params.adapter.ingest(params.raw);
+      if (!input) {
+        return { admission: { kind: "drop" as const, reason: "ingest-null" }, dispatched: false };
+      }
+      const eventClass = (await params.adapter.classify?.(input)) ?? {
+        kind: "message" as const,
+        canStartAgentTurn: true,
+      };
+      const preflight = (await params.adapter.preflight?.(input, eventClass)) ?? {};
+      const resolved = await params.adapter.resolveTurn(
+        input,
+        eventClass,
+        "kind" in preflight ? { admission: preflight } : preflight,
+      );
+      if (!("route" in resolved) || !("delivery" in resolved)) {
+        throw new Error("expected assembled Signal channel turn plan");
+      }
+      const runPrepared = async () => {
+        const pendingDeliveries: Promise<unknown>[] = [];
+        const dispatcher = {
+          sendFinalReply: (payload: { text: string }) => {
+            pendingDeliveries.push(
+              Promise.resolve(resolved.delivery.deliver(payload, { kind: "final" })),
+            );
+          },
+          markComplete: () => {},
+          waitForIdle: async () => {
+            await Promise.all(pendingDeliveries);
+          },
+        };
+        return await actual.runPreparedInboundReply({
+          channel: resolved.channel,
+          accountId: resolved.accountId,
+          routeSessionKey: resolved.route.sessionKey,
+          storePath: resolveStorePath(resolved.cfg.session?.store, {
+            agentId: resolved.route.agentId,
+          }),
+          ctxPayload: resolved.ctxPayload,
+          recordInboundSession: recordInboundSessionMock,
+          afterRecord: resolved.afterRecord,
+          record: resolved.record,
+          history: resolved.history,
+          admission: resolved.admission,
+          botLoopProtection: resolved.botLoopProtection,
+          runDispatch: async () => {
+            const dispatchResult = await dispatchInboundMessageMock({
               ctx: resolved.ctxPayload,
               cfg: resolved.cfg,
-              dispatcher: {
-                sendFinalReply: (payload) => {
-                  pending.push(
-                    Promise.resolve(resolved.delivery.deliver(payload, { kind: "final" })),
-                  );
-                },
-                markComplete: () => {},
-                waitForIdle: async () => {
-                  await Promise.all(pending);
-                },
-              },
+              dispatcher,
               replyOptions: {
                 ...resolved.replyOptions,
                 onReplyStart: resolved.dispatcherOptions?.typingCallbacks?.onReplyStart,
               },
             });
-            const count = (delivered: number) => ({
-              delivered,
-              deliveredNotVisible: 0,
-              cancelled: 0,
-              failedBeforeSend: 0,
-              failedAfterSend: 0,
-            });
-            const counts = {
-              tool: count(result.counts.tool),
-              block: count(result.counts.block),
-              final: count(result.counts.final),
+            if (dispatchResult.settledReceipt) {
+              return dispatchResult;
+            }
+            const counts = (kind: "tool" | "block" | "final") => {
+              const failedBeforeSend = dispatchResult.failedCounts?.[kind] ?? 0;
+              return {
+                delivered: Math.max(0, (dispatchResult.counts?.[kind] ?? 0) - failedBeforeSend),
+                deliveredNotVisible: 0,
+                cancelled: 0,
+                failedBeforeSend,
+                failedAfterSend: 0,
+              };
+            };
+            const settledCounts = {
+              tool: counts("tool"),
+              block: counts("block"),
+              final: counts("final"),
             };
             return {
-              ...result,
+              ...dispatchResult,
               settledReceipt: {
-                counts,
-                anyVisibleDelivered: Object.values(counts).some(({ delivered }) => delivered > 0),
+                counts: settledCounts,
+                anyVisibleDelivered: Object.values(settledCounts).some(
+                  (entry) => entry.delivered > 0,
+                ),
               },
             };
           },
-        )(params);
+        });
+      };
+      let result;
+      try {
+        result = await runPrepared();
+      } catch (err) {
+        await params.adapter.onFinalize?.({
+          admission: resolved.admission ?? { kind: "dispatch" },
+          dispatched: false,
+          ctxPayload: resolved.ctxPayload,
+          routeSessionKey: resolved.route.sessionKey,
+        });
+        throw err;
       } finally {
-        // The fake dispatcher still owns the typing timers it starts.
-        onIdle?.();
+        // Match the real buffered dispatcher's ownership of typing timers.
+        resolved.dispatcherOptions?.typingCallbacks?.onIdle?.();
       }
+      await params.adapter.onFinalize?.(result);
+      return result;
     },
   };
 });
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>()),
-  recordInboundSession: recordInboundSessionMock,
-  readChannelAllowFromStore: vi.fn().mockResolvedValue([]),
-  upsertChannelPairingRequest: vi.fn(),
-}));
-
-vi.mock("openclaw/plugin-sdk/system-event-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/system-event-runtime")>();
-  return { ...actual, enqueueSystemEvent: enqueueSystemEventMock };
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/conversation-runtime")>(
+    "openclaw/plugin-sdk/conversation-runtime",
+  );
+  return {
+    ...actual,
+    recordInboundSession: recordInboundSessionMock,
+    readChannelAllowFromStore: vi.fn().mockResolvedValue([]),
+    upsertChannelPairingRequest: vi.fn(),
+  };
 });
 
-vi.mock("../approval-reactions.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../approval-reactions.js")>()),
-  maybeResolveSignalApprovalReaction: approvalReactionMocks.maybeResolveSignalApprovalReaction,
-}));
-
-vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
-  return { ...actual, logVerbose: logVerboseMock, shouldLogVerbose: shouldLogVerboseMock };
+vi.mock("openclaw/plugin-sdk/system-event-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/system-event-runtime")>(
+    "openclaw/plugin-sdk/system-event-runtime",
+  );
+  return {
+    ...actual,
+    enqueueSystemEvent: enqueueSystemEventMock,
+  };
 });
 
-const requireCapturedContext = () => expectDefined(capture.ctx, "inbound MsgContext");
+vi.mock("../approval-reactions.js", async () => {
+  const actual = await vi.importActual<typeof import("../approval-reactions.js")>(
+    "../approval-reactions.js",
+  );
+  return {
+    ...actual,
+    maybeResolveSignalApprovalReaction: approvalReactionMocks.maybeResolveSignalApprovalReaction,
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
+    "openclaw/plugin-sdk/runtime-env",
+  );
+  return {
+    ...actual,
+    logVerbose: logVerboseMock,
+    shouldLogVerbose: shouldLogVerboseMock,
+  };
+});
+
+function requireCapturedContext(): MsgContext {
+  if (!capture.ctx) {
+    throw new Error("expected inbound MsgContext");
+  }
+  return capture.ctx;
+}
 
 function nextTimerTick(): Promise<void> {
   return new Promise((resolve) => {
@@ -202,51 +280,76 @@ type DirectMessageOverrides = Omit<SignalEnvelope, "dataMessage"> & {
 };
 
 type TestMessagesConfig = Partial<SignalMessagesConfig>;
-type ConfigOverrides = { messages?: TestMessagesConfig; signal?: Partial<SignalChannelConfig> };
 
-function createStatusReactionConfig(options: ConfigOverrides = {}): OpenClawConfig {
-  return createDirectConfig({
+function createStatusReactionConfig(
+  options: {
+    messages?: TestMessagesConfig;
+    signal?: Partial<SignalChannelConfig>;
+  } = {},
+): OpenClawConfig {
+  return {
     messages: {
       ackReaction: "👀",
       ackReactionScope: "direct",
+      inbound: { debounceMs: 0 },
       statusReactions: { enabled: true },
       ...options.messages,
     },
-    signal: options.signal,
-  });
+    channels: {
+      signal: {
+        dmPolicy: "open",
+        allowFrom: ["*"],
+        ...options.signal,
+      },
+    },
+  } as OpenClawConfig;
 }
 
-function createDirectConfig(options: ConfigOverrides = {}): OpenClawConfig {
+function createDirectConfig(
+  options: {
+    messages?: TestMessagesConfig;
+    signal?: Partial<SignalChannelConfig>;
+  } = {},
+): OpenClawConfig {
   return {
     messages: {
       inbound: { debounceMs: 0 },
       ...options.messages,
     },
     channels: {
-      signal: { dmPolicy: "open", allowFrom: ["*"], ...options.signal },
+      signal: {
+        dmPolicy: "open",
+        allowFrom: ["*"],
+        ...options.signal,
+      },
     },
   };
 }
 
-function createGroupHandler(
-  signal: Partial<SignalChannelConfig> & Pick<SignalChannelConfig, "groupAllowFrom">,
-  overrides: Partial<SignalEventHandlerDeps> = {},
-  messages: TestMessagesConfig = {},
-) {
-  return createTestHandler({
-    cfg: {
-      messages: { inbound: { debounceMs: 0 }, ...messages },
-      channels: { signal: { groupPolicy: "allowlist", ...signal } },
+function createGroupAllowlistConfig(options: {
+  messages?: TestMessagesConfig;
+  signal: Partial<SignalChannelConfig> & Pick<SignalChannelConfig, "groupAllowFrom">;
+}): OpenClawConfig {
+  return {
+    messages: {
+      inbound: { debounceMs: 0 },
+      ...options.messages,
     },
-    groupPolicy: "allowlist",
-    groupAllowFrom: signal.groupAllowFrom,
-    ...overrides,
-  });
+    channels: {
+      signal: {
+        groupPolicy: "allowlist",
+        ...options.signal,
+      },
+    },
+  };
 }
 
 function createTestHandler(overrides: Partial<SignalEventHandlerDeps> = {}): SignalHandler {
   return createSignalEventHandler(
-    createBaseSignalEventHandlerDeps({ historyLimit: 0, cfg: createDirectConfig(), ...overrides }),
+    createBaseSignalEventHandlerDeps({
+      historyLimit: 0,
+      ...overrides,
+    }),
   );
 }
 
@@ -261,7 +364,11 @@ function receiveDirectMessage(
       sourceName: "Bob",
       timestamp: 1700000000001,
       ...envelope,
-      dataMessage: { message: "ship it", attachments: [], ...dataMessage },
+      dataMessage: {
+        message: "ship it",
+        attachments: [],
+        ...dataMessage,
+      },
     }),
   );
 }
@@ -317,7 +424,6 @@ describe("signal createSignalEventHandler inbound context", () => {
     shouldLogVerboseMock.mockReset().mockReturnValue(false);
     approvalReactionMocks.maybeResolveSignalApprovalReaction.mockReset().mockResolvedValue(false);
   });
-  afterEach(() => vi.useRealTimers());
 
   it("uses editMessage.targetSentTimestamp as the native reply target", async () => {
     const handler = createTestHandler({
@@ -331,17 +437,19 @@ describe("signal createSignalEventHandler inbound context", () => {
         timestamp: 1700000000999,
         editMessage: {
           targetSentTimestamp: 1700000000002,
-          dataMessage: { timestamp: 1700000000999, message: "edited hello", attachments: [] },
+          dataMessage: {
+            timestamp: 1700000000999,
+            message: "edited hello",
+            attachments: [],
+          },
         },
       }),
     );
 
     const context = requireCapturedContext();
-    expect(context).toMatchObject({
-      MessageSid: "1700000000999",
-      ReplyToId: "1700000000002",
-      Timestamp: 1700000000999,
-    });
+    expect(context.MessageSid).toBe("1700000000999");
+    expect(context.ReplyToId).toBe("1700000000002");
+    expect(context.Timestamp).toBe(1700000000999);
     await expect(
       resolveSignalReplyContextWithPersistence({
         accountId: "default",
@@ -370,38 +478,40 @@ describe("signal createSignalEventHandler inbound context", () => {
       deliverReplies: deliverRepliesMock,
     });
 
-    await receiveMessage(
-      handler,
-      { message: "first debounced message", attachments: [] },
-      { timestamp: 1700000000001 },
-    );
-    await receiveMessage(
-      handler,
-      { message: "second debounced message", attachments: [] },
-      { timestamp: 1700000000002 },
-    );
+    try {
+      await receiveMessage(
+        handler,
+        { message: "first debounced message", attachments: [] },
+        { timestamp: 1700000000001 },
+      );
+      await receiveMessage(
+        handler,
+        { message: "second debounced message", attachments: [] },
+        { timestamp: 1700000000002 },
+      );
 
-    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
 
-    await vi.advanceTimersByTimeAsync(10);
+      await vi.advanceTimersByTimeAsync(10);
 
-    await vi.waitFor(() => {
-      expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
-    });
-    const context = requireCapturedContext();
-    expect(context).toMatchObject({
-      BodyForAgent: "first debounced message\nsecond debounced message",
-      CommandBody: "first debounced message\nsecond debounced message",
-      ReplyToId: "1700000000002",
-    });
-    expect(context.ReplyThreading).toEqual({ implicitCurrentMessage: "allow" });
-    expect(deliverRepliesMock.mock.calls[0]?.[0]).toMatchObject({
-      replyContext: {
-        replyToId: "1700000000002",
-        author: "+15550001111",
-        body: "second debounced message",
-      },
-    });
+      await vi.waitFor(() => {
+        expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+      });
+      const context = requireCapturedContext();
+      expect(context.BodyForAgent).toBe("first debounced message\nsecond debounced message");
+      expect(context.CommandBody).toBe("first debounced message\nsecond debounced message");
+      expect(context.ReplyToId).toBe("1700000000002");
+      expect(context.ReplyThreading).toEqual({ implicitCurrentMessage: "allow" });
+      expect(deliverRepliesMock.mock.calls[0]?.[0]).toMatchObject({
+        replyContext: {
+          replyToId: "1700000000002",
+          author: "+15550001111",
+          body: "second debounced message",
+        },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps per-channel-peer direct-message last-route writes on the isolated session", async () => {
@@ -416,25 +526,33 @@ describe("signal createSignalEventHandler inbound context", () => {
     await receiveDirectMessage(handler, { dataMessage: { message: "hello" } });
 
     const context = requireCapturedContext();
-    expect(context).toMatchObject({
-      SessionKey: "agent:main:signal:direct:+15550002222",
-      ChatType: "direct",
-      To: "+15550002222",
-      OriginatingTo: "+15550002222",
-      BodyForAgent: "hello",
-      RawBody: "hello",
-      CommandBody: "hello",
-      BodyForCommands: "hello",
-    });
+    expect(context.SessionKey).toBe("agent:main:signal:direct:+15550002222");
+    expect(context.ChatType).toBe("direct");
+    expect(context.To).toBe("+15550002222");
+    expect(context.OriginatingTo).toBe("+15550002222");
+    expect(context.BodyForAgent).toBe("hello");
+    expect(context.RawBody).toBe("hello");
+    expect(context.CommandBody).toBe("hello");
+    expect(context.BodyForCommands).toBe("hello");
     expect(context.Body).toContain("hello");
     expect(context.Body).not.toBe(context.BodyForAgent);
     expect(context.ChannelPromptContext).toBeUndefined();
-    const recordParams = recordInboundSessionMock.mock.calls.at(-1)?.[0];
-    expect(recordParams).toMatchObject({
-      sessionKey: context.SessionKey,
-      updateLastRoute: { sessionKey: context.SessionKey, channel: "signal", to: "+15550002222" },
-    });
+    const recordParams = recordInboundSessionMock.mock.calls.at(-1)?.[0] as
+      | {
+          sessionKey?: string;
+          updateLastRoute?: {
+            channel?: string;
+            mainDmOwnerPin?: unknown;
+            sessionKey?: string;
+            to?: string;
+          };
+        }
+      | undefined;
+    expect(recordParams?.sessionKey).toBe(context.SessionKey);
+    expect(recordParams?.updateLastRoute?.sessionKey).toBe(context.SessionKey);
     expect(recordParams?.updateLastRoute?.sessionKey).not.toBe("agent:main:main");
+    expect(recordParams?.updateLastRoute?.channel).toBe("signal");
+    expect(recordParams?.updateLastRoute?.to).toBe("+15550002222");
     expect(recordParams?.updateLastRoute?.mainDmOwnerPin).toBeUndefined();
   });
 
@@ -452,7 +570,9 @@ describe("signal createSignalEventHandler inbound context", () => {
         return { queuedFinal: false, counts: { tool: 0, block: 0, final: 1 } };
       },
     );
-    const handler = createTestHandler({ cfg: createStatusReactionConfig() });
+    const handler = createTestHandler({
+      cfg: createStatusReactionConfig(),
+    });
 
     await receiveDirectMessage(handler);
     for (let i = 0; i < 5; i += 1) {
@@ -515,18 +635,44 @@ describe("signal createSignalEventHandler inbound context", () => {
     );
   });
 
-  it.each<[string, number | undefined, boolean]>([
-    ["missing timestamp", undefined, false],
-    ["non-positive timestamp", -1, false],
-    ["account reactionLevel off", 1700000000001, true],
-  ])("suppresses status reactions: %s", async (_name, timestamp, off) => {
+  it("does not send Signal status reactions without an inbound timestamp", async () => {
     const handler = createTestHandler({
       cfg: createStatusReactionConfig({
-        signal: off ? { accounts: { work: { reactionLevel: "off" } } } : {},
+        messages: { statusReactions: { enabled: true } },
       }),
-      accountId: off ? "work" : "default",
     });
-    await receiveDirectMessage(handler, { timestamp });
+
+    await receiveDirectMessage(handler, { timestamp: undefined });
+    await nextTimerTick();
+
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+    expect(sendReactionSignalMock).not.toHaveBeenCalled();
+  });
+
+  it("does not send Signal status reactions for non-positive inbound timestamps", async () => {
+    const handler = createTestHandler({
+      cfg: createStatusReactionConfig({
+        messages: { statusReactions: { enabled: true } },
+      }),
+    });
+
+    await receiveDirectMessage(handler, { timestamp: -1 });
+    await nextTimerTick();
+
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+    expect(sendReactionSignalMock).not.toHaveBeenCalled();
+  });
+
+  it("does not send Signal status reactions when account reactionLevel is off", async () => {
+    const handler = createTestHandler({
+      cfg: createStatusReactionConfig({
+        messages: { statusReactions: { enabled: true } },
+        signal: { accounts: { work: { reactionLevel: "off" } } },
+      }),
+      accountId: "work",
+    });
+
+    await receiveDirectMessage(handler);
     await nextTimerTick();
 
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
@@ -569,7 +715,10 @@ describe("signal createSignalEventHandler inbound context", () => {
         };
       },
     );
-    const handler = createTestHandler({ cfg: createStatusReactionConfig(), deliverReplies });
+    const handler = createTestHandler({
+      cfg: createStatusReactionConfig(),
+      deliverReplies,
+    });
 
     await receiveDirectMessage(handler);
     for (let i = 0; i < 5; i += 1) {
@@ -589,7 +738,9 @@ describe("signal createSignalEventHandler inbound context", () => {
 
   it("keeps dispatch running when Signal status reaction send fails", async () => {
     sendReactionSignalMock.mockRejectedValueOnce(new Error("reaction rejected"));
-    const handler = createTestHandler({ cfg: createStatusReactionConfig() });
+    const handler = createTestHandler({
+      cfg: createStatusReactionConfig(),
+    });
 
     await receiveDirectMessage(handler);
     await nextTimerTick();
@@ -624,11 +775,9 @@ describe("signal createSignalEventHandler inbound context", () => {
     expectInboundContextContract(context);
     expect(context.Body).toMatch(/Alice.*:/);
     expect(context.Body).not.toContain("[from:");
-    expect(context).toMatchObject({
-      BodyForAgent: "current request",
-      CommandBody: "current request",
-      BodyForCommands: "current request",
-    });
+    expect(context.BodyForAgent).toBe("current request");
+    expect(context.CommandBody).toBe("current request");
+    expect(context.BodyForCommands).toBe("current request");
     expect(context.InboundHistory).toEqual([
       {
         sender: "Mallory",
@@ -644,101 +793,90 @@ describe("signal createSignalEventHandler inbound context", () => {
   it("sends typing + read receipt for allowed DMs", async () => {
     vi.useFakeTimers();
     const handler = createTestHandler({
+      cfg: createDirectConfig(),
       account: "+15550009999",
       blockStreaming: false,
+      historyLimit: 0,
+      groupHistories: new Map(),
       sendReadReceipts: true,
     });
 
-    await receiveMessage(handler, { message: "hi" });
+    try {
+      await receiveMessage(handler, { message: "hi" });
 
-    const sendOptions = {
-      cfg: createDirectConfig(),
-      baseUrl: "http://localhost",
-      account: "+15550009999",
-      accountId: "default",
-    };
-    expect(sendTypingMock).toHaveBeenCalledWith("+15550001111", sendOptions);
-    expect(sendReadReceiptMock).toHaveBeenCalledWith(
-      "signal:+15550001111",
-      1700000000000,
-      sendOptions,
-    );
+      expect(sendTypingMock).toHaveBeenCalledWith("+15550001111", {
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        },
+        baseUrl: "http://localhost",
+        account: "+15550009999",
+        accountId: "default",
+      });
+      expect(sendReadReceiptMock).toHaveBeenCalledWith("signal:+15550001111", 1700000000000, {
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        },
+        baseUrl: "http://localhost",
+        account: "+15550009999",
+        accountId: "default",
+      });
 
-    await vi.advanceTimersByTimeAsync(3_000);
-    expect(sendTypingMock).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(sendTypingMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
-  it.each<[string, () => SignalHandler, SignalDataMessage, Omit<SignalEnvelope, "dataMessage">]>([
-    [
-      "DM commands without allowlists",
-      () =>
-        createTestHandler({
-          cfg: createDirectConfig({ signal: { allowFrom: [] } }),
-          allowFrom: [],
-          groupAllowFrom: [],
-          account: "+15550009999",
-          blockStreaming: false,
-        }),
-      { message: "/status", attachments: [] },
-      {},
-    ],
-    [
-      "unlisted group",
-      () =>
-        createGroupHandler({
+  it("drops DM commands in open mode without allowlists", async () => {
+    const handler = createTestHandler({
+      cfg: createDirectConfig({ signal: { allowFrom: [] } }),
+      allowFrom: [],
+      groupAllowFrom: [],
+      account: "+15550009999",
+      blockStreaming: false,
+      historyLimit: 0,
+      groupHistories: new Map(),
+    });
+
+    await receiveMessage(handler, { message: "/status", attachments: [] });
+
+    expect(capture.ctx).toBeUndefined();
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks Signal groups whose id is not listed in groupAllowFrom", async () => {
+    const handler = createTestHandler({
+      cfg: createGroupAllowlistConfig({
+        signal: {
           groupAllowFrom: ["g2"],
           groups: { "*": { requireMention: false } },
-        }),
-      {
-        message: "hello from blocked group",
-        attachments: [],
-        groupInfo: { groupId: "g1", groupName: "Test Group" },
-      },
-      {},
-    ],
-    [
-      "non-allowlisted quote sender",
-      () =>
-        createGroupHandler({ groupAllowFrom: ["+15550001111"], contextVisibility: "allowlist" }),
-      {
-        message: "",
-        attachments: [],
-        groupInfo: { groupId: "g1", groupName: "Test Group" },
-        quote: { text: "blocked quote", author: "+15550002222" },
-      },
-      {},
-    ],
-    [
-      "own UUID without phone account",
-      () =>
-        createTestHandler({
-          cfg: createDirectConfig({
-            signal: { accountUuid: "123e4567-e89b-12d3-a456-426614174000" },
-          }),
-          account: undefined,
-          accountUuid: "123e4567-e89b-12d3-a456-426614174000",
-        }),
-      { message: "self message", attachments: [] },
-      { sourceNumber: null, sourceUuid: "123e4567-e89b-12d3-a456-426614174000" },
-    ],
-    [
-      "null sync envelope",
-      () => createTestHandler(),
-      { message: "replayed sentTranscript envelope", attachments: [] },
-      { syncMessage: null },
-    ],
-  ])("drops %s before dispatch", async (_name, handler, message, envelope) => {
-    await receiveMessage(handler(), message, envelope);
+        },
+      }),
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["g2"],
+    });
+
+    await receiveGroupMessage(handler, "hello from blocked group");
+
     expect(capture.ctx).toBeUndefined();
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
   });
 
   it("authorizes group control commands when groupAllowFrom matches the Signal group id", async () => {
-    const handler = createGroupHandler(
-      { groupAllowFrom: ["g1"], groups: { "*": { requireMention: true } } },
-      {},
-      { groupChat: { mentionPatterns: ["@bot"] } },
-    );
+    const handler = createTestHandler({
+      cfg: createGroupAllowlistConfig({
+        messages: { groupChat: { mentionPatterns: ["@bot"] } },
+        signal: {
+          groupAllowFrom: ["g1"],
+          groups: { "*": { requireMention: true } },
+        },
+      }),
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["g1"],
+    });
 
     await receiveGroupMessage(handler, "/status");
 
@@ -746,7 +884,12 @@ describe("signal createSignalEventHandler inbound context", () => {
   });
 
   it("allows reaction-only group events when groupAllowFrom matches the reaction group id", async () => {
-    const handler = createGroupHandler({ groupAllowFrom: ["g1"] }, { reactionMode: "all" });
+    const handler = createTestHandler({
+      cfg: createGroupAllowlistConfig({ signal: { groupAllowFrom: ["g1"] } }),
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["g1"],
+      reactionMode: "all",
+    });
 
     await handler(
       createSignalReceiveEvent({
@@ -774,7 +917,11 @@ describe("signal createSignalEventHandler inbound context", () => {
     const cfg = {
       messages: { inbound: { debounceMs: 0 } },
       channels: {
-        signal: { dmPolicy: "allowlist", allowFrom: [], defaultTo: "+15550001111" },
+        signal: {
+          dmPolicy: "allowlist",
+          allowFrom: [],
+          defaultTo: "+15550001111",
+        },
       },
     };
     const handler = createTestHandler({
@@ -809,10 +956,36 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
   });
 
-  it("keeps quote-only group context in allowlist_quote mode", async () => {
-    const handler = createGroupHandler({
+  it("drops quote-only group context from non-allowlisted quoted senders in allowlist mode", async () => {
+    const handler = createTestHandler({
+      cfg: createGroupAllowlistConfig({
+        signal: {
+          groupAllowFrom: ["+15550001111"],
+          contextVisibility: "allowlist",
+        },
+      }),
+      groupPolicy: "allowlist",
       groupAllowFrom: ["+15550001111"],
-      contextVisibility: "allowlist_quote",
+    });
+
+    await receiveGroupMessage(handler, "", {
+      quote: { text: "blocked quote", author: "+15550002222" },
+    });
+
+    expect(capture.ctx).toBeUndefined();
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps quote-only group context in allowlist_quote mode", async () => {
+    const handler = createTestHandler({
+      cfg: createGroupAllowlistConfig({
+        signal: {
+          groupAllowFrom: ["+15550001111"],
+          contextVisibility: "allowlist_quote",
+        },
+      }),
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["+15550001111"],
     });
 
     await receiveGroupMessage(handler, "", {
@@ -820,16 +993,15 @@ describe("signal createSignalEventHandler inbound context", () => {
     });
 
     const context = requireCapturedContext();
-    expect(context).toMatchObject({
-      BodyForAgent: "",
-      ReplyToBody: "quoted context",
-      ReplyToSender: "+15550002222",
-      ReplyToIsQuote: true,
-    });
+    expect(context.BodyForAgent).toBe("");
+    expect(context.ReplyToBody).toBe("quoted context");
+    expect(context.ReplyToSender).toBe("+15550002222");
+    expect(context.ReplyToIsQuote).toBe(true);
   });
 
   it("forwards all fetched attachments via MediaPaths/MediaTypes", async () => {
     const handler = createTestHandler({
+      cfg: createDirectConfig(),
       ignoreAttachments: false,
       fetchAttachment: async ({ attachment }) => ({
         path: `/tmp/${String(attachment.id)}.dat`,
@@ -850,35 +1022,37 @@ describe("signal createSignalEventHandler inbound context", () => {
   });
   it("combines raw and command text across failed-media debounce batches", async () => {
     vi.useFakeTimers();
-    const error = vi.fn();
-    const dispatched = captureNextSignalDispatch(dispatchInboundMessageMock);
-    const handler = createTestHandler({
-      cfg: createDirectConfig({ messages: { inbound: { debounceMs: 10 } } }),
-      runtime: { log: vi.fn(), error, exit: vi.fn() },
-      ignoreAttachments: false,
-      fetchAttachment: async () => {
-        throw new Error("expired attachment /private/signal/private-attachment-name.jpg");
-      },
-    });
+    try {
+      const error = vi.fn();
+      const dispatched = captureNextSignalDispatch(dispatchInboundMessageMock);
+      const handler = createTestHandler({
+        cfg: createDirectConfig({ messages: { inbound: { debounceMs: 10 } } }),
+        runtime: { log: vi.fn(), error, exit: vi.fn() },
+        ignoreAttachments: false,
+        fetchAttachment: async () => {
+          throw new Error("expired attachment /private/signal/private-attachment-name.jpg");
+        },
+      });
 
-    await receiveMessage(handler, {
-      message: "first request",
-      attachments: [{ id: "a1", contentType: "image/jpeg" }],
-    });
-    await receiveMessage(handler, { message: "second request", attachments: [] });
-    await vi.advanceTimersByTimeAsync(10);
+      await receiveMessage(handler, {
+        message: "first request",
+        attachments: [{ id: "a1", contentType: "image/jpeg" }],
+      });
+      await receiveMessage(handler, { message: "second request", attachments: [] });
+      await vi.advanceTimersByTimeAsync(10);
 
-    const context = await dispatched;
-    expect(context.BodyForAgent).toContain("[signal attachment unavailable]");
-    expect(context).toMatchObject({
-      RawBody: "first request\nsecond request",
-      CommandBody: "first request\nsecond request",
-    });
-    expect(context.BodyForAgent).not.toContain("<media:image>");
-    expect(context.media).toEqual([expect.objectContaining({ contentType: "image/jpeg" })]);
-    expect(context.media?.[0]?.path).toBeUndefined();
-    expect(error).toHaveBeenCalledWith(expect.stringContaining("attachment fetch failed"));
-    expect(JSON.stringify(error.mock.calls)).not.toContain("private-attachment-name.jpg");
+      const context = await dispatched;
+      expect(context.BodyForAgent).toContain("[signal attachment unavailable]");
+      expect(context.RawBody).toBe("first request\nsecond request");
+      expect(context.CommandBody).toBe("first request\nsecond request");
+      expect(context.BodyForAgent).not.toContain("<media:image>");
+      expect(context.media).toEqual([expect.objectContaining({ contentType: "image/jpeg" })]);
+      expect(context.media?.[0]?.path).toBeUndefined();
+      expect(error).toHaveBeenCalledWith(expect.stringContaining("attachment fetch failed"));
+      expect(JSON.stringify(error.mock.calls)).not.toContain("private-attachment-name.jpg");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("dispatches failed-media commands without text debounce", async () => {
@@ -896,11 +1070,40 @@ describe("signal createSignalEventHandler inbound context", () => {
     });
 
     const context = requireCapturedContext();
-    expect(context).toMatchObject({
-      CommandBody: "/stop",
-      RawBody: "/stop",
-      BodyForAgent: "/stop\n\n[signal attachment unavailable]",
+    expect(context.CommandBody).toBe("/stop");
+    expect(context.RawBody).toBe("/stop");
+    expect(context.BodyForAgent).toBe("/stop\n\n[signal attachment unavailable]");
+  });
+
+  it("drops own UUID inbound messages when only accountUuid is configured", async () => {
+    const ownUuid = "123e4567-e89b-12d3-a456-426614174000";
+    const handler = createTestHandler({
+      cfg: createDirectConfig({ signal: { accountUuid: ownUuid } }),
+      account: undefined,
+      accountUuid: ownUuid,
     });
+
+    await receiveMessage(
+      handler,
+      { message: "self message", attachments: [] },
+      { sourceNumber: null, sourceUuid: ownUuid },
+    );
+
+    expect(capture.ctx).toBeUndefined();
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("drops sync envelopes when syncMessage is present but null", async () => {
+    const handler = createTestHandler({ cfg: createDirectConfig() });
+
+    await receiveMessage(
+      handler,
+      { message: "replayed sentTranscript envelope", attachments: [] },
+      { syncMessage: null },
+    );
+
+    expect(capture.ctx).toBeUndefined();
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -915,6 +1118,7 @@ describe("signal createSignalEventHandler inbound context", () => {
     async (_label, data, category) => {
       const error = vi.fn();
       const handler = createTestHandler({
+        cfg: createDirectConfig(),
         runtime: { log: vi.fn(), error, exit: vi.fn() },
       });
 
@@ -942,11 +1146,19 @@ describe("signal createSignalEventHandler inbound context", () => {
     "keeps %s inbound content out of verbose logs without changing delivery",
     async (_label, message, deliveredText) => {
       shouldLogVerboseMock.mockReturnValue(true);
-      await receiveMessage(createTestHandler(), { message });
-      const context = requireCapturedContext();
-      expect(context.BodyForAgent).toBe(deliveredText);
-      expect(context.Body).toContain(deliveredText);
-      expect(JSON.stringify(logVerboseMock.mock.calls)).not.toContain("private line");
+      try {
+        const handler = createTestHandler({ cfg: createDirectConfig() });
+
+        await receiveMessage(handler, { message });
+
+        const context = requireCapturedContext();
+        expect(context.BodyForAgent).toBe(deliveredText);
+        expect(context.Body).toContain(deliveredText);
+        expect(JSON.stringify(logVerboseMock.mock.calls)).not.toContain("private line");
+      } finally {
+        shouldLogVerboseMock.mockReturnValue(false);
+      }
     },
   );
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

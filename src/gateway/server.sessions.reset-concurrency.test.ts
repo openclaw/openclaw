@@ -163,7 +163,7 @@ test.each([false, true])(
 test.each(["sess-main", "sess-replacement"])(
   "sessions.reset preserves a concurrent lifecycle replacement (%s)",
   async (replacementSessionId) => {
-    const { scope, write } = await seedSession("agent:main:main", "sess-main", {
+    const { scope, write } = await seedSession("main", "sess-main", {
       lifecycleRevision: "original-revision",
     });
     let lifecycleCurrent = true;

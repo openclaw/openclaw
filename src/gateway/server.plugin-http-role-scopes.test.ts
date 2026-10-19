@@ -41,20 +41,19 @@ const proxyAuth = {
   allowTailscale: false,
   trustedProxy: { userHeader: "x-forwarded-user" },
 } as const;
-const read = ["operator.read"];
-const write = ["operator.write"];
 type Scope = GatewayOperatorRoleDefinition["scopes"];
-const roleCases: Array<["write-default" | "trusted-operator", string, Scope, string[], string[]]> =
-  [
-    ["write-default", "empty", [], [], []],
-    ["trusted-operator", "empty", [], [], []],
-    ["trusted-operator", "reader", read, read, read],
-    ["write-default", "reader", read, read, read],
-    ["write-default", "writer", write, write, read],
-    ["trusted-operator", "writer", write, [...read, ...write], read],
-    ["write-default", "admin", ["operator.admin"], write, read],
-    ["trusted-operator", "admin", ["operator.admin"], [...CLI_DEFAULT_OPERATOR_SCOPES], read],
-  ];
+const read: Scope = ["operator.read"];
+const write: Scope = ["operator.write"];
+const roleCases: Array<["write-default" | "trusted-operator", string, Scope, Scope, Scope]> = [
+  ["write-default", "empty", [], [], []],
+  ["trusted-operator", "empty", [], [], []],
+  ["trusted-operator", "reader", read, read, read],
+  ["write-default", "reader", read, read, read],
+  ["write-default", "writer", write, write, read],
+  ["trusted-operator", "writer", write, [...read, ...write], read],
+  ["write-default", "admin", ["operator.admin"], write, read],
+  ["trusted-operator", "admin", ["operator.admin"], [...CLI_DEFAULT_OPERATOR_SCOPES], read],
+];
 const roleDefinition = (scopes: Scope): GatewayOperatorRoleDefinition => ({
   sessions: { others: "view" },
   agents: "*",
@@ -203,7 +202,7 @@ it.each(roleCases)(
               readAllowed: expectedScopes.some((scope) =>
                 [...read, ...write, "operator.admin"].includes(scope),
               ),
-              adminAllowed: expectedScopes.includes("operator.admin"),
+              adminAllowed: expectedScopes.some((scope) => scope === "operator.admin"),
               writeAllowed: expectedScopes.some(
                 (scope) => scope === "operator.write" || scope === "operator.admin",
               ),

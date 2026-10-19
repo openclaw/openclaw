@@ -501,7 +501,7 @@ describe("shared question panel", () => {
     other.dispatchEvent(new InputEvent("input", { bubbles: true }));
     flush();
 
-    mounted?.unmount();
+    mounted?.dispose();
     mounted = undefined;
     drawGateway(prompt, { onSubmit });
     await panelIn(container);

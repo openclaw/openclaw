@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { waitForDead } from "../../test/helpers/process-wait.js";
 import {
@@ -187,8 +188,8 @@ describe("terminal PTY spawn diagnostics", () => {
       await withChildProcessOperation("agent.exec", () =>
         spawnTerminalPty({ file: "powershell.exe", args: [], ...dimensions }),
       );
-      const onData: (data: string) => void = pty.onData.mock.calls[0][0];
-      const onExit: () => void = pty.onExit.mock.calls[0][0];
+      const onData: (data: string) => void = expectDefined(pty.onData.mock.calls[0])[0];
+      const onExit: () => void = expectDefined(pty.onExit.mock.calls[0])[0];
       expectSample(60_000);
       if (outcome !== "failed-exit") {
         pty.pid = 4321;

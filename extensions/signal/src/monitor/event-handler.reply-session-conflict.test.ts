@@ -1,7 +1,7 @@
+// Signal tests cover durable redelivery after dispatch failures.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
@@ -9,7 +9,7 @@ import {
 import { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } from "openclaw/plugin-sdk/channel-outbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { startSignalIngressMonitor } from "../signal-ingress.js";
 
 const [
@@ -17,24 +17,37 @@ const [
   { createSignalEventHandler },
 ] = await Promise.all([import("./event-handler.test-harness.js"), import("./event-handler.js")]);
 
-const { dispatchInboundMessageMock, recordInboundSessionMock } = vi.hoisted(() => ({
+const {
+  sendTypingMock,
+  sendReadReceiptMock,
+  sendReactionSignalMock,
+  removeReactionSignalMock,
+  dispatchInboundMessageMock,
+  recordInboundSessionMock,
+} = vi.hoisted(() => ({
+  sendTypingMock: vi.fn(),
+  sendReadReceiptMock: vi.fn(),
+  sendReactionSignalMock: vi.fn(async () => ({ ok: true })),
+  removeReactionSignalMock: vi.fn(async () => ({ ok: true })),
   dispatchInboundMessageMock: vi.fn(),
   recordInboundSessionMock: vi.fn(),
 }));
 
 vi.mock("../send.js", () => ({
   sendMessageSignal: vi.fn(),
-  sendTypingSignal: vi.fn(async () => true),
-  sendReadReceiptSignal: vi.fn(async () => true),
+  sendTypingSignal: sendTypingMock,
+  sendReadReceiptSignal: sendReadReceiptMock,
 }));
 
 vi.mock("../send-reactions.js", () => ({
-  sendReactionSignal: vi.fn(async () => ({ ok: true })),
-  removeReactionSignal: vi.fn(async () => ({ ok: true })),
+  sendReactionSignal: sendReactionSignalMock,
+  removeReactionSignal: removeReactionSignalMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
+vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
+    "openclaw/plugin-sdk/channel-inbound",
+  );
   const { createSignalPreparedDispatchRunner } = await import("./event-handler.test-harness.js");
   return {
     ...actual,
@@ -54,8 +67,10 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/conversation-runtime")>(
+    "openclaw/plugin-sdk/conversation-runtime",
+  );
   return {
     ...actual,
     recordInboundSession: recordInboundSessionMock,
@@ -68,12 +83,26 @@ const CONFLICT_ERROR = new Error(
   "reply session initialization conflicted for agent:main:signal:direct:+15550001111",
 );
 
+function createTrackedTaskHarness() {
+  const tasks: Promise<void>[] = [];
+  return {
+    tasks,
+    runTrackedTask: (task: () => Promise<void>) => {
+      tasks.push(task());
+    },
+  };
+}
+
 describe("signal durable dispatch failure recovery", () => {
   beforeEach(() => {
+    vi.useRealTimers();
+    sendTypingMock.mockReset().mockResolvedValue(true);
+    sendReadReceiptMock.mockReset().mockResolvedValue(true);
+    sendReactionSignalMock.mockReset().mockResolvedValue({ ok: true });
+    removeReactionSignalMock.mockReset().mockResolvedValue({ ok: true });
     recordInboundSessionMock.mockReset().mockResolvedValue(undefined);
     dispatchInboundMessageMock.mockReset();
   });
-  afterEach(() => vi.useRealTimers());
 
   it("preserves durable abandon accounting through backoff, threshold, and restart", async () => {
     vi.useFakeTimers();
@@ -98,13 +127,11 @@ describe("signal durable dispatch failure recovery", () => {
     dispatchInboundMessageMock.mockRejectedValue(CONFLICT_ERROR);
 
     const createIntegratedMonitor = async () => {
-      const tasks: Promise<void>[] = [];
+      const tracked = createTrackedTaskHarness();
       const handler = createSignalEventHandler(
         createBaseSignalEventHandlerDeps({
           cfg: { messages: { inbound: { debounceMs: 10 } } },
-          runTrackedTask: (task) => {
-            tasks.push(task());
-          },
+          runTrackedTask: tracked.runTrackedTask,
         }),
       );
       const dispatched = createDeferred<Awaited<ReturnType<typeof handler>>>();
@@ -118,18 +145,18 @@ describe("signal durable dispatch failure recovery", () => {
         },
         runtime: { error: vi.fn(), log: vi.fn() },
       });
-      return { monitor, tasks, dispatched };
+      return { monitor, tracked, dispatched };
     };
-    const retryAt = async (time: number, attempts: number, dispatches: number, initial = false) => {
-      vi.setSystemTime(time);
-      const { monitor, tasks, dispatched } = await createIntegratedMonitor();
-      if (initial) {
-        await monitor.receive(event);
-      }
+    const finishOuterAttempt = async ({
+      tracked,
+      dispatched,
+    }: Awaited<ReturnType<typeof createIntegratedMonitor>>) => {
       await dispatched.promise;
       await vi.advanceTimersByTimeAsync(10);
-      expect(tasks).toHaveLength(1);
-      await Promise.all(tasks);
+      expect(tracked.tasks).toHaveLength(1);
+      await Promise.all(tracked.tasks);
+    };
+    const pendingAttempt = async (attempts: number) => {
       const pending = await queue.listPending({ limit: "all" });
       expect(pending).toEqual([
         expect.objectContaining({
@@ -139,41 +166,69 @@ describe("signal durable dispatch failure recovery", () => {
           lastError: CONFLICT_ERROR.message,
         }),
       ]);
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatches);
-      await monitor.stop();
-      return expectDefined(pending[0]?.lastAttemptAt, "Signal retry timestamp");
-    };
-    const blockedAt = async (time: number, dispatches: number) => {
-      vi.setSystemTime(time);
-      const blocked = await createIntegratedMonitor();
-      await blocked.monitor.waitForIdle();
-      await vi.advanceTimersByTimeAsync(10);
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatches);
-      expect(blocked.tasks).toHaveLength(0);
-      await blocked.monitor.stop();
+      const record = pending[0];
+      const lastAttemptAt = record?.lastAttemptAt;
+      if (lastAttemptAt === undefined) {
+        throw new Error(`Missing Signal retry timestamp for attempt ${attempts}`);
+      }
+      return { ...record, lastAttemptAt };
     };
 
     try {
-      const firstAttemptAt = await retryAt(now, 1, 1, true);
+      const first = await createIntegratedMonitor();
+      await first.monitor.receive(event);
+      await finishOuterAttempt(first);
+      const firstAttempt = await pendingAttempt(1);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+      await first.monitor.stop();
 
-      await blockedAt(firstAttemptAt + 999, 1);
-      const secondAttemptAt = await retryAt(firstAttemptAt + 1_001, 2, 2);
+      vi.setSystemTime(firstAttempt.lastAttemptAt + 999);
+      const blocked = await createIntegratedMonitor();
+      await blocked.monitor.waitForIdle();
+      await vi.advanceTimersByTimeAsync(10);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+      expect(blocked.tracked.tasks).toHaveLength(0);
+      await blocked.monitor.stop();
+
+      vi.setSystemTime(firstAttempt.lastAttemptAt + 1_001);
+      const second = await createIntegratedMonitor();
+      await finishOuterAttempt(second);
+      const secondAttempt = await pendingAttempt(2);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
+      await second.monitor.stop();
 
       for (let attempt = 3; attempt < DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS; attempt += 1) {
-        const claim = expectDefined(
-          await queue.claim(eventId, { ownerId: `seed-${attempt}` }),
-          "Signal seed claim",
-        );
+        const claim = await queue.claim(eventId, { ownerId: `seed-${attempt}` });
+        if (!claim) {
+          throw new Error(`Expected Signal seed claim ${attempt}`);
+        }
         await queue.release(claim, {
           lastError: CONFLICT_ERROR.message,
-          releasedAt: secondAttemptAt,
+          releasedAt: secondAttempt.lastAttemptAt,
         });
       }
 
-      const threshold = DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS;
-      const thresholdAttemptAt = await retryAt(secondAttemptAt + 64_001, threshold, 3);
-      const beyondAttemptAt = await retryAt(thresholdAttemptAt + 128_001, threshold + 1, 4);
-      await blockedAt(beyondAttemptAt + 1_000, 4);
+      vi.setSystemTime(secondAttempt.lastAttemptAt + 64_001);
+      const threshold = await createIntegratedMonitor();
+      await finishOuterAttempt(threshold);
+      const thresholdAttempt = await pendingAttempt(DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(3);
+      await threshold.monitor.stop();
+
+      vi.setSystemTime(thresholdAttempt.lastAttemptAt + 128_001);
+      const beyond = await createIntegratedMonitor();
+      await finishOuterAttempt(beyond);
+      const beyondAttempt = await pendingAttempt(DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS + 1);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(4);
+      await beyond.monitor.stop();
+
+      vi.setSystemTime(beyondAttempt.lastAttemptAt + 1_000);
+      const blockedRestart = await createIntegratedMonitor();
+      await blockedRestart.monitor.waitForIdle();
+      await vi.advanceTimersByTimeAsync(10);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(4);
+      expect(blockedRestart.tracked.tasks).toHaveLength(0);
+      await blockedRestart.monitor.stop();
     } finally {
       vi.useRealTimers();
       await closeOpenClawStateDatabaseAsync();
@@ -188,9 +243,22 @@ describe("signal durable dispatch failure recovery", () => {
     const handler = createSignalEventHandler(createBaseSignalEventHandlerDeps());
 
     vi.useFakeTimers();
-    await handler(createSignalReceiveEvent({ dataMessage: { message: "hello", attachments: [] } }));
-    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+    try {
+      await handler(
+        createSignalReceiveEvent({
+          dataMessage: {
+            message: "hello",
+            attachments: [],
+          },
+        }),
+      );
+
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -31,6 +31,7 @@ const registrations =
   });
 const contribution = (key: string) =>
   Object.assign(document.createElement("openclaw-plugin-contributions"), {
+    kind: "navigation",
     navigationKey: `example/${key}`,
   });
 const providerFor = (

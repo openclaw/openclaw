@@ -40,7 +40,7 @@ function selectRange(node: Text, start: number, end: number) {
 
 function pointerUp(
   thread: HTMLElement,
-  options: Partial<Parameters<typeof handleChatSelectionPointerUp>[1]> = {
+  options: Omit<Parameters<typeof handleChatSelectionPointerUp>[1], "paneId"> = {
     onAddToChat: onAddToChatSpy,
     onAskSideChat: onAskSideChatSpy,
   },
