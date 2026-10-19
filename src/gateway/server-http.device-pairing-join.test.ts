@@ -1,9 +1,9 @@
-// Real Gateway lifecycle proof for admin mint -> public single-use join exchange.
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { getPairedDevice } from "../infra/device-pairing.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { decodePairingSetupCode } from "../pairing/setup-code.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
@@ -31,11 +31,7 @@ beforeAll(async () => {
   testState.gatewayAuth = {
     mode: "token",
     token: "secret",
-    rateLimit: {
-      maxAttempts: 2,
-      windowMs: 60_000,
-      lockoutMs: 60_000,
-    },
+    rateLimit: { maxAttempts: 2, windowMs: 60_000, lockoutMs: 60_000 },
   };
   harness = await createGatewaySuiteHarness();
   adminSocket = await harness.openWs();
@@ -74,6 +70,31 @@ async function readJson(response: Response): Promise<unknown> {
   return JSON.parse(await response.text()) as unknown;
 }
 
+function joinCodes(db: EngineConnection) {
+  return getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "device_pairing_join_codes">>(db);
+}
+
+function updateJoinCode(
+  joinUrl: string,
+  values: { shortcode?: string; expires_at_ms?: number; payload_json?: string | null },
+) {
+  runOpenClawStateWriteTransaction(({ db }) => {
+    executeSqliteQuerySync(
+      db,
+      joinCodes(db)
+        .updateTable("device_pairing_join_codes")
+        .set(values)
+        .where("shortcode", "=", shortcodeFromUrl(joinUrl)),
+    );
+  });
+}
+
+async function expectJoined(joinUrl: string, setupCode: string) {
+  const response = await fetch(joinUrl);
+  expect(response.status).toBe(200);
+  expect(await readJson(response)).toEqual(decodePairingSetupCode(setupCode));
+}
+
 describe("Gateway device join route", () => {
   it("keeps the code-less /j route claimed by the join handler", async () => {
     // One miss only: a second recorded failure would trip the suite's
@@ -88,9 +109,7 @@ describe("Gateway device join route", () => {
     const exec = vi.spyOn(DatabaseSync.prototype, "exec");
     try {
       const setup = await mintJoinUrl();
-      const response = await fetch(setup.joinUrl);
-      expect(response.status).toBe(200);
-      expect(await readJson(response)).toEqual(decodePairingSetupCode(setup.setupCode));
+      await expectJoined(setup.joinUrl, setup.setupCode);
       const joinCodeSql = [...prepare.mock.calls, ...exec.mock.calls].filter(([sql]) =>
         /\bdevice_pairing_join_codes\b/u.test(sql),
       );
@@ -105,22 +124,11 @@ describe("Gateway device join route", () => {
     const setup = await mintJoinUrl("/public-gateway");
     const originalShortcode = shortcodeFromUrl(setup.joinUrl);
     const jPrefixedShortcode = `j${"a".repeat(21)}`;
-    runOpenClawStateWriteTransaction(({ db }) => {
-      executeSqliteQuerySync(
-        db,
-        getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "device_pairing_join_codes">>(db)
-          .updateTable("device_pairing_join_codes")
-          .set({ shortcode: jPrefixedShortcode })
-          .where("shortcode", "=", originalShortcode),
-      );
-    });
+    updateJoinCode(setup.joinUrl, { shortcode: jPrefixedShortcode });
     const joinUrl = new URL(setup.joinUrl);
     joinUrl.pathname = joinUrl.pathname.replace(originalShortcode, jPrefixedShortcode);
 
-    const response = await fetch(joinUrl);
-
-    expect(response.status).toBe(200);
-    expect(await readJson(response)).toEqual(decodePairingSetupCode(setup.setupCode));
+    await expectJoined(joinUrl.href, setup.setupCode);
   });
 
   it("approves the joined node's initial surface but gates a later manifest escalation", async () => {
@@ -136,19 +144,24 @@ describe("Gateway device join route", () => {
       deviceFamily: "Mac",
       mode: GATEWAY_CLIENT_MODES.NODE,
     };
-
-    const firstNode = await harness.openWs();
-    const first = await connectReq(firstNode, {
-      skipDefaultAuth: true,
-      bootstrapToken: payload.bootstrapToken,
-      role: "node",
-      scopes: [],
-      client,
-      deviceIdentityPath: loaded.identityPath,
-      commands: ["system.run"],
-    });
-    expect(first.ok).toBe(true);
-    firstNode.close();
+    const connectNode = async (
+      auth: { bootstrapToken?: string; deviceToken?: string },
+      commands: string[],
+    ) => {
+      const socket = await harness.openWs();
+      const result = await connectReq(socket, {
+        skipDefaultAuth: true,
+        role: "node",
+        scopes: [],
+        client,
+        deviceIdentityPath: loaded.identityPath,
+        ...auth,
+        commands,
+      });
+      expect(result.ok).toBe(true);
+      socket.close();
+    };
+    await connectNode({ bootstrapToken: payload.bootstrapToken }, ["system.run"]);
 
     const paired = await getPairedDevice(loaded.identity.deviceId);
     expect(paired).toMatchObject({
@@ -157,18 +170,7 @@ describe("Gateway device join route", () => {
     });
     expect(paired?.pendingNodeSurface).toBeUndefined();
 
-    const secondNode = await harness.openWs();
-    const second = await connectReq(secondNode, {
-      skipDefaultAuth: true,
-      deviceToken: paired?.tokens?.node?.token,
-      role: "node",
-      scopes: [],
-      client,
-      deviceIdentityPath: loaded.identityPath,
-      commands: ["system.run", "system.which"],
-    });
-    expect(second.ok).toBe(true);
-    secondNode.close();
+    await connectNode({ deviceToken: paired?.tokens?.node?.token }, ["system.run", "system.which"]);
 
     const escalated = await getPairedDevice(loaded.identity.deviceId);
     expect(escalated?.nodeSurface?.commands).toEqual(["system.run"]);
@@ -177,16 +179,7 @@ describe("Gateway device join route", () => {
 
   it("burns once and malformed payloads, expires opaquely, and serializes concurrent misses", async () => {
     const expired = await mintJoinUrl();
-    const expiredShortcode = shortcodeFromUrl(expired.joinUrl);
-    runOpenClawStateWriteTransaction(({ db }) => {
-      executeSqliteQuerySync(
-        db,
-        getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "device_pairing_join_codes">>(db)
-          .updateTable("device_pairing_join_codes")
-          .set({ expires_at_ms: 0 })
-          .where("shortcode", "=", expiredShortcode),
-      );
-    });
+    updateJoinCode(expired.joinUrl, { expires_at_ms: 0 });
 
     const expiredResponse = await fetch(expired.joinUrl);
     expect(expiredResponse.status).toBe(404);
@@ -206,22 +199,14 @@ describe("Gateway device join route", () => {
 
       const malformed = await mintJoinUrl();
       const malformedShortcode = shortcodeFromUrl(malformed.joinUrl);
-      runOpenClawStateWriteTransaction(({ db }) => {
-        executeSqliteQuerySync(
-          db,
-          getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "device_pairing_join_codes">>(db)
-            .updateTable("device_pairing_join_codes")
-            .set({ payload_json: payloadJson })
-            .where("shortcode", "=", malformedShortcode),
-        );
-      });
+      updateJoinCode(malformed.joinUrl, { payload_json: payloadJson });
       const malformedResponse = await fetch(malformed.joinUrl);
       expect(malformedResponse.status).toBe(404);
       expect(await readJson(malformedResponse)).toEqual(opaqueNotFound);
       const malformedRows = runOpenClawStateWriteTransaction(({ db }) =>
         executeSqliteQuerySync(
           db,
-          getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "device_pairing_join_codes">>(db)
+          joinCodes(db)
             .selectFrom("device_pairing_join_codes")
             .select("shortcode")
             .where("shortcode", "=", malformedShortcode),

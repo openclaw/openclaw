@@ -12,6 +12,44 @@ import {
   withGatewayServer,
 } from "./server-http.test-harness.js";
 
+type Server = Parameters<typeof sendRequest>[0];
+type Request = Parameters<typeof sendRequest>[1];
+type ServerOptions = Parameters<typeof withGatewayServer>[0];
+
+function withUiServer({
+  overrides,
+  ...options
+}: Omit<ServerOptions, "prefix" | "resolvedAuth"> & {
+  resolvedAuth?: ServerOptions["resolvedAuth"];
+}) {
+  return withGatewayServer({
+    prefix: "control-ui",
+    resolvedAuth: AUTH_NONE,
+    ...options,
+    overrides: { controlUiEnabled: true, controlUiBasePath: "", ...overrides },
+  });
+}
+
+function withUiRoot(run: (root: string) => Promise<void>) {
+  return withTempDir("openclaw-http-ui-", async (root) => {
+    await fs.writeFile(nodePath.join(root, "index.html"), "<html>synthetic UI</html>\n");
+    await fs.mkdir(nodePath.join(root, "assets"));
+    await fs.writeFile(nodePath.join(root, "assets", "app.js"), "// synthetic asset\n");
+    await run(root);
+  });
+}
+
+async function request(
+  server: Server,
+  path: string,
+  status: number,
+  options: Omit<Request, "path"> = {},
+) {
+  const response = await sendRequest(server, { path, ...options });
+  expect(response.res.statusCode, `${options.method ?? "GET"} ${path}`).toBe(status);
+  return response;
+}
+
 describe("Gateway Control UI identity", () => {
   it.each([
     { basePath: "", enabled: true },
@@ -19,8 +57,7 @@ describe("Gateway Control UI identity", () => {
   ])(
     "keeps authenticated media available at $basePath with dashboard enabled=$enabled",
     async ({ basePath, enabled }) => {
-      await withGatewayServer({
-        prefix: "control-ui-resource-auth",
+      await withUiServer({
         resolvedAuth: AUTH_TOKEN,
         overrides: { controlUiEnabled: enabled, controlUiBasePath: basePath },
         run: async (server) => {
@@ -35,24 +72,19 @@ describe("Gateway Control UI identity", () => {
             ["GET", mediaPath],
             ["POST", `${mediaPath}&allow=1`],
           ] as const) {
-            const response = await sendRequest(server, { path, method });
-            expect(response.res.statusCode, path).toBe(401);
+            await request(server, path, 401, { method });
           }
-          const metadata = await sendRequest(server, {
-            path: mediaPath,
+          const metadata = await request(server, mediaPath, 200, {
             authorization: `Bearer ${AUTH_TOKEN.token}`,
           });
-          expect(metadata.res.statusCode).toBe(200);
           expect(JSON.parse(metadata.getBody())).toMatchObject({
             available: true,
             mimeType: "image/png",
             mediaTicket: expect.any(String),
           });
-          const avatar = await sendRequest(server, { path: `${base}/avatar/main?meta=1` });
-          expect(avatar.res.statusCode).toBe(enabled ? 401 : 404);
+          await request(server, `${base}/avatar/main?meta=1`, enabled ? 401 : 404);
           if (!enabled) {
-            const document = await sendRequest(server, { path: `${base}/` });
-            expect(document.res.statusCode).toBe(404);
+            await request(server, `${base}/`, 404);
           }
         },
       });
@@ -60,17 +92,12 @@ describe("Gateway Control UI identity", () => {
   );
 
   it("keeps the root UI POST rejection ahead of the startup fallback", async () => {
-    await withGatewayServer({
-      prefix: "control-ui-legacy-post",
-      resolvedAuth: AUTH_NONE,
+    await withUiServer({
       overrides: {
-        controlUiEnabled: true,
-        controlUiBasePath: "",
         isStartupPluginRuntimeReady: () => false,
       },
       run: async (server) => {
-        const response = await sendRequest(server, { path: "/ui", method: "POST" });
-        expect(response.res.statusCode).toBe(404);
+        const response = await request(server, "/ui", 404, { method: "POST" });
         expect(response.getBody()).toBe("Not Found");
         expect(response.setHeader).toHaveBeenCalledWith(
           "Permissions-Policy",
@@ -83,22 +110,23 @@ describe("Gateway Control UI identity", () => {
   it.each(["", "/console/"])(
     "leaves unclaimed media writes to startup at base %j",
     async (basePath) => {
-      await withGatewayServer({
-        prefix: "control-ui-unclaimed-media-write",
+      await withUiServer({
         resolvedAuth: AUTH_TOKEN,
         overrides: {
-          controlUiEnabled: true,
           controlUiBasePath: basePath,
           isStartupPluginRuntimeReady: () => false,
         },
         run: async (server) => {
           const base = basePath.replace(/\/$/, "");
           for (const query of ["meta=1", "allow=1", "meta=1&allow=0"]) {
-            const response = await sendRequest(server, {
-              method: "POST",
-              path: `${base}/__openclaw__/assistant-media?${query}&source=missing.png`,
-            });
-            expect(response.res.statusCode, query).toBe(503);
+            const response = await request(
+              server,
+              `${base}/__openclaw__/assistant-media?${query}&source=missing.png`,
+              503,
+              {
+                method: "POST",
+              },
+            );
             expect(response.getBody()).toBe("Plugin runtime is starting");
           }
         },
@@ -107,17 +135,11 @@ describe("Gateway Control UI identity", () => {
   );
 
   it("applies dashboard enablement to subsequent requests without replacing the listener", async () => {
-    await withTempDir("openclaw-http-toggle-", async (controlUiRoot) => {
-      await fs.writeFile(nodePath.join(controlUiRoot, "index.html"), "<html>synthetic UI</html>\n");
-      await fs.mkdir(nodePath.join(controlUiRoot, "assets"));
-      await fs.writeFile(nodePath.join(controlUiRoot, "assets", "app.js"), "// synthetic asset\n");
+    await withUiRoot(async (controlUiRoot) => {
       let enabled: boolean | undefined = false;
-      await withGatewayServer({
-        prefix: "control-ui-enablement",
-        resolvedAuth: AUTH_NONE,
+      await withUiServer({
         overrides: {
           controlUiEnabled: undefined,
-          controlUiBasePath: "",
           controlUiRoot: { kind: "resolved", path: controlUiRoot },
           getRuntimeConfig: () => ({ gateway: { controlUi: { enabled } } }),
         },
@@ -125,13 +147,9 @@ describe("Gateway Control UI identity", () => {
           for (const next of [false, true, false, undefined]) {
             enabled = next;
             for (const path of ["/", "/chat", "/assets/app.js", "/control-ui-config.json"]) {
-              const response = await sendRequest(server, { path, method: "GET" });
-              expect(response.res.statusCode, `${path}, enabled=${enabled}`).toBe(
-                enabled === false ? 404 : 200,
-              );
+              await request(server, path, enabled === false ? 404 : 200);
             }
-            const health = await sendRequest(server, { path: "/healthz", method: "GET" });
-            expect(health.res.statusCode).toBe(200);
+            await request(server, "/healthz", 200);
           }
         },
       });
@@ -139,21 +157,14 @@ describe("Gateway Control UI identity", () => {
   });
 
   it("keeps assets independent of identity reads while documents and bootstrap resolve identity", async () => {
-    await withTempDir("openclaw-http-identity-", async (controlUiRoot) => {
-      await fs.writeFile(nodePath.join(controlUiRoot, "index.html"), "<html>synthetic UI</html>\n");
+    await withUiRoot(async (controlUiRoot) => {
       const workspace = await fs.realpath(controlUiRoot);
       await fs.writeFile(
         nodePath.join(controlUiRoot, "IDENTITY.md"),
         "- Name: Synthetic assistant\n",
       );
-      await fs.mkdir(nodePath.join(controlUiRoot, "assets"));
-      await fs.writeFile(nodePath.join(controlUiRoot, "assets", "app.js"), "// synthetic asset\n");
-      await withGatewayServer({
-        prefix: "control-ui-static-identity",
-        resolvedAuth: AUTH_NONE,
+      await withUiServer({
         overrides: {
-          controlUiEnabled: true,
-          controlUiBasePath: "",
           controlUiRoot: { kind: "resolved", path: controlUiRoot },
           getRuntimeConfig: () => ({
             agents: {
@@ -173,8 +184,7 @@ describe("Gateway Control UI identity", () => {
             );
           try {
             for (const method of ["GET", "HEAD"]) {
-              const response = await sendRequest(server, { path: "/assets/app.js", method });
-              expect(response.res.statusCode, method).toBe(200);
+              const response = await request(server, "/assets/app.js", 200, { method });
               if (method === "HEAD") {
                 expect(response.getBody()).toBe("");
               }
@@ -183,8 +193,7 @@ describe("Gateway Control UI identity", () => {
             expect(prepareIdentity).not.toHaveBeenCalled();
 
             for (const path of ["/", "/chat"]) {
-              const response = await sendRequest(server, { path, method: "GET" });
-              expect(response.res.statusCode, path).toBe(200);
+              const response = await request(server, path, 200);
               expect(response.getBody()).toContain('data-openclaw-bootstrap-config="');
               expect(response.getBody()).toContain(
                 "&quot;assistantAgentId&quot;:&quot;research&quot;",
@@ -195,10 +204,7 @@ describe("Gateway Control UI identity", () => {
               expect(response.setHeader).toHaveBeenCalledWith("Cache-Control", "private, no-store");
             }
 
-            const bootstrap = await sendRequest(server, {
-              path: "/control-ui-config.json",
-              method: "GET",
-            });
+            const bootstrap = await sendRequest(server, { path: "/control-ui-config.json" });
             expect(JSON.parse(bootstrap.getBody())).toMatchObject({
               assistantAgentId: "research",
               assistantName: "Synthetic assistant",
@@ -219,12 +225,8 @@ describe("Gateway Control UI identity", () => {
 it("serves marketplace browser reads while preserving plugin HTTP boundaries", async () => {
   await withTempDir("openclaw-marketplace-routing-", async (controlUiRoot) => {
     await fs.writeFile(nodePath.join(controlUiRoot, "index.html"), "<html>spa fallback</html>\n");
-    await withGatewayServer({
-      prefix: "plugin-marketplace-root-control-ui",
-      resolvedAuth: AUTH_NONE,
+    await withUiServer({
       overrides: {
-        controlUiEnabled: true,
-        controlUiBasePath: "",
         controlUiRoot: { kind: "resolved", path: controlUiRoot },
         handlePluginRequest: async (req, res) => {
           if (req.url !== "/plugins/webhook") {
@@ -246,12 +248,10 @@ it("serves marketplace browser reads while preserving plugin HTTP boundaries", a
         ];
         for (const pathname of documentPaths) {
           for (const method of ["GET", "HEAD"]) {
-            const { res, getBody } = await sendRequest(server, {
-              path: pathname,
+            const { getBody } = await request(server, pathname, 200, {
               method,
               headers: { accept: "text/html" },
             });
-            expect(res.statusCode, `${method} ${pathname}`).toBe(200);
             if (method === "GET") {
               expect(getBody()).toContain("spa fallback");
             } else {
@@ -259,7 +259,7 @@ it("serves marketplace browser reads while preserving plugin HTTP boundaries", a
             }
           }
         }
-        for (const request of [
+        for (const options of [
           ...documentPaths.flatMap((pathname) => [
             { path: pathname, method: "GET", headers: { accept: "application/json" } },
             { path: pathname, method: "GET", headers: { accept: "text/html;q=0" } },
@@ -269,23 +269,16 @@ it("serves marketplace browser reads while preserving plugin HTTP boundaries", a
           { path: "/plugins/ch_a", method: "GET", headers: { accept: "text/html" } },
           { path: "/plugins/ch_bWF0cml4/extra", method: "GET", headers: { accept: "text/html" } },
         ]) {
-          const { res, getBody } = await sendRequest(server, request);
-          expect(res.statusCode, JSON.stringify(request)).toBe(404);
+          const { getBody } = await request(server, options.path, 404, options);
           expect(getBody()).toBe("Not Found");
         }
-        const plugin = await sendRequest(server, {
-          path: "/plugins/webhook",
-          method: "GET",
+        const plugin = await request(server, "/plugins/webhook", 202, {
           headers: { accept: "text/html" },
         });
-        expect(plugin.res.statusCode).toBe(202);
         expect(plugin.getBody()).toBe("plugin response");
-        const pluginManager = await sendRequest(server, {
-          path: "/settings/plugins",
-          method: "GET",
+        const pluginManager = await request(server, "/settings/plugins", 200, {
           headers: { accept: "text/html" },
         });
-        expect(pluginManager.res.statusCode).toBe(200);
         expect(pluginManager.getBody()).toContain("spa fallback");
       },
     });

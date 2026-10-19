@@ -1,4 +1,3 @@
-// Gateway OpenAI-compatible route tests cover config reload and root-mounted behavior.
 import { once } from "node:events";
 import http, { type Server, type ServerResponse } from "node:http";
 import { describe, expect, it, vi } from "vitest";
@@ -40,6 +39,25 @@ const endpointCases = [
   },
 ] as const;
 
+function mediaBody(path: string, content: unknown[], stream?: boolean) {
+  return {
+    model: "openclaw/main",
+    ...(stream === undefined ? {} : { stream }),
+    ...(path === "/v1/chat/completions"
+      ? { messages: [{ role: "user", content }] }
+      : { input: [{ type: "message", role: "user", content }] }),
+  };
+}
+
+const requestHeaders = {
+  authorization: "Bearer test-token",
+  "content-type": "application/json",
+};
+
+function publishConfig(config: OpenClawConfig) {
+  setRuntimeConfigSnapshot(config, config);
+}
+
 describe("gateway OpenAI-compatible HTTP routes", () => {
   it.each(endpointCases)(
     "hot reloads $name routes on the same server",
@@ -55,10 +73,9 @@ describe("gateway OpenAI-compatible HTTP routes", () => {
         },
         run: async (server) => {
           for (const enabled of [false, true, false]) {
-            const config: OpenClawConfig = {
+            publishConfig({
               gateway: { http: { endpoints: { [endpoint]: { enabled } } } },
-            };
-            setRuntimeConfigSnapshot(config, config);
+            });
 
             for (const requestPath of [
               "/v1/models",
@@ -96,62 +113,29 @@ describe("gateway OpenAI-compatible HTTP routes", () => {
     "hot reloads $name image limits for real HTTP requests",
     async ({ endpoint, path, override }) => {
       vi.mocked(agentCommandFromGatewayIngress).mockClear();
-      const body = JSON.stringify({
-        model: "openclaw/main",
-        ...(endpoint === "chatCompletions"
-          ? {
-              messages: [
-                {
-                  role: "user",
-                  content: [
-                    {
-                      type: "image_url",
-                      image_url: { url: `data:image/png;base64,${PNG_IMAGE_BASE64}` },
-                    },
-                  ],
-                },
-              ],
-            }
+      const image =
+        endpoint === "chatCompletions"
+          ? { type: "image_url", image_url: { url: `data:image/png;base64,${PNG_IMAGE_BASE64}` } }
           : {
-              input: [
-                {
-                  type: "message",
-                  role: "user",
-                  content: [
-                    {
-                      type: "input_image",
-                      source: { type: "base64", media_type: "image/png", data: PNG_IMAGE_BASE64 },
-                    },
-                  ],
-                },
-              ],
-            }),
-      });
+              type: "input_image",
+              source: { type: "base64", media_type: "image/png", data: PNG_IMAGE_BASE64 },
+            };
+      const body = JSON.stringify(mediaBody(path, [image]));
       await withGatewayServer({
         prefix: "openai-compat-image-limit-reload",
         resolvedAuth: AUTH_TOKEN,
         overrides: { [override]: true },
         run: async (server) => {
-          await new Promise<void>((resolve) => {
-            server.listen(0, "127.0.0.1", resolve);
-          });
+          const origin = await listen(server);
           try {
-            const address = server.address();
-            if (!address || typeof address === "string") {
-              throw new Error("Expected an HTTP listener address");
-            }
             for (const maxBytes of [1, 1024, 1]) {
-              const config: OpenClawConfig = {
+              publishConfig({
                 agents: { entries: { main: {} } },
                 gateway: { http: { endpoints: { [endpoint]: { images: { maxBytes } } } } },
-              };
-              setRuntimeConfigSnapshot(config, config);
-              const response = await fetch(`http://127.0.0.1:${address.port}${path}`, {
+              });
+              const response = await fetch(`${origin}${path}`, {
                 method: "POST",
-                headers: {
-                  authorization: "Bearer test-token",
-                  "content-type": "application/json",
-                },
+                headers: requestHeaders,
                 body,
               });
               const responseBody = await response.text();
@@ -162,9 +146,7 @@ describe("gateway OpenAI-compatible HTTP routes", () => {
             }
             expect(agentCommandFromGatewayIngress).toHaveBeenCalledTimes(1);
           } finally {
-            await new Promise<void>((resolve, reject) => {
-              server.close((error) => (error ? reject(error) : resolve()));
-            });
+            await close(server);
           }
         },
       });
@@ -199,31 +181,18 @@ async function close(server: Server): Promise<void> {
 
 function requestBody(input: { path: string; kind: "image" | "file" }, stream: boolean) {
   const urls = ["first", "second"].map((name) => `${SOURCE_ORIGIN}/${name}`);
-  return {
-    model: "openclaw/main",
+  return mediaBody(
+    input.path,
+    urls.map((url) =>
+      input.path === "/v1/chat/completions"
+        ? { type: "image_url", image_url: { url } }
+        : {
+            type: input.kind === "image" ? "input_image" : "input_file",
+            source: { type: "url", url },
+          },
+    ),
     stream,
-    ...(input.path === "/v1/chat/completions"
-      ? {
-          messages: [
-            {
-              role: "user",
-              content: urls.map((url) => ({ type: "image_url", image_url: { url } })),
-            },
-          ],
-        }
-      : {
-          input: [
-            {
-              type: "message",
-              role: "user",
-              content: urls.map((url) => ({
-                type: input.kind === "image" ? "input_image" : "input_file",
-                source: { type: "url", url },
-              })),
-            },
-          ],
-        }),
-  };
+  );
 }
 
 describe("HTTP media preparation cancellation", () => {
@@ -295,12 +264,12 @@ describe("HTTP media preparation cancellation", () => {
               },
             },
           };
-          setRuntimeConfigSnapshot(config, config);
+          publishConfig(config);
           server.on("request", (_req, res) => res.once("close", requestClosed.resolve));
           const origin = await listen(server);
           const client = http.request(`${origin}${testCase.path}`, {
             method: "POST",
-            headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+            headers: requestHeaders,
           });
           client.on("error", () => {});
           const completed =
@@ -311,11 +280,10 @@ describe("HTTP media preparation cancellation", () => {
           try {
             if (testCase.phase === "policy changed") {
               await firstStarted.promise;
-              const changed: OpenClawConfig = {
+              publishConfig({
                 ...config,
                 gateway: { ...config.gateway, allowRealIpFallback: true },
-              };
-              setRuntimeConfigSnapshot(changed, changed);
+              });
               firstResponse?.end(bytes);
             }
             if (completed) {

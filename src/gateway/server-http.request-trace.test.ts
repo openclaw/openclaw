@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   AgentDatabaseAdmissionError,
@@ -9,7 +9,6 @@ import {
 } from "../state/agent-database-admission.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
-import type { ResolvedGatewayAuth } from "./auth.js";
 import { buildControlUiSessionEntryUrl } from "./control-ui-session-entry-path.js";
 import { createGatewayHttpServer } from "./server-http.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
@@ -19,9 +18,27 @@ import { createGatewayPluginRequestHandler } from "./server/plugins-http.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 
-const resolvedAuth: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
-
 type HttpServerOptions = Parameters<typeof createGatewayHttpServer>[0];
+const servers: ReturnType<typeof createGatewayHttpServer>[] = [];
+const errorLogs: MockInstance[] = [];
+
+function spyError() {
+  const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+  errorLogs.push(spy);
+  return spy;
+}
+
+afterEach(async () => {
+  for (const server of servers.splice(0)) {
+    server.closeAllConnections();
+    await new Promise<void>((resolve, reject) => {
+      server.close((err) => (err ? reject(err) : resolve()));
+    });
+  }
+  for (const spy of errorLogs.splice(0)) {
+    spy.mockRestore();
+  }
+});
 
 function createServer(
   options: Pick<HttpServerOptions, "handleHooksRequest"> & Partial<HttpServerOptions>,
@@ -32,23 +49,19 @@ function createServer(
     controlUiBasePath: "",
     openAiChatCompletionsEnabled: false,
     openResponsesEnabled: false,
-    resolvedAuth,
+    resolvedAuth: { mode: "none", allowTailscale: false },
+    getRuntimeConfig: () => ({}),
     ...options,
   });
 }
 
 async function listen(server: ReturnType<typeof createGatewayHttpServer>): Promise<number> {
+  servers.push(server);
   return await new Promise<number>((resolve) => {
     server.listen(0, "127.0.0.1", () => {
       const address = server.address();
       resolve(typeof address === "object" && address ? address.port : 0);
     });
-  });
-}
-
-async function closeServer(server: ReturnType<typeof createGatewayHttpServer>): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    server.close((err) => (err ? reject(err) : resolve()));
   });
 }
 
@@ -123,81 +136,61 @@ describe("gateway HTTP request error cleanup", () => {
         return false;
       },
       handleWatchNodeRequest,
-      getRuntimeConfig: () => ({}),
     });
     const port = await listen(server);
 
-    try {
-      const request = fetch(`http://127.0.0.1:${port}/api/nodes/watch/example`);
-      if (destroy) {
-        await expect(request).rejects.toMatchObject({ name: "TypeError" });
-      } else {
-        const response = await request;
-        expect(response.status).toBe(200);
-        expect(await response.text()).toBe("already finished");
-      }
-      expect(handleWatchNodeRequest).not.toHaveBeenCalled();
-    } finally {
-      server.closeAllConnections();
-      await closeServer(server);
+    const request = fetch(`http://127.0.0.1:${port}/api/nodes/watch/example`);
+    if (destroy) {
+      await expect(request).rejects.toMatchObject({ name: "TypeError" });
+    } else {
+      const response = await request;
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe("already finished");
     }
+    expect(handleWatchNodeRequest).not.toHaveBeenCalled();
   });
 
   it("preserves a response the route already completed before throwing", async () => {
-    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    const errorLog = spyError();
     const server = createServer({
       handleHooksRequest: async (_req, res) => {
         res.end("complete");
         throw new Error("route failed after completing a response");
       },
-      getRuntimeConfig: () => ({}),
     });
     const port = await listen(server);
 
-    try {
-      const response = await fetch(`http://127.0.0.1:${port}/hooks/test`, {
-        signal: AbortSignal.timeout(1_000),
-      });
+    const response = await fetch(`http://127.0.0.1:${port}/hooks/test`, {
+      signal: AbortSignal.timeout(1_000),
+    });
 
-      expect(response.status).toBe(200);
-      expect(await response.text()).toBe("complete");
-      expect(errorLog).toHaveBeenCalledWith(
-        "[gateway-http] unhandled error in request handler:",
-        expect.any(Error),
-      );
-    } finally {
-      server.closeAllConnections();
-      await closeServer(server);
-      errorLog.mockRestore();
-    }
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("complete");
+    expect(errorLog).toHaveBeenCalledWith(
+      "[gateway-http] unhandled error in request handler:",
+      expect.any(Error),
+    );
   });
 
   it("aborts an incomplete unframed response after its route throws", async () => {
-    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    const errorLog = spyError();
     const server = createServer({
       handleHooksRequest: async (_req, res) => {
         res.write("partial");
         throw new Error("route failed after writing a partial response");
       },
-      getRuntimeConfig: () => ({}),
     });
     const port = await listen(server);
 
-    try {
-      await expect(
-        fetch(`http://127.0.0.1:${port}/hooks/test`, {
-          signal: AbortSignal.timeout(1_000),
-        }).then(async (response) => await response.text()),
-      ).rejects.toMatchObject({ name: "TypeError" });
-      expect(errorLog).toHaveBeenCalledWith(
-        "[gateway-http] unhandled error in request handler:",
-        expect.any(Error),
-      );
-    } finally {
-      server.closeAllConnections();
-      await closeServer(server);
-      errorLog.mockRestore();
-    }
+    await expect(
+      fetch(`http://127.0.0.1:${port}/hooks/test`, {
+        signal: AbortSignal.timeout(1_000),
+      }).then(async (response) => await response.text()),
+    ).rejects.toMatchObject({ name: "TypeError" });
+    expect(errorLog).toHaveBeenCalledWith(
+      "[gateway-http] unhandled error in request handler:",
+      expect.any(Error),
+    );
   });
 
   it.each([
@@ -237,7 +230,7 @@ describe("gateway HTTP request error cleanup", () => {
         ETag: '"report-version"',
         "Last-Modified": "Wed, 26 Aug 2026 12:00:00 GMT",
       };
-      const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+      const errorLog = spyError();
       const route = async (_req: IncomingMessage, res: ServerResponse) => {
         for (const [name, value] of Object.entries(headers)) {
           res.setHeader(name, value);
@@ -266,73 +259,51 @@ describe("gateway HTTP request error cleanup", () => {
         handleHooksRequest: owner === "hook" ? route : async () => false,
         handlePluginRequest: owner === "plugin" ? handlePluginRequest : undefined,
         shouldEnforcePluginGatewayAuth: () => false,
-        getRuntimeConfig: () => ({}),
       });
       const port = await listen(server);
 
-      try {
-        const response = await fetch(`http://127.0.0.1:${port}/failure`, {
-          signal: AbortSignal.timeout(1_000),
-        });
+      const response = await fetch(`http://127.0.0.1:${port}/failure`, {
+        signal: AbortSignal.timeout(1_000),
+      });
 
-        expect(response.status).toBe(pending ? 503 : 500);
-        expect(response.statusText).toBe(statusText);
-        expect(await response.text()).toBe(body);
-        expect(response.headers.get("retry-after")).toBe(pending ? "1" : null);
-        expect(errorLog).toHaveBeenCalledTimes(!pending && owner === "hook" ? 1 : 0);
-        expect(warn).toHaveBeenCalledTimes(!pending && owner === "plugin" ? 1 : 0);
-        expect(response.headers.get("content-type")).toBe("text/plain; charset=utf-8");
-        expect(response.headers.get("content-length")).toBe(String(Buffer.byteLength(body)));
-        expect(response.headers.get("content-encoding")).toBeNull();
-        expect(response.headers.get("transfer-encoding")).toBeNull();
-        expect(response.headers.get("trailer")).toBeNull();
-        expect.soft(response.headers.get("cache-control")).toBe("no-store");
-        for (const header of [
-          "content-disposition",
-          "content-range",
-          "content-language",
-          "content-location",
-          "etag",
-          "last-modified",
-        ]) {
-          expect.soft(response.headers.get(header), header).toBeNull();
-        }
-        expect(response.headers.get("access-control-allow-origin")).toBe("https://example.test");
-        expect(response.headers.get("x-content-type-options")).toBe("nosniff");
-      } finally {
-        server.closeAllConnections();
-        await closeServer(server);
-        errorLog.mockRestore();
+      expect(response.status).toBe(pending ? 503 : 500);
+      expect(response.statusText).toBe(statusText);
+      expect(await response.text()).toBe(body);
+      expect(response.headers.get("retry-after")).toBe(pending ? "1" : null);
+      expect(errorLog).toHaveBeenCalledTimes(!pending && owner === "hook" ? 1 : 0);
+      expect(warn).toHaveBeenCalledTimes(!pending && owner === "plugin" ? 1 : 0);
+      expect(response.headers.get("content-type")).toBe("text/plain; charset=utf-8");
+      expect(response.headers.get("content-length")).toBe(String(Buffer.byteLength(body)));
+      expect.soft(response.headers.get("cache-control")).toBe("no-store");
+      for (const header of Object.keys(headers).filter(
+        (name) => !["Content-Length", "Cache-Control"].includes(name),
+      )) {
+        expect(response.headers.get(header), header).toBeNull();
       }
+      expect(response.headers.get("access-control-allow-origin")).toBe("https://example.test");
+      expect(response.headers.get("x-content-type-options")).toBe("nosniff");
     },
   );
 
   it("preserves plugin route ownership when plugin dispatch fails", async () => {
-    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    const errorLog = spyError();
     const handlePluginRequest = vi.fn(async () => {
       throw new Error("plugin route dispatch failed");
     });
     const server = createServer({
       handleHooksRequest: async () => false,
       handlePluginRequest,
-      getRuntimeConfig: () => ({}),
     });
     const port = await listen(server);
 
-    try {
-      const response = await fetch(`http://127.0.0.1:${port}/plugin-failure`);
+    const response = await fetch(`http://127.0.0.1:${port}/plugin-failure`);
 
-      expect(response.status).toBe(500);
-      expect(await response.text()).toBe("Internal Server Error");
-      expect(handlePluginRequest).toHaveBeenCalledOnce();
-      expect(errorLog).toHaveBeenCalledWith(
-        "[gateway-http] unhandled error in request handler:",
-        expect.objectContaining({ message: "plugin route dispatch failed" }),
-      );
-    } finally {
-      server.closeAllConnections();
-      await closeServer(server);
-      errorLog.mockRestore();
-    }
+    expect(response.status).toBe(500);
+    expect(await response.text()).toBe("Internal Server Error");
+    expect(handlePluginRequest).toHaveBeenCalledOnce();
+    expect(errorLog).toHaveBeenCalledWith(
+      "[gateway-http] unhandled error in request handler:",
+      expect.objectContaining({ message: "plugin route dispatch failed" }),
+    );
   });
 });
