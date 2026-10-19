@@ -1,10 +1,10 @@
-import { For, Show, createEffect, createMemo, createSignal, onSettled, untrack } from "solid-js";
+import { For, Show, createMemo, createSignal, onSettled, untrack } from "solid-js";
 import type { CronCompactJob } from "../../../api/types.ts";
 import { pathForRoute } from "../../../app-route-paths.ts";
 import { gatewayPresentationScope } from "../../../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { loadCompactCronJobsPage } from "../../../lib/cron/jobs.ts";
+import { loadCompactCronJobsPage, retireCronJobsRequest } from "../../../lib/cron/jobs.ts";
 import { createInitialCronState } from "../../../lib/cron/state.ts";
 import { createGatewayConnectionLifecycle } from "../../../lib/gateway-connection-lifecycle.ts";
 import { canCallGatewayMethod, canPresentGatewayMethod } from "../../../lib/gateway-methods.ts";
@@ -44,9 +44,7 @@ export function createSessionAutomationInventory(
   let dirty = true;
   let active = true;
   let presentationScope = 0;
-  // The presentation effect owns changes; request admission samples its current value.
-  const readPresented = () => untrack(presented);
-  const visible = (isPresented = readPresented()) =>
+  const visible = (isPresented = presented()) =>
     active &&
     host()?.isConnected === true &&
     isPresented &&
@@ -66,6 +64,7 @@ export function createSessionAutomationInventory(
   };
 
   function reset(source: ApplicationGateway | undefined, key: string, retain = false) {
+    retireCronJobsRequest(cron);
     readAccess = canPresentGatewayMethod(source?.snapshot, "cron.list", "operator.read", {
       requireAdvertisement: false,
     });
@@ -103,7 +102,7 @@ export function createSessionAutomationInventory(
 
   async function load({
     append = false,
-    isPresented = readPresented(),
+    isPresented = presented(),
     event,
   }: {
     append?: boolean;
@@ -133,54 +132,69 @@ export function createSessionAutomationInventory(
     publish();
   }
 
-  // This shared, non-rendering owner binds transport work to the source lifetime.
-  createEffect(binding, ({ source, key }) => {
-    reset(source, key);
-    if (!source) {
-      return undefined;
-    }
-    const lifecycle = createGatewayConnectionLifecycle(source.snapshot);
-    let identity = JSON.stringify(resolveUiConversationIdentity(source.snapshot, key));
-    // Reject obsolete event delivery before queued binding cleanup runs.
-    const current = () => props.gateway === source && props.sessionKey === key;
-    // Connection publications retire request scopes before the next cron event is delivered.
-    const unsubscribe = source.subscribe((snapshot) => {
-      if (!current()) {
-        return;
-      }
-      const nextIdentity = JSON.stringify(resolveUiConversationIdentity(snapshot, key));
-      const changed = lifecycle.transition(snapshot);
-      const nextReadAccess = canPresentGatewayMethod(snapshot, "cron.list", "operator.read", {
-        requireAdvertisement: false,
-      });
-      if (changed || identity !== nextIdentity || readAccess !== nextReadAccess) {
-        reset(source, key, identity === nextIdentity && readAccess === nextReadAccess);
-        identity = nextIdentity;
-      }
-      if (dirty) {
-        void load();
-      }
-    });
-    const unsubscribeEvents = source.subscribeEvents((event) => {
-      if (current() && event.event === "cron") {
-        dirty = true;
-        void load({ event: event.payload });
-      }
-    });
-    void load();
-    return () => {
-      unsubscribe();
-      unsubscribeEvents();
-      lifecycle.dispose();
-    };
-  });
-  // Presentation changes suspend or resume the Gateway inventory request.
-  createEffect(presented, (value) => {
-    dirty ||= !value;
-    if (value) {
-      void load({ isPresented: value });
-    }
-  });
+  // Mount this outlet once in the session owner; consumers share its retained inventory.
+  const lifecycle = (
+    <Show when={binding()} keyed>
+      {({ source, key }) => {
+        onSettled(() => {
+          reset(source, key);
+          if (!source) {
+            return undefined;
+          }
+          const lifecycle = createGatewayConnectionLifecycle(source.snapshot);
+          let identity = JSON.stringify(resolveUiConversationIdentity(source.snapshot, key));
+          // Reject obsolete event delivery before queued binding cleanup runs.
+          const current = () => props.gateway === source && props.sessionKey === key;
+          // Connection publications retire request scopes before the next cron event is delivered.
+          const unsubscribe = source.subscribe((snapshot) => {
+            if (!current()) {
+              return;
+            }
+            const nextIdentity = JSON.stringify(resolveUiConversationIdentity(snapshot, key));
+            const changed = lifecycle.transition(snapshot);
+            const nextReadAccess = canPresentGatewayMethod(snapshot, "cron.list", "operator.read", {
+              requireAdvertisement: false,
+            });
+            if (changed || identity !== nextIdentity || readAccess !== nextReadAccess) {
+              reset(source, key, identity === nextIdentity && readAccess === nextReadAccess);
+              identity = nextIdentity;
+            }
+            if (dirty) {
+              void load();
+            }
+          });
+          const unsubscribeEvents = source.subscribeEvents((event) => {
+            if (current() && event.event === "cron") {
+              dirty = true;
+              void load({ event: event.payload });
+            }
+          });
+          void load();
+          return () => {
+            unsubscribe();
+            unsubscribeEvents();
+            lifecycle.dispose();
+            retireCronJobsRequest(cron);
+          };
+        });
+        return (
+          <For each={[presented()]}>
+            {(shown) => {
+              onSettled(() => {
+                if (shown) {
+                  void load({ isPresented: true });
+                }
+                return () => {
+                  dirty = true;
+                };
+              });
+              return null;
+            }}
+          </For>
+        );
+      }}
+    </Show>
+  );
   onSettled(() => {
     const activate = () => {
       if (dirty) {
@@ -198,6 +212,7 @@ export function createSessionAutomationInventory(
   });
 
   return {
+    lifecycle,
     jobs: (): readonly CronCompactJob[] => state().cronJobs,
     total: () => state().cronJobsTotal,
     hasMore: () => state().cronJobsHasMore,
@@ -236,8 +251,8 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
       }
     };
   };
-  const inventory =
-    untrack(() => props.inventory) ?? createSessionAutomationInventory(props, () => host);
+  const initialInventory = untrack(() => props.inventory);
+  const inventory = initialInventory ?? createSessionAutomationInventory(props, () => host);
   const presented = createMemo(() => props.presented);
   const sessionKey = createMemo(() => props.sessionKey);
   // Reopening or replacing the session resets only the local reveal count.
@@ -454,6 +469,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
   );
   return (
     <openclaw-chat-summary-automations ref={(element) => (host = element)}>
+      {initialInventory ? null : inventory.lifecycle}
       <Show when={inventory.readable()}>
         <Show
           when={inventory.jobs().length > 0}
