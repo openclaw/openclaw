@@ -492,11 +492,9 @@ export class MarkdownDomReconciler {
           : [];
         node.end.before(template.content);
         if (registerSessionTitle && targets.length) {
-          const releases = targets.map((target) => {
-            const label = document.createElement("span");
-            label.className = "session-label";
-            return registerSessionTitle(target, label);
-          });
+          const releases = targets.map((target) =>
+            registerSessionTitle(target, document.createElement("span")),
+          );
           node.releaseSessionTitles = () => releases.forEach((release) => release());
         }
       }

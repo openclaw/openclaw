@@ -20,18 +20,16 @@ const bootstrap = new LazyHovercardBootstrap<SessionProgressHovercardProvider>({
 installSessionTitleRegistrar((target, label) => {
   let active = true;
   let release: (() => void) | undefined;
-  // Markdown fragments can register while their caller is still mounting them.
-  void Promise.resolve().then(async () => {
-    const provider = bootstrap.providerFor(target);
-    if (!active || !provider) {
-      return;
-    }
-    await bootstrap.define();
-    await provider.updateComplete;
-    if (active && target.isConnected && bootstrap.providerFor(target) === provider) {
-      release = provider.registerSessionTitleTarget(target, label);
-    }
-  });
+  // The registrar promise lets producers finish mounting before this lookup.
+  const provider = bootstrap.providerFor(target);
+  if (provider) {
+    void bootstrap.define().then(async () => {
+      await provider.updateComplete;
+      if (active && target.isConnected && bootstrap.providerFor(target) === provider) {
+        release = provider.registerSessionTitleTarget(target, label);
+      }
+    });
+  }
   return () => {
     active = false;
     release?.();
