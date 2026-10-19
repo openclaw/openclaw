@@ -163,7 +163,7 @@ it("holds an exact Claw package owner until async release completes", async () =
       throw new Error("Expected the package lease to be acquired");
     }
     try {
-      lease.heartbeat();
+      lease.assertCurrent();
       const database = openOpenClawStateDatabase({ env: state.env });
       expect(leaseStore.readOpenClawStateLeaseExpiry(database.db, lease.identity)).toBeGreaterThan(
         Date.now(),

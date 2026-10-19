@@ -3047,7 +3047,7 @@ const reviewedOperations = new Map([
         tier: "T3",
         operations: ["stageHookInstall", "stageHookInstall.rollback"],
         evidence:
-          "CLI install/update only: cli/hook-install-persistence.ts calls stageHookInstall; hooks/update.ts reaches it only through cli/plugins-update-command.ts. Rollback belongs to that same offline install transaction.",
+          "CLI install/update only: cli/plugins-install-command.ts calls stageHookInstall; hooks/update.ts reaches it only through cli/plugins-update-command.ts. Rollback belongs to that same offline install transaction.",
       },
     ],
   ],
