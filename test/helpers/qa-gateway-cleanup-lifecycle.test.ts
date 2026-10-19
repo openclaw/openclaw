@@ -6,6 +6,10 @@ import { collectErrorGraphCandidates } from "@openclaw/normalization-core/error-
 import { expect, it, vi, type TestContext } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "./promise.js";
 
+type Evidence = typeof import("../e2e/qa-lab/runtime/script-evidence.js");
+type Wire = typeof import("../e2e/qa-lab/runtime/paired-node-worker-wire-fixture.js");
+const generationModule = "../e2e/qa-lab/runtime/worker-inference-generation-reload.js";
+
 it.for(["cancelled import", "failed import", "failed evidence", "cancelled close"] as const)(
   "joins generation work before reset and the next case (%s)",
   (fault, context) => {
@@ -22,8 +26,7 @@ it.for(["cancelled import", "failed import", "failed evidence", "cancelled close
       const resets: boolean[] = [];
       const writes: Array<{ artifactBase: string; details?: string }> = [];
       const roots = new Set<string>();
-      const argv = process.argv;
-      const exitCode = process.exitCode;
+      const originalProcess = { argv: process.argv, exitCode: process.exitCode };
       const tmpdir = process.env.TMPDIR;
       const remove = fs.rm;
       let released = false;
@@ -39,27 +42,18 @@ it.for(["cancelled import", "failed import", "failed evidence", "cancelled close
         vi.resetModules();
       };
       const realDoMock = vi.doMock.bind(vi);
-      const record = (_name: string, body: (context: TestContext) => Promise<unknown>) => {
-        cases.push(body);
-      };
-      const captureIt = Object.assign(record, {
-        each: (values: string[]) => (_name: string, body: (value: string) => Promise<unknown>) => {
-          for (const value of values) {
-            cases.push(() => body(value));
-          }
-        },
-        for:
-          (values: string[]) =>
-          (_name: string, body: (value: string, context: TestContext) => Promise<unknown>) => {
-            for (const value of values) {
-              cases.push((ctx) => body(value, ctx));
-            }
-          },
-      });
       vi.doMock("vitest", () => ({
         expect,
         describe: (_name: string, body: () => void) => body(),
-        it: captureIt,
+        // Only the generation table is exercised; sibling bodies stay in their own suite.
+        it: Object.assign(() => {}, {
+          each: () => () => {},
+          for:
+            (values: string[]) =>
+            (_name: string, body: (value: string, context: TestContext) => Promise<unknown>) => {
+              cases.push(...values.map((value) => (ctx: TestContext) => body(value, ctx)));
+            },
+        }),
         afterEach: (hook: () => unknown) => after.push(hook),
         vi: {
           ...vi,
@@ -69,12 +63,10 @@ it.for(["cancelled import", "failed import", "failed evidence", "cancelled close
               realDoMock(id, factory);
             } else if (id.endsWith("/script-evidence.js")) {
               realDoMock(id, async (importOriginal) => {
-                const original = (await factory(
-                  importOriginal,
-                )) as typeof import("../e2e/qa-lab/runtime/script-evidence.js");
+                const original = (await factory(importOriginal)) as Evidence;
                 return {
                   createQaScriptEvidenceWriter: (
-                    options: Parameters<typeof original.createQaScriptEvidenceWriter>[0],
+                    options: Parameters<Evidence["createQaScriptEvidenceWriter"]>[0],
                   ) => {
                     const writer = original.createQaScriptEvidenceWriter(options);
                     return {
@@ -92,9 +84,7 @@ it.for(["cancelled import", "failed import", "failed evidence", "cancelled close
               });
             } else if (id.endsWith("/paired-node-worker-wire-fixture.js")) {
               realDoMock(id, async (importOriginal) => {
-                const original = (await factory(
-                  importOriginal,
-                )) as typeof import("../e2e/qa-lab/runtime/paired-node-worker-wire-fixture.js");
+                const original = (await factory(importOriginal)) as Wire;
                 return {
                   ...original,
                   async closeWireServer(server: Server) {
@@ -128,7 +118,7 @@ it.for(["cancelled import", "failed import", "failed evidence", "cancelled close
           },
         },
       }));
-      vi.doMock("../e2e/qa-lab/runtime/worker-inference-generation-reload.js", async (original) => {
+      vi.doMock(generationModule, async (original) => {
         importing.resolve();
         await gate.promise;
         if (fault === "failed import") {
@@ -160,20 +150,15 @@ it.for(["cancelled import", "failed import", "failed evidence", "cancelled close
         gate.resolve();
         const outcome = await first;
         await teardown;
-        // The old temp tracker has a separate earlier hook; run it only after join.
-        for (const hook of after.slice(0, -1)) {
-          await hook();
-        }
         const firstWrites = [...writes];
-        vi.doUnmock("../e2e/qa-lab/runtime/worker-inference-generation-reload.js");
+        vi.doUnmock(generationModule);
         reset(mocks);
         firstCase = false;
         await cases[1]!(context);
         for (const hook of after.toReversed()) {
           await hook();
         }
-        expect(resetBeforeJoin).toBe(false);
-        expect(completedBeforeJoin).toBe(false);
+        expect([resetBeforeJoin, completedBeforeJoin]).toEqual([false, false]);
         expect(collectErrorGraphCandidates(outcome, (error) => [error.cause])).toContain(reason);
         const firstWriteCount = fault === "failed evidence" || fault === "cancelled close" ? 1 : 0;
         expect(firstWrites).toHaveLength(firstWriteCount);
@@ -184,8 +169,8 @@ it.for(["cancelled import", "failed import", "failed evidence", "cancelled close
           expect(server.listening).toBe(false);
           expect(await promisify(server.getConnections).call(server)).toBe(0);
         }
-        expect(process.argv).toBe(argv);
-        expect(process.exitCode).toBe(exitCode);
+        expect(process.argv).toBe(originalProcess.argv);
+        expect(process.exitCode).toBe(originalProcess.exitCode);
         expect(process.env.TMPDIR).toBe(tmpdir);
         expect(fs.rm).toBe(remove);
         const [firstRoot, secondRoot] = [...roots];
@@ -203,25 +188,15 @@ it.for(["cancelled import", "failed import", "failed evidence", "cancelled close
           await first;
           await teardown;
         } finally {
-          reset([
-            "vitest",
-            "../e2e/qa-lab/runtime/worker-inference-generation-reload.js",
-            ...mocks,
-          ]);
-          process.argv = argv;
-          process.exitCode = exitCode;
+          reset(["vitest", generationModule, ...mocks]);
+          Object.assign(process, originalProcess);
           for (const root of roots) {
             await fs.rm(root, { recursive: true, force: true });
           }
         }
       }
     });
-    context.onTestFinished(() =>
-      work.then(
-        () => {},
-        () => {},
-      ),
-    );
+    context.onTestFinished(() => work.catch(() => {}));
     return work;
   },
 );

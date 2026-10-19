@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import { createFixtureLifetime } from "./fixture-lifetime.js";
 import { waitForDead, waitForPidFile } from "./process-wait.js";
@@ -62,8 +62,7 @@ console.log(JSON.stringify({ answer: Answer.value, bun: Boolean(process.versions
       5_000,
       { executable: runtime === "current" ? process.execPath : undefined },
     );
-    expect(result.error, result.stderr).toBeUndefined();
-    expect(result.status, result.stderr).toBe(0);
+    expect(result, result.stderr).toMatchObject({ error: undefined, status: 0 });
     expect(JSON.parse(result.stdout)).toEqual({
       answer: 42,
       bun: runtime === "current" && Boolean(process.versions.bun),
@@ -97,13 +96,14 @@ if(mode==='at limit') {
     const pid = Number(readFileSync(pidFile, "utf8"));
     expect(() => process.kill(pid, 0)).toThrow();
     if (mode === "at limit") {
-      expect(result.error).toBeUndefined();
-      expect(result.status).toBe(0);
+      expect(result).toMatchObject({ error: undefined, status: 0 });
       expect(result.stdout).toBe("a".repeat(maxBuffer));
       expect(result.stderr).toBe("b".repeat(maxBuffer));
     } else {
-      expect(result.error).toHaveProperty("code", "ERR_CHILD_PROCESS_STDIO_MAXBUFFER");
-      expect(result.status).toBeNull();
+      expect(result).toMatchObject({
+        error: { code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" },
+        status: null,
+      });
       expect(Buffer.byteLength(result.stdout)).toBeLessThanOrEqual(maxBuffer);
       expect(Buffer.byteLength(result.stderr)).toBeLessThanOrEqual(maxBuffer);
     }
@@ -115,10 +115,8 @@ it.skipIf(process.platform === "win32")(
   async ({ signal }) => {
     const ownerRoot = tempDirs.make("node-script-owner-");
     const owner = createVitestResourceOwner(ownerRoot);
-    for (const key of ["TMPDIR", "TMP", "TEMP"]) {
-      vi.stubEnv(key, ownerRoot);
-    }
-    const fixture = createFixtureLifetime();
+    const env = { ...process.env, TMPDIR: ownerRoot, TMP: ownerRoot, TEMP: ownerRoot };
+    const fixture = createFixtureLifetime(ownerRoot);
     const directory = fixture.createTempDir("openclaw-node-script-uncertain-");
     const script = join(directory, "parent.mjs");
     const pidFile = join(directory, "leaf.pid");
@@ -145,7 +143,7 @@ child.once('message',()=>process.exit(0));
 `,
     );
     const command = fixture.track(
-      runNodeScript(script, process.env, undefined, { signal, requireProcessTreeExit: true }),
+      runNodeScript(script, env, undefined, { signal, requireProcessTreeExit: true }),
     );
     let cleanupPromise: Promise<void> | undefined;
     const cleanup = () =>
@@ -161,7 +159,6 @@ child.once('message',()=>process.exit(0));
         }
         await fixture.cleanup();
         rmSync(directory, { recursive: true, force: true });
-        vi.unstubAllEnvs();
       })());
     cleanupFixture = cleanup;
     try {
