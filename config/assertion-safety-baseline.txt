@@ -2384,7 +2384,6 @@ src/shared/deferred.ts	1
 src/shared/frontmatter.ts	1
 src/shared/global-singleton.ts	4
 src/shared/json-schema-defaults.ts	17
-src/shared/message-content-blocks.ts	2
 src/shared/node-list-parse.ts	3
 src/shared/node-presence.ts	1
 src/shared/node-resolve.ts	1

@@ -63,6 +63,7 @@ export async function createInitialSubagentSession(input: {
   requesterInternalKey: string;
   parentTarget: GatewaySessionStoreTargetWithStore;
   senderIsOwner?: boolean;
+  gitContributorProfileId?: string;
   expectedParentSessionId?: string;
   assertActive?: SessionSourceAssertion;
   creationPolicy: Pick<Parameters<typeof buildSessionCreationStamp>[0], "actor" | "sandbox">;
@@ -302,8 +303,15 @@ export async function createInitialSubagentSession(input: {
                     ...params.creationPolicy,
                     ...(!params.incognito
                       ? {
-                          inheritedGitContributorProfileIds:
-                            inheritSessionGitContributorProfileIds(parentEntry),
+                          inheritedGitContributorProfileIds: inheritSessionGitContributorProfileIds(
+                            parentEntry,
+                            {
+                              config: params.cfg,
+                              agentId: params.requesterAgentId,
+                              sessionKey: params.requesterInternalKey,
+                              requesterProfileId: params.gitContributorProfileId,
+                            },
+                          ),
                         }
                       : {}),
                   }),

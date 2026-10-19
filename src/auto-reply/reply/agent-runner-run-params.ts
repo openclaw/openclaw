@@ -159,6 +159,7 @@ export function buildReplyRunStateParams(run: FollowupRun["run"]) {
     ownerNumbers: run.ownerNumbers,
     inputProvenance: run.inputProvenance,
     senderIsOwner: run.senderIsOwner,
+    gitContributorProfileId: run.gitContributorProfileId,
     conversationToolPolicy: run.conversationToolPolicy,
     channelContext: run.channelContext,
     approvalReviewerDeviceId: run.approvalReviewerDeviceId,

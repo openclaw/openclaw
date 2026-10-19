@@ -563,7 +563,7 @@ it(
               },
             });
             expect(result.publication).toBe("published");
-            onCommitted?.();
+            await onCommitted?.();
           },
         });
       let batchChild = await addRecoveryChild(batchChildMarker, {
