@@ -406,6 +406,7 @@ function createServerMcpRuntime(
             context: nativeContext,
             signal: lifecycleAbortController.signal,
             invalidateCatalog,
+            validatorForCall: (name) => createdSession.toolMetadata?.validatorForCall(name),
             retire: async () => {
               if (currentSession === createdSession) {
                 invalidateCatalog();
@@ -850,9 +851,7 @@ function createServerMcpRuntime(
     },
     async listPrompts(requestedServer) {
       const session = await getActiveSession(requestedServer);
-      return await runGuardedServerRequest(session, async () =>
-        collectServerItems(session, "prompts"),
-      );
+      return runGuardedServerRequest(session, () => collectServerItems(session, "prompts"));
     },
     async getPrompt(requestedServer, name, args) {
       const session = await getActiveSession(requestedServer);

@@ -23,6 +23,7 @@ import {
   withGuardedFetchRequestAuthority,
 } from "../infra/net/fetch-request-authority.js";
 import { logWarn } from "../logger.js";
+import type { McpToolCatalogMetadata } from "./mcp-tool-metadata.js";
 import type {
   NativeMcpClientContext,
   NativeMcpRequestOptions,
@@ -53,6 +54,7 @@ export function createNativeMcpClientBridge(params: {
   context: NativeMcpClientContext;
   signal: AbortSignal;
   invalidateCatalog: () => void;
+  validatorForCall: McpToolCatalogMetadata["validatorForCall"];
   retire: () => Promise<void>;
   acquireLease: () => () => void;
   runRequest: <T>(
@@ -299,6 +301,7 @@ export function createNativeMcpClientBridge(params: {
       input: Record<string, unknown>,
       schema: StandardSchemaV1<unknown, T>,
       options: NativeMcpRequestOptions,
+      validateResult?: (result: T) => void,
     ): Promise<NativeMcpResponse<T>> => {
       const result = await run(options, (requestOptions) =>
         params.transportType === "stdio"
@@ -309,6 +312,7 @@ export function createNativeMcpClientBridge(params: {
           : client.request({ method, params: input }, schema, requestOptions),
       );
       if (!isInputRequiredResult(result)) {
+        validateResult?.(result);
         return { kind: "complete", result };
       }
       let resumed = false;
@@ -337,6 +341,7 @@ export function createNativeMcpClientBridge(params: {
                 nextOptions.assertCurrent();
               },
             },
+            validateResult,
           );
         },
       };
@@ -367,7 +372,9 @@ export function createNativeMcpClientBridge(params: {
         ),
       callTool: async (input, options) => {
         if (params.transportType === "stdio") {
-          return flow("tools/call", input, CallToolResultSchema, options);
+          // Keep dispatch-time catalog validation through every continuation.
+          const validateResult = params.validatorForCall(input.name);
+          return flow("tools/call", input, CallToolResultSchema, options, validateResult);
         }
         // The SDK lacks a manual-result callTool overload; HTTP retains its header mirroring.
         return {
