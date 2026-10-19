@@ -19,6 +19,26 @@ function expectAdd(params: Record<string, unknown>) {
     expect.objectContaining(params),
   );
 }
+function expectUpdate(id: string, patch: Record<string, unknown>, revision?: string) {
+  expect(gateway.mock.calls).toEqual(
+    revision
+      ? [
+          ["cron.get", expect.anything(), { id }],
+          ["cron.update", expect.anything(), { id, expectedConfigRevision: revision, patch }],
+        ]
+      : [["cron.update", expect.anything(), { id, patch }]],
+  );
+}
+function updatePatch() {
+  const params = gateway.mock.calls[0]?.[2] as { patch?: Record<string, unknown> } | undefined;
+  return params?.patch;
+}
+async function rejectDottedKey(key: string, value: string) {
+  await expect(execute({ action: "update", jobId: "job", [key]: value })).rejects.toThrow(
+    "job required",
+  );
+  expect(gateway).not.toHaveBeenCalled();
+}
 
 beforeEach(() => {
   setRuntimeConfigSnapshot({});
@@ -94,14 +114,7 @@ describe("cron shorthand recovery", () => {
     });
     const trigger = { script: "json({ fire: true })", once: false };
     await execute({ action: "update", jobId: "job", trigger });
-    expect(gateway.mock.calls).toEqual([
-      ["cron.get", expect.anything(), { id: "job" }],
-      [
-        "cron.update",
-        expect.anything(),
-        { id: "job", expectedConfigRevision: "sha256:trigger", patch: { trigger } },
-      ],
-    ]);
+    expectUpdate("job", { trigger }, "sha256:trigger");
   });
 
   it("repairs recognized padded keys (#95407)", async () => {
@@ -149,8 +162,6 @@ describe("cron shorthand recovery", () => {
   });
 
   it("merges sibling dotted keys under one recovered object (#120616)", async () => {
-    // The first field creates the payload object; the second meets that parent
-    // and must continue into it instead of being kept as a literal key.
     await execute({
       action: "update",
       jobId: "job-dotted-siblings",
@@ -158,14 +169,10 @@ describe("cron shorthand recovery", () => {
       "job.payload.kind": "agentTurn",
     });
 
-    const params = gateway.mock.calls[0]?.[2] as { patch?: Record<string, unknown> };
-    expect(params.patch).toEqual({ payload: { kind: "agentTurn", message: "after" } });
+    expect(updatePatch()).toEqual({ payload: { kind: "agentTurn", message: "after" } });
   });
 
   it("keeps the explicit structured value authoritative over a conflicting dotted key (#120616)", async () => {
-    // The explicit payload is a valid update on its own. Forwarding the extra
-    // dotted key as well made the whole update fail a strict gateway patch, so
-    // the canonical value stands and the redundant key is dropped.
     await execute({
       action: "update",
       jobId: "job-dotted-conflict",
@@ -173,46 +180,26 @@ describe("cron shorthand recovery", () => {
       "job.payload.message": "after",
     });
 
-    const params = gateway.mock.calls[0]?.[2] as { patch?: Record<string, unknown> };
-    expect(params.patch).toHaveProperty("payload.message", "before");
-    expect(params.patch).not.toHaveProperty("job.payload.message");
+    expect(updatePatch()).toHaveProperty("payload.message", "before");
+    expect(updatePatch()).not.toHaveProperty("job.payload.message");
   });
 
   it("recovers quoted dotted job keys (#120616)", async () => {
-    // The report includes literal quote characters around the dotted name.
     await execute({
       action: "update",
       jobId: "job-dotted-quoted",
       '"job.payload.message"': "after",
     });
 
-    const params = gateway.mock.calls[0]?.[2] as { patch?: Record<string, unknown> };
-    expect(params.patch).toEqual({ payload: { kind: "agentTurn", message: "after" } });
+    expect(updatePatch()).toEqual({ payload: { kind: "agentTurn", message: "after" } });
   });
 
   it("does not nest dotted keys rooted at a scalar cron field (#120616)", async () => {
-    // Only object-typed cron fields are containers in the gateway schema, so a
-    // dot inside a scalar such as a job name stays a plain unrecognized key
-    // instead of being reshaped into a path.
-    await expect(
-      execute({
-        action: "update",
-        jobId: "job-dotted-name",
-        "job.name": "nightly.report",
-      }),
-    ).rejects.toThrow("job required");
-    expect(gateway).not.toHaveBeenCalled();
+    await rejectDottedKey("job.name", "nightly.report");
   });
 
   it("does not nest dotted keys that would reach Object.prototype (#120616)", async () => {
-    await expect(
-      execute({
-        action: "update",
-        jobId: "job-dotted-proto",
-        "job.payload.__proto__.polluted": "yes",
-      }),
-    ).rejects.toThrow("job required");
-    expect(gateway).not.toHaveBeenCalled();
+    await rejectDottedKey("job.payload.__proto__.polluted", "yes");
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 });
@@ -230,18 +217,11 @@ describe("cron schedule updates", () => {
       expr: "0 8 * * *",
       scheduleKind: "cron",
     });
-    expect(gateway.mock.calls).toEqual([
-      ["cron.get", expect.anything(), { id: "job-kind" }],
-      [
-        "cron.update",
-        expect.anything(),
-        {
-          id: "job-kind",
-          expectedConfigRevision: "sha256:test",
-          patch: { schedule: { expr: "0 8 * * *", kind: "cron", tz: "Asia/Shanghai" } },
-        },
-      ],
-    ]);
+    expectUpdate(
+      "job-kind",
+      { schedule: { expr: "0 8 * * *", kind: "cron", tz: "Asia/Shanghai" } },
+      "sha256:test",
+    );
   });
 
   it.each([
@@ -252,10 +232,7 @@ describe("cron schedule updates", () => {
     "updates explicit timezones and unrelated fields without reading the job: %j",
     async (patch) => {
       await execute({ action: "update", id: "job-fast-path", job: patch });
-      expect(gateway).toHaveBeenCalledExactlyOnceWith("cron.update", expect.anything(), {
-        id: "job-fast-path",
-        patch,
-      });
+      expectUpdate("job-fast-path", patch);
     },
   );
 
@@ -266,13 +243,6 @@ describe("cron schedule updates", () => {
     gateway.mockResolvedValueOnce({ id: "job-no-tz", configRevision: "sha256:test", schedule });
     const patch = { schedule: { kind: "cron", expr: "0 8 * * *" } };
     await execute({ action: "update", id: "job-no-tz", job: patch });
-    expect(gateway.mock.calls).toEqual([
-      ["cron.get", expect.anything(), { id: "job-no-tz" }],
-      [
-        "cron.update",
-        expect.anything(),
-        { id: "job-no-tz", expectedConfigRevision: "sha256:test", patch },
-      ],
-    ]);
+    expectUpdate("job-no-tz", patch, "sha256:test");
   });
 });

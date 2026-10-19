@@ -40,13 +40,16 @@ function recorder(boardSnapshot: BoardSnapshot = snapshot) {
     return boardSnapshot as T;
   };
   return {
+    tool: createDashboardTool({
+      agentSessionKey: snapshot.sessionKey,
+      callGateway,
+      emitCommand: (command) => {
+        commands.push(command);
+        return 2;
+      },
+    }),
     calls,
     commands,
-    callGateway,
-    emitCommand: (command: { sessionKey: string; command: BoardCommand }) => {
-      commands.push(command);
-      return 2;
-    },
   };
 }
 
@@ -88,6 +91,8 @@ function createGatewayAffinityHarness(revision: number) {
 describe("dashboard tool", () => {
   it("declares dashboard actions without overriding widget placement", () => {
     const tool = createDashboardTool();
+    const accepts = (args: Record<string, unknown>, valid = true) =>
+      expect(Value.Check(tool.parameters, args)).toBe(valid);
     const directoryDescription = tool.description.slice(0, 177);
     expect(tool.requiredClientCaps).toBeUndefined();
     expect(tool.description).toContain("stable names");
@@ -116,35 +121,19 @@ describe("dashboard tool", () => {
         },
       },
     });
-    expect(Value.Check(tool.parameters, { action: "widget_move", name: "status" })).toBe(true);
-    expect(
-      Value.Check(tool.parameters, {
-        action: "widget_put",
-        name: "work-item",
-        pluginKind: "workboard:card",
-        props: { cardId: "card-123" },
-      }),
-    ).toBe(true);
-    expect(Value.Check(tool.parameters, { action: "unknown" })).toBe(false);
-    expect(
-      Value.Check(tool.parameters, { action: "set_presentation", presentation: "expanded" }),
-    ).toBe(true);
-    expect(
-      Value.Check(tool.parameters, { action: "tab_update", tabId: "main", chatDock: "left" }),
-    ).toBe(false);
-    expect(Value.Check(tool.parameters, { action: "set_presentation", dock: "left" })).toBe(false);
-    expect(
-      Value.Check(tool.parameters, {
-        action: "set_default_presentation",
-        presentation: "expanded",
-      }),
-    ).toBe(true);
-    expect(
-      Value.Check(tool.parameters, {
-        action: "set_default_presentation",
-        presentation: "fullscreen",
-      }),
-    ).toBe(false);
+    accepts({ action: "widget_move", name: "status" });
+    accepts({
+      action: "widget_put",
+      name: "work-item",
+      pluginKind: "workboard:card",
+      props: { cardId: "card-123" },
+    });
+    accepts({ action: "unknown" }, false);
+    accepts({ action: "set_presentation", presentation: "expanded" });
+    accepts({ action: "tab_update", tabId: "main", chatDock: "left" }, false);
+    accepts({ action: "set_presentation", dock: "left" }, false);
+    accepts({ action: "set_default_presentation", presentation: "expanded" });
+    accepts({ action: "set_default_presentation", presentation: "fullscreen" }, false);
   });
 
   it("dispatches through the admitted Gateway and fences replacement or retirement", async () => {
@@ -261,12 +250,7 @@ describe("dashboard tool", () => {
       ],
     };
     const harness = recorder(boardSnapshot);
-    const tool = createDashboardTool({
-      agentSessionKey: "agent:main:main",
-      callGateway: harness.callGateway,
-    });
-
-    const result = await tool.execute("read", { action: "read" });
+    const result = await harness.tool.execute("read", { action: "read" });
 
     expect(result.details).toMatchObject({
       widgets: [
@@ -302,57 +286,30 @@ describe("dashboard tool", () => {
     [{ action: "set_presentation" }, "presentation required"],
   ])("rejects invalid presentation command %j before broadcasting", async (args, message) => {
     const harness = recorder();
-    const tool = createDashboardTool({
-      agentSessionKey: "agent:main:main",
-      emitCommand: harness.emitCommand,
-      callGateway: harness.callGateway,
-    });
-    await expect(tool.execute("command", args)).rejects.toThrow(message);
+    await expect(harness.tool.execute("command", args)).rejects.toThrow(message);
     expect(harness.commands).toEqual([]);
     expect(harness.calls).toEqual([]);
   });
 
   it.each([
-    [
-      "tab_create",
-      { tabId: "notes", title: "Notes" },
-      { kind: "tab_create", tabId: "notes", title: "Notes" },
-    ],
-    [
-      "tab_update",
-      { tabId: "notes", title: "New", position: 0 },
-      { kind: "tab_update", tabId: "notes", title: "New", position: 0 },
-    ],
-    ["tab_delete", { tabId: "notes" }, { kind: "tab_delete", tabId: "notes" }],
-    ["tabs_reorder", { tabIds: ["two", "one"] }, { kind: "tabs_reorder", tabIds: ["two", "one"] }],
-    [
-      "widget_move",
-      { name: "status", tabId: "notes", after: "clock" },
-      { kind: "widget_move", name: "status", tabId: "notes", after: "clock" },
-    ],
-    [
-      "widget_resize",
-      { name: "status", sizeW: 8, sizeH: 6 },
-      { kind: "widget_resize", name: "status", sizeW: 8, sizeH: 6 },
-    ],
-    ["widget_remove", { name: "status" }, { kind: "widget_remove", name: "status" }],
-  ])("maps %s to one board.update op", async (action, args, op) => {
+    ["tab_create", { tabId: "notes", title: "Notes" }],
+    ["tab_update", { tabId: "notes", title: "New", position: 0 }],
+    ["tab_delete", { tabId: "notes" }],
+    ["tabs_reorder", { tabIds: ["two", "one"] }],
+    ["widget_move", { name: "status", tabId: "notes", after: "clock" }],
+    ["widget_resize", { name: "status", sizeW: 8, sizeH: 6 }],
+    ["widget_remove", { name: "status" }],
+  ])("maps %s to one board.update op", async (action, args) => {
     const harness = recorder();
-    const tool = createDashboardTool({
-      agentSessionKey: "agent:main:main",
-      callGateway: harness.callGateway,
-    });
-    await tool.execute("mutate", { action, ...args });
-    expect(harness.calls).toEqual([["board.update", { sessionKey: "agent:main:main", ops: [op] }]]);
+    await harness.tool.execute("mutate", { action, ...args });
+    expect(harness.calls).toEqual([
+      ["board.update", { sessionKey: "agent:main:main", ops: [{ kind: action, ...args }] }],
+    ]);
   });
 
   it("creates a plugin widget through board.widget.put", async () => {
     const harness = recorder();
-    const tool = createDashboardTool({
-      agentSessionKey: "agent:main:main",
-      callGateway: harness.callGateway,
-    });
-    await tool.execute("put", {
+    await harness.tool.execute("put", {
       action: "widget_put",
       name: "work-item",
       title: "Work item",
@@ -384,12 +341,7 @@ describe("dashboard tool", () => {
     ["set_presentation", { presentation: "expanded" }, { kind: "set_chat_dock", dock: "hidden" }],
   ])("emits board.command for %s", async (action, args, command) => {
     const harness = recorder();
-    const tool = createDashboardTool({
-      agentSessionKey: "agent:main:main",
-      callGateway: harness.callGateway,
-      emitCommand: harness.emitCommand,
-    });
-    const result = await tool.execute("command", { action, ...args });
+    const result = await harness.tool.execute("command", { action, ...args });
     expect(harness.calls).toEqual([]);
     expect(harness.commands).toEqual([{ sessionKey: "agent:main:main", command }]);
     expect(result.details).toEqual({ ok: true, delivered: 2 });

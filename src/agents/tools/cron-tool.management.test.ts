@@ -27,13 +27,8 @@ import {
 const jobId = "existing-job";
 const configRevision = "sha256:stored-job";
 
-beforeEach(() => {
-  setRuntimeConfigSnapshot({});
-});
-
-afterEach(() => {
-  clearRuntimeConfigSnapshot();
-});
+beforeEach(() => setRuntimeConfigSnapshot({}));
+afterEach(clearRuntimeConfigSnapshot);
 
 async function withAdminTool(
   origin: "unknown" | "channel-owner",
@@ -100,25 +95,23 @@ async function withAdminTool(
 }
 
 describe("admin automation management", () => {
-  it.each(["channel-owner"] as const)(
-    "permits %s command edits without recapturing creator authority",
-    async (origin) => {
-      await withAdminTool(origin, async (tool, calls) => {
-        const patch = {
-          payload: { kind: "command", argv: ["printf", "proof"], timeoutSeconds: 30 },
-        };
-        await expect(
-          tool.execute("command-update", { action: "update", jobId, job: patch }),
-        ).resolves.toMatchObject({ details: { id: jobId } });
-        expect(calls).toEqual([["cron.update", { id: jobId, patch }]]);
-      });
-    },
-  );
+  it("permits channel-owner command edits without recapturing creator authority", async () => {
+    await withAdminTool("channel-owner", async (tool, calls) => {
+      const patch = {
+        payload: { kind: "command", argv: ["printf", "proof"], timeoutSeconds: 30 },
+      };
+      await expect(
+        tool.execute("command-update", { action: "update", jobId, job: patch }),
+      ).resolves.toMatchObject({ details: { id: jobId } });
+      expect(calls).toEqual([["cron.update", { id: jobId, patch }]]);
+    });
+  });
 
   it("inherits a stored command kind when clearing its timeout", async () => {
     await withAdminTool(
       "unknown",
       async (tool, calls) => {
+        const patch = { payload: { kind: "command", timeoutSeconds: null } };
         await tool.execute("timeout-update", {
           action: "update",
           jobId,
@@ -131,7 +124,7 @@ describe("admin automation management", () => {
             {
               id: jobId,
               expectedConfigRevision: configRevision,
-              patch: { payload: { kind: "command", timeoutSeconds: null } },
+              patch,
             },
           ],
         ]);
@@ -167,6 +160,9 @@ describe("cron next_check action", () => {
       { callGatewayTool: vi.fn() },
     );
   }
+  function nextCheck(tool = createScopedTool(), delay = "15m") {
+    return tool.execute("call-next-check", { action: "next_check", in: delay });
+  }
 
   function registerRun(nextCheckEnabled: boolean) {
     runClaimId = claimAgentRunContext(
@@ -182,33 +178,27 @@ describe("cron next_check action", () => {
   it("rejects a proposal when the current job does not admit next_check", async () => {
     registerRun(false);
 
-    await expect(
-      createScopedTool().execute("call-next-check", { action: "next_check", in: "15m" }),
-    ).rejects.toThrow("cron next_check requires pacing or a one-shot session continuation");
+    await expect(nextCheck()).rejects.toThrow(
+      "cron next_check requires pacing or a one-shot session continuation",
+    );
   });
 
   it("rejects next_check outside a current cron run", async () => {
     const tool = createCronTool(undefined, { callGatewayTool: vi.fn() });
 
-    await expect(
-      tool.execute("call-next-check-unscoped", { action: "next_check", in: "15m" }),
-    ).rejects.toThrow("cron next_check is only available to the currently running job");
+    await expect(nextCheck(tool)).rejects.toThrow(
+      "cron next_check is only available to the currently running job",
+    );
   });
 
   it("keeps proposals isolated when a shared run context adds another job", async () => {
     registerRun(true);
-    await createScopedTool().execute("call-next-check-stale", {
-      action: "next_check",
-      in: "15m",
-    });
+    await nextCheck();
 
     claimAgentRunContext(RUN_ID, {
       cronRunsByJobId: new Map([["next-job", { nextCheckEnabled: true }]]),
     });
-    await createScopedTool("next-job").execute("call-next-check-next-job", {
-      action: "next_check",
-      in: "30m",
-    });
+    await nextCheck(createScopedTool("next-job"), "30m");
 
     expect(consumeCronNextCheckProposal(RUN_ID, JOB_ID)).toBe(15 * 60_000);
     expect(consumeCronNextCheckProposal(RUN_ID, "next-job")).toBe(30 * 60_000);
