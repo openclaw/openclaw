@@ -100,7 +100,8 @@ it.each(["clean", "unclean"])(
           type: "vector.ensure",
           input: { dimensions: 3, state },
         });
-        assert.ok(resized.ok && resized.searchSchema);
+        assert.ok(resized && typeof resized === "object" && "ok" in resized && resized.ok);
+        assert.ok(resized.searchSchema);
         expect(resized.searchSchema.vector).toContain("FLOAT[3]");
         source.exec(`
           INSERT INTO memory_index_sources (path, source, hash, mtime, size)
