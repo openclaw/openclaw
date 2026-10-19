@@ -133,6 +133,8 @@ export function resolveInitialDoctorHealthContributions(params: {
       "doctor:node-hosting-preconditions",
       "Node hosting preconditions",
       {
+        // Update canaries force loopback ingress, so only the activated config can answer this.
+        updateWork: { kind: "inspection", scope: "run" },
         healthChecks: {
           description: "Gateway config can authenticate and onboard node and worker hosts.",
           async detect(ctx) {

@@ -74,11 +74,12 @@ afterEach(() => {
 async function runLintFixture(
   agentCount: number,
   options: DoctorLintCliOptions = {},
-  { snapshotReceipt = false, validationElapsedMs = 20_000 } = {},
+  { snapshotReceipt = false, validationElapsedMs = 20_000, extraConfig = {} } = {},
 ) {
   const processTempDir = os.tmpdir();
   return withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg: OpenClawConfig = {
+      ...extraConfig,
       agents: {
         ownership: "explicit",
         entries: Object.fromEntries(
@@ -226,6 +227,27 @@ it.each([true, false])(
     }
   },
 );
+
+it("defers node onboarding ingress past the canary's forced loopback bind", async () => {
+  // #177697: the canary copy always binds loopback, whatever the operator configured.
+  const { resolveDoctorContributionHealthChecks } = await vi.importActual<
+    typeof import("../flows/doctor-health-contributions.js")
+  >("../flows/doctor-health-contributions.js");
+  observed.coreChecks = (await resolveDoctorContributionHealthChecks()).filter(
+    (check) => check.id === "core/doctor/node-hosting-preconditions",
+  );
+  const result = await runLintFixture(
+    1,
+    {},
+    {
+      extraConfig: { gateway: { bind: "loopback" }, tools: { exec: { host: "node" } } },
+    },
+  );
+  expect(result.stdout).not.toContain("node-onboarding-url");
+  expect(result.deferred).toEqual([
+    warning("core/doctor/node-hosting-preconditions", { requirement: "update-validation-scope" }),
+  ]);
+});
 
 it.each(["selected", "required-error"])(
   "defers optional rehearsal inspection without weakening lint gates (%s)",
