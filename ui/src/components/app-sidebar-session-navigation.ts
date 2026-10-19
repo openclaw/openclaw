@@ -154,11 +154,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
     if (this.navigationVisible && this.navigationView === "sessions" && !this.contextualSidebar) {
       const visibleIds = (this.sidebarSnapshot?.cards ?? cards).map((card) => card.id);
       const previous = this.admittedRoster?.collapsedAgentIds;
-      if (
-        !previous ||
-        previous.size !== visibleIds.length ||
-        visibleIds.some((id) => !previous.has(id))
-      ) {
+      if (previous?.size !== visibleIds.length || visibleIds.some((id) => !previous.has(id))) {
         this.admittedRoster = { context, collapsedAgentIds: new Set(visibleIds) };
       }
     }
@@ -173,10 +169,6 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   }
 
   protected rosterVisibleSessionLimits = new Map<string, number>();
-
-  private get groupedSessionSource() {
-    return this.sidebarAgentsMode === "roster" ? this.rosterSessionSource : null;
-  }
 
   sessionSortMode: SidebarSessionSortMode = loadStoredSidebarSessionSortMode();
 
@@ -208,13 +200,13 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
     return mergeAdoptedSessionPullRequestRows({
       rows: [
         ...this.visibleSessionRowsInOrder(),
-        ...(this.groupedSessionSource?.agentIds.flatMap((agentId) => {
+        ...(this.rosterSessionSource?.agentIds.flatMap((agentId) => {
           const home = this.visibleHomeSession(agentId);
           return home ? [home] : [];
         }) ?? []),
       ],
       adopted: adoptedCatalogSessionKeys(this.visibleSessionCatalogs()),
-      sessionsResult: this.groupedSessionSource?.result ?? this.sessionData.sessionsResult,
+      sessionsResult: this.rosterSessionSource?.result ?? this.sessionData.sessionsResult,
       sessionResultsByAgent: this.sessionData.sessionResultsByAgent,
       navigationState: this.getSessionNavigationState(),
     });
@@ -226,13 +218,9 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
     createdOrder: this.sessionProjection.createdOrder,
   });
 
-  private sessionPeopleSortCapability(): boolean | undefined {
-    const owners = this.selectedAgentSessionResult()?.owners;
-    return owners ? owners.length >= 2 : undefined;
-  }
-
   sessionPeopleSortAvailable(): boolean {
-    return this.sessionPeopleSortCapability() !== false;
+    const owners = this.selectedAgentSessionResult()?.owners;
+    return !owners || owners.length >= 2;
   }
 
   effectiveSessionSortMode(): SidebarSessionSortMode {
@@ -249,7 +237,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   }
 
   setSessionSortMode(mode: SidebarSessionSortMode) {
-    this.sessionSortMode = storeSidebarSessionSortMode(mode, this.sessionPeopleSortCapability());
+    this.sessionSortMode = storeSidebarSessionSortMode(mode, this.sessionPeopleSortAvailable());
     this.invalidate();
   }
 
@@ -366,7 +354,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
 
   override updated() {
     super.updated();
-    if (this.sessionSortMode === "people" && this.sessionPeopleSortCapability() === false) {
+    if (this.sessionSortMode === "people" && !this.sessionPeopleSortAvailable()) {
       this.setSessionSortMode("created");
     }
   }
@@ -393,7 +381,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
 
   getSessionNavigationState(): SidebarSessionNavigationState {
     const data = this.sessionData;
-    const currentResult = this.groupedSessionSource?.result ?? data.sessionsResult;
+    const currentResult = this.rosterSessionSource?.result ?? data.sessionsResult;
     this.sessionProjection.observeRows([
       ...(currentResult ? [currentResult] : []),
       ...Object.values(data.sessionResultsByAgent),
@@ -689,7 +677,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
     const rows = this.rowsMemo.read(
       () => [...sidebarRowsInputs(this, navigationState), this.sidebarEntries],
       () => {
-        const roster = this.groupedSessionSource;
+        const roster = this.rosterSessionSource;
         const selected = this.expandedAgentId();
         const projected = projectSidebarAgentSessionRows({
           host: this,
@@ -720,8 +708,8 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   }
 
   private selectedAgentSessionResult(agentId = this.expandedAgentId()): SessionsListResult | null {
-    if (this.groupedSessionSource) {
-      return this.groupedSessionSource.result;
+    if (this.rosterSessionSource) {
+      return this.rosterSessionSource.result;
     }
     const selected = normalizeAgentId(agentId);
     return this.sessionData.sessionsAgentId === null ||

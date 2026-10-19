@@ -1,4 +1,4 @@
-import { createMemo, For, onCleanup, onSettled, Show } from "solid-js";
+import { createMemo, For, onCleanup, onSettled, Show, untrack } from "solid-js";
 import { isSessionRouteId, pathForAgentPanel } from "../app-route-paths.ts";
 import { togglePinnedAgent } from "../app/bootstrap-navigation-preferences.ts";
 import { registerAgentsHomeEnglish } from "../i18n/locales/en-agents-home.ts";
@@ -298,7 +298,10 @@ export function SidebarAgentRoster(props: RosterProps) {
                 </For>
               </section>
               <For each={pinnedCards()} keyed={(card) => card.id}>
-                {(card) => renderPendingSessionCreateRow(host, card().id)}
+                {(card) => {
+                  const initialAgentId = untrack(() => card().id);
+                  return renderPendingSessionCreateRow(host, initialAgentId);
+                }}
               </For>
             </>
           </Show>
