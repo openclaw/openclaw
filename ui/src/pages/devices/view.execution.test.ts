@@ -154,10 +154,9 @@ describe("devices exec approvals rendering", () => {
     });
     const section = getSection(container, "Exec approvals");
 
-    expect(section.textContent).toContain("Host-native policy");
-    expect(section.textContent).toContain("Read-only here");
-    expect(section.textContent).toContain("hostname");
-    expect(section.textContent).toContain("deny");
+    for (const text of ["Host-native policy", "Read-only here", "hostname", "deny"]) {
+      expect(section.textContent).toContain(text);
+    }
     expect(section.querySelector("button")?.hasAttribute("disabled")).toBe(true);
   });
 
@@ -255,15 +254,16 @@ describe("devices agent bindings", () => {
         const option = expectDefined(select.selectedOptions[0], "selected node binding option");
         const ref = scenario.refs[index];
         const node = expectDefined(nodes[index], "bound node");
-        expect(select.value).toBe(ref);
-        expect(option.disabled).toBe(unavailable);
+        expect({ value: select.value, disabled: option.disabled }).toEqual({
+          value: ref,
+          disabled: unavailable,
+        });
         expect(option.textContent?.replace(/\s+/gu, " ").trim()).toBe(
           unavailable ? `${ref} (Unavailable)` : `${node.displayName} · ${node.nodeId}`,
         );
       });
       expect(configForm).toEqual(savedConfig);
-      expect(onBindDefault).not.toHaveBeenCalled();
-      expect(onBindAgent).not.toHaveBeenCalled();
+      expect([onBindDefault.mock.calls, onBindAgent.mock.calls]).toEqual([[], []]);
     };
     const competitors = scenario.competitors
       ? nodes.map((node) => ({
