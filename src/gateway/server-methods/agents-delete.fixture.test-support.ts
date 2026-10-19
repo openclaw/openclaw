@@ -53,7 +53,7 @@ export function createDeletionCron(
     scheduler,
     cron,
     context: createDirectChatContext({ cron, getRuntimeConfig }),
-    async stop() {
+    async stop(this: void) {
       cron.stop();
       await cron.waitForIdle();
       await scheduler.stop();
