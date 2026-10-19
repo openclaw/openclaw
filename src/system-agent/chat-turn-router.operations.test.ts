@@ -32,7 +32,16 @@ import { createInferenceConfigFixture } from "./inference-config.test-support.js
 import type { SystemAgentOperation } from "./operation-types.js";
 import { SystemAgentOperationExitError } from "./operations-execution-helpers.js";
 import { describeSystemAgentPersistentOperation } from "./operations.js";
+import * as operations from "./operations.js";
 import { installSystemAgentClaudeCliBackendTestFixture } from "./system-agent.test-helpers.js";
+
+const nativeExecuteOperation = operations.executeSystemAgentOperation;
+
+function mockApprovedOperation(execute: typeof nativeExecuteOperation) {
+  vi.spyOn(operations, "executeSystemAgentOperation").mockImplementation((...args) =>
+    args[2]?.approved === true ? execute(...args) : nativeExecuteOperation(...args),
+  );
+}
 
 vi.mock("../agents/cli-runner.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/cli-runner.js")>()),
@@ -42,10 +51,6 @@ vi.mock("../agents/cli-runner.js", async (importOriginal) => ({
 function createRouterHarness(
   options: ConstructorParameters<typeof ChatTurnRouter>[0],
   internals: {
-    executeOperation?: NonNullable<
-      ConstructorParameters<typeof ChatTurnRouter>[1]["executeOperation"]
-    >;
-
     loadOverview?: ReturnType<typeof fakeOverviewLoader>;
   } = {},
 ) {
@@ -60,7 +65,6 @@ function createRouterHarness(
   };
   const router = new ChatTurnRouter(
     options,
-    { executeOperation: internals.executeOperation ?? (async () => ({ applied: true })) },
     session,
     new ChatWizardHost({
       surface: options.surface,
@@ -123,23 +127,21 @@ describe("SystemAgentChatEngine operations", () => {
     async ({ args, operation, description }) => {
       const requesterAgentId = args.action === "create_team" ? "planner" : undefined;
       const executeOperation = vi.fn(async () => ({ applied: true }));
-      const router = createRouterHarness(
-        {
-          surface: "gateway",
-          operatorApprovalOnly: true,
-          ...(requesterAgentId ? { requesterAgentId } : {}),
-          runAgentTurn: async (params) => {
-            const tool = createSystemAgentTool({
-              surface: params.surface,
-              approvalArmed: params.approvalArmed,
-              operatorApprovalOnly: params.operatorApprovalOnly,
-              proposalRef: params.session.proposalRef,
-            });
-            return { text: extractToolResultText(await tool.execute("create", args)) ?? "" };
-          },
+      mockApprovedOperation(executeOperation);
+      const router = createRouterHarness({
+        surface: "gateway",
+        operatorApprovalOnly: true,
+        ...(requesterAgentId ? { requesterAgentId } : {}),
+        runAgentTurn: async (params) => {
+          const tool = createSystemAgentTool({
+            surface: params.surface,
+            approvalArmed: params.approvalArmed,
+            operatorApprovalOnly: params.operatorApprovalOnly,
+            proposalRef: params.session.proposalRef,
+          });
+          return { text: extractToolResultText(await tool.execute("create", args)) ?? "" };
         },
-        { executeOperation },
-      );
+      });
       await router.resolveTurn("I want that option");
       const proposal = expectDefined(router.getPendingOperatorProposal(), "creation proposal");
       expect(proposal.operation).toEqual(operation);
@@ -519,19 +521,21 @@ describe("SystemAgentChatEngine operations", () => {
     );
     mocks.readConfigFileSnapshot.mockImplementation(configFixture.read);
     let currentConfig: OpenClawConfig = baseConfig;
-    const executeOperation = vi.fn(async (_operation, runtime, options) => {
-      currentConfig = changedConfig;
-      await configFixture.write(currentConfig);
-      options.onVerifiedInferenceChanged?.(reboundInference);
-      runtime.log("Default model: openai/gpt-5.6-sol");
-      return { applied: true };
-    });
+    const executeOperation = vi.fn<typeof nativeExecuteOperation>(
+      async (_operation, runtime, options) => {
+        currentConfig = changedConfig;
+        await configFixture.write(currentConfig);
+        options?.onVerifiedInferenceChanged?.(reboundInference);
+        runtime.log("Default model: openai/gpt-5.6-sol");
+        return { applied: true };
+      },
+    );
+    mockApprovedOperation(executeOperation);
     const runAgentTurn = vi.fn(async (params) => {
       return { text: `using ${params.session.verifiedInference.execution.modelLabel}` };
     });
     const engine = new SystemAgentChatEngine({
       verifiedInference,
-      executeOperation,
       runAgentTurn,
       classifyApproval: async () => "approve",
       deps: {
@@ -588,15 +592,11 @@ describe("SystemAgentChatEngine operations", () => {
     const runAgentTurn = vi.fn<SystemAgentTurnRunner>(async () => ({
       text: "Proposed correction.",
     }));
-    const router = createRouterHarness(
-      { yes: true, runAgentTurn },
-      {
-        executeOperation: async (_operation, runtime) => {
-          runtime.error(validationError);
-          throw new SystemAgentOperationExitError(1);
-        },
-      },
-    );
+    mockApprovedOperation(async (_operation, runtime) => {
+      runtime.error(validationError);
+      throw new SystemAgentOperationExitError(1);
+    });
+    const router = createRouterHarness({ yes: true, runAgentTurn });
     const reply = await router.resolveTurn("config set gateway.port banana");
     expect(reply.text).toContain(validationError);
     expect(reply.text).not.toContain("operation exited");
@@ -845,11 +845,10 @@ describe("SystemAgentChatEngine handoff", () => {
         text: "Let’s open your account controls.",
         directive: { kind: "model-accounts" as const },
       }));
-      const executeOperation = vi.fn();
+      const executeOperation = vi.spyOn(operations, "executeSystemAgentOperation");
       const engine = new SystemAgentChatEngine({
         surface,
         runAgentTurn,
-        executeOperation,
         deps: { loadOverview: fakeOverviewLoader() },
       });
 

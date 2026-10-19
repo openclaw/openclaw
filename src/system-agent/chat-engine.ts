@@ -41,10 +41,6 @@ export type SystemAgentChatEngineOptions = ConstructorParameters<typeof ChatTurn
   readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
 };
 
-type SystemAgentChatEngineInternals = {
-  executeOperation?: typeof import("./operations.js").executeSystemAgentOperation;
-};
-
 /**
  * One conversation with OpenClaw, independent of transport. The facade owns
  * serialization, history, and the verified inference session; concept owners
@@ -58,10 +54,7 @@ export class SystemAgentChatEngine {
   private verifiedInference: SystemAgentVerifiedInferenceBinding;
   private turnQueue: Promise<unknown> = Promise.resolve();
 
-  constructor(
-    private readonly options: SystemAgentChatEngineOptions,
-    internals: SystemAgentChatEngineInternals = {},
-  ) {
+  constructor(private readonly options: SystemAgentChatEngineOptions) {
     const binding = options?.verifiedInference;
     if (!binding) {
       throw new SystemAgentInferenceUnavailableError("conversation");
@@ -74,21 +67,15 @@ export class SystemAgentChatEngine {
         await this.requirePersistentApplyInference(runtime);
       },
     });
-    this.router = new ChatTurnRouter(
-      options,
-      { executeOperation: internals.executeOperation },
-      this.agentSession,
-      this.wizard,
-      {
-        requireVerifiedInference: async () => await this.requireVerifiedInference(),
-        requirePersistentApplyInference: async (runtime) =>
-          await this.requirePersistentApplyInference(runtime),
-        rebindVerifiedInference: (next) => this.rebindVerifiedInference(next),
-        getVerifiedInference: () => this.verifiedInference,
-        loadOverview: async () => await this.loadOverview(),
-        verifyConfigAfterWrite: async () => await this.verifyConfigAfterWrite(),
-      },
-    );
+    this.router = new ChatTurnRouter(options, this.agentSession, this.wizard, {
+      requireVerifiedInference: async () => await this.requireVerifiedInference(),
+      requirePersistentApplyInference: async (runtime) =>
+        await this.requirePersistentApplyInference(runtime),
+      rebindVerifiedInference: (next) => this.rebindVerifiedInference(next),
+      getVerifiedInference: () => this.verifiedInference,
+      loadOverview: async () => await this.loadOverview(),
+      verifyConfigAfterWrite: async () => await this.verifyConfigAfterWrite(),
+    });
   }
 
   propose(operation: SystemAgentOperation): string {

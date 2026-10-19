@@ -16,6 +16,17 @@ import {
 import { ChatTurnRouter } from "./chat-turn-router.js";
 import { ChatWizardHost } from "./chat-wizard-host.js";
 import { describeSystemAgentPersistentOperation } from "./operations.js";
+import * as operations from "./operations.js";
+
+const nativeExecuteOperation = operations.executeSystemAgentOperation;
+
+function mockApprovedOperation() {
+  vi.spyOn(operations, "executeSystemAgentOperation").mockImplementation((...args) =>
+    args[2]?.approved === true
+      ? Promise.resolve({ applied: true })
+      : nativeExecuteOperation(...args),
+  );
+}
 
 function createRouterHarness(options: ConstructorParameters<typeof ChatTurnRouter>[0]) {
   const verifiedInference = expectDefined(
@@ -29,7 +40,6 @@ function createRouterHarness(options: ConstructorParameters<typeof ChatTurnRoute
   };
   return new ChatTurnRouter(
     options,
-    { executeOperation: async () => ({ applied: true }) },
     session,
     new ChatWizardHost({ beforePersistentApply: async () => {} }),
     {
@@ -45,6 +55,7 @@ function createRouterHarness(options: ConstructorParameters<typeof ChatTurnRoute
 
 describe("SystemAgentChatEngine approval", () => {
   it("records the delegated requester before hashing a model-tool proposal", async () => {
+    mockApprovedOperation();
     const unrecordedOperation = {
       kind: "create-agent" as const,
       agentId: "researcher",
@@ -337,6 +348,7 @@ describe("SystemAgentChatEngine approval", () => {
   });
 
   it("keeps a host setup proposal across approval reads and follow-up questions", async () => {
+    mockApprovedOperation();
     const operation = {
       kind: "setup",
       workspace: "/tmp/work",
@@ -368,6 +380,7 @@ describe("SystemAgentChatEngine approval", () => {
   });
 
   it("keeps a host-resolution marker queued across a failed turn", async () => {
+    mockApprovedOperation();
     const observedInputs: string[] = [];
     const runAgentTurn = vi.fn(async (params: { input: string }) => {
       observedInputs.push(params.input);

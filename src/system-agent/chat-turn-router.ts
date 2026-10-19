@@ -118,9 +118,6 @@ export class ChatTurnRouter {
 
   constructor(
     private readonly options: ChatTurnRouterOptions,
-    private readonly dependencies: {
-      executeOperation?: typeof executeSystemAgentOperation;
-    },
     private readonly agentSession: SystemAgentSession,
     private readonly wizard: ChatWizardHost,
     private readonly callbacks: {
@@ -552,9 +549,8 @@ export class ChatTurnRouter {
     beforePersistentApply?: PersistentApplyGuard,
   ): Promise<SystemAgentOperationResult | undefined> {
     try {
-      const execute = this.dependencies.executeOperation ?? executeSystemAgentOperation;
       await this.callbacks.requirePersistentApplyInference(capture);
-      return await execute(operation, capture, {
+      return await executeSystemAgentOperation(operation, capture, {
         approved: true,
         ...(this.options.requesterAgentId
           ? { requesterAgentId: this.options.requesterAgentId }

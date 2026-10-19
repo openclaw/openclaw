@@ -280,7 +280,6 @@ export async function createCliVerifiedBinding(config: OpenClawConfig) {
 }
 
 type TestSystemAgentChatEngineOptions = Omit<SystemAgentChatEngineOptions, "verifiedInference"> & {
-  executeOperation?: typeof import("./operations.js").executeSystemAgentOperation;
   verifiedInference?: SystemAgentVerifiedInferenceBinding;
 };
 
@@ -295,19 +294,15 @@ export class SystemAgentChatEngine extends RuntimeSystemAgentChatEngine {
   override handle = scoped(super.handle.bind(this));
 
   constructor(opts: TestSystemAgentChatEngineOptions = {}) {
-    const { executeOperation, ...engineOptions } = opts;
-    const explicitBinding = engineOptions.verifiedInference;
-    super(
-      {
-        ...engineOptions,
-        verifiedInference: explicitBinding ?? sharedFixture.binding,
-        deps: {
-          readConfigFileSnapshot: async () => sharedSnapshot(),
-          ...engineOptions.deps,
-        },
+    const explicitBinding = opts.verifiedInference;
+    super({
+      ...opts,
+      verifiedInference: explicitBinding ?? sharedFixture.binding,
+      deps: {
+        readConfigFileSnapshot: async () => sharedSnapshot(),
+        ...opts.deps,
       },
-      executeOperation ? { executeOperation } : {},
-    );
+    });
   }
 }
 
