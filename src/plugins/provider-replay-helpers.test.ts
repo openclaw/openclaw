@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
+import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { expectObjectFields as expectFields } from "../test-utils/mock-call-assertions.js";
 import {
@@ -127,28 +128,17 @@ describe("provider replay helpers", () => {
           modelApi,
           modelId: "deployment",
           model: {
-            id: "deployment",
-            name: "Deployment",
-            api: modelApi,
-            provider: "custom-proxy",
-            baseUrl: "https://example.invalid",
-            input: ["text"],
-            reasoning: true,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 128_000,
-            maxTokens: 16_384,
+            ...makeProviderModelFixture({
+              id: "deployment",
+              api: modelApi,
+              provider: "custom-proxy",
+              baseUrl: "https://example.invalid",
+            }),
             params: { canonicalModelId: modelId },
           },
         })?.appendOnlyRuntimeContext,
       ).toBe(expected);
     }
-  });
-
-  it("derives claude-only anthropic replay policy from the model id", () => {
-    expectFields(anthropic(sonnet), strictAnthropicPolicy);
-    expect(anthropic(sonnet)).not.toHaveProperty("dropThinkingBlocks");
-    expect(anthropic(legacySonnet)).toHaveProperty("dropThinkingBlocks", true);
-    expect(anthropic("amazon.nova-pro-v1")).not.toHaveProperty("dropThinkingBlocks");
   });
 
   it("preserves thinking blocks only for Claude models with native history support", () => {
@@ -195,11 +185,15 @@ describe("provider replay helpers", () => {
     ).toHaveProperty("dropThinkingBlocks", true);
   });
 
-  it("builds native Anthropic replay policy with selective tool-call id preservation", () => {
-    const policy = nativeAnthropic(sonnet);
-    expectFields(policy, { ...strictAnthropicPolicy, preserveNativeAnthropicToolUseIds: true });
+  it.each([anthropic, nativeAnthropic])("derives strict Claude replay through %s", (build) => {
+    const policy = build(sonnet);
+    expect(policy).toMatchObject(strictAnthropicPolicy);
+    if (build === nativeAnthropic) {
+      expect(policy).toHaveProperty("preserveNativeAnthropicToolUseIds", true);
+    }
     expect(policy).not.toHaveProperty("dropThinkingBlocks");
-    expect(nativeAnthropic(legacySonnet).dropThinkingBlocks).toBe(true);
+    expect(build(legacySonnet)).toHaveProperty("dropThinkingBlocks", true);
+    expect(build("amazon.nova-pro-v1")).not.toHaveProperty("dropThinkingBlocks");
   });
 
   it("builds hybrid anthropic or openai replay policy", () => {
@@ -249,8 +243,6 @@ describe("provider replay helpers", () => {
 
     const result = sanitizeGoogleGeminiReplayHistory({
       provider: "google",
-      modelApi: "google-generative-ai",
-      modelId: "gemini-3.1-pro-preview",
       sessionId: "session-1",
       messages: [makeAgentAssistantMessage({ content: [{ type: "text", text: "hello" }] })],
       sessionState: {

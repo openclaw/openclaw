@@ -1,4 +1,3 @@
-// Verifies provider public artifacts extracted from plugin metadata.
 import fs from "node:fs";
 import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
@@ -6,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
 import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
 import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.js";
 import { getPluginValueInstance } from "./plugin-instance-scope.js";
@@ -18,7 +18,7 @@ import {
 import { listTrustedExternalProviderPolicyOwners } from "./provider-policy-owners.js";
 import { resolveDirectBundledProviderPolicySurface } from "./provider-policy-surface.js";
 import {
-  loadProviderPolicyArtifacts,
+  loadProviderPolicyArtifacts as loadArtifacts,
   resolveBundledProviderPolicySurface,
   resolveProviderPolicySurface,
 } from "./provider-public-artifacts.js";
@@ -34,8 +34,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function writeExternalPolicyFixture(): string {
   const pluginRoot = tempDirs.make("openclaw-provider-policy-external-");
-  // Shipped policy artifacts are ESM in a "type": "module" package; an ambiguous
-  // .js file would depend on the host loader's syntax detection instead.
+  // Policy artifacts must use ESM, independent of the host's syntax detection.
   fs.writeFileSync(path.join(pluginRoot, "package.json"), '{ "type": "module" }\n', "utf8");
   fs.writeFileSync(
     path.join(pluginRoot, "provider-policy-api.js"),
@@ -58,17 +57,6 @@ function writeExternalPolicyFixture(): string {
   return pluginRoot;
 }
 
-function forbidManifestRegistryScan() {
-  const loadPluginManifestRegistry = vi.fn(() => {
-    throw new Error("unexpected manifest registry scan");
-  });
-  vi.doMock("./manifest-registry.js", async (importOriginal) => ({
-    ...(await importOriginal<typeof import("./manifest-registry.js")>()),
-    loadPluginManifestRegistryCore: loadPluginManifestRegistry,
-  }));
-  return loadPluginManifestRegistry;
-}
-
 function externalOwner(rootDir: string, id = "fixture-provider", providers = [id]) {
   return {
     id,
@@ -89,6 +77,18 @@ function mockBundledPolicy(resolve: (dirName: string) => object | null) {
   return load;
 }
 
+function resolveExternal(provider: string, ...plugins: PluginManifestRecord[]) {
+  return resolveProviderPolicySurface(provider, { manifestRegistry: { plugins } });
+}
+
+async function freshPolicyResolver(scope: string) {
+  const module = await importFreshModule<typeof import("./provider-public-artifacts.js")>(
+    import.meta.url,
+    `./provider-public-artifacts.js?scope=${scope}`,
+  );
+  return module.resolveBundledProviderPolicySurface;
+}
+
 describe("provider public artifacts", () => {
   function useBundledDir() {
     const dir = tempDirs.make("openclaw-provider-policy-bundled-");
@@ -104,7 +104,6 @@ describe("provider public artifacts", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
-    vi.doUnmock("./bundled-dir.js");
     vi.doUnmock("./manifest-registry.js");
     vi.doUnmock("./public-surface-loader.js");
   });
@@ -306,24 +305,16 @@ describe("provider public artifacts", () => {
     useBundledDir();
     const pluginRoot = writeExternalPolicyFixture();
     const fixturePlugin = externalOwner(pluginRoot, "fixture-provider", ["fixture:nvidia"]);
-    const manifestRegistry = { plugins: [fixturePlugin as never] };
-    const surface = resolveProviderPolicySurface("fixture:nvidia", { manifestRegistry });
+    const surface = resolveExternal("fixture:nvidia", fixturePlugin as never);
+    const embedding = resolveExternal("fixture-embedding", fixturePlugin as never);
+    const profile = (modelId: string) =>
+      surface?.resolveThinkingProfile?.({ provider: "fixture:nvidia", modelId });
 
-    expect(
-      surface
-        ?.resolveThinkingProfile?.({ provider: "fixture:nvidia", modelId: "full" })
-        ?.levels.map((level) => level.id),
-    ).toEqual(["off", "high", "max"]);
-    expect(
-      surface
-        ?.resolveThinkingProfile?.({ provider: "fixture:nvidia", modelId: "legacy" })
-        ?.levels.map((level) => level.label),
-    ).toEqual([undefined, "on"]);
+    expect(profile("full")?.levels.map((level) => level.id)).toEqual(["off", "high", "max"]);
+    expect(profile("legacy")?.levels.map((level) => level.label)).toEqual([undefined, "on"]);
     expect(surface).not.toHaveProperty("projectConfiguredModelRow");
     expect(
-      resolveProviderPolicySurface("fixture-embedding", {
-        manifestRegistry,
-      })?.inspectEmbeddingProviderSetup?.({
+      embedding?.inspectEmbeddingProviderSetup?.({
         config: {},
         env: {},
         agentId: "main",
@@ -394,7 +385,7 @@ describe("provider public artifacts", () => {
         }
         const resolve = () =>
           withPluginRuntimeRegistryScope(registry, () =>
-            withPluginCache(cache, () => loadProviderPolicyArtifacts([metadata])?.surface),
+            withPluginCache(cache, () => loadArtifacts([metadata])?.surface),
           );
         if (scenario === "catalog") {
           const catalog: ModelCatalogSnapshot = {
@@ -461,38 +452,26 @@ describe("provider public artifacts", () => {
     },
   );
 
-  it("retains a trusted installed provider owner without a policy artifact", () => {
-    const pluginRoot = tempDirs.make("openclaw-provider-owner-");
-    const plugin = {
-      ...externalOwner(pluginRoot, "llama-cpp"),
-      contracts: { embeddingProviders: ["local"] },
-    } as never;
-    const manifestRegistry = { plugins: [plugin] };
-
-    const owners = listTrustedExternalProviderPolicyOwners("local", manifestRegistry);
-    expect(loadProviderPolicyArtifacts(owners)).toEqual({
-      owner: plugin,
-      surface: null,
-    });
-    expect(resolveProviderPolicySurface("local", { manifestRegistry })).toBeNull();
-  });
-
-  it("continues to a usable policy when the first trusted owner lacks its artifact", () => {
-    const missingPolicyRoot = tempDirs.make("openclaw-provider-owner-missing-");
-    const policyRoot = writeExternalPolicyFixture();
-    const manifestRegistry = {
-      plugins: [
-        externalOwner(missingPolicyRoot, "a-missing-policy", []) as never,
-        externalOwner(policyRoot, "b-policy", []) as never,
-      ],
-    };
-
-    const owners = listTrustedExternalProviderPolicyOwners("fixture-embedding", manifestRegistry);
-    const artifacts = loadProviderPolicyArtifacts(owners);
-
-    expect(artifacts?.owner.id).toBe("b-policy");
-    expect(artifacts?.surface?.inspectEmbeddingProviderSetup).toBeTypeOf("function");
-  });
+  it.each([false, true])(
+    "retains a missing-artifact owner or finds a later policy (later=%s)",
+    (later) => {
+      const root = tempDirs.make("openclaw-provider-owner-missing-");
+      const missing = externalOwner(root, "a-missing-policy", []) as never;
+      const plugins: PluginManifestRecord[] = [missing];
+      if (later) {
+        plugins.push(externalOwner(writeExternalPolicyFixture(), "b-policy", []) as never);
+      }
+      const owners = listTrustedExternalProviderPolicyOwners("fixture-embedding", { plugins });
+      const artifacts = loadArtifacts(owners);
+      if (later) {
+        expect(artifacts?.owner.id).toBe("b-policy");
+        expect(artifacts?.surface?.inspectEmbeddingProviderSetup).toBeTypeOf("function");
+      } else {
+        expect(artifacts).toEqual({ owner: missing, surface: null });
+        expect(resolveExternal("fixture-embedding", missing)).toBeNull();
+      }
+    },
+  );
 
   it.runIf(process.platform !== "win32")(
     "rejects trusted official provider policy artifacts hardlinked outside the installed root",
@@ -509,13 +488,10 @@ describe("provider public artifacts", () => {
       fs.linkSync(outsidePath, path.join(pluginRoot, "provider-policy-api.js"));
 
       const pluginId = "hardlinked-provider";
-      expect(() =>
-        resolveProviderPolicySurface(pluginId, {
-          manifestRegistry: {
-            plugins: [{ ...externalOwner(pluginRoot, pluginId), origin: "global" } as never],
-          },
-        }),
-      ).toThrow("Unable to open plugin public surface provider-policy-api.js");
+      const owner = { ...externalOwner(pluginRoot, pluginId), origin: "global" } as never;
+      expect(() => resolveExternal(pluginId, owner)).toThrow(
+        "Unable to open plugin public surface provider-policy-api.js",
+      );
     },
   );
 
@@ -593,7 +569,13 @@ describe("provider public artifacts", () => {
   });
 
   it("resolves bundled policy artifacts for a plugin-owned CLI backend", async () => {
-    const loadPluginManifestRegistry = forbidManifestRegistryScan();
+    const loadPluginManifestRegistry = vi.fn(() => {
+      throw new Error("unexpected manifest registry scan");
+    });
+    vi.doMock("./manifest-registry.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./manifest-registry.js")>()),
+      loadPluginManifestRegistryCore: loadPluginManifestRegistry,
+    }));
     const loadArtifact = mockBundledPolicy((dirName) =>
       dirName === "anthropic"
         ? {
@@ -604,9 +586,7 @@ describe("provider public artifacts", () => {
         : null,
     );
 
-    const { resolveBundledProviderPolicySurface: resolvePolicySurface } = await importFreshModule<
-      typeof import("./provider-public-artifacts.js")
-    >(import.meta.url, "./provider-public-artifacts.js?scope=provider-cli-backend");
+    const resolvePolicySurface = await freshPolicyResolver("provider-cli-backend");
 
     // CLI backend ids use the same provider-policy owner boundary as provider ids.
     // Without it, claude-cli subagents fall back to the base thinking profile.
@@ -662,9 +642,7 @@ describe("provider public artifacts", () => {
     );
     writePlugin("first", ["fixture-provider"], 1);
     writePlugin("second", [], 1);
-    const { resolveBundledProviderPolicySurface: resolvePolicySurface } = await importFreshModule<
-      typeof import("./provider-public-artifacts.js")
-    >(import.meta.url, "./provider-public-artifacts.js?scope=provider-alias-refresh");
+    const resolvePolicySurface = await freshPolicyResolver("provider-alias-refresh");
 
     const owner = createPluginCache();
     const levels = () =>
@@ -732,9 +710,7 @@ describe("provider public artifacts", () => {
       normalizeConfig: (ctx: { providerConfig: ModelProviderConfig }) => ctx.providerConfig,
     }));
 
-    const { resolveBundledProviderPolicySurface: resolvePolicySurface } = await importFreshModule<
-      typeof import("./provider-public-artifacts.js")
-    >(import.meta.url, "./provider-public-artifacts.js?scope=no-runtime-deps");
+    const resolvePolicySurface = await freshPolicyResolver("no-runtime-deps");
 
     const manifestRegistry = {
       get plugins(): never {
