@@ -784,7 +784,7 @@ describe("SQLite trajectory runtime reader snapshot consistency", () => {
       type: "admit-row-2",
       payloadSize: 100,
     });
-    const writerDb = openNodeSqliteDatabase(dbPath);
+    const writerDb = openNodeSqliteDatabase(sqlitePath());
     writerDb
       .prepare(
         "INSERT INTO trajectory_runtime_events (session_id, seq, run_id, event_json, created_at) VALUES (?, ?, ?, ?, ?)",
