@@ -149,7 +149,7 @@ describe("native UI roster refresh", () => {
     });
     const client = createTestGatewayClient(request);
     const fixture = createRosterHost(client.request.bind(client));
-    const params = { agentId: "main", displayName: "Board agent", surface: "plugin-dock" };
+    const params = { agentId: "main", displayName: "Board agent", surface: "plugin-dock" } as const;
     await expect(fixture.host.sessions.create(params)).resolves.toBe(key);
     expect(request).toHaveBeenCalledWith("sessions.create", params);
     expect(request).toHaveBeenCalledWith(

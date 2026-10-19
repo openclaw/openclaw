@@ -188,8 +188,11 @@ describe("terminal PTY spawn diagnostics", () => {
       await withChildProcessOperation("agent.exec", () =>
         spawnTerminalPty({ file: "powershell.exe", args: [], ...dimensions }),
       );
-      const onData: (data: string) => void = expectDefined(pty.onData.mock.calls[0])[0];
-      const onExit: () => void = expectDefined(pty.onExit.mock.calls[0])[0];
+      const onData: (data: string) => void = expectDefined(
+        pty.onData.mock.calls[0],
+        "data callback",
+      )[0];
+      const onExit: () => void = expectDefined(pty.onExit.mock.calls[0], "exit callback")[0];
       expectSample(60_000);
       if (outcome !== "failed-exit") {
         pty.pid = 4321;

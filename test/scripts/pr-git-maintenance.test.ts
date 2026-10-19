@@ -140,6 +140,9 @@ describePosix("scripts/pr Git maintenance ownership", () => {
       });
       let stderr = "";
       child.stdout?.resume();
+      if (!child.stderr) {
+        throw new Error("expected piped maintenance stderr");
+      }
       child.stderr.setEncoding("utf8");
       child.stderr.on("data", (chunk: string) => {
         stderr += chunk;
