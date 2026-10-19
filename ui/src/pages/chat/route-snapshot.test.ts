@@ -62,7 +62,7 @@ it.each([sessionRouteUuid, sessionRouteUuid.replaceAll("-", "")])(
     expect(result).toMatchObject({
       kind: "session",
       sessionKey: sessionRouteKey,
-      sessionResolutionFromCache: true,
+      sessionResolutionFromCache: "snapshot",
     });
     expect(result).not.toHaveProperty("canonicalLocation");
     expect(request).not.toHaveBeenCalled();

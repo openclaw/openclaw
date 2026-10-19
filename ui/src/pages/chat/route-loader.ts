@@ -420,7 +420,7 @@ export async function loadChatRoute(
           row: resolution.session,
         });
         return resolved
-          ? { ...resolved, ...(cachedRow ? { sessionResolutionFromCache: true as const } : {}) }
+          ? { ...resolved, ...(cachedRow ? { sessionResolutionFromCache: "roster" as const } : {}) }
           : notFound({ routeId: face });
       }
       if (target.slugCandidate) {
@@ -493,7 +493,7 @@ export async function loadChatRoute(
         agentId: snapshot.agentId,
         ...sessionRouteHints(routeLocation),
         face,
-        sessionResolutionFromCache: true,
+        sessionResolutionFromCache: "snapshot",
       };
     }
   }
@@ -592,10 +592,9 @@ export async function loadChatRoute(
   return resolved
     ? {
         ...resolved,
-        ...(localRow && !cached?.fromNavigation
-          ? { sessionResolutionFromCache: true as const }
-          : {}),
-        ...(!localRow ? { routeLoadingSkeleton: true as const } : {}),
+        ...(localRow
+          ? { sessionResolutionFromCache: "roster" as const }
+          : { routeLoadingSkeleton: true as const }),
       }
     : notFound({ routeId: face });
 }
