@@ -5,11 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTranscriptsTool } from "../agents/tools/transcripts-tool.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
 import { clearTranscriptCapturesForTest } from "../transcripts/capture.test-support.js";
+import type { TranscriptStartRequest } from "../transcripts/provider-types.js";
 import { TranscriptsStore } from "../transcripts/store.js";
 import { MeetingTranscriptDeliveryError } from "./session-transcript-store.js";
 import type { MeetingSessionRecord } from "./session-types.js";
@@ -17,9 +19,11 @@ import { createMeetingTranscriptSourceProvider } from "./transcripts-bridge.js";
 import { createMeetingDurableTranscriptBridge } from "./transcripts-bridge.runtime.js";
 
 let stateDir: string;
+let current: MeetingSessionRecord<"chrome", "agent">;
 
 beforeEach(async () => {
   stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-bridge-"));
+  current = session();
 });
 
 afterEach(async () => {
@@ -47,119 +51,117 @@ function session(): MeetingSessionRecord<"chrome", "agent"> {
   };
 }
 
-function createBridge(providerId: string, providerName: string) {
-  return createMeetingDurableTranscriptBridge({
-    logger: { warn: vi.fn() },
-    options: { providerId, providerName, stateDir },
-  });
-}
-
 function createStore() {
   return new TranscriptsStore(path.join(stateDir, "transcripts"), {
     env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
   });
 }
 
-describe("MeetingDurableTranscriptBridge", () => {
-  it.each([true])(
-    "retires simultaneous tool subscribers when meeting capture ends (metadata failure: %s)",
-    async (failMetadata) => {
-      const current = session();
-      const logger = { warn: vi.fn() };
-      const bridge = createMeetingDurableTranscriptBridge({
-        logger,
-        options: { providerId: "meeting", providerName: "Meeting", stateDir },
-      });
-      const stopSource = vi.fn(bridge.detach.bind(bridge));
-      const provider = createMeetingTranscriptSourceProvider({
-        id: "meeting",
-        name: "Meeting",
-        runtime: async () => ({
-          startTranscriptSource: async (request) => await bridge.attach(current, request),
-          stopTranscriptSource: stopSource,
-        }),
-      });
-      const registry = createEmptyPluginRegistry();
-      registry.transcriptSourceProviders.push({ pluginId: "meeting", source: "test", provider });
-      const tool = createTranscriptsTool({
-        stateDir,
-        agentId: "research",
-        logger,
-        caller: { kind: "operator", source: "local" },
-      });
-      const execute = (params: Record<string, unknown>) =>
-        withPluginRuntimeRegistryScope(registry, () => tool.execute("meeting", params));
-      const attach = (sessionId: string) =>
-        execute({ action: "start", providerId: "meeting", meetingUrl: current.url, sessionId });
-      const store = createStore();
-      await bridge.start(current, async () => {});
-      await bridge.ingest(current, [{ text: "existing note" }]);
-      await attach("first-subscriber");
-      await attach("second-subscriber");
-      await execute({ action: "stop", sessionId: "first-subscriber" });
-      await expect(execute({ action: "status" })).resolves.toMatchObject({
-        details: { active: [{ sessionId: "second-subscriber" }] },
-      });
-      await attach("third-subscriber");
-      const writeSession = store.writeSession.bind(store);
-      const fault = vi
-        .spyOn(TranscriptsStore.prototype, "writeSession")
-        .mockImplementation(async (descriptor) => {
-          if (failMetadata && descriptor.sessionId === current.id && descriptor.stoppedAt) {
-            throw new Error("meeting metadata unavailable");
-          }
-          return await writeSession(descriptor);
-        });
-      const stopping = bridge.stop(current, async () => {
-        await bridge.ingest(current, [{ text: "final note" }]);
-      });
-      if (failMetadata) {
-        await expect(stopping).rejects.toThrow("meeting metadata unavailable");
-      } else {
-        await expect(stopping).resolves.toBe(true);
-      }
-      fault.mockRestore();
-      await vi.waitFor(async () => {
-        for (const sessionId of ["second-subscriber", "third-subscriber"]) {
-          const stored = await store.readSession(sessionId);
-          expect(stored?.stoppedAt).toEqual(expect.any(String));
-          expect(stored?.metadata).toMatchObject({ agentId: "research" });
-          expect(stored?.source).toMatchObject({ providerId: "meeting", agentId: "research" });
-          expect(stored && (await store.readSummary(stored))).toMatchObject({
-            summary: { utteranceCount: 2 },
-          });
-        }
-        await expect(execute({ action: "status" })).resolves.toMatchObject({
-          details: { active: [], pendingFinalization: [] },
-        });
-      });
-      expect(stopSource).toHaveBeenCalledOnce();
-      await execute({ action: "stop", sessionId: "second-subscriber" });
-      expect(stopSource).toHaveBeenCalledOnce();
-      if (failMetadata) {
-        await bridge.stop(current, async () => {});
-      }
+async function startBridge(providerId: string, providerName: string, capture = async () => {}) {
+  const bridge = createMeetingDurableTranscriptBridge({
+    logger: { warn: vi.fn() },
+    options: { providerId, providerName, stateDir },
+  });
+  await bridge.start(current, capture);
+  return bridge;
+}
+
+function attachment(
+  providerId: string,
+  sessionId: string,
+  callbacks: Partial<Pick<TranscriptStartRequest, "onUtterance" | "onStatus">> = {},
+): TranscriptStartRequest {
+  return {
+    session: {
+      sessionId,
+      source: { providerId, agentId: "research", meetingUrl: current.url },
+      startedAt: current.createdAt,
     },
-  );
+    onUtterance: vi.fn(),
+    ...callbacks,
+  };
+}
+
+describe("MeetingDurableTranscriptBridge", () => {
+  it("retires simultaneous tool subscribers when meeting metadata finalization fails", async () => {
+    const logger = { warn: vi.fn() };
+    const bridge = createMeetingDurableTranscriptBridge({
+      logger,
+      options: { providerId: "meeting", providerName: "Meeting", stateDir },
+    });
+    const stopSource = vi.fn(bridge.detach.bind(bridge));
+    const provider = createMeetingTranscriptSourceProvider({
+      id: "meeting",
+      name: "Meeting",
+      runtime: async () => ({
+        startTranscriptSource: async (request) => await bridge.attach(current, request),
+        stopTranscriptSource: stopSource,
+      }),
+    });
+    const registry = createEmptyPluginRegistry();
+    registry.transcriptSourceProviders.push({ pluginId: "meeting", source: "test", provider });
+    const tool = createTranscriptsTool({
+      stateDir,
+      agentId: "research",
+      logger,
+      caller: { kind: "operator", source: "local" },
+    });
+    const execute = (params: Record<string, unknown>) =>
+      withPluginRuntimeRegistryScope(registry, () => tool.execute("meeting", params));
+    const attach = (sessionId: string) =>
+      execute({ action: "start", providerId: "meeting", meetingUrl: current.url, sessionId });
+    const store = createStore();
+    await bridge.start(current, async () => {});
+    await bridge.ingest(current, [{ text: "existing note" }]);
+    await attach("first-subscriber");
+    await attach("second-subscriber");
+    await execute({ action: "stop", sessionId: "first-subscriber" });
+    await expect(execute({ action: "status" })).resolves.toMatchObject({
+      details: { active: [{ sessionId: "second-subscriber" }] },
+    });
+    await attach("third-subscriber");
+    const writeSession = store.writeSession.bind(store);
+    const fault = vi
+      .spyOn(TranscriptsStore.prototype, "writeSession")
+      .mockImplementation(async (descriptor) => {
+        if (descriptor.sessionId === current.id && descriptor.stoppedAt) {
+          throw new Error("meeting metadata unavailable");
+        }
+        return await writeSession(descriptor);
+      });
+    const stopping = bridge.stop(current, async () => {
+      await bridge.ingest(current, [{ text: "final note" }]);
+    });
+    await expect(stopping).rejects.toThrow("meeting metadata unavailable");
+    fault.mockRestore();
+    await vi.waitFor(async () => {
+      for (const sessionId of ["second-subscriber", "third-subscriber"]) {
+        const stored = await store.readSession(sessionId);
+        expect(stored).toMatchObject({
+          stoppedAt: expect.any(String),
+          metadata: { agentId: "research" },
+          source: { providerId: "meeting", agentId: "research" },
+        });
+        expect(stored && (await store.readSummary(stored))).toMatchObject({
+          summary: { utteranceCount: 2 },
+        });
+      }
+      await expect(execute({ action: "status" })).resolves.toMatchObject({
+        details: { active: [], pendingFinalization: [] },
+      });
+    });
+    expect(stopSource).toHaveBeenCalledOnce();
+    await execute({ action: "stop", sessionId: "second-subscriber" });
+    expect(stopSource).toHaveBeenCalledOnce();
+    await bridge.stop(current, async () => {});
+  });
 
   it("replays stored lines to an attached provider and streams new lines in order", async () => {
-    const current = session();
     const onUtterance = vi.fn();
-    const transcriptSession = {
-      sessionId: "external-1",
-      source: { providerId: "google-meet", agentId: "research", meetingUrl: current.url },
-      startedAt: current.createdAt,
-    };
-    const bridge = createBridge("google-meet", "Google Meet");
-
-    await bridge.start(current, async () => {});
+    const request = attachment("google-meet", "external-1", { onUtterance });
+    const bridge = await startBridge("google-meet", "Google Meet");
     await bridge.ingest(current, [{ speaker: "Avery", text: "First line" }]);
-    await expect(
-      bridge.attach(current, {
-        session: transcriptSession,
-        onUtterance,
-      }),
-    ).resolves.toMatchObject({ ok: true });
+    await expect(bridge.attach(current, request)).resolves.toMatchObject({ ok: true });
     await bridge.ingest(current, [{ speaker: "Blake", text: "Second line" }]);
     await expect(
       bridge.detach({
@@ -175,7 +177,7 @@ describe("MeetingDurableTranscriptBridge", () => {
     ).resolves.toMatchObject({ ok: true });
     const replayed = vi.fn();
     await expect(
-      bridge.attach(current, { session: transcriptSession, onUtterance: replayed }),
+      bridge.attach(current, { ...request, onUtterance: replayed }),
     ).resolves.toMatchObject({ ok: true });
     await bridge.stop(current, async () => {});
 
@@ -204,57 +206,34 @@ describe("MeetingDurableTranscriptBridge", () => {
       },
     });
 
-    await bridge.start(session(), async () => {});
+    await bridge.start(current, async () => {});
 
     expect(bridge.enabled).toBe(false);
     await expect(
-      bridge.attach(session(), {
-        session: {
-          sessionId: "external-disabled",
-          source: { providerId: "zoom", agentId: "research" },
-          startedAt: "2026-07-23T12:00:00.000Z",
-        },
-        onUtterance: vi.fn(),
-      }),
+      bridge.attach(current, attachment("zoom", "external-disabled")),
     ).resolves.toMatchObject({ ok: false });
   });
 
   it("rolls back an attachment when its start status callback fails", async () => {
-    const current = session();
-    const bridge = createBridge("teams", "Microsoft Teams");
-    const transcriptSession = {
-      sessionId: "external-status",
-      source: { providerId: "teams", agentId: "research", meetingUrl: current.url },
-      startedAt: current.createdAt,
-    };
-    await bridge.start(current, async () => {});
+    const bridge = await startBridge("teams", "Microsoft Teams");
+    const request = attachment("teams", "external-status");
 
     await expect(
       bridge.attach(current, {
-        session: transcriptSession,
+        ...request,
         onStatus: async () => {
           throw new Error("status delivery failed");
         },
-        onUtterance: vi.fn(),
       }),
     ).rejects.toThrow("status delivery failed");
-    await expect(
-      bridge.attach(current, {
-        session: transcriptSession,
-        onUtterance: vi.fn(),
-      }),
-    ).resolves.toMatchObject({ ok: true });
+    await expect(bridge.attach(current, request)).resolves.toMatchObject({ ok: true });
 
     await bridge.stop(current, async () => {});
   });
 
   it("drains an in-flight periodic capture before the final capture", async () => {
     vi.useFakeTimers();
-    const current = session();
-    let releasePeriodic!: () => void;
-    const periodic = new Promise<void>((resolve) => {
-      releasePeriodic = resolve;
-    });
+    const { promise: periodic, resolve: releasePeriodic } = createDeferredCore();
     let captureCount = 0;
     const capture = vi.fn(async () => {
       captureCount += 1;
@@ -263,8 +242,7 @@ describe("MeetingDurableTranscriptBridge", () => {
       }
     });
     const finalCapture = vi.fn(async () => {});
-    const bridge = createBridge("zoom", "Zoom");
-    await bridge.start(current, capture);
+    const bridge = await startBridge("zoom", "Zoom", capture);
     await vi.advanceTimersByTimeAsync(5_000);
 
     const stopping = bridge.stop(current, finalCapture);
@@ -276,14 +254,12 @@ describe("MeetingDurableTranscriptBridge", () => {
   });
 
   it("retries final durable delivery before completing the capture", async () => {
-    const current = session();
     const finalCapture = vi
       .fn<() => Promise<void>>()
       .mockRejectedValueOnce(new MeetingTranscriptDeliveryError(new Error("write failed")))
       .mockRejectedValueOnce(new MeetingTranscriptDeliveryError(new Error("write failed")))
       .mockResolvedValueOnce();
-    const bridge = createBridge("teams", "Microsoft Teams");
-    await bridge.start(current, async () => {});
+    const bridge = await startBridge("teams", "Microsoft Teams");
 
     await expect(bridge.stop(current, finalCapture)).resolves.toBe(true);
 
@@ -291,20 +267,11 @@ describe("MeetingDurableTranscriptBridge", () => {
   });
 
   it("detaches a failing subscriber without blocking durable rows", async () => {
-    const current = session();
     const onUtterance = vi.fn(async () => {
       throw new Error("subscriber store unavailable");
     });
-    const bridge = createBridge("google-meet", "Google Meet");
-    await bridge.start(current, async () => {});
-    await bridge.attach(current, {
-      session: {
-        sessionId: "external-retry",
-        source: { providerId: "google-meet", agentId: "research", meetingUrl: current.url },
-        startedAt: current.createdAt,
-      },
-      onUtterance,
-    });
+    const bridge = await startBridge("google-meet", "Google Meet");
+    await bridge.attach(current, attachment("google-meet", "external-retry", { onUtterance }));
 
     await expect(bridge.ingest(current, [{ text: "first" }])).resolves.toBeUndefined();
     await expect(bridge.ingest(current, [{ text: "second" }])).resolves.toBeUndefined();
@@ -317,47 +284,28 @@ describe("MeetingDurableTranscriptBridge", () => {
   });
 
   it("rejects attachments once finalization begins", async () => {
-    const current = session();
-    let releaseFinal!: () => void;
-    const finalizing = new Promise<void>((resolve) => {
-      releaseFinal = resolve;
-    });
-    const bridge = createBridge("zoom", "Zoom");
-    await bridge.start(current, async () => {});
+    const { promise: finalizing, resolve: releaseFinal } = createDeferredCore();
+    const bridge = await startBridge("zoom", "Zoom");
 
     const stopping = bridge.stop(current, async () => await finalizing);
     await expect(
-      bridge.attach(current, {
-        session: {
-          sessionId: "external-late",
-          source: { providerId: "zoom", agentId: "research", meetingUrl: current.url },
-          startedAt: current.createdAt,
-        },
-        onUtterance: vi.fn(),
-      }),
+      bridge.attach(current, attachment("zoom", "external-late")),
     ).resolves.toMatchObject({ ok: false });
     releaseFinal();
     await expect(stopping).resolves.toBe(true);
   });
 
   it("drains subscriber delivery before detaching", async () => {
-    const current = session();
-    let releaseDelivery!: () => void;
-    const delivery = new Promise<void>((resolve) => {
-      releaseDelivery = resolve;
-    });
+    const { promise: delivery, resolve: releaseDelivery } = createDeferredCore();
     const onStatus = vi.fn(async () => {});
-    const bridge = createBridge("teams", "Microsoft Teams");
-    await bridge.start(current, async () => {});
-    await bridge.attach(current, {
-      session: {
-        sessionId: "external-drain",
-        source: { providerId: "teams", agentId: "research", meetingUrl: current.url },
-        startedAt: current.createdAt,
-      },
-      onStatus,
-      onUtterance: async () => await delivery,
-    });
+    const bridge = await startBridge("teams", "Microsoft Teams");
+    await bridge.attach(
+      current,
+      attachment("teams", "external-drain", {
+        onStatus,
+        onUtterance: async () => await delivery,
+      }),
+    );
 
     const ingesting = bridge.ingest(current, [{ text: "pending delivery" }]);
     const detaching = bridge.detach({
@@ -375,7 +323,6 @@ describe("MeetingDurableTranscriptBridge", () => {
   });
 
   it("does not let terminal subscriber notification block finalization", async () => {
-    const current = session();
     let statusCalls = 0;
     const onStatus = vi.fn(() => {
       statusCalls += 1;
@@ -383,17 +330,8 @@ describe("MeetingDurableTranscriptBridge", () => {
         throw new Error("terminal status unavailable");
       }
     });
-    const bridge = createBridge("zoom", "Zoom");
-    await bridge.start(current, async () => {});
-    await bridge.attach(current, {
-      session: {
-        sessionId: "external-terminal",
-        source: { providerId: "zoom", agentId: "research", meetingUrl: current.url },
-        startedAt: current.createdAt,
-      },
-      onStatus,
-      onUtterance: vi.fn(),
-    });
+    const bridge = await startBridge("zoom", "Zoom");
+    await bridge.attach(current, attachment("zoom", "external-terminal", { onStatus }));
 
     await expect(bridge.stop(current, async () => {})).resolves.toBe(true);
 
@@ -401,26 +339,14 @@ describe("MeetingDurableTranscriptBridge", () => {
   });
 
   it("queues detach behind a pending attachment replay", async () => {
-    const current = session();
-    let releaseReplay!: () => void;
-    const replay = new Promise<void>((resolve) => {
-      releaseReplay = resolve;
-    });
+    const { promise: replay, resolve: releaseReplay } = createDeferredCore();
     const onUtterance = vi.fn(async () => await replay);
-    const bridge = createBridge("google-meet", "Google Meet");
-    await bridge.start(current, async () => {});
+    const bridge = await startBridge("google-meet", "Google Meet");
     await bridge.ingest(current, [{ text: "existing row" }]);
-    const transcriptSession = {
-      sessionId: "external-pending",
-      source: { providerId: "google-meet", agentId: "research", meetingUrl: current.url },
-      startedAt: current.createdAt,
-    };
+    const request = attachment("google-meet", "external-pending", { onUtterance });
 
-    const attaching = bridge.attach(current, { session: transcriptSession, onUtterance });
-    const detaching = bridge.detach({
-      sessionId: transcriptSession.sessionId,
-      source: transcriptSession.source,
-    });
+    const attaching = bridge.attach(current, request);
+    const detaching = bridge.detach(request.session);
     releaseReplay();
     await expect(attaching).resolves.toMatchObject({ ok: true });
     await expect(detaching).resolves.toMatchObject({ ok: true });
@@ -431,9 +357,7 @@ describe("MeetingDurableTranscriptBridge", () => {
   });
 
   it("records a non-blocking final browser snapshot failure", async () => {
-    const current = session();
-    const bridge = createBridge("zoom", "Zoom");
-    await bridge.start(current, async () => {});
+    const bridge = await startBridge("zoom", "Zoom");
 
     await expect(
       bridge.stop(current, async () => {

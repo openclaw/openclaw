@@ -1,9 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { MeetingSessionTranscriptStore } from "./session-transcript-store.js";
 import type { MeetingSessionRecord, MeetingTranscriptSnapshot } from "./session-types.js";
 
-function createSession(): MeetingSessionRecord<"chrome", "transcribe"> {
-  return {
+let session: MeetingSessionRecord<"chrome", "transcribe">;
+let delivered: string[];
+let unavailable: boolean;
+
+beforeEach(() => {
+  delivered = [];
+  unavailable = false;
+  session = {
     id: "session-1",
     url: "https://meeting.example/room",
     transport: "chrome",
@@ -16,26 +22,44 @@ function createSession(): MeetingSessionRecord<"chrome", "transcribe"> {
     realtime: { enabled: false, toolPolicy: "none" },
     notes: [],
   };
+});
+
+async function deliver(lines: MeetingTranscriptSnapshot["lines"]) {
+  if (unavailable) {
+    throw new Error("store unavailable");
+  }
+  delivered.push(...lines.map((line) => line.text));
 }
 
 function createStore(
-  session: MeetingSessionRecord<"chrome", "transcribe">,
-  snapshots: MeetingTranscriptSnapshot[],
-  onLines?: (lines: MeetingTranscriptSnapshot["lines"]) => Promise<void>,
+  snapshots: (MeetingTranscriptSnapshot | Error)[],
+  onLines = deliver,
+  onSnapshot?: (snapshot: MeetingTranscriptSnapshot) => void,
 ) {
   return new MeetingSessionTranscriptStore({
     getSession: (sessionId) => (sessionId === session.id ? session : undefined),
     isBrowserSession: () => true,
     isTranscribeSession: () => true,
     hasBrowserTab: () => true,
-    capture: async () => snapshots.shift(),
-    ...(onLines ? { onLines: async (_session, lines) => await onLines(lines) } : {}),
+    capture: async () => {
+      const next = snapshots[0];
+      if (next instanceof Error) {
+        throw next;
+      }
+      snapshots.shift();
+      return next;
+    },
+    onLines: async (_session, lines) => await onLines(lines),
+    ...(onSnapshot ? { onSnapshot: (_session, captured) => onSnapshot(captured) } : {}),
   });
+}
+
+function snapshot(texts: string[], epoch?: string, droppedLines = 0): MeetingTranscriptSnapshot {
+  return { droppedLines, epoch, lines: texts.map((text) => ({ text })) };
 }
 
 describe("MeetingSessionTranscriptStore", () => {
   it("observes pending and corrected sources before transcript dedup without persisting pending text", async () => {
-    const session = createSession();
     const source = {
       id: "caption-1",
       epoch: "page-1",
@@ -55,25 +79,20 @@ describe("MeetingSessionTranscriptStore", () => {
       { droppedLines: 0, epoch: "page-1", lines: [committed], pendingLines: [correction] },
     ];
     const observed: string[][] = [];
-    const delivered: string[] = [];
-    const store = new MeetingSessionTranscriptStore({
-      getSession: () => session,
-      isBrowserSession: () => true,
-      isTranscribeSession: () => true,
-      hasBrowserTab: () => true,
-      capture: async () => snapshots.shift(),
-      onSnapshot: (_session, snapshot) => {
+    const store = createStore(
+      snapshots,
+      async (lines) => {
+        expect(observed.at(-1)).toEqual(["2"]);
+        delivered.push(...lines.map((line) => line.text));
+      },
+      (captured) => {
         observed.push(
-          [...snapshot.lines, ...(snapshot.pendingLines ?? [])].map(
+          [...captured.lines, ...(captured.pendingLines ?? [])].map(
             (line) => line.source?.revision ?? "",
           ),
         );
       },
-      onLines: async (_session, lines) => {
-        expect(observed.at(-1)).toEqual(["2"]);
-        delivered.push(...lines.map((line) => line.text));
-      },
-    });
+    );
 
     expect((await store.read(session.id)).lines).toEqual([]);
     await store.read(session.id);
@@ -84,14 +103,8 @@ describe("MeetingSessionTranscriptStore", () => {
   });
 
   it("trims an oversized initial snapshot to the retained tail", async () => {
-    const session = createSession();
-    const store = createStore(session, [
-      {
-        droppedLines: 7,
-        epoch: "page-1",
-        lines: Array.from({ length: 2_005 }, (_, index) => ({ text: `line-${index}` })),
-      },
-    ]);
+    const texts = Array.from({ length: 2_005 }, (_, index) => `line-${index}`);
+    const store = createStore([snapshot(texts, "page-1", 7)]);
 
     const result = await store.read(session.id);
 
@@ -107,23 +120,10 @@ describe("MeetingSessionTranscriptStore", () => {
   });
 
   it("keeps only the new epoch tail when its first snapshot already has a gap", async () => {
-    const session = createSession();
-    const store = createStore(session, [
-      {
-        droppedLines: 0,
-        epoch: "page-1",
-        lines: [{ text: "old-0" }, { text: "old-1" }],
-      },
-      {
-        droppedLines: 3,
-        epoch: "page-2",
-        lines: [{ text: "new-3" }, { text: "new-4" }],
-      },
-      {
-        droppedLines: 3,
-        epoch: "page-2",
-        lines: [{ text: "new-3" }, { text: "new-4" }, { text: "new-5" }],
-      },
+    const store = createStore([
+      snapshot(["old-0", "old-1"], "page-1"),
+      snapshot(["new-3", "new-4"], "page-2", 3),
+      snapshot(["new-3", "new-4", "new-5"], "page-2", 3),
     ]);
 
     await store.read(session.id);
@@ -137,15 +137,9 @@ describe("MeetingSessionTranscriptStore", () => {
   });
 
   it("acknowledges a durable snapshot one line at a time", async () => {
-    const session = createSession();
-    const snapshot = {
-      droppedLines: 0,
-      epoch: "page-1",
-      lines: [{ text: "first" }, { text: "second" }],
-    };
+    const batch = snapshot(["first", "second"], "page-1");
     let failedSecond = false;
-    const delivered: string[] = [];
-    const store = createStore(session, [snapshot, snapshot], async (lines) => {
+    const store = createStore([batch, batch], async (lines) => {
       const text = lines[0]?.text;
       if (text === "second" && !failedSecond) {
         failedSecond = true;
@@ -162,47 +156,16 @@ describe("MeetingSessionTranscriptStore", () => {
     expect(delivered).toEqual(["first", "second"]);
   });
 
-  it.each([
-    {
-      name: "strips the maximal suffix-prefix overlap from a no-epoch reset",
-      snapshots: [
-        { droppedLines: 0, lines: [{ text: "A" }, { text: "B" }] },
-        { droppedLines: 0, lines: [{ text: "B" }, { text: "C" }] },
-      ],
-      expected: ["A", "B", "C"],
-    },
-  ])("$name", async ({ snapshots, expected }) => {
-    const session = createSession();
-    const delivered: string[] = [];
-    const snapshotCount = snapshots.length;
-    const store = createStore(session, snapshots, async (lines) => {
-      delivered.push(...lines.map((line) => line.text));
-    });
-
-    for (let index = 0; index < snapshotCount; index += 1) {
-      await store.read(session.id);
-    }
-
-    expect(delivered).toEqual(expected);
+  it("strips the maximal suffix-prefix overlap from a no-epoch reset", async () => {
+    const store = createStore([snapshot(["A", "B"]), snapshot(["B", "C"])]);
+    await store.read(session.id);
+    await store.read(session.id);
+    expect(delivered).toEqual(["A", "B", "C"]);
   });
 
   it("queues newer final rows behind an unavailable pending batch", async () => {
-    const session = createSession();
-    let unavailable = true;
-    const delivered: string[] = [];
-    const store = createStore(
-      session,
-      [
-        { droppedLines: 0, epoch: "page-1", lines: [{ text: "A" }] },
-        { droppedLines: 0, epoch: "page-1", lines: [{ text: "A" }, { text: "B" }] },
-      ],
-      async (lines) => {
-        if (unavailable) {
-          throw new Error("store unavailable");
-        }
-        delivered.push(...lines.map((line) => line.text));
-      },
-    );
+    unavailable = true;
+    const store = createStore([snapshot(["A"], "page-1"), snapshot(["A", "B"], "page-1")]);
 
     await expect(store.captureNotes(session)).rejects.toThrow("store unavailable");
     await expect(store.captureNotes(session, { finalize: true })).rejects.toThrow(
@@ -215,24 +178,8 @@ describe("MeetingSessionTranscriptStore", () => {
   });
 
   it("preserves pending delivery when the final browser snapshot also fails", async () => {
-    const session = createSession();
-    let captureCount = 0;
-    const store = new MeetingSessionTranscriptStore({
-      getSession: () => session,
-      isBrowserSession: () => true,
-      isTranscribeSession: () => true,
-      hasBrowserTab: () => true,
-      capture: async () => {
-        captureCount += 1;
-        if (captureCount === 1) {
-          return { droppedLines: 0, lines: [{ text: "pending" }] };
-        }
-        throw new Error("browser snapshot unavailable");
-      },
-      onLines: async () => {
-        throw new Error("store unavailable");
-      },
-    });
+    unavailable = true;
+    const store = createStore([snapshot(["pending"]), new Error("browser snapshot unavailable")]);
 
     await expect(store.captureNotes(session)).rejects.toThrow("store unavailable");
     await expect(store.captureNotes(session, { finalize: true })).rejects.toMatchObject({
@@ -241,23 +188,8 @@ describe("MeetingSessionTranscriptStore", () => {
   });
 
   it("queues an empty reset marker while delivery is pending", async () => {
-    const session = createSession();
-    let unavailable = true;
-    const delivered: string[] = [];
-    const store = createStore(
-      session,
-      [
-        { droppedLines: 0, lines: [{ text: "A" }] },
-        { droppedLines: 0, lines: [] },
-        { droppedLines: 0, lines: [{ text: "A" }, { text: "B" }] },
-      ],
-      async (lines) => {
-        if (unavailable) {
-          throw new Error("store unavailable");
-        }
-        delivered.push(...lines.map((line) => line.text));
-      },
-    );
+    unavailable = true;
+    const store = createStore([snapshot(["A"]), snapshot([]), snapshot(["A", "B"])]);
 
     await expect(store.captureNotes(session)).rejects.toThrow("store unavailable");
     await expect(store.captureNotes(session)).rejects.toThrow("store unavailable");
