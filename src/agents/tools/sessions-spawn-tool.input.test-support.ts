@@ -10,6 +10,7 @@ import { createAgentsWaitTool } from "./agents-wait-tool.js";
 import type { InProcessGatewayCaller } from "./in-process-gateway.js";
 import { registerSessionsSpawnAccessProgramTests } from "./sessions-spawn-tool.access-program.test-support.js";
 import type { createSessionsSpawnTool as SpawnToolFactory } from "./sessions-spawn-tool.js";
+import { registerSessionsSpawnVisibleThinkingTests } from "./sessions-spawn-visible-thinking.test-support.js";
 
 const requireRecord = createRequireRecord("record", "expected-label");
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-spawn-guidance-");
@@ -18,11 +19,18 @@ export function registerSessionsSpawnInputTests({
   createTool,
   registerAcpBackendForTest,
   mockGateway,
+  mockCallArg,
   mocks: hoisted,
 }: {
   createTool: typeof SpawnToolFactory;
   registerAcpBackendForTest: () => void;
   mockGateway: (response: Record<string, unknown>) => InProcessGatewayCaller;
+  mockCallArg: (
+    mock: unknown,
+    callIndex: number,
+    argIndex: number,
+    label: string,
+  ) => Record<string, unknown>;
   mocks: {
     spawnSubagentDirectMock: Mock;
     spawnAcpDirectMock: Mock;
@@ -35,6 +43,7 @@ export function registerSessionsSpawnInputTests({
     mockGateway,
     mocks: hoisted,
   });
+registerSessionsSpawnVisibleThinkingTests({ createTool, mockCallArg });
 
   it.each([false, true])(
     "keeps collector inputs within the declared spawn contract (placement=%s)",
@@ -165,6 +174,7 @@ export function registerSessionsSpawnInputTests({
       projectGitUrl: "https://github.com/example/project.git",
       worktreeName: "api-review",
       worktreeBaseRef: "origin/main",
+      thinking: "high",
     };
     const error = await tool
       .execute("hidden-visible-options", {
@@ -203,6 +213,9 @@ export function registerSessionsSpawnInputTests({
 
     expect(result.details).toMatchObject({ status: "accepted", runId: "run-visible" });
     expect(callGateway).toHaveBeenCalledOnce();
+    expect(mockCallArg(callGateway, 0, 1, "corrected visible sessions.create")).toMatchObject({
+      thinkingLevel: "high",
+    });
   });
 
   it("registers requester target guidance in the description, not the agentId schema", () => {

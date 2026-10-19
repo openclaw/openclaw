@@ -168,7 +168,7 @@ function buildSessionsSpawnToolSchema(params: {
       }),
     ),
     thinking: Type.Optional(
-      Type.String({ description: "Thinking override; unavailable with visible=true." }),
+      Type.String({ description: "Thinking override; supported with visible=true for subagents." }),
     ),
     cyberAccessProgram: SESSIONS_SPAWN_CYBER_ACCESS_PROGRAM_SCHEMA,
     cwd: Type.Optional(

@@ -137,6 +137,7 @@ describe("sessions_spawn tool", () => {
     createTool: makeTool,
     registerAcpBackendForTest,
     mockGateway,
+    mockCallArg,
     mocks: hoisted,
   });
 
@@ -1150,6 +1151,23 @@ describe("sessions_spawn tool", () => {
     });
     const result = await tool.execute("owned-visible", { task: "inspect", visible: true });
     expect(result.details).toMatchObject({ status: "accepted", owner });
+  });
+
+  it("reports every unsupported visible parameter in one error", async () => {
+    await expect(
+      makeTool().execute("visible-unsupported", {
+        task: "inspect",
+        runtime: "acp",
+        thread: true,
+        mode: "session",
+        lightContext: true,
+        attachments: [{ name: "note.txt", content: "hello" }],
+        attachAs: { mountPath: "inputs" },
+        visible: true,
+      }),
+    ).rejects.toThrow(
+      'Parameters unavailable with visible=true: runtime: supports runtime="subagent" only; thread: visible sessions route to the dashboard, not a channel thread; mode: visible sessions are persistent dashboard sessions; lightContext: bootstrap staging is not wired to the sessions.create path; attachments: attachment staging is not wired to the sessions.create path; attachAs: attachment staging is not wired to the sessions.create path',
+    );
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

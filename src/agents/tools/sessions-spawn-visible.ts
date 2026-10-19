@@ -72,6 +72,7 @@ import {
   summarizeVisibleSessionSpawnError,
 } from "./sessions-spawn-visible-cleanup.js";
 import { resolveVisibleSessionOwner } from "./sessions-spawn-visible-owner.js";
+import { resolveVisibleSpawnThinkingLevel } from "./sessions-spawn-visible-thinking.js";
 import {
   correctedVisibleSpawnCall,
   SessionsSpawnPlacementSchema,
@@ -344,6 +345,7 @@ export async function maybeSpawnVisibleSession(params: {
     requesterModel: params.options?.requesterModel,
     childModel: resolvedModel,
   });
+const thinkingLevel = resolveVisibleSpawnThinkingLevel(resolvedModel, params.raw);
   const { authProfileOverride } = initialSessionPatch;
   // A sandbox-classified visible child must not dispatch to a host-executed CLI
   // backend: the CLI runs as the Gateway OS user outside the configured sandbox
@@ -456,6 +458,7 @@ export async function maybeSpawnVisibleSession(params: {
         ...(group ? { category: group } : {}),
         model: resolvedModelRef,
         ...(cyberAccessProgram !== undefined ? { cyberAccessProgram } : {}),
+...(thinkingLevel ? { thinkingLevel } : {}),
         ...(placement ? { titleSource } : { task: taskMessage }),
         timeoutMs:
           runTimeoutSeconds === 0

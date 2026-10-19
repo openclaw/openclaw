@@ -141,10 +141,12 @@ describe("sessions_spawn terminal effects", () => {
 
   it("classifies an internal argument exception as not started", async () => {
     const tool = createSessionsSpawnTool({ config, countActiveRuns: () => 0 });
+    // Valid thinking levels are accepted on visible spawns, so use an invalid value here.
     const error = await tool
       .execute("spawn", {
         ...task,
-        thinking: "low",
+        visible: true,
+        thinking: "not-a-thinking-level",
       })
       .catch((reason: unknown) => reason);
     expect(error).toBeInstanceOf(Error);

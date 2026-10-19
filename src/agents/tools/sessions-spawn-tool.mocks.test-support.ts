@@ -32,9 +32,15 @@ vi.mock("../subagents/spawn/acp-spawn.js", () => ({
   spawnAcpDirect: (...args: unknown[]) => hoisted.spawnAcpDirectMock(...args),
 }));
 
-vi.mock("../subagents/registry/subagent-registry.js", () => ({
-  registerSubagentRun: (...args: unknown[]) => hoisted.registerSubagentRunMock(...args),
-}));
+vi.mock("../subagents/registry/subagent-registry.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../subagents/registry/subagent-registry.js")>();
+  return {
+    ...actual,
+    countActiveRunsForSession: () => 0,
+    registerSubagentRun: (...args: unknown[]) => hoisted.registerSubagentRunMock(...args),
+  };
+});
 
 vi.mock("./in-process-gateway.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./in-process-gateway.js")>();
