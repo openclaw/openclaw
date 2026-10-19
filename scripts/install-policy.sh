@@ -355,8 +355,10 @@ probe_git_remote_ref() {
             -e 's#[[:alpha:]][[:alnum:]+.-]*://[^[:space:]]+#[redacted-url]#g' \
             -e 's/([Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]):.*/\1: [redacted]/g' \
             -e 's/(gh[pousr]_[[:alnum:]_]+|github_pat_[[:alnum:]_]+)/[redacted]/g' >&2
-        if (( attempt == 3 )) || ! printf '%s\n' "$diagnostic" | grep -Eqi \
-            'Could not resolve (host|proxy)|Failed to connect|Connection (timed out|reset)|timed out|TLS connection was non-properly terminated|Empty reply from server|Send failure|Recv failure|SSL_ERROR_SYSCALL|transfer closed with|HTTP/2 stream .*not closed cleanly|RPC failed; curl (5|6|7|18|28|35|52|55|56|92)( |$)|requested URL returned error: (408|429|5[0-9][0-9])'; then
+        if (( attempt == 3 )) || printf '%s\n' "$diagnostic" | grep -Eqi \
+            'Authentication failed|Permission denied|Host key verification failed|could not read (Username|Password)|certificate verification failed|SSL certificate problem' ||
+            ! printf '%s\n' "$diagnostic" | grep -Eqi \
+            'Could not resolve (host|proxy)|Failed to connect|Connection.*(timed out|reset|closed|refused)|timed out|Network is unreachable|No route to host|Broken pipe|TLS connection was non-properly terminated|Empty reply from server|Send failure|Recv failure|GnuTLS recv error|Error in the pull function|SSL_ERROR_SYSCALL|transfer closed with|HTTP/2 stream .*not closed cleanly|RPC failed; curl (5|6|7|18|28|35|52|55|56|92)( |$)|requested URL returned error: (408|429|5[0-9][0-9])'; then
             return "$probe_status"
         fi
         printf 'Retrying Git ref lookup (%s/3)\n' "$((attempt + 1))" >&2

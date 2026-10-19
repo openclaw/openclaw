@@ -7,7 +7,7 @@ if [[ "${1:-}" != --case ]]; then
   default_installer="$root/scripts/install-cli.sh"
   [[ ! -f "$root/public/install-cli.sh" ]] || default_installer="$root/public/install-cli.sh"
   for installer in "${@:-$default_installer}"; do
-    for scenario in transient exhausted authentication missing lightweight annotated full retained retained-annotated; do
+    for scenario in transient ssh exhausted authentication ssh-auth missing lightweight annotated full retained retained-annotated; do
       fixture="$(mktemp -d)"
       mkdir -p "$fixture/home"
       result=0
@@ -34,15 +34,33 @@ git() {
     count="$(cat "$work/probes")"
     count=$((count + 1))
     printf '%s\n' "$count" > "$work/probes"
-    if [[ "$scenario" == exhausted || ( "$scenario" == transient && "$count" -lt 3 ) ]]; then
-      if [[ "$scenario" == transient ]]; then
-        printf '%s\n' 'fatal: unable to access https://user:synthetic-password@example.invalid/repo?token=synthetic-query: Empty reply from server' >&2
+    if [[ "$scenario" == exhausted || ( ( "$scenario" == transient || "$scenario" == ssh ) && "$count" -lt 3 ) ]]; then
+      if [[ "$scenario" == ssh ]]; then
+        if [[ "$count" == 1 ]]; then
+          printf '%s\n' 'kex_exchange_identification: Connection closed by remote host' >&2
+        else
+          printf '%s\n' 'Connection to example.invalid closed by remote host.' >&2
+        fi
+      elif [[ "$scenario" == transient ]]; then
+        if [[ "$count" == 1 ]]; then
+          printf '%s\n' 'fatal: unable to access https://user:synthetic-password@example.invalid/repo?token=synthetic-query: Empty reply from server' >&2
+        else
+          printf '%s\n' 'fatal: HTTP/2 stream 1 was not closed cleanly: INTERNAL_ERROR' >&2
+        fi
       else
-        printf '%s\n' 'fatal: unable to access https://user:synthetic-password@example.invalid/repo?token=synthetic-query: Could not resolve host: example.invalid' >&2
+        if [[ "$count" == 2 ]]; then
+          printf '%s\n' 'fatal: gnutls_handshake() failed: Error in the pull function.' >&2
+        else
+          printf '%s\n' 'fatal: unable to access https://user:synthetic-password@example.invalid/repo?token=synthetic-query: Could not resolve host: example.invalid' >&2
+        fi
       fi
       return 128
-    elif [[ "$scenario" == authentication ]]; then
-      printf '%s\n' 'fatal: Authentication failed for https://user:synthetic-password@example.invalid/repo' 'aUtHoRiZaTiOn: Bearer synthetic-header' 'COOKIE: synthetic-cookie' >&2
+    elif [[ "$scenario" == authentication || "$scenario" == ssh-auth ]]; then
+      if [[ "$scenario" == ssh-auth ]]; then
+        printf '%s\n' 'user@example.invalid: Permission denied (publickey).' 'Connection closed by remote host' >&2
+      else
+        printf '%s\n' 'fatal: Authentication failed for https://user:synthetic-password@example.invalid/repo' 'aUtHoRiZaTiOn: Bearer synthetic-header' 'COOKIE: synthetic-cookie' >&2
+      fi
       return 128
     fi
   fi
@@ -92,7 +110,7 @@ if grep -Eq 'synthetic-password|synthetic-query|synthetic-header|synthetic-cooki
   exit 1
 fi
 case "$scenario" in
-  transient|lightweight|annotated|full|retained|retained-annotated)
+  transient|ssh|lightweight|annotated|full|retained|retained-annotated)
     [[ "$result" == 0 ]] || exit 1
     [[ "$(command git -C "$repo" rev-parse HEAD)" == "$expected" ]] || exit 1
     [[ -z "$(command git -C "$repo" symbolic-ref --quiet HEAD || true)" ]] || exit 1
@@ -103,9 +121,9 @@ case "$scenario" in
     fi
     [[ "$scenario" != retained* || "$(command git -C "$repo" rev-list --count main)" == 3 ]] || exit 1
     ;;
-  exhausted|authentication)
+  exhausted|authentication|ssh-auth)
     [[ "$result" != 0 ]] || exit 1
-    grep -q 'fatal:' "$work/output" || exit 1
+    grep -Eq 'fatal:|Permission denied' "$work/output" || exit 1
     ;;
   missing)
     [[ "$result" != 0 ]] || exit 1
@@ -113,8 +131,8 @@ case "$scenario" in
     ;;
 esac || exit 1
 case "$scenario" in
-  transient|exhausted) [[ "$(cat "$work/probes")" == 3 ]] ;;
-  authentication|lightweight|annotated|full|retained|retained-annotated) [[ "$(cat "$work/probes")" == 1 ]] ;;
+  transient|ssh|exhausted) [[ "$(cat "$work/probes")" == 3 ]] ;;
+  authentication|ssh-auth|lightweight|annotated|full|retained|retained-annotated) [[ "$(cat "$work/probes")" == 1 ]] ;;
   missing) [[ "$(cat "$work/probes")" == 2 ]] ;;
 esac || exit 1
 printf 'PASS: %s %s\n' "$(basename "$installer")" "$scenario"
