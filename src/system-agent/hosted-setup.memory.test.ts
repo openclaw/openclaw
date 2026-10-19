@@ -7,12 +7,12 @@ import {
   sharedVerifiedInferenceConfig,
   mocks,
   useTempStateDir,
-  configSnapshot,
   createAmbientVerifiedBinding,
   SystemAgentChatEngine,
   type MemoryImportStepParams,
   type OpenClawConfig,
 } from "./chat-engine.test-support.js";
+import { createInferenceConfigFixture } from "./inference-config.test-support.js";
 
 function createEngine(options: ConstructorParameters<typeof SystemAgentChatEngine>[0] = {}) {
   return new SystemAgentChatEngine({
@@ -52,8 +52,13 @@ it("rechecks inference authority immediately before a hosted memory copy", async
   const changedConfig: OpenClawConfig = {
     agents: { defaults: { model: { primary: "anthropic/claude-opus-4-8" } } },
   };
-  const verifiedInference = await createAmbientVerifiedBinding(baseConfig);
-  let currentConfig = structuredClone(baseConfig);
+  const configFixture = await createInferenceConfigFixture(baseConfig);
+  const snapshot = configFixture.snapshot;
+  const verifiedInference = await createAmbientVerifiedBinding(
+    snapshot.runtimeConfig ?? snapshot.config,
+    snapshot,
+  );
+  mocks.readConfigFileSnapshot.mockImplementation(configFixture.read);
   const copyEffect = vi.fn();
   mocks.runSetupMemoryImportStep.mockImplementation(async (params: MemoryImportStepParams) => {
     const confirmed = await params.prompter.confirm({
@@ -65,7 +70,7 @@ it("rechecks inference authority immediately before a hosted memory copy", async
     }
     // Route changes mid-wizard, after the turn gate: only the copy-boundary
     // recheck can catch it.
-    currentConfig = changedConfig;
+    await configFixture.write(changedConfig);
     await params.beforeApply?.();
     copyEffect();
     return { status: "completed", providers: [] };
@@ -74,7 +79,7 @@ it("rechecks inference authority immediately before a hosted memory copy", async
     surface: "gateway",
     verifiedInference,
     deps: {
-      readConfigFileSnapshot: vi.fn(async () => configSnapshot(currentConfig)) as never,
+      readConfigFileSnapshot: configFixture.read,
     },
   });
 
