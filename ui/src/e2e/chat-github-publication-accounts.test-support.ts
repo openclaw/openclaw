@@ -3,7 +3,7 @@ import { expect, it } from "vitest";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
-import { openDetailsPullRequests } from "./chat-details.test-support.ts";
+import { closeChatDetails, openDetailsPullRequests } from "./chat-details.test-support.ts";
 import { exactButton as publicationAction } from "./chat-flow.test-support.ts";
 import {
   personalAccount,
@@ -219,9 +219,16 @@ export function defineGitHubPublicationAccountTests({
       await page.locator(".agent-chat__input textarea").click();
       await personal.waitFor({ state: "hidden" });
       expect(await arrow.getAttribute("aria-expanded")).toBe("false");
-      expect(await page.locator(".chat-details-toggle").getAttribute("aria-expanded")).toBe(
-        "false",
-      );
+      if (width === 390) {
+        // The retained mobile host closes through its own control in this prefix.
+        await page.locator(".chat-mobile-host").waitFor({ state: "visible" });
+        await closeChatDetails(page);
+        await page.locator(".chat-mobile-host").waitFor({ state: "hidden" });
+      } else {
+        expect(await page.locator(".chat-details-toggle").getAttribute("aria-expanded")).toBe(
+          "false",
+        );
+      }
       await openDetailsPullRequests(page);
       expect(await personal.isVisible()).toBe(false);
       expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
