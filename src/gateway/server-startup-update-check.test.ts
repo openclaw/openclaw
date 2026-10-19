@@ -150,6 +150,7 @@ it.each(["background", "early manual"])(
 
     const ready = createDeferred();
     const result = await startUpdateCheck({
+      createUpdateCheck: mocks.createGatewayUpdateCheck,
       ...(source === "early manual" ? { waitForPostReadyWork: () => ready.promise } : {}),
       broadcastToConnIds,
       getClientConnIds,
