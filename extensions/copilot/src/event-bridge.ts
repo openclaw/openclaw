@@ -115,7 +115,6 @@ export function attachEventBridge(session: SessionLike, options: EventBridgeOpti
   let activeCompactionCount = 0;
   let observedCompaction = false;
   let deltaQueue = Promise.resolve();
-  let deltaChain = Promise.resolve();
   let agentEventChain = Promise.resolve();
   let compactionChain = Promise.resolve();
   let compactionIdle: ReturnType<typeof createDeferred<void>> | undefined;
@@ -204,19 +203,10 @@ export function attachEventBridge(session: SessionLike, options: EventBridgeOpti
       usage,
     };
     deltaQueue = deltaQueue
-      .then(
-        () => onAssistantDelta(payload),
-        () => onAssistantDelta(payload),
-      )
+      .then(() => onAssistantDelta(payload))
       .catch((error: unknown) => {
         firstDeltaError ??= error;
       });
-    deltaChain = deltaQueue.then(() => {
-      if (firstDeltaError !== undefined) {
-        throw toErrorObject(firstDeltaError, "Non-Error thrown");
-      }
-    });
-    void deltaChain.catch(() => undefined);
   });
 
   listenRoot("assistant.reasoning_delta", (event) => {
@@ -498,8 +488,11 @@ export function attachEventBridge(session: SessionLike, options: EventBridgeOpti
       compactionIdle?.resolve();
       compactionIdle = undefined;
     },
-    awaitDeltaChain() {
-      return deltaChain;
+    async awaitDeltaChain() {
+      await deltaQueue;
+      if (firstDeltaError !== undefined) {
+        throw toErrorObject(firstDeltaError, "Non-Error thrown");
+      }
     },
     awaitAgentEventChain() {
       return agentEventChain;

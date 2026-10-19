@@ -3,6 +3,7 @@ import { constants, lstatSync, type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
+import { ignoreMissingPath } from "./errno.js";
 import { hasErrnoCode } from "./errors.js";
 import { readPackageVersion } from "./package-json.js";
 import { repairPackagePermissions } from "./package-update-activation-paths.js";
@@ -702,10 +703,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       await read(() => fs.lstat(file));
       return true;
     } catch (error) {
-      if (hasErrnoCode(error, "ENOENT")) {
-        return false;
-      }
-      throw error;
+      return ignoreMissingPath(error) ?? false;
     }
   }
 

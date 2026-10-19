@@ -27,7 +27,6 @@ type PendingAgentConsult = {
   terminalSubmitted: boolean;
   generation: number;
   abortController: AbortController;
-  runRegistration?: { runId: string; controller: AbortController };
 };
 
 export function createFaceTimeConsultController(params: {
@@ -86,7 +85,6 @@ export function createFaceTimeConsultController(params: {
 
   const abortConsult = (consult: PendingAgentConsult, reason: string) => {
     consult.abortController.abort(new Error(`FaceTime agent consult ${reason}`));
-    consult.runRegistration?.controller.abort(new Error(`FaceTime agent consult run ${reason}`));
   };
   const abortForClose = () => {
     for (const consult of pending.values()) {
@@ -333,21 +331,6 @@ export function createFaceTimeConsultController(params: {
       extraSystemPrompt: CONSULT_SYSTEM_PROMPT,
       thinkLevel: "off",
       abortSignal: consult.abortController.signal,
-      onRunStarted: ({ runId }) => {
-        const registration = { runId, controller: new AbortController() };
-        consult.runRegistration = registration;
-        if (consult.cancelRequested || pending.get(consult.callId) !== consult) {
-          registration.controller.abort(new Error("FaceTime agent consult was already cancelled"));
-        }
-        return {
-          abortSignal: registration.controller.signal,
-          cleanup: () => {
-            if (consult.runRegistration === registration) {
-              consult.runRegistration = undefined;
-            }
-          },
-        };
-      },
     }).then(
       (result) => deliverResult(result),
       async (error: unknown) => {

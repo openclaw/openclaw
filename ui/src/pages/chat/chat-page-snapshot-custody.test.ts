@@ -24,13 +24,10 @@ import {
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
 import { loadChatRoute } from "./route-loader.ts";
-import {
-  readChatSessionSnapshot,
-  resolveChatSnapshotKey,
-  type ChatSessionSnapshot,
-} from "./session-message-cache.ts";
+import { readChatSessionSnapshot, resolveChatSnapshotKey } from "./session-message-cache.ts";
 import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
+import type { ChatSessionSnapshot } from "./session-snapshot-types.ts";
 
 beforeEach(() => {
   installTranscriptDomMocks();

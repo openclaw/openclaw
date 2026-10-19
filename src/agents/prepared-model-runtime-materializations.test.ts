@@ -2,9 +2,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   clearAllRuntimeAuthMaterializations,
   recordRuntimeAuthMaterialization,
+  runtimeAuthMaterializationChanges,
 } from "./auth-profiles/runtime-materializations.js";
 import { getPreparedModelRuntimeAuthMaterializations } from "./prepared-model-runtime-auth.js";
-import { registerPreparedRuntimeAuthMaterializationPublisher } from "./prepared-model-runtime-materializations.js";
+import { bindPreparedRuntimeAuthMaterializationPublisher } from "./prepared-model-runtime-materializations.js";
 import type {
   PreparedModelRuntimeOwner,
   PreparedModelRuntimeSnapshot,
@@ -53,7 +54,9 @@ const materialization = {
   runtimeOwnerId: "codex",
 };
 
+const publishMaterialization = runtimeAuthMaterializationChanges.onChange;
 afterEach(() => {
+  runtimeAuthMaterializationChanges.onChange = publishMaterialization;
   clearAllRuntimeAuthMaterializations();
 });
 
@@ -70,7 +73,7 @@ describe("prepared model runtime auth materialization publication", () => {
       ["atlas", atlas],
     ]);
     const phases: string[] = [];
-    const unregister = registerPreparedRuntimeAuthMaterializationPublisher(owners, (event) => {
+    bindPreparedRuntimeAuthMaterializationPublisher(owners, (event) => {
       phases.push(event.phase);
     });
 
@@ -87,14 +90,13 @@ describe("prepared model runtime auth materialization publication", () => {
         runtimeOwnerId: "codex",
       }),
     ]);
-    unregister();
   });
 
   it("announces publication when every configured owner is request-visible", () => {
     const main = createOwner({ agentId: "main", agentDir: "/tmp/configured-main" });
     const owners = new Map<string, PreparedModelRuntimeOwner>([["main", main]]);
     const phases: string[] = [];
-    const unregister = registerPreparedRuntimeAuthMaterializationPublisher(owners, (event) => {
+    bindPreparedRuntimeAuthMaterializationPublisher(owners, (event) => {
       phases.push(event.phase);
     });
 
@@ -105,6 +107,5 @@ describe("prepared model runtime auth materialization publication", () => {
       }),
     ).toBe(true);
     expect(phases).toEqual(["invalidated", "published"]);
-    unregister();
   });
 });

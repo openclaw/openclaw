@@ -6,7 +6,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { onOutboundDeliveryEnqueued } from "../delivery-queue-cache.js";
+import { outboundDeliveryNotifications } from "../delivery-queue-cache.js";
 import { captureDeliveryQueueStateContext } from "../delivery-queue-sqlite.js";
 import {
   getDeliveryQueueEntryStatus,
@@ -31,9 +31,8 @@ const payload = { channel: "matrix", to: "!synthetic:example", payloads: [{ text
 
 describe("outbound enqueue worker", () => {
   const fixtures = installDeliveryQueueTmpDirHooks();
-  let unsubscribe = () => {};
   afterEach(() => {
-    unsubscribe();
+    outboundDeliveryNotifications.onEnqueued = () => {};
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
@@ -50,7 +49,7 @@ describe("outbound enqueue worker", () => {
     const { db } = openState(stateDir);
     await enqueueDelivery(payload, stateDir);
     const enqueued = vi.fn();
-    unsubscribe = onOutboundDeliveryEnqueued(enqueued);
+    outboundDeliveryNotifications.onEnqueued = enqueued;
     const reply = holdEnqueueReply();
     const channelData = {
       date: new Date("2026-09-01T00:00:00.000Z"),
@@ -147,7 +146,7 @@ describe("outbound enqueue worker", () => {
   it("keeps stages on conflicts and atomically consumes only a matching preparation", async () => {
     const stateDir = fixtures.tmpDir();
     const enqueued = vi.fn();
-    unsubscribe = onOutboundDeliveryEnqueued(enqueued);
+    outboundDeliveryNotifications.onEnqueued = enqueued;
     const id = "enqueue-preparation";
     const stage = await createDeliveryQueueMediaRetention([], "outbound-media-stage", stateDir);
     seed(LEGACY_QUEUE, { id: "legacy-owner", enqueuedAt: Date.now(), retryCount: 0 });
