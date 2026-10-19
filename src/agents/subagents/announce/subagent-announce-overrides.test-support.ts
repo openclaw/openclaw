@@ -10,13 +10,14 @@ import * as embeddedRuns from "../../embedded-agent-runner/runs.js";
 import * as deliveryRuntime from "./subagent-announce-delivery.runtime.js";
 import * as announceRuntime from "./subagent-announce.runtime.js";
 
+type Implementation<T extends (...args: never[]) => unknown> = Parameters<
+  MockInstance<T>["mockImplementation"]
+>[0];
 type AnnounceTestDeps = Pick<typeof announceRuntime, "getRuntimeConfig"> & {
-  dispatchGatewayMethodInProcess: Parameters<
-    MockInstance<typeof announceRuntime.dispatchGatewayMethodInProcess>["mockImplementation"]
-  >[0];
-  callGateway: Parameters<
-    MockInstance<typeof announceRuntime.callSubagentLifecycleGateway>["mockImplementation"]
-  >[0];
+  dispatchGatewayMethodInProcess: Implementation<
+    typeof announceRuntime.dispatchGatewayMethodInProcess
+  >;
+  callGateway: Implementation<typeof announceRuntime.callSubagentLifecycleGateway>;
 };
 
 type OutputTestDeps = Pick<
@@ -97,9 +98,9 @@ async function dispatchThroughTestGateway(
 function install<T extends (...args: never[]) => unknown>(
   original: T,
   createSpy: () => MockInstance<T>,
-  implementation: Parameters<MockInstance<T>["mockImplementation"]>[0],
+  implementation?: Implementation<T>,
 ) {
-  if (Object.is(original, implementation)) {
+  if (!implementation || Object.is(original, implementation)) {
     return;
   }
   const alreadyMocked = vi.isMockFunction(original);
@@ -123,21 +124,13 @@ function replaceOverrides(scope: Scope, overrides?: Overrides) {
   }
   scopes.delete(scope);
   if (overrides) {
-    const callGateway = overrides.callGateway;
-    scopes.set(scope, {
-      ...overrides,
-      ...(scope !== "output" && callGateway && !overrides.dispatchGatewayMethodInProcess
-        ? {
-            dispatchGatewayMethodInProcess: (async (method, params, options) =>
-              await dispatchThroughTestGateway(
-                callGateway,
-                method,
-                params,
-                options,
-              )) satisfies AnnounceTestDeps["dispatchGatewayMethodInProcess"],
-          }
-        : {}),
-    });
+    const entry = { ...overrides };
+    const callGateway = entry.callGateway;
+    if (scope !== "output" && callGateway && !entry.dispatchGatewayMethodInProcess) {
+      entry.dispatchGatewayMethodInProcess = async (method, params, options) =>
+        await dispatchThroughTestGateway(callGateway, method, params, options);
+    }
+    scopes.set(scope, entry);
   }
   // Flow and output share imports. One spy owner restores a removed scope's
   // defaults without erasing another scope's active overrides.
@@ -145,32 +138,26 @@ function replaceOverrides(scope: Scope, overrides?: Overrides) {
   for (const entry of scopes.values()) {
     Object.assign(current, entry);
   }
-  if (current.callGateway) {
-    install(
-      announceRuntime.callSubagentLifecycleGateway,
-      () => vi.spyOn(announceRuntime, "callSubagentLifecycleGateway"),
-      current.callGateway,
-    );
-  }
-  if (current.dispatchGatewayMethodInProcess) {
-    install(
-      announceRuntime.dispatchGatewayMethodInProcess,
-      () => vi.spyOn(announceRuntime, "dispatchGatewayMethodInProcess"),
-      current.dispatchGatewayMethodInProcess,
-    );
-  }
-  if (current.getRuntimeConfig) {
-    install(
-      announceRuntime.getRuntimeConfig,
-      () => vi.spyOn(announceRuntime, "getRuntimeConfig"),
-      current.getRuntimeConfig,
-    );
-    install(
-      configRuntime.getRuntimeConfig,
-      () => vi.spyOn(configRuntime, "getRuntimeConfig"),
-      current.getRuntimeConfig,
-    );
-  }
+  install(
+    announceRuntime.callSubagentLifecycleGateway,
+    () => vi.spyOn(announceRuntime, "callSubagentLifecycleGateway"),
+    current.callGateway,
+  );
+  install(
+    announceRuntime.dispatchGatewayMethodInProcess,
+    () => vi.spyOn(announceRuntime, "dispatchGatewayMethodInProcess"),
+    current.dispatchGatewayMethodInProcess,
+  );
+  install(
+    announceRuntime.getRuntimeConfig,
+    () => vi.spyOn(announceRuntime, "getRuntimeConfig"),
+    current.getRuntimeConfig,
+  );
+  install(
+    configRuntime.getRuntimeConfig,
+    () => vi.spyOn(configRuntime, "getRuntimeConfig"),
+    current.getRuntimeConfig,
+  );
   if (current.readSubagentSessionEntry) {
     install(
       announceRuntime.readSubagentSessionEntry,
@@ -178,34 +165,26 @@ function replaceOverrides(scope: Scope, overrides?: Overrides) {
       async (...args) => current.readSubagentSessionEntry!(...args),
     );
   }
-  if (current.readSessionMessagesAsync) {
-    install(
-      announceRuntime.readSessionMessagesAsync,
-      () => vi.spyOn(announceRuntime, "readSessionMessagesAsync"),
-      current.readSessionMessagesAsync,
-    );
-  }
-  if (current.resolveSessionStorePathCore) {
-    install(
-      announceRuntime.resolveSessionStorePathCore,
-      () => vi.spyOn(announceRuntime, "resolveSessionStorePathCore"),
-      current.resolveSessionStorePathCore,
-    );
-  }
-  if (current.findTranscriptEvent) {
-    install(
-      sessionAccessor.findTranscriptEvent,
-      () => vi.spyOn(sessionAccessor, "findTranscriptEvent"),
-      current.findTranscriptEvent,
-    );
-  }
-  if (current.findSessionTranscriptArchiveEventReadOnly) {
-    install(
-      sessionHistory.findSessionTranscriptArchiveEventReadOnly,
-      () => vi.spyOn(sessionHistory, "findSessionTranscriptArchiveEventReadOnly"),
-      current.findSessionTranscriptArchiveEventReadOnly,
-    );
-  }
+  install(
+    announceRuntime.readSessionMessagesAsync,
+    () => vi.spyOn(announceRuntime, "readSessionMessagesAsync"),
+    current.readSessionMessagesAsync,
+  );
+  install(
+    announceRuntime.resolveSessionStorePathCore,
+    () => vi.spyOn(announceRuntime, "resolveSessionStorePathCore"),
+    current.resolveSessionStorePathCore,
+  );
+  install(
+    sessionAccessor.findTranscriptEvent,
+    () => vi.spyOn(sessionAccessor, "findTranscriptEvent"),
+    current.findTranscriptEvent,
+  );
+  install(
+    sessionHistory.findSessionTranscriptArchiveEventReadOnly,
+    () => vi.spyOn(sessionHistory, "findSessionTranscriptArchiveEventReadOnly"),
+    current.findSessionTranscriptArchiveEventReadOnly,
+  );
   if (current.loadSessionEntry) {
     install(
       sessionAccessor.loadSessionEntryReadOnly,
@@ -249,41 +228,31 @@ function replaceOverrides(scope: Scope, overrides?: Overrides) {
       }),
     );
   }
-  if (current.loadSessionEntryByKey) {
-    install(
-      deliveryRuntime.loadSessionEntryByKey,
-      () => vi.spyOn(deliveryRuntime, "loadSessionEntryByKey"),
-      current.loadSessionEntryByKey,
-    );
-  }
-  if (current.getRequesterSessionActivity) {
-    install(
-      deliveryRuntime.getSubagentRequesterSessionActivity,
-      () => vi.spyOn(deliveryRuntime, "getSubagentRequesterSessionActivity"),
-      current.getRequesterSessionActivity,
-    );
-  }
-  if (current.isSessionRunActive) {
-    install(
-      sessionQueries.isSessionRunActive,
-      () => vi.spyOn(sessionQueries, "isSessionRunActive"),
-      current.isSessionRunActive,
-    );
-  }
-  if (current.resolveRequesterSessionAbandonment) {
-    install(
-      embeddedRuns.resolveEmbeddedRunAbandonment,
-      () => vi.spyOn(embeddedRuns, "resolveEmbeddedRunAbandonment"),
-      current.resolveRequesterSessionAbandonment,
-    );
-  }
-  if (current.sendMessage) {
-    install(
-      deliveryRuntime.sendSubagentAnnounceMessage,
-      () => vi.spyOn(deliveryRuntime, "sendSubagentAnnounceMessage"),
-      current.sendMessage,
-    );
-  }
+  install(
+    deliveryRuntime.loadSessionEntryByKey,
+    () => vi.spyOn(deliveryRuntime, "loadSessionEntryByKey"),
+    current.loadSessionEntryByKey,
+  );
+  install(
+    deliveryRuntime.getSubagentRequesterSessionActivity,
+    () => vi.spyOn(deliveryRuntime, "getSubagentRequesterSessionActivity"),
+    current.getRequesterSessionActivity,
+  );
+  install(
+    sessionQueries.isSessionRunActive,
+    () => vi.spyOn(sessionQueries, "isSessionRunActive"),
+    current.isSessionRunActive,
+  );
+  install(
+    embeddedRuns.resolveEmbeddedRunAbandonment,
+    () => vi.spyOn(embeddedRuns, "resolveEmbeddedRunAbandonment"),
+    current.resolveRequesterSessionAbandonment,
+  );
+  install(
+    deliveryRuntime.sendSubagentAnnounceMessage,
+    () => vi.spyOn(deliveryRuntime, "sendSubagentAnnounceMessage"),
+    current.sendMessage,
+  );
 }
 
 export const announceTesting = {

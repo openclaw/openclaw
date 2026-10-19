@@ -91,6 +91,19 @@ afterEach(() => {
   testing.setDepsForTest();
 });
 
+type MediaCase = {
+  name: string;
+  input: Parameters<typeof deliver>[0];
+  expected: { content?: string; mediaUrls?: string[]; asVoice?: boolean } | null;
+};
+function mediaCase(
+  name: string,
+  event: Partial<AgentInternalEvent>,
+  expected: MediaCase["expected"] = { content: "Image ready", mediaUrls: [image] },
+): MediaCase {
+  return { name, input: { event }, expected };
+}
+
 describe("subagent completion media after requester wake failure", () => {
   it("retains the original failed text fallback error", async () => {
     const failure = Object.assign(new Error("synthetic channel failure"), { code: "ECONNRESET" });
@@ -106,98 +119,66 @@ describe("subagent completion media after requester wake failure", () => {
     expect(sendMessage).toHaveBeenCalledOnce();
   });
 
-  it.each<{
-    name: string;
-    event?: Partial<AgentInternalEvent>;
-    payloads?: Record<string, unknown>[];
-    content?: string;
-    absent?: boolean;
-    media?: string[];
-    asVoice?: boolean;
-  }>([
-    {
-      name: "structured media",
-      event: { mediaUrls: [image] },
-      content: "Image ready",
-      media: [image],
-    },
-    {
-      name: "captionless media",
-      event: { result: "", mediaUrls: [image] },
-      content: "",
-      media: [image],
-    },
-    {
-      name: "attachment metadata",
-      event: { attachments: [{ type: "image" as const, path: image }] },
-      content: "Image ready",
-      media: [image],
-    },
-    {
-      name: "visible directive beside hidden context",
-      event: { result: `Image ready\nMEDIA:${image}\n${hidden}` },
-      content: "Image ready",
-      media: [image],
-    },
-    {
-      name: "voice directive",
-      event: { result: "[[audio_as_voice]]\nMEDIA:/tmp/voice.ogg" },
-      content: "",
-      media: ["/tmp/voice.ogg"],
-      asVoice: true,
-    },
-    {
-      name: "hidden-only media",
-      event: { result: `Image ready\n${hidden}` },
-      content: "Image ready",
-      media: undefined,
-    },
-    {
-      name: "genuine placeholder-shaped result",
-      event: { result: "(no output)" },
-      content: "(no output)",
-      media: undefined,
-    },
+  it.each<MediaCase>([
+    mediaCase("structured media", { mediaUrls: [image] }),
+    mediaCase(
+      "captionless media",
+      { result: "", mediaUrls: [image] },
+      { content: "", mediaUrls: [image] },
+    ),
+    mediaCase("attachment metadata", { attachments: [{ type: "image", path: image }] }),
+    mediaCase("visible directive beside hidden context", {
+      result: `Image ready\nMEDIA:${image}\n${hidden}`,
+    }),
+    mediaCase(
+      "voice directive",
+      { result: "[[audio_as_voice]]\nMEDIA:/tmp/voice.ogg" },
+      { content: "", mediaUrls: ["/tmp/voice.ogg"], asVoice: true },
+    ),
+    mediaCase(
+      "hidden-only media",
+      { result: `Image ready\n${hidden}` },
+      { content: "Image ready" },
+    ),
+    mediaCase(
+      "genuine placeholder-shaped result",
+      { result: "(no output)" },
+      { content: "(no output)" },
+    ),
     {
       name: "requester voice payload",
-      payloads: [
-        {
-          text: `Voice ready\nMEDIA:/tmp/voice.ogg\n${hidden}`,
-          mediaUrls: ["/tmp/voice.ogg"],
-          audioAsVoice: true,
-        },
-      ],
-      content: "Voice ready",
-      media: ["/tmp/voice.ogg"],
-      asVoice: true,
+      input: {
+        payloads: [
+          {
+            text: `Voice ready\nMEDIA:/tmp/voice.ogg\n${hidden}`,
+            mediaUrls: ["/tmp/voice.ogg"],
+            audioAsVoice: true,
+          },
+        ],
+      },
+      expected: { content: "Voice ready", mediaUrls: ["/tmp/voice.ogg"], asVoice: true },
     },
-    {
-      name: "recorded absent result",
-      event: { result: "(no output)", noVisibleResult: true },
-      absent: true,
-    },
-    {
-      name: "failed completion without its media",
-      event: { status: "error", statusLabel: "failed", result: "(no output)", mediaUrls: [image] },
-    },
-  ])(
-    "delivers only visible completed content: $name",
-    async ({ event, payloads, content, media, asVoice, absent }) => {
-      const { result, sendMessage } = await deliver({ event, payloads });
-      if (absent) {
-        expect(sendMessage).not.toHaveBeenCalled();
-        return;
-      }
-      expect(result).toMatchObject({ delivered: true, path: "direct" });
-      expect(sendMessage).toHaveBeenCalledOnce();
-      const payload = mockCallArg(sendMessage);
-      if (content !== undefined) {
-        expect(payload.content).toBe(content);
-      }
-      expect(payload.mediaUrls).toEqual(media);
-      expect(payload.asVoice).toBe(asVoice);
-    },
-  );
+    mediaCase("recorded absent result", { result: "(no output)", noVisibleResult: true }, null),
+    mediaCase(
+      "failed completion without its media",
+      { status: "error", statusLabel: "failed", result: "(no output)", mediaUrls: [image] },
+      {},
+    ),
+  ])("delivers only visible completed content: $name", async ({ input, expected }) => {
+    const { result, sendMessage } = await deliver(input);
+    if (expected === null) {
+      expect(sendMessage).not.toHaveBeenCalled();
+      return;
+    }
+    expect(result).toMatchObject({ delivered: true, path: "direct" });
+    expect(sendMessage).toHaveBeenCalledOnce();
+    const payload = mockCallArg(sendMessage);
+    if (expected.content !== undefined) {
+      expect(payload.content).toBe(expected.content);
+    }
+    expect(payload.mediaUrls).toEqual(expected.mediaUrls);
+    expect(payload.asVoice).toBe(expected.asVoice);
+  });
 
   it("does not settle or retry a partially sent media batch", async () => {
     const onDeliveryResult = vi.fn();
