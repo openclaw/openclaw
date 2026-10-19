@@ -10,6 +10,7 @@ import {
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
+import { log as embeddedAgentLog } from "../embedded-agent-runner/logger.js";
 import {
   PreparedQuestionAnswerRefusedError,
   QuestionDispatchRefusedError,
@@ -135,6 +136,45 @@ describe("gateway harness questions", () => {
       }
       cleanup();
     }),
+  );
+  it.each(["failed", "aborted"] as const)(
+    "records a secret prompt delivery failure only while pending: %s",
+    async (outcome) => {
+      const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
+      const prompt = createDeferred();
+      const entered = createDeferred();
+      const controller = new AbortController();
+      const run = startQuestion(
+        "agent:main:secret-delivery-failure",
+        undefined,
+        async () => {
+          entered.resolve();
+          await prompt.promise;
+        },
+        {
+          questions: [{ id: "answer", header: "Answer", question: "Input", isSecret: true }],
+          signal: controller.signal,
+        },
+      );
+      try {
+        await entered.promise;
+        if (outcome === "aborted") {
+          controller.abort();
+        }
+        prompt.reject(new Error("synthetic private prompt delivery payload"));
+        await expect(run).resolves.toEqual({ status: "cancelled" });
+        expect(warn.mock.calls).toEqual(
+          outcome === "failed"
+            ? [["Secret input prompt delivery failed; the pending input request was cancelled."]]
+            : [],
+        );
+      } finally {
+        controller.abort();
+        prompt.resolve();
+        await run;
+        warn.mockRestore();
+      }
+    },
   );
   it.each(["uncommitted", "question-replaced", "creator-closed", "unstaged"] as const)(
     "settles secret input only after current source persistence: %s",

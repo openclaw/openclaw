@@ -1,6 +1,4 @@
-import type { ConfigSchemaAnalysis } from "../../components/config-form.analyze.ts";
 import { pathKey } from "../../components/config-form.shared.ts";
-import type { JsonSchema } from "../../components/config-form.shared.ts";
 import type { RealtimeTalkInputDevice } from "../chat/talk/input.ts";
 
 export type SettingsMediaDeviceState = {
@@ -20,12 +18,6 @@ type RawDiffCache = {
   current: string;
   diff: ConfigDiffEntry[];
 };
-type SchemaAnalysisCache = {
-  schema: JsonSchema | null;
-  includeKey: string;
-  excludeKey: string;
-  analysis: ConfigSchemaAnalysis;
-};
 
 export type ConfigViewState = {
   rawRevealed: boolean;
@@ -34,7 +26,6 @@ export type ConfigViewState = {
   validityDismissed: boolean;
   revealedSensitivePaths: Set<string>;
   rawDiffCache?: RawDiffCache;
-  schemaAnalysisCache?: SchemaAnalysisCache;
   lastConfigContextKey: string | null;
   lastFormModeForScroll: ConfigFormMode | null;
 };

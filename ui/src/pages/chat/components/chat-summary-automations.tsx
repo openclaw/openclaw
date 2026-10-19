@@ -348,11 +348,3 @@ export function ChatSummaryAutomations(props: Props) {
     </openclaw-chat-summary-automations>
   );
 }
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-chat-summary-automations": HTMLAttributes<HTMLElement>;
-    }
-  }
-}

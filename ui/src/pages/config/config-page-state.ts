@@ -66,7 +66,7 @@ import {
   defaultConfigSelection,
   normalizeConfigSelection,
   type ConfigSelection,
-  SCOPED_CONFIG_SECTION_KEYS,
+  ADVANCED_EXCLUDED_SECTIONS,
   type ConfigPageId,
 } from "./config-sections.ts";
 import * as themeImport from "./custom-theme-import-owner.ts";
@@ -703,7 +703,7 @@ export function createConfigPage(
     const configState = runtimeConfig.state;
     const includeSections = configSectionKeysForPage(pageId);
     // Advanced shows everything without a curated home elsewhere.
-    const excludeSections = pageId === "advanced" ? [...SCOPED_CONFIG_SECTION_KEYS] : undefined;
+    const excludeSections = pageId === "advanced" ? ADVANCED_EXCLUDED_SECTIONS : undefined;
     const currentSelection = presentation.selections[pageId] ?? defaultConfigSelection(pageId);
     const selection = normalizeConfigSelection(
       pageId,
@@ -974,7 +974,7 @@ export function createConfigPage(
       navRootLabel: pageId === "advanced" ? undefined : titleForRoute(pageId),
       showSectionDocs: pageId !== "communications",
       showRootTab: !includeSections?.length,
-      includeSections: includeSections ? [...includeSections] : undefined,
+      includeSections,
       excludeSections,
       includeVirtualSections: pageId === "appearance" || pageId === "notifications",
       settingsLayout: pageId === "advanced" ? ("accordion" as const) : undefined,

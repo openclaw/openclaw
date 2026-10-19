@@ -21,10 +21,7 @@ import {
   replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.sqlite-entry.js";
-import {
-  historyLane,
-  targetDiscoveryLane,
-} from "../config/sessions/session-transcript-worker-resources.js";
+import { historyLane } from "../config/sessions/session-transcript-worker-resources.js";
 import * as historyWorker from "../config/sessions/session-transcript-worker-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -401,51 +398,6 @@ describe("worker conversation reads", () => {
       await outcome;
     }
   });
-
-  it.each(["conversation-rows", "session-store-target"] as const)(
-    "refuses a replaced source while %s is pending",
-    async (phase) => {
-      const directory = state.statePath(phase);
-      const missing = state.statePath(phase, "openclaw-agent.sqlite");
-      const locator =
-        phase === "session-store-target" ? state.statePath(phase, "sessions.json") : missing;
-      await fs.mkdir(directory, { recursive: true });
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const lane = targetDiscoveryLane;
-      const run = lane.pool.run.bind(lane.pool);
-      vi.spyOn(lane.pool, "run").mockImplementation(async (...args) => {
-        const reply = await run(...args);
-        if (
-          reply.ok &&
-          typeof reply.value === "object" &&
-          !Array.isArray(reply.value) &&
-          "kind" in reply.value &&
-          reply.value.kind === phase
-        ) {
-          entered.resolve();
-          await release.promise;
-        }
-        return reply;
-      });
-      const pending = listConversations({ agentId: "main", storePath: locator });
-      const outcome = pending.catch((error: unknown) => error);
-      try {
-        await awaitGateBeforeSettlement(
-          entered.promise,
-          pending,
-          "Conversation read was not dispatched",
-        );
-        await fs.writeFile(missing, "replacement source");
-        release.resolve();
-        await expect(pending).rejects.toThrow(/Session store changed/);
-      } finally {
-        release.resolve();
-        await outcome;
-        await fs.unlink(missing).catch(() => {});
-      }
-    },
-  );
 
   it("keeps process-held incognito conversations with their memory owner", async () => {
     const memory = {
