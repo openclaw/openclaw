@@ -1,0 +1,52 @@
+import type { SkillLibraryEntry, SkillsLibraryListResult } from "@openclaw/gateway-protocol";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { createApplicationGateway } from "../../test-helpers/application-context.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+
+export function libraryList(canManageWorkspace = true): SkillsLibraryListResult {
+  return {
+    entries: [],
+    profileId: "alice",
+    multipleProfiles: true,
+    defaultTarget: "personal",
+    canManageWorkspace,
+    defaultSelectionLimit: 64,
+  };
+}
+
+export function connectedGateway(
+  request: (method: string, params?: unknown) => Promise<unknown>,
+  methods: string[],
+) {
+  return createApplicationGateway({
+    client: { request } as unknown as GatewayBrowserClient,
+    phase: "connected",
+    hello: gatewayHelloForMethods(methods),
+    offlineStable: false,
+    canvasPluginSurfaceUrl: null,
+    assistantAgentId: "main",
+    sessionKey: "main",
+    lastError: null,
+    lastErrorCode: null,
+  });
+}
+
+export function libraryEntry(overrides: Partial<SkillLibraryEntry> = {}): SkillLibraryEntry {
+  return {
+    skillId: "12345678-1234-1234-1234-123456789abc",
+    revision: "a".repeat(64),
+    slug: "existing-skill",
+    name: "existing-skill",
+    description: "An existing skill with an image",
+    ownerProfileId: "alice",
+    authorProfileId: "alice",
+    ownerLabel: "Alice",
+    shared: false,
+    enabled: true,
+    removed: false,
+    canEdit: true,
+    createdAt: 1,
+    updatedAt: 1,
+    ...overrides,
+  };
+}
