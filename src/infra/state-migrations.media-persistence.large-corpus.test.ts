@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { deriveTranscriptPredicateFields } from "../config/sessions/transcript-predicate-fields.js";
 import { closeOpenClawAgentDatabases } from "../state/openclaw-agent-db-lifecycle.js";
@@ -78,6 +78,10 @@ function migrationChildEnv(stateDir: string): NodeJS.ProcessEnv {
   ]);
 }
 
+const MEDIA_CARRIER_SCRIPT = String.raw`
+  const mediaCarrier = (message) => [message.__openclaw?.media?.[0]?.path,
+    Object.hasOwn(message, "MediaPath")];
+`;
 const CHILD_SCRIPT = String.raw`
   import { createHash } from "node:crypto";
   import { DatabaseSync } from "node:sqlite";
@@ -103,6 +107,7 @@ const CHILD_SCRIPT = String.raw`
   const first = JSON.parse(read("large-corpus-0", 0));
   const boundary = JSON.parse(read("large-corpus-0", 64));
   const trajectoryBoundary = JSON.parse(readTrajectory(64));
+  ${MEDIA_CARRIER_SCRIPT}
   process.stdout.write(JSON.stringify({
     warnings: migration.warnings,
     changes: migration.changes,
@@ -110,16 +115,9 @@ const CHILD_SCRIPT = String.raw`
     events: count("transcript_events"),
     trajectoryEvents: count("trajectory_runtime_events"),
     firstIdentity: [first.type, first.id, first.parentId],
-    firstMediaPath: first.message.__openclaw?.media?.[0]?.path,
-    firstHasLegacyCarrier: Object.hasOwn(first.message, "MediaPath"),
-    boundaryMediaPath: boundary.message.__openclaw?.media?.[0]?.path,
-    boundaryHasLegacyCarrier: Object.hasOwn(boundary.message, "MediaPath"),
-    trajectoryBoundaryMediaPath:
-      trajectoryBoundary.data.messagesSnapshot[0].__openclaw?.media?.[0]?.path,
-    trajectoryBoundaryHasLegacyCarrier: Object.hasOwn(
-      trajectoryBoundary.data.messagesSnapshot[0],
-      "MediaPath",
-    ),
+    firstMedia: mediaCarrier(first.message),
+    boundaryMedia: mediaCarrier(boundary.message),
+    trajectoryBoundaryMedia: mediaCarrier(trajectoryBoundary.data.messagesSnapshot[0]),
     middlePreserved: hash(read("large-corpus-20", 64)) === before[0],
     lastPreserved: hash(read("large-corpus-39", 127)) === before[1],
   }) + "\n");
@@ -162,172 +160,143 @@ const SPARSE_EVENT_CHILD_SCRIPT = String.raw`
   const trajectory = JSON.parse(db.prepare(
     "SELECT event_json FROM trajectory_runtime_events WHERE session_id=? AND seq=0",
   ).get("sparse-${SPARSE_EVENT_SESSION_COUNT - 1}").event_json);
+  ${MEDIA_CARRIER_SCRIPT}
   process.stdout.write(JSON.stringify({
     warnings: migration.warnings,
     changes: migration.changes,
     migrationSelects,
-    transcriptMediaPath: transcript.message.__openclaw?.media?.[0]?.path,
-    transcriptHasLegacyCarrier: Object.hasOwn(transcript.message, "MediaPath"),
-    trajectoryMediaPath:
-      trajectory.data.messagesSnapshot[0].__openclaw?.media?.[0]?.path,
-    trajectoryHasLegacyCarrier: Object.hasOwn(
-      trajectory.data.messagesSnapshot[0],
-      "MediaPath",
-    ),
+    transcriptMedia: mediaCarrier(transcript.message),
+    trajectoryMedia: mediaCarrier(trajectory.data.messagesSnapshot[0]),
   }) + "\n");
   db.close();
 `;
 
-function createCorpus(stateDir: string): void {
-  const database = createWindows(stateDir, "large-corpus-", SESSION_COUNT);
-  database.db
-    .prepare(`WITH RECURSIVE s(i) AS (
+function createCorpus(stateDir: string, sparse = false): void {
+  const prefix = sparse ? "sparse-" : "large-corpus-";
+  const sessions = sparse ? SPARSE_EVENT_SESSION_COUNT : SESSION_COUNT;
+  const active = sparse ? sessions : ACTIVE_SESSIONS;
+  const events = sparse ? 1 : EVENTS_PER_SESSION;
+  const content = sparse ? "sparse" : PAYLOAD;
+  const db = createWindows(stateDir, prefix, sessions).db;
+  db.prepare(`WITH RECURSIVE s(i) AS (
     VALUES(0) UNION ALL SELECT i+1 FROM s WHERE i+1 < ?
   ), e(seq) AS (VALUES(0) UNION ALL SELECT seq+1 FROM e WHERE seq+1 < ?)
   INSERT INTO transcript_events(session_id,seq,event_json,created_at,navigation_type,navigation_last_type,message_role)
-    SELECT 'large-corpus-'||i, seq,
-      json_object('type','message','id','event-'||i||'-'||seq,'parentId',NULL,'message',
-        CASE WHEN i=0 AND seq=0
-          THEN json_object('role','user','content',?,'MediaPath','/media/legacy.png')
-          WHEN i=0 AND seq=64
-          THEN json_object('role','user','content',?,'MediaPath','/media/boundary.png')
-          ELSE json_object('role','user','content',?) END), seq+1, ?, ?, ? FROM s CROSS JOIN e`)
-    .run(
-      ACTIVE_SESSIONS,
-      EVENTS_PER_SESSION,
-      PAYLOAD,
-      PAYLOAD,
-      PAYLOAD,
-      messagePredicates.navigation_type,
-      messagePredicates.navigation_last_type,
-      messagePredicates.message_role,
-    );
-  database.db
-    .prepare(`WITH RECURSIVE e(seq) AS (
-    VALUES(0) UNION ALL SELECT seq+1 FROM e WHERE seq+1 < ?
-  ) INSERT INTO trajectory_runtime_events(session_id,seq,run_id,event_json,created_at)
-    SELECT 'large-corpus-0', seq, 'run-large-corpus',
+    SELECT ?||i, seq,
+      json_object('type','message','id',
+        CASE WHEN ? THEN 'transcript-'||i ELSE 'event-'||i||'-'||seq END,
+        'parentId',NULL,'message',
+        CASE WHEN i=0 AND seq=0 THEN json_object('role','user','content',?,'MediaPath',?)
+          WHEN i=0 AND seq=64 THEN json_object('role','user','content',?,'MediaPath','/media/boundary.png')
+          ELSE json_object('role','user','content',?) END),
+      CASE WHEN ? THEN i+1 ELSE seq+1 END, ?, ?, ? FROM s CROSS JOIN e`).run(
+    active,
+    events,
+    prefix,
+    Number(sparse),
+    content,
+    sparse ? "/media/transcript.png" : "/media/legacy.png",
+    content,
+    content,
+    Number(sparse),
+    messagePredicates.navigation_type,
+    messagePredicates.navigation_last_type,
+    messagePredicates.message_role,
+  );
+  db.prepare(`WITH RECURSIVE s(i) AS (
+    VALUES(0) UNION ALL SELECT i+1 FROM s WHERE i+1 < ?
+  ), e(seq) AS (VALUES(0) UNION ALL SELECT seq+1 FROM e WHERE seq+1 < ?)
+  INSERT INTO trajectory_runtime_events(session_id,seq,run_id,event_json,created_at)
+    SELECT ?||i, seq, CASE WHEN ? THEN 'run-'||i ELSE 'run-large-corpus' END,
       json_object('type','model.completed','data',json_object('messagesSnapshot',json_array(
-        CASE WHEN seq=64
-          THEN json_object('role','user','content','trajectory','MediaPath','/media/trajectory-boundary.png')
-          ELSE json_object('role','user','content','trajectory') END))), seq+1 FROM e`)
-    .run(EVENTS_PER_SESSION);
-  database.db.exec("COMMIT; UPDATE session_nodes SET entry_valid=1");
+        CASE WHEN i=? AND seq=? THEN json_object('role','user','content',?,'MediaPath',?)
+          ELSE json_object('role','user','content',?) END))),
+      CASE WHEN ? THEN i+1 ELSE seq+1 END FROM s CROSS JOIN e`).run(
+    sparse ? sessions : 1,
+    events,
+    prefix,
+    Number(sparse),
+    sparse ? sessions - 1 : 0,
+    sparse ? 0 : 64,
+    sparse ? "sparse" : "trajectory",
+    sparse ? "/media/trajectory.png" : "/media/trajectory-boundary.png",
+    sparse ? "sparse" : "trajectory",
+    Number(sparse),
+  );
+  finishCorpus(db);
+}
+
+function finishCorpus(db: ReturnType<typeof createWindows>["db"]) {
+  db.exec("COMMIT; UPDATE session_nodes SET entry_valid=1");
   closeOpenClawAgentDatabases();
 }
 
-function createSessionWindowCorpus(stateDir: string): void {
-  const database = createWindows(stateDir, "window-", SESSION_WINDOW_COUNT);
-  database.db.exec("COMMIT; UPDATE session_nodes SET entry_valid=1");
-  closeOpenClawAgentDatabases();
-}
-
-function createSparseEventCorpus(stateDir: string): void {
-  const database = createWindows(stateDir, "sparse-", SPARSE_EVENT_SESSION_COUNT);
+it("bounds retained payload bytes when a row batch contains oversized identity events", () => {
+  const stateDir = tempDir.make("openclaw-media-oversized-events-");
+  const database = createWindows(stateDir, "oversized-", 1);
   database.db
     .prepare(`WITH RECURSIVE n(i) AS (
-    VALUES(0) UNION ALL SELECT i+1 FROM n WHERE i+1 < ?
-  ) INSERT INTO transcript_events(session_id,seq,event_json,created_at,navigation_type,navigation_last_type,message_role)
-    SELECT 'sparse-'||i, 0,
-      json_object('type','message','id','transcript-'||i,'parentId',NULL,'message',
-        CASE WHEN i=0
-          THEN json_object('role','user','content','sparse','MediaPath','/media/transcript.png')
-          ELSE json_object('role','user','content','sparse') END), i+1, ?, ?, ? FROM n`)
-    .run(
-      SPARSE_EVENT_SESSION_COUNT,
-      messagePredicates.navigation_type,
-      messagePredicates.navigation_last_type,
-      messagePredicates.message_role,
-    );
-  database.db
-    .prepare(`WITH RECURSIVE n(i) AS (
-    VALUES(0) UNION ALL SELECT i+1 FROM n WHERE i+1 < ?
-  ) INSERT INTO trajectory_runtime_events(session_id,seq,run_id,event_json,created_at)
-    SELECT 'sparse-'||i, 0, 'run-'||i,
-      json_object('type','model.completed','data',json_object('messagesSnapshot',json_array(
-        CASE WHEN i=?
-          THEN json_object('role','user','content','sparse','MediaPath','/media/trajectory.png')
-          ELSE json_object('role','user','content','sparse') END))), i+1 FROM n`)
-    .run(SPARSE_EVENT_SESSION_COUNT, SPARSE_EVENT_SESSION_COUNT - 1);
-  database.db.exec("COMMIT; UPDATE session_nodes SET entry_valid=1");
+      VALUES(0) UNION ALL SELECT i+1 FROM n WHERE i+1 < 65
+    ) INSERT INTO transcript_events(session_id,seq,event_json,created_at)
+      SELECT 'oversized-0', i, json_object('type','custom','customType','synthetic',
+        'data', ?), i+1 FROM n`)
+    .run("x".repeat(8 * 1024 * 1024));
+  database.db.exec("COMMIT");
   closeOpenClawAgentDatabases();
-}
+  expect(runMigration(stateDir, SESSION_WINDOW_CHILD_SCRIPT, 256)).toEqual({
+    changes: [],
+    warnings: [],
+  });
+}, 130_000);
 
-describe("legacy media persistence large corpus", () => {
-  it("bounds retained payload bytes when a row batch contains oversized identity events", () => {
-    const stateDir = tempDir.make("openclaw-media-oversized-events-");
-    const database = createWindows(stateDir, "oversized-", 1);
-    database.db
-      .prepare(`WITH RECURSIVE n(i) AS (
-        VALUES(0) UNION ALL SELECT i+1 FROM n WHERE i+1 < 65
-      ) INSERT INTO transcript_events(session_id,seq,event_json,created_at)
-        SELECT 'oversized-0', i, json_object('type','custom','customType','synthetic',
-          'data', ?), i+1 FROM n`)
-      .run("x".repeat(8 * 1024 * 1024));
-    database.db.exec("COMMIT");
-    closeOpenClawAgentDatabases();
-    expect(runMigration(stateDir, SESSION_WINDOW_CHILD_SCRIPT, 256)).toEqual({
-      changes: [],
-      warnings: [],
-    });
-  }, 130_000);
+it("does not materialize every session window under a 128 MiB old-space cap", () => {
+  const stateDir = tempDir.make("openclaw-media-session-windows-");
+  finishCorpus(createWindows(stateDir, "window-", SESSION_WINDOW_COUNT).db);
+  const output = runMigration(stateDir, SESSION_WINDOW_CHILD_SCRIPT, 128);
+  expect(output).toEqual({ changes: [], warnings: [] });
+}, 130_000);
 
-  it("does not materialize every session window under a 128 MiB old-space cap", () => {
-    const stateDir = tempDir.make("openclaw-media-session-windows-");
-    createSessionWindowCorpus(stateDir);
-    const output = runMigration(stateDir, SESSION_WINDOW_CHILD_SCRIPT, 128);
-    expect(output).toEqual({ changes: [], warnings: [] });
-  }, 130_000);
+it("rewrites bounded batches under a 256 MiB old-space cap", () => {
+  const stateDir = tempDir.make("openclaw-media-corpus-");
+  createCorpus(stateDir);
+  const output = runMigration(stateDir, CHILD_SCRIPT, 256);
+  expect(output).toMatchObject({
+    warnings: [],
+    changes: [
+      expect.stringContaining("Saved pre-repair SQLite backup:"),
+      expect.stringContaining("1 transcript session(s), 1 trajectory row(s),"),
+    ],
+    sessions: SESSION_COUNT,
+    windows: SESSION_COUNT,
+    events: ACTIVE_SESSIONS * EVENTS_PER_SESSION,
+    trajectoryEvents: EVENTS_PER_SESSION,
+    firstIdentity: ["message", "event-0-0", null],
+    firstMedia: ["/media/legacy.png", false],
+    boundaryMedia: ["/media/boundary.png", false],
+    trajectoryBoundaryMedia: ["/media/trajectory-boundary.png", false],
+    middlePreserved: true,
+    lastPreserved: true,
+  });
+}, 130_000);
 
-  it("rewrites bounded batches under a 256 MiB old-space cap", () => {
-    const stateDir = tempDir.make("openclaw-media-corpus-");
-    createCorpus(stateDir);
-    const output = runMigration(stateDir, CHILD_SCRIPT, 256);
-    expect(output).toMatchObject({
-      warnings: [],
-      changes: [
-        expect.stringContaining("Saved pre-repair SQLite backup:"),
-        expect.stringContaining("1 transcript session(s), 1 trajectory row(s),"),
-      ],
-      sessions: SESSION_COUNT,
-      windows: SESSION_COUNT,
-      events: ACTIVE_SESSIONS * EVENTS_PER_SESSION,
-      trajectoryEvents: EVENTS_PER_SESSION,
-      firstIdentity: ["message", "event-0-0", null],
-      firstMediaPath: "/media/legacy.png",
-      firstHasLegacyCarrier: false,
-      boundaryMediaPath: "/media/boundary.png",
-      boundaryHasLegacyCarrier: false,
-      trajectoryBoundaryMediaPath: "/media/trajectory-boundary.png",
-      trajectoryBoundaryHasLegacyCarrier: false,
-      middlePreserved: true,
-      lastPreserved: true,
-    });
-  }, 130_000);
-
-  it("bounds SQLite crossings across many event-bearing sessions", () => {
-    const stateDir = tempDir.make("openclaw-media-sparse-events-");
-    createSparseEventCorpus(stateDir);
-    const output = runMigration(stateDir, SPARSE_EVENT_CHILD_SCRIPT) as {
-      changes: string[];
-      migrationSelects: number;
-      transcriptHasLegacyCarrier: boolean;
-      transcriptMediaPath: string;
-      trajectoryHasLegacyCarrier: boolean;
-      trajectoryMediaPath: string;
-      warnings: string[];
-    };
-    expect(output).toMatchObject({
-      warnings: [],
-      changes: [
-        expect.stringContaining("Saved pre-repair SQLite backup:"),
-        expect.stringContaining("1 transcript session(s), 1 trajectory row(s),"),
-      ],
-      transcriptMediaPath: "/media/transcript.png",
-      transcriptHasLegacyCarrier: false,
-      trajectoryMediaPath: "/media/trajectory.png",
-      trajectoryHasLegacyCarrier: false,
-    });
-    expect(output.migrationSelects).toBeLessThan(1_000);
-  }, 130_000);
-});
+it("bounds SQLite crossings across many event-bearing sessions", () => {
+  const stateDir = tempDir.make("openclaw-media-sparse-events-");
+  createCorpus(stateDir, true);
+  const output = runMigration(stateDir, SPARSE_EVENT_CHILD_SCRIPT) as {
+    changes: string[];
+    migrationSelects: number;
+    transcriptMedia: [string, boolean];
+    trajectoryMedia: [string, boolean];
+    warnings: string[];
+  };
+  expect(output).toMatchObject({
+    warnings: [],
+    changes: [
+      expect.stringContaining("Saved pre-repair SQLite backup:"),
+      expect.stringContaining("1 transcript session(s), 1 trajectory row(s),"),
+    ],
+    transcriptMedia: ["/media/transcript.png", false],
+    trajectoryMedia: ["/media/trajectory.png", false],
+  });
+  expect(output.migrationSelects).toBeLessThan(1_000);
+}, 130_000);

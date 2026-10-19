@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runWithAgentDatabaseMaintenanceAuthority } from "../state/openclaw-agent-db-lease.js";
 import { ensureSessionTranscriptArchiveSchema } from "../state/openclaw-agent-session-transcript-archive-schema.js";
@@ -114,10 +114,10 @@ function fixture(emptySessionIds = false) {
       signal: controller.signal,
       deadlineOwnedByCaller: true,
     });
-  const expectProgress = (rewrites: number, saved: unknown) => {
+  const expectProgress = (rewrites = BATCH_SIZE) => {
     expect(database.isTransaction).toBe(false);
     expect(rewritten()).toBe(rewrites);
-    expect(cursor()).toEqual(saved);
+    expect(cursor()).toEqual({ sessionId: "031", generation: "retained" });
   };
   return {
     database,
@@ -132,156 +132,73 @@ function fixture(emptySessionIds = false) {
   };
 }
 
-describe("canonical archive migration progress", () => {
-  it.each(["repair", "inspection"] as const)(
-    "advances %s through 202 archives with empty session IDs",
-    async (mode) => {
-      const f = fixture(true);
-      let visited = 0;
-      const visit = () => {
-        if (++visited > count) {
-          throw new Error("Archive pagination reselected an already visited key");
-        }
-      };
-      if (mode === "repair") {
-        await f.migrate({ onArchive: visit });
-        expect(f.rewritten()).toBe(count);
-        expect(f.cursor()).toEqual({ phase: "complete" });
-      } else {
-        expect(
-          await needsMigration(f.database, f.options.start, (raw, owner) => {
-            visit();
-            return directiveLine(raw, owner);
-          }),
-        ).toBe(false);
-        expect(f.rewritten()).toBe(0);
-      }
-      expect(visited).toBe(count);
-    },
-  );
-
-  it("rolls back a failing batch, retains its committed prefix and resumes once", async () => {
-    const f = fixture();
-    f.database.exec(`CREATE TRIGGER reject_archive BEFORE UPDATE OF archive_blob
-      ON session_transcript_archives WHEN OLD.session_id = '040'
-      BEGIN SELECT RAISE(ABORT, 'OpenClaw state database read admission is closed'); END`);
-    const failure = await f.migrate().catch((error: unknown) => error);
-    expect(String(failure)).toMatch(
-      /040:retained.*OpenClaw state database read admission is closed/,
-    );
-    f.expectProgress(BATCH_SIZE, {
-      sessionId: "031",
-      generation: "retained",
-    });
-    f.database.exec("DROP TRIGGER reject_archive");
-    await f.migrate({ start: f.cursor() });
-    expect(f.rewritten()).toBe(count);
-    expect(f.cursor()).toEqual({ phase: "complete" });
-  });
-
-  it("honors Doctor cancellation at the first committed batch boundary", async () => {
-    const f = fixture();
-    const interrupted = new Error("Doctor interrupted by SIGINT");
-    await expect(
-      f.inspect(() =>
-        f.migrate({
-          writeCursor(cursor) {
-            f.options.writeCursor(cursor);
-            if ("sessionId" in cursor && cursor.sessionId === "031") {
-              queueMicrotask(() => f.controller.abort(interrupted));
-            }
-          },
-        }),
-      ),
-    ).rejects.toThrow(interrupted);
-    f.expectProgress(BATCH_SIZE, {
-      sessionId: "031",
-      generation: "retained",
-    });
-  });
-
-  it("cancels archive inspection while decoding a batch", async () => {
-    const f = fixture();
-    const interrupted = new Error("Doctor interrupted by SIGINT");
-    let calls = 0;
-    await expect(
-      f.inspect(() =>
-        needsMigration(f.database, f.options.start, (raw, owner) => {
-          const line = directiveLine(raw, owner);
-          if (++calls === BATCH_SIZE) {
-            f.controller.abort(interrupted);
-          }
-          return line;
-        }),
-      ),
-    ).rejects.toBe(interrupted);
-    expect(calls).toBe(BATCH_SIZE);
-    expect(f.rewritten()).toBe(0);
-  });
-
-  it("preserves a failed archive write when interruption arrives with it", async () => {
-    const f = fixture();
-    const interrupted = new Error("Doctor interrupted by SIGTERM");
-    const failure = new Error("archive cursor write failed");
-    await expect(
-      f.inspect(() =>
-        f.migrate({
-          writeCursor(cursor) {
-            f.options.writeCursor(cursor);
-            f.controller.abort(interrupted);
-            throw failure;
-          },
-        }),
-      ),
-    ).rejects.toMatchObject({ cause: failure });
-    expect(f.database.isTransaction).toBe(false);
-    expect(f.cursor()).toBeUndefined();
-  });
-
-  it("renews its existing maintenance owner before each synchronous batch", async () => {
-    const f = fixture();
-    let now = 0;
-    let expires = 100;
-    f.authority.assertOwned = () => {
-      if (now >= expires) {
-        throw new Error("maintenance lease expired");
+it.each(["repair", "inspection"] as const)(
+  "advances %s through 202 archives with empty session IDs",
+  async (mode) => {
+    const f = fixture(true);
+    let visited = 0;
+    const visit = () => {
+      if (++visited > count) {
+        throw new Error("Archive pagination reselected an already visited key");
       }
     };
-    f.authority.renew = () => {
-      f.authority.assertOwned();
-      expires = now + 100;
-    };
-    await f.migrate({
-      onArchive(archivePath) {
-        if (Number(path.basename(archivePath, ".jsonl")) % BATCH_SIZE === 0) {
-          now += 75;
-        }
-      },
-    });
-    expect(now).toBeGreaterThan(100);
-    expect(f.rewritten()).toBe(count);
-    expect(f.cursor()).toEqual({ phase: "complete" });
-  });
+    if (mode === "repair") {
+      await f.migrate({ onArchive: visit });
+      expect(f.rewritten()).toBe(count);
+      expect(f.cursor()).toEqual({ phase: "complete" });
+    } else {
+      expect(
+        await needsMigration(f.database, f.options.start, (raw, owner) => {
+          visit();
+          return directiveLine(raw, owner);
+        }),
+      ).toBe(false);
+      expect(f.rewritten()).toBe(0);
+    }
+    expect(visited).toBe(count);
+  },
+);
 
-  it("rolls back publication and cursor together when interrupted before commit", async () => {
-    const f = fixture();
+it("rolls back a failing batch, retains its committed prefix and resumes once", async () => {
+  const f = fixture();
+  f.database.exec(`CREATE TRIGGER reject_archive BEFORE UPDATE OF archive_blob
+    ON session_transcript_archives WHEN OLD.session_id = '040'
+    BEGIN SELECT RAISE(ABORT, 'OpenClaw state database read admission is closed'); END`);
+  const failure = await f.migrate().catch((error: unknown) => error);
+  expect(String(failure)).toMatch(/040:retained.*OpenClaw state database read admission is closed/);
+  f.expectProgress();
+  f.database.exec("DROP TRIGGER reject_archive");
+  await f.migrate({ start: f.cursor() });
+  expect(f.rewritten()).toBe(count);
+  expect(f.cursor()).toEqual({ phase: "complete" });
+});
+
+it.each([true, false])("cancels at a batch boundary (deferred: %s)", async (deferred) => {
+  const f = fixture();
+  if (!deferred) {
     for (let index = 0; index < 64; index++) {
       fs.writeFileSync(path.join(path.dirname(f.options.pathname), `${index}.jsonl`), original);
     }
-    const interrupted = new Error("Doctor interrupted by SIGTERM");
-    await expect(
-      f.inspect(() =>
-        f.migrate({
-          writeCursor(cursor) {
-            f.options.writeCursor(cursor);
-            if ("sessionId" in cursor && cursor.sessionId === "063") {
+  }
+  const interrupted = new Error(`Doctor interrupted by ${deferred ? "SIGINT" : "SIGTERM"}`);
+  await expect(
+    f.inspect(() =>
+      f.migrate({
+        writeCursor(cursor) {
+          f.options.writeCursor(cursor);
+          if ("sessionId" in cursor && cursor.sessionId === (deferred ? "031" : "063")) {
+            if (deferred) {
+              queueMicrotask(() => f.controller.abort(interrupted));
+            } else {
               f.controller.abort(interrupted);
             }
-          },
-        }),
-      ),
-    ).rejects.toThrow(interrupted);
-    f.expectProgress(64, { sessionId: "031", generation: "retained" });
+          }
+        },
+      }),
+    ),
+  ).rejects.toThrow(interrupted);
+  f.expectProgress(deferred ? BATCH_SIZE : 64);
+  if (!deferred) {
     const publication = f.database
       .prepare(
         "SELECT published_at FROM session_transcript_archives WHERE session_id < '064' ORDER BY session_id",
@@ -292,5 +209,68 @@ describe("canonical archive migration progress", () => {
     expect(fs.readFileSync(path.join(path.dirname(f.options.pathname), "63.jsonl"), "utf8")).toBe(
       replacement,
     );
+  }
+});
+
+it("cancels archive inspection while decoding a batch", async () => {
+  const f = fixture();
+  const interrupted = new Error("Doctor interrupted by SIGINT");
+  let calls = 0;
+  await expect(
+    f.inspect(() =>
+      needsMigration(f.database, f.options.start, (raw, owner) => {
+        const line = directiveLine(raw, owner);
+        if (++calls === BATCH_SIZE) {
+          f.controller.abort(interrupted);
+        }
+        return line;
+      }),
+    ),
+  ).rejects.toBe(interrupted);
+  expect(calls).toBe(BATCH_SIZE);
+  expect(f.rewritten()).toBe(0);
+});
+
+it("preserves a failed archive write when interruption arrives with it", async () => {
+  const f = fixture();
+  const interrupted = new Error("Doctor interrupted by SIGTERM");
+  const failure = new Error("archive cursor write failed");
+  await expect(
+    f.inspect(() =>
+      f.migrate({
+        writeCursor(cursor) {
+          f.options.writeCursor(cursor);
+          f.controller.abort(interrupted);
+          throw failure;
+        },
+      }),
+    ),
+  ).rejects.toMatchObject({ cause: failure });
+  expect(f.database.isTransaction).toBe(false);
+  expect(f.cursor()).toBeUndefined();
+});
+
+it("renews its existing maintenance owner before each synchronous batch", async () => {
+  const f = fixture();
+  let now = 0;
+  let expires = 100;
+  f.authority.assertOwned = () => {
+    if (now >= expires) {
+      throw new Error("maintenance lease expired");
+    }
+  };
+  f.authority.renew = () => {
+    f.authority.assertOwned();
+    expires = now + 100;
+  };
+  await f.migrate({
+    onArchive(archivePath) {
+      if (Number(path.basename(archivePath, ".jsonl")) % BATCH_SIZE === 0) {
+        now += 75;
+      }
+    },
   });
+  expect(now).toBeGreaterThan(100);
+  expect(f.rewritten()).toBe(count);
+  expect(f.cursor()).toEqual({ phase: "complete" });
 });

@@ -41,7 +41,11 @@ describe("sandbox workspace Doctor migration", () => {
     envSnapshot = undefined;
   });
 
-  function setup() {
+  function setup(
+    sandbox: AgentSandboxConfig = {},
+    entries: NonNullable<OpenClawConfig["agents"]>["entries"] = { main: {} },
+    publish = true,
+  ) {
     const homeDir = sessionDirs.make();
     const stateDir = path.join(homeDir, ".openclaw");
     const workspaceDir = path.join(homeDir, "workspace");
@@ -49,23 +53,11 @@ describe("sandbox workspace Doctor migration", () => {
     envSnapshot = captureEnv(["HOME", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR"]);
     setTestEnvValue("HOME", homeDir);
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-    return {
-      env: { ...process.env, HOME: homeDir, OPENCLAW_STATE_DIR: stateDir },
-      homeDir,
-      stateDir,
-      workspaceDir,
-    };
-  }
-
-  function config(
-    context: ReturnType<typeof setup>,
-    sandbox: AgentSandboxConfig = {},
-    entries: NonNullable<OpenClawConfig["agents"]>["entries"] = { main: {} },
-  ): OpenClawConfig {
+    const env = { ...process.env, HOME: homeDir, OPENCLAW_STATE_DIR: stateDir };
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
-          workspace: context.workspaceDir,
+          workspace: workspaceDir,
           sandbox: {
             mode: "all",
             scope: "session",
@@ -77,27 +69,31 @@ describe("sandbox workspace Doctor migration", () => {
         entries,
       },
     };
-    setRuntimeConfigSnapshot(cfg);
-    return cfg;
-  }
-
-  function marker(
-    context: ReturnType<typeof setup>,
-    cfg: OpenClawConfig,
-    rawSessionKey: string,
-    workspaceRoot = path.join(context.homeDir, "sandboxes"),
-    scope: AgentSandboxConfig["scope"] = "session",
-  ) {
-    const agentId = parseAgentSessionKey(rawSessionKey)?.agentId ?? "main";
-    return path.join(
-      resolveSandboxWorkspaceLayoutPaths({
-        cfg: { scope, workspaceAccess: "ro", workspaceRoot },
-        agentId,
-        rawSessionKey,
-        workspaceDir: resolveAgentWorkspaceDir(cfg, agentId, context.env),
-      }).sandboxWorkspaceDir,
-      MARKER,
-    );
+    if (publish) {
+      setRuntimeConfigSnapshot(cfg);
+    }
+    return {
+      homeDir,
+      stateDir,
+      env,
+      cfg,
+      marker(
+        rawSessionKey: string,
+        workspaceRoot = path.join(homeDir, "sandboxes"),
+        scope: AgentSandboxConfig["scope"] = "session",
+      ) {
+        const agentId = parseAgentSessionKey(rawSessionKey)?.agentId ?? "main";
+        return path.join(
+          resolveSandboxWorkspaceLayoutPaths({
+            cfg: { scope, workspaceAccess: "ro", workspaceRoot },
+            agentId,
+            rawSessionKey,
+            workspaceDir: resolveAgentWorkspaceDir(cfg, agentId, env),
+          }).sandboxWorkspaceDir,
+          MARKER,
+        );
+      },
+    };
   }
 
   function writeMarkers(...files: string[]) {
@@ -115,32 +111,29 @@ describe("sandbox workspace Doctor migration", () => {
   }
 
   async function repair(
-    context: ReturnType<typeof setup>,
-    cfg: OpenClawConfig,
+    { cfg, env, stateDir, homeDir }: ReturnType<typeof setup>,
     active: string,
     protectedPaths: string[] = [],
   ) {
     const detected = await detectLegacyWorkspaceState({
       cfg,
-      stateDir: context.stateDir,
-      env: context.env,
-      homedir: () => context.homeDir,
+      stateDir,
+      env,
+      homedir: () => homeDir,
       doctorOnlyStateMigrations: true,
     });
     expect(detected.sources.map((source) => source.sourcePath)).toEqual([active]);
     const result = await migrateLegacyWorkspaceState({
       detected,
-      env: context.env,
-      stateDir: context.stateDir,
+      env,
+      stateDir,
     });
     expect(result.warnings).toEqual([]);
     expect(fs.existsSync(active)).toBe(false);
     for (const file of protectedPaths) {
       expect(fs.existsSync(file)).toBe(true);
     }
-    expect(
-      await readWorkspaceStateSnapshot(path.dirname(active), { env: context.env }),
-    ).toMatchObject({
+    expect(await readWorkspaceStateSnapshot(path.dirname(active), { env })).toMatchObject({
       setup: { bootstrapSeededAt: SEEDED_AT },
       setupExists: true,
     });
@@ -150,9 +143,9 @@ describe("sandbox workspace Doctor migration", () => {
     "awaits persisted session keys before reporting readiness: %s",
     async (outcome) => {
       const context = setup();
-      const cfg = config(context);
+      const { cfg } = context;
       const sessionKey = "agent:main:telegram:direct:delayed-discovery";
-      const legacyPath = marker(context, cfg, sessionKey);
+      const legacyPath = context.marker(sessionKey);
       const entered = createDeferred();
       const release = createDeferred();
       const unavailable = new Error("Session key storage is unavailable");
@@ -169,14 +162,10 @@ describe("sandbox workspace Doctor migration", () => {
         });
       let settled = false;
       const readiness = assertConfiguredWorkspaceStateReady({ cfg, env: context.env });
-      void readiness.then(
-        () => {
-          settled = true;
-        },
-        () => {
-          settled = true;
-        },
-      );
+      const markSettled = () => {
+        settled = true;
+      };
+      void readiness.then(markSettled, markSettled);
       try {
         await withTestTimeout(entered.promise, 5_000, "Session-key discovery was not reached");
         expect(settled).toBe(false);
@@ -201,9 +190,7 @@ describe("sandbox workspace Doctor migration", () => {
   );
 
   it("repairs only durable session owners, including overlapping agent names after runtime pruning", async () => {
-    const context = setup();
-    const cfg = config(
-      context,
+    const context = setup(
       {},
       {
         main: { sandbox: { mode: "off" } },
@@ -216,13 +203,13 @@ describe("sandbox workspace Doctor migration", () => {
       "agent:main:telegram:direct:doctor-proof",
       "agent:writer:telegram:direct:doctor-proof",
     ];
-    const active = marker(context, cfg, activeSession);
+    const active = context.marker(activeSession);
     const protectedPaths = [
       ...inactiveSessions,
       "agent:removed:telegram:direct:doctor-proof",
       "agent:main",
       "shared",
-    ].map((session) => marker(context, cfg, session));
+    ].map((session) => context.marker(session));
     protectedPaths.push(path.join(context.homeDir, "sandboxes", "notes", MARKER));
     writeMarkers(active, ...protectedPaths);
     for (const session of [activeSession, ...inactiveSessions]) {
@@ -238,25 +225,24 @@ describe("sandbox workspace Doctor migration", () => {
       });
     }
     await removeRegistryEntry(activeSession);
-    await repair(context, cfg, active, protectedPaths);
+    await repair(context, active, protectedPaths);
   });
 
   it("takes both durable ownership and the default sandbox root from the requested profile", async () => {
-    const context = setup();
+    const context = setup({ workspaceRoot: undefined });
     const requestedStateDir = path.join(context.homeDir, "requested-profile");
     const requested = {
       ...context,
       stateDir: requestedStateDir,
       env: { ...context.env, OPENCLAW_STATE_DIR: requestedStateDir },
     };
-    const cfg = config(context, { workspaceRoot: undefined });
     const requestedSession = "agent:main:telegram:direct:requested-profile";
     const ambientSession = "agent:main:slack:direct:ambient-profile";
     const requestedRoot = path.join(requestedStateDir, "sandboxes");
-    const active = marker(context, cfg, requestedSession, requestedRoot);
+    const active = context.marker(requestedSession, requestedRoot);
     const protectedPaths = [
-      marker(context, cfg, ambientSession, requestedRoot),
-      marker(context, cfg, requestedSession, path.join(context.stateDir, "sandboxes")),
+      context.marker(ambientSession, requestedRoot),
+      context.marker(requestedSession, path.join(context.stateDir, "sandboxes")),
     ];
     writeMarkers(active, ...protectedPaths);
     await register(requestedSession, requested.env);
@@ -267,24 +253,23 @@ describe("sandbox workspace Doctor migration", () => {
     expect(
       await sessionAccessor.listSessionEntryKeysReadOnly({ agentId: "main", env: context.env }),
     ).toEqual([ambientSession]);
-    await repair(requested, cfg, active, protectedPaths);
+    await repair(requested, active, protectedPaths);
   });
 
   it("does not migrate a main-session copy when sandbox mode is non-main", async () => {
-    const context = setup();
-    const cfg = config(context, { mode: "non-main" });
+    const context = setup({ mode: "non-main" });
     const mainSession = "agent:main:main";
     const session = "agent:main:telegram:direct:doctor-proof";
-    const active = marker(context, cfg, session);
-    const main = marker(context, cfg, mainSession);
+    const active = context.marker(session);
+    const main = context.marker(mainSession);
     writeMarkers(active, main);
     await register(mainSession);
     await register(session);
-    await repair(context, cfg, active, [main]);
+    await repair(context, active, [main]);
   });
 
   it("repairs sandbox workspace copies beneath the configured OpenClaw home", async () => {
-    const context = setup();
+    const context = setup({ scope: "agent" }, undefined, false);
     const effectiveHome = path.join(context.homeDir, "effective-openclaw-home");
     setTestEnvValue("OPENCLAW_HOME", effectiveHome);
     const env = {
@@ -292,15 +277,13 @@ describe("sandbox workspace Doctor migration", () => {
       OPENCLAW_HOME: effectiveHome,
       OPENCLAW_CONFIG_PATH: path.join(context.stateDir, "openclaw.json"),
     };
-    const cfg = config(context, { scope: "agent" });
-    const active = marker(
-      context,
-      cfg,
+    setRuntimeConfigSnapshot(context.cfg);
+    const active = context.marker(
       "agent:main:main",
       path.join(effectiveHome, "sandboxes"),
       "agent",
     );
     writeMarkers(active);
-    await repair({ ...context, env }, cfg, active);
+    await repair({ ...context, env }, active);
   });
 });

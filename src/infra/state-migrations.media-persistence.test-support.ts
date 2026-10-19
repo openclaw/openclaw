@@ -50,13 +50,8 @@ export function createEvent(params: {
   parentId: string | null;
   timestamp: number;
 }): FixtureEvent {
-  return {
-    type: "message",
-    id: params.id,
-    parentId: params.parentId,
-    timestamp: params.timestamp,
-    message: params.message,
-  };
+  const { id, parentId, timestamp, message } = params;
+  return { type: "message", id, parentId, timestamp, message };
 }
 
 export function createLegacyDatabaseFixture(params: {
@@ -233,9 +228,6 @@ export function readDatabaseSnapshot(databasePath: string) {
         .orderBy("session_id")
         .orderBy("seq"),
     ).rows;
-    const trajectoryCount = database
-      .prepare("SELECT count(*) AS count FROM trajectory_runtime_events")
-      .get() as { count: number };
     const trajectoryRows = select(
       "SELECT session_id,seq,run_id,event_json,created_at FROM trajectory_runtime_events ORDER BY session_id,seq",
     ) as Array<{
@@ -256,7 +248,7 @@ export function readDatabaseSnapshot(databasePath: string) {
         "SELECT session_id,event_id,seq,event_type,parent_id,message_idempotency_key,created_at FROM transcript_event_identities ORDER BY session_id,seq",
       ),
       rows,
-      trajectoryCount: trajectoryCount.count,
+      trajectoryCount: trajectoryRows.length,
       trajectoryRows,
       version,
       windows: select(
@@ -271,15 +263,11 @@ export function readDatabaseSnapshot(databasePath: string) {
 export function writeArchive(filePath: string, events: FixtureEvent[], compressed: boolean): void {
   const content = `${events.map((event) => JSON.stringify(event)).join("\n")}\n`;
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  if (!compressed) {
-    fs.writeFileSync(filePath, content);
-    return;
-  }
-  const encoded = encodeSessionArchiveContent(content);
-  if (encoded.suffix !== SESSION_ARCHIVE_ZSTD_SUFFIX) {
+  const encoded = compressed ? encodeSessionArchiveContent(content) : undefined;
+  if (encoded && encoded.suffix !== SESSION_ARCHIVE_ZSTD_SUFFIX) {
     throw new Error("test runtime does not support zstd");
   }
-  fs.writeFileSync(filePath, encoded.bytes);
+  fs.writeFileSync(filePath, encoded?.bytes ?? content);
 }
 
 export function cleanupMediaPersistenceFixtures(tempDirs: string[]): void {
