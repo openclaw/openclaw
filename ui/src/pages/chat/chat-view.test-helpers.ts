@@ -38,6 +38,9 @@ export async function renderChatModelControls(
     ...props,
     modelPickerOpen: props.modelPickerOpen ?? true,
   };
+  if (renderProps.modelPickerOpen) {
+    await import("./components/chat-model-picker-panel.tsx");
+  }
   const update = modelControlsUpdates.get(container);
   if (update) {
     update(renderProps);
