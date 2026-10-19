@@ -112,8 +112,13 @@ afterEach(async () => {
   try {
     await view?.release();
   } finally {
-    await runtime?.dispose();
-    await runtime?.joinCleanup();
+    if (runtime) {
+      await runtime.dispose();
+      if (!runtime.joinCleanup) {
+        throw new Error("MCP runtime does not expose cleanup ownership");
+      }
+      await runtime.joinCleanup();
+    }
     runtime = undefined;
     view = undefined;
   }
