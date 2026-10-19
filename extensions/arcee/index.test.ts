@@ -17,6 +17,11 @@ import { runSingleProviderCatalog } from "../test-support/provider-model-test-he
 import { applyArceeConfig, applyArceeOpenRouterConfig } from "./api.js";
 import arceePlugin from "./index.js";
 
+const apiKey = (provider: string, key: string) => ({ type: "api_key" as const, provider, key });
+const unexpectedOAuth = () => {
+  throw new Error("Unexpected browser auth/OAuth");
+};
+
 describe("arcee provider plugin", () => {
   describe.each([
     {
@@ -86,14 +91,8 @@ describe("arcee provider plugin", () => {
         prompter: createTestWizardPrompter(),
         secretInputMode: "plaintext",
         isRemote: false,
-        openUrl: async () => {
-          throw new Error("Unexpected browser auth");
-        },
-        oauth: {
-          createVpsAwareHandlers: () => {
-            throw new Error("Unexpected OAuth");
-          },
-        },
+        openUrl: unexpectedOAuth,
+        oauth: { createVpsAwareHandlers: unexpectedOAuth },
       });
     }
 
@@ -102,17 +101,10 @@ describe("arcee provider plugin", () => {
       const store: AuthProfileStore = {
         version: 1,
         profiles: {
-          "arcee:other": { type: "api_key", provider: "arcee", key: "direct-account-key" },
-          "openrouter:other": {
-            type: "api_key",
-            provider: "openrouter",
-            key: "router-account-key",
-          },
+          "arcee:other": apiKey("arcee", "direct-account-key"),
+          "openrouter:other": apiKey("openrouter", "router-account-key"),
           ...Object.fromEntries(
-            result.profiles.map(({ profileId: storedProfileId, credential }) => [
-              storedProfileId,
-              credential,
-            ]),
+            result.profiles.map((profile) => [profile.profileId, profile.credential]),
           ),
         },
       };
@@ -123,7 +115,7 @@ describe("arcee provider plugin", () => {
       expect(order).not.toContain(
         route.credentialProvider === "arcee" ? "openrouter:other" : "arcee:other",
       );
-      expect(result.defaultModel).toBe("arcee/trinity-large-thinking");
+      expect(result.defaultModel).toBe(modelRef);
     });
 
     it.each([
@@ -135,14 +127,7 @@ describe("arcee provider plugin", () => {
       const interactive = await onboardInteractive(input);
 
       expect(interactive.profiles).toEqual([
-        {
-          profileId,
-          credential: {
-            type: "api_key",
-            provider: route.credentialProvider,
-            key: "test-arcee-key",
-          },
-        },
+        { profileId, credential: apiKey(route.credentialProvider, "test-arcee-key") },
       ]);
       expect(interactive.defaultModel).toBe(modelRef);
       expect(nonInteractive.auth?.profiles?.[profileId]).toEqual({
@@ -198,44 +183,23 @@ describe("arcee provider plugin", () => {
         },
       };
       const before = structuredClone(input);
+      const authoredProfile = input.auth?.profiles?.["other:default"];
+      const authoredAlias = input.agents?.defaults?.models?.[modelRef];
+      function expectPreserved(output: OpenClawConfig, additions: string[], primary: string) {
+        const models = output.models?.providers?.arcee?.models;
+        expect(models?.slice(0, 2)).toEqual([collision, authoredOnly]);
+        const expectedIds = [route.collisionId, "operator-only", ...additions];
+        expect(models?.map((model) => model.id)).toEqual(expectedIds);
+        expect(output.models?.providers?.other).toEqual(input.models?.providers?.other);
+        expect(output.auth?.profiles?.["other:default"]).toEqual(authoredProfile);
+        expect(output.agents?.defaults?.models?.[modelRef]).toEqual(authoredAlias);
+        expect(output.agents?.defaults?.model).toEqual({ primary, fallbacks: ["arcee/fallback"] });
+      }
       const output = await onboard(input);
-      expect(output.models?.providers?.arcee?.models?.slice(0, 2)).toEqual([
-        collision,
-        authoredOnly,
-      ]);
-      expect(output.models?.providers?.arcee?.models?.map((model) => model.id)).toEqual([
-        route.collisionId,
-        "operator-only",
-        ...addedIds,
-      ]);
-      expect(output.models?.providers?.other).toEqual(input.models?.providers?.other);
-      expect(output.auth?.profiles?.["other:default"]).toEqual(
-        input.auth?.profiles?.["other:default"],
-      );
-      expect(output.agents?.defaults?.models?.[modelRef]).toEqual(
-        input.agents?.defaults?.models?.[modelRef],
-      );
-      expect(output.agents?.defaults?.model).toEqual({
-        primary: modelRef,
-        fallbacks: ["arcee/fallback"],
-      });
+      expectPreserved(output, addedIds, modelRef);
       expect(await onboard(output)).toEqual(output);
       expect(input).toEqual(before);
-
-      const publicOutput = route.applyPublicConfig(input);
-      expect(publicOutput.models?.providers?.arcee?.models?.slice(0, 2)).toEqual([
-        collision,
-        authoredOnly,
-      ]);
-      expect(publicOutput.models?.providers?.arcee?.models?.map((model) => model.id)).toEqual([
-        route.collisionId,
-        "operator-only",
-        ...route.addedIds,
-      ]);
-      expect(publicOutput.agents?.defaults?.model).toEqual(input.agents?.defaults?.model);
-      expect(publicOutput.agents?.defaults?.models?.[modelRef]).toEqual(
-        input.agents?.defaults?.models?.[modelRef],
-      );
+      expectPreserved(route.applyPublicConfig(input), route.addedIds, "arcee/operator-only");
     });
   });
 
@@ -246,11 +210,10 @@ describe("arcee provider plugin", () => {
       .spyOn(ssrfRuntime, "fetchWithSsrFGuard")
       .mockImplementation(async ({ url }) => ({
         response: Response.json({
-          data: [
-            { id: "trinity-mini", object: "model" },
-            { id: "trinity-large-preview", object: "model" },
-            { id: "trinity-large-thinking", object: "model" },
-          ],
+          data: ["trinity-mini", "trinity-large-preview", "trinity-large-thinking"].map((id) => ({
+            id,
+            object: "model",
+          })),
         }),
         finalUrl: url,
         release,
@@ -265,8 +228,10 @@ describe("arcee provider plugin", () => {
         id === "arcee" ? { apiKey: "test-key" } : { apiKey: undefined },
     });
 
-    expect(catalogProvider.api).toBe("openai-completions");
-    expect(catalogProvider.baseUrl).toBe("https://api.arcee.ai/api/v1");
+    expect(catalogProvider).toMatchObject({
+      api: "openai-completions",
+      baseUrl: "https://api.arcee.ai/api/v1",
+    });
     expect(catalogProvider.models?.map((model) => model.id)).toEqual([
       "trinity-large-preview",
       "trinity-large-thinking",
@@ -274,23 +239,18 @@ describe("arcee provider plugin", () => {
     ]);
     expect(fetchGuard).toHaveBeenCalledOnce();
     const request = fetchGuard.mock.calls[0]?.[0];
-    expect(
-      JSON.stringify({
-        url: request?.url,
-        init: {
-          ...request?.init,
-          headers: Object.fromEntries(new Headers(request?.init?.headers)),
-        },
-      }),
-    ).toBe(
-      '{"url":"https://api.arcee.ai/api/v1/models","init":{"headers":{"accept":"application/json","authorization":"Bearer test-key"}}}',
-    );
+    expect({
+      url: request?.url,
+      init: { ...request?.init, headers: Object.fromEntries(new Headers(request?.init?.headers)) },
+    }).toEqual({
+      url: "https://api.arcee.ai/api/v1/models",
+      init: { headers: { accept: "application/json", authorization: "Bearer test-key" } },
+    });
     expect(release).toHaveBeenCalledOnce();
     const thinkingCompat = catalogProvider.models?.find(
       (model) => model.id === "trinity-large-thinking",
     )?.compat;
-    expect(thinkingCompat?.supportsTools).toBe(false);
-    expect(thinkingCompat?.supportsReasoningEffort).toBe(false);
+    expect(thinkingCompat).toMatchObject({ supportsTools: false, supportsReasoningEffort: false });
   });
 
   it("keeps the configured OpenRouter catalog when both credentials exist", async () => {
@@ -323,39 +283,31 @@ describe("arcee provider plugin", () => {
 
   it("canonicalizes stale OpenRouter /v1 config and transport metadata", async () => {
     const provider = await registerSingleProviderPlugin(arceePlugin);
-
+    const transport = {
+      api: "openai-completions",
+      baseUrl: "https://openrouter.ai/v1",
+    };
+    const canonicalTransport = { api: transport.api, baseUrl: "https://openrouter.ai/api/v1" };
     const normalizedConfig = provider.normalizeConfig?.({
       provider: "arcee",
-      providerConfig: {
-        api: "openai-completions",
-        baseUrl: "https://openrouter.ai/v1/",
-        models: [],
-      },
+      providerConfig: { ...transport, baseUrl: `${transport.baseUrl}/`, models: [] },
     } as never);
-    expect(normalizedConfig?.baseUrl).toBe("https://openrouter.ai/api/v1");
-
+    expect(normalizedConfig?.baseUrl).toBe(canonicalTransport.baseUrl);
     const normalizedModel = provider.normalizeResolvedModel?.({
       modelId: "arcee/trinity-large-thinking",
       model: {
+        ...transport,
         provider: "arcee",
         id: "trinity-large-thinking",
         name: "Trinity Large Thinking",
-        api: "openai-completions",
-        baseUrl: "https://openrouter.ai/v1",
       },
     } as never);
-    expect(normalizedModel?.id).toBe("arcee-ai/trinity-large-thinking");
-    expect(normalizedModel?.baseUrl).toBe("https://openrouter.ai/api/v1");
-
-    expect(
-      provider.normalizeTransport?.({
-        provider: "arcee",
-        api: "openai-completions",
-        baseUrl: "https://openrouter.ai/v1",
-      } as never),
-    ).toEqual({
-      api: "openai-completions",
-      baseUrl: "https://openrouter.ai/api/v1",
+    expect(normalizedModel).toMatchObject({
+      id: "arcee-ai/trinity-large-thinking",
+      baseUrl: canonicalTransport.baseUrl,
     });
+    expect(provider.normalizeTransport?.({ ...transport, provider: "arcee" } as never)).toEqual(
+      canonicalTransport,
+    );
   });
 });
