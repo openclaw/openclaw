@@ -8,28 +8,18 @@ const { sinceMs, untilMs } = window;
 async function collect(context: SourceRuntime, sourceConfig = config) {
   const messages = new Map<string, DiscordMessage>();
   const batchSizes: number[] = [];
-  const status = await createDiscordSource(context).collect(
-    sourceConfig,
-    window,
-    async (entries) => {
-      batchSizes.push(entries.length);
-      for (const { key, value } of entries) {
-        messages.set(key, value);
-      }
-    },
+  const source = createDiscordSource(context);
+  const status = await source.collect(sourceConfig, window, async (entries) => {
+    batchSizes.push(entries.length);
+    for (const { key, value } of entries) {
+      messages.set(key, value);
+    }
+  });
+  const sorted = [...messages].toSorted(
+    ([a, left], [b, right]) =>
+      left.atMs - right.atMs || left.channelId.localeCompare(right.channelId) || a.localeCompare(b),
   );
-  return {
-    messages: [...messages]
-      .toSorted(
-        ([leftId, left], [rightId, right]) =>
-          left.atMs - right.atMs ||
-          left.channelId.localeCompare(right.channelId) ||
-          leftId.localeCompare(rightId),
-      )
-      .map(([, entry]) => entry),
-    status,
-    batchSizes,
-  };
+  return { messages: sorted.map(([, entry]) => entry), status, batchSizes };
 }
 
 function expectStatus(
@@ -56,6 +46,10 @@ function routedRuntime(routes: Record<string, (url: URL) => Response>) {
   });
 }
 
+function archives(threads: ReturnType<typeof thread>[], has_more = true) {
+  return json({ threads, has_more });
+}
+
 afterEach(() => vi.useRealTimers());
 
 it("pages forward across reverse-ordered pages and stops at the exclusive upper bound", async () => {
@@ -78,9 +72,7 @@ it("pages forward across reverse-ordered pages and stops at the exclusive upper 
     },
   });
   const result = await collect(context);
-  expect(pages).toBe(2);
-  expect(result.batchSizes).toEqual([100, 1]);
-  expect(result.messages).toHaveLength(101);
+  expect([pages, result.batchSizes]).toEqual([2, [100, 1]]);
   expect(result.messages.map((entry) => entry.atMs)).toEqual([
     ...firstPage.map((entry) => Date.parse(entry.timestamp)),
     sinceMs + 200,
@@ -90,32 +82,21 @@ it("pages forward across reverse-ordered pages and stops at the exclusive upper 
 
 it("rolls active and public archived threads into configured parents and bounds archive paging", async () => {
   const future = untilMs + 1000;
+  const design = { ...thread("22", future, 11), name: "design" };
+  const older = [
+    { ...thread("21", sinceMs + 1000, 11), name: "review" },
+    { ...thread("23", sinceMs - 1, 11), name: "old" },
+  ];
   let archivePages = 0;
   const context = routedRuntime({
     "/threads/active": () =>
-      json({
-        threads: [
-          { id: "22", parent_id: "20", name: "design", type: 11 },
-          { id: "90", parent_id: "99", name: "outside" },
-        ],
-      }),
+      json({ threads: [design, { id: "90", parent_id: "99", name: "outside" }] }),
     "/channels/20/threads/archived/public": (url) => {
       expect(url.searchParams.get("limit")).toBe("100");
-      archivePages += 1;
-      if (archivePages === 1) {
-        return json({
-          threads: [{ ...thread("22", future, 11), name: "design" }],
-          has_more: true,
-        });
+      if (archivePages) {
+        expect(url.searchParams.get("before")).toBe(new Date(future).toISOString());
       }
-      expect(url.searchParams.get("before")).toBe(new Date(future).toISOString());
-      return json({
-        threads: [
-          { ...thread("21", sinceMs + 1000, 11), name: "review" },
-          { ...thread("23", sinceMs - 1, 11), name: "old" },
-        ],
-        has_more: true,
-      });
+      return archives(archivePages++ ? older : [design]);
     },
     "/messages": (url) => {
       const channelId = url.pathname.split("/").at(-2);
@@ -144,10 +125,7 @@ it("falls back to joined private archives and pages by thread id past old archiv
       joinedPages += 1;
       expect(url.searchParams.get("limit")).toBe("100");
       expect(url.searchParams.get("before")).toBe(joinedPages === 1 ? null : newerThread.id);
-      return json({
-        threads: [joinedPages === 1 ? newerThread : olderThread],
-        has_more: joinedPages === 1,
-      });
+      return archives([joinedPages === 1 ? newerThread : olderThread], joinedPages === 1);
     },
     [`/channels/${olderThread.id}/messages`]: () => json([message(sinceMs + 1)]),
   });
@@ -157,23 +135,19 @@ it("falls back to joined private archives and pages by thread id past old archiv
   expectStatus(result, []);
 });
 
-it("counts inaccessible private archives without warnings or stale status when both endpoints return 403", async () => {
+it.each([403, 404])("handles private archive HTTP %s", async (code) => {
   const context = routedRuntime({
-    "/threads/archived/private": () => json({}, 403),
+    "/threads/archived/private": () => json({}, code),
     "/channels/20/messages": () => json([message(sinceMs + 1)]),
   });
   const result = await collect(context);
   expect(result.messages).toHaveLength(1);
-  expectStatus(result, [], 1);
-  expect(requestsEnding(context, "/threads/archived/private")).toHaveLength(2);
-});
-
-it("warns on non-403 failures from primary private archives", async () => {
-  const context = routedRuntime({
-    "/channels/20/threads/archived/private": () => json({}, 404),
-    "/users/@me/threads/archived/private": () => json({}, 404),
-  });
-  expectStatus(await collect(context), [expect.stringMatching(/20.*404/)]);
+  expectStatus(
+    result,
+    code === 403 ? [] : [expect.stringMatching(/20.*404/)],
+    code === 403 ? 1 : 0,
+  );
+  expect(requestsEnding(context, "/threads/archived/private")).toHaveLength(code === 403 ? 2 : 1);
 });
 
 it("waits 60 seconds for Discord retry_after before retrying", async () => {
@@ -196,22 +170,13 @@ it("waits 60 seconds for Discord retry_after before retrying", async () => {
 });
 
 it("warns on missing channel access and collects accessible sibling channels without exposing tokens", async () => {
+  const channels = ["20", "21"].map((id) => ({ id, excerpts: false }));
   const context = routedRuntime({
-    "/guilds/10/channels": () =>
-      json([
-        { id: "20", name: "restricted" },
-        { id: "21", name: "general" },
-      ]),
+    "/guilds/10/channels": () => json(channels),
     "/channels/20/messages": () => json({ message: `Missing access ${config.token}` }, 403),
     "/channels/21/messages": () => json([message(sinceMs + 1)]),
   });
-  const result = await collect(context, {
-    ...config,
-    channels: [
-      { id: "20", excerpts: false },
-      { id: "21", excerpts: false },
-    ],
-  });
+  const result = await collect(context, { ...config, channels });
   expectStatus(result, [expect.stringMatching(/20.*403/)]);
   expect(result.messages.map((entry) => entry.channelId)).toEqual(["21"]);
   expect(JSON.stringify({ status: result.status, logs: context.logs })).not.toContain(config.token);
