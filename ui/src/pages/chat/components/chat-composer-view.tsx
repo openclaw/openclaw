@@ -28,7 +28,7 @@ import type { createChatComposerContext } from "./chat-composer-frame.ts";
 import { GoalComposerMode } from "./chat-composer-goal-mode.tsx";
 import { ChatGoal, renderChatGoalRecoverySolid } from "./chat-composer-goal.tsx";
 import { HumanMentionMenuView } from "./chat-composer-mention-menu.tsx";
-import { createComposerMobileInteraction } from "./chat-composer-mobile-interaction.ts";
+import { createComposerMobileInteraction } from "./chat-composer-mobile-interaction.tsx";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
 import type { ChatComposerPlusMenuView } from "./chat-composer-plus-menu.types.ts";
 import { ComposerQuestionDock } from "./chat-composer-question.tsx";
@@ -57,7 +57,7 @@ export function renderChatComposerView(
   const inputHandle = createChatAttachmentInputHandle();
   let shell: HTMLDivElement | undefined;
   let placeholderElement: HTMLSpanElement | undefined;
-  const { mobileEditing, keyboardNavigation } = createComposerMobileInteraction(
+  const { mobileEditing, keyboardNavigation, lifecycle } = createComposerMobileInteraction(
     context,
     props,
     state,
@@ -252,6 +252,7 @@ export function renderChatComposerView(
       data-composer-keyboard={props.mobileKeyboardVisible ? "true" : undefined}
       data-composer-keyboard-navigation={keyboardNavigation() ? "true" : undefined}
     >
+      {lifecycle}
       <div class="agent-chat__composer-float" ref={[elementRef(props.onComposerFloatRef)]}>
         <div class="chat-footer__context">
           {props.footerContent}
