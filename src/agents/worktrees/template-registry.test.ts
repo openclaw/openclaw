@@ -36,6 +36,26 @@ describe("worktree template registry", () => {
   let env: NodeJS.ProcessEnv;
   let template: WorktreeTemplateRecord & { status: "preparing" };
   const guard = () => {};
+  const read = () => readTemplateAsync(env, template.cacheKey);
+  const list = () => listTemplatesAsync(env);
+  const reserve = (record = template) => reserveTemplateAsync(env, record, guard);
+  const ready = (id: string, now: number) => markTemplateReadyAsync(env, id, now, guard);
+  const remove = (id: string) => deleteTemplateAsync(env, id, guard);
+  const release = (key: string) => releaseTemplateReaderAsync(env, key, guard);
+  const owner = { pid: 1, host: "synthetic-remote-owner", startedAt: null };
+  const retain = (input: Parameters<typeof retainTemplateReaderAsync>[1]) =>
+    retainTemplateReaderAsync(env, input, guard);
+  const retire = () => retain({ id: template.id, key: "retire", owner, unpublish: true });
+
+  async function withoutMainThreadSql(run: () => Promise<void>) {
+    const sql = observeMainThreadSql();
+    try {
+      await run();
+      sql.expectIdle();
+    } finally {
+      sql.restore();
+    }
+  }
 
   beforeEach(() => {
     const root = tempDirs.make("openclaw-worktree-template-registry-");
@@ -88,57 +108,44 @@ describe("worktree template registry", () => {
         { include: ["worker.request"] },
       ),
     );
-    const absentSql = observeMainThreadSql();
-    try {
-      expect(await readTemplateAsync(env, template.cacheKey)).toBeUndefined();
+    await withoutMainThreadSql(async () => {
+      expect(await read()).toBeUndefined();
       expect(await hasTemplatesAsync(env)).toBe(false);
-      expect(await listTemplatesAsync(env)).toEqual([]);
-      await reserveTemplateAsync(env, template, guard);
-      expect(await readTemplateAsync(env, template.cacheKey)).toEqual(template);
+      expect(await list()).toEqual([]);
+      await reserve();
+      expect(await read()).toEqual(template);
       expect(await hasTemplatesAsync(env)).toBe(true);
-      absentSql.expectIdle();
-    } finally {
-      absentSql.restore();
-    }
-    await expect(
-      reserveTemplateAsync(env, { ...template, id: "contender" }, guard),
-    ).rejects.toThrow();
-    expect(await markTemplateReadyAsync(env, template.id, 20, guard)).toBe(true);
+    });
+    await expect(reserve({ ...template, id: "contender" })).rejects.toThrow();
+    expect(await ready(template.id, 20)).toBe(true);
     await closeStateDatabaseForTest();
-    expect(await readTemplateAsync(env, template.cacheKey)).toEqual({
+    expect(await read()).toEqual({
       ...template,
       status: "ready",
       lastUsedAt: 20,
     });
 
-    expect(await deleteTemplateAsync(env, template.id, guard)).toBe(true);
-    const sql = observeMainThreadSql();
-    try {
+    expect(await remove(template.id)).toBe(true);
+    await withoutMainThreadSql(async () => {
       const replacement = {
         ...template,
         id: "generation-2",
         path: path.join(template.worktreeRoot, "generation-2"),
       };
-      await reserveTemplateAsync(env, replacement, guard);
-      expect(await markTemplateReadyAsync(env, template.id, 30, guard)).toBe(false);
-      expect(await deleteTemplateAsync(env, template.id, guard)).toBe(false);
-      expect(await markTemplateReadyAsync(env, replacement.id, 40, guard)).toBe(true);
-      expect(await listTemplatesAsync(env)).toEqual([
-        { ...replacement, status: "ready", lastUsedAt: 40 },
-      ]);
+      await reserve(replacement);
+      expect(await ready(template.id, 30)).toBe(false);
+      expect(await remove(template.id)).toBe(false);
+      expect(await ready(replacement.id, 40)).toBe(true);
+      expect(await list()).toEqual([{ ...replacement, status: "ready", lastUsedAt: 40 }]);
       await waitForDiagnosticEventsDrained();
       expect(readerQueues.length).toBeGreaterThan(0);
       expect(new Set(readerQueues)).toEqual(new Set(["stateRead"]));
-      sql.expectIdle();
-    } finally {
-      sql.restore();
-    }
+    });
   });
 
   it("admits readers only from retained ready generations and refuses retirement until they settle", async () => {
-    await reserveTemplateAsync(env, template, guard);
-    await markTemplateReadyAsync(env, template.id, 20, guard);
-    const owner = { pid: 1, host: "synthetic-remote-owner", startedAt: null };
+    await reserve();
+    await ready(template.id, 20);
     const selection = {
       selection: {
         cacheKey: template.cacheKey,
@@ -148,65 +155,28 @@ describe("worktree template registry", () => {
       key: "warm",
       owner,
     };
-    expect(await retainTemplateReaderAsync(env, selection, guard)).toBeUndefined();
-    await retainTemplateReaderAsync(env, { id: template.id, key: "first", owner }, guard);
+    expect(await retain(selection)).toBeUndefined();
+    await retain({ id: template.id, key: "first", owner });
     expect(
-      await retainTemplateReaderAsync(
-        env,
-        { ...selection, selection: { ...selection.selection, contentKey: "other" } },
-        guard,
-      ),
+      await retain({ ...selection, selection: { ...selection.selection, contentKey: "other" } }),
     ).toBeUndefined();
-    expect(await retainTemplateReaderAsync(env, selection, guard)).toEqual({
+    expect(await retain(selection)).toEqual({
       ...template,
       status: "ready",
       lastUsedAt: 20,
     });
-    expect(
-      await retainTemplateReaderAsync(
-        env,
-        {
-          id: template.id,
-          key: "retire",
-          owner,
-          unpublish: true,
-        },
-        guard,
-      ),
-    ).toBeUndefined();
-    await releaseTemplateReaderAsync(env, "first", guard);
-    expect(
-      await retainTemplateReaderAsync(
-        env,
-        {
-          id: template.id,
-          key: "retire",
-          owner,
-          unpublish: true,
-        },
-        guard,
-      ),
-    ).toBeUndefined();
-    await releaseTemplateReaderAsync(env, "warm", guard);
-    expect(
-      await retainTemplateReaderAsync(
-        env,
-        {
-          id: template.id,
-          key: "retire",
-          owner,
-          unpublish: true,
-        },
-        guard,
-      ),
-    ).toMatchObject({ id: template.id });
-    expect(await retainTemplateReaderAsync(env, selection, guard)).toBeUndefined();
-    expect((await readTemplateAsync(env, template.cacheKey))?.status).toBe("preparing");
-    await releaseTemplateReaderAsync(env, "retire", guard);
+    expect(await retire()).toBeUndefined();
+    await release("first");
+    expect(await retire()).toBeUndefined();
+    await release("warm");
+    expect(await retire()).toMatchObject({ id: template.id });
+    expect(await retain(selection)).toBeUndefined();
+    expect((await read())?.status).toBe("preparing");
+    await release("retire");
   });
 
   it("rolls back ready publication when custody is revoked at worker commit", async () => {
-    await reserveTemplateAsync(env, template, guard);
+    await reserve();
     const context = captureOpenClawStateWorkerContext({ env });
     await expect(
       runOpenClawStateWorkerOperation(
@@ -230,24 +200,29 @@ describe("worktree template registry", () => {
         },
       ),
     ).rejects.toThrow("allocation lease lost");
-    expect(await readTemplateAsync(env, template.cacheKey)).toEqual(template);
+    expect(await read()).toEqual(template);
   });
 
   it("keeps template rows and reader custody in the worker's selected database", async () => {
     const selectedPath = path.join(env.OPENCLAW_STATE_DIR!, "selected.sqlite");
     const context = captureOpenClawStateWorkerContext({ env, path: selectedPath });
-    const sql = observeMainThreadSql();
-    try {
+    const readSelected = (command: Parameters<typeof executeExistingOpenClawStateRead>[1]) =>
+      executeExistingOpenClawStateRead({ env, path: selectedPath }, command, {
+        context,
+        current: true,
+      });
+    await withoutMainThreadSql(async () => {
       await runOpenClawStateWorkerOperation(
         context,
         async (scope) => {
+          const hasReaders = () =>
+            scope.execute({
+              type: "worktrees.templates.hasReaders",
+              input: { id: template.id },
+            });
           await scope.execute({ type: "worktrees.templates.reserve", input: template });
           expect(
-            await executeExistingOpenClawStateRead(
-              { env, path: selectedPath },
-              { type: "worktrees.templates.has", input: undefined },
-              { context, current: true },
-            ),
+            await readSelected({ type: "worktrees.templates.has", input: undefined }),
           ).toMatchObject({ type: "worktrees.templates.has", has: true });
           await scope.execute({
             type: "worktrees.templates.ready",
@@ -258,43 +233,28 @@ describe("worktree template registry", () => {
             input: {
               id: template.id,
               key: "reader",
-              owner: { pid: 1, host: "synthetic-remote-owner", startedAt: null },
+              owner,
               unpublish: true,
             },
           });
           expect(
-            await executeExistingOpenClawStateRead(
-              { env, path: selectedPath },
-              { type: "worktrees.templates.read", input: { cacheKey: template.cacheKey } },
-              { context, current: true },
-            ),
+            await readSelected({
+              type: "worktrees.templates.read",
+              input: { cacheKey: template.cacheKey },
+            }),
           ).toMatchObject({
             type: "worktrees.templates.read",
             record: { ...template, lastUsedAt: 20 },
           });
-          expect(
-            await scope.execute({
-              type: "worktrees.templates.hasReaders",
-              input: { id: template.id },
-            }),
-          ).toBe(true);
+          expect(await hasReaders()).toBe(true);
           await scope.execute({
             type: "worktrees.templates.releaseReader",
             input: { key: "reader" },
           });
-          expect(
-            await scope.execute({
-              type: "worktrees.templates.hasReaders",
-              input: { id: template.id },
-            }),
-          ).toBe(false);
+          expect(await hasReaders()).toBe(false);
           await scope.execute({ type: "worktrees.templates.delete", input: { id: template.id } });
           expect(
-            await executeExistingOpenClawStateRead(
-              { env, path: selectedPath },
-              { type: "worktrees.templates.list", input: undefined },
-              { context, current: true },
-            ),
+            await readSelected({ type: "worktrees.templates.list", input: undefined }),
           ).toMatchObject({ type: "worktrees.templates.list", records: [] });
         },
         {
@@ -307,9 +267,6 @@ describe("worktree template registry", () => {
           }),
         },
       );
-      sql.expectIdle();
-    } finally {
-      sql.restore();
-    }
+    });
   });
 });

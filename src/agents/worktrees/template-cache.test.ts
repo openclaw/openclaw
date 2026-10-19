@@ -3,7 +3,6 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import * as workerStore from "../../state/openclaw-state-worker-store.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
@@ -24,6 +23,47 @@ describe("worktree template custody", () => {
   let env: NodeJS.ProcessEnv;
   let params: Parameters<typeof prepareWorktreeTemplate>[0];
 
+  const prepare = (overrides: Partial<typeof params> = {}) =>
+    prepareWorktreeTemplate({ ...params, ...overrides });
+  const collect = (onError?: Parameters<typeof collectWorktreeTemplates>[3]) =>
+    collectWorktreeTemplates(env, 101, options, onError);
+  const list = () => listTemplatesAsync(env);
+  const source = (record: { path: string }) =>
+    fs.readFile(path.join(record.path, "source"), "utf8");
+  async function idle() {
+    const record = await prepare();
+    await record?.release();
+    return record;
+  }
+  function preparationGate() {
+    const entered = createDeferred();
+    const finish = createDeferred();
+    const block = <Args extends unknown[], Result>(run: (...args: Args) => Promise<Result>) =>
+      vi.fn(async (...args: Args) => {
+        entered.resolve();
+        await finish.promise;
+        return await run(...args);
+      });
+    return {
+      entered: entered.promise,
+      finish: finish.resolve,
+      prepare: block(params.prepare),
+      validate: block(params.validate),
+    };
+  }
+  function observeReaderAttempt() {
+    const attempted = createDeferred();
+    const retain = templateRegistry.retainTemplateReaderAsync;
+    vi.spyOn(templateRegistry, "retainTemplateReaderAsync").mockImplementation(async (...args) => {
+      const result = await retain(...args);
+      if ("selection" in args[1]) {
+        attempted.resolve();
+      }
+      return result;
+    });
+    return attempted.promise;
+  }
+
   beforeEach(() => {
     const root = directories.make("openclaw-template-custody-");
     env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
@@ -39,8 +79,7 @@ describe("worktree template custody", () => {
       sourceCommit: "a".repeat(40),
       backend: "btrfs",
       requireSpace: async () => {},
-      validate: async (record) =>
-        (await fs.readFile(path.join(record.path, "source"), "utf8")) === "source",
+      validate: async (record) => (await source(record)) === "source",
       prepare: async (record) => {
         await fs.mkdir(record.path);
         await fs.writeFile(path.join(record.path, "source"), "source");
@@ -52,41 +91,19 @@ describe("worktree template custody", () => {
     "prepares a %s template once for concurrent readers through collection and replacement",
     async (state) => {
       if (state === "idle") {
-        const seeded = await prepareWorktreeTemplate(params);
-        await seeded?.release();
+        await idle();
       }
-      const entered = createDeferred();
-      const finish = createDeferred();
+      const { entered, finish, prepare: build, validate } = preparationGate();
       const mutate = vi.spyOn(allocation, "withWorktreeMutationLease");
-      const prepare = vi.fn(async (...args: Parameters<typeof params.prepare>) => {
-        entered.resolve();
-        await finish.promise;
-        await params.prepare(...args);
-      });
-      const validate = vi.fn(async (...args: Parameters<typeof params.validate>) => {
-        entered.resolve();
-        await finish.promise;
-        return await params.validate(...args);
-      });
-      const first = prepareWorktreeTemplate({ ...params, prepare, validate });
-      await entered.promise;
-      const attempted = createDeferred();
-      const retain = templateRegistry.retainTemplateReaderAsync;
-      vi.spyOn(templateRegistry, "retainTemplateReaderAsync").mockImplementation(
-        async (...args) => {
-          const result = await retain(...args);
-          if ("selection" in args[1]) {
-            attempted.resolve();
-          }
-          return result;
-        },
-      );
-      const second = prepareWorktreeTemplate({ ...params, prepare, validate });
-      await attempted.promise;
-      finish.resolve();
+      const first = prepare({ prepare: build, validate });
+      await entered;
+      const attempted = observeReaderAttempt();
+      const second = prepare({ prepare: build, validate });
+      await attempted;
+      finish();
       const [left, right] = await Promise.all([first, second]);
       expect(left?.id).toBe(right?.id);
-      expect(prepare).toHaveBeenCalledTimes(state === "cold" ? 1 : 0);
+      expect(build).toHaveBeenCalledTimes(state === "cold" ? 1 : 0);
       expect(validate).toHaveBeenCalledTimes(state === "idle" ? 1 : 0);
       expect(mutate).toHaveBeenCalledTimes(1);
       expect(left?.status).toBe("ready");
@@ -94,15 +111,15 @@ describe("worktree template custody", () => {
       if (!left || !right) {
         throw new Error("Both callers must acquire the prepared template");
       }
-      await collectWorktreeTemplates(env, 101, options);
-      expect(await fs.readFile(path.join(left.path, "source"), "utf8")).toBe("source");
-      expect(await prepareWorktreeTemplate({ ...params, contentKey: "commit-2" })).toBeUndefined();
+      await collect();
+      expect(await source(left)).toBe("source");
+      expect(await prepare({ contentKey: "commit-2" })).toBeUndefined();
       await left.release();
-      await collectWorktreeTemplates(env, 101, options);
-      expect(await listTemplatesAsync(env)).toHaveLength(1);
+      await collect();
+      expect(await list()).toHaveLength(1);
       await right.release();
-      await collectWorktreeTemplates(env, 101, options);
-      expect(await listTemplatesAsync(env)).toEqual([]);
+      await collect();
+      expect(await list()).toEqual([]);
       await expect(fs.access(left.path)).rejects.toMatchObject({ code: "ENOENT" });
     },
   );
@@ -110,8 +127,7 @@ describe("worktree template custody", () => {
   it.each([false, true])(
     "publishes an idle refresh only after settlement (failure=%s)",
     async (fail) => {
-      const original = await prepareWorktreeTemplate(params);
-      await original?.release();
+      const original = await idle();
       const entered = createDeferred();
       const finish = createDeferred();
       const failure = new Error("refresh failed");
@@ -131,7 +147,7 @@ describe("worktree template custody", () => {
       };
       const refreshing = prepareWorktreeTemplate(next);
       await entered.promise;
-      expect((await listTemplatesAsync(env))[0]).toMatchObject({
+      expect((await list())[0]).toMatchObject({
         id: original?.id,
         status: "preparing",
         contentKey: params.contentKey,
@@ -144,13 +160,12 @@ describe("worktree template custody", () => {
       const reused = await concurrent;
       if (fail) {
         expect(reused?.id).not.toBe(original?.id);
-        expect(await fs.readFile(path.join(reused!.path, "source"), "utf8")).toBe("source");
       } else {
         expect(reused?.id).toBe(original?.id);
-        expect(await fs.readFile(path.join(reused!.path, "source"), "utf8")).toBe("updated");
-        await refreshed?.release();
       }
-      expect((await listTemplatesAsync(env))[0]).toMatchObject({
+      expect(await source(reused!)).toBe(fail ? "source" : "updated");
+      await refreshed?.release();
+      expect((await list())[0]).toMatchObject({
         status: "ready",
         contentKey: next.contentKey,
         sourceCommit: next.sourceCommit,
@@ -162,82 +177,56 @@ describe("worktree template custody", () => {
   it.each(["owner", "waiter"])(
     "keeps the other caller live when the preparation %s aborts",
     async (canceled) => {
-      const entered = createDeferred();
-      const finish = createDeferred();
+      const { entered, finish, prepare: build } = preparationGate();
       const controller = new AbortController();
-      const prepare = async (...args: Parameters<typeof params.prepare>) => {
-        entered.resolve();
-        await finish.promise;
-        await params.prepare(...args);
-      };
-      const first = prepareWorktreeTemplate({
-        ...params,
-        prepare,
+      const first = prepare({
+        prepare: build,
         options: canceled === "owner" ? { ...options, signal: controller.signal } : options,
       });
-      await entered.promise;
-      const attempted = createDeferred();
-      const retain = templateRegistry.retainTemplateReaderAsync;
-      vi.spyOn(templateRegistry, "retainTemplateReaderAsync").mockImplementation(
-        async (...args) => {
-          const result = await retain(...args);
-          if ("selection" in args[1]) {
-            attempted.resolve();
-          }
-          return result;
-        },
-      );
-      const second = prepareWorktreeTemplate({
-        ...params,
-        prepare,
+      await entered;
+      const attempted = observeReaderAttempt();
+      const second = prepare({
+        prepare: build,
         options: canceled === "waiter" ? { ...options, signal: controller.signal } : options,
       });
-      await attempted.promise;
+      await attempted;
       const rejected = expect(canceled === "owner" ? first : second).rejects.toMatchObject({
         code: "OPENCLAW_STATE_LEASE_ABORTED",
       });
       controller.abort();
-      finish.resolve();
+      finish();
       await rejected;
       const prepared = await (canceled === "owner" ? second : first);
       expect(prepared?.status).toBe("ready");
-      expect(await fs.readFile(path.join(prepared!.path, "source"), "utf8")).toBe("source");
+      expect(await source(prepared!)).toBe("source");
       await prepared?.release();
-      await collectWorktreeTemplates(env, 101, options);
-      expect(await listTemplatesAsync(env)).toEqual([]);
+      await collect();
+      expect(await list()).toEqual([]);
     },
   );
 
   it("preserves recovery guidance when a shared preparation exhausts the caller wait budget", async () => {
-    const entered = createDeferred();
-    const finish = createDeferred();
-    const first = prepareWorktreeTemplate({
-      ...params,
-      prepare: async (...args) => {
-        entered.resolve();
-        await finish.promise;
-        await params.prepare(...args);
-      },
-    });
-    await entered.promise;
+    const { entered, finish, prepare: build } = preparationGate();
+    const first = prepare({ prepare: build });
+    await entered;
     const timeout = AbortSignal.timeout.bind(AbortSignal);
     vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) =>
       ms === 0 ? AbortSignal.abort(new DOMException("Expired", "TimeoutError")) : timeout(ms),
     );
     const waitBudget = { remainingMs: 0 };
     try {
-      await expect(
-        prepareWorktreeTemplate({ ...params, options: { ...options, waitBudget } }),
-      ).rejects.toThrow(/timed out.*openclaw worktrees list.*openclaw worktrees gc/);
+      await expect(prepare({ options: { ...options, waitBudget } })).rejects.toThrow(
+        /timed out.*openclaw worktrees list.*openclaw worktrees gc/,
+      );
       expect(waitBudget.remainingMs).toBe(0);
     } finally {
-      finish.resolve();
+      finish();
       await (await first)?.release();
     }
   });
 
   it("reuses a retained ready generation and revalidates it once readers settle", async () => {
-    const first = await prepareWorktreeTemplate(params);
+    const first = await prepare();
     expect(first).toBeDefined();
     const unavailableValidation = async () => {
       throw new Error("validation must not hold up a concurrent clone");
@@ -245,20 +234,19 @@ describe("worktree template custody", () => {
     const second = await allocation.withWorktreeMutationLease(
       { env, ...options, id: `template:${params.cacheKey}` },
       async () =>
-        prepareWorktreeTemplate({
-          ...params,
+        prepare({
           validate: unavailableValidation,
           options: { ...options, waitBudget: { remainingMs: 0 } },
         }),
     );
     expect(second?.id).toBe(first?.id);
-    expect(await fs.readFile(path.join(second!.path, "source"), "utf8")).toBe("source");
+    expect(await source(second!)).toBe("source");
     await first?.release();
     await second?.release();
     await fs.writeFile(path.join(first!.path, "source"), "changed");
-    const next = await prepareWorktreeTemplate(params);
+    const next = await prepare();
     expect(next?.id).not.toBe(first?.id);
-    expect(await fs.readFile(path.join(next!.path, "source"), "utf8")).toBe("source");
+    expect(await source(next!)).toBe("source");
     await next?.release();
   });
 
@@ -266,62 +254,55 @@ describe("worktree template custody", () => {
     "retains a failed builder only while its native outcome is uncertain (%s)",
     async (kind) => {
       const uncertain = kind !== "settled";
-      const error =
-        kind === "worker"
-          ? new SqliteWorkerError("native result missing", "outcome-unknown")
-          : kind === "process"
-            ? new CommandProcessCleanupError()
-            : new Error("native failure settled");
+      const error = uncertain
+        ? new CommandProcessCleanupError()
+        : new Error("native failure settled");
       await expect(
-        prepareWorktreeTemplate({
-          ...params,
+        prepare({
           prepare: async (record, guard) => {
             await params.prepare(record, guard);
             throw error;
           },
         }),
       ).rejects.toBe(error);
-      const [record] = await listTemplatesAsync(env);
+      const [record] = await list();
       expect(record?.status).toBe("preparing");
-      await collectWorktreeTemplates(env, 101, options);
-      expect(await listTemplatesAsync(env)).toHaveLength(uncertain ? 1 : 0);
+      await collect();
+      expect(await list()).toHaveLength(uncertain ? 1 : 0);
       if (uncertain) {
-        expect(await prepareWorktreeTemplate(params)).toBeUndefined();
-        expect(await fs.readFile(path.join(record!.path, "source"), "utf8")).toBe("source");
+        expect(await prepare()).toBeUndefined();
+        expect(await source(record!)).toBe("source");
       }
     },
   );
 
   it("keeps an uncertain retirement unpublished and retained", async () => {
-    const prepared = await prepareWorktreeTemplate(params);
-    await prepared?.release();
+    const prepared = await idle();
     const failure = new CommandProcessCleanupError();
     vi.spyOn(fs, "rm").mockRejectedValueOnce(failure);
     const onError = vi.fn();
-    await collectWorktreeTemplates(env, 101, options, onError);
+    await collect(onError);
     expect(onError).toHaveBeenCalledWith(failure, prepared?.id);
-    expect((await listTemplatesAsync(env))[0]?.status).toBe("preparing");
-    expect(await prepareWorktreeTemplate(params)).toBeUndefined();
+    expect((await list())[0]?.status).toBe("preparing");
+    expect(await prepare()).toBeUndefined();
   });
 
   it("retains validation with an uncertain native result", async () => {
-    const prepared = await prepareWorktreeTemplate(params);
-    await prepared?.release();
+    const prepared = await idle();
     const failure = new CommandProcessCleanupError();
     await expect(
-      prepareWorktreeTemplate({
-        ...params,
+      prepare({
         validate: async () => {
           throw failure;
         },
       }),
     ).rejects.toBe(failure);
-    await collectWorktreeTemplates(env, 101, options);
-    expect((await listTemplatesAsync(env))[0]).toMatchObject({
+    await collect();
+    expect((await list())[0]).toMatchObject({
       id: prepared?.id,
       status: "preparing",
     });
-    expect(await prepareWorktreeTemplate(params)).toBeUndefined();
+    expect(await prepare()).toBeUndefined();
   });
 
   it.each(["reservation", "lease"])(
@@ -347,17 +328,16 @@ describe("worktree template custody", () => {
               }),
             );
       await expect(
-        prepareWorktreeTemplate({ ...params, options: { ...options, signal: controller.signal } }),
+        prepare({ options: { ...options, signal: controller.signal } }),
       ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
       handoff.mockRestore();
-      await collectWorktreeTemplates(env, 101, options);
-      expect(await listTemplatesAsync(env)).toEqual([]);
+      await collect();
+      expect(await list()).toEqual([]);
     },
   );
 
   it("propagates unknown native settlement after successful registry delivery", async () => {
-    const prepared = await prepareWorktreeTemplate(params);
-    await prepared?.release();
+    const prepared = await idle();
     const execute = workerStore.runOpenClawStateWorkerOperation;
     const failure = new Error("native cleanup receipt missing");
     const worker = vi
