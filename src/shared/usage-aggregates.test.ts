@@ -23,6 +23,21 @@ function usage(overrides: Partial<SessionCostSummary> = {}): SessionCostSummary 
   };
 }
 
+const zeroMessages = { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 };
+function day(date: string, totals: Partial<SessionCostSummary>) {
+  return { ...usage(totals), date, tokens: totals.totalTokens ?? 0, cost: totals.totalCost ?? 0 };
+}
+function modelDay(
+  date: string,
+  model: string,
+  tokens: number,
+  cost: number,
+  count: number,
+  provider?: string,
+) {
+  return { date, model, provider, tokens, cost, count };
+}
+
 describe("shared/usage-aggregates", () => {
   it("retains incomplete daily and model subtotals after merging complete rows", () => {
     const accumulator = createUsageAggregateAccumulator();
@@ -42,15 +57,7 @@ describe("shared/usage-aggregates", () => {
       { date, tokens: 20, cost: 2, messages: 0, toolCalls: 0, errors: 0, usageReport: marker },
     ]);
     expect(result.modelDaily).toEqual([
-      {
-        date,
-        model: "local",
-        provider: undefined,
-        tokens: 20,
-        cost: 2,
-        count: 2,
-        usageReport: marker,
-      },
+      { ...modelDay(date, "local", 20, 2, 2), usageReport: marker },
     ]);
   });
 
@@ -185,22 +192,8 @@ describe("shared/usage-aggregates", () => {
       { provider: "fixture::bedrock", model: undefined, count: 1, totals: { totalTokens: 20 } },
     ]);
     expect(aggregates.modelDaily).toEqual([
-      {
-        date: "2026-03-12",
-        provider: "fixture",
-        model: "bedrock::arn",
-        tokens: 25,
-        cost: 0,
-        count: 2,
-      },
-      {
-        date: "2026-03-12",
-        provider: "fixture::bedrock",
-        model: "arn",
-        tokens: 20,
-        cost: 0,
-        count: 1,
-      },
+      modelDay("2026-03-12", "bedrock::arn", 25, 0, 2, "fixture"),
+      modelDay("2026-03-12", "arn", 20, 0, 1, "fixture::bedrock"),
     ]);
   });
 
@@ -215,13 +208,8 @@ describe("shared/usage-aggregates", () => {
         latency: quick,
         dailyLatency: [{ date: later, ...quick }],
         dailyBreakdown: [
-          {
-            ...usage({ input: 3, totalTokens: 3, totalCost: 4, inputCost: 4 }),
-            date: later,
-            tokens: 3,
-            cost: 4,
-          },
-          { ...usage({ totalTokens: 5, totalCost: 6 }), date: earlier, tokens: 5, cost: 6 },
+          day(later, { input: 3, totalTokens: 3, totalCost: 4, inputCost: 4 }),
+          day(earlier, { totalTokens: 5, totalCost: 6 }),
         ],
         dailyModelUsage: [
           { date: later, provider: "fixture", model: "one", tokens: 3, cost: 4, count: 2 },
@@ -236,12 +224,7 @@ describe("shared/usage-aggregates", () => {
           { date: earlier, ...slow },
         ],
         dailyBreakdown: [
-          {
-            ...usage({ cacheRead: 7, totalTokens: 7, totalCost: 8, cacheReadCost: 8 }),
-            date: later,
-            tokens: 7,
-            cost: 8,
-          },
+          day(later, { cacheRead: 7, totalTokens: 7, totalCost: 8, cacheReadCost: 8 }),
         ],
         dailyMessageCounts: [
           { date: later, total: 9, user: 5, assistant: 4, toolCalls: 2, toolResults: 2, errors: 1 },
@@ -253,16 +236,11 @@ describe("shared/usage-aggregates", () => {
       }),
     });
     const aggregates = accumulator.finish();
-    expect(aggregates.latency).toEqual({
-      count: 3,
-      avgMs: 220 / 3,
-      minMs: 20,
-      maxMs: 120,
-      p95Ms: 120,
-    });
+    const weighted = { count: 3, avgMs: 220 / 3, minMs: 20, maxMs: 120, p95Ms: 120 };
+    expect(aggregates.latency).toEqual(weighted);
     expect(aggregates.dailyLatency).toEqual([
       { date: earlier, ...slow },
-      { date: later, count: 3, avgMs: 220 / 3, minMs: 20, maxMs: 120, p95Ms: 120 },
+      { date: later, ...weighted },
     ]);
     expect(aggregates.daily).toEqual([
       { date: earlier, tokens: 5, cost: 6, messages: 0, toolCalls: 0, errors: 0 },
@@ -294,7 +272,7 @@ describe("shared/usage-aggregates", () => {
     accumulator.add({ usage: null });
     expect(accumulator.finish()).toEqual({
       sessionCount: 0,
-      messages: { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 },
+      messages: zeroMessages,
       tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
       byModel: [],
       byProvider: [],
@@ -336,25 +314,14 @@ describe("shared/usage-aggregates", () => {
       totalTokens: 30,
       totalCost: 3,
       activityDates: [dates[1], dates[0], dates[1]],
-      dailyBreakdown: dates
-        .slice(0, 2)
-        .map((date, index) =>
-          Object.assign(
-            usage({ input: (index + 1) * 10, totalTokens: (index + 1) * 10, totalCost: index + 1 }),
-            { date, tokens: (index + 1) * 10, cost: index + 1 },
-          ),
-        ),
-      dailyMessageCounts: [
-        {
-          date: dates[2],
-          total: 1,
-          user: 1,
-          assistant: 0,
-          toolCalls: 0,
-          toolResults: 0,
-          errors: 0,
-        },
-      ],
+      dailyBreakdown: dates.slice(0, 2).map((date, index) =>
+        day(date, {
+          input: (index + 1) * 10,
+          totalTokens: (index + 1) * 10,
+          totalCost: index + 1,
+        }),
+      ),
+      dailyMessageCounts: [{ ...zeroMessages, date: dates[2], total: 1, user: 1 }],
     });
     const original = structuredClone(summary);
     const accumulator = createUsageAggregateAccumulator();
@@ -378,12 +345,6 @@ describe("shared/usage-aggregates", () => {
         { dates, sessionCount: 2 },
       ],
     });
-    const selectedDays = new Set<string>(dates.slice(0, 2));
-    expect(
-      group?.sessionActivity
-        .filter((entry) => entry.dates.some((date) => selectedDays.has(date)))
-        .reduce((sum, entry) => sum + entry.sessionCount, 0),
-    ).toBe(2);
     expect(summary).toEqual(original);
   });
 });

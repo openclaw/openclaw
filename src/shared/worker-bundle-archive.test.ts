@@ -10,7 +10,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { workerBundleArchiveEntrypoint } from "./worker-bundle-archive-runtime.test-support.js";
 import {
-  DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
+  DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS as limits,
   extractWorkerBundleArchive,
   readWorkerBundleArchiveManifest,
   readWorkerBundleDirectoryManifest,
@@ -19,68 +19,64 @@ import { hashWorkerBundleManifest } from "./worker-bundle-hash.js";
 
 describe("worker bundle archive", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-  let root: string;
+  let root: string, source: string, archive: string, destination: string;
 
   beforeEach(() => {
     root = tempDirs.make("openclaw-bundle-archive-");
+    source = path.join(root, "source");
+    archive = path.join(root, "bundle.tgz");
+    destination = path.join(root, "destination");
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
+  async function artifact(name: string, contents: string | Buffer, mode?: number) {
+    const file = path.join(source, name);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, contents);
+    if (mode !== undefined) {
+      await fs.chmod(file, mode);
+    }
+  }
+  const pack = (files: string[]) =>
+    tar.create({ cwd: source, file: archive, gzip: true, noDirRecurse: true }, files);
+  const directoryManifest = (
+    options: Partial<Parameters<typeof readWorkerBundleDirectoryManifest>[0]> = {},
+  ) => readWorkerBundleDirectoryManifest({ root: source, limits, ...options });
+  const extract = (expectedBundleHash: string) =>
+    extractWorkerBundleArchive({ tarballPath: archive, destination, expectedBundleHash, limits });
+  const entry = (entryPath: string, contents: string) => ({
+    path: entryPath,
+    mode: 0o700,
+    size: Buffer.byteLength(contents),
+    sha256: createHash("sha256").update(contents).digest("hex"),
+  });
+
   it("extracts only a manifest-identical regular-file bundle", async () => {
-    const source = path.join(root, "source");
-    const archive = path.join(root, "bundle.tgz");
-    const destination = path.join(root, "destination");
-    await fs.mkdir(path.join(source, "dist"), { recursive: true });
-    await fs.writeFile(path.join(source, "openclaw.mjs"), "#!/usr/bin/env node\n");
-    await fs.chmod(path.join(source, "openclaw.mjs"), 0o700);
-    await fs.writeFile(path.join(source, "dist", "worker.js"), "export const worker = true;\n");
-    await fs.chmod(path.join(source, "dist", "worker.js"), 0o600);
-    await fs.writeFile(path.join(source, "dist", "Upper.js"), "export const upper = true;\n");
-    await fs.chmod(path.join(source, "dist", "Upper.js"), 0o600);
-    const sourceManifest = await readWorkerBundleDirectoryManifest({
-      root: source,
-      limits: DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
-    });
+    await artifact("openclaw.mjs", "#!/usr/bin/env node\n", 0o700);
+    await artifact("dist/worker.js", "export const worker = true;\n", 0o600);
+    await artifact("dist/Upper.js", "export const upper = true;\n", 0o600);
+    const sourceManifest = await directoryManifest();
     const bundleHash = hashWorkerBundleManifest(sourceManifest);
-    await tar.create({ cwd: source, file: archive, gzip: true, noDirRecurse: true }, [
-      "openclaw.mjs",
-      "dist/worker.js",
-      "dist/Upper.js",
-    ]);
+    await pack(["openclaw.mjs", "dist/worker.js", "dist/Upper.js"]);
 
-    await extractWorkerBundleArchive({
-      tarballPath: archive,
-      destination,
-      expectedBundleHash: bundleHash,
-      limits: DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
-    });
+    await extract(bundleHash);
 
-    expect(
-      hashWorkerBundleManifest(
-        await readWorkerBundleDirectoryManifest({
-          root: destination,
-          limits: DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
-        }),
-      ),
-    ).toBe(bundleHash);
+    expect(hashWorkerBundleManifest(await directoryManifest({ root: destination }))).toBe(
+      bundleHash,
+    );
   });
 
   it("rejects archive links before extraction", async () => {
-    const source = path.join(root, "source");
-    const archive = path.join(root, "bundle.tgz");
-    await fs.mkdir(source);
-    await fs.writeFile(path.join(source, "target"), "target");
+    await artifact("target", "target");
     await fs.symlink("target", path.join(source, "openclaw.mjs"));
-    await tar.create({ cwd: source, file: archive, gzip: true, noDirRecurse: true }, [
-      "openclaw.mjs",
-    ]);
+    await pack(["openclaw.mjs"]);
 
-    await expect(
-      readWorkerBundleArchiveManifest(archive, DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS),
-    ).rejects.toThrow("Invalid worker bundle tar entry");
+    await expect(readWorkerBundleArchiveManifest(archive, limits)).rejects.toThrow(
+      "Invalid worker bundle tar entry",
+    );
   });
 
   it.each([
@@ -111,7 +107,7 @@ describe("worker bundle archive", () => {
       tailHeader,
     );
     const bytes = Buffer.concat([...chunks, tailHeader, tail, Buffer.alloc(1024)]);
-    const limits = {
+    const scenarioLimits = {
       maxEntries: scenario.maxEntries ?? 10,
       maxExpandedBytes: scenario.maxExpandedBytes ?? bytes.length,
     };
@@ -129,15 +125,15 @@ describe("worker bundle archive", () => {
       syncBuiltinESMExports();
       const { readWorkerBundleArchiveManifest } = await import(${JSON.stringify(archiveUrl.href)});
       await assert.rejects(
-        readWorkerBundleArchiveManifest(process.argv[1], ${JSON.stringify(limits)}),
+        readWorkerBundleArchiveManifest(process.argv[1], ${JSON.stringify(scenarioLimits)}),
         { message: new RegExp(${JSON.stringify(scenario.error)}) },
       );
       assert.equal(input.closed, true);
       assert.ok(input.bytesRead < fs.statSync(process.argv[1]).size);
     `;
     for (const compressed of [false, true]) {
-      const archive = path.join(root, compressed ? "invalid.tgz" : "invalid.tar");
-      await fs.writeFile(archive, compressed ? gzipSync(bytes) : bytes);
+      const invalidArchive = path.join(root, compressed ? "invalid.tgz" : "invalid.tar");
+      await fs.writeFile(invalidArchive, compressed ? gzipSync(bytes) : bytes);
       const result = await promisify(execFile)(
         process.execPath,
         [
@@ -145,7 +141,7 @@ describe("worker bundle archive", () => {
           "--input-type=module",
           "--eval",
           probe,
-          archive,
+          invalidArchive,
         ],
         { timeout: 10_000 },
       );
@@ -154,17 +150,11 @@ describe("worker bundle archive", () => {
   });
 
   it("preserves archive ratio admission with a highly compressible prefix", async () => {
-    const source = path.join(root, "ratio-source");
-    const archive = path.join(root, "ratio.tgz");
-    await fs.mkdir(source);
-    await fs.writeFile(path.join(source, "zeros"), Buffer.alloc(5 * 1024 * 1024));
-    await fs.writeFile(path.join(source, "tail"), randomBytes(2 * 1024 * 1024));
-    await tar.create({ cwd: source, file: archive, gzip: true }, ["zeros", "tail"]);
+    await artifact("zeros", Buffer.alloc(5 * 1024 * 1024));
+    await artifact("tail", randomBytes(2 * 1024 * 1024));
+    await pack(["zeros", "tail"]);
 
-    const manifest = await readWorkerBundleArchiveManifest(
-      archive,
-      DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
-    );
+    const manifest = await readWorkerBundleArchiveManifest(archive, limits);
     expect(manifest.map(({ path: entryPath, size }) => ({ path: entryPath, size }))).toEqual([
       { path: "tail", size: 2 * 1024 * 1024 },
       { path: "zeros", size: 5 * 1024 * 1024 },
@@ -174,12 +164,10 @@ describe("worker bundle archive", () => {
   it.each(["replacement", "oversized", "symlink"] as const)(
     "handles a %s swapped in after directory entry inspection",
     async (kind) => {
-      const source = path.join(root, "source");
       const filePath = path.join(source, "worker.mjs");
       const replacement = path.join(root, "replacement");
       const contents = "export const worker = true;\n";
-      await fs.mkdir(source);
-      await fs.writeFile(filePath, "old", { mode: 0o600 });
+      await artifact("worker.mjs", "old", 0o600);
       if (kind === "symlink") {
         const outside = path.join(root, "outside");
         await fs.writeFile(outside, contents);
@@ -198,22 +186,14 @@ describe("worker bundle archive", () => {
         return stats;
       });
 
-      const manifest = readWorkerBundleDirectoryManifest({
-        root: source,
+      const manifest = directoryManifest({
         limits: {
           maxEntries: 1,
           maxExpandedBytes: kind === "oversized" ? 3 : 1024,
         },
       });
       if (kind === "replacement") {
-        await expect(manifest).resolves.toEqual([
-          {
-            path: "worker.mjs",
-            mode: 0o700,
-            size: Buffer.byteLength(contents),
-            sha256: createHash("sha256").update(contents).digest("hex"),
-          },
-        ]);
+        await expect(manifest).resolves.toEqual([entry("worker.mjs", contents)]);
       } else {
         await expect(manifest).rejects.toThrow(
           kind === "oversized" ? "directory exceeds its limits" : /symbolic link|symlink/iu,
@@ -223,95 +203,48 @@ describe("worker bundle archive", () => {
     },
   );
 
-  it.each(["~/worker.mjs"])(
-    "retains hardlinked %s and ignores directories and the install receipt in file limits",
-    async (relativePath) => {
-      const source = path.join(root, "source");
-      const original = path.join(root, "worker.mjs");
-      const contents = "export {};\n";
-      await fs.mkdir(path.join(source, "empty"), { recursive: true });
-      await fs.mkdir(path.dirname(path.join(source, relativePath)), { recursive: true });
-      await fs.writeFile(original, contents, { mode: 0o700 });
-      await fs.link(original, path.join(source, relativePath));
-      await fs.writeFile(path.join(source, "bootstrap-receipt.json"), "{}\n");
-
-      await expect(
-        readWorkerBundleDirectoryManifest({
-          root: source,
-          limits: { maxEntries: 1, maxExpandedBytes: Buffer.byteLength(contents) },
-          ignoreTopLevel: new Set(["bootstrap-receipt.json"]),
-        }),
-      ).resolves.toEqual([
-        {
-          path: relativePath,
-          mode: 0o700,
-          size: Buffer.byteLength(contents),
-          sha256: createHash("sha256").update(contents).digest("hex"),
-        },
-      ]);
-    },
-  );
-
-  it("rejects a valid archive under the wrong logical hash", async () => {
-    const source = path.join(root, "source");
-    const archive = path.join(root, "bundle.tgz");
-    await fs.mkdir(source);
-    await fs.writeFile(path.join(source, "openclaw.mjs"), "worker");
-    await tar.create({ cwd: source, file: archive, gzip: true, noDirRecurse: true }, [
-      "openclaw.mjs",
-    ]);
+  it("retains hardlinked ~/worker.mjs and ignores directories and the install receipt in file limits", async () => {
+    const relativePath = "~/worker.mjs";
+    const original = path.join(root, "worker.mjs");
+    const contents = "export {};\n";
+    await fs.mkdir(path.join(source, "empty"), { recursive: true });
+    await fs.mkdir(path.dirname(path.join(source, relativePath)), { recursive: true });
+    await fs.writeFile(original, contents, { mode: 0o700 });
+    await fs.link(original, path.join(source, relativePath));
+    await fs.writeFile(path.join(source, "bootstrap-receipt.json"), "{}\n");
 
     await expect(
-      extractWorkerBundleArchive({
-        tarballPath: archive,
-        destination: path.join(root, "destination"),
-        expectedBundleHash: "f".repeat(64),
-        limits: DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
+      directoryManifest({
+        limits: { maxEntries: 1, maxExpandedBytes: Buffer.byteLength(contents) },
+        ignoreTopLevel: new Set(["bootstrap-receipt.json"]),
       }),
-    ).rejects.toThrow("archive manifest does not match");
+    ).resolves.toEqual([entry(relativePath, contents)]);
+  });
+
+  it("rejects a valid archive under the wrong logical hash", async () => {
+    await artifact("openclaw.mjs", "worker");
+    await pack(["openclaw.mjs"]);
+
+    await expect(extract("f".repeat(64))).rejects.toThrow("archive manifest does not match");
   });
 
   it("preserves the v1 bundle hash when Windows cannot retain Unix artifact modes", async () => {
-    const source = path.join(root, "source");
-    const archive = path.join(root, "unix-mode-bundle.tgz");
-    const destination = path.join(root, "destination");
-    await fs.mkdir(source);
     const artifacts = ["github-exec-launcher.mjs", "worker.mjs", "workspace-rsync-receiver.mjs"];
-    for (const artifact of artifacts) {
-      await fs.writeFile(
-        path.join(source, artifact),
-        `export const name = ${JSON.stringify(artifact)};\n`,
-      );
-      await fs.chmod(path.join(source, artifact), 0o700);
+    for (const name of artifacts) {
+      await artifact(name, `export const name = ${JSON.stringify(name)};\n`, 0o700);
     }
-    await tar.create({ cwd: source, file: archive, gzip: true, noDirRecurse: true }, artifacts);
+    await pack(artifacts);
     const bundleHash = hashWorkerBundleManifest(
-      await readWorkerBundleArchiveManifest(archive, DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS),
+      await readWorkerBundleArchiveManifest(archive, limits),
     );
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 
-    try {
-      await expect(
-        extractWorkerBundleArchive({
-          tarballPath: archive,
-          destination,
-          expectedBundleHash: bundleHash,
-          limits: DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
-        }),
-      ).resolves.toBeUndefined();
-      for (const artifact of artifacts) {
-        await fs.chmod(path.join(destination, artifact), 0o666);
-      }
-      expect(
-        hashWorkerBundleManifest(
-          await readWorkerBundleDirectoryManifest({
-            root: destination,
-            limits: DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
-          }),
-        ),
-      ).toBe(bundleHash);
-    } finally {
-      vi.restoreAllMocks();
+    await expect(extract(bundleHash)).resolves.toBeUndefined();
+    for (const name of artifacts) {
+      await fs.chmod(path.join(destination, name), 0o666);
     }
+    expect(hashWorkerBundleManifest(await directoryManifest({ root: destination }))).toBe(
+      bundleHash,
+    );
   });
 });
