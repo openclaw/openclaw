@@ -22,10 +22,11 @@ export async function createOpenAILiveCall(
     session: object;
     onCallAllocated?: (callId: string) => void;
     signal?: AbortSignal;
+    fetchImpl?: typeof fetch;
   },
   runtime: OpenAIRealtimeHost,
 ) {
-  const response = await fetch(OPENAI_LIVE_SESSIONS_URL, {
+  const response = await (params.fetchImpl ?? fetch)(OPENAI_LIVE_SESSIONS_URL, {
     method: "POST",
     headers: {
       ...resolveOpenAIRealtimeRequestHeaders(runtime, OPENAI_LIVE_SESSIONS_URL),
@@ -60,6 +61,7 @@ export async function createOpenAILiveCall(
   }
   return {
     kind: "gpt-live" as const,
+    status: response.status,
     answerSdp: transport.data.transport.sdp,
     callId,
     sidebandUrl: `wss://api.openai.com/v1/live/sessions/${encodeURIComponent(callId)}/attach`,
@@ -71,11 +73,12 @@ export async function hangupOpenAILiveCall(
     apiKey: string;
     callId: string;
     signal?: AbortSignal;
+    fetchImpl?: typeof fetch;
   },
   runtime: OpenAIRealtimeHost,
 ): Promise<void> {
   const url = `${OPENAI_LIVE_SESSIONS_URL}/${encodeURIComponent(params.callId)}/hangup`;
-  const response = await fetch(url, {
+  const response = await (params.fetchImpl ?? fetch)(url, {
     method: "POST",
     headers: {
       ...resolveOpenAIRealtimeRequestHeaders(runtime, url),

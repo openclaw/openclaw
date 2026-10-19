@@ -115,13 +115,13 @@ export function createBroker(params?: {
   const sockets: FakeSocket[] = [];
   const socketRequests: Array<{ url: string; headers?: Record<string, string> }> = [];
   const logger = createLogger();
-  vi.stubGlobal("fetch", params?.fetchImpl ?? vi.fn(async () => createCallResponse()));
   const realtime = createOpenAIQuicksilverBrowserSessionBroker(
     {
       getConfig: () => ({
         gateway: { controlUi: { allowedOrigins: ["https://control.example"] } },
       }),
       logger,
+      fetchImpl: params?.fetchImpl ?? vi.fn(async () => createCallResponse()),
       webSocketFactory: (url, options) => {
         const socket = params?.socketFactory?.(sockets.length) ?? new FakeSocket();
         sockets.push(socket);

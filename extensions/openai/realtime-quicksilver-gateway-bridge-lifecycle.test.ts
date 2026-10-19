@@ -20,7 +20,6 @@ function createBridge(params: {
   const fetchImpl = vi.fn<typeof fetch>(async () =>
     createCallResponse("v=answer\r\n", "rtc_lifecycle"),
   );
-  vi.stubGlobal("fetch", fetchImpl);
   const createPeer = vi.fn(async () => ({
     createOffer: vi.fn(async () => "v=offer\r\n"),
     applyAnswer: vi.fn(async () => undefined),
@@ -46,6 +45,7 @@ function createBridge(params: {
         token: "platform-key",
       })),
       createPeer,
+      fetchImpl,
       mediaSocketFactory: fakeQuicksilverMediaSocket(() => {
         socket = new FakeSocket();
         const send = socket.send.bind(socket);

@@ -10,7 +10,6 @@ function createCall(
   fetchImpl: typeof fetch,
   { model = "gpt-live-test-canary", oauth = false } = {},
 ) {
-  vi.stubGlobal("fetch", fetchImpl);
   return createOpenAIQuicksilverCall(
     {
       auth: oauth
@@ -23,6 +22,7 @@ function createCall(
       },
       sdp: "v=offer\r\n",
       session: buildOpenAIQuicksilverSession({ model }),
+      fetchImpl,
     },
     openAIRealtimeHost,
   );

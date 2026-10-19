@@ -377,6 +377,7 @@ export async function createOpenAIQuicksilverCall(
     session: OpenAIQuicksilverSession | (Record<string, unknown> & { model: string });
     requestIds: OpenAIQuicksilverRequestIds;
     signal?: AbortSignal;
+    fetchImpl?: typeof fetch;
     onCallAllocated?: (callId: string) => void;
   } & ({ gaSideband: true; onCallAllocated: (callId: string) => void } | { gaSideband?: false }),
   runtime: OpenAIRealtimeHost,
@@ -396,6 +397,7 @@ export async function createOpenAIQuicksilverCall(
         session: params.session,
         onCallAllocated: params.onCallAllocated,
         signal: params.signal,
+        fetchImpl: params.fetchImpl,
       },
       runtime,
     );
@@ -422,7 +424,7 @@ export async function createOpenAIQuicksilverCall(
     ? { body: JSON.stringify(payload), contentType: "application/json" }
     : buildOpenAIQuicksilverMultipartBody(payload);
 
-  const response = await fetch(callUrl, {
+  const response = await (params.fetchImpl ?? fetch)(callUrl, {
     method: "POST",
     headers: {
       ...authHeaders,
@@ -497,6 +499,7 @@ export async function createOpenAIQuicksilverCall(
   });
   return {
     kind: "gpt-live" as const,
+    status: response.status,
     answerSdp,
     callId,
     sidebandUrl: `wss://api.openai.com/v1/live/${callId}`,
@@ -508,6 +511,7 @@ export async function hangupOpenAIRealtimeCall(
     apiKey: string;
     callId: string;
     signal?: AbortSignal;
+    fetchImpl?: typeof fetch;
   },
   runtime: OpenAIRealtimeHost,
 ): Promise<void> {
@@ -518,7 +522,7 @@ export async function hangupOpenAIRealtimeCall(
   const headers = resolveOpenAIRealtimeRequestHeaders(runtime, url, {
     Authorization: `Bearer ${params.apiKey}`,
   });
-  const response = await fetch(url, {
+  const response = await (params.fetchImpl ?? fetch)(url, {
     method: "POST",
     headers,
     signal: params.signal,

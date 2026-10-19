@@ -69,6 +69,7 @@ type OpenAIQuicksilverBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
     callbacks: OpenAIQuicksilverAudioPeerCallbacks,
     signal: AbortSignal,
   ) => Promise<OpenAIQuicksilverAudioPeerContract>;
+  fetchImpl?: typeof fetch;
   webSocketFactory?: OpenAIQuicksilverSocketFactory;
   mediaSocketFactory?: QuicksilverMediaSocketFactory;
   connectTimeoutMs?: number;
@@ -342,6 +343,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
             voice: this.config.voice,
           }),
           signal: connectSignal,
+          fetchImpl: this.config.fetchImpl,
         },
         this.runtime,
       ),
