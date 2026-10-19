@@ -12,14 +12,15 @@ import {
 } from "./subagent-registry-queries.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-function makeRun(overrides: Partial<SubagentRunRecordOverrides>): SubagentRunRecord {
-  const runId = overrides.runId ?? "run-default";
+function makeRun(
+  runId: string,
+  overrides: Partial<SubagentRunRecordOverrides> = {},
+): SubagentRunRecord {
   const childSessionKey = overrides.childSessionKey ?? `agent:main:subagent:${runId}`;
   const requesterSessionKey = overrides.requesterSessionKey ?? "agent:main:main";
   return createSubagentRunRecord({
     runId,
     childSessionKey,
-    controllerSessionKey: overrides.controllerSessionKey,
     requesterSessionKey,
     requesterDisplayKey: requesterSessionKey,
     task: "test task",
@@ -43,14 +44,12 @@ function listRunsForController(
 describe("subagent registry read index", () => {
   it("indexes the latest generation for each child session", () => {
     const childSessionKey = "agent:main:subagent:restarted";
-    const olderGeneration = makeRun({
-      runId: "run-newer-created-at",
+    const olderGeneration = makeRun("run-newer-created-at", {
       childSessionKey,
       generation: 1,
       createdAt: 200,
     });
-    const latestGeneration = makeRun({
-      runId: "run-latest-generation",
+    const latestGeneration = makeRun("run-latest-generation", {
       childSessionKey: ` ${childSessionKey} `,
       generation: 2,
       createdAt: 100,
@@ -71,8 +70,7 @@ describe("subagent registry read index", () => {
     const liveChild = "agent:main:subagent:parent:subagent:live-child";
     const movedChild = "agent:main:subagent:moved-child";
     const runs = toRunMap([
-      makeRun({
-        runId: "run-parent",
+      makeRun("run-parent", {
         childSessionKey: parent,
         controllerSessionKey: root,
         requesterSessionKey: root,
@@ -80,24 +78,21 @@ describe("subagent registry read index", () => {
         startedAt: now - 4_500,
         endedAt: now - 2_500,
       }),
-      makeRun({
-        runId: "run-live-child",
+      makeRun("run-live-child", {
         childSessionKey: liveChild,
         controllerSessionKey: parent,
         requesterSessionKey: parent,
         createdAt: now - 2_000,
         startedAt: now - 1_500,
       }),
-      makeRun({
-        runId: "run-moved-old",
+      makeRun("run-moved-old", {
         childSessionKey: movedChild,
         controllerSessionKey: root,
         requesterSessionKey: root,
         createdAt: now - 4_000,
         startedAt: now - 3_500,
       }),
-      makeRun({
-        runId: "run-moved-new",
+      makeRun("run-moved-new", {
         childSessionKey: movedChild,
         controllerSessionKey: "agent:main:other-controller",
         requesterSessionKey: "agent:main:other-controller",
@@ -135,15 +130,13 @@ describe("subagent registry read index", () => {
     const startedAt = Date.UTC(2026, 0, 1);
     const root = "agent:main:main";
     const childSessionKey = "agent:main:subagent:reused";
-    const active = makeRun({
-      runId: "older-active",
+    const active = makeRun("older-active", {
       childSessionKey,
       generation: 1,
       createdAt: startedAt,
       startedAt,
     });
-    const ended = makeRun({
-      runId: "newer-ended",
+    const ended = makeRun("newer-ended", {
       childSessionKey,
       generation: 2,
       createdAt: startedAt + 100,
@@ -151,8 +144,7 @@ describe("subagent registry read index", () => {
       endedAt: startedAt + 500,
       cleanupCompletedAt: startedAt + 500,
     });
-    const descendant = makeRun({
-      runId: "active-descendant",
+    const descendant = makeRun("active-descendant", {
       createdAt: startedAt,
       startedAt,
     });
@@ -175,33 +167,24 @@ describe("subagent registry read index", () => {
     expect(after.inputs).toBe(grouped.inputs);
   });
 
-  it.each([{ label: "ended over active", olderEndedAt: undefined, newerEndedAt: 250 }])(
-    "selects the latest in-memory generation: $label",
-    ({ olderEndedAt, newerEndedAt }) => {
-      const childSessionKey = "agent:main:subagent:display-generation";
-      const persisted = makeRun({
-        runId: "run-persisted",
-        childSessionKey,
-        generation: 3,
-      });
-      const older = makeRun({
-        runId: "run-memory-older",
-        childSessionKey,
-        generation: 1,
-        endedAt: olderEndedAt,
-      });
-      const newer = makeRun({
-        runId: "run-memory-newer",
-        childSessionKey,
-        generation: 2,
-        endedAt: newerEndedAt,
-      });
-      const index = buildSubagentRunReadIndexFromRuns({
-        runs: toRunMap([persisted]),
-        inMemoryRuns: [newer, older],
-      });
+  it("selects the latest in-memory generation: ended over active", () => {
+    const childSessionKey = "agent:main:subagent:display-generation";
+    const persisted = makeRun("run-persisted", { childSessionKey, generation: 3 });
+    const older = makeRun("run-memory-older", {
+      childSessionKey,
+      generation: 1,
+      endedAt: undefined,
+    });
+    const newer = makeRun("run-memory-newer", {
+      childSessionKey,
+      generation: 2,
+      endedAt: 250,
+    });
+    const index = buildSubagentRunReadIndexFromRuns({
+      runs: toRunMap([persisted]),
+      inMemoryRuns: [newer, older],
+    });
 
-      expect(index.getDisplaySubagentRun(childSessionKey)).toBe(newer);
-    },
-  );
+    expect(index.getDisplaySubagentRun(childSessionKey)).toBe(newer);
+  });
 });

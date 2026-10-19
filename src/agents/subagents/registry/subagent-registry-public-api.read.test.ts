@@ -118,79 +118,72 @@ describe("subagent registry known-run reads", () => {
     });
   });
 
-  it.each([4])(
-    "counts %i retained children without preparing unrelated descendant graphs",
-    async (activeChildren) => {
-      await withPersistedReads(async () => {
-        const rows = Array.from({ length: 256 }, (_, index) =>
-          createRun(`unrelated-${index}`, {
-            requesterSessionKey: "agent:other:main",
-            swarmRequesterSessionKey: "agent:other:main",
+  it("counts retained children without preparing unrelated descendant graphs", async () => {
+    const activeChildren = 4;
+    await withPersistedReads(async () => {
+      const rows = Array.from({ length: 256 }, (_, index) =>
+        createRun(`unrelated-${index}`, {
+          requesterSessionKey: "agent:other:main",
+          swarmRequesterSessionKey: "agent:other:main",
+        }),
+      );
+      rows.push(
+        ...Array.from({ length: activeChildren }, (_, index) =>
+          createRun(`active-${index}`, {
+            collect: false,
+            requesterAgentId: "main",
+            createdAt: Date.now(),
+            execution: { status: "running", startedAt: Date.now() },
+          }),
+        ),
+      );
+      saveSubagentRegistryToSqlite(new Map(rows.map((row) => [row.runId, row])));
+      const memory = new Map<string, SubagentRunRecord>();
+      const api = createReadApi(memory);
+      expect(() => api.countActiveRunsForSession("agent:main:main")).toThrow("must be prepared");
+      const read = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+      try {
+        await prepareSubagentSessionListReadCache();
+        const count = () =>
+          api.countActiveRunsForSession("agent:main:main", {
+            collect: false,
+            requesterAgentId: "main",
+          });
+        expect(count()).toBe(activeChildren);
+        expect(read.mock.calls.map(([, command]) => command.type)).toEqual([
+          "subagents.sessionList",
+        ]);
+        const settled = createRun("active-0", { collect: false, requesterAgentId: "main" });
+        memory.set(settled.runId, settled);
+        expect(count()).toBe(activeChildren - 1);
+
+        const descendant = createRun("descendant", {
+          collect: false,
+          requesterSessionKey: settled.childSessionKey,
+          execution: { status: "running", startedAt: Date.now() },
+        });
+        memory.set(descendant.runId, descendant);
+        expect(count()).toBe(activeChildren);
+        memory.set(descendant.runId, {
+          ...descendant,
+          execution: { status: "terminal", endedAt: Date.now() },
+          cleanupCompletedAt: Date.now(),
+        });
+        expect(count()).toBe(activeChildren - 1);
+        memory.set(
+          "active-1",
+          createRun("active-1", {
+            collect: false,
+            controllerSessionKey: "agent:other:main",
+            execution: { status: "running", startedAt: Date.now() },
           }),
         );
-        rows.push(
-          ...Array.from({ length: activeChildren }, (_, index) =>
-            createRun(`active-${index}`, {
-              collect: false,
-              requesterAgentId: "main",
-              createdAt: Date.now(),
-              execution: { status: "running", startedAt: Date.now() },
-            }),
-          ),
-        );
-        saveSubagentRegistryToSqlite(new Map(rows.map((row) => [row.runId, row])));
-        const memory = new Map<string, SubagentRunRecord>();
-        const api = createReadApi(memory);
-        expect(() => api.countActiveRunsForSession("agent:main:main")).toThrow("must be prepared");
-        const read = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
-        try {
-          await prepareSubagentSessionListReadCache();
-          expect(
-            api.countActiveRunsForSession("agent:main:main", {
-              collect: false,
-              requesterAgentId: "main",
-            }),
-          ).toBe(activeChildren);
-          expect(read.mock.calls.map(([, command]) => command.type)).toEqual([
-            "subagents.sessionList",
-          ]);
-          const count = () =>
-            api.countActiveRunsForSession("agent:main:main", {
-              collect: false,
-              requesterAgentId: "main",
-            });
-          const settled = createRun("active-0", { collect: false, requesterAgentId: "main" });
-          memory.set(settled.runId, settled);
-          expect(count()).toBe(activeChildren - 1);
-
-          const descendant = createRun("descendant", {
-            collect: false,
-            requesterSessionKey: settled.childSessionKey,
-            execution: { status: "running", startedAt: Date.now() },
-          });
-          memory.set(descendant.runId, descendant);
-          expect(count()).toBe(activeChildren);
-          memory.set(descendant.runId, {
-            ...descendant,
-            execution: { status: "terminal", endedAt: Date.now() },
-            cleanupCompletedAt: Date.now(),
-          });
-          expect(count()).toBe(activeChildren - 1);
-          memory.set(
-            "active-1",
-            createRun("active-1", {
-              collect: false,
-              controllerSessionKey: "agent:other:main",
-              execution: { status: "running", startedAt: Date.now() },
-            }),
-          );
-          expect(count()).toBe(activeChildren - 2);
-        } finally {
-          read.mockRestore();
-        }
-      });
-    },
-  );
+        expect(count()).toBe(activeChildren - 2);
+      } finally {
+        read.mockRestore();
+      }
+    });
+  });
 
   it("keeps live alias changes authoritative", async () => {
     await withPersistedReads(async () => {

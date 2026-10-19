@@ -126,84 +126,64 @@ describe("subagent maintenance protection", () => {
     const payload = (patch: Record<string, unknown>) => JSON.stringify({ ...run, ...patch });
     const active = payload({ execution: { status: "running" } });
     const done = payload({ cleanupCompletedAt: 3, delivery: { status: "delivered" } });
-    const cases: Array<[string, string, boolean]> = [
-      ["active", active, true],
-      ["cleanup completed", payload({ cleanupCompletedAt: 3 }), false],
-      ["string cleanup", payload({ cleanupCompletedAt: "3" }), true],
-      ["delivered", payload({ delivery: { status: "delivered" } }), false],
-      ["in progress", payload({ delivery: { status: "in_progress" } }), true],
-      ["no completion expected", payload({ expectsCompletionMessage: false }), false],
-      ["pending without expectation", payload({ expectsCompletionMessage: undefined }), true],
-      [
-        "suspended",
-        payload({
-          expectsCompletionMessage: undefined,
-          delivery: { status: "suspended", suspendedAt: 0 },
-        }),
-        true,
-      ],
-      [
-        "suspended without timestamp",
-        payload({ expectsCompletionMessage: undefined, delivery: { status: "suspended" } }),
-        false,
-      ],
-      [
-        "suspended string timestamp",
-        payload({
-          expectsCompletionMessage: undefined,
-          delivery: { status: "suspended", suspendedAt: "1" },
-        }),
-        false,
-      ],
-      [
-        "kill reconciliation after cleanup",
-        payload({ cleanupCompletedAt: 3, killReconciliation: { killedAt: 0 } }),
-        true,
-      ],
-      [
-        "invalid kill reconciliation",
-        payload({ cleanupCompletedAt: 3, killReconciliation: { killedAt: "0" } }),
-        false,
-      ],
-      [
-        "kill intent after cleanup",
-        payload({ cleanupCompletedAt: 3, killIntent: { requestedAt: 0, reason: " stop " } }),
-        true,
-      ],
-      [
-        "invalid kill intent",
-        payload({ cleanupCompletedAt: 3, killIntent: { requestedAt: 0, reason: " " } }),
-        false,
-      ],
-      [
-        "duplicate execution",
-        payload({}).replace('"execution":', '"execution":{"status":"invalid"},"execution":'),
-        true,
-      ],
-      [
-        "last private envelope completed",
-        `{"parentCompletion":${active.slice(0, -1)},"completionTarget":"parent"},"parentCompletion":${done.slice(0, -1)},"completionTarget":"parent"}}`,
-        false,
-      ],
-      [
-        "last private envelope active",
-        `{"parentCompletion":${done.slice(0, -1)},"completionTarget":"parent"},"parentCompletion":${active.slice(0, -1)},"completionTarget":"parent"}}`,
-        true,
-      ],
-      ["literal NUL", active + "\u0000invalid", false],
-      ["malformed", "{", false],
-      ["retired state", payload({ execution: undefined }), false],
-      [
-        "overdepth",
-        active.slice(0, -1) + ',"unused":' + "[".repeat(1001) + "0" + "]".repeat(1001) + "}",
-        true,
-      ],
-    ];
-    for (const [name, text, protectedRun] of cases) {
-      write.run(text, run.runId);
+    const check = async (name: string, value: string | Record<string, unknown>, keep: boolean) => {
+      write.run(typeof value === "string" ? value : payload(value), run.runId);
       clearSubagentRunsReadCacheForTest();
-      expect(await protectedKeys(), name).toEqual(protectedRun ? [run.childSessionKey] : []);
-    }
+      expect(await protectedKeys(), name).toEqual(keep ? [run.childSessionKey] : []);
+    };
+    const suspended = (suspendedAt?: unknown) => ({
+      expectsCompletionMessage: undefined,
+      delivery: { status: "suspended", suspendedAt },
+    });
+    const afterCleanup = (patch: Record<string, unknown>) => ({ cleanupCompletedAt: 3, ...patch });
+    const privateEnvelopes = (first: string, last: string) =>
+      `{"parentCompletion":${first.slice(0, -1)},"completionTarget":"parent"},"parentCompletion":${last.slice(0, -1)},"completionTarget":"parent"}}`;
+
+    await check("active", active, true);
+    await check("cleanup completed", { cleanupCompletedAt: 3 }, false);
+    await check("string cleanup", { cleanupCompletedAt: "3" }, true);
+    await check("delivered", { delivery: { status: "delivered" } }, false);
+    await check("in progress", { delivery: { status: "in_progress" } }, true);
+    await check("no completion expected", { expectsCompletionMessage: false }, false);
+    await check("pending without expectation", { expectsCompletionMessage: undefined }, true);
+    await check("suspended", suspended(0), true);
+    await check("suspended without timestamp", suspended(), false);
+    await check("suspended string timestamp", suspended("1"), false);
+    await check(
+      "kill reconciliation after cleanup",
+      afterCleanup({ killReconciliation: { killedAt: 0 } }),
+      true,
+    );
+    await check(
+      "invalid kill reconciliation",
+      afterCleanup({ killReconciliation: { killedAt: "0" } }),
+      false,
+    );
+    await check(
+      "kill intent after cleanup",
+      afterCleanup({ killIntent: { requestedAt: 0, reason: " stop " } }),
+      true,
+    );
+    await check(
+      "invalid kill intent",
+      afterCleanup({ killIntent: { requestedAt: 0, reason: " " } }),
+      false,
+    );
+    await check(
+      "duplicate execution",
+      payload({}).replace('"execution":', '"execution":{"status":"invalid"},"execution":'),
+      true,
+    );
+    await check("last private envelope completed", privateEnvelopes(active, done), false);
+    await check("last private envelope active", privateEnvelopes(done, active), true);
+    await check("literal NUL", active + "\u0000invalid", false);
+    await check("malformed", "{", false);
+    await check("retired state", { execution: undefined }, false);
+    await check(
+      "overdepth",
+      active.slice(0, -1) + ',"unused":' + "[".repeat(1001) + "0" + "]".repeat(1001) + "}",
+      true,
+    );
   });
 
   it("uses committed registry writes for prepared protection without rereading SQLite", async () => {

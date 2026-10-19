@@ -1,5 +1,3 @@
-// Subagent registry query tests cover liveness, descendant counting, requester
-// lookup, and stale-row handling for in-memory run snapshots.
 import { describe, expect, it, vi } from "vitest";
 import { claimAgentRunContext, releaseAgentRunContext } from "../../../infra/agent-run-registry.js";
 import {
@@ -19,8 +17,10 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const STALE_UNENDED_SUBAGENT_RUN_MS = 2 * 60 * 60 * 1_000;
 
-function makeRun(overrides: Partial<SubagentRunRecordOverrides>): SubagentRunRecord {
-  const runId = overrides.runId ?? "run-default";
+function makeRun(
+  runId: string,
+  overrides: Partial<SubagentRunRecordOverrides> = {},
+): SubagentRunRecord {
   const childSessionKey = overrides.childSessionKey ?? `agent:main:subagent:${runId}`;
   const requesterSessionKey = overrides.requesterSessionKey ?? "agent:main:main";
   return createSubagentRunRecord({
@@ -39,12 +39,15 @@ function toRunMap(runs: SubagentRunRecord[]): Map<string, SubagentRunRecord> {
   return new Map(runs.map((run) => [run.runId, run]));
 }
 
+function expectIds(runs: readonly SubagentRunRecord[] | undefined, ids: string[]) {
+  expect(runs?.map((run) => run.runId)).toEqual(ids);
+}
+
 describe("subagent registry query regressions", () => {
   it("patches one sibling without reading others and preserves group order after removal", () => {
     let unrelatedReads = 0;
     const first = {
-      ...makeRun({
-        runId: "first",
+      ...makeRun("first", {
         collect: true,
         groupId: "group",
         swarmRequesterSessionKey: "parent",
@@ -54,8 +57,8 @@ describe("subagent registry query regressions", () => {
         return "first";
       },
     };
-    const middle = makeRun({ ...first, runId: "middle", childSessionKey: "middle" });
-    const last = makeRun({ ...first, runId: "last", childSessionKey: "last" });
+    const middle = makeRun("middle", { ...first, runId: "middle", childSessionKey: "middle" });
+    const last = makeRun("last", { ...first, runId: "last", childSessionKey: "last" });
     let index = buildSubagentRunReadIndexFromRuns({ runs: toRunMap([first, middle, last]) });
     unrelatedReads = 0;
     const updated = { ...last, cleanupCompletedAt: 100 };
@@ -78,13 +81,12 @@ describe("subagent registry query regressions", () => {
   });
 
   it("patches moved memberships and reveals retained generations when a live owner retires", () => {
-    const older = makeRun({
-      runId: "older",
+    const older = makeRun("older", {
       childSessionKey: "child",
       requesterSessionKey: "parent",
       generation: 1,
     });
-    const latest = makeRun({
+    const latest = makeRun("latest", {
       ...older,
       runId: "latest",
       generation: 2,
@@ -96,14 +98,9 @@ describe("subagent registry query regressions", () => {
     let index = buildSubagentRunReadIndexFromRuns({ runs, inMemoryRuns: [older, latest] });
     const revision = index.revision;
     const listed = index.listDescendantRunsForRequester("parent");
-    expect(listed.map((run) => run.runId)).toEqual(["latest"]);
+    expectIds(listed, ["latest"]);
     listed.length = 0;
-    expect(
-      index
-        .atTime(100)
-        .listDescendantRunsForRequester("parent")
-        .map((run) => run.runId),
-    ).toEqual(["latest"]);
+    expectIds(index.atTime(100).listDescendantRunsForRequester("parent"), ["latest"]);
     expect(index.listDescendantRunsForRequester("requester")).toEqual([]);
     latest.childSessionKey = "moved";
     latest.controllerSessionKey = "controller";
@@ -116,22 +113,12 @@ describe("subagent registry query regressions", () => {
     const replay = buildSubagentRunReadIndexFromRuns(index.inputs);
     expect(replay.getDisplaySubagentRun("child")).toBe(older);
     expect(replay.getDisplaySubagentRun("moved")).toBe(latest);
-    expect(index.runsByControllerSessionKey.get("parent")?.map((run) => run.runId)).toEqual([
-      "older",
-    ]);
-    expect(index.runsByControllerSessionKey.get("controller")?.map((run) => run.runId)).toEqual([
-      "latest",
-    ]);
+    expectIds(index.runsByControllerSessionKey.get("parent"), ["older"]);
+    expectIds(index.runsByControllerSessionKey.get("controller"), ["latest"]);
     expect(index.swarmRunsByRequesterSessionKey.has("parent")).toBe(false);
-    expect(index.swarmRunsByRequesterSessionKey.get("swarm")?.map((run) => run.runId)).toEqual([
-      "latest",
-    ]);
-    expect(index.listDescendantRunsForRequester("parent").map((run) => run.runId)).toEqual([
-      "older",
-    ]);
-    expect(index.listDescendantRunsForRequester("requester").map((run) => run.runId)).toEqual([
-      "latest",
-    ]);
+    expectIds(index.swarmRunsByRequesterSessionKey.get("swarm"), ["latest"]);
+    expectIds(index.listDescendantRunsForRequester("parent"), ["older"]);
+    expectIds(index.listDescendantRunsForRequester("requester"), ["latest"]);
     index = index.patch(new Map(), new Map([[latest.runId, undefined]]));
     expect(index.getDisplaySubagentRun("moved")).toBe(runs.get("latest"));
     expect(buildSubagentRunReadIndexFromRuns(index.inputs).getDisplaySubagentRun("moved")).toBe(
@@ -147,21 +134,18 @@ describe("subagent registry query regressions", () => {
   it("preserves captured display classification while descendant queries see released owners", () => {
     const now = Date.now();
     const root = "agent:main:captured-index";
-    const running = makeRun({
-      runId: "captured-display",
+    const running = makeRun("captured-display", {
       requesterSessionKey: root,
       createdAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
       startedAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
     });
-    const ended = makeRun({
-      runId: "captured-ended",
+    const ended = makeRun("captured-ended", {
       requesterSessionKey: root,
       childSessionKey: running.childSessionKey,
       createdAt: now - 100,
       endedAt: now - 10,
     });
-    const sibling = makeRun({
-      runId: "captured-sibling",
+    const sibling = makeRun("captured-sibling", {
       requesterSessionKey: root,
       createdAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
       startedAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
@@ -199,8 +183,7 @@ describe("subagent registry query regressions", () => {
 
   it("counts collectors against the spawning owner and excludes them from announce admission", () => {
     const owner = "agent:main:telegram:default:direct:456";
-    const entry = makeRun({
-      runId: "collector",
+    const entry = makeRun("collector", {
       controllerSessionKey: "agent:main:main",
       collect: true,
       swarmRequesterSessionKey: owner,
@@ -215,9 +198,8 @@ describe("subagent registry query regressions", () => {
 
   it("uses the admission snapshot time for descendants at the stale boundary", () => {
     const capturedAt = Date.now();
-    const parent = makeRun({ runId: "ended-parent", endedAt: capturedAt - 1 });
-    const child = makeRun({
-      runId: "boundary-child",
+    const parent = makeRun("ended-parent", { endedAt: capturedAt - 1 });
+    const child = makeRun("boundary-child", {
       requesterSessionKey: parent.childSessionKey,
       createdAt: capturedAt - STALE_UNENDED_SUBAGENT_RUN_MS,
       startedAt: capturedAt - STALE_UNENDED_SUBAGENT_RUN_MS,
@@ -238,32 +220,25 @@ describe("subagent registry query regressions", () => {
   });
 
   it("preserves breadth-first cycle traversal and refreshes a cached tree after a generation moves", () => {
-    const child = makeRun({
-      runId: "child",
+    const child = makeRun("child", {
       childSessionKey: "child",
       requesterSessionKey: "parent",
       generation: 1,
     });
-    const sibling = makeRun({
-      runId: "sibling",
+    const sibling = makeRun("sibling", {
       childSessionKey: "sibling",
       requesterSessionKey: "parent",
     });
-    const parent = makeRun({
-      runId: "parent",
+    const parent = makeRun("parent", {
       childSessionKey: "parent",
       requesterSessionKey: "child",
     });
     let index = buildSubagentRunReadIndexFromRuns({ runs: toRunMap([child, sibling, parent]) });
     for (const view of [index, index.atTime(100)]) {
-      expect(view.listDescendantRunsForRequester("parent").map((run) => run.runId)).toEqual([
-        "child",
-        "sibling",
-        "parent",
-      ]);
+      expectIds(view.listDescendantRunsForRequester("parent"), ["child", "sibling", "parent"]);
       expect(view.countPendingDescendantRuns("parent")).toBe(3);
     }
-    const successor = makeRun({
+    const successor = makeRun("successor", {
       ...child,
       runId: "successor",
       requesterSessionKey: "new-parent",
@@ -273,7 +248,7 @@ describe("subagent registry query regressions", () => {
     expect(index.listDescendantRunsForRequester("parent").map((run) => run.runId)).toEqual([
       "sibling",
     ]);
-    expect(index.listDescendantRunsForRequester("new-parent").map((run) => run.runId)).toEqual([
+    expectIds(index.listDescendantRunsForRequester("new-parent"), [
       "successor",
       "parent",
       "sibling",
@@ -291,7 +266,7 @@ describe("subagent registry query regressions", () => {
   ])(
     "resolves requester ownership without backfill ($requesterSessionKey, $requesterAgentId)",
     ({ requesterSessionKey, requesterAgentId, matches }) => {
-      const entry = makeRun({ runId: "legacy-requester", requesterSessionKey, requesterAgentId });
+      const entry = makeRun("legacy-requester", { requesterSessionKey, requesterAgentId });
       const before = structuredClone(entry);
 
       expect(
@@ -304,9 +279,8 @@ describe("subagent registry query regressions", () => {
   );
 
   it("scopes direct children to the requester run window", () => {
-    const parent = makeRun({ runId: "parent", createdAt: 200, startedAt: 200, endedAt: 260 });
-    const old = makeRun({
-      runId: "old",
+    const parent = makeRun("parent", { createdAt: 200, startedAt: 200, endedAt: 260 });
+    const old = makeRun("old", {
       childSessionKey: parent.childSessionKey,
       createdAt: 100,
       startedAt: 100,
@@ -316,8 +290,7 @@ describe("subagent registry query regressions", () => {
       old,
       parent,
       ...[130, 210, 220, 270].map((createdAt) =>
-        makeRun({
-          runId: `child-${createdAt}`,
+        makeRun(`child-${createdAt}`, {
           requesterSessionKey: parent.childSessionKey,
           createdAt,
         }),
@@ -332,9 +305,8 @@ describe("subagent registry query regressions", () => {
 
   it("gates late announces after run-mode parent cleanup", () => {
     const spawnMode = "run";
-    const parent = makeRun({ runId: "parent", createdAt: 2, endedAt: 100, spawnMode });
-    const old = makeRun({
-      runId: "old",
+    const parent = makeRun("parent", { createdAt: 2, endedAt: 100, spawnMode });
+    const old = makeRun("old", {
       childSessionKey: parent.childSessionKey,
       createdAt: 1,
       endedAt: 10,
@@ -342,8 +314,7 @@ describe("subagent registry query regressions", () => {
       spawnMode,
     });
     const children = ["one", "two"].map((runId, index) =>
-      makeRun({
-        runId,
+      makeRun(runId, {
         requesterSessionKey: parent.childSessionKey,
         createdAt: 3 + index,
         endedAt: 110 + index,
@@ -362,8 +333,7 @@ describe("subagent registry query regressions", () => {
     for (const child of children) {
       runs.set(child.runId, { ...child, cleanupCompletedAt: 120 });
     }
-    const last = makeRun({
-      runId: "last",
+    const last = makeRun("last", {
       requesterSessionKey: parent.childSessionKey,
       createdAt: 5,
     });
@@ -388,14 +358,12 @@ describe("hasDescendantRunAwaitingSettleFromRuns", () => {
 
   it("scopes descendants ended during the batch without pruning an old parent", () => {
     const batchCreatedAt = Date.now() - 1_000;
-    const parent = makeRun({
-      runId: "old-parent",
+    const parent = makeRun("old-parent", {
       requesterSessionKey: requester,
       createdAt: batchCreatedAt - 3_000,
       endedAt: batchCreatedAt - 2_000,
     });
-    const descendant = makeRun({
-      runId: "descendant",
+    const descendant = makeRun("descendant", {
       requesterSessionKey: parent.childSessionKey,
       createdAt: batchCreatedAt - 2_500,
       startedAt: batchCreatedAt - 2_500,

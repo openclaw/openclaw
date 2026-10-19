@@ -1,9 +1,7 @@
-// Subagent registry helper tests cover attachment cleanup and compact logging
-// for announce delivery give-up paths.
 import { promises as fs } from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { resolveSubagentSessionAttachmentRootDir } from "../subagent-attachment-paths.js";
 import { updateSwarmCollectorCompletion } from "../swarm/swarm-collector.js";
@@ -16,10 +14,21 @@ import {
 } from "./subagent-registry-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const terminal = { status: "terminal", startedAt: 1_000, endedAt: 2_000 } as const;
+const cfg = { agents: { defaults: { subagents: { archiveAfterMinutes: 5 } } } };
+const childSessionKey = "agent:main:subagent:child";
+
+function captureLog() {
+  const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+  onTestFinished(() => log.mockRestore());
+  return log;
+}
+
 function createRunEntry(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
   return {
     runId: "run-1",
-    childSessionKey: "agent:main:subagent:child",
+    childSessionKey,
     requesterSessionKey: "agent:main:main",
     requesterDisplayKey: "main",
     task: "finish the task",
@@ -55,19 +64,12 @@ describe("capFrozenResultText", () => {
 });
 
 describe("updateSubagentArchiveAtMs", () => {
-  const cfg = { agents: { defaults: { subagents: { archiveAfterMinutes: 5 } } } };
-
   it("starts retention when a delayed result first becomes waitable", () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
     const entry = createRunEntry({
       collect: true,
-      execution: {
-        status: "terminal",
-        startedAt: 1_000,
-        endedAt: 2_000,
-        outcome: { status: "ok" },
-      },
+      execution: { ...terminal, outcome: { status: "ok" } },
       completion: { required: false, resultText: "done" },
     });
 
@@ -84,11 +86,11 @@ describe("updateSubagentArchiveAtMs", () => {
       {
         cleanup: "delete" as const,
         pauseReason: "sessions_yield" as const,
-        execution: { status: "terminal" as const, startedAt: 1_000, endedAt: 2_000 },
+        execution: terminal,
       },
       {
         cleanup: "keep" as const,
-        execution: { status: "terminal" as const, startedAt: 1_000, endedAt: 2_000 },
+        execution: terminal,
       },
     ]) {
       const entry = createRunEntry({ ...overrides, archiveAtMs: 10_000 });
@@ -99,7 +101,7 @@ describe("updateSubagentArchiveAtMs", () => {
     const persistent = createRunEntry({
       collect: true,
       spawnMode: "session",
-      execution: { status: "terminal", startedAt: 1_000, endedAt: 2_000 },
+      execution: terminal,
       archiveAtMs: 10_000,
     });
     expect(updateSubagentArchiveAtMs(persistent, cfg)).toBe(true);
@@ -111,7 +113,7 @@ describe("updateSubagentArchiveAtMs", () => {
       const entry = createRunEntry({
         cleanup: "delete",
         collect,
-        execution: { status: "terminal", startedAt: 1_000, endedAt: 2_000 },
+        execution: terminal,
         archiveAtMs: 10_000,
       });
 
@@ -127,25 +129,20 @@ describe("updateSubagentArchiveAtMs", () => {
 
 describe("safeRemoveAttachmentsDir", () => {
   it("records cleanup failures even when callers do not inspect the result", async () => {
-    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-    try {
-      await expect(
-        safeRemoveAttachmentsDir(createRunEntry({ attachmentId: "invalid" })),
-      ).resolves.toBe(false);
-      expect(log).toHaveBeenCalledWith(
-        expect.stringContaining(
-          "Subagent attachment cleanup failed (run-1): Error: invalid subagent attachment identity",
-        ),
-      );
-    } finally {
-      log.mockRestore();
-    }
+    const log = captureLog();
+    await expect(
+      safeRemoveAttachmentsDir(createRunEntry({ attachmentId: "invalid" })),
+    ).resolves.toBe(false);
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Subagent attachment cleanup failed (run-1): Error: invalid subagent attachment identity",
+      ),
+    );
   });
 
   it("removes only the generated directory under the host-owned root", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attachment-state-"));
+    const stateDir = tempDirs.make("openclaw-attachment-state-");
     const attachmentId = "2d4a8398-4d5a-4c20-9c16-0a5f6627cf92";
-    const childSessionKey = "agent:main:subagent:child";
     const attachmentDir = path.join(
       resolveSubagentSessionAttachmentRootDir({
         agentId: "main",
@@ -159,6 +156,7 @@ describe("safeRemoveAttachmentsDir", () => {
     await fs.mkdir(siblingDir, { recursive: true });
     await fs.writeFile(path.join(attachmentDir, "staged.txt"), "staged");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    onTestFinished(() => vi.unstubAllEnvs());
 
     await expect(
       safeRemoveAttachmentsDir(createRunEntry({ attachmentId, childSessionKey })),
@@ -168,14 +166,11 @@ describe("safeRemoveAttachmentsDir", () => {
       safeRemoveAttachmentsDir(createRunEntry({ attachmentId, childSessionKey })),
     ).resolves.toBe(true);
     await fs.access(siblingDir);
-
-    vi.unstubAllEnvs();
-    await fs.rm(stateDir, { recursive: true, force: true });
   });
 
   it("ignores legacy workspace paths after an external symlink replacement", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attachment-root-"));
-    const externalDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attachment-external-"));
+    const workspaceDir = tempDirs.make("openclaw-attachment-root-");
+    const externalDir = tempDirs.make("openclaw-attachment-external-");
     const relDir = ".openclaw/attachments/run-1";
     const externalSentinel = path.join(externalDir, "sentinel.txt");
     await fs.mkdir(path.join(workspaceDir, ".openclaw", "attachments"), { recursive: true });
@@ -192,21 +187,12 @@ describe("safeRemoveAttachmentsDir", () => {
     ).resolves.toBe(true);
     await expect(fs.readFile(externalSentinel, "utf8")).resolves.toBe("must-survive");
     await expect(fs.readdir(externalDir)).resolves.toEqual(["sentinel.txt"]);
-
-    await fs.rm(workspaceDir, { recursive: true, force: true });
-    await fs.rm(externalDir, { recursive: true, force: true });
   });
 });
 
 describe("logAnnounceGiveUp", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
   it("normalizes multiline delivery errors onto one gateway log line", () => {
-    // Gateway logs are line-oriented; multiline provider errors must be
-    // collapsed before they enter warning text.
-    const logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const logSpy = captureLog();
     const entry = createRunEntry({
       delivery: {
         status: "failed",
@@ -219,11 +205,10 @@ describe("logAnnounceGiveUp", () => {
     expect(logSpy).toHaveBeenCalledWith(
       expect.stringContaining('deliveryError="gateway timeout phase: routed dispatch failed"'),
     );
-    logSpy.mockRestore();
   });
 
   it("keeps bounded delivery errors UTF-16 well-formed", () => {
-    const logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const logSpy = captureLog();
     const entry = createRunEntry({
       delivery: {
         status: "failed",
@@ -236,6 +221,5 @@ describe("logAnnounceGiveUp", () => {
     const line = String(logSpy.mock.calls[0]?.[0]);
     expect(line).toContain(`${"x".repeat(1_999)}…`);
     expect(line).not.toContain("\uD83D");
-    logSpy.mockRestore();
   });
 });
