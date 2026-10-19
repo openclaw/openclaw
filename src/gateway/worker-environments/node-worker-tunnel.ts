@@ -76,15 +76,17 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
   const entries = new Map<string, NodeTunnelEntry>();
   const retiredEntries = new Set<NodeEnvironmentOwner>();
   const shutdown = new AbortController();
-  let shutdownTimer: ReturnType<typeof setTimeout> | undefined;
+  let closing = false;
   const beginClose = () => {
-    if (shutdownTimer || shutdown.signal.aborted) {
+    if (closing) {
       return;
     }
+    closing = true;
     // A reconcile may already be stopping a node outside the shutdown async scope.
     // Bound its remote acknowledgements too, while local writes keep their custody.
     const remainingMs = (getProcessCleanupBudget()?.deadline ?? Infinity) - performance.now();
-    shutdownTimer = setTimeout(
+    // Keep the original deadline armed when the sidecar owner retries cleanup.
+    setTimeout(
       () => {
         shutdown.abort(
           new WorkerTunnelOwnerDisconnectedError(
@@ -93,8 +95,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
         );
       },
       Math.max(0, Math.ceil(Math.min(5_000, remainingMs))),
-    );
-    shutdownTimer.unref();
+    ).unref();
   };
   let resolveWorkspaceBinding: NodeWorkerWorkspaceBindingResolver | undefined;
   const gatewayNamespace = nodeWorkerGatewayNamespace(options.gatewayDeviceId);
@@ -716,14 +717,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       ]);
       // Shared transfer state outlives every tunnel, even when a sibling's cleanup fails.
       const closeTransfers = () => options.workspaceTransfer.closeAll();
-      try {
-        await joinWorkerTunnelStops([
-          tunnelStops,
-          tunnelStops.then(closeTransfers, closeTransfers),
-        ]);
-      } finally {
-        clearTimeout(shutdownTimer);
-      }
+      await joinWorkerTunnelStops([tunnelStops, tunnelStops.then(closeTransfers, closeTransfers)]);
     },
     status(environmentId: string): WorkerTunnelStatus {
       const entry = entries.get(environmentId);

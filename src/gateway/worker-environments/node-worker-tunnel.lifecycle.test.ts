@@ -245,6 +245,42 @@ describe("node worker tunnel lifetime", () => {
     },
   );
 
+  it("keeps the original shutdown deadline after a failed cleanup attempt", async () => {
+    enableTransferCleanup();
+    vi.useFakeTimers({ toFake: ["performance", "setTimeout", "clearTimeout"] });
+    const manager = createManager();
+    const failure = new Error("Node cleanup failed before acknowledging stop");
+    nodeTransport.invoke = withWorkspaceDrain(async () => {
+      throw failure;
+    });
+    const entered = createDeferred();
+    const release = createDeferred();
+    let retry: Promise<unknown> | undefined;
+    try {
+      manager.beginClose();
+      await expect(manager.stopAll()).rejects.toBe(failure);
+      await vi.advanceTimersByTimeAsync(2_000);
+      nodeTransport.invoke = withWorkspaceDrain(async () => {
+        entered.resolve();
+        await release.promise;
+        return nullReply;
+      });
+      let stopped = false;
+      retry = manager.stopAll().catch((error: unknown) => {
+        stopped = true;
+        return error;
+      });
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(stopped).toBe(true);
+      expect(await retry).toBeInstanceOf(WorkerTunnelOwnerDisconnectedError);
+    } finally {
+      release.resolve();
+      await retry;
+      vi.useRealTimers();
+    }
+  });
+
   it("reads the current destination's launch vocabulary with a legacy fallback while offline", async () => {
     const host = await currentNodeHost();
     let currentTransport: NodeWorkerSupervisorTransport | undefined = nodeTransport;
