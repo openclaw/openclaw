@@ -112,6 +112,8 @@ function createFixture(boundary: "activation" | "pairing" | "attachment") {
   });
   return {
     service,
+    observe: (overrides: Partial<Parameters<typeof service.observe>[0]> = {}) =>
+      service.observe({ nodeId: "node", control: false, ...overrides }),
     nodeRegistry,
     desktopRegistry,
     reached: reached.promise,
@@ -132,9 +134,7 @@ describe("node desktop runtime policy", () => {
       throw new Error("expected fixture node");
     }
     node.pairingGeneration = undefined;
-    await expect(fixture.service.observe({ nodeId: "node", control: false })).rejects.toThrow(
-      "reconnect and approve the node capability",
-    );
+    await expect(fixture.observe()).rejects.toThrow("reconnect and approve the node capability");
     expect(fixture.forwarded).toEqual([]);
   });
 
@@ -160,9 +160,7 @@ describe("node desktop runtime policy", () => {
         isCurrent: () => !controller.signal.aborted,
       };
       try {
-        const observing = fixture.service.observe({
-          nodeId: "node",
-          control: false,
+        const observing = fixture.observe({
           credentials: { password: "synthetic-password" },
           requester,
         });
@@ -200,9 +198,7 @@ describe("node desktop runtime policy", () => {
     const invoke = vi.spyOn(fixture.nodeRegistry, "invoke");
     const stream = new PassThrough();
     try {
-      const observing = fixture.service.observe({
-        nodeId: "node",
-        control: false,
+      const observing = fixture.observe({
         credentials: { password: "synthetic-password" },
       });
       await fixture.reached;
@@ -243,19 +239,17 @@ describe("node desktop runtime policy", () => {
     async ({ boundary, revoked }) => {
       const fixture = createFixture(boundary);
       const controller = new AbortController();
-      const observed = fixture.service
-        .observe({
-          nodeId: "node",
-          control: false,
-          ...(revoked === "requester"
+      const observed = fixture
+        .observe(
+          revoked === "requester"
             ? {
                 requester: {
                   signal: controller.signal,
                   isCurrent: () => !controller.signal.aborted,
                 },
               }
-            : {}),
-        })
+            : {},
+        )
         .then(
           () => true,
           () => false,
@@ -276,10 +270,8 @@ describe("node desktop runtime policy", () => {
     const fixture = createFixture("pairing");
     const controller = new AbortController();
     let settled = false;
-    const observed = fixture.service
+    const observed = fixture
       .observe({
-        nodeId: "node",
-        control: false,
         requester: {
           signal: controller.signal,
           isCurrent: () => !controller.signal.aborted,
@@ -314,9 +306,7 @@ describe("node desktop runtime policy", () => {
       signal: controller.signal,
       isCurrent: () => !client.invalidated,
     };
-    const observed = fixture.service.observe({
-      nodeId: "node",
-      control: false,
+    const observed = fixture.observe({
       credentials: { password: "synthetic-password" },
       requester,
     });
@@ -335,12 +325,10 @@ describe("node desktop runtime policy", () => {
   it("destroys a late attachment instead of publishing a revoked desktop", async () => {
     const fixture = createFixture("attachment");
     const stream = new PassThrough();
-    const observed = fixture.service
-      .observe({ nodeId: "node", control: false, credentials: { password: "synthetic-password" } })
-      .then(
-        () => true,
-        () => false,
-      );
+    const observed = fixture.observe({ credentials: { password: "synthetic-password" } }).then(
+      () => true,
+      () => false,
+    );
     await fixture.reached;
     fixture.revoke();
     fixture.attached.resolve({ stream, auth: "vnc-password" });

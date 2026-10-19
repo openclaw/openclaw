@@ -24,6 +24,9 @@ import type { RfbPreauthDescriptor } from "./rfb-preauth.js";
 import { createDesktopSessionRegistry, type DesktopSessionRegistry } from "./session-registry.js";
 
 const cleanup: Array<() => Promise<void>> = [];
+const HELLO = Buffer.concat([Buffer.from("RFB 003.008\n", "ascii"), Buffer.from([1, 1])]);
+const KEY_EVENT = Buffer.from([4, 1, 0, 0, 0, 0, 0, 65]);
+const UPDATE_REQUEST = Buffer.from([3, 1, 0, 0, 0, 0, 0, 64, 0, 64]);
 const logPaths = createSuiteLogPathTracker("desktop-observer-diagnostics-");
 const logCaptures: ReturnType<typeof createDiagnosticLogRecordCapture>[] = [];
 
@@ -52,6 +55,37 @@ afterEach(async () => {
     vi.useRealTimers();
   }
 });
+
+function captureLogs() {
+  const capture = createDiagnosticLogRecordCapture();
+  logCaptures.push(capture);
+  return capture;
+}
+
+async function expectCloseLog(
+  capture: ReturnType<typeof captureLogs>,
+  attributes: Record<string, unknown>,
+) {
+  await expect
+    .poll(async () => {
+      await capture.flush();
+      return capture.records.filter((record) => record.message === "desktop observer closed");
+    })
+    .toHaveLength(1);
+  expect(capture.records[0]?.attributes).toMatchObject(attributes);
+}
+
+function closedSocket(ws: WebSocket) {
+  return new Promise<[number, string]>((resolve) => {
+    ws.once("close", (code, reason) => resolve([code, reason.toString()]));
+  });
+}
+
+function nextFrame(ws: WebSocket) {
+  return new Promise<Buffer>((resolve) => {
+    ws.once("message", (data) => resolve(Buffer.from(data as Buffer)));
+  });
+}
 
 async function createProxyHarness(
   params: {
@@ -188,9 +222,7 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
       cleanup.push(() => registry.stopAll());
       await registry.activate({ sourceKey: "worker:pump", ownerEpoch: 2 });
       const previous = await createProxyHarness({ control: true, registry });
-      const closed = new Promise<[number, string]>((resolve) => {
-        previous.ws.once("close", (code, value) => resolve([code, value.toString()]));
-      });
+      const closed = closedSocket(previous.ws);
       const requester = resolveDesktopObserveRequester({
         client: {
           authenticatedUserId: userId,
@@ -221,8 +253,7 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
   );
 
   it("keeps an idle observer alive without adding bytes to RFB and retires on owner close", async () => {
-    const logCapture = createDiagnosticLogRecordCapture();
-    logCaptures.push(logCapture);
+    const logCapture = captureLogs();
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const harness = await createProxyHarness({ control: true });
     expect(vi.getTimerCount()).toBe(harness.serverTimers! + 1);
@@ -237,18 +268,10 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
     await expect.poll(() => pings.length).toBe(2);
     expect(onDesktopData).not.toHaveBeenCalled();
 
-    const closed = new Promise<number>((resolve) => {
-      harness.ws.once("close", resolve);
-    });
+    const closed = closedSocket(harness.ws).then(([code]) => code);
     harness.closeObserver(1012, "desktop tunnel closed");
     await expect(closed).resolves.toBe(1012);
-    await expect
-      .poll(async () => {
-        await logCapture.flush();
-        return logCapture.records.filter((record) => record.message === "desktop observer closed");
-      })
-      .toHaveLength(1);
-    expect(logCapture.records[0]?.attributes).toMatchObject({
+    await expectCloseLog(logCapture, {
       sourceKey: "worker:pump",
       ownerEpoch: 2,
       trigger: "owner-close",
@@ -354,9 +377,7 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
       });
       const frames: Buffer[] = [];
       harness.ws.on("message", (data) => frames.push(Buffer.from(data as Buffer)));
-      const closed = new Promise<[number, string]>((resolve) => {
-        harness.ws.once("close", (code, reason) => resolve([code, reason.toString()]));
-      });
+      const closed = closedSocket(harness.ws);
       client.invalidated = true;
       if (trigger === "abort") {
         controller.abort();
@@ -377,37 +398,22 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
   );
 
   it("drops view-only input while forwarding framebuffer requests", async () => {
-    const logCapture = createDiagnosticLogRecordCapture();
-    logCaptures.push(logCapture);
+    const logCapture = captureLogs();
     const harness = await createProxyHarness();
-    const fromDesktop = new Promise<Buffer>((resolve) => {
-      harness.ws.once("message", (data) => resolve(Buffer.from(data as Buffer)));
-    });
+    const fromDesktop = nextFrame(harness.ws);
     harness.desktopPeer.write(Buffer.from("RFB 003.008\n"));
     await expect(fromDesktop).resolves.toEqual(Buffer.from("RFB 003.008\n"));
-
-    const handshake = Buffer.concat([Buffer.from("RFB 003.008\n", "ascii"), Buffer.from([1, 1])]);
-    const keyEvent = Buffer.from([4, 1, 0, 0, 0, 0, 0, 65]);
-    const framebufferRequest = Buffer.from([3, 1, 0, 0, 0, 0, 0, 64, 0, 64]);
     const fromWebSocket = readSocketBytes(
       harness.desktopPeer,
-      handshake.length + framebufferRequest.length,
+      HELLO.length + UPDATE_REQUEST.length,
     );
-    harness.ws.send(Buffer.concat([handshake, keyEvent, framebufferRequest]));
-    await expect(fromWebSocket).resolves.toEqual(Buffer.concat([handshake, framebufferRequest]));
+    harness.ws.send(Buffer.concat([HELLO, KEY_EVENT, UPDATE_REQUEST]));
+    await expect(fromWebSocket).resolves.toEqual(Buffer.concat([HELLO, UPDATE_REQUEST]));
 
-    const closed = new Promise<void>((resolve) => {
-      harness.ws.once("close", () => resolve());
-    });
+    const closed = closedSocket(harness.ws);
     harness.desktopPeer.destroy();
     await closed;
-    await expect
-      .poll(async () => {
-        await logCapture.flush();
-        return logCapture.records.filter((record) => record.message === "desktop observer closed");
-      })
-      .toHaveLength(1);
-    expect(logCapture.records[0]?.attributes).toMatchObject({
+    await expectCloseLog(logCapture, {
       trigger: "stream-close",
       cleanupCode: 1000,
       closeCode: 1000,
@@ -417,22 +423,16 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
 
   it("closes malformed view-only streams with a policy violation", async () => {
     const harness = await createProxyHarness();
-    const closed = new Promise<{ code: number; reason: string }>((resolve) => {
-      harness.ws.once("close", (code, reason) => resolve({ code, reason: reason.toString() }));
-    });
+    const closed = closedSocket(harness.ws);
     harness.ws.send(
       Buffer.concat([Buffer.from("RFB 003.008\n", "ascii"), Buffer.from([1, 1, 254])]),
     );
-    await expect(closed).resolves.toEqual({
-      code: 1008,
-      reason: "invalid view-only RFB stream",
-    });
+    await expect(closed).resolves.toEqual([1008, "invalid view-only RFB stream"]);
     expect(harness.release).toHaveBeenCalledOnce();
   });
 
   it("propagates websocket close to the unix socket", async () => {
-    const logCapture = createDiagnosticLogRecordCapture();
-    logCaptures.push(logCapture);
+    const logCapture = captureLogs();
     const harness = await createProxyHarness();
     const closed = new Promise<void>((resolve) => {
       harness.desktopPeer.once("close", resolve);
@@ -479,42 +479,30 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
         stream,
         requester: { signal: new AbortController().signal, isCurrent: () => true },
       });
-      const pulse = new Promise<Buffer>((resolve) => {
-        harness.ws.once("message", (data) => resolve(Buffer.from(data as Buffer)));
-      });
+      const pulse = nextFrame(harness.ws);
       stream.push(Buffer.from("synthetic-server-pulse"));
       await expect(pulse).resolves.toEqual(Buffer.from("synthetic-server-pulse"));
-      const handshake = Buffer.concat([Buffer.from("RFB 003.008\n"), Buffer.from([1, 1])]);
-      harness.ws.send(handshake);
+      harness.ws.send(HELLO);
       await expect.poll(() => releaseWrite).toBeDefined();
       const gatewaySocket = pause.mock.contexts.at(-1);
       if (!(gatewaySocket instanceof NpmWebSocket)) {
         throw new Error("Expected the paused Gateway WebSocket.");
       }
       expect(gatewaySocket?.isPaused).toBe(true);
-      expect(stream.writableLength).toBe(handshake.length);
-
-      const keyEvent = Buffer.from([4, 1, 0, 0, 0, 0, 0, 65]);
-      const framebufferRequest = Buffer.from([3, 1, 0, 0, 0, 0, 0, 64, 0, 64]);
-      harness.ws.send(Buffer.concat([keyEvent, framebufferRequest]));
+      expect(stream.writableLength).toBe(HELLO.length);
+      harness.ws.send(Buffer.concat([KEY_EVENT, UPDATE_REQUEST]));
       blocked = false;
       releaseWrite?.();
       releaseWrite = undefined;
-      const expected = Buffer.concat([
-        handshake,
-        ...(control ? [keyEvent] : []),
-        framebufferRequest,
-      ]);
+      const expected = Buffer.concat([HELLO, ...(control ? [KEY_EVENT] : []), UPDATE_REQUEST]);
       await expect.poll(() => Buffer.concat(received)).toEqual(expected);
       await expect.poll(() => gatewaySocket?.isPaused).toBe(false);
 
       blocked = true;
-      harness.ws.send(framebufferRequest);
+      harness.ws.send(UPDATE_REQUEST);
       await expect.poll(() => releaseWrite).toBeDefined();
       expect(gatewaySocket?.isPaused).toBe(true);
-      const closed = new Promise<number>((resolve) => {
-        harness.ws.once("close", resolve);
-      });
+      const closed = closedSocket(harness.ws).then(([code]) => code);
       harness.closeObserver(1012, "desktop tunnel closed");
       await expect(closed).resolves.toBe(1012);
       expect(stream.destroyed).toBe(true);

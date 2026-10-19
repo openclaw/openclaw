@@ -5,6 +5,9 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { classifyRfbSecurity, connectRfbServer, probeRfbServer } from "./rfb-probe.js";
 
 const cleanups: Array<() => Promise<void>> = [];
+const VERSION = Buffer.from("RFB 003.008\n");
+const OFFER = Buffer.from([1, 2]);
+const CLIENT_HELLO = Buffer.concat([VERSION, Buffer.from([2])]);
 
 afterEach(async () => {
   await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
@@ -39,6 +42,26 @@ async function listenScriptedRfb(script: (socket: net.Socket) => void): Promise<
 
 function probe(port: number) {
   return probeRfbServer({ host: "127.0.0.1", port, timeoutMs: 2_000 });
+}
+
+async function connect(port: number, signal?: AbortSignal) {
+  const result = await connectRfbServer({ host: "127.0.0.1", port, timeoutMs: 2_000, signal });
+  expect(result.kind).toBe("rfb");
+  if (result.kind !== "rfb") {
+    throw new Error("expected retained connection");
+  }
+  cleanups.push(async () => {
+    result.stream.destroy();
+  });
+  return result;
+}
+
+function serveHandshake(socket: net.Socket, onSelection: (selection: Buffer) => void) {
+  socket.write(VERSION);
+  socket.once("data", () => {
+    socket.write(OFFER);
+    socket.once("data", onSelection);
+  });
 }
 
 describe("RFB server probe", () => {
@@ -132,14 +155,7 @@ describe("retained RFB connection", () => {
           socket.write(Buffer.concat([offer, challenge]));
         });
       });
-      const result = await connectRfbServer({ host: "127.0.0.1", port, timeoutMs: 2_000 });
-      expect(result.kind).toBe("rfb");
-      if (result.kind !== "rfb") {
-        throw new Error("expected retained connection");
-      }
-      cleanups.push(async () => {
-        result.stream.destroy();
-      });
+      const result = await connect(port);
       const output: Buffer[] = [];
       result.stream.on("data", (chunk: Buffer) => output.push(chunk));
       await vi.waitFor(() =>
@@ -168,10 +184,7 @@ describe("retained RFB connection", () => {
       socket.write(Buffer.from("RFB 003.008\n"));
       socket.once("data", () => socket.write(Buffer.from([1, 2])));
     });
-    const result = await connectRfbServer({ host: "127.0.0.1", port, timeoutMs: 2_000 });
-    if (result.kind !== "rfb") {
-      throw new Error("expected retained connection");
-    }
+    const result = await connect(port);
     const failure = new Promise<Error>((resolve) => {
       result.stream.once("error", resolve);
     });
@@ -231,30 +244,20 @@ describe("retained RFB connection", () => {
     const peerClosed = createDeferred();
     const port = await listenScriptedRfb((socket) => {
       socket.once("close", () => peerClosed.resolve());
-      socket.write(Buffer.from("RFB 003.008\n"));
-      socket.once("data", () => {
-        socket.write(Buffer.from([1, 2]));
-        socket.once("data", (selection) => {
-          expect(selection).toEqual(Buffer.from([2]));
-          socket.end(response);
-        });
+      serveHandshake(socket, (selection) => {
+        expect(selection).toEqual(Buffer.from([2]));
+        socket.end(response);
       });
     });
-    const result = await connectRfbServer({ host: "127.0.0.1", port, timeoutMs: 2_000 });
-    if (result.kind !== "rfb") {
-      throw new Error("expected retained connection");
-    }
-    cleanups.push(async () => {
-      result.stream.destroy();
-    });
+    const result = await connect(port);
     const prefix = await new Promise<Buffer>((resolve) => {
       result.stream.once("data", (chunk: Buffer) => {
         result.stream.pause();
         resolve(chunk);
       });
     });
-    expect(prefix).toEqual(Buffer.concat([Buffer.from("RFB 003.008\n"), Buffer.from([1, 2])]));
-    result.stream.write(Buffer.concat([Buffer.from("RFB 003.008\n"), Buffer.from([2])]));
+    expect(prefix).toEqual(Buffer.concat([VERSION, OFFER]));
+    result.stream.write(CLIENT_HELLO);
     // The peer has finished and closed while the caller has consumed no response.
     await peerClosed.promise;
     expect(result.stream.destroyed).toBe(false);
@@ -280,33 +283,18 @@ describe("retained RFB connection", () => {
           throw error;
         }
       });
-      peer.write(Buffer.from("RFB 003.008\n"));
-      peer.once("data", () => {
-        peer.write(Buffer.from([1, 2]));
-        peer.once("data", () => {
-          peer.pause();
-          peer.on("data", (chunk) => {
-            const bytes = Buffer.from(chunk);
-            received.push(bytes);
-            receivedBytes += bytes.length;
-          });
-          ready.resolve(peer);
+      serveHandshake(peer, () => {
+        peer.pause();
+        peer.on("data", (chunk) => {
+          const bytes = Buffer.from(chunk);
+          received.push(bytes);
+          receivedBytes += bytes.length;
         });
+        ready.resolve(peer);
       });
     });
     const controller = new AbortController();
-    const result = await connectRfbServer({
-      host: "127.0.0.1",
-      port,
-      timeoutMs: 2_000,
-      signal: controller.signal,
-    });
-    if (result.kind !== "rfb") {
-      throw new Error("expected retained connection");
-    }
-    cleanups.push(async () => {
-      result.stream.destroy();
-    });
+    const result = await connect(port, controller.signal);
     const settled = finished(result.stream);
     void settled.catch(() => undefined);
     await new Promise<void>((resolve) => {
@@ -315,7 +303,7 @@ describe("retained RFB connection", () => {
         resolve();
       });
     });
-    result.stream.write(Buffer.concat([Buffer.from("RFB 003.008\n"), Buffer.from([2])]));
+    result.stream.write(CLIENT_HELLO);
     const peer = await ready.promise;
     const first = Buffer.alloc(8 * 1024 * 1024, 7);
     const last = Buffer.from("queued-client-tail");
@@ -350,22 +338,12 @@ describe("retained RFB connection", () => {
     "retains an offer and FIN before attachment (tail: %j)",
     async (tail) => {
       const finSent = createDeferred();
-      const wire = Buffer.concat([
-        Buffer.from("RFB 003.008\n"),
-        Buffer.from([1, 2]),
-        Buffer.from(tail),
-      ]);
+      const wire = Buffer.concat([VERSION, OFFER, Buffer.from(tail)]);
       const port = await listenScriptedRfb((peer) => {
         peer.write(wire.subarray(0, 12));
         peer.once("data", () => peer.end(wire.subarray(12), () => finSent.resolve()));
       });
-      const result = await connectRfbServer({ host: "127.0.0.1", port, timeoutMs: 2_000 });
-      if (result.kind !== "rfb") {
-        throw new Error("expected retained connection");
-      }
-      cleanups.push(async () => {
-        result.stream.destroy();
-      });
+      const result = await connect(port);
       await finSent.promise;
       const settled = finished(result.stream);
       const received: Buffer[] = [];

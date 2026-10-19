@@ -10,6 +10,14 @@ import {
 } from "./rfb-preauth.js";
 
 const VERSION_3_8 = Buffer.from("RFB 003.008\n", "ascii");
+const VNC: RfbPreauthDescriptor = {
+  auth: "vnc-password",
+  credentials: { password: "password" },
+};
+const ARD: RfbPreauthDescriptor = {
+  auth: "ard-account",
+  credentials: { username: "operator", password: "password" },
+};
 
 class ScriptedPeer implements RfbPreauthPeer {
   private buffered = Buffer.alloc(0);
@@ -106,6 +114,20 @@ async function completeSyntheticBrowserHandshake(browser: ScriptedPeer): Promise
   expect(await browser.readExactly(4)).toEqual(Buffer.alloc(4));
 }
 
+async function offerSecurity(server: ScriptedPeer, types: number[], banner = VERSION_3_8) {
+  await server.write(banner);
+  expect(await server.readExactly(12)).toEqual(VERSION_3_8);
+  await server.write(Buffer.from([types.length, ...types]));
+  expect(await server.readExactly(1)).toEqual(Buffer.from([types[0]!]));
+}
+
+function ardHeader(keyLength: number) {
+  const header = Buffer.alloc(4);
+  header.writeUInt16BE(5, 0);
+  header.writeUInt16BE(keyLength, 2);
+  return header;
+}
+
 async function runPreauth(params: {
   preauth: RfbPreauthDescriptor;
   serverScript: (server: ScriptedPeer) => Promise<void>;
@@ -137,24 +159,24 @@ async function runPreauth(params: {
 }
 
 async function writeArdOffer(server: ScriptedPeer, keyLength: number): Promise<void> {
-  await server.write(Buffer.from("RFB 003.889\n", "ascii"));
-  expect(await server.readExactly(12)).toEqual(VERSION_3_8);
-  await server.write(Buffer.from([4, 30, 33, 36, 35]));
-  expect(await server.readExactly(1)).toEqual(Buffer.from([30]));
+  await offerSecurity(server, [30, 33, 36, 35], Buffer.from("RFB 003.889\n", "ascii"));
   const generator = 5n;
   const modulus = 7919n;
   const serverPrivate = 7n;
   const serverPublic = modPow(generator, serverPrivate, modulus);
-  const header = Buffer.alloc(4);
-  header.writeUInt16BE(Number(generator), 0);
-  header.writeUInt16BE(keyLength, 2);
   await server.write(
     Buffer.concat([
-      header,
+      ardHeader(keyLength),
       bigIntBuffer(modulus, keyLength),
       bigIntBuffer(serverPublic, keyLength),
     ]),
   );
+}
+
+function rejectArd(serverScript: (server: ScriptedPeer) => Promise<void>, message: string) {
+  return expect(
+    runPreauth({ preauth: ARD, browserScript: async () => {}, serverScript }),
+  ).rejects.toThrow(message);
 }
 
 describe("RFB server-side pre-authentication", () => {
@@ -170,10 +192,7 @@ describe("RFB server-side pre-authentication", () => {
           }
         },
         serverScript: async (server) => {
-          await server.write(VERSION_3_8);
-          expect(await server.readExactly(12)).toEqual(VERSION_3_8);
-          await server.write(Buffer.from([1, 2]));
-          expect(await server.readExactly(1)).toEqual(Buffer.from([2]));
+          await offerSecurity(server, [2]);
           server.stream.on("data", (bytes: Buffer) => responses.push(bytes));
           current = false;
           await server.write(Buffer.from("0123456789abcdef"));
@@ -188,12 +207,9 @@ describe("RFB server-side pre-authentication", () => {
     const browserReady = createDeferred();
     const events: string[] = [];
     await runPreauth({
-      preauth: { auth: "vnc-password", credentials: { password: "password" } },
+      preauth: VNC,
       serverScript: async (server) => {
-        await server.write(VERSION_3_8);
-        expect(await server.readExactly(12)).toEqual(VERSION_3_8);
-        await server.write(Buffer.from([1, 2]));
-        expect(await server.readExactly(1)).toEqual(Buffer.from([2]));
+        await offerSecurity(server, [2]);
         await server.write(Buffer.from("0123456789abcdef"));
         await server.readExactly(16);
         await browserReady.promise;
@@ -218,7 +234,7 @@ describe("RFB server-side pre-authentication", () => {
   it("rejects a bad browser handshake without waiting for an upstream banner", async () => {
     await expect(
       runPreauth({
-        preauth: { auth: "vnc-password", credentials: { password: "password" } },
+        preauth: VNC,
         serverScript: async (server) => {
           await server.readExactly(12);
         },
@@ -264,92 +280,29 @@ describe("RFB server-side pre-authentication", () => {
   );
 
   it.each([0, 1025])("rejects malformed ARD key length %i", async (keyLength) => {
-    const [gatewayServer, fakeServerStream] = duplexPair();
-    const [gatewayBrowserStream, fakeBrowserStream] = duplexPair();
-    const fakeServer = new ScriptedPeer(fakeServerStream);
-    const preauth = preauthenticateRfb({
-      server: gatewayServer,
-      browser: new ScriptedPeer(gatewayBrowserStream),
-      preauth: {
-        auth: "ard-account",
-        credentials: { username: "operator", password: "password" },
-      },
-    });
-    try {
-      await fakeServer.write(VERSION_3_8);
-      expect(await fakeServer.readExactly(12)).toEqual(VERSION_3_8);
-      await fakeServer.write(Buffer.from([1, 30]));
-      expect(await fakeServer.readExactly(1)).toEqual(Buffer.from([30]));
-      const header = Buffer.alloc(4);
-      header.writeUInt16BE(5, 0);
-      header.writeUInt16BE(keyLength, 2);
-      await fakeServer.write(header);
-      await expect(preauth).rejects.toThrow(`invalid ARD key length ${keyLength}`);
-    } finally {
-      gatewayServer.destroy();
-      fakeServerStream.destroy();
-      gatewayBrowserStream.destroy();
-      fakeBrowserStream.destroy();
-    }
+    await rejectArd(async (server) => {
+      await offerSecurity(server, [30]);
+      await server.write(ardHeader(keyLength));
+    }, `invalid ARD key length ${keyLength}`);
   });
 
   it("rejects zero ARD Diffie-Hellman parameters", async () => {
-    const [gatewayServer, fakeServerStream] = duplexPair();
-    const [gatewayBrowserStream, fakeBrowserStream] = duplexPair();
-    const fakeServer = new ScriptedPeer(fakeServerStream);
-    const preauth = preauthenticateRfb({
-      server: gatewayServer,
-      browser: new ScriptedPeer(gatewayBrowserStream),
-      preauth: {
-        auth: "ard-account",
-        credentials: { username: "operator", password: "password" },
-      },
-    });
-    try {
-      await fakeServer.write(VERSION_3_8);
-      expect(await fakeServer.readExactly(12)).toEqual(VERSION_3_8);
-      await fakeServer.write(Buffer.from([1, 30]));
-      expect(await fakeServer.readExactly(1)).toEqual(Buffer.from([30]));
-      const header = Buffer.alloc(4);
-      header.writeUInt16BE(5, 0);
-      header.writeUInt16BE(8, 2);
-      await fakeServer.write(Buffer.concat([header, Buffer.alloc(16)]));
-      await expect(preauth).rejects.toThrow("invalid ARD Diffie-Hellman parameters");
-    } finally {
-      gatewayServer.destroy();
-      fakeServerStream.destroy();
-      gatewayBrowserStream.destroy();
-      fakeBrowserStream.destroy();
-    }
+    await rejectArd(async (server) => {
+      await offerSecurity(server, [30]);
+      await server.write(Buffer.concat([ardHeader(8), Buffer.alloc(16)]));
+    }, "invalid ARD Diffie-Hellman parameters");
   });
 
   it("surfaces the ARD server SecurityResult reason", async () => {
-    const reason = Buffer.from("account rejected", "utf8");
-    const [gatewayServer, fakeServerStream] = duplexPair();
-    const [gatewayBrowserStream, fakeBrowserStream] = duplexPair();
-    const fakeServer = new ScriptedPeer(fakeServerStream);
-    const preauth = preauthenticateRfb({
-      server: gatewayServer,
-      browser: new ScriptedPeer(gatewayBrowserStream),
-      preauth: {
-        auth: "ard-account",
-        credentials: { username: "operator", password: "password" },
-      },
-    });
-    try {
-      await writeArdOffer(fakeServer, 16);
-      await fakeServer.readExactly(144);
+    await rejectArd(async (server) => {
+      await writeArdOffer(server, 16);
+      await server.readExactly(144);
+      const reason = Buffer.from("account rejected", "utf8");
       const status = Buffer.alloc(8);
       status.writeUInt32BE(1, 0);
       status.writeUInt32BE(reason.length, 4);
-      await fakeServer.write(Buffer.concat([status, reason]));
-      await expect(preauth).rejects.toThrow("RFB authentication failed: account rejected");
-    } finally {
-      gatewayServer.destroy();
-      fakeServerStream.destroy();
-      gatewayBrowserStream.destroy();
-      fakeBrowserStream.destroy();
-    }
+      await server.write(Buffer.concat([status, reason]));
+    }, "RFB authentication failed: account rejected");
   });
 
   it.each([
@@ -358,7 +311,7 @@ describe("RFB server-side pre-authentication", () => {
   ])("matches the VncAuth DES vector with server version %j", async (banner, reply, legacy) => {
     const challenge = Buffer.from("0123456789abcdef", "ascii");
     await runPreauth({
-      preauth: { auth: "vnc-password", credentials: { password: "password" } },
+      preauth: VNC,
       serverScript: async (server) => {
         await server.write(Buffer.from(banner));
         expect(await server.readExactly(12)).toEqual(Buffer.from(reply));
