@@ -10,10 +10,8 @@ import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runti
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
-import { aggregateDay } from "./src/aggregate.js";
-import * as configRuntime from "./src/config.js";
 import { describePeriod } from "./src/periods.js";
-import { buildRoster } from "./src/roster.js";
+import { reportDocument } from "./src/reports-data.test-support.js";
 import { teamReportsSqliteBackendEntrypoint } from "./src/sqlite-backend-entrypoint.test-support.js";
 import { createTeamReportsStore } from "./src/store.js";
 
@@ -33,18 +31,6 @@ const pluginConfig = {
   github: { token: "fixture-github-token", orgs: ["sample"] },
   summaries: { enabled: false },
 };
-function reportsConfig(
-  overrides: Partial<typeof pluginConfig> & { schedule?: { enabled: boolean } } = {},
-): OpenClawConfig {
-  return {
-    gateway: { controlUi: { basePath: "/control" } },
-    plugins: {
-      entries: { "team-reports": { enabled: true, config: { ...pluginConfig, ...overrides } } },
-    },
-  };
-}
-const config = reportsConfig();
-
 async function openStore() {
   const actual = await vi.importActual<typeof import("./src/store.js")>("./src/store.js");
   const store = await actual.createTeamReportsStore({
@@ -55,18 +41,25 @@ async function openStore() {
   return store;
 }
 
-function resolveConfig() {
-  const parsed = configRuntime.parseTeamReportsConfig(pluginConfig);
-  vi.spyOn(configRuntime, "resolveTeamReportsConfig").mockResolvedValue({
-    github: { ...parsed.github, token: "fixture-github-token", ignoreCommentPatterns: [] },
-    people: [],
-  });
+function expectUnavailable(
+  respond: Awaited<ReturnType<typeof requestReports>>,
+  details: Record<string, unknown>,
+) {
+  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(details));
 }
 
 function captureReports(
   runtimeSource = fileURLToPath(new URL("./index.ts", import.meta.url)),
-  runtimeConfig = config,
+  enabled?: boolean,
 ) {
+  const runtimeConfig: OpenClawConfig = {
+    gateway: { controlUi: { basePath: "/control" } },
+    plugins: {
+      entries: {
+        "team-reports": { enabled: true, config: { ...pluginConfig, schedule: { enabled } } },
+      },
+    },
+  };
   const scheduler = createTestPluginServiceScheduler();
   onTestFinished(() => scheduler.stop());
   const registerService = vi.fn<OpenClawPluginApi["registerService"]>();
@@ -136,34 +129,19 @@ beforeEach(() => vi.clearAllMocks());
 afterEach(() => vi.restoreAllMocks());
 
 it.each([
-  ["source", "extensions/team-reports/index.ts", "extensions/team-reports/src/store.worker.ts"],
-  [
-    "standalone",
-    "plugins/team-reports/dist/index.js",
-    "plugins/team-reports/dist/src/store.worker.js",
-  ],
-  [
-    "bundled",
-    "dist/extensions/team-reports/index.js",
-    "dist/extensions/team-reports/src/store.worker.js",
-  ],
-] as const)("locates the %s runtime worker", async (_layout, entry, worker) => {
-  const runtimeSource = path.resolve(entry);
-  const { services, methods, scheduler } = captureReports(runtimeSource);
-  resolveConfig();
+  ["extensions/team-reports", "ts"],
+  ["plugins/team-reports/dist", "js"],
+  ["dist/extensions/team-reports", "js"],
+] as const)("locates the %s runtime worker", async (root, extension) => {
+  const runtimeSource = path.resolve(root, `index.${extension}`);
+  const { service, methods, context } = captureReports(runtimeSource);
   const stopBeforeOpening = new Error("worker location captured");
   vi.mocked(createTeamReportsStore).mockRejectedValueOnce(stopBeforeOpening);
-  await expect(
-    services[0]!.start({ config, stateDir: "/unused", logger: console, scheduler }),
-  ).resolves.toBeUndefined();
-  expect(await requestReports(methods)).toHaveBeenCalledWith(
-    false,
-    undefined,
-    expect.objectContaining({ message: stopBeforeOpening.message }),
-  );
+  await expect(service.start(context)).resolves.toBeUndefined();
+  expectUnavailable(await requestReports(methods), { message: stopBeforeOpening.message });
   expect(createTeamReportsStore).toHaveBeenCalledWith({
-    stateDir: "/unused",
-    workerModuleUrl: pathToFileURL(path.resolve(worker)),
+    stateDir: "unused",
+    workerModuleUrl: pathToFileURL(path.resolve(root, `src/store.worker.${extension}`)),
   });
 });
 
@@ -171,17 +149,12 @@ it("closes owned storage when the service scheduler cannot start", async () => {
   const store = await openStore();
   const close = vi.spyOn(store, "close");
   vi.mocked(createTeamReportsStore).mockResolvedValueOnce(store);
-  resolveConfig();
   const { service, methods, scheduler, context } = captureReports();
   await scheduler.stop();
   await expect(service.start(context)).resolves.toBeUndefined();
-  expect(await requestReports(methods)).toHaveBeenCalledWith(
-    false,
-    undefined,
-    expect.objectContaining({
-      message: expect.stringContaining("scheduler cannot be started again"),
-    }),
-  );
+  expectUnavailable(await requestReports(methods), {
+    message: expect.stringContaining("scheduler cannot be started again"),
+  });
   expect(close).toHaveBeenCalledOnce();
   await expect(store.listRuns()).rejects.toThrow("store is closed");
 });
@@ -192,28 +165,17 @@ it.each([false, true])("joins storage readiness (stop early: %s)", async (stopEa
   vi.mocked(createTeamReportsStore).mockReturnValueOnce(opening.promise);
   const { service, methods, context } = captureReports();
   await service.start(context);
-  let replied = false;
-  const reading = requestReports(methods, "team-reports.list").then((result) => {
-    replied = true;
-    return result;
-  });
-  let stopped = false;
-  const stopping = stopEarly
-    ? Promise.resolve(service.stop?.(context)).then(() => {
-        stopped = true;
-      })
-    : undefined;
-  expect(replied).toBe(false);
-  expect(stopped).toBe(false);
+  const replied = vi.fn();
+  const stopped = vi.fn();
+  const reading = requestReports(methods, "team-reports.list");
+  void reading.then(replied);
+  const stopping = stopEarly ? Promise.resolve(service.stop?.(context)).then(stopped) : undefined;
+  expect([replied.mock.calls, stopped.mock.calls]).toEqual([[], []]);
   opening.resolve(store);
   const respond = await reading;
   if (stopEarly) {
     await stopping;
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "UNAVAILABLE" }),
-    );
+    expectUnavailable(respond, { code: "UNAVAILABLE" });
     await expect(store.listPeriods()).rejects.toThrow("store is closed");
   } else {
     expect(respond).toHaveBeenCalledWith(true, { periods: [] });
@@ -236,19 +198,21 @@ it("registers authenticated reports, read/admin methods, and CLI without opening
       path: "/team/activity/",
     },
   ]);
-  expect(routes).toHaveLength(1);
-  expect(routes[0]).toMatchObject({
-    path: "/team/activity",
-    match: "prefix",
-    auth: "gateway",
-    handler: expect.any(Function),
-  });
-  expect(services).toHaveLength(1);
-  expect(services[0]).toMatchObject({
-    id: "team-reports",
-    start: expect.any(Function),
-    stop: expect.any(Function),
-  });
+  expect(routes).toMatchObject([
+    {
+      path: "/team/activity",
+      match: "prefix",
+      auth: "gateway",
+      handler: expect.any(Function),
+    },
+  ]);
+  expect(services).toMatchObject([
+    {
+      id: "team-reports",
+      start: expect.any(Function),
+      stop: expect.any(Function),
+    },
+  ]);
   expect(methods.map(([name, , options]) => [name, options?.scope])).toEqual([
     ["team-reports.status", "operator.read"],
     ["team-reports.list", "operator.read"],
@@ -271,63 +235,49 @@ it("registers authenticated reports, read/admin methods, and CLI without opening
   expect(createTeamReportsStore).not.toHaveBeenCalled();
 });
 
-it.each([true, false])(
-  "serves stored JSON and Markdown with scheduling enabled=%s",
-  async (enabled) => {
-    const store = await openStore();
-    vi.mocked(createTeamReportsStore).mockResolvedValueOnce(store);
-    const runtimeConfig = reportsConfig({ schedule: { enabled } });
-    const { service, methods, context } = captureReports(undefined, runtimeConfig);
-    try {
-      await expect(service.start(context)).resolves.toBeUndefined();
-      expect(await store.listPeriods()).toEqual([]);
-      const request = async (format: "json" | "markdown") => {
-        const respond = await requestReports(methods, "team-reports.get", {
-          period: "day",
-          key: "2026-08-19",
-          format,
-        });
-        expect(respond).toHaveBeenCalledOnce();
-        return respond;
-      };
-      for (const format of ["json", "markdown"] as const) {
-        expect(await request(format)).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({
-            code: "UNAVAILABLE",
-            message: "Report not found; generate the requested UTC day first",
-          }),
-        );
-      }
-      const report = aggregateDay({
-        period: describePeriod("day", "2026-08-19"),
-        nowMs: Date.parse("2026-08-20T00:00:00Z"),
-        orgs: ["sample"],
-        roster: buildRoster([]),
-        items: [],
-        messages: [],
-        githubStatus: { ok: true, warnings: [], stats: {} },
+it.each([true, false])("reads stored JSON/Markdown (schedule: %s)", async (enabled) => {
+  const store = await openStore();
+  vi.mocked(createTeamReportsStore).mockResolvedValueOnce(store);
+  const { service, methods, context } = captureReports(undefined, enabled);
+  try {
+    await expect(service.start(context)).resolves.toBeUndefined();
+    expect(await store.listPeriods()).toEqual([]);
+    const request = async (format: "json" | "markdown") => {
+      const respond = await requestReports(methods, "team-reports.get", {
+        period: "day",
+        key: "2026-08-19",
+        format,
       });
-      const summary = {
-        source: "fallback" as const,
-        generatedAtMs: report.generatedAtMs,
-        globalSummary: "No recorded activity.",
-        highlights: [],
-        fingerprint: "stored-summary",
-      };
-      const markdown = "# Stored report\n\né 🦞\0\n";
-      await store.upsertPeriod({ report, summary, markdown });
-      expect(await request("json")).toHaveBeenCalledWith(true, { report, summary });
-      expect(await request("markdown")).toHaveBeenCalledWith(true, { markdown });
-      await store.upsertPeriod({ report, markdown: "Updated report" });
-      expect(await request("json")).toHaveBeenCalledWith(true, { report, summary: null });
-      expect(await request("markdown")).toHaveBeenCalledWith(true, {
-        markdown: "Updated report",
+      expect(respond).toHaveBeenCalledOnce();
+      return respond;
+    };
+    for (const format of ["json", "markdown"] as const) {
+      expectUnavailable(await request(format), {
+        code: "UNAVAILABLE",
+        message: "Report not found; generate the requested UTC day first",
       });
-    } finally {
-      await service.stop?.(context);
-      await store.close();
     }
-  },
-);
+    const report = reportDocument([], {
+      period: describePeriod("day", "2026-08-19"),
+      orgs: ["sample"],
+    });
+    const summary = {
+      source: "fallback" as const,
+      generatedAtMs: report.generatedAtMs,
+      globalSummary: "No recorded activity.",
+      highlights: [],
+      fingerprint: "stored-summary",
+    };
+    const markdown = "# Stored report\n\né 🦞\0\n";
+    await store.upsertPeriod({ report, summary, markdown });
+    expect(await request("json")).toHaveBeenCalledWith(true, { report, summary });
+    expect(await request("markdown")).toHaveBeenCalledWith(true, { markdown });
+    await store.upsertPeriod({ report, markdown: "Updated report" });
+    expect(await request("json")).toHaveBeenCalledWith(true, { report, summary: null });
+    expect(await request("markdown")).toHaveBeenCalledWith(true, {
+      markdown: "Updated report",
+    });
+  } finally {
+    await service.stop?.(context);
+  }
+});
