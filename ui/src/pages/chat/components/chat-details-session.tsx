@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
+import { For, Show, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { getLocale, t } from "../../../lib/reactive/i18n.ts";
@@ -21,6 +21,7 @@ import { ChatSummaryAutomations } from "./chat-summary-automations.tsx";
 
 type Props = { props?: ChatDetailsProps; presented: boolean; dismissed?: boolean };
 export type ChatDetailsSession = SolidBridgeElement<Props>;
+const diffSummaryInputs = new WeakMap<ChatDetailsSession, () => void>();
 
 export const ChatDetailsSession = defineSolidBridge<Props>(
   "openclaw-chat-details-session",
@@ -41,6 +42,22 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
     const Background = (backgroundProps: Parameters<typeof ChatDetailsBackground>[0]) =>
       ChatDetailsBackground(backgroundProps, processes);
     const changes = createSessionDiffSummary(host.ownerDocument, () => host.isConnected);
+    const syncDiffSummary = () =>
+      changes.update({
+        gateway: host.props?.pullRequestsGateway,
+        sessionKey: host.props?.sessionKey ?? "",
+        agentId: host.props?.currentAgentId ?? undefined,
+        sessionId: host.props?.selectedSession?.sessionId,
+        presented: host.presented && Boolean(host.props?.onOpenSessionDiff),
+        runActive:
+          host.props?.runActive === true || host.props?.selectedSession?.hasActiveRun === true,
+      });
+    diffSummaryInputs.set(host, syncDiffSummary);
+    onSettled(syncDiffSummary);
+    onCleanup(() => {
+      diffSummaryInputs.delete(host);
+      changes.dispose();
+    });
     const changesView = projectOwner(changes, (owner) => owner.snapshot);
     const summary = () => changesView.read().summary;
     const compactNumber = createMemo(
@@ -66,19 +83,6 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
         .filter(Boolean)
         .join(" ");
     };
-    createEffect(
-      () => ({
-        gateway: props.props?.pullRequestsGateway,
-        sessionKey: props.props?.sessionKey ?? "",
-        agentId: props.props?.currentAgentId ?? undefined,
-        sessionId: props.props?.selectedSession?.sessionId,
-        presented: props.presented && Boolean(props.props?.onOpenSessionDiff),
-        runActive:
-          props.props?.runActive === true || props.props?.selectedSession?.hasActiveRun === true,
-      }),
-      (input) => changes.update(input),
-    );
-    onCleanup(() => changes.dispose());
     const identity = createMemo(() =>
       JSON.stringify([
         props.props?.sessionKey,
@@ -322,6 +326,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
     propertyChanged: (host, key) => {
       if (key === "props" || key === "presented") {
         syncSessionPanelInputs(host);
+        diffSummaryInputs.get(host)?.();
       }
     },
     properties: {
