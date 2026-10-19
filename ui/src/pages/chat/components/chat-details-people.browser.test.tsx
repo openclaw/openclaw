@@ -26,6 +26,8 @@ it("shows a known unloaded remainder without fabricating people and fades only o
       />
     </div>
   ));
+  // Keep rename width fixed so tooltip updates cannot rely on a resize.
+  view.container.style.fontFamily = "monospace";
   const label = view.container.querySelector<HTMLElement>(".chat-details-people__name")!;
   await document.fonts.ready;
   await expect.poll(() => label.hasAttribute("data-overflow")).toBe(true);
