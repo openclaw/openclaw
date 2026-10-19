@@ -1,4 +1,5 @@
 import { controlUiAccentInk } from "./accent-contrast.ts";
+import { controlUiDocumentHead } from "./control-ui-document-head.ts";
 
 const ACCENT_CSS_VARIABLES = [
   "--ring",
@@ -53,7 +54,7 @@ export function syncControlUiSystemChrome(paletteChanged = false): void {
     return;
   }
   root.style.setProperty("--control-ui-system-chrome-background", background);
-  for (const meta of document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]')) {
+  for (const meta of controlUiDocumentHead().themeColors) {
     meta.content = background;
     meta.removeAttribute("media");
   }

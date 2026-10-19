@@ -364,10 +364,11 @@ tokens. Each observed combination uses one sample in the existing shared cap.
 
 `openclaw_sessions_list_response_bytes_total` reuses these labels and adds
 `rows_outcome`: `unchanged` for `rowsUnchanged`, `delta` for `rowsDelta`,
-`full-no-base` for full sidebar replies when the request omits `ifRowsRevision`,
-or `full-with-base` when it supplies a revision. `full-with-base` includes
+`full-no-base` for conditional replies when the request omits `ifRowsRevision`
+or supplies an empty opt-in token, or `full-with-base` when it supplies a revision.
+`full-with-base` includes
 stale or evicted bases and the rare case where every row changed.
-Non-sidebar row modes use `not-sidebar`. Diagnostics derives these labels from
+Non-sidebar row modes without the opt-in use `not-sidebar`. Diagnostics derives these labels from
 the request and existing response fields without changing the protocol payload.
 
 `openclaw_sessions_list_baseline_retirements_total{cause}` counts retirement
@@ -375,14 +376,14 @@ events, not rows or the number of views cleared. Causes are `projection-revision
 `config`, `identity`, `selection-reset`, `view-evicted` (the 512-slot or 32 MiB
 estimated-retention limit), and
 `history-evicted` (the 32-generation limit). Only clears or evictions retaining
-sidebar rows or history count, including empty sidebar row lists. Selection-only
-and non-sidebar views do not count. When a read observes multiple invalidations,
+conditional rows or history count, including empty row lists. Selection-only
+and non-conditional views do not count. When a read observes multiple invalidations,
 `config` takes precedence
 over `identity`, then `projection-revision`; an earlier selection reset already
 clears the cache and is counted separately at that point.
 
-`openclaw_sessions_list_base_misses_total{reason}` counts successful full sidebar
-replies with a supplied `ifRowsRevision`. `unknown-base` means no eligible history
+`openclaw_sessions_list_base_misses_total{reason}` counts successful full conditional
+replies with a nonempty `ifRowsRevision`. `unknown-base` means no eligible history
 base was found, including after restart, eviction, or a non-delta revision token.
 `all-rows-changed` means the base was found but the delta was not smaller than the
 full row list (also possible for an empty list). The existing `full-with-base`

@@ -482,6 +482,9 @@ async function callInProcessGatewayToolBound<T>(
             ...(creation.requesterProfileId
               ? { requesterProfileId: creation.requesterProfileId }
               : {}),
+            ...(creation.gitContributorProfileId
+              ? { gitContributorProfileId: creation.gitContributorProfileId }
+              : {}),
             ...(creation.completionOwnerSessionKey
               ? { completionOwnerSessionKey: creation.completionOwnerSessionKey }
               : {}),

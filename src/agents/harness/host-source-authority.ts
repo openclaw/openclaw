@@ -218,9 +218,7 @@ export function retainHarnessSource(
     },
     get sourceIdentity() {
       assertCurrent();
-      const identity = source.source;
-      assertCurrent();
-      return identity;
+      return source.source;
     },
     bindModelExecution: (model: ModelRef | undefined) => {
       assertCurrent();

@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { readAgentDatabaseAdmissionRefusal } from "./agent-database-admission.js";
@@ -69,9 +70,9 @@ function withImmediateAdmission(run: Parameters<typeof withAgentDatabaseStartupA
   return withAgentDatabaseStartupAdmission(run, { deferInspections: false });
 }
 
-it("skips an unconfigured system-agent database across startup passes while keeping Doctor strict", async () => {
+it("skips an unowned non-reserved database across startup passes while keeping Doctor strict", async () => {
   const fleet = createFleet();
-  const leftover = fleet.agent("openclaw").path;
+  const leftover = fleet.agent("unowned").path;
   closeDatabases();
   fs.writeFileSync(leftover, "not a configured database");
   const before = fs.readFileSync(leftover);
@@ -82,7 +83,7 @@ it("skips an unconfigured system-agent database across startup passes while keep
       compatible,
     );
     fleet.expectInspections(0);
-    expect(readAgentDatabaseAdmissionRefusal("openclaw", { env: fleet.env })).toBeUndefined();
+    expect(readAgentDatabaseAdmissionRefusal("unowned", { env: fleet.env })).toBeUndefined();
   });
   await expect(fleet.doctor([], fleet.config)).rejects.toThrow();
   expect(fs.readFileSync(leftover)).toEqual(before);
@@ -247,10 +248,13 @@ it("reads newly registered stores without copying admitted state after startup w
       `PRAGMA journal_mode=DELETE; PRAGMA user_version=${supportedVersions.agent + 1};`,
     );
     const prepare = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation");
+    const exec = vi.spyOn(requireNodeSqlite().DatabaseSync.prototype, "exec");
     expect(await fleet.inspect()).toMatchObject({
       incompatible: [versionRow("agent", changedPath, supportedVersions.agent + 1)],
       indeterminate: [],
     });
+    expect(exec.mock.calls.filter(([sql]) => /PRAGMA busy_timeout/iu.test(sql))).toEqual([]);
+    exec.mockRestore();
     const statePath = fs.realpathSync.native(
       path.join(fleet.env.OPENCLAW_STATE_DIR, "state", "openclaw.sqlite"),
     );

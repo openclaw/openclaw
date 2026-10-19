@@ -49,6 +49,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/database-engine/gateway-session-startup.conformance.test.ts",
   "src/infra/database-engine/conversation-batches.conformance.test.ts",
   "src/infra/database-engine/session-actor.conformance.test.ts",
+  "src/infra/database-engine/audit-retention.conformance.test.ts",
   "src/infra/database-engine/pending-input.conformance.test.ts",
   "src/infra/database-engine/subagent-registry.conformance.test.ts",
   "src/infra/database-engine/gateway-agent-inspection.conformance.test.ts",

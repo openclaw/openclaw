@@ -9,10 +9,17 @@ import { ChatPermissionPicker, type ChatPermissionPickerProps } from "./chat-per
 
 it("keeps locked modes unavailable and selects enabled numeric shortcuts with return focus", async () => {
   const onSelect = vi.fn();
-  const { container } = mountSolid(() => (
-    <ChatPermissionPicker canSelectFull={false} mode="guarded" onSelect={onSelect} />
-  ));
+  const canSelectFull = vi.fn(() => false);
+  const options: ChatPermissionPickerProps = {
+    get canSelectFull() {
+      return canSelectFull();
+    },
+    mode: "guarded",
+    onSelect,
+  };
+  const { container } = mountSolid(() => <ChatPermissionPicker {...options} />);
   flush();
+  expect(canSelectFull).not.toHaveBeenCalled();
   const trigger = container.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!;
   trigger.focus();
   trigger.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true, cancelable: true }));

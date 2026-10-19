@@ -73,6 +73,11 @@ Sidebar replies include an opaque `rowsRevision`. A client can send it as
 `sessions` array when the authorized rows are unchanged. Counts, defaults, and
 facets still describe the current full window.
 
+Compact and dashboard callers can opt into the same shared-fact and conditional
+row contract by sending `ifRowsRevision: ""` on the initial read. Subsequent reads
+send the returned revision, scoped to the same query and connection. Omitting
+`ifRowsRevision` preserves their ordinary full row arrays without shared facts.
+
 Clients that also accept row deltas send `ifRowsRevision: "delta:<revision>"`.
 When that query's previous row identities are still retained, `sessions` contains only
 changed or inserted rows, and `rowsDelta` contains `baseRevision` and `order`.

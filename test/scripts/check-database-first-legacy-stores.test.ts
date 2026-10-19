@@ -251,6 +251,17 @@ describe("check-database-first-legacy-stores", () => {
     ]);
   });
 
+  it("keeps transcript bridge markers out of runtime while permitting migration owners", () => {
+    const source = 'const transcriptLocator = "sqlite-transcript://legacy";';
+    expect(violations(source, "src/runtime/fixture.ts")).toEqual([
+      { kind: "legacy transcript bridge marker", line: 1 },
+    ]);
+    expect(violations(source, "src/commands/doctor/fixture.ts")).toEqual([]);
+    expect(
+      violations('type Locator = "sqlite-transcript://legacy";', "src/runtime/fixture.ts"),
+    ).toEqual([]);
+  });
+
   // Legacy paths and literal propagation.
   it.each(
     namedCases({

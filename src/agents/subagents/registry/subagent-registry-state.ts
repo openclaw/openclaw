@@ -391,11 +391,13 @@ export async function withSubagentRunReadSnapshot<S extends SubagentRunReadSelec
 export function prepareSubagentRunsSnapshotForSessions(
   inMemoryRuns: Map<string, SubagentRunRecord>,
   sessionKeys: readonly string[],
+  context?: OpenClawStateWorkerContext,
 ) {
   return prepareSubagentSessionRunReadSnapshot({
     inMemoryRuns,
     sessionKeys,
     fullCache: persistedSubagentRunsReadCache,
+    context,
   });
 }
 

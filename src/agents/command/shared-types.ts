@@ -59,7 +59,11 @@ export type AgentRunClientContext = Pick<
 
 export type AgentRunMessageContext = Pick<
   QueuedAgentRunParams,
-  "agentAccountId" | "senderIsOwner" | "sourceReplyDeliveryMode" | "taskSuggestionDeliveryMode"
+  | "agentAccountId"
+  | "senderIsOwner"
+  | "gitContributorProfileId"
+  | "sourceReplyDeliveryMode"
+  | "taskSuggestionDeliveryMode"
 > & {
   /** Opaque host-issued capability for current-turn channel message actions. */
   messageActionTurnCapability?: string;

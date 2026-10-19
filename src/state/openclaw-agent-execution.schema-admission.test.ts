@@ -7,6 +7,7 @@ import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { AgentDatabaseSchemaAdmissionInvalidError } from "./agent-database-admission-error.js";
+import { invalidateOpenClawAgentDatabaseValidation } from "./openclaw-agent-db-validation-cache.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesAsync,
@@ -27,12 +28,16 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-function createSource(assertCurrent = () => {}): AgentDatabaseRequestExecutionSource {
+function createSource(
+  assertCurrent = () => {},
+  onRequest?: (request: workerAdmission.SqliteWorkerAdmissionRequest) => void,
+): AgentDatabaseRequestExecutionSource {
   return {
     assertCurrent,
     createAdmission: (binding) => () => ({
       nativeLocations: binding.nativeLocations,
       admission: workerAdmission.createSqliteWorkerOperationAdmission((request, grant) => {
+        onRequest?.(request);
         binding.authorize(request);
         if (!grant()) {
           throw new Error("Schema admission fixture lost admission");
@@ -132,5 +137,54 @@ it("rejects malformed native schema receipts without replaying caller work", asy
   } finally {
     malformed.mockRestore();
     await execution.release();
+  }
+});
+
+it("admits schema and integrity once, then warm turns request only their writes", async () => {
+  const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-warm-turn-")) };
+  const database = openOpenClawAgentDatabase({ agentId: "main", env });
+  // Force worker verification so the cold turn shows the admission work being counted.
+  invalidateOpenClawAgentDatabaseValidation(database.path);
+  const generation = createAgentDatabaseNativeGeneration(
+    "main",
+    database.path,
+    captureOpenClawStateWorkerContext({ env }),
+    new AgentDatabaseExecutionLifetime().state,
+    () => {},
+    () => {},
+    undefined,
+    () => {},
+    () => {},
+  );
+  const requests: string[] = [];
+  const source = createSource(undefined, (request) => {
+    const kind = isRecord(request.facts) ? request.facts.kind : undefined;
+    requests.push(typeof kind === "string" ? `${request.stage}:${kind}` : request.stage);
+  });
+  // A chat turn prepares the agent database for writing, then records its transcript.
+  const turn = (sessionId: string) =>
+    generation.run(
+      source,
+      (scope) =>
+        scope.execute({
+          type: "session.transcript.initialize",
+          input: { sessionKey: `agent:main:${sessionId}`, sessionId },
+        }),
+      undefined,
+      true,
+    );
+  try {
+    await turn("first-turn");
+    expect(requests).toEqual(
+      expect.arrayContaining(["open", "prepare:agent-validation-start", "commit"]),
+    );
+    requests.length = 0;
+    await turn("second-turn");
+    await turn("third-turn");
+    // No open, registration, schema preparation or integrity validation repeats (#166253).
+    const write = ["prepare", "transaction", "commit"];
+    expect(requests).toEqual([...write, ...write]);
+  } finally {
+    await generation.close();
   }
 });

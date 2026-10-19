@@ -1,5 +1,4 @@
-import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
-import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { auth, type FetchLike } from "@modelcontextprotocol/client";
 import { describe, expect, it } from "vitest";
 import {
   closeOpenClawStateDatabaseAsync,

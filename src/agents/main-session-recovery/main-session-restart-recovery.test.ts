@@ -19,6 +19,8 @@ import {
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import { resolveReplyRunDeliveryContext } from "../../auto-reply/reply/agent-runner-core.js";
 import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-marker.js";
+import { createReplyRestartRecoveryClaimController } from "../../auto-reply/reply/restart-recovery-claim.js";
+import { createReplyRecoveryActorFixture } from "../../auto-reply/reply/restart-recovery-claim.test-support.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -101,6 +103,10 @@ import {
   markReplyOperationExecutionStarted,
 } from "../../sessions/session-controller.state.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import {
+  buildRunUserTurnIdempotencyKey,
+  createUserTurnTranscriptRecorder,
+} from "../../sessions/user-turn-transcript.js";
 import {
   createAgentDatabaseInspectionRefusal,
   preparePendingAgentDatabase,
@@ -1974,67 +1980,165 @@ describe("main-session-restart-recovery", () => {
     expect(gatewayParams().internalExecutionIdentityRecoveryAttempt).toBe(1);
   });
 
-  it("keeps ambiguous pre-admission recovery identity unbound", async () => {
-    const { sessionsDir, readEntry } = await makeMainSessionFixture({
-      restartRecoveryDeliveryRunId: "control-ui-run",
-      restartRecoveryDeliverySourceRunId: "control-ui-run",
-    });
-    await writeCompletedToolTranscript(sessionsDir);
-    vi.mocked(callGateway).mockRejectedValueOnce(new Error("gateway unavailable"));
-
-    await expectRecovery(
-      { started: 0, settled: 0, failed: 1, skipped: 0 },
-      executionIdentityEnabledConfig,
-    );
-
-    const firstRecoveryRunId = gatewayParams().idempotencyKey;
-    expect(firstRecoveryRunId).toEqual(expect.any(String));
-    expect(firstRecoveryRunId).not.toBe("control-ui-run");
-    const pending = readEntry();
-    expect(pending).toMatchObject({
-      abortedLastRun: true,
-      mainRestartRecovery: { chargedAttempts: 1 },
-      restartRecoveryDeliveryRunId: firstRecoveryRunId,
-      restartRecoveryDeliverySourceRunId: "control-ui-run",
-      sessionId: "main-session",
-      status: "interrupted",
-    });
-    expect(pending?.mainRestartRecovery?.reservation).toBeUndefined();
-    expect(pending?.mainRestartRecovery?.executionIdentity).toBeUndefined();
-    expect(gatewayParams()).toMatchObject({
-      internalExecutionIdentityRetry: false,
-      internalExecutionIdentityRecoveryAttempt: 1,
-    });
-
-    await expectRecovery(
-      { started: 1, settled: 0, failed: 0, skipped: 0 },
-      executionIdentityEnabledConfig,
-    );
-    const runIds = vi
-      .mocked(callGateway)
-      .mock.calls.map(([request]) =>
-        request.method === "agent"
-          ? (request.params as { idempotencyKey?: unknown }).idempotencyKey
-          : undefined,
-      )
-      .filter((runId) => runId !== undefined);
-    expect(runIds).toEqual([firstRecoveryRunId, firstRecoveryRunId]);
-    const recovered = readEntry();
-    expect(recovered).toMatchObject({
+  it("resumes an admitted queued user turn under a distinct recovery identity", async () => {
+    const inputRunId = "queued-human-input";
+    const executionRunId = "queued-followup-execution";
+    const sourceTurnId = buildRunUserTurnIdempotencyKey(inputRunId);
+    const { sessionsDir, storePath, sessionKey, readEntry } = await makeMainSessionFixture({
       abortedLastRun: false,
-      mainRestartRecovery: { chargedAttempts: 2 },
-      restartRecoveryDeliveryRunId: firstRecoveryRunId,
-      restartRecoveryDeliverySourceRunId: "control-ui-run",
+      mainRestartRecovery: undefined,
+      status: "done",
     });
-    expect(recovered?.status).toBeUndefined();
-    const agentRequests = vi
-      .mocked(callGateway)
-      .mock.calls.map(([request]) => request)
-      .filter((request) => request.method === "agent");
-    expect(agentRequests[1]).toMatchObject({
-      params: { internalExecutionIdentityRetry: true, internalExecutionIdentityRecoveryAttempt: 2 },
+    let entry = readEntry()!;
+    {
+      const recorder = createUserTurnTranscriptRecorder({
+        message: {
+          role: "user",
+          content: "finish the synthetic task",
+          timestamp: 1,
+          idempotencyKey: sourceTurnId,
+        },
+        target: {
+          agentId: "main",
+          storePath,
+          sessionKey,
+          sessionId: entry.sessionId,
+          sessionEntry: entry,
+        },
+        updateMode: "none",
+      });
+      await using actor = createReplyRecoveryActorFixture({
+        agentId: "main",
+        storePath,
+        sessionKey,
+        getSessionId: () => entry.sessionId,
+      });
+      const controller = createReplyRestartRecoveryClaimController({
+        agentId: "main",
+        storePath,
+        sessionKey,
+        acquireSessionActor: () => actor.acquireSessionActor(),
+        admissionRunId: inputRunId,
+        executionRunId,
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+        sourceTurnId,
+        getEntry: () => entry,
+        getSessionId: () => entry.sessionId,
+        setEntry: (next) => {
+          entry = next;
+        },
+        isRestartAbort: () => false,
+        resolveDeliveryContext: () => discordDeliveryContext,
+      });
+      await expect(controller.admitUserTurn(recorder)).resolves.toBe("admitted");
+    }
+    expect(readEntry()).toMatchObject({
+      restartRecoveryDeliveryRunId: inputRunId,
+      restartRecoveryDeliverySourceRunId: sourceTurnId,
     });
+    await markRestartAbortedMainSessions({
+      activeRuns: [activeRestartRun(sessionKey, entry.sessionId, { runId: executionRunId })],
+      isActiveRun: () => true,
+    });
+    let resumedRunId: string | undefined;
+    let dispatchError: unknown;
+    vi.mocked(callGateway).mockImplementationOnce(async ({ params }) => {
+      const request = expectRecord(params, "recovery request");
+      resumedRunId = String(request.idempotencyKey);
+      try {
+        await appendTranscriptMessage(
+          { storePath, sessionKey, sessionId: entry.sessionId },
+          {
+            cwd: sessionsDir,
+            message: makeUserMessage(String(request.message), {
+              idempotencyKey: buildRunUserTurnIdempotencyKey(resumedRunId),
+            }),
+          },
+        );
+      } catch (error) {
+        dispatchError = error;
+        throw error;
+      }
+      return { runId: resumedRunId };
+    });
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+    expect(dispatchError).toBeUndefined();
+    expect(result).toEqual({ started: 1, settled: 0, failed: 0, skipped: 0 });
+    expect(resumedRunId).not.toBe(inputRunId);
+    expect(readEntry()?.restartRecoveryDeliverySourceRunId).toBe(sourceTurnId);
+    const transcript = await loadTestTranscript(sessionKey, storePath);
+    expect(
+      transcript.filter((event) => event.message?.idempotencyKey === sourceTurnId),
+    ).toHaveLength(1);
   });
+
+  it.each(["control-ui-run", "control-ui-run:user"])(
+    "keeps ambiguous recovery identity unbound for source %s",
+    async (sourceRunId) => {
+      const { sessionsDir, readEntry } = await makeMainSessionFixture({
+        restartRecoveryDeliveryRunId: "control-ui-run",
+        restartRecoveryDeliverySourceRunId: sourceRunId,
+      });
+      await writeCompletedToolTranscript(sessionsDir);
+      vi.mocked(callGateway).mockRejectedValueOnce(new Error("gateway unavailable"));
+
+      await expectRecovery(
+        { started: 0, settled: 0, failed: 1, skipped: 0 },
+        executionIdentityEnabledConfig,
+      );
+
+      const firstRecoveryRunId = gatewayParams().idempotencyKey;
+      expect(firstRecoveryRunId).toEqual(expect.any(String));
+      expect(firstRecoveryRunId).not.toBe("control-ui-run");
+      const pending = readEntry();
+      expect(pending).toMatchObject({
+        abortedLastRun: true,
+        mainRestartRecovery: { chargedAttempts: 1 },
+        restartRecoveryDeliveryRunId: firstRecoveryRunId,
+        restartRecoveryDeliverySourceRunId: sourceRunId,
+        sessionId: "main-session",
+        status: "interrupted",
+      });
+      expect(pending?.mainRestartRecovery?.reservation).toBeUndefined();
+      expect(pending?.mainRestartRecovery?.executionIdentity).toBeUndefined();
+      expect(gatewayParams()).toMatchObject({
+        internalExecutionIdentityRetry: false,
+        internalExecutionIdentityRecoveryAttempt: 1,
+      });
+
+      await expectRecovery(
+        { started: 1, settled: 0, failed: 0, skipped: 0 },
+        executionIdentityEnabledConfig,
+      );
+      const runIds = vi
+        .mocked(callGateway)
+        .mock.calls.map(([request]) =>
+          request.method === "agent"
+            ? (request.params as { idempotencyKey?: unknown }).idempotencyKey
+            : undefined,
+        )
+        .filter((runId) => runId !== undefined);
+      expect(runIds).toEqual([firstRecoveryRunId, firstRecoveryRunId]);
+      const recovered = readEntry();
+      expect(recovered).toMatchObject({
+        abortedLastRun: false,
+        mainRestartRecovery: { chargedAttempts: 2 },
+        restartRecoveryDeliveryRunId: firstRecoveryRunId,
+        restartRecoveryDeliverySourceRunId: sourceRunId,
+      });
+      expect(recovered?.status).toBeUndefined();
+      const agentRequests = vi
+        .mocked(callGateway)
+        .mock.calls.map(([request]) => request)
+        .filter((request) => request.method === "agent");
+      expect(agentRequests[1]).toMatchObject({
+        params: {
+          internalExecutionIdentityRetry: true,
+          internalExecutionIdentityRecoveryAttempt: 2,
+        },
+      });
+    },
+  );
 
   it("preserves recovery identity when a prior-lifecycle delivery run rotates", async () => {
     const previousRecoveryRunId = "recovery-run-a";
@@ -5525,7 +5629,7 @@ describe("main-session startup recovery", () => {
         await resetSubagentRegistryForTests({ persist: false });
         await markStartupOrphanedMainSessionsForRecovery({ cfg, agentIds: new Set(["main"]) });
         expect(
-          await readSessionEntrySummariesInWorker({ ...target, mainSessionRecovery: true }),
+          await readSessionEntrySummariesInWorker({ ...target, mainSessionRecovery: "claims" }),
         ).toEqual([]);
         expect(
           await recoverRestartAbortedMainSessions({ cfg, agentIds: new Set(["main"]) }),

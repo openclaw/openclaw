@@ -583,6 +583,7 @@ export function createSessionsSpawnTool(
           onSpawnEffectsStart,
           agentSessionKey: opts?.agentSessionKey,
           senderIsOwner: opts?.senderIsOwner,
+          gitContributorProfileId: opts?.gitContributorProfileId,
           expectedParentSessionId: opts?.expectedParentSessionId,
           requesterTurnRunId: opts?.requesterTurnRunId,
           completionOwnerKey: opts?.completionOwnerKey,
