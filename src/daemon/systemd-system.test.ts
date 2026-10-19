@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import type { ExecResult } from "./exec-file.js";
 
@@ -145,36 +145,33 @@ it("fails closed when manager unit load paths cannot be enumerated", async () =>
   });
 });
 
-it.each(["/etc", "/usr/lib"])(
-  "renders safe recovery for units in %s",
-  async (prefix, { onTestFinished }) => {
-    const existingGeteuid = Object.getOwnPropertyDescriptor(process, "geteuid");
-    Object.defineProperty(process, "geteuid", { configurable: true, value: () => 0 });
-    onTestFinished(() => {
-      if (existingGeteuid) {
-        Object.defineProperty(process, "geteuid", existingGeteuid);
-      } else {
-        Reflect.deleteProperty(process, "geteuid");
-      }
-    });
-    const unitPath = `${prefix}/systemd/system/${gatewayUnit}`;
-    state.paths.add(unitPath);
-    const error = await assertNoSystemSystemdOwnership(gatewayUnit).catch(
-      (caught: unknown) => caught,
-    );
-
-    expect(error).toMatchObject({
-      name: "SystemSystemdOwnershipError",
-      code: "SYSTEM_SYSTEMD_OWNERSHIP",
-      ownership: { status: "installed" },
-    });
-    expect(String(error)).toContain("--force does not override system ownership");
-    if (prefix === "/etc") {
-      expect(String(error)).toContain("systemctl disable --now openclaw-gateway.service");
-      expect(String(error)).toContain(`rm ${unitPath}`);
+it.each(["/etc", "/usr/lib"])("renders safe recovery for units in %s", async (prefix) => {
+  const existingGeteuid = Object.getOwnPropertyDescriptor(process, "geteuid");
+  Object.defineProperty(process, "geteuid", { configurable: true, value: () => 0 });
+  onTestFinished(() => {
+    if (existingGeteuid) {
+      Object.defineProperty(process, "geteuid", existingGeteuid);
     } else {
-      expect(String(error)).toContain("uninstall or reconfigure the package, generator");
-      expect(String(error)).not.toContain(`rm ${unitPath}`);
+      Reflect.deleteProperty(process, "geteuid");
     }
-  },
-);
+  });
+  const unitPath = `${prefix}/systemd/system/${gatewayUnit}`;
+  state.paths.add(unitPath);
+  const error = await assertNoSystemSystemdOwnership(gatewayUnit).catch(
+    (caught: unknown) => caught,
+  );
+
+  expect(error).toMatchObject({
+    name: "SystemSystemdOwnershipError",
+    code: "SYSTEM_SYSTEMD_OWNERSHIP",
+    ownership: { status: "installed" },
+  });
+  expect(String(error)).toContain("--force does not override system ownership");
+  if (prefix === "/etc") {
+    expect(String(error)).toContain("systemctl disable --now openclaw-gateway.service");
+    expect(String(error)).toContain(`rm ${unitPath}`);
+  } else {
+    expect(String(error)).toContain("uninstall or reconfigure the package, generator");
+    expect(String(error)).not.toContain(`rm ${unitPath}`);
+  }
+});

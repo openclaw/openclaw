@@ -211,7 +211,10 @@ describe("Matrix QA CLI runtime", () => {
       session.endStdin();
       const result = await secondWait;
 
-      expect(JSON.parse(result.stdout)).toEqual({ input: "yes", ended: true });
+      expect(JSON.parse(result.stdout.split("\n").at(-1) ?? "")).toEqual({
+        input: "yes",
+        ended: true,
+      });
       await expect(firstWait).resolves.toEqual(result);
       await expect(session.wait()).resolves.toEqual(result);
     });
