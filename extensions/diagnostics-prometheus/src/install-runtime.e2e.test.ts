@@ -105,13 +105,18 @@ async function runCli(args: string[], env: NodeJS.ProcessEnv): Promise<string> {
   return result.stdout;
 }
 
-async function packPlugin(
-  outputDir: string,
-  version: string,
-): Promise<{
-  files: string[];
-  tarballPath: string;
-}> {
+async function spawnLogged(args: string[], logPath: string, env: NodeJS.ProcessEnv, ipc = false) {
+  const log = await fs.open(logPath, "a");
+  const child = spawn(process.execPath, args, {
+    cwd: repoRoot,
+    env,
+    stdio: ["ignore", log.fd, log.fd, ...(ipc ? ["ipc" as const] : [])],
+  });
+  children.push(child);
+  return { child, closeLog: () => log.close() };
+}
+
+async function packPlugin(outputDir: string, version: string) {
   const stagingDir = path.join(outputDir, "package-source");
   await fs.cp(pluginRoot, stagingDir, {
     recursive: true,
@@ -121,41 +126,33 @@ async function packPlugin(
       return topLevel !== "dist" && topLevel !== "node_modules";
     },
   });
-  await execFileAsync(
-    process.execPath,
-    [
-      ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(packagingEntrypoints.runtimeBuild)),
-      stagingDir,
-    ],
-    {
-      cwd: repoRoot,
-      maxBuffer: 2 * 1024 * 1024,
-      timeout: 60_000,
-    },
-  );
-  await execFileAsync(
-    process.execPath,
-    [
-      ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(packagingEntrypoints.packageManifest)),
-      "--run",
-      stagingDir,
-      "--",
-      "npm",
-      "pack",
-      "--ignore-scripts",
-      "--pack-destination",
-      outputDir,
-    ],
-    {
-      cwd: repoRoot,
-      env: {
-        ...process.env,
-        OPENCLAW_PLUGIN_NPM_BUNDLE_DEPENDENCIES: "1",
+  const runPackaging = (entrypoint: keyof typeof packagingEntrypoints, args: string[]) =>
+    execFileAsync(
+      process.execPath,
+      [
+        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(packagingEntrypoints[entrypoint])),
+        ...args,
+      ],
+      {
+        cwd: repoRoot,
+        maxBuffer: 2 * 1024 * 1024,
+        timeout: 60_000,
+        ...(entrypoint === "packageManifest" && {
+          env: { ...process.env, OPENCLAW_PLUGIN_NPM_BUNDLE_DEPENDENCIES: "1" },
+        }),
       },
-      maxBuffer: 2 * 1024 * 1024,
-      timeout: 60_000,
-    },
-  );
+    );
+  await runPackaging("runtimeBuild", [stagingDir]);
+  await runPackaging("packageManifest", [
+    "--run",
+    stagingDir,
+    "--",
+    "npm",
+    "pack",
+    "--ignore-scripts",
+    "--pack-destination",
+    outputDir,
+  ]);
   const tarballPath = path.join(
     outputDir,
     `${packageName.replace(/^@/, "").replace("/", "-")}-${version}.tgz`,
@@ -191,10 +188,7 @@ async function startRegistry(params: {
   signal: AbortSignal;
 }): Promise<string> {
   const portFile = path.join(params.root, "registry-port");
-  const logPath = path.join(params.root, "registry.log");
-  const logHandle = await fs.open(logPath, "a");
-  const child = spawn(
-    process.execPath,
+  const { child, closeLog } = await spawnLogged(
     [
       "scripts/e2e/lib/plugins/npm-registry-server.mjs",
       portFile,
@@ -202,17 +196,14 @@ async function startRegistry(params: {
       params.version,
       params.tarballPath,
     ],
-    {
-      cwd: repoRoot,
-      env: isolatedEnv({
-        configPath: path.join(params.root, "unused.json"),
-        home: params.root,
-        stateDir: path.join(params.root, "unused-state"),
-      }),
-      stdio: ["ignore", logHandle.fd, logHandle.fd, "ipc"],
-    },
+    path.join(params.root, "registry.log"),
+    isolatedEnv({
+      configPath: path.join(params.root, "unused.json"),
+      home: params.root,
+      stateDir: path.join(params.root, "unused-state"),
+    }),
+    true,
   );
-  children.push(child);
   const listening = once(child, "message", { signal: params.signal });
   const closed = once(child, "close", { signal: params.signal });
   const ready = withinTest(
@@ -224,7 +215,7 @@ async function startRegistry(params: {
     params.signal,
   );
   void ready.catch(() => {});
-  await logHandle.close();
+  await closeLog();
   const [port] = await ready;
   expect(port).toEqual(expect.any(Number));
   return `http://127.0.0.1:${port}`;
@@ -275,44 +266,37 @@ describe("diagnostics-prometheus managed install runtime", () => {
     const gatewayPort = await reservePort();
     await fs.mkdir(home, { recursive: true });
     await fs.mkdir(stateDir, { recursive: true });
-    await fs.writeFile(
-      configPath,
-      `${JSON.stringify(
-        {
-          diagnostics: { enabled: true },
-          gateway: {
-            mode: "local",
-            controlUi: { enabled: false },
-            bind: "loopback",
-            port: gatewayPort,
-            trustedProxies: ["127.0.0.1"],
-            auth: {
-              mode: "trusted-proxy",
-              password: gatewayPassword,
-              trustedProxy: {
-                allowLoopback: true,
-                allowUsers: ["restricted-scraper@example.com"],
-                requiredHeaders: ["x-forwarded-proto"],
-                userHeader: "x-forwarded-user",
-              },
-            },
-            roles: {
-              default: "metrics-denied",
-              definitions: {
-                "metrics-denied": {
-                  agents: "*",
-                  scopes: ["operator.approvals"],
-                  sessions: { others: "none" },
-                },
-              },
+    const config = {
+      diagnostics: { enabled: true },
+      gateway: {
+        mode: "local",
+        controlUi: { enabled: false },
+        bind: "loopback",
+        port: gatewayPort,
+        trustedProxies: ["127.0.0.1"],
+        auth: {
+          mode: "trusted-proxy",
+          password: gatewayPassword,
+          trustedProxy: {
+            allowLoopback: true,
+            allowUsers: ["restricted-scraper@example.com"],
+            requiredHeaders: ["x-forwarded-proto"],
+            userHeader: "x-forwarded-user",
+          },
+        },
+        roles: {
+          default: "metrics-denied",
+          definitions: {
+            "metrics-denied": {
+              agents: "*",
+              scopes: ["operator.approvals"],
+              sessions: { others: "none" },
             },
           },
         },
-        null,
-        2,
-      )}\n`,
-      "utf8",
-    );
+      },
+    };
+    await fs.writeFile(configPath, JSON.stringify(config), "utf8");
 
     const pluginVersion = await readPluginVersion();
     const packedPlugin = await packPlugin(root, pluginVersion);
@@ -339,53 +323,36 @@ describe("diagnostics-prometheus managed install runtime", () => {
     const inspect = JSON.parse(
       await runCli(["plugins", "inspect", pluginId, "--runtime", "--json"], env),
     ) as {
-      install?: {
-        artifactKind?: unknown;
-        installPath?: unknown;
-        resolvedName?: unknown;
-        resolvedVersion?: unknown;
-        source?: unknown;
-        sourcePath?: unknown;
-      };
-      plugin?: {
-        enabled?: unknown;
-        id?: unknown;
-        origin?: unknown;
-        status?: unknown;
-        trustedOfficialInstall?: unknown;
-      };
+      install?: { artifactKind?: unknown; installPath?: unknown; sourcePath?: unknown };
+      plugin?: { origin?: unknown };
     };
-    expect(inspect.install).toMatchObject({
-      source: "npm",
-      resolvedName: packageName,
-      resolvedVersion: pluginVersion,
+    expect(inspect).toMatchObject({
+      install: {
+        source: "npm",
+        resolvedName: packageName,
+        resolvedVersion: pluginVersion,
+      },
+      plugin: {
+        id: pluginId,
+        enabled: true,
+        status: "loaded",
+        trustedOfficialInstall: true,
+      },
     });
     expect(typeof inspect.install?.installPath).toBe("string");
     expect(inspect.install?.artifactKind).toBeUndefined();
     expect(inspect.install?.sourcePath).toBeUndefined();
-    expect(inspect.plugin).toMatchObject({
-      id: pluginId,
-      enabled: true,
-      status: "loaded",
-      trustedOfficialInstall: true,
-    });
     expect(["config", "global"]).toContain(inspect.plugin?.origin);
 
-    const gatewayLogHandle = await fs.open(gatewayLog, "a");
-    const gateway = spawn(
-      process.execPath,
+    const { child: gateway, closeLog } = await spawnLogged(
       ["openclaw.mjs", "gateway", "run", "--bind", "loopback", "--port", String(gatewayPort)],
-      {
-        cwd: repoRoot,
-        env,
-        stdio: ["ignore", gatewayLogHandle.fd, gatewayLogHandle.fd],
-      },
+      gatewayLog,
+      env,
     );
-    children.push(gateway);
     const gatewayClosed = once(gateway, "close", { signal });
     // Setup can fail before this waiter is awaited; afterEach still owns forced cleanup.
     void gatewayClosed.catch(() => {});
-    await gatewayLogHandle.close();
+    await closeLog();
     await waitForGateway({ child: gateway, logPath: gatewayLog, port: gatewayPort });
 
     const url = `http://127.0.0.1:${gatewayPort}/api/diagnostics/prometheus`;
@@ -428,13 +395,10 @@ describe("diagnostics-prometheus managed install runtime", () => {
       const lines = (await response.text())
         .split("\n")
         .filter((line) => line.startsWith("openclaw_gateway_event_loop_"));
-      const value = (name: string) =>
-        Number(
-          lines
-            .find((line) => line.startsWith(`${name} `))
-            ?.split(" ")
-            .at(-1),
-        );
+      const value = (name: string) => {
+        const metric = lines.find((line) => line.startsWith(`${name} `));
+        return Number(metric?.split(" ").at(-1));
+      };
       return {
         lines,
         count: value("openclaw_gateway_event_loop_delay_max_seconds_count"),
