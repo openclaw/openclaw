@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
 import type { DecisionBatch } from "openclaw/plugin-sdk/decisions";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveProviderHttpRequestConfigWithOriginTrust } from "openclaw/plugin-sdk/provider-http";
 import { getPreparedPluginSecretInput } from "openclaw/plugin-sdk/secret-input-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import plugin from "../index.js";
+import { registeredDecisionProvider } from "./transport.test-support.js";
 
 vi.mock("openclaw/plugin-sdk/secret-input-runtime", () => ({
   getPreparedPluginSecretInput: vi.fn(),
@@ -40,17 +39,7 @@ const response = {
 };
 
 function registeredProvider(config: Record<string, unknown> = {}) {
-  const registerDecisionProvider = vi.fn<OpenClawPluginApi["registerDecisionProvider"]>();
-  plugin.register({
-    runtime: { config: { current: () => ({ plugins: { entries: { typesafe: { config } } } }) } },
-    registerDecisionProvider,
-  } as unknown as OpenClawPluginApi);
-  const provider = registerDecisionProvider.mock.calls[0]?.[0];
-  assert(provider);
-  if (provider.contractVersion !== 1) {
-    throw new Error("TypeSafe fixture registered an unexpected decision contract");
-  }
-  return provider;
+  return registeredDecisionProvider(() => ({ plugins: { entries: { typesafe: { config } } } }));
 }
 
 const context = (signal = new AbortController().signal) => ({
@@ -58,6 +47,17 @@ const context = (signal = new AbortController().signal) => ({
   agentId: "research",
   signal,
   deadlineMonotonicMs: performance.now() + 1000,
+});
+function mockResponse(body: unknown = response, init?: ResponseInit) {
+  const fetch = vi.fn(
+    async (_url: RequestInfo | URL, _init?: RequestInit) =>
+      new Response(typeof body === "string" ? body : JSON.stringify(body), init),
+  );
+  vi.stubGlobal("fetch", fetch);
+  return fetch;
+}
+const withAnswer = (id: keyof typeof response.answers, overrides: object) => ({
+  answers: { ...response.answers, [id]: { ...response.answers[id], ...overrides } },
 });
 
 beforeAll(async () => {
@@ -103,13 +103,11 @@ describe.each<{ mode: string; config: { baseUrl?: string } }>([
   ])("preserves mixed answers and estimates with $name", async ({ topLevel, usage }) => {
     vi.stubEnv("TYPESAFE_BASE_URL", "https://invalid.example");
     vi.stubEnv("TYPESAFE_DEFAULT_MODEL", "unexpected");
-    const fetch = vi.fn(
-      async (_url: RequestInfo | URL, _init?: RequestInit) =>
-        new Response(
-          JSON.stringify({ ...response, ...topLevel, usage: { ...response.usage, ...usage } }),
-        ),
-    );
-    vi.stubGlobal("fetch", fetch);
+    const fetch = mockResponse({
+      ...response,
+      ...topLevel,
+      usage: { ...response.usage, ...usage },
+    });
     const provider = registeredProvider(config);
     await expect(provider.evaluate(batch, context())).resolves.toEqual({
       status: "ok",
@@ -159,62 +157,21 @@ describe.each<{ mode: string; config: { baseUrl?: string } }>([
     ["missing answer", { answers: { c: response.answers.c, s: response.answers.s } }],
     ["extra answer", { answers: { ...response.answers, extra: response.answers.q } }],
     ["mismatched answer type", { answers: { ...response.answers, q: response.answers.c } }],
-    [
-      "invalid Noul probability",
-      { answers: { ...response.answers, q: { type: "noul", noul: 1.01 } } },
-    ],
-    [
-      "extra answer field",
-      { answers: { ...response.answers, q: { ...response.answers.q, debug: true } } },
-    ],
-    [
-      "unknown Choice label",
-      { answers: { ...response.answers, c: { ...response.answers.c, choice: "other" } } },
-    ],
+    ["invalid Noul probability", withAnswer("q", { noul: 1.01 })],
+    ["extra answer field", withAnswer("q", { debug: true })],
+    ["unknown Choice label", withAnswer("c", { choice: "other" })],
     [
       "mismatched distribution labels",
-      {
-        answers: {
-          ...response.answers,
-          c: { ...response.answers.c, probabilities: { keep: 0.5, other: 0.5 } },
-        },
-      },
+      withAnswer("c", { probabilities: { keep: 0.5, other: 0.5 } }),
     ],
-    [
-      "zero distribution",
-      {
-        answers: {
-          ...response.answers,
-          c: { ...response.answers.c, probabilities: { keep: 0, skip: 0 } },
-        },
-      },
-    ],
+    ["zero distribution", withAnswer("c", { probabilities: { keep: 0, skip: 0 } })],
     [
       "invalid distribution probability",
-      {
-        answers: {
-          ...response.answers,
-          c: { ...response.answers.c, probabilities: { keep: -0.1, skip: 1 } },
-        },
-      },
+      withAnswer("c", { probabilities: { keep: -0.1, skip: 1 } }),
     ],
-    [
-      "malformed confidence",
-      { answers: { ...response.answers, c: { ...response.answers.c, confidence: "0.5" } } },
-    ],
-    [
-      "Score outside rubric",
-      { answers: { ...response.answers, s: { ...response.answers.s, score: 1.1 } } },
-    ],
-    [
-      "incorrect Score legend",
-      {
-        answers: {
-          ...response.answers,
-          s: { ...response.answers.s, legend: { 0: "Wrong", 1: "High" } },
-        },
-      },
-    ],
+    ["malformed confidence", withAnswer("c", { confidence: "0.5" })],
+    ["Score outside rubric", withAnswer("s", { score: 1.1 })],
+    ["incorrect Score legend", withAnswer("s", { legend: { 0: "Wrong", 1: "High" } })],
     ["excessive metadata bytes", { metrics: "x".repeat(4 * 1024 * 1024) }],
     ["excessive metadata nodes", { metrics: Array(262144).fill(null) }],
     [
@@ -222,20 +179,12 @@ describe.each<{ mode: string; config: { baseUrl?: string } }>([
       { metrics: Array.from({ length: 65 }).reduce<unknown>((value) => [value], null) },
     ],
   ])("rejects %s despite additive metadata", async (_name, invalid) => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async () =>
-          new Response(
-            JSON.stringify({
-              ...response,
-              ...metadata,
-              usage: { ...response.usage, ...usageMetadata },
-              ...invalid,
-            }),
-          ),
-      ),
-    );
+    mockResponse({
+      ...response,
+      ...metadata,
+      usage: { ...response.usage, ...usageMetadata },
+      ...invalid,
+    });
     await expect(registeredProvider(config).evaluate(batch, context())).resolves.toEqual({
       status: "unavailable",
       reason: "invalid-response",
@@ -248,10 +197,7 @@ describe.each<{ mode: string; config: { baseUrl?: string } }>([
       ...metadata,
       usage: { ...response.usage, ...usageMetadata },
     }).replace('"noul":0.37', '"noul":1e400');
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response(body)),
-    );
+    mockResponse(body);
     await expect(registeredProvider(config).evaluate(batch, context())).resolves.toEqual({
       status: "unavailable",
       reason: "invalid-response",
@@ -268,14 +214,10 @@ it.each([
   [429, "rate-limited"],
   [500, "transport"],
 ] as const)("classifies HTTP %s without retries or private details", async (status, reason) => {
-  const fetch = vi.fn(
-    async () =>
-      new Response("synthetic-key: synthetic only", {
-        status,
-        headers: { "retry-after-ms": "123" },
-      }),
-  );
-  vi.stubGlobal("fetch", fetch);
+  const fetch = mockResponse("synthetic-key: synthetic only", {
+    status,
+    headers: { "retry-after-ms": "123" },
+  });
   expect(await registeredProvider().evaluate(batch, context())).toEqual({
     status: "unavailable",
     reason,
@@ -286,10 +228,7 @@ it.each([
 
 it("observes prepared credential rotation, loss, recovery, and caller cancellation", async () => {
   vi.stubEnv("TYPESAFE_API_KEY", "synthetic-ambient");
-  const fetch = vi.fn(
-    async (_url: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify(response)),
-  );
-  vi.stubGlobal("fetch", fetch);
+  const fetch = mockResponse();
   const provider = registeredProvider({ apiKey: "synthetic-unprepared" });
   const controller = new AbortController();
   for (const [revision, key] of [
@@ -345,8 +284,7 @@ it.each<DecisionBatch>([
 });
 
 it("does not dispatch when preparation consumes the native deadline", async () => {
-  const fetch = vi.fn(async () => new Response(JSON.stringify(response)));
-  vi.stubGlobal("fetch", fetch);
+  const fetch = mockResponse();
   vi.spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValue(100);
   await expect(
     registeredProvider().evaluate(batch, {
@@ -417,16 +355,9 @@ it.each(["inherited array serializer", "hidden serializer", "getter", "hidden ar
         kind === "getter" ? { enumerable: true, get: hook } : { value: hook },
       );
     }
-    const fetch = vi.fn(async () => new Response("{}"));
-    vi.stubGlobal("fetch", fetch);
+    const fetch = mockResponse({});
     await expect(
-      registeredProvider().evaluate(
-        {
-          state,
-          questions: { q: { type: "boolean" } },
-        },
-        context(),
-      ),
+      registeredProvider().evaluate({ state, questions: { q: { type: "boolean" } } }, context()),
     ).resolves.toEqual({ status: "unavailable", reason: "unsupported-input" });
     expect(hook).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();

@@ -14,6 +14,13 @@ function mockFetch(implementation: typeof globalThis.fetch) {
   vi.stubGlobal("fetch", fetch);
   return fetch;
 }
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -73,32 +80,17 @@ it("preserves bounded multi-chunk JSON responses", async () => {
   mockFetch(async () => new Response(body));
   await expect(requestEvaluation(request)).resolves.toEqual({ value: 0.37 });
 });
-it.each<{ status: number; reason: string; headers: HeadersInit; retryAfterMs?: number }>([
-  { status: 400, reason: "unsupported-input", headers: {}, retryAfterMs: undefined },
-  { status: 401, reason: "authentication", headers: {}, retryAfterMs: undefined },
-  { status: 413, reason: "unsupported-input", headers: {}, retryAfterMs: undefined },
-  { status: 422, reason: "unsupported-input", headers: {}, retryAfterMs: undefined },
-  {
-    status: 429,
-    reason: "rate-limited",
-    headers: { "retry-after-ms": "250", "retry-after": "10" },
-    retryAfterMs: 250,
-  },
-  {
-    status: 429,
-    reason: "rate-limited",
-    headers: { "retry-after-ms": "invalid", "retry-after": "10" },
-    retryAfterMs: 10000,
-  },
-  {
-    status: 429,
-    reason: "rate-limited",
-    headers: { "retry-after": "invalid" },
-    retryAfterMs: undefined,
-  },
+it.each<[number, string, HeadersInit, number?]>([
+  [400, "unsupported-input", {}],
+  [401, "authentication", {}],
+  [413, "unsupported-input", {}],
+  [422, "unsupported-input", {}],
+  [429, "rate-limited", { "retry-after-ms": "250", "retry-after": "10" }, 250],
+  [429, "rate-limited", { "retry-after-ms": "invalid", "retry-after": "10" }, 10000],
+  [429, "rate-limited", { "retry-after": "invalid" }],
 ])(
-  "classifies HTTP $status without consuming private bodies or retrying",
-  async ({ status, reason, headers, retryAfterMs }) => {
+  "classifies HTTP %s without consuming private bodies or retrying",
+  async (status, reason, headers, retryAfterMs) => {
     const pull = vi.fn(() => {
       throw new Error("synthetic credential and submitted state");
     });
@@ -131,15 +123,9 @@ it.each([
 ])(
   "joins capture cancellation and release concurrently for $trigger/$status",
   async ({ status, trigger, reason }) => {
-    let finishCancellation!: () => void;
-    const cancellationGate = new Promise<void>((resolve) => {
-      finishCancellation = resolve;
-    });
-    let finishRelease!: () => void;
-    const releaseGate = new Promise<void>((resolve) => {
-      finishRelease = resolve;
-    });
-    const nativeCancel = vi.fn(() => cancellationGate);
+    const cancellationGate = deferred();
+    const releaseGate = deferred();
+    const nativeCancel = vi.fn(() => cancellationGate.promise);
     const stream = new ReadableStream<Uint8Array>(
       {
         start(controller) {
@@ -154,7 +140,7 @@ it.each([
     const [consumer, capture] = stream.tee();
     const release = vi.fn(async () => {
       await capture.cancel();
-      await releaseGate;
+      await releaseGate.promise;
     });
     const controller = new AbortController();
     vi.spyOn(providerHttp, "fetchWithProviderHttpGuard").mockImplementationOnce(async () => {
@@ -169,15 +155,13 @@ it.each([
       };
     });
     let settled = false;
+    const settle = (value: unknown) => {
+      settled = true;
+      return value;
+    };
     const outcome = requestEvaluation({ ...request, signal: controller.signal }).then(
-      (value) => {
-        settled = true;
-        return value;
-      },
-      (error: unknown) => {
-        settled = true;
-        return error;
-      },
+      settle,
+      settle,
     );
     try {
       await setImmediate();
@@ -188,10 +172,10 @@ it.each([
       expect(release).toHaveBeenCalledOnce();
       expect(nativeCancel).toHaveBeenCalledOnce();
       expect(settled).toBe(false);
-      finishCancellation();
+      cancellationGate.resolve();
       await setImmediate();
       expect(settled).toBe(false);
-      finishRelease();
+      releaseGate.resolve();
       expect(await outcome).toMatchObject({ name: "EvaluationError", reason });
       if (trigger === "overflow") {
         expect(await outcome).toHaveProperty("message", "TypeSafe response exceeds its limit.");
@@ -202,8 +186,8 @@ it.each([
     } finally {
       // Also release the fixture after an assertion fails against the old sequential implementation.
       const cancellation = Promise.allSettled([consumer.cancel(), capture.cancel()]);
-      finishCancellation();
-      finishRelease();
+      cancellationGate.resolve();
+      releaseGate.resolve();
       await cancellation;
       await outcome;
     }

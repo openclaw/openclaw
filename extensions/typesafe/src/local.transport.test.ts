@@ -2,13 +2,12 @@ import assert from "node:assert/strict";
 import { lookup } from "node:dns/promises";
 import { createServer } from "node:http";
 import type { Socket } from "node:net";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { getPreparedPluginSecretInput } from "openclaw/plugin-sdk/secret-input-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import plugin from "../index.js";
 import { evaluate } from "./client.js";
 import { runtimeConfig } from "./config.js";
 import type { EvaluationInput } from "./schema.js";
+import { registeredDecisionProvider } from "./transport.test-support.js";
 
 vi.mock("openclaw/plugin-sdk/secret-input-runtime", () => ({
   getPreparedPluginSecretInput: vi.fn(),
@@ -28,6 +27,31 @@ const input = {
     b: { type: "noul", instructions: { question: "Escalate?" } },
   },
 } satisfies EvaluationInput;
+const criteria = ["", '{"impact":["widespread",true,2]}'];
+const wireInput = {
+  ...input,
+  questions: {
+    c: { ...input.questions.c, instructions: null },
+    s: { ...input.questions.s, instructions: null, criteria },
+    b: input.questions.b,
+  },
+};
+const decisionBatch = {
+  ...input,
+  questions: { ...input.questions, b: { ...input.questions.b, type: "boolean" as const } },
+};
+const context = () => ({
+  model: input.model,
+  signal: new AbortController().signal,
+  deadlineMonotonicMs: performance.now() + 1000,
+});
+function mockResponse(response: unknown) {
+  const fetch = vi.fn(
+    async (_url: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify(response)),
+  );
+  vi.stubGlobal("fetch", fetch);
+  return fetch;
+}
 const localAnswer = {
   model: "kev-latest",
   answers: {
@@ -61,25 +85,11 @@ afterEach(() => {
 });
 
 function registeredProvider(endpoint?: string) {
-  const registerDecisionProvider = vi.fn<OpenClawPluginApi["registerDecisionProvider"]>();
-  plugin.register({
-    runtime: {
-      config: {
-        current: () => ({
-          plugins: {
-            entries: { typesafe: { config: { baseUrl: endpoint, apiKey: "hosted-materialized" } } },
-          },
-        }),
-      },
+  return registeredDecisionProvider(() => ({
+    plugins: {
+      entries: { typesafe: { config: { baseUrl: endpoint, apiKey: "hosted-materialized" } } },
     },
-    registerDecisionProvider,
-  } as unknown as OpenClawPluginApi);
-  const provider = registerDecisionProvider.mock.calls[0]?.[0];
-  assert(provider);
-  if (provider.contractVersion !== 1) {
-    throw new Error("TypeSafe fixture registered an unexpected decision contract");
-  }
-  return provider;
+  }));
 }
 
 it("refuses to send the local Kev selection to hosted inference through registered handlers", async () => {
@@ -89,11 +99,7 @@ it("refuses to send the local Kev selection to hosted inference through register
   await expect(
     provider.evaluate(
       { state: "local-only evidence", questions: { q: { type: "boolean" } } },
-      {
-        model: "kev-latest",
-        signal: new AbortController().signal,
-        deadlineMonotonicMs: performance.now() + 10000,
-      },
+      { ...context(), deadlineMonotonicMs: performance.now() + 10000 },
     ),
   ).resolves.toEqual({ status: "unavailable", reason: "unsupported-input" });
   expect(fetch).not.toHaveBeenCalled();
@@ -130,24 +136,14 @@ it.each([
   { ...localAnswer, latency_ms: -1 },
   { ...localAnswer, latency_ms: "15" },
 ])("rejects invalid local latency metadata", async (response) => {
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async () => new Response(JSON.stringify(response))),
-  );
+  mockResponse(response);
   await expect(evaluate(input, runtimeConfig({ baseUrl }))).rejects.toThrow("invalid response");
 });
 
 it("accepts hosted metadata and ignores stale keys even on direct local calls", async () => {
-  const fetch = vi.fn(
-    async (_url: RequestInfo | URL, _init?: RequestInit) =>
-      new Response(JSON.stringify(localAnswer)),
-  );
-  vi.stubGlobal("fetch", fetch);
+  const fetch = mockResponse(localAnswer);
   await expect(
-    evaluate(input, {
-      ...runtimeConfig({ baseUrl }),
-      apiKey: "hosted-secret",
-    }),
+    evaluate(input, { ...runtimeConfig({ baseUrl }), apiKey: "hosted-secret" }),
   ).resolves.toHaveProperty("evaluation.model", "kev-latest");
   expect(new Headers(fetch.mock.calls[0]?.[1]?.headers).has("authorization")).toBe(false);
   const hostedInput = {
@@ -155,10 +151,7 @@ it("accepts hosted metadata and ignores stale keys even on direct local calls", 
     model: "jev-latest",
     questions: {
       ...input.questions,
-      s: {
-        ...input.questions.s,
-        criteria: ["", '{"impact":["widespread",true,2]}'],
-      },
+      s: { ...input.questions.s, criteria },
     },
   };
   await expect(
@@ -180,12 +173,11 @@ it.each(["127.0.0.1", "localhost", "[::1]"])(
       const chunks: Buffer[] = [];
       request.on("data", (chunk: Buffer) => chunks.push(chunk));
       request.on("end", () => {
-        received.push({
-          url: request.url,
-          authorization: request.headers.authorization,
-          host: request.headers.host,
-          body: Buffer.concat(chunks).toString("utf8"),
-        });
+        const {
+          url,
+          headers: { authorization, host },
+        } = request;
+        received.push({ url, authorization, host, body: Buffer.concat(chunks).toString("utf8") });
         response.setHeader("Content-Type", "application/json");
         response.end(JSON.stringify(localAnswer));
       });
@@ -215,19 +207,7 @@ it.each(["127.0.0.1", "localhost", "[::1]"])(
       const provider = registeredProvider(`http://${hostname}:${address.port}`);
       expect(provider.isReady?.()).toBe(true);
       for (let attempt = 0; attempt < 5; attempt += 1) {
-        await expect(
-          provider.evaluate(
-            {
-              ...input,
-              questions: { ...input.questions, b: { ...input.questions.b, type: "boolean" } },
-            },
-            {
-              model: input.model,
-              signal: new AbortController().signal,
-              deadlineMonotonicMs: performance.now() + 1000,
-            },
-          ),
-        ).resolves.toMatchObject({
+        await expect(provider.evaluate(decisionBatch, context())).resolves.toMatchObject({
           status: "ok",
           result: {
             answers: {
@@ -246,18 +226,7 @@ it.each(["127.0.0.1", "localhost", "[::1]"])(
         authorization: undefined,
         host: `${hostname}:${address.port}`,
       });
-      expect(JSON.parse(received[0]!.body)).toEqual({
-        ...input,
-        questions: {
-          c: { ...input.questions.c, instructions: null },
-          s: {
-            ...input.questions.s,
-            instructions: null,
-            criteria: ["", '{"impact":["widespread",true,2]}'],
-          },
-          b: input.questions.b,
-        },
-      });
+      expect(JSON.parse(received[0]!.body)).toEqual(wireInput);
       if (hostname === "localhost") {
         expect(lookup).not.toHaveBeenCalled();
       }
