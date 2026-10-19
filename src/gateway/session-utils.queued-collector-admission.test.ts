@@ -6,7 +6,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as preparedModelRuntime from "../agents/prepared-model-runtime.js";
-import * as killControl from "../agents/subagents/registry/subagent-control-kill.js";
 import * as registryMemory from "../agents/subagents/registry/subagent-registry-memory.js";
 import { isSubagentRunQueued } from "../agents/subagents/registry/subagent-registry-read.js";
 import * as subagentRegistry from "../agents/subagents/registry/subagent-registry.js";
@@ -28,10 +27,12 @@ import { unwrapGatewayMethodDispatchResponse } from "./server-in-process-dispatc
 import { agentRunHandler } from "./server-methods/agent-run-handler.js";
 import { handleChatAbortRequest } from "./server-methods/chat-abort-handler.js";
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
+import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
 import { sessionAbortHandlers } from "./server-methods/sessions-abort.js";
 import { sessionDeleteHandlers } from "./server-methods/sessions-delete.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import type { dispatchGatewayMethodInProcess } from "./server-plugins.js";
+import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils.js";
 
 const { parentKey, requestContext, operatorClient } = useQueuedCollectorFixture();
@@ -41,13 +42,15 @@ it.each([
   [true, false],
   [false, true],
 ])(
-  "cancels real preaccept admission and joins cleanup (exact=%s, publicationFailure=%s)",
+  "joins real preaccept cleanup independently of display preparation (exact=%s, publicationFailure=%s)",
   async (exact, publicationFailure) => {
     const context = requestContext();
     const entered = createDeferred();
     const dispatched = createDeferred();
     const publicationEntered = createDeferred();
     const releasePublication = createDeferred();
+    const killWriteEntered = createDeferred();
+    const releaseKillWrite = createDeferred();
     const cleanupWaiting = createDeferred();
     const order: string[] = [];
     let nativeRunId: string | undefined;
@@ -64,31 +67,31 @@ it.each([
         }
         return pending;
       });
-    const kill = killControl.killSubagentRunAdmin;
+    let holdNotices = false;
+    const markTerminated = subagentRegistry.markSubagentRunTerminated;
     const killGate = vi
-      .spyOn(killControl, "killSubagentRunAdmin")
-      .mockImplementation((params, control) => {
-        const currentControl = expectDefined(control, "cancellation control");
-        const preparation = expectDefined(currentControl.preparePublication, "preparation");
-        const publishSnapshot = expectDefined(preparation.publishSnapshot, "snapshot publisher");
-        return kill(params, {
-          ...currentControl,
-          preparePublication: {
-            ...preparation,
-            publishSnapshot: (result) => {
-              publishSnapshot(result);
-              order.push("published");
-            },
-            prepare: async (publishPrepared) => {
-              publicationEntered.resolve();
-              await releasePublication.promise;
-              if (publicationFailure) {
-                throw new Error("publication preparation failed");
-              }
-              return await preparation.prepare(publishPrepared);
-            },
-          },
-        });
+      .spyOn(subagentRegistry, "markSubagentRunTerminated")
+      .mockImplementation(async (params) => {
+        if (params.runId === nativeRunId) {
+          holdNotices = true;
+          killWriteEntered.resolve();
+          await releaseKillWrite.promise;
+        }
+        return markTerminated(params);
+      });
+    const projection = expectDefined(getSessionRowProjection(context), "session projection");
+    const prepareRows = projection.withPreparedExactRows.bind(projection);
+    const displayGate = vi
+      .spyOn(projection, "withPreparedExactRows")
+      .mockImplementation(async (queries, consume, options) => {
+        if (holdNotices) {
+          publicationEntered.resolve();
+          await releasePublication.promise;
+          if (publicationFailure) {
+            throw new Error("publication preparation failed");
+          }
+        }
+        return prepareRows(queries, consume, options);
       });
     const runtimeGate = vi
       .spyOn(preparedModelRuntime, "loadPublishedGatewayReplyDispatchRuntime")
@@ -213,10 +216,10 @@ it.each([
         }),
       );
       await Promise.race([
-        Promise.all([dispatched.promise, publicationEntered.promise, cleanupWaiting.promise]),
+        Promise.all([dispatched.promise, killWriteEntered.promise, cleanupWaiting.promise]),
         stopping.then(() => {
           throw new Error(
-            `Stop settled before held publication: ${JSON.stringify(respond.mock.calls)}`,
+            `Stop settled before its kill write: ${JSON.stringify(respond.mock.calls)}`,
           );
         }),
       ]);
@@ -231,7 +234,7 @@ it.each([
         "collector before publication",
       );
       expect(interrupted.execution.startedAt).toBeUndefined();
-      releasePublication.resolve();
+      releaseKillWrite.resolve();
       await stopping;
       await dispatched.promise;
       // This unadopted launch still owns its provisional session; join its real cleanup.
@@ -242,25 +245,43 @@ it.each([
       );
       expect(stopped.collectorCompletion?.status).toBe("killed");
       expect(respond).toHaveBeenCalledOnce();
-      if (publicationFailure) {
-        expect(respond.mock.calls[0]?.[0]).toBe(false);
-        expect(respond.mock.calls[0]?.[2]).toMatchObject({
-          message: expect.stringContaining("publication preparation failed"),
-        });
-      } else {
-        expect
-          .soft(respond.mock.calls[0]?.slice(0, 2), JSON.stringify(respond.mock.calls[0]?.[2]))
-          .toEqual([true, { ok: true, status: "aborted", abortedRunId: entry.runId }]);
-      }
+      expect
+        .soft(respond.mock.calls[0]?.slice(0, 2), JSON.stringify(respond.mock.calls[0]?.[2]))
+        .toEqual([true, { ok: true, status: "aborted", abortedRunId: entry.runId }]);
       expect.soft(context.chatRunState.hasAbortMarker(entry.runId)).toBe(true);
       expect.soft(admission.adapter.abortStopReason).toBe("rpc");
       expect.soft(entry.execution.startedAt).toBeUndefined();
       expect.soft(entry.sessionStartedAt).toBeUndefined();
       expect(rpcSourceTesting.has(entry.runId)).toBe(false);
-      expect(order[0]).toBe(publicationFailure ? "deleting" : "published");
       expect(order).toContain("deleted");
       expect(await sessionEntry()).toBeUndefined();
+      await publicationEntered.promise;
+      expect(context.broadcastToConnIds).toHaveBeenCalledWith(
+        "sessions.changed",
+        expect.objectContaining({ reason: "delete" }),
+        new Set(["observer"]),
+        expect.any(Object),
+      );
+      expect(context.broadcastToConnIds).not.toHaveBeenCalledWith(
+        "sessions.changed",
+        expect.objectContaining({ sessionKey: entry.childSessionKey, reason: "abort" }),
+        expect.anything(),
+        expect.anything(),
+      );
+      releasePublication.resolve();
+      await flushPendingSessionsChangedEvents(context);
+      expect(context.broadcastToConnIds).toHaveBeenCalledWith(
+        "sessions.changed",
+        expect.objectContaining(
+          publicationFailure
+            ? { reason: "update" }
+            : { sessionKey: entry.childSessionKey, reason: "abort" },
+        ),
+        new Set(["observer"]),
+        expect.any(Object),
+      );
     } finally {
+      releaseKillWrite.resolve();
       releasePublication.resolve();
       if (nativeRunId) {
         const source = rpcSourceTesting.get(nativeRunId);
@@ -271,7 +292,8 @@ it.each([
         clearAgentRunContext(nativeRunId);
       }
       await stopping;
-      for (const spy of [killGate, runtimeGate, registration, publicationWait]) {
+      await flushPendingSessionsChangedEvents(context);
+      for (const spy of [killGate, displayGate, runtimeGate, registration, publicationWait]) {
         spy.mockRestore();
       }
     }

@@ -93,7 +93,7 @@ export function retainSessionPlacementRead(
 
 type PlacementReadObservation = {
   owner: PlacementAuthorityOwner;
-  observation: { revokedBy: Set<string>; indeterminate: boolean };
+  observation: { revoked: boolean; indeterminate: boolean };
   authority: { assertCurrent: () => void; release: () => void };
   assertUsable: () => void;
 };
@@ -168,7 +168,7 @@ export async function readCachedPlacementProjection(
       : (owner.projections.get(sessionId) ?? (await read()));
     signal?.throwIfAborted();
     assertUsable();
-    if (observation.revokedBy.size === 0 && !hasPendingPublication(owner, sessionId)) {
+    if (!observation.revoked && !hasPendingPublication(owner, sessionId)) {
       retainProjection(owner, sessionId, value);
     }
     return value;
@@ -193,7 +193,7 @@ export async function prepareCachedPlacementPreservationRead(
     const baseline = owner.preservation ?? (await read());
     signal?.throwIfAborted();
     assertUsable();
-    if (observation.revokedBy.size === 0 && !hasPendingPublication(owner)) {
+    if (!observation.revoked && !hasPendingPublication(owner)) {
       owner.preservation = freezeJsonSnapshot(baseline);
     }
     return {
@@ -249,11 +249,7 @@ export async function readCachedPlacementRecoveryCandidates(
       owner.recoveryCandidatesEmpty && !hasPendingPublication(owner) ? [] : await read();
     signal?.throwIfAborted();
     assertUsable();
-    if (
-      candidates.length === 0 &&
-      observation.revokedBy.size === 0 &&
-      !hasPendingPublication(owner)
-    ) {
+    if (candidates.length === 0 && !observation.revoked && !hasPendingPublication(owner)) {
       owner.recoveryCandidatesEmpty = true;
     }
     return candidates;

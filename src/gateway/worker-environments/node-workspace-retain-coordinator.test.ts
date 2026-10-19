@@ -228,7 +228,7 @@ function createHarness(
           assertCurrent: () => {
             assertPreparedResultCurrent?.();
             if (!isDeepStrictEqual(captured, findPlacement(sessionId))) {
-              throw new WorkerPlacementInventoryChangedError(new Set([sessionId]));
+              throw new WorkerPlacementInventoryChangedError();
             }
           },
           release: () => {},
@@ -567,9 +567,7 @@ describe("node workspace retain coordinator", () => {
       const { coordinator, invoke, warn, placements } = createHarness({ placements: rows });
       const prepare = vi.spyOn(placements, "prepareRuntimeRefresh");
       if (phase === "initial placement read") {
-        prepare.mockRejectedValueOnce(
-          new WorkerPlacementInventoryChangedError(new Set(["session-1"])),
-        );
+        prepare.mockRejectedValueOnce(new WorkerPlacementInventoryChangedError());
       } else {
         const inventory = placements.prepareMaintenancePlacements;
         vi.spyOn(placements, "prepareMaintenancePlacements").mockImplementationOnce(async () => {
@@ -588,7 +586,7 @@ describe("node workspace retain coordinator", () => {
   it("does not retry a typed placement failure after invoking retention", async () => {
     const { invoke, warn } = await startHarness({
       onInvoke: () => {
-        throw new WorkerPlacementInventoryChangedError(new Set(["session-1"]));
+        throw new WorkerPlacementInventoryChangedError();
       },
     });
     expect(invoke).toHaveBeenCalledOnce();
@@ -617,7 +615,7 @@ describe("node workspace retain coordinator", () => {
         const capturedRevision = resultRevision;
         return () => {
           if (capturedRevision !== resultRevision) {
-            throw new WorkerPlacementInventoryChangedError(new Set(["session-1"]));
+            throw new WorkerPlacementInventoryChangedError();
           }
         };
       },

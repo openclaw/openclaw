@@ -107,7 +107,7 @@ function commitChange(owner: PlacementAuthorityOwner, change: ClaimChange, seque
   for (const sessionId of [change.sessionId, undefined]) {
     if (affectsPlacementObservation(change, sessionId)) {
       for (const observation of owner.observations.get(sessionId) ?? []) {
-        observation.revokedBy.add(change.sessionId);
+        observation.revoked = true;
         observation.indeterminate ||= change.indeterminate === true;
       }
     }
@@ -188,7 +188,7 @@ function commitChange(owner: PlacementAuthorityOwner, change: ClaimChange, seque
 function capturePlacementObservation(pathname: string, sessionId?: string) {
   const context = captureOpenClawStateWorkerContext({ path: pathname });
   const owner = ownerFor(context.admission.identity);
-  const observation = { revokedBy: new Set<string>(), indeterminate: false };
+  const observation = { revoked: false, indeterminate: false };
   const observations = owner.observations.get(sessionId) ?? new Set<typeof observation>();
   observations.add(observation);
   owner.observations.set(sessionId, observations);
@@ -215,18 +215,10 @@ function capturePlacementObservation(pathname: string, sessionId?: string) {
   const authority = {
     assertCurrent(this: void) {
       assertUsable();
-      if (observation.revokedBy.size > 0 || hasPendingPublication(owner, sessionId)) {
-        if (sessionId === undefined) {
-          throw new WorkerPlacementInventoryChangedError(
-            new Set([
-              ...observation.revokedBy,
-              ...[...owner.pending]
-                .filter((change) => affectsPlacementObservation(change))
-                .map((change) => change.sessionId),
-            ]),
-          );
-        }
-        throw new WorkerPlacementInventoryChangedError(new Set([sessionId]), changedMessage);
+      if (observation.revoked || hasPendingPublication(owner, sessionId)) {
+        throw sessionId === undefined
+          ? changed()
+          : new WorkerPlacementInventoryChangedError(changedMessage);
       }
     },
     release(this: void) {
@@ -245,7 +237,7 @@ function capturePlacementObservation(pathname: string, sessionId?: string) {
 
 export async function preparePlacementAuthorityRead<T>(
   pathname: string,
-  sessionId: string | undefined,
+  sessionId: string,
   read: () => Promise<T>,
 ) {
   return await preparePlacementRead(

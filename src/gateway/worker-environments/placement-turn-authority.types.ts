@@ -64,7 +64,7 @@ export type PlacementAuthorityOwner = {
     string,
     { placement: WorkerSessionPlacementRecord | undefined; sequence: number }
   >;
-  observations: Map<string | undefined, Set<{ revokedBy: Set<string>; indeterminate: boolean }>>;
+  observations: Map<string | undefined, Set<{ revoked: boolean; indeterminate: boolean }>>;
   pending: Set<ClaimChange>;
   sequence: number;
   published: Map<string, number>;

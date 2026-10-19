@@ -321,17 +321,21 @@ it.for([
         ),
     );
     const onResult = vi.fn();
+    const onSnapshot = vi.fn();
     try {
       const result = await killScope
         .run(true, () =>
           publication === "result"
-            ? killSubagentRunAdmin({
-                cfg: getRuntimeConfig(),
-                sessionKey: childKey,
-                agentId: "main",
-                expectedRunId: runId,
-                onResult,
-              })
+            ? killSubagentRunAdmin(
+                {
+                  cfg: getRuntimeConfig(),
+                  sessionKey: childKey,
+                  agentId: "main",
+                  expectedRunId: runId,
+                  onResult,
+                },
+                { assertCurrent: () => {}, onSnapshot },
+              )
             : killAllControlledSubagentRuns({
                 cfg: getRuntimeConfig(),
                 controller: controlController,
@@ -351,6 +355,7 @@ it.for([
         label: "metadata survived",
       });
       if (publication === "result") {
+        expect(onSnapshot).toHaveBeenCalledExactlyOnceWith(result);
         expect(onResult).toHaveBeenCalledExactlyOnceWith(result);
         expect(result).toMatchObject({ found: true, killed: true });
         if (replacement) {
