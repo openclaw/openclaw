@@ -895,6 +895,52 @@ unchanged checkout eligible for revision caching should issue zero Git commands,
 including after the prior TTL. Compare B minus A within each concurrent pair;
 use at least two pairs with swapped CPU halves and record outside load for context.
 
+### Interactive diff contention
+
+Use the same script's `--boundary rpc` mode to measure real `sessions.diff`
+WebSocket requests while full-diff requests, host-budgeted read-only Git work,
+and external agent-like Git commands compete. Seed each side separately; the
+load checkout contains 16 tracked files with 4,096 changed lines each, written
+sequentially. This default exceeds the full-patch size guard, so those requests
+exercise diff statistics rather than patch generation. All repository data is
+synthetic. The maintenance-shaped load
+runs `diff --numstat` through the production child budget; it does not run
+maintenance, repack, garbage collection, or change repository configuration.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/checkout-diff-measure.ts \
+  --state-dir /path/to/new-rpc-fixture --boundary rpc --seed
+node --import ./scripts/tsx.mjs scripts/perf/checkout-diff-measure.ts \
+  --state-dir /path/to/new-rpc-fixture --boundary rpc --port 41473 \
+  --tabs 3 --background 8 --maintenance 2 --agents 2 --mutate --observe-git-queues --duration-ms 30000 --poll-ms 250 \
+  --start-at <epoch-ms> --output /path/to/rpc-result.json
+```
+
+Each tab polls the same session, so queued duplicate polls exercise the existing
+read owner. `--mutate` writes a tracked file before every polling round; every
+response must include the exact current added-line count, which varies by round.
+Compare response hashes for matching A/B round numbers. Without mutation, polls exercise unchanged-revision
+reuse. Background readers bypass the read cache to represent distinct heavy
+read requests. Each external agent iteration executes status, diff statistics,
+and the latest commit read; their end-to-end timings are reported separately.
+All load loops stay active for the same fixed duration on both revisions;
+completed counts and throughput accompany the latency distributions. Work
+already admitted at the deadline must settle before the report is written. Use `--heavy-files` and `--heavy-lines` at seed time to
+change the load without changing the polling checkout.
+
+The report contains RPC p50/p95/p99, independent round counts and each round’s
+maximum tab latency, heavy-reader and agent Git distributions,
+response hashes, and the existing `openclaw.git.operation` diagnostics. Queue
+fields are included with `--observe-git-queues`, which uses a benchmark-only
+loader hook to extend the existing diagnostics publication identically on both
+revisions. It changes observation only, and fails if that publication cannot be
+identified. Without the flag, absent measurements remain absent. Exclude startup
+and warmup. Compare at least two concurrent pairs under the measurement lock,
+swapping CPU halves, separate state directories and loopback ports. The
+contention acceptance rule is at least a 60% paired RPC p99 reduction with no
+agent Git regression. Inspect command counts and queue waits to distinguish
+scheduling changes from reduced Git work.
+
 ## Sandbox measurements
 
 Follow the current host policy. On Team, use only a task-owned
