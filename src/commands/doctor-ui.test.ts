@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as packageRoot from "../infra/openclaw-root.js";
 import * as commands from "../process/exec.js";
 import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
+import { fixtureGit } from "./doctor-git.test-support.js";
 import {
   detectUiProtocolFreshnessIssues,
   uiProtocolFreshnessIssueToHealthFinding,
@@ -51,24 +52,6 @@ function mockGitLog(stdout: string | null) {
 async function buildUi(root: string, date = "2026-01-01") {
   await touch(path.join(root, "ui/package.json"), new Date(date));
   await touch(path.join(root, "dist/control-ui/index.html"), new Date(date));
-}
-
-function git(root: string, ...args: string[]) {
-  return execFileSync(
-    "git",
-    ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false", "-C", root, ...args],
-    {
-      env: {
-        ...process.env,
-        GIT_AUTHOR_NAME: "Doctor UI Test",
-        GIT_AUTHOR_EMAIL: "doctor-ui@example.invalid",
-        GIT_COMMITTER_NAME: "Doctor UI Test",
-        GIT_COMMITTER_EMAIL: "doctor-ui@example.invalid",
-        GIT_AUTHOR_DATE: "2026-01-03T00:00:00Z",
-        GIT_COMMITTER_DATE: "2026-01-03T00:00:00Z",
-      },
-    },
-  );
 }
 
 it.each(["missing-assets", "stale-assets"] as const)("maps %s findings/effects", (kind) => {
@@ -135,9 +118,13 @@ it("reads committed nested protocol changes from the real complete-package git p
     path.join(root, "packages/gateway-protocol/src/schema/sessions.ts"),
     new Date("2026-01-03"),
   );
-  execFileSync("git", ["init", "--quiet", root]);
-  git(root, "add", "packages/gateway-protocol/src/schema/sessions.ts");
-  git(root, "commit", "--quiet", "-m", "update nested protocol schema");
+  const git = fixtureGit(root, {
+    GIT_AUTHOR_DATE: "2026-01-03T00:00:00Z",
+    GIT_COMMITTER_DATE: "2026-01-03T00:00:00Z",
+  });
+  git("init", "--quiet");
+  git("add", "packages/gateway-protocol/src/schema/sessions.ts");
+  git("commit", "--quiet", "-m", "update nested protocol schema");
   await expect(inspectRoot(root)).resolves.toEqual([
     expect.objectContaining({
       kind: "stale-assets",

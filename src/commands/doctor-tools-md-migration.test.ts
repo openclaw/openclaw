@@ -111,23 +111,13 @@ describe("TOOLS.md migration", () => {
     );
   });
   it("refuses to migrate a TOOLS.md whose bytes are not valid UTF-8", async () => {
-    const fixture = await createFixture();
-    const agents = "# Agent\n\n## Tools\n\nExisting notes.\n";
-    const toolsBytes = Buffer.concat([
-      Buffer.from("### Cameras\n\n- kitchen → wide "),
-      Buffer.from([0xff, 0xfe]),
-      Buffer.from(" angle\n"),
-    ]);
-    await fs.writeFile(fixture.agentsPath, agents);
-    await fs.writeFile(fixture.toolsPath, toolsBytes);
-    const result = await fixture.migrate();
-
-    // Replacement decoding would have been merged into AGENTS.md and re-encoded into the
-    // archive before the source unlink, so the migration must refuse before any write.
-    expect(result.changes).toEqual([]);
-    expect(result.warnings).toEqual([expect.stringContaining("is not valid UTF-8")]);
-    expect(await fs.readFile(fixture.toolsPath)).toEqual(toolsBytes);
-    expect(await fs.readFile(fixture.agentsPath, "utf8")).toBe(agents);
+    const toolsBytes = Buffer.from([0xff, 0xfe]);
+    const fixture = await createFixture(DEFAULT_AGENTS, toolsBytes);
+    expect(await fixture.migrate()).toEqual({
+      changes: [],
+      warnings: [expect.stringContaining("is not valid UTF-8")],
+    });
+    await expectUnchanged(fixture, DEFAULT_AGENTS, toolsBytes);
     await expectMissing(path.join(fixture.stateDir, "backups", "tools-md-migration"));
   });
   it("preserves customized content and ownership under restrictive umask and is idempotent", async () => {
@@ -185,8 +175,9 @@ describe("TOOLS.md migration", () => {
     await expectMigrated(fixture, expected, tools);
     if (process.platform !== "win32") {
       expect((await fs.stat(fixture.workspace)).mode & 0o777).toBe(0o751);
-      expect((await fs.stat(fixture.agentsPath)).mode & 0o777).toBe(0o640);
-      expect(await fs.stat(fixture.agentsPath)).toMatchObject({
+      const { mode, uid, gid } = await fs.stat(fixture.agentsPath);
+      expect({ mode: mode & 0o777, uid, gid }).toEqual({
+        mode: 0o640,
         uid: originalAgentsStat.uid,
         gid: originalAgentsStat.gid,
       });
@@ -201,9 +192,8 @@ describe("TOOLS.md migration", () => {
     { when: "during source revalidation", mode: 0o640, warning: "TOOLS.md changed" },
     { when: "ownership cannot be preserved", mode: 0o644, warning: "synthetic chown refusal" },
   ])("retains notes when $when without granting destination readers", async ({ mode, warning }) => {
-    const agents = "# Agent\n\n## Tools\n\nExisting notes.\n";
     const tools = "Private local notes.\n";
-    const fixture = await createFixture(agents, tools);
+    const fixture = await createFixture(DEFAULT_AGENTS, tools);
     await fs.chmod(fixture.agentsPath, 0o640);
     await fs.chmod(fixture.toolsPath, mode);
     const original = await fs.stat(fixture.agentsPath);
@@ -243,11 +233,10 @@ describe("TOOLS.md migration", () => {
       return handle;
     });
     const result = await fixture.migrate();
-    expect(result.changes).toEqual([]);
-    expect(result.warnings).toEqual([expect.stringContaining(warning)]);
+    expect(result).toEqual({ changes: [], warnings: [expect.stringContaining(warning)] });
     expect(sourceTightened).toBe(mode === 0o640);
     expect(grantedGroupRead).toBe(false);
-    await expectUnchanged(fixture, agents, tools);
+    await expectUnchanged(fixture, DEFAULT_AGENTS, tools);
     expect(await fs.stat(fixture.agentsPath)).toMatchObject({
       uid: original.uid,
       gid: original.gid,
@@ -263,14 +252,14 @@ describe("TOOLS.md migration", () => {
     }
     const result = await fixture.migrate();
     expectSuccess(result);
-    await expect(fs.readFile(fixture.agentsPath, "utf8")).resolves.toBe(
+    await expectMigrated(
+      fixture,
       `## Tools\n\n### Local notes (migrated from TOOLS.md)\n\n${tools}`,
+      tools,
     );
     if (process.platform !== "win32") {
       expect((await fs.stat(fixture.agentsPath)).mode & 0o777).toBe(0o600);
     }
-    await expectMissing(fixture.toolsPath);
-    await expect(readOnlyArchive(fixture.stateDir)).resolves.toEqual(Buffer.from(tools));
   });
   it("checks every agent budget while migrating a shared workspace once", async () => {
     const agents = `# Agent\n\n## Tools\n\n${"a".repeat(15_000)}\n`;
@@ -321,10 +310,10 @@ describe("TOOLS.md migration", () => {
         await fs.link(linkedTarget, linkedFixture.agentsPath);
       }
       const linkedResult = await linkedFixture.migrate();
-      expect(linkedResult.changes).toEqual([]);
-      expect(linkedResult.warnings).toEqual([
-        expect.stringContaining("AGENTS.md must be an unlinked regular file"),
-      ]);
+      expect(linkedResult).toEqual({
+        changes: [],
+        warnings: [expect.stringContaining("AGENTS.md must be an unlinked regular file")],
+      });
       await expect(fs.readFile(linkedFixture.toolsPath, "utf8")).resolves.toBe(
         "Local tool notes.\n",
       );
@@ -370,13 +359,12 @@ describe("TOOLS.md migration", () => {
     await expectMissing(fixture.toolsPath);
   });
   it("keeps TOOLS.md untouched when the original cannot be archived", async () => {
-    const agents = "# Agent\n\n## Tools\n\nExisting notes.\n";
     const tools = "Local camera: kitchen → wide angle\n";
-    const fixture = await createFixture(agents, tools);
+    const fixture = await createFixture(DEFAULT_AGENTS, tools);
     await fs.writeFile(fixture.stateDir, "not a directory");
     const result = await fixture.migrate();
     expect(result.changes).toEqual([]);
     expect(result.warnings).toHaveLength(1);
-    await expectUnchanged(fixture, agents, tools);
+    await expectUnchanged(fixture, DEFAULT_AGENTS, tools);
   });
 });

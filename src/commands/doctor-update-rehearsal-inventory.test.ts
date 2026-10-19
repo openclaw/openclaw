@@ -9,7 +9,6 @@ import * as updateCheck from "../infra/update-check.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
 import * as drivers from "../infra/update-run-driver.js";
 import { createUpdateRun, recordUpdateRunStep } from "../infra/update-run-ledger.js";
-import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
 import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-module.js";
 import * as commands from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
@@ -25,6 +24,7 @@ import {
   preflightUpdateDoctorCli,
   rehearseDeferredUpdateDoctorSchema,
 } from "./doctor-update-schema-guard.js";
+import { externalDoctorEnv } from "./doctor-update.test-support.js";
 
 const selection = vi.hoisted(() => ({
   entries: [] as { pluginId: string; migration: PluginDoctorStateMigration }[],
@@ -51,23 +51,26 @@ function childResult(cleanup: "normal" | "uncertain" = "normal") {
   return { ...createCommandResult(), cleanup };
 }
 
+function writePrivate(file: string, contents: string) {
+  fs.writeFileSync(file, contents, { mode: 0o600 });
+}
+
 function prepareFixture(source: OpenClawTestState) {
   const driver = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } });
   recordUpdateRunStep(driver.runId, { step: "openclaw doctor", status: "in_progress" });
   closeOpenClawStateDatabaseForTest();
   const root = fs.realpathSync(dirs.make("openclaw-update-canary-"));
   const external = fs.realpathSync(dirs.make("rehearsal-external-"));
-  fs.writeFileSync(path.join(external, "retained.txt"), "external acknowledged data", {
-    mode: 0o600,
-  });
-  fs.mkdirSync(path.join(root, "state"), { mode: 0o700 });
-  fs.mkdirSync(path.join(root, "workspace"), { mode: 0o700 });
+  writePrivate(path.join(external, "retained.txt"), "external acknowledged data");
+  for (const directory of ["state", "workspace"]) {
+    fs.mkdirSync(path.join(root, directory), { mode: 0o700 });
+  }
   const statePath = path.join(root, "state", "openclaw.sqlite");
   fs.copyFileSync(resolveOpenClawStateSqlitePath(source.env), statePath);
   fs.chmodSync(statePath, 0o600);
   const configPath = path.join(root, "openclaw.json");
   const workspace = path.join(root, "workspace");
-  fs.writeFileSync(
+  writePrivate(
     configPath,
     `{
     "agents": {"defaults": {"workspace": ${JSON.stringify(workspace)}, "cwd": ${JSON.stringify(workspace)}, "heartbeat": {"every": "0m"}}, "entries": {}},
@@ -79,17 +82,11 @@ function prepareFixture(source: OpenClawTestState) {
     "hooks": {"enabled": false, "internal": {"enabled": false}},
     "transcripts": {"enabled": false, "autoStart": []}, "discovery": {"mdns": {"mode": "off"}}
   }`,
-    { mode: 0o600 },
   );
   const bytes = fs.statSync(statePath).size;
   const env: NodeJS.ProcessEnv = {
     ...buildUpdateRehearsalPathEnv(root),
-    ...buildUpdateDoctorEnv({
-      allowGatewayServiceRepair: false,
-      allowGatewayActivation: false,
-      serviceRepairPolicy: "external",
-      deferConfiguredPluginInstallRepair: true,
-    }),
+    ...externalDoctorEnv(),
   };
   const cleanup = vi.fn(async (assertDirectoryCurrent?: (directory: string) => void) => {
     assertDirectoryCurrent?.(root);
@@ -100,8 +97,7 @@ function prepareFixture(source: OpenClawTestState) {
   vi.spyOn(entrypoint, "resolveGatewayInstallEntrypoint").mockResolvedValue(
     path.join(source.root, "not-executed.js"),
   );
-  // The copied-state producer and child process are controlled boundaries. The
-  // caller, inventory, filesystem guards, native state reads and collector run.
+  // Inventory, filesystem guards, native state reads and the collector run normally.
   vi.spyOn(snapshots, "prepareUpdateCandidateRehearsal").mockResolvedValue({
     stateDir: root,
     configPath,
@@ -167,17 +163,17 @@ it("consumes declared paths, admits legacy plugins with one typed reported warni
   await fixture(async (f) => {
     const legacy = migration("old");
     const declared = migration("declared", (params) => {
-      expect(params.requireLocalResources).toBe(true);
-      expect(params.stateDir).toBe(f.root);
-      expect(params.config.agents?.defaults?.workspace).toBe(path.join(f.root, "workspace"));
+      expect(params).toMatchObject({
+        requireLocalResources: true,
+        stateDir: f.root,
+        config: { agents: { defaults: { workspace: path.join(f.root, "workspace") } } },
+      });
       return [
         { path: path.join(f.root, "plugin.sqlite"), kind: "sqlite" },
         { path: path.join(f.root, "future", "destination"), kind: "directory" },
       ];
     });
-    fs.writeFileSync(path.join(f.root, "plugin.sqlite"), "fixture data; no native open", {
-      mode: 0o600,
-    });
+    writePrivate(path.join(f.root, "plugin.sqlite"), "fixture data; no native open");
     selection.entries = [
       { pluginId: "legacy-plugin", migration: legacy },
       { pluginId: "legacy-plugin", migration: migration("second") },
@@ -230,12 +226,7 @@ it.each([
     const entry = migration("declared", () =>
       mode === "malformed-declaration"
         ? ([{ path: declared, kind: "invalid" }] as unknown as { path: string; kind: "file" }[])
-        : [
-            {
-              path: declared,
-              kind: "sqlite",
-            },
-          ],
+        : [{ path: declared, kind: "sqlite" }],
     );
     selection.entries = [{ pluginId: "test-plugin", migration: entry }];
     await expect(f.invoke()).rejects.toThrow(
@@ -302,11 +293,11 @@ it.each([
     f.runtime.log.mockImplementationOnce(() => {
       if (mode === "config-replaced") {
         fs.renameSync(f.configPath, `${f.configPath}.old`);
-        fs.writeFileSync(f.configPath, "{}", { mode: 0o600 });
+        writePrivate(f.configPath, "{}");
       } else if (mode === "root-replaced") {
         fs.renameSync(f.root, displaced);
         fs.mkdirSync(f.root, { mode: 0o700 });
-        fs.writeFileSync(retained, "replacement must survive", { mode: 0o600 });
+        writePrivate(retained, "replacement must survive");
       } else if (mode !== "parent-retired") {
         fs.symlinkSync(
           f.external,

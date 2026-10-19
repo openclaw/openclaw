@@ -77,12 +77,7 @@ it("reports a host-owned install before Git discovery", async () => {
   const root = tempDirs.make("openclaw-doctor-host-");
   await fs.writeFile(
     path.join(root, "openclaw-install-owner.json"),
-    JSON.stringify({
-      schemaVersion: 1,
-      owner: "macos-app",
-      displayName: "OpenClaw.app",
-      updateHint: "Update OpenClaw.app to update this Gateway.",
-    }),
+    '{"schemaVersion":1,"owner":"macos-app","displayName":"OpenClaw.app","updateHint":"Update OpenClaw.app to update this Gateway."}',
   );
   await expectSkipped({ root, options: { nonInteractive: true } });
   expect(mocks.git).not.toHaveBeenCalled();
@@ -113,18 +108,35 @@ it.each(["nonInteractive", "non-TTY"] as const)(
   },
 );
 
-it("does not recurse when the canonical updater runs candidate Doctor", async () => {
-  mocks.updateCommand.mockImplementation(async ({ onResult }) => {
-    await withUpdateInProgressEnv(process.cwd(), async () => {
-      await expect(offer()).resolves.toEqual({ updated: false });
+it.each([undefined, "still-starting"] as const)(
+  "delegates to the updater without recursion (readiness=%s)",
+  async (reason) => {
+    mocks.updateCommand.mockImplementation(async ({ onResult }) => {
+      expect(mocks.outro).not.toHaveBeenCalled();
+      await withUpdateInProgressEnv(process.cwd(), async () => {
+        await expect(offer()).resolves.toEqual({ updated: false });
+      });
+      onResult?.(reason ? { ...result("skipped"), reason } : result("ok"));
     });
-    onResult?.(result("ok"));
-  });
-  await expect(offer()).resolves.toEqual({ updated: true, handled: true });
-  expect(mocks.confirm).toHaveBeenCalledOnce();
-  expect(mocks.updateCommand).toHaveBeenCalledOnce();
-  expect(process.env.OPENCLAW_UPDATE_IN_PROGRESS).toBeUndefined();
-});
+    await expect(offer()).resolves.toEqual({
+      updated: true,
+      handled: true,
+      ...(reason ? { reason } : {}),
+    });
+    expect(mocks.confirm).toHaveBeenCalledOnce();
+    expect(mocks.updateCommand).toHaveBeenCalledExactlyOnceWith({
+      sourceUpdate: { root: "/repo/source" },
+      timeout: "1200",
+      onResult: expect.any(Function),
+    });
+    expect(process.env.OPENCLAW_UPDATE_IN_PROGRESS).toBeUndefined();
+    if (reason) {
+      expect(mocks.outro).toHaveBeenCalledWith(
+        expect.stringContaining("Gateway readiness remains unverified. Keep recovery backups"),
+      );
+    }
+  },
+);
 
 it("leaves a declined update with Doctor", async () => {
   mocks.confirm.mockResolvedValue(false);
@@ -135,26 +147,6 @@ it("leaves a declined update with Doctor", async () => {
   });
   expect(mocks.updateCommand).not.toHaveBeenCalled();
   expect(mocks.outro).not.toHaveBeenCalled();
-});
-
-it("keeps recovery backups when the canonical updater reports still-starting", async () => {
-  mocks.updateCommand.mockImplementation(async ({ onResult }) => {
-    expect(mocks.outro).not.toHaveBeenCalled();
-    onResult?.({ ...result("skipped"), reason: "still-starting" });
-  });
-  await expect(offer()).resolves.toEqual({
-    updated: true,
-    handled: true,
-    reason: "still-starting",
-  });
-  expect(mocks.updateCommand).toHaveBeenCalledExactlyOnceWith({
-    sourceUpdate: { root: "/repo/source" },
-    timeout: "1200",
-    onResult: expect.any(Function),
-  });
-  expect(mocks.outro).toHaveBeenCalledWith(
-    expect.stringContaining("Gateway readiness remains unverified. Keep recovery backups"),
-  );
 });
 
 it.each([

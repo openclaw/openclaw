@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -26,8 +25,10 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { VERSION } from "../version.js";
+import { fixtureGit } from "./doctor-git.test-support.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 import { guardUpdateDoctorSchemaUpgrade } from "./doctor-update-schema-guard.js";
+import { externalDoctorEnv, pendingSchema } from "./doctor-update.test-support.js";
 
 vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/openclaw-root.js")>()),
@@ -92,35 +93,11 @@ function createCheckout(root: string, history: History) {
   if (history === "npm") {
     return { previous: "", candidate: "" };
   }
-  const git = (...args: string[]) =>
-    execFileSync(
-      "git",
-      [
-        "-c",
-        `core.hooksPath=${path.join(root, "disabled-hooks")}`,
-        "-c",
-        "commit.gpgsign=false",
-        "-C",
-        root,
-        ...args,
-      ],
-      {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-        env: {
-          ...process.env,
-          GIT_AUTHOR_NAME: "Update Fixture",
-          GIT_AUTHOR_EMAIL: "update-fixture@example.test",
-          GIT_COMMITTER_NAME: "Update Fixture",
-          GIT_COMMITTER_EMAIL: "update-fixture@example.test",
-          GIT_CONFIG_NOSYSTEM: "1",
-          GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
-          ...(history === "stale" && args[0] === "checkout"
-            ? { GIT_COMMITTER_DATE: "2000-01-01T00:00:00Z" }
-            : {}),
-        },
-      },
-    ).trim();
+  const git = fixtureGit(root, (args) =>
+    history === "stale" && args[0] === "checkout"
+      ? { GIT_COMMITTER_DATE: "2000-01-01T00:00:00Z" }
+      : {},
+  );
   git("init", "-b", "installed");
   fs.writeFileSync(path.join(root, "generation"), "previous");
   git("add", ".");
@@ -209,19 +186,7 @@ async function withFixture(
           refreshDefinition: false,
         },
       });
-      const schemas: OpenClawDatabaseSchemaPreflight = {
-        incompatible: [],
-        indeterminate: [],
-        pendingMigrations: [
-          {
-            kind: "agent",
-            path: state.path("agent.sqlite"),
-            agentId: "main",
-            foundVersion: 1,
-            supportedVersion: 2,
-          },
-        ],
-      };
+      const schemas = pendingSchema(state.path("agent.sqlite"), "agent", 1, 2, "main");
       createUpdateRun({
         runId: "3752a66b-275f-4fe0-b43b-1c9a7e6fe7ca",
         trigger: "cli",
@@ -417,15 +382,7 @@ it.each(["missing", "ambiguous", "same-tree", "earlier-rebase", "stale"] as cons
 
 it("preserves Git recovery instead of accepting its package-style early markers", async () => {
   await withFixture("detached", async ({ root, previous, schemas }) => {
-    Object.assign(
-      process.env,
-      buildUpdateDoctorEnv({
-        allowGatewayServiceRepair: false,
-        allowGatewayActivation: false,
-        serviceRepairPolicy: "external",
-        deferConfiguredPluginInstallRepair: true,
-      }),
-    );
+    Object.assign(process.env, externalDoctorEnv());
     recordUpdateRunStep("3752a66b-275f-4fe0-b43b-1c9a7e6fe7ca", {
       step: "openclaw doctor",
       status: "in_progress",

@@ -9,18 +9,17 @@ import {
   finishUpdateRun,
   recordUpdateRunStep,
 } from "../infra/update-run-ledger.js";
-import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import * as databasePreflight from "./doctor-database-preflight.js";
-import type { DoctorDatabasePreflight } from "./doctor-database-preflight.js";
 import {
   guardUpdateDoctorSchemaUpgrade,
   preflightUpdateDoctorCli,
   preflightUpdatePackageLifecycle,
 } from "./doctor-update-schema-guard.js";
+import { externalDoctorEnv, pendingSchema } from "./doctor-update.test-support.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -81,18 +80,7 @@ async function inspectDoctor(scenario: Scenario) {
     });
     // These are prepared preflight facts, not a synthetic migration or a claim
     // that the current test database has the shipped schema's full layout.
-    const schemas: DoctorDatabasePreflight = {
-      incompatible: [],
-      indeterminate: [],
-      pendingMigrations: [
-        {
-          kind: scenario.databaseKind ?? "state",
-          path: databasePath,
-          foundVersion: 17,
-          supportedVersion: 19,
-        },
-      ],
-    };
+    const schemas = pendingSchema(databasePath, scenario.databaseKind ?? "state", 17, 19);
     vi.spyOn(databasePreflight, "prepareDoctorDatabasePreflight").mockResolvedValue(schemas);
     vi.spyOn(packageRoot, "resolveOpenClawPackageRoot").mockResolvedValue(null);
     vi.spyOn(driver, "readUpdateRunDriver").mockReturnValue(recorded);
@@ -100,14 +88,7 @@ async function inspectDoctor(scenario: Scenario) {
     vi.spyOn(driver, "inspectUpdateRunDriver").mockImplementation((observed) =>
       observed.pid === recorded.pid ? (scenario.liveness ?? "alive") : "dead",
     );
-    for (const [name, value] of Object.entries(
-      buildUpdateDoctorEnv({
-        allowGatewayServiceRepair: false,
-        allowGatewayActivation: false,
-        deferConfiguredPluginInstallRepair: true,
-        serviceRepairPolicy: "external",
-      }),
-    )) {
+    for (const [name, value] of Object.entries(externalDoctorEnv())) {
       vi.stubEnv(name, value);
     }
     if (scenario.update === false) {
