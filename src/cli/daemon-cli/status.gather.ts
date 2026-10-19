@@ -40,6 +40,7 @@ import { resolveGatewayLocalPortOverride } from "../gateway-port-option.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 import { normalizeListenerAddress } from "./shared.js";
 import { readDaemonStatusConfig } from "./status.config.js";
+import { resolveGatewayIdentityReport } from "./status.gateway-identity.js";
 import {
   inspectDaemonPortStatuses,
   resolveGatewayStatusProbeConfig,
@@ -373,11 +374,16 @@ async function gatherDaemonStatusImpl(
           )
           .catch(() => undefined)
       : undefined;
-  const gatewayVersion = opts.probe
-    ? ((rpc && "server" in rpc ? rpc.server?.version : undefined) ??
-      (rpc && "version" in rpc ? rpc.version : undefined) ??
-      null)
+  // Only the registered service's own install says which build a restart would load.
+  // A URL override, an explicit --port, or a separate-process context reaches a Gateway
+  // this service does not own, so comparing its build would name the wrong install; the
+  // service's own build id stays available as a diagnostic under service.layout.
+  const gatewayIdentity = opts.probe
+    ? resolveGatewayIdentityReport(rpc, {
+        installedBuildId: serviceTargetsProbe ? serviceLayout?.packageBuildId : undefined,
+      })
     : undefined;
+  const gatewayVersion = gatewayIdentity?.version;
 
   let lastError: string | undefined;
   if (
@@ -525,11 +531,7 @@ async function gatherDaemonStatusImpl(
       ...(lastShutdown ? { lastShutdown } : {}),
       ...(duelingScopesWarning ? { duelingScopesWarning } : {}),
       ...(windowsFirewall?.applies ? { windowsFirewall } : {}),
-      ...(opts.probe
-        ? {
-            version: gatewayVersion,
-          }
-        : {}),
+      ...gatewayIdentity,
     },
     hostDesktop: hostDesktop.status,
     port: portStatus,

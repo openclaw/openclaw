@@ -32,7 +32,9 @@ export function registerServiceInspectionStatusTests(params: {
     mockResolvedValueOnce(loaded: boolean): unknown;
     mockRejectedValueOnce(error: unknown): unknown;
   };
-  serviceReadCommand: { mockResolvedValueOnce(command: null): unknown };
+  serviceReadCommand: {
+    mockResolvedValueOnce(command: null | { programArguments: string[] }): unknown;
+  };
   serviceReadRuntime: {
     mockImplementationOnce(
       implementation: (
@@ -221,4 +223,80 @@ export function registerServiceInspectionStatusTests(params: {
         }
       }),
   );
+
+  /** Builds an install tree carrying `onDisk` in its own dist/build-info.json, registers it
+   * as the service's command, and removes it once `run` returns. The node builtins are
+   * imported here rather than at module scope because only these scenarios need them. */
+  async function withServiceBuild(onDisk: string, run: () => Promise<void>): Promise<void> {
+    const [fs, os, path] = await Promise.all([
+      import("node:fs/promises"),
+      import("node:os"),
+      import("node:path"),
+    ]);
+    const installRoot = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-status-build-id-")),
+    );
+    try {
+      await fs.mkdir(path.join(installRoot, "dist"), { recursive: true });
+      await fs.writeFile(
+        path.join(installRoot, "package.json"),
+        '{"name":"openclaw","version":"2026.5.6"}',
+      );
+      await fs.writeFile(path.join(installRoot, "dist", "index.js"), "gateway");
+      await fs.writeFile(
+        path.join(installRoot, "dist", "build-info.json"),
+        JSON.stringify({ version: "2026.5.6", buildId: onDisk }),
+      );
+      serviceReadCommand.mockResolvedValueOnce({
+        programArguments: [
+          "/bin/node",
+          path.join(installRoot, "dist", "index.js"),
+          "gateway",
+          "--port",
+          "19001",
+        ],
+      });
+      await run();
+    } finally {
+      await fs.rm(installRoot, { recursive: true, force: true });
+    }
+  }
+
+  it.each([
+    { label: "rebuilt under the running Gateway", onDisk: "build-on-disk", restart: true },
+    { label: "matching the loaded build", onDisk: "build-2026.5.6", restart: false },
+  ])(
+    "compares the loaded build id against the one on disk ($label)",
+    async ({ onDisk, restart }) =>
+      await withServiceBuild(onDisk, async () => {
+        const status = await gatherStatus();
+
+        // The probe reports what the process loaded; the layout reports what a restart
+        // would load. Only their divergence means a restart is required.
+        expect(status.gateway?.buildId).toBe("build-2026.5.6");
+        expect(status.gateway?.installedBuildId).toBe(onDisk);
+        expect(status.gateway?.restartRequired).toBe(restart ? true : undefined);
+      }),
+  );
+
+  it("omits a build comparison for a Gateway whose install this host cannot read", async () => {
+    const status = await gatherStatus({ rpc: { url: "wss://remote.example:19443" } });
+
+    expect(status.gateway?.buildId).toBe("build-2026.5.6");
+    expect(status.gateway?.installedBuildId).toBeUndefined();
+    expect(status.gateway?.restartRequired).toBeUndefined();
+  });
+
+  it("keeps the registered service's build out of a comparison it does not target", async () =>
+    await withServiceBuild("build-on-disk", async () => {
+      // --port selects a Gateway by port on this host; the registered service keeps running
+      // its own install, so its build says nothing about what the selected process loaded.
+      const status = await gatherStatus({ rpc: { port: "19002" } });
+
+      expect(status.service.targetRole).toBe("diagnostic-only");
+      expect(status.service.layout?.packageBuildId).toBe("build-on-disk");
+      expect(status.gateway?.buildId).toBe("build-2026.5.6");
+      expect(status.gateway?.installedBuildId).toBeUndefined();
+      expect(status.gateway?.restartRequired).toBeUndefined();
+    }));
 }

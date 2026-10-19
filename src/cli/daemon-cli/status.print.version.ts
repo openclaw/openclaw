@@ -1,5 +1,6 @@
 import { defaultRuntime } from "../../runtime.js";
 import { shortenHomePath } from "../../utils.js";
+import { formatCliCommand } from "../command-format.js";
 import { resolveDaemonServiceInstallGuidance, type createCliStatusTextStyles } from "./shared.js";
 import type { DaemonStatus } from "./status.gather.js";
 
@@ -8,6 +9,45 @@ function formatCliVersionLine(cli: DaemonStatus["cli"]): string | null {
     return null;
   }
   return cli.entrypoint ? `${cli.version} (${shortenHomePath(cli.entrypoint)})` : cli.version;
+}
+
+/** A build that lands under a running Gateway leaves it serving an install it can no
+ * longer fully load: already-imported chunks keep working while every dynamic import it
+ * has not reached yet resolves against replaced files. Name that state here so it stops
+ * surfacing later as unrelated-looking module errors. */
+function printGatewayBuildIdentity(
+  status: DaemonStatus,
+  {
+    label,
+    infoText,
+    warnText,
+  }: Pick<ReturnType<typeof createCliStatusTextStyles>, "label" | "infoText" | "warnText">,
+) {
+  const runningBuildId = status.gateway?.buildId?.trim();
+  const installedBuildId = status.gateway?.installedBuildId?.trim();
+  if (!runningBuildId && !installedBuildId) {
+    return;
+  }
+  const onDisk =
+    installedBuildId && installedBuildId !== runningBuildId ? `, on disk ${installedBuildId}` : "";
+  defaultRuntime.log(
+    `${label("Gateway build:")} ${infoText(`${runningBuildId ?? "unknown"}${onDisk}`)}`,
+  );
+  if (!status.gateway?.restartRequired) {
+    return;
+  }
+  defaultRuntime.error(
+    warnText(
+      `Restart required: the running Gateway loaded build ${runningBuildId}, but the installation on disk is build ${installedBuildId}. Imports it has not already loaded will fail until it restarts.`,
+    ),
+  );
+  // The restart has to reach the same Gateway this status read, and profile selection
+  // lives only in this process, so the printed command must carry it forward; pasting a
+  // bare `openclaw gateway restart` into another shell would restart the default
+  // profile's Gateway and leave this one stale.
+  defaultRuntime.error(
+    warnText(`Restart it with: ${formatCliCommand("openclaw gateway restart")}`),
+  );
 }
 
 export function printDaemonStatusVersions(
@@ -28,7 +68,8 @@ export function printDaemonStatusVersions(
       ? `${serviceInstallVersion} (${shortenHomePath(status.service.layout.packageRoot)})`
       : serviceInstallVersion
     : null;
-  if (!gatewayVersion && !serviceInstallLine) {
+  const hasBuildIdentity = Boolean(status.gateway?.buildId || status.gateway?.installedBuildId);
+  if (!gatewayVersion && !serviceInstallLine && !hasBuildIdentity) {
     return;
   }
   if (cliVersionLine) {
@@ -70,5 +111,6 @@ export function printDaemonStatusVersions(
       }
     }
   }
+  printGatewayBuildIdentity(status, { label, infoText, warnText });
   defaultRuntime.log("");
 }
