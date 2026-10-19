@@ -200,7 +200,7 @@ it("uses registered composers in DOM order and releases a removed draft target",
               return firstVisible();
             },
             get children() {
-              return createComponent(Composer, { top: 200, registered: true });
+              return () => createComponent(Composer, { top: 200, registered: true });
             },
           }),
           createComponent(Composer, { top: 300, registered: true }),
