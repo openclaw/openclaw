@@ -216,10 +216,11 @@ function buildProviderFromBuilder(opts: ConfigSetOptions): SecretProviderConfig 
     if (modeRaw && modeRaw !== "singleValue" && modeRaw !== "json") {
       throw new Error("--provider-mode must be one of: singleValue, json.");
     }
+    const mode = modeRaw === "singleValue" || modeRaw === "json" ? modeRaw : undefined;
     provider = {
       source: "file",
       path: filePath,
-      ...(modeRaw ? { mode: modeRaw } : {}),
+      ...(mode ? { mode } : {}),
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       ...(maxBytes !== undefined ? { maxBytes } : {}),
     };
