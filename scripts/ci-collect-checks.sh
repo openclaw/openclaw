@@ -3,6 +3,21 @@
 # Independent checks finish before the caller reports their aggregate failure.
 ci_check_failures=0
 
+prepare_ratchet_base_args() {
+  local base="$1"
+  git cat-file -e "${base}^{commit}" || return
+  ratchet_base_args=(--base "$base")
+  # The checkout owner proved this comparison commit before shallow checkout.
+  # Historical targets retain their parser and must not receive an unknown flag.
+  if node --input-type=module -e '
+    const { parseRatchetArgs } = await import("./scripts/lib/shrink-ratchet.mts");
+    const args = parseRatchetArgs(["--base", process.argv[1], "--no-merge-base"]);
+    process.exit(args.mergeBase === false ? 0 : 1);
+  ' "$base" >/dev/null 2>&1; then
+    ratchet_base_args+=(--no-merge-base)
+  fi
+}
+
 run_check() {
   local label="$1"
   shift

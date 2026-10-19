@@ -16,7 +16,9 @@ import type {
 export const MEMORY_INDEX_WRITE_SCOPE = "memory-index";
 export const MEMORY_EMBEDDING_CACHE_WRITE_SCOPE = "memory-embedding-cache";
 
-export type MemoryPublicationConnection = MemoryShadowConnection | { kind: "agent" };
+export type MemoryPublicationConnection =
+  | MemoryShadowConnection
+  | { kind: "agent"; stageId?: string };
 export type MemoryPublicationState = {
   vector: { enabled: boolean; available: boolean | null };
   fts: { enabled: boolean; available: boolean };
@@ -24,6 +26,11 @@ export type MemoryPublicationState = {
   extensionPath?: string;
 };
 export type MemoryPublicationFragment = { json: string; last: boolean };
+export type MemoryPublicationSchema = {
+  fts: string | null;
+  paths: string | null;
+  vector: string | null;
+};
 export type MemoryEmbeddingCacheEntry = {
   hash: string;
   embedding: number[];
@@ -39,9 +46,22 @@ export type MemoryEmbeddingCacheMutation =
   | { kind: "upsert"; header: MemoryEmbeddingCacheHeader; entries: MemoryEmbeddingCacheEntry[] }
   | { kind: "clear"; identities: MemoryIndexProviderIdentity[] };
 export type MemoryPublicationResult<T> =
-  | { ok: true; value: T; facts?: MemoryDatabaseFacts; writeToken?: string }
+  | {
+      ok: true;
+      value: T;
+      facts?: MemoryDatabaseFacts;
+      searchSchema?: MemoryPublicationSchema;
+      writeToken?: string;
+    }
   | { ok: false; error: MemoryShadowFailure; entered: boolean; committed: boolean };
 export type MemoryPublicationOperations = {
+  "database.reset": { input: undefined; output: MemoryPublicationResult<boolean> };
+  "database.stage.start": { input: undefined; output: MemoryPublicationResult<void> };
+  "database.stage.discard": { input: { stageId: string }; output: void };
+  "database.stage.publish": {
+    input: { stageId?: string; expectedRevision: number; vectorIndexComplete: boolean };
+    output: MemoryPublicationResult<void>;
+  };
   "connection.inspect": { input: undefined; output: MemoryShadowConnection };
   "vector.ensure": {
     input: { dimensions: number; currentDimensions?: number; state: MemoryPublicationState };
@@ -52,11 +72,15 @@ export type MemoryPublicationOperations = {
     output: MemoryPublicationResult<{ extensionPath: string; retiredLegacy: boolean }>;
   };
   "index.facts": { input: undefined; output: MemoryDatabaseFacts };
+  "index.upgradeProviderKey": {
+    input: { meta: MemoryIndexMeta; providerKey: string };
+    output: MemoryPublicationResult<boolean>;
+  };
   "index.writeMetadata": { input: MemoryIndexMeta; output: MemoryPublicationResult<void> };
   "schema.admit": {
     input: Pick<
       Parameters<typeof ensureMemoryIndexSchema>[0],
-      "cacheEnabled" | "ftsEnabled" | "ftsTokenizer"
+      "cacheEnabled" | "ftsEnabled" | "ftsTokenizer" | "fresh"
     >;
     output: MemoryPublicationResult<
       ReturnType<typeof ensureMemoryIndexSchema> & { admission?: MemoryDatabaseAdmission }
@@ -152,7 +176,7 @@ export type MemoryPublicationOperations = {
       sourceIdentity: MemoryShadowConnection["fileIdentity"];
       metaKey: string;
       expectedRevision: number;
-      sourceHasVectors: boolean;
+      sourceSchema: MemoryPublicationSchema;
       vectorIndexComplete: boolean;
       state: MemoryPublicationState;
     };

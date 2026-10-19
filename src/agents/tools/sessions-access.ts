@@ -106,6 +106,9 @@ function recordAdmittedSessionDecision(params: {
   } catch {
     return false;
   }
+  const representedProfileId = caller.personalToolIdentityScoped
+    ? caller.personalToolSelection?.operatorAuthority?.profileId
+    : caller.operatorAuthority?.profileId;
   const receiptId = `${params.owner}:${randomUUID()}`;
   return recordExecutionDecisionWork({
     workVersion: 1,
@@ -131,6 +134,15 @@ function recordAdmittedSessionDecision(params: {
       remediation: [],
     },
     refs: {
+      ...(representedProfileId
+        ? {
+            representedSubject: {
+              state: "present" as const,
+              kind: "person" as const,
+              rawPrincipalRef: representedProfileId,
+            },
+          }
+        : {}),
       target: {
         namespace: "session",
         value: JSON.stringify([params.targetAgentId, params.targetSessionKey]),

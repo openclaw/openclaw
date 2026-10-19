@@ -3,7 +3,6 @@ import type {
   ChannelIngressContextBinding,
   ResolvedChannelMessageIngress,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
-// Signal plugin helpers isolate active-run control scheduling from the inbound handler.
 import {
   listChatCommands,
   maybeResolveTextAlias,

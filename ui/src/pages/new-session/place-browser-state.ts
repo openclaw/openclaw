@@ -24,7 +24,7 @@ export class PlaceBrowserState {
 
   constructor(
     private readonly listDirectory: (path?: string) => Promise<FsListDirResult>,
-    private readonly requestUpdate: () => void,
+    private readonly changed: () => void,
     private readonly onListing?: (listing: FsListDirResult) => void,
   ) {}
 
@@ -34,7 +34,7 @@ export class PlaceBrowserState {
     this.activeIndex = -1;
     this.error = null;
     this.loading = true;
-    this.requestUpdate();
+    this.changed();
     return this.load(path, mode, this.token);
   }
 
@@ -53,7 +53,7 @@ export class PlaceBrowserState {
         void this.load(split.directory, "typing", requestId);
       }, PICKER_INPUT_DEBOUNCE_MS);
     }
-    this.requestUpdate();
+    this.changed();
   }
 
   draftInLoadedDirectory(): boolean {
@@ -80,7 +80,7 @@ export class PlaceBrowserState {
           ? 0
           : count - 1
         : (this.activeIndex + delta + count) % count;
-    this.requestUpdate();
+    this.changed();
   }
 
   highlightedEntry(): FsDirEntry | undefined {
@@ -166,7 +166,7 @@ export class PlaceBrowserState {
     } finally {
       if (requestId === this.token) {
         this.loading = false;
-        this.requestUpdate();
+        this.changed();
       }
     }
   }

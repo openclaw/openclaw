@@ -199,6 +199,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "codex-native-task-assignments",
     label: "Codex native pending assignments",
+    sqliteOnly: { family: "state" },
     collectBackupResources: async (params) =>
       (
         await import("./src/migration/native-task-assignments.js")

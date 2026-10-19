@@ -16,7 +16,7 @@ import { clampText } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import {
   ChatProviderReviewNotice,
-  type ChatProviderReviewController,
+  type ChatProviderReviewOwner,
 } from "./chat-provider-review-controller.tsx";
 import type { SubagentRoster, SubagentRowContext } from "./chat-spawned-subagent.ts";
 import { ChatChildAttention } from "./components/chat-child-attention.tsx";
@@ -47,8 +47,8 @@ type ChatComposerNoticesProps = ChatPlacementStartupNoticeProps &
     connected?: boolean;
     messages: readonly unknown[];
     providerPolicyNotice?: ProviderPolicyNotice | null;
-    providerReview?: ChatProviderReviewController;
-    providerReviewRevision?: object;
+    // Resolve after the first pane frame prepares the Solid owner's permission facts.
+    readProviderReview?: () => ChatProviderReviewOwner;
     runError?: ChatRunError | null;
     onRefresh?: () => void;
     onDismissWorkspaceConflict?: () => void;
@@ -64,7 +64,7 @@ function renderStatusNotice(
 ) {
   return (
     <div
-      class={`chat-composer-neighbor-card chat-composer-neighbor-card--${tone} ${className}`}
+      class={["chat-composer-neighbor-card", `chat-composer-neighbor-card--${tone}`, className]}
       role={tone === "danger" ? "alert" : "status"}
       title={tooltip}
     >
@@ -145,7 +145,11 @@ function ChatErrorNotice(props: {
   const tone = () => props.tone ?? "danger";
   return (
     <div
-      class={`chat-composer-neighbor-card chat-composer-neighbor-card--${tone()} chat-error`}
+      class={[
+        "chat-composer-neighbor-card",
+        `chat-composer-neighbor-card--${tone()}`,
+        "chat-error",
+      ]}
       role={tone() === "warn" ? "status" : "alert"}
     >
       <span class="chat-composer-neighbor-card__icon" aria-hidden="true">
@@ -239,13 +243,8 @@ export function renderChatComposerNotices(props: ChatComposerNoticesProps) {
           onOpenSession={props.onSessionSelect}
         />
       </Show>
-      <Show when={props.providerReview}>
-        {(controller) => (
-          <ChatProviderReviewNotice
-            controller={controller()}
-            revision={props.providerReviewRevision}
-          />
-        )}
+      <Show when={props.readProviderReview?.()}>
+        {(owner) => <ChatProviderReviewNotice owner={owner()} />}
       </Show>
       {renderProviderPolicyNotice(providerPolicyNotice())}
       <Show when={!hasTranscriptFailure() && props.runError}>

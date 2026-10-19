@@ -21,10 +21,10 @@ import { createWorkerComputerTool } from "../../worker/computer-runtime.js";
 import { createDesktopSessionRegistry } from "../desktop/session-registry.js";
 import { createTestApprovalFixture } from "../exec-approval-manager.test-support.js";
 import {
-  createApprovalClientLookup,
   createOperatorClient,
   expectSinglePendingApproval,
 } from "../node-invoke-plugin-policy.test-helpers.js";
+import { createApprovalClientLookup } from "../server-methods/approval-request.test-support.js";
 import { createWorkerComputerService } from "./computer-service.js";
 import {
   COMPUTER_USE,

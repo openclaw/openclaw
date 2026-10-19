@@ -32,7 +32,6 @@ import {
 import { canUseNodeFs, formatLocalDate, LOG_PREFIX, LOG_SUFFIX } from "./log-file-shared.js";
 import { serializeFileLogRecord, type FileLogMessagePart } from "./logger-file-message.js";
 import { ensureLogDirectorySync, fileLogTransport } from "./logger-file-transport.js";
-import { setLoggerFileTargetResolver } from "./logger-settings-internal.js";
 import { redactSecrets, redactSensitiveText } from "./redact.js";
 import { APPLIED_LOGGING_CONFIG_UNOWNED, loggingState } from "./state.js";
 import { formatTimestamp } from "./timestamps.js";
@@ -472,10 +471,10 @@ function resolveSettings(): ResolvedRuntimeSettings {
   return { level, file, maxFileBytes, rolling };
 }
 
-setLoggerFileTargetResolver(() => {
+export function getResolvedLoggerFileTarget(): { file: string; rolling: boolean } {
   const { file, rolling } = resolveSettings();
   return { file, rolling };
-});
+}
 
 function getRuntimeSettings(): ResolvedRuntimeSettings {
   const settings =

@@ -22,13 +22,10 @@ function createHarness() {
   registry.plugins.push(owner);
   markPluginRegistryActive(registry);
   let currentRegistry = registry;
-  const config: OpenClawConfig = {
-    cloudWorkers: {
-      profiles: {
-        project: { provider: "cloud-a", settings: { location: "one" } },
-      },
-    },
+  const profiles: NonNullable<NonNullable<OpenClawConfig["cloudWorkers"]>["profiles"]> = {
+    project: { provider: "cloud-a", settings: { location: "one" } },
   };
+  const config: OpenClawConfig = { cloudWorkers: { profiles } };
   const controller = new AbortController();
   const warn = vi.fn<(message: string) => void>();
   const addProvider = (id: string, maintain: NonNullable<WorkerProvider["maintain"]>) => {
@@ -49,12 +46,18 @@ function createHarness() {
     registry,
     owner,
     config,
+    profiles,
     controller,
     warn,
     addProvider,
     replaceRegistry: () => {
       currentRegistry = createEmptyPluginRegistry();
       markPluginRegistryActive(currentRegistry);
+    },
+    useUnactivatedRegistry: () => {
+      currentRegistry = createEmptyPluginRegistry();
+      currentRegistry.plugins.push(owner);
+      currentRegistry.workerProviders = registry.workerProviders;
     },
     run: () =>
       maintainConfiguredWorkerProviders({
@@ -69,7 +72,7 @@ function createHarness() {
 describe("configured worker provider maintenance", () => {
   it("batches normalized profiles, preserves the receiver, and isolates mutable settings", async () => {
     const harness = createHarness();
-    harness.config.cloudWorkers!.profiles!.second = {
+    harness.profiles.second = {
       provider: " CLOUD-A ",
       settings: { nested: { location: "two" } },
     };
@@ -87,7 +90,7 @@ describe("configured worker provider maintenance", () => {
     await harness.run();
 
     expect(maintain).toHaveBeenCalledTimes(1);
-    expect(harness.config.cloudWorkers!.profiles!.second.settings).toEqual({
+    expect(harness.profiles.second.settings).toEqual({
       nested: { location: "two" },
     });
     expect(retained).toBeDefined();
@@ -97,122 +100,69 @@ describe("configured worker provider maintenance", () => {
 
   it.each([
     ["registry replacement", (h: ReturnType<typeof createHarness>) => h.replaceRegistry()],
-    [
-      "registry retirement",
-      (h: ReturnType<typeof createHarness>) => markPluginRegistryRetired(h.registry),
-    ],
+    ["registry retirement", (h) => markPluginRegistryRetired(h.registry)],
     [
       "same-object reactivation",
-      (h: ReturnType<typeof createHarness>) => {
+      (h) => {
         markPluginRegistryRetired(h.registry);
         markPluginRegistryActive(h.registry);
       },
     ],
-    [
-      "owner disablement",
-      (h: ReturnType<typeof createHarness>) => {
-        h.owner.enabled = false;
-      },
-    ],
-    [
-      "owner removal",
-      (h: ReturnType<typeof createHarness>) => {
-        h.registry.plugins.length = 0;
-      },
-    ],
-    [
-      "registration replacement",
-      (h: ReturnType<typeof createHarness>) => {
-        h.addProvider("cloud-a", async () => {});
-      },
-    ],
-    [
-      "settings mutation",
-      (h: ReturnType<typeof createHarness>) => {
-        h.config.cloudWorkers!.profiles!.project!.settings!.location = "changed";
-      },
-    ],
-    [
-      "profile removal",
-      (h: ReturnType<typeof createHarness>) => {
-        delete h.config.cloudWorkers!.profiles!.project;
-      },
-    ],
-    [
-      "plugin policy change",
-      (h: ReturnType<typeof createHarness>) => {
-        h.config.plugins = { enabled: false };
-      },
-    ],
+    ["owner disablement", (h) => (h.owner.enabled = false)],
+    ["owner removal", (h) => (h.registry.plugins.length = 0)],
+    ["registration replacement", (h) => h.addProvider("cloud-a", async () => {})],
+    ["settings mutation", (h) => (h.profiles.project!.settings!.location = "changed")],
+    ["profile removal", (h) => delete h.profiles.project],
+    ["plugin policy change", (h) => (h.config.plugins = { enabled: false })],
     ["abort", (h: ReturnType<typeof createHarness>) => h.controller.abort()],
-  ] as const)("rejects effects after awaited work across %s", async (_label, invalidate) => {
-    const harness = createHarness();
-    const entered = createDeferredCore<MaintenanceContext>();
-    const resume = createDeferredCore();
-    const effect = vi.fn();
-    harness.addProvider("cloud-a", async (context) => {
-      entered.resolve(context);
-      await resume.promise;
-      context.assertCurrent();
-      effect();
-    });
-    const operation = harness.run();
-    const context = await entered.promise;
-    expect(() => context.assertCurrent()).not.toThrow();
+  ] satisfies [string, (h: ReturnType<typeof createHarness>) => void][])(
+    "rejects effects after awaited work across %s",
+    async (_label, invalidate) => {
+      const harness = createHarness();
+      const entered = createDeferredCore<MaintenanceContext>();
+      const resume = createDeferredCore();
+      const effect = vi.fn();
+      harness.addProvider("cloud-a", async (context) => {
+        entered.resolve(context);
+        await resume.promise;
+        context.assertCurrent();
+        effect();
+      });
+      const operation = harness.run();
+      const context = await entered.promise;
+      expect(() => context.assertCurrent()).not.toThrow();
 
-    invalidate(harness);
-    resume.resolve();
-    await operation;
+      invalidate(harness);
+      resume.resolve();
+      await operation;
 
-    expect(effect).not.toHaveBeenCalled();
-    expect(() => context.assertCurrent()).toThrow();
-  });
+      expect(effect).not.toHaveBeenCalled();
+      expect(() => context.assertCurrent()).toThrow();
+    },
+  );
 
   it.each([
-    "unactivated",
-    "disabled",
-    "missing",
-    "unconfigured",
-    "denylisted",
-    "excluded-by-allowlist",
-    "disabled-normalized-entry",
-  ] as const)("does not invoke an %s owner", async (kind) => {
-    const harness = createHarness();
-    const maintain = vi.fn(async () => {});
-    harness.addProvider("cloud-a", maintain);
-    if (kind === "unactivated") {
-      const fresh = createEmptyPluginRegistry();
-      fresh.plugins.push(harness.owner);
-      fresh.workerProviders = harness.registry.workerProviders;
-      await maintainConfiguredWorkerProviders({
-        getRegistry: () => fresh,
-        getConfig: () => harness.config,
-        signal: harness.controller.signal,
-        warn: harness.warn,
-      });
-    } else {
-      if (kind === "disabled") {
-        harness.owner.enabled = false;
-      }
-      if (kind === "missing") {
-        harness.registry.plugins.length = 0;
-      }
-      if (kind === "unconfigured") {
-        harness.config.cloudWorkers!.profiles = {};
-      }
-      if (kind === "denylisted") {
-        harness.config.plugins = { deny: [" WORKER-OWNER "] };
-      }
-      if (kind === "excluded-by-allowlist") {
-        harness.config.plugins = { allow: ["another-owner"] };
-      }
-      if (kind === "disabled-normalized-entry") {
-        harness.config.plugins = { entries: { " WORKER-OWNER ": { enabled: false } } };
-      }
+    ["unactivated", (h) => h.useUnactivatedRegistry()],
+    ["disabled", (h) => (h.owner.enabled = false)],
+    ["missing", (h) => (h.registry.plugins.length = 0)],
+    ["unconfigured", (h) => (h.config.cloudWorkers!.profiles = {})],
+    ["denylisted", (h) => (h.config.plugins = { deny: [" WORKER-OWNER "] })],
+    ["excluded-by-allowlist", (h) => (h.config.plugins = { allow: ["another-owner"] })],
+    [
+      "disabled-normalized-entry",
+      (h) => (h.config.plugins = { entries: { " WORKER-OWNER ": { enabled: false } } }),
+    ],
+  ] satisfies [string, (h: ReturnType<typeof createHarness>) => void][])(
+    "does not invoke an %s owner",
+    async (_kind, prepare) => {
+      const harness = createHarness();
+      const maintain = vi.fn(async () => {});
+      harness.addProvider("cloud-a", maintain);
+      prepare(harness);
       await harness.run();
-    }
-    expect(maintain).not.toHaveBeenCalled();
-  });
+      expect(maintain).not.toHaveBeenCalled();
+    },
+  );
 
   it("isolates provider failures and invalid settings without logging provider error text", async () => {
     const harness = createHarness();
@@ -221,7 +171,7 @@ describe("configured worker provider maintenance", () => {
       throw new Error("synthetic credential material must not be logged");
     });
     harness.addProvider("cloud-b", second);
-    harness.config.cloudWorkers!.profiles!.other = { provider: "cloud-b", settings: {} };
+    harness.profiles.other = { provider: "cloud-b", settings: {} };
 
     await harness.run();
     expect(second).toHaveBeenCalledTimes(1);
@@ -229,7 +179,7 @@ describe("configured worker provider maintenance", () => {
 
     const invalid = vi.fn(async () => {});
     harness.addProvider("cloud-a", invalid);
-    harness.config.cloudWorkers!.profiles!.project!.settings = { token: "synthetic plaintext" };
+    harness.profiles.project!.settings = { token: "synthetic plaintext" };
     await harness.run();
 
     expect(invalid).not.toHaveBeenCalled();

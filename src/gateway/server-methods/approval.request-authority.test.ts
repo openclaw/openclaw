@@ -16,10 +16,7 @@ import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { StateDatabaseReadAdmissionInvalidatedError } from "../../state/openclaw-state-db-async-lifecycle.js";
-import {
-  openOpenClawStateDatabase,
-  type OpenClawStateDatabaseOptions,
-} from "../../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
@@ -52,11 +49,19 @@ afterEach(() => {
 });
 afterAll(async () => sharedState?.cleanup());
 
-function createManagers(
-  databaseOptions: OpenClawStateDatabaseOptions,
-  runtimeEpoch: string,
+async function createFixture(
+  id: string,
+  state = expectDefined(sharedState, "shared approval test state"),
+  request: Partial<ExecApprovalRequestPayload> = {},
   onLifecycle?: ExecApprovalManagerOptions<ExecApprovalRequestPayload>["onLifecycle"],
 ) {
+  const databaseOptions = { env: state.env };
+  openOpenClawStateDatabase(databaseOptions);
+  const runtimeEpoch = id.startsWith("request-custody-")
+    ? "request-custody-test"
+    : id.startsWith("worker-refusal-")
+      ? "worker-refusal-test"
+      : `${id}-test`;
   const persistence = { runtimeEpoch, databaseOptions };
   const exec = new ExecApprovalManager<ExecApprovalRequestPayload>({
     scheduler: createTestGatewayScheduler(),
@@ -74,7 +79,48 @@ function createManagers(
     pluginApprovalManager: plugin,
     databaseOptions,
   });
-  return { exec, plugin, handlers };
+  const record = exec.create({ command: "echo fixture", ...request }, 600_000, id);
+  record.approvalReviewerDeviceIds = ["reviewer"];
+  const { decision } = await exec.register(record, 600_000);
+  const client = createClient({ deviceId: "reviewer" });
+  let settled = false;
+  void decision.then(() => {
+    settled = true;
+  });
+  return {
+    exec,
+    record,
+    decision,
+    state,
+    client,
+    settled: () => settled,
+    invoke: (
+      method: Parameters<typeof createApprovalInvocation>[0]["method"],
+      body: Record<string, unknown> = { id },
+      overrides: Partial<Parameters<typeof createApprovalInvocation>[0]> = {},
+    ) => createApprovalInvocation({ handlers, client, method, body, ...overrides }),
+    read: () => getOperatorApproval({ id, databaseOptions }),
+    drain: () => Promise.all([exec.drain(), plugin.drain()]),
+  };
+}
+
+function configure(
+  invocation: ReturnType<typeof createApprovalInvocation>,
+  client: ReturnType<typeof createClient>,
+  initialConfig: OpenClawConfig = {},
+) {
+  let currentConfig = initialConfig;
+  setRuntimeConfigSnapshot(initialConfig);
+  client.authPolicy = captureGatewayAuthPolicy(initialConfig, {
+    role: "operator",
+    verifiedIdentity: "reviewer@example.test",
+  });
+  invocation.context.getRuntimeConfig = () => currentConfig;
+  return (config: OpenClawConfig) => {
+    currentConfig = config;
+    setRuntimeConfigSnapshot(config);
+    publishOperatorRoleConfigChange(invocation.context);
+  };
 }
 
 const unrelatedAgentConfig: OpenClawConfig = {
@@ -124,251 +170,181 @@ it.each([
   ].includes(revocation);
   const targetsMainSession =
     revocation.endsWith("unrelated-agent") || revocation.startsWith("config-target-");
-  const state = expectDefined(sharedState, "shared approval test state");
-  {
-    const databaseOptions = { env: state.env };
-    openOpenClawStateDatabase(databaseOptions);
-    const { exec, plugin, handlers } = createManagers(databaseOptions, "request-custody-test");
-    const record = exec.create(
-      {
-        command: "echo fixture",
-        ...(targetsMainSession ? { sessionKey: "agent:main:main", agentId: "main" } : {}),
-      },
-      600_000,
+  const { exec, invoke, record, decision, client, read, drain, state, settled } =
+    await createFixture(
       `request-custody-${revocation}`,
+      undefined,
+      targetsMainSession ? { sessionKey: "agent:main:main", agentId: "main" } : {},
     );
-    record.approvalReviewerDeviceIds = ["reviewer"];
-    const { decision } = await exec.register(record, 600_000);
-    let settled = false;
-    void decision.then(() => {
-      settled = true;
-    });
-    const client = createClient({ deviceId: "reviewer" });
-    const connection = new AbortController();
-    client.connectionSignal = connection.signal;
-    let nativeRevoked = false;
-    const nativeGuard = vi.fn(() => {
-      if (nativeRevoked) {
-        throw new Error("synthetic native guard revoked");
-      }
-    });
-    const before = getOperatorApproval({ id: record.id, databaseOptions });
-    const invocation = createApprovalInvocation({
-      handlers,
-      method: "approval.resolve",
-      body: {
-        id: revocation.startsWith("transport-")
-          ? expectDefined(before, "persisted approval").resolutionRef
-          : record.id,
-        kind: "exec",
-        decision: "allow-once",
-      },
-      client,
-      ...(native ? { sessionMutationCommitGuard: nativeGuard } : {}),
-    });
-    const initialConfig: OpenClawConfig = {};
-    setRuntimeConfigSnapshot(initialConfig);
-    client.authPolicy = captureGatewayAuthPolicy(initialConfig, {
-      role: "operator",
-      verifiedIdentity: "reviewer@example.test",
-    });
-    let currentConfig = initialConfig;
-    invocation.context.getRuntimeConfig = () => currentConfig;
-    const publishConfig = (config: OpenClawConfig) => {
-      currentConfig = config;
-      setRuntimeConfigSnapshot(config);
-      publishOperatorRoleConfigChange(invocation.context);
-    };
-    expect(before).toMatchObject({
-      status: "pending",
-      decision: null,
-      resolvedAtMs: null,
-      terminalReason: null,
-      resolver: null,
-    });
-    const lookup = vi.spyOn(operatorApprovalStore, "getOperatorApprovalDetailed");
-    const stages: string[] = [];
-    let transaction = 0;
-    probe.admission(workerAdmission, (request, grant, admit) => {
-      if (request.stage === "transaction") {
-        transaction += 1;
-        if (transaction === 1) {
-          connection.abort();
-          stages.push("transport-retired");
-        }
-      } else if (request.stage === "commit") {
-        if (transaction === 1) {
-          stages.push("lookup-completed");
-          switch (revocation) {
-            case "lookup":
-            case "native-refused":
-            case "native-config-unrelated":
-            case "native-config-unrelated-agent":
-            case "native-config-role-aba":
-            case "native-config-routing-aba":
-            case "verdict":
-            case "verdict-reviewer":
-            case "verdict-source":
-              break;
-            case "access":
-              bumpGatewayAccessRevision();
-              break;
-            case "transport-reviewer":
-            case "reviewer":
-              record.approvalReviewerDeviceIds = ["other-reviewer"];
-              break;
-            case "transport-source":
-            case "source":
-              record.request.sessionKey = "agent:main:other";
-              break;
-            case "binding":
-              exec.retire();
-              break;
-            case "profile":
-              client.authenticatedUserId = "other-user";
-              break;
-            case "config":
-              invocation.context.getRuntimeConfig = () => ({});
-              break;
-            case "config-unrelated":
-              publishConfig({ ...initialConfig, messages: { ackReaction: "ok" } });
-              break;
-            case "config-unrelated-agent":
-            case "transport-unrelated-agent":
-              publishConfig(unrelatedAgentConfig);
-              break;
-            case "config-target-routing-aba":
-              publishConfig({ ...initialConfig, session: { mainKey: "other" } });
-              publishConfig(initialConfig);
-              break;
-            case "config-target-store-aba":
-              publishConfig({
-                ...initialConfig,
-                session: { store: path.join(state.stateDir, "moved", "{agentId}.sqlite") },
-              });
-              publishConfig(initialConfig);
-              break;
-            case "config-other-identity":
-            case "config-own-identity-aba":
-              publishConfig({
-                gateway: {
-                  auth: {
-                    identityScopes: {
-                      [revocation === "config-other-identity"
-                        ? "other@example.test"
-                        : "reviewer@example.test"]: ["operator.approvals"],
-                    },
-                  },
-                },
-              });
-              publishConfig(initialConfig);
-              break;
-            case "config-role-aba":
-              publishConfig(rolePolicyConfig());
-              publishConfig(initialConfig);
-              break;
-            case "config-routing-aba":
-              publishConfig({ ...initialConfig, session: { mainKey: "other" } });
-              publishConfig(initialConfig);
-              break;
-          }
-        }
-        if (transaction === 2 && verdictChange) {
-          stages.push("verdict-precommit");
-          if (revocation === "verdict-reviewer") {
-            record.approvalReviewerDeviceIds = ["other-reviewer"];
-          }
-          if (revocation === "verdict-source") {
-            record.request.sessionKey = "agent:main:other";
-          }
-        }
-        if (
-          (transaction === 1 && revocation === "lookup") ||
-          (transaction === 2 && revocation === "verdict")
-        ) {
-          invalidateGatewayDeviceRevocation(invocation.context, "reviewer", "operator");
-          stages.push("device-revoked");
-        }
-      }
-      admit(request, grant);
-    });
-    try {
-      const pending = invocation.invoke();
-      if (revocation === "native-refused") {
-        nativeRevoked = true;
-      }
-      if (revocation === "native-config-unrelated") {
-        publishConfig({ ...initialConfig, messages: { ackReaction: "ok" } });
-      } else if (revocation === "native-config-unrelated-agent") {
-        publishConfig(unrelatedAgentConfig);
-      } else if (revocation === "native-config-role-aba") {
-        publishConfig(rolePolicyConfig());
-        publishConfig(initialConfig);
-      } else if (revocation === "native-config-routing-aba") {
-        publishConfig({ ...initialConfig, session: { mainKey: "other" } });
-        publishConfig(initialConfig);
-      }
-      const response = await pending;
-      expect(stages).toEqual(
-        native && revoke
-          ? []
-          : [
-              "transport-retired",
-              "lookup-completed",
-              ...(verdictChange ? ["verdict-precommit"] : []),
-              ...(revocation === "lookup" || revocation === "verdict" ? ["device-revoked"] : []),
-            ],
-      );
-      if (native) {
-        expect(nativeGuard).toHaveBeenCalled();
-      }
-      if (native && revoke) {
-        expect(lookup).not.toHaveBeenCalled();
-      } else {
-        expect(client.connectionSignal.aborted).toBe(true);
-        expect(lookup).toHaveBeenCalledOnce();
-      }
-      if (revoke) {
-        expect(response).toMatchObject({ ok: false, error: { message: "approval not found" } });
-        expect(getOperatorApproval({ id: record.id, databaseOptions })).toEqual(before);
-        expect(exec.getLiveSnapshot(record.id)).toBe(revocation === "binding" ? null : record);
-        expect(record.resolvedAtMs).toBeUndefined();
-        expect(settled).toBe(false);
-        expect(invocation.context.approvalEvents?.publishResolved).not.toHaveBeenCalled();
-        expect(invocation.context.broadcast).not.toHaveBeenCalled();
-        expect(invocation.context.broadcastToConnIds).not.toHaveBeenCalled();
-      } else {
-        expect(response).toMatchObject({
-          ok: true,
-          result: { approval: { id: record.id, status: "allowed" } },
-        });
-        expect(getOperatorApproval({ id: record.id, databaseOptions })).toMatchObject({
-          status: "allowed",
-        });
-        await expect(decision).resolves.toBe("allow-once");
-      }
-    } finally {
-      await Promise.all([exec.drain(), plugin.drain()]);
+  const connection = new AbortController();
+  client.connectionSignal = connection.signal;
+  let nativeRevoked = false;
+  const nativeGuard = vi.fn(() => {
+    if (nativeRevoked) {
+      throw new Error("synthetic native guard revoked");
     }
+  });
+  const before = read();
+  const invocation = invoke(
+    "approval.resolve",
+    {
+      id: revocation.startsWith("transport-")
+        ? expectDefined(before, "persisted approval").resolutionRef
+        : record.id,
+      kind: "exec",
+      decision: "allow-once",
+    },
+    native ? { sessionMutationCommitGuard: nativeGuard } : {},
+  );
+  const initialConfig: OpenClawConfig = {};
+  const publishConfig = configure(invocation, client, initialConfig);
+  const changeConfig = (change: string) => {
+    const identity = (email: string): OpenClawConfig => ({
+      gateway: { auth: { identityScopes: { [email]: ["operator.approvals"] } } },
+    });
+    const routing = { ...initialConfig, session: { mainKey: "other" } };
+    const configs: Record<string, OpenClawConfig> = {
+      "config-unrelated": { ...initialConfig, messages: { ackReaction: "ok" } },
+      "config-unrelated-agent": unrelatedAgentConfig,
+      "transport-unrelated-agent": unrelatedAgentConfig,
+      "config-target-routing-aba": routing,
+      "config-routing-aba": routing,
+      "config-target-store-aba": {
+        ...initialConfig,
+        session: { store: path.join(state.stateDir, "moved", "{agentId}.sqlite") },
+      },
+      "config-other-identity": identity("other@example.test"),
+      "config-own-identity-aba": identity("reviewer@example.test"),
+      "config-role-aba": rolePolicyConfig(),
+    };
+    const config = configs[change];
+    if (config) {
+      publishConfig(config);
+      if (change.endsWith("-aba") || change === "config-other-identity") {
+        publishConfig(initialConfig);
+      }
+    }
+  };
+  expect(before).toMatchObject({
+    status: "pending",
+    decision: null,
+    resolvedAtMs: null,
+    terminalReason: null,
+    resolver: null,
+  });
+  const lookup = vi.spyOn(operatorApprovalStore, "getOperatorApprovalDetailed");
+  const mutations: Record<string, () => void> = {
+    access: bumpGatewayAccessRevision,
+    reviewer: () => {
+      record.approvalReviewerDeviceIds = ["other-reviewer"];
+    },
+    source: () => {
+      record.request.sessionKey = "agent:main:other";
+    },
+    binding: () => exec.retire(),
+    profile: () => {
+      client.authenticatedUserId = "other-user";
+    },
+    config: () => {
+      invocation.context.getRuntimeConfig = () => ({});
+    },
+  };
+  const mutate = (change: string) => {
+    const mutation = mutations[change.replace(/^(transport|verdict)-/, "")];
+    if (mutation) {
+      mutation();
+    } else {
+      changeConfig(change);
+    }
+  };
+  const stages: string[] = [];
+  let transaction = 0;
+  probe.admission(workerAdmission, (request, grant, admit) => {
+    if (request.stage === "transaction") {
+      transaction += 1;
+      if (transaction === 1) {
+        connection.abort();
+        stages.push("transport-retired");
+      }
+    } else if (request.stage === "commit") {
+      if (transaction === 1) {
+        stages.push("lookup-completed");
+        if (!verdictChange) {
+          mutate(revocation);
+        }
+      }
+      if (transaction === 2 && verdictChange) {
+        stages.push("verdict-precommit");
+        mutate(revocation);
+      }
+      if (
+        (transaction === 1 && revocation === "lookup") ||
+        (transaction === 2 && revocation === "verdict")
+      ) {
+        invalidateGatewayDeviceRevocation(invocation.context, "reviewer", "operator");
+        stages.push("device-revoked");
+      }
+    }
+    admit(request, grant);
+  });
+  try {
+    const pending = invocation.invoke();
+    if (revocation === "native-refused") {
+      nativeRevoked = true;
+    }
+    if (native) {
+      changeConfig(revocation.slice("native-".length));
+    }
+    const response = await pending;
+    expect(stages).toEqual(
+      native && revoke
+        ? []
+        : [
+            "transport-retired",
+            "lookup-completed",
+            ...(verdictChange ? ["verdict-precommit"] : []),
+            ...(revocation === "lookup" || revocation === "verdict" ? ["device-revoked"] : []),
+          ],
+    );
+    if (native) {
+      expect(nativeGuard).toHaveBeenCalled();
+    }
+    if (native && revoke) {
+      expect(lookup).not.toHaveBeenCalled();
+    } else {
+      expect(client.connectionSignal.aborted).toBe(true);
+      expect(lookup).toHaveBeenCalledOnce();
+    }
+    if (revoke) {
+      expect(response).toMatchObject({ ok: false, error: { message: "approval not found" } });
+      expect(read()).toEqual(before);
+      expect(exec.getLiveSnapshot(record.id)).toBe(revocation === "binding" ? null : record);
+      expect(record.resolvedAtMs).toBeUndefined();
+      expect(settled()).toBe(false);
+      expect(invocation.context.approvalEvents?.publishResolved).not.toHaveBeenCalled();
+      expect(invocation.context.broadcast).not.toHaveBeenCalled();
+      expect(invocation.context.broadcastToConnIds).not.toHaveBeenCalled();
+    } else {
+      expect(response).toMatchObject({
+        ok: true,
+        result: { approval: { id: record.id, status: "allowed" } },
+      });
+      expect(read()).toMatchObject({
+        status: "allowed",
+      });
+      await expect(decision).resolves.toBe("allow-once");
+    }
+  } finally {
+    await drain();
   }
 });
 
 it("keeps a legacy decision wait when an unrelated agent is added", async () => {
-  const state = expectDefined(sharedState, "shared approval test state");
-  const databaseOptions = { env: state.env };
-  openOpenClawStateDatabase(databaseOptions);
-  const exec = new ExecApprovalManager<ExecApprovalRequestPayload>({
-    scheduler: createTestGatewayScheduler(),
-    persistence: { runtimeEpoch: "wait-unrelated-agent-test", databaseOptions },
-    resolveAllowedDecisions: resolveExecApprovalRequestAllowedDecisions,
-  });
-  const record = exec.create(
-    { command: "echo wait", sessionKey: "agent:main:main", agentId: "main" },
-    600_000,
+  const { exec, invoke, record, client, drain } = await createFixture(
     "wait-unrelated-agent",
+    undefined,
+    { sessionKey: "agent:main:main", agentId: "main" },
   );
-  record.approvalReviewerDeviceIds = ["wait-reviewer"];
-  await exec.register(record, 600_000);
   const waiting = createDeferred();
   const awaitDecision = exec.awaitDecision.bind(exec);
   vi.spyOn(exec, "awaitDecision").mockImplementation((id) => {
@@ -376,62 +352,45 @@ it("keeps a legacy decision wait when an unrelated agent is added", async () => 
     waiting.resolve();
     return decision;
   });
-  const client = createClient({ deviceId: "wait-reviewer" });
-  const invocation = createApprovalInvocation({
-    handlers: createExecApprovalHandlers(exec),
-    method: "exec.approval.waitDecision",
-    body: { id: record.id },
-    client,
-  });
-  const initialConfig: OpenClawConfig = {};
-  setRuntimeConfigSnapshot(initialConfig);
-  client.authPolicy = captureGatewayAuthPolicy(initialConfig, {
-    role: "operator",
-    verifiedIdentity: "reviewer@example.test",
-  });
-  let currentConfig = initialConfig;
-  invocation.context.getRuntimeConfig = () => currentConfig;
+  const invocation = invoke(
+    "exec.approval.waitDecision",
+    { id: record.id },
+    {
+      handlers: createExecApprovalHandlers(exec),
+    },
+  );
+  const publishConfig = configure(invocation, client);
   try {
     const pending = invocation.invoke();
     await waiting.promise;
-    currentConfig = unrelatedAgentConfig;
-    setRuntimeConfigSnapshot(currentConfig);
-    publishOperatorRoleConfigChange(invocation.context);
+    publishConfig(unrelatedAgentConfig);
     await expect(exec.resolve(record.id, "allow-once")).resolves.toBe(true);
     await expect(pending).resolves.toMatchObject({
       ok: true,
       result: { id: record.id, decision: "allow-once" },
     });
   } finally {
-    await exec.drain();
+    await drain();
   }
 });
 
 it("rechecks retained request authority after the real history read settles", async () => {
   await withOpenClawTestState({ label: "approval-history-custody" }, async (state) => {
-    const databaseOptions = { env: state.env };
-    openOpenClawStateDatabase(databaseOptions);
-    const { exec, plugin, handlers } = createManagers(databaseOptions, "history-custody-test");
-    const record = exec.create({ command: "echo history" }, 600_000, "history-custody");
-    record.approvalReviewerDeviceIds = ["history-reviewer"];
-    const { decision } = await exec.register(record, 600_000);
+    const { exec, invoke, record, decision, client, read, drain } = await createFixture(
+      "history-custody",
+      state,
+    );
     await exec.resolve(record.id, "allow-once");
     await expect(decision).resolves.toBe("allow-once");
-    const client = createClient({ deviceId: "history-reviewer" });
     const connection = new AbortController();
     client.connectionSignal = connection.signal;
-    const invocation = createApprovalInvocation({
-      handlers,
-      method: "approval.history",
-      body: {},
-      client,
-    });
+    const invocation = invoke("approval.history", {});
     const history = operatorApprovalStore.listTerminalOperatorApprovals;
     vi.spyOn(operatorApprovalStore, "listTerminalOperatorApprovals").mockImplementation(
       async (params) => {
         const result = await history(params);
         expect(result.records).toHaveLength(1);
-        invalidateGatewayDeviceRevocation(invocation.context, "history-reviewer", "operator");
+        invalidateGatewayDeviceRevocation(invocation.context, "reviewer", "operator");
         return result;
       },
     );
@@ -442,29 +401,25 @@ it("rechecks retained request authority after the real history read settles", as
         result: undefined,
         error: { message: "approval not found" },
       });
-      expect(getOperatorApproval({ id: record.id, databaseOptions })).toMatchObject({
+      expect(read()).toMatchObject({
         status: "allowed",
         decision: "allow-once",
       });
     } finally {
-      await Promise.all([exec.drain(), plugin.drain()]);
+      await drain();
     }
   });
 });
 
 it("rejects a revoked lookup waiting for a committed decision without losing the winner", async () => {
   await withOpenClawTestState({ label: "approval-reconciliation-custody" }, async (state) => {
-    const databaseOptions = { env: state.env };
-    openOpenClawStateDatabase(databaseOptions);
     const onLifecycle = vi.fn();
-    const { exec, plugin, handlers } = createManagers(
-      databaseOptions,
-      "reconciliation-custody-test",
+    const { exec, invoke, record, decision, read, drain } = await createFixture(
+      "reconciliation-custody",
+      state,
+      {},
       onLifecycle,
     );
-    const record = exec.create({ command: "echo committed" }, 600_000, "reconciliation-custody");
-    record.approvalReviewerDeviceIds = ["reconciliation-reviewer"];
-    const { decision } = await exec.register(record, 600_000);
     const committed = createDeferred();
     const reply = createDeferred();
     const entered = createDeferred();
@@ -483,19 +438,14 @@ it("rejects a revoked lookup waiting for a committed decision without losing the
       entered.resolve();
       return result;
     });
-    const invocation = createApprovalInvocation({
-      handlers,
-      method: "approval.get",
-      body: { id: record.id },
-      client: createClient({ deviceId: "reconciliation-reviewer" }),
-    });
+    const invocation = invoke("approval.get");
     const resolution = exec.resolve(record.id, "allow-once");
     let lookup: ReturnType<typeof invocation.invoke> | undefined;
     try {
       await committed.promise;
       lookup = invocation.invoke();
       await entered.promise;
-      invalidateGatewayDeviceRevocation(invocation.context, "reconciliation-reviewer", "operator");
+      invalidateGatewayDeviceRevocation(invocation.context, "reviewer", "operator");
       reply.resolve();
       await expect(lookup).resolves.toMatchObject({
         ok: false,
@@ -504,7 +454,7 @@ it("rejects a revoked lookup waiting for a committed decision without losing the
       });
       await expect(resolution).resolves.toBe(true);
       await expect(decision).resolves.toBe("allow-once");
-      expect(getOperatorApproval({ id: record.id, databaseOptions })).toMatchObject({
+      expect(read()).toMatchObject({
         status: "allowed",
         decision: "allow-once",
       });
@@ -515,7 +465,7 @@ it("rejects a revoked lookup waiting for a committed decision without losing the
     } finally {
       reply.resolve();
       await Promise.allSettled([resolution, lookup]);
-      await Promise.all([exec.drain(), plugin.drain()]);
+      await drain();
     }
   });
 });
@@ -532,22 +482,10 @@ it.each([
 ] as const)(
   "keeps the pending waiter after a $code $operation refusal",
   async ({ code, operation }) => {
-    const state = expectDefined(sharedState, "shared approval test state");
-    const databaseOptions = { env: state.env };
-    const { exec, plugin, handlers } = createManagers(databaseOptions, "worker-refusal-test");
-    const record = exec.create(
-      { command: "echo refused" },
-      600_000,
+    const { exec, invoke, record, read, drain, settled } = await createFixture(
       `worker-refusal-${code}-${operation}`,
     );
-    record.approvalReviewerDeviceIds = ["refusal-reviewer"];
-    const { decision } = await exec.register(record, 600_000);
-    let settled = false;
-    void decision.then(() => {
-      settled = true;
-    });
-    const before = getOperatorApproval({ id: record.id, databaseOptions });
-    const client = createClient({ deviceId: "refusal-reviewer" });
+    const before = read();
     vi.spyOn(
       operatorApprovalStore,
       operation === "lookup"
@@ -564,35 +502,28 @@ it.each([
     );
     try {
       expect(
-        await createApprovalInvocation({
-          handlers,
-          method: operation === "lookup" ? "approval.get" : "approval.resolve",
-          body:
-            operation === "lookup"
-              ? { id: record.id }
-              : {
-                  id: record.id,
-                  kind: "exec",
-                  decision: operation === "resolve" ? "allow-once" : "invalid",
-                },
-          client,
-        }).invoke(),
+        await invoke(
+          operation === "lookup" ? "approval.get" : "approval.resolve",
+          operation === "lookup"
+            ? { id: record.id }
+            : {
+                id: record.id,
+                kind: "exec",
+                decision: operation === "resolve" ? "allow-once" : "invalid",
+              },
+        ).invoke(),
       ).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
-      expect(getOperatorApproval({ id: record.id, databaseOptions })).toEqual(before);
+      expect(read()).toEqual(before);
       expect(exec.getLiveSnapshot(record.id)).toBe(record);
       expect(record.resolvedAtMs).toBeUndefined();
-      expect(settled).toBe(false);
-      expect(
-        await createApprovalInvocation({
-          handlers,
-          method: "approval.get",
-          body: { id: record.id },
-          client,
-        }).invoke(),
-      ).toMatchObject({ ok: true, result: { approval: { status: "pending" } } });
-      expect(settled).toBe(false);
+      expect(settled()).toBe(false);
+      expect(await invoke("approval.get").invoke()).toMatchObject({
+        ok: true,
+        result: { approval: { status: "pending" } },
+      });
+      expect(settled()).toBe(false);
     } finally {
-      await Promise.all([exec.drain(), plugin.drain()]);
+      await drain();
     }
   },
 );

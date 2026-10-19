@@ -13,7 +13,6 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { McpConnectionAuthorityError } from "./mcp-connection-authority-error.js";
 import { captureMcpOAuthAuthorization } from "./mcp-oauth-authorization.js";
 import { requesterMcpOAuthIdentity } from "./mcp-oauth-identity.js";
-import { createMcpOAuthClientProvider } from "./mcp-oauth-provider.js";
 import { retainMcpOAuthAuthorizationState } from "./mcp-oauth-store.authorization.js";
 import * as oauthStore from "./mcp-oauth-store.js";
 import {
@@ -23,7 +22,11 @@ import {
 } from "./mcp-oauth-store.js";
 import type { McpOAuthMutation } from "./mcp-oauth-store.types.js";
 import { recordMcpOAuthAuthorizationRequired } from "./mcp-oauth.js";
-import { seedMcpOAuthStoreForTest, withMcpOAuthTestLease } from "./mcp-oauth.test-support.js";
+import {
+  seedMcpOAuthStoreForTest,
+  withMcpOAuthProviderForTest,
+  withMcpOAuthTestLease,
+} from "./mcp-oauth.test-support.js";
 
 const identity = requesterMcpOAuthIdentity("events", "https://mcp.example.test/events", {
   messageChannel: "discord",
@@ -38,6 +41,10 @@ const tokens = {
 const retired = new McpConnectionAuthorityError("retired");
 const unavailable = new McpConnectionAuthorityError("unavailable");
 const capture = () => captureMcpOAuthAuthorization({ identity, assertCurrent() {} });
+const seedGrant = (authorizationId: string) =>
+  seedMcpOAuthStoreForTest(identity.storeKey, { tokens, authorizationId });
+const recordRejected = (rejectedAccessToken: string) =>
+  recordMcpOAuthAuthorizationRequired({ identity, rejectedAccessToken });
 const mutate = (mutation: McpOAuthMutation) =>
   withMcpOAuthTestLease(identity.storeKey, (lease, context) =>
     mutateMcpOAuthStore({ storeKey: identity.storeKey, lease, context }, mutation),
@@ -71,12 +78,7 @@ it("binds legacy requester grants, preserves refresh, and never revives logout o
       );
       expect(original.authorizationId).not.toContain(tokens.access_token);
       expect((await keep()).authorizationId).toBe(original.authorizationId);
-      await withMcpOAuthTestLease(identity.storeKey, async (lease, context) => {
-        const provider = await createMcpOAuthClientProvider({
-          identity,
-          lease,
-          storeContext: context,
-        });
+      await withMcpOAuthProviderForTest({ identity }, async (provider) => {
         await provider.saveTokens({ ...tokens, access_token: "fixture-refreshed" });
         // Verification inside an existing flow cannot reacquire its own lease.
         const insideFlow = await capture();
@@ -96,45 +98,30 @@ it("binds legacy requester grants, preserves refresh, and never revives logout o
       }
       await original.revalidate();
       expect(original.assertCurrent).not.toThrow();
-      expect(
-        await recordMcpOAuthAuthorizationRequired({
-          identity,
-          rejectedAccessToken: tokens.access_token,
-        }),
-      ).toBe(false);
+      expect(await recordRejected(tokens.access_token)).toBe(false);
       // The canonical writer's CAS also leaves stale challenges inert.
-      expect(
-        (
-          await mutate({
-            kind: "authorizationChallenge",
-            rejectedAccessToken: tokens.access_token,
-            requiresAuthorization: true,
-          })
-        ).applied,
-      ).toBe(false);
-      expect(original.assertCurrent).not.toThrow();
-      expect(
-        await recordMcpOAuthAuthorizationRequired({
-          identity,
-          rejectedAccessToken: "fixture-refreshed",
+      await expect(
+        mutate({
+          kind: "authorizationChallenge",
+          rejectedAccessToken: tokens.access_token,
+          requiresAuthorization: true,
         }),
-      ).toBe(true);
+      ).resolves.toMatchObject({ applied: false });
+      expect(original.assertCurrent).not.toThrow();
+      expect(await recordRejected("fixture-refreshed")).toBe(true);
       expect(original.assertCurrent).toThrow(retired);
       await expect(capture()).rejects.toThrow(retired);
       await save();
       const reconnected = await keep();
       expect(reconnected.authorizationId).not.toBe(original.authorizationId);
       expect(original.assertCurrent).toThrow(retired);
-      await withMcpOAuthTestLease(identity.storeKey, async (lease, context) => {
-        const replacement = await createMcpOAuthClientProvider({
-          identity,
-          lease,
-          storeContext: context,
-          replaceAuthorization: true,
-        });
-        // Even identical credentials for the same native requester are a new login.
-        await replacement.saveTokens(tokens);
-      });
+      await withMcpOAuthProviderForTest(
+        { identity, replaceAuthorization: true },
+        async (replacement) => {
+          // Even identical credentials for the same native requester are a new login.
+          await replacement.saveTokens(tokens);
+        },
+      );
       expect(reconnected.assertCurrent).toThrow(retired);
       const replaced = await keep();
       expect(replaced.authorizationId).not.toBe(reconnected.authorizationId);
@@ -216,16 +203,10 @@ it("fences before the actual commit grant and restores authority only after a kn
 it("reads foreign credential changes and refuses pending or uncertain owner facts", async () => {
   await withOpenClawTestState({ label: "mcp-oauth-authority-foreign" }, async () => {
     // Test-only native writes stand in for another process: no host publication is emitted.
-    seedMcpOAuthStoreForTest(identity.storeKey, {
-      tokens,
-      authorizationId: "fixture-foreign-original",
-    });
+    seedGrant("fixture-foreign-original");
     const retained = await capture();
     try {
-      seedMcpOAuthStoreForTest(identity.storeKey, {
-        tokens,
-        authorizationId: "fixture-foreign-reconnected",
-      });
+      seedGrant("fixture-foreign-reconnected");
       expect(retained.assertCurrent).not.toThrow();
       await expect(retained.revalidate()).rejects.toThrow(retired);
       expect(retained.assertCurrent).toThrow(retired);
@@ -260,7 +241,7 @@ it("reads foreign credential changes and refuses pending or uncertain owner fact
 
 it("retains the canonical clear fence when native settlement is unknown despite result failure", async () => {
   await withOpenClawTestState({ label: "mcp-oauth-authority-unknown" }, async () => {
-    seedMcpOAuthStoreForTest(identity.storeKey, { tokens, authorizationId: "fixture-unknown" });
+    seedGrant("fixture-unknown");
     const retained = await capture();
     const context = captureOpenClawStateWorkerContext();
     const lease: OpenClawStateAsyncLeaseContext = {

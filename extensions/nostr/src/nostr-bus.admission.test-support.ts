@@ -93,12 +93,12 @@ export function registerNostrAdmissionTests() {
         admissionPubkeys: [approvedPubkey],
         onMessage,
         authorizeSender,
-        onMetric: (event) => {
-          if (event.name === "event.received" && ++seen === count + 1) {
+        trackIngressTask: (task) => {
+          tasks.push(task);
+          if (++seen === count + 1) {
             received.resolve();
           }
         },
-        trackIngressTask: (task) => tasks.push(task),
       });
       await relay.subscribed;
       const denied = Array.from({ length: count }, (_, i) =>

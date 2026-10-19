@@ -1,4 +1,4 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalString,
   readNonBlankString,
@@ -126,10 +126,7 @@ function parseApprovalScope(value: unknown): ApprovalScope | null {
             kind: "message-send",
             target: value.target,
             recipientCount: value.recipientCount,
-            ...(Array.isArray(value.recipients) &&
-            value.recipients.every((recipient) => typeof recipient === "string")
-              ? { recipients: value.recipients }
-              : {}),
+            ...(isStringArray(value.recipients) ? { recipients: value.recipients } : {}),
             ...(value.audience === "internal" || value.audience === "external"
               ? { audience: value.audience }
               : {}),
@@ -429,7 +426,9 @@ export async function refreshPendingApprovalQueue(
     for (const entry of refreshed) {
       scheduleApprovalExpiryPrune(state, entry);
     }
-    return true;
+    return [execResult, pluginResult, systemAgentResult].every(
+      (result) => result.status === "fulfilled",
+    );
   } finally {
     refreshes.delete(refresh);
     if (refreshes.size === 0) {

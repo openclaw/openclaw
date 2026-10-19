@@ -39,7 +39,7 @@ it("keeps private pane probes on the reported runtime while composing stream ins
   const runtime = new ChatPaneRuntime(element, fixture.pane.context);
   Reflect.set(runtime, "state", fixture.state);
   onTestFinished(() => {
-    runtime.disconnectedCallback();
+    runtime.dispose();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
@@ -49,7 +49,8 @@ it("keeps private pane probes on the reported runtime while composing stream ins
   expect(Reflect.get(element, "state")).toBe(fixture.state);
   expect(Reflect.get(element, "chatState")).toBe(Reflect.get(runtime, "chatState"));
   expect(Reflect.get(element, "context")).toBe(fixture.pane.context);
-  expect(Reflect.get(element, "presencePayload")).toBeUndefined();
+  expect(Reflect.get(element, "presence")).toBe(runtime.presence);
+  expect(runtime.presence.snapshot).toBeUndefined();
   expect(firstProbe).toHaveBeenCalledWith(runtime, "commit");
   expect(Reflect.get(element, "updateComplete")).toBe(commitFence);
   expect(Object.getOwnPropertyDescriptor(element, "sessionSnapshotStore")).toMatchObject(
@@ -61,20 +62,23 @@ it("keeps private pane probes on the reported runtime while composing stream ins
 
   const suggestions: [] = [];
   Reflect.set(runtime, "taskSuggestions", suggestions);
-  Reflect.set(runtime, "loadingOlder", true);
+  const catalogMessages = [{ role: "assistant", content: "Catalog fixture" }];
+  runtime.history.catalogMessages = catalogMessages;
+  runtime.history.loadingOlder = true;
   Reflect.set(runtime, "historyIntentTimer", 37);
   const presence = { presence: [] };
-  Reflect.set(runtime, "presencePayload", presence);
+  runtime.presence.update(presence);
   expect(Reflect.get(element, "taskSuggestions")).toBe(suggestions);
+  expect(Reflect.get(element, "catalogMessages")).toBe(catalogMessages);
   expect(Reflect.get(element, "loadingOlder")).toBe(true);
   expect(Reflect.get(element, "historyIntentTimer")).toBe(37);
-  expect(Reflect.get(element, "presencePayload")).toBe(presence);
+  expect(Reflect.get(element, "presence")).toMatchObject({ snapshot: presence });
   const boardProviderLease = { update: vi.fn() };
   Reflect.set(runtime, "boardProviderLease", boardProviderLease);
   expect(Reflect.get(element, "boardProviderLease")).toBe(boardProviderLease);
   Reflect.set(runtime, "boardProviderLease", undefined);
   expect(Reflect.get(element, "boardProviderLease")).toBeUndefined();
-  Reflect.set(runtime, "loadingOlder", false);
+  runtime.history.loadingOlder = false;
   Reflect.set(runtime, "historyIntentTimer", null);
   expect(Reflect.get(element, "loadingOlder")).toBe(false);
   expect(Reflect.get(element, "historyIntentTimer")).toBeNull();
@@ -82,36 +86,31 @@ it("keeps private pane probes on the reported runtime while composing stream ins
   const streamProbe = vi.fn();
   scope.openclawRenderLifecycleTestHook = streamProbe;
   Reflect.set(runtime, "state", undefined);
-  notifyRenderLifecycleForTest(runtime, "invalidate");
+  notifyRenderLifecycleForTest(runtime, "commit");
   expect(Reflect.get(element, "state")).toBeUndefined();
   expect(firstProbe).toHaveBeenCalledTimes(1);
-  expect(streamProbe).toHaveBeenCalledWith(runtime, "invalidate");
+  expect(streamProbe).toHaveBeenCalledWith(runtime, "commit");
 
-  for (const key of ["requestUpdate", "render"] as const) {
-    const ownerMethod = vi.spyOn(runtime, key);
-    const original: unknown = Reflect.get(element, key);
-    if (typeof original !== "function") {
-      throw new Error(`Expected the recorded pane's ${key} operation`);
-    }
-    let probeCalls = 0;
-    Reflect.set(element, key, (...args: unknown[]) => {
-      probeCalls += 1;
-      if (probeCalls > 1) {
-        throw new Error("The saved owner method recursed through its replacement");
-      }
-      return Reflect.apply(original, element, args);
-    });
-    const instrumented: unknown = Reflect.get(element, key);
-    if (typeof instrumented !== "function") {
-      throw new Error(`Expected the instrumented pane's ${key} operation`);
-    }
-    const args = key === "requestUpdate" ? ["sessionKey", "previous"] : [];
-    const result: unknown = Reflect.apply(instrumented, element, args);
-    if (key === "render") {
-      expect(result).toHaveProperty("layout");
-    }
-    expect(probeCalls).toBe(1);
-    expect(ownerMethod).toHaveBeenCalledWith(...args);
-    expect(ownerMethod.mock.instances[0]).toBe(runtime);
+  const ownerMethod = vi.spyOn(runtime, "render");
+  const original: unknown = Reflect.get(element, "render");
+  if (typeof original !== "function") {
+    throw new Error("Expected the recorded pane's render operation");
   }
+  let probeCalls = 0;
+  Reflect.set(element, "render", (...args: unknown[]) => {
+    probeCalls += 1;
+    if (probeCalls > 1) {
+      throw new Error("The saved owner method recursed through its replacement");
+    }
+    return Reflect.apply(original, element, args);
+  });
+  const instrumented: unknown = Reflect.get(element, "render");
+  if (typeof instrumented !== "function") {
+    throw new Error("Expected the instrumented pane's render operation");
+  }
+  const result: unknown = Reflect.apply(instrumented, element, []);
+  expect(result).toHaveProperty("layout");
+  expect(probeCalls).toBe(1);
+  expect(ownerMethod).toHaveBeenCalledWith();
+  expect(ownerMethod.mock.instances[0]).toBe(runtime);
 });

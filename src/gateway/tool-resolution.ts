@@ -9,10 +9,10 @@ import { applyToolAvailabilityDescriptions } from "../agents/agent-tools.deferre
 import { createOpenClawCodingToolsInternalAsync } from "../agents/agent-tools.js";
 import { filterToolsByMessageProvider } from "../agents/agent-tools.message-provider-policy.js";
 import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
+import { resolveTurnToolSurface } from "../agents/agent-tools.turn-authority.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { nodeExecSchema } from "../agents/bash-tools.schemas.js";
 import { resolveConversationQuestionInputMode } from "../agents/conversation-capability-profile.js";
-import { resolveCoreToolFactoryFamily } from "../agents/core-tool-factory-descriptors.js";
 import { applyDelegationCapability } from "../agents/delegation-capability.js";
 import { prepareExecDefaults, resolvePreparedExecDefaultsAsync } from "../agents/exec-defaults.js";
 import { createLazyExecTool, resolveExecToolConfig } from "../agents/lazy-exec-tool.js";
@@ -26,6 +26,7 @@ import {
 import { resolveSandboxRuntimeStatusAsync } from "../agents/sandbox/runtime-status.js";
 import { createScheduledMessageInvocationAdmission } from "../agents/scheduled-message-invocation.js";
 import { resolveScheduledToolCallerContext } from "../agents/scheduled-tool-policy.js";
+import { resolveCoreToolFactoryFamily } from "../agents/tool-catalog.js";
 import { buildDeclaredToolAllowlistContext } from "../agents/tool-policy-declared-context.js";
 import { filterToolsByPolicy } from "../agents/tool-policy-match.js";
 import {
@@ -62,10 +63,11 @@ import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing
 import { loadExecApprovalsReadOnlyAsync } from "../infra/exec-approvals-store.js";
 import { resolveExactExecModeFromPolicy } from "../infra/exec-approvals.js";
 import { logWarn } from "../logger.js";
+import type { MemoryAudience } from "../plugins/memory-provider-types.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import {
   DEFAULT_GATEWAY_HTTP_TOOL_DENY,
-  GATEWAY_OWNER_ONLY_CORE_TOOLS,
+  resolveGatewayOwnerOnlyToolDenylist,
 } from "../security/dangerous-tools.js";
 import type { McpLoopbackRequestContext } from "./mcp-grant-store.js";
 import {
@@ -90,6 +92,8 @@ export async function resolveGatewayScopedTools(
     /** Workspace from the invocation owner's exact session read. */
     preparedSessionWorkspaceDir?: string;
     messageActionTurnCapability?: string;
+    /** Host-minted audience from a run-bound loopback grant; ignored on other surfaces. */
+    memoryAudience?: MemoryAudience;
     authProfileStore?: AuthProfileStore;
     agentDir?: string;
     onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
@@ -150,6 +154,7 @@ export async function resolveGatewayScopedTools(
       }).sessionAgentId
     : sessionAgentId;
   const surface = params.surface ?? "http";
+  const stableSessionSurface = surface === "loopback" && params.admittedRunContext !== undefined;
   const nodeExecSurface = surface === "loopback" && params.includeNodeExecTool === true;
   const gatewayRequestedTools = params.gatewayRequestedTools ?? [];
   const messageProvider = params.messageProvider?.trim().toLowerCase();
@@ -210,6 +215,8 @@ export async function resolveGatewayScopedTools(
     accountId: gatewayCaller.accountId,
   });
   const { groupPolicy, senderPolicy, subagentPolicy, inheritedToolPolicy } = requesterPolicies;
+  const completionHandoff =
+    stableSessionSurface && requesterPolicies.requesterPolicySource === "completion-handoff";
   const sessionPermissionPolicy =
     requesterPolicies.inheritedToolPolicySource === "sender"
       ? params.sessionPermissionPolicy
@@ -262,11 +269,9 @@ export async function resolveGatewayScopedTools(
     params.admittedRunContext &&
     getAdmittedRunDelegatedAuthority(params.admittedRunContext);
   const ownerOnlyGatewayDeny = [
-    ...(params.senderIsOwner === false || (surface === "http" && params.senderIsOwner !== true)
-      ? GATEWAY_OWNER_ONLY_CORE_TOOLS.filter(
-          (name) => name !== "sessions" && (name !== "portal" || !sessionPortalTarget),
-        )
-      : []),
+    ...resolveGatewayOwnerOnlyToolDenylist(
+      surface === "http" ? params.senderIsOwner === true : params.senderIsOwner,
+    ).filter((name) => name !== "sessions" && (name !== "portal" || !sessionPortalTarget)),
     // Attach grants also use loopback; session binding is not run authority.
     ...(params.senderIsOwner !== true &&
     !assignmentAdmitted &&
@@ -281,7 +286,7 @@ export async function resolveGatewayScopedTools(
       : undefined) ||
     params.workspaceDir?.trim() ||
     resolveAgentWorkspaceDir(params.cfg, sessionAgentId);
-  const basePolicies = [
+  const sessionPolicies = [
     profilePolicy,
     providerProfilePolicy,
     globalPolicy,
@@ -292,18 +297,28 @@ export async function resolveGatewayScopedTools(
     senderPolicy,
     sandboxPolicy,
     subagentPolicy,
-    inheritedToolPolicy,
   ];
-  const requestedPolicies = [
-    ...basePolicies,
-    gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined,
+  const basePolicies = [...sessionPolicies, inheritedToolPolicy];
+  const requestedToolPolicy =
+    gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined;
+  const requestedPolicies = [...basePolicies, requestedToolPolicy];
+  const catalogPolicies = [
+    ...sessionPolicies,
+    completionHandoff ? undefined : inheritedToolPolicy,
+    requestedToolPolicy,
+  ];
+  const gatewayDenyPolicies = [
+    defaultGatewayDeny.length > 0 ? { deny: defaultGatewayDeny } : undefined,
+    Array.isArray(gatewayToolsCfg?.deny) ? { deny: gatewayToolsCfg.deny } : undefined,
   ];
   const explicitDenylist = collectExplicitDenylist([
     ...basePolicies,
-    defaultGatewayDeny.length > 0 ? { deny: defaultGatewayDeny } : undefined,
+    ...gatewayDenyPolicies,
     ownerOnlyGatewayDeny.length > 0 ? { deny: ownerOnlyGatewayDeny } : undefined,
-    Array.isArray(gatewayToolsCfg?.deny) ? { deny: gatewayToolsCfg.deny } : undefined,
   ]);
+  const catalogDenylist = stableSessionSurface
+    ? collectExplicitDenylist([...catalogPolicies, ...gatewayDenyPolicies])
+    : explicitDenylist;
   const inheritedToolDenylist = [
     ...explicitDenylist,
     ...(requesterPolicies.inheritedToolPolicyForSpawn?.deny ?? []),
@@ -335,6 +350,10 @@ export async function resolveGatewayScopedTools(
   };
   const swarmCollectorContext = resolveSwarmCollectorToolContext(swarmCollectorAdmission);
   const commonToolOptions = () => ({
+    requesterOrigin: params.requesterOrigin,
+    operatorProfileId: params.operatorProfileId,
+    conversationId: params.conversationId,
+    chatType: params.chatType,
     runId: params.runId,
     inboundEventKind: params.inboundEventKind,
     sourceReplyDeliveryMode,
@@ -345,6 +364,7 @@ export async function resolveGatewayScopedTools(
     sessionId: params.sessionId,
     requireExplicitMessageTarget: params.requireExplicitMessageTarget,
     senderIsOwner: params.senderIsOwner,
+    gitContributorProfileId: params.gitContributorProfileId,
     config: params.cfg,
     sessionConfigSource: "runtime" as const,
     modelProvider: params.modelProvider,
@@ -380,6 +400,7 @@ export async function resolveGatewayScopedTools(
       : undefined,
     assertInputCommitAllowed: params.assertInputCommitAllowed,
     assertInvocationCurrent,
+    memoryAudience: surface === "loopback" ? params.memoryAudience : undefined,
     ...(swarmCollectorContext
       ? {
           swarmCollector: true,
@@ -424,8 +445,8 @@ export async function resolveGatewayScopedTools(
     authProfileStore: params.authProfileStore,
     pinnedWidgetAuthoring: surface === "loopback" ? params.pinnedWidgetAuthoring : undefined,
     sandboxed,
-    pluginToolAllowlist: collectExplicitAllowlist(requestedPolicies),
-    pluginToolDenylist: explicitDenylist,
+    pluginToolAllowlist: collectExplicitAllowlist(catalogPolicies),
+    pluginToolDenylist: catalogDenylist,
     cronCreatorToolAllowlist,
     cronCreatorToolAllowlistCaptureRef,
     inheritedToolAllowlist,
@@ -592,11 +613,12 @@ export async function resolveGatewayScopedTools(
   const declaredToolAllowlist = buildDeclaredToolAllowlistContext({
     config: params.cfg,
     workspaceDir,
-    toolDenylist: explicitDenylist,
+    toolDenylist: catalogDenylist,
   });
   function filterGatewayToolPolicies(
     config: OpenClawConfig,
     onFilter?: Parameters<typeof applyToolPolicyPipeline>[0]["onFilter"],
+    scope: "turn" | "session" = "turn",
   ): AnyAgentTool[] {
     const current =
       config === params.cfg ? configuredToolPolicies : resolveConfiguredToolPolicies(config);
@@ -622,7 +644,10 @@ export async function resolveGatewayScopedTools(
         }),
         { policy: sandboxPolicy, label: "sandbox tools.allow" },
         { policy: subagentPolicy, label: "subagent tools.allow" },
-        { policy: inheritedToolPolicy, label: "inherited tools" },
+        {
+          policy: scope === "session" && completionHandoff ? undefined : inheritedToolPolicy,
+          label: "inherited tools",
+        },
       ],
       declaredToolAllowlist,
       onFilter,
@@ -635,26 +660,38 @@ export async function resolveGatewayScopedTools(
   const gatewayDenySet = new Set(
     [
       ...defaultGatewayDeny,
-      ...ownerOnlyGatewayDeny,
+      ...(stableSessionSurface ? [] : ownerOnlyGatewayDeny),
       ...(Array.isArray(gatewayToolsCfg?.deny) ? gatewayToolsCfg.deny : []),
       ...excludedToolNames,
     ].map(normalizeToolPolicyName),
   );
-  const tools = applySwarmCollectorToolContract(
-    applyDelegationCapability(
-      policyFiltered.filter((tool) => !gatewayDenySet.has(normalizeToolPolicyName(tool.name))),
-      params.delegationCapability,
-    ),
-    {
-      swarmCollector: Boolean(swarmCollectorContext),
-      structuredOutputTool: openClawTools.find((tool) => tool.name === "structured_output"),
-    },
-  );
+  const completeTools = (filtered: AnyAgentTool[]) =>
+    applySwarmCollectorToolContract(
+      applyDelegationCapability(
+        filtered.filter((tool) => !gatewayDenySet.has(normalizeToolPolicyName(tool.name))),
+        params.delegationCapability,
+      ),
+      {
+        swarmCollector: Boolean(swarmCollectorContext),
+        structuredOutputTool: openClawTools.find((tool) => tool.name === "structured_output"),
+      },
+    );
+  const turnTools = completeTools(policyFiltered);
+  // Run-bound CLI catalogs share the session surface; authority only changes executors.
+  const { tools, exportedTools } = stableSessionSurface
+    ? resolveTurnToolSurface({
+        turnTools,
+        sessionTools: completionHandoff
+          ? completeTools(filterGatewayToolPolicies(params.cfg, undefined, "session"))
+          : undefined,
+        ownerOnlyDenied: new Set(ownerOnlyGatewayDeny),
+      })
+    : { tools: turnTools, exportedTools: turnTools };
   // The loopback exec tool is node-only. Do not let a raw `exec` capability get
   // reinterpreted as generic Gateway/sandbox exec by spawned sessions or cron jobs.
   const inheritableTools = includeNodeExecTool
-    ? tools.filter((tool) => tool.name.trim().toLowerCase() !== "exec")
-    : tools;
+    ? exportedTools.filter((tool) => tool.name.trim().toLowerCase() !== "exec")
+    : exportedTools;
   if (shouldInheritEffectiveToolAllowlist) {
     replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, inheritableTools);
   }

@@ -148,7 +148,6 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
       ? (snapshot) => params.onProgress?.("recovery", renderRestartDiagnostics(snapshot).join("; "))
       : undefined,
     supervisorKeepsAlive: true,
-    settle: { probes: 12 },
   });
   assertCurrent();
   return { health, launchAgentRecovery };
@@ -246,7 +245,9 @@ export async function admitInstalledGatewayRecovery(
     !params.shouldRestart ||
     !params.preManagedServiceStop?.stopped ||
     databaseRollback?.exitCode === 0 ||
-    (!settlement && !databaseRollback) ||
+    // Normal Doctor completion needs no settlement receipt. The candidate's
+    // schema inspection below can still admit forward recovery after migration.
+    (!settlement && !databaseRollback && !params.candidateSchemaVersions) ||
     (result.recovery?.serviceRestartSafe === false &&
       result.recovery.reason === "source-rollback-failed")
   ) {
@@ -361,6 +362,15 @@ export async function admitInstalledGatewayRecovery(
     result.reason = "post-update-failed";
   }
   result.recovery = { serviceRestartSafe: true, version, ...(buildId ? { buildId } : {}) };
+  // Health observation alone cannot distinguish an untouched installation from
+  // forward recovery. Preserve this owner's admission for later repair guidance.
+  result.steps.push({
+    name: "installed gateway recovery admission",
+    command: "admit installed gateway recovery",
+    cwd: root,
+    durationMs: 0,
+    exitCode: 0,
+  });
   if (params.opts.run) {
     recordUpdateRunDiagnostics(
       params.opts.run.runId,
@@ -536,7 +546,6 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
       assertCurrent,
       onProgress: (stage, reason) =>
         defaultRuntime[params.jsonMode ? "error" : "log"](`Gateway recovery (${stage}): ${reason}`),
-      settle: { probes: 12 },
     });
     assertCurrent();
     if (!health.healthy || health.runtime.status !== "running") {

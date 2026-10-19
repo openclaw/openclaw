@@ -20,7 +20,6 @@ import {
   retainNativeHookRelayOperation,
   renewNativeHookRelayBridgeRecord,
   unregisterNativeHookRelayBridge,
-  isRetryableNativeHookRelayBridgeLookupError,
 } from "./native-hook-relay-bridge.js";
 import {
   normalizeNativeHookInvocation,
@@ -644,9 +643,6 @@ export const testing = {
   ): Promise<Record<string, unknown> | undefined> {
     const record = await readNativeHookRelayBridgeRecordIfExists(relayId);
     return record ? { ...record } : undefined;
-  },
-  isNativeHookRelayBridgeLookupRetryableForTests(error: unknown, elapsedMs = 0): boolean {
-    return isRetryableNativeHookRelayBridgeLookupError({ error, elapsedMs });
   },
   formatPermissionApprovalDescriptionForTests,
   permissionRequestContentFingerprintForTests,

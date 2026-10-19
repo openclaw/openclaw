@@ -83,7 +83,7 @@ it.skipIf(process.platform === "win32").each(["previous", "candidate", "current"
                 "legacy package record settled by identity and version; content could not be re-verified",
               ],
             ]
-          : [],
+          : [[expect.stringContaining("Repaired permissions on")]],
       );
     }
   },

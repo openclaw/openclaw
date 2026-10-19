@@ -134,6 +134,5 @@ export async function moveSessionFromMenu(params: {
     onPendingChange: () => {},
     publishError: params.publishError ?? ((error) => showToast({ message: formatUiError(error) })),
     reconcileMutation: (agentId) => sessions.reconcileMutation(agentId),
-    requestUpdate: () => {},
   });
 }

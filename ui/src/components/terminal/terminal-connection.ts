@@ -22,8 +22,10 @@ export interface TerminalGatewayClient {
     options?: TerminalRequestOptions,
   ): Promise<T>;
   addEventListener(listener: (evt: Pick<EventFrame, "event" | "payload">) => void): () => void;
-  inboundActivitySeq?: number;
-  /** Recovers unreplayable output gaps and half-open terminal streams. */
+  readonly recoveryScope?: string;
+  readonly recoveryScopeReady?: boolean;
+  readonly offlineRecoveryRetired?: boolean;
+  /** Recovers unreplayable output gaps and terminal-open watchdog failures. */
   forceReconnect(reason: string): void;
 }
 
@@ -40,7 +42,7 @@ type TerminalExitInfo = {
 type TerminalReplay = {
   data: string;
   newlyObservedFrom: number;
-  mode: "initial" | "recovery";
+  mode: "initial" | "recovery" | "resume";
   signal: AbortSignal;
 };
 
@@ -62,10 +64,6 @@ type PendingEvent =
   | { kind: "data"; seq: number; data: string }
   | { kind: "exit"; info: TerminalExitInfo };
 
-const TERMINAL_LIVENESS_IDLE_MS = 20_000;
-const TERMINAL_LIVENESS_PROBE_TIMEOUT_MS = 5_000;
-const TERMINAL_LIVENESS_MAX_CONSECUTIVE_FAILURES = 2;
-const TERMINAL_LIVENESS_FAILURE_RETRY_MS = 5_000;
 // The Gateway owns the 30s open deadline. This longer browser watchdog only
 // recovers a half-open socket when the Gateway's response cannot arrive.
 const TERMINAL_OPEN_WATCHDOG_MS = 35_000;
@@ -135,16 +133,11 @@ export class TerminalConnection {
   private readonly pending = new Map<string, BoundedBuffer<PendingEvent>>();
   private unsubscribe: (() => void) | null = null;
   // Fence for replies that outlive dispose(): without it a late open/attach
-  // would resurrect stream state and re-arm the liveness loop on a connection
-  // whose panel is gone or was replaced by a reconnect.
+  // would resurrect stream state after its panel is gone or replaced by a reconnect.
   private disposed = false;
+  private suspended = false;
+  private transportGeneration = 0;
   private pendingOpenCount = 0;
-  private livenessTimer: ReturnType<typeof setTimeout> | null = null;
-  private livenessProbeInFlight = false;
-  private livenessProbeFailures = 0;
-  private lastLivenessFailureActivityVersion: number | null = null;
-  private lastTerminalActivityAtMs = Date.now();
-  private inboundActivityVersion = 0;
 
   // Failed opens never register, so bound their pre-registration output.
   private static readonly MAX_PENDING_EVENTS = 512;
@@ -158,7 +151,6 @@ export class TerminalConnection {
     }
     this.unsubscribe = this.client.addEventListener((evt) => {
       if (evt.event === "terminal.data") {
-        this.noteTerminalActivity();
         const payload = evt.payload as Partial<TerminalDataEvent> | undefined;
         if (
           payload?.sessionId &&
@@ -176,7 +168,6 @@ export class TerminalConnection {
         return;
       }
       if (evt.event === "terminal.exit") {
-        this.noteTerminalActivity();
         const payload = evt.payload as Partial<TerminalExitEvent> | undefined;
         if (payload?.sessionId) {
           const info: TerminalExitInfo = {
@@ -213,6 +204,7 @@ export class TerminalConnection {
     params: TerminalOpenParams | SessionsCatalogStartTerminalParams,
     sink: SessionSink,
   ): Promise<TerminalOpenResult> {
+    const generation = this.transportGeneration;
     let result: TerminalOpenResult;
     try {
       result = await this.requestWhileHoldingStream(() =>
@@ -221,13 +213,13 @@ export class TerminalConnection {
         }),
       );
     } catch (error) {
-      if (!isTerminalOpenTimeout(error)) {
+      if (generation !== this.transportGeneration || !isTerminalOpenTimeout(error)) {
         throw error;
       }
       if (isTerminalOpenRequestTimeout(error)) {
         // The server should answer first. A later browser timeout means this
         // socket cannot carry the response, so disconnect to cancel ownership.
-        this.forceReconnect("terminal open watchdog timeout");
+        this.client.forceReconnect("terminal open watchdog timeout");
       }
       throw new TerminalOpenTimeoutError(error);
     }
@@ -241,7 +233,7 @@ export class TerminalConnection {
       }
       throw new TerminalOpenUnusableSessionError(missingField);
     }
-    if (this.disposed) {
+    if (this.disposed || this.suspended || generation !== this.transportGeneration) {
       return result;
     }
     const stream = this.setStream(result.sessionId, sink, {
@@ -249,15 +241,15 @@ export class TerminalConnection {
       recovering: false,
     });
     this.flushPending(result.sessionId, stream);
-    this.scheduleLivenessCheck();
     return result;
   }
 
   /** Rebinds a session and resets the emulator to its authoritative replay. */
   async attach(sessionId: string, sink: SessionSink): Promise<TerminalAttachResult> {
+    const generation = this.transportGeneration;
     const result = await this.requestReplay(sessionId);
     const offset = result.seq;
-    if (this.disposed) {
+    if (this.disposed || this.suspended || generation !== this.transportGeneration) {
       return result;
     }
     const stream = this.setStream(sessionId, sink, {
@@ -285,7 +277,6 @@ export class TerminalConnection {
     }
     stream.recovering = false;
     this.flushPending(sessionId, stream, offset);
-    this.scheduleLivenessCheck();
     return result;
   }
 
@@ -350,16 +341,28 @@ export class TerminalConnection {
     if (stream.recovering) {
       return;
     }
+    const signal = stream.abort.signal;
+    void this.reattachStream(sessionId, stream, gapFrame).catch(() => {
+      if (!signal.aborted) {
+        this.client.forceReconnect("terminal replay failed");
+      }
+    });
+  }
+
+  private async reattachStream(
+    sessionId: string,
+    stream: StreamState,
+    gapFrame?: Extract<PendingEvent, { kind: "data" }>,
+  ): Promise<void> {
     stream.recovering = true;
     const signal = stream.abort.signal;
-    void this.requestReplay(sessionId)
+    return this.requestReplay(sessionId)
       .then(async (result) => {
         if (signal.aborted) {
           return;
         }
         const offset = result.seq;
         const previouslyObservedThrough = stream.expectedSeq;
-        stream.expectedSeq = offset;
         // The ring may include both bytes already delivered and the gap's
         // missing suffix. Preserve that boundary so response-producing
         // emulators do not answer historical control queries twice.
@@ -371,12 +374,18 @@ export class TerminalConnection {
         await stream.sink.onReplay({
           data: result.buffer,
           newlyObservedFrom,
-          mode: "recovery",
+          mode:
+            !gapFrame &&
+            replayStart <= previouslyObservedThrough &&
+            offset >= previouslyObservedThrough
+              ? "resume"
+              : "recovery",
           signal,
         });
         if (signal.aborted) {
           return;
         }
+        stream.expectedSeq = offset;
         stream.recovering = false;
         this.flushPending(sessionId, stream, offset);
       })
@@ -385,7 +394,7 @@ export class TerminalConnection {
           return;
         }
         const queued = this.pending.get(sessionId)?.drain();
-        if (queued?.some((event) => event.kind === "exit")) {
+        if (gapFrame && queued?.some((event) => event.kind === "exit")) {
           // The process can exit before the recovery attach finds it. Preserve
           // every received tail frame, then surface the terminal exit once.
           this.pending.delete(sessionId);
@@ -403,8 +412,34 @@ export class TerminalConnection {
         }
         stream.recovering = false;
         this.pending.delete(sessionId);
-        this.forceReconnect("terminal replay failed");
+        throw new Error("terminal replay failed");
       });
+  }
+
+  /** Retain stream offsets and sinks, but retire every request from the old transport. */
+  suspend(): void {
+    this.suspended = true;
+    this.transportGeneration += 1;
+    for (const stream of this.streams.values()) {
+      stream.abort.abort();
+    }
+    this.pending.clear();
+    this.dropSubscriptions();
+  }
+
+  async resume(): Promise<Map<string, unknown>> {
+    this.suspended = false;
+    const failures = new Map<string, unknown>();
+    await Promise.all(
+      [...this.streams].map(([sessionId, stream]) => {
+        stream.abort.abort();
+        stream.abort = new AbortController();
+        return this.reattachStream(sessionId, stream).catch((error: unknown) => {
+          failures.set(sessionId, error);
+        });
+      }),
+    );
+    return failures;
   }
 
   private flushPending(sessionId: string, stream: StreamState, coveredThroughSeq?: number): void {
@@ -459,7 +494,6 @@ export class TerminalConnection {
     this.removeStream(sessionId);
     const stream = { abort: new AbortController(), sink, ...state };
     this.streams.set(sessionId, stream);
-    this.lastTerminalActivityAtMs = Date.now();
     return stream;
   }
 
@@ -478,95 +512,6 @@ export class TerminalConnection {
     buffer.push(event);
   }
 
-  /** Terminal traffic delays the next probe without resetting a timer per chunk. */
-  private noteTerminalActivity(): void {
-    this.resetLivenessProbeFailures();
-    this.lastTerminalActivityAtMs = Date.now();
-    this.inboundActivityVersion += 1;
-  }
-
-  private forceReconnect(reason: string): void {
-    this.resetLivenessProbeFailures();
-    this.client.forceReconnect(reason);
-  }
-
-  private resetLivenessProbeFailures(): void {
-    this.livenessProbeFailures = 0;
-    this.lastLivenessFailureActivityVersion = null;
-  }
-
-  private scheduleLivenessCheck(delayMs = TERMINAL_LIVENESS_IDLE_MS): void {
-    if (this.livenessTimer || this.livenessProbeInFlight || this.streams.size === 0) {
-      return;
-    }
-    this.livenessTimer = setTimeout(
-      () => {
-        this.livenessTimer = null;
-        this.checkLiveness();
-      },
-      Math.max(0, delayMs),
-    );
-  }
-
-  private checkLiveness(): void {
-    if (this.streams.size === 0) {
-      return;
-    }
-    const remaining = TERMINAL_LIVENESS_IDLE_MS - (Date.now() - this.lastTerminalActivityAtMs);
-    if (remaining > 0) {
-      this.scheduleLivenessCheck(remaining);
-      return;
-    }
-    const activityBefore = this.client.inboundActivitySeq ?? this.inboundActivityVersion;
-    if (
-      this.lastLivenessFailureActivityVersion !== null &&
-      activityBefore !== this.lastLivenessFailureActivityVersion
-    ) {
-      // A frame arrived since the last failed probe, so the socket is proven alive. Treat it like
-      // any other activity: restart the full idle window instead of immediately re-probing on the
-      // short failure-retry backoff (matches the during-probe activity path).
-      this.resetLivenessProbeFailures();
-      this.lastTerminalActivityAtMs = Date.now();
-      this.scheduleLivenessCheck();
-      return;
-    }
-    let nextDelayMs = TERMINAL_LIVENESS_IDLE_MS;
-    this.livenessProbeInFlight = true;
-    void this.client
-      .request("terminal.list", undefined, { timeoutMs: TERMINAL_LIVENESS_PROBE_TIMEOUT_MS })
-      .then(() => {
-        // The response itself proves the inbound half of the socket is alive.
-        this.resetLivenessProbeFailures();
-        this.lastTerminalActivityAtMs = Date.now();
-      })
-      .catch(() => {
-        if (this.streams.size === 0) {
-          this.resetLivenessProbeFailures();
-          return;
-        }
-        const activityNow = this.client.inboundActivitySeq ?? this.inboundActivityVersion;
-        if (activityNow !== activityBefore) {
-          // Any valid inbound frame proves the socket is not half-open.
-          this.resetLivenessProbeFailures();
-          this.lastTerminalActivityAtMs = Date.now();
-          return;
-        }
-        this.livenessProbeFailures += 1;
-        this.lastLivenessFailureActivityVersion = activityNow;
-        if (this.livenessProbeFailures >= TERMINAL_LIVENESS_MAX_CONSECUTIVE_FAILURES) {
-          // One probe cannot distinguish a dead socket from a stalled Gateway event loop.
-          this.forceReconnect("terminal liveness timeout");
-          return;
-        }
-        // Keep the old activity time so the short retry performs another probe.
-        nextDelayMs = TERMINAL_LIVENESS_FAILURE_RETRY_MS;
-      })
-      .finally(() => {
-        this.livenessProbeInFlight = false;
-        this.scheduleLivenessCheck(nextDelayMs);
-      });
-  }
-
   input(sessionId: string, data: string): Promise<void> {
     return this.requestAction("terminal.input", sessionId, { sessionId, data });
   }
@@ -577,16 +522,30 @@ export class TerminalConnection {
 
   private async requestAction(method: string, sessionId: string, params: unknown): Promise<void> {
     const stream = this.streams.get(sessionId);
-    const result = await this.client.request<{ ok: boolean }>(method, params).catch(() => null);
-    if (result?.ok !== false || !stream || this.streams.get(sessionId) !== stream) {
+    const signal = stream?.abort.signal;
+    if (this.suspended || this.disposed || stream?.recovering) {
+      throw new Error("Terminal is reconnecting. Input was not sent.");
+    }
+    const result = await this.client.request<{ ok: boolean }>(method, params);
+    if (result == null || signal?.aborted) {
+      throw new Error("Terminal delivery could not be confirmed.");
+    }
+    if (result.ok || !stream || this.streams.get(sessionId) !== stream) {
       return;
     }
+    // Transport failures stay with Gateway reconnect; only a negative acknowledgment ends this stream.
     this.deliverExit(sessionId, stream, {
       exitCode: null,
       signal: null,
       reason: "disconnected",
       error: "Terminal session is no longer available. Open a new terminal session.",
     });
+  }
+
+  release(sessionId: string): void {
+    this.removeStream(sessionId);
+    this.pending.delete(sessionId);
+    this.maybeUnsubscribe();
   }
 
   async close(sessionId: string): Promise<void> {
@@ -609,23 +568,13 @@ export class TerminalConnection {
     }
     this.streams.clear();
     this.pending.clear();
-    this.stopLiveness();
     this.dropSubscriptions();
   }
 
   private maybeUnsubscribe(): void {
     if (this.streams.size === 0 && this.pendingOpenCount === 0) {
       this.pending.clear();
-      this.stopLiveness();
       this.dropSubscriptions();
-    }
-  }
-
-  private stopLiveness(): void {
-    this.resetLivenessProbeFailures();
-    if (this.livenessTimer) {
-      clearTimeout(this.livenessTimer);
-      this.livenessTimer = null;
     }
   }
 

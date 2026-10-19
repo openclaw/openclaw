@@ -5,9 +5,8 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { CONFIG_PATH } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
-import { createConfigurePrompts } from "./configure.prompts.js";
+import { configurePrompts as prompts } from "./configure.prompts.js";
 
 type ConfiguredChannelRemovalChoice = {
   id: string;
@@ -54,12 +53,8 @@ function compareChannelRemovalChoices(
   );
 }
 
-export async function removeChannelConfigWizard(
-  cfg: OpenClawConfig,
-  runtime: RuntimeEnv,
-): Promise<OpenClawConfig> {
+export async function removeChannelConfigWizard(cfg: OpenClawConfig): Promise<OpenClawConfig> {
   const next = { ...cfg };
-  const prompts = createConfigurePrompts(runtime);
 
   while (true) {
     const configured = listConfiguredChannelRemovalChoices(next);

@@ -122,6 +122,13 @@ five-second RPC bound. The remaining grace permits handoff or cleanup; pending
 writes never become permission to stop. Adopt this controller closure alongside
 the Gateway's bounded-drain change; landing either does not deploy it.
 
+Activation audits the current and previous sealed release trees before closing
+Gateway admission. The deployment lock excludes other pointer writers; a direct
+current-target comparison still precedes journal publication. Fresh suspension,
+process-generation, protected-identity, and policy checks remain at the stop
+boundary, including after handoff arming. Adopt the reviewed controller closure
+to move these audits out of the client-visible offline window.
+
 During graceful suspension drain, status reads use a five-second transport and
 subprocess bound (shortened by the original drain deadline). A typed timeout,
 connection loss, or service-restart close retries after one, two, then at most

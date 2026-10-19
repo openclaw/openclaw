@@ -594,7 +594,7 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
     diagnostics: ["SDK type assertions and compatibility documentation; no runtime warnings"],
     tests: [
       "test/type-contracts/memory-core-host-engine-sessions.contract.ts",
-      "src/config/sessions/session-actor-memory-corpus.test.ts",
+      "src/config/sessions/session-actor-memory-search.test.ts",
       "src/plugins/compat/registry.test.ts",
     ],
     releaseNote:

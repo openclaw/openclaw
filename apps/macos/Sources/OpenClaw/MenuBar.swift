@@ -101,13 +101,13 @@ struct OpenClawApp: App {
                 Button("New Gateway Window…") {
                     AppNavigationActions.newGatewayWindow()
                 }
-                .keyboardShortcut("n", modifiers: .command)
+                .keyboardShortcut("n", modifiers: [.command, .shift])
 
                 if !self.state.nativeExperienceEnabled {
                     Button("New Thread") {
                         DashboardManager.shared.dispatchNativeCommand(.newSession)
                     }
-                    .keyboardShortcut("n", modifiers: [.command, .shift])
+                    .keyboardShortcut("n", modifiers: .command)
                 }
             }
             CommandGroup(replacing: .appSettings) {
@@ -184,7 +184,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var terminationDeadlineTask: Task<Void, Never>?
     private var terminationCleanupFinished = false
     private var profileInstanceLock: AppInstanceLock?
-    private let webChatAutoLogger = Logger(subsystem: "ai.openclaw", category: "Chat")
     private static func cleanUpProcesses() async {
         let execHostCleanup = ExecApprovalsPromptServer.shared.stop()
         let macControlCleanup = MacControlServer.shared.stop()
@@ -355,7 +354,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             // Attachment must settle before deciding whether this app needs to install a CLI.
             if !PostUpdateController.shared.startIfNeeded() {
-                CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "launch")
+                CLIInstallPrompter.shared.checkAndPromptIfNeeded()
             }
         }
         TerminationSignalWatcher.shared.start()
@@ -396,11 +395,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         #endif
         // Developer/testing helper: auto-open chat when launched with --chat (or legacy --webchat).
         if launchPlan.shouldAutoOpenChat(arguments: CommandLine.arguments) {
-            self.webChatAutoLogger.debug("Auto-opening chat via CLI flag")
             AppNavigationActions.openChat()
         }
         if launchPlan.shouldAutoOpenDashboard(arguments: CommandLine.arguments) {
-            self.webChatAutoLogger.info("Auto-opening dashboard via CLI flag")
             AppNavigationActions.openDashboard(userGesture: false)
         }
     }

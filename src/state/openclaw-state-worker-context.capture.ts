@@ -18,7 +18,7 @@ export function captureOpenClawStateReadContextWithAdmission(
 ): Pick<
   OpenClawStateWorkerContext,
   | "admission"
-  | "databaseEngineInput"
+  | "databaseEngineSelection"
   | "maintenanceScope"
   | "existingSchemaPath"
   | "runInCapturedSchemaScope"
@@ -52,7 +52,7 @@ export function captureOpenClawStateReadContextWithAdmission(
       });
   }
   return {
-    databaseEngineInput: getDatabaseEngineSelection()?.input,
+    databaseEngineSelection: getDatabaseEngineSelection(),
     maintenanceScope: getOpenClawDatabaseMaintenanceScope(),
     admission,
     assertPublicationCurrent,

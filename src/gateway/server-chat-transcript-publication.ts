@@ -125,7 +125,7 @@ export function createChatTranscriptPublication(params: {
       };
       items.set(itemId, item);
     },
-    retireTranscript: (event: InternalSessionTranscriptUpdate, publication?: Promise<void>) => {
+    retireTranscript: (event: InternalSessionTranscriptUpdate, publication?: Promise<boolean>) => {
       const sourceRunId = readSessionTranscriptRunId(event.message);
       if (!sourceRunId || getTranscriptMessageRole(event.message) !== "assistant") {
         return;
@@ -161,7 +161,16 @@ export function createChatTranscriptPublication(params: {
       ) {
         return;
       }
+      const run = chatRunState.getOrCreate(clientRunId);
+      if (run.bufferIsCurrent?.() === false || isChatAbortMarkerCurrent(run.abortMarker, link)) {
+        return;
+      }
+      const changed = source
+        ? chatRunState.retireSource(clientRunId, source)
+        : chatRunState.retireBuffer(clientRunId, itemIds);
+      const publicationIds = source?.itemId ? [source.itemId] : itemIds;
       if (publication) {
+        const items = run.assistantItems;
         const pending: PendingPublication = currentPublication(clientRunId) ?? {
           pending: 0,
           isCurrent: () => {
@@ -187,7 +196,17 @@ export function createChatTranscriptPublication(params: {
         };
         pending.pending += 1;
         pendingByRun.set(clientRunId, pending);
-        const release = () => {
+        const release = (published: boolean) => {
+          for (const id of publicationIds) {
+            const item = items?.get(id);
+            if (item) {
+              // A failed duplicate cannot retract an earlier successful handoff.
+              item.published = published || item.published === true;
+            }
+          }
+          if (run.assistantItems === items && run.display) {
+            run.display.reset = true;
+          }
           pending.pending -= 1;
           if (pending.pending > 0 || pendingByRun.get(clientRunId) !== pending) {
             return;
@@ -202,20 +221,20 @@ export function createChatTranscriptPublication(params: {
             pending.delta?.();
           }
         };
-        const settled = publication.then(release, release).catch((error: unknown) => {
-          logError(`gateway: deferred chat publication failed: ${formatErrorMessage(error)}`);
-        });
+        const settled = publication
+          .then(release, () => release(false))
+          .catch((error: unknown) => {
+            logError(`gateway: deferred chat publication failed: ${formatErrorMessage(error)}`);
+          });
         publications.add(settled);
         void settled.then(() => publications.delete(settled));
       }
-      const run = chatRunState.getOrCreate(clientRunId);
-      if (run.bufferIsCurrent?.() === false || isChatAbortMarkerCurrent(run.abortMarker, link)) {
-        return;
-      }
       if (
-        !(source
-          ? chatRunState.retireSource(clientRunId, source)
-          : chatRunState.retireBuffer(clientRunId, itemIds))
+        !changed &&
+        !(
+          publication &&
+          publicationIds.some((id) => run.assistantItems?.get(id)?.published === false)
+        )
       ) {
         return;
       }

@@ -2,11 +2,13 @@ import { EventEmitter } from "node:events";
 import type http from "node:http";
 import type { Duplex } from "node:stream";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { RealtimeVoiceProviderPlugin } from "openclaw/plugin-sdk/realtime-voice";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import type {
+  RealtimeVoiceBridge,
+  RealtimeVoiceProviderPlugin,
+} from "openclaw/plugin-sdk/realtime-voice";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { CallRecord } from "../types.js";
 import { makeCall, makeBridge, makeHandler } from "./realtime-call-control.test-helpers.js";
-import type { RealtimeCallHandler } from "./realtime-handler.js";
 
 type RealtimeBridgeRequest = Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0];
 
@@ -43,6 +45,14 @@ class FakeCarrierSocket extends EventEmitter {
   receive(message: string) {
     this.emit("message", Buffer.from(message));
   }
+  receiveAudio(byte: number) {
+    this.receive(
+      JSON.stringify({
+        event: "media",
+        media: { payload: Buffer.alloc(160, byte).toString("base64") },
+      }),
+    );
+  }
   close() {
     if (this.readyState === 1) {
       this.readyState = 3;
@@ -57,18 +67,22 @@ class FakeCarrierSocket extends EventEmitter {
   }
 }
 
-async function openCall(params: {
-  call: CallRecord;
-  handler: RealtimeCallHandler;
-  providerCallId: string;
-}) {
-  const stream = params.handler.issueStreamSession({
+async function openCall(call: CallRecord, bridge: Partial<RealtimeVoiceBridge> = {}) {
+  const created = createDeferred<RealtimeBridgeRequest>();
+  const { handler } = makeHandler({
+    call,
+    createBridge: (request) => {
+      created.resolve(request);
+      return makeBridge(bridge);
+    },
+  });
+  const stream = handler.issueStreamSession({
     providerName: "twilio",
-    callId: params.call.callId,
-    direction: params.call.direction,
+    callId: call.callId,
+    direction: call.direction,
   });
   const ws = new FakeCarrierSocket();
-  params.handler.handleWebSocketUpgrade(
+  handler.handleWebSocketUpgrade(
     { url: new URL(stream.streamUrl).pathname } as http.IncomingMessage,
     ws as unknown as Duplex,
     Buffer.alloc(0),
@@ -76,17 +90,17 @@ async function openCall(params: {
   ws.receive(
     JSON.stringify({
       event: "start",
-      start: { streamSid: "MZ-test", callSid: params.providerCallId },
+      start: { streamSid: "MZ-test", callSid: call.providerCallId },
     }),
   );
   await ws.ready.promise;
-  return { ws };
+  onTestFinished(async () => {
+    vi.useRealTimers();
+    ws.close();
+    await handler.close();
+  });
+  return { handler, ws, request: await created.promise };
 }
-async function closeCall(handler: RealtimeCallHandler, ws: FakeCarrierSocket) {
-  ws.close();
-  await handler.close();
-}
-afterEach(() => vi.useRealTimers());
 
 describe("realtime playback through carrier frames", () => {
   it("acknowledges sustained speech once during AMD while holding the opening", async () => {
@@ -98,63 +112,35 @@ describe("realtime playback through carrier frames", () => {
         brief: { language: "Spanish" },
       },
     });
-    const created = createDeferred<RealtimeBridgeRequest>();
     const acknowledged = createDeferred<string>();
     const triggerGreeting = vi.fn((instructions?: string) =>
       acknowledged.resolve(instructions ?? ""),
     );
     const sendAudio = vi.fn();
-    const { handler } = makeHandler({
-      call,
-      createBridge: (request) => {
-        created.resolve(request);
-        return makeBridge({ triggerGreeting, sendAudio });
-      },
-    });
-    const { ws } = await openCall({ call, handler, providerCallId: call.providerCallId! });
-    try {
-      const request = await created.promise;
-      vi.useFakeTimers();
-      request.onReady?.();
-      for (let i = 0; i < 200; i++) {
-        ws.receive(
-          JSON.stringify({
-            event: "media",
-            media: { payload: Buffer.alloc(160, 0x00).toString("base64") },
-          }),
-        );
-      }
-      await vi.advanceTimersByTimeAsync(3100);
-      expect(triggerGreeting).toHaveBeenCalledTimes(1);
-      expect(await acknowledged.promise).toContain("Sí, un momento");
-      expect(sendAudio).not.toHaveBeenCalled();
-      request.onAudio(Buffer.alloc(160, 0x00));
-      await vi.advanceTimersByTimeAsync(1500);
-      expect(triggerGreeting).toHaveBeenCalledTimes(1);
-      call.metadata = { ...call.metadata, answeredBy: "human" };
-      ws.receive(
-        JSON.stringify({
-          event: "media",
-          media: { payload: Buffer.alloc(160, 0xff).toString("base64") },
-        }),
-      );
-      await vi.advanceTimersByTimeAsync(1);
-      expect(triggerGreeting).toHaveBeenCalledTimes(2);
-      expect(triggerGreeting.mock.calls[1]?.[0]).toContain("The opening");
-    } finally {
-      vi.useRealTimers();
-      await closeCall(handler, ws);
+    const { ws, request } = await openCall(call, { triggerGreeting, sendAudio });
+    vi.useFakeTimers();
+    request.onReady?.();
+    for (let i = 0; i < 200; i++) {
+      ws.receiveAudio(0x00);
     }
+    await vi.advanceTimersByTimeAsync(3100);
+    expect(triggerGreeting).toHaveBeenCalledTimes(1);
+    expect(await acknowledged.promise).toContain("Sí, un momento");
+    expect(sendAudio).not.toHaveBeenCalled();
+    request.onAudio(Buffer.alloc(160, 0x00));
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(triggerGreeting).toHaveBeenCalledTimes(1);
+    call.metadata = { ...call.metadata, answeredBy: "human" };
+    ws.receiveAudio(0xff);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(triggerGreeting).toHaveBeenCalledTimes(2);
+    expect(triggerGreeting.mock.calls[1]?.[0]).toContain("The opening");
   });
 
   it("rejects host speech immediately while the provider is still closing", async () => {
     const call = makeCall("CA-closing");
     const closed = createDeferred<void>();
-    const { handler } = makeHandler({
-      call,
-      createBridge: () => makeBridge({ close: () => closed.promise }),
-    });
-    const { ws } = await openCall({ call, handler, providerCallId: call.providerCallId! });
+    const { handler } = await openCall(call, { close: () => closed.promise });
     try {
       vi.useFakeTimers();
       const closing = handler.prepareCarrierPlayback(call.callId);
@@ -170,8 +156,6 @@ describe("realtime playback through carrier frames", () => {
       await closing;
     } finally {
       closed.resolve();
-      vi.useRealTimers();
-      await closeCall(handler, ws);
     }
   });
 
@@ -185,58 +169,39 @@ describe("realtime playback through carrier frames", () => {
           answeredBy: "machine_end_beep",
         },
       });
-      const created = createDeferred<RealtimeBridgeRequest>();
       const triggerGreeting = vi.fn();
-      const { handler } = makeHandler({
-        call,
-        createBridge: (request) => {
-          created.resolve(request);
-          return makeBridge({ triggerGreeting });
-        },
-      });
-      const { ws } = await openCall({ call, handler, providerCallId: call.providerCallId! });
-      try {
-        const request = await created.promise;
-        vi.useFakeTimers();
-        request.onReady?.();
-        const playback = handler.playVoicemail(call.callId, "Speak the voicemail");
-        expect(playback).toBeDefined();
-        const settled = vi.fn();
-        const result = playback?.then(
-          () => settled("done"),
-          () => settled("failed"),
-        );
-        expect(triggerGreeting).toHaveBeenCalledWith("Speak the voicemail");
-        await vi.advanceTimersByTimeAsync(2000);
+      const { handler, ws, request } = await openCall(call, { triggerGreeting });
+      vi.useFakeTimers();
+      request.onReady?.();
+      const playback = handler.playVoicemail(call.callId, "Speak the voicemail");
+      expect(playback).toBeDefined();
+      const settled = vi.fn();
+      const result = playback?.then(
+        () => settled("done"),
+        () => settled("failed"),
+      );
+      expect(triggerGreeting).toHaveBeenCalledWith("Speak the voicemail");
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(settled).not.toHaveBeenCalled();
+      if (mode === "closed") {
+        await handler.prepareCarrierPlayback(call.callId);
+      } else if (mode === "audible") {
+        request.onAudio(Buffer.alloc(160, 0x00));
+        await vi.advanceTimersByTimeAsync(1400);
+        request.onAudio(Buffer.alloc(160, 0x00));
+        await vi.advanceTimersByTimeAsync(1400);
+        request.onAudio(Buffer.alloc(160, 0xff));
         expect(settled).not.toHaveBeenCalled();
-        if (mode === "closed") {
-          await handler.prepareCarrierPlayback(call.callId);
-        } else if (mode === "audible") {
-          request.onAudio(Buffer.alloc(160, 0x00));
-          await vi.advanceTimersByTimeAsync(1400);
-          request.onAudio(Buffer.alloc(160, 0x00));
-          await vi.advanceTimersByTimeAsync(1400);
-          request.onAudio(Buffer.alloc(160, 0xff));
-          expect(settled).not.toHaveBeenCalled();
-          await vi.advanceTimersByTimeAsync(100);
-        } else {
-          for (let i = 0; i < 43; i++) {
-            ws.receive(
-              JSON.stringify({
-                event: "media",
-                media: { payload: Buffer.alloc(160, 0xff).toString("base64") },
-              }),
-            );
-            request.onAudio(Buffer.alloc(160, mode === "silent" ? 0xff : 0x00));
-            await vi.advanceTimersByTimeAsync(1000);
-          }
+        await vi.advanceTimersByTimeAsync(100);
+      } else {
+        for (let i = 0; i < 43; i++) {
+          ws.receiveAudio(0xff);
+          request.onAudio(Buffer.alloc(160, mode === "silent" ? 0xff : 0x00));
+          await vi.advanceTimersByTimeAsync(1000);
         }
-        await result;
-        expect(settled).toHaveBeenCalledWith(mode === "audible" ? "done" : "failed");
-      } finally {
-        vi.useRealTimers();
-        await closeCall(handler, ws);
       }
+      await result;
+      expect(settled).toHaveBeenCalledWith(mode === "audible" ? "done" : "failed");
     },
   );
 });

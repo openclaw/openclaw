@@ -1,8 +1,8 @@
-import { isCloudModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import {
   findNormalizedProviderValue,
+  isCloudModelRef,
   normalizeProviderId,
-} from "@openclaw/model-catalog-core/provider-id";
+} from "openclaw/plugin-sdk/model-ref-parse";
 import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderNormalizeResolvedModelContext,
@@ -14,8 +14,12 @@ import type {
 } from "openclaw/plugin-sdk/provider-model-types";
 import {
   OLLAMA_CLOUD_PROVIDER_ID,
+  OLLAMA_CLOUD_BASE_URL,
   isOllamaCloudOrigin,
+  isHostedOllamaCloud,
   OLLAMA_DEFAULT_BASE_URL,
+  resolveOllamaCloudDefaultModel,
+  resolveOllamaOutputBudget,
 } from "./src/defaults.js";
 import { supportsOllamaCloudFullThinkingEffort } from "./src/model-reasoning.js";
 import { readProviderBaseUrl, resolveOllamaBaseUrlForRun } from "./src/provider-base-url.js";
@@ -90,15 +94,39 @@ export function normalizeConfig({
   providerConfig: OllamaProviderConfigDraft;
 }): OllamaProviderConfigDraft {
   const normalizedProviderId = provider.trim().toLowerCase();
-  if (normalizedProviderId !== "ollama") {
+  if (normalizedProviderId !== "ollama" && normalizedProviderId !== OLLAMA_CLOUD_PROVIDER_ID) {
     return providerConfig;
   }
-
-  return {
-    ...providerConfig,
-    baseUrl: providerConfig.baseUrl?.trim() ? providerConfig.baseUrl : OLLAMA_DEFAULT_BASE_URL,
-    models: providerConfig.models ?? [],
-  };
+  const baseUrl = providerConfig.baseUrl?.trim()
+    ? providerConfig.baseUrl
+    : normalizedProviderId === OLLAMA_CLOUD_PROVIDER_ID
+      ? OLLAMA_CLOUD_BASE_URL
+      : OLLAMA_DEFAULT_BASE_URL;
+  const models: ModelProviderConfig["models"] = [];
+  for (const model of providerConfig.models ?? []) {
+    const cloudModel = resolveOllamaCloudDefaultModel(model.id);
+    const remote =
+      isHostedOllamaCloud(baseUrl) || normalizedProviderId === OLLAMA_CLOUD_PROVIDER_ID;
+    if (
+      model.maxTokens !== undefined ||
+      (model.contextWindow === undefined && !cloudModel) ||
+      (!remote && !isCloudModelRef(model.id) && !cloudModel)
+    ) {
+      models.push(model);
+      continue;
+    }
+    models.push({
+      ...model,
+      maxTokens:
+        providerConfig.maxTokens ??
+        resolveOllamaOutputBudget({
+          modelId: model.id,
+          contextWindow: model.contextWindow,
+          remote,
+        }),
+    });
+  }
+  return { ...providerConfig, baseUrl, models };
 }
 
 /**

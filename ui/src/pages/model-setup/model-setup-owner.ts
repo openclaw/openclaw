@@ -1,4 +1,4 @@
-import { createEffect, onCleanup, onSettled, untrack } from "solid-js";
+import { createEffect, onCleanup, onSettled } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   SystemAgentSetupActivateParams,
@@ -7,13 +7,11 @@ import type {
 } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
-import { t } from "../../i18n/index.ts";
-import { i18n } from "../../i18n/lib/translate.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { readSessionDefaults } from "../../lib/sessions/session-key.ts";
-import { useSolidControllerHost } from "../../lit/solid-controller-host.ts";
-import { ModelProviderLoginController } from "../model-providers/login-controller.ts";
+import { createModelProviderLogin } from "../model-providers/login-controller.ts";
 import {
   captureModelSetupConnection,
   modelSetupAgentSelection,
@@ -64,9 +62,9 @@ export function createModelSetup(
       for (const listener of listeners) {
         listener();
       }
+      onSettled(afterRender);
     }
   };
-  const { host: loginHost, revision: loginRevision } = useSolidControllerHost();
   const actionsDisabled = (): boolean =>
     login.busy ||
     nativeModels.saving ||
@@ -133,7 +131,7 @@ export function createModelSetup(
     () => state.pageState,
     (urls) => setState("iconUrls", urls),
   );
-  const login = new ModelProviderLoginController(loginHost, {
+  const login = createModelProviderLogin({
     getScope: () => ({ context, agentId: agentSelection().state.selectedId }),
     getManualProviders: () =>
       state.pageState.phase === "ready" ? state.pageState.result.manualProviders : [],
@@ -731,55 +729,50 @@ export function createModelSetup(
     () => state,
   );
   const view = () => {
+    i18nRevision();
     projection.read();
-    loginRevision();
     return viewProps();
   };
   createEffect(
     () => [props.routeData, agentSelection()],
     ([, selection]) => {
-      // Reconcile current request authority without subscribing the imperative work.
-      return untrack(() => {
-        const stop = selection.subscribe(() => {
-          synchronizeGateway(context.gateway.snapshot);
-          notify();
-        });
+      // Selection receipts retire wizard ownership before another setup action can run.
+      const stop = selection.subscribe(() => {
         synchronizeGateway(context.gateway.snapshot);
         notify();
-        return stop;
       });
+      synchronizeGateway(context.gateway.snapshot);
+      notify();
+      return stop;
     },
   );
-  // DOM settlement starts imperative first-run work; view() owns its dependencies.
-  createEffect(view, () => untrack(afterRender));
   onSettled(() => {
     connected = true;
+    // Connection authority changes synchronously suspend or retire the admitted wizard.
     const stopGateway = context.gateway.subscribe(() => {
       synchronizeGateway(context.gateway.snapshot);
       notify();
     });
+    // Receipt-clear events retire restored wizard work before another activation can start.
     const stopFirstRun = firstRun.subscribe(notify);
-    const stopLocale = i18n.subscribe(notify);
     synchronizeGateway(context.gateway.snapshot);
     notify();
     return () => {
       stopGateway();
       stopFirstRun();
-      stopLocale();
     };
   });
   onCleanup(() => {
     disposed = true;
     connected = false;
     firstRun.dispose();
-    resetActivity();
+    retireWizardMutation();
+    iconLoader.reset();
+    void wizard.cancel();
   });
   return {
     view,
     login,
-    revision: () => {
-      projection.read();
-      return loginRevision();
-    },
+    revision: projection.revision,
   };
 }

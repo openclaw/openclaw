@@ -53,6 +53,9 @@ export function createChannelSetup(deps: WizardSetupDeps) {
   });
 
   function startSetup(channel: string | null): void {
+    if (deps.getContext().gateway.snapshot.phase !== "connected") {
+      return;
+    }
     // Completion reloads config; keep any unsaved advanced-form edits intact.
     if (deps.getContext().runtimeConfig.state.configFormDirty) {
       setBlockedByDirtyConfig(true);

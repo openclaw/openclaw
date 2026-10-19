@@ -1,7 +1,7 @@
 import { ChannelType, PermissionFlagsBits, Routes } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import * as discordRequestClient from "../proxy-request-client.js";
+import * as discordRest from "../internal/rest.js";
 import { createDiscordLoopbackRest } from "../send.test-harness.js";
 import { handleDiscordMessageAction } from "./handle-action.js";
 
@@ -100,7 +100,9 @@ beforeAll(async () => {
   });
   requests = loopback.requests;
   closeLoopback = loopback.close;
-  vi.spyOn(discordRequestClient, "createDiscordRequestClient").mockReturnValue(loopback.rest);
+  vi.spyOn(discordRest, "RequestClient").mockImplementation(function () {
+    return loopback.rest;
+  });
 });
 
 afterAll(async () => {

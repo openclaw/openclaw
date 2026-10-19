@@ -99,9 +99,11 @@ export function canPreviewPages(owner: HoverPreviewOwner): boolean {
   return Boolean(
     context?.config.current.automaticallyFetchFavicons &&
     context.gateway.snapshot.client === owner.client &&
-    canCallGatewayMethod(context.gateway.snapshot, "controlUi.linkPreview", "operator.read", {
-      requireAdvertisement: false,
-    }),
+    !owner.client?.offlineRecoveryRetired &&
+    (context.gateway.snapshot.phase !== "connected" ||
+      canCallGatewayMethod(context.gateway.snapshot, "controlUi.linkPreview", "operator.read", {
+        requireAdvertisement: false,
+      })),
   );
 }
 

@@ -71,12 +71,11 @@ export async function createContextEngineLogicalTurnLease(params: {
     resolution.configuredFailure === undefined &&
     resolution.configured.registeredId === resolution.fallback.registeredId;
 
-  const asEffective = (): EffectiveContextEngineRef =>
-    Object.freeze({
-      ...effective,
-      mode: degradedReason ? "legacy-degraded" : "configured",
-      ...(degradedReason ? { reason: degradedReason } : {}),
-    });
+  const asEffective = (): EffectiveContextEngineRef => ({
+    ...effective,
+    mode: degradedReason ? "legacy-degraded" : "configured",
+    ...(degradedReason ? { reason: degradedReason } : {}),
+  });
 
   const warnOnce = (reason: string) => {
     if (warned) {

@@ -617,17 +617,12 @@ async function canOpenWebSocket(
   lookup?: CdpEndpointPin["lookup"],
   signal?: AbortSignal,
 ): Promise<boolean> {
-  try {
-    return await withCdpSocket(url, async () => true, {
-      handshakeTimeoutMs: timeoutMs,
-      handshakeRetries: 0,
-      lookup,
-      signal,
-    });
-  } catch {
-    signal?.throwIfAborted();
-    return false;
-  }
+  return await withCdpSocket(url, async () => true, {
+    handshakeTimeoutMs: timeoutMs,
+    handshakeRetries: 0,
+    lookup,
+    signal,
+  });
 }
 
 export async function isChromeReachable(

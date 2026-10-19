@@ -49,7 +49,12 @@ export function preparePluginToolExecutionCapabilities(params: {
     const snapshot = params.skillsSnapshot;
     for (const skill of snapshot?.discoverySkills ?? snapshot?.resolvedSkills ?? []) {
       if (
-        !["openclaw-managed", "openclaw-library", "openclaw-bundled"].includes(skill.source) ||
+        ![
+          "openclaw-managed",
+          "openclaw-library",
+          "openclaw-bundled",
+          "agents-skills-personal",
+        ].includes(skill.source) ||
         skill.disableModelInvocation ||
         skill.fileHost === "workspace"
       ) {
@@ -60,14 +65,19 @@ export function preparePluginToolExecutionCapabilities(params: {
       if (source?.fileHost === "workspace") {
         continue;
       }
-      const sourceFile = canonicalizePath(source?.filePath ?? skill.filePath);
+      const selectedSourceFile = source?.filePath ?? skill.filePath;
+      const sourceFile = canonicalizePath(selectedSourceFile);
       const usage = sandbox.skillUsagePaths?.find(
         (entry) => entry.skillName === skill.name && entry.skillFile === sourceFile,
       );
       if (!usage) {
         continue;
       }
-      const root = resolveProtectedSandboxDirectory(sandbox, path.dirname(usage.readPath));
+      const root = resolveProtectedSandboxDirectory(
+        sandbox,
+        path.dirname(usage.readPath),
+        path.dirname(selectedSourceFile),
+      );
       if (root) {
         installedSkillRoots[skill.name] = root;
       }

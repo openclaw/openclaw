@@ -34,11 +34,47 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
+it("reports artifact progress on stderr while preserving one final JSON result", async () => {
+  const report: RecoveryCleanupReport = {
+    stateDir: "/fixture/state",
+    missingOriginals: 0,
+    artifacts: [],
+    totals: {
+      candidateBytes: 0,
+      verificationRequiredBytes: 0,
+      protectedBytes: 0,
+      blockedBytes: 0,
+      removedBytes: 0,
+      removedFiles: 0,
+    },
+    status: "complete",
+  };
+  vi.mocked(inspectSessionSqliteRecovery).mockReturnValue({ ...report, status: "preview" });
+  vi.mocked(retireSessionSqliteRecovery).mockImplementation(async ({ onProgress }) => {
+    for (const phase of ["verifying", "claiming", "removing-capture"] as const) {
+      onProgress?.({ phase, path: "/fixture/original", index: 1, total: 2, bytes: 42 });
+      expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+    }
+    return report;
+  });
+  using stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+  await updateCleanupCommand({ yes: true, json: true });
+
+  expect(stderr.mock.calls.map(([text]) => text)).toEqual([
+    "Verifying original 1/2: /fixture/original (42 bytes)\n",
+    "Retiring original 1/2: /fixture/original (42 bytes)\n",
+    "Removing capture 1/2: /fixture/original (42 bytes)\n",
+  ]);
+  expect(defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith({ ...report, dryRun: false }, 2);
+});
+
 it.each(["refused", "blocked"] as const)(
   "preserves one reported %s cleanup result while unwinding its exit",
   async (status) => {
     const report: RecoveryCleanupReport = {
       stateDir: "/fixture/state",
+      missingOriginals: 0,
       artifacts: [
         {
           path: "/fixture/original",

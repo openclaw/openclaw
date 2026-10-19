@@ -18,6 +18,7 @@ import { buildTelegramRoutingTarget, buildTelegramGroupFrom } from "./bot/helper
 import type { TelegramInlineButtons } from "./button-types.js";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
+import { loadTelegramSendModule } from "./send-runtime.js";
 import { recordSentMessage } from "./sent-message-cache.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
@@ -191,18 +192,14 @@ export async function executeTelegramPluginCommand(
     (!renderable || editable)
   ) {
     try {
-      await dispatch.telegramDeps.editMessageTelegram(
-        dispatch.chatId,
-        progressMessageId,
-        progressResultText,
-        {
-          cfg: dispatch.runtimeCfg,
-          accountId: dispatch.route.accountId,
-          textMode: "markdown",
-          linkPreview: dispatch.runtimeTelegramCfg.linkPreview,
-          buttons: renderable ? telegramData?.buttons : undefined,
-        },
-      );
+      const { editMessageTelegram } = await loadTelegramSendModule();
+      await editMessageTelegram(dispatch.chatId, progressMessageId, progressResultText, {
+        cfg: dispatch.runtimeCfg,
+        accountId: dispatch.route.accountId,
+        textMode: "markdown",
+        linkPreview: dispatch.runtimeTelegramCfg.linkPreview,
+        buttons: renderable ? telegramData?.buttons : undefined,
+      });
       await recordSentMessage(dispatch.chatId, progressMessageId, dispatch.runtimeCfg, {
         accountId: dispatch.route.accountId,
         agentId: dispatch.opts.ownerAgentId,

@@ -1,10 +1,28 @@
 import { describe, expect, it } from "vitest";
-import { mergeAssistantText } from "./agent-event-assistant-text.js";
+import { createAssistantTextStream, mergeAssistantText } from "./agent-event-assistant-text.js";
 import { capLiveAssistantText } from "./live-chat-projector.js";
 
 const LIVE_CHAT_BUFFER_CHARS = 500_000;
 
 describe("server chat stream text merge", () => {
+  it("keeps certified raw appends independent of display text and reconciles final corrections", () => {
+    const stream = createAssistantTextStream(false);
+    expect(stream.update({ itemId: "answer", text: "provisional display" }, "Raw")).toEqual({
+      delta: "Raw",
+    });
+    expect(stream.update({ itemId: "answer", text: "different display" }, " bytes")).toEqual({
+      delta: " bytes",
+    });
+    expect(stream.streamedText).toBe("Raw bytes");
+    expect(stream.update({ itemId: "answer", text: "Raw bytes!", replace: true })).toEqual({
+      delta: "!",
+      replacement: "representable",
+    });
+    expect(stream.update({ itemId: "answer", text: "Correction", replace: true })).toEqual({
+      replacement: "unrepresentable",
+    });
+  });
+
   it.each([
     ["coordination draft", "final answer", "", "final answer", "coordination draft"],
     ["Echo", "Echo", "Echo", "EchoEcho", "Echo"],

@@ -178,6 +178,7 @@ type WebPushPayload = {
   renotify?: boolean;
   tag?: string;
   url?: string;
+  icon?: string;
 };
 
 async function sendPreparedWebPushNotification(
@@ -195,9 +196,16 @@ async function sendPreparedWebPushNotification(
   };
 
   try {
+    let encodedPayload = JSON.stringify(payload);
+    // RFC 8291 leaves 3993 plaintext bytes within the mandatory 4096-byte push limit.
+    // Preserve the notification itself when an optional image would exceed that budget.
+    if (payload.icon && Buffer.byteLength(encodedPayload) > 3_993) {
+      const { icon: _icon, ...withoutIcon } = payload;
+      encodedPayload = JSON.stringify(withoutIcon);
+    }
     const result = await webPush.sendNotification(
       pushSubscription,
-      JSON.stringify(payload),
+      encodedPayload,
       deliveryOptions,
     );
     return {

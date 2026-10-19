@@ -11,16 +11,19 @@ import {
   createConfigRuntimeEnv,
 } from "../config/config-env-vars.js";
 import { createConfigIoContext } from "../config/io.context.js";
-import { coerceConfig, readConfigFileIfPresent } from "../config/io.read-helpers.js";
+import {
+  coerceConfig,
+  parseConfigJson5,
+  readConfigFileIfPresent,
+  resolveConfigForRead,
+  resolveConfigIncludesForRead,
+} from "../config/io.read-helpers.js";
 import { inspectConfigJsonRootSuffixWithContext } from "../config/io.recovery.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import { resolveConfiguredAgentDatabaseCandidatePaths } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasErrnoCode } from "../infra/errno.js";
-import {
-  assertNoRetiredStateFiles,
-  createRetiredStateInspectionError,
-} from "../infra/state-migrations.retired-files.js";
+import { createRetiredStateInspectionError } from "../infra/state-migrations.retired-files.js";
 import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
 import { resolveUserPath } from "../utils.js";
 
@@ -158,10 +161,9 @@ export function resolveLegacyFlatAuthPath(agentDir?: string): string {
 /**
  * Lists retired OAuth sidecars that a legacy auth-profiles.json still references.
  *
- * The 2026.9.7 Doctor imports only referenced sidecars and deliberately keeps unreferenced
- * ones, so those stay in place without blocking: no supported step can clear them, and
- * every later auth import repeats this check against the directories it sees then. The scan
- * reads no database, so it also runs before schema preparation and counts retained agents.
+ * Doctor imports referenced sidecars with their auth store. Unreferenced files remain
+ * untouched because external agent directories may still use them. This inventory reads
+ * no database and never admits legacy credentials to the runtime.
  */
 export function listReferencedLegacyOAuthSidecarPaths(
   env: NodeJS.ProcessEnv,
@@ -222,28 +224,48 @@ export function listReferencedLegacyOAuthSidecarPaths(
     .map((name) => path.join(directory, name));
 }
 
-export function assertNoRetiredOAuthSidecarsBeforeConfigRecovery(params: {
+export function inspectLegacyOAuthSidecarsBeforeConfigRecovery(params: {
   env: NodeJS.ProcessEnv;
   configPath?: string;
   stateDir?: string;
-}): void {
+}): readonly string[] {
+  const paths = new Set(
+    listReferencedLegacyOAuthSidecarPaths(params.env, undefined, params.stateDir),
+  );
   const context = createConfigIoContext({
     configPath: params.configPath,
     env: cloneEnvWithPlatformSemantics(params.env),
     observe: false,
     shellEnvFallback: "defer",
   });
+  const collect = (candidate: unknown) => {
+    for (const pathname of listReferencedLegacyOAuthSidecarPaths(
+      context.deps.env,
+      coerceConfig(candidate),
+      params.stateDir,
+    )) {
+      paths.add(pathname);
+    }
+  };
   const raw = readConfigFileIfPresent(context.deps, context.configPath);
   if (raw !== undefined) {
-    inspectConfigJsonRootSuffixWithContext(context, raw, (candidate) => {
-      assertNoRetiredStateFiles(
-        "OAuth credential sidecars",
-        listReferencedLegacyOAuthSidecarPaths(
-          context.deps.env,
-          coerceConfig(candidate),
-          params.stateDir,
-        ),
+    const parsed = parseConfigJson5(raw, context.deps.json5);
+    if (parsed.ok) {
+      collect(parsed.parsed);
+      const included = resolveConfigIncludesForRead(
+        parsed.parsed,
+        context.configPath,
+        context.deps,
       );
-    });
+      const resolved = resolveConfigForRead(
+        included,
+        context.deps.env,
+        context.deps.lowerPrecedenceEnv,
+      );
+      collect(resolved.resolvedConfigRaw);
+    } else {
+      inspectConfigJsonRootSuffixWithContext(context, raw, collect);
+    }
   }
+  return [...paths];
 }

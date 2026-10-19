@@ -1,4 +1,5 @@
 import { truncateCodePoints } from "@openclaw/normalization-core/code-points";
+import { asPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
@@ -41,12 +42,8 @@ const PRESENTATION_FALLBACK_CONTINUATION = Symbol.for(
   "openclaw.presentation.fallback-continuation",
 );
 
-function positiveInteger(value: number | undefined): number | undefined {
-  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
-}
-
 function truncateText(value: string, maxLength: number | undefined): string {
-  const limit = positiveInteger(maxLength);
+  const limit = asPositiveInteger(maxLength);
   return limit ? truncateCodePoints(value, limit) : value;
 }
 
@@ -65,7 +62,7 @@ function truncateUtf8Bytes(value: string, limit: number): string {
 }
 
 function truncatePresentationText(value: string, limits: TextLimits | undefined): string {
-  const limit = positiveInteger(limits?.maxLength);
+  const limit = asPositiveInteger(limits?.maxLength);
   if (!limit) {
     return value;
   }
@@ -79,7 +76,7 @@ function truncatePresentationText(value: string, limits: TextLimits | undefined)
 }
 
 function splitPresentationText(value: string, limits: TextLimits | undefined): string[] {
-  const limit = positiveInteger(limits?.maxLength);
+  const limit = asPositiveInteger(limits?.maxLength);
   if (!limit || truncatePresentationText(value, limits) === value) {
     return [value];
   }
@@ -118,7 +115,7 @@ function presentationTextBlocks(params: {
 }
 
 function fitsByteLimit(value: string | undefined, maxBytes: number | undefined): boolean {
-  const limit = positiveInteger(maxBytes);
+  const limit = asPositiveInteger(maxBytes);
   return !value || !limit || Buffer.byteLength(value, "utf8") <= limit;
 }
 
@@ -142,9 +139,9 @@ function fallbackListBlocks(params: {
 
 function createActionBudget(limits: ActionLimits | undefined): ActionBudget {
   return {
-    remainingActions: positiveInteger(limits?.maxActions),
-    remainingRows: positiveInteger(limits?.maxRows),
-    maxActionsPerRow: positiveInteger(limits?.maxActionsPerRow),
+    remainingActions: asPositiveInteger(limits?.maxActions),
+    remainingRows: asPositiveInteger(limits?.maxRows),
+    maxActionsPerRow: asPositiveInteger(limits?.maxActionsPerRow),
   };
 }
 
@@ -254,7 +251,7 @@ function adaptButtonsBlock(
     return fallback;
   }
   return [
-    ...chunkItems(buttons, positiveInteger(limits?.maxActionsPerRow) ?? buttons.length).map(
+    ...chunkItems(buttons, asPositiveInteger(limits?.maxActionsPerRow) ?? buttons.length).map(
       (row): MessagePresentationBlock => ({ type: "buttons", buttons: row }),
     ),
     ...fallback,
@@ -283,7 +280,7 @@ function adaptSelectBlock(
     (candidate): candidate is SelectCandidate & { adapted: MessagePresentationOption } =>
       Boolean(candidate.adapted),
   );
-  const maxOptions = positiveInteger(limits?.maxOptions);
+  const maxOptions = asPositiveInteger(limits?.maxOptions);
   const selectedCandidates = maxOptions
     ? renderableCandidates.slice(0, maxOptions)
     : renderableCandidates;

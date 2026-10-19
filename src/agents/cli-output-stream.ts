@@ -11,10 +11,9 @@ import type {
   CliUsage,
 } from "./cli-output-contracts.js";
 import { normalizeClaudeCliStreamJsonRecord } from "./cli-output-echoed-binary.js";
-import type { CliEventProjectionState } from "./cli-output-events.js";
+import type { CliEventProjectionState, ThinkingTracker } from "./cli-output-events.js";
 import {
   createLeadingTaggedReasoningRouter,
-  createThinkingTracker,
   createToolUseTracker,
   dispatchClaudeCliStreamingToolEvent,
   dispatchClaudeCliThinking,
@@ -97,7 +96,13 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
   // always has a destination; a separate enable flag let it be dropped (#92092).
   const classifyClaudeCommentary =
     Boolean(params.onCommentaryText) && supportsCliJsonlToolEvents(params);
-  const thinkingTracker = createThinkingTracker();
+  const thinkingTracker: ThinkingTracker = {
+    streamedByIndex: new Map(),
+    highestStreamedIndex: Number.NEGATIVE_INFINITY,
+    emittedText: "",
+    nextSyntheticBlockIndex: 0,
+    progressTokens: 0,
+  };
   const claudeStreamJson = isClaudeStreamJsonDialect(params);
   let taggedReasoningRouter = createLeadingTaggedReasoningRouter();
   let currentTaggedReasoningText = "";

@@ -8,6 +8,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import {
   applySessionEntryReplacements,
   assignSessionOwner,
@@ -147,9 +148,9 @@ it.each(["participant", "owner"] as const)(
     const { database, storePath } = createStore(24);
     writeMetadata(storePath, kind, 0);
     const factReads = vi.spyOn(ageFacts, "recordSessionEntryMaintenanceAgeFact");
-    // One fact uses separate indexed probes; metadata writes must not repeat any of them.
+    // One fact combines dashboard and pending rows; metadata writes must not repeat either probe.
     const queries = trackSqliteStatementExecutions(
-      database.db,
+      requireNativeSqliteDatabase(database.db),
       ["after", "dashboards", "pending", "unexpected"],
       (sql) => {
         if (!sql.includes('"session_started_at"') || !sql.includes('from "session_nodes"')) {
@@ -164,7 +165,7 @@ it.each(["participant", "owner"] as const)(
         return sql.includes('"updated_at" > ?') ? "after" : "unexpected";
       },
     );
-    const expectedProbes = { after: 1, dashboards: 1, pending: 1, unexpected: 0 };
+    const expectedProbes = { after: 1, dashboards: 1, pending: 0, unexpected: 0 };
     const expectedRows = { after: 1, dashboards: 0, pending: 0, unexpected: 0 };
     try {
       await renameEntry(storePath, 0, "warm age facts");
@@ -219,8 +220,10 @@ it("reports a maintenance deadline without an unused revision snapshot", () => {
     (current) => ageFacts.recordSessionEntryMaintenanceAgeFact(current, maintenance, now),
     options,
   );
-  const reads = trackSqliteStatementExecutions(database.db, ["revision"], (sql) =>
-    /^PRAGMA data_version\b/i.test(sql) ? "revision" : null,
+  const reads = trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(database.db),
+    ["revision"],
+    (sql) => (/^PRAGMA data_version\b/i.test(sql) ? "revision" : null),
   );
   let admittedReads = 0;
   try {

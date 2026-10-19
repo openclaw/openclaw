@@ -105,37 +105,21 @@ const startedPath = path.join(descriptor.assignment.workspaceDir, descriptor.ass
 const starts = fs.existsSync(startedPath) ? JSON.parse(fs.readFileSync(startedPath, "utf8")).starts + 1 : 1;
 writeArtifact(descriptor, "started", { pid: process.pid, starts });
 const mode = descriptor.assignment.prompt;
+const credential = descriptor.admission.credential;
 if (mode === "admission-rearm") {
   const marker = path.join(descriptor.assignment.workspaceDir, "admission-attempt");
   const first = !fs.existsSync(marker);
   fs.writeFileSync(marker, descriptor.assignment.turnId);
   finish(descriptor, first
-    ? { status: "not-started", reason: "admission-deadline", errorText: "gateway unreachable " + descriptor.admission.credential }
+    ? { status: "not-started", reason: "admission-deadline", errorText: "gateway unreachable " + credential }
     : completedResult);
-} else if (mode === "connection-failure" || mode === "connection-deadline") {
-  const target = new URL(descriptor.connectionEndpoint.url).host;
-  const report = (cause) => new Promise((resolve) => process.send(
-    { type: "openclaw-worker-connection-failure-v1", cause }, resolve,
-  ));
-  await report("worker could not reach gateway " + target + ": certificate rejected " +
-    descriptor.admission.credential + "; check TLS pin/publicUrl configuration");
-  if (mode === "connection-deadline") {
-    await report("worker admission deadline exceeded after 3 attempts to " + target +
-      ": connect failed: Opening handshake has timed out " + descriptor.admission.credential);
-    process.stderr.write("worker admission deadline exceeded\n");
-    exitWorker(7);
-  } else {
-    fs.writeFileSync(path.join(descriptor.assignment.workspaceDir, "connection-failure-reported"), "reported");
-    setInterval(() => {}, 1000);
-  }
 } else if (mode === "wait") {
   return;
-} else if (mode === "tree" || mode === "tree-cancel-reject") {
-  grandchild = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
-  fs.writeFileSync(path.join(descriptor.assignment.workspaceDir, "grandchild.pid"), String(grandchild.pid));
-} else if (mode === "escaped-tree") {
+} else if (["tree", "tree-cancel-reject", "escaped-tree"].includes(mode)) {
   grandchild = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
-    detached: true, stdio: ["ignore", "ignore", "ignore", ...lineageFds],
+    ...(mode === "escaped-tree"
+      ? { detached: true, stdio: ["ignore", "ignore", "ignore", ...lineageFds] }
+      : { stdio: "ignore" }),
   });
   fs.writeFileSync(path.join(descriptor.assignment.workspaceDir, "grandchild.pid"), String(grandchild.pid));
 } else if (mode === "background-start" || mode.startsWith("background-start:")) {
@@ -162,34 +146,26 @@ if (mode === "admission-rearm") {
   if (!background) throw new Error("background process was not retained");
   return;
 } else if (mode === "diagnostic-retain") {
-  fs.writeSync(2, "previous turn stderr " + descriptor.admission.credential + "\n");
+  fs.writeSync(2, "previous turn stderr " + credential + "\n");
   await new Promise((resolve) => process.send({
     type: "openclaw-worker-connection-failure-v1",
-    cause: "previous turn connection " + descriptor.admission.credential,
+    cause: "previous turn connection " + credential,
   }, resolve));
   finish(descriptor, completedResult, true);
 } else if (mode === "quiet-fail") {
   exitWorker(7);
 } else if (mode === "secret-fail") {
-  const credential = descriptor.admission.credential;
   const escaped = JSON.stringify(credential).slice(1, -1);
   process.stderr.write(
     "failure " + "x".repeat(5000) + " " + credential + " " + encodeURIComponent(credential) + " " + escaped,
   );
   exitWorker(7);
-} else if (mode.startsWith("secret-cutoff-")) {
-  const credential = descriptor.admission.credential;
-  const representations = {
-    "secret-cutoff-raw": credential,
-    "secret-cutoff-url": encodeURIComponent(credential),
-    "secret-cutoff-json": JSON.stringify(credential).slice(1, -1),
-  };
-  const representation = representations[mode];
+} else if (mode === "secret-cutoff-url") {
+  const representation = encodeURIComponent(credential);
   const suffixBytes = 4096 - Math.floor(Buffer.byteLength(representation, "utf8") / 2);
   process.stderr.write("x".repeat(5000) + representation + "y".repeat(suffixBytes));
   exitWorker(7);
 } else if (mode === "secret-success") {
-  const credential = descriptor.admission.credential;
   finish(descriptor, {
     ...completedResult,
     transcriptLeafId: "raw " + credential + " encoded " + encodeURIComponent(credential) +

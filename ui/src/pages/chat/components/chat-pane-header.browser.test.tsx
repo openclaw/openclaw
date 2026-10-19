@@ -1,9 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { icons } from "../../../components/icons.ts";
 import { installTitleTooltips } from "../../../components/tooltip-title.ts";
 import { i18n, t } from "../../../i18n/index.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../../../lib/keyboard-shortcut-contract.ts";
-import { solidContent } from "../../../lit/solid-content.tsx";
 import {
   openChatLayoutMenu,
   selectChatLayoutAction,
@@ -15,7 +13,11 @@ import "../../../styles/chat/layout.css";
 import "../../../styles/chat/split-view.css";
 import { openSlot, setSidebarOpen } from "../sidebar-layout.ts";
 import type { ChatDetails } from "./chat-details.tsx";
-import { mountChatPaneHeader } from "./chat-pane-header.test-support.ts";
+import {
+  chatPaneHeaderSharing,
+  chatPaneHeaderSessionMenu,
+  mountChatPaneHeader,
+} from "./chat-pane-header.test-support.ts";
 import "./chat-details.tsx";
 import { ChatSidebarEditorMenu } from "./chat-sidebar-editor-menu.tsx";
 
@@ -38,6 +40,60 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
       containers.splice(0).forEach((container) => container.remove());
     });
 
+    it.each([
+      [390, 844],
+      [768, 1024],
+      [1366, 768],
+      [1440, 900],
+    ])("keeps the agent identity and keyboard context usable at %sx%s", async (width, height) => {
+      const { userEvent } = await import("vitest/browser");
+      await page.viewport(width, height);
+      const { container, props } = mountChatPaneHeader(containers, {
+        mergedChrome: width <= 768,
+        narrow: width <= 768,
+        agent: {
+          id: "research",
+          name: "Research lead for international policy and technology",
+          textAvatar: "🔬",
+        },
+        sessionMenuAction: chatPaneHeaderSessionMenu(),
+      });
+      const header = container.querySelector<HTMLElement>(".chat-pane__header")!;
+      const trigger = container.querySelector<HTMLButtonElement>(
+        ".chat-pane__agent-identity > button",
+      )!;
+      const name = container.querySelector<HTMLElement>(".chat-pane__agent-name")!;
+      const actions = container.querySelector<HTMLElement>(".chat-pane__header-trailing")!;
+      const settings = container.querySelector<HTMLButtonElement>(".chat-pane__agent-settings")!;
+      expect(trigger.checkVisibility()).toBe(true);
+      expect(name.getBoundingClientRect().width).toBeGreaterThan(40);
+      const headerCenter = header.getBoundingClientRect().left + header.clientWidth / 2;
+      const identity = container.querySelector<HTMLElement>(".chat-pane__header-agent")!;
+      const identityCenter = identity.getBoundingClientRect().left + identity.clientWidth / 2;
+      expect(Math.abs(identityCenter - headerCenter)).toBeLessThanOrEqual(2);
+      expect(trigger.getBoundingClientRect().right).toBeLessThanOrEqual(
+        actions.getBoundingClientRect().left,
+      );
+      expect(header.scrollWidth).toBeLessThanOrEqual(header.clientWidth);
+      const idleBackground = getComputedStyle(settings).backgroundColor;
+      await userEvent.hover(trigger);
+      expect(getComputedStyle(settings).opacity).toBe("1");
+      expect(getComputedStyle(settings).backgroundColor).toBe(idleBackground);
+      expect(getComputedStyle(trigger.querySelector(":scope > svg")!).opacity).toBe("0");
+      trigger.focus();
+      await userEvent.keyboard("{Enter}");
+      const context = container.querySelector<HTMLElement>(".chat-pane__agent-context")!;
+      await expect.poll(() => context.matches(":popover-open")).toBe(true);
+      expect(context.textContent).toContain("Session title");
+      expect(context.getBoundingClientRect().left).toBeGreaterThanOrEqual(0);
+      expect(context.getBoundingClientRect().right).toBeLessThanOrEqual(width);
+      await userEvent.keyboard("{Escape}");
+      await expect.poll(() => context.matches(":popover-open")).toBe(false);
+      expect(document.activeElement).toBe(trigger);
+      settings.click();
+      expect(props.onOpenAgentSettings).toHaveBeenCalledWith("research");
+    });
+
     it("opens the labelled Layout menu and dispatches focus, swap, docking, and panel choices", async () => {
       const onLayoutChange = vi.fn();
       const onBrowser = vi.fn();
@@ -50,19 +106,19 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
           {
             slot: "conversation",
             label: "Chat",
-            icon: icons.copy,
+            icon: "copy",
             available: true,
             content: null,
-            loading: solidContent(() => null, {}),
+            loading: { variant: "files", label: "Loading" },
             empty: { description: "" },
           },
           {
             slot: "subagents",
             label: "Subagents",
-            icon: icons.copy,
+            icon: "copy",
             available: true,
             content: null,
-            loading: solidContent(() => null, {}),
+            loading: { variant: "files", label: "Loading" },
             empty: { description: "" },
           },
         ],
@@ -70,7 +126,7 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
           {
             id: "browser",
             label: "Toggle browser panel",
-            icon: icons.copy,
+            icon: "copy",
             shortcut: KEYBOARD_SHORTCUT_COMBOS.browserPanel,
             onActivate: onBrowser,
           },
@@ -113,14 +169,14 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
             {
               id: "terminal",
               label: "Terminal",
-              icon: icons.copy,
+              icon: "copy",
               shortcut: KEYBOARD_SHORTCUT_COMBOS.terminalPanel,
               onActivate: onTerminal,
             },
             ...Array.from({ length: 7 }, (_, index) => ({
               id: `panel-${index + 1}`,
               label: `Panel ${index + 1}`,
-              icon: icons.copy,
+              icon: "copy" as const,
               onActivate: vi.fn(),
             })),
           ],
@@ -150,13 +206,18 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
           "open-split-view",
         ]);
         const surface = menu.querySelector<HTMLElement>(":scope > .oc-menu")!;
+        // Measure the settled surface, not its opening scale transition.
+        await Promise.all(surface.getAnimations().map((animation) => animation.finished));
         const bounds = surface.getBoundingClientRect();
         expect(bounds.width).toBeCloseTo(264, 0);
-        expect(direction === "ltr" ? bounds.left : window.innerWidth - bounds.right).toBeCloseTo(
-          8,
+        // The phone menu opens from its header trigger, not a viewport corner.
+        const anchor = trigger.getBoundingClientRect();
+        expect(direction === "ltr" ? bounds.right : bounds.left).toBeCloseTo(
+          direction === "ltr" ? anchor.right : anchor.left,
           0,
         );
-        expect(window.innerHeight - bounds.bottom).toBeCloseTo(8, 0);
+        expect(bounds.top).toBeGreaterThanOrEqual(anchor.bottom);
+        expect(bounds.top - anchor.bottom).toBeLessThanOrEqual(12);
         expect(bounds.height).toBeCloseTo(360, 0);
         expect(surface.scrollHeight).toBeGreaterThan(surface.clientHeight);
         const terminalDetails = surface.querySelector<HTMLElement>(
@@ -275,25 +336,23 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
             {
               id: "terminal",
               label: "Toggle terminal",
-              icon: icons.copy,
+              icon: "copy",
               shortcut: KEYBOARD_SHORTCUT_COMBOS.terminalPanel,
               onActivate: onTerminal,
             },
           ],
-          detailsControl: { chat: undefined, mobile: false, presentation: true, setRef: () => {} },
+          detailsControl: {
+            chat: undefined,
+            mobile: false,
+            presentation: true,
+            elements: {},
+            setRef: () => {},
+          },
           sidebarLayout: { columns: [] },
           onLayoutChange: vi.fn(),
           onToggleSidePanel: vi.fn(),
-          sharingControl: (
-            <button class="btn btn--ghost chat-pane__sharing-trigger" aria-label="Share">
-              Share
-            </button>
-          ),
-          sessionMenuAction: (
-            <button class="btn btn--ghost chat-icon-btn" aria-label="Session actions">
-              …
-            </button>
-          ),
+          sharingControl: chatPaneHeaderSharing(),
+          sessionMenuAction: chatPaneHeaderSessionMenu(),
         });
         container.style.width = `${width}px`;
         const header = container.querySelector<HTMLElement>(".chat-pane__header")!;
@@ -303,9 +362,9 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
         const bounds = header.getBoundingClientRect();
         for (const selector of [
           ".chat-details-toggle",
-          '[aria-label="Share"]',
+          ".chat-pane__sharing-trigger",
           ".chat-pane__layout-trigger",
-          '[aria-label="Session actions"]',
+          ".chat-header-session-menu__trigger",
         ]) {
           const button = container.querySelector<HTMLElement>(selector)!;
           expect(button.checkVisibility()).toBe(true);

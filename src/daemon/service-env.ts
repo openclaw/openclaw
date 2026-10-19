@@ -4,6 +4,7 @@ import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveNodeStartupTlsEnvironment } from "../bootstrap/node-startup-env.js";
 import type { GatewayDaemonRuntime } from "../commands/daemon-runtime.js";
+import { omitSecretEgressProxyEnvironment } from "../secrets/egress-proxy/environment.js";
 import {
   GATEWAY_SERVICE_KIND,
   GATEWAY_SERVICE_MARKER,
@@ -324,9 +325,10 @@ function resolveServiceTmpDir(
 }
 
 function buildCommonServiceEnvironment(
-  { env, extraPathDirs, execPath, runtime }: ServiceEnvironmentParams,
+  { env: invocationEnv, extraPathDirs, execPath, runtime }: ServiceEnvironmentParams,
   platform: NodeJS.Platform,
 ): Record<string, string | undefined> {
+  const env = omitSecretEgressProxyEnvironment(invocationEnv, platform);
   const tmpDir = resolveServiceTmpDir(env, platform);
   // On macOS, launchd services don't inherit the shell environment, so Node's undici/fetch
   // cannot locate the system CA bundle. Default to /etc/ssl/cert.pem so TLS verification

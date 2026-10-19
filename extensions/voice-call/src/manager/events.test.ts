@@ -279,9 +279,9 @@ describe("processEvent (functional)", () => {
       if (!state) {
         throw new Error("expected the fixture state runtime");
       }
-      const openStore = state.openKeyedStore.bind(state);
+      const openStore = state.openKeyedStoreV2.bind(state);
       const fault = vi
-        .spyOn(state, "openKeyedStore")
+        .spyOn(state, "openKeyedStoreV2")
         .mockImplementation(<T>(options: OpenAsyncKeyedStoreOptions) => {
           const store = openStore<T>(options);
           store.entries = async () => {

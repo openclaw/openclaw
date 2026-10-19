@@ -1,8 +1,7 @@
 import { AsyncResource } from "node:async_hooks";
-import { setImmediate } from "node:timers/promises";
 import type { WorkboardCard } from "@openclaw/workboard-contract";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
-import { isIncognitoSessionKey, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawPluginApi, OpenClawPluginService } from "../api.js";
 import {
@@ -14,15 +13,12 @@ import {
   workboardCardMatchesLifecycleLink,
   workboardCardSessionLookupKey,
 } from "./session-link.js";
-import { cardRunId, cardSessionKey } from "./store-card-helpers.js";
-import { DEFAULT_WORKBOARD_DISPATCH_OWNER } from "./store-constants.js";
+import { cardRunId, cardSessionKey, latestRunningAttempt } from "./store-card-helpers.js";
 import type { WorkboardStore } from "./store.js";
 
 const WORKBOARD_LIFECYCLE_SWEEP_MS = 60_000;
 const WORKBOARD_STALE_SESSION_MS = 30 * 60 * 1000;
-const WORKBOARD_SESSION_SWEEP_LIMIT = 10_000;
-const WORKBOARD_SESSION_PAGE_SIZE = 200;
-const WORKBOARD_SESSION_RECOVERY_SWEEP_LIMIT = 32;
+const WORKBOARD_SESSION_LOOKUP_LIMIT = 2;
 const WORKBOARD_WORKTREE_CLEANUP_SWEEP_LIMIT = 32;
 // Prepared hook generations share the active service reader, never a worker's
 // caller authority. Gateway restart clears both readiness and that reader.
@@ -70,10 +66,13 @@ function sessionProvesPreparedAcceptance(session: WorkboardLifecycleSession): bo
   );
 }
 
+type WorkboardLifecycleSweep = {
+  agentIds?: Promise<string[]>;
+};
+
 type WorkboardLifecycleSessionReadOptions = {
-  includeUnknown: boolean;
-  sessionKey?: string;
-  search?: string;
+  sessionKey: string;
+  sweep?: WorkboardLifecycleSweep;
 };
 
 type WorkboardLifecycleSessionReader = (
@@ -92,18 +91,21 @@ type WorkboardLifecycleService = OpenClawPluginService & {
   readSessions: WorkboardLifecycleSessionReader;
 };
 
-function needsWorkboardLifecycleReconciliation(card: WorkboardCard): boolean {
+function needsWorkboardLifecycleReconciliation(card: WorkboardCard, now: number): boolean {
   if (card.metadata?.archivedAt) {
     return false;
   }
   // A running claim can own an accepted session even when persisting its link failed.
   // Keep those cards, and stale cleanup, in the missed-event recovery sweep.
+  const claim = card.metadata?.claim;
+  const settled = card.status === "review" || card.status === "blocked" || card.status === "done";
   return Boolean(
-    card.sessionKey ||
-    card.runId ||
-    card.execution ||
+    (!settled && (card.sessionKey || card.runId || card.execution)) ||
     card.status === "running" ||
-    card.metadata?.claim ||
+    card.execution?.status === "running" ||
+    latestRunningAttempt(card) ||
+    card.metadata?.automation?.launch?.phase === "prepared" ||
+    (claim && (!claim.expiresAt || claim.expiresAt > now)) ||
     card.metadata?.stale,
   );
 }
@@ -209,13 +211,13 @@ export async function syncWorkboardAgentEnded(params: {
   onMatched?: WorkboardLifecycleMatchHandler;
 }): Promise<number> {
   const now = params.now ?? Date.now();
+  if (!params.context.sessionKey) {
+    return 0;
+  }
   // An attempt can finish before fallback settles, even with success=true.
   // Only the session owner can establish the run's terminal outcome.
   const snapshot = await params.readSessions({
-    includeUnknown: params.context.sessionKey === "unknown",
-    ...(params.context.sessionKey && parseAgentSessionKey(params.context.sessionKey)
-      ? { sessionKey: params.context.sessionKey }
-      : {}),
+    sessionKey: params.context.sessionKey,
   });
   const session = snapshot.sessions.find((entry) => entry.key === params.context.sessionKey);
   if (!session) {
@@ -279,58 +281,25 @@ function lifecycleFromSession(
 
 async function syncWorkboardLifecycleSessions(params: {
   store: WorkboardStore;
-  cards?: readonly WorkboardCard[];
+  cards: readonly WorkboardCard[];
   sessions: readonly WorkboardLifecycleSession[];
   complete?: boolean;
   now?: number;
   onMatched?: WorkboardLifecycleMatchHandler;
-  recovery?: {
-    readSessions: WorkboardLifecycleSessionReader;
-    remaining: number;
-    nextOffset: number;
-  };
 }): Promise<void> {
   const now = params.now ?? Date.now();
-  const sessionsByKey = new Map<string, WorkboardLifecycleSession>();
-  const sessionsByWorkboardSuffix = new Map<string, WorkboardLifecycleSession>();
-  const ambiguousWorkboardSuffixes = new Set<string>();
-  for (const session of params.sessions) {
-    sessionsByKey.set(session.key, session);
-    const suffixIndex = session.key.lastIndexOf(":subagent:workboard-");
-    if (suffixIndex >= 0) {
-      const suffix = session.key.slice(suffixIndex + 1);
-      const existing = sessionsByWorkboardSuffix.get(suffix);
-      if (existing && existing.key !== session.key) {
-        sessionsByWorkboardSuffix.delete(suffix);
-        ambiguousWorkboardSuffixes.add(suffix);
-      } else if (!ambiguousWorkboardSuffixes.has(suffix)) {
-        sessionsByWorkboardSuffix.set(suffix, session);
-      }
-    }
-  }
-  const cards = params.cards ?? (await params.store.list());
-  for (const [index, card] of cards.entries()) {
-    if (card.metadata?.archivedAt) {
+  for (const card of params.cards) {
+    const lookupKey = workboardCardSessionLookupKey(card);
+    const candidates = lookupKey.startsWith("subagent:workboard-")
+      ? params.sessions.filter((entry) => entry.key.endsWith(`:${lookupKey}`))
+      : [];
+    // Persisted links win; an unlinked dispatcher claim needs one configured owner.
+    const session =
+      params.sessions.find((entry) => entry.key === lookupKey) ??
+      (candidates.length === 1 ? candidates[0] : undefined);
+    if (!session && candidates.length > 1) {
       continue;
     }
-    const lookupKey = workboardCardSessionLookupKey(card);
-    const suffixIndex = lookupKey.lastIndexOf("subagent:workboard-");
-    const linkedSessionKey = cardSessionKey(card);
-    const canUseAgentlessFallback =
-      linkedSessionKey?.startsWith("subagent:workboard-") === true ||
-      (!linkedSessionKey &&
-        (!card.agentId ||
-          (card.agentId === DEFAULT_WORKBOARD_DISPATCH_OWNER &&
-            card.metadata?.claim?.ownerId === DEFAULT_WORKBOARD_DISPATCH_OWNER)));
-    // Persisted links and explicit agent targets stay authoritative. The unique
-    // suffix fallback recovers a run accepted before its link could be persisted.
-    const exactSession = sessionsByKey.get(lookupKey);
-    const canMatchSuffix = canUseAgentlessFallback && suffixIndex >= 0;
-    const session =
-      exactSession ??
-      (params.complete && canMatchSuffix
-        ? sessionsByWorkboardSuffix.get(lookupKey.slice(suffixIndex))
-        : undefined);
     const launch = card.metadata?.automation?.launch;
     const preparedAcceptanceAt =
       launch?.phase === "prepared" && session && sessionProvesPreparedAcceptance(session)
@@ -338,34 +307,10 @@ async function syncWorkboardLifecycleSessions(params: {
           ? Math.max(now, launch.preparedAt)
           : session.updatedAt
         : undefined;
-    const preparedNeedsRecovery =
-      launch?.phase === "prepared" &&
-      (preparedAcceptanceAt === undefined || preparedAcceptanceAt < launch.preparedAt);
     if (
-      !params.complete &&
-      params.recovery &&
-      ((!exactSession && canMatchSuffix) || preparedNeedsRecovery)
+      launch?.phase === "prepared" &&
+      (preparedAcceptanceAt === undefined || preparedAcceptanceAt < launch.preparedAt)
     ) {
-      // Moving pages cannot establish absence or a unique cross-agent suffix.
-      if (params.recovery.remaining === 0) {
-        continue;
-      }
-      params.recovery.remaining -= 1;
-      params.recovery.nextOffset = index + 1;
-      const snapshot = await params.recovery.readSessions({
-        includeUnknown: linkedSessionKey === "unknown",
-        search: canMatchSuffix ? lookupKey.slice(suffixIndex) : lookupKey,
-      });
-      await syncWorkboardLifecycleSessions({
-        store: params.store,
-        cards: [card],
-        ...snapshot,
-        now,
-        onMatched: params.onMatched,
-      });
-      continue;
-    }
-    if (preparedNeedsRecovery) {
       if (params.complete) {
         await params.store.failPreparedLaunch(card.id, {
           expectedLaunch: launch,
@@ -424,13 +369,17 @@ function normalizeSession(value: unknown): WorkboardLifecycleSession | undefined
 }
 
 export async function readWorkboardLifecycleSessions(
-  gateway: Pick<OpenClawPluginApi["runtime"]["gateway"], "isAvailable" | "request">,
-  options: WorkboardLifecycleSessionReadOptions = { includeUnknown: false },
+  gateway: Pick<OpenClawPluginApi["runtime"]["gateway"], "isAvailable"> & {
+    request: (
+      ...args: Parameters<OpenClawPluginApi["runtime"]["gateway"]["request"]>
+    ) => Promise<unknown>;
+  },
+  options: WorkboardLifecycleSessionReadOptions,
 ): Promise<WorkboardLifecycleSessionSnapshot> {
   if (!(await gateway.isAvailable())) {
     return { sessions: [], complete: false };
   }
-  if (options.sessionKey) {
+  if (parseAgentSessionKey(options.sessionKey)) {
     const payload = await gateway.request(
       "sessions.describe",
       { key: options.sessionKey, includeDerivedTitles: false, includeLastMessage: false },
@@ -440,11 +389,39 @@ export async function readWorkboardLifecycleSessions(
       throw new Error("sessions.describe returned an invalid lifecycle snapshot");
     }
     const session = normalizeSession(payload.session);
-    // An exact read establishes no facts about the rest of the catalog.
-    return { sessions: session ? [session] : [], complete: false };
+    // Completeness is scoped to the requested identity, never the catalog.
+    return { sessions: session ? [session] : [], complete: true };
+  }
+  if (options.sessionKey.startsWith("subagent:workboard-")) {
+    // Success and failure are shared only within this admitted sweep.
+    const sweep: WorkboardLifecycleSweep = options.sweep ?? {};
+    sweep.agentIds ??= gateway
+      .request("agents.list", {}, { scopes: ["operator.read"] })
+      .then((payload) => {
+        if (!isRecord(payload) || !Array.isArray(payload.agents)) {
+          throw new Error("agents.list returned an invalid ownership snapshot");
+        }
+        return payload.agents.map((agent) => {
+          if (!isRecord(agent) || typeof agent.id !== "string" || !agent.id) {
+            throw new Error("agents.list returned an invalid agent identity");
+          }
+          return agent.id;
+        });
+      });
+    const sessions: WorkboardLifecycleSession[] = [];
+    for (const agentId of await sweep.agentIds) {
+      const exact = await readWorkboardLifecycleSessions(gateway, {
+        sessionKey: `agent:${agentId}:${options.sessionKey}`,
+      });
+      if (!exact.complete) {
+        return { sessions: [], complete: false };
+      }
+      sessions.push(...exact.sessions);
+    }
+    return { sessions, complete: true };
   }
   let includeUnknown = false;
-  if (options.includeUnknown) {
+  if (options.sessionKey === "unknown") {
     const agentsPayload = await gateway.request("agents.list", {}, { scopes: ["operator.read"] });
     if (!isRecord(agentsPayload) || typeof agentsPayload.selectionRequired !== "boolean") {
       throw new Error("agents.list returned an invalid ownership snapshot");
@@ -453,53 +430,35 @@ export async function readWorkboardLifecycleSessions(
     // captured link only while the Gateway proves that its owner is unambiguous.
     includeUnknown = !agentsPayload.selectionRequired;
   }
-  const sessions = new Map<string, WorkboardLifecycleSession>();
-  let complete = false;
-  let offset = 0;
-  while (offset < WORKBOARD_SESSION_SWEEP_LIMIT) {
-    const payload = await gateway.request(
-      "sessions.list",
-      {
-        rowMode: "compact",
-        limit: Math.min(WORKBOARD_SESSION_PAGE_SIZE, WORKBOARD_SESSION_SWEEP_LIMIT - offset),
-        offset,
-        ...(options.search !== undefined ? { search: options.search } : {}),
-        configuredAgentsOnly: true,
-        archived: "all",
-        includeGlobal: false,
-        includeUnknown,
-      },
-      { scopes: ["operator.read"] },
-    );
-    if (!isRecord(payload) || !Array.isArray(payload.sessions)) {
-      throw new Error("sessions.list returned an invalid lifecycle snapshot");
-    }
-    for (const value of payload.sessions) {
-      const session = normalizeSession(value);
-      if (session) {
-        sessions.set(session.key, session);
-      }
-    }
-    if (payload.hasMore === false) {
-      // A moving multi-page roster supplies positive observations, never absence.
-      complete = offset === 0;
-      break;
-    }
-    const nextOffset = offset + payload.sessions.length;
-    if (
-      options.search !== undefined ||
-      payload.hasMore !== true ||
-      payload.sessions.length === 0 ||
-      payload.nextOffset !== nextOffset
-    ) {
-      break;
-    }
-    offset = nextOffset;
-    if (offset < WORKBOARD_SESSION_SWEEP_LIMIT) {
-      await setImmediate();
-    }
+  const payload = await gateway.request(
+    "sessions.list",
+    {
+      source: "workboard-lifecycle",
+      rowMode: "compact",
+      search: options.sessionKey,
+      limit: WORKBOARD_SESSION_LOOKUP_LIMIT,
+      configuredAgentsOnly: true,
+      archived: "all",
+      includeGlobal: false,
+      includeUnknown,
+    },
+    { scopes: ["operator.read"] },
+  );
+  if (!isRecord(payload) || !Array.isArray(payload.sessions)) {
+    throw new Error("sessions.list returned an invalid lifecycle snapshot");
   }
-  return { sessions: [...sessions.values()], complete };
+  const sessions = payload.sessions.flatMap((value) => {
+    const session = normalizeSession(value);
+    return session ? [session] : [];
+  });
+  return {
+    sessions,
+    // An exact hit establishes this identity despite unrelated title matches.
+    // Otherwise, only a short page can prove absence or a unique suffix owner.
+    complete:
+      sessions.some((session) => session.key === options.sessionKey) ||
+      payload.sessions.length < WORKBOARD_SESSION_LOOKUP_LIMIT,
+  };
 }
 
 export function createWorkboardLifecycleService(params: {
@@ -516,7 +475,6 @@ export function createWorkboardLifecycleService(params: {
   let begin: (() => void) | undefined;
   let removeDrainListener: (() => void) | undefined;
   let cleanupCursor = 0;
-  let recoveryCursor = 0;
   let serviceReader: WorkboardLifecycleSessionReader | undefined;
   const cleanupWorktrees = async (
     cards: readonly WorkboardCard[],
@@ -601,57 +559,39 @@ export function createWorkboardLifecycleService(params: {
             if (generation !== owner) {
               return;
             }
-            const lifecycleCards = cards.filter(needsWorkboardLifecycleReconciliation);
-            if (lifecycleCards.length > 0) {
+            const cardsByKey = new Map<string, WorkboardCard[]>();
+            const now = params.now?.() ?? Date.now();
+            const sweep: WorkboardLifecycleSweep = {};
+            for (const card of cards.filter((candidate) =>
+              needsWorkboardLifecycleReconciliation(candidate, now),
+            )) {
+              const key = workboardCardSessionLookupKey(card);
+              const group = cardsByKey.get(key) ?? [];
+              group.push(card);
+              cardsByKey.set(key, group);
+            }
+            for (const [sessionKey, linkedCards] of cardsByKey) {
               try {
-                const snapshot = await params.readSessions({
-                  includeUnknown: lifecycleCards.some((card) => cardSessionKey(card) === "unknown"),
+                const snapshot = await params.readSessions({ sessionKey, sweep });
+                // A partial suffix search cannot establish a unique owner or absence.
+                if (!snapshot.complete) {
+                  continue;
+                }
+                await syncWorkboardLifecycleSessions({
+                  store: params.store,
+                  cards: linkedCards,
+                  ...snapshot,
+                  now,
+                  onMatched,
                 });
-                // Incognito sessions are absent from discovery. Read only identities
-                // already linked to cards, without requesting private preview content.
-                let describedIncognitoKeys: Set<string> | undefined;
-                for (const card of lifecycleCards) {
-                  const sessionKey = cardSessionKey(card);
-                  if (
-                    !sessionKey ||
-                    !isIncognitoSessionKey(sessionKey) ||
-                    describedIncognitoKeys?.has(sessionKey)
-                  ) {
-                    continue;
-                  }
-                  (describedIncognitoKeys ??= new Set()).add(sessionKey);
-                  const exact = await params.readSessions({ includeUnknown: false, sessionKey });
-                  snapshot.sessions.push(...exact.sessions);
-                }
-                const recoveryStart = recoveryCursor % lifecycleCards.length;
-                const recovery = {
-                  readSessions: params.readSessions,
-                  remaining: WORKBOARD_SESSION_RECOVERY_SWEEP_LIMIT,
-                  nextOffset: 0,
-                };
-                try {
-                  await syncWorkboardLifecycleSessions({
-                    store: params.store,
-                    cards: [
-                      ...lifecycleCards.slice(recoveryStart),
-                      ...lifecycleCards.slice(0, recoveryStart),
-                    ],
-                    ...snapshot,
-                    now: params.now?.() ?? Date.now(),
-                    onMatched,
-                    recovery,
-                  });
-                } finally {
-                  // Rotate past attempted lookups, including failures, so orphaned
-                  // cards cannot monopolize the next sweep's recovery budget.
-                  recoveryCursor = recoveryStart + recovery.nextOffset;
-                }
-                cards = await params.store.list();
               } catch (error) {
                 if (generation === owner) {
                   ctx.logger.warn(`workboard lifecycle sync failed: ${String(error)}`);
                 }
               }
+            }
+            if (cardsByKey.size > 0) {
+              cards = await params.store.list();
             }
             if (generation === owner) {
               await cleanupWorktrees(cards, (message) => ctx.logger.warn(message));

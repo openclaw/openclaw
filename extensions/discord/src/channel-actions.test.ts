@@ -1,4 +1,3 @@
-// Discord tests cover channel actions plugin behavior.
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { withEnv } from "openclaw/plugin-sdk/test-env";
@@ -54,6 +53,21 @@ vi.spyOn(handleActionModule, "handleDiscordMessageAction").mockImplementation(
 const { discordMessageActions } = await import("./channel-actions.js");
 
 type DiscordDiscovery = ReturnType<NonNullable<typeof discordMessageActions.describeMessageTool>>;
+const discordCfg = (
+  discord: NonNullable<OpenClawConfig["channels"]>["discord"],
+): OpenClawConfig => ({ channels: { discord } });
+type PrepareInput = Parameters<NonNullable<typeof discordMessageActions.prepareSendPayload>>[0];
+function prepareSend(
+  params: ChannelMessageActionContext["params"],
+  payload: PrepareInput["payload"] = { text: "hello" },
+  ctx: Pick<ChannelMessageActionContext, "sessionKey" | "inboundEventKind"> = {},
+) {
+  return discordMessageActions.prepareSendPayload?.({
+    ctx: { channel: "discord", action: "send", cfg: {}, params, ...ctx },
+    to: "channel:123",
+    payload,
+  });
+}
 function schemaForAction(discovery: DiscordDiscovery, action: string) {
   const schema = discovery?.schema;
   return (Array.isArray(schema) ? schema : schema ? [schema] : []).find((entry) =>
@@ -65,13 +79,7 @@ describe("discordMessageActions", () => {
   it("returns no tool actions when no token-sourced Discord accounts are enabled", () => {
     withEnv({ DISCORD_BOT_TOKEN: undefined }, () => {
       const discovery = discordMessageActions.describeMessageTool?.({
-        cfg: {
-          channels: {
-            discord: {
-              enabled: true,
-            },
-          },
-        } as OpenClawConfig,
+        cfg: discordCfg({ enabled: true }),
       });
 
       expect(discovery).toEqual({
@@ -84,17 +92,10 @@ describe("discordMessageActions", () => {
 
   it("describes actions when the Discord token is an unresolved SecretRef", () => {
     const discovery = discordMessageActions.describeMessageTool?.({
-      cfg: {
-        channels: {
-          discord: {
-            token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
-            actions: {
-              polls: true,
-              reactions: true,
-            },
-          },
-        },
-      } as unknown as OpenClawConfig,
+      cfg: discordCfg({
+        token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+        actions: { polls: true, reactions: true },
+      }),
     });
 
     expect(discovery?.capabilities).toEqual(["presentation"]);
@@ -102,54 +103,27 @@ describe("discordMessageActions", () => {
   });
 
   it("requires trusted requester sender for privileged guild admin actions from tool contexts", () => {
+    type TrustedInput = Parameters<
+      NonNullable<typeof discordMessageActions.requiresTrustedRequesterSender>
+    >[0];
+    const requiresTrusted = (
+      action: TrustedInput["action"],
+      toolContext?: TrustedInput["toolContext"],
+    ) => discordMessageActions.requiresTrustedRequesterSender?.({ action, toolContext });
     for (const action of ["channel-delete", "timeout", "kick", "ban"] as const) {
-      expect(
-        discordMessageActions.requiresTrustedRequesterSender?.({
-          action,
-          toolContext: { currentChannelProvider: "discord" },
-        }),
-      ).toBe(true);
-      expect(
-        discordMessageActions.requiresTrustedRequesterSender?.({
-          action,
-        }),
-      ).toBe(false);
+      expect(requiresTrusted(action, { currentChannelProvider: "discord" })).toBe(true);
+      expect(requiresTrusted(action)).toBe(false);
     }
-    expect(
-      discordMessageActions.requiresTrustedRequesterSender?.({
-        action: "channel-delete",
-        toolContext: { currentChannelProvider: "telegram" },
-      }),
-    ).toBe(true);
-    expect(
-      discordMessageActions.requiresTrustedRequesterSender?.({
-        action: "read",
-        toolContext: { currentChannelProvider: "discord" },
-      }),
-    ).toBe(false);
+    expect(requiresTrusted("channel-delete", { currentChannelProvider: "telegram" })).toBe(true);
+    expect(requiresTrusted("read", { currentChannelProvider: "discord" })).toBe(false);
   });
 
   it("honors account-scoped action gates during discovery", () => {
-    const cfg = {
-      channels: {
-        discord: {
-          token: "Bot token-main",
-          actions: {
-            reactions: false,
-            polls: true,
-          },
-          accounts: {
-            work: {
-              token: "Bot token-work",
-              actions: {
-                reactions: true,
-                polls: false,
-              },
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
+    const cfg = discordCfg({
+      token: "Bot token-main",
+      actions: { reactions: false, polls: true },
+      accounts: { work: { token: "Bot token-work", actions: { reactions: true, polls: false } } },
+    });
 
     const defaultDiscovery = discordMessageActions.describeMessageTool?.({
       cfg,
@@ -164,12 +138,14 @@ describe("discordMessageActions", () => {
       expectedDiscordActions(["react", "reactions", "emoji-list"]),
     );
     expect(workDiscovery?.actions).toEqual(expectedDiscordActions(["poll"]));
-    expect(schemaForAction(defaultDiscovery, "send")).toMatchObject({
-      actions: ["send"],
-      properties: {
-        components: { description: expect.stringContaining("Discord Components V2") },
-      },
-    });
+    for (const discovery of [defaultDiscovery, workDiscovery]) {
+      expect(schemaForAction(discovery, "send")).toMatchObject({
+        actions: ["send"],
+        properties: {
+          components: { description: expect.stringContaining("Discord Components V2") },
+        },
+      });
+    }
     expect(schemaForAction(workDiscovery, "react")).toMatchObject({
       actions: expect.arrayContaining(["react", "reactions"]),
       properties: {
@@ -177,40 +153,36 @@ describe("discordMessageActions", () => {
       },
     });
     expect(schemaForAction(workDiscovery, "send")).toMatchObject({
-      actions: ["send"],
       visibility: "all-configured",
-      properties: {
-        components: { description: expect.stringContaining("Discord Components V2") },
-      },
     });
   });
 
-  it.each(["sticker-upload"])("keeps %s on local execution mode", (action) => {
-    expect(discordMessageActions.resolveExecutionMode?.({ action: action as never })).toBe("local");
+  it("keeps sticker-upload on local execution mode", () => {
+    expect(discordMessageActions.resolveExecutionMode?.({ action: "sticker-upload" })).toBe(
+      "local",
+    );
   });
 
   it("extracts send targets for message and thread reply actions", () => {
-    expect(
-      discordMessageActions.extractToolSend?.({
-        args: { action: "sendMessage", to: "channel:123" },
-      }),
-    ).toEqual({ to: "channel:123" });
-
-    expect(
-      discordMessageActions.extractToolSend?.({
-        args: { action: "threadReply", channelId: "987" },
-      }),
-    ).toEqual({ to: "channel:987" });
-
-    expect(
-      discordMessageActions.extractToolSend?.({
-        args: { action: "threadReply", channelId: "   " },
-      }),
-    ).toBeNull();
+    const extract = (args: Record<string, unknown>) =>
+      discordMessageActions.extractToolSend?.({ args });
+    expect(extract({ action: "sendMessage", to: "channel:123" })).toEqual({ to: "channel:123" });
+    expect(extract({ action: "threadReply", channelId: "987" })).toEqual({ to: "channel:987" });
+    expect(extract({ action: "threadReply", channelId: "   " })).toBeNull();
   });
 
   it("proves only the exact current Discord thread-reply target", () => {
     const spec = discordMessageActions.messageActionTargetAliases?.["thread-reply"];
+    const matches = (args: Record<string, unknown>, messagingTarget = true) =>
+      spec?.matchesCurrentConversation?.({
+        args,
+        accountId: "default",
+        toolContext: {
+          currentChannelProvider: "discord",
+          currentChannelId: "123456",
+          ...(messagingTarget ? { currentMessagingTarget: "channel:123456" } : {}),
+        },
+      });
 
     expect(spec?.resolveDeliveryTarget?.({ args: { threadId: "123456" } })).toBe("channel:123456");
     for (const args of [
@@ -233,90 +205,35 @@ describe("discordMessageActions", () => {
       { to: "channel:123456" },
       { channelId: "123456" },
     ]) {
-      expect(
-        spec?.matchesCurrentConversation?.({
-          args,
-          accountId: "default",
-          toolContext: {
-            currentChannelProvider: "discord",
-            currentChannelId: "123456",
-            currentMessagingTarget: "channel:123456",
-          },
-        }),
-      ).toBe(true);
+      expect(matches(args)).toBe(true);
     }
-    expect(
-      spec?.matchesCurrentConversation?.({
-        args: { threadId: "123456", target: "channel:999999", to: "channel:999999" },
-        accountId: "default",
-        toolContext: {
-          currentChannelProvider: "discord",
-          currentChannelId: "123456",
-          currentMessagingTarget: "channel:123456",
-        },
-      }),
-    ).toBe(true);
-    expect(
-      spec?.matchesCurrentConversation?.({
-        args: { threadId: "999999" },
-        accountId: "default",
-        toolContext: {
-          currentChannelProvider: "discord",
-          currentChannelId: "123456",
-          currentMessagingTarget: "channel:123456",
-        },
-      }),
-    ).toBe(false);
-    expect(
-      spec?.matchesCurrentConversation?.({
-        args: {},
-        accountId: "default",
-        toolContext: {
-          currentChannelProvider: "discord",
-          currentChannelId: "123456",
-        },
-      }),
-    ).toBe(false);
+    expect(matches({ threadId: "123456", target: "channel:999999", to: "channel:999999" })).toBe(
+      true,
+    );
+    expect(matches({ threadId: "999999" })).toBe(false);
+    expect(matches({}, false)).toBe(false);
   });
 
   it("prepares Discord send payload channel data for durable core delivery", async () => {
-    const prepared = await discordMessageActions.prepareSendPayload?.({
-      ctx: {
-        channel: "discord",
-        action: "send",
-        cfg: {} as OpenClawConfig,
-        params: {
-          components: JSON.stringify({
-            text: "Choose",
-            blocks: [
-              {
-                type: "actions",
-                buttons: [{ label: "Yes", callbackData: "yes" }],
-              },
-            ],
-          }),
-          embeds: undefined,
-          filename: "photo.png",
-        },
+    const components = {
+      text: "Choose",
+      blocks: [{ type: "actions", buttons: [{ label: "Yes", callbackData: "yes" }] }],
+    };
+    const prepared = await prepareSend(
+      {
+        components: JSON.stringify(components),
+        embeds: undefined,
+        filename: "photo.png",
       },
-      to: "channel:123",
-      payload: { text: "hello", mediaUrl: "/tmp/photo.png" },
-    });
+      { text: "hello", mediaUrl: "/tmp/photo.png" },
+    );
 
     expect(prepared).toEqual({
       text: "hello",
       mediaUrl: "/tmp/photo.png",
       channelData: {
         discord: {
-          components: {
-            text: "Choose",
-            blocks: [
-              {
-                type: "actions",
-                buttons: [{ label: "Yes", callbackData: "yes" }],
-              },
-            ],
-          },
+          components,
           filename: "photo.png",
         },
       },
@@ -324,60 +241,28 @@ describe("discordMessageActions", () => {
   });
 
   it("prepares inbound event delivery metadata for durable core sends", async () => {
-    const prepared = await discordMessageActions.prepareSendPayload?.({
-      ctx: {
-        channel: "discord",
-        action: "send",
-        cfg: {} as OpenClawConfig,
-        params: {},
-        sessionKey: "agent:main:discord:channel:c1",
-        inboundEventKind: "room_event",
-      },
-      to: "channel:123",
-      payload: { text: "hello" },
-    });
+    const delivery = {
+      sessionKey: "agent:main:discord:channel:c1",
+      inboundEventKind: "room_event" as const,
+    };
+    const prepared = await prepareSend({}, { text: "hello" }, delivery);
 
     expect(prepared).toEqual({
       text: "hello",
       channelData: {
         discord: {
-          __openclawInboundEventDelivery: {
-            sessionKey: "agent:main:discord:channel:c1",
-            inboundEventKind: "room_event",
-          },
+          __openclawInboundEventDelivery: delivery,
         },
       },
     });
   });
 
   it("keeps non-serializable Discord component sends on the legacy action path", async () => {
-    const prepared = await discordMessageActions.prepareSendPayload?.({
-      ctx: {
-        channel: "discord",
-        action: "send",
-        cfg: {} as OpenClawConfig,
-        params: {
-          components: () => [],
-        },
-      },
-      to: "channel:123",
-      payload: { text: "hello" },
-    });
-
-    expect(prepared).toBeNull();
+    expect(await prepareSend({ components: () => [] })).toBeNull();
   });
 
   it("delegates action handling to the Discord action handler", async () => {
-    const cfg = {
-      channels: {
-        discord: {
-          token: "Bot token-main",
-        },
-      },
-    } as OpenClawConfig;
-    const toolContext: ChannelMessageActionContext["toolContext"] = {
-      currentChannelProvider: "discord",
-    };
+    const cfg = discordCfg({ token: "Bot token-main" });
     const mediaReadFile = vi.fn(async () => Buffer.from("image"));
     const mediaAccess: NonNullable<ChannelMessageActionContext["mediaAccess"]> = {
       localRoots: ["/tmp/media"],
@@ -390,8 +275,7 @@ describe("discordMessageActions", () => {
       mode: "first" as const,
     };
 
-    await discordMessageActions.handleAction?.({
-      channel: "discord",
+    const forwarded: Omit<ChannelMessageActionContext, "channel"> = {
       action: "send",
       params: { to: "channel:123", message: "hello" },
       cfg,
@@ -399,28 +283,14 @@ describe("discordMessageActions", () => {
       requesterAccountId: "ops",
       requesterSenderId: "user-1",
       senderIsOwner: true,
-      toolContext,
+      toolContext: { currentChannelProvider: "discord" },
       mediaAccess,
       mediaLocalRoots,
       mediaReadFile,
       conversationReadOrigin: "delegated",
       reply,
-    });
-
-    expect(handleDiscordMessageActionMock).toHaveBeenCalledWith({
-      action: "send",
-      params: { to: "channel:123", message: "hello" },
-      cfg,
-      accountId: "ops",
-      requesterAccountId: "ops",
-      requesterSenderId: "user-1",
-      senderIsOwner: true,
-      toolContext,
-      mediaAccess,
-      mediaLocalRoots,
-      mediaReadFile,
-      conversationReadOrigin: "delegated",
-      reply,
-    });
+    };
+    await discordMessageActions.handleAction?.({ channel: "discord", ...forwarded });
+    expect(handleDiscordMessageActionMock).toHaveBeenCalledWith(forwarded);
   });
 });

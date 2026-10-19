@@ -1,4 +1,3 @@
-// Exercises harness lifecycle hook adapters and finalize-retry budget semantics.
 import { afterEach, describe, expect, it, vi } from "vitest";
 const log = vi.hoisted(() => ({ warn: vi.fn() }));
 vi.mock("../../logging/subsystem.js", () => ({ createSubsystemLogger: () => log }));
@@ -12,17 +11,29 @@ import { bindAgentHarnessHookMessages } from "./lifecycle-hook-messages.js";
 const EVENT = {
   runId: "run-1",
   sessionId: "session-1",
-  sessionKey: "agent:main:session-1",
-  turnId: "turn-1",
-  provider: "codex",
-  model: "gpt-5.4",
-  cwd: "/repo",
-  transcriptPath: "/tmp/session.jsonl",
   stopHookActive: false,
-  lastAssistantMessage: "done",
   messages: [],
   success: true,
 };
+
+const ctx = { runId: "run-1", sessionKey: "agent:main:session-1" };
+function finalize(
+  hookRunner: Parameters<typeof runAgentHarnessBeforeAgentFinalizeHook>[0]["hookRunner"],
+  event: Parameters<typeof runAgentHarnessBeforeAgentFinalizeHook>[0]["event"] = EVENT,
+  context = ctx,
+) {
+  return runAgentHarnessBeforeAgentFinalizeHook({ event, ctx: context, hookRunner });
+}
+function finalizer(result: unknown, event: Parameters<typeof finalize>[1] = EVENT, context = ctx) {
+  const hookRunner = {
+    hasHooks: () => true,
+    runBeforeAgentFinalize: vi.fn().mockResolvedValue(result),
+  };
+  return () => finalize(hookRunner as never, event, context);
+}
+function retry<Key>(instruction: string, idempotencyKey: Key) {
+  return { instruction, idempotencyKey, maxAttempts: 1 };
+}
 
 describe("agent harness lifecycle hook helpers", () => {
   afterEach(() => {
@@ -68,17 +79,14 @@ describe("agent harness lifecycle hook helpers", () => {
   );
 
   it("resolves after agent_end hooks settle", async () => {
-    let releaseHook: () => void = () => undefined;
-    const agentEndSettled = new Promise<void>((resolve) => {
-      releaseHook = resolve;
-    });
+    const { promise: agentEndSettled, resolve: releaseHook } = Promise.withResolvers<void>();
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) => hookName === "agent_end"),
       runAgentEnd: vi.fn(() => agentEndSettled),
     };
 
     const run = awaitAgentHarnessAgentEndHook({
-      ctx: { runId: "run-1", sessionKey: "agent:main:session-1" },
+      ctx,
       event: EVENT,
       hookRunner: hookRunner as never,
     });
@@ -107,7 +115,7 @@ describe("agent harness lifecycle hook helpers", () => {
     };
 
     runAgentHarnessAgentEndHook({
-      ctx: { runId: "run-1", sessionKey: "agent:main:session-1" },
+      ctx,
       event: EVENT,
       hookRunner: hookRunner as never,
     });
@@ -125,11 +133,7 @@ describe("agent harness lifecycle hook helpers", () => {
       hasHooks: () => true,
       runBeforeAgentFinalize: vi.fn().mockResolvedValue({
         action: "revise",
-        retry: {
-          instruction: "revise from context run",
-          idempotencyKey: "stable",
-          maxAttempts: 1,
-        },
+        retry: retry("revise from context run", "stable"),
       }),
     };
     const eventWithoutRunId = {
@@ -138,59 +142,31 @@ describe("agent harness lifecycle hook helpers", () => {
       sessionId: "shared-session",
     };
 
-    await expect(
-      runAgentHarnessBeforeAgentFinalizeHook({
-        event: eventWithoutRunId,
-        ctx: { runId: "run-from-context", sessionKey: "agent:main:shared-session" },
-        hookRunner: hookRunner as never,
-      }),
-    ).resolves.toEqual({ action: "revise", reason: "revise from context run" });
-    await expect(
-      runAgentHarnessBeforeAgentFinalizeHook({
-        event: eventWithoutRunId,
-        ctx: { runId: "run-from-context", sessionKey: "agent:main:shared-session" },
-        hookRunner: hookRunner as never,
-      }),
-    ).resolves.toEqual({ action: "continue" });
+    const run = () =>
+      finalize(hookRunner as never, eventWithoutRunId, {
+        runId: "run-from-context",
+        sessionKey: "agent:main:shared-session",
+      });
+    await expect(run()).resolves.toEqual({ action: "revise", reason: "revise from context run" });
+    await expect(run()).resolves.toEqual({ action: "continue" });
   });
 
   it("preserves merged revise reasons when retry metadata is present", async () => {
-    const hookRunner = {
-      hasHooks: () => true,
-      runBeforeAgentFinalize: vi.fn().mockResolvedValue({
-        action: "revise",
-        reason: "fix generated baseline\n\nrerun the focused tests",
-        retry: {
-          instruction: "rerun the focused tests",
-          idempotencyKey: "merged-reason",
-          maxAttempts: 1,
-        },
-      }),
-    };
+    const run = finalizer({
+      action: "revise",
+      reason: "fix generated baseline\n\nrerun the focused tests",
+      retry: retry("rerun the focused tests", "merged-reason"),
+    });
 
-    await expect(
-      runAgentHarnessBeforeAgentFinalizeHook({
-        event: EVENT,
-        ctx: { runId: "run-1", sessionKey: "agent:main:session-1" },
-        hookRunner: hookRunner as never,
-      }),
-    ).resolves.toEqual({
+    await expect(run()).resolves.toEqual({
       action: "revise",
       reason: "fix generated baseline\n\nrerun the focused tests",
     });
   });
 
   it("honors a later finalize retry candidate after an earlier candidate is spent", async () => {
-    const firstRetry = {
-      instruction: "regenerate artifacts",
-      idempotencyKey: "artifacts",
-      maxAttempts: 1,
-    };
-    const secondRetry = {
-      instruction: "rerun focused tests",
-      idempotencyKey: "tests",
-      maxAttempts: 1,
-    };
+    const firstRetry = retry("regenerate artifacts", "artifacts");
+    const secondRetry = retry("rerun focused tests", "tests");
     const result = {
       action: "revise",
       reason: "retry generated artifacts\n\nretry focused tests",
@@ -202,63 +178,29 @@ describe("agent harness lifecycle hook helpers", () => {
       enumerable: false,
       value: [firstRetry, secondRetry],
     });
-    const hookRunner = {
-      hasHooks: () => true,
-      runBeforeAgentFinalize: vi.fn().mockResolvedValue(result),
-    };
+    const run = finalizer(result);
 
-    await expect(
-      runAgentHarnessBeforeAgentFinalizeHook({
-        event: EVENT,
-        ctx: { runId: "run-1", sessionKey: "agent:main:session-1" },
-        hookRunner: hookRunner as never,
-      }),
-    ).resolves.toEqual({
+    await expect(run()).resolves.toEqual({
       action: "revise",
       reason: "retry generated artifacts\n\nretry focused tests\n\nregenerate artifacts",
     });
-    await expect(
-      runAgentHarnessBeforeAgentFinalizeHook({
-        event: EVENT,
-        ctx: { runId: "run-1", sessionKey: "agent:main:session-1" },
-        hookRunner: hookRunner as never,
-      }),
-    ).resolves.toEqual({
+    await expect(run()).resolves.toEqual({
       action: "revise",
       reason: "retry generated artifacts\n\nretry focused tests\n\nrerun focused tests",
     });
   });
 
   it("falls back to retry instruction keys when retry idempotency keys are malformed", async () => {
-    const hookRunner = {
-      hasHooks: () => true,
-      runBeforeAgentFinalize: vi.fn().mockResolvedValue({
-        action: "revise",
-        retry: {
-          instruction: "retry with a safe key",
-          idempotencyKey: { invalid: true },
-          maxAttempts: 1,
-        } as never,
-      }),
-    };
+    const run = finalizer({
+      action: "revise",
+      retry: retry("retry with a safe key", { invalid: true }) as never,
+    });
 
-    await expect(
-      runAgentHarnessBeforeAgentFinalizeHook({
-        event: EVENT,
-        ctx: { runId: "run-1", sessionKey: "agent:main:session-1" },
-        hookRunner: hookRunner as never,
-      }),
-    ).resolves.toEqual({
+    await expect(run()).resolves.toEqual({
       action: "revise",
       reason: "retry with a safe key",
     });
-    await expect(
-      runAgentHarnessBeforeAgentFinalizeHook({
-        event: EVENT,
-        ctx: { runId: "run-1", sessionKey: "agent:main:session-1" },
-        hookRunner: hookRunner as never,
-      }),
-    ).resolves.toEqual({ action: "continue" });
+    await expect(run()).resolves.toEqual({ action: "continue" });
   });
 
   it("does not collide fallback retry keys for long instructions with shared prefixes", async () => {
@@ -273,39 +215,19 @@ describe("agent harness lifecycle hook helpers", () => {
         .fn()
         .mockResolvedValueOnce({
           action: "revise",
-          retry: {
-            instruction: firstInstruction,
-            idempotencyKey: { invalid: true },
-            maxAttempts: 1,
-          },
+          retry: retry(firstInstruction, { invalid: true }),
         })
         .mockResolvedValueOnce({
           action: "revise",
-          retry: {
-            instruction: secondInstruction,
-            idempotencyKey: { invalid: true },
-            maxAttempts: 1,
-          },
+          retry: retry(secondInstruction, { invalid: true }),
         }),
     };
 
-    await expect(
-      runAgentHarnessBeforeAgentFinalizeHook({
-        event: EVENT,
-        ctx: { runId: "run-1", sessionKey: "agent:main:session-1" },
-        hookRunner: hookRunner as never,
-      }),
-    ).resolves.toEqual({
+    await expect(finalize(hookRunner as never)).resolves.toEqual({
       action: "revise",
       reason: firstInstruction,
     });
-    await expect(
-      runAgentHarnessBeforeAgentFinalizeHook({
-        event: EVENT,
-        ctx: { runId: "run-1", sessionKey: "agent:main:session-1" },
-        hookRunner: hookRunner as never,
-      }),
-    ).resolves.toEqual({
+    await expect(finalize(hookRunner as never)).resolves.toEqual({
       action: "revise",
       reason: secondInstruction,
     });

@@ -1,5 +1,4 @@
 import type { SkillsDetailResult } from "@openclaw/gateway-protocol";
-// ClawHub skill metadata, trust, install resolution, cards, and telemetry.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";

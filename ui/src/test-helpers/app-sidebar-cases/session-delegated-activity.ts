@@ -160,39 +160,19 @@ describe("AppSidebar delegated activity", () => {
       rosterRows.filter((row) => row.key !== parentKey),
     );
     mixed.sidebar.sidebarAgentsMode = "roster";
-    const rosterParent = () => mixed.sidebar.querySelector(`[data-session-key="${parentKey}"]`)!;
-    await waitForFast(
-      () => expect(mixed.sidebar.querySelector('[data-agent-collapse="main"]')).not.toBeNull(),
-      { timeout: 5_000 },
-    );
-    await waitForFast(() => expect(rosterParent()).not.toBeNull(), { timeout: 5_000 });
-    mixed.sidebar
-      .querySelector<HTMLButtonElement>(`[data-child-session-toggle="${parentKey}"]`)!
-      .click();
+    const agent = () => mixed.sidebar.querySelector('[data-agent-group="main"]')!;
+    await waitForFast(() => expect(agent()).not.toBeNull(), { timeout: 5_000 });
     await waitForFast(
       () =>
-        expect(mixed.sidebar.querySelector(`[data-session-key="${persistentKey}"]`)).not.toBeNull(),
+        expect(
+          agent().querySelector(".sidebar-agent-roster__avatar .session-glyph__ring"),
+        ).not.toBeNull(),
       { timeout: 5_000 },
     );
-    expect(
-      rosterParent().querySelector("[data-child-session-toggle]")?.getAttribute("aria-expanded"),
-    ).toBe("true");
-    expect(
-      rosterParent().querySelector(".sidebar-session-team-state .session-glyph__ring"),
-    ).not.toBeNull();
-    expect(rosterParent().querySelector('[aria-label="Unread"]')).not.toBeNull();
+    expect(mixed.sidebar.querySelector("[data-agent-collapse]")).toBeNull();
+    expect(mixed.sidebar.querySelector(`[data-session-key="${parentKey}"]`)).toBeNull();
     expect(mixed.sidebar.querySelector(`[data-session-key="${childKey}"]`)).toBeNull();
-    expect(mixed.sidebar.querySelectorAll(".sidebar-recent-session--child")).toHaveLength(1);
-
-    const navigation = vi.fn();
-    mixed.sidebar.onNavigate = navigation;
-    mixed.sidebar
-      .querySelector<HTMLAnchorElement>(`[data-session-key="${persistentKey}"] a`)!
-      .click();
-    expect(navigation).toHaveBeenCalledWith(
-      "chat",
-      expect.objectContaining({ pathname: "/chat/main/dashboard/implementation" }),
-    );
+    expect(mixed.sidebar.querySelector(`[data-session-key="${persistentKey}"]`)).toBeNull();
 
     mixed.result.ts += 1;
     mixed.result.sessions = [
@@ -203,21 +183,14 @@ describe("AppSidebar delegated activity", () => {
     mixed.sessions.publishList({ result: mixed.result });
     await rosterActivityStore(mixed.context).refresh();
     await waitForFast(
-      () => expect(rosterParent().querySelector('[data-session-attention="error"]')).not.toBeNull(),
+      () =>
+        expect(
+          agent().querySelector(".sidebar-agent-roster__avatar .session-glyph__ring"),
+        ).toBeNull(),
       { timeout: 5_000 },
     );
-    expect(rosterParent().querySelector(".session-glyph__ring")).toBeNull();
-    expect(rosterParent().querySelector('[aria-label="Unread"]')).not.toBeNull();
-    const rosterAttention = rosterParent().querySelector('[data-session-attention="error"]')!;
-    await rosterAttention.closest<HTMLElementTagNameMap["openclaw-tooltip"]>("openclaw-tooltip")!
-      .updateComplete;
-    const rosterDescription = (rosterAttention.getAttribute("aria-describedby") ?? "")
-      .split(/\s+/u)
-      .map((id) => rosterAttention.ownerDocument.getElementById(id)?.textContent ?? "")
-      .join(" ");
-    expect(rosterDescription).toContain("Child session Review changes failed: Review failed");
     expect(mixed.sidebar.querySelector(`[data-session-key="${childKey}"]`)).toBeNull();
-    expect(mixed.sidebar.querySelectorAll(".sidebar-recent-session--child")).toHaveLength(1);
+    expect(mixed.sidebar.querySelectorAll(".sidebar-recent-session--child")).toHaveLength(0);
   });
 
   it("offers Mark as read on a read parent whose only unread state is a hidden run", async () => {
@@ -265,7 +238,7 @@ describe("AppSidebar delegated activity", () => {
     expect(sessions.patch).not.toHaveBeenCalledWith(parentKey, { unread: true }, expect.anything());
   });
 
-  it("offers Mark as read in team view on a read parent whose only unread state is a hidden run", async () => {
+  it("keeps session actions out of the agent-only roster", async () => {
     const parentKey = "agent:main:dashboard:release";
     const runKey = "agent:main:subagent:review";
     const rosterRows = [
@@ -297,18 +270,12 @@ describe("AppSidebar delegated activity", () => {
       rosterRows.filter((row) => row.key !== parentKey),
     );
     mounted.sidebar.sidebarAgentsMode = "roster";
-    const parent = () => mounted.sidebar.querySelector(`[data-session-key="${parentKey}"]`);
-    await waitForFast(() => expect(parent()).not.toBeNull());
     await waitForFast(() =>
-      expect(parent()!.querySelector('[aria-label="Unread"]')).not.toBeNull(),
+      expect(mounted.sidebar.querySelector('[data-agent-group="main"]')).not.toBeNull(),
     );
-
-    parent()!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
-    await mounted.sidebar.updateComplete;
-    const menu = mounted.sidebar.querySelector<TestSessionMenu>("openclaw-session-menu")!;
-    await menu.updateComplete;
-    const toggle = menu.querySelector<HTMLButtonElement>('[data-shortcut="u"]')!;
-    expect(toggle.textContent).toContain("Mark as read");
+    expect(mounted.sidebar.querySelector(`[data-session-key="${parentKey}"]`)).toBeNull();
+    expect(mounted.sidebar.querySelector(`[data-session-key="${runKey}"]`)).toBeNull();
+    expect(mounted.sidebar.querySelector("openclaw-session-menu")).toBeNull();
   });
 
   it("rings a queued parent and its idle child while a grandchild works", async () => {

@@ -1,5 +1,6 @@
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
+import { closeMenusWithin } from "../../components/solid/menu.tsx";
 import { t } from "../../i18n/index.ts";
 import { registerCommandPaletteEnglish } from "../../i18n/locales/en-command-palette.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
@@ -15,10 +16,9 @@ import {
   handleChatAttachmentPaste,
 } from "../chat/components/chat-attachments.ts";
 import { ConnectMachineSetupState } from "./connect-machine-dialog.ts";
-import { NewSessionDraft } from "./draft-controller.ts";
+import { NewSessionDraft } from "./draft.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { resolveNewSessionMentionDirectory } from "./mention-directory.ts";
-import { closeSessionMenus } from "./new-session-runtime.ts";
 import { PaletteSessionPreferences } from "./palette-session-preferences.ts";
 import type { PaletteSessionPreference } from "./preferences.ts";
 import { captureSessionNoticeOwner, openSessionNoticeTarget } from "./session-notice-owner.ts";
@@ -47,10 +47,7 @@ export class PaletteSessionDraft {
   private readonly idPrefix = `palette-session-${++PaletteSessionDraft.nextId}`;
 
   constructor(
-    private readonly element: Pick<
-      HTMLElement,
-      "isConnected" | "ownerDocument" | "querySelector" | "querySelectorAll"
-    >,
+    private readonly element: Pick<HTMLElement, "isConnected" | "ownerDocument" | "contains">,
     private readonly read: () => { context: ApplicationContext | undefined; open: boolean },
     private readonly callbacks: {
       changed: () => void;
@@ -71,10 +68,6 @@ export class PaletteSessionDraft {
       }),
       callbacks.changed,
     );
-  }
-
-  get initialized(): boolean {
-    return this.draft !== undefined;
   }
 
   get message(): string {
@@ -218,19 +211,16 @@ export class PaletteSessionDraft {
           isConnected: this.element.isConnected,
         }),
         {
-          requestUpdate: this.callbacks.changed,
+          changed: this.callbacks.changed,
           updateComplete: this.callbacks.updateComplete,
           onMessageChange: (message) => this.callbacks.onMessageChange?.(message),
-          querySelector: (selector) => this.element.querySelector(selector),
           activeElement: () => this.element.ownerDocument.activeElement,
-          body: () => this.element.ownerDocument.body,
-          pickerIdPrefix: this.idPrefix,
           preferenceScope: "palette",
           readPalettePreference: () => this.preferences.selection,
           closeTransientUi: () => {
             this.draft?.browser.close();
             this.closeSettings?.();
-            closeSessionMenus(this.element);
+            closeMenusWithin(this.element);
           },
           onInvalidate: () => this.connectMachine.close(),
           onRecoveryReady: (url, scope) => this.bindOwner(url, scope),
@@ -244,7 +234,7 @@ export class PaletteSessionDraft {
     this.coldSubmit = undefined;
     this.draft.place.resetDraft();
     this.draft.submission.resetDraft();
-    this.draft.place.setAgentsHydrated(this.draft.agentsReady());
+    this.draft.place.agentsHydrated = this.draft.agentsReady();
     this.preferences.begin();
     this.draft.place.adoptAgentDefaults();
     this.callbacks.changed();
@@ -269,7 +259,7 @@ export class PaletteSessionDraft {
     this.closeSettings?.();
     this.draft?.browser.close();
     this.connectMachine.close();
-    closeSessionMenus(this.element);
+    closeMenusWithin(this.element);
   }
 
   async submit(): Promise<void> {
@@ -397,7 +387,7 @@ export class PaletteSessionDraft {
     const agentId = preference?.agentId ?? defaultAgent;
     this.data = { ...this.data, agentId, requestedAgentId: agentId };
     this.draft.place.resetDraft();
-    this.draft.place.setAgentsHydrated(this.draft.agentsReady());
+    this.draft.place.agentsHydrated = this.draft.agentsReady();
     this.draft.place.adoptAgentDefaults();
     this.draft.place.restorePreferenceSelections();
   }

@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { onSessionCostUsageUpdated } from "../infra/session-cost-usage-events.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isSessionStoreTopologyChange, sessionChanges } from "../sessions/session-row-changes.js";
 import type { SessionCostUsagePublication } from "../shared/usage-types.js";
 import { modelSelectionPoliciesMatch } from "./operator-model-presentation.js";
@@ -31,6 +32,7 @@ export function broadcastChatMetadataChanged(
 export async function createGatewayChatMetadataLifecycle(params: {
   getConfig: () => OpenClawConfig;
   log: GatewayLogger;
+  getPluginMetadataSnapshot?: () => PluginMetadataSnapshot | undefined;
 }) {
   let context: GatewayRequestContext | undefined;
   let preparedModelRuntimeState: "unobserved" | "available" | "unavailable" = "unobserved";
@@ -172,7 +174,11 @@ export async function createGatewayChatMetadataLifecycle(params: {
       const unregisterRolePolicy = onOperatorRolePolicyChanged((change) => {
         if (change.kind === "config" && change.context === next && context === next) {
           const config = next.getCommittedRuntimeConfig?.() ?? params.getConfig();
-          const unchanged = modelSelectionPoliciesMatch(selectionConfig, config);
+          const unchanged = modelSelectionPoliciesMatch(
+            selectionConfig,
+            config,
+            params.getPluginMetadataSnapshot?.(),
+          );
           selectionConfig = config;
           if (!unchanged) {
             broadcastChatMetadataChanged(next, {

@@ -3,7 +3,7 @@ import { acquireNativeOverlaySurface } from "../../lib/native-overlay-occlusion.
 import { listen } from "../../lib/reactive/listener.ts";
 import { createOverlayAnchor } from "../overlay-anchor.ts";
 import { createOverlay, findOverlayParent } from "../overlay-lifecycle.ts";
-import type { TooltipController, TooltipPolicyProps } from "../tooltip-controller.ts";
+import type { TooltipOwner, TooltipPolicyProps } from "../tooltip-owner.ts";
 import { TooltipElement, type TooltipRuntime } from "../tooltip.ts";
 import { retainShadowStyles } from "./shadow-styles.ts";
 import overlayStyles from "./overlay.css?inline";
@@ -16,7 +16,7 @@ export function mountTooltipView(
   host: TooltipElement,
   surface: HTMLDivElement,
   rich: HTMLSpanElement,
-  policy: TooltipController,
+  policy: TooltipOwner,
 ): TooltipRuntime {
   const content = host.ownerDocument.createElement("span");
   content.className = "tooltip-content";
@@ -118,6 +118,7 @@ export const Tooltip = Object.assign(
         prop:hoverDismissDelay={props.hoverDismissDelay}
         prop:delay={props.delay}
         prop:describe={props.describe ?? true}
+        prop:descriptionTarget={props.descriptionTarget}
         prop:pointerThrough={props.pointerThrough ?? false}
         prop:autoSize={props.autoSize ?? false}
         prop:disabled={props.disabled ?? false}

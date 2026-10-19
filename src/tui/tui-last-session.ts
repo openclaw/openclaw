@@ -1,4 +1,3 @@
-// Stores and resolves the last TUI session per workspace.
 import { createHash } from "node:crypto";
 import { normalizeLowercaseStringOrEmpty as normalizeMarker } from "@openclaw/normalization-core/string-coerce";
 import { normalizeAgentId } from "../routing/session-key.js";

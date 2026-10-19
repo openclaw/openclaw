@@ -82,7 +82,7 @@ export async function runMSTeamsFeedbackInvokeHandler(
   });
 
   const feedbackThreadId = isChannel
-    ? (extractMSTeamsConversationMessageId(rawConversationId) ?? activity.replyToId ?? undefined)
+    ? (extractMSTeamsConversationMessageId(rawConversationId) ?? activity.replyToId)
     : undefined;
   if (feedbackThreadId) {
     const threadKeys = resolveThreadSessionKeys({

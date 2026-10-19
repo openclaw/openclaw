@@ -1,3 +1,7 @@
+import {
+  getPostgresPhysicalFacts,
+  type PostgresPhysicalFacts,
+} from "../../infra/database-engine/physical-facts.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import {
   getAdmittedSqliteSchemaFacts,
@@ -18,7 +22,7 @@ import {
 } from "./session-pending-input-value.js";
 
 type PendingInputScope = SessionAccessScope & { agentId: string; sessionId: string };
-const receiptSchemas = new WeakMap<SqliteSchemaFacts, boolean>();
+const receiptSchemas = new WeakMap<SqliteSchemaFacts | PostgresPhysicalFacts, boolean>();
 
 /** History-worker display reconciliation; these durable correlations never authorize replay. */
 export function listSessionPendingInputReceipts(
@@ -31,7 +35,8 @@ export function listSessionPendingInputReceipts(
   }
   const resolved = resolveSqliteTranscriptScope(scope);
   const result = withOpenClawAgentDatabaseReadOnly((database) => {
-    const schema = getAdmittedSqliteSchemaFacts(database.db);
+    const schema =
+      getAdmittedSqliteSchemaFacts(database.db) ?? getPostgresPhysicalFacts(database.db);
     if (!schema) {
       throw new Error("Pending input receipt reads require admitted schema facts");
     }

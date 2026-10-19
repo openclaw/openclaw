@@ -25,6 +25,24 @@ import { runLegacyStateMigrationSteps } from "./state-migrations.steps.js";
 
 const tempDirs: string[] = [];
 afterEach(() => cleanupMediaPersistenceFixtures(tempDirs));
+const content = (event: unknown) => JSON.parse(String(event)).message.content;
+
+function readState(file: string) {
+  using db = openNodeSqliteDatabase(file, { readOnly: true });
+  const row = (sql: string) => db.prepare(sql).get();
+  return {
+    version: row("PRAGMA user_version")?.user_version,
+    event: row("SELECT event_json FROM transcript_events")?.event_json,
+    trajectory: row("SELECT event_json FROM trajectory_runtime_events")?.event_json,
+    stat: row("SELECT stat FROM sqlite_stat1 WHERE idx = 'idx_agent_cache_updated'")?.stat,
+    archive: row("SELECT archive_blob, published_at FROM session_transcript_archives"),
+    media: row("SELECT 1 FROM schema_meta WHERE meta_key = 'media-persistence-rows-v1'"),
+    directives: row(
+      "SELECT 1 FROM schema_meta WHERE meta_key = 'historical-transcript-directives-v1'",
+    ),
+    entry: row("SELECT entry_json FROM session_nodes")?.entry_json,
+  };
+}
 
 it("keeps unrelated legacy content and planner maintenance outside a version migration", async () => {
   const stateDir = makeTempDir(tempDirs, "media-bounded-version-");
@@ -32,17 +50,18 @@ it("keeps unrelated legacy content and planner maintenance outside a version mig
   openOpenClawStateDatabase({ env });
   const pathname = resolveOpenClawAgentSqlitePath({ agentId: "main", env });
   fs.mkdirSync(path.dirname(pathname), { recursive: true });
-  const event = JSON.stringify({
-    type: "message",
-    id: "retained",
-    parentId: null,
-    timestamp: 1,
-    message: {
-      role: "assistant",
-      content: [{ type: "text", text: "[[reply_to_current]] retained" }],
-      MediaPath: "/media/retained.png",
-    },
-  });
+  const makeEvent = (id: string, extra: Record<string, unknown> = {}) =>
+    createEvent({
+      id,
+      parentId: null,
+      timestamp: 1,
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: `[[reply_to_current]] ${id}` }],
+        ...extra,
+      },
+    });
+  const event = JSON.stringify(makeEvent("retained", { MediaPath: "/media/retained.png" }));
   const trajectory = JSON.stringify({
     data: { messagesSnapshot: [{ role: "user", MediaPath: "/media/retained.png" }] },
   });
@@ -64,17 +83,19 @@ it("keeps unrelated legacy content and planner maintenance outside a version mig
         VALUES ('agent:main:retained', 'retained', '{"sessionId":"retained","updatedAt":1,"memoryFlushCompactionCount":3}', 1, 1);
       INSERT INTO session_windows (session_id, session_key, created_at, updated_at)
         VALUES ('retained', 'agent:main:retained', 1, 1);
+      INSERT INTO cache_entries (scope, key, value_json, updated_at)
+        VALUES ('planner-proof', 'retained', '{}', 1);
     `);
-    source
-      .prepare(
-        "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES ('retained', 0, ?, 1)",
-      )
-      .run(event);
-    source
-      .prepare(
-        "INSERT INTO trajectory_runtime_events (session_id, seq, event_json, created_at) VALUES ('retained', 0, ?, 1)",
-      )
-      .run(trajectory);
+    for (const [table, json] of [
+      ["transcript_events", event],
+      ["trajectory_runtime_events", trajectory],
+    ] as const) {
+      source
+        .prepare(
+          `INSERT INTO ${table} (session_id, seq, event_json, created_at) VALUES ('retained', 0, ?, 1)`,
+        )
+        .run(json);
+    }
     source
       .prepare(`INSERT INTO session_transcript_archives
         (session_id, generation, session_key, reason, encoding, archive_blob, archive_sha256, archive_name, created_at)
@@ -82,7 +103,7 @@ it("keeps unrelated legacy content and planner maintenance outside a version mig
       .run(archive, createHash("sha256").update(archive).digest("hex"), archiveName);
     source.exec(`
       ANALYZE;
-      UPDATE sqlite_stat1 SET stat = '7 1 1 1 1' WHERE idx = 'idx_agent_trajectory_runtime_run';
+      UPDATE sqlite_stat1 SET stat = '7 1 1 1' WHERE idx = 'idx_agent_cache_updated';
     `);
   }
   registerOpenClawAgentDatabase({ agentId: "main", env, path: pathname, schemaVersion: 25 });
@@ -90,19 +111,7 @@ it("keeps unrelated legacy content and planner maintenance outside a version mig
     agentId: "current",
     env,
     schemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
-    eventsBySession: {
-      current: [
-        createEvent({
-          id: "current",
-          parentId: null,
-          timestamp: 1,
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "[[reply_to_current]] current" }],
-          },
-        }),
-      ],
-    },
+    eventsBySession: { current: [makeEvent("current")] },
   });
   const runPrelude = () =>
     withDoctorSqliteMaintenanceLock({
@@ -114,30 +123,29 @@ it("keeps unrelated legacy content and planner maintenance outside a version mig
           assertOwnerCurrent: () => authority.assertCurrent(),
         });
         try {
-          const { sources } = await scope.run(() =>
-            runLegacyStateMigrationSteps(
-              buildLegacyStateMigrationPreludeSteps({
-                mode: "doctor",
-                invocationPurpose: "doctor",
-                config: { agents: { ownership: "explicit", entries: { main: {}, current: {} } } },
-                configPath: path.join(stateDir, "openclaw.json"),
-                configIncludedPaths: [],
-                stateDir,
-                env,
-                homedir: () => stateDir,
-                agentDatabaseTargets: [
-                  { agentId: "main", path: pathname },
-                  { agentId: "current", path: currentPath },
-                ],
-                pluginSessionStoreAgentIds: [],
-                legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
-              }).filter((step) =>
-                ["media-persistence", "session-entry-state", "transcript-directives"].includes(
-                  step.id,
-                ),
+          const { sources } = await scope.run(() => {
+            const steps = buildLegacyStateMigrationPreludeSteps({
+              mode: "doctor",
+              invocationPurpose: "doctor",
+              config: { agents: { ownership: "explicit", entries: { main: {}, current: {} } } },
+              configPath: path.join(stateDir, "openclaw.json"),
+              configIncludedPaths: [],
+              stateDir,
+              env,
+              homedir: () => stateDir,
+              agentDatabaseTargets: [
+                { agentId: "main", path: pathname },
+                { agentId: "current", path: currentPath },
+              ],
+              pluginSessionStoreAgentIds: [],
+              legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+            });
+            return runLegacyStateMigrationSteps(
+              steps.filter(({ id }) =>
+                ["media-persistence", "session-entry-state", "transcript-directives"].includes(id),
               ),
-            ),
-          );
+            );
+          });
           return {
             changes: sources.flatMap((source) => source.changes),
             warnings: sources.flatMap((source) => source.warnings),
@@ -153,53 +161,25 @@ it("keeps unrelated legacy content and planner maintenance outside a version mig
     changes: [
       `Upgraded agent database schema in ${pathname}: v25 -> v${OPENCLAW_AGENT_SCHEMA_VERSION}.`,
       expect.stringMatching(/^Saved pre-repair SQLite backup: /),
-      `Migrated historical transcript directives in ${currentPath}: 1 active session(s), 0 archived transcript(s).`,
+      `Repaired historical transcripts in ${currentPath}: 1 active session(s), 0 archived transcript(s).`,
     ],
     warnings: [],
   });
   expect(fs.readFileSync(archivePath)).toEqual(archive);
-  {
-    using migrated = openNodeSqliteDatabase(pathname, { readOnly: true });
-    expect(migrated.prepare("PRAGMA user_version").get()?.user_version).toBe(
-      OPENCLAW_AGENT_SCHEMA_VERSION,
-    );
-    expect(migrated.prepare("SELECT event_json FROM transcript_events").get()?.event_json).toBe(
-      event,
-    );
-    expect(
-      migrated.prepare("SELECT event_json FROM trajectory_runtime_events").get()?.event_json,
-    ).toBe(trajectory);
-    expect(
-      migrated
-        .prepare("SELECT stat FROM sqlite_stat1 WHERE idx = 'idx_agent_trajectory_runtime_run'")
-        .get()?.stat,
-    ).toBe("7 1 1 1 1");
-    expect(
-      migrated.prepare("SELECT archive_blob, published_at FROM session_transcript_archives").get(),
-    ).toEqual({
-      archive_blob: new Uint8Array(archive),
-      published_at: null,
-    });
-    expect(
-      migrated
-        .prepare("SELECT 1 FROM schema_meta WHERE meta_key = 'media-persistence-rows-v1'")
-        .get(),
-    ).toBeUndefined();
-    expect(
-      migrated
-        .prepare("SELECT 1 FROM schema_meta WHERE meta_key = 'historical-transcript-directives-v1'")
-        .get(),
-    ).toBeUndefined();
-    expect(migrated.prepare("SELECT entry_json FROM session_nodes").get()?.entry_json).toBe(
-      '{"sessionId":"retained","updatedAt":1,"memoryFlushCompactionCount":3}',
-    );
-  }
+  expect(readState(pathname)).toEqual({
+    version: OPENCLAW_AGENT_SCHEMA_VERSION,
+    event,
+    trajectory,
+    stat: "7 1 1 1",
+    archive: { archive_blob: new Uint8Array(archive), published_at: null },
+    media: undefined,
+    directives: undefined,
+    entry: '{"sessionId":"retained","updatedAt":1,"memoryFlushCompactionCount":3}',
+  });
   {
     using current = openNodeSqliteDatabase(currentPath, { readOnly: true });
     expect(
-      JSON.parse(
-        String(current.prepare("SELECT event_json FROM transcript_events").get()?.event_json),
-      ).message.content,
+      content(current.prepare("SELECT event_json FROM transcript_events").get()?.event_json),
     ).toEqual([{ type: "text", text: "current" }]);
   }
 
@@ -212,25 +192,12 @@ it("keeps unrelated legacy content and planner maintenance outside a version mig
   expect(repaired.changes).toContain(
     `Migrated canonical transcript archive media in ${pathname}: 1 archive(s).`,
   );
-  {
-    using sameVersion = openNodeSqliteDatabase(pathname, { readOnly: true });
-    expect(
-      sameVersion.prepare("SELECT archive_blob FROM session_transcript_archives").get()
-        ?.archive_blob,
-    ).toEqual(new Uint8Array(fs.readFileSync(archivePath)));
-    expect(
-      JSON.parse(
-        String(sameVersion.prepare("SELECT entry_json FROM session_nodes").get()?.entry_json),
-      ),
-    ).toEqual({
-      sessionId: "retained",
-      updatedAt: 1,
-      memoryFlush: { kind: "succeeded", compactionCount: 3 },
-    });
-    expect(
-      JSON.parse(
-        String(sameVersion.prepare("SELECT event_json FROM transcript_events").get()?.event_json),
-      ).message.content,
-    ).toEqual([{ type: "text", text: "retained" }]);
-  }
+  const sameVersion = readState(pathname);
+  expect(sameVersion.archive?.archive_blob).toEqual(new Uint8Array(fs.readFileSync(archivePath)));
+  expect(JSON.parse(String(sameVersion.entry))).toEqual({
+    sessionId: "retained",
+    updatedAt: 1,
+    memoryFlush: { kind: "succeeded", compactionCount: 3 },
+  });
+  expect(content(sameVersion.event)).toEqual([{ type: "text", text: "retained" }]);
 });

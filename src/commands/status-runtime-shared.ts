@@ -1,4 +1,3 @@
-// Shared runtime probes used by status text and JSON commands.
 // Heavy modules stay lazily loaded so fast status output avoids security/provider/gateway costs.
 
 import type { Result } from "@openclaw/normalization-core/result";

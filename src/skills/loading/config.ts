@@ -44,11 +44,7 @@ export function resolveSkillConfig(
   config: OpenClawConfig | undefined,
   skillKey: string,
 ): SkillConfig | undefined {
-  const entry = config?.skills?.entries?.[skillKey];
-  if (!entry || typeof entry !== "object") {
-    return undefined;
-  }
-  return entry;
+  return config?.skills?.entries?.[skillKey];
 }
 
 /** Returns whether cold startup isolated this exact skill's configured secret. */

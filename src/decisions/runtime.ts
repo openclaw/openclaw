@@ -1,5 +1,6 @@
 import { bindOperatorModelExecution } from "../agents/admitted-run-context.js";
 import { resolveDecisionModelSetting } from "../agents/decision-model-setting.js";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { normalizeModelRef } from "../agents/model-ref-shared.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -15,9 +16,17 @@ import {
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  assertAllowedCompletionModel,
+  resolvePluginLlmPolicy,
+} from "../plugins/runtime/runtime-model-policy.js";
+import { finalizePluginModelUsage } from "../plugins/runtime/runtime-model-usage.js";
+import { modelKey } from "../shared/model-key.js";
 import { logDecisionEvaluation } from "./diagnostics.js";
-import type { DecisionProviderHost } from "./provider-host.js";
+import type { DecisionProviderHost, PreparedDecisionBilling } from "./provider-host.js";
+import type { DecisionBatchV2, DecisionEvaluateOptionsV2, DecisionOutcomeV2 } from "./types-v2.js";
 import type { DecisionBatch, DecisionOutcome, DecisionRuntimeV1 } from "./types.js";
+import { validateDecisionBatchV2 } from "./validation-v2.js";
 import { DecisionContractError, validateDecisionBatch } from "./validation.js";
 
 type Options = Parameters<DecisionRuntimeV1["evaluate"]>[1];
@@ -35,15 +44,110 @@ export async function evaluateDecision(
   );
 }
 
+export function evaluateDecisionV2(
+  batch: DecisionBatchV2,
+  options: DecisionEvaluateOptionsV2,
+): Promise<DecisionOutcomeV2> {
+  return evaluateDecisionV2InRegistry(
+    batch,
+    options,
+    getPluginRegistryForContext(),
+    getRuntimeConfig(),
+  );
+}
+
+type Outcome = DecisionOutcome | DecisionOutcomeV2;
+export type DecisionEvaluation<T extends Outcome = Outcome> = {
+  outcome: T;
+  usageFacts?: Pick<
+    Parameters<typeof finalizePluginModelUsage>[0],
+    "cfg" | "hostPluginId" | "target" | "preparedBilling"
+  >;
+};
+
+/** Complete only at the caller's successful return, after its late guards and projection. */
+export function completeDecisionEvaluation<T extends Outcome>(
+  evaluation: DecisionEvaluation<T>,
+): T {
+  if (evaluation.outcome.status === "ok" && evaluation.usageFacts) {
+    finalizePluginModelUsage({
+      ...evaluation.usageFacts,
+      rawUsage: evaluation.outcome.result.usage,
+      estimate: "none",
+    });
+  }
+  return evaluation.outcome;
+}
+
 export async function evaluateDecisionInRegistry(
+  ...args: Parameters<typeof evaluateDecisionOperation>
+): Promise<DecisionOutcome> {
+  const evaluation = await evaluateDecisionOperation(...args);
+  args[1].signal.throwIfAborted();
+  return completeDecisionEvaluation(evaluation);
+}
+
+export async function evaluateDecisionV2InRegistry(
+  ...args: Parameters<typeof evaluateDecisionV2Operation>
+): Promise<DecisionOutcomeV2> {
+  const evaluation = await evaluateDecisionV2Operation(...args);
+  args[1].signal.throwIfAborted();
+  return completeDecisionEvaluation(evaluation);
+}
+
+/** Internal callers with outer lifecycle checks retain completion until those checks pass. */
+export function evaluateDecisionOperation(
   batch: DecisionBatch,
-  inputOptions: Options,
-  registry: PluginRegistry | null,
+  options: Options,
+  registry: PluginRegistry | null | undefined,
   config: OpenClawConfig,
   consumerId?: string,
   isAdmissible?: () => boolean,
   canDispatch?: () => boolean,
-): Promise<DecisionOutcome> {
+): Promise<DecisionEvaluation<DecisionOutcome>> {
+  return evaluateVersion(
+    batch,
+    options,
+    registry,
+    config,
+    1,
+    consumerId,
+    isAdmissible,
+    canDispatch,
+  ) as Promise<DecisionEvaluation<DecisionOutcome>>; // SAFETY: V1 dispatch validates and returns the paired V1 outcome.
+}
+
+export function evaluateDecisionV2Operation(
+  batch: DecisionBatchV2,
+  options: DecisionEvaluateOptionsV2,
+  registry: PluginRegistry | null | undefined,
+  config: OpenClawConfig,
+  consumerId?: string,
+  isAdmissible?: () => boolean,
+  canDispatch?: () => boolean,
+): Promise<DecisionEvaluation<DecisionOutcomeV2>> {
+  return evaluateVersion(
+    batch,
+    options,
+    registry,
+    config,
+    2,
+    consumerId,
+    isAdmissible,
+    canDispatch,
+  ) as Promise<DecisionEvaluation<DecisionOutcomeV2>>; // SAFETY: V2 dispatch validates and returns the paired V2 outcome.
+}
+
+async function evaluateVersion(
+  batch: DecisionBatch | DecisionBatchV2,
+  inputOptions: DecisionEvaluateOptionsV2,
+  registry: PluginRegistry | null | undefined,
+  config: OpenClawConfig,
+  version: 1 | 2,
+  consumerId?: string,
+  isAdmissible?: () => boolean,
+  canDispatch?: () => boolean,
+): Promise<DecisionEvaluation> {
   const options = { ...inputOptions };
   if (
     !inputOptions ||
@@ -52,24 +156,33 @@ export async function evaluateDecisionInRegistry(
     typeof options.purpose !== "string" ||
     !options.purpose ||
     options.purpose.length > 128 ||
+    (options.priority !== undefined &&
+      options.priority !== "requested" &&
+      options.priority !== "optional") ||
     typeof options.rubricVersion !== "string" ||
     !options.rubricVersion ||
     options.rubricVersion.length > 128 ||
     !Number.isFinite(options.timeoutMs) ||
     options.timeoutMs <= 0 ||
-    !(options.signal instanceof AbortSignal)
+    !(options.signal instanceof AbortSignal) ||
+    (options.reasoning !== undefined && !["auto", "off", "on"].includes(options.reasoning))
   ) {
     throw new DecisionContractError();
   }
   options.signal.throwIfAborted();
   const started = performance.now();
-  const skipped = (outcome: DecisionOutcome): DecisionOutcome => {
+  const skipped = (outcome: DecisionOutcome | DecisionOutcomeV2): DecisionEvaluation => {
     logDecisionEvaluation({ options, facts: { dispatched: false }, started, outcome });
-    return outcome;
+    return { outcome };
   };
-  if (!validateDecisionBatch(batch)) {
+  if (!(version === 1 ? validateDecisionBatch(batch) : validateDecisionBatchV2(batch))) {
     return skipped({ status: "unavailable", reason: "unsupported-input" });
   }
+  // Registration supplies consumer identity; request fields cannot select another plugin's policy.
+  const pluginPolicy = resolvePluginLlmPolicy(config, consumerId);
+  // The public Decision contract takes the operation owner explicitly. This runtime
+  // is consumer-bound, not agent-bound; LLM override policy would reject owner calls.
+  // Omission still selects the global role.
   const selected = resolveDecisionModelSetting(config, options.agentId);
   if (!selected) {
     return skipped({ status: "unavailable", reason: "disabled" });
@@ -86,16 +199,21 @@ export async function evaluateDecisionInRegistry(
   if (config.plugins?.entries?.[entry.pluginId]?.enabled === false) {
     return skipped(entry.host.unavailable("disabled"));
   }
-  let submitted: DecisionBatch;
+  let submitted: DecisionBatch | DecisionBatchV2;
   try {
     submitted = structuredClone(batch);
   } catch {
     throw new DecisionContractError();
   }
-  const model = normalizeModelRef(selected.provider, selected.model, {
-    allowPluginNormalization: false,
-    manifestPlugins: getProcessGatewayPluginMetadataSnapshot() ?? [],
-  });
+  // Credential profiles select auth, not a different model policy identity.
+  const model = normalizeModelRef(
+    selected.provider,
+    splitTrailingAuthProfile(selected.model).model,
+    {
+      allowPluginNormalization: false,
+      manifestPlugins: getProcessGatewayPluginMetadataSnapshot() ?? [],
+    },
+  );
   // Bind the registry lifetime before operator preparation yields.
   const rootCaller =
     getPluginRegistryResourceOwner(registry) === getPluginRegistryState()?.activeRegistry;
@@ -119,6 +237,12 @@ export async function evaluateDecisionInRegistry(
         new Error("Decision evaluation requires its current Gateway binding."),
     });
     modelExecution = bindOperatorModelExecution(capturedOperator.authority, model);
+    // A configured role is not a caller model override; only all-completion policy applies.
+    assertAllowedCompletionModel({
+      resolvedModelRef: modelKey(model.provider, model.model),
+      pluginPolicyId: consumerId,
+      pluginPolicy,
+    });
     const modelSignal = modelExecution
       ? AbortSignal.any([options.signal, modelExecution.signal])
       : options.signal;
@@ -143,15 +267,38 @@ export async function evaluateDecisionInRegistry(
     if ((canDispatch && !canDispatch()) || (isAdmissible && !isAdmissible())) {
       return skipped({ status: "unavailable", reason: "disabled" });
     }
-    const result = await entry.host.evaluate(
-      submitted,
-      { ...options, signal },
-      selected.model,
-      config,
-      registry,
-      consumerId,
-      isAdmissible,
-    );
+    // Preparation consumes the caller's budget. The host still owns provider
+    // cancellation and waits for physical settlement after its deadline.
+    const timeoutMs = options.timeoutMs - (performance.now() - started);
+    if (timeoutMs <= 0) {
+      return skipped(entry.host.unavailable("deadline"));
+    }
+    let preparedBilling: PreparedDecisionBilling | undefined;
+    const onPreparedBilling = (facts: PreparedDecisionBilling) => {
+      preparedBilling = facts;
+    };
+    const result =
+      version === 1
+        ? await entry.host.evaluate(
+            submitted as DecisionBatch, // SAFETY: V1 validation and structuredClone preserve the admitted V1 shape.
+            { ...options, timeoutMs, signal },
+            selected.model,
+            config,
+            registry,
+            consumerId,
+            isAdmissible,
+            onPreparedBilling,
+          )
+        : await entry.host.evaluateV2(
+            submitted as DecisionBatchV2, // SAFETY: V2 validation and structuredClone preserve the admitted V2 shape.
+            { ...options, timeoutMs, signal },
+            selected.model,
+            config,
+            registry,
+            consumerId,
+            isAdmissible,
+            onPreparedBilling,
+          );
     if (!rootCaller) {
       signal.throwIfAborted();
     }
@@ -159,7 +306,19 @@ export async function evaluateDecisionInRegistry(
     if (!rootCaller && !authority?.()) {
       throw new Error("Decision consumer authority closed.");
     }
-    return result;
+    return {
+      outcome: result,
+      usageFacts: {
+        cfg: config,
+        hostPluginId: consumerId,
+        target: {
+          provider: selected.provider,
+          model: splitTrailingAuthProfile(selected.model).model,
+          agentId: options.agentId,
+        },
+        preparedBilling,
+      },
+    };
   } finally {
     modelExecution?.release();
     capturedOperator?.release?.();

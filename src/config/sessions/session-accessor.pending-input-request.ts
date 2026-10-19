@@ -2,6 +2,7 @@ import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { MAX_PAYLOAD_BYTES } from "../../gateway/payload-limits.js";
+import { readSessionSendDelivery } from "../../gateway/session-send-delivery.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type { SessionPendingInputRow } from "./session-accessor.sqlite-pending-inputs.js";
@@ -56,7 +57,7 @@ export function preparePendingInputRequest(params: PendingInputRequest) {
   };
 }
 
-/** Reconcile only a shipped scheduling-source variation against its complete accepted hash. */
+/** Reconcile saved input variations only against their complete accepted hash. */
 export function resolvePendingInputReplayRequest(
   prepared: ReturnType<typeof preparePendingInputRequest>,
   accepted?: Pick<SessionPendingInputRow, "request_hash" | "run_id">,
@@ -68,6 +69,33 @@ export function resolvePendingInputReplayRequest(
     requestHash: prepared.requestHash,
   };
   if (!replaySourceSessionKeys) {
+    if (
+      accepted?.run_id === prepared.runId &&
+      accepted.request_hash !== prepared.requestHash &&
+      !prepared.requestHash.startsWith("request:")
+    ) {
+      const delivery = readSessionSendDelivery(message);
+      if (!delivery) {
+        return original;
+      }
+      // Older peer admission hashed explicit undefined revisions, which JSON storage omits.
+      // Reconstruct only those fields; changed content or identity must still conflict.
+      const candidate = {
+        ...message,
+        __openclaw: {
+          ...message["__openclaw"],
+          sessionSendDelivery: {
+            ...asOptionalRecord(message["__openclaw"]?.sessionSendDelivery),
+            source: { ...delivery.source, lifecycleRevision: delivery.source.lifecycleRevision },
+            target: { ...delivery.target, lifecycleRevision: delivery.target.lifecycleRevision },
+          },
+        },
+      };
+      const request = preparePendingInputMessage(candidate);
+      if (request.requestHash === accepted.request_hash) {
+        return { ...original, requestHash: request.requestHash };
+      }
+    }
     return original;
   }
   if (
@@ -157,24 +185,36 @@ export function matchesSessionPendingInputRequest(
     return true;
   }
   const metadata = asOptionalRecord(message["__openclaw"]);
-  const transport = asOptionalRecord(metadata?.transport);
-  if (!metadata || !transport || !Object.hasOwn(transport, "clients")) {
+  if (!metadata) {
+    return false;
+  }
+  const legacyMetadata = { ...metadata };
+  // Shipped collected receipts predate requester provenance. Only a consumed
+  // receipt can match this old shape; it returns an outcome, never live custody.
+  delete legacyMetadata.requesterOrigin;
+  const legacyMessage = { ...message };
+  if (Object.keys(legacyMetadata).length) {
+    legacyMessage["__openclaw"] = legacyMetadata;
+  } else {
+    delete legacyMessage["__openclaw"];
+  }
+  if (receipt.request_hash === resolvePendingInputRequestHash(legacyMessage)) {
+    return true;
+  }
+  const transport = asOptionalRecord(legacyMetadata.transport);
+  if (!transport || !Object.hasOwn(transport, "clients")) {
     return false;
   }
   // v2026.9.4 Gateway inputs have no client sources. Preserve every other
   // request field while reconstructing their original serialized shape.
   const legacyTransport = { ...transport };
   delete legacyTransport.clients;
-  const legacyMetadata = { ...metadata };
   if (Object.keys(legacyTransport).length) {
     legacyMetadata.transport = legacyTransport;
   } else {
     delete legacyMetadata.transport;
   }
-  const legacyMessage = { ...message };
-  if (Object.keys(legacyMetadata).length) {
-    legacyMessage["__openclaw"] = legacyMetadata;
-  } else {
+  if (!Object.keys(legacyMetadata).length) {
     delete legacyMessage["__openclaw"];
   }
   return receipt.request_hash === resolvePendingInputRequestHash(legacyMessage);

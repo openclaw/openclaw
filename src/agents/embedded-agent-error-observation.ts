@@ -1,20 +1,17 @@
 import { stableStringify } from "@openclaw/normalization-core";
-/**
- * Builds structured observations for embedded-agent API/text failures.
- */
 import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { readLoggingConfig } from "../logging/config.js";
 import { getDefaultRedactPatterns, redactSensitiveText } from "../logging/redact.js";
+import { parseApiErrorInfo } from "../shared/assistant-error-format.js";
 import {
   classifyProviderRuntimeFailureKind,
-  getApiErrorPayloadFingerprint,
-  parseApiErrorInfo,
   type ProviderRuntimeFailureKind,
-} from "./embedded-agent-helpers.js";
+} from "./embedded-agent-helpers/provider-runtime-failure.js";
 import type { PreparedProviderFailoverOwner } from "./failover/provider-patterns.js";
+import { getApiErrorPayloadFingerprint } from "./failover/user-copy.js";
 
 const MAX_OBSERVATION_INPUT_CHARS = 64_000;
 const MAX_FINGERPRINT_MESSAGE_CHARS = 8_000;
@@ -26,12 +23,6 @@ const OBSERVATION_EXTRA_REDACT_PATTERNS = [
   String.raw`"(?:api[-_]?key|api_key)"\s*:\s*"([^"]+)"`,
   String.raw`(?:\bCookie\b\s*[:=]\s*[^;=\s]+=|;\s*[^;=\s]+=)([^;\s\r\n]+)`,
 ];
-const RAW_ERROR_CONSOLE_SUPPRESSED_FAILURE_KINDS = new Set<ProviderRuntimeFailureKind>([
-  "auth_html",
-  "auth_refresh",
-  "auth_scope",
-  "upstream_html",
-]);
 
 function truncateForObservation(text: string | undefined, maxChars: number): string | undefined {
   const trimmed = text?.trim();
@@ -60,9 +51,9 @@ function redactObservationText(text: string | undefined): string | undefined {
   if (!text) {
     return text;
   }
-  // Observation logs must stay redacted even when operators disable general-purpose
-  // log redaction, otherwise raw provider payloads leak back into always-on logs. The default
-  // policy includes its programmatic matchers, not only the configurable string sources.
+  // Client-visible error observations retain masking even when general-purpose
+  // log redaction is disabled. Include the default programmatic matchers as well
+  // as configured string patterns.
   const configuredPatterns = filterStringEntries(readLoggingConfig()?.redactPatterns);
   return redactSensitiveText(text, {
     mode: "tools",
@@ -72,14 +63,6 @@ function redactObservationText(text: string | undefined): string | undefined {
       ...OBSERVATION_EXTRA_REDACT_PATTERNS,
     ],
   });
-}
-
-export function shouldSuppressRawErrorConsoleSuffix(
-  providerRuntimeFailureKind?: ProviderRuntimeFailureKind,
-): boolean {
-  return providerRuntimeFailureKind
-    ? RAW_ERROR_CONSOLE_SUPPRESSED_FAILURE_KINDS.has(providerRuntimeFailureKind)
-    : false;
 }
 
 function buildObservationFingerprint(params: {

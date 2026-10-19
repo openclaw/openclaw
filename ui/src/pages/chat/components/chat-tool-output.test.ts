@@ -10,15 +10,13 @@ import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createSidebarFullMessageLoader } from "../chat-pane-sidebar-layout.ts";
 import { createTestChatPane } from "../chat-pane.test-support.ts";
-import "./chat-detail-slot.ts";
 import type {
   SidebarContent,
   SidebarFullMessageLoader,
   ToolOutputSidebarContent,
 } from "./chat-sidebar-content-types.ts";
-import { renderToolCard } from "./chat-tool-cards.test-support.tsx";
-import { ChatToolOutput } from "./chat-tool-output.ts";
-import { renderToolFixture } from "./chat-tool-render.test-support.ts";
+import { mountCard } from "./chat-tool-cards.test-support.tsx";
+import { ChatToolOutput } from "./chat-tool-output-view.tsx";
 
 type Panel = HTMLElement & {
   content: ToolOutputSidebarContent;
@@ -219,7 +217,7 @@ describe("tool output inspection", () => {
     const rawBody = panel.querySelector<HTMLElement>(".chat-tool-card__raw-body")!;
     expect(rawBody.hidden).toBe(true);
     button(panel, t("chat.toolCards.rawDetails")).click();
-    expect(rawBody.hidden).toBe(false);
+    await waitForSolid(() => expect(rawBody.hidden).toBe(false));
     expect(rawBody.querySelector("code")?.textContent).toBe(raw);
     const copy = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText: copy } });
@@ -233,15 +231,16 @@ describe("tool output inspection", () => {
     const card = outputCard({ outputText: output });
     const open = vi.fn<(content: SidebarContent) => void>();
     const root = document.createElement("div");
-    await renderToolFixture(
-      renderToolCard(card, {
+    await mountCard(
+      card,
+      {
         messageKey: "calls",
         sessionKey: "global",
         agentId: "work",
         expanded: true,
         onToggleExpanded: vi.fn(),
         onOpenSidebar: open,
-      }),
+      },
       root,
     );
     expect(root.textContent).not.toContain("TAIL");
@@ -450,4 +449,33 @@ describe("tool output inspection", () => {
       expect(panel.querySelector(".chat-tool-output__text")?.textContent).toBe("new selection");
     },
   );
+
+  it("keeps the preview visible while retrying a failed full-output read", async () => {
+    const retried = createDeferred<ReturnType<typeof result>>();
+    const load = vi
+      .fn<SidebarFullMessageLoader>()
+      .mockRejectedValueOnce(new Error("Read failed"))
+      .mockImplementationOnce(() => retried.promise);
+    const panel = mount(outputCard(), load);
+    await waitForSolid(() =>
+      expect(panel.querySelector('[role="alert"]')?.textContent).toContain(
+        t("chat.toolCards.outputLoadFailed"),
+      ),
+    );
+
+    button(panel, t("common.retry")).click();
+    await waitForSolid(() =>
+      expect(panel.querySelector("[aria-busy]")?.getAttribute("aria-busy")).toBe("true"),
+    );
+    expect(panel.querySelector('[role="alert"]')).toBeNull();
+    expect(panel.querySelector(".chat-tool-output__text")?.textContent).toBe("preview");
+    expect(panel.querySelector(".chat-tool-output__actions")).toBeNull();
+
+    retried.resolve(result("complete output"));
+    await waitForSolid(() =>
+      expect(panel.querySelector(".chat-tool-output__text")?.textContent).toBe("complete output"),
+    );
+    expect(panel.querySelector("[aria-busy]")?.getAttribute("aria-busy")).toBe("false");
+    expect(panel.querySelector(".chat-tool-output__actions")).not.toBeNull();
+  });
 });

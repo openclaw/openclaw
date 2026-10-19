@@ -1,6 +1,6 @@
 import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 // Voice Call tests cover manager.restore plugin behavior.
@@ -22,8 +22,8 @@ import { setVoiceCallStateRuntime, type VoiceCallStateRuntime } from "./runtime-
 function installStateRuntime(): VoiceCallStateRuntime["state"] {
   const state: VoiceCallStateRuntime["state"] = {
     resolveStateDir: () => "",
-    openKeyedStore: (options: OpenAsyncKeyedStoreOptions) =>
-      createPluginStateKeyedStoreForTests("voice-call", options),
+    openKeyedStoreV2: (options: OpenAsyncKeyedStoreOptions) =>
+      createPluginStateKeyedStoreV2ForTests("voice-call", options, { assertCurrent() {} }),
     openChannelIngressQueue: (() => {
       throw new Error("openChannelIngressQueue is not used by voice-call restore tests");
     }) as never,
@@ -168,7 +168,7 @@ describe("CallManager verification on restore", () => {
     setVoiceCallStateRuntime({
       state: {
         ...retainedStateRuntime,
-        openKeyedStore: () => {
+        openKeyedStoreV2: () => {
           throw new Error("ambient state runtime must not own retained manager records");
         },
       },

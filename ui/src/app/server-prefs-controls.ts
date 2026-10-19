@@ -1,8 +1,5 @@
 // Appearance-only controls operate on the canonical outbox; startup does not load them.
-import {
-  normalizeBackgroundPreference,
-  type BackgroundPreference,
-} from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
+import type { BackgroundPreference } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { readConfirmedPrefs, publishConfirmedPrefs } from "./server-prefs-confirmation.ts";
 import { requestServerUiPrefIntent } from "./server-prefs-intent.ts";
@@ -83,11 +80,7 @@ export function adoptCommittedBackgroundPreference(options: {
   ) {
     return false;
   }
-  const background =
-    options.preference === null ? undefined : normalizeBackgroundPreference(options.preference);
-  if (options.preference !== null && !background) {
-    return false;
-  }
+  const background = options.preference ?? undefined;
   const effectiveScope = resolveProfilePreferenceScope(scope, options.profileId);
   if (effectiveScope === outbox.pendingScope) {
     outbox.reconcilePersistedPendingPrefs();

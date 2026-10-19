@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   resolveControlUiAutomationRunUrl,
   resolveControlUiSessionLinkBase,
+  resolveControlUiPublicSessionUrl,
 } from "./control-ui-link-base.js";
 
 describe("resolveControlUiSessionLinkBase", () => {
@@ -85,5 +86,39 @@ describe("resolveControlUiAutomationRunUrl", () => {
         { jobId: "daily-report" },
       ),
     ).toBe("https://gateway.example.com/automations?job=daily-report");
+  });
+});
+
+describe("resolveControlUiPublicSessionUrl", () => {
+  const config = { gateway: { publicOrigin: "https://gateway.example" } };
+  const entry = {
+    sessionId: "session-1",
+    updatedAt: 1,
+    publicShare: { id: "a".repeat(48), sessionId: "session-1", createdAt: 1 },
+  };
+  it("uses the canonical anonymous chat route for the published generation", () => {
+    expect(
+      resolveControlUiPublicSessionUrl(config, {
+        sessionKey: "agent:main:main",
+        sessionId: "session-1",
+        agentId: "main",
+        entry,
+      }),
+    ).toBe("https://gateway.example/chat/main");
+  });
+  it.each([
+    { name: "missing", entry: undefined },
+    { name: "private", entry: { ...entry, publicShare: undefined } },
+    { name: "incognito", entry: { ...entry, incognito: true as const } },
+    { name: "stale", entry: { ...entry, sessionId: "session-2" } },
+  ])("omits $name sessions", ({ entry: current }) => {
+    expect(
+      resolveControlUiPublicSessionUrl(config, {
+        sessionKey: "agent:main:main",
+        sessionId: "session-1",
+        agentId: "main",
+        entry: current,
+      }),
+    ).toBeUndefined();
   });
 });

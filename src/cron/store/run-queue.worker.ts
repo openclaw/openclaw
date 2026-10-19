@@ -322,6 +322,7 @@ function drainCronQueueInDatabase(
     });
   const result: CronRunQueueOperations["cron.drainQueue"]["output"] = {
     launches: [],
+    preparing: [],
     skipped: cancelled,
   };
   for (const receipt of queued) {
@@ -372,6 +373,11 @@ function drainCronQueueInDatabase(
       );
       continue;
     }
+    if (input.preparingAgentIds?.includes(agentId)) {
+      // Keep durable custody without spending capacity while the host awaits admission.
+      result.preparing.push({ job, runReceipt: { ...handle, agentId } });
+      continue;
+    }
     if (
       (input.schedulingPaused && context.mode === "scheduled") ||
       activeCount >= Math.max(1, input.maxConcurrentRuns)
@@ -413,7 +419,7 @@ export function requestAndDrainCronRunsInWorker(
   input: CronRunQueueOperations["cron.requestRuns"]["input"],
   queue: Pick<
     CronRunQueueOperations["cron.drainQueue"]["input"],
-    "requests" | "maxConcurrentRuns" | "schedulingPaused"
+    "requests" | "maxConcurrentRuns" | "schedulingPaused" | "preparingAgentIds"
   >,
   jobs: Map<string, CronJob>,
 ): CronRunQueueOperations["cron.requestRuns"]["output"] &

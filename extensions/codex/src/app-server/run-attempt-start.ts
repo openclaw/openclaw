@@ -80,7 +80,11 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       data: { phase: "startup" },
     });
     const startupResult = await startCodexAttemptThread({
-      assertCurrent: connection.assertCurrent,
+      assertCurrent: () => {
+        connection.assertCurrent();
+        runtime.nativeExecutionPolicy.source?.();
+      },
+      assertCurrentAsync: runtime.nativeExecutionPolicy.assertCurrent,
       authority: connection.authority,
       attemptClientFactory,
       bindingStore,
@@ -138,6 +142,8 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       sandboxExecServerEnabled,
       sandbox,
       contextEngineProjection: promptState.contextEngineProjection,
+      historyBootstrapItems: promptState.historyBootstrapItems,
+      historyDeltaItems: promptState.historyDeltaItems,
       startupTimeoutMs,
       signal: runAbortController.signal,
       onStartupTimeout: () => runAbortController.abort("codex_startup_timeout"),

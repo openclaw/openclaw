@@ -665,6 +665,7 @@ describe("SQLite worker store", () => {
         expect(expire).toBeDefined();
         expire?.();
         await opening;
+        expect(fs.existsSync(pendingFile)).toBe(false);
       } finally {
         timeout.mockRestore();
       }

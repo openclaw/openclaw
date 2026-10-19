@@ -71,11 +71,11 @@ export class NewSessionModelControl extends NewSessionModelSelection {
   private resolveRuntime = createDraftAgentRuntimeResolver();
 
   constructor(
-    requestUpdate: () => void,
+    changed: () => void,
     onSelectionChange: ModelSelectionChange = () => undefined,
     private readonly onCatalogTargetSelect: (catalogId: string) => void = () => undefined,
   ) {
-    super(onSelectionChange, requestUpdate);
+    super(onSelectionChange, changed);
     this.catalogTargets = new CatalogTargetDiscovery(this.notify);
     this.metadataReader = new ModelCatalogReader(
       () => {
@@ -671,7 +671,6 @@ export class NewSessionModelControl extends NewSessionModelSelection {
               }
             : undefined,
           onManage: () => options.context?.navigate("profile"),
-          onRequestUpdate: this.notify,
         }),
       activeRunId: null,
       connected: snapshot?.phase === "connected",
@@ -734,7 +733,6 @@ export class NewSessionModelControl extends NewSessionModelSelection {
         }
         this.catalogTargets.retry(metadataClient, this.agentId);
       },
-      onRequestUpdate: this.notify,
     };
   }
 }

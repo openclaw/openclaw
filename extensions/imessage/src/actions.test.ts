@@ -38,7 +38,10 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => ({
   )),
   createSubsystemLogger: () => loggerMock,
 }));
-vi.mock("./probe.js", () => probeMock);
+// mock-isolation: keep private API probe calls in the test-owned double.
+vi.mock("./probe.js", () => ({
+  probeIMessagePrivateApi: probeMock.probeIMessagePrivateApi,
+}));
 vi.mock("./private-api-status.js", async () => ({
   ...(await vi.importActual<typeof import("./private-api-status.js")>("./private-api-status.js")),
   getCachedIMessagePrivateApiStatus: probeMock.getCachedIMessagePrivateApiStatus,

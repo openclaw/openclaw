@@ -12,7 +12,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
 import { isAgentSessionModelPatchOrigin } from "../../gateway/session-model-patch-origin.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import * as failoverErrors from "../failover-error.js";
 import { createAgentPatchedSessionModelRunGuard } from "../session-model-auto-revert.js";
@@ -68,6 +68,31 @@ async function captureSessionDecisionWork<T>(run: () => Promise<T>): Promise<{
 }
 
 describe("sessions tool", () => {
+  it("paginates canonical owner profiles without exposing private directory fields", async () => {
+    const profiles = Array.from({ length: 34 }, (_, index) => ({
+      id: `person-${index}`,
+      displayName: `Person ${index}`,
+      mergedInto: null,
+      githubIdentity: null,
+      emails: ["private@example.test"],
+      role: "admin",
+    }));
+    const callGateway = vi.fn().mockResolvedValue({
+      profiles: [{ ...profiles[0], id: "merged-person", mergedInto: "person-0" }, ...profiles],
+    });
+    const tool = createSessionsTool({ senderIsOwner: true, callGateway });
+    const first = await tool.execute("owners-first", { action: "owner_profiles" });
+    expect(first.details).toMatchObject({ profiles: expect.any(Array), nextOffset: 32 });
+    expect(JSON.stringify(first.details)).not.toMatch(/private@example|merged-person|"role"/);
+    const second = await tool.execute("owners-next", { action: "owner_profiles", offset: 32 });
+    expect(second.details).toEqual({
+      profiles: [
+        { id: "person-32", displayName: "Person 32", githubIdentity: null },
+        { id: "person-33", displayName: "Person 33", githubIdentity: null },
+      ],
+    });
+  });
+
   it("carries the persisted fixed-store owner for a bare patch key", async () => {
     const callGateway = vi.fn().mockResolvedValue({});
     const tool = createSessionsTool({
@@ -830,7 +855,7 @@ describe("sessions tool", () => {
       config: { session: { store: storePath } },
       callGateway: callGateway as never,
     });
-    const admission = await beginSessionWorkAdmission({
+    const admission = await beginSessionEffect({
       scope: storePath,
       identities: [sessionKey, sessionId],
       assertAllowed: () => {},

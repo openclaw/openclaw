@@ -12,7 +12,6 @@ import {
   AgentTerminalSessionDrainTracker,
 } from "./agent-session-drain.js";
 import type { TerminalBackend } from "./backend.js";
-import { TERMINAL_EVENT_DATA, TERMINAL_EVENT_EXIT } from "./gateway-transport.js";
 import { composeTerminalIntroBanner } from "./intro-banner.js";
 import { TerminalOutputController } from "./output-flow-control.js";
 import { TerminalOutputRing } from "./output-ring.js";
@@ -40,7 +39,12 @@ import {
   terminalSessionRecipientIds,
   terminalSessionSummary,
 } from "./session-projection.js";
-import type { TerminalAttachSummary, TerminalSessionSummary } from "./session-types.js";
+import {
+  TERMINAL_EVENT_DATA,
+  TERMINAL_EVENT_EXIT,
+  type TerminalAttachSummary,
+  type TerminalSessionSummary,
+} from "./session-types.js";
 export { DEFAULT_TERMINAL_DETACH_SECONDS } from "./session-limits.js";
 
 const log = createSubsystemLogger("gateway/terminal");

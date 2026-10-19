@@ -1,4 +1,3 @@
-// Gateway BOOT.md runner.
 // Runs per-workspace boot checks in a run-owned temporary session.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";

@@ -31,6 +31,8 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
         "openclaw.agent": normalizeDiagnosticValue(evt.agentId),
         "openclaw.provider": evt.provider ?? "unknown",
         "openclaw.model": evt.model ?? "unknown",
+        ...(evt.purpose ? { "openclaw.purpose": evt.purpose } : {}),
+        ...(evt.runtimeKind ? { "openclaw.runtime.kind": evt.runtimeKind } : {}),
       };
       const genAiAttrs: Record<string, string> = {
         "gen_ai.operation.name": "chat",

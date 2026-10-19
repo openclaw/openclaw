@@ -1,9 +1,14 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
+import fs from "node:fs";
+import path from "node:path";
 import { Worker } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { beginAgentDeletionJournal } from "../../test-utils/agent-deletion-journal.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
@@ -18,8 +23,86 @@ import type { InternalSessionEntry } from "./types.js";
 
 const tempDirs = createTempDirTracker();
 
+function beginOtherAgentDeletion(env: { OPENCLAW_STATE_DIR: string }) {
+  beginAgentDeletionJournal(
+    {
+      agentId: "other",
+      operationId: "delete-other",
+      agentDir: path.join(env.OPENCLAW_STATE_DIR, "agents", "other", "agent"),
+      workspaceDir: path.join(env.OPENCLAW_STATE_DIR, "workspace-other"),
+      sessionsDir: path.join(env.OPENCLAW_STATE_DIR, "agents", "other", "sessions"),
+      deleteFiles: true,
+    },
+    { env },
+  );
+  setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
+}
+
+it.each<{ change: string; patch: Partial<InternalSessionEntry>; current: boolean }>([
+  { change: "metadata", patch: { displayName: "Metadata changed" }, current: true },
+  { change: "policy", patch: { execHost: "gateway" }, current: false },
+  { change: "lifecycle", patch: { lifecycleRevision: "replacement" }, current: false },
+])(
+  "compares an initial snapshot with a concurrent $change publication",
+  async ({ patch, current }) => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("entry-current-acquisition-") };
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:entry-current",
+      storePath: resolveOpenClawAgentSqlitePath({ agentId: "main", env }),
+      env,
+    };
+    const initial: InternalSessionEntry = { sessionId: "same", updatedAt: 1, execHost: "node" };
+    replaceSessionEntrySync(scope, initial);
+    await closeOpenClawAgentDatabaseByPathAsync(scope.storePath, scope.agentId);
+    let changed = false;
+    // Delay delivery, not the read: the writer commits after the worker selected its snapshot.
+    // oxlint-disable-next-line typescript/unbound-method -- forwarding preserves the worker receiver.
+    const emit = Worker.prototype.emit;
+    const spy = vi.spyOn(Worker.prototype, "emit").mockImplementation(function (
+      this: Worker,
+      event,
+      ...args
+    ) {
+      const message: unknown = args[0];
+      if (
+        !changed &&
+        event === "message" &&
+        isRecord(message) &&
+        isRecord(message.value) &&
+        isRecord(message.value.value) &&
+        message.value.value.kind === "session-entry-read"
+      ) {
+        changed = true;
+        beginOtherAgentDeletion(env);
+        replaceSessionEntrySync(scope, { ...initial, ...patch });
+      }
+      return emit.call(this, event, ...args);
+    });
+    try {
+      const pending = captureSessionEntryCurrentCheckAsyncInternal({
+        ...scope,
+        fields: ["execHost", "execNode", "sandbox", "sandboxMode"],
+      });
+      if (current) {
+        const check = await pending;
+        try {
+          await expect(check.assertCurrent()).resolves.toBeUndefined();
+        } finally {
+          check.release();
+        }
+      } else {
+        await expect(pending).rejects.toThrow("selected session changed");
+      }
+      expect(changed).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  },
+);
+
 beforeEach(() => {
-  setRuntimeConfigSnapshot({});
+  setRuntimeConfigSnapshot({ agents: { entries: { main: {}, other: {} } } });
 });
 
 afterEach(async () => {
@@ -79,7 +162,11 @@ it("keeps prepared entry authority current through native and worker writes with
   try {
     const generation = await capture();
     const policy = await capture(["execHost", "execNode"]);
-    policy.entry!.execNode = "caller-local-edit";
+    beginOtherAgentDeletion(env);
+    await expectCurrent(generation, true);
+    await expectCurrent(policy, true);
+    // Borrowed snapshots may be frozen; caller edits cannot change retained policy either way.
+    Reflect.set(policy.entry!, "execNode", "caller-local-edit");
     await expectCurrent(policy, true);
     const released = await policy.source.prepareSessionSource();
     await released.release?.();
@@ -121,6 +208,19 @@ it("keeps prepared entry authority current through native and worker writes with
     await expectCurrent(absent, true);
     await replaceSessionEntry(scope, { ...initial, sessionId: "created-again", updatedAt: 3 });
     await expectCurrent(absent, false);
+    const lifecycle = await capture();
+    await patchSessionEntryCore(scope, () => ({ lifecycleRevision: "next-generation" }), {
+      skipMaintenance: true,
+    });
+    await expectCurrent(lifecycle, false);
+    const unreadable = await capture();
+    const moved = `${scope.storePath}.unavailable`;
+    fs.renameSync(scope.storePath, moved);
+    try {
+      await expectCurrent(unreadable, false);
+    } finally {
+      fs.renameSync(moved, scope.storePath);
+    }
     const latest = await capture();
     latest.release();
     await expectCurrent(latest, false);
@@ -129,5 +229,60 @@ it("keeps prepared entry authority current through native and worker writes with
       check.release();
       await sources.get(check)?.release?.();
     }
+  }
+});
+
+it("retains ID-selected policy and absence without revoking unrelated publications", async () => {
+  const env = { OPENCLAW_STATE_DIR: tempDirs.make("entry-current-id-") };
+  const scope = {
+    agentId: "main",
+    sessionKey: "agent:main:selected",
+    storePath: resolveOpenClawAgentSqlitePath({ agentId: "main", env }),
+    env,
+  };
+  const initial: InternalSessionEntry = { sessionId: "selected", updatedAt: 1, execHost: "node" };
+  replaceSessionEntrySync(scope, initial);
+  const selected = await captureSessionEntryCurrentCheckAsyncInternal({
+    ...scope,
+    sessionKey: "agent:main:ignored-key",
+    sessionId: "selected",
+    fields: ["execHost"],
+  });
+  const absent = await captureSessionEntryCurrentCheckAsyncInternal({
+    agentId: scope.agentId,
+    storePath: scope.storePath,
+    env,
+    sessionId: "missing",
+  });
+  try {
+    expect(selected.entry?.execHost).toBe("node");
+    expect(absent.entry).toBeUndefined();
+    const selectedSource = await selected.source.prepareSessionSource();
+    const absentSource = await absent.source.prepareSessionSource();
+    replaceSessionEntrySync(scope, { ...initial, displayName: "Metadata edit" });
+    await replaceSessionEntry(
+      { ...scope, sessionKey: "agent:main:unrelated" },
+      { sessionId: "unrelated", updatedAt: 2 },
+    );
+    const sql = observeHostDataSql();
+    try {
+      expect(() => selectedSource.assertCurrent()).not.toThrow();
+      expect(() => absentSource.assertCurrent()).not.toThrow();
+      await expect(selected.isCurrent()).resolves.toBe(true);
+      await expect(absent.isCurrent()).resolves.toBe(true);
+      expect(sql.queries).toEqual([]);
+    } finally {
+      sql.restore();
+    }
+    await patchSessionEntryCore(scope, () => ({ execHost: "gateway" }), {
+      skipMaintenance: true,
+    });
+    expect(() => selectedSource.assertCurrent()).toThrow("selected session changed");
+    await expect(selected.assertCurrent()).rejects.toThrow("selected session changed");
+    absent.release();
+    expect(() => absentSource.assertCurrent()).toThrow("selected session changed");
+  } finally {
+    selected.release();
+    absent.release();
   }
 });

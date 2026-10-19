@@ -201,8 +201,7 @@ export async function requestCliNativeToolApproval(params: {
               agentId: params.agentId,
               matches: analysis.allowlistMatches,
               command: bashCommand,
-              resolvedPath:
-                candidates[0]?.sourceSegment.resolution?.execution.resolvedPath ?? undefined,
+              resolvedPath: candidates[0]?.sourceSegment.resolution?.execution.resolvedPath,
               authorization,
             },
             policyContext,

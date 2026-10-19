@@ -65,7 +65,14 @@ vi.mock("../../infra/update-managed-service-handoff.js", async (original) => ({
   ...(await original<typeof import("../../infra/update-managed-service-handoff.js")>()),
   parkForegroundUpdateHandoff: mocks.parkForeground,
 }));
-vi.mock("./progress.js", () => ({ printResult: mocks.printResult }));
+vi.mock("./progress.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./progress.js")>()),
+  printResult: mocks.printResult,
+  prepareResult:
+    async (...args: Parameters<typeof import("./progress.js").printResult>) =>
+    () =>
+      mocks.printResult(...args.slice(0, 3)),
+}));
 vi.mock("../../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/config.js")>()),
   readConfigFileSnapshot: mocks.readConfig,
@@ -127,6 +134,21 @@ import { registerStaleSessionReceiptUpdateTest } from "./update-command-stale-se
 
 type FinishUpdateParams = Parameters<typeof finishUpdate>[0];
 const stdinIsTTYDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+
+type OrderedMock = { mock: { invocationCallOrder: number[] } };
+function expectBefore(first: OrderedMock, second: OrderedMock, firstIndex = 0, secondIndex = 0) {
+  expect(first.mock.invocationCallOrder[firstIndex]).toBeLessThan(
+    second.mock.invocationCallOrder[secondIndex] ?? Number.POSITIVE_INFINITY,
+  );
+}
+
+function expectReportedFailure(reason: string) {
+  expect(mocks.printResult).toHaveBeenCalledOnce();
+  expectFailureReport(mocks.printResult, reason, expect.objectContaining({ json: true }));
+  expect(mocks.writeSentinel.mock.lastCall?.[0].result).toEqual(
+    mocks.printResult.mock.lastCall?.[0],
+  );
+}
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
@@ -357,9 +379,7 @@ describe("successful update finalization ordering", () => {
     expect.soft(output).toContain("Resolve the reported error before retrying");
     expect.soft(output).not.toContain("session only");
     expect.soft(mocks.restartService).toHaveBeenCalledOnce();
-    expect(mocks.restartService.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.checkCompletionStatus.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    );
+    expectBefore(mocks.restartService, mocks.checkCompletionStatus);
   });
 
   it("restarts when completion cache refresh reports failure", async () => {
@@ -379,10 +399,7 @@ describe("successful update finalization ordering", () => {
       call.some((value) => String(value).includes("Completion cache update failed")),
     );
     expect(warningIndex).toBeGreaterThanOrEqual(0);
-    expect(mocks.restartService.mock.invocationCallOrder[0]).toBeLessThan(
-      vi.mocked(defaultRuntime.log).mock.invocationCallOrder[warningIndex] ??
-        Number.POSITIVE_INFINITY,
-    );
+    expectBefore(mocks.restartService, vi.mocked(defaultRuntime.log), 0, warningIndex);
     expect(logCalls[warningIndex]?.join(" ")).toContain("openclaw completion --write-state");
   });
 
@@ -406,9 +423,7 @@ describe("successful update finalization ordering", () => {
     expect(output).not.toContain("source /tmp/openclaw-completion.zsh");
     expect(output).toContain("openclaw completion --write-state --install");
     expect(mocks.restartService).toHaveBeenCalledOnce();
-    expect(mocks.restartService.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.ensureCompletionCache.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    );
+    expectBefore(mocks.restartService, mocks.ensureCompletionCache);
   });
 
   it("reports Windows autostart recovery failure before exiting", async () => {
@@ -432,15 +447,7 @@ describe("successful update finalization ordering", () => {
 
     expect(restore).toHaveBeenCalledOnce();
     expect(mocks.restartService).not.toHaveBeenCalled();
-    expect(mocks.printResult).toHaveBeenCalledOnce();
-    expectFailureReport(
-      mocks.printResult,
-      "windows-task-autostart-restore-failed",
-      expect.objectContaining({ json: true }),
-    );
-    expect(mocks.writeSentinel.mock.lastCall?.[0].result).toEqual(
-      mocks.printResult.mock.lastCall?.[0],
-    );
+    expectReportedFailure("windows-task-autostart-restore-failed");
   });
 
   it.each([
@@ -504,12 +511,8 @@ describe("successful update finalization ordering", () => {
     } else {
       await finishing;
       expect(mocks.writeSentinel).toHaveBeenCalledTimes(2);
-      expect(unlink.mock.invocationCallOrder[0]).toBeLessThan(
-        mocks.writeSentinel.mock.invocationCallOrder[1] ?? Number.POSITIVE_INFINITY,
-      );
-      expect(mocks.writeSentinel.mock.invocationCallOrder[1]).toBeLessThan(
-        mocks.printResult.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-      );
+      expectBefore(unlink, mocks.writeSentinel, 0, 1);
+      expectBefore(mocks.writeSentinel, mocks.printResult, 1);
     }
   });
 
@@ -730,15 +733,7 @@ describe("successful update finalization ordering", () => {
         expect(defaultRuntime.error).toHaveBeenCalledWith(
           "Stopped gateway service could not be revalidated; inspect it before restarting manually.",
         );
-        expect(mocks.printResult).toHaveBeenCalledOnce();
-        expectFailureReport(
-          mocks.printResult,
-          "service-revalidation-failed",
-          expect.objectContaining({ json: true }),
-        );
-        expect(mocks.writeSentinel.mock.lastCall?.[0].result).toEqual(
-          mocks.printResult.mock.lastCall?.[0],
-        );
+        expectReportedFailure("service-revalidation-failed");
       },
     );
 
@@ -796,14 +791,10 @@ describe("successful update finalization ordering", () => {
           requireRunningServiceAfterRestart: !unloaded,
         }),
       );
-      expect(mocks.revalidateService.mock.invocationCallOrder[0]).toBeLessThan(
-        mocks.restartService.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-      );
+      expectBefore(mocks.revalidateService, mocks.restartService);
       if (activated) {
         expect(mocks.writeSentinel).toHaveBeenCalledTimes(2);
-        expect(mocks.restartService.mock.invocationCallOrder[0]).toBeLessThan(
-          mocks.writeSentinel.mock.invocationCallOrder[1] ?? Number.POSITIVE_INFINITY,
-        );
+        expectBefore(mocks.restartService, mocks.writeSentinel, 0, 1);
       } else {
         expect(mocks.writeSentinel).toHaveBeenCalledOnce();
         expect(mocks.printResult).toHaveBeenCalledOnce();
@@ -849,39 +840,15 @@ describe("successful update finalization ordering", () => {
   });
 
   it.each([
-    { owner: "original updater", candidateRuntime: false, marker: false, runs: true, ready: true },
-    {
-      owner: "migrated worker with the marker",
-      candidateRuntime: true,
-      marker: true,
-      runs: true,
-      ready: true,
-    },
-    {
-      owner: "unadopted worker from a shipped updater",
-      candidateRuntime: true,
-      marker: false,
-      runs: false,
-      ready: true,
-    },
-    {
-      owner: "adopted worker from a shipped updater",
-      candidateRuntime: true,
-      adoptedFinalization: true as const,
-      marker: false,
-      runs: true,
-      ready: true,
-    },
-    {
-      owner: "unverified Gateway",
-      candidateRuntime: false,
-      marker: false,
-      runs: true,
-      ready: false,
-    },
-  ])(
-    "runs deferred Doctor inspections after the restart for the $owner",
-    async ({ candidateRuntime, adoptedFinalization, marker, runs, ready }) => {
+    // owner, candidate runtime, adopted finalization, parent marker, inspections run, ready
+    ["original updater", false, undefined, false, true, true],
+    ["migrated worker with the marker", true, undefined, true, true, true],
+    ["unadopted worker from a shipped updater", true, undefined, false, false, true],
+    ["adopted worker from a shipped updater", true, true, false, true, true],
+    ["unverified Gateway", false, undefined, false, true, false],
+  ] as const)(
+    "runs deferred Doctor inspections after the restart for the %s",
+    async (_owner, candidateRuntime, adoptedFinalization, marker, runs, ready) => {
       const root = tempDirs.make("post-activation-inspections-");
       const lintLog = path.join(root, "lint.json");
       const findings = [

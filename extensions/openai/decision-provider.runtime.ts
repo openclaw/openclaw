@@ -1,46 +1,40 @@
-import { resolveAgentDir } from "openclaw/plugin-sdk/agent-scope-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { getModelProviderRequestTransport } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type {
-  DecisionAnswer,
-  DecisionBatch,
+  DecisionAnswerV2,
+  DecisionBatchV2,
   DecisionEntry,
-  DecisionProviderV1,
-  ProviderDecisionOutcome,
+  DecisionProviderV2,
+  ProviderDecisionOutcomeV2,
 } from "openclaw/plugin-sdk/decisions";
+import { validateDecisionBatchV2 } from "openclaw/plugin-sdk/decisions";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import {
   shouldUseEnvHttpProxyForUrl,
   withTrustedEnvProxyGuardedFetchMode,
 } from "openclaw/plugin-sdk/fetch-runtime";
-import { findNormalizedProviderValue } from "openclaw/plugin-sdk/model-ref-parse";
 import {
-  isProviderAuthError,
-  resolveApiKeyForProvider,
-} from "openclaw/plugin-sdk/provider-auth-runtime";
-import {
+  fetchWithProviderHttpGuard,
   readProviderJsonObjectResponse,
   resolveProviderHttpRequestConfig,
-  sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import { parseRetryAfterHeaderSeconds } from "openclaw/plugin-sdk/retry-runtime";
-import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import {
-  classifyOpenAIBaseUrl,
-  OPENAI_API_BASE_URL,
-  resolveOpenAIDefaultBaseUrl,
-} from "./base-url.js";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { classifyOpenAIBaseUrl, OPENAI_API_BASE_URL } from "./base-url.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
-type Context = Parameters<DecisionProviderV1["evaluate"]>[1];
+type Context = Parameters<DecisionProviderV2["evaluate"]>[1];
 // The bundled manifest declares one OpenAI Decision model with shared wire limits.
-const { maxQuestions, maxChoiceAlternatives } = manifest.decisionModels[0]!.capabilities;
+const capability = manifest.modelCatalog.providers.openai.models.find(
+  (model) => model.id === "gpt-6-luna",
+)!.inference!.decision;
+const maxQuestions = capability.limits.maxQuestions;
+const maxChoiceAlternatives = capability.questions.choice.maxOptions;
 
 function text(value: DecisionEntry | undefined): string {
   return typeof value === "string" ? value : value === undefined ? "" : JSON.stringify(value);
 }
 
-function questions(batch: DecisionBatch) {
+function questions(batch: DecisionBatchV2) {
   return Object.entries(batch.questions).map(([name, question]) => {
     const instructions = text(question.instructions);
     if (question.type === "boolean") {
@@ -63,6 +57,9 @@ function questions(batch: DecisionBatch) {
         })),
       };
     }
+    if (question.type !== "score") {
+      throw new Error("Unsupported OpenAI decision question");
+    }
     return {
       type: "score",
       name,
@@ -75,18 +72,14 @@ function questions(batch: DecisionBatch) {
   });
 }
 
-function record(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function probability(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
 }
 
 function parseResult(
-  batch: DecisionBatch,
+  batch: DecisionBatchV2,
   payload: Record<string, unknown>,
-): ProviderDecisionOutcome {
+): ProviderDecisionOutcomeV2 {
   const entries = Object.entries(batch.questions);
   if (
     typeof payload.model !== "string" ||
@@ -97,15 +90,16 @@ function parseResult(
   ) {
     return { status: "unavailable", reason: "invalid-response" };
   }
-  const answers: [string, DecisionAnswer][] = [];
+  const answers: [string, DecisionAnswerV2][] = [];
   for (const [index, [name, question]] of entries.entries()) {
     const answer: unknown = payload.answers[index];
-    if (!record(answer) || answer.name !== name) {
+    if (!isRecord(answer) || answer.name !== name) {
       return { status: "unavailable", reason: "invalid-response" };
     }
-    // V1 cannot carry per-question refusals. Never invent a probability or publish a partial batch.
+    // Refusals belong to one question; preserve independent successful answers.
     if (answer.type === "refusal") {
-      return { status: "unavailable", reason: "unsupported-input" };
+      answers.push([name, { type: "error", code: "provider-error", providerCode: "refusal" }]);
+      continue;
     }
     if (question.type === "boolean") {
       if (answer.type !== "predicate" || !probability(answer.probability)) {
@@ -113,6 +107,9 @@ function parseResult(
       }
       answers.push([name, { type: "boolean", probabilityTrue: answer.probability }]);
       continue;
+    }
+    if (question.type !== "choice" && question.type !== "score") {
+      return { status: "unavailable", reason: "invalid-response" };
     }
     if (
       answer.type !== question.type ||
@@ -128,9 +125,11 @@ function parseResult(
         : question.criteria.map((_, i) => String(i));
     const distribution = new Map<string, number>();
     for (const item of answer.probabilities) {
-      const label = record(item) ? item[question.type === "choice" ? "value" : "label"] : undefined;
+      const label = isRecord(item)
+        ? item[question.type === "choice" ? "value" : "label"]
+        : undefined;
       if (
-        !record(item) ||
+        !isRecord(item) ||
         typeof label !== "string" ||
         !labels.includes(label) ||
         distribution.has(label) ||
@@ -182,7 +181,7 @@ function parseResult(
   }
   const usage = payload.usage;
   if (
-    !record(usage) ||
+    !isRecord(usage) ||
     typeof usage.input_tokens !== "number" ||
     !Number.isInteger(usage.input_tokens) ||
     usage.input_tokens < 0 ||
@@ -206,16 +205,19 @@ function parseResult(
 }
 
 export async function evaluateOpenAIDecision(
-  batch: DecisionBatch,
+  batch: DecisionBatchV2,
   context: Context,
-  config: OpenClawConfig,
-): Promise<ProviderDecisionOutcome> {
+): Promise<ProviderDecisionOutcomeV2> {
   context.signal.throwIfAborted();
-  // The API caps batches and choices below the shared Decision V1 input limits.
-  // Use the same limits advertised to callers, before resolving credentials or sending evidence.
+  // Keep direct adapter calls inside the same envelope declared by the catalog.
+  // Credential selection belongs to the prepared host, never this transport.
   const entries = Object.values(batch.questions);
   if (
+    !validateDecisionBatchV2(batch) ||
+    (batch.state.type !== "text" && batch.state.type !== "json" && batch.state.type !== "image") ||
+    (context.reasoning !== undefined && context.reasoning !== "auto") ||
     entries.length > maxQuestions ||
+    entries.some((question) => !["boolean", "choice", "score"].includes(question.type)) ||
     entries.some(
       (question) =>
         question.type === "choice" && Object.keys(question.criteria).length > maxChoiceAlternatives,
@@ -223,36 +225,17 @@ export async function evaluateOpenAIDecision(
   ) {
     return { status: "unavailable", reason: "unsupported-input" };
   }
-  const providerConfig = findNormalizedProviderValue(config.models?.providers, "openai");
-  const configuredBaseUrl = providerConfig?.baseUrl ?? resolveOpenAIDefaultBaseUrl();
+  const configuredBaseUrl = context.model.baseUrl;
   const endpointKind = classifyOpenAIBaseUrl(configuredBaseUrl);
-  if (endpointKind === "chatgpt" || endpointKind === "invalid") {
+  if (
+    context.model.api !== "openai-responses" ||
+    endpointKind === "chatgpt" ||
+    endpointKind === "invalid" ||
+    endpointKind === "unresolved"
+  ) {
     return { status: "unavailable", reason: "unsupported-input" };
   }
-  let auth: Awaited<ReturnType<typeof resolveApiKeyForProvider>>;
-  try {
-    auth = await resolveApiKeyForProvider({
-      provider: "openai",
-      cfg: config,
-      modelId: context.model,
-      modelApi: "openai-responses",
-      modelBaseUrl: configuredBaseUrl,
-      capability: "decision",
-      ...(context.agentId ? { agentDir: resolveAgentDir(config, context.agentId) } : {}),
-      signal: context.signal,
-    });
-  } catch (error) {
-    context.signal.throwIfAborted();
-    return {
-      status: "unavailable",
-      reason:
-        isProviderAuthError(error, "missing-provider-auth") ||
-        isProviderAuthError(error, "missing-api-key")
-          ? "credentials-unavailable"
-          : "authentication",
-    };
-  }
-  context.signal.throwIfAborted();
+  const auth = context.auth;
   if (auth.mode !== "api-key" || !auth.apiKey) {
     return { status: "unavailable", reason: "credentials-unavailable" };
   }
@@ -266,45 +249,46 @@ export async function evaluateOpenAIDecision(
     operation: "OpenAI decision",
   });
   const signal = timeoutSignal ?? context.signal;
+  let admissionError: { error: unknown } | undefined;
   const assertActive = () => {
     signal.throwIfAborted();
-    if (
-      performance.now() >= context.deadlineMonotonicMs ||
-      (context.isAdmissible && !context.isAdmissible())
-    ) {
+    let admitted: boolean;
+    try {
+      admitted = context.isAdmissible();
+    } catch (error) {
+      admissionError = { error };
+      throw error;
+    }
+    if (performance.now() >= context.deadlineMonotonicMs || !admitted) {
       throw new Error("OpenAI decision is no longer admitted.");
     }
   };
   try {
-    const configuredHeaders: Record<string, string> = {};
-    try {
-      for (const [name, value] of Object.entries(providerConfig?.headers ?? {})) {
-        const resolved = normalizeResolvedSecretInputString({
-          value,
-          path: `models.providers.openai.headers.${name}`,
-          defaults: config.secrets?.defaults,
-        });
-        if (resolved !== undefined) {
-          configuredHeaders[name] = resolved;
-        }
-      }
-    } catch {
-      return { status: "unavailable", reason: "credentials-unavailable" };
-    }
-    const { baseUrl, headers, dispatcherPolicy } = resolveProviderHttpRequestConfig({
-      baseUrl: endpointKind === "platform" ? OPENAI_API_BASE_URL : configuredBaseUrl,
-      defaultBaseUrl: OPENAI_API_BASE_URL,
-      defaultHeaders: {
-        Authorization: `Bearer ${auth.apiKey}`,
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      headers: configuredHeaders,
-      request: sanitizeConfiguredModelProviderRequest(providerConfig?.request),
-      provider: "openai",
-      capability: "other",
-      transport: "http",
-    });
+    const preparedRequest = getModelProviderRequestTransport(context.model);
+    const { baseUrl, headers, dispatcherPolicy, allowPrivateNetwork } =
+      resolveProviderHttpRequestConfig({
+        baseUrl: endpointKind === "platform" ? OPENAI_API_BASE_URL : configuredBaseUrl,
+        defaultBaseUrl: OPENAI_API_BASE_URL,
+        defaultHeaders: {
+          // Prepared auth overrides already own the header; never restore a removed bearer.
+          ...(!preparedRequest?.auth || preparedRequest.auth.mode === "provider-default"
+            ? { Authorization: `Bearer ${auth.apiKey}` }
+            : {}),
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        headers: context.model.headers,
+        request: preparedRequest
+          ? {
+              proxy: preparedRequest.proxy,
+              tls: preparedRequest.tls,
+              allowPrivateNetwork: preparedRequest.allowPrivateNetwork,
+            }
+          : undefined,
+        provider: "openai",
+        capability: "other",
+        transport: "http",
+      });
     const url = `${baseUrl.replace(/\/$/, "")}/decisions`;
     const request = {
       url,
@@ -312,17 +296,31 @@ export async function evaluateOpenAIDecision(
       beforeRequest: assertActive,
       maxRedirects: 0,
       dispatcherPolicy,
+      policy: { allowPrivateNetwork },
       init: {
         method: "POST",
         headers,
         body: JSON.stringify({
-          model: context.model,
-          input: text(batch.state),
+          model: context.model.id,
+          input:
+            batch.state.type === "image"
+              ? [
+                  {
+                    role: "user",
+                    content: [
+                      ...(batch.state.text ? [{ type: "input_text", text: batch.state.text }] : []),
+                      { type: "input_image", image_url: batch.state.dataUri },
+                    ],
+                  },
+                ]
+              : batch.state.type === "text"
+                ? batch.state.text
+                : JSON.stringify(batch.state.value),
           questions: questions(batch),
         }),
       },
     };
-    const { response, release } = await fetchWithSsrFGuard(
+    const { response, release } = await fetchWithProviderHttpGuard(
       !dispatcherPolicy && shouldUseEnvHttpProxyForUrl(url)
         ? withTrustedEnvProxyGuardedFetchMode(request)
         : request,
@@ -368,6 +366,9 @@ export async function evaluateOpenAIDecision(
     }
   } catch {
     context.signal.throwIfAborted();
+    if (admissionError) {
+      throw admissionError.error;
+    }
     return { status: "unavailable", reason: "transport" };
   } finally {
     cleanup();

@@ -22,6 +22,26 @@ For unmatched HTTP paths, the app-shell fallback respects the request's `Accept`
 
 It speaks **directly to the Gateway WebSocket** on the same port.
 
+## Temporary disconnections
+
+When the connection drops, the Control UI keeps loaded catalogs, automation
+editors, Memory Import selections, Activity history, Dreaming results, approval
+queues, and open board and portal documents in memory. A transport interruption
+does not reset those page-local drafts. The connection indicator at the bottom
+left shows the connection state; retained data may be out of date until reconnect.
+
+If a chat side panel fails to load, its Close control remains available independently of the failed panel. Closing it keeps the conversation and its draft in place without reloading the page. Retry still respects unsaved work that blocks document reloads.
+
+Gateway actions, including saving edits and approving requests, require a live
+connection. Reconnecting refreshes retained data without automatically replaying
+those actions. Memory Import keeps explicit deselections when refreshing its
+plan. Session rename and new-group dialogs keep typed text across a temporary
+disconnect; failed submissions stay open for review and retry.
+
+Switching Gateway or account, signing out, or losing access clears the affected
+data and drafts. This retention does not add offline persistence or guarantee
+that page-local drafts survive a reload or closing the tab.
+
 ## Browser requirements
 
 Use Safari 26.2 or later on macOS 26.2, iOS 26.2, or iPadOS 26.2 or later,
@@ -41,7 +61,11 @@ badges remain visible on every shape.
 
 After a Gateway restart, an agent may need a few minutes to prepare its database. The chat view shows "Starting up" and the sidebar stays quiet while preparation is pending. Both reload automatically when the agent is ready; an actual preparation failure still shows its diagnostic and repair instructions.
 
-Reloading a previously visited chat restores the last settled sidebar while the Gateway reconnects. Pinned sessions, plugin rows, roster order, filters, and your display identity keep their places until live data is ready. The footer still reports the current connection status. This browser cache is scoped to the Gateway and profile, expires after 30 days, and excludes incognito sessions. The same snapshot provides the saved session rows and routing defaults for the first chat header. Cached rows never authorize session changes.
+If the New Session page fails during its initial render, the UI attempts one automatic page reload per browser tab. A repeated failure shows **Retry** instead of starting a reload loop. Automatic recovery is skipped if session storage is unavailable, the serving document cannot be reached, or unsaved work blocks reloading. Errors after the composer has rendered use in-page retry instead.
+
+Reloading a previously visited chat restores the last settled sidebar while the Gateway reconnects. Pinned sessions, plugin rows, roster order, filters, and your display identity keep their places until live data is ready. The footer still reports the current connection status. This browser cache is scoped to the Gateway and profile, expires after 30 days, and excludes incognito sessions. The same snapshot provides the saved session rows and routing defaults for the first chat header. Cached rows never authorize session changes. Sidebar snapshot capture coalesces live updates during idle time and flushes pending changes when the page is hidden or left.
+
+A short transcript loads at most one older page automatically when you open or reload a chat. It stops once the visible area is filled, without filling the backscroll buffer. Scroll up or choose **Show earlier** to continue loading older messages, even if the transcript still fits on screen.
 
 The cached transcript also preserves its conversation title when the conversation is outside the saved sidebar page. Live session metadata replaces that display projection when it arrives.
 
@@ -52,6 +76,8 @@ Saved pin labels remain visible while their details refresh, even when those ses
 Inline widgets and MCP Apps reserve their last rendered height when a cached conversation reloads, so loading their content does not move the surrounding messages. New widgets use their declared size until the content reports its height. Changed content or a different window width can still resize a widget.
 
 Transcript history loads in parallel with the browser cache. An unchanged history response keeps the cached message rows and widget sizes in place. The transcript restores its saved reading position, or opens at the end, before showing its initial measured rows. Measured rows become visible once their selected geometry is committed, without an extra layout frame.
+
+Consecutive informational system, recovery, and model-fallback events appear as a collapsed **system events** row in chat. Expand it with a click, Enter, or Space to read the original events in order. An amber **Updates not delivered** summary stays visible when delivery needs attention; event counts do not imply a count of undelivered updates. Human and assistant messages, actionable notices, and search results remain separate. This changes presentation only, not retry or delivery behavior.
 
 During connection recovery, Send shows its busy state and explains why sending is unavailable without inserting a temporary notice above the composer.
 
@@ -67,6 +93,8 @@ While the initial connection or a route loads, shimmer placeholders reserve the 
 
 The selected chat loads before automatic sidebar session lists refresh. Live events remain subscribed during startup, and explicit sidebar actions remain available. Background lists resume after the transcript loads or reports an error. Accepted new sessions refresh the visible sidebar immediately, including **Involving me** and owner filters, without waiting for the chat to finish loading or the agent to finish working.
 
+If the selected session changes while its message subscription is being admitted, chat retries that read with fresh access checks for up to one minute. Saved replies load after the subscription succeeds, without resending your message. Switching chats or losing access stops recovery; a persistent failure leaves **Retry** available.
+
 Use **Snooze → Choose another time** in a session menu to pick a future date and time in your browser’s local time zone. After a successful snooze, **Custom** shows that exact date and time in other session menus for one hour. Choosing another custom time replaces it; presets and Undo leave the remembered choice unchanged. The browser stores this choice separately for each Gateway and signed-in account, and removes it when it expires or the wake time passes. If browser storage is unavailable, the choice remains reusable only in the current page.
 
 The chat header’s **Details** panel groups session information into collapsible sections separated by subtle dividers. **Environment** shows the workspace name, branch, worktree, execution device, and model. Absolute workspace paths stay out of the panel text and tooltips; use **Copy path** when you need the full path, copy the branch, or open **Show session files** to browse the workspace. **Context** shows the current context usage and latest input/output token counts when available. Approximate usage keeps its `~` marker. **Changes** keeps pull requests, change totals, checks, and available publication actions together. Background tasks, automations, participants, and task progress retain their existing session-scoped actions. On wide conversations, Details docks beside the transcript; narrower conversations use a dismissible popover below the header. On desktop, use the **Details** toggle to open or close the panel; mobile keeps a close button inside the panel.
@@ -76,6 +104,8 @@ Session details share concurrent reads across the sidebar, chat, and resource pa
 Sidebar pull-request indicators reuse the last known snapshot. Opening a session, its progress card, or its Git activity requests current checkout facts; sidebar rows alone do not poll Git. Active panels detect branch and staged changes from Git metadata. Tool completion refreshes working-tree stats, with a five-minute fallback for edits made outside OpenClaw.
 
 In the chat’s **Changes** panel, gutter chevrons fold complete functions, classes, and other language-supported multiline blocks within a file. Everything starts expanded, including edits. A folded placeholder shows the hidden line count and additions/deletions; click it to expand. Split and unified views share the same folds. The file menu offers **Collapse Code**, **Collapse Functions and Classes**, and **Expand Code**, separately from collapsing whole files. Incomplete source, omitted gaps, unsupported languages, and oversized previews stay expanded. Changing the patch resets code folds.
+
+Session-start baselines omit SQLite databases and their WAL, SHM, and journal files, as well as hardlinked files. These files remain visible in checkout diffs even when unchanged since the session began; baseline capture never opens them in the Gateway process, preserving live database locks.
 
 Background pull-request comparisons use local Git objects and never fetch missing history or blobs. If a partial clone lacks objects needed for the comparison, statistics can remain unavailable until those objects are fetched. A timed-out comparison skips its dependent checks, keeps the branch visible without statistics or a Create PR link, and logs a warning to fetch repository history and retry.
 
@@ -106,6 +136,13 @@ Failed narration releases use the same backoff, including while the tab is hidde
 Closed Terminal, Browser, and Desktop panels initialize when you open them rather than during initial navigation. Home/Ask OpenClaw and System busyness keep lightweight frames ready and defer their conversation or diagnostic contents until opened. Home preserves its saved dock position and size throughout loading. Panels saved as open still restore after a reload. Settings does not automatically reopen Ask OpenClaw; its control and diagnostic actions can still open it explicitly.
 
 Minimizing and reopening the Dashboard side panel preserves loaded MCP Apps and their unsaved in-app input while the app lease remains valid.
+
+MCP Apps and Canvas previews also retain their loaded frames through a connection
+blip to the same Gateway. Gateway-backed actions pause until reconnection; they
+are not queued for replay. MCP discovery keeps its last results while offline.
+If an app times out during initialization, use **Retry** to load it again.
+Changing Gateway, losing access, or selecting different content retires the old
+frame and its local state.
 
 Hidden retained chats defer command and model metadata refreshes until you return to them. Returning to a recently opened chat reuses its completed metadata on the same connection until a Gateway change invalidates it. Concurrent readers share the same request. Session events with an unchanged model-selection revision retain the model catalog, and session-only changes retain agent commands. Native sessions without a model-selection revision wait for a 2.5-second quiet period after ordinary patches before refreshing the catalog and session facts. Explicit model, account, and runtime selections refresh promptly. Configuration and command changes refresh commands; catalog and session lifecycle changes refresh affected model choices. Agent-specific catalog changes retain other agents’ cached choices and pending catalog requests. Repeated changes during a request share one trailing refresh instead of issuing overlapping requests.
 
@@ -164,14 +201,20 @@ messages. This changes only presentation, not stored messages or run ownership.
 
 When an incoming message causes an unstarted tool call to be skipped, its card
 and work summary show **Skipped**, including after reloading the conversation.
-Approval blocks and tool failures keep their separate outcomes.
+Approval blocks and tool failures keep their separate outcomes. A failed command
+with a reported zero exit code still shows **failed** in its summary and expanded
+result. Nonzero exit codes remain visible as diagnostics; captured output and
+reported exit facts are unchanged.
 
 Failed replies show **Try again** at the right of the heading. A compact
 **Copy error** icon beside the title appears on hover or keyboard focus, and
 stays visible on touch devices. **Details** appears only when the diagnostic
 contains more than the visible summary. To change models, use the model picker
 in the composer; retrying continues from the existing conversation without
-replaying the original request.
+replaying the original request. Internal updates that return no answer keep their
+failed-run diagnostics without adding a retry notice to an already successful
+conversation. User-requested missing replies and actual provider or storage
+failures still show their failure notice.
 
 The chat header keeps **Share**, **Layout**, and the session menu together.
 **Layout** contains focus, split, swap, panel selection, and dock-position actions,
@@ -208,7 +251,10 @@ menu to inspect the conversation's background exec commands. It is separate from
 time. **Finished** starts collapsed; click its heading to expand or collapse the
 list. Selecting a process opens its recent output. **Stop** targets that exact
 process, not the parent conversation or another command with the same name.
-Hidden panels stop refreshing. Output follows the process owner's temporary
+Details and Processes panels viewing the same session share one observation and
+refresh when its background processes change. Changes are batched over five seconds;
+a safety refresh runs after a minute without an update. Hidden panels and browser
+tabs stop refreshing. Output follows the process owner's temporary
 retention limits; viewing it does not drain output waiting for the agent.
 
 Select a session's title in the chat header to rename it. Enter saves the name;
@@ -257,6 +303,10 @@ If team creation stops partway through, the custodian reports the retained
 agents so you can inspect them before creating the missing members.
 
 ## Download files
+
+If the **Files** panel shows a listing error, select **Retry** to load the current
+folder or search again. This keeps the session and query in place; access checks
+still apply, and a failed retry displays its error.
 
 In the **Files** panel, hover over a file or focus its row to reveal **Download file**
 next to Preview and Copy path. The same action is available in the file preview
@@ -401,6 +451,7 @@ for group controls and filtering.
 Agent names and avatars follow agent and identity updates. While a configured avatar image loads,
 the avatar keeps its tinted background with no face or text. The image appears when ready;
 an emoji or generated face appears only when no image is configured or the image fails to load.
+Agents without an advertised image use their fallback without probing an avatar route.
 Repeated views reuse prepared avatar thumbnails; updating the avatar refreshes its thumbnail.
 Profiles with an uploaded photo or a linked email (for a Gateway-proxied Gravatar) request the
 versioned profile image; profiles with neither use initials without probing an image route. Authenticated
@@ -416,7 +467,10 @@ After an automatic read, the next waits three times its duration,
 bounded between five and 15 seconds. Navigation, reconnects, and explicit refreshes
 bypass that delay. When both are visible, they share one activity window and
 one refresh, so opening **Agents** while team mode is visible does not duplicate requests. Activity loading
-stops when neither roster is visible. Each refresh reads at most 300 sessions
+stops when neither roster is visible. Team mode's owner and status filters reuse
+this window instead of also loading a separate sidebar list; **Involving me**
+still selects membership on the Gateway. Unchanged rows reuse the sidebar's
+revision-based responses. Each refresh reads at most 300 sessions
 across agents, loading pinned sessions first and then the most recent sessions.
 Pinned sessions count toward that limit; sessions outside the window do not appear
 in the grouped sidebar or contribute to activity summaries, except that the open

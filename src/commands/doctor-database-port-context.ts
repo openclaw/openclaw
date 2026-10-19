@@ -7,7 +7,15 @@ import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { readConfigFileSnapshotForWrite } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { DatabasePortError } from "../infra/database-engine/port-command.worker.js";
+import type { PortVerification } from "../infra/database-engine/port.worker.js";
 import {
+  resolveDatabaseFamilyEngines,
+  listDatabaseEngineStores,
+  type DatabaseEngineId,
+} from "../infra/database-engine/registry.js";
+import type { DatabaseEngineSelection } from "../infra/database-engine/types.js";
+import {
+  archiveDatabasePortManifest,
   databasePortManifestPath,
   databasePortArtifactSchema,
   writeDatabasePortArtifact,
@@ -20,9 +28,75 @@ import { captureDatabaseArtifact } from "../snapshot/database-backup.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { assertDoctorSqliteMaintenancePathsNotAliased } from "./doctor-sqlite-maintenance-lock.js";
 
+export const databasePortFamilySchema = z.enum([
+  "state",
+  "agent",
+  "workboard",
+  "logbook",
+  "team-reports",
+]);
+export type DatabasePortFamily = z.infer<typeof databasePortFamilySchema>;
+
+export function assertPortSelection(
+  config: OpenClawConfig,
+  to?: DatabaseEngineId,
+  family?: DatabasePortFamily,
+) {
+  try {
+    const engines = resolveDatabaseFamilyEngines(config);
+    if (
+      !family &&
+      new Set(
+        listDatabaseEngineStores()
+          .filter((store) => store.postgres)
+          .map((store) => engines[store.id]),
+      ).size > 1
+    ) {
+      throw new Error(
+        "Mixed-engine database port requires --family <state|agent|workboard|logbook|team-reports>; port one family at a time.",
+      );
+    }
+    if (to && !family) {
+      const selected = resolveDatabaseFamilyEngines({
+        ...config,
+        database: { ...config.database, engine: to },
+      });
+      if (listDatabaseEngineStores().some((store) => store.postgres && selected[store.id] !== to)) {
+        throw new Error(
+          "Engine-pinning family overrides require --family; port each configured family separately.",
+        );
+      }
+    }
+  } catch (error) {
+    if (error instanceof Error) {
+      throw new DatabasePortError(error.message);
+    }
+    throw error;
+  }
+}
+
 export const inputsSchema = z.object({
-  originalEngine: z.string().nullable(),
-  remainingSqlite: z.array(z.string()),
+  // Legacy v1 inputs retain their original global-selection recovery reader.
+  originalEngine: z.string().nullable().optional(),
+  remainingSqlite: z.array(z.string()).optional(),
+  selection: z
+    .object({
+      path: z.union([
+        z.tuple([z.literal("database"), z.literal("engine")]),
+        z.tuple([
+          z.literal("database"),
+          z.literal("families"),
+          databasePortFamilySchema,
+          z.literal("engine"),
+        ]),
+      ]),
+      originalValue: z.string().nullable(),
+      effectiveSource: z.enum(["sqlite", "postgres"]),
+    })
+    .optional(),
+  outOfScope: z
+    .array(z.object({ path: z.string(), engine: z.enum(["sqlite", "postgres"]) }))
+    .optional(),
   stores: z.array(
     z.object({
       dev: z.string(),
@@ -33,9 +107,19 @@ export const inputsSchema = z.object({
   ),
 });
 export type Context = {
+  family?: DatabasePortFamily;
   stateDir: string;
   configPath: string;
   env: NodeJS.ProcessEnv;
+  engineSelection: {
+    effectiveEngines: DatabaseEngineSelection["effectiveEngines"];
+    postgres?: DatabaseEngineSelection["postgres"];
+  };
+  stateReceipt?: {
+    path: string;
+    engine: "sqlite" | "postgres";
+    verification: PortVerification;
+  };
   assertCurrent: () => void;
   signal?: AbortSignal;
   phase: string;
@@ -66,8 +150,12 @@ export const livePath = (target: DatabasePortManifest["targets"][number]) =>
   target.original.engine === "sqlite" ? target.original.path : target.original.anchorPath;
 export function revise(ctx: Context) {
   const current = manifest(ctx);
+  writeDatabasePortManifest(
+    ctx.stateDir,
+    { ...current, revision: current.revision + 1 },
+    ctx.assertCurrent,
+  );
   current.revision++;
-  writeDatabasePortManifest(ctx.stateDir, current, ctx.assertCurrent);
 }
 export async function record(ctx: Context, file: string, value: unknown) {
   const contents = `${JSON.stringify(value)}\n`;
@@ -121,7 +209,7 @@ export async function readDatabasePortConfigSnapshot(ctx: Context) {
   return value;
 }
 export function postgresConfig(config: OpenClawConfig): OpenClawConfig {
-  return { ...config, database: { ...config.database, engine: "postgres" } };
+  return { ...config, database: { ...config.database, engine: "postgres", families: undefined } };
 }
 export function capacity(ctx: Context, files: { path: string; size: number }[]) {
   const volumes = new Map<number, { path: string; required: number }>();
@@ -141,4 +229,35 @@ export function capacity(ctx: Context, files: { path: string; size: number }[]) 
       );
     }
   }
+}
+
+export function finalize(ctx: Context, outcome: "ported" | "rolled-back") {
+  ctx.phase = "finalize/archive";
+  const current = manifest(ctx);
+  if (current.state !== "complete") {
+    current.state = "complete";
+    current.outcome = outcome;
+    revise(ctx);
+  }
+  const archived = archiveDatabasePortManifest(
+    ctx.stateDir,
+    current.operationId,
+    ctx.assertCurrent,
+  );
+  return {
+    phase: "complete",
+    engine: outcome === "ported" ? current.direction.to : current.direction.from,
+    stores: current.targets.map(livePath),
+    backup: ctx.directory,
+    remainingSqlite:
+      ctx.inputs?.outOfScope
+        ?.filter((store) => store.engine === "sqlite")
+        .map((store) => store.path) ??
+      ctx.inputs?.remainingSqlite ??
+      [],
+    ...(ctx.family ? { family: ctx.family, outOfScope: ctx.inputs?.outOfScope ?? [] } : {}),
+    manifest: archived,
+    serverCapacity: "unknown; former PostgreSQL namespaces retained",
+    restart: "Start the Gateway through its service owner.",
+  };
 }

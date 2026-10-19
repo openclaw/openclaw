@@ -1,13 +1,13 @@
 /* @vitest-environment jsdom */
 
-import { createSignal, flush } from "solid-js";
+import { createSignal, flush, Show } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { BoardProvider } from "../../lib/board/provider.ts";
-import { emptyLegacyContent, LitContent } from "../../lit/solid-content.tsx";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
+import { ChatBoardPanel } from "./chat-pane-surfaces.tsx";
 import { createSessionCapabilityFixture, createTestChatPane } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { openSlot } from "./sidebar-layout.ts";
@@ -18,7 +18,10 @@ type BoardTestPane = HTMLElement & {
   state: ChatPageHost;
   resolveBoardProvider: () => BoardProvider;
   resolveBoardView: () => ResolvedBoardView;
-  renderBoardPanel: (board: ResolvedBoardView, layout: ChatPageHost["sidebarLayout"]) => unknown;
+  renderBoardPanel: (
+    board: ResolvedBoardView,
+    layout: ChatPageHost["sidebarLayout"],
+  ) => Parameters<typeof ChatBoardPanel>[0] | null;
   releaseBoardProviderLease: () => void;
 };
 
@@ -47,8 +50,11 @@ function createGatewayBoardPane(sessionKey: string) {
   // The board custom element must be connected before its loading state commits.
   const container = document.body.appendChild(document.createElement("div"));
   const layout = openSlot({ columns: [] }, "dashboard");
-  const [content, setContent] = createSignal<unknown>(emptyLegacyContent);
-  const mounted = mountSolid(() => <LitContent value={content()} />, { container });
+  const [content, setContent] = createSignal<Parameters<typeof ChatBoardPanel>[0] | null>(null);
+  const mounted = mountSolid(
+    () => <Show when={content()}>{(current) => <ChatBoardPanel {...current()} />}</Show>,
+    { container },
+  );
   return {
     pane,
     request,

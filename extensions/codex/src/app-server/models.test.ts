@@ -21,11 +21,16 @@ const mocks = vi.hoisted(() => {
   return { authBridge, managedBinary, providerAuth };
 });
 
-vi.mock("./auth-bridge.js", () => ({
+vi.mock("./auth-bridge.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./auth-bridge.js")>()),
   applyCodexAppServerAuthProfile: mocks.authBridge.applyAuthProfile,
   bridgeCodexAppServerStartOptions: mocks.authBridge.startOptions,
-  reconcileCodexComputerUseStartArtifacts: mocks.authBridge.reconcileComputerUseArtifacts,
   resolveCodexAppServerHomeDir: (agentDir: string) => `${agentDir}/codex-home`,
+}));
+
+vi.mock("./computer-use-artifacts.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./computer-use-artifacts.js")>()),
+  reconcileCodexComputerUseStartArtifacts: mocks.authBridge.reconcileComputerUseArtifacts,
 }));
 
 vi.mock("./auth-profile.js", () => ({
@@ -33,7 +38,8 @@ vi.mock("./auth-profile.js", () => ({
   resolveCodexAppServerAuthProfileStore: () => ({ version: 1, profiles: {} }),
 }));
 
-vi.mock("./auth-cache-key.js", () => ({
+vi.mock("./auth-cache-key.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./auth-cache-key.js")>()),
   resolveCodexAppServerFallbackApiKeyCacheKey: mocks.authBridge.fallbackApiKeyCacheKey,
 }));
 

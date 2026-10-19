@@ -2,13 +2,15 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
+import { json } from "node:stream/consumers";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { isInternalRuntimeContextCarrierText } from "../extensions/qa-lab/api.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
 import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
+import { createOpenAiResponsesModelConfig } from "./helpers/openai-responses-model-fixture.js";
 import {
   writeOpenAiResponsesSse,
   writeOpenAiResponsesText,
@@ -20,12 +22,10 @@ import {
 import { createDeferred, withinTest } from "./helpers/promise.js";
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
 
-const MODEL_REF = "reply-obligation/reply-obligation";
 const REQUIRED_REQUEST = "REQUIRED_EMPTY_CONTROL";
 const REQUIRED_RECOVERED = "REQUIRED_RECOVERED";
 const variants = ["empty", "no-reply"] as const;
 type Variant = (typeof variants)[number];
-type ObservedEvent = { event?: string; payload?: unknown };
 let instance: OpenClawTestInstance | undefined;
 let fixture: Awaited<ReturnType<typeof startFixture>> | undefined;
 
@@ -60,186 +60,160 @@ afterEach(async () => {
   fixture = undefined;
 });
 
-describe("Gateway trusted reply obligations", () => {
-  it(
-    "silently settles late peer results without retrying, but recovers a required empty reply",
-    { timeout: 180_000 },
-    async ({ signal }) => {
-      const scenarios = variants.map(createScenario);
-      const activeFixture = await startFixture(scenarios);
-      fixture = activeFixture;
-      const profile = "reply-obligation-" + randomUUID();
-      const gateway = await createOpenClawTestInstance({
-        name: profile,
-        entrypoint: ["scripts/run-node.mjs", "--profile", profile],
-        config: createConfig(activeFixture.url),
-        env: {
-          OPENCLAW_PROFILE: profile,
-          OPENCLAW_SKIP_PROVIDERS: undefined,
-          OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-          OPENCLAW_AGENT_RUNTIME: undefined,
-        },
-        signal,
-      });
-      instance = gateway;
-      // Keep the named service identity and logging inside the same disposable state.
-      await gateway.state.writeConfig({
-        ...createConfig(activeFixture.url),
-        gateway: {
-          port: gateway.port,
-          auth: { mode: "token", token: gateway.gatewayToken },
-          controlUi: { enabled: false },
-        },
-        logging: { file: path.join(gateway.stateDir, "gateway.log") },
-      });
-      const prepared = await gateway.cli(["--help"], { timeoutMs: 120_000 });
-      expect(prepared.code, prepared.stderr).toBe(0);
-      await gateway.startGateway();
-      const events: ObservedEvent[] = [];
-      const client = await connectGatewayClient({
-        url: gateway.url,
-        token: gateway.gatewayToken,
-        role: "operator",
-        scopes: ["operator.admin", "operator.read", "operator.write"],
-        deviceIdentity: loadOrCreateDeviceIdentity({
-          path: gateway.state.path("reply-obligation-client.sqlite"),
-        }),
-        signal,
-        onEvent: (event) => {
-          events.push(event);
-          const payload = asOptionalRecord(event.payload);
-          const data = asOptionalRecord(payload?.data);
-          if (
-            event.event !== "agent" ||
-            payload?.stream !== "lifecycle" ||
-            (data?.phase !== "end" && data?.phase !== "error")
-          ) {
-            return;
-          }
-          const scenario = scenarios.find(
-            (candidate) =>
-              payload.sessionKey === candidate.parentKey && payload.runId !== candidate.parentRunId,
-          );
-          if (scenario) {
-            scenario.callbackTerminal.resolve(payload);
-          }
-        },
-      });
-      try {
-        await client.request("sessions.subscribe", {});
-        for (const scenario of scenarios) {
-          await client.request("sessions.create", { key: scenario.peerKey, agentId: "main" });
-          await client.request("sessions.create", { key: scenario.parentKey, agentId: "main" });
-          await client.request("sessions.messages.subscribe", {
-            key: scenario.parentKey,
-            subscriptionId: "reply-obligation-" + scenario.variant,
-          });
-          const parent = await client.request(
-            "agent",
-            {
-              sessionKey: scenario.parentKey,
-              message: scenario.parentPrompt,
-              channel: "webchat",
-              deliver: false,
-              idempotencyKey: scenario.parentRunId,
-            },
-            { expectFinal: true, timeoutMs: 60_000 },
-          );
-          expect(parent, gateway.logs()).toMatchObject({ status: "ok" });
-          await withinTest(scenario.peerStarted.promise, signal);
-          expect(scenario.callbackRequests).toBe(0);
-          const before = await client.request<{ messages: unknown[] }>("chat.history", {
-            sessionKey: scenario.parentKey,
-            limit: 100,
-          });
-          expect(modelReplyTexts(before.messages)).toEqual([scenario.parentFinal]);
-
-          // Release only after the original final is committed and publicly readable.
-          scenario.releasePeer.resolve();
-          const terminal = await withinTest(scenario.callbackTerminal.promise, signal);
-          expect(terminal.data, gateway.logs()).toMatchObject({ phase: "end" });
-          expect(asOptionalRecord(terminal.data)?.error).toBeUndefined();
-          const settled = await client.request(
-            "agent.wait",
-            { runId: terminal.runId, timeoutMs: 10_000 },
-            { timeoutMs: 15_000 },
-          );
-          expect(settled, gateway.logs()).toMatchObject({ status: "ok" });
-          expect(asOptionalRecord(settled)?.error).toBeUndefined();
-          const after = await client.request<{ messages: unknown[] }>("chat.history", {
-            sessionKey: scenario.parentKey,
-            limit: 100,
-          });
-          expect(modelReplyTexts(after.messages)).toEqual([scenario.parentFinal]);
-          const forwarded = interSessionInputs(after.messages);
-          expect(forwarded).toHaveLength(1);
-          expect(contentText(forwarded[0]?.content).trim()).toBe(scenario.peerResult);
-          expect(forwarded[0]).toMatchObject({
-            role: "assistant",
-            provenance: {
-              kind: "inter_session",
-              sourceTool: "sessions_send",
-              sourceSessionKey: scenario.peerKey,
-            },
-            senderSession: { agentId: "main", sessionKey: scenario.peerKey },
-            senderLabel: "Forwarded from main",
-          });
-          expect(scenario.parentRequests).toBe(2);
-          expect(scenario.peerRequests).toBe(1);
-          expect(scenario.callbackRequests).toBe(1);
-          expect(
-            events.filter((event) => {
-              const payload = asOptionalRecord(event.payload);
-              const data = asOptionalRecord(payload?.data);
-              return (
-                payload?.sessionKey === scenario.parentKey &&
-                ((event.event === "chat" && payload.state === "error") ||
-                  (event.event === "agent" && data?.phase === "error"))
-              );
-            }),
-          ).toEqual([]);
+it(
+  "Gateway trusted reply obligations silently settles late peer results without retrying, but recovers a required empty reply",
+  { timeout: 180_000 },
+  async ({ signal }) => {
+    const scenarios = variants.map(createScenario);
+    const activeFixture = await startFixture(scenarios);
+    fixture = activeFixture;
+    const profile = "reply-obligation-" + randomUUID();
+    const gateway = await createOpenClawTestInstance({
+      name: profile,
+      entrypoint: ["scripts/run-node.mjs", "--profile", profile],
+      config: createConfig(activeFixture.url),
+      env: {
+        OPENCLAW_PROFILE: profile,
+        OPENCLAW_SKIP_PROVIDERS: undefined,
+        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+        OPENCLAW_AGENT_RUNTIME: undefined,
+      },
+      signal,
+    });
+    instance = gateway;
+    // Keep the named service identity and logging inside the same disposable state.
+    await gateway.state.writeConfig({
+      ...createConfig(activeFixture.url),
+      gateway: {
+        port: gateway.port,
+        auth: { mode: "token", token: gateway.gatewayToken },
+        controlUi: { enabled: false },
+      },
+      logging: { file: path.join(gateway.stateDir, "gateway.log") },
+    });
+    const prepared = await gateway.cli(["--help"], { timeoutMs: 120_000 });
+    expect(prepared.code, prepared.stderr).toBe(0);
+    await gateway.startGateway();
+    const errorSessions: unknown[] = [];
+    const client = await connectGatewayClient({
+      url: gateway.url,
+      token: gateway.gatewayToken,
+      role: "operator",
+      scopes: ["operator.admin", "operator.read", "operator.write"],
+      deviceIdentity: loadOrCreateDeviceIdentity({
+        path: gateway.state.path("reply-obligation-client.sqlite"),
+      }),
+      signal,
+      onEvent: (event) => {
+        const payload = asOptionalRecord(event.payload);
+        const data = asOptionalRecord(payload?.data);
+        if (
+          (event.event === "chat" && payload?.state === "error") ||
+          (event.event === "agent" && data?.phase === "error")
+        ) {
+          errorSessions.push(payload?.sessionKey);
         }
+        if (
+          event.event !== "agent" ||
+          payload?.stream !== "lifecycle" ||
+          (data?.phase !== "end" && data?.phase !== "error")
+        ) {
+          return;
+        }
+        const scenario = scenarios.find(
+          (candidate) =>
+            payload.sessionKey === candidate.parentKey && payload.runId !== candidate.parentRunId,
+        );
+        scenario?.callbackTerminal.resolve(payload);
+      },
+    });
+    const history = async (sessionKey: string) =>
+      (await client.request<{ messages: unknown[] }>("chat.history", { sessionKey, limit: 100 }))
+        .messages;
+    const requestReply = (
+      sessionKey: string,
+      message: string,
+      idempotencyKey = randomUUID(),
+      inputProvenance?: { kind: "inter_session"; sourceTool: "sessions_send" },
+    ) =>
+      client.request(
+        "agent",
+        {
+          sessionKey,
+          message,
+          channel: "webchat",
+          deliver: false,
+          idempotencyKey,
+          inputProvenance,
+        },
+        { expectFinal: true, timeoutMs: 60_000 },
+      );
+    try {
+      await client.request("sessions.subscribe", {});
+      for (const scenario of scenarios) {
+        for (const key of [scenario.peerKey, scenario.parentKey]) {
+          await client.request("sessions.create", { key, agentId: "main" });
+        }
+        await client.request("sessions.messages.subscribe", {
+          key: scenario.parentKey,
+          subscriptionId: "reply-obligation-" + scenario.variant,
+        });
+        const parent = await requestReply(
+          scenario.parentKey,
+          scenario.parentPrompt,
+          scenario.parentRunId,
+        );
+        expect(parent, gateway.logs()).toMatchObject({ status: "ok" });
+        await withinTest(scenario.peerStarted.promise, signal);
+        expect(scenario.callbackRequests).toBe(0);
+        expect(modelReplyTexts(await history(scenario.parentKey))).toEqual([scenario.parentFinal]);
 
-        const requiredKey = "agent:main:reply-obligation-required";
-        const required = await client.request(
-          "agent",
-          {
-            sessionKey: requiredKey,
-            message: REQUIRED_REQUEST,
-            channel: "webchat",
-            deliver: false,
-            idempotencyKey: randomUUID(),
-            // Public provenance is not the trusted owner's optional-reply decision.
-            inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
-          },
-          { expectFinal: true, timeoutMs: 60_000 },
+        // Release only after the original final is committed and publicly readable.
+        scenario.releasePeer.resolve();
+        const terminal = await withinTest(scenario.callbackTerminal.promise, signal);
+        expect(terminal.data, gateway.logs()).toMatchObject({ phase: "end" });
+        expect(asOptionalRecord(terminal.data)?.error).toBeUndefined();
+        const settled = await client.request(
+          "agent.wait",
+          { runId: terminal.runId, timeoutMs: 10_000 },
+          { timeoutMs: 15_000 },
         );
-        expect(required, gateway.logs()).toMatchObject({ status: "ok" });
-        expect(activeFixture.requiredRequests()).toBe(2);
-        const requiredHistory = await client.request<{ messages: unknown[] }>("chat.history", {
-          sessionKey: requiredKey,
-          limit: 100,
+        expect(settled, gateway.logs()).toMatchObject({ status: "ok" });
+        expect(asOptionalRecord(settled)?.error).toBeUndefined();
+        const after = await history(scenario.parentKey);
+        expect(modelReplyTexts(after)).toEqual([scenario.parentFinal]);
+        expectForwardedInput(after, scenario.peerResult, {
+          provenance: { sourceSessionKey: scenario.peerKey },
+          senderSession: { agentId: "main", sessionKey: scenario.peerKey },
+          senderLabel: "Forwarded from main",
         });
-        expect(modelReplyTexts(requiredHistory.messages)).toEqual([REQUIRED_RECOVERED]);
-        const requiredInputs = interSessionInputs(requiredHistory.messages);
-        expect(requiredInputs).toHaveLength(1);
-        expect(contentText(requiredInputs[0]?.content).trim()).toBe(REQUIRED_REQUEST);
-        expect(requiredInputs[0]).toMatchObject({
-          role: "assistant",
-          provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+        expect(scenario).toMatchObject({
+          parentRequests: 2,
+          peerRequests: 1,
+          callbackRequests: 1,
         });
-        expect(activeFixture.failures).toEqual([]);
-        expect(gateway.logs()).not.toContain("sessions_send reply flow failed");
-        console.log(
-          "[reply-obligation-proof] Late peer empty/NO_REPLY completions settled once; a required empty request recovered",
-        );
-      } finally {
-        activeFixture.releaseAll();
-        await disconnectGatewayClient(client);
+        expect(errorSessions.filter((key) => key === scenario.parentKey)).toEqual([]);
       }
-    },
-  );
-});
+
+      const requiredKey = "agent:main:reply-obligation-required";
+      // Public provenance is not the trusted owner's optional-reply decision.
+      const required = await requestReply(requiredKey, REQUIRED_REQUEST, randomUUID(), {
+        kind: "inter_session",
+        sourceTool: "sessions_send",
+      });
+      expect(required, gateway.logs()).toMatchObject({ status: "ok" });
+      expect(activeFixture.requiredRequests()).toBe(2);
+      const requiredHistory = await history(requiredKey);
+      expect(modelReplyTexts(requiredHistory)).toEqual([REQUIRED_RECOVERED]);
+      expectForwardedInput(requiredHistory, REQUIRED_REQUEST);
+      expect(activeFixture.failures).toEqual([]);
+      expect(gateway.logs()).not.toContain("sessions_send reply flow failed");
+    } finally {
+      activeFixture.releaseAll();
+      await disconnectGatewayClient(client);
+    }
+  },
+);
 
 function contentText(content: unknown): string {
   if (typeof content === "string") {
@@ -253,11 +227,22 @@ function contentText(content: unknown): string {
     : "";
 }
 
-function interSessionInputs(messages: unknown[]): Record<string, unknown>[] {
-  return messages.flatMap((message) => {
+function expectForwardedInput(
+  messages: unknown[],
+  text: string,
+  details: Record<string, unknown> = {},
+): void {
+  const inputs = messages.flatMap((message) => {
     const record = asOptionalRecord(message);
     return record && asOptionalRecord(record.provenance)?.kind === "inter_session" ? [record] : [];
   });
+  expect(inputs).toHaveLength(1);
+  expect(contentText(inputs[0]?.content).trim()).toBe(text);
+  expect(inputs[0]).toMatchObject({
+    role: "assistant",
+    provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+  });
+  expect(inputs[0]).toMatchObject(details);
 }
 
 function modelReplyTexts(messages: unknown[]): string[] {
@@ -274,51 +259,27 @@ function modelReplyTexts(messages: unknown[]): string[] {
 }
 
 function createConfig(url: string): OpenClawConfig {
-  return {
-    plugins: { enabled: false },
-    discovery: { mdns: { mode: "off" } },
-    agents: {
-      defaults: {
-        heartbeat: { every: "0m" },
-        model: { primary: MODEL_REF },
-        models: { [MODEL_REF]: { agentRuntime: { id: "openclaw" } } },
-        skipBootstrap: true,
-        skills: [],
-        sandbox: { mode: "off" },
-      },
-    },
-    tools: {
-      profile: "coding",
-      codeMode: false,
-      toolSearch: false,
-      allow: ["sessions_send"],
-      sessions: { visibility: "all" },
-      agentToAgent: { enabled: true },
-    },
-    models: {
-      mode: "replace",
-      providers: {
-        "reply-obligation": {
-          baseUrl: url + "/v1",
-          apiKey: "test-placeholder",
-          api: "openai-responses",
-          request: { allowPrivateNetwork: true },
-          models: [
-            {
-              id: "reply-obligation",
-              name: "reply-obligation",
-              api: "openai-responses",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 128_000,
-              maxTokens: 4096,
-            },
-          ],
-        },
-      },
-    },
+  const config = createOpenAiResponsesModelConfig({
+    baseUrl: url,
+    providerId: "reply-obligation",
+    modelId: "reply-obligation",
+    reasoning: false,
+    toolProfile: "coding",
+  });
+  config.plugins = { enabled: false };
+  config.discovery = { mdns: { mode: "off" } };
+  config.agents = {
+    defaults: { ...config.agents?.defaults, sandbox: { mode: "off" } },
   };
+  config.tools = {
+    profile: "coding",
+    codeMode: false,
+    toolSearch: false,
+    allow: ["sessions_send"],
+    sessions: { visibility: "all" },
+    agentToAgent: { enabled: true },
+  };
+  return config;
 }
 
 async function startFixture(scenarios: Scenario[]) {
@@ -341,11 +302,7 @@ async function startFixture(scenarios: Scenario[]) {
       response.writeHead(404).end();
       return;
     }
-    const chunks: Buffer[] = [];
-    for await (const chunk of request) {
-      chunks.push(Buffer.from(chunk));
-    }
-    const body = asOptionalRecord(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+    const body = asOptionalRecord(await json(request));
     const input = Array.isArray(body?.input) ? body.input.map(asOptionalRecord) : [];
     const userTexts = input
       .filter((item) => item?.role === "user")
@@ -365,16 +322,14 @@ async function startFixture(scenarios: Scenario[]) {
       if (++requiredRequests > 2) {
         throw new Error("Required reply exceeded one empty response and one recovery");
       }
-      final(requiredRequests === 1 ? "" : REQUIRED_RECOVERED);
-      return;
+      return final(requiredRequests === 1 ? "" : REQUIRED_RECOVERED);
     }
     const scenario = scenarios.find((candidate) =>
       userTexts.some((text) => text.includes(candidate.peerResult)),
     );
     if (scenario) {
       scenario.callbackRequests += 1;
-      final(scenario.variant === "empty" ? "" : "NO_REPLY");
-      return;
+      return final(scenario.variant === "empty" ? "" : "NO_REPLY");
     }
     const peer = scenarios.find((candidate) => userText.includes(candidate.peerPrompt));
     if (peer) {
@@ -383,8 +338,7 @@ async function startFixture(scenarios: Scenario[]) {
       }
       peer.peerStarted.resolve();
       await peer.releasePeer.promise;
-      final(peer.peerResult);
-      return;
+      return final(peer.peerResult);
     }
     const parent = scenarios.find((candidate) => userText.includes(candidate.parentPrompt));
     if (!parent || ++parent.parentRequests > 2) {
@@ -396,8 +350,7 @@ async function startFixture(scenarios: Scenario[]) {
       if (!serialized?.includes("accepted") || !serialized.includes("pending")) {
         throw new Error("Real sessions_send did not accept delayed peer delivery");
       }
-      final(parent.parentFinal);
-      return;
+      return final(parent.parentFinal);
     }
     const item = {
       type: "function_call",
@@ -411,19 +364,20 @@ async function startFixture(scenarios: Scenario[]) {
       }),
       status: "completed",
     };
+    const event = (type: string, fields: Record<string, unknown>) => ({
+      type: `response.${type}`,
+      output_index: 0,
+      ...fields,
+    });
     writeOpenAiResponsesSse(response, [
-      {
-        type: "response.output_item.added",
-        output_index: 0,
+      event("output_item.added", {
         item: { ...item, status: "in_progress", arguments: "" },
-      },
-      {
-        type: "response.function_call_arguments.done",
+      }),
+      event("function_call_arguments.done", {
         item_id: item.id,
-        output_index: 0,
         arguments: item.arguments,
-      },
-      { type: "response.output_item.done", output_index: 0, item },
+      }),
+      event("output_item.done", { item }),
       {
         type: "response.completed",
         response: {

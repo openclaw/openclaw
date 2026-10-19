@@ -8,6 +8,7 @@ export function boundContextEngineAssembly(
   assembled: AssembleResult,
   maxBytes: number | undefined,
   tokenBudget?: number,
+  additionalBytes?: ReadonlyMap<AssembleResult["messages"][number], number>,
 ): AssembleResult {
   if (maxBytes === undefined) {
     return assembled;
@@ -19,8 +20,9 @@ export function boundContextEngineAssembly(
   let exceedsByteBudget = false;
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index]!;
-    bytes += Buffer.byteLength(JSON.stringify(message), "utf8") + 1;
-    tokens += estimateTokens(message);
+    const extraBytes = additionalBytes?.get(message) ?? 0;
+    bytes += Buffer.byteLength(JSON.stringify(message), "utf8") + 1 + extraBytes;
+    tokens += estimateTokens(message) + (extraBytes ? Math.ceil(extraBytes / 4) : 0);
     if (bytes > maxBytes) {
       exceedsByteBudget = true;
       break;
@@ -66,7 +68,10 @@ export function boundContextEngineAssembly(
   return {
     ...assembled,
     messages: retained,
-    estimatedTokens: retained.reduce((sum, message) => sum + estimateTokens(message), 0),
+    estimatedTokens: retained.reduce((sum, message) => {
+      const extraBytes = additionalBytes?.get(message) ?? 0;
+      return sum + estimateTokens(message) + (extraBytes ? Math.ceil(extraBytes / 4) : 0);
+    }, 0),
     promptAuthority: "assembled",
     // Persistent backends must replace the old native context, not append a
     // bounded view to a thread that still contains the omitted messages.

@@ -11,6 +11,7 @@ import { renderPluginCapabilitySection, renderPublisherIdentity } from "../plugi
 import type { ClawAddReviewPlan } from "./claws-catalog-client.ts";
 import type { ClawsCatalogViewProps } from "./claws-catalog-view-props.ts";
 import { renderClawTrustWarning } from "./claws-trust-warning.tsx";
+import { ClawWorkspaceFiles } from "./claws-workspace-files.tsx";
 
 registerEnglishCatalog(registerPluginConsentEnglish);
 
@@ -65,38 +66,12 @@ function grantSummary(grants: ClawPluginGrants): string[] {
 
 function ClawContents(props: { view: ClawsCatalogViewProps }) {
   const contents = () => props.view.detail!.contents;
-  const workspaceFiles = () => contents().instructions;
-  const featuredFiles = () =>
-    ["SOUL.md", "AGENTS.md"]
-      .map((name) => workspaceFiles().find((file) => file.name === name))
-      .filter((file) => file !== undefined);
   return (
     <>
-      {renderPluginCapabilitySection(
-        t("clawsCatalog.workspaceFiles"),
-        [
-          ...featuredFiles().map((item) => ({
-            name: item.name,
-            description: item.excerpt,
-            onOpen: () => props.view.onOpenPreview("instruction", item.name),
-          })),
-          ...(workspaceFiles().length > featuredFiles().length
-            ? [
-                {
-                  name: t("clawsCatalog.viewAll"),
-                  onOpen: () =>
-                    props.view.onOpenPreview(
-                      "instruction",
-                      featuredFiles()[0]?.name ?? workspaceFiles()[0]!.name,
-                    ),
-                },
-              ]
-            : []),
-        ],
-        () => (
-          <Icon name="fileText" />
-        ),
-      )}
+      <ClawWorkspaceFiles
+        files={contents().instructions}
+        onOpen={(name) => props.view.onOpenPreview("instruction", name)}
+      />
       {renderPluginCapabilitySection(
         t("clawsCatalog.skillsSection"),
         contents().skills.map((item) => ({

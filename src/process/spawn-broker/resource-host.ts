@@ -15,7 +15,7 @@ import { BrokerNativeResourceCloseError } from "./resource-protocol.js";
 export type BrokerNativeResourceLease = {
   readonly attachment: BrokerResourceAttachment;
   receive(response: BrokerResourceResponse): void;
-  ownerMessage(value: unknown): { sequence: number; result: Promise<void> };
+  ownerMessage(value: unknown): { sequence: number };
   close(): Promise<void>;
   release(): void;
   abandonUnattached(): void;
@@ -41,7 +41,6 @@ type Claim = {
     {
       request: Extract<BrokerResourceRequest, { type: "resource-owner" }>;
       size: number;
-      completion: Deferred;
     }
   >;
   pending?: { requestId: number; completion: Deferred };
@@ -130,11 +129,9 @@ export class BrokerResourceClaims {
           throw new SpawnBrokerError("Native resource owner delivery capacity exceeded");
         }
         claim.ownerSequence = sequence;
-        const completion = createDeferredCore();
-        void completion.promise.catch(() => {});
         const request: Extract<BrokerResourceRequest, { type: "resource-owner" }> =
           deserialize(serialized);
-        claim.ownerMessages.set(sequence, { request, size: serialized.length, completion });
+        claim.ownerMessages.set(sequence, { request, size: serialized.length });
         this.bufferedBytes += serialized.length;
         this.bufferedMessages++;
         void (async () => {
@@ -146,12 +143,11 @@ export class BrokerResourceClaims {
           }
         })().catch((cause: unknown) => {
           const error = toErrorObject(cause, "Native resource owner delivery failed");
-          completion.reject(error);
           if (this.claims.get(captured.id) === claim && !claim.closed && !claim.failure) {
             claim.inContext(() => claim.callbacks.failed(error));
           }
         });
-        return { sequence, result: completion.promise };
+        return { sequence };
       },
       close: () => {
         if (claim.closed) {
@@ -204,7 +200,7 @@ export class BrokerResourceClaims {
         const error = new SpawnBrokerError("Native resource was never dispatched");
         claim.attached.reject(error);
         claim.pending?.completion.reject(error);
-        this.remove(claim, error);
+        this.remove(claim);
       },
     };
   }
@@ -240,10 +236,7 @@ export class BrokerResourceClaims {
             decodeNativeWorkerFailure(response.error),
             "Native resource owner callback failed",
           );
-          pending.completion.reject(error);
           claim.inContext(() => claim.callbacks.failed(error));
-        } else {
-          pending.completion.resolve();
         }
       }
       return;
@@ -260,10 +253,7 @@ export class BrokerResourceClaims {
         return;
       }
       claim.closed = true;
-      this.clearOwnerMessages(
-        claim,
-        new SpawnBrokerError("Native resource closed before owner delivery was acknowledged"),
-      );
+      this.clearOwnerMessages(claim);
       claim.pending?.completion.resolve();
       claim.pending = undefined;
       this.host.refreshReference();
@@ -288,9 +278,6 @@ export class BrokerResourceClaims {
       );
       claim.pending?.completion.reject(error);
       claim.pending = undefined;
-      for (const pending of claim.ownerMessages.values()) {
-        pending.completion.reject(error);
-      }
       claim.inContext(() => claim.callbacks.failed(error));
       return;
     }
@@ -340,28 +327,20 @@ export class BrokerResourceClaims {
     claim.failure = error;
     claim.attached.reject(error);
     claim.pending?.completion.reject(error);
-    for (const pending of claim.ownerMessages.values()) {
-      pending.completion.reject(error);
-    }
     claim.pending = undefined;
     return true;
   }
 
-  private clearOwnerMessages(claim: Claim, error: Error): void {
+  private clearOwnerMessages(claim: Claim): void {
     for (const pending of claim.ownerMessages.values()) {
       this.bufferedBytes -= pending.size;
       this.bufferedMessages--;
-      pending.completion.reject(error);
     }
     claim.ownerMessages.clear();
   }
 
-  private remove(claim: Claim, error?: Error): void {
-    this.clearOwnerMessages(
-      claim,
-      error ??
-        new SpawnBrokerError("Native resource released before owner delivery was acknowledged"),
-    );
+  private remove(claim: Claim): void {
+    this.clearOwnerMessages(claim);
     this.claims.delete(claim.attachment.id);
     this.host.refreshReference();
   }

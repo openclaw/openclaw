@@ -13,7 +13,7 @@ import {
 } from "./current-plugin-metadata-snapshot.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
-import { preparePersistedInstalledPluginIndexCacheEntry } from "./installed-plugin-index-record-state.js";
+import { preparePluginMetadataMachineStateAsync } from "./installed-plugin-index-record-state.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import { loadBundledPluginManifestRegistry } from "./manifest-registry-build.js";
 import {
@@ -27,7 +27,6 @@ import {
   createPluginCache,
   getPluginCache,
   getPluginMetadataSnapshotCache,
-  retainPluginCache,
   withPluginCache,
 } from "./plugin-cache.js";
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
@@ -68,12 +67,8 @@ export type {
 
 export { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-env.js";
 
-function throwReadonlyPluginMetadataMutation(): never {
-  throw new TypeError("Plugin metadata snapshots are immutable");
-}
-
 function freezeSnapshotValue<T>(value: T, seen = new WeakSet<object>()): T {
-  // Frozen facts stay frozen; native callers bypassing their setters are unsupported.
+  // Freeze plain facts once; internal Map/Set consumers honor their readonly types.
   if (!value || typeof value !== "object" || Object.isFrozen(value)) {
     return value;
   }
@@ -81,29 +76,6 @@ function freezeSnapshotValue<T>(value: T, seen = new WeakSet<object>()): T {
     return value;
   }
   seen.add(value);
-  if (value instanceof Map) {
-    for (const [key, entry] of value) {
-      freezeSnapshotValue(key, seen);
-      freezeSnapshotValue(entry, seen);
-    }
-    Object.defineProperties(value, {
-      clear: { value: throwReadonlyPluginMetadataMutation },
-      delete: { value: throwReadonlyPluginMetadataMutation },
-      set: { value: throwReadonlyPluginMetadataMutation },
-    });
-    return Object.freeze(value);
-  }
-  if (value instanceof Set) {
-    for (const entry of value) {
-      freezeSnapshotValue(entry, seen);
-    }
-    Object.defineProperties(value, {
-      add: { value: throwReadonlyPluginMetadataMutation },
-      clear: { value: throwReadonlyPluginMetadataMutation },
-      delete: { value: throwReadonlyPluginMetadataMutation },
-    });
-    return Object.freeze(value);
-  }
   for (const entry of Object.values(value)) {
     freezeSnapshotValue(entry, seen);
   }
@@ -313,12 +285,8 @@ export function rebasePluginMetadataSnapshotManifestRegistry(
   const rebased = {
     ...snapshot,
     ...buildPluginMetadataManifestFacts(manifestRegistry, snapshot.index),
-    normalizePluginId: snapshot.index
-      ? createPluginRegistryIdNormalizer(snapshot.index, { manifestRegistry })
-      : snapshot.normalizePluginId,
-    ...(snapshot.metrics
-      ? { metrics: { ...snapshot.metrics, manifestPluginCount: manifestRegistry.plugins.length } }
-      : {}),
+    normalizePluginId: createPluginRegistryIdNormalizer(snapshot.index, { manifestRegistry }),
+    metrics: { ...snapshot.metrics, manifestPluginCount: manifestRegistry.plugins.length },
   };
   // Rebuilt views retain the original generation even when consumed in another scope.
   bindPluginMetadataSnapshotCache(rebased, getPluginMetadataSnapshotCache(snapshot));
@@ -399,17 +367,13 @@ export function loadPluginMetadataSnapshot(
       env: params.env,
       workspaceDir: params.workspaceDir,
       allowWorkspaceScopedSnapshot: true,
+      ...(params.config === undefined ? { requireDefaultDiscoveryContext: true } : {}),
     });
     if (
       current &&
       (isCurrentPluginMetadataSnapshotRuntimeGeneration(current) ||
-        isPluginMetadataSnapshotCompatible({
-          snapshot: current,
-          config: params.config,
-          env: params.env,
-          workspaceDir: params.workspaceDir,
-          index: params.index,
-        }))
+        ((current.workspaceDir ?? "") === (params.workspaceDir ?? "") &&
+          indexesMatch(current.index, params.index)))
     ) {
       return projectPluginMetadataSnapshot(
         current,
@@ -597,19 +561,7 @@ function selectPluginMetadataSnapshot(
     if (!params.index) {
       return { kind: "current", snapshot: current };
     }
-    if (
-      allowSynchronousPolicyRead &&
-      isPluginMetadataSnapshotCompatible({
-        snapshot: current,
-        config: params.config,
-        env: params.env,
-        allowScopedSnapshot: params.pluginIds !== undefined || params.pluginIdScope !== undefined,
-        workspaceDir:
-          params.workspaceDir ??
-          (params.allowWorkspaceScopedCurrent === true ? current.workspaceDir : undefined),
-        index: params.index,
-      })
-    ) {
+    if (allowSynchronousPolicyRead && indexesMatch(current.index, params.index)) {
       return { kind: "current", snapshot: current };
     }
   }
@@ -648,36 +600,19 @@ export async function resolvePluginMetadataSnapshotAsync(
     return withPluginCache(createPluginCache(), () => resolvePluginMetadataSnapshotAsync(captured));
   }
   const cache = getPluginCache();
-  const release = retainPluginCache(cache);
-  try {
-    return await withPluginCache(cache, async () => {
-      const current = selectPluginMetadataSnapshot(captured, false);
-      if (current.kind === "current") {
-        return current.snapshot;
-      }
-      const activateDiscovery = await prepareBundledDiscoveryMode(captured.env);
-      activateDiscovery();
-      const prepared = selectPluginMetadataSnapshot(captured);
-      if (prepared.kind === "current") {
-        return prepared.snapshot;
-      }
-      if (
-        captured.index === undefined &&
-        captured.installRecords === undefined &&
-        captured.preferPersisted !== false
-      ) {
-        const installed = await preparePersistedInstalledPluginIndexCacheEntry({
-          env: captured.env,
-          stateDir: captured.stateDir,
-        });
-        installed.assertCurrent();
-      }
-      activateDiscovery();
-      return resolvePluginMetadataSnapshot(captured);
-    });
-  } finally {
-    release();
-  }
+  return withPluginCache(cache, async () => {
+    const current = selectPluginMetadataSnapshot(captured, false);
+    if (current.kind === "current") {
+      return current.snapshot;
+    }
+    const activateDiscovery = await (captured.index === undefined &&
+    captured.installRecords === undefined &&
+    captured.preferPersisted !== false
+      ? preparePluginMetadataMachineStateAsync({ env: captured.env, stateDir: captured.stateDir })
+      : prepareBundledDiscoveryMode(captured.env));
+    activateDiscovery();
+    return resolvePluginMetadataSnapshot(captured);
+  });
 }
 
 /** Reuse prepared workspace facts without materializing an intermediate immutable graph. */

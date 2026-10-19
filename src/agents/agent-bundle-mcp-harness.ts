@@ -276,18 +276,12 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
         });
       }
     : undefined;
-  let liveRuntime: Awaited<ReturnType<typeof materializeBundleMcpToolsForRun>>;
-  try {
-    liveRuntime = await materializeBundleMcpToolsForRun({
-      ...acquisition,
-      agentId: params.agentId,
-      reservedToolNames: params.reservedToolNames,
-      ...(retireSnapshotRuntime ? { disposeRuntime: retireSnapshotRuntime } : {}),
-    });
-  } catch (error) {
-    await retireSnapshotRuntime?.();
-    throw error;
-  }
+  const liveRuntime = await materializeBundleMcpToolsForRun({
+    ...acquisition,
+    agentId: params.agentId,
+    reservedToolNames: params.reservedToolNames,
+    ...(retireSnapshotRuntime ? { disposeRuntime: retireSnapshotRuntime } : {}),
+  });
   try {
     // Policy warnings describe inputs; only actual omissions make configured MCP incomplete.
     const omissions: string[] = [];

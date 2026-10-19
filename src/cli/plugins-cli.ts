@@ -116,7 +116,11 @@ export function registerPluginsCli(program: Command) {
     .description("Reload one or more plugins in the running Gateway")
     .argument("<ids...>", "Plugin ids")
     .option("--accept-capabilities", "Accept changed declared capabilities", false)
-    .option("--wait", "Wait for admitted work without a deadline; Ctrl-C cancels the wait", false)
+    .option(
+      "--wait",
+      "Wait up to 10 minutes for admitted work; blocks new agent runs; Ctrl-C cancels",
+      false,
+    )
     .option("--json", "Print the applied runtime generation", false)
     .action(async (ids: string[], opts: PluginsReloadOptions) => {
       const { runPluginsReloadCommand } = await import("./plugins-reload-command.js");
@@ -139,11 +143,11 @@ export function registerPluginsCli(program: Command) {
   plugins
     .command("install")
     .description(
-      "Install a plugin or hook pack (path, archive, npm spec, git repo, clawhub:package, or marketplace entry)",
+      "Install a plugin or hook pack (ClawHub by default; npm:, git:, path, archive, or marketplace)",
     )
     .argument(
       "<path-or-spec-or-plugin>",
-      "Path (.ts/.js/.zip/.tgz/.tar.gz), npm package spec, or marketplace plugin name",
+      "ClawHub package (optional @version/tag), npm:package, path/archive, or marketplace plugin name",
     )
     .option("-l, --link", "Link a local path instead of copying", false)
     .option(

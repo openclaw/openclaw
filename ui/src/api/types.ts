@@ -85,56 +85,8 @@ export type ChannelsStatusSnapshot = ChannelsStatusResult;
 export type ChannelUiMetaEntry = NonNullable<ChannelsStatusResult["channelMeta"]>[number];
 export type ChannelAccountSnapshot = ChannelsStatusResult["channelAccounts"][string][number];
 
-type WhatsAppSelf = {
-  e164?: string | null;
-  jid?: string | null;
-};
-
-type WhatsAppDisconnect = {
-  at: number;
-  status?: number | null;
-  error?: string | null;
-  loggedOut?: boolean | null;
-};
-
-export type WhatsAppStatus = {
-  configured: boolean;
-  linked: boolean;
-  authAgeMs?: number | null;
-  self?: WhatsAppSelf | null;
-  running: boolean;
-  connected: boolean;
-  lastConnectedAt?: number | null;
-  lastDisconnect?: WhatsAppDisconnect | null;
-  reconnectAttempts: number;
-  lastMessageAt?: number | null;
-  lastEventAt?: number | null;
-  lastError?: string | null;
-};
-
 export type ChannelStatus = Omit<ChannelAccountSnapshot, "accountId" | "probe"> & {
   probe?: { ok?: boolean; status?: number | string | null; error?: string | null } | null;
-};
-
-export type NostrProfile = {
-  name?: string | null;
-  displayName?: string | null;
-  about?: string | null;
-  picture?: string | null;
-  banner?: string | null;
-  website?: string | null;
-  nip05?: string | null;
-  lud16?: string | null;
-};
-
-export type NostrStatus = {
-  configured: boolean;
-  publicKey?: string | null;
-  running: boolean;
-  lastStartAt?: number | null;
-  lastStopAt?: number | null;
-  lastError?: string | null;
-  profile?: NostrProfile | null;
 };
 
 type ConfigSnapshotIssue = { path: string; message: string };

@@ -268,15 +268,16 @@ describe("installScheduledTask", () => {
 
     expect(schtasksCalls[0]).toEqual(["/Query", "/TN", "OpenClaw Gateway", "/XML"]);
     expect(schtasksCalls[3]?.[0]).toBe("/Change");
+    expect(schtasksCalls[4]).toEqual(["/Query", "/TN", "OpenClaw Gateway", "/XML"]);
     // Battery-flag XML re-apply runs between /Change and /Run on upgrades.
-    expect(schtasksCalls[4]?.slice(0, 5)).toEqual([
+    expect(schtasksCalls[5]?.slice(0, 5)).toEqual([
       "/Create",
       "/F",
       "/TN",
       "OpenClaw Gateway",
       "/XML",
     ]);
-    expect(schtasksCalls[6]).toEqual(["/Run", "/TN", "OpenClaw Gateway"]);
+    expect(schtasksCalls[7]).toEqual(["/Run", "/TN", "OpenClaw Gateway"]);
   });
 
   it("rejects line breaks in command arguments, env vars, and descriptions", async ({
@@ -339,20 +340,20 @@ describe("installScheduledTask", () => {
     expect(schtasksCalls[3]?.[4]).toContain(launcherPath);
     // wscript requires a BOM for UTF-16; XML owns the interactive principal.
     expect(rawLauncher.subarray(0, 2)).toEqual(Buffer.from([0xff, 0xfe]));
-    expect(schtasksCalls[4]?.slice(0, 5)).toEqual([
+    expect(schtasksCalls[5]?.slice(0, 5)).toEqual([
       "/Create",
       "/F",
       "/TN",
       "OpenClaw Gateway",
       "/XML",
     ]);
-    expect(schtasksCalls[4]).not.toContain("/RU");
-    expect(schtasksCalls[4]).not.toContain("/NP");
-    const xml = xmlPayloadCaptures.find((entry) => entry.index === 4)?.xml;
+    expect(schtasksCalls[5]).not.toContain("/RU");
+    expect(schtasksCalls[5]).not.toContain("/NP");
+    const xml = xmlPayloadCaptures.find((entry) => entry.index === 5)?.xml;
     expect(xml).toContain("<UserId>WORKSTATION\\alice</UserId>");
     expect(xml).toContain("<LogonType>InteractiveToken</LogonType>");
     expect(launcher).toContain(`WScript.Quit shell.Run("""${scriptPath}""", 0, True)`);
-    expectTaskRunCall(6);
+    expectTaskRunCall(7);
   });
 
   it("fails the install instead of writing an unrepresentable cmd launcher", async ({
@@ -528,11 +529,12 @@ describe("installScheduledTask", () => {
       "/Query",
       "/Query",
       "/Change",
+      "/Query",
       "/Create",
       "/Query",
       "/Run",
     ]);
-    expectTaskRunCall(6);
+    expectTaskRunCall(7);
   });
 
   it.for([

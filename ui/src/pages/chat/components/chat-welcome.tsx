@@ -1,6 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import type { AgentsListResult, SessionsListResult } from "../../../api/types.ts";
+import { createBackgroundLayoutRef } from "../../../components/session-background-layout-context.tsx";
 import { AgentIdentityAvatar } from "../../../components/solid/identity-avatar.tsx";
 import { Kbd } from "../../../components/solid/kbd.tsx";
 import "../../../components/openclaw-mascot.ts";
@@ -23,6 +24,8 @@ export type ChatWelcomeProps = {
   currentAgentId?: string;
   agents?: AgentsListResult["agents"];
   assistantName: string;
+  /** Existing agent picker, shown in the new-session welcome heading. */
+  assistantNameControl?: JSX.Element;
   assistantAvatar: string | null;
   assistantAvatarUrl?: string | null;
   /** Hero hint override; defaults to the chat slash-command hint. */
@@ -118,7 +121,12 @@ function WelcomeHero(props: ChatWelcomeProps) {
         <AgentIdentityAvatar agent={resolveAssistantDisplayAvatar(props)} />
       </span>
       <div class="agent-chat__welcome-identity-copy">
-        <h2>{props.assistantName || "Assistant"}</h2>
+        <h2 class={props.assistantNameControl ? "sr-only" : undefined}>
+          {props.assistantName || "Assistant"}
+        </h2>
+        <Show when={props.assistantNameControl}>
+          <div class="agent-chat__welcome-name">{props.assistantNameControl}</div>
+        </Show>
         <p class="agent-chat__hint">
           {props.hint ?? (
             <>
@@ -136,6 +144,7 @@ function WelcomeHero(props: ChatWelcomeProps) {
 export function ChatWelcome(
   props: ChatWelcomeProps & { preparedRecents?: readonly WelcomeRecentSession[] },
 ) {
+  const welcomeRef = createBackgroundLayoutRef("welcome");
   const recentSessions = createMemo(() => {
     if (props.preparedRecents) {
       return props.preparedRecents;
@@ -151,7 +160,7 @@ export function ChatWelcome(
     <Show
       when={!props.modelSetupRequired}
       fallback={
-        <div class="agent-chat__welcome agent-chat__welcome--setup" role="alert">
+        <div ref={welcomeRef} class="agent-chat__welcome agent-chat__welcome--setup" role="alert">
           <WelcomeClawd />
           <h2>{t("modelSetup.required.title")}</h2>
           <p class="agent-chat__hint">{t("modelSetup.required.body")}</p>
@@ -163,7 +172,7 @@ export function ChatWelcome(
         </div>
       }
     >
-      <div class="agent-chat__welcome" style="--agent-color: var(--accent)">
+      <div ref={welcomeRef} class="agent-chat__welcome" style="--agent-color: var(--accent)">
         <WelcomeHero {...props} />
         {props.composer}
         <Show when={!props.hideSecondaryContent}>

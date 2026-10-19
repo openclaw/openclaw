@@ -41,7 +41,7 @@ function CpuDetailRow(props: { label: string; value: number | undefined; kind: s
   return (
     <div class="gateway-cpu-detail__thread">
       <dt>
-        <span class={`gateway-cpu-key gateway-cpu-key--${props.kind}`} aria-hidden="true" />
+        <span class={["gateway-cpu-key", `gateway-cpu-key--${props.kind}`]} aria-hidden="true" />
         {props.label}
       </dt>
       <dd>

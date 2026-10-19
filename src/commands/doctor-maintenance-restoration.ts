@@ -7,7 +7,13 @@ import {
   ServiceInspectionError,
   findServiceOwnershipRefusal,
 } from "../daemon/service-inspection-error.js";
+import {
+  currentGatewayServiceRebindReceipt,
+  fingerprintGatewayServiceDefinition,
+  withGatewayServiceRebindCapture,
+} from "../daemon/service-rebind.js";
 import type { GatewayServiceState } from "../daemon/service-types.js";
+import { GatewayServiceAuthorityError } from "../daemon/service-update-authority.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -87,6 +93,7 @@ export async function restoreDoctorGatewayService(params: {
       );
     let current: Awaited<ReturnType<typeof readGatewayServiceState>> | undefined;
     let inspectionFailure: unknown;
+    let expectedDefinitionFingerprint: string | undefined;
     const readInspection = async () => {
       current = undefined;
       inspectionFailure = undefined;
@@ -168,6 +175,7 @@ export async function restoreDoctorGatewayService(params: {
             root,
             preManagedServiceStop: before,
             allowIncompleteInspection,
+            expectedDefinitionFingerprint,
           }),
         );
       } catch (error) {
@@ -211,38 +219,65 @@ export async function restoreDoctorGatewayService(params: {
           import("./doctor-prompter.js"),
         ]);
         assertInstallationCurrent();
-        cfg = await settle(() =>
-          maybeRepairGatewayServiceConfig(
-            cfg,
-            "local",
-            params.runtime,
-            createDoctorPrompter({
-              runtime: params.runtime,
-              options: params.options,
-              signal: params.signal,
-            }),
-            {
-              async writeConfig(nextConfig) {
-                assertInstallationCurrent();
-                // Failed maintenance entry has no inspected Doctor writer context.
-                // Do not fall back to an independent config replacement on recovery.
-                if (!writeConfig) {
-                  throw new Error(
-                    "Doctor config writer is unavailable during service restoration.",
-                  );
-                }
-                const committed = await writeConfig(nextConfig);
-                assertInstallationCurrent();
-                return committed;
-              },
-              serviceMaintenance: {
-                managerUid: before.serviceManagerUid,
-                assertCurrent: assertInstallationCurrent,
-                assertReadCurrent: assertInspectionCurrent,
-              },
-            },
-          ),
+        const originalDefinition = await fingerprintGatewayServiceDefinition(
+          current?.command ?? null,
         );
+        assertInstallationCurrent();
+        try {
+          cfg = await withGatewayServiceRebindCapture(originalDefinition, async () => {
+            try {
+              return await settle(() =>
+                maybeRepairGatewayServiceConfig(
+                  cfg,
+                  "local",
+                  params.runtime,
+                  createDoctorPrompter({
+                    runtime: params.runtime,
+                    options: params.options,
+                    signal: params.signal,
+                  }),
+                  {
+                    async writeConfig(nextConfig) {
+                      assertInstallationCurrent();
+                      // Failed maintenance entry has no inspected Doctor writer context.
+                      // Do not fall back to an independent config replacement on recovery.
+                      if (!writeConfig) {
+                        throw new Error(
+                          "Doctor config writer is unavailable during service restoration.",
+                        );
+                      }
+                      const committed = await writeConfig(nextConfig);
+                      assertInstallationCurrent();
+                      return committed;
+                    },
+                    serviceMaintenance: {
+                      managerUid: before.serviceManagerUid,
+                      assertCurrent: assertInstallationCurrent,
+                      assertReadCurrent: assertInspectionCurrent,
+                    },
+                  },
+                ),
+              );
+            } finally {
+              // The native writer records its settled result, including compensation.
+              expectedDefinitionFingerprint =
+                currentGatewayServiceRebindReceipt()?.after ?? originalDefinition;
+            }
+          });
+        } catch (error) {
+          if (
+            originalInstallation.requiresInstallRootRefresh ||
+            hasCommandProcessCleanupError(error) ||
+            findServiceOwnershipRefusal(error) ||
+            !(error instanceof GatewayServiceAuthorityError) ||
+            (error.outcome !== "unchanged" && error.outcome !== "restored")
+          ) {
+            throw error;
+          }
+          const warning = `Warning: Gateway service repair failed; its previous definition was ${error.outcome}. Restoring the previously running service after verifying its definition and ownership. Reason: ${formatErrorMessage(error)}`;
+          warnings.push(warning);
+          params.runtime.log(warning);
+        }
         assertInstallationCurrent();
         const repairedState = before.stopped ? await readCurrent() : await readInspection();
         assertInstallationCurrent();

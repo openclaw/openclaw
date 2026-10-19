@@ -8,7 +8,10 @@ import {
   withConfigMutationExclusive,
 } from "../config/config.js";
 import { completeLocalSetupRecovery } from "../system-agent/setup-recovery.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import {
   beginLocalOnboarding,
   completeLocalOnboarding,
@@ -22,36 +25,51 @@ assert.equal(isMainThread, true, "Onboarding completion requires the host writer
 afterEach(() => closeOpenClawStateDatabaseForTest());
 
 const SECURITY_ACKNOWLEDGED_AT = "2026-08-02T00:00:00.000Z";
+const acknowledgedConfig = {
+  wizard: { securityAcknowledgedAt: SECURITY_ACKNOWLEDGED_AT },
+};
+
+function onboarding(state: OpenClawTestState) {
+  const database = { env: state.env };
+  const begin = (
+    overrides: Partial<Parameters<typeof beginLocalOnboarding>[0]> & { runId: string },
+  ) =>
+    beginLocalOnboarding({
+      configPath: state.configPath,
+      workspace: state.workspaceDir,
+      securityAcknowledgedAt: SECURITY_ACKNOWLEDGED_AT,
+      ...overrides,
+      database,
+    });
+  const complete = (runId: string, nowMs?: number) =>
+    completeLocalOnboarding({ configPath: state.configPath, runId, nowMs, database });
+  const read = () => readLocalOnboardingState(state.configPath, database);
+  const recover = (owner: Parameters<typeof completeLocalSetupRecovery>[0]["owner"]) =>
+    completeLocalSetupRecovery({ owner, appliedConfigPath: state.configPath });
+  const writeConfig = () =>
+    state.writeConfig({
+      agents: { defaults: { workspace: state.workspaceDir }, entries: { main: {} } },
+      ...acknowledgedConfig,
+    });
+  return { database, begin, complete, read, recover, writeConfig };
+}
 
 void describe("local onboarding state", () => {
   void it("does not create persistent state when checking an unconfigured install", async () => {
     await withOpenClawTestState({ label: "local-onboarding-empty" }, async (state) => {
-      assert.equal(readLocalOnboardingState(state.configPath, { env: state.env }), undefined);
-      assert.equal(
-        await completeLocalOnboarding({
-          configPath: state.configPath,
-          runId: "missing-run",
-          database: { env: state.env },
-        }),
-        false,
-      );
+      const { read, complete } = onboarding(state);
+      assert.equal(read(), undefined);
+      assert.equal(await complete("missing-run"), false);
       assert.equal(fs.existsSync(state.statePath("state", "openclaw.sqlite")), false);
     });
   });
 
   void it("isolates receipts by configuration path", async () => {
     await withOpenClawTestState({ label: "local-onboarding-paths" }, async (state) => {
-      const database = { env: state.env };
-      const first = beginLocalOnboarding({
-        configPath: state.configPath,
-        workspace: state.workspaceDir,
-        securityAcknowledgedAt: SECURITY_ACKNOWLEDGED_AT,
-        runId: "first-run",
-        nowMs: 100,
-        database,
-      });
+      const { database, begin, read } = onboarding(state);
+      const first = begin({ runId: "first-run", nowMs: 100 });
 
-      assert.deepEqual(readLocalOnboardingState(state.configPath, database), first);
+      assert.deepEqual(read(), first);
       assert.equal(readLocalOnboardingState(state.path("other.json"), database), undefined);
       assert.partialDeepStrictEqual(first, {
         status: "pending",
@@ -63,152 +81,69 @@ void describe("local onboarding state", () => {
 
   void it("preserves the pending owner across repeated activation commits", async () => {
     await withOpenClawTestState({ label: "local-onboarding-owner" }, async (state) => {
-      const database = { env: state.env };
-      const first = beginLocalOnboarding({
-        configPath: state.configPath,
-        workspace: state.workspaceDir,
-        securityAcknowledgedAt: SECURITY_ACKNOWLEDGED_AT,
-        runId: "first-run",
-        teamCoordinatorId: " Project Lead ",
-        database,
-      });
+      const { database, begin, complete, read } = onboarding(state);
+      const first = begin({ runId: "first-run", teamCoordinatorId: " Project Lead " });
       closeOpenClawStateDatabaseForTest();
-      assert.partialDeepStrictEqual(readLocalOnboardingState(state.configPath, database), {
-        teamCoordinatorId: "project-lead",
-      });
-      const second = beginLocalOnboarding({
-        configPath: state.configPath,
+      assert.partialDeepStrictEqual(read(), { teamCoordinatorId: "project-lead" });
+      const second = begin({
         workspace: state.path("other-workspace"),
-        securityAcknowledgedAt: SECURITY_ACKNOWLEDGED_AT,
         runId: "second-run",
         teamCoordinatorId: "different-coordinator",
-        database,
       });
 
       assert.deepEqual(second, first);
-      assert.equal(
-        await completeLocalOnboarding({ configPath: state.configPath, runId: "wrong", database }),
-        false,
-      );
-      assert.equal(readLocalOnboardingState(state.configPath, database)?.status, "pending");
-      assert.equal(
-        await completeLocalOnboarding({
-          configPath: state.configPath,
-          runId: "first-run",
-          nowMs: 200,
-          database,
-        }),
-        true,
-      );
+      assert.equal(await complete("wrong"), false);
+      assert.equal(read()?.status, "pending");
+      assert.equal(await complete("first-run", 200), true);
       assert.partialDeepStrictEqual(
         await readLocalOnboardingStateForConfigAsync(
           state.configPath,
-          { wizard: { securityAcknowledgedAt: SECURITY_ACKNOWLEDGED_AT } },
+          acknowledgedConfig,
           database,
         ),
-        {
-          ...first,
-          status: "completed",
-          completedAtMs: 200,
-        },
+        { ...first, status: "completed", completedAtMs: 200 },
       );
     });
   });
 
   void it("rejects an unrepresentable team coordinator before creating a receipt", async () => {
     await withOpenClawTestState({ label: "local-onboarding-invalid-team" }, async (state) => {
-      const database = { env: state.env };
+      const { begin, read } = onboarding(state);
       assert.throws(
-        () =>
-          beginLocalOnboarding({
-            configPath: state.configPath,
-            workspace: state.workspaceDir,
-            securityAcknowledgedAt: SECURITY_ACKNOWLEDGED_AT,
-            runId: "invalid-team",
-            teamCoordinatorId: "!!!",
-            database,
-          }),
+        () => begin({ runId: "invalid-team", teamCoordinatorId: "!!!" }),
         /coordinator/u,
       );
-      assert.equal(readLocalOnboardingState(state.configPath, database), undefined);
+      assert.equal(read(), undefined);
     });
   });
 
   void it("prevents an interrupted pre-reset run from completing its replacement", async () => {
     await withOpenClawTestState({ label: "local-onboarding-reset" }, async (state) => {
-      const database = { env: state.env };
-      beginLocalOnboarding({
-        configPath: state.configPath,
-        workspace: state.workspaceDir,
-        securityAcknowledgedAt: SECURITY_ACKNOWLEDGED_AT,
-        runId: "stale-run",
-        database,
-      });
-      const replacement = beginLocalOnboarding({
-        configPath: state.configPath,
+      const { begin, complete, read } = onboarding(state);
+      begin({ runId: "stale-run" });
+      const replacement = begin({
         workspace: state.path("replacement-workspace"),
         securityAcknowledgedAt: "2026-08-03T00:00:00.000Z",
         runId: "new-run",
         replace: true,
         expectedRunId: "stale-run",
-        database,
       });
 
-      assert.equal(
-        await completeLocalOnboarding({
-          configPath: state.configPath,
-          runId: "stale-run",
-          database,
-        }),
-        false,
-      );
-      assert.deepEqual(readLocalOnboardingState(state.configPath, database), replacement);
-      assert.equal(
-        await completeLocalOnboarding({ configPath: state.configPath, runId: "new-run", database }),
-        true,
-      );
+      assert.equal(await complete("stale-run"), false);
+      assert.deepEqual(read(), replacement);
+      assert.equal(await complete("new-run"), true);
     });
   });
 
   void it("completes the same run idempotently without changing its original timestamp", async () => {
     await withOpenClawTestState({ label: "local-onboarding-idempotent" }, async (state) => {
-      const database = { env: state.env };
-      beginLocalOnboarding({
-        configPath: state.configPath,
-        workspace: state.workspaceDir,
-        securityAcknowledgedAt: SECURITY_ACKNOWLEDGED_AT,
-        runId: "completed-run",
-        database,
-      });
+      const { begin, complete, read } = onboarding(state);
+      begin({ runId: "completed-run" });
 
-      assert.equal(
-        await completeLocalOnboarding({
-          configPath: state.configPath,
-          runId: "completed-run",
-          nowMs: 100,
-          database,
-        }),
-        true,
-      );
-      assert.equal(
-        await completeLocalOnboarding({
-          configPath: state.configPath,
-          runId: "completed-run",
-          nowMs: 200,
-          database,
-        }),
-        true,
-      );
-      assert.equal(
-        await completeLocalOnboarding({
-          configPath: state.configPath,
-          runId: "different-run",
-          nowMs: 300,
-          database,
-        }),
-        false,
-      );
-      assert.partialDeepStrictEqual(readLocalOnboardingState(state.configPath, database), {
+      assert.equal(await complete("completed-run", 100), true);
+      assert.equal(await complete("completed-run", 200), true);
+      assert.equal(await complete("different-run", 300), false);
+      assert.partialDeepStrictEqual(read(), {
         status: "completed",
         runId: "completed-run",
         completedAtMs: 100,
@@ -218,58 +153,28 @@ void describe("local onboarding state", () => {
 
   void it("completes its validated owner idempotently without rewriting the locked config", async () => {
     await withOpenClawTestState({ label: "local-onboarding-locked-completion" }, async (state) => {
-      const database = { env: state.env };
-      await state.writeConfig({
-        agents: {
-          defaults: { workspace: state.workspaceDir },
-          entries: { main: {} },
-        },
-        wizard: { securityAcknowledgedAt: SECURITY_ACKNOWLEDGED_AT },
-      });
-      const owner = beginLocalOnboarding({
-        configPath: state.configPath,
-        workspace: state.workspaceDir,
-        securityAcknowledgedAt: SECURITY_ACKNOWLEDGED_AT,
-        runId: "locked-owner",
-        database,
-      });
+      const { begin, read, recover, writeConfig } = onboarding(state);
+      await writeConfig();
+      const owner = begin({ runId: "locked-owner" });
       const originalConfig = fs.readFileSync(state.configPath, "utf8");
 
-      const first = await completeLocalSetupRecovery({
-        owner,
-        appliedConfigPath: state.configPath,
-      });
-      const completed = readLocalOnboardingState(state.configPath, database);
-      const second = await completeLocalSetupRecovery({
-        owner,
-        appliedConfigPath: state.configPath,
-      });
+      const first = await recover(owner);
+      const completed = read();
+      const second = await recover(owner);
 
       assert.equal(first.path, state.configPath);
       assert.equal(second.path, state.configPath);
       assert.partialDeepStrictEqual(completed, { status: "completed", runId: owner.runId });
-      assert.deepEqual(readLocalOnboardingState(state.configPath, database), completed);
+      assert.deepEqual(read(), completed);
       assert.equal(fs.readFileSync(state.configPath, "utf8"), originalConfig);
     });
   });
 
   void it("rejects a canonical config mutation that wins the completion lock", async () => {
     await withOpenClawTestState({ label: "local-onboarding-config-lock-race" }, async (state) => {
-      const database = { env: state.env };
-      await state.writeConfig({
-        agents: {
-          defaults: { workspace: state.workspaceDir },
-          entries: { main: {} },
-        },
-        wizard: { securityAcknowledgedAt: SECURITY_ACKNOWLEDGED_AT },
-      });
-      const owner = beginLocalOnboarding({
-        configPath: state.configPath,
-        workspace: state.workspaceDir,
-        securityAcknowledgedAt: SECURITY_ACKNOWLEDGED_AT,
-        runId: "racing-owner",
-        database,
-      });
+      const { begin, read, writeConfig } = onboarding(state);
+      await writeConfig();
+      const owner = begin({ runId: "racing-owner" });
       const optimisticSnapshot = await readConfigFileSnapshot();
       assert.equal(
         optimisticSnapshot.sourceConfig.wizard?.securityAcknowledgedAt,
@@ -289,10 +194,7 @@ void describe("local onboarding state", () => {
         await replaceConfigFile({
           nextConfig: {
             ...lockedConfig,
-            wizard: {
-              ...lockedConfig.wizard,
-              securityAcknowledgedAt: "2026-08-03T00:00:00.000Z",
-            },
+            wizard: { ...lockedConfig.wizard, securityAcknowledgedAt: "2026-08-03T00:00:00.000Z" },
           },
         });
       });
@@ -306,7 +208,7 @@ void describe("local onboarding state", () => {
       await competingMutation;
       await completionFails;
 
-      assert.deepEqual(readLocalOnboardingState(state.configPath, database), owner);
+      assert.deepEqual(read(), owner);
       assert.equal(
         (await readConfigFileSnapshot()).sourceConfig.wizard?.securityAcknowledgedAt,
         "2026-08-03T00:00:00.000Z",
@@ -316,156 +218,90 @@ void describe("local onboarding state", () => {
 
   void it("rejects another receipt owner and an applied config at a different path", async () => {
     await withOpenClawTestState({ label: "local-onboarding-locked-ownership" }, async (state) => {
-      const database = { env: state.env };
-      await state.writeConfig({
-        agents: {
-          defaults: { workspace: state.workspaceDir },
-          entries: { main: {} },
-        },
-        wizard: { securityAcknowledgedAt: SECURITY_ACKNOWLEDGED_AT },
-      });
-      const owner = beginLocalOnboarding({
-        configPath: state.configPath,
-        workspace: state.workspaceDir,
-        securityAcknowledgedAt: SECURITY_ACKNOWLEDGED_AT,
-        runId: "real-owner",
-        database,
-      });
+      const { begin, read, recover, writeConfig } = onboarding(state);
+      await writeConfig();
+      const owner = begin({ runId: "real-owner" });
 
       await assert.rejects(
-        completeLocalSetupRecovery({
-          owner: { ...owner, runId: "different-owner" },
-          appliedConfigPath: state.configPath,
-        }),
+        recover({ ...owner, runId: "different-owner" }),
         /Another onboarding run replaced this setup operation/u,
       );
       await assert.rejects(
-        completeLocalSetupRecovery({
-          owner,
-          appliedConfigPath: state.path("another-config.json"),
-        }),
+        completeLocalSetupRecovery({ owner, appliedConfigPath: state.path("another-config.json") }),
         /onboarding configuration changed before setup could complete/u,
       );
 
-      assert.deepEqual(readLocalOnboardingState(state.configPath, database), owner);
+      assert.deepEqual(read(), owner);
     });
   });
 
   void it("does not let a concurrent missing-config run replace the active owner", async () => {
     await withOpenClawTestState({ label: "local-onboarding-concurrent" }, async (state) => {
-      const database = { env: state.env };
-      const active = beginLocalOnboarding({
-        configPath: state.configPath,
-        workspace: state.workspaceDir,
-        securityAcknowledgedAt: SECURITY_ACKNOWLEDGED_AT,
-        runId: "active-run",
-        database,
-      });
-      const concurrent = beginLocalOnboarding({
-        configPath: state.configPath,
+      const { begin, read } = onboarding(state);
+      const active = begin({ runId: "active-run" });
+      const concurrent = begin({
         workspace: state.path("concurrent-workspace"),
         securityAcknowledgedAt: "2026-08-03T00:00:00.000Z",
         runId: "concurrent-run",
         replace: true,
         expectedRunId: "stale-reset-run",
-        database,
       });
 
       assert.deepEqual(concurrent, active);
-      assert.deepEqual(readLocalOnboardingState(state.configPath, database), active);
+      assert.deepEqual(read(), active);
     });
   });
 
   void it("does not let a delayed concurrent run reopen a completed owner", async () => {
     await withOpenClawTestState({ label: "local-onboarding-completed-owner" }, async (state) => {
-      const database = { env: state.env };
-      const first = beginLocalOnboarding({
-        configPath: state.configPath,
-        workspace: state.workspaceDir,
-        securityAcknowledgedAt: SECURITY_ACKNOWLEDGED_AT,
-        runId: "completed-run",
-        database,
-      });
-      assert.equal(
-        await completeLocalOnboarding({
-          configPath: state.configPath,
-          runId: first.runId,
-          database,
-        }),
-        true,
-      );
-      const completed = readLocalOnboardingState(state.configPath, database);
+      const { begin, complete, read } = onboarding(state);
+      const first = begin({ runId: "completed-run" });
+      assert.equal(await complete(first.runId), true);
+      const completed = read();
 
       for (const replacement of [
         {},
         { replace: true },
         { replace: true, expectedRunId: "other-run" },
       ]) {
-        const concurrent = beginLocalOnboarding({
-          configPath: state.configPath,
+        const concurrent = begin({
           workspace: state.path("concurrent-workspace"),
           securityAcknowledgedAt: "2026-08-03T00:00:00.000Z",
           runId: "delayed-run",
           ...replacement,
-          database,
         });
         assert.deepEqual(concurrent, completed);
-        assert.deepEqual(readLocalOnboardingState(state.configPath, database), completed);
+        assert.deepEqual(read(), completed);
       }
     });
   });
 
   void it("replaces a completed owner only when reset observed its exact run", async () => {
     await withOpenClawTestState({ label: "local-onboarding-completed-reset" }, async (state) => {
-      const database = { env: state.env };
-      const first = beginLocalOnboarding({
-        configPath: state.configPath,
-        workspace: state.workspaceDir,
-        securityAcknowledgedAt: SECURITY_ACKNOWLEDGED_AT,
-        runId: "observed-completed-run",
-        database,
-      });
-      assert.equal(
-        await completeLocalOnboarding({
-          configPath: state.configPath,
-          runId: first.runId,
-          database,
-        }),
-        true,
-      );
+      const { begin, complete, read } = onboarding(state);
+      const first = begin({ runId: "observed-completed-run" });
+      assert.equal(await complete(first.runId), true);
 
-      const replacement = beginLocalOnboarding({
-        configPath: state.configPath,
+      const replacement = begin({
         workspace: state.path("replacement-workspace"),
         securityAcknowledgedAt: "2026-08-03T00:00:00.000Z",
         runId: "replacement-run",
         replace: true,
         expectedRunId: first.runId,
-        database,
       });
 
       assert.partialDeepStrictEqual(replacement, { status: "pending", runId: "replacement-run" });
-      assert.deepEqual(readLocalOnboardingState(state.configPath, database), replacement);
+      assert.deepEqual(read(), replacement);
     });
   });
 
   void it("binds receipts to the acknowledged configuration identity", async () => {
     await withOpenClawTestState({ label: "local-onboarding-config-identity" }, async (state) => {
-      const database = { env: state.env };
-      const pending = beginLocalOnboarding({
-        configPath: state.configPath,
-        workspace: state.workspaceDir,
-        securityAcknowledgedAt: SECURITY_ACKNOWLEDGED_AT,
-        runId: "original-run",
-        database,
-      });
+      const { database, begin, read } = onboarding(state);
+      const pending = begin({ runId: "original-run" });
 
       assert.deepEqual(
-        readLocalOnboardingStateForConfig(
-          state.configPath,
-          { wizard: { securityAcknowledgedAt: SECURITY_ACKNOWLEDGED_AT } },
-          database,
-        ),
+        readLocalOnboardingStateForConfig(state.configPath, acknowledgedConfig, database),
         pending,
       );
       assert.equal(
@@ -477,7 +313,7 @@ void describe("local onboarding state", () => {
         undefined,
       );
       assert.equal(readLocalOnboardingStateForConfig(state.configPath, {}, database), undefined);
-      assert.deepEqual(readLocalOnboardingState(state.configPath, database), pending);
+      assert.deepEqual(read(), pending);
     });
   });
 });

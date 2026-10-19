@@ -116,6 +116,7 @@ function createBlobStoreStub() {
   return {
     register: vi.fn(),
     registerIfAbsent: vi.fn(),
+    registerIfAbsentWithReceipt: vi.fn(),
     lookup: vi.fn(),
     entries: vi.fn(),
     delete: vi.fn(),

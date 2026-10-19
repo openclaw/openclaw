@@ -7,9 +7,17 @@ import {
   createCoordinatorTestService,
   LOCAL_PLACEMENT,
   MOVE_REQUEST,
+  preparedReclaim,
   PROVISIONING_PLACEMENT,
   REQUEST,
 } from "./placement-dispatch-coordinator.test-support.js";
+
+function createCoordinatedService(overrides: Parameters<typeof createCoordinatorTestService>[0]) {
+  return coordinateWorkerPlacementDispatch(
+    createCoordinatorTestService(overrides),
+    (_request, run) => run(),
+  );
+}
 
 it.each(["targeted sweep", "recovery"] as const)(
   "reclaims independent sessions while %s handles a busy session",
@@ -23,34 +31,31 @@ it.each(["targeted sweep", "recovery"] as const)(
     const recover = async () => {
       events.push("recovery");
     };
-    const coordinated = coordinateWorkerPlacementDispatch(
-      createCoordinatorTestService({
-        dispatch: async (request) => {
-          if (request.sessionId === REQUEST.sessionId) {
-            dispatchEntered.resolve();
-            await dispatchRelease.promise;
+    const coordinated = createCoordinatedService({
+      dispatch: async (request) => {
+        if (request.sessionId === REQUEST.sessionId) {
+          dispatchEntered.resolve();
+          await dispatchRelease.promise;
+        }
+        return { ...ACTIVE_PLACEMENT, ...request };
+      },
+      reconcileActive: async (_environmentId, admit) => {
+        await admit!([REQUEST.sessionId], async (mode) => {
+          expect(mode).toBe("results-only");
+          await recover();
+        });
+      },
+      resumeProvisioning: admittedRecovery(recover),
+      reclaim: async (request, _authorize, _beforeDrain, serialize) =>
+        await serialize!(async () => {
+          events.push(`reclaim:${request.sessionId}`);
+          if (request.sessionId === stopped.sessionId) {
+            reclaimEntered.resolve();
+            await reclaimRelease.promise;
           }
-          return { ...ACTIVE_PLACEMENT, ...request };
-        },
-        reconcileActive: async (_environmentId, admit) => {
-          await admit!([REQUEST.sessionId], async (mode) => {
-            expect(mode).toBe("results-only");
-            await recover();
-          });
-        },
-        resumeProvisioning: admittedRecovery(recover),
-        reclaim: async (request, _authorize, _beforeDrain, serialize) =>
-          await serialize!(async () => {
-            events.push(`reclaim:${request.sessionId}`);
-            if (request.sessionId === stopped.sessionId) {
-              reclaimEntered.resolve();
-              await reclaimRelease.promise;
-            }
-            return { ...LOCAL_PLACEMENT, ...request };
-          }),
-      }),
-      (_request, run) => run(),
-    );
+          return { ...LOCAL_PLACEMENT, ...request };
+        }),
+    });
     const dispatch = coordinated.dispatch(REQUEST);
     await dispatchEntered.promise;
     const recovery =
@@ -84,26 +89,22 @@ it.each([false, true])(
     const reclaimRelease = createDeferredCore();
     const failure = new Error("provider cleanup pending");
     const events: string[] = [];
-    const coordinated = coordinateWorkerPlacementDispatch(
-      createCoordinatorTestService({
-        dispatch: async () => ACTIVE_PLACEMENT,
-        reclaim: async (_request, _authorize, _beforeDrain, serialize) =>
-          await serialize!(async () => {
-            events.push("reclaim:start");
-            reclaimEntered.resolve();
-            await reclaimRelease.promise;
-            events.push("reclaim:finish");
-            if (fails) {
-              throw failure;
-            }
-            return LOCAL_PLACEMENT;
-          }),
-        resumeProvisioning: admittedRecovery(async () => {
-          events.push("recovery");
-        }),
+    const coordinated = createCoordinatedService({
+      dispatch: async () => ACTIVE_PLACEMENT,
+      reclaim: preparedReclaim(async () => {
+        events.push("reclaim:start");
+        reclaimEntered.resolve();
+        await reclaimRelease.promise;
+        events.push("reclaim:finish");
+        if (fails) {
+          throw failure;
+        }
+        return LOCAL_PLACEMENT;
       }),
-      (_request, run) => run(),
-    );
+      resumeProvisioning: admittedRecovery(async () => {
+        events.push("recovery");
+      }),
+    });
     const reclaim = coordinated.reclaim(REQUEST).catch((error: unknown) => error);
     await reclaimEntered.promise;
     const recovery = coordinated.resumeProvisioning(
@@ -126,33 +127,30 @@ it("preserves a registered Move before the same session's Stop preparation finis
   const moveRelease = createDeferredCore();
   const prepared = createDeferredCore();
   const events: string[] = [];
-  const coordinated = coordinateWorkerPlacementDispatch(
-    createCoordinatorTestService({
-      dispatch: async (request) => {
-        if (request.sessionId === REQUEST.sessionId) {
-          dispatchEntered.resolve();
-          await dispatchRelease.promise;
-        }
-        return { ...ACTIVE_PLACEMENT, ...request };
-      },
-      move: async () => {
-        events.push("move:start");
-        moveEntered.resolve();
-        await moveRelease.promise;
-        events.push("move:finish");
+  const coordinated = createCoordinatedService({
+    dispatch: async (request) => {
+      if (request.sessionId === REQUEST.sessionId) {
+        dispatchEntered.resolve();
+        await dispatchRelease.promise;
+      }
+      return { ...ACTIVE_PLACEMENT, ...request };
+    },
+    move: async () => {
+      events.push("move:start");
+      moveEntered.resolve();
+      await moveRelease.promise;
+      events.push("move:finish");
+      return LOCAL_PLACEMENT;
+    },
+    reclaim: async (_request, _authorize, _beforeDrain, serialize, pending) => {
+      prepared.resolve();
+      await pending?.settled;
+      return await serialize!(async () => {
+        events.push("reclaim");
         return LOCAL_PLACEMENT;
-      },
-      reclaim: async (_request, _authorize, _beforeDrain, serialize, pending) => {
-        prepared.resolve();
-        await pending?.settled;
-        return await serialize!(async () => {
-          events.push("reclaim");
-          return LOCAL_PLACEMENT;
-        });
-      },
-    }),
-    (_request, run) => run(),
-  );
+      });
+    },
+  });
   const dispatch = coordinated.dispatch(REQUEST);
   await dispatchEntered.promise;
   const moving = coordinated.move(MOVE_REQUEST);
@@ -187,26 +185,23 @@ it.each(["sweep", "recovery"] as const)(
       await release.promise;
       events.push("recovery:finish");
     };
-    const coordinated = coordinateWorkerPlacementDispatch(
-      createCoordinatorTestService({
-        dispatch,
-        reconcile: async (_mode, admit) => {
-          await admit!([REQUEST.sessionId], recover);
-        },
-        resumeProvisioning: admittedRecovery(recover),
-        reclaim: async (_request, _authorize, _beforeDrain, serialize) => {
-          prepared.resolve();
-          return await serialize!(async () => {
-            events.push("reclaim:start");
-            reclaimEntered.resolve();
-            await reclaimRelease.promise;
-            events.push("reclaim:finish");
-            return LOCAL_PLACEMENT;
-          });
-        },
-      }),
-      (_request, run) => run(),
-    );
+    const coordinated = createCoordinatedService({
+      dispatch,
+      reconcile: async (_mode, admit) => {
+        await admit!([REQUEST.sessionId], recover);
+      },
+      resumeProvisioning: admittedRecovery(recover),
+      reclaim: async (_request, _authorize, _beforeDrain, serialize) => {
+        prepared.resolve();
+        return await serialize!(async () => {
+          events.push("reclaim:start");
+          reclaimEntered.resolve();
+          await reclaimRelease.promise;
+          events.push("reclaim:finish");
+          return LOCAL_PLACEMENT;
+        });
+      },
+    });
     const recovering =
       kind === "sweep"
         ? coordinated.reconcile()

@@ -13,7 +13,10 @@ import {
   type SessionNotification,
 } from "@agentclientprotocol/sdk";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveOpenClawCliInvocation } from "../../cli-invocation.mjs";
+import {
+  isStandaloneRuntimeExecutable,
+  resolveOpenClawCliInvocation,
+} from "../../cli-invocation.mjs";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { killProcessTree, signalProcessTree } from "../process/kill-tree.js";
 import { settlesWithin } from "../shared/settle-within.js";
@@ -134,14 +137,16 @@ async function createAcpClient(opts: AcpClientOptions = {}) {
     serverArgs.push("--verbose");
   }
 
-  const entryPath = resolveSelfEntryPath();
-  const defaultInvocation = entryPath
-    ? resolveOpenClawCliInvocation({ entryPath, args: serverArgs, execArgv: [] })
-    : { command: "openclaw", args: serverArgs };
+  const standalone = isStandaloneRuntimeExecutable();
+  const entryPath = standalone ? undefined : resolveSelfEntryPath();
+  const defaultInvocation =
+    standalone || entryPath
+      ? resolveOpenClawCliInvocation({ entryPath, args: serverArgs, execArgv: [] })
+      : { command: "openclaw", args: serverArgs };
   const defaultServerCommand = defaultInvocation.command;
   const defaultServerArgs = defaultInvocation.args;
   const serverCommand = opts.serverCommand ?? defaultServerCommand;
-  const effectiveArgs = opts.serverCommand || !entryPath ? serverArgs : defaultServerArgs;
+  const effectiveArgs = opts.serverCommand ? serverArgs : defaultServerArgs;
   const { getActiveSkillEnvKeysCore } = await import("../skills/runtime/env-overrides.js");
   const stripProviderAuthEnvVars = shouldStripProviderAuthEnvVarsForAcpServer({
     serverCommand,

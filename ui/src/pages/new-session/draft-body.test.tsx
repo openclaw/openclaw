@@ -29,6 +29,7 @@ it.each([
       onOpenImage={() => {}}
     />
   ));
+  await vi.dynamicImportSettled();
   await waitForSolid(() => {
     const group = container.querySelector(".chat-group.user");
     const avatar = group?.querySelector(
@@ -82,7 +83,10 @@ it("replaces startup progress with an actionable completion while retaining the 
       onOpenImage={() => {}}
     />
   ));
-  expect(container.querySelector(".chat-working-indicator")).not.toBeNull();
+  await vi.dynamicImportSettled();
+  await waitForSolid(() =>
+    expect(container.querySelector(".chat-working-indicator")).not.toBeNull(),
+  );
   expect(container.querySelector("textarea")).not.toBeNull();
   setCompletion({ label: "Session ready", onOpen: open });
   await waitForSolid(() => {

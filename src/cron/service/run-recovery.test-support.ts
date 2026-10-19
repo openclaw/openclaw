@@ -41,7 +41,6 @@ export function claimCronRecoveryReceipt(
   defaultAgentId = "alpha",
 ) {
   const prepared = prepareCronRunReceiptClaim({
-    observed: undefined,
     storePath,
     job,
     agentId: job.agentId ?? defaultAgentId,

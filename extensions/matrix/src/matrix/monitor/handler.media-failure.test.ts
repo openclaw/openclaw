@@ -29,6 +29,10 @@ function createMediaFailureHarness() {
     error: vi.fn(),
   };
   const harness = createMatrixHandlerTestHarness({
+    cfg: {
+      session: { store: "/tmp/openclaw-test-session.json" },
+      channels: { matrix: { dm: { allowFrom: ["*"] } } },
+    },
     logger: logger as never,
     runtime: runtime as never,
     shouldHandleTextCommands: () => true,
@@ -41,14 +45,12 @@ function createMediaFailureHarness() {
       channel: "matrix",
       matchedBy: "binding.account",
     }),
-    resolveStorePath: () => "/tmp/openclaw-test-session.json",
     getRoomInfo: async () => ({
       name: "Media Room",
       canonicalAlias: "#media:example.org",
       altAliases: [],
     }),
     getMemberDisplayName: async () => "Gum",
-    startupMs: Date.now() - 120_000,
     mediaMaxBytes: 5 * 1024 * 1024,
     replyToMode: "first",
   });

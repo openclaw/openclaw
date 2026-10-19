@@ -391,8 +391,11 @@ For a specific paired device that advertises `workerHost.deviceFolders: true`,
 choose **Existing folder on device** in the workspace picker and enter an
 absolute path on that device. This option is not available for **Auto**, cloud
 workers, runtimes without worker-turn execution, or devices that do not advertise
-the capability. The device validates
-the folder; the Gateway does not browse or resolve this path locally.
+the capability. Operators with `operator.admin` can also choose **Browse folders
+on** _device_ to list folders on that device through its `fs.listDir` command.
+The listing is not limited to `folders` roots; the device validates the chosen
+folder when the session is created. The Gateway never browses or resolves this
+path locally.
 
 The session records `deviceFolder: { deviceId, path }` and dispatches to that
 exact device. Do not combine `deviceFolder` with a project, repository,
@@ -432,6 +435,14 @@ Restart the node host after changing either setting. Isolation defaults to
 `"none"`, preserving the existing direct-process behavior. This setting is
 enforced locally on the node; the Gateway cannot silently disable it or fall
 back to an unisolated worker.
+
+Isolation applies only to sessions placed on this node. When `sessions.dispatch`
+to the node is refused (for example, because no container engine works), the
+session stays unplaced, and its turns run on the Gateway like any other
+undispatched session. To forbid Gateway-local execution entirely, set
+[`cloudWorkers.requiredProfile`](/gateway/config-cloud-workers#required-worker-profile)
+to a device profile for this node; turns then fail with an actionable error
+instead of running on the Gateway.
 
 Container isolation is supported on Linux and macOS node hosts; Windows is
 unsupported because native Windows paths cannot be mounted at their original

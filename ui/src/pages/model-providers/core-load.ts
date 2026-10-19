@@ -4,7 +4,6 @@ import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
 import { loadModelCatalog, modelCatalogRefreshError } from "../../lib/model-catalog-store.ts";
-import type { SolidControllerHost as ControllerHost } from "../../lit/solid-controller-host.ts";
 import { loadModelProvidersData, type ModelProvidersData } from "./load.ts";
 
 export type ModelProviderRefreshReason = "publication" | "replacement" | "forced";
@@ -56,7 +55,7 @@ export class ModelProviderCoreLoader {
   private publicationPending = false;
 
   constructor(
-    private readonly host: ControllerHost,
+    private readonly notify: () => void,
     private readonly options: CoreLoadOptions,
   ) {}
 
@@ -73,7 +72,7 @@ export class ModelProviderCoreLoader {
     this.catalogRequest = null;
     this.catalogError = null;
     retired?.abort();
-    this.host.requestUpdate();
+    this.notify();
   }
 
   async discoverCatalog(
@@ -88,7 +87,7 @@ export class ModelProviderCoreLoader {
     const ownsResult = () => this.catalogRequest === request && isCurrent();
     this.catalogRequest = request;
     this.catalogError = null;
-    this.host.requestUpdate();
+    this.notify();
     try {
       const result = await loadModelCatalog(client, {
         agentId,
@@ -110,7 +109,7 @@ export class ModelProviderCoreLoader {
       if (this.catalogRequest === request) {
         this.catalogRequest = null;
         this.refreshPendingPublication(client, agentId);
-        this.host.requestUpdate();
+        this.notify();
       }
     }
   }
@@ -136,7 +135,7 @@ export class ModelProviderCoreLoader {
     if (!target) {
       this.options.onStart(reason);
     }
-    this.host.requestUpdate();
+    this.notify();
     try {
       const data = target
         ? await loadConnectedProviderData(client, agentId, target, request.signal)
@@ -157,7 +156,7 @@ export class ModelProviderCoreLoader {
         this.request = null;
         this.active = false;
         this.refreshPendingPublication(client, agentId);
-        this.host.requestUpdate();
+        this.notify();
       }
     }
   }
@@ -175,6 +174,6 @@ export class ModelProviderCoreLoader {
     this.active = false;
     this.request?.abort();
     this.request = null;
-    this.host.requestUpdate();
+    this.notify();
   }
 }

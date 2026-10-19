@@ -943,6 +943,9 @@ def available_simulator_devices
   ] + @owned.values + (@scenario == "busy" ? [{ "name" => "Unrelated", "udid" => "unrelated", "state" => "Booted" }] : [])
 end
 def write_watch_screenshot_mode_defaults(*); end
+def resolve_simulator_device(name)
+  available_simulator_devices.find { |device| device.fetch("name") == name }
+end
 def set_watch_status_bar_override(*)
   false
 end
@@ -993,6 +996,11 @@ def sh(command, *arguments, **_options)
   @commands << args
   if args[0, 3] == ["xcrun", "simctl", "create"]
     raise "new device before old cleanup" unless @owned.empty?
+    if args[3].include?("Apple Watch") && @scenario.start_with?("runtime-")
+      @watch_creates += 1
+      raise "unrelated creation failure" if @scenario == "runtime-unrelated"
+      raise "The watchOS 27.0 simulator runtime is not available: runtime path not found" if @watch_creates == 1 || @scenario == "runtime-retry-failure"
+    end
     @created += 1
     udid = "00000000-0000-0000-0000-%012d" % @created
     @owned[udid] = { "name" => args[3], "udid" => udid, "runtime" => args[5], "state" => "Shutdown" }
@@ -1007,6 +1015,16 @@ def sh(command, *arguments, **_options)
     @owned.fetch(args[3])["state"] = "Shutdown"
   elsif args[0, 3] == ["xcrun", "simctl", "delete"]
     @owned.delete(args[3])
+  elsif args == ["xcrun", "simctl", "runtime", "list", "-j"]
+    return JSON.generate({
+      "watch-image" => { "identifier" => "watch-image", "runtimeIdentifier" => "com.apple.CoreSimulator.SimRuntime.watchOS-27-0", "state" => "Ready", "runtimeBundlePath" => File.join(@root, "watch-runtime") },
+      "phone-image" => { "identifier" => "phone-image", "runtimeIdentifier" => "com.apple.CoreSimulator.SimRuntime.iOS-27-0", "state" => "Ready", "runtimeBundlePath" => File.join(@root, "phone-runtime") }
+    })
+  elsif args == ["xcrun", "--sdk", "watchsimulator", "--show-sdk-version"]
+    return "27.0"
+  elsif args[0, 2] == ["xcodebuild", "-downloadPlatform"]
+    raise "watchOS download unavailable" if @scenario == "runtime-download-failure"
+    FileUtils.mkdir_p(File.join(@root, "watch-runtime")) unless @scenario == "runtime-path-missing"
   elsif args.include?("xcodebuild") && args.include?("build")
     @builds << "watch"
     raise "Watch build failed" if @scenario == "standalone-build-failure"
@@ -1019,10 +1037,12 @@ def sh(command, *arguments, **_options)
   end
 end
 
-results = %w[combined diagnostics iphone standalone standalone-build-failure missing invalid-plist invalid-install build-failure busy boot-failure boot-ended capture-failure capture-cleanup-failure cleanup-failure].map do |scenario|
+results = %w[combined diagnostics iphone standalone standalone-build-failure missing invalid-plist invalid-install build-failure busy boot-failure boot-ended capture-failure capture-cleanup-failure cleanup-failure runtime-recovered runtime-download-failure runtime-path-missing runtime-retry-failure runtime-unrelated runtime-local].map do |scenario|
   Dir.mktmpdir("openclaw-watch-build-") do |root|
     @root, @scenario, @builds, @commands, @installed = root, scenario, [], [], nil
     @owned, @created = {}, 0
+    @watch_creates = 0
+    ENV["CI"] = scenario == "runtime-local" ? "false" : "true"
     ENV["HOME"] = root
     ENV["OPENCLAW_SNAPSHOT_DIAGNOSTICS"] = scenario == "diagnostics" ? "1" : "0"
     logs = File.join(ios_root, "build", "SnapshotLogs")
@@ -1055,6 +1075,8 @@ results = %w[combined diagnostics iphone standalone standalone-build-failure mis
       scenario: scenario, builds: @builds, error: error, installed: @installed,
       owned: @owned.keys,
       lifecycle: @commands.select { |args| args[0, 2] == ["xcrun", "simctl"] && %w[create bootstatus shutdown delete].include?(args[2]) }.map { |args| args.drop(2) },
+      repairCommands: @commands.select { |args| args[0, 3] == ["xcrun", "simctl", "runtime"] || args[0, 2] == ["xcodebuild", "-downloadPlatform"] },
+      watchCreates: @watch_creates,
       pngs: Dir[File.join(ios_root, "fastlane", "screenshots", "en-US", "*.png")].length,
       xcresults: Dir[File.join(ios_root, "build", "SnapshotTestResults", "*.xcresult")].length,
       attempts: File.exist?(File.join(ios_root, "build", "SnapshotTestResults", "capture-attempts.json")),
@@ -1086,6 +1108,8 @@ puts JSON.generate(results)
       versions: string[][];
       owned: string[];
       lifecycle: string[][];
+      repairCommands: string[][];
+      watchCreates: number;
     }[];
     const row = (scenario: string) => rows.find((entry) => entry.scenario === scenario)!;
     const versionArgs = ["--version", "2026.9.1", "--revision", "2", "--build-number", "123"];
@@ -1208,6 +1232,26 @@ puts JSON.generate(results)
     expect(row("capture-failure").error).toBe("capture failed");
     expect(row("capture-cleanup-failure").error).toBe("capture failed");
     expect(row("cleanup-failure").error).toBe("cleanup failed");
+    expect(row("runtime-recovered")).toMatchObject({ error: null, pngs: 9, watchCreates: 2 });
+    expect(row("runtime-recovered").repairCommands).toEqual([
+      ["xcrun", "simctl", "runtime", "list", "-j"],
+      ["xcrun", "simctl", "runtime", "delete", "watch-image"],
+      ["xcodebuild", "-downloadPlatform", "watchOS", "-buildVersion", "27.0"],
+      ["xcrun", "simctl", "runtime", "list", "-j"],
+    ]);
+    expect(row("runtime-download-failure")).toMatchObject({
+      error: "watchOS download unavailable",
+      pngs: 8,
+      watchCreates: 1,
+    });
+    expect(row("runtime-path-missing").error).toContain("did not restore a mounted runtime");
+    expect(row("runtime-path-missing").watchCreates).toBe(1);
+    expect(row("runtime-retry-failure").error).toContain("after one runtime repair");
+    expect(row("runtime-retry-failure").watchCreates).toBe(2);
+    for (const scenario of ["runtime-unrelated", "runtime-local"]) {
+      expect(row(scenario)).toMatchObject({ pngs: 8, watchCreates: 1, repairCommands: [] });
+      expect(row(scenario).error).toBeTruthy();
+    }
     for (const entry of rows) {
       expect(entry.owned, entry.scenario).toEqual([]);
     }
@@ -1315,15 +1359,15 @@ end
     });
   });
 
-  it("runs screenshot shards alongside builds without changing runner authorization", () => {
+  it("captures all screenshot families once without changing runner authorization", () => {
     const workflow = readFileSync(ciWorkflowPath, "utf8");
     const iosJobStart = workflow.indexOf("\n  ios-build:\n");
-    const iosJobEnd = workflow.indexOf("\n  ios-screenshot-shard:\n", iosJobStart);
+    const iosJobEnd = workflow.indexOf("\n  ios-screenshot-capture:\n", iosJobStart);
     const iosJob = workflow.slice(iosJobStart, iosJobEnd);
-    const shardJobStart = iosJobEnd;
-    const shardJobEnd = workflow.indexOf("\n  ios-screenshot-evidence:\n", shardJobStart);
-    const shardJob = workflow.slice(shardJobStart, shardJobEnd);
-    const reducerJobStart = shardJobEnd;
+    const captureJobStart = iosJobEnd;
+    const captureJobEnd = workflow.indexOf("\n  ios-screenshot-evidence:\n", captureJobStart);
+    const captureJob = workflow.slice(captureJobStart, captureJobEnd);
+    const reducerJobStart = captureJobEnd;
     const reducerJobEnd = workflow.indexOf("\n  android:\n", reducerJobStart);
     const reducerJob = workflow.slice(reducerJobStart, reducerJobEnd);
 
@@ -1331,32 +1375,40 @@ end
     expect(workflow).toContain('IOS_SCREENSHOT_XCODE_VERSION: "Xcode 27.0 Build version 27A266a"');
     expect(iosJob).toContain("timeout-minutes: 150");
     expect(iosJob).not.toContain("Capture iOS release screenshots");
-    expect(shardJob).toContain("needs: [preflight]");
-    expect(shardJob).toContain("max-parallel: 2");
-    expect(shardJob).toContain("device_family: [iphone, ipad-13]");
-    expect(shardJob).toContain(
-      "OPENCLAW_SNAPSHOT_SKIP_WATCH: ${{ matrix.device_family == 'iphone' && '1' || '0' }}",
+    expect(captureJob).toContain("needs: [preflight]");
+    expect(captureJob).not.toContain("strategy:");
+    expect(captureJob).not.toContain("OPENCLAW_SNAPSHOT_DEVICE_FAMILY");
+    expect(captureJob).not.toContain("OPENCLAW_SNAPSHOT_SKIP_WATCH");
+    expect(captureJob).not.toContain("run_ios_fastlane ios watch_screenshot");
+    expect(captureJob).toContain("run: pnpm ios:screenshots");
+    const runtimeProvision = "xcodebuild -downloadPlatform watchOS -buildVersion 27.0";
+    expect(captureJob).toContain(runtimeProvision);
+    expect(captureJob.indexOf("*select_xcode_step")).toBeLessThan(
+      captureJob.indexOf(runtimeProvision),
     );
-    expect(shardJob).not.toContain("run_ios_fastlane ios watch_screenshot");
-    expect(shardJob).toContain("run: pnpm ios:screenshots");
-    expect(shardJob).toContain("id: package_screenshot_evidence");
-    expect(shardJob).toContain('if [[ "$DEVICE_FAMILY" == "ipad-13" ]]; then');
+    expect(captureJob.indexOf(runtimeProvision)).toBeLessThan(
+      captureJob.indexOf("run: pnpm ios:screenshots"),
+    );
+    expect(captureJob).toContain("id: package_screenshot_evidence");
+    expect(captureJob).not.toContain("--family");
     expect(
-      shardJob.match(/node \.ci-harness\/scripts\/ios-screenshot-evidence\.mjs/g),
-    ).toHaveLength(2);
-    expect(shardJob).not.toContain("node scripts/ios-screenshot-evidence.mjs");
-    expect(shardJob).toContain("steps.package_screenshot_evidence.outcome == 'failure'");
-    expect(shardJob).toContain("steps.device_screenshots.outcome == 'failure'");
-    expect(shardJob).toContain("apps/ios/build/SnapshotTestResults/capture-attempts.json");
-    expect(shardJob).not.toContain("IOS_SCREENSHOT_FASTLANE_VERSION");
-    expect(shardJob).toContain("IOS_SCREENSHOT_NODE_VERSION");
-    expect(shardJob).toContain("IOS_SCREENSHOT_XCODE_VERSION");
-    expect(shardJob).not.toContain('test "$fastlane_version" = "$IOS_SCREENSHOT_FASTLANE_VERSION"');
-    expect(shardJob).toContain("node-version: ${{ env.IOS_SCREENSHOT_NODE_VERSION }}");
-    expect(shardJob).not.toContain("SnapshotDerivedData");
-    expect(shardJob.match(/contents: read/g)).toHaveLength(1);
-    expect(reducerJob).toContain("needs: [preflight, ios-screenshot-shard]");
-    expect(reducerJob).toContain("merge-multiple: false");
+      captureJob.match(/node \.ci-harness\/scripts\/ios-screenshot-evidence\.mjs/g),
+    ).toHaveLength(1);
+    expect(captureJob).not.toContain("node scripts/ios-screenshot-evidence.mjs");
+    expect(captureJob).toContain("steps.package_screenshot_evidence.outcome == 'failure'");
+    expect(captureJob).toContain("steps.device_screenshots.outcome == 'failure'");
+    expect(captureJob).toContain("apps/ios/build/SnapshotTestResults/capture-attempts.json");
+    expect(captureJob).not.toContain("IOS_SCREENSHOT_FASTLANE_VERSION");
+    expect(captureJob).toContain("IOS_SCREENSHOT_NODE_VERSION");
+    expect(captureJob).toContain("IOS_SCREENSHOT_XCODE_VERSION");
+    expect(captureJob).not.toContain(
+      'test "$fastlane_version" = "$IOS_SCREENSHOT_FASTLANE_VERSION"',
+    );
+    expect(captureJob).toContain("node-version: ${{ env.IOS_SCREENSHOT_NODE_VERSION }}");
+    expect(captureJob).not.toContain("SnapshotDerivedData");
+    expect(captureJob.match(/contents: read/g)).toHaveLength(1);
+    expect(reducerJob).toContain("needs: [preflight, ios-screenshot-capture]");
+    expect(reducerJob).not.toContain("merge-multiple:");
     expect(reducerJob).toContain("Setup screenshot evidence Node");
     expect(reducerJob).toContain("node-version: ${{ env.IOS_SCREENSHOT_NODE_VERSION }}");
     expect(reducerJob).toContain("id: reduce_screenshot_evidence");

@@ -20,9 +20,10 @@ const { pluginsHandlers } = await import("./plugins.js");
 
 afterEach(() => resetPluginRuntimeStateForTest());
 
-it.each([true])(
+it.each([undefined, 1, 2] as const)(
   "validates the actual inspection response with a decision provider: %s",
-  async (registered) => {
+  async (contractVersion) => {
+    const registered = contractVersion !== undefined;
     const config = { agents: { defaults: { decisionModel: "fixture/fast" } } };
     const builder = createTestPluginRegistry();
     const record = createPluginRecord({
@@ -37,7 +38,18 @@ it.each([true])(
       let calls = 0;
       const api = builder.createApi(record, { config });
       runPluginRegisterSyncInRegistry(
-        (registration) =>
+        (registration) => {
+          if (contractVersion === 2) {
+            registration.registerDecisionProvider({
+              id: "fixture",
+              contractVersion: 2,
+              provider: { label: "Fixture", auth: [] },
+              async evaluate() {
+                throw new Error("Inspection must not evaluate a V2 provider");
+              },
+            });
+            return;
+          }
           registration.registerDecisionProvider({
             id: "fixture",
             contractVersion: 1,
@@ -54,7 +66,8 @@ it.each([true])(
                 },
               };
             },
-          }),
+          });
+        },
         api,
         builder.registry,
         record.id,
@@ -65,7 +78,7 @@ it.each([true])(
       });
     }
     setActivePluginRegistry(builder.registry);
-    if (registered) {
+    if (contractVersion === 1) {
       for (let index = 0; index < 2; index++) {
         await evaluateDecisionInRegistry(
           { state: "synthetic", questions: { check: { type: "boolean" } } },
@@ -132,16 +145,22 @@ it.each([true])(
               providerId: "fixture",
               pluginId: record.id,
               configured: true,
-              credentialReady: true,
+              ...(contractVersion === 1 ? { credentialReady: false } : {}),
               callable: true,
-              successCount: 1,
+              successCount: contractVersion === 1 ? 1 : 0,
               activeRequests: 0,
-              usage: { inputTokens: 2, outputTokens: 1 },
-              reasons: { transport: 1 },
+              usage:
+                contractVersion === 1
+                  ? { inputTokens: 2, outputTokens: 1 }
+                  : { inputTokens: 0, outputTokens: 0 },
+              reasons: contractVersion === 1 ? { transport: 1 } : {},
             },
           ]
         : [],
     });
+    if (contractVersion === 2) {
+      expect(response).not.toHaveProperty("decisions.0.credentialReady");
+    }
     expect(Value.Check(PluginsInspectResultSchema, response)).toBe(true);
     expect(Value.Check(PluginsInspectResultSchema, inspection)).toBe(true);
     if (registered) {

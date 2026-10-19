@@ -2,10 +2,13 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, Show } from "solid-js";
 import { ChannelIcon } from "../../components/solid/channel-icon.tsx";
 import { WizardBusyButton, WizardStepControls } from "../../components/wizard-step-controls.tsx";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import "../../components/modal-dialog.ts";
 import { channelDocsUrl } from "./hub-meta.ts";
 import type { ChannelWizardState } from "./wizard-runner.ts";
+
+registerEnglishCatalog(registerSettingsEnglish);
 
 type ChannelWizardViewProps = {
   wizard: ChannelWizardState;
@@ -30,7 +33,7 @@ type ChannelWizardViewProps = {
 
 function renderCloseButton(props: ChannelWizardViewProps, labelKey: string, primary = false) {
   return (
-    <button type="button" class={primary ? "btn primary" : "btn"} onClick={() => props.onClose()}>
+    <button type="button" class={["btn", { primary }]} onClick={() => props.onClose()}>
       {t(labelKey)}
     </button>
   );
@@ -45,11 +48,12 @@ function WizardStepBody(props: {
   );
   const message = createMemo(() => props.wizard.step.message?.trim() ?? "");
   const gatewayOwned = createMemo(() => props.wizard.step.executor === "gateway");
-  const outputClass = createMemo(() =>
-    gatewayOwned()
-      ? "channels-wizard__message"
-      : `channels-wizard__output${message().includes("{") || message().includes("  ") ? " channels-wizard__output--code" : ""}`,
-  );
+  const outputClass = () => [
+    gatewayOwned() ? "channels-wizard__message" : "channels-wizard__output",
+    !gatewayOwned() &&
+      (message().includes("{") || message().includes("  ")) &&
+      "channels-wizard__output--code",
+  ];
   return (
     <Show
       when={informational()}

@@ -1,5 +1,11 @@
 import type { OAuthCredential } from "../agents/auth-profiles/types.js";
 import { unwrapSecretSentinelsForProviderEgress } from "../agents/provider-secret-egress.js";
+import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
+import {
+  assertProviderAuthAuthority,
+  attachProviderAuthAuthority,
+  getProviderAuthAuthority,
+} from "./provider-auth-authority.js";
 import { resolveProviderRuntimePlugin } from "./provider-hook-runtime.js";
 import { resolveProviderRefOwnership } from "./providers.js";
 import type { ProviderPlugin, ProviderPrepareRuntimeAuthContext } from "./types.js";
@@ -15,22 +21,31 @@ export async function prepareProviderRuntimeAuth(
     context: ProviderPrepareRuntimeAuthContext;
   },
 ) {
+  if (resolveMergedModelProviderConfig(params.config, params.provider)?.auth === "none") {
+    return undefined;
+  }
   const prepareRuntimeAuth = resolveProviderRuntimePlugin(params)?.prepareRuntimeAuth;
   if (!prepareRuntimeAuth) {
     return undefined;
   }
   // The lazy runtime import may outlive the caller's authority to exchange credentials.
   params.assertCurrent?.();
+  assertProviderAuthAuthority(params.context.model);
   // Secret material crosses into provider code only when that provider owns an
   // auth hook. Callers can safely pass sentinels without probing plugin state.
   const preparedInput = unwrapSecretSentinelsForProviderEgress(
     params.context.apiKey,
     "provider runtime auth exchange",
   );
-  return await prepareRuntimeAuth({
+  const prepared = await prepareRuntimeAuth({
     ...params.context,
     apiKey: preparedInput,
   });
+  params.assertCurrent?.();
+  assertProviderAuthAuthority(params.context.model);
+  return prepared
+    ? attachProviderAuthAuthority(prepared, getProviderAuthAuthority(params.context.model))
+    : prepared;
 }
 
 export async function loginProviderOAuthWithPlugin(

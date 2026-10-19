@@ -27,6 +27,33 @@ const target = { roomId, messageId: "$msg" };
 const account = { accountId: "ops" };
 const authorizedOpts = { cfg, ...account, client: mocks.matrixClient };
 const mediaLocalRoots = ["/tmp/openclaw-matrix-test"];
+const blockedMessage = "Matrix read target is not allowed.";
+function blockReadTarget() {
+  mocks.withAuthorizedMatrixReadTarget.mockRejectedValueOnce(new Error(blockedMessage));
+}
+type BlockedCase = [
+  action: Parameters<typeof runMatrixAction>[0],
+  params: Record<string, unknown>,
+  forbidden: Array<typeof mocks.voteMatrixPoll>,
+  config?: CoreConfig,
+  context?: Parameters<typeof runMatrixAction>[3],
+];
+function runScoped(action: Parameters<typeof runMatrixAction>[0], params: Record<string, unknown>) {
+  return runMatrixAction(action, params, cfg, account);
+}
+const makeMessage = (eventId: string, body: string, timestamp = 1_750_000_000_000) => ({
+  eventId,
+  sender: "@alice:example.org",
+  body,
+  timestamp,
+});
+const readParams = {
+  roomId: `room:${roomId}`,
+  limit: 7,
+  before: "before",
+  after: "after",
+  threadId: "$thread",
+};
 
 describe("Matrix public message actions", () => {
   beforeEach(resetMatrixActionMocks);
@@ -65,23 +92,20 @@ describe("Matrix public message actions", () => {
     });
   });
 
-  it("rejects missing poll ids", async () => {
-    await expect(
-      runMatrixAction("poll-vote", { roomId, pollOptionIndex: 1 }, emptyCfg),
-    ).rejects.toThrow("pollId required");
-  });
-
-  it("rejects fractional poll option indexes before voting", async () => {
-    await expect(
-      runMatrixAction("poll-vote", { roomId, pollId: "$poll", pollOptionIndex: 1.5 }, emptyCfg),
-    ).rejects.toThrow("pollOptionIndex must be a positive integer.");
-    await expect(
-      runMatrixAction(
-        "poll-vote",
-        { roomId, pollId: "$poll", pollOptionIndexes: [1, 2.5] },
-        emptyCfg,
-      ),
-    ).rejects.toThrow("pollOptionIndexes must contain positive integers.");
+  it.each([
+    { params: { pollOptionIndex: 1 }, error: "pollId required" },
+    {
+      params: { pollId: "$poll", pollOptionIndex: 1.5 },
+      error: "pollOptionIndex must be a positive integer.",
+    },
+    {
+      params: { pollId: "$poll", pollOptionIndexes: [1, 2.5] },
+      error: "pollOptionIndexes must contain positive integers.",
+    },
+  ])("rejects invalid vote: $error", async ({ params, error }) => {
+    await expect(runMatrixAction("poll-vote", { roomId, ...params }, emptyCfg)).rejects.toThrow(
+      error,
+    );
     expect(mocks.voteMatrixPoll).not.toHaveBeenCalled();
   });
 
@@ -99,26 +123,8 @@ describe("Matrix public message actions", () => {
     });
   });
 
-  it("authorizes the room before reading the poll", async () => {
-    mocks.withAuthorizedMatrixReadTarget.mockRejectedValueOnce(
-      new Error("Matrix read target is not allowed."),
-    );
-    await expect(
-      runMatrixAction(
-        "poll-vote",
-        {
-          roomId: "!blocked:example",
-          pollId: "$poll",
-          pollOptionIndex: 1,
-        },
-        emptyCfg,
-      ),
-    ).rejects.toThrow("Matrix read target is not allowed.");
-    expect(mocks.voteMatrixPoll).not.toHaveBeenCalled();
-  });
-
   it("passes account-scoped opts to add reactions", async () => {
-    await runMatrixAction("react", { ...target, emoji: "👍" }, cfg, account);
+    await runScoped("react", { ...target, emoji: "👍" });
     expect(mocks.reactMatrixMessage).toHaveBeenCalledWith(roomId, "$msg", "👍", authorizedOpts);
   });
 
@@ -140,7 +146,7 @@ describe("Matrix public message actions", () => {
     });
   });
 
-  it("rejects custom-emote discovery when reactions or room access are disabled", async () => {
+  it("rejects custom-emote discovery when reactions are disabled", async () => {
     const params = { roomId: "!blocked:example" };
     await expect(
       runMatrixAction("emoji-list", params, {
@@ -148,44 +154,46 @@ describe("Matrix public message actions", () => {
       }),
     ).rejects.toThrow("Matrix reactions are disabled.");
     expect(mocks.withAuthorizedMatrixReadTarget).not.toHaveBeenCalled();
-    mocks.withAuthorizedMatrixReadTarget.mockRejectedValueOnce(
-      new Error("Matrix read target is not allowed."),
-    );
-    await expect(runMatrixAction("emoji-list", params, emptyCfg)).rejects.toThrow(
-      "Matrix read target is not allowed.",
-    );
     expect(mocks.listMatrixEmojis).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { action: "react", params: { emoji: "👍" }, providerCall: mocks.reactMatrixMessage },
-    { action: "edit", params: { message: "updated" }, providerCall: mocks.editMatrixMessage },
-    { action: "delete", params: {}, providerCall: mocks.deleteMatrixMessage },
-  ] as const)(
-    "rejects blocked $action before mutating Matrix",
-    async ({ action, params, providerCall }) => {
-      mocks.withAuthorizedMatrixReadTarget.mockRejectedValueOnce(
-        new Error("Matrix read target is not allowed."),
-      );
+  it.each<BlockedCase>([
+    ["react", { ...target, emoji: "👍" }, [mocks.reactMatrixMessage]],
+    ["edit", { ...target, message: "updated" }, [mocks.editMatrixMessage]],
+    ["delete", target, [mocks.deleteMatrixMessage]],
+    ["poll-vote", { pollId: "$poll", pollOptionIndex: 1 }, [mocks.voteMatrixPoll], emptyCfg],
+    ["emoji-list", {}, [mocks.listMatrixEmojis], emptyCfg],
+    [
+      "pin",
+      { messageId: "$pin" },
+      [mocks.pinMatrixMessage, mocks.unpinMatrixMessage, mocks.listMatrixPins],
+    ],
+    [
+      "read",
+      { messageId: "$older" },
+      [mocks.readMatrixMessage, mocks.readMatrixMessages],
+      emptyCfg,
+      {
+        ...account,
+        requesterAccountId: "other",
+        toolContext: { currentChannelId: "!current:example", currentChannelProvider: "matrix" },
+      },
+    ],
+  ])(
+    "rejects blocked %s before reading or mutating Matrix",
+    async (action, params, forbidden, config = cfg, context = {}) => {
+      blockReadTarget();
       await expect(
-        runMatrixAction(action, { ...target, roomId: "!blocked:example", ...params }, cfg),
-      ).rejects.toThrow("Matrix read target is not allowed.");
-      expect(providerCall).not.toHaveBeenCalled();
+        runMatrixAction(action, { ...params, roomId: "!blocked:example" }, config, context),
+      ).rejects.toThrow(blockedMessage);
+      for (const call of forbidden) {
+        expect(call).not.toHaveBeenCalled();
+      }
     },
   );
 
   it("passes account-scoped opts to remove reactions", async () => {
-    await runMatrixAction(
-      "react",
-      {
-        room_id: roomId,
-        message_id: "$msg",
-        emoji: "👍",
-        remove: true,
-      },
-      cfg,
-      account,
-    );
+    await runScoped("react", { room_id: roomId, message_id: "$msg", emoji: "👍", remove: true });
     expect(mocks.removeMatrixReactions).toHaveBeenCalledWith(roomId, "$msg", {
       ...authorizedOpts,
       emoji: "👍",
@@ -193,16 +201,11 @@ describe("Matrix public message actions", () => {
   });
 
   it("passes account-scoped opts and limit to reaction listing", async () => {
-    const result = await runMatrixAction(
-      "reactions",
-      {
-        room_id: roomId,
-        message_id: "$msg",
-        limit: "5",
-      },
-      cfg,
-      account,
-    );
+    const result = await runScoped("reactions", {
+      room_id: roomId,
+      message_id: "$msg",
+      limit: "5",
+    });
     expect(mocks.listMatrixReactions).toHaveBeenCalledWith(roomId, "$msg", {
       ...authorizedOpts,
       limit: 5,
@@ -249,98 +252,66 @@ describe("Matrix public message actions", () => {
     expect(mocks.sendMatrixMessage.mock.lastCall?.[2]?.mediaAccess).toBe(mediaAccess);
   });
 
-  it("keeps blank IDs on authorized paginated history and projects readable messages", async () => {
-    const message = {
-      eventId: "$message",
-      sender: "@alice:example.org",
-      body: "hello from Matrix",
-      msgtype: "m.text",
-      timestamp: 1_750_000_000_000,
-    };
-    mocks.readMatrixMessages.mockResolvedValueOnce({
-      messages: [message, { eventId: "$sparse" }],
-      nextBatch: "next",
-      prevBatch: "previous",
-    });
-    const result = await runMatrixAction(
-      "read",
-      {
-        roomId: `room:${roomId}`,
-        messageId: "   ",
-        limit: 7,
-        before: "before",
-        after: "after",
-        threadId: "$thread",
-      },
-      cfg,
-      account,
-    );
-    expect(mocks.readMatrixMessages).toHaveBeenCalledWith(roomId, {
-      ...authorizedOpts,
-      limit: 7,
-      before: "before",
-      after: "after",
-      threadId: "$thread",
-    });
-    expect(mocks.readMatrixMessage).not.toHaveBeenCalled();
-    expect(result.details).toEqual({
-      ok: true,
-      roomId,
-      threadId: "$thread",
-      messages: [
-        {
-          ...message,
-          id: "$message",
-          authorTag: "@alice:example.org",
-          content: "hello from Matrix",
-          ts: "2025-06-15T15:06:40.000Z",
-        },
-        { eventId: "$sparse", id: "$sparse" },
-      ],
-      nextBatch: "next",
-      prevBatch: "previous",
-    });
-  });
-
-  it("reads exactly the requested message id instead of room history", async () => {
-    mocks.readMatrixMessage.mockResolvedValueOnce({
-      eventId: "$older",
-      sender: "@alice:example.org",
-      body: "older",
-      timestamp: 1000,
-    });
-    const result = await runMatrixAction(
-      "read",
-      {
-        roomId: `room:${roomId}`,
-        messageId: "  $older  ",
-        limit: 5,
-        before: "before",
-        after: "after",
-        threadId: "$thread",
-      },
-      cfg,
-      account,
-    );
-    expect(mocks.readMatrixMessage).toHaveBeenCalledWith(roomId, "$older", authorizedOpts);
-    expect(mocks.readMatrixMessages).not.toHaveBeenCalled();
-    expect(result.details).toEqual({
-      ok: true,
-      roomId,
-      messages: [
-        {
-          eventId: "$older",
-          sender: "@alice:example.org",
-          body: "older",
-          timestamp: 1000,
-          ts: "1970-01-01T00:00:01.000Z",
-          id: "$older",
-          authorTag: "@alice:example.org",
-          content: "older",
-        },
-      ],
-    });
-  });
+  it.each([
+    ["history", "$message", "hello from Matrix", 1_750_000_000_000, "2025-06-15T15:06:40.000Z"],
+    ["event", "$older", "older", 1000, "1970-01-01T00:00:01.000Z"],
+    ["pins", "$pin", "pinned message", 1_750_000_000_000, "2025-06-15T15:06:40.000Z"],
+  ] as const)(
+    "projects %s without losing source fields or selection semantics",
+    async (kind, id, body, timestamp, ts) => {
+      const entry = {
+        ...makeMessage(id, body, timestamp),
+        ...(kind === "history" ? { msgtype: "m.text" } : {}),
+      };
+      const projected = { ...entry, id, authorTag: "@alice:example.org", content: body, ts };
+      const sparse = { eventId: "$sparse" };
+      const history = { messages: [entry, sparse], nextBatch: "next", prevBatch: "previous" };
+      const pins = { pinned: [id], events: [entry] };
+      const provider =
+        kind === "history"
+          ? mocks.readMatrixMessages
+          : kind === "event"
+            ? mocks.readMatrixMessage
+            : mocks.listMatrixPins;
+      provider.mockResolvedValueOnce(
+        kind === "history" ? history : kind === "event" ? entry : pins,
+      );
+      const params =
+        kind === "pins"
+          ? { roomId }
+          : {
+              ...readParams,
+              limit: kind === "event" ? 5 : 7,
+              messageId: kind === "event" ? "  $older  " : "   ",
+            };
+      const result = await runScoped(kind === "pins" ? "list-pins" : "read", params);
+      if (kind === "history") {
+        const { roomId: _room, ...pagination } = readParams;
+        expect(provider).toHaveBeenCalledWith(roomId, { ...authorizedOpts, ...pagination });
+        expect(mocks.readMatrixMessage).not.toHaveBeenCalled();
+        expect(result.details).toEqual({
+          ok: true,
+          roomId,
+          threadId: "$thread",
+          messages: [projected, { ...sparse, id: "$sparse" }],
+          nextBatch: "next",
+          prevBatch: "previous",
+        });
+      } else if (kind === "event") {
+        expect(provider).toHaveBeenCalledWith(roomId, "$older", authorizedOpts);
+        expect(mocks.readMatrixMessages).not.toHaveBeenCalled();
+        expect(result.details).toEqual({ ok: true, roomId, messages: [projected] });
+      } else {
+        expect(provider).toHaveBeenCalledWith(roomId, authorizedOpts);
+        expect(result.details).toEqual({
+          ok: true,
+          pinned: [id],
+          events: [entry],
+          pins: [projected],
+        });
+      }
+    },
+  );
 
   it("does not fall back to history when the exact event cannot be summarized", async () => {
     mocks.readMatrixMessage.mockRejectedValueOnce(
@@ -373,79 +344,21 @@ describe("Matrix public message actions", () => {
     expect(mocks.readMatrixMessages).not.toHaveBeenCalled();
   });
 
-  it("retains the read-policy gate before exact event selection", async () => {
-    mocks.withAuthorizedMatrixReadTarget.mockRejectedValueOnce(
-      new Error("Matrix read target is not allowed."),
-    );
-    await expect(
-      runMatrixAction("read", { roomId: "!blocked:example", messageId: "$older" }, emptyCfg, {
-        ...account,
-        requesterAccountId: "other",
-        toolContext: { currentChannelId: "!current:example", currentChannelProvider: "matrix" },
-      }),
-    ).rejects.toThrow("Matrix read target is not allowed.");
-    expect(mocks.readMatrixMessage).not.toHaveBeenCalled();
-    expect(mocks.readMatrixMessages).not.toHaveBeenCalled();
-  });
-
-  it("projects pinned Matrix events without removing their original event fields", async () => {
-    const event = {
-      eventId: "$pin",
-      sender: "@alice:example.org",
-      body: "pinned message",
-      timestamp: 1_750_000_000_000,
-    };
-    mocks.listMatrixPins.mockResolvedValueOnce({ pinned: ["$pin"], events: [event] });
-    const result = await runMatrixAction("list-pins", { roomId }, cfg, account);
-    expect(mocks.listMatrixPins).toHaveBeenCalledWith(roomId, authorizedOpts);
-    expect(result.details).toEqual({
-      ok: true,
-      pinned: ["$pin"],
-      events: [event],
-      pins: [
-        {
-          ...event,
-          id: "$pin",
-          authorTag: "@alice:example.org",
-          content: "pinned message",
-          ts: "2025-06-15T15:06:40.000Z",
-        },
-      ],
-    });
-  });
-
   it.each([
     { action: "pin", expected: mocks.pinMatrixMessage, expectedPinned: ["$existing", "$pin"] },
     { action: "unpin", expected: mocks.unpinMatrixMessage, expectedPinned: ["$existing"] },
   ] as const)(
     "authorizes $action before reading pinned state",
     async ({ action, expected, expectedPinned }) => {
-      const result = await runMatrixAction(
-        action,
-        { roomId: `room:${roomId}`, messageId: "$pin" },
-        cfg,
-        account,
-      );
+      const result = await runScoped(action, { roomId: `room:${roomId}`, messageId: "$pin" });
       expect(expected).toHaveBeenCalledWith(roomId, "$pin", authorizedOpts);
       expect(result.details).toEqual({ ok: true, pinned: expectedPinned });
     },
   );
 
-  it("rejects blocked pins before reading or mutating pinned state", async () => {
-    mocks.withAuthorizedMatrixReadTarget.mockRejectedValueOnce(
-      new Error("Matrix read target is not allowed."),
-    );
-    await expect(
-      runMatrixAction("pin", { roomId: "!blocked:example", messageId: "$pin" }, cfg),
-    ).rejects.toThrow("Matrix read target is not allowed.");
-    expect(mocks.pinMatrixMessage).not.toHaveBeenCalled();
-    expect(mocks.unpinMatrixMessage).not.toHaveBeenCalled();
-    expect(mocks.listMatrixPins).not.toHaveBeenCalled();
-  });
-
   it("passes account-scoped opts to member and room info actions", async () => {
-    await runMatrixAction("member-info", { userId: "@u:example", roomId }, cfg, account);
-    await runMatrixAction("channel-info", { roomId }, cfg, account);
+    await runScoped("member-info", { userId: "@u:example", roomId });
+    await runScoped("channel-info", { roomId });
     expect(mocks.getMatrixMemberInfo).toHaveBeenCalledWith("@u:example", {
       ...authorizedOpts,
       roomId,

@@ -388,7 +388,6 @@ function publishAuthorityStoreChange(
   };
   if (
     !stageSqliteTransactionState(db, {
-      stage: () => {},
       // Native callbacks keep their committed facts until the physical COMMIT attempt.
       prepareCommit: () => {
         fence ??= fenceAuthorityEntries(store, entries, false);
@@ -540,8 +539,6 @@ export function stageUserProfileEmailBindingChange(
   binding: UserProfileEmailBinding | null,
 ): void {
   stageSqliteTransactionState(db, {
-    stage: () => {},
-    rollback: () => {},
     commit: () => {
       changes.bindingRevision += 1;
       for (const listener of changes.bindingListeners) {

@@ -67,7 +67,7 @@ For Talk TTS playback, after setting `talk.provider` and the matching `talk.prov
 
 Status and list are read-only. Setting a voice requires the message-channel owner or a Gateway client with `operator.admin`. Configuration, provider lookup, unknown-voice, and permission failures are returned visibly in chat. A masked API-key value in `/voice status` describes config only; it does not verify credential availability.
 
-Client-owned realtime Talk normally forwards provider tool calls through `talk.client.toolCall` instead of calling `chat.send` directly. GPT-Live WebRTC sessions delegate on a Gateway-owned sideband, and the Gateway binds each delegation to the browser or Gateway-relay Talk session that owns it. Backend WebSocket bridges use the normal relay consult path. While a realtime consult is active, clients can call `talk.client.steer` or `talk.session.steer` to classify spoken input as `status`, `steer`, `cancel`, or `followup`; this includes GPT-Live delegations. Accepted steering queues into the active embedded run; rejected steering returns a reason such as `no_active_run`, `not_streaming`, or `compacting`. A newer GPT-Live spoken task also supersedes the running delegation.
+Client-owned realtime Talk normally forwards provider tool calls through `talk.client.toolCall` instead of calling `chat.send` directly. GPT-Live WebRTC sessions delegate on a Gateway-owned sideband, and the Gateway binds each delegation to the browser or Gateway-relay Talk session that owns it. Backend WebSocket bridges use the normal relay consult path. While a realtime consult is active, clients can call `talk.client.steer` or `talk.session.steer` to classify spoken input as `status`, `steer`, `cancel`, or `followup`; this includes GPT-Live delegations. Accepted steering enters the active session turn; rejected steering returns a reason such as `no_active_run` or `injection_unavailable`. A newer GPT-Live spoken task also supersedes the running delegation.
 
 Thin audio clients can request `gateway-control-v1` in
 `talk.client.create.capabilities`. OpenAI GA Realtime requires a Platform API
@@ -140,8 +140,13 @@ replies retain their existing visibility.
 
 Direct provider-owned consultations keep their own final answer visible in Chat.
 Accepted work can outlive a closed or replaced audio connection, so a spoken
-replacement is not guaranteed. If speech also arrives, both records may be visible;
-OpenClaw preserves the answer rather than guessing that the spoken text replaces it.
+replacement is not guaranteed. For native provider-owned calls, new assistant speech
+appears in an expandable **Voice transcript**, separately from the backing agent's answer.
+Speech-only dialogue remains available there, and chat search expands matching
+transcripts. The transcript does not claim that speech replaces a particular
+consultation. Raw history, exports, and model context retain both records;
+missing or failed audio never hides the backing answer. Chat-backed Talk and
+older speech records without the presentation marker retain their existing display.
 
 OpenAI GA browser Talk keeps provider conversation order even when an assistant
 reply finishes before the user's transcription or item announcements arrive out

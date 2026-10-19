@@ -56,7 +56,7 @@ function projectWhatsAppRuntimeStatus(runtime?: ChannelAccountSnapshot) {
     lastEventAt: runtime?.lastEventAt ?? null,
     busy: runtime?.busy ?? false,
     lastRunActivityAt: runtime?.lastRunActivityAt ?? null,
-    healthState: runtime?.healthState ?? undefined,
+    healthState: runtime?.healthState,
     ...(runtime?.terminalDisconnect ? { terminalDisconnect: runtime.terminalDisconnect } : {}),
   };
 }

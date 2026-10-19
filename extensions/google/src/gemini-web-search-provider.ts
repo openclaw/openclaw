@@ -4,6 +4,7 @@ import {
   createWebSearchProviderContractFields,
   mergeScopedSearchConfig,
   resolveProviderWebSearchPluginConfig,
+  WEB_SEARCH_QUERY_COUNT_PROPERTIES,
   type WebSearchProviderPlugin,
   type WebSearchProviderToolDefinition,
 } from "openclaw/plugin-sdk/provider-web-search-config-contract";
@@ -19,13 +20,7 @@ const loadGeminiWebSearchRuntime = createLazyRuntimeModule(
 const GEMINI_TOOL_PARAMETERS = {
   type: "object",
   properties: {
-    query: { type: "string", description: "Search query string." },
-    count: {
-      type: "integer",
-      description: "Number of results to return (1-10).",
-      minimum: 1,
-      maximum: 10,
-    },
+    ...WEB_SEARCH_QUERY_COUNT_PROPERTIES,
     country: { type: "string", description: "Not supported by Gemini." },
     language: { type: "string", description: "Not supported by Gemini." },
     freshness: {

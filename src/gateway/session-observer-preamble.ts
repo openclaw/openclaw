@@ -15,9 +15,6 @@ type PreambleEntry = {
 };
 
 export function createSessionObserverPreamblePublisher(params: {
-  now: () => number;
-  setTimeoutFn: typeof setTimeout;
-  clearTimeoutFn: typeof clearTimeout;
   isCurrent: (state: SessionObserverState) => boolean;
   preparePublication?: (state: SessionObserverState, publish: () => void) => void | Promise<void>;
   publish: (state: SessionObserverState, digest: SessionObserverDigest) => void;
@@ -27,7 +24,7 @@ export function createSessionObserverPreamblePublisher(params: {
   const clear = (state: SessionObserverState): void => {
     const entry = entries.get(state);
     if (entry?.timer) {
-      params.clearTimeoutFn(entry.timer);
+      clearTimeout(entry.timer);
     }
     entries.delete(state);
   };
@@ -66,7 +63,7 @@ export function createSessionObserverPreamblePublisher(params: {
     };
     state.previousDigest = digest;
     state.lastPublishedPreambleHeadline = entry.headline;
-    entry.lastPublishedAt = params.now();
+    entry.lastPublishedAt = Date.now();
     entry.published = true;
     params.publish(state, digest);
   };
@@ -109,17 +106,17 @@ export function createSessionObserverPreamblePublisher(params: {
       entry.updatedAt = event.ts;
       entries.set(state, entry);
 
-      const elapsed = params.now() - entry.lastPublishedAt;
+      const elapsed = Date.now() - entry.lastPublishedAt;
       if (!entry.published || elapsed >= PREAMBLE_PUBLISH_INTERVAL_MS) {
         if (entry.timer) {
-          params.clearTimeoutFn(entry.timer);
+          clearTimeout(entry.timer);
         }
         const pending = publish(state, entry);
         if (pending) {
           return pending.then(() => true);
         }
       } else if (!entry.timer) {
-        entry.timer = params.setTimeoutFn(() => {
+        entry.timer = setTimeout(() => {
           void publish(state, entry);
         }, PREAMBLE_PUBLISH_INTERVAL_MS - elapsed);
         entry.timer.unref?.();
@@ -130,7 +127,7 @@ export function createSessionObserverPreamblePublisher(params: {
       const entry = entries.get(state);
       if (entry) {
         if (entry.timer) {
-          params.clearTimeoutFn(entry.timer);
+          clearTimeout(entry.timer);
         }
         return publish(state, entry);
       }

@@ -1,8 +1,10 @@
+import { decisionBatchV2ToV1, decisionResultV1ToV2 } from "openclaw/plugin-sdk/decisions";
 import type {
   DecisionAnswer,
   DecisionBatch,
   DecisionEntry,
   DecisionProviderV1,
+  DecisionProviderV2,
   DecisionQuestion,
 } from "openclaw/plugin-sdk/decisions";
 import { findModel } from "./catalog.js";
@@ -82,7 +84,12 @@ export function createOnnxProvider(
               : { instructions: render(question.instructions) }),
           };
         });
-        const results = await client.classify(context.model, inputs, context.signal);
+        const results = await client.classify(
+          context.model,
+          inputs,
+          context.signal,
+          context.isAdmissible,
+        );
         context.signal.throwIfAborted();
         const answers = new Map<string, DecisionAnswer>();
         let inputTokens = 0;
@@ -140,6 +147,96 @@ export function createOnnxProvider(
         }
         return { status: "unavailable", reason: "invalid-response" };
       }
+    },
+  };
+}
+
+export function createPreparedOnnxProvider(
+  client: Pick<InferenceWorkerClient, "classify">,
+  warn: (message: string) => void,
+): DecisionProviderV2 {
+  const legacy = createOnnxProvider(client, warn);
+  return {
+    id: "onnx",
+    contractVersion: 2,
+    provider: {
+      label: "ONNX",
+      auth: [],
+      authScope: "plugin",
+      // This local marker satisfies the common auth contract; it never reaches a network.
+      resolveSyntheticAuth: () => ({
+        apiKey: "onnx-local",
+        source: "onnx plugin",
+        mode: "api-key",
+      }),
+      augmentModelCatalog: ({ entries }) => {
+        const models: typeof entries = [];
+        for (const entry of entries) {
+          if (entry.provider !== "onnx") {
+            continue;
+          }
+          const inference = entry.inference;
+          // Canonical route facts win. Enrich only the documented V1 manifest input,
+          // preserving each model's token scope, limits, and billing declarations.
+          if (!inference?.decision || inference.decision.protocol !== "decision-v1") {
+            models.push(entry);
+            continue;
+          }
+          const decision = inference.decision;
+          models.push({
+            ...entry,
+            inference: {
+              ...inference,
+              decision: {
+                ...decision,
+                protocol: "onnx-classifier",
+                questions: {
+                  boolean: {
+                    ...decision.questions?.boolean,
+                    probabilities: "boolean",
+                    abstention: false,
+                    requiresCriteria: true,
+                  },
+                  choice: {
+                    ...decision.questions?.choice,
+                    probabilities: "categorical",
+                    abstention: false,
+                    minOptions: 2,
+                  },
+                  score: {
+                    ...decision.questions?.score,
+                    probabilities: "categorical",
+                    abstention: false,
+                    minOptions: 2,
+                  },
+                },
+                reasoning: { modes: ["auto"] },
+              },
+            },
+          });
+        }
+        return models;
+      },
+    },
+    async evaluate(batch, context) {
+      const v1 = decisionBatchV2ToV1(batch);
+      if (!v1 || (context.reasoning !== undefined && context.reasoning !== "auto")) {
+        return { status: "unavailable", reason: "unsupported-input" };
+      }
+      const outcome = await legacy.evaluate(v1, {
+        model: context.model.id,
+        agentId: context.agentId,
+        signal: context.signal,
+        deadlineMonotonicMs: context.deadlineMonotonicMs,
+        isAdmissible: context.isAdmissible,
+      });
+      if (outcome.status !== "ok") {
+        return outcome;
+      }
+      const result = decisionResultV1ToV2(v1, outcome.result);
+      return result
+        ? { status: "ok", result }
+        : { status: "unavailable", reason: "invalid-response" };
     },
   };
 }

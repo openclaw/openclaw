@@ -16,6 +16,7 @@ import {
   getActiveDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
+import { createMainThreadStallMonitor } from "../../../infra/main-thread-stall.js";
 import { resetLogger, setLoggerOverride } from "../../../logging/logger.js";
 import { loggingState } from "../../../logging/state.js";
 import {
@@ -98,6 +99,56 @@ function createRequest(handler: GatewayRequestHandler, method = "health") {
 }
 
 describe("authenticated Gateway RPC diagnostics", () => {
+  it("attributes a registered handler stall with diagnostics disabled", async () => {
+    let now = 0;
+    const monitor = createMainThreadStallMonitor(() => now);
+    onTestFinished(() => monitor.stop());
+    const fixture = createRequest(({ respond }) => {
+      now += 250;
+      respond(true, {});
+    });
+    setDiagnosticsEnabledForProcess(false);
+    await fixture.dispatch();
+    expect(monitor.drain().stalls).toEqual([
+      { elapsedMs: 250, task: "gateway:rpc:health", taskMs: 250 },
+    ]);
+    expect(fixture.events).toEqual([]);
+  });
+
+  it.each([
+    ["openclaw-control-ui", "control-ui"],
+    ["webchat-ui", "control-ui"],
+    ["webchat", "control-ui"],
+    ["openclaw-browser-copilot", "control-ui"],
+    ["openclaw-macos", "macos"],
+    ["openclaw-ios", "ios"],
+    ["openclaw-watchos", "ios"],
+    ["openclaw-android", "android"],
+    ["cli", "cli"],
+    ["openclaw-tui", "cli"],
+    ["node-host", "node"],
+    ["openclaw-worker", "node"],
+    ["gateway-client", "other"],
+    ["openclaw-linux", "other"],
+    ["test", "other"],
+  ] as const)("attributes ordinary RPCs from %s as %s", async (id, clientKind) => {
+    const fixture = createRequest(({ respond }) => respond(true, {}));
+    const client = createOperatorWsClient({ clientInfo: { id, mode: "backend" } });
+    client.connect.client.displayName = "private-display-name";
+    client.connect.client.instanceId = "private-instance";
+    client.connect.client.platform = "private-platform";
+    await fixture.dispatcher.dispatch(
+      { type: "req", id: "private-request", method: "health", params: {} },
+      client,
+    );
+    await fixture.finished;
+    expect(fixture.events.find((event) => event.phase === "received")).toMatchObject({
+      method: "health",
+      clientKind,
+    });
+    expect(JSON.stringify(fixture.events)).not.toContain("private-");
+  });
+
   it.each([
     {
       clientKind: "openclaw-control-ui",
@@ -880,8 +931,6 @@ describe("Gateway observation response ordering", () => {
       extraHandlers: { "agent.wait": agentHandlers["agent.wait"]! },
       buildRequestContext: () => ({
         dedupe: new Map(),
-        chatAbortControllers: new Map(),
-        chatQueuedTurns: new Map(),
         getRuntimeConfig: () => ({}),
       }),
     });

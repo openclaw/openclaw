@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createOverlay } from "../../components/overlay-lifecycle.ts";
+import { registerModalSurface } from "../../components/overlay-registry.ts";
 import { t } from "../../i18n/index.ts";
 import * as attachmentInputs from "../chat/components/chat-attachment-inputs.tsx";
 import type { ChatDetailPanel } from "../chat/components/chat-detail-panel.tsx";
@@ -13,7 +15,6 @@ type NewSessionElement = HTMLElement & {
   data: NewSessionRouteData | undefined;
   focusComposer(): void;
   updateComplete: Promise<boolean>;
-  requestUpdate: () => void;
 };
 
 function routeData(agentId: string, catalogId = ""): NewSessionRouteData {
@@ -65,18 +66,18 @@ afterEach(() => {
 describe("new session draft route ownership", () => {
   it("prepares composer options once per published typing revision without replacing the input", async () => {
     const prepare = vi.spyOn(NewSessionPageOwner.prototype, "composerOptions");
-    const updated = vi.spyOn(NewSessionPageOwner.prototype, "updated");
+    const projectRecents = vi.spyOn(DraftPlaceBrowser.prototype, "resolveProjectRecents");
     const renderModels = vi.spyOn(NewSessionModelControl.prototype, "renderProps");
     const page = await mount(routeData("research"));
     const textarea = page.querySelector<HTMLTextAreaElement>("textarea")!;
     await enterMessage(page, "warmup");
     for (const text of ["h", "he", "hello"]) {
       prepare.mockClear();
-      updated.mockClear();
+      projectRecents.mockClear();
       renderModels.mockClear();
       await enterMessage(page, text);
-      expect(updated).toHaveBeenCalled();
-      expect(prepare).toHaveBeenCalledTimes(updated.mock.calls.length);
+      expect(prepare).toHaveBeenCalledOnce();
+      expect(projectRecents.mock.calls.length).toBeLessThanOrEqual(2);
       expect(renderModels).not.toHaveBeenCalled();
       expect(page.querySelector("textarea")).toBe(textarea);
       expect(textarea.value).toBe(text);
@@ -97,24 +98,9 @@ describe("new session draft route ownership", () => {
     await enterMessage(page, "later draft");
     expect(retained?.getDraft?.()).toBe("later draft");
     dictating = true;
-    page.requestUpdate();
+    document.dispatchEvent(new Event("visibilitychange"));
     await settle(page);
     expect(retained?.disabled).toBe(true);
-  });
-
-  it("prepares composer options once per draft revision rather than per prop read", async () => {
-    const page = await mount(routeData("research"));
-    const textarea = page.querySelector("textarea");
-    const prepare = vi.spyOn(NewSessionPageOwner.prototype, "composerOptions");
-    const projectRecents = vi.spyOn(DraftPlaceBrowser.prototype, "resolveProjectRecents");
-
-    await enterMessage(page, "Keep typing without rebuilding options");
-
-    expect(message(page)).toBe("Keep typing without rebuilding options");
-    expect(page.querySelector("textarea")).toBe(textarea);
-    expect(prepare.mock.calls.length).toBeGreaterThan(0);
-    expect(prepare.mock.calls.length).toBeLessThanOrEqual(2);
-    expect(projectRecents.mock.calls.length).toBeLessThanOrEqual(2);
   });
 
   it.each([false, true])(
@@ -152,7 +138,6 @@ describe("new session draft route ownership", () => {
       await flushFrames(0);
       await flushFrames(206);
       expect(placeholder()).toBe(reducedMotion ? target : target.slice(0, 1));
-      page.requestUpdate();
       page.remove();
       await settle(page);
       expect(frames.size).toBe(0);
@@ -224,7 +209,7 @@ describe("new session draft route ownership", () => {
         .not.toBeNull();
       if (transition === "finish dictation") {
         dictating = true;
-        page.requestUpdate();
+        document.dispatchEvent(new Event("visibilitychange"));
         await settle(page);
         expect(page.querySelector<HTMLTextAreaElement>("textarea")?.readOnly).toBe(true);
       }
@@ -256,7 +241,7 @@ describe("new session draft route ownership", () => {
         expect(actionButtons()).toHaveLength(2);
         expect(actionButtons().every((button) => button.disabled)).toBe(true);
         dictating = false;
-        page.requestUpdate();
+        document.dispatchEvent(new Event("visibilitychange"));
         await expect.poll(() => actionButtons().every((button) => !button.disabled)).toBe(true);
       }
       if (transition === "show in composer" || transition === "finish dictation") {
@@ -306,10 +291,15 @@ describe("new session draft route ownership", () => {
     const menu = append(document.createElement("div"));
     menu.setAttribute("role", "menu");
     menu.popover = "manual";
+    const menuOwner = createOverlay("new-session-routing-test", undefined, {
+      dismissOutsideFocus: false,
+    });
+    menuOwner.bindSurface(menu);
     const menuItem = menu.appendChild(document.createElement("button"));
     menuItem.setAttribute("role", "menuitemradio");
     menuItem.tabIndex = -1;
     const dialog = append(document.createElement("dialog"));
+    const releaseDialog = registerModalSurface(dialog);
     dialog.open = true;
     const dialogButton = dialog.appendChild(document.createElement("button"));
     const details = append(document.createElement("details"));
@@ -354,25 +344,30 @@ describe("new session draft route ownership", () => {
       { name: "input/contenteditable", targets: [input, editable], expected: element },
     ];
 
-    for (const row of routing) {
-      for (const target of row.targets) {
-        for (const [index, key] of keys.entries()) {
-          menu.togglePopover(row.openMenu === true);
-          dialog.open = row.openDialog === true;
-          target.focus();
-          target.dispatchEvent(
-            new KeyboardEvent("keydown", { key, bubbles: true, composed: true }),
-          );
-          const destination = row.expected[index];
-          if (destination === "composer") {
-            expect(document.activeElement, `${row.name} / ${key} -> composer`).toBe(textarea);
-          } else if (destination === "overlay") {
-            expect(document.activeElement, `${row.name} / ${key} -> overlay`).not.toBe(textarea);
-          } else {
-            expect(document.activeElement, `${row.name} / ${key} -> ${destination}`).toBe(target);
+    try {
+      for (const row of routing) {
+        for (const target of row.targets) {
+          for (const [index, key] of keys.entries()) {
+            menuOwner.request(row.openMenu === true);
+            dialog.open = row.openDialog === true;
+            target.focus();
+            target.dispatchEvent(
+              new KeyboardEvent("keydown", { key, bubbles: true, composed: true }),
+            );
+            const destination = row.expected[index];
+            if (destination === "composer") {
+              expect(document.activeElement, `${row.name} / ${key} -> composer`).toBe(textarea);
+            } else if (destination === "overlay") {
+              expect(document.activeElement, `${row.name} / ${key} -> overlay`).not.toBe(textarea);
+            } else {
+              expect(document.activeElement, `${row.name} / ${key} -> ${destination}`).toBe(target);
+            }
           }
         }
       }
+    } finally {
+      menuOwner.dispose();
+      releaseDialog();
     }
   });
 

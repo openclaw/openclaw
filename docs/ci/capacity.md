@@ -251,6 +251,16 @@ private-QA output variants. Checkout already fetches depth-one selected source;
 historical test prerequisites and revision-comparison inputs stay with their
 existing owners.
 
+Keep the full source checkout for UI E2E jobs. An October 16 blobless sparse
+checkout trial excluded 48.31 MiB of logical mobile/macOS app content, but its
+Blacksmith UI checkout took 56s and its hosted browser checkout 58s in
+[run 38866595993](https://github.com/openclaw/openclaw/actions/runs/38866595993).
+Full UI checkouts in that run took 22–38s. These small, unpaired samples did
+not qualify the trial for rollout and do not establish a billing delta.
+Future trials must include filtered fetch, lazy materialization, and harness
+export in complete checkout timing; omitted logical bytes are not transfer or
+cost savings.
+
 A Linux Testbox check on four CPUs, 15.4 GiB RAM, and Node 24.19.0 measured
 preparation plus joined cleanup at 8.43/9.44 seconds without reuse and 3.21/3.17
 seconds after restoring a 30 MiB archive. Peak process RSS fell from
@@ -540,6 +550,18 @@ families, unqualified configs, builds, memory floors, and explicit large-runner
 anchors at their planned capacity. Resource-gated tooling tests remain outside
 this rule.
 RunsOn inherits the same hybrid choice for these retained Blacksmith jobs.
+The singleton `src/gateway/mcp-app-extension-runtime.test.ts` in `gateway-core`
+and `src/agents/cli-runner.helpers.test.ts` in `agents-core` also qualify under
+the same guards. Other files in those configs retain their planned capacity.
+At `137e7b2abc87`, a serial five-file replay through the production executor
+passed all 56 tests on both Bun (93.8 seconds) and Node (125.2 seconds) on a
+[16-class Testbox](https://github.com/openclaw/openclaw/actions/runs/39097664576).
+The machine supplied four CPUs and 15.42 GiB RAM. Whole-machine peak used memory
+was 5.00 GiB on Bun and 5.22 GiB on Node; both observed zero OOM kills and at most
+268 KiB of swap use. The replay included the selected embedded-agent and Gateway
+client siblings. Its infra file remains outside this rule: the current planner
+permits parallel execution without the required two-worker bound. These are
+capacity measurements; native billed savings still need post-merge observation.
 The isolated `attempt.llm-boundary.cache-stability.test.ts` selection also uses
 the 16-class when it is the group's only file and the same guards hold. A complete
 replay at `33488188fcab` passed all 19 tests in 105 seconds through the production
@@ -547,6 +569,13 @@ shard executor, using four CPUs, a 12-GiB memory limit, and no swap. Peak memory
 4.23 GiB with no OOMs. This qualifies that file only; any unqualified isolated
 sibling keeps the whole job at its planned capacity. Native latency and billed
 savings for this selection still need post-merge observation.
+The singleton `src/gateway/board-store.test.ts` selection also uses the 16-class
+when it is the job's only group, with two explicit workers and a two-worker
+fallback. Its 28-GiB worker-admission threshold remains intact. A complete replay
+at `ece4639ff930` passed all five tests and joined cleanup in 40.78 seconds on
+four CPUs and 15.42 GiB RAM. Maximum process RSS was 3.17 GiB; this is not an
+aggregate VM peak. This qualifies only that exact selection, not the database
+worker family or mixed jobs. Native billed savings still need observation.
 Ordinary self-hosted groups can share the existing promoted 32-class capacity
 across logical classes, and the existing group exchange fills stranded capacity.
 Hybrid packing keeps descending-cost initial placement when the completed plan

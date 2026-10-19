@@ -4,7 +4,8 @@ import { t } from "../../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import { normalizeAttachmentContentBlock } from "../../../lib/chat/message-normalizer-attachments.ts";
-import { chatItemGroups, type coalesceAgentRunFrames } from "../chat-agent-run-grouping.ts";
+import { chatItemGroups } from "../chat-agent-run-grouping.ts";
+import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
 import { isSessionActivityGroup } from "../chat-turn-boundary.ts";
 import { attachmentFailureReason } from "./chat-message-attachment-status.ts";
 
@@ -15,7 +16,7 @@ export type TranscriptAnnouncement = {
   text: string;
 };
 
-type ChatRenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
+type ChatRenderItem = SystemEventRenderItem;
 const ANNOUNCEMENT_MAX_CHARS = 500;
 
 function assistantMessageAttachmentFailureText(message: unknown): string | null {

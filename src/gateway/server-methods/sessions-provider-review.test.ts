@@ -1,13 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
 import {
   readProviderReviewAcknowledgment,
   retireProviderReviewAcknowledgment,
-  type ProviderReviewAcknowledgment,
 } from "../../sessions/provider-review.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { projectSessionProviderReview } from "../session-provider-review-projection.js";
+import type { handleProviderReviewContinuationChat as ReviewHandoff } from "./chat-send-handler.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
 import { coreGatewayHandlers } from "./core-handlers.js";
 import { soloClient } from "./sessions-sharing.test-support.js";
@@ -15,9 +15,7 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   read: vi.fn(),
-  handoff: vi.fn(),
-  resolveTarget: vi.fn(),
-  resolveAuthorization: vi.fn(),
+  handoff: vi.fn<typeof ReviewHandoff>(),
   releaseAuthorization: vi.fn(),
 }));
 vi.mock("../../config/sessions/provider-review-store.js", () => ({
@@ -26,21 +24,32 @@ vi.mock("../../config/sessions/provider-review-store.js", () => ({
 vi.mock("./chat-send-handler.js", () => ({
   handleProviderReviewContinuationChat: mocks.handoff,
 }));
-vi.mock("../session-sharing.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../session-sharing.js")>();
-  return {
-    ...actual,
-    resolveSessionSharingTargetAsync: async (...args: unknown[]) => mocks.resolveTarget(...args),
-  };
-});
+vi.mock("../session-sharing.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../session-sharing.js")>()),
+  resolveSessionSharingTargetAsync: async () => ({
+    agentId: "main",
+    canonicalKey: sessionKey,
+    storeKey: sessionKey,
+    storePath: "/synthetic/session-store",
+    entry,
+  }),
+}));
 // mock-isolation: Provider-review tests control authorization changes while the review is awaited.
 vi.mock("../session-sharing-authorization-async.js", () => ({
-  resolveSessionMutationAuthorizationAsync: (...args: unknown[]) =>
-    mocks.resolveAuthorization(...args),
+  resolveSessionMutationAuthorizationAsync: async () => ({
+    authorization: {
+      assertCurrent,
+      assertAdmittedInputCurrent: assertCurrent,
+      release: mocks.releaseAuthorization,
+    },
+    error: null,
+  }),
 }));
 
 const sessionKey = "agent:main:provider-review";
 const sessionId = "session-a";
+const target = { sessionKey, agentId: "main", sessionId };
+const requestParams = { ...target, reviewId: "review-a", idempotencyKey: "next-run" };
 const message = "/stop e\u0301\n ";
 let entry: SessionEntry;
 let sourceCurrent: boolean;
@@ -52,25 +61,13 @@ const assertCurrent = () => {
 
 function request(overrides: Record<string, unknown> = {}): GatewayRequestHandlerOptions {
   const client = soloClient();
-  const params = {
-    sessionKey,
-    agentId: "main",
-    sessionId,
-    reviewId: "review-a",
-    idempotencyKey: "next-run",
-    ...overrides,
-  };
+  client.connId = "operator-a";
+  client.connect.client.mode = "ui";
+  const params = { ...requestParams, ...overrides };
   return {
     req: { type: "req", id: "request-a", method: "sessions.providerReview.continue", params },
     params,
-    client: {
-      ...client,
-      connId: "operator-a",
-      connect: {
-        ...client.connect,
-        client: { ...client.connect.client, mode: "ui" },
-      },
-    },
+    client,
     isWebchatConnect: () => true,
     respond: vi.fn(),
     context: createDirectChatContext({ getRuntimeConfig: () => ({}) }),
@@ -78,7 +75,8 @@ function request(overrides: Record<string, unknown> = {}): GatewayRequestHandler
   };
 }
 
-function expectRejected(options: GatewayRequestHandlerOptions) {
+async function reject(options: GatewayRequestHandlerOptions = request()) {
+  await coreGatewayHandlers["sessions.providerReview.continue"]!(options);
   expect(mocks.handoff).not.toHaveBeenCalled();
   expect(options.respond).toHaveBeenCalledWith(
     false,
@@ -108,112 +106,84 @@ beforeEach(() => {
     },
   };
   mocks.read.mockImplementation(async () => structuredClone(entry));
-  mocks.resolveTarget.mockImplementation(() => ({
-    agentId: "main",
-    canonicalKey: sessionKey,
-    storeKey: sessionKey,
-    storePath: "/synthetic/session-store",
-    entry,
-  }));
-  mocks.resolveAuthorization.mockReturnValue({
-    authorization: {
-      assertCurrent,
-      assertAdmittedInputCurrent: assertCurrent,
-      assertTargetCurrent: assertCurrent,
-      release: mocks.releaseAuthorization,
-    },
-    error: null,
-  });
   mocks.handoff.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
   for (const [, acknowledgment] of mocks.handoff.mock.calls) {
-    retireProviderReviewAcknowledgment(acknowledgment as ProviderReviewAcknowledgment);
+    retireProviderReviewAcknowledgment(acknowledgment);
   }
 });
 
-describe("registered provider review continuation", () => {
-  it("hands the reviewed literal input and host capability to ordinary chat admission", async () => {
-    const options = request();
-    await coreGatewayHandlers["sessions.providerReview.continue"]!(options);
-    expect(mocks.handoff).toHaveBeenCalledTimes(1);
-    expect(mocks.releaseAuthorization).toHaveBeenCalledTimes(1);
-    const [chatOptions, acknowledgment] = mocks.handoff.mock.calls[0] as [
-      GatewayRequestHandlerOptions,
-      ProviderReviewAcknowledgment,
-    ];
-    expect(chatOptions.params).toEqual({
-      sessionKey,
-      agentId: "main",
-      sessionId,
-      message,
-      idempotencyKey: "next-run",
-      deliver: false,
-    });
-    expect(readProviderReviewAcknowledgment(acknowledgment).review.id).toBe("review-a");
-    await loadOrCreateProcessDeviceIdentityAsync();
-    const normalized = await normalizeChatSendRequest({
+it("hands literal input and host capability to chat admission", async () => {
+  await coreGatewayHandlers["sessions.providerReview.continue"]!(request());
+  expect(mocks.handoff).toHaveBeenCalledTimes(1);
+  expect(mocks.releaseAuthorization).toHaveBeenCalledTimes(1);
+  const [chatOptions, acknowledgment] = mocks.handoff.mock.calls[0]!;
+  expect(chatOptions.params).toEqual({
+    ...target,
+    message,
+    idempotencyKey: "next-run",
+    deliver: false,
+  });
+  expect(readProviderReviewAcknowledgment(acknowledgment).review.id).toBe("review-a");
+  await loadOrCreateProcessDeviceIdentityAsync();
+  await expect(
+    normalizeChatSendRequest({
       params: chatOptions.params,
       client: chatOptions.client,
       providerReviewAcknowledgment: acknowledgment,
-    });
-    expect(normalized).toMatchObject({
-      ok: true,
-      value: {
-        inboundMessage: message,
-        rawMessage: message,
-        suppressCommandInterpretation: true,
-        stopCommand: false,
-        turnKind: "main",
-      },
-    });
-    expect(entry.providerReview?.id).toBe("review-a");
+    }),
+  ).resolves.toMatchObject({
+    ok: true,
+    value: {
+      inboundMessage: message,
+      rawMessage: message,
+      suppressCommandInterpretation: true,
+      stopCommand: false,
+      turnKind: "main",
+    },
   });
-
-  it.each(["review", "generation", "authority"])(
-    "rejects %s changes during the awaited read",
-    async (change) => {
-      mocks.read.mockImplementation(async () => {
-        if (change === "review") {
-          entry.providerReview!.id = "new-review";
-        }
-        if (change === "generation") {
-          entry.lifecycleRevision = "new-generation";
-        }
-        if (change === "authority") {
-          sourceCurrent = false;
-        }
-        return structuredClone(entry);
-      });
-      const options = request();
-      await coreGatewayHandlers["sessions.providerReview.continue"]!(options);
-      expectRejected(options);
-    },
-  );
-
-  it.each(["client-supplied authority", "synthetic UI", "ordinary API"])(
-    "rejects continuation from %s",
-    async (source) => {
-      const options = request(
-        source === "client-supplied authority" ? { providerReviewAcknowledgment: {} } : {},
-      );
-      if (source === "synthetic UI") {
-        options.client!.internal = { syntheticClient: true };
-      } else if (source === "ordinary API") {
-        Object.assign(entry.providerReview!, { runtimeId: "openclaw", api: "openai-responses" });
-        expect(projectSessionProviderReview(entry, sessionKey)).toEqual({
-          id: "review-a",
-          runId: "failed-run",
-          explanation: "Review the proposed operation.",
-          canContinue: false,
-        });
-      }
-      await coreGatewayHandlers["sessions.providerReview.continue"]!(options);
-      if (source !== "ordinary API") {
-        expect(mocks.read).not.toHaveBeenCalled();
-      }
-      expectRejected(options);
-    },
-  );
+  expect(entry.providerReview?.id).toBe("review-a");
 });
+
+it.each(["review", "generation", "authority"])(
+  "rejects awaited-read %s changes",
+  async (change) => {
+    mocks.read.mockImplementation(async () => {
+      if (change === "review") {
+        entry.providerReview!.id = "new-review";
+      } else if (change === "generation") {
+        entry.lifecycleRevision = "new-generation";
+      } else {
+        sourceCurrent = false;
+      }
+      return structuredClone(entry);
+    });
+    await reject();
+  },
+);
+
+it.each(["client-supplied authority", "synthetic UI", "ordinary API"])(
+  "rejects continuation from %s",
+  async (source) => {
+    const options = request(
+      source === "client-supplied authority" ? { providerReviewAcknowledgment: {} } : {},
+    );
+    if (source === "synthetic UI") {
+      options.client!.internal = { syntheticClient: true };
+    } else if (source === "ordinary API") {
+      Object.assign(entry.providerReview!, { runtimeId: "openclaw", api: "openai-responses" });
+      expect(projectSessionProviderReview(entry, sessionKey)).toEqual({
+        id: "review-a",
+        runId: "failed-run",
+        explanation: "Review the proposed operation.",
+        canContinue: false,
+      });
+    }
+    await reject(options);
+    if (source !== "ordinary API") {
+      expect(mocks.read).not.toHaveBeenCalled();
+    }
+  },
+);

@@ -287,8 +287,8 @@ openclaw gateway
 ```
 
 With code mode active, the logged model-facing tool names should be `exec` and
-`wait`. For the full redacted provider payload, add
-`OPENCLAW_DEBUG_MODEL_PAYLOAD=full-redacted` for a short debugging session.
+`wait`. `OPENCLAW_DEBUG_MODEL_PAYLOAD=full-redacted` also reports request shape
+and the complete tool-name list; it never logs prompt, message, or tool content.
 
 ## Use Swarm for agent fan-out
 

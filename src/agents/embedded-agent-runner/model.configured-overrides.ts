@@ -260,6 +260,11 @@ export function mergeCatalogInlineModel(
     headers: inlineModel.headers ?? catalogModel.headers,
     contextWindow: inlineModel.contextWindow ?? catalogModel.contextWindow,
     contextTokens: inlineModel.contextTokens ?? catalogModel.contextTokens,
+    parameterCount:
+      inlineModel.parameterCount ??
+      (modelTransportRoutesMatch(catalogModel, inlineModel)
+        ? catalogModel.parameterCount
+        : undefined),
     compat,
     ...(mediaInput ? { mediaInput } : {}),
     ...(params ? { params } : {}),
@@ -335,10 +340,10 @@ export function clampModelMaxTokensToContextWindow(
   maxTokens: number | undefined,
   contextWindow: number | undefined,
 ): number | undefined {
-  if (typeof maxTokens !== "number" || !Number.isFinite(maxTokens)) {
+  if (maxTokens === undefined || !Number.isFinite(maxTokens)) {
     return undefined;
   }
-  return typeof contextWindow === "number" && Number.isFinite(contextWindow)
+  return contextWindow !== undefined && Number.isFinite(contextWindow)
     ? Math.min(maxTokens, contextWindow)
     : maxTokens;
 }
@@ -608,6 +613,14 @@ export function applyConfiguredProviderOverrides(params: {
           }),
           contextWindow,
           contextTokens: metadataOverrideModel?.contextTokens ?? discoveredModel.contextTokens,
+          parameterCount:
+            metadataOverrideModel?.parameterCount ??
+            (modelTransportRoutesMatch(discoveredModel, resolvedTransport)
+              ? discoveredModel.parameterCount
+              : undefined) ??
+            (modelTransportRoutesMatch(catalogModel, resolvedTransport)
+              ? catalogModel.parameterCount
+              : undefined),
           ...(normalizedResolvedMaxTokens !== undefined
             ? {
                 maxTokens: normalizedResolvedMaxTokens,

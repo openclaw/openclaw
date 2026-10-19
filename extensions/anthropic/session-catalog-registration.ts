@@ -55,7 +55,7 @@ function claudeProjectsAvailable(env: NodeJS.ProcessEnv): boolean {
 }
 
 function currentConfig(api: OpenClawPluginApi): OpenClawConfig {
-  return (api.runtime.config?.current?.() ?? api.config ?? {}) as OpenClawConfig;
+  return api.runtime.config.current() as OpenClawConfig;
 }
 
 function registerClaudeSessionCatalog(api: OpenClawPluginApi): void {

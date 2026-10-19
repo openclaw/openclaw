@@ -46,6 +46,7 @@ import { readCommittedSessionManagerReload } from "./session-manager-reload.js";
 import { SessionManagerSuffixPersistence } from "./session-manager-suffix-persistence.js";
 import type {
   AppendPersistenceOptions,
+  ModelChangeEntry,
   SessionEntry,
   SessionMessageEntry,
 } from "./session-manager-types.js";
@@ -325,6 +326,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
     entry: T,
     committed: PersistWorkerRecordResult,
     admittedUserId?: string,
+    initialModel?: ModelChangeEntry,
   ): Promise<{
     entry: T;
     anchor?: TranscriptEntryAnchor;
@@ -377,12 +379,20 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
         : undefined);
     this.transcriptVersion = committed.committedVersion;
     this.transcriptMutationAt = committed.committedVersion.updatedAt;
-    return this.adoptPersistedEntry(entry, committed.result, admittedUserId, (append) => {
+    const adoptReload = (append?: {
+      expectedMutationAt: number | null;
+      expectedEntryId: string;
+      admittedUserId: string;
+    }) => {
       if (!reload) {
         throw new Error("Committed session append did not supply its transcript reload");
       }
       this.adoptPreparedTranscriptReload(reload, append);
-    });
+    };
+    if (initialModel && !needsReload) {
+      this.adoptPersistedEntry(initialModel, undefined, admittedUserId, adoptReload);
+    }
+    return this.adoptPersistedEntry(entry, committed.result, admittedUserId, adoptReload);
   }
 
   protected adoptPersistedEntry<T extends SessionEntry>(
@@ -514,7 +524,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
   resolveCurrentTurnEntryId(
     isInterruptedTail?: (entry: SessionEntry) => boolean,
     options?: {
-      /** @deprecated Await openAsync and traverse the complete view without this option. Supported through 2026-12-31. */
+      /** @deprecated Await openAsync and traverse the complete view without this option. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
       includeOmittedCustomMessages?: boolean;
     },
   ): string | null {
@@ -567,7 +577,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
     );
   }
 
-  /** @deprecated Await appendMessageAsync. Supported through 2026-12-31. */
+  /** @deprecated Await appendMessageAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   appendMessage(
     message: Message | CustomMessage | BashExecutionMessage,
     options?: AppendPersistenceOptions,
@@ -614,7 +624,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
     };
   }
 
-  /** @deprecated Await appendMessageWithTranscriptAnchorAsync. Supported through 2026-12-31. */
+  /** @deprecated Await appendMessageWithTranscriptAnchorAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   appendMessageWithTranscriptAnchor(
     message: Message | CustomMessage | BashExecutionMessage,
     options?: AppendPersistenceOptions,

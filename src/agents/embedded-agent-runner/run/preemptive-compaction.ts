@@ -14,7 +14,6 @@ import {
   estimateRenderedPromptTokens,
   estimateToolSchemaTokens,
 } from "../../sessions/context-token-pressure.js";
-import { log } from "../logger.js";
 import type { MeasuredRequestContext } from "../prompt-cache-request-observer.js";
 import { estimateToolResultReductionPotential } from "../tool-result-truncation.js";
 import { MidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./midturn-precheck.js";
@@ -264,12 +263,7 @@ export function resolveProjectedRequestPressure(params: {
   replay?: CompactionReplayPressureContext;
 }) {
   const { context, previousRequest } = params;
-  const anchor =
-    previousRequest &&
-    Number.isFinite(previousRequest.contextTokens) &&
-    previousRequest.contextTokens > 0
-      ? previousRequest
-      : undefined;
+  const anchor = previousRequest && previousRequest.contextTokens > 0 ? previousRequest : undefined;
   const messages = context.messages;
   // Measured completion occupancy includes opaque reasoning. Its async fragments
   // share either identity; unrelated synthetic assistants remain fresh content.
@@ -306,15 +300,7 @@ export function resolveProjectedRequestPressure(params: {
       source: anchor ? "provider_context_usage" : "transcript_estimate",
     },
   });
-  const decision = precheck.compactionReplay ?? precheck;
-  log.debug(
-    `[context-overflow-midturn-precheck] provider-bound check route=${decision.route} ` +
-      `messages=${messages.length} pressureSource=${decision.pressureSource} ` +
-      `estimatedPromptTokens=${decision.estimatedPromptTokens} ` +
-      `promptBudgetBeforeReserve=${decision.promptBudgetBeforeReserve} ` +
-      `overflowTokens=${decision.overflowTokens}`,
-  );
-  return decision;
+  return precheck.compactionReplay ?? precheck;
 }
 
 /** Stop before a projected foreground request that no longer fits its budget. */

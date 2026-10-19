@@ -1,7 +1,3 @@
-/**
- * ACPX runtime plugin entry. It registers the embedded ACP backend service and
- * wires reply-dispatch hooks into the plugin SDK runtime.
- */
 import { createAgentRegistry } from "acpx/agent-registry";
 import { tryDispatchAcpReplyHook } from "openclaw/plugin-sdk/acp-runtime-backend";
 import { createAcpxRuntimeService } from "./register.runtime.js";

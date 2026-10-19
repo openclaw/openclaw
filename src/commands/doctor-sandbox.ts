@@ -2,14 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { listAgentEntriesWithSource } from "../agents/agent-scope-config.js";
+import { resolveSandboxScope } from "../agents/sandbox/config.js";
 import {
   DEFAULT_SANDBOX_BROWSER_IMAGE,
   DEFAULT_SANDBOX_COMMON_IMAGE,
   DEFAULT_SANDBOX_IMAGE,
-  isDockerDaemonUnavailable,
-  resolveSandboxScope,
-} from "../agents/sandbox.js";
-import {
   SANDBOX_BROWSER_REGISTRY_PATH,
   SANDBOX_BROWSERS_DIR,
   SANDBOX_CONTAINERS_DIR,
@@ -17,6 +14,7 @@ import {
 } from "../agents/sandbox/constants.js";
 import {
   DOCKER_SANDBOX_ENGINE,
+  isDockerDaemonUnavailable,
   PODMAN_SANDBOX_ENGINE,
   validateSandboxContainerEngineTarget,
 } from "../agents/sandbox/docker.js";
@@ -25,10 +23,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { resolveOpenClawPackageRootsSync } from "../infra/openclaw-root.js";
-import {
-  assertNoRetiredStateFiles,
-  createRetiredStateInspectionError,
-} from "../infra/state-migrations.retired-files.js";
+import { archiveRetiredStateFiles } from "../infra/state-migrations.retired-archive.js";
+import { createRetiredStateInspectionError } from "../infra/state-migrations.retired-files.js";
 import { runCommandWithTimeout, runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
@@ -391,7 +387,7 @@ function formatLegacyRegistryInspectionLine(file: LegacySandboxRegistryInspectio
 }
 
 function legacySandboxRegistryUpgradeHint(): string {
-  return `Upgrade through OpenClaw 2026.9.7 and run ${formatCliCommand("openclaw doctor --fix")} on the original host before retrying. The retired files are left unchanged.`;
+  return `Run ${formatCliCommand("openclaw doctor --fix")} to archive retired registry files. Sandbox containers are recreated on demand; consult the archive for old container names before removing unused containers.`;
 }
 
 export async function detectLegacySandboxRegistryFileIssues(): Promise<
@@ -435,7 +431,7 @@ export function legacySandboxRegistryInspectionToRepairEffect(
 ): HealthRepairEffect {
   return {
     kind: "state",
-    action: "requires-intermediate-sandbox-registry-upgrade",
+    action: "archive-retired-sandbox-registry",
     target: file.path,
     dryRunSafe: false,
   };
@@ -443,16 +439,48 @@ export function legacySandboxRegistryInspectionToRepairEffect(
 
 export async function maybeRepairSandboxRegistryFiles(
   prompter: Pick<DoctorPrompter, "shouldRepair">,
+  assertCurrent: () => void,
 ): Promise<void> {
   const legacyFiles = await detectLegacySandboxRegistryFileIssues();
   if (legacyFiles.length === 0) {
     return;
   }
   if (prompter.shouldRepair) {
-    assertNoRetiredStateFiles(
-      "Sandbox registries",
-      legacyFiles.map((file) => file.path),
-    );
+    for (const file of legacyFiles) {
+      const stat = fs.lstatSync(file.path);
+      const directory = stat.isDirectory() && !stat.isSymbolicLink();
+      const paths = directory
+        ? fs.readdirSync(file.path).map((name) => path.join(file.path, name))
+        : [file.path];
+      const result = await archiveRetiredStateFiles({
+        label: "sandbox registry",
+        paths,
+        assertCurrent,
+        recoveryInstructions:
+          "Sandbox containers are recreated on demand. Consult this archive for old container names before manually removing unused containers.",
+      });
+      if (directory) {
+        let archivePath = `${file.path}.migrated`;
+        for (let index = 2; ; index++) {
+          try {
+            fs.lstatSync(archivePath);
+          } catch (error) {
+            if (hasErrnoCode(error, "ENOENT")) {
+              break;
+            }
+            throw error;
+          }
+          archivePath = `${file.path}.migrated.${index}`;
+        }
+        assertCurrent();
+        fs.renameSync(file.path, archivePath);
+        result.warnings = result.warnings.map((warning) =>
+          warning.replaceAll(`${file.path}${path.sep}`, `${archivePath}${path.sep}`),
+        );
+        result.warnings.push(`Retired sandbox registry directory archived at ${archivePath}.`);
+      }
+      note(result.warnings.join("\n"), "Sandbox");
+    }
     return;
   }
   note(

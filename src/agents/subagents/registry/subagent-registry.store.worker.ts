@@ -1,4 +1,3 @@
-import { readAcpSessionControlInWorker } from "../../../acp/runtime/session-meta-source.worker.js";
 import { requestSessionEntryCurrentAdmission } from "../../../config/sessions/session-entry-current-admission.worker.js";
 import { getNodeSqliteKysely, iterateSqliteQuerySync } from "../../../infra/kysely-sync.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../../../infra/sql-connection.js";
@@ -22,16 +21,12 @@ import {
   openOpenClawStateReadConnection,
 } from "../../../state/openclaw-state-db-read-connection.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../../state/openclaw-state-db.generated.js";
-import {
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabase,
-  type OpenClawStateDatabaseOptions,
-} from "../../../state/openclaw-state-db.js";
 import type {
   OpenClawStateReadCommand,
   OpenClawStateReadResult,
   OpenClawStateReadRequest,
 } from "../../../state/openclaw-state-read.types.js";
+import type { WorkerWriteOperationContext } from "../../../state/worker-operation-registry.js";
 import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import { writeSubagentRunValuesInDatabase } from "./subagent-registry.store.kernel.js";
 import {
@@ -155,49 +150,44 @@ export async function streamSubagentRegistryInWorker(
 }
 
 /** The row owner's worker adapter commits FIFO-planned rows and terminal signals together. */
-export function persistSubagentRunChangesInWorker(
-  input: SubagentRegistryWrite,
-  writeOptions: OpenClawStateDatabaseOptions & { database: OpenClawStateDatabase },
-): SubagentRegistryWriteReceipt {
-  const { writeId, values, deleteRunIds, terminalEvents = [] } = input;
-  let committedReceipt: SubagentRegistryWriteReceipt | undefined;
-  try {
-    return runOpenClawStateWriteTransaction((writer): SubagentRegistryWriteReceipt => {
-      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: writeId });
-      const admitEvents = (stage: "transaction" | "commit") => {
+export const subagentRegistryOperations = {
+  "subagents.persistChanges": (
+    input: SubagentRegistryWrite,
+    context: WorkerWriteOperationContext,
+  ): SubagentRegistryWriteReceipt => {
+    const { writeId, values, deleteRunIds, terminalEvents = [] } = input;
+    let committedReceipt: SubagentRegistryWriteReceipt | undefined;
+    try {
+      return context.write((writer): SubagentRegistryWriteReceipt => {
+        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: writeId });
+        writeSubagentRunValuesInDatabase(writer, values, deleteRunIds);
+        const notices: SessionStateNotice[] = [];
+        for (const { event, now } of terminalEvents) {
+          notices.push(...recordSessionStateEventInDatabase(writer.db, event, now).notices);
+        }
         for (const [eventIndex, event] of terminalEvents.entries()) {
           requestSessionEntryCurrentAdmission(event.sessionEntryCurrentSource, {
-            stage,
+            stage: "commit",
             facts: { writeId, eventIndex },
           });
-          if (event.acpControl && !readAcpSessionControlInWorker(writer, event.acpControl).row) {
-            throw new Error("ACP task owner could not be verified.");
-          }
         }
-      };
-      admitEvents("transaction");
-      writeSubagentRunValuesInDatabase(writer, values, deleteRunIds);
-      const notices: SessionStateNotice[] = [];
-      for (const { event, now } of terminalEvents) {
-        notices.push(...recordSessionStateEventInDatabase(writer.db, event, now).notices);
-      }
-      admitEvents("commit");
-      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: writeId });
-      const receipt: SubagentRegistryWriteReceipt = {
-        writeId,
-        notices,
-      };
-      deferSqliteWorkerCommitReceipt(writer.db, receipt);
-      deferSqlitePostCommitPublication(writer.db, () => {
-        committedReceipt = receipt;
+        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: writeId });
+        const receipt: SubagentRegistryWriteReceipt = {
+          writeId,
+          notices,
+        };
+        deferSqliteWorkerCommitReceipt(writer.db, receipt);
+        deferSqlitePostCommitPublication(writer.db, () => {
+          committedReceipt = receipt;
+        });
+        return receipt;
       });
-      return receipt;
-    }, writeOptions);
-  } catch (error) {
-    if (!committedReceipt) {
-      throw error;
+    } catch (error) {
+      if (!committedReceipt) {
+        throw error;
+      }
+      log.warn("Subagent registry write committed before cleanup failed", { error });
+      return committedReceipt;
     }
-    log.warn("Subagent registry write committed before cleanup failed", { error });
-    return committedReceipt;
-  }
-}
+  },
+};

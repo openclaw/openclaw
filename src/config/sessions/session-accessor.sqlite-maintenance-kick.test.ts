@@ -14,7 +14,7 @@ import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { recordAgentDatabaseAdmissions } from "../../state/agent-database-admission.js";
 import * as agentDatabase from "../../state/openclaw-agent-db.js";
 import {
@@ -156,11 +156,11 @@ it("resumes idle capacity maintenance when acquired work releases without anothe
       updatedAt,
     });
   }, scope);
-  const admission = await beginSessionWorkAdmission({
+  const admission = await beginSessionEffect({
     scope: storePath,
     identities: [sessionKey, "age-kick"],
   });
-  const partialAdmission = await beginSessionWorkAdmission({
+  const partialAdmission = await beginSessionEffect({
     scope: storePath,
     identities: [partialKey, "admission-partial-capacity-victim"],
   });

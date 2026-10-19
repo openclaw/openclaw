@@ -40,6 +40,7 @@ export function registerThreadWebSearchBindingTests({
     const { sessionFile, workspaceDir } = createPaths();
     const params = createParams(sessionFile, workspaceDir);
     params.model = createCodexTestModel("codex");
+    params.preparedWebSearchPolicy = { allowed: true, persistentAllowed: true };
     setCodexTestToolFactory(params, () => []);
 
     const fixture = await createSequentialLifecycleHarness(() => threadStartResult("thread-1"));
@@ -136,6 +137,7 @@ export function registerThreadWebSearchBindingTests({
     });
     params.config = { tools: { deny: ["web_search"] } };
     params.toolsAllow = ["message"];
+    params.pluginHarnessToolPolicyScope = "conversation";
     await fixture.endTurn("thread-1");
     const restrictedBinding = await startOrResumeThread({
       client,

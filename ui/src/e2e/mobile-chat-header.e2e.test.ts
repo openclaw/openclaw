@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { openChatDetails } from "./chat-details.test-support.ts";
 import {
   captureUiProofEnabled,
   chatSessionListResponse,
@@ -52,6 +53,42 @@ async function installFixture(page: Page) {
 }
 
 suite.define(() => {
+  it("opens Details when its offline trigger retires during the click", async () => {
+    await suite.withPage({ viewport: { width: 560, height: 900 } }, async ({ page }) => {
+      page.setDefaultTimeout(1_000);
+      await page.setContent("<button id=offline>Details</button>");
+      await page.evaluate(() => {
+        const offline = document.getElementById("offline")!;
+        offline.addEventListener(
+          "pointerover",
+          () => {
+            const menu = document.createElement("button");
+            menu.className = "chat-header-session-menu__trigger";
+            menu.textContent = "Actions";
+            menu.addEventListener("click", () => {
+              const item = document.createElement("button");
+              item.setAttribute("role", "menuitem");
+              item.textContent = "Session details";
+              item.addEventListener("click", () => {
+                const details = document.createElement("aside");
+                details.setAttribute("role", "complementary");
+                details.setAttribute("aria-label", "Details");
+                details.textContent = "Session details content";
+                document.body.append(details);
+                item.remove();
+              });
+              document.body.append(item);
+            });
+            offline.replaceWith(menu);
+          },
+          { once: true },
+        );
+      });
+      const details = await openChatDetails(page);
+      expect(await details.textContent()).toBe("Session details content");
+    });
+  });
+
   for (const viewport of [
     { width: 390, height: 844, colorScheme: "light" },
     { width: 320, height: 700, colorScheme: "dark" },

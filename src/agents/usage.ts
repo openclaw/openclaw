@@ -37,6 +37,8 @@ export type UsageLike = {
   completion_tokens?: number;
   cache_read_input_tokens?: number;
   cache_creation_input_tokens?: number;
+  // Anthropic splits cache writes by TTL; the 1h subset is billed at a higher rate.
+  cache_creation?: { ephemeral_1h_input_tokens?: number };
   reasoningTokens?: number;
   reasoning_tokens?: number;
   completion_tokens_details?: { reasoning_tokens?: number };
@@ -79,6 +81,8 @@ export type NormalizedUsage = {
   total?: number;
   cost?: Pick<Usage["cost"], "total" | "totalOrigin"> &
     Partial<Pick<Usage["cost"], "input" | "output" | "cacheRead" | "cacheWrite">>;
+  /** Aggregated candidate prices are authoritative, including zero and unavailable totals. */
+  costStatus?: "complete" | "unavailable";
 };
 
 export type OpenAiChatCompletionsUsage = ReturnType<typeof toOpenAiChatCompletionsUsage>;
@@ -158,7 +162,8 @@ const normalizeTokenCount = (value: unknown): number | undefined => {
     : Math.min(Math.max(0, Math.trunc(numeric)), Number.MAX_SAFE_INTEGER);
 };
 
-function normalizeContextUsage(raw?: ContextUsage): ContextUsage | undefined {
+export function normalizeContextUsage(value: unknown): ContextUsage | undefined {
+  const raw = asOptionalRecord(value);
   if (raw?.state !== "available") {
     return raw?.state === "unavailable" ? { state: "unavailable" } : undefined;
   }
@@ -197,7 +202,9 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
       raw.prompt_tokens_details?.cache_write_tokens ??
       raw.prompt_tokens_details?.cache_creation_input_tokens,
   );
-  const cacheWrite1h = normalizeTokenCount(raw.cacheWrite1h);
+  const cacheWrite1h = normalizeTokenCount(
+    raw.cacheWrite1h ?? raw.cache_creation?.ephemeral_1h_input_tokens,
+  );
 
   const directInput = asFiniteNumber(raw.input);
   const rawInputValue =

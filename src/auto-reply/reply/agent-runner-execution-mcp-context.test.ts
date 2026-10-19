@@ -26,6 +26,28 @@ const image = {
   mimeType: "image/png",
   data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRz0AAAAASUVORK5CYII=",
 };
+const authority = (profileId: string) =>
+  createAdmittedRunOperatorAuthority({
+    profileId,
+    scopes: ["operator.read", "operator.write"],
+    assertCurrent() {},
+  });
+async function pendingView(text: string, requesterId?: string, agentId = "main", images = false) {
+  const runtime = { sessionId: "session" } as SessionMcpRuntime;
+  const view = await prepareView(runtime, requesterId, agentId);
+  updateMcpAppModelContext(runtime, view, {
+    content: [{ type: "text", text }, ...(images ? [image] : [])],
+  });
+  return { runtime, view };
+}
+function expectContext(input: EmbeddedAgentParams | undefined, text: string) {
+  expect(input?.currentInboundContext).toMatchObject({
+    text: expect.stringContaining(text),
+    fragments: expect.arrayContaining([
+      { kind: "conversation-data", text: expect.stringContaining(text) },
+    ]),
+  });
+}
 async function prepareView(runtime: SessionMcpRuntime, requesterId?: string, agentId = "main") {
   Object.assign(runtime, {
     sessionKey: "main",
@@ -59,20 +81,10 @@ describe("executeAgentTurn MCP App context", () => {
   ])(
     "uses the admitted profile $profileId rather than transport sender $senderId",
     async ({ profileId, senderId, attached }) => {
-      const runtime = { sessionId: "session" } as SessionMcpRuntime;
-      const view = await prepareView(runtime, "alice");
-      updateMcpAppModelContext(runtime, view, {
-        content: [{ type: "text", text: "mapped private selection" }, image],
-      });
+      await pendingView("mapped private selection", "alice", "main", true);
       const params = createMinimalRunAgentTurnParams();
       params.followupRun.run.senderId = senderId;
-      params.followupRun.operatorAuthority = profileId
-        ? createAdmittedRunOperatorAuthority({
-            profileId,
-            scopes: ["operator.read", "operator.write"],
-            assertCurrent() {},
-          })
-        : undefined;
+      params.followupRun.operatorAuthority = profileId ? authority(profileId) : undefined;
       await executeAgentTurn(params);
       const input = state.runEmbeddedAgentMock.mock.calls[0]?.[0];
       expect(input?.images ?? []).toEqual(attached ? [image] : []);
@@ -82,17 +94,14 @@ describe("executeAgentTurn MCP App context", () => {
     },
   );
   it("keeps another agent's App context isolated when bare keys and session ids coincide", async () => {
-    const runtime = { sessionId: "session" } as SessionMcpRuntime;
-    const view = await prepareView(runtime, "alice", "research");
-    updateMcpAppModelContext(runtime, view, {
-      content: [{ type: "text", text: "foreign project selection" }, image],
-    });
+    const { runtime, view } = await pendingView(
+      "foreign project selection",
+      "alice",
+      "research",
+      true,
+    );
     const params = createMinimalRunAgentTurnParams();
-    params.followupRun.operatorAuthority = createAdmittedRunOperatorAuthority({
-      profileId: "alice",
-      scopes: ["operator.read", "operator.write"],
-      assertCurrent() {},
-    });
+    params.followupRun.operatorAuthority = authority("alice");
     expect(params.followupRun.run.agentId).toBe("main");
     await executeAgentTurn(params);
     const input = state.runEmbeddedAgentMock.mock.calls[0]?.[0];
@@ -103,64 +112,47 @@ describe("executeAgentTurn MCP App context", () => {
     expect(getMcpAppModelContext(runtime, view)).not.toBeNull();
   });
 
-  it.each(["turn_accepted"] as const)(
-    "injects context and native images exactly once at %s without rewriting transcript text",
-    async (phase) => {
-      const runtime = { sessionId: "session" } as SessionMcpRuntime;
-      const view = await prepareView(runtime);
-      updateMcpAppModelContext(runtime, view, {
-        content: [
-          { type: "text", text: "selected item 42", _meta: { "openai/title": "Selection" } },
-          image,
-        ],
-      });
-      state.runEmbeddedAgentMock.mockImplementation(async (params: EmbeddedAgentParams) => {
-        params.onExecutionPhase?.({ phase });
-        return { payloads: [{ text: "ok" }], meta: {} };
-      });
-
-      await executeAgentTurn({
-        ...createMinimalRunAgentTurnParams(),
-        commandBody: "show details",
-        transcriptCommandBody: "show details",
-      });
-      await executeAgentTurn({
-        ...createMinimalRunAgentTurnParams(),
-        commandBody: "next question",
-        transcriptCommandBody: "next question",
-      });
-
-      expect(state.runEmbeddedAgentMock.mock.calls[0]?.[0]?.images).toEqual([image]);
-      expect(state.runEmbeddedAgentMock.mock.calls[0]?.[0]?.imageOrder).toEqual(["inline"]);
-      expect(
-        JSON.stringify(state.runEmbeddedAgentMock.mock.calls[0]?.[0]?.currentInboundContext),
-      ).not.toContain(image.data);
-      expect(
-        JSON.stringify(state.runEmbeddedAgentMock.mock.calls[0]?.[0]?.currentInboundContext),
-      ).not.toContain("_meta");
-      expect(state.peekSessionMcpRuntimeMock).not.toHaveBeenCalled();
-      expect(state.runEmbeddedAgentMock.mock.calls[0]?.[0]?.prompt).toBe("show details");
-      expect(state.runEmbeddedAgentMock.mock.calls[0]?.[0]?.currentInboundContext).toMatchObject({
-        text: expect.stringContaining("selected item 42"),
-        fragments: expect.arrayContaining([
-          { kind: "conversation-data", text: expect.stringContaining("selected item 42") },
-        ]),
-      });
-      expect(state.runEmbeddedAgentMock.mock.calls[0]?.[0]?.transcriptPrompt).toBe("show details");
-      expect(state.runEmbeddedAgentMock.mock.calls[1]?.[0]?.prompt).toBe("next question");
-      expect(state.runEmbeddedAgentMock.mock.calls[1]?.[0]?.transcriptPrompt).toBe("next question");
-      expect(
-        JSON.stringify(state.runEmbeddedAgentMock.mock.calls[1]?.[0]?.currentInboundContext ?? {}),
-      ).not.toContain("selected item 42");
-    },
-  );
-
-  it("does not consume pending MCP App context when pre-start validation fails", async () => {
+  it("injects context and native images exactly once at turn_accepted without rewriting transcript text", async () => {
     const runtime = { sessionId: "session" } as SessionMcpRuntime;
     const view = await prepareView(runtime);
     updateMcpAppModelContext(runtime, view, {
-      content: [{ type: "text", text: "still pending" }],
+      content: [
+        { type: "text", text: "selected item 42", _meta: { "openai/title": "Selection" } },
+        image,
+      ],
     });
+    state.runEmbeddedAgentMock.mockImplementation(async (params: EmbeddedAgentParams) => {
+      params.onExecutionPhase?.({ phase: "turn_accepted" });
+      return { payloads: [{ text: "ok" }], meta: {} };
+    });
+
+    await executeAgentTurn({
+      ...createMinimalRunAgentTurnParams(),
+      commandBody: "show details",
+      transcriptCommandBody: "show details",
+    });
+    await executeAgentTurn({
+      ...createMinimalRunAgentTurnParams(),
+      commandBody: "next question",
+      transcriptCommandBody: "next question",
+    });
+
+    const first = state.runEmbeddedAgentMock.mock.calls[0]?.[0];
+    const second = state.runEmbeddedAgentMock.mock.calls[1]?.[0];
+    expect(first?.images).toEqual([image]);
+    expect(first?.imageOrder).toEqual(["inline"]);
+    const context = JSON.stringify(first?.currentInboundContext);
+    expect(context).not.toContain(image.data);
+    expect(context).not.toContain("_meta");
+    expect(state.peekSessionMcpRuntimeMock).not.toHaveBeenCalled();
+    expect(first).toMatchObject({ prompt: "show details", transcriptPrompt: "show details" });
+    expectContext(first, "selected item 42");
+    expect(second).toMatchObject({ prompt: "next question", transcriptPrompt: "next question" });
+    expect(JSON.stringify(second?.currentInboundContext ?? {})).not.toContain("selected item 42");
+  });
+
+  it("does not consume pending MCP App context when pre-start validation fails", async () => {
+    const { runtime, view } = await pendingView("still pending");
     state.resolveCurrentTurnImagesMock.mockRejectedValueOnce(new Error("invalid image"));
 
     await expect(executeAgentTurn(createMinimalRunAgentTurnParams())).rejects.toThrow(
@@ -176,12 +168,7 @@ describe("executeAgentTurn MCP App context", () => {
     });
     await executeAgentTurn(createMinimalRunAgentTurnParams());
 
-    expect(state.runEmbeddedAgentMock.mock.calls[0]?.[0]?.currentInboundContext).toMatchObject({
-      text: expect.stringContaining("still pending"),
-      fragments: expect.arrayContaining([
-        { kind: "conversation-data", text: expect.stringContaining("still pending") },
-      ]),
-    });
+    expectContext(state.runEmbeddedAgentMock.mock.calls[0]?.[0], "still pending");
     expect(getMcpAppModelContext(runtime, view)).toBeNull();
   });
 
@@ -197,11 +184,7 @@ describe("executeAgentTurn MCP App context", () => {
       model,
       attempts: [],
     }));
-    const runtime = { sessionId: "session" } as SessionMcpRuntime;
-    const view = await prepareView(runtime);
-    updateMcpAppModelContext(runtime, view, {
-      content: [{ type: "text", text: "CLI selection" }],
-    });
+    const { runtime, view } = await pendingView("CLI selection");
     state.runCliAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
       params.onExecutionPhase?.({ phase: "process_spawned" });
       return { payloads: [{ text: "final" }], meta: {} };
@@ -211,11 +194,7 @@ describe("executeAgentTurn MCP App context", () => {
       resumableText: "Current room event",
     };
 
-    await executeAgentTurn(
-      createMinimalRunAgentTurnParams({
-        followupRun,
-      }),
-    );
+    await executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun }));
 
     const cliParams = state.runCliAgentMock.mock.calls[0]?.[0];
     expect(cliParams?.prompt).toBe("fix it");

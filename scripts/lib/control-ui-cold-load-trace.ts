@@ -1,7 +1,11 @@
 import { readFile } from "node:fs/promises";
 import { SourceMap } from "node:module";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import { z } from "zod";
+
+const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 
 export type ColdLoadTraceEvent = {
   name?: string;
@@ -132,19 +136,33 @@ export async function mapColdLoadCpuProfile(
         unmappedFrames++;
         return node;
       }
-      const origin = map.findOrigin(frame.lineNumber + 1, frame.columnNumber + 1);
-      if (!("fileName" in origin)) {
+      const origin = map.findEntry(frame.lineNumber, frame.columnNumber);
+      if (
+        !("originalSource" in origin) ||
+        typeof origin.originalSource !== "string" ||
+        origin.generatedLine !== frame.lineNumber
+      ) {
         unmappedFrames += 1;
         return node;
       }
       mappedFrames += 1;
+      // Node's SourceMapping declarations omit the optional decoded name.
+      const name = asRecord(origin)?.name;
+      const source = origin.originalSource;
       return {
         ...node,
         callFrame: {
-          functionName: origin.name ?? frame.functionName,
-          url: origin.fileName,
-          lineNumber: origin.lineNumber - 1,
-          columnNumber: origin.columnNumber - 1,
+          functionName: typeof name === "string" && name ? name : frame.functionName,
+          // Resolve map-relative paths before comparing functions across build directories.
+          url:
+            URL.canParse(source) && !path.isAbsolute(source)
+              ? source
+              : path
+                  .relative(repositoryRoot, path.resolve(path.dirname(file), source))
+                  .split(path.sep)
+                  .join("/"),
+          lineNumber: origin.originalLine,
+          columnNumber: origin.originalColumn,
         },
       };
     }),
@@ -261,7 +279,7 @@ export function summarizeColdLoadTrace(events: readonly ColdLoadTraceEvent[], du
 
 export function summarizeCpuProfile(
   profile: ColdLoadCpuProfile,
-  options: { isSolidFlush?: (frame: ColdLoadCpuFrame) => boolean } = {},
+  options: { isSolidFlush?: (frame: ColdLoadCpuFrame) => boolean; includeTables?: boolean } = {},
 ) {
   const samples = profile.samples ?? [];
   const deltas = profile.timeDeltas ?? [];
@@ -295,6 +313,8 @@ export function summarizeCpuProfile(
     string,
     ColdLoadCpuFrame & { selfMs: number; samples: number; callSite?: ColdLoadCpuFrame }
   >();
+  const functions = new Map<string, ColdLoadCpuFunction>();
+  const files = new Map<string, number>();
   const isSolidFlush =
     options.isSolidFlush ??
     ((frame: ColdLoadCpuFrame) =>
@@ -335,6 +355,38 @@ export function summarizeCpuProfile(
     if (frame.functionName === "(root)" || frame.functionName === "(idle)") {
       continue;
     }
+    if (options.includeTables) {
+      const seenFunctions = new Set<string>();
+      const seenFiles = new Set<string>();
+      let current: number | undefined = sample.id;
+      while (current !== undefined) {
+        const entry = nodes.get(current)!;
+        if (entry.functionName !== "(root)" && entry.functionName !== "(idle)") {
+          const key = functionKey(entry);
+          const row = functions.get(key) ?? {
+            functionName: entry.functionName,
+            url: entry.url,
+            lineNumber: entry.lineNumber,
+            columnNumber: entry.columnNumber,
+            selfMs: 0,
+            inclusiveMs: 0,
+          };
+          if (current === sample.id) {
+            row.selfMs += selfMs;
+          }
+          if (!seenFunctions.has(key)) {
+            row.inclusiveMs += selfMs;
+          }
+          functions.set(key, row);
+          seenFunctions.add(key);
+          if (entry.url && !seenFiles.has(entry.url)) {
+            files.set(entry.url, (files.get(entry.url) ?? 0) + selfMs);
+            seenFiles.add(entry.url);
+          }
+        }
+        current = parents.get(current);
+      }
+    }
     let callSite: ColdLoadCpuFrame | undefined;
     if (!frame.url) {
       let caller = parents.get(sample.id);
@@ -365,6 +417,12 @@ export function summarizeCpuProfile(
     totals.set(key, total);
   }
   return {
+    tables: options.includeTables
+      ? {
+          functions: [...functions.values()],
+          files: [...files].map(([url, inclusiveMs]) => ({ url, inclusiveMs })),
+        }
+      : undefined,
     sampledMs,
     idleMs,
     outOfOrderSamples,
@@ -375,4 +433,125 @@ export function summarizeCpuProfile(
       .toSorted((left, right) => right.selfMs - left.selfMs)
       .slice(0, 20),
   };
+}
+
+export type ColdLoadCpuFunction = ColdLoadCpuFrame & { selfMs: number; inclusiveMs: number };
+export type ColdLoadCpuTables = {
+  functions: ColdLoadCpuFunction[];
+  files: { url: string; inclusiveMs: number }[];
+};
+
+function functionKey(row: ColdLoadCpuFrame) {
+  return JSON.stringify([row.url, row.functionName, row.lineNumber, row.columnNumber]);
+}
+
+export function medianCpuTables(tables: ColdLoadCpuTables[]): ColdLoadCpuTables {
+  const median = (values: number[]) => {
+    const sorted = values.toSorted((a, b) => a - b);
+    return (
+      (sorted[Math.floor((sorted.length - 1) / 2)]! + sorted[Math.floor(sorted.length / 2)]!) / 2
+    );
+  };
+  const functions = tables.map(
+    (table) => new Map(table.functions.map((row) => [functionKey(row), row])),
+  );
+  const files = tables.map(
+    (table) => new Map(table.files.map((row) => [row.url, row.inclusiveMs])),
+  );
+  return {
+    functions: [
+      ...new Map(
+        tables.flatMap((table) => table.functions.map((row) => [functionKey(row), row])),
+      ).entries(),
+    ].map(([key, row]) =>
+      Object.assign({}, row, {
+        selfMs: median(functions.map((rows) => rows.get(key)?.selfMs ?? 0)),
+        inclusiveMs: median(functions.map((rows) => rows.get(key)?.inclusiveMs ?? 0)),
+      }),
+    ),
+    files: [...new Set(tables.flatMap((table) => table.files.map((row) => row.url)))].map(
+      (url) => ({
+        url,
+        inclusiveMs: median(files.map((rows) => rows.get(url) ?? 0)),
+      }),
+    ),
+  };
+}
+
+export function compareCpuTables(baseline: ColdLoadCpuTables, candidate: ColdLoadCpuTables) {
+  const before = new Map(baseline.functions.map((row) => [functionKey(row), row]));
+  const after = new Map(candidate.functions.map((row) => [functionKey(row), row]));
+  return [...new Map([...before, ...after])].map(([key, row]) =>
+    Object.assign({}, row, {
+      baselineSelfMs: before.get(key)?.selfMs ?? 0,
+      baselineInclusiveMs: before.get(key)?.inclusiveMs ?? 0,
+      selfMs: (after.get(key)?.selfMs ?? 0) - (before.get(key)?.selfMs ?? 0),
+      inclusiveMs: (after.get(key)?.inclusiveMs ?? 0) - (before.get(key)?.inclusiveMs ?? 0),
+    }),
+  );
+}
+
+export function formatCpuTables(title: string, tables: ColdLoadCpuTables, comparison = false) {
+  const appFirst = (url: string) =>
+    Boolean(url && !url.includes("node_modules") && !URL.canParse(url));
+  const format = (value: number) =>
+    `${comparison && value > 0 ? "+" : ""}${value.toFixed(1)}`.padStart(10);
+  const rows = (metric: "selfMs" | "inclusiveMs") =>
+    tables.functions
+      .toSorted(
+        (a, b) =>
+          Number(appFirst(b.url)) - Number(appFirst(a.url)) ||
+          Math.abs(b[metric]) - Math.abs(a[metric]) ||
+          functionKey(a).localeCompare(functionKey(b)),
+      )
+      .slice(0, 70)
+      .map(
+        (row) =>
+          `${format(row[metric])}  ${row.url || "(native)"}:${row.lineNumber + 1}:${row.columnNumber + 1} ${row.functionName || "(anonymous)"}`,
+      )
+      .join("\n");
+  return [
+    title,
+    `${comparison ? "Delta " : ""}self ms (app sources first)`,
+    rows("selfMs"),
+    `${comparison ? "Delta " : ""}inclusive ms by function (app sources first)`,
+    rows("inclusiveMs"),
+    ...(comparison
+      ? []
+      : [
+          "Inclusive ms by source file",
+          tables.files
+            .toSorted((a, b) => b.inclusiveMs - a.inclusiveMs)
+            .slice(0, 45)
+            .map((row) => `${format(row.inclusiveMs)}  ${row.url}`)
+            .join("\n"),
+        ]),
+  ].join("\n");
+}
+
+const cpuTablesSchema = z.object({
+  functions: z.array(
+    z.object({
+      functionName: z.string(),
+      url: z.string(),
+      lineNumber: z.number().int(),
+      columnNumber: z.number().int(),
+      selfMs: z.number().nonnegative().finite(),
+      inclusiveMs: z.number().nonnegative().finite(),
+    }),
+  ),
+  files: z.array(z.object({ url: z.string(), inclusiveMs: z.number().nonnegative().finite() })),
+});
+
+export function readCpuProfileReport(
+  value: unknown,
+  phases: string[],
+): Record<string, ColdLoadCpuTables> {
+  const report = z.record(z.string(), cpuTablesSchema).parse(value);
+  const baseline = Object.keys(report).toSorted().join(", ");
+  const candidate = phases.toSorted().join(", ");
+  if (baseline !== candidate) {
+    throw new Error(`CPU profile phases differ: baseline [${baseline}], candidate [${candidate}]`);
+  }
+  return report;
 }

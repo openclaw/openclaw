@@ -1,4 +1,3 @@
-// Builds channel status rows and account details for `openclaw status --all`.
 // This layer stays plugin-generic: channel-specific auth rules live in plugin config/status hooks.
 
 import fs from "node:fs";
@@ -11,7 +10,10 @@ import {
 } from "../../channels/account-inspection.js";
 import { resolveChannelAllowFrom } from "../../channels/account-resolution.js";
 import { hasConfiguredUnavailableCredentialStatus } from "../../channels/account-snapshot-fields.js";
-import { formatChannelAllowFrom } from "../../channels/account-summary.js";
+import {
+  buildChannelAccountNotes,
+  formatChannelAllowFrom,
+} from "../../channels/account-summary.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { resolveReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import { formatChannelStatusState } from "../../channels/plugins/status-state.js";
@@ -56,46 +58,19 @@ const buildAccountNotes = async (params: {
   liveCredentialAvailable?: boolean;
 }) => {
   const { plugin, cfg, entry } = params;
-  const notes: string[] = [];
   const snapshot = entry.snapshot;
-  if (snapshot.enabled === false) {
-    notes.push("disabled");
-  }
-  if (snapshot.dmPolicy) {
-    notes.push(`dm:${snapshot.dmPolicy}`);
-  }
-  for (const [label, source] of [
-    ["token", snapshot.tokenSource],
-    ["bot", snapshot.botTokenSource],
-    ["app", snapshot.appTokenSource],
-    ["signing", snapshot.signingSecretSource],
-  ]) {
-    if (source && source !== "none") {
-      notes.push(`${label}:${source}`);
-    }
-  }
-  if (entry.kind === "unavailable") {
-    notes.push("secret unavailable in this command path");
-  } else if (params.liveCredentialAvailable) {
-    notes.push("credential available in gateway runtime");
-  } else if (hasConfiguredUnavailableCredentialStatus(entry.account)) {
-    notes.push("secret unavailable in this command path");
-  }
-  if (snapshot.baseUrl) {
-    notes.push(snapshot.baseUrl);
-  }
-  if (snapshot.port != null) {
-    notes.push(`port:${snapshot.port}`);
-  }
-  if (snapshot.cliPath) {
-    notes.push(`cli:${snapshot.cliPath}`);
-  }
-  if (snapshot.dbPath) {
-    notes.push(`db:${snapshot.dbPath}`);
-  }
-
   const unavailable =
     entry.kind === "unavailable" || hasConfiguredUnavailableCredentialStatus(entry.account);
+  const notes = buildChannelAccountNotes(
+    snapshot,
+    entry.kind === "unavailable"
+      ? "secret unavailable in this command path"
+      : params.liveCredentialAvailable
+        ? "credential available in gateway runtime"
+        : unavailable
+          ? "secret unavailable in this command path"
+          : undefined,
+  );
   const allowFrom = unavailable
     ? snapshot.allowFrom
     : ((await resolveChannelAllowFrom({ plugin, cfg, accountId: snapshot.accountId })) ??

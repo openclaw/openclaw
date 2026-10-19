@@ -133,16 +133,15 @@ type ToolUseResultPairingOptions = {
 
 export { stripToolResultDetails } from "../shared/model-context-message.js";
 
-function collectFollowingToolResults(
+export function collectFollowingToolResults(
   messages: AgentMessage[],
   index: number,
+  currentToolCalls?: ReturnType<typeof extractToolCallsFromAssistant>,
+  hasAssistantToolCall: (message: Extract<AgentMessage, { role: "assistant" }>) => boolean = (
+    message,
+  ) => extractToolCallsFromAssistant(message).length > 0,
 ): { ids: Set<string>; displaced: boolean } {
   const ids = new Set<string>();
-  const assistant = messages[index];
-  const currentToolCalls =
-    assistant && typeof assistant === "object" && assistant.role === "assistant"
-      ? extractToolCallsFromAssistant(assistant)
-      : [];
   let sawNonToolResult = false;
   let displaced = false;
   for (let nextIndex = index + 1; nextIndex < messages.length; nextIndex += 1) {
@@ -151,11 +150,13 @@ function collectFollowingToolResults(
       sawNonToolResult = true;
       continue;
     }
-    if (message.role === "assistant" && extractToolCallsFromAssistant(message).length > 0) {
+    if (message.role === "assistant" && hasAssistantToolCall(message)) {
       break;
     }
     if (message.role === "toolResult") {
-      const normalizedLegacyResult = normalizeLegacyToolResultId(message, currentToolCalls);
+      const normalizedLegacyResult = currentToolCalls
+        ? normalizeLegacyToolResultId(message, currentToolCalls)
+        : message;
       const resultIds = extractToolResultIds(normalizedLegacyResult);
       for (const id of resultIds) {
         ids.add(id);
@@ -201,7 +202,11 @@ export function sanitizeToolCallInputs(
       // the later pairing repair can synthesize missing legacy tool results
       // without mutating provider-owned assistant content.
       const replaySafeToolCalls = extractToolCallsFromAssistant(msg);
-      const followingToolResults = collectFollowingToolResults(messages, index);
+      const followingToolResults = collectFollowingToolResults(
+        messages,
+        index,
+        replaySafeToolCalls,
+      );
       const hasSpawnAttachments = hasSessionsSpawnAttachmentToolCall(msg.content);
       if (
         isReplaySafeThinkingAssistantTurn(msg.content, allowedToolNames, isCompleted) &&

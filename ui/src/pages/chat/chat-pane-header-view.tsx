@@ -1,11 +1,14 @@
 import { onCleanup } from "solid-js";
-import type { PresentationValue } from "../../lit/presentation-binding.ts";
+import { Icon } from "../../components/solid/icon.tsx";
+import type { PresentationValue } from "../../lib/presentation.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import type { ElementProperties } from "../../types/solid-elements.d.ts";
-import { usePanePresentation } from "./chat-pane-embedded-view.tsx";
+import { usePanePresentation } from "./chat-pane-presentation.ts";
 import type { ChatDetails } from "./components/chat-details.tsx";
 
 export type PaneDetailsProps = {
   chat: ChatDetails["props"];
+  elements: ChatDetails["elements"];
   mobile: boolean;
   conversationVisible?: boolean;
   externalTrigger?: boolean;
@@ -20,6 +23,7 @@ export function PaneDetails(props: PaneDetailsProps) {
     <openclaw-chat-details
       ref={(element) => props.setRef(element)}
       prop:props={props.chat}
+      prop:elements={props.elements}
       prop:mobile={props.mobile}
       prop:conversationVisible={props.conversationVisible ?? true}
       prop:externalTrigger={props.externalTrigger ?? false}
@@ -32,6 +36,20 @@ type PresenceProps = Pick<
   HTMLElementTagNameMap["openclaw-viewer-facepile"],
   "staticUsers" | "personActivity"
 >;
+
+export function PaneSubagentStop(props: { onAbort: () => void }) {
+  return (
+    <button
+      class="chat-subagent-detail__stop"
+      type="button"
+      aria-label={t("chat.runControls.stopGenerating")}
+      onClick={() => props.onAbort()}
+    >
+      <Icon name="stop" />
+      <span>{t("chat.runControls.stop")}</span>
+    </button>
+  );
+}
 export function PaneHeaderPresence(props: PresenceProps) {
   return (
     <openclaw-viewer-facepile
@@ -56,6 +74,7 @@ export function PaneHeaderSessionMenu(props: SessionMenuProps) {
       prop:onboarding={props.onboarding}
       prop:preferencesBrowserOnly={props.preferencesBrowserOnly}
       prop:compact={props.compact}
+      prop:prewarm={props.prewarm}
       prop:copyMarkdownAllowed={props.copyMarkdownAllowed}
       prop:splitAllowed={props.splitAllowed}
       prop:settings={props.settings}
@@ -88,7 +107,12 @@ declare module "@solidjs/web" {
         ElementProperties<
           Pick<
             ChatDetails,
-            "props" | "presented" | "mobile" | "conversationVisible" | "externalTrigger"
+            | "props"
+            | "elements"
+            | "presented"
+            | "mobile"
+            | "conversationVisible"
+            | "externalTrigger"
           >
         >;
       "openclaw-chat-header-session-menu": HTMLAttributes<

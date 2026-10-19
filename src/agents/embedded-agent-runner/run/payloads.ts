@@ -16,9 +16,10 @@ import {
 } from "../../../auto-reply/reply-payload.js";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
-import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
+import { HEARTBEAT_TOKEN } from "../../../auto-reply/tokens.js";
 import { applyAssistantDeliveryDirectives } from "../../../config/sessions/transcript-assistant-delivery.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { readAgentAssistantSource } from "../../../infra/agent-events.js";
 import { hasReplyPayloadContent } from "../../../interactive/payload.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { resolveRawAssistantAnswerText } from "../../../shared/assistant-answer-text.js";
@@ -31,13 +32,13 @@ import {
   type PreparedAgentRunTerminalReply,
 } from "../../agent-run-terminal-reply.js";
 import { classifyOAuthRefreshFailure } from "../../auth-profiles/oauth-refresh-failure.js";
+import { classifyAssistantFailoverReason } from "../../embedded-agent-helpers/assistant-message-failures.js";
 import {
-  classifyAssistantFailoverReason,
   formatAssistantErrorText,
   formatUserFacingAssistantErrorText,
-  normalizeTextForComparison,
-} from "../../embedded-agent-helpers.js";
-import { SYNTHESIZED_TIMEOUT_ERROR_TEXT } from "../../embedded-agent-helpers/error-text.js";
+  SYNTHESIZED_TIMEOUT_ERROR_TEXT,
+} from "../../embedded-agent-helpers/error-text.js";
+import { normalizeTextForComparison } from "../../embedded-agent-helpers/messaging-dedupe.js";
 import { sanitizeUserFacingText } from "../../embedded-agent-helpers/sanitize-user-facing-text.js";
 import type {
   MessagingToolSend,
@@ -75,34 +76,30 @@ function renderNativeAssistantReply(
   const sourceBlocks = finalBlocks.length
     ? finalBlocks
     : readAssistantTextBlocksForPhase(assistant);
-  const prefixLength = rawText.length - preparedText.length;
+  const prefixLength = rawText.endsWith(preparedText) ? rawText.length - preparedText.length : 0;
   // Only project native parts when they still represent the authoritative prepared source.
   if (
     sourceBlocks.map((block) => block.text).join("") !== rawText ||
-    (rawText !== preparedText &&
-      (prefixLength !== SILENT_REPLY_TOKEN.length + 1 ||
-        !rawText.startsWith(`${SILENT_REPLY_TOKEN}\n`) ||
-        rawText.slice(prefixLength) !== preparedText))
+    (prefixLength === 0 && !rawText.startsWith(preparedText))
   ) {
     return undefined;
   }
   const rendered = {
     ...assistant,
-    content: assistant.content.map((block) => (block.type === "text" ? { ...block } : block)),
+    content: assistant.content.map((block) => ({ ...block })),
   };
-  if (prefixLength > 0) {
-    // Map the already-consumed raw control line onto its parts without inspecting the suffix.
+  if (rawText !== preparedText) {
+    // Map the prepared range before directives consume bytes from the native parts.
     let remainingPrefix = prefixLength;
+    let remainingLength = preparedText.length;
     for (const block of readAssistantTextBlocksForPhase(
       rendered,
       finalBlocks.length ? "final_answer" : undefined,
     )) {
       const removed = Math.min(remainingPrefix, block.text.length);
-      block.text = block.text.slice(removed);
       remainingPrefix -= removed;
-      if (remainingPrefix === 0) {
-        break;
-      }
+      block.text = block.text.slice(removed, removed + remainingLength);
+      remainingLength -= block.text.length;
     }
   }
   // Native part boundaries carry fence context that is lost after joining the text.
@@ -459,9 +456,14 @@ export function buildEmbeddedRunPayloads(params: {
             : {}),
         };
         addReplyPayloadMediaFailures(replyPayload, mediaFailures);
-        if (assistantMessageIndex !== undefined) {
-          setReplyPayloadMetadata(replyPayload, { assistantMessageIndex });
-        }
+        const assistantTranscriptSource =
+          mediaUrls?.length || mediaFailures?.length
+            ? readAgentAssistantSource(assistantForPayload)
+            : undefined;
+        setReplyPayloadMetadata(replyPayload, {
+          ...(assistantMessageIndex !== undefined ? { assistantMessageIndex } : {}),
+          ...(assistantTranscriptSource ? { assistantTranscriptSource } : {}),
+        });
         replyItems.push(
           ttsFacts ? setReplyPayloadMetadata(replyPayload, { tts: ttsFacts }) : replyPayload,
         );

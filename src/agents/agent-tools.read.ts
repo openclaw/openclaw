@@ -97,10 +97,6 @@ type SkillReadContent = {
 
 export type SkillInstructionDeliveryCache = Map<string, Promise<boolean>>;
 
-export function createSkillInstructionDeliveryCache(): SkillInstructionDeliveryCache {
-  return new Map();
-}
-
 /** Erase a schema-specific session tool only after its input passes that owned schema. */
 function eraseSessionFileTool<TParameters extends TSchema, TDetails>(
   tool: AgentTool<TParameters, TDetails>,

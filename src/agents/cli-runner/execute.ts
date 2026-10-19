@@ -37,10 +37,8 @@ import {
 import { executeDeps } from "./execute-deps.js";
 import { createCliEventHandlers } from "./execute-events.js";
 import {
-  buildCliExecLogLine,
   CLAUDE_SELECTED_AUTH_ENV_KEYS,
   CLI_BACKEND_PRESERVE_ENV,
-  logCliInvocation,
   NODE_CLAUDE_FORWARD_ENV_KEYS,
   parseCliBackendPreserveEnv,
   resolveNodeClaudeAuthEnv,
@@ -324,19 +322,6 @@ export async function executePreparedCliRun(
       getRunState: () => ({ failed: runFailed, error: runError }),
     });
     try {
-      cliBackendLog.info(
-        buildCliExecLogLine({
-          provider: params.provider,
-          model: context.normalizedModel,
-          promptChars: basePrompt.length,
-          trigger: params.isolatedCompletionPurpose ?? params.trigger,
-          useResume,
-          cliSessionId: cliSessionIdToUse,
-          resolvedSessionId,
-          reusableSession: context.reusableCliSession,
-          hasHistoryPrompt: Boolean(context.openClawHistoryPrompt),
-        }),
-      );
       const logOutputText = isTruthyEnvValue(process.env[CLI_BACKEND_LOG_OUTPUT_ENV]);
       const outputMode = useResume ? (backend.resumeOutput ?? backend.output) : backend.output;
       const initialGatewayCaptureKey =
@@ -344,9 +329,7 @@ export async function executePreparedCliRun(
       const mcpCaptureAttempt = nodePlacement
         ? { env: {}, cleanup: undefined }
         : await prepareCliBundleMcpCaptureAttempt({
-            mode: context.backendResolved.bundleMcpMode,
-            backend,
-            env: context.preparedBackend.env,
+            preparedBackend: context.preparedBackend,
             captureKey: initialGatewayCaptureKey,
           });
       cleanupMcpCaptureAttempt = mcpCaptureAttempt.cleanup;
@@ -524,18 +507,6 @@ export async function executePreparedCliRun(
           sendSystemPromptOnResume: resendSystemPromptForSoftResume,
         });
 
-        if (logOutputText) {
-          logCliInvocation({
-            args,
-            command: executionCommand,
-            env,
-            systemPromptArg: backend.systemPromptArg,
-            modelArg: backend.modelArg,
-            imageArg: backend.imageArg,
-            argsPrompt,
-            log: (message) => cliBackendLog.info(message),
-          });
-        }
         return args;
       };
       const runTimeoutOverrideMs = resolveCliRunTimeoutOverrideMs({

@@ -5,13 +5,13 @@ import type {
   ModelsAuthLoginFlowResult,
 } from "openclaw/plugin-sdk/provider-auth-login-flow-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
-import { vi } from "vitest";
 import { registerTelegramNativeCommands } from "./src/bot-native-commands.js";
 import {
   createCommandBot,
   createNativeCommandTestParams,
   createPrivateCommandContext,
   deliverReplies,
+  nativeCommandMocks,
   resetNativeCommandMenuMocks,
 } from "./src/bot-native-commands.menu-test-support.js";
 import { setTelegramRuntime } from "./src/runtime.js";
@@ -73,8 +73,7 @@ export async function createTelegramNativeCommandTestDriver(options: {
             }),
       );
     },
-    pairingStoreReadCount: () =>
-      vi.mocked(params.telegramDeps.readChannelAllowFromStore).mock.calls.length,
+    pairingStoreReadCount: () => nativeCommandMocks.readChannelAllowFromStore.mock.calls.length,
     deliveries: () =>
       deliverReplies.mock.calls.map(([delivery]) => ({ replies: delivery.replies })),
     sentMessages: () =>
@@ -93,11 +92,11 @@ export async function createTelegramNativeCommandTestDriver(options: {
       run: (options: ModelsAuthLoginFlowOptions) => Promise<ModelsAuthLoginFlowResult>;
       onResult: () => void;
     }) {
-      params.telegramDeps.runModelsAuthLoginFlow = input.run;
-      params.telegramDeps.sendMessageTelegram = async () => {
+      nativeCommandMocks.runModelsAuthLoginFlow.mockImplementation(input.run);
+      nativeCommandMocks.sendMessageTelegram.mockImplementation(async () => {
         input.onResult();
         return { messageId: "999", chatId: "100" };
-      };
+      });
     },
     close: clearTelegramRuntimeForTest,
   };

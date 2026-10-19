@@ -1,11 +1,10 @@
 import { EventEmitter } from "node:events";
-import http, { createServer } from "node:http";
+import http from "node:http";
 import { createServer as createTcpServer } from "node:net";
 import type { AddressInfo } from "node:net";
-import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
-import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CHROME_STOP_PROBE_TIMEOUT_MS } from "./cdp-timeouts.js";
+import { withMockChromeCdpServer } from "./chrome.cdp.test-support.js";
 import { diagnoseChromeCdp, formatChromeCdpDiagnostic } from "./chrome.diagnostics.js";
 import {
   getChromeWebSocketEndpoint,
@@ -15,8 +14,6 @@ import {
   stopOpenClawChrome,
 } from "./chrome.js";
 import { BrowserCdpEndpointBlockedError } from "./errors.js";
-
-const CHROME_TEST_WS_MAX_PAYLOAD_BYTES = 1024 * 1024;
 
 type StopChromeTarget = Parameters<typeof stopOpenClawChrome>[0];
 function jsonResponse(payload: unknown, status = 200): Response {
@@ -30,80 +27,6 @@ async function getChromeWebSocketUrl(
   ...args: Parameters<typeof getChromeWebSocketEndpoint>
 ): Promise<string | null> {
   return (await getChromeWebSocketEndpoint(...args))?.url ?? null;
-}
-
-async function withMockChromeCdpServer(params: {
-  wsPath: string;
-  advertisedPath?: string;
-  browser?: string;
-  version?: object;
-  versionPath?: string;
-  authorization?: string;
-  reply?: (method: string, id: number) => unknown;
-  run: (
-    baseUrl: string,
-    requests: Array<{ authorization: string | undefined; url: string | undefined }>,
-  ) => Promise<void>;
-}) {
-  const requests: Array<{ authorization: string | undefined; url: string | undefined }> = [];
-  const server = createServer((req, res) => {
-    requests.push({ authorization: req.headers.authorization, url: req.url });
-    const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
-    if (
-      pathname === (params.versionPath ?? "/json/version") &&
-      (!params.authorization || req.headers.authorization === params.authorization)
-    ) {
-      const addr = server.address() as AddressInfo;
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(
-        JSON.stringify(
-          params.version ?? {
-            Browser: params.browser,
-            webSocketDebuggerUrl: `ws://127.0.0.1:${addr.port}${params.advertisedPath ?? params.wsPath}`,
-          },
-        ),
-      );
-      return;
-    }
-    res.writeHead(404);
-    res.end();
-  });
-  const wss = new WebSocketServer({ noServer: true, maxPayload: CHROME_TEST_WS_MAX_PAYLOAD_BYTES });
-  server.on("upgrade", (req, socket, head) => {
-    if (new URL(req.url ?? "/", "http://localhost").pathname !== params.wsPath) {
-      socket.destroy();
-      return;
-    }
-    wss.handleUpgrade(req, socket, head, (ws) => {
-      wss.emit("connection", ws, req);
-    });
-  });
-  if (params.reply) {
-    wss.on("connection", (ws) => {
-      ws.on("message", (data) => {
-        const request = JSON.parse(rawDataToString(data)) as { id: number; method: string };
-        const result = params.reply?.(request.method, request.id);
-        if (result !== undefined) {
-          ws.send(JSON.stringify({ id: request.id, result }));
-        }
-      });
-    });
-  }
-  await new Promise<void>((resolve, reject) => {
-    server.listen(0, "127.0.0.1", () => resolve());
-    server.once("error", reject);
-  });
-  try {
-    const addr = server.address() as AddressInfo;
-    await params.run(`http://127.0.0.1:${addr.port}`, requests);
-  } finally {
-    await new Promise<void>((resolve) => {
-      wss.close(() => resolve());
-    });
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
-  }
 }
 
 function replyWithBrowserVersion(method: string, id: number) {

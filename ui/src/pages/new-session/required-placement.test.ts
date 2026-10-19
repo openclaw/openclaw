@@ -265,7 +265,7 @@ it("renders required placement as a readonly indicator, not a machine or workspa
           onConnectMachine: vi.fn(),
           onNavigate: vi.fn(),
           onFocusComposer: vi.fn(),
-          requestUpdate: vi.fn(),
+          onChange: vi.fn(),
         },
       }),
     { container },
@@ -318,7 +318,7 @@ it("keeps a server startup failure with the created session for Retry rather tha
       }),
     }),
   );
-  expect(f.request).not.toHaveBeenCalledWith("sessions.send", expect.anything());
+  expect(f.request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(0);
 });
 
 it("keeps a cold required-worker draft on configured defaults across asynchronous catalogs", async () => {

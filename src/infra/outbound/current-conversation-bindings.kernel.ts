@@ -99,7 +99,10 @@ function createCurrentConversationBindingQueries(db: EngineConnection) {
           .where((eb) =>
             eb.or([
               eb(
-                parameter((params) => params.scope?.channel ?? null),
+                eb.cast(
+                  parameter((params) => params.scope?.channel ?? null),
+                  "text",
+                ),
                 "is",
                 null,
               ),
@@ -161,6 +164,7 @@ function createCurrentConversationBindingQueries(db: EngineConnection) {
         ),
       );
       const fields = sqliteStringSetEntries(encoded).as("field");
+      // A literal tuple width lets PostgreSQL match SELECT and GROUP BY expressions.
       const requested = bindingDb.with("requested", (query) =>
         query
           .selectFrom(fields)
@@ -174,14 +178,14 @@ function createCurrentConversationBindingQueries(db: EngineConnection) {
                   .end(),
               );
             return [
-              eb.cast<number>(eb("field.key", "/", 4), "integer").as("request_index"),
+              eb.cast<number>(eb("field.key", "/", eb.lit(4)), "integer").as("request_index"),
               component(0).as("binding_key"),
               component(1).as("channel"),
               component(2).as("account_id"),
               component(3).as("conversation_id"),
             ];
           })
-          .groupBy((eb) => eb.cast<number>(eb("field.key", "/", 4), "integer")),
+          .groupBy((eb) => eb.cast<number>(eb("field.key", "/", eb.lit(4)), "integer")),
       );
       const columns = [
         "requested.request_index",

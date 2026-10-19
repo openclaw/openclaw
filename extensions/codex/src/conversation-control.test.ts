@@ -12,7 +12,7 @@ import {
   observeHostDataSql,
   useSessionStoreTempDirs,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   buildCodexSupervisionTestConnectionFingerprint,
   readCodexAppServerBinding,
@@ -27,9 +27,9 @@ import {
   steerCodexConversationTurn,
   stopCodexConversationTurn,
   trackCodexConversationActiveTurn,
-  setCodexConversationFastMode as setCodexConversationFastModeImpl,
-  setCodexConversationModel as setCodexConversationModelImpl,
-  setCodexConversationPermissions as setCodexConversationPermissionsImpl,
+  setCodexConversationFastMode as setFast,
+  setCodexConversationModel as setModel,
+  setCodexConversationPermissions as permissions,
 } from "./conversation-control.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-codex-control-");
@@ -47,31 +47,72 @@ function controlTarget(sessionFile: string) {
   };
 }
 
-function setCodexConversationFastMode(
-  params: Omit<
-    Parameters<typeof setCodexConversationFastModeImpl>[0],
-    "identity" | "bindingStore" | "binding" | "assertCurrent"
-  > & {
-    sessionFile: string;
-  },
-) {
-  const { sessionFile, ...rest } = params;
-  return setCodexConversationFastModeImpl({ ...rest, ...controlTarget(sessionFile) });
-}
-
-function setCodexConversationModel(
-  params: Omit<
-    Parameters<typeof setCodexConversationModelImpl>[0],
-    "identity" | "bindingStore" | "binding" | "assertCurrent"
-  > & {
-    sessionFile: string;
-  },
-) {
-  const { sessionFile, ...rest } = params;
-  return setCodexConversationModelImpl({ ...rest, ...controlTarget(sessionFile) });
-}
-
 let tempDir: string;
+
+async function permissionSession(
+  sessionId: string,
+  entry: Partial<SessionEntry> = {},
+  sessionKey = `agent:main:${sessionId}`,
+) {
+  const session = { agentId: "main", sessionId, sessionKey };
+  const storePath = resolveStorePath(undefined, { agentId: session.agentId });
+  await upsertSessionEntry({
+    ...session,
+    storePath,
+    entry: { sessionId, updatedAt: Date.now(), ...entry },
+  });
+  return {
+    session,
+    storePath,
+    set: (mode?: Parameters<typeof permissions>[0]["mode"]) =>
+      permissions({ session, mode, config: {}, assertCurrent() {} }),
+    read: () => getSessionEntry({ ...session, storePath, readConsistency: "latest" }),
+  };
+}
+
+async function expectStaleTurn(target: ReturnType<typeof controlTarget>, message: string) {
+  const expected = { message: "The active Codex run no longer matches this session binding." };
+  await expect(stopCodexConversationTurn(target)).resolves.toEqual({ stopped: false, ...expected });
+  await expect(steerCodexConversationTurn({ ...target, message })).resolves.toEqual({
+    steered: false,
+    ...expected,
+  });
+}
+
+function trackTurn(
+  target: ReturnType<typeof controlTarget>,
+  threadId: string,
+  harness: ReturnType<typeof createClientHarness>,
+) {
+  const stop = trackCodexConversationActiveTurn({
+    identity: target.identity,
+    client: harness.client,
+    requestTimeoutMs: 60_000,
+    threadId,
+    turnId: "turn-1",
+  });
+  onTestFinished(() => {
+    stop();
+    harness.client.close();
+  });
+}
+
+async function boundTarget(
+  binding: Omit<Parameters<typeof writeCodexAppServerBinding>[1], "cwd"> & { cwd?: string },
+) {
+  const sessionFile = path.join(tempDir, "session.jsonl");
+  await writeCodexAppServerBinding(sessionFile, { cwd: tempDir, ...binding });
+  return { ...controlTarget(sessionFile), sessionFile };
+}
+
+function replyingHarness() {
+  return createClientHarness({
+    onWrite: (line, send) => {
+      const request = JSON.parse(line) as { id: number };
+      send({ id: request.id, result: {} });
+    },
+  });
+}
 
 const sharedClientMocks = vi.hoisted(() => ({
   getSharedCodexAppServerClient: vi.fn(),
@@ -115,25 +156,18 @@ describe("codex conversation controls", () => {
   });
 
   it("reads private permission policy from memory and rejects a deleted session", async () => {
-    const session = {
-      agentId: "main",
-      sessionId: "private-policy",
-      sessionKey: "agent:main:dashboard:incognito-policy",
-    };
-    const storePath = resolveStorePath(undefined, { agentId: session.agentId });
-    const entry: SessionEntry = {
-      sessionId: session.sessionId,
-      updatedAt: 1,
-      incognito: true,
-      permissionMode: "full",
-    };
-    await upsertSessionEntry({ ...session, storePath, entry });
+    const test = await permissionSession(
+      "private-policy",
+      { updatedAt: 1, incognito: true, permissionMode: "full" },
+      "agent:main:dashboard:incognito-policy",
+    );
+    const { session, storePath } = test;
     try {
       const sql = observeHostDataSql();
       try {
-        await expect(
-          setCodexConversationPermissionsImpl({ session, storePath, assertCurrent() {} }),
-        ).resolves.toBe("Codex permissions: full access.");
+        await expect(permissions({ session, storePath, assertCurrent() {} })).resolves.toBe(
+          "Codex permissions: full access.",
+        );
         expect(sql.queries).toEqual([]);
       } finally {
         sql.restore();
@@ -141,111 +175,50 @@ describe("codex conversation controls", () => {
     } finally {
       await deleteSessionEntry({ ...session, storePath });
     }
-    await expect(
-      setCodexConversationPermissionsImpl({ session, storePath, assertCurrent() {} }),
-    ).rejects.toThrow("Codex session changed while reading the permission mode");
+    await expect(permissions({ session, storePath, assertCurrent() {} })).rejects.toThrow(
+      "Codex session changed while reading the permission mode",
+    );
   });
 
   it("persists fast mode on the binding and permissions on the session", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const session = {
-      agentId: "main",
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-    };
-    const storePath = resolveStorePath(undefined, { agentId: session.agentId });
-    await upsertSessionEntry({
-      agentId: session.agentId,
-      sessionKey: session.sessionKey,
-      storePath,
-      entry: {
-        sessionId: session.sessionId,
-        updatedAt: Date.now(),
-        permissionMode: "full",
-        sessionRoot: tempDir,
-      },
+    const test = await permissionSession("session-1", {
+      permissionMode: "full",
+      sessionRoot: tempDir,
     });
-    await writeCodexAppServerBinding(sessionFile, {
+    const target = await boundTarget({
       threadId: "thread-1",
-      cwd: tempDir,
-      model: "gpt-5.4",
-      modelProvider: "openai",
       approvalPolicy: "never",
       sandbox: "danger-full-access",
     });
 
-    await expect(setCodexConversationFastMode({ sessionFile, enabled: true })).resolves.toBe(
-      "Codex fast mode enabled.",
-    );
-    await expect(
-      setCodexConversationPermissionsImpl({
-        session,
-        mode: "default",
-        config: {},
-        assertCurrent: () => {},
-      }),
-    ).resolves.toBe("Codex permissions set to guarded.");
+    await expect(setFast({ ...target, enabled: true })).resolves.toBe("Codex fast mode enabled.");
+    await expect(test.set("default")).resolves.toBe("Codex permissions set to guarded.");
 
-    const binding = await readCodexAppServerBinding(sessionFile);
-    expect(binding?.threadId).toBe("thread-1");
-    expect(binding?.serviceTier).toBe("priority");
-    expect(binding?.approvalPolicy).toBe("never");
-    expect(binding?.sandbox).toBe("danger-full-access");
-    expect(
-      getSessionEntry({
-        agentId: session.agentId,
-        sessionKey: session.sessionKey,
-        storePath,
-        readConsistency: "latest",
-      }),
-    ).toMatchObject({ permissionMode: "guarded", sessionRoot: tempDir });
+    expect(await readCodexAppServerBinding(target.sessionFile)).toMatchObject({
+      threadId: "thread-1",
+      serviceTier: "priority",
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+    });
+    expect(test.read()).toMatchObject({ permissionMode: "guarded", sessionRoot: tempDir });
 
-    await expect(
-      setCodexConversationPermissionsImpl({
-        session,
-        mode: "yolo",
-        config: {},
-        assertCurrent: () => {},
-      }),
-    ).resolves.toBe("Codex permissions set to full access.");
-    expect(
-      getSessionEntry({
-        agentId: session.agentId,
-        sessionKey: session.sessionKey,
-        storePath,
-        readConsistency: "latest",
-      })?.permissionMode,
-    ).toBe("full");
+    await expect(test.set("yolo")).resolves.toBe("Codex permissions set to full access.");
+    expect(test.read()?.permissionMode).toBe("full");
   });
 
   it("rejects prepared binding mutations after the selected binding changes", async () => {
-    const sessionFile = path.join(tempDir, "prepared-binding.jsonl");
-    const identity = controlTarget(sessionFile).identity;
     const prepared = {
       threadId: "thread-prepared",
       cwd: tempDir,
-      model: "gpt-5.4",
-      modelProvider: "openai",
     };
-    await writeCodexAppServerBinding(sessionFile, prepared);
-    const assertCurrent = () => {
-      expect(testCodexAppServerBindingStore.read(identity)).toEqual(prepared);
-    };
-    await testCodexAppServerBindingStore.mutate(identity, {
+    const target = await boundTarget(prepared);
+    await testCodexAppServerBindingStore.mutate(target.identity, {
       kind: "set",
       binding: { ...prepared, threadId: "thread-replacement" },
     });
 
-    await expect(
-      setCodexConversationFastModeImpl({
-        identity,
-        bindingStore: testCodexAppServerBindingStore,
-        binding: prepared,
-        enabled: true,
-        assertCurrent,
-      }),
-    ).rejects.toThrow();
-    expect(testCodexAppServerBindingStore.read(identity)).not.toHaveProperty("serviceTier");
+    await expect(setFast({ ...target, enabled: true })).rejects.toThrow();
+    expect(testCodexAppServerBindingStore.read(target.identity)).not.toHaveProperty("serviceTier");
   });
 
   it.each([
@@ -260,243 +233,119 @@ describe("codex conversation controls", () => {
   });
 
   it("persists a permission mode on a rootless session", async () => {
-    const session = {
-      agentId: "main",
-      sessionId: "session-without-root",
-      sessionKey: "agent:main:session-without-root",
-    };
-    const storePath = resolveStorePath(undefined, { agentId: session.agentId });
-    await upsertSessionEntry({
-      agentId: session.agentId,
-      sessionKey: session.sessionKey,
-      storePath,
-      entry: { sessionId: session.sessionId, updatedAt: Date.now() },
-    });
+    const test = await permissionSession("session-without-root");
 
-    await expect(
-      setCodexConversationPermissionsImpl({
-        session,
-        mode: "default",
-        config: {},
-        assertCurrent: () => {},
-      }),
-    ).resolves.toBe("Codex permissions set to guarded.");
-    expect(
-      getSessionEntry({ agentId: session.agentId, sessionKey: session.sessionKey, storePath }),
-    ).toMatchObject({ permissionMode: "guarded" });
+    await expect(test.set("default")).resolves.toBe("Codex permissions set to guarded.");
+    expect(test.read()).toMatchObject({ permissionMode: "guarded" });
   });
 
   it("routes stop and steer through the client that owns the active turn", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    await writeCodexAppServerBinding(sessionFile, {
+    const target = await boundTarget({
       threadId: "thread-supervised",
       connectionScope: "supervision",
       supervisionSourceThreadId: "thread-supervised",
       appServerRuntimeFingerprint: buildCodexSupervisionTestConnectionFingerprint(),
-      cwd: tempDir,
       model: "gpt-5.5",
       modelProvider: "openai",
       preserveNativeModel: true,
       conversationSourceTransferComplete: true,
     });
-    const target = controlTarget(sessionFile);
-    const harness = createClientHarness({
-      onWrite: (line, send) => {
-        const request = JSON.parse(line) as { id: number };
-        send({ id: request.id, result: {} });
-      },
-    });
-    const stopTracking = trackCodexConversationActiveTurn({
-      identity: target.identity,
-      client: harness.client,
-      requestTimeoutMs: 60_000,
-      threadId: "thread-supervised",
-      turnId: "turn-1",
-    });
+    const harness = replyingHarness();
+    trackTurn(target, "thread-supervised", harness);
 
-    try {
-      await expect(stopCodexConversationTurn(target)).resolves.toMatchObject({ stopped: true });
-      await expect(
-        steerCodexConversationTurn({ ...target, message: "focus tests" }),
-      ).resolves.toMatchObject({ steered: true });
-      expect(harness.writes.map((line) => JSON.parse(line))).toMatchObject([
-        {
-          method: "turn/interrupt",
-          params: { threadId: "thread-supervised", turnId: "turn-1" },
+    await expect(stopCodexConversationTurn(target)).resolves.toMatchObject({ stopped: true });
+    await expect(
+      steerCodexConversationTurn({ ...target, message: "focus tests" }),
+    ).resolves.toMatchObject({ steered: true });
+    expect(harness.writes.map((line) => JSON.parse(line))).toMatchObject([
+      {
+        method: "turn/interrupt",
+        params: { threadId: "thread-supervised", turnId: "turn-1" },
+      },
+      {
+        method: "turn/steer",
+        params: {
+          threadId: "thread-supervised",
+          expectedTurnId: "turn-1",
+          input: [{ type: "text", text: "focus tests", text_elements: [] }],
         },
-        {
-          method: "turn/steer",
-          params: {
-            threadId: "thread-supervised",
-            expectedTurnId: "turn-1",
-            input: [{ type: "text", text: "focus tests", text_elements: [] }],
-          },
-        },
-      ]);
-      expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
-    } finally {
-      stopTracking();
-      harness.client.close();
-    }
+      },
+    ]);
+    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 
   it("refuses to stop or steer when the active turn no longer matches the private binding", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "replacement-thread",
-      cwd: tempDir,
-    });
-    const target = controlTarget(sessionFile);
+    const target = await boundTarget({ threadId: "replacement-thread" });
     const harness = createClientHarness();
-    const stopTracking = trackCodexConversationActiveTurn({
-      identity: target.identity,
-      client: harness.client,
-      requestTimeoutMs: 60_000,
-      threadId: "stale-active-thread",
-      turnId: "turn-1",
-    });
+    trackTurn(target, "stale-active-thread", harness);
 
-    try {
-      await expect(stopCodexConversationTurn(target)).resolves.toEqual({
-        stopped: false,
-        message: "The active Codex run no longer matches this session binding.",
-      });
-      await expect(
-        steerCodexConversationTurn({ ...target, message: "do not send" }),
-      ).resolves.toEqual({
-        steered: false,
-        message: "The active Codex run no longer matches this session binding.",
-      });
-      await testCodexAppServerBindingStore.mutate(target.identity, { kind: "clear" });
-      const clearedTarget = controlTarget(sessionFile);
-      await expect(stopCodexConversationTurn(clearedTarget)).resolves.toEqual({
-        stopped: false,
-        message: "The active Codex run no longer matches this session binding.",
-      });
-      await expect(
-        steerCodexConversationTurn({ ...clearedTarget, message: "still do not send" }),
-      ).resolves.toEqual({
-        steered: false,
-        message: "The active Codex run no longer matches this session binding.",
-      });
-    } finally {
-      stopTracking();
-      harness.client.close();
-    }
+    await expectStaleTurn(target, "do not send");
+    await testCodexAppServerBindingStore.mutate(target.identity, { kind: "clear" });
+    const clearedTarget = controlTarget(target.sessionFile);
+    await expectStaleTurn(clearedTarget, "still do not send");
 
     expect(harness.writes).toHaveLength(0);
     expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 
   it("rejects steer before a retained-client write after host rollover", async () => {
-    const sessionFile = path.join(tempDir, "steer-retained.jsonl");
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-steer-retained",
-      cwd: tempDir,
-    });
-    const target = controlTarget(sessionFile);
-    const harness = createClientHarness({
-      onWrite: (line, send) => {
-        const request = JSON.parse(line) as { id: number };
-        send({ id: request.id, result: {} });
-      },
-    });
-    const stopTracking = trackCodexConversationActiveTurn({
-      identity: target.identity,
-      client: harness.client,
-      requestTimeoutMs: 60_000,
-      threadId: "thread-steer-retained",
-      turnId: "turn-1",
-    });
+    const target = await boundTarget({ threadId: "thread-steer-retained" });
+    const harness = replyingHarness();
+    trackTurn(target, "thread-steer-retained", harness);
 
-    try {
-      await expect(
-        steerCodexConversationTurn({
-          message: "focus tests",
-          ...target,
-          assertCurrent: () => {
-            throw new Error("host session rolled over");
-          },
-        }),
-      ).rejects.toThrow("host session rolled over");
-      expect(harness.writes).toHaveLength(0);
-    } finally {
-      stopTracking();
-      harness.client.close();
-    }
+    await expect(
+      steerCodexConversationTurn({
+        message: "focus tests",
+        ...target,
+        assertCurrent: () => {
+          throw new Error("host session rolled over");
+        },
+      }),
+    ).rejects.toThrow("host session rolled over");
+    expect(harness.writes).toHaveLength(0);
   });
 
   it("rejects direct model changes for private supervised bindings", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    await writeCodexAppServerBinding(sessionFile, {
+    const target = await boundTarget({
       threadId: "thread-supervised",
       connectionScope: "supervision",
       supervisionSourceThreadId: "thread-supervised",
-      cwd: tempDir,
       model: "gpt-5.5",
       modelProvider: "openai",
       preserveNativeModel: true,
       conversationSourceTransferComplete: true,
     });
 
-    await expect(
-      setCodexConversationModel({
-        sessionFile,
-        model: "gpt-5.4",
-      }),
-    ).rejects.toThrow(MODEL_SELECTION_LOCKED_MESSAGE);
-    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
-  });
-
-  it("keeps the bound local provider when switching to another unqualified model", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const model = "local-model-2 <@U123> [trusted](evil)";
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-1",
-      cwd: tempDir,
-      model: "local-model",
-      modelProvider: "lmstudio",
-      approvalPolicy: "on-request",
-      sandbox: "workspace-write",
-    });
-    await expect(
-      setCodexConversationModel({
-        sessionFile,
-        model,
-      }),
-    ).resolves.toBe(
-      "Codex model set to local-model-2 &lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08evil\uff09.",
+    await expect(setModel({ ...target, model: "gpt-5.4" })).rejects.toThrow(
+      MODEL_SELECTION_LOCKED_MESSAGE,
     );
-
-    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
-      model,
-      modelProvider: "lmstudio",
-    });
     expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 
-  it("keeps the bound local provider when reselecting a model id with a slash", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-1",
-      cwd: tempDir,
-      model: "openai/gpt-oss-20b",
-      modelProvider: "lmstudio",
-      approvalPolicy: "on-request",
-      sandbox: "workspace-write",
-    });
-    await expect(
-      setCodexConversationModel({
-        sessionFile,
-        model: "openai/gpt-oss-20b",
-      }),
-    ).resolves.toBe("Codex model set to openai/gpt-oss-20b.");
+  it.each([
+    [
+      "local-model",
+      "local-model-2 <@U123> [trusted](evil)",
+      "local-model-2 &lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08evil\uff09",
+    ],
+    ["openai/gpt-oss-20b", "openai/gpt-oss-20b", "openai/gpt-oss-20b"],
+  ])(
+    "keeps the bound local provider when selecting %s -> %s",
+    async (previousModel, model, display) => {
+      const target = await boundTarget({
+        threadId: "thread-1",
+        model: previousModel,
+        modelProvider: "lmstudio",
+      });
+      await expect(setModel({ ...target, model })).resolves.toBe(`Codex model set to ${display}.`);
 
-    const binding = await readCodexAppServerBinding(sessionFile);
-    expect(binding?.model).toBe("openai/gpt-oss-20b");
-    expect(binding?.modelProvider).toBe("lmstudio");
-    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
-  });
+      await expect(readCodexAppServerBinding(target.sessionFile)).resolves.toMatchObject({
+        model,
+        modelProvider: "lmstudio",
+      });
+      expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     {
@@ -511,9 +360,6 @@ describe("codex conversation controls", () => {
     },
   ])("$name", async ({ recordedProvider, expectedProfile }) => {
     const sessionKey = "agent:main:model-provider-switch";
-    const sessionId = "session-provider-switch";
-    const identity = { kind: "session" as const, agentId: "main", sessionId, sessionKey };
-    const storePath = resolveStorePath(undefined, { agentId: "main" });
     const agentDir = path.join(tempDir, "agent");
     if (recordedProvider) {
       await upsertAuthProfileAsync({
@@ -522,17 +368,15 @@ describe("codex conversation controls", () => {
         credential: { type: "api_key", provider: recordedProvider, key: "test-key" },
       });
     }
-    await upsertSessionEntry({
-      agentId: "main",
-      storePath,
-      sessionKey,
-      entry: {
-        sessionId,
-        updatedAt: Date.now(),
+    const { session, storePath } = await permissionSession(
+      "session-provider-switch",
+      {
         authProfileOverride: "lmstudio:work",
         authProfileOverrideSource: "user",
       },
-    });
+      sessionKey,
+    );
+    const identity = { kind: "session" as const, ...session };
     await testCodexAppServerBindingStore.mutate(identity, {
       kind: "set",
       binding: {
@@ -544,7 +388,7 @@ describe("codex conversation controls", () => {
     });
 
     await expect(
-      setCodexConversationModelImpl({
+      setModel({
         identity,
         bindingStore: testCodexAppServerBindingStore,
         binding: testCodexAppServerBindingStore.read(identity),

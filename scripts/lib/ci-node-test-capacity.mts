@@ -68,25 +68,40 @@ export function resolveSelectedNodeTestRunner(
     !job.requiresDist &&
     !job.pretestBuildMode &&
     job.groups.length > 0 &&
-    job.groups.every(
-      (group) =>
+    job.groups.every((group) => {
+      const isQualifiedBoardStore =
+        job.groups.length === 1 &&
+        group.configs[0] === "test/vitest/vitest.gateway-database-workers.config.ts" &&
+        group.includePatterns?.length === 1 &&
+        group.includePatterns[0] === "src/gateway/board-store.test.ts" &&
+        group.env?.OPENCLAW_VITEST_MAX_WORKERS === "2" &&
+        group.fallbackMaxWorkers === 2 &&
+        group.minTotalMemoryBytes === 28 * 1024 ** 3;
+      return (
         group.configs.length === 1 &&
-        (SERIAL_SELECTED_16_CONFIGS.has(group.configs[0]!) ||
+        (isQualifiedBoardStore ||
+          SERIAL_SELECTED_16_CONFIGS.has(group.configs[0]!) ||
           (group.configs[0] === "test/vitest/vitest.unit-fast-isolated.config.ts" &&
             group.includePatterns?.length === 1 &&
             group.includePatterns[0] ===
-              "src/agents/embedded-agent-runner/run/attempt.llm-boundary.cache-stability.test.ts")) &&
+              "src/agents/embedded-agent-runner/run/attempt.llm-boundary.cache-stability.test.ts") ||
+          (group.includePatterns?.length === 1 &&
+            ((group.configs[0] === "test/vitest/vitest.gateway-core.config.ts" &&
+              group.includePatterns[0] === "src/gateway/mcp-app-extension-runtime.test.ts") ||
+              (group.configs[0] === "test/vitest/vitest.agents-core.config.ts" &&
+                group.includePatterns[0] === "src/agents/cli-runner.helpers.test.ts")))) &&
         [BUNDLED_NODE_TEST_RUNNER, DEFAULT_NODE_TEST_RUNNER].includes(group.runner) &&
         (group.env?.OPENCLAW_VITEST_MAX_WORKERS === "2" ||
           (group.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined &&
             group.fallbackMaxWorkers === 2)) &&
-        group.minTotalMemoryBytes === undefined &&
+        (group.minTotalMemoryBytes === undefined || isQualifiedBoardStore) &&
         !group.requiresDist &&
         !group.pretestBuildMode &&
         group.includePatterns !== undefined &&
         group.includePatterns.length > 0 &&
-        group.includePatterns.length <= 2,
-    )
+        group.includePatterns.length <= 2
+      );
+    })
     ? "blacksmith-16vcpu-ubuntu-2404"
     : job.runner;
 }

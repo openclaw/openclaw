@@ -21,6 +21,7 @@ import type {
   PluginBlobEntry,
   PluginBlobEntryInfo,
   PluginBlobOverflowPolicy,
+  PluginBlobRegistrationReceipt,
   PluginBlobStoreErrorCode,
   PluginBlobStoreOperation,
 } from "./plugin-blob-store.types.js";
@@ -363,7 +364,11 @@ function deleteOldestUntilWithinLimits(params: {
   });
 }
 
-function upsertBlob(db: EngineConnection, params: BlobWriteParams, now: number): void {
+function upsertBlob(
+  db: EngineConnection,
+  params: BlobWriteParams,
+  now: number,
+): PluginBlobRegistrationReceipt {
   const expiresAt = (() => {
     if (params.ttlMs === undefined) {
       return null;
@@ -402,23 +407,28 @@ function upsertBlob(db: EngineConnection, params: BlobWriteParams, now: number):
         }),
       ),
   );
+  return { createdAt: now, ...(expiresAt !== null ? { expiresAt } : {}) };
 }
 
-function writeBlob(db: EngineConnection, params: BlobWriteParams, ifAbsent: boolean): boolean {
+function writeBlob(
+  db: EngineConnection,
+  params: BlobWriteParams,
+  ifAbsent: boolean,
+): PluginBlobRegistrationReceipt | undefined {
   const now = Date.now();
   if (ifAbsent && blobKeyExists(db, params)) {
     // Expired rows retain the metadata their owner needs for external cleanup.
-    return false;
+    return undefined;
   }
   if (params.overflowPolicy === "reject-new") {
     const existingBytes = ifAbsent ? undefined : readStoredKeySize(db, params);
     assertProjectedLimits({ db, write: params, existingBytes });
   }
-  upsertBlob(db, params, now);
+  const receipt = upsertBlob(db, params, now);
   if (params.overflowPolicy === "evict-oldest") {
     deleteOldestUntilWithinLimits({ db, write: params, now });
   }
-  return true;
+  return receipt;
 }
 
 export function pluginBlobRegisterInDatabase(db: EngineConnection, params: BlobWriteParams): void {
@@ -428,7 +438,7 @@ export function pluginBlobRegisterInDatabase(db: EngineConnection, params: BlobW
 export function pluginBlobRegisterIfAbsentInDatabase(
   db: EngineConnection,
   params: BlobWriteParams,
-): boolean {
+): PluginBlobRegistrationReceipt | undefined {
   return writeBlob(db, params, true);
 }
 

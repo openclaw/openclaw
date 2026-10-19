@@ -13,11 +13,7 @@ import { canReadSystemInfo, readSystemInfo } from "../../lib/system-info.ts";
 import * as catalog from "./catalog-target.ts";
 import { CLOUD_PROFILE_RETRY_DELAYS_MS } from "./cloud-profile-discovery.ts";
 import { requestPlaceCatalog } from "./cloud-target.ts";
-import {
-  readDraftCloudProfiles,
-  type DraftCloudProfile,
-  type DraftEnvironment,
-} from "./discovery.ts";
+import type { DraftCloudProfile, DraftEnvironment } from "./discovery.ts";
 import type { DraftGatewayCallbacks, DraftGatewaySnapshot } from "./draft-gateway-contract.ts";
 import {
   DraftPreferenceState,
@@ -134,7 +130,7 @@ export class DraftGatewayState {
       .finally(() => {
         if (this.gatewayNameRequest === request) {
           this.gatewayNameRequest = undefined;
-          this.callbacks.requestUpdate();
+          this.callbacks.changed();
         }
       });
   }
@@ -164,7 +160,7 @@ export class DraftGatewayState {
     const request = {};
     this.cloudProfileRequest = request;
     this.cloudProfileStatus = client && policy ? "pending" : "initial";
-    this.callbacks.requestUpdate();
+    this.callbacks.changed();
     if (!client || !policy) {
       return Promise.resolve();
     }
@@ -172,7 +168,9 @@ export class DraftGatewayState {
     const result =
       required || !canWrite
         ? Promise.resolve({
-            profiles: readDraftCloudProfiles(required ? [required] : []),
+            profiles: required?.providerId
+              ? [{ ...required, providerId: required.providerId }]
+              : [],
             environments: [],
             suggestedProfile: undefined,
           })
@@ -203,7 +201,7 @@ export class DraftGatewayState {
       })
       .finally(() => {
         if (this.cloudProfileRequest === request) {
-          this.callbacks.requestUpdate();
+          this.callbacks.changed();
         }
       });
     return this.cloudProfileComplete;
@@ -254,9 +252,9 @@ export class DraftGatewayState {
     }
     // Retire an older catalog read before publishing the saved profile.
     void this.readCloudProfiles();
-    this.applyCloudProfiles(readDraftCloudProfiles([profile]));
+    this.applyCloudProfiles([profile]);
     this.suggestedProfileValue = undefined;
-    this.callbacks.requestUpdate();
+    this.callbacks.changed();
     return profile.id;
   }
 
@@ -325,16 +323,6 @@ export class DraftGatewayState {
 
   get preferenceLoading(): boolean {
     return this.preferences.loading || this.identityPreferences?.mode === "loading";
-  }
-
-  resolvedGroupCategory(): string | undefined {
-    const snapshot = this.read();
-    return isGatewayMethodAdvertised(
-      snapshot.context?.gateway.snapshot ?? {},
-      "sessions.groups.defaults",
-    ) === true
-      ? catalog.resolvedGroupName(snapshot.data, snapshot.context?.sessions)
-      : undefined;
   }
 
   refreshCloudProfiles(): Promise<void> {
@@ -458,7 +446,7 @@ export class DraftGatewayState {
     }
     this.preferences.synchronize();
     this.synchronizeIdentityPreferences(snapshot.selfUser?.id);
-    this.callbacks.requestUpdate();
+    this.callbacks.changed();
   }
 
   invalidateDiscovery(resetHostSelection: boolean, submissionOutcome: SubmissionOutcomeReason) {
@@ -473,7 +461,7 @@ export class DraftGatewayState {
     }
     this.resetCloudProfileRetry();
     this.callbacks.onInvalidate(resetHostSelection, submissionOutcome);
-    this.callbacks.requestUpdate();
+    this.callbacks.changed();
   }
 
   retryPendingCatalogTarget() {
@@ -553,7 +541,7 @@ export class DraftGatewayState {
     globalThis.clearTimeout(this.catalogRetryTimer);
     this.catalogRetryTimer = undefined;
     this.catalogRetryingValue = true;
-    this.callbacks.requestUpdate();
+    this.callbacks.changed();
     void revalidation
       .catch(() => undefined)
       .then(() => this.callbacks.updateComplete())
@@ -565,7 +553,7 @@ export class DraftGatewayState {
         } else {
           this.retryPendingCatalogTarget();
         }
-        this.callbacks.requestUpdate();
+        this.callbacks.changed();
       });
   };
 
@@ -719,7 +707,7 @@ export class DraftGatewayState {
       if (this.identityPreferences !== preferences) {
         return;
       }
-      this.callbacks.requestUpdate();
+      this.callbacks.changed();
     };
     this.stopPreferences = preferences.subscribe(
       notify,

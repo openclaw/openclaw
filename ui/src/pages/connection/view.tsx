@@ -1,5 +1,4 @@
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { Show, createMemo } from "solid-js";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayHelloOk } from "../../api/gateway.ts";
@@ -25,7 +24,7 @@ import { SystemSection } from "./system-section.tsx";
 
 registerEnglishCatalog(registerSettingsEnglish);
 
-type GatewayAuthMode = "none" | "token" | "password" | "trusted-proxy";
+type GatewayAuthMode = NonNullable<NonNullable<GatewayHelloOk["snapshot"]>["authMode"]>;
 
 export type ConnectionProps = {
   phase: ApplicationGatewayPhase;
@@ -167,12 +166,7 @@ export function ConnectionView(props: ConnectionProps) {
   const busy = () => ["connecting", "starting", "reconnecting"].includes(props.phase);
   const submitting = () => busy() && !props.dirty;
   const reloadRequired = () => props.phase === "reload-required";
-  const authMode = () => {
-    const mode = asOptionalRecord(props.hello?.snapshot)?.authMode;
-    return mode === "none" || mode === "token" || mode === "password" || mode === "trusted-proxy"
-      ? mode
-      : undefined;
-  };
+  const authMode = () => props.hello?.snapshot?.authMode;
   const draftAuthMode = createMemo(() =>
     gatewayCredentialScope(props.settings.gatewayUrl) ===
     gatewayCredentialScope(props.liveGatewayUrl)

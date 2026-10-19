@@ -326,7 +326,7 @@ describe("channels list", () => {
       expect(output).toContain("configured");
       expect(output).toContain("disabled");
       expect(output).toContain(
-        "run openclaw plugins install @openclaw/mattermost or openclaw doctor --fix",
+        "run openclaw plugins install npm:@openclaw/mattermost or openclaw doctor --fix",
       );
       expect(output).not.toContain("no configured chat channels");
     },

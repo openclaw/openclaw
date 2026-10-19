@@ -17,16 +17,15 @@ export function runRespawnChildWithSignalBridge(params: {
   args: string[];
   env: NodeJS.ProcessEnv;
   detachForProcessTree?: boolean;
-  stdioIsTerminal?: boolean;
   runtime: RespawnChildRuntime;
   onError: (error: unknown) => void | Promise<void>;
 }): Promise<number> {
   const { command, args, env, runtime, onError } = params;
-  const stdioIsTerminal = params.stdioIsTerminal ?? (process.stdin.isTTY || process.stdout.isTTY);
+  const stdioIsTerminal = process.stdin.isTTY || process.stdout.isTTY;
   const detachForProcessTree =
     params.detachForProcessTree === true && process.platform !== "win32" && !stdioIsTerminal;
   const child = runtime.spawn(command, args, {
-    stdio: "inherit",
+    stdio: ["inherit", "inherit", "inherit", "ipc"],
     env,
     detached: detachForProcessTree,
     windowsHide: !stdioIsTerminal,
@@ -78,9 +77,7 @@ export function runRespawnChildWithSignalBridge(params: {
     signalExitTimer.unref?.();
   };
 
-  const bridge = runtime.attachChildProcessBridge(child, {
-    onSignal: scheduleParentExit,
-  });
+  const bridge = runtime.attachChildProcessBridge(child, scheduleParentExit);
 
   child.once("exit", () => {
     childExited = true;

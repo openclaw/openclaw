@@ -99,6 +99,10 @@ An explicit permission edit still requires matching owner authority. Jobs whose
 stored identity cannot prove an account need authenticated administrator recovery;
 Doctor does not infer ownership from delivery settings or the current caller.
 
+Automations created before owner attribution have no recorded owner. Chat can
+still enable, disable, reschedule or remove them, but only a Gateway owner or an
+operator can change their prompt or tools.
+
 ```bash
 # List enabled jobs
 openclaw automations list

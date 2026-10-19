@@ -14,6 +14,8 @@ import {
   assertValidPluginSecretProviderAlias,
   buildPluginSecretRefSetupPlan,
   parsePluginSecretTargetSpecifier,
+  type PluginSecretRefConfigTargetMapping as SecretRefConfigTargetMapping,
+  type PluginSecretRefProviderMapping as SecretRefProviderMapping,
 } from "../secrets/plugin-setup-plan.js";
 import { createPrivateWindowsPlanFile } from "../secrets/private-plan-file.js";
 import {
@@ -51,17 +53,6 @@ type SecretRefProviderStatus = {
     pluginId: string;
     integrationId: string;
   };
-};
-
-type SecretRefProviderMapping = {
-  providerId: string;
-  secretId: string;
-};
-
-type SecretRefConfigTargetMapping = {
-  path: string;
-  agentId?: string;
-  secretId: string;
 };
 
 type PluginSecretRefSetupCliParams = {

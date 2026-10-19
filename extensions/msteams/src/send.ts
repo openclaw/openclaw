@@ -17,11 +17,7 @@ import {
   formatMSTeamsSendErrorHint,
   formatUnknownError,
 } from "./errors.js";
-import {
-  FILE_CONSENT_THRESHOLD_BYTES,
-  prepareFileConsentActivityFs,
-  requiresFileConsent,
-} from "./file-consent-helpers.js";
+import { prepareFileConsentActivityFs, requiresFileConsent } from "./file-consent-helpers.js";
 import { formatMSTeamsMarkdown } from "./format.js";
 import { buildTeamsFileInfoCard } from "./graph-chat.js";
 import {
@@ -194,14 +190,7 @@ export async function sendMessageMSTeams(
   const tableMode = resolveMSTeamsMarkdownTableMode(cfg, accountId);
   const messageText = formatMSTeamsMarkdown(text ?? "", tableMode);
   const ctx = await resolveMSTeamsSendContext({ cfg, accountId, to });
-  const { conversationId, log, conversationType, tokenProvider, sharePointSiteId } = ctx;
-
-  log.debug?.("sending proactive message", {
-    conversationId,
-    conversationType,
-    textLength: messageText.length,
-    hasMedia: Boolean(mediaUrl),
-  });
+  const { conversationId, conversationType, tokenProvider, sharePointSiteId } = ctx;
 
   if (mediaUrl) {
     const mediaMaxBytes = ctx.mediaMaxBytes ?? MSTEAMS_MAX_MEDIA_BYTES;
@@ -211,19 +200,9 @@ export async function sendMessageMSTeams(
       mediaLocalRoots,
       mediaReadFile,
     });
-    const isLargeFile = media.buffer.length >= FILE_CONSENT_THRESHOLD_BYTES;
     const isImage = media.contentType?.startsWith("image/") ?? false;
     const fallbackFileName = await extractFilename(mediaUrl);
     const fileName = filename?.trim() || media.fileName || fallbackFileName;
-
-    log.debug?.("processing media", {
-      fileName,
-      contentType: media.contentType,
-      size: media.buffer.length,
-      isLargeFile,
-      isImage,
-      conversationType,
-    });
 
     // Personal chats: base64 only works for images; use FileConsentCard for large files or non-images
     if (
@@ -240,8 +219,6 @@ export async function sendMessageMSTeams(
         conversationId,
         description: messageText || undefined,
       });
-
-      log.debug?.("sending file consent card", { uploadId, fileName, size: media.buffer.length });
 
       const messageId = await sendProactiveActivity({
         ctx,
@@ -267,7 +244,6 @@ export async function sendMessageMSTeams(
         } finally {
           await setPendingUploadActivityIdFs(uploadId, messageId);
         }
-        log.info("sent file consent card", { conversationId, messageId, uploadId });
       });
     }
 
@@ -279,15 +255,8 @@ export async function sendMessageMSTeams(
       return sendTextWithMedia(ctx, messageText, finalMediaUrl, params);
     }
 
-    // Group chat or channel: upload to configured SharePoint storage.
     try {
       const siteId = requireMSTeamsSharePointSiteId(sharePointSiteId);
-      log.debug?.("uploading to SharePoint for native file card", {
-        fileName,
-        conversationType,
-        siteId,
-      });
-
       const uploaded = await uploadAndShareSharePoint({
         assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
         buffer: media.buffer,
@@ -299,21 +268,11 @@ export async function sendMessageMSTeams(
         usePerUserSharing: conversationType === "groupChat",
       });
 
-      log.debug?.("SharePoint upload complete", {
-        itemId: uploaded.itemId,
-        shareUrl: uploaded.shareUrl,
-      });
-
       const driveItem = await getDriveItemProperties({
         assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
         siteId,
         itemId: uploaded.itemId,
         tokenProvider,
-      });
-
-      log.debug?.("driveItem properties retrieved", {
-        eTag: driveItem.eTag,
-        webDavUrl: driveItem.webDavUrl,
       });
 
       const fileCardAttachment = buildTeamsFileInfoCard(driveItem);
@@ -326,12 +285,6 @@ export async function sendMessageMSTeams(
         activity,
         assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
         onPlatformSendDispatch: params.onPlatformSendDispatch,
-      });
-
-      log.info("sent native file card", {
-        conversationId,
-        messageId,
-        fileName: driveItem.name,
       });
 
       const result = createMSTeamsSendResult({
@@ -414,7 +367,6 @@ async function sendTextWithMedia(
   }
 
   const messageId = platformMessageIds[0] ?? "unknown";
-  log.info("sent proactive message", { conversationId, messageId });
 
   return {
     messageId,
@@ -469,18 +421,12 @@ export async function sendPollMSTeams(params: SendMSTeamsPollParams) {
     accountId,
     to,
   });
-  const { conversationId, log } = ctx;
+  const { conversationId } = ctx;
 
   const pollCard = buildMSTeamsPollCard({
     question,
     options,
     maxSelections,
-  });
-
-  log.debug?.("sending poll", {
-    conversationId,
-    pollId: pollCard.pollId,
-    optionCount: pollCard.options.length,
   });
 
   const activity = buildMSTeamsAdaptiveCardActivity(pollCard.card);
@@ -492,8 +438,6 @@ export async function sendPollMSTeams(params: SendMSTeamsPollParams) {
     assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
     onPlatformSendDispatch: params.onPlatformSendDispatch,
   });
-
-  log.info("sent poll", { conversationId, pollId: pollCard.pollId, messageId });
 
   return {
     pollId: pollCard.pollId,
@@ -512,13 +456,7 @@ export async function sendAdaptiveCardMSTeams(
     accountId,
     to,
   });
-  const { conversationId, log } = ctx;
-
-  log.debug?.("sending adaptive card", {
-    conversationId,
-    cardType: card.type,
-    cardVersion: card.version,
-  });
+  const { conversationId } = ctx;
 
   const activity = buildMSTeamsAdaptiveCardActivity(card);
 
@@ -529,8 +467,6 @@ export async function sendAdaptiveCardMSTeams(
     assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
     onPlatformSendDispatch: params.onPlatformSendDispatch,
   });
-
-  log.info("sent adaptive card", { conversationId, messageId });
 
   const result = createMSTeamsSendResult({
     messageId,
@@ -586,18 +522,13 @@ async function mutateMSTeamsMessageActivity(
   params: MSTeamsMessageMutationParams & { activity?: Record<string, unknown> },
 ) {
   const { cfg, accountId, to, activityId, activity } = params;
-  const { app, conversationId, ref, log, sdkCloudOptions } = await resolveMSTeamsSendContext({
+  const { app, conversationId, ref, sdkCloudOptions } = await resolveMSTeamsSendContext({
     cfg,
     accountId,
     to,
   });
 
   const operation = activity ? "edit" : "delete";
-  log.debug?.(`${activity ? "editing" : "deleting"} proactive message`, {
-    conversationId,
-    activityId,
-  });
-
   try {
     const baseRef = buildConversationReference(ref);
     const options = { serviceUrlBoundary: sdkCloudOptions };
@@ -609,8 +540,6 @@ async function mutateMSTeamsMessageActivity(
   } catch (err) {
     throw createMSTeamsSendError(`msteams ${operation}`, err);
   }
-
-  log.info(`${activity ? "edited" : "deleted"} proactive message`, { conversationId, activityId });
 
   return { conversationId };
 }

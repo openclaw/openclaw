@@ -4,7 +4,9 @@ import { afterEach, expect, it, vi } from "vitest";
 import {
   isStandaloneRuntimeExecutable,
   readStandaloneRuntimeManifest,
+  readStandaloneRuntimeManifestForRoot,
   resolveOpenClawCliInvocation,
+  resolveOpenClawCliRespawn,
 } from "../../cli-invocation.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -61,14 +63,18 @@ it("uses a renamed standalone artifact's manifest for service invocation and run
   const manifest = {
     schemaVersion: 1,
     mode: "jit",
-    executable: { path: "renamed-runtime" },
-    runtime: { path: "runtime" },
-    openclaw: { version: "2026.10.3" },
+    executable: { path: "renamed-runtime", sha256: "a".repeat(64) },
+    runtime: { path: "runtime", sha256: "b".repeat(64) },
+    openclaw: { version: "2026.10.3", commit: "c".repeat(40) },
     bun: { version: "1.4.3" },
   };
   fs.writeFileSync(path.join(root, "manifest.json"), JSON.stringify(manifest));
   // No executable bytes are needed: packaging owns hashes; planning owns the argv shape.
   expect(readStandaloneRuntimeManifest(executable)).toEqual(manifest);
+  expect(readStandaloneRuntimeManifestForRoot(path.join(root, "runtime"))).toEqual(manifest);
+  expect(() => readStandaloneRuntimeManifestForRoot(path.join(root, "unrelated"))).toThrow(
+    "Invalid standalone",
+  );
   expect(
     resolveOpenClawCliInvocation({
       execPath: executable,
@@ -98,6 +104,56 @@ it("uses a renamed standalone artifact's manifest for service invocation and run
     JSON.stringify({ ...manifest, executable: { path: "another-runtime" } }),
   );
   expect(() => isStandaloneRuntimeExecutable(executable)).toThrow("Invalid standalone");
+  fs.writeFileSync(
+    path.join(root, "manifest.json"),
+    JSON.stringify({ ...manifest, executable: { ...manifest.executable, path: "../outside" } }),
+  );
+  expect(() => readStandaloneRuntimeManifestForRoot(path.join(root, "runtime"))).toThrow(
+    "Invalid standalone",
+  );
   fs.writeFileSync(path.join(root, "manifest.json"), "{");
   expect(() => readStandaloneRuntimeManifest(executable)).toThrow("Invalid standalone");
+});
+
+it("keeps loose parent-bound respawn bytes identical to the former runner prefix", () => {
+  const env = { KEEP: "unchanged" };
+  const invocation = resolveOpenClawCliRespawn({
+    execPath: "/synthetic/node",
+    entryPath: "/synthetic/openclaw.mjs",
+    execArgv: ["--no-warnings", "--import", "synthetic-loader"],
+    args: ["doctor", "--fix"],
+    env,
+  });
+  // Fixed bytes protect the self-removing preload, ordering, and inherited flags.
+  const source = `
+  globalThis[Symbol.for("openclaw.cliRespawnParent")] = { pid: process.ppid };
+  process.execArgv = process.execArgv.filter((arg, index, args) =>
+    arg !== import.meta.url && !(arg === "--import" && args[index + 1] === import.meta.url));
+`;
+  expect(invocation).toEqual({
+    command: "/synthetic/node",
+    args: [
+      "--import",
+      `data:text/javascript,${encodeURIComponent(source)}`,
+      "--no-warnings",
+      "--import",
+      "synthetic-loader",
+      "/synthetic/openclaw.mjs",
+      "doctor",
+      "--fix",
+    ],
+    env,
+  });
+  expect(invocation.env).toBe(env);
+});
+
+it("keeps runtime-flag construction out of CLI spawn transports", () => {
+  // These transports accept already-resolved invocations. Adding a runtime
+  // prefix here bypasses the standalone/loose decision at the invocation owner.
+  for (const file of ["node-runtime-recovery.mjs", "src/process/respawn-child-runner.ts"]) {
+    const source = fs.readFileSync(new URL(`../../${file}`, import.meta.url), "utf8");
+    expect(source, file).not.toMatch(
+      /CLI_PARENT_BOUND_PRELOAD|["']--(?:import|require|loader)(?:=|["'])/,
+    );
+  }
 });

@@ -1,9 +1,11 @@
+export type XAssertActive = () => void | (() => void) | Promise<void | (() => void)>;
+
 export async function fetchXService(
   host: "api.x.com" | "api.github.com",
   path: string,
   init: RequestInit,
   fetchImpl?: (url: string, init?: RequestInit) => Promise<Response>,
-  assertActive?: () => void | (() => void) | Promise<void | (() => void)>,
+  assertActive?: XAssertActive,
   onDispatch?: () => void,
 ): Promise<Response> {
   const url = `https://${host}${path}`;

@@ -24,12 +24,13 @@ export function normalizeBrowserEvaluateFunctionSource(
   if (!trimmed) {
     return "";
   }
-  if (FUNCTION_SOURCE_PATTERN.test(trimmed) && canParseAsExpression(trimmed)) {
+  const isExpression = canParseAsExpression(trimmed);
+  if (FUNCTION_SOURCE_PATTERN.test(trimmed) && isExpression) {
     return trimmed;
   }
   const argumentName = params.argumentName;
   const args = argumentName ? `(${argumentName})` : "()";
-  if (canParseAsExpression(trimmed)) {
+  if (isExpression) {
     const invokeArgs = argumentName ? argumentName : "";
     return [
       `${args} => {`,

@@ -24,6 +24,7 @@ const INHERITED_MODEL_PROVIDER_CONFIG_KEYS = new Set([
 export function renderIsolatedCodexConfig(params: {
   sourceConfigToml?: string;
   projectPaths: string[];
+  mcpServers?: Record<string, unknown>;
 }): string {
   let source: TomlTable = {};
   if (params.sourceConfigToml) {
@@ -53,6 +54,7 @@ export function renderIsolatedCodexConfig(params: {
       Object.entries(source).filter(([key]) => INHERITED_TOP_LEVEL_CODEX_CONFIG_KEYS.has(key)),
     ),
     ...(providers.size ? { model_providers: Object.fromEntries(providers) } : {}),
+    ...(params.mcpServers ? { mcp_servers: params.mcpServers } : {}),
   };
   const trustedProjects = isRecord(source.projects)
     ? Object.entries(source.projects)

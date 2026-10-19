@@ -79,9 +79,11 @@ describe("Signal durable ingress", () => {
   it("propagates durable append failure before dispatch scheduling", async () => {
     await withQueue(async (queue) => {
       const appendError = new Error("sqlite unavailable");
+      // An idle monitor admits a fresh singleton through the fused append-and-claim.
       const failingQueue = {
         ...queue,
         enqueue: vi.fn().mockRejectedValue(appendError),
+        enqueueAndClaim: vi.fn().mockRejectedValue(appendError),
       } satisfies SignalIngressQueue;
       const dispatch = vi.fn();
       const monitor = await startSignalIngressMonitor({

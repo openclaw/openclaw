@@ -3,10 +3,10 @@ import type { DatabaseSync } from "node:sqlite";
 import type { EngineConnection, PostgresSqlConnection } from "../sql-connection.js";
 import {
   getSqliteDatabaseAdmission,
+  getOrLoadSqliteDatabaseAdmissionForPath,
   publishSqliteDatabaseAdmission,
   type SqliteDatabaseAdmissionKey,
 } from "../sqlite-database-admission.js";
-import { assertEngineStoreExecutionAllowed } from "./admission-scope.js";
 import type { StoreSchema } from "./contract.js";
 import {
   assertPostgresCatalog,
@@ -18,6 +18,8 @@ import {
   readPostgresSchema,
   recordPostgresSchema,
   verifyPostgresSchema,
+  withPostgresSearchExtensions,
+  retainPostgresSchema,
   type PostgresCapabilities,
 } from "./postgres-schema.js";
 
@@ -87,6 +89,11 @@ export function getPostgresPhysicalFacts(db: EngineConnection) {
   return getSqliteDatabaseAdmission(db, admissionKey);
 }
 
+/** Operator projections consume admission evidence without opening or probing a store. */
+export function getPostgresPhysicalFactsForPath(path: string) {
+  return getOrLoadSqliteDatabaseAdmissionForPath(path, admissionKey, () => undefined);
+}
+
 /** The anchor carries PG admission facts without treating its native catalog as application data. */
 export function admitPostgresPhysicalFacts(params: {
   anchor: DatabaseSync;
@@ -101,17 +108,8 @@ export function admitPostgresPhysicalFacts(params: {
 }): PostgresPhysicalFacts {
   const retained = getPostgresPhysicalFacts(params.db);
   if (retained) {
-    if (
-      retained.store !== params.store ||
-      retained.namespace !== params.namespace ||
-      retained.storeId !== params.storeId ||
-      retained.version !== params.version
-    ) {
-      throw new Error(`PostgreSQL admission identity or version mismatch. ${recovery}`);
-    }
     return retained;
   }
-  assertEngineStoreExecutionAllowed();
   const capabilities = admitPostgresCapabilities(params.db);
   let snapshot;
   try {
@@ -124,11 +122,13 @@ export function admitPostgresPhysicalFacts(params: {
     throw new Error(`PostgreSQL metadata identity or version mismatch. ${recovery}`);
   }
   if (params.schema) {
+    const schema = withPostgresSearchExtensions(params.schema, snapshot);
     if (params.recordSchema) {
-      recordPostgresSchema(params.db, params.namespace, params.schema, snapshot);
+      recordPostgresSchema(params.db, params.namespace, schema, snapshot);
     } else {
-      verifyPostgresSchema(params.db, params.namespace, params.schema, snapshot);
+      verifyPostgresSchema(params.db, params.namespace, schema, snapshot);
     }
+    retainPostgresSchema(params.db, schema);
   }
   if (params.expected) {
     assertPostgresCatalog(
@@ -152,25 +152,17 @@ export function admitPostgresPhysicalFacts(params: {
   return facts;
 }
 
-/** Optional native housekeeping is skipped on PostgreSQL; explicit native requests refuse below. */
-export const physicalDatabaseCapabilities = {
-  sqlite: {
-    nativeFile: true,
-    integrity: "native",
-    wal: "native",
-    checkpoint: "native",
-    vacuum: "native",
-    readSnapshot: "sqlite",
-  },
-  postgres: {
-    nativeFile: false,
-    integrity: "server-constraints",
-    wal: "skip",
-    checkpoint: "skip",
-    vacuum: "skip",
-    readSnapshot: "repeatable-read",
-  },
-} as const;
+export function publishPostgresSearchExtensionFacts(
+  db: PostgresSqlConnection,
+  facts: PostgresPhysicalFacts,
+  catalog: readonly PostgresCatalogFact[],
+): void {
+  publishSqliteDatabaseAdmission(db, admissionKey, {
+    ...facts,
+    admissionId: randomUUID(),
+    catalog,
+  });
+}
 
 export function requireNativeDatabaseFile(
   engine: "postgres",
