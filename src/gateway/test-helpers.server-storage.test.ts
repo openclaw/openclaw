@@ -25,7 +25,6 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { startAwaitedReadMock } from "../state/openclaw-state-read-mock.test-support.js";
 import * as stateReader from "../state/openclaw-state-read-worker.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
@@ -69,13 +68,11 @@ test("joins a direct history projection's accepted read before retiring the Gate
         }
         return {
           ...transport,
-          startRead(...args) {
-            return startAwaitedReadMock(async () => {
-              const reply = await transport.startRead(...args).result;
-              entered.resolve();
-              await release.promise;
-              return reply;
-            });
+          async startRead(...args) {
+            const reply = await transport.startRead(...args);
+            entered.resolve();
+            await release.promise;
+            return reply;
           },
         };
       },

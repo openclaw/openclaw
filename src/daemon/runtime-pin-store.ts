@@ -1,15 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { createDirectorySync, createFileSync } from "@openclaw/fs-safe/advanced";
-import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { resolveStateDir } from "../config/paths.js";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { getDatabaseEngineInput } from "../infra/database-engine/context.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "../infra/node-sqlite.js";
-import { applyPrivateModeSync } from "../infra/private-mode.js";
+import { preparePrivateStoreFileSync } from "../infra/private-store-file.js";
 import {
   getSqliteDatabaseAdmission,
   publishSqliteDatabaseAdmission,
@@ -41,16 +39,6 @@ export function resolveDaemonRuntimePinStorePath(env: NodeJS.ProcessEnv): string
   return path.join(resolveStateDir(env), "control", "services.sqlite");
 }
 
-function createPrivateIfMissing(create: () => void): void {
-  try {
-    create();
-  } catch (error) {
-    if (!(error instanceof FsSafeError && error.code === "already-exists")) {
-      throw error;
-    }
-  }
-}
-
 function withDaemonRuntimePinDatabase<T>(
   env: NodeJS.ProcessEnv,
   writable: boolean,
@@ -66,14 +54,7 @@ function withDaemonRuntimePinDatabase<T>(
     return undefined;
   }
   if (writable) {
-    if (!parent) {
-      fs.mkdirSync(path.dirname(directory), { recursive: true, mode: 0o700 });
-      createPrivateIfMissing(() => createDirectorySync(directory, { private: true }));
-    }
-    applyPrivateModeSync(directory, 0o700);
-    if (!fs.existsSync(pathname)) {
-      createPrivateIfMissing(() => createFileSync(pathname, { private: true }).close());
-    }
+    preparePrivateStoreFileSync(pathname, Boolean(parent));
   }
   const opened = openRootFileSync({
     absolutePath: pathname,

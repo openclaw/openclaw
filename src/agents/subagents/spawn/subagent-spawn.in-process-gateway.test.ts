@@ -164,6 +164,9 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     let launchCount = 0;
     gatewayContext.recoveryRuntime = {
       prepareRestartRecovery: () => undefined,
+      resumeChatInput: async () => {
+        throw new Error("Unexpected fixture chat input recovery");
+      },
       waitForAgent: async <T>(params: { runId: string }): Promise<T> => {
         const index = launchedRunIds.indexOf(params.runId);
         const terminal = expectDefined(terminalReplies[index], "launched collector terminal owner");

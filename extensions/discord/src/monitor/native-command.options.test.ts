@@ -48,7 +48,7 @@ type CreateCommand = typeof import("./native-command.js").createDiscordNativeCom
 let createDiscordNativeCommand: CreateCommand;
 let buildDiscordCommandOptions: typeof import("./native-command.options.js").buildDiscordCommandOptions;
 let resolveDiscordNativeAutocompleteAuthorized: typeof import("./native-command-auth.js").resolveDiscordNativeAutocompleteAuthorized;
-let createNoopThreadBindingManager: typeof import("./thread-bindings.js").createNoopThreadBindingManager;
+let nativeCommandContext: typeof import("./native-command.dispatch.test-support.js").nativeCommandContext;
 
 function createNativeCommand(
   spec: string | Parameters<CreateCommand>[0]["command"],
@@ -64,12 +64,8 @@ function createNativeCommand(
   return createDiscordNativeCommand({
     readPolicy,
     command,
-    cfg,
-    discordConfig: cfg.channels?.discord ?? {},
-    accountId: "default",
-    sessionPrefix: "discord:slash",
+    ...nativeCommandContext(cfg),
     ephemeralDefault: true,
-    threadBindings: createNoopThreadBindingManager("default"),
   });
 }
 
@@ -169,7 +165,7 @@ beforeAll(async () => {
   ({ createDiscordNativeCommand } = await import("./native-command.js"));
   ({ buildDiscordCommandOptions } = await import("./native-command.options.js"));
   ({ resolveDiscordNativeAutocompleteAuthorized } = await import("./native-command-auth.js"));
-  ({ createNoopThreadBindingManager } = await import("./thread-bindings.js"));
+  ({ nativeCommandContext } = await import("./native-command.dispatch.test-support.js"));
 });
 
 beforeEach(() => {

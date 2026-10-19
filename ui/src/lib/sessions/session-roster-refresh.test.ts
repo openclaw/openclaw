@@ -31,6 +31,33 @@ function resultFor(agentId: string, ts: number) {
 }
 
 describe("session roster refresh", () => {
+  it("shares the initial child list across sidebar and chat observers", async () => {
+    const initial = createDeferred<SessionsListResult>();
+    const row = { key: "agent:main:child", kind: "direct" as const };
+    const result = sessionsResult([row]);
+    const request = vi.fn().mockReturnValueOnce(initial.promise).mockResolvedValue(result);
+    const { sessions, watch, resolveOnCleanup } = rosterFixture(request);
+    resolveOnCleanup([initial, result]);
+    const query = { agentId: "main", spawnedBy: "agent:main:parent" };
+    const sidebar = vi.fn();
+    const chat = vi.fn();
+    const first = sessions.observeList({ ...query, source: "sidebar" }, sidebar);
+    const second = sessions.observeList({ ...query, source: "chat-pane" }, chat);
+    watch(() => first.dispose());
+    watch(() => second.dispose());
+    const reads = [first.refresh(), second.refresh()];
+    initial.resolve(result);
+    await Promise.all(reads);
+    expect(request).toHaveBeenCalledOnce();
+    for (const listener of [sidebar, chat]) {
+      expect(listener).toHaveBeenLastCalledWith(
+        expect.objectContaining({ result, loading: false }),
+      );
+    }
+    await second.refresh();
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
   it("reuses conditional sidebar rows while accepting fresh facets and query replacements", async () => {
     const row = {
       key: "agent:main:one",

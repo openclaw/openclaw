@@ -12,12 +12,17 @@ export function createTranscriptMessageElements(
     get elements(): ReadonlyMap<string, HTMLElement> {
       return mounted;
     },
-    forKey:
-      (key: string): MessageElementRef =>
-      (element) => {
-        entryRefFor(key)?.(element);
+    forKey(key: string): MessageElementRef {
+      let registered: HTMLElement | undefined;
+      return (element) => {
         const previous = mounted.get(key);
         const current = element instanceof HTMLElement ? element : undefined;
+        // A replacement branch can mount before the previous branch cleans up.
+        if (!current && previous !== registered) {
+          return;
+        }
+        registered = current;
+        entryRefFor(key)?.(element);
         if (current) {
           mounted.set(key, current);
         } else {
@@ -28,7 +33,8 @@ export function createTranscriptMessageElements(
             listener();
           }
         }
-      },
+      };
+    },
     subscribe(listener: () => void): () => void {
       listeners.add(listener);
       return () => listeners.delete(listener);

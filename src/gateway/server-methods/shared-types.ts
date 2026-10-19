@@ -202,7 +202,7 @@ type GatewayKernelContext = {
     readonly hasPendingAgents: boolean;
     waitForAgentPreparation: (
       agentId: string,
-      options?: { signal?: AbortSignal },
+      options?: { signal?: AbortSignal; forWrite?: boolean },
     ) => Promise<void> | undefined;
   };
   channelAdmissionAudit?: import("../../channels/message-access/admission-evidence.js").ChannelAdmissionAudit;

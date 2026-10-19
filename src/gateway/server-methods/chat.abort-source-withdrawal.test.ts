@@ -18,6 +18,9 @@ import {
 vi.mock("../session-utils.js", async (original) => ({
   ...(await original<typeof import("../session-utils.js")>()),
   loadGatewaySessionEntryReadOnlyInWorker: async () => ({
+    cfg: {},
+    agentId: "main",
+    canonicalKey: "main",
     entry: { sessionId: "main-session" },
     storePath: "/synthetic/withdrawal/sessions.json",
   }),

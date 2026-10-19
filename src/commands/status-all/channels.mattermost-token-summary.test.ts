@@ -1,33 +1,67 @@
 // Mattermost token summary tests cover status-all credential source counting and safe display output.
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelAccountInspectionResult } from "../../channels/account-inspection.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
-import {
-  summarizeTokenConfig,
-  type ChannelAccountTokenSummaryRow,
-} from "./channels-token-summary.js";
+import { buildChannelsTable } from "./channels.js";
+
+const mocks = vi.hoisted(() => ({ resolveInspectedChannelAccount: vi.fn() }));
+vi.mock("../../channels/account-inspection.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../channels/account-inspection.js")>()),
+  resolveInspectedChannelAccount: mocks.resolveInspectedChannelAccount,
+}));
+vi.mock("../../channels/plugins/read-only.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../channels/plugins/read-only.js")>()),
+  resolveReadOnlyChannelPluginsForConfig: () => ({
+    plugins: [
+      {
+        id: "mattermost",
+        meta: { label: "Mattermost" },
+        config: {
+          listAccountIds: () => ["primary"],
+          defaultAccountId: () => "primary",
+        },
+      },
+    ],
+    manifestRecords: [],
+    missingConfiguredChannelIds: [],
+    loadFailures: [],
+  }),
+}));
+
+beforeEach(() => vi.clearAllMocks());
 
 function tokenRow(params: {
   account: Record<string, unknown>;
   snapshot?: Partial<ChannelAccountSnapshot>;
   enabled?: boolean;
-}): ChannelAccountTokenSummaryRow {
+}): ChannelAccountInspectionResult {
   return {
+    kind: "inspected",
     account: params.account,
     enabled: params.enabled ?? true,
+    configured: true,
     snapshot: {
       accountId: "primary",
       ...params.snapshot,
-    } as ChannelAccountSnapshot,
+    },
   };
 }
 
-function summarize(accounts: ChannelAccountTokenSummaryRow[]) {
-  return summarizeTokenConfig({ accounts, showSecrets: false });
+async function summarize(accounts: ChannelAccountInspectionResult[], showSecrets = false) {
+  for (const account of accounts) {
+    mocks.resolveInspectedChannelAccount.mockResolvedValueOnce(account);
+  }
+  const table = await buildChannelsTable({}, { showSecrets });
+  const row = table.rows[0];
+  if (!row) {
+    throw new Error("channel row missing");
+  }
+  return row;
 }
 
-describe("summarizeTokenConfig", () => {
-  it("does not require appToken for bot-token-only channels", () => {
-    const summary = summarize([
+describe("channel table credential summaries", () => {
+  it("does not require appToken for bot-token-only channels", async () => {
+    const summary = await summarize([
       tokenRow({
         account: {
           botToken: "bot-token-value",
@@ -40,10 +74,12 @@ describe("summarizeTokenConfig", () => {
     expect(summary.state).toBe("ok");
     expect(summary.detail).toContain("bot token config");
     expect(summary.detail).not.toContain("need bot+app");
+    expect(summary.detail).toMatch(/sha256:[a-f0-9]{8} · len 15/u);
+    expect(summary.detail).not.toContain("bot-token-value");
   });
 
-  it("keeps bot+app requirement when both fields exist", () => {
-    const summary = summarize([
+  it("keeps bot+app requirement when both fields exist", async () => {
+    const summary = await summarize([
       tokenRow({
         account: {
           botToken: "bot-token",
@@ -56,8 +92,8 @@ describe("summarizeTokenConfig", () => {
     expect(summary.detail).toContain("need bot+app");
   });
 
-  it("reports configured-but-unavailable Slack credentials as warn", () => {
-    const summary = summarize([
+  it("reports configured-but-unavailable Slack credentials as warn", async () => {
+    const summary = await summarize([
       tokenRow({
         account: {
           configured: true,
@@ -79,8 +115,8 @@ describe("summarizeTokenConfig", () => {
     expect(summary.detail).toContain("unavailable in this command path");
   });
 
-  it("treats status-only available HTTP credentials as resolved", () => {
-    const summary = summarize([
+  it("treats status-only available HTTP credentials as resolved", async () => {
+    const summary = await summarize([
       tokenRow({
         account: {
           mode: "http",
@@ -102,8 +138,8 @@ describe("summarizeTokenConfig", () => {
     expect(summary.detail).toContain("credentials ok");
   });
 
-  it("treats Slack HTTP signing-secret availability as required config", () => {
-    const summary = summarize([
+  it("treats Slack HTTP signing-secret availability as required config", async () => {
+    const summary = await summarize([
       tokenRow({
         account: {
           mode: "http",
@@ -142,21 +178,21 @@ describe("summarizeTokenConfig", () => {
         appToken: "",
         appTokenStatus: "configured_unavailable",
       },
-      detail: "partial tokens (need bot+app) · accounts 1",
+      detail: "configured credentials unavailable in this command path · accounts 1",
     },
   ])(
-    "preserves unavailable-versus-partial precedence in $mode mode",
-    ({ mode, account, detail }) => {
-      expect(summarize([tokenRow({ account: { mode, ...account } })])).toEqual({
+    "preserves public unavailable-credential precedence in $mode mode",
+    async ({ mode, account, detail }) => {
+      expect(await summarize([tokenRow({ account: { mode, ...account } })])).toMatchObject({
         state: "warn",
         detail,
       });
     },
   );
 
-  it("requires token values for socket mode even when status fields report available", () => {
+  it("requires token values for socket mode even when status fields report available", async () => {
     expect(
-      summarize([
+      await summarize([
         tokenRow({
           account: {
             botToken: "",
@@ -166,7 +202,7 @@ describe("summarizeTokenConfig", () => {
           },
         }),
       ]),
-    ).toEqual({ state: "setup", detail: "no tokens (need bot+app)" });
+    ).toMatchObject({ state: "setup", detail: "no tokens (need bot+app)" });
   });
 
   it.each([
@@ -174,11 +210,11 @@ describe("summarizeTokenConfig", () => {
     [`abc😀${"x".repeat(10)}`, "abc…xxxx · len 15"],
     [`${"x".repeat(10)}😀abc`, "xxxx…abc · len 15"],
     ["a😀b", "a😀b · len 4"],
-  ])("formats a visible token hint without splitting %p", (token, expectedHint) => {
-    const summary = summarizeTokenConfig({
-      accounts: [tokenRow({ account: { token }, snapshot: { tokenSource: "config" } })],
-      showSecrets: true,
-    });
+  ])("formats a visible token hint without splitting %p", async (token, expectedHint) => {
+    const summary = await summarize(
+      [tokenRow({ account: { token }, snapshot: { tokenSource: "config" } })],
+      true,
+    );
 
     expect(summary.detail).toContain(`token config (${expectedHint})`);
   });

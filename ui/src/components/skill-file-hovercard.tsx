@@ -6,6 +6,11 @@ import { registerFilePreviewEnglish } from "../i18n/locales/en-file-preview.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { highlightCodeHtml } from "./markdown-code-blocks.ts";
+import {
+  controlsForHovercard,
+  createHovercardControlRef,
+  HovercardControlsContext,
+} from "./portaled-hovercard-focus.ts";
 import { createPortaledHovercard, createPortaledHovercardOwner } from "./portaled-hovercard.ts";
 import { CopyButton } from "./solid/copy-button.tsx";
 import { Icon } from "./solid/icon.tsx";
@@ -63,8 +68,14 @@ function SkillSource(props: {
         <strong>{props.file.path.replaceAll("\\", "/").split("/").at(-1)}</strong>
         <span class="skill-file-hovercard__name">{props.file.name}</span>
         <div class="skill-file-hovercard__actions">
-          <CopyButton text={props.file.content} idleLabel={t("filePreview.copyFile")} bare />
+          <CopyButton
+            ref={createHovercardControlRef()}
+            text={props.file.content}
+            idleLabel={t("filePreview.copyFile")}
+            bare
+          />
           <button
+            ref={createHovercardControlRef()}
             type="button"
             title={t("filePreview.skill.open")}
             aria-label={t("filePreview.skill.open")}
@@ -72,12 +83,18 @@ function SkillSource(props: {
           >
             <Icon name="maximize" />
           </button>
-          <button type="button" aria-label={t("common.close")} onClick={() => props.onClose()}>
+          <button
+            ref={createHovercardControlRef()}
+            type="button"
+            aria-label={t("common.close")}
+            onClick={() => props.onClose()}
+          >
             <Icon name="x" />
           </button>
         </div>
       </header>
       <div
+        ref={createHovercardControlRef()}
         class="skill-file-hovercard__source"
         tabindex={0}
         aria-label={t("filePreview.skill.source")}
@@ -145,7 +162,12 @@ function SkillReadStatus(props: {
       <header class="skill-file-hovercard__header">
         <strong>{t("filePreview.skill.title")}</strong>
         <div class="skill-file-hovercard__actions">
-          <button type="button" aria-label={t("common.close")} onClick={() => props.onClose()}>
+          <button
+            ref={createHovercardControlRef()}
+            type="button"
+            aria-label={t("common.close")}
+            onClick={() => props.onClose()}
+          >
             <Icon name="x" />
           </button>
         </div>
@@ -163,7 +185,12 @@ function SkillReadStatus(props: {
           <Icon name="alertTriangle" />
           <strong>{t("filePreview.skill.unavailable")}</strong>
           <span>{t("filePreview.skill.unavailableHint")}</span>
-          <button type="button" class="btn btn--sm" onClick={() => props.retry?.()}>
+          <button
+            ref={createHovercardControlRef()}
+            type="button"
+            class="btn btn--sm"
+            onClick={() => props.retry?.()}
+          >
             {t("common.retry")}
           </button>
         </Show>
@@ -263,34 +290,36 @@ export function createSkillFileHovercard(props: SkillFileHovercardProps) {
       dispose = render(() => {
         spread(card, () => ({ "aria-label": t("filePreview.skill.title") }), true);
         return (
-          <Errored
-            fallback={(_error, retry) => (
-              <SkillReadStatus
-                retry={retry}
-                onClose={dismiss}
-                onPosition={() => hovercard.position()}
-              />
-            )}
-          >
-            <Loading
-              fallback={
-                <SkillReadStatus onClose={dismiss} onPosition={() => hovercard.position()} />
-              }
+          <HovercardControlsContext value={controlsForHovercard(card)}>
+            <Errored
+              fallback={(_error, retry) => (
+                <SkillReadStatus
+                  retry={retry}
+                  onClose={dismiss}
+                  onPosition={() => hovercard.position()}
+                />
+              )}
             >
-              <SkillRead
-                client={client}
-                path={path}
-                agentId={agentId}
-                signal={controller.signal}
-                onOpen={(file) => {
-                  props.onOpenFile(file, Number(next.dataset.fileLine) || null);
-                  close();
-                }}
-                onClose={dismiss}
-                onPosition={() => hovercard.position()}
-              />
-            </Loading>
-          </Errored>
+              <Loading
+                fallback={
+                  <SkillReadStatus onClose={dismiss} onPosition={() => hovercard.position()} />
+                }
+              >
+                <SkillRead
+                  client={client}
+                  path={path}
+                  agentId={agentId}
+                  signal={controller.signal}
+                  onOpen={(file) => {
+                    props.onOpenFile(file, Number(next.dataset.fileLine) || null);
+                    close();
+                  }}
+                  onClose={dismiss}
+                  onPosition={() => hovercard.position()}
+                />
+              </Loading>
+            </Errored>
+          </HovercardControlsContext>
         );
       }, card);
     });

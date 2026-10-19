@@ -102,8 +102,8 @@ it.for(["assignment", "metadata"] as const)(
   },
 );
 
-it.for(["permissionMode", "toolOverrides"] as const)(
-  "fences retained %s until same-generation policy publication settles",
+it.for(["permissionMode", "toolOverrides", "lifecycleRunId"] as const)(
+  "keeps exec-wake settings available only when pending %s publication preserves policy",
   async (setting, { signal }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const database = openOpenClawAgentDatabase({ agentId: "main" });
@@ -140,7 +140,12 @@ it.for(["permissionMode", "toolOverrides"] as const)(
         requireWriteSuccess: true,
         update: () => ({
           result: undefined,
-          replacements: [{ sessionKey: scope.sessionKey, entry: { ...original, ...settings } }],
+          replacements: [
+            {
+              sessionKey: scope.sessionKey,
+              entry: { ...original, ...settings, lifecycleRunId: "completion-wake" },
+            },
+          ],
         }),
       });
       try {
@@ -148,11 +153,15 @@ it.for(["permissionMode", "toolOverrides"] as const)(
           awaitGateBeforeSettlement(committed.promise, write, "policy write did not commit"),
           signal,
         );
-        // Main's generation-only readers stay current; policy consumers cannot reuse old grants.
+        // Exec wakes check identity and settings synchronously after tool-preparation awaits.
         generation.assertCurrent();
-        expect(generation.readSessionSettings).toThrow(
-          expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),
-        );
+        if (setting === "lifecycleRunId") {
+          expect(generation.readSessionSettings()).toEqual(settings);
+        } else {
+          expect(generation.readSessionSettings).toThrow(
+            expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),
+          );
+        }
         release.resolve();
         await withinTest(write, signal);
         generation.assertCurrent();

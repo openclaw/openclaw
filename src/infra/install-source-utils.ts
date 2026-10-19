@@ -255,9 +255,8 @@ export type NpmIntegrityDrift = {
 export async function withInstallWorkspace<T>(
   prefix: string,
   fn: (tmpDir: string) => Promise<T>,
-  options?: { rootDir?: string },
 ): Promise<T> {
-  const rootDir = options?.rootDir ?? resolvePreferredOpenClawTmpDir();
+  const rootDir = resolvePreferredOpenClawTmpDir();
   return await withTempWorkspace({ rootDir, prefix }, async (tmp) => fn(tmp.dir));
 }
 

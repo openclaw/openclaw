@@ -50,6 +50,8 @@ it.each([
   ["webhook", "after-acceptance"],
   ["announce", "before-delivery"],
   ["webhook", "before-delivery"],
+  ["announce", "legacy-unknown"],
+  ["webhook", "legacy-unknown"],
 ] as const)(
   "recovers %s interrupted %s without duplicating its completion",
   async (mode, interrupted) => {
@@ -60,7 +62,7 @@ it.each([
     const received: string[] = [];
     const receive = async (text: string) => {
       received.push(text);
-      if (interrupted === "after-acceptance" && received.length === 1) {
+      if (interrupted !== "before-delivery" && received.length === 1) {
         reachedInterruption.resolve();
         await acknowledgment.promise;
       }
@@ -139,10 +141,10 @@ it.each([
       await next.clock.advanceBy(120_000);
       await onTimer(next.state);
     };
-    const expectedDeliveries = interrupted === "after-acceptance" ? [result] : [];
-    const expectNoReplay = () => {
-      expect(received).toEqual(expectedDeliveries);
-      expect(executionCount).toBe(1);
+    const expectedDeliveries = interrupted === "before-delivery" ? [] : [result];
+    const expectRecoveredOnce = () => {
+      expect(received).toEqual([result]);
+      expect(executionCount).toBe(interrupted === "before-delivery" ? 2 : 1);
     };
     let tick: Promise<void> | undefined;
     try {
@@ -164,36 +166,46 @@ it.each([
       const receipt = inspectActiveCronRunReceipt({ storePath, jobId: job.id });
       expect(receipt).toBeDefined();
       expect((await first.cron.readJob(job.id))?.state.runningReceiptId).toBe(receipt?.receiptId);
+      if (interrupted === "legacy-unknown") {
+        // Schema-19 migration preserves uncertainty for already-running receipts.
+        openOpenClawStateDatabase()
+          .db.prepare(
+            "UPDATE cron_run_receipts SET delivery_attempt_state = 'unknown' WHERE receipt_id = ?",
+          )
+          .run(receipt!.receiptId);
+      }
 
       await restart(first, replacement);
-      expectNoReplay();
+      expectRecoveredOnce();
       const recovered = await replacement.cron.readJob(job.id);
       expect(recovered).toMatchObject({
         enabled: false,
         state: {
-          lastRunStatus: "error",
-          lastError: interruptedError,
-          lastDeliveryStatus: "unknown",
+          lastRunStatus: interrupted === "before-delivery" ? "ok" : "error",
+          ...(interrupted !== "before-delivery"
+            ? { lastError: interruptedError, lastDeliveryStatus: "unknown" }
+            : { lastDeliveryStatus: "delivered" }),
         },
       });
       expect(recovered?.state.nextRunAtMs).toBeUndefined();
       expect(recovered?.state.startupCatchupAtMs).toBeUndefined();
       expect(inspectActiveCronRunReceipt({ storePath, jobId: job.id })).toBeUndefined();
-      if (interrupted === "after-acceptance") {
+      if (interrupted !== "before-delivery") {
         expect(recovered?.deleteAfterRun).toBe(true);
       }
       const readHistory = () =>
         readCronRunHistoryPageForTests({ storeKey: cronStoreKey(storePath), jobId: job.id })
           .entries;
       const history = readHistory();
-      expect(history).toEqual([
+      expect(history).toHaveLength(interrupted === "before-delivery" ? 2 : 1);
+      expect(history).toContainEqual(
         expect.objectContaining({
           status: "error",
           error: interruptedError,
           runAtMs: receipt?.startedAtMs,
           deliveryStatus: "unknown",
         }),
-      ]);
+      );
       expect(
         openOpenClawStateDatabase()
           .db.prepare("SELECT status FROM cron_run_receipts WHERE receipt_id = ?")
@@ -201,7 +213,7 @@ it.each([
       ).toMatchObject({ status: "interrupted" });
 
       await restart(replacement, secondReplacement);
-      expectNoReplay();
+      expectRecoveredOnce();
       expect(await secondReplacement.cron.readJob(job.id)).toEqual(recovered);
       expect(readHistory()).toEqual(history);
     } finally {

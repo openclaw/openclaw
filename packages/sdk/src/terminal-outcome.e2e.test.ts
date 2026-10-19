@@ -16,7 +16,7 @@ import {
   clearAgentRunContext,
   registerAgentRunContext,
 } from "../../../src/infra/agent-run-registry.js";
-import { withTimeout } from "../../../src/utils/with-timeout.js";
+import { withTimeout } from "../../../src/infra/fs-safe.js";
 import { GatewayClientTransport, OpenClaw } from "./index.js";
 
 describe("SDK writer takeover through the Gateway", () => {

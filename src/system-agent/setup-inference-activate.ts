@@ -531,7 +531,6 @@ async function verifyAndActivateCandidate(
         route: candidateRoute,
         auth: verification.auth,
         stagedOwnerPluginArtifacts: artifacts,
-        deps,
       }),
     );
   };

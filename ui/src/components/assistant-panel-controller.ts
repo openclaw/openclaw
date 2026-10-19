@@ -17,7 +17,6 @@ import {
 } from "../lib/sessions/navigation-handoff.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import {
-  areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
   normalizeAgentId,
   resolveUiConfiguredMainKey,
@@ -30,7 +29,7 @@ import {
   CHAT_ROUTE_READY_EVENT,
   CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
 } from "../pages/chat/chat-history-events.ts";
-import type { ChatPaneElement } from "../pages/chat/route-draft-focus-handoff.ts";
+import type { ChatPaneElement } from "../pages/chat/chat-pane-elements.ts";
 import type { CustodianSessionStore } from "../pages/custodian/custodian-session-store.ts";
 import {
   consumePluginHelpAutoOpen,
@@ -65,6 +64,7 @@ export type AssistantPanelProps = {
   homeAvailable: boolean;
   custodianSuppressed: boolean;
   pageSessionKey: string;
+  getPrimaryChatPane?: (sessionKey: string) => ChatPaneElement | undefined;
   pageAgentId: string;
   pageRouteId: RouteId;
   pageRouteFailed: boolean;
@@ -263,20 +263,6 @@ export function createAssistantPanel(
     }
   }
 
-  function primaryChatPane(): ChatPaneElement | undefined {
-    const root = element.closest("openclaw-app-shell") ?? element.parentElement;
-    return [
-      ...(root?.querySelectorAll<ChatPaneElement>(
-        "openclaw-chat-pane.chat-pane-cache__pane--active",
-      ) ?? []),
-    ].find(
-      (pane) =>
-        pane.presented !== false &&
-        pane.sessionKey &&
-        areUiSessionKeysEquivalent(pane.sessionKey, props.pageSessionKey),
-    );
-  }
-
   function startHomeAfterPrimaryChat(): void {
     if (homeStarted || !dockLayout.open || destination !== "home") {
       return;
@@ -285,7 +271,7 @@ export function createAssistantPanel(
       homeStarted = true;
       return;
     }
-    const pane = primaryChatPane();
+    const pane = props.getPrimaryChatPane?.(props.pageSessionKey);
     if (!pane?.transcriptReady || pendingPrimaryPane?.pane === pane) {
       return;
     }
@@ -304,7 +290,7 @@ export function createAssistantPanel(
         if (
           element.isConnected &&
           getContext() === currentContext &&
-          primaryChatPane() === pane &&
+          props.getPrimaryChatPane?.(props.pageSessionKey) === pane &&
           pane.transcriptReady
         ) {
           homeStarted = true;

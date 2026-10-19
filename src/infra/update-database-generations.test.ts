@@ -12,6 +12,7 @@ import {
   sameSqliteFileGeneration,
 } from "./sqlite-file-generation.js";
 import * as readOnlyLocation from "./sqlite-readonly-location.js";
+import * as snapshotSource from "./sqlite-snapshot-source.js";
 import { readDatabaseIdentityBirthtime } from "./sqlite-worker-identity.js";
 import { readUpdatePhysicalDatabaseGenerations } from "./update-database-generations.js";
 
@@ -148,6 +149,22 @@ it.each(["auto", "off"] as const)(
   },
 );
 
+it("refuses a malformed engine anchor from the captured image and cleans up", async () => {
+  const { file, staging } = generationFixture();
+  const database = new DatabaseSync(file);
+  database.exec(
+    "CREATE TABLE openclaw_engine_anchor (store_id TEXT, engine TEXT, schema TEXT);" +
+      "INSERT INTO openclaw_engine_anchor VALUES ('test-store', 'postgres', 'invalid-schema');",
+  );
+  database.close();
+  const before = fs.readFileSync(file);
+  await expect(readUpdatePhysicalDatabaseGenerations([file])).rejects.toThrow(
+    /Invalid PostgreSQL anchor/,
+  );
+  expect(fs.readFileSync(file)).toEqual(before);
+  expect(fs.readdirSync(staging)).toEqual([]);
+});
+
 it.each(["same-size write", "truncation", "identity replacement"] as const)(
   "refuses a captured source's %s before native admission",
   async (change) => {
@@ -232,17 +249,69 @@ it.each([
   expect(fs.readdirSync(staging)).toEqual([]);
 });
 
-it("reads a sidecar-free private payload once while retaining four source-family passes", async () => {
-  const { file, staging } = generationFixture();
+it.each(["before acquisition", "after acquisition"] as const)(
+  "refuses a same-size write after a source digest %s",
+  async (timing) => {
+    const { file, staging, prepare } = generationFixture();
+    const changed = fs.readFileSync(file);
+    const offset = changed.indexOf("before");
+    expect(offset).toBeGreaterThan(0);
+    changed.write("after!", offset);
+    let acquired = false;
+    let mutated = false;
+    vi.mocked(readOnlyLocation.prepareSqliteReadOnlyLocationSyncInProcess).mockImplementation(
+      (pathname, _staging, ...rest) => {
+        const prepared = prepare(pathname, staging, ...rest);
+        acquired = true;
+        return prepared;
+      },
+    );
+    const statSync = fs.statSync;
+    vi.spyOn(fs, "statSync").mockImplementation((...args) => {
+      const stat = statSync(...args);
+      if (!mutated && String(args[0]) === file && acquired === (timing === "after acquisition")) {
+        // The digest is already computed; the outer identity check sees the
+        // same inode and size. Subsequent content verification must catch it.
+        fs.writeFileSync(file, changed);
+        mutated = true;
+      }
+      return stat;
+    });
+    await expect(readUpdatePhysicalDatabaseGenerations([file])).rejects.toThrow(
+      timing === "before acquisition" ? /snapshot hash mismatch/ : /generation changed/,
+    );
+    expect(mutated).toBe(true);
+    expect(acquired).toBe(timing === "after acquisition");
+    expect(fs.readFileSync(file)).toEqual(changed);
+    expect(fs.readdirSync(staging)).toEqual([]);
+  },
+);
+
+it("acquires one private payload with three source-family verification passes", async () => {
+  const { file, staging, prepare } = generationFixture();
   const database = new DatabaseSync(file);
   database.exec(
     "CREATE TABLE payload(value BLOB); INSERT INTO payload VALUES (zeroblob(2097152));",
   );
   database.close();
+  const expected = expectedClosedGeneration(file);
   const source = fs.statSync(file, { bigint: true });
+  const isolatedCapture = vi.spyOn(snapshotSource, "prepareSqliteReadOnlyLocationSync");
   const read = fs.readSync.bind(fs);
   let sourceBytes = 0;
+  let generationBytes = 0;
   let privateBytes = 0;
+  let acquiring = false;
+  vi.mocked(readOnlyLocation.prepareSqliteReadOnlyLocationSyncInProcess).mockImplementation(
+    (pathname, _staging, ...rest) => {
+      acquiring = true;
+      try {
+        return prepare(pathname, staging, ...rest);
+      } finally {
+        acquiring = false;
+      }
+    },
+  );
   vi.spyOn(fs, "readSync").mockImplementation(
     (
       descriptor: number,
@@ -259,17 +328,23 @@ it("reads a sidecar-free private payload once while retaining four source-family
       const opened = fs.fstatSync(descriptor, { bigint: true });
       if (opened.dev === source.dev && opened.ino === source.ino) {
         sourceBytes += count;
+        if (!acquiring) {
+          generationBytes += count;
+        }
       } else if (opened.isFile() && opened.size === source.size) {
         privateBytes += count;
       }
       return count;
     },
   );
-  expect((await readUpdatePhysicalDatabaseGenerations([file]))[file]).toEqual(expect.any(String));
+  expect(await readUpdatePhysicalDatabaseGenerations([file])).toEqual({ [file]: expected });
+  expect(readOnlyLocation.prepareSqliteReadOnlyLocationSyncInProcess).toHaveBeenCalledTimes(1);
+  expect(isolatedCapture).not.toHaveBeenCalled();
   const size = Number(source.size);
-  expect(sourceBytes).toBeGreaterThanOrEqual(4 * size);
+  expect(generationBytes).toBe(3 * size);
+  expect(sourceBytes).toBeGreaterThanOrEqual(3 * size);
   // A byte-copy fallback can add one source pass. Headers are bounded overhead.
-  expect(sourceBytes).toBeLessThanOrEqual(5 * size + 256);
+  expect(sourceBytes).toBeLessThanOrEqual(4 * size + 256);
   expect(privateBytes).toBe(size);
   expect(fs.readdirSync(staging)).toEqual([]);
 });

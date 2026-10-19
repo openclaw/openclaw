@@ -42,6 +42,7 @@ import {
   resolveMessageReplyLine,
 } from "./chat-reply-attribution.ts";
 import { ReplyLineView, ReplyLineConnector } from "./chat-reply-attribution.tsx";
+import type { ReplyConnectorElements } from "./chat-reply-connector.ts";
 import { ChatSessionActivity } from "./chat-session-activity.solid.tsx";
 import { BrowserTabPreviews } from "./chat-tool-cards.solid.tsx";
 import { selectBrowserTabPreviews } from "./chat-tool-cards.ts";
@@ -199,7 +200,10 @@ export function MessageGroupContent(props: {
   );
 }
 
-function GroupAvatar(props: { frame: MessageGroupFrame }) {
+function GroupAvatar(props: {
+  frame: MessageGroupFrame;
+  elementRef?: (element: HTMLElement) => void;
+}) {
   const frame = () => props.frame;
   const options = () => frame().options;
   return (
@@ -208,6 +212,7 @@ function GroupAvatar(props: { frame: MessageGroupFrame }) {
         when={frame().isForwarded}
         fallback={
           <ChatAvatar
+            elementRef={props.elementRef}
             role={frame().group.role}
             assistant={{
               agentId: options().agentId,
@@ -225,7 +230,11 @@ function GroupAvatar(props: { frame: MessageGroupFrame }) {
           />
         }
       >
-        <ForwardedAvatar agentId={frame().group.senderSession?.agentId} options={options()} />
+        <ForwardedAvatar
+          agentId={frame().group.senderSession?.agentId}
+          options={options()}
+          elementRef={props.elementRef}
+        />
       </Show>
     </Show>
   );
@@ -293,6 +302,7 @@ function FramedMessage(props: {
   index: number;
   mobile: boolean;
 }) {
+  const replyElements: ReplyConnectorElements = {};
   const frame = () => props.frame;
   const prepared = () => frame().preparedMessages[props.index]!;
   const line = createMemo(() =>
@@ -344,8 +354,8 @@ function FramedMessage(props: {
           </>
         }
       >
-        <div class="chat-message--reply">
-          <ReplyLineView line={line()} actions={frame().options} />
+        <div ref={(element) => (replyElements.group = element)} class="chat-message--reply">
+          <ReplyLineView line={line()} actions={frame().options} elements={replyElements} />
           <PreparedMessage
             group={frame().group}
             item={props.item}
@@ -353,8 +363,11 @@ function FramedMessage(props: {
             options={options()}
             prepared={prepared()}
           />
-          <GroupAvatar frame={props.frame} />
-          <ReplyLineConnector line={line()} avatar={frame().hasAvatar} />
+          <GroupAvatar
+            frame={props.frame}
+            elementRef={(element) => (replyElements.avatar = element)}
+          />
+          <ReplyLineConnector line={line()} avatar={frame().hasAvatar} elements={replyElements} />
         </div>
       </Show>
       <Show when={showActions()}>
@@ -390,6 +403,7 @@ function FramedMessageGroup(props: {
   group: MessageGroupData;
   options: NativeMessageGroupOptions;
 }) {
+  const replyElements: ReplyConnectorElements = {};
   const frame = createMemo(() => prepareMessageGroupFrame(props.group, props.options));
   const options = () => frame().options;
   const media = globalThis.matchMedia?.(
@@ -400,6 +414,7 @@ function FramedMessageGroup(props: {
   onSettled(() => media && listen(media, "change", onLayoutChange));
   return (
     <div
+      ref={(element) => (replyElements.group = element)}
       class={frame().className}
       style={frame().style}
       data-chat-row-key={props.group.key}
@@ -407,13 +422,13 @@ function FramedMessageGroup(props: {
       data-file-session-key={frame().sessionKey}
     >
       <Show when={!frame().inlineUserAvatar}>
-        <GroupAvatar frame={frame()} />
+        <GroupAvatar frame={frame()} elementRef={(element) => (replyElements.avatar = element)} />
       </Show>
-      <div class="chat-group-messages">
+      <div ref={(element) => (replyElements.messages = element)} class="chat-group-messages">
         <Show when={frame().forwardedSource}>
           <ForwardedAttribution group={props.group} options={options()} />
         </Show>
-        <ReplyLineView line={frame().replyLine} actions={options()} />
+        <ReplyLineView line={frame().replyLine} actions={options()} elements={replyElements} />
         <Show
           when={options().frameContent !== undefined}
           fallback={
@@ -497,7 +512,11 @@ function FramedMessageGroup(props: {
           </div>
         </Show>
       </Show>
-      <ReplyLineConnector line={frame().replyLine} avatar={frame().hasAvatar} />
+      <ReplyLineConnector
+        line={frame().replyLine}
+        avatar={frame().hasAvatar}
+        elements={replyElements}
+      />
     </div>
   );
 }

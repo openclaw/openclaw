@@ -3,6 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it } from "vitest";
 import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
+import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -200,6 +201,59 @@ it("pages saved deliveries without unrelated or cancelled inputs and preserves l
       expect(older.nextBefore).toBeUndefined();
       expect(newer.items.at(-1)?.state).toBe("queued");
       expect(newer.items.slice(0, -1).every((item) => item.state === "interrupted")).toBe(true);
+    } finally {
+      for (const receipt of receipts) {
+        receipt.finish("interrupted");
+      }
+      await Promise.all(receipts.map(async (receipt) => receipt.settled?.()));
+    }
+  });
+});
+
+it("discovers interrupted chat inputs and reconciles crash-left queued inputs at startup", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const store = { agentId: "main", storePath: database.path, env };
+    const scope = { ...store, sessionKey: "agent:main:chat-recovery", sessionId: "chat-recovery" };
+    writeSessionEntry(database, scope.sessionKey, { sessionId: scope.sessionId, updatedAt: 1 });
+    const receipts: SessionPendingInputReceipt[] = [];
+    try {
+      for (const runId of ["terminated", "killed", "legacy"]) {
+        const receipt = expectDefined(
+          await stageSessionPendingInput(scope, {
+            runId,
+            message: {
+              role: "user",
+              content: `Saved ${runId} chat input`,
+              timestamp: 1,
+              idempotencyKey: `${runId}:user`,
+              ...(runId === "legacy" ? {} : { __openclaw: { chatInputRecovery: { version: 1 } } }),
+            },
+            assertCurrent() {},
+          }),
+          "Expected accepted chat input",
+        );
+        receipts.push(receipt);
+        receipt.finish("interrupted");
+        await receipt.settled?.();
+        if (runId !== "terminated") {
+          // Crash-left rows have no live receipt for lifecycle rotation to finish.
+          database.db
+            .prepare("UPDATE session_pending_inputs SET state = 'queued' WHERE input_id = ?")
+            .run(receipt.inputId);
+        }
+      }
+      rotateAgentEventLifecycleGeneration();
+      expect(
+        (await readPendingInputRecoveryEntriesInWorker(store)).map((row) => row.sessionKey),
+      ).toEqual([scope.sessionKey]);
+      // This is the startup owner's read, without a preceding chat.history request.
+      const page = await readSessionSendRecoveryPage(scope);
+      expect(page.items.map(({ runId, state }) => ({ runId, state }))).toEqual([
+        { runId: "terminated", state: "interrupted" },
+        { runId: "killed", state: "interrupted" },
+        { runId: "legacy", state: "interrupted" },
+      ]);
     } finally {
       for (const receipt of receipts) {
         receipt.finish("interrupted");

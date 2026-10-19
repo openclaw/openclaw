@@ -2,7 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import {
   disposeConfigFormFixture,
   renderArrayFixture,
+  renderJsonTextareaFixture,
   renderNodeFixture,
+  renderTextInputFixture,
 } from "../test-helpers/config-form-fixtures.tsx";
 import { flush } from "../test-helpers/solid-settle.ts";
 
@@ -21,6 +23,99 @@ function fill(element: HTMLInputElement, value: string) {
 }
 
 describe("config form draft lifetimes", () => {
+  it.each(["scalar", "JSON"] as const)(
+    "preserves an invalid %s draft on an equal acknowledgment and applies its replacement policy",
+    (kind) => {
+      const container = document.body.appendChild(document.createElement("div"));
+      const onPatch = vi.fn();
+      const render = (replaced: boolean) => {
+        if (kind === "scalar") {
+          renderTextInputFixture(container, {
+            schema: { type: "string", minLength: 3 },
+            value: replaced ? "remote" : "local",
+            sourceIdentity: {},
+            path: ["value"],
+            inputType: "text",
+            onPatch,
+          });
+        } else {
+          renderJsonTextareaFixture(container, {
+            schema: { type: "object" },
+            value: { enabled: !replaced },
+            path: ["value"],
+            onPatch,
+          });
+        }
+      };
+      try {
+        render(false);
+        const field = container.querySelector<HTMLInputElement | HTMLTextAreaElement>(
+          "input, textarea",
+        )!;
+        const invalid = kind === "scalar" ? "x" : '{"enabled":';
+        field.focus();
+        field.value = invalid;
+        field.setSelectionRange(1, 1);
+        field.dispatchEvent(new Event("input", { bubbles: true }));
+        flush();
+        expect(field.checkValidity()).toBe(false);
+        expect(onPatch).not.toHaveBeenCalled();
+
+        render(false);
+        expect(container.querySelector("input, textarea")).toBe(field);
+        expect(field.value).toBe(invalid);
+        expect(field.selectionStart).toBe(1);
+        expect(field.checkValidity()).toBe(false);
+        expect(container.querySelector<HTMLElement>(".cfg-field__error")?.hidden).toBe(false);
+
+        render(true);
+        if (kind === "scalar") {
+          expect(field.value).toBe(invalid);
+          expect(field.checkValidity()).toBe(false);
+          field.blur();
+          render(true);
+          expect(field.value).toBe("remote");
+        } else {
+          expect(field.value).toContain('"enabled": false');
+        }
+        expect(field.checkValidity()).toBe(true);
+        expect(field.getAttribute("aria-invalid")).toBe("false");
+        expect(container.querySelector<HTMLElement>(".cfg-field__error")?.hidden).toBe(true);
+      } finally {
+        disposeConfigFormFixture(container);
+        container.remove();
+      }
+    },
+  );
+
+  it("retains the focused scalar edit's string branch across a numeric source replacement", () => {
+    const container = document.body.appendChild(document.createElement("div"));
+    const onPatch = vi.fn();
+    const render = (value: string | number) =>
+      renderTextInputFixture(container, {
+        schema: { anyOf: [{ type: "string" }, { type: "number" }] },
+        value,
+        sourceIdentity: {},
+        path: ["value"],
+        inputType: "text",
+        onPatch,
+      });
+    try {
+      render("initial");
+      const field = input(container, "input");
+      field.focus();
+      fill(field, "12");
+      expect(onPatch).toHaveBeenLastCalledWith(["value"], "12");
+      render(100);
+      expect(field.value).toBe("12");
+      field.dispatchEvent(new Event("change", { bubbles: true }));
+      expect(onPatch).toHaveBeenLastCalledWith(["value"], "12");
+    } finally {
+      disposeConfigFormFixture(container);
+      container.remove();
+    }
+  });
+
   it.each([
     { label: "absent", initial: undefined },
     { label: "empty", initial: [] },

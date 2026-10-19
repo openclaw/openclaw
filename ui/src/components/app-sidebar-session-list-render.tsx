@@ -3,13 +3,12 @@ import { createMemo, For, Show, untrack } from "solid-js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { CatalogOpenTarget } from "../app/settings.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
-import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import {
   presenceViewerActivity,
   type PresenceActivity,
   projectPresenceViewers,
 } from "../lib/presence-users.ts";
-import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
+import { t } from "../lib/reactive/i18n.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";
 import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.tsx";
@@ -34,7 +33,6 @@ import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { SIDEBAR_SESSION_PAGE_SIZE } from "./app-sidebar-session-types.ts";
 import { areSessionCatalogsSettled } from "./session-data-catalog.ts";
 
-registerEnglishCatalog(registerSessionOrganizationEnglish);
 type SessionCatalogRenderSnapshot = {
   catalogs: readonly SidebarSessionCatalog[];
   basePath: string;
@@ -99,8 +97,7 @@ function renderSessionCatalog(params: {
 }) {
   const host = createMemo(() => params.host),
     snapshot = createMemo(() => params.snapshot),
-    catalog = createMemo(() => params.catalog),
-    renderer = createMemo(() => params.renderer);
+    catalog = createMemo(() => params.catalog);
   const newSessionAccess = createMemo(() => host().readNewSessionAccess());
   const groupWriteAccess = createMemo(() =>
     host().readSessionMutationAccess({
@@ -109,7 +106,7 @@ function renderSessionCatalog(params: {
     }),
   );
   // One lazy module owns this catalog renderer for the mounted section's lifetime.
-  const InitialRenderer = untrack(renderer);
+  const InitialRenderer = params.renderer;
   return (
     <InitialRenderer
       catalogs={[catalog()]}

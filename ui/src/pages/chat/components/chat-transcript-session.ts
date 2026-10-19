@@ -52,6 +52,7 @@ export type ChatTranscriptSession = {
   readonly layout: Pick<TranscriptLayoutOwner, "viewportResizePending">;
   readonly entryAnimations: ChatMessageEntryAnimations;
   readonly messageElements: TranscriptMessageElements;
+  readonly contentElement: HTMLDivElement | null;
   readonly expandedAssistantMessages: Map<string, AssistantMessageExpansionState>;
   readonly liveAnnouncementText: string;
   readonly scrollElementRef: (element?: Element) => void;
@@ -96,10 +97,11 @@ export type TranscriptRenderSnapshot<T> = {
 export function createTranscriptPresentation(
   scrollElement: () => HTMLDivElement | null,
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
+  rowElements: () => Iterable<HTMLElement>,
   beforeMeasure: () => void,
 ) {
   const readConnectedRows = (): (() => boolean) | null => {
-    const apply = readConnectedTranscriptRows(scrollElement(), virtualizer);
+    const apply = readConnectedTranscriptRows(scrollElement(), virtualizer, rowElements());
     return apply
       ? () => {
           beforeMeasure();

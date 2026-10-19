@@ -1,4 +1,3 @@
-import type { BrowserContext, Page } from "playwright-core";
 import { z } from "zod";
 import type { ExtensionRelayBridge } from "../src/browser/extension-relay/relay-bridge.js";
 
@@ -61,23 +60,14 @@ const envelope = z.object({
 });
 type Method = (typeof METHODS)[number];
 type Phase =
-  | "injection.used"
-  | "injection.calls"
+  | `injection.${"used" | "calls"}`
   | "adapter.fresh"
   | "navigate.status"
-  | "owner.selected"
-  | "owner.unrelated"
+  | `owner.${"selected" | "unrelated"}`
   | "direct.url"
   | "unrelated.url"
-  | "direct.commit"
-  | "direct.domcontentloaded"
-  | "direct.load"
-  | "direct.closed"
-  | "http.request"
-  | "http.finish"
-  | "http.closed"
-  | "relay.clients"
-  | "relay.closed"
+  | `http.${"request" | "finish" | "closed"}`
+  | `relay.${"clients" | "closed"}`
   | "mcp.closed";
 type RecordEntry = { phase: string; [key: string]: string | number | boolean };
 
@@ -92,9 +82,6 @@ export function createBootstrapDiagnostic() {
   let remaining = 256;
   let dropped = 0;
   let active = false;
-  let inventoryUrl: string | undefined;
-  let contextBindingName: string | undefined;
-  let contextClient = 0;
   let nextClient = 0;
   let nextCommand = 0;
   let flushes = 0;
@@ -111,19 +98,13 @@ export function createBootstrapDiagnostic() {
       return 0;
     }
     const key = `${kind}:${value}`;
-    const found = ordinals.get(key);
-    if (found) {
-      return found;
+    if (!ordinals.has(key) && ordinals.size < 128) {
+      ordinals.set(key, ordinals.size + 1);
     }
-    if (ordinals.size === 128) {
-      return 0;
-    }
-    const next = ordinals.size + 1;
-    ordinals.set(key, next);
-    return next;
+    return ordinals.get(key) ?? 0;
   };
   const observe = (client: number, outgoing: boolean, raw: string) => {
-    if (!active && contextBindingName === undefined) {
+    if (!active) {
       return;
     }
     // Reserve the final records for action outcome and teardown, even on event floods.
@@ -132,24 +113,7 @@ export function createBootstrapDiagnostic() {
       return;
     }
     try {
-      const parsed = envelope.safeParse(JSON.parse(raw));
-      if (!parsed.success) {
-        return;
-      }
-      const msg = parsed.data;
-      if (
-        !outgoing &&
-        msg.method === "Runtime.addBinding" &&
-        contextBindingName !== undefined &&
-        msg.params?.name === contextBindingName
-      ) {
-        contextClient = client;
-        contextBindingName = undefined;
-        append({ phase: "inventory.client", client });
-      }
-      if (!active) {
-        return;
-      }
+      const msg = envelope.parse(JSON.parse(raw));
       const key = `${client}:${msg.id}`;
       const command = outgoing ? pending.get(key) : undefined;
       if (outgoing) {
@@ -167,7 +131,6 @@ export function createBootstrapDiagnostic() {
       append({
         phase: !outgoing ? "cdp.command" : command ? "cdp.result" : "cdp.event",
         client,
-        retainedContext: client === contextClient,
         method,
         command: commandId,
         session: ordinal("session", msg.sessionId ?? data?.sessionId),
@@ -186,10 +149,6 @@ export function createBootstrapDiagnostic() {
           "loader",
           data?.loaderId ?? data?.frame?.loaderId ?? data?.frameTree?.frame.loaderId,
         ),
-        matchesInventoryUrl:
-          inventoryUrl !== undefined &&
-          (data?.targetInfo?.url ?? data?.frame?.url ?? data?.frameTree?.frame.url) ===
-            inventoryUrl,
         load: data?.name === "load",
         domContentLoaded: data?.name === "DOMContentLoaded",
         error: msg.error !== undefined || Boolean(msg.result?.errorText),
@@ -201,10 +160,6 @@ export function createBootstrapDiagnostic() {
   const mark = (phase: Phase, value: boolean | number) => append({ phase, value });
   return {
     mark,
-    identifyContextBinding(name: string) {
-      // Correlate the retained context through its existing command, without a new CDP request.
-      contextBindingName = name;
-    },
     arm(selected: string, unrelated?: string) {
       active = true;
       append({
@@ -242,55 +197,6 @@ export function createBootstrapDiagnostic() {
       restores.push(() => {
         bridge.attachCdpClientSocket = original;
       });
-    },
-    inventory(
-      context: BrowserContext,
-      bridge: Pick<ExtensionRelayBridge, "devtoolsTargetDescriptors" | "extensionConnected">,
-      expectedUrl: string,
-    ) {
-      inventoryUrl = expectedUrl;
-      const browser = context.browser();
-      const pages = context.pages();
-      const tabs = bridge.devtoolsTargetDescriptors();
-      append({
-        phase: "inventory.state",
-        contextClient,
-        extensionConnected: bridge.extensionConnected,
-        browserPresent: browser !== null,
-        browserConnected: browser?.isConnected() ?? false,
-        contextClosed: context.isClosed(),
-        pages: pages.length,
-        pageMatches: pages.filter((page) => page.url() === expectedUrl).length,
-        tabs: tabs.length,
-        tabMatches: tabs.filter((tab) => tab.url === expectedUrl).length,
-        unresolvedMatches: tabs.filter(
-          (tab) => tab.url === expectedUrl && tab.id === `tab-${tab.tabId}`,
-        ).length,
-      });
-    },
-    watchPage(page: Page, expectedUrl: string) {
-      const commit = (frame: ReturnType<Page["mainFrame"]>) => {
-        if (frame === page.mainFrame()) {
-          mark("direct.commit", page.url() === expectedUrl);
-        }
-      };
-      const ready = () => mark("direct.domcontentloaded", page.url() === expectedUrl);
-      const loaded = () => mark("direct.load", page.url() === expectedUrl);
-      const closed = () => mark("direct.closed", true);
-      page
-        .on("framenavigated", commit)
-        .on("domcontentloaded", ready)
-        .on("load", loaded)
-        .on("close", closed);
-      const stop = () => {
-        page
-          .off("framenavigated", commit)
-          .off("domcontentloaded", ready)
-          .off("load", loaded)
-          .off("close", closed);
-      };
-      restores.push(stop);
-      return stop;
     },
     flush() {
       if (++flushes > 2) {

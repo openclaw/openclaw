@@ -78,7 +78,6 @@ export function placeChatInputs(
     const inputItems = buildPendingInputItems(
       [input],
       undefined,
-      orderedQueue,
       props.workspaceSyncPendingRunIds,
       props.workerSetupPending,
       props.messageRecovery,

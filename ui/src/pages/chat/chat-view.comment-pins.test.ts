@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
+import { createChatViewFrame } from "./chat-view-frame.ts";
 import { createChatProps, renderChatPropsInto } from "./chat-view.test-helpers.ts";
 import { getTranscriptState } from "./components/chat-thread-interactions.ts";
 
@@ -27,6 +28,43 @@ function comment(id: string): ChatAttachment {
 }
 
 describe("chat comment pins", () => {
+  it("resolves saved sources from the transcript registry instead of unrelated matching DOM", async () => {
+    const container = createComposerContainer();
+    document.body.append(container);
+    const props = createChatProps({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "Selected passage" }] }],
+    });
+    renderChatPropsInto(container, props);
+    await waitForSolid(() =>
+      expect(props.transcript.messageElements?.elements.size).toBeGreaterThan(0),
+    );
+    const bubble = [...props.transcript.messageElements!.elements.values()][0]!;
+    const source = {
+      messageId: bubble.dataset.messageId!,
+      entryId: bubble.dataset.entryId,
+      start: 0,
+      end: 16,
+      text: "Selected passage",
+    };
+    const unrelated = document.createElement("div");
+    unrelated.className = "chat-bubble";
+    unrelated.dataset.messageId = source.messageId;
+    if (source.entryId) {
+      unrelated.dataset.entryId = source.entryId;
+    }
+    unrelated.textContent = "Different source";
+    container.querySelector(".chat-thread")!.prepend(unrelated);
+
+    const frame = createChatViewFrame(props, () => container);
+    const range = frame.resolveCommentSource(source);
+    expect(range?.toString()).toBe("Selected passage");
+    expect(bubble.contains(range!.startContainer)).toBe(true);
+
+    renderChatPropsInto(container, { ...props, messages: [] });
+    await waitForSolid(() => expect(bubble.isConnected).toBe(false));
+    expect(frame.resolveCommentSource(source)).toBeUndefined();
+  });
+
   it("exposes only connected pins fully inside the transcript and viewport, then retires its handle", async () => {
     vi.stubGlobal("requestAnimationFrame", () => 1);
     vi.stubGlobal("cancelAnimationFrame", () => {});

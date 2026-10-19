@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { createCipheriv, createHash, randomUUID } from "node:crypto";
 import { createWriteStream, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
+import type { Profiler } from "node:inspector";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
@@ -10,6 +11,7 @@ import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts
 import { stripInboundMetadata } from "../../src/auto-reply/reply/strip-inbound-meta.js";
 import { prepareSessionEventMetrics } from "../../src/gateway/session-event-metrics.js";
 import { encodePngRgba } from "../../src/media/png-encode.js";
+import { GatewaySessionRowEvents } from "../../ui/src/api/gateway-session-row-events.ts";
 import { applyMockOpenAiModelConfig } from "../e2e/lib/fixtures/mock-openai-config.mjs";
 import {
   readMockUserText,
@@ -19,6 +21,9 @@ import { readBody } from "../e2e/lib/mock-openai-http.mjs";
 import { stopChild } from "../lib/gateway-bench-child.ts";
 import { startGatewayBenchDiagnostics } from "../lib/gateway-bench-diagnostics.ts";
 import {
+  controlGatewayProfile,
+  readGatewayCpuProfile,
+  readGatewayHeapProfile,
   readGatewayCpuUsage,
   startGatewayDiagnostics,
   readGatewayResources,
@@ -38,6 +43,11 @@ const { values } = parseArgs({
     "state-dir": { type: "string" },
     allocations: { type: "boolean", default: false },
     diagnostics: { type: "boolean", default: false },
+    "cpu-profile": { type: "boolean", default: false },
+    "trace-gc": { type: "boolean", default: false },
+    "stream-start-diagnostics": { type: "boolean", default: false },
+    "stream-start-allocations": { type: "boolean", default: false },
+    "active-work-diagnostics": { type: "boolean", default: false },
     scenario: { type: "string", default: "transcript-broadcast" },
     revision: { type: "string" },
     operations: { type: "string" },
@@ -49,15 +59,19 @@ const { values } = parseArgs({
     clients: { type: "string", default: "60" },
     "exact-clients": { type: "string" },
     "activity-summaries": { type: "boolean", default: false },
+    "recap-burst-repeats": { type: "string", default: "0" },
+    "recap-burst-interval-ms": { type: "string", default: "50" },
     runs: { type: "string", default: "20" },
     rounds: { type: "string", default: "5" },
     chunks: { type: "string", default: "100" },
+    "chunk-interval-ms": { type: "string", default: "10" },
     "prompt-kib": { type: "string", default: "128" },
     "heap-snapshot": { type: "boolean", default: false },
     "session-row-deltas": { type: "boolean", default: false },
     "session-envelope-refs": { type: "boolean", default: false },
     "start-at": { type: "string" },
     "list-interval-ms": { type: "string", default: "0" },
+    "poll-seed": { type: "string" },
   },
 });
 if (!values["state-dir"]) {
@@ -88,7 +102,12 @@ if (
 const retentionScenario = scenario === "attempt-retention";
 const turnScenario =
   scenario === "chat.send" || scenario === "transcript-broadcast" || retentionScenario;
-if (!values.allocations && scenario !== "transcript-broadcast" && !retentionScenario) {
+if (
+  !values.allocations &&
+  !values["stream-start-allocations"] &&
+  scenario !== "transcript-broadcast" &&
+  !retentionScenario
+) {
   throw new Error("--scenario requires --allocations");
 }
 const operations = integer(
@@ -108,7 +127,34 @@ if (exactClients > clientCount) {
 const runCount = scenario === "chat.send" ? 1 : integer(values.runs, "--runs");
 const rounds = integer(values.rounds, "--rounds");
 const chunkCount = integer(values.chunks, "--chunks");
+const chunkIntervalMs = integer(values["chunk-interval-ms"], "--chunk-interval-ms", 0);
 const listIntervalMs = integer(values["list-interval-ms"], "--list-interval-ms", 0);
+const recapBurstRepeats = integer(values["recap-burst-repeats"], "--recap-burst-repeats", 0);
+const recapBurstIntervalMs = integer(
+  values["recap-burst-interval-ms"],
+  "--recap-burst-interval-ms",
+  0,
+);
+if (recapBurstRepeats > 100 || recapBurstIntervalMs > 1000) {
+  throw new Error("recap burst limits are 100 repeats and a 1000 ms interval");
+}
+if (recapBurstRepeats && (!values["activity-summaries"] || !turnScenario)) {
+  throw new Error("--recap-burst-repeats requires --activity-summaries and a turn scenario");
+}
+if ((values["cpu-profile"] || values["stream-start-diagnostics"]) && !turnScenario) {
+  throw new Error("--cpu-profile and --stream-start-diagnostics require a turn scenario");
+}
+if (values["stream-start-allocations"] && (!turnScenario || values.allocations)) {
+  throw new Error("--stream-start-allocations requires a turn scenario without --allocations");
+}
+if (values["poll-seed"] !== undefined && !listIntervalMs) {
+  throw new Error("--poll-seed requires --list-interval-ms");
+}
+const recordListRequests =
+  values.diagnostics ||
+  values["stream-start-diagnostics"] ||
+  values["cpu-profile"] ||
+  values["poll-seed"] !== undefined;
 const startAt = values["start-at"] ? integer(values["start-at"], "--start-at") : undefined;
 if (values["session-envelope-refs"] && !values["session-row-deltas"]) {
   throw new Error("--session-envelope-refs requires --session-row-deltas");
@@ -147,6 +193,13 @@ cfg.plugins = {
   ...cfg.plugins,
   entries: { "memory-core": { config: { dreaming: { enabled: false } } } },
 };
+if (values["active-work-diagnostics"]) {
+  if (scenario !== "transcript-broadcast") {
+    throw new Error("--active-work-diagnostics requires --scenario transcript-broadcast");
+  }
+  cfg.diagnostics = { ...cfg.diagnostics, enabled: true };
+  cfg.plugins.entries["diagnostics-prometheus"] = { enabled: true };
+}
 let reloadPluginId: string | undefined;
 if (scenario === "plugins.reload") {
   const plugin = writePluginFixtures(output, { count: 1, activationOnStartup: true });
@@ -219,12 +272,62 @@ let toolResults = 0;
 let outputLimitResponses = 0;
 let recoveredResponses = 0;
 let imageRequests = 0;
+let activeWorkCounts: { running: number; queued: number } | undefined;
+async function readActiveWorkCounts() {
+  let lastCounts: { running: number; queued: number } | undefined;
+  for (let attempt = 0; attempt < 50; attempt++) {
+    const response = await fetch(`http://127.0.0.1:${port}/api/diagnostics/prometheus`, {
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) {
+      throw new Error(`active-work metrics scrape failed: HTTP ${response.status}`);
+    }
+    const metrics = await response.text();
+    const running = metrics.match(/^openclaw_sessions_active\{state="running"\} (\d+)$/mu);
+    const queued = metrics.match(/^openclaw_sessions_active\{state="queued"\} (\d+)$/mu);
+    if (running && queued) {
+      lastCounts = { running: Number(running[1]), queued: Number(queued[1]) };
+      if (lastCounts.running === runCount && lastCounts.queued === 0) {
+        writeFileSync(path.join(output, `held-streams-${cohort?.id}.prom`), metrics);
+        return lastCounts;
+      }
+    }
+    await delay(100);
+  }
+  throw new Error(
+    `active-work exporter did not observe ${runCount} running and zero queued held streams: ${JSON.stringify(lastCounts)}`,
+  );
+}
+type StreamStartPhases = {
+  admissionStartedAtEpochMs: number;
+  firstPrimaryRequestAtEpochMs?: number;
+  lastPrimaryRequestAtEpochMs?: number;
+  streamsReleasedAtEpochMs?: number;
+  firstPrimarySseWrittenAtEpochMs?: number;
+  completedAtEpochMs?: number;
+};
+const epochNow = () => performance.timeOrigin + performance.now();
+function createPollRandom(round: number, client: number) {
+  if (values["poll-seed"] === undefined) {
+    return undefined;
+  }
+  let state = createHash("sha256")
+    .update(JSON.stringify([values["poll-seed"], round, client]))
+    .digest()
+    .readUInt32LE();
+  return () => {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    return state / 0x1_0000_0000;
+  };
+}
 let cohort:
   | {
       id: string;
       arrivals: Set<number>;
       toolCallIds: Set<string>;
       outputLimited: Set<string>;
+      phases: StreamStartPhases;
+      beforeRelease?: () => Promise<void>;
       ready: Promise<void>;
       release: () => void;
       reject: (error: Error) => void;
@@ -325,7 +428,16 @@ const mock = createServer((req, res) => {
           throw new Error(`duplicate primary stream ${index} in cohort ${cohort.id}`);
         }
         cohort.arrivals.add(index);
+        cohort.phases.firstPrimaryRequestAtEpochMs ??= epochNow();
+        cohort.phases.lastPrimaryRequestAtEpochMs = epochNow();
         if (cohort.arrivals.size === runCount) {
+          if (values["active-work-diagnostics"]) {
+            activeWorkCounts = await readActiveWorkCounts();
+          }
+          if (cohort.beforeRelease) {
+            await cohort.beforeRelease();
+          }
+          cohort.phases.streamsReleasedAtEpochMs = epochNow();
           cohort.release();
         }
         await cohort.ready;
@@ -368,7 +480,13 @@ const mock = createServer((req, res) => {
           },
         ];
       }
-      let answer = toolAnswer ?? (primary || continuation ? events : utilityEvents);
+      let answer =
+        toolAnswer ??
+        (facts.purpose === "activity-recap"
+          ? responseEvents([`Synthetic recap for cohort ${cohort?.id}.`])
+          : primary || continuation
+            ? events
+            : utilityEvents);
       if (retentionScenario && continuation && cohort) {
         if (!cohort.outputLimited.has(toolOutput.call_id)) {
           cohort.outputLimited.add(toolOutput.call_id);
@@ -394,9 +512,12 @@ const mock = createServer((req, res) => {
         if (res.destroyed) {
           break;
         }
+        if (primary && cohort) {
+          cohort.phases.firstPrimarySseWrittenAtEpochMs ??= epochNow();
+        }
         res.write(`data: ${JSON.stringify(event)}\n\n`);
         if ((primary || continuation) && event.type === "response.output_text.delta") {
-          await delay(10);
+          await delay(chunkIntervalMs);
         }
       }
       res.end("data: [DONE]\n\n");
@@ -432,6 +553,17 @@ let lastSubscriberEventAt = performance.now();
 let closing = false;
 let subscriberFailure: Error | undefined;
 let recapRequests = 0;
+type RecapReceipt = {
+  client: number;
+  key: string;
+  state: unknown;
+  text: unknown;
+  updatedAt: unknown;
+  receivedAtEpochMs: number;
+};
+const perClientRecaps: Map<string, RecapReceipt>[] = [];
+const recapReceipts: RecapReceipt[] = [];
+let recapPhase: Awaited<ReturnType<typeof runRecapBurst>> | undefined;
 let gateway: ChildProcess | undefined;
 function fieldBytes(record: Record<string, unknown>) {
   return Object.fromEntries(
@@ -573,13 +705,95 @@ async function rpc(
   onResponse?.(response.id);
   return response.payload;
 }
-async function runRound(client: ReturnType<typeof createGatewayWsClient>) {
+function summarizeCpuProfile(profilePath: string) {
+  const profile: Profiler.Profile = JSON.parse(readFileSync(profilePath, "utf8"));
+  const nodes = new Map(profile.nodes.map((node) => [node.id, node.callFrame]));
+  const childNodes = new Map(profile.nodes.map((node) => [node.id, node.children ?? []]));
+  const broadcastNodes = new Set<number>();
+  const pending = profile.nodes
+    .filter((node) => node.callFrame.functionName === "broadcastInternal")
+    .map((node) => node.id);
+  while (pending.length) {
+    const id = pending.pop()!;
+    broadcastNodes.add(id);
+    pending.push(...(childNodes.get(id) ?? []));
+  }
+  let broadcastSampledMs = 0;
+  const sites = new Map<
+    string,
+    { frame: Profiler.ProfileNode["callFrame"]; sampledSelfMs: number }
+  >();
+  for (const [index, id] of (profile.samples ?? []).entries()) {
+    const frame = nodes.get(id);
+    if (!frame) {
+      continue;
+    }
+    const key = JSON.stringify(frame);
+    const site = sites.get(key) ?? { frame, sampledSelfMs: 0 };
+    const sampledMs = (profile.timeDeltas?.[index] ?? 1000) / 1000;
+    site.sampledSelfMs += sampledMs;
+    if (broadcastNodes.has(id)) {
+      broadcastSampledMs += sampledMs;
+    }
+    sites.set(key, site);
+  }
+  return {
+    ...readGatewayCpuProfile(profilePath),
+    broadcastSampledMs,
+    topSelfTime: [...sites.values()]
+      .toSorted((left, right) => right.sampledSelfMs - left.sampledSelfMs)
+      .slice(0, 40),
+  };
+}
+async function runRound(client: ReturnType<typeof createGatewayWsClient>, measuredRound?: number) {
   if (retentionScenario) {
     // Retire each previous session generation so retained history is not the measurement.
     for (const key of keys) {
       await rpc(client, "sessions.reset", { key });
     }
   }
+  const child = gateway;
+  if (!child) {
+    throw new Error("owned Gateway is unavailable");
+  }
+  const profilePath =
+    measuredRound !== undefined && values["cpu-profile"]
+      ? path.join(output, `stream-start-${measuredRound}.cpuprofile`)
+      : undefined;
+  if (profilePath) {
+    await controlGatewayProfile(child, "cpu", "start", profilePath);
+  }
+  const heapProfilePath =
+    measuredRound !== undefined && values["stream-start-allocations"]
+      ? path.join(output, `stream-start-${measuredRound}.heapprofile`)
+      : undefined;
+  const deliveredSessionEvents = () =>
+    (perClientCounters[0]?.get("session.message") ?? 0) +
+    (perClientCounters[0]?.get("sessions.changed") ?? 0);
+  const eventsBeforeProfile = deliveredSessionEvents();
+  if (heapProfilePath) {
+    await controlGatewayProfile(child, "heap", "start", heapProfilePath);
+  }
+  let finishAdmissionDiagnostics =
+    measuredRound !== undefined && values["stream-start-diagnostics"]
+      ? await startGatewayDiagnostics(child, `stream-admission-${measuredRound}`)
+      : undefined;
+  if (finishAdmissionDiagnostics) {
+    // Prime the 20 ms loop-delay timer before admitting the measured burst.
+    await delay(25);
+    await readGatewayCpuUsage(child);
+  }
+  let finishReleaseDiagnostics: typeof finishAdmissionDiagnostics;
+  let admissionDiagnostics: ReturnType<ReturnType<typeof startGatewayBenchDiagnostics>> | undefined;
+  let capture:
+    | {
+        cpuProfile?: ReturnType<typeof summarizeCpuProfile>;
+        heapProfile?: ReturnType<typeof readGatewayHeapProfile>;
+        observedSessionPublications?: number;
+        admissionDiagnostics?: typeof admissionDiagnostics;
+        releaseDiagnostics?: typeof admissionDiagnostics;
+      }
+    | undefined;
   let release!: () => void;
   let reject!: (error: Error) => void;
   const cohortReady = new Promise<void>((resolve, rejectReady) => {
@@ -591,11 +805,49 @@ async function runRound(client: ReturnType<typeof createGatewayWsClient>) {
     arrivals: new Set(),
     toolCallIds: new Set(),
     outputLimited: new Set(),
+    phases: { admissionStartedAtEpochMs: epochNow() },
+    beforeRelease: finishAdmissionDiagnostics
+      ? async () => {
+          admissionDiagnostics = await finishAdmissionDiagnostics?.();
+          finishAdmissionDiagnostics = undefined;
+          finishReleaseDiagnostics = await startGatewayDiagnostics(
+            child,
+            `stream-release-${measuredRound}`,
+          );
+          await delay(25);
+          await readGatewayCpuUsage(child);
+        }
+      : undefined,
     ready: cohortReady,
     release,
     reject,
   };
   const current = cohort;
+  // Include the first response processing after the mock releases the whole cohort.
+  const captureWork =
+    profilePath || heapProfilePath || finishAdmissionDiagnostics
+      ? (async () => {
+          try {
+            await cohortReady;
+            await delay(500);
+          } finally {
+            if (finishAdmissionDiagnostics) {
+              admissionDiagnostics = await finishAdmissionDiagnostics();
+            }
+            const releaseDiagnostics = await finishReleaseDiagnostics?.();
+            capture = { admissionDiagnostics, releaseDiagnostics };
+            if (heapProfilePath) {
+              await controlGatewayProfile(child, "heap", "stop", heapProfilePath);
+              capture.heapProfile = readGatewayHeapProfile(heapProfilePath);
+              capture.observedSessionPublications = deliveredSessionEvents() - eventsBeforeProfile;
+            }
+            if (profilePath) {
+              await controlGatewayProfile(child, "cpu", "stop", profilePath);
+              capture.cpuProfile = summarizeCpuProfile(profilePath);
+            }
+          }
+        })()
+      : undefined;
   const timeout = setTimeout(
     () =>
       current.reject(
@@ -606,9 +858,8 @@ async function runRound(client: ReturnType<typeof createGatewayWsClient>) {
     45_000,
   );
   try {
-    await Promise.all([
-      cohortReady,
-      ...keys.map(async (sessionKey, index) => {
+    const turns = Promise.all(
+      keys.map(async (sessionKey, index) => {
         const runId = randomUUID();
         const image = retentionScenario
           ? promptContent.update(Buffer.alloc(256 * 128 * 4))
@@ -650,10 +901,15 @@ async function runRound(client: ReturnType<typeof createGatewayWsClient>) {
           throw new Error(`agent.wait: ${JSON.stringify(result)}`);
         }
       }),
-    ]);
+    ).then(() => {
+      current.phases.completedAtEpochMs = epochNow();
+    });
+    await Promise.all([cohortReady, captureWork, turns]);
+    return { phases: current.phases, ...capture };
   } finally {
     clearTimeout(timeout);
     current.release();
+    await captureWork;
   }
 }
 async function drainEvents() {
@@ -666,6 +922,168 @@ async function drainEvents() {
     await delay(50);
   }
   throw new Error("model streams and subscriber events did not drain within 15s");
+}
+async function ensureRecaps(client: ReturnType<typeof createGatewayWsClient>) {
+  const states: unknown[] = [];
+  for (let offset = 0; offset < keys.length; offset += 20) {
+    const batch = keys.slice(offset, offset + 20);
+    const result = await rpc(client, "sessions.activitySummary.ensure", {
+      sessions: batch.map((key) => ({ key })),
+    });
+    if (
+      !isRecord(result) ||
+      !Array.isArray(result.sessions) ||
+      result.sessions.length !== batch.length ||
+      result.sessions.some(
+        (row: unknown) =>
+          !isRecord(row) ||
+          !isRecord(row.activitySummary) ||
+          row.activitySummary.state === "unavailable",
+      )
+    ) {
+      throw new Error("sessions.activitySummary.ensure did not admit the measured sessions");
+    }
+    for (const row of result.sessions) {
+      states.push(row.activitySummary.state);
+    }
+  }
+  return states;
+}
+async function waitForCurrentRecaps(text: string, since = 0, pendingKeys: string[] = keys) {
+  const started = performance.now();
+  while (performance.now() - started < 15_000) {
+    assertGatewayAlive();
+    if (
+      perClientRecaps.every((rows) =>
+        keys.every((key) => {
+          const row = rows.get(key);
+          return (
+            row?.state === "current" &&
+            row.text === text &&
+            (!pendingKeys.includes(key) || row.receivedAtEpochMs >= since)
+          );
+        }),
+      )
+    ) {
+      return;
+    }
+    await delay(25);
+  }
+  throw new Error("latest current recap did not reach every subscriber within 15s");
+}
+async function runRecapBurst(
+  client: ReturnType<typeof createGatewayWsClient>,
+  measuredRound?: number,
+) {
+  const child = gateway;
+  if (!child) {
+    throw new Error("owned Gateway is unavailable");
+  }
+  const text = `Synthetic recap for cohort ${cohort?.id}.`;
+  await ensureRecaps(client);
+  await waitForCurrentRecaps(text);
+  await drainEvents();
+  const initial = sessionEventSizesSnapshot();
+  const initialModelRequests = recapRequests;
+  const profilePath =
+    values["cpu-profile"] && measuredRound !== undefined
+      ? path.join(output, `recap-ensure-${measuredRound}.cpuprofile`)
+      : undefined;
+  if (profilePath) {
+    await controlGatewayProfile(child, "cpu", "start", profilePath);
+  }
+  const beforeRepeatCpu = await readGatewayCpuUsage(child);
+  const startedAtEpochMs = epochNow();
+  const repeats = [];
+  for (let repeat = 0; repeat < recapBurstRepeats; repeat++) {
+    const started = epochNow();
+    const responseStates = await ensureRecaps(client);
+    repeats.push({ startedAtEpochMs: started, completedAtEpochMs: epochNow(), responseStates });
+    if (repeat + 1 < recapBurstRepeats) {
+      await delay(Math.max(0, recapBurstIntervalMs - (epochNow() - started)));
+    }
+  }
+  const lastRepeat = repeats.at(-1);
+  await waitForCurrentRecaps(
+    text,
+    lastRepeat?.startedAtEpochMs,
+    keys.filter((_, index) => lastRepeat?.responseStates[index] === "updating"),
+  );
+  await drainEvents();
+  const completedAtEpochMs = epochNow();
+  const repeatCpu = measureGatewayCpuUsage(beforeRepeatCpu, await readGatewayCpuUsage(child));
+  if (profilePath) {
+    await controlGatewayProfile(child, "cpu", "stop", profilePath);
+  }
+  const noopSizes = Object.fromEntries(
+    [...sessionEventSizes].map(([bucket, sizes]) => [
+      bucket,
+      {
+        frames: sizes.frames - (initial[bucket]?.frames ?? 0),
+        bytes: sizes.bytes - (initial[bucket]?.bytes ?? 0),
+      },
+    ]),
+  );
+  for (const key of keys) {
+    const result = await rpc(client, "sessions.describe", { key });
+    const row = isRecord(result) && isRecord(result.session) ? result.session : undefined;
+    const summary = row && isRecord(row.activitySummary) ? row.activitySummary : undefined;
+    if (
+      !summary ||
+      summary.state !== "current" ||
+      summary.text !== text ||
+      perClientRecaps.some((rows) => rows.get(key)?.updatedAt !== summary.updatedAt)
+    ) {
+      throw new Error(`delivered recap differs from the final authoritative row for ${key}`);
+    }
+  }
+  const latestValueDelivery = perClientRecaps.flatMap((_, clientIndex) =>
+    keys.map((key) => {
+      const receipt = recapReceipts.find(
+        (candidate) =>
+          candidate.client === clientIndex &&
+          candidate.key === key &&
+          candidate.state === "current" &&
+          candidate.text === text,
+      );
+      if (!receipt || typeof receipt.updatedAt !== "number") {
+        throw new Error(`client ${clientIndex} missed the final activity-summary event for ${key}`);
+      }
+      return {
+        client: clientIndex,
+        key,
+        committedToReceivedMs: receipt.receivedAtEpochMs - receipt.updatedAt,
+      };
+    }),
+  );
+  return {
+    latestValueDelivery,
+    finalRecapsMatch: true,
+    turnAndInitialRecap: { modelRequests: initialModelRequests, sessionEventSizes: initial },
+    repeatedEnsure: {
+      repeats,
+      intervalMs: recapBurstIntervalMs,
+      startedAtEpochMs,
+      completedAtEpochMs,
+      ...repeatCpu,
+      ...(profilePath ? { cpuProfile: summarizeCpuProfile(profilePath) } : {}),
+      modelRequests: recapRequests - initialModelRequests,
+      sessionEventSizes: noopSizes,
+      finalReceiptAfterLastEnsureMs: lastRepeat
+        ? Math.max(
+            0,
+            ...perClientRecaps.flatMap((rows) =>
+              keys.map((key) => rows.get(key)!.receivedAtEpochMs - lastRepeat.completedAtEpochMs),
+            ),
+          )
+        : null,
+    },
+  };
+}
+function sessionEventSizesSnapshot() {
+  return Object.fromEntries(
+    [...sessionEventSizes].map(([bucket, sizes]) => [bucket, { ...sizes }]),
+  );
 }
 let cleanupPromise: Promise<void> | undefined;
 function cleanup() {
@@ -704,6 +1122,7 @@ try {
   await ready(mockPort, "/health");
   gateway = launch(
     buildGatewayBenchChildArgs(values.entry, port, [
+      ...(values["trace-gc"] ? ["--trace-gc"] : []),
       "--import",
       "./scripts/tsx.mjs",
       "--import",
@@ -722,6 +1141,9 @@ try {
     assertGatewayAlive();
     const clientCounters = new Map<string, number>();
     perClientCounters.push(clientCounters);
+    const recapRows = new Map<string, RecapReceipt>();
+    perClientRecaps.push(recapRows);
+    const rowEvents = new GatewaySessionRowEvents();
     let previousSeq: number | undefined;
     let receivedFrameBytes = 0;
     const client = createGatewayWsClient({
@@ -737,6 +1159,29 @@ try {
           previousSeq = event.seq;
         }
         const payload = isRecord(event.payload) ? event.payload : undefined;
+        if (values["activity-summaries"]) {
+          const decoded = rowEvents.project(event);
+          if (decoded.missingBaseline) {
+            subscriberFailure ??= new Error(`client ${index} lost its session row baseline`);
+          }
+          const facts = isRecord(decoded.event.payload) ? decoded.event.payload : undefined;
+          const row = facts && isRecord(facts.session) ? facts.session : undefined;
+          const summary = row && isRecord(row.activitySummary) ? row.activitySummary : undefined;
+          if (summary && typeof facts?.sessionKey === "string" && keys.includes(facts.sessionKey)) {
+            const receipt = {
+              client: index,
+              key: facts.sessionKey,
+              state: summary.state,
+              text: summary.text,
+              updatedAt: summary.updatedAt,
+              receivedAtEpochMs: epochNow(),
+            };
+            recapRows.set(facts.sessionKey, receipt);
+            if (facts.reason === "activity-summary") {
+              recapReceipts.push(receipt);
+            }
+          }
+        }
         if (index === 0 && !initialFullFrame && event.event === "sessions.changed" && payload) {
           const sizes = measureFrameFields(event, payload, receivedFrameBytes);
           if (sizes.duplicateEnvelopeFields !== undefined) {
@@ -841,31 +1286,13 @@ try {
     throw new Error("no sender client");
   }
   console.log("PHASE subscribed-and-reset");
-  const runScenario = async () => {
+  const runScenario = async (measuredRound?: number) => {
     if (turnScenario) {
-      await runRound(sender);
+      const streamStart = await runRound(sender, measuredRound);
       if (values["activity-summaries"]) {
-        for (let offset = 0; offset < keys.length; offset += 20) {
-          const batch = keys.slice(offset, offset + 20);
-          const result = await rpc(sender, "sessions.activitySummary.ensure", {
-            sessions: batch.map((key) => ({ key })),
-          });
-          if (
-            !isRecord(result) ||
-            !Array.isArray(result.sessions) ||
-            result.sessions.length !== batch.length ||
-            result.sessions.some(
-              (row: unknown) =>
-                !isRecord(row) ||
-                !isRecord(row.activitySummary) ||
-                row.activitySummary.state === "unavailable",
-            )
-          ) {
-            throw new Error("sessions.activitySummary.ensure did not admit the measured sessions");
-          }
-        }
+        recapPhase = await runRecapBurst(sender, measuredRound);
       }
-      return;
+      return streamStart;
     }
     for (let operation = 0; operation < operations; operation++) {
       if (scenario === "sessions.list" || scenario === "subscribe") {
@@ -903,6 +1330,7 @@ try {
         }
       }
     }
+    return undefined;
   };
   await runScenario();
   console.log("PHASE warmed");
@@ -936,6 +1364,9 @@ try {
     recoveredResponses = 0;
     imageRequests = 0;
     recapRequests = 0;
+    recapReceipts.length = 0;
+    recapPhase = undefined;
+    activeWorkCounts = undefined;
     const finishGatewayDiagnostics = values.diagnostics
       ? await startGatewayDiagnostics(gateway)
       : undefined;
@@ -945,6 +1376,8 @@ try {
     const before = await readGatewayCpuUsage(gateway);
     measuring = true;
     const listLatencies: number[] = [];
+    const initialPollPhasesMs: number[] = [];
+    let streamStart: Awaited<ReturnType<typeof runRound>> | undefined;
     const listRequests: Array<{
       method: "sessions.list";
       responseId: string;
@@ -964,6 +1397,12 @@ try {
         ? Promise.all(
             clients
               .map(async (client, clientIndex) => {
+                const random = createPollRandom(round, clientIndex);
+                const initialPhaseMs = random ? random() * listIntervalMs : 0;
+                initialPollPhasesMs[clientIndex] = initialPhaseMs;
+                if (random) {
+                  await Promise.race([delay(initialPhaseMs, undefined, { ref: false }), stopped]);
+                }
                 while (true) {
                   if (!polling) {
                     break;
@@ -974,7 +1413,7 @@ try {
                     client,
                     "sessions.list",
                     { rowMode: "compact", limit, archived: "all" },
-                    values.diagnostics
+                    recordListRequests
                       ? (id) => {
                           responseId = id;
                         }
@@ -993,7 +1432,7 @@ try {
                   const ended = performance.now();
                   const durationMs = ended - started;
                   listLatencies.push(durationMs);
-                  if (values.diagnostics) {
+                  if (recordListRequests) {
                     listRequests.push({
                       method: "sessions.list",
                       responseId,
@@ -1004,8 +1443,9 @@ try {
                       durationMs,
                     });
                   }
+                  const intervalMs = random ? listIntervalMs * (0.5 + random()) : listIntervalMs;
                   await Promise.race([
-                    delay(Math.max(0, listIntervalMs - (performance.now() - started)), undefined, {
+                    delay(Math.max(0, intervalMs - (performance.now() - started)), undefined, {
                       ref: false,
                     }),
                     stopped,
@@ -1022,7 +1462,7 @@ try {
           )
         : undefined;
       try {
-        await runScenario();
+        streamStart = await runScenario(round);
         await drainEvents();
       } finally {
         polling = false;
@@ -1040,6 +1480,9 @@ try {
       : undefined;
     if (!values.allocations) {
       await workload();
+    }
+    if (listIntervalMs && listLatencies.length === 0) {
+      throw new Error("No sessions.list samples collected; shorten --list-interval-ms");
     }
     measuring = false;
     const diagnostics = finishGatewayDiagnostics
@@ -1110,9 +1553,12 @@ try {
       scenario,
       allocation,
       diagnostics,
+      streamStart,
+      activeWorkCounts,
       toolCalls,
       toolResults,
       recapRequests,
+      ...(values["activity-summaries"] ? { recapPhase, recapReceipts: [...recapReceipts] } : {}),
       ...(retentionScenario
         ? { outputLimitResponses, recoveredResponses, imageRequests, retainedResources }
         : {}),
@@ -1129,7 +1575,8 @@ try {
               p95: sortedListLatencies[Math.ceil(listLatencies.length * 0.95) - 1],
               p99: sortedListLatencies[Math.ceil(listLatencies.length * 0.99) - 1],
               latencies: listLatencies,
-              ...(values.diagnostics
+              ...(values["poll-seed"] !== undefined ? { initialPollPhasesMs } : {}),
+              ...(recordListRequests
                 ? {
                     requests: listRequests,
                     p99Request: listRequests.toSorted((a, b) => a.durationMs - b.durationMs)[
@@ -1182,14 +1629,23 @@ try {
     sessionRowDeltas: values["session-row-deltas"],
     sessionEnvelopeRefs: values["session-envelope-refs"],
     listIntervalMs,
+    pollSeed: values["poll-seed"] ?? null,
     diagnostics: values.diagnostics,
+    cpuProfile: values["cpu-profile"],
+    traceGc: values["trace-gc"],
+    streamStartDiagnostics: values["stream-start-diagnostics"],
+    streamStartAllocations: values["stream-start-allocations"],
+    activeWorkDiagnostics: values["active-work-diagnostics"],
     measurementStartedAt,
     initialFullFrame,
     clientCount,
     exactClients,
     activitySummaries: values["activity-summaries"],
+    recapBurstRepeats,
+    recapBurstIntervalMs,
     runCount,
     chunks: chunkCount,
+    chunkIntervalMs,
     peakStreams,
     streamRequests,
     fixture,

@@ -112,6 +112,9 @@ export function createChatState<TState extends ChatPageHost>(
         return;
       }
       disposed = true;
+      if (stateValue) {
+        chatOutboxOwner(stateValue).admissions.cancelRequests(stateValue);
+      }
       cancelRenderLifecycleScope();
       attachmentReadsValue.abortReads();
       // Flush while stateValue still points at the active session. Composer
@@ -192,6 +195,7 @@ export function createChatState<TState extends ChatPageHost>(
     attach(state: TState) {
       releaseRunPublication?.();
       if (stateValue && stateValue !== state) {
+        chatOutboxOwner(stateValue).admissions.cancelRequests(stateValue);
         privateDraftReview?.controller.abort();
         disposeSelectedSessionMessageSubscription(stateValue);
         releaseChatMediaResourceOwner(stateValue);
@@ -301,12 +305,15 @@ export function createChatState<TState extends ChatPageHost>(
       }
     },
 
-    prepareRender() {
+    publishPendingRunState() {
       const state = stateValue;
       if (state?.chatStreamRenderFrame != null) {
         cancelChatStreamRenderFrame(state);
         publishChatRunState(state);
       }
+    },
+
+    captureRenderChanges() {
       // Every owner-driven frame captures transcript changes before its DOM commit.
       captureRenderLifecycleChanges();
     },

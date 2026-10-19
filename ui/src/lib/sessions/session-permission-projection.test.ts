@@ -7,6 +7,7 @@ import {
   createSessionCapabilityHarness,
   sessionsResult,
 } from "./session-capability.test-support.ts";
+import type { SessionListScope } from "./session-capability.ts";
 
 const scope = {
   agentId: "main",
@@ -76,7 +77,7 @@ function harness(replies: Reply[]) {
     sessions,
     request,
     rows: () => sessions.state.result?.sessions,
-    managed: (query = scope) => sessions.listSnapshot(query),
+    managed: (query: SessionListScope = scope) => sessions.listSnapshot(query),
     event: (session: GatewaySessionRow, agentId = "main") =>
       capability.emitEvent({
         type: "event",
@@ -93,6 +94,46 @@ function harness(replies: Reply[]) {
 }
 
 describe("permission projection across canonical session lists", () => {
+  it.each(["sidebar", "dashboard"] as const)(
+    "retains known permission after a %s list omits it and accepts a full-row clear",
+    async (rowMode) => {
+      const initial = row("agent:main:partial-permission");
+      const partial: GatewaySessionRow = {
+        key: initial.key,
+        sessionId: initial.sessionId,
+        kind: initial.kind,
+        rowMode,
+        updatedAt: 3,
+        label: "Updated list label",
+      };
+      const cleared: GatewaySessionRow = {
+        key: initial.key,
+        sessionId: initial.sessionId,
+        kind: initial.kind,
+        updatedAt: 4,
+      };
+      const { sessions, rows, managed, event } = harness([
+        sessionsResult([initial], 1),
+        sessionsResult([partial], 3),
+        sessionsResult([cleared], 4),
+      ]);
+      await sessions.refresh(primary);
+      const selected = sessions.observeRow({ key: initial.key, agentId: "main" }, () => {});
+      onTestFinished(selected.dispose);
+      event({ ...initial, updatedAt: 2, permissionMode: "full" });
+      expect(selected.row?.permissionMode).toBe("full");
+
+      await sessions.refreshList({ ...scope, rowMode });
+      expect(managed({ ...scope, rowMode }).result?.sessions[0]?.label).toBe("Updated list label");
+      expect(rows()?.[0]?.permissionMode).toBe("full");
+      expect(selected.row?.permissionMode).toBe("full");
+
+      await sessions.refresh(primary);
+      expect(rows()?.[0]).not.toHaveProperty("permissionMode");
+      expect(selected.row).not.toHaveProperty("permissionMode");
+    },
+  );
+
   it.each([
     { name: "an explicit mode", permissionMode: "full" as const },
     { name: "the default mode", permissionMode: undefined },

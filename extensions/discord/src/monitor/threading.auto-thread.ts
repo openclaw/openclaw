@@ -102,7 +102,7 @@ export async function resolveDiscordAutoThreadReplyPlan(
         parentInheritanceEnabled: params.threadParentInheritanceEnabled,
       })
     : null;
-  return { ...deliveryPlan, createdThreadId, autoThreadContext };
+  return { ...deliveryPlan, autoThreadContext };
 }
 
 export async function maybeCreateDiscordAutoThread(

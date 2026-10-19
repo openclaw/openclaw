@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { lstatSync, readFileSync } from "node:fs";
 import path from "node:path";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { resolveMergeHeadDiffBase } from "./merge-head-diff-base.mjs";
 import { createNativeTypeScriptParser } from "./native-typescript.mts";
 import { walkTypeScriptTokens } from "./ts-guard-utils.mts";

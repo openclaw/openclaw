@@ -143,6 +143,59 @@ describe("session event wake target concurrency", () => {
     }
   });
 
+  it.each(["dispose", "drain"] as const)(
+    "retains a wake interrupted by %s for its successor",
+    async (action) => {
+      vi.useFakeTimers();
+      const finish = createDeferred();
+      let activeSignal: AbortSignal | undefined;
+      const handler = vi.fn(async (_request: WakeRequest, signal: AbortSignal) => {
+        activeSignal = signal;
+        await finish.promise;
+        throw new Error("interrupted wake preparation");
+      });
+      setSessionEventWakeHandler(handler);
+      const request = {
+        source: "exec-event" as const,
+        intent: "event" as const,
+        reason: "exec-event",
+        sessionKey: "agent:main:interrupted",
+        coalesceMs: 0,
+      };
+      const result = requestSessionEventWakeAndWait(request);
+      try {
+        await vi.advanceTimersByTimeAsync(1);
+        expect(handler).toHaveBeenCalledOnce();
+        if (action === "dispose") {
+          currentHandlerDisposer?.();
+        } else {
+          markGatewayRestartDraining();
+        }
+        expect(activeSignal?.aborted).toBe(action === "dispose");
+        finish.resolve();
+        await vi.advanceTimersByTimeAsync(0);
+        await expect(result).resolves.toEqual({
+          status: "skipped",
+          reason: action === "dispose" ? "handler-unavailable" : "gateway-draining",
+        });
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
+        resetGatewayWorkAdmission();
+        const replacement = vi.fn(async () => ({ status: "ran" as const, durationMs: 1 }));
+        setSessionEventWakeHandler(replacement);
+        await vi.runAllTimersAsync();
+        expect(replacement).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ reason: request.reason, sessionKey: request.sessionKey }),
+          expect.any(AbortSignal),
+        );
+        expect(handler).toHaveBeenCalledOnce();
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
+      } finally {
+        finish.resolve();
+        await vi.advanceTimersByTimeAsync(0);
+      }
+    },
+  );
+
   it.each([100, 5_000])(
     "preserves distinct target deadlines with a new %ims wake",
     async (delay) => {

@@ -1,4 +1,4 @@
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, For, Show, onSettled } from "solid-js";
 import type {
   ProjectRecord,
   TaskSuggestion,
@@ -34,6 +34,11 @@ export type ChatTaskSuggestionTrayProps = {
   taskSuggestionSwapDirection?: "next" | "previous";
   taskSuggestionSwapGeneration?: number;
   onNavigateTaskSuggestion?: (taskId: string, direction: "next" | "previous") => void;
+  onTaskSuggestionNavigationMount?: (
+    taskId: string,
+    direction: "next" | "previous",
+    button: HTMLButtonElement,
+  ) => void;
   onCopyTaskSuggestionPrompt?: (suggestion: TaskSuggestion) => void;
   canAcceptTaskSuggestions?: boolean;
   canDismissTaskSuggestions?: boolean;
@@ -159,24 +164,39 @@ function TaskSuggestionCard(props: {
           </button>
           <Show when={props.count > 1}>
             <For each={["previous", "next"] as const}>
-              {(direction) => (
-                <button
-                  class="task-suggestion__header-action"
-                  type="button"
-                  aria-label={t(
-                    direction === "previous"
-                      ? "chat.taskSuggestions.previous"
-                      : "chat.taskSuggestions.next",
-                  )}
-                  data-task-prev={direction === "previous" ? "" : undefined}
-                  data-task-next={direction === "next" ? "" : undefined}
-                  onClick={() =>
-                    props.view.onNavigateTaskSuggestion?.(props.suggestion.id, direction)
+              {(direction) => {
+                let button: HTMLButtonElement | undefined;
+                onSettled(() => {
+                  if (props.active && button) {
+                    props.view.onTaskSuggestionNavigationMount?.(
+                      props.suggestion.id,
+                      direction,
+                      button,
+                    );
                   }
-                >
-                  <Icon name={direction === "previous" ? "chevronLeft" : "chevronRight"} />
-                </button>
-              )}
+                });
+                return (
+                  <button
+                    ref={(element) => {
+                      button = element;
+                    }}
+                    class="task-suggestion__header-action"
+                    type="button"
+                    aria-label={t(
+                      direction === "previous"
+                        ? "chat.taskSuggestions.previous"
+                        : "chat.taskSuggestions.next",
+                    )}
+                    data-task-prev={direction === "previous" ? "" : undefined}
+                    data-task-next={direction === "next" ? "" : undefined}
+                    onClick={() =>
+                      props.view.onNavigateTaskSuggestion?.(props.suggestion.id, direction)
+                    }
+                  >
+                    <Icon name={direction === "previous" ? "chevronLeft" : "chevronRight"} />
+                  </button>
+                );
+              }}
             </For>
           </Show>
           <Show when={props.view.canDismissTaskSuggestions === true}>

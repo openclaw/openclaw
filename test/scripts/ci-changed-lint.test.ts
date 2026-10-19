@@ -433,7 +433,10 @@ describe("CI changed lint", () => {
         }).commands;
         expect(
           commands.find(({ args }) => args[0] === "check:control-ui-controllers")?.args,
-        ).toEqual(["check:control-ui-controllers", ...(staged ? ["--staged"] : [])]);
+        ).toEqual([
+          "check:control-ui-controllers",
+          ...(staged ? ["--staged"] : ["--base", "unavailable-base", "--no-merge-base"]),
+        ]);
       }
     },
   );
@@ -455,6 +458,9 @@ describe("CI changed lint", () => {
           },
         ).trim();
       write("ui/src/view.ts", "export {};\n");
+      for (const pattern of ["createEffect", "untrack", "addEventListener", "querySelector"]) {
+        write(`config/control-ui-${pattern}-baseline.txt`, "");
+      }
       git(source, ["init"]);
       git(source, ["add", "."]);
       git(source, ["commit", "-m", "base"]);

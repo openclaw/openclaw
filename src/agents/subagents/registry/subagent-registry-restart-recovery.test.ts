@@ -138,6 +138,40 @@ describe("subagent registry restart recovery", () => {
     }
   });
 
+  it("keeps one recovery owner when startup and a sweep overlap", async () => {
+    const preparation = createDeferred<number | undefined>();
+    const entered = createDeferred();
+    let preparations = 0;
+    const entry = run();
+    const { sweeper, finalizeInterruptedSubagentRun } = createSubagentSweeperHarness(
+      {
+        current: {
+          ...gatewayRuntime,
+          prepareRestartRecovery: () => {
+            if (++preparations === 1) {
+              entered.resolve();
+              return preparation.promise;
+            }
+            return undefined;
+          },
+        },
+      },
+      entry,
+    );
+    const startup = sweeper.recoverInterruptedRuns([entry]);
+    try {
+      await entered.promise;
+      await sweeper.recoverInterruptedRuns([entry]);
+      await sweeper.sweepOnce();
+      expect(finalizeInterruptedSubagentRun).not.toHaveBeenCalled();
+    } finally {
+      preparation.resolve(undefined);
+      await startup;
+      await sweeper.reset();
+    }
+    expect(finalizeInterruptedSubagentRun).toHaveBeenCalledOnce();
+  });
+
   it("abandons startup settlement if the Gateway changes while the breaker is checked", async () => {
     const preparation = createDeferred<number | undefined>();
     const entered = createDeferred();

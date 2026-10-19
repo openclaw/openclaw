@@ -14,6 +14,7 @@ import {
 } from "../../config/runtime-snapshot.js";
 import { defaultRuntime } from "../../runtime.js";
 import { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
+import * as hostedSetup from "../../system-agent/hosted-setup.runtime.js";
 import { SystemAgentInferenceUnavailableError } from "../../system-agent/inference-error.js";
 import { detectSetupInference } from "../../system-agent/setup-inference-detect.js";
 import type { ActivateSetupInferenceParams } from "../../system-agent/setup-inference.js";
@@ -80,6 +81,7 @@ async function makeVerificationContext() {
 
 async function runSensitiveChannelSetup(_channel: string, prompter: WizardPrompter) {
   await prompter.text({ message: "Bot token", sensitive: true });
+  return "applied" as const;
 }
 
 function stubEngineOverview() {
@@ -804,15 +806,13 @@ describe("openclaw.chat", () => {
   });
 
   it("persists only the mask marker for a sensitive hosted-wizard answer", async () => {
-    const engine = new SystemAgentChatEngine(
-      {
-        surface: "gateway",
-        verifiedInference: requireVerifiedInferenceFixture(),
-        deps: requireVerifiedInferenceDeps(),
-        runAgentTurn: async () => null,
-      },
-      { wizardDependencies: { runChannelSetupWizard: runSensitiveChannelSetup } },
-    );
+    vi.spyOn(hostedSetup, "runHostedChannelSetup").mockImplementationOnce(runSensitiveChannelSetup);
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      verifiedInference: requireVerifiedInferenceFixture(),
+      deps: requireVerifiedInferenceDeps(),
+      runAgentTurn: async () => null,
+    });
     const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
     const context = makeContext(sessions);
 

@@ -122,15 +122,22 @@ export function registerSessionsSendRequesterRetirementTests({
         }
         return {};
       });
-      const queueMessage = vi.fn(async () => {});
+      const queueMessage = vi.fn<EmbeddedAgentQueueHandle["queueMessage"]>(
+        async (_text, options) => {
+          const recorder = options?.userTurnTranscriptRecorder;
+          if (!recorder || !(await recorder.persistApproved())) {
+            throw new Error("Steering fixture did not commit the admitted guidance");
+          }
+        },
+      );
       const handle: EmbeddedAgentQueueHandle = {
-        ...createEmbeddedRunHandle({ runId, queueMessage }),
+        ...createEmbeddedRunHandle({ runId, queueMessage, supportsTranscriptCommitWait: true }),
         messageInjectionV2: {
           version: 2,
           isAvailable: () => true,
-          queueMessage: async (_text, _options, assertCurrent) => {
+          queueMessage: async (text, options, assertCurrent) => {
             assertCurrent?.();
-            await queueMessage();
+            await queueMessage(text, options);
           },
         },
       };

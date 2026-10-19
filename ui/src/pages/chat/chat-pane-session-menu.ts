@@ -13,6 +13,7 @@ import type {
   SidebarSessionMutationResult,
   SidebarSessionMutationScope,
 } from "../../components/app-sidebar-session-types.ts";
+import { hasModalSurface } from "../../components/overlay-registry.ts";
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
 import type { SessionMenuData } from "../../components/session-menu-actions.ts";
 import { hasSessionArchiveDescendants } from "../../components/session-menu-descendants.ts";
@@ -92,9 +93,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       !this.active ||
       !this.presented ||
       this.onboarding ||
-      document.openClawModalLayers?.size ||
-      // Shell modal DOM owns keyboard admission outside this pane.
-      document.querySelector(".shell-nav[aria-modal='true']")
+      hasModalSurface(this.element.ownerDocument)
     ) {
       return true;
     }
@@ -550,12 +549,6 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     header.renameSession = { key, sessionId, label };
     this.headerRenameInitialValue = resolveSessionRenameValue(row);
     header.renameValue = this.headerRenameInitialValue;
-    void this.awaitDomCommit().then(() => {
-      // The native pane transfers focus into the independently rendered header.
-      const input = this.element.querySelector<HTMLInputElement>(".chat-pane__session-title-input");
-      input?.focus();
-      input?.select();
-    });
   }
 
   protected cancelHeaderRename(): void {

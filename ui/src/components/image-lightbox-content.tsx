@@ -525,6 +525,9 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
     <>
       <style>{imageLightboxStyles}</style>
       <openclaw-modal-dialog
+        prop:initialFocus={() =>
+          [...focusables].find((element) => element.isConnected && element.autofocus) ?? null
+        }
         class="mobile-edge-to-edge viewport-edge-to-edge"
         label={
           props.mediaKind === "video"

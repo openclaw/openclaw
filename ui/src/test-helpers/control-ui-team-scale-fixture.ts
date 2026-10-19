@@ -67,6 +67,8 @@ type FixtureOptions = {
   sidebarListChurn?: boolean;
   sidebarLiveChurn?: boolean;
   sessionEventChurn?: boolean;
+  sessionEventDurationMs?: number;
+  sessionEventAncestorRefs?: boolean;
   duplicateBootReads?: boolean;
   closedMenuMembers?: boolean;
   largeSnapshot?: boolean;
@@ -591,7 +593,14 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     }
   }
   if (options.sessionEventChurn) {
-    liveEvents.splice(0, liveEvents.length, ...createTeamScaleSessionEvents(sessions, now));
+    liveEvents.splice(
+      0,
+      liveEvents.length,
+      ...createTeamScaleSessionEvents(sessions, now, {
+        durationMs: options.sessionEventDurationMs,
+        ancestorSessionKey: options.sessionEventAncestorRefs ? selectedSessionKey : undefined,
+      }),
+    );
   }
   return {
     scenario,

@@ -102,7 +102,6 @@ export type ChatPageHost = ChatHost &
     updateSidebarActivePanel: (panelId: string) => void;
     imageLightbox: ImageLightboxItem | null;
     imageLightboxRequestVersion: number;
-    querySelector: (selectors: string) => Element | null;
     resetToolStream: () => void;
     resetChatInputHistoryNavigation: () => void;
     scrollToBottom: (opts?: { smooth?: boolean }) => void;

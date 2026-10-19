@@ -139,21 +139,11 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
     if (closeInvalidatedClient(client, req.method, isCommittedGrantCurrent)) {
       return;
     }
-    const diagnostics = createGatewayRpcDiagnostics(
-      req.method,
-      getMethodRegistry,
-      extraHandlers,
-      req.method === "models.list" ||
-        req.method === "sessions.list" ||
-        req.method === "cron.list" ||
-        req.method === "chat.history"
-        ? {
-            clientKind: client.connect.client.id,
-            source: sendResponse === send ? "wire" : "internal",
-            params: req.params,
-          }
-        : undefined,
-    );
+    const diagnostics = createGatewayRpcDiagnostics(req.method, getMethodRegistry, extraHandlers, {
+      clientKind: client.connect.client.id,
+      source: sendResponse === send ? "wire" : "internal",
+      params: req.params,
+    });
     logWs("in", "req", { connId, id: req.id, method: req.method });
     const generationState = SharedGatewaySessionGenerationState.fromReader(
       getRequiredSharedGatewaySessionGeneration,

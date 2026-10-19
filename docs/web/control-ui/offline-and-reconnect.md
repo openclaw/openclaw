@@ -395,10 +395,23 @@ one history notice offers **Retry**, which reloads the conversation and restores
 its live subscription, including approval updates. Permission and other terminal
 failures remain visible rather than being silently retried.
 
+After a Gateway restart, eligible accepted chat inputs resume on the server in
+order within each session, even while this browser is closed. Automatic recovery
+requires the original session and current operator access, and is limited to
+inputs accepted in the past 24 hours. Cancelled inputs never resume. Inputs that
+cannot resume stay visibly interrupted for review. The browser keeps the original
+submission ID when retrying, so reconnect cannot duplicate a recovered input.
+It does not resend interrupted inputs automatically: the server owns recovery order.
+If a saved input remains interrupted, copy it and send again to continue.
+
 When the Gateway confirms that it holds the same pending input, the Control UI clears the
 uncertain-delivery warning without sending the message again. The browser keeps its retry
 payload until consumption or cancellation is confirmed. If delivery is still unknown,
-the review warning remains.
+the review warning remains. Confirmed server custody does not block later browser-queued
+chat sends, including when the accepted input is too old for automatic recovery.
+Local commands such as `/compact` and `/reset` in the same browser outbox still wait
+behind that input. An independent authorized reset from another client can cancel
+pending work, as with other session resets.
 If the Gateway is holding that input for a later turn, it appears in the queue
 above the composer. Removing that row withdraws the exact queued message without
 stopping the active turn. Once cancellation is confirmed, the removed prompt and

@@ -4,7 +4,7 @@ import {
   isUnresolvedShellReference,
   readStateDirDotEnvFromStateDir,
 } from "../config/state-dir-dotenv.js";
-import { hasErrnoCode } from "../infra/errno.js";
+import { hasErrnoCode, ignoreMissingPath } from "../infra/errno.js";
 import {
   GATEWAY_SERVICE_KIND,
   GATEWAY_SERVICE_MARKER,
@@ -154,12 +154,9 @@ export async function refreshLegacySystemdServiceMetadata(
   const deadlineAt = performance.now() + Math.max(1, timeoutMs);
   const remainingTimeoutMs = () => Math.max(1, deadlineAt - performance.now());
   const unitPath = resolveSystemdUnitPath(env);
-  const current = await fs.readFile(unitPath, "utf8").catch((error: unknown) => {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return null;
-    }
-    throw error;
-  });
+  const current = await fs
+    .readFile(unitPath, "utf8")
+    .catch((error: unknown) => ignoreMissingPath(error) ?? null);
   if (current === null || removeLegacyGatewayVersionMetadata(current) === current) {
     return false;
   }
@@ -560,11 +557,7 @@ export async function uninstallSystemdService({
     }
     // Unit file was already absent; still clean generated node env state below.
   }
-  await fs.unlink(`${unitPath}.bak`).catch((error: unknown) => {
-    if (!hasErrnoCode(error, "ENOENT")) {
-      throw error;
-    }
-  });
+  await fs.unlink(`${unitPath}.bak`).catch(ignoreMissingPath);
   await removeNodeSystemdManagedEnvironmentKeys(env);
   if (removed) {
     stdout.write(`${formatLine("Removed systemd service", unitPath)}\n`);

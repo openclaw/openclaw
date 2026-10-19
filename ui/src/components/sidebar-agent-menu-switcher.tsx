@@ -6,7 +6,7 @@ import { t } from "../lib/reactive/i18n.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { Icon } from "./solid/icon.tsx";
 import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
-import type { MenuEntry, MenuItem } from "./solid/menu.tsx";
+import type { MenuControls, MenuEntry, MenuItem } from "./solid/menu.tsx";
 export const AGENT_VALUE_PREFIX = "agent:";
 export type SidebarAgentMenuSwitcherParams = {
   activeId: string;
@@ -89,6 +89,7 @@ function renderAgentRow(
   readAutofocus: () => boolean,
   readDuplicateName: () => boolean,
   pinButtons: Map<string, HTMLButtonElement>,
+  controls?: MenuControls,
 ) {
   const agentId = createMemo(() => normalizeAgentId(readAgent().id));
   const identity = createMemo(() => params.identities.get(agentId()) ?? null);
@@ -139,7 +140,7 @@ function renderAgentRow(
         <span class="sidebar-agent-menu__agent-status">
           {params.agents.length > 3 ? (
             <button
-              ref={(button) => pinButtons.set(agentId(), button)}
+              ref={[controls?.ref(), (button) => pinButtons.set(agentId(), button)]}
               type="button"
               class="sidebar-agent-menu__pin"
               aria-label={`${pinLabel()}: ${label()}`}
@@ -179,6 +180,7 @@ function renderAgentRow(
 export function renderSidebarAgentMenuSwitcher(
   params: SidebarAgentMenuSwitcherParams,
   pinButtons = new Map<string, HTMLButtonElement>(),
+  controls?: MenuControls,
 ) {
   const agents = createMemo(() => {
     const pinnedIds = new Set(params.pinnedAgentIds.map(normalizeAgentId));
@@ -241,6 +243,7 @@ export function renderSidebarAgentMenuSwitcher(
             normalizeAgentLabel(agent, params.identities.get(normalizeAgentId(agent.id))),
           ) ?? 0) > 1,
         pinButtons,
+        controls,
       ),
     );
   }

@@ -1,4 +1,17 @@
+import type {
+  ProviderResolveUsageAuthContext,
+  ProviderUsageAuthToken,
+} from "../plugins/provider-runtime.types.js";
 import { createLazyRuntimeMethod } from "../shared/lazy-runtime.js";
+
+/** Use the first current API-key candidate without selecting another auth policy. */
+export async function resolveProviderUsageApiKeyAuth(
+  ctx: Pick<ProviderResolveUsageAuthContext, "resolveApiKeyCandidatesFromConfigAndStore">,
+  envDirect: Array<string | undefined>,
+): Promise<ProviderUsageAuthToken | null> {
+  const apiKey = (await ctx.resolveApiKeyCandidatesFromConfigAndStore?.({ envDirect }))?.[0];
+  return apiKey ? { token: apiKey } : null;
+}
 
 export type {
   ProviderUsageCostDaily,

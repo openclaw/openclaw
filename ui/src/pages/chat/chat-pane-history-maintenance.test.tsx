@@ -102,6 +102,7 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
     renderRows(rows);
     const sentinel = container.appendChild(document.createElement("div"));
     sentinel.className = "chat-history-sentinel";
+    pane.historySentinel = sentinel;
 
     class HistoryIntersectionObserver {
       constructor(private readonly callback: IntersectionObserverCallback) {}
@@ -158,7 +159,7 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
     expect(request).toHaveBeenCalledExactlyOnceWith("chat.history", {
       sessionKey: state.sessionKey,
       limit: 1000,
-      maxBytes: 2 * 1024 * 1024,
+      maxBytes: 3 * 1024 * 1024,
       toolResultMaxChars: 2_000,
       offset: 2,
     });

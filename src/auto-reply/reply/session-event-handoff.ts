@@ -18,7 +18,6 @@ import {
 import {
   claimSystemEventTurn,
   enqueueRequiredSystemEventEntry,
-  type SystemEvent,
 } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { channelRouteTargetsMatchExact } from "../../plugin-sdk/channel-route.js";
@@ -33,15 +32,13 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import type { ReplyPayload } from "../../shared/reply-payload.types.js";
 import { readAgentDeletionJournalStatusInWorker } from "../../state/agent-deletion-journal.read.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import type { MsgContext } from "../templating.js";
 import type { NormalizeReplySkipReason } from "./normalize-reply-skip-reason.js";
 import type {
+  SessionEventOptions,
   SessionEventOutcome,
   SessionEventReceipt,
-  SessionEventSource,
-  SessionEventTarget,
 } from "./session-event-contract.js";
 import { narrowSessionEventSettings } from "./session-event-policy.js";
 import {
@@ -51,6 +48,7 @@ import {
   getSessionEventRuntimeConfig,
   prepareSessionEventTargetForHost,
   readSessionEventTargetEnvironment,
+  readSessionEventTargetOperatorAuthority,
   resolveSessionEventKey,
 } from "./session-event-target.js";
 import { setChannelSourceTurnId } from "./source-turn-id.js";
@@ -60,11 +58,7 @@ export {
   captureSessionEventTargetForHost,
   combineSessionEventTargetsForHost,
 } from "./session-event-target.js";
-export type {
-  SessionEventReceipt,
-  SessionEventSource,
-  SessionEventTarget,
-} from "./session-event-contract.js";
+export type { SessionEventReceipt, SessionEventTarget } from "./session-event-contract.js";
 
 const log = createSubsystemLogger("session-events");
 
@@ -74,41 +68,16 @@ const MAX_CONFIG_READMISSION_ATTEMPTS = 2;
 /** Producer-owned occurrence; passive notices continue to use enqueueSystemEvent. */
 export function enqueueSessionEventForHost(
   text: string,
-  {
-    assertAcceptanceCurrent,
-    ...options
-  }: {
-    agentId: string;
-    sessionKey: string;
-    source: SessionEventSource;
-    contextKey?: string;
-    /** Stable identity for durable host producers across restart handoffs. */
-    sourceTurnId?: string;
-    deliveryContext?: DeliveryContext;
-    abortSignal?: AbortSignal;
-    expectedTarget?: SessionEventTarget;
-    /** Authorized fresh work may create an absent session; captured completions may not. */
-    createIfMissing?: true;
-    /** Submitting invocation custody lasts through acceptance only. */
-    assertAcceptanceCurrent?: () => void;
-    /** Durable producer commits its attempt only after normal turn adoption. */
-    onAdopted?: () => void | Promise<void>;
-    /** Transfer exact queued occurrences into one ordinary turn without duplicating them. */
-    occurrences?: readonly SystemEvent[];
-    /** Failed promotion retains an existing passive occurrence until ordinary adoption begins. */
-    preserveOccurrenceOnRejection?: true;
-    /** Internal: policy-change re-admission depth, bounded to stop publication storms. */
-    readmissionAttempt?: number;
-    /** An explicitly silent source records its result without transport delivery. */
-    deliver?: boolean;
-    /** Host producer remains live through admission, execution and delivery. */
-    assertCurrent?: () => void;
-  },
+  { assertAcceptanceCurrent, ...options }: SessionEventOptions,
 ): SessionEventReceipt {
   let acceptanceAssertion = assertAcceptanceCurrent;
   acceptanceAssertion?.();
   options.assertCurrent?.();
   options.expectedTarget?.assertCurrent?.();
+  const operatorAuthority = options.expectedTarget
+    ? readSessionEventTargetOperatorAuthority(options.expectedTarget)
+    : undefined;
+  operatorAuthority?.assertCurrent();
   const cfg = getSessionEventRuntimeConfig();
   const configPublication = getRuntimeConfigSnapshotMetadata();
   const agentId = normalizeAgentId(options.agentId);
@@ -152,9 +121,11 @@ export function enqueueSessionEventForHost(
       ]
     : readExecRequestOwners(options);
   const requestSignal = execRequestAbortSignal(execRequestOwners, options.abortSignal);
-  const signal = requestSignal
-    ? AbortSignal.any([requestSignal, controller.signal])
-    : controller.signal;
+  const signal = AbortSignal.any(
+    [requestSignal, controller.signal, operatorAuthority?.signal].filter(
+      (value): value is AbortSignal => Boolean(value),
+    ),
+  );
   signal.throwIfAborted();
   if (options.preserveOccurrenceOnRejection && !options.occurrences?.length) {
     throw new Error("Preserving a rejected event requires its original queued occurrence");
@@ -202,6 +173,14 @@ export function enqueueSessionEventForHost(
   if (!ownership) {
     throw new Error("Session event occurrence no longer available for admission");
   }
+  let releaseOperatorAuthority: (() => void) | undefined;
+  try {
+    // Transfer custody before the completed process releases its original source.
+    releaseOperatorAuthority = operatorAuthority?.retain?.();
+  } catch (error) {
+    ownership.cancel();
+    throw error;
+  }
   const { promise: settled, resolve } = createDeferredCore<SessionEventOutcome>();
   const acceptance = createDeferredCore<Awaited<SessionEventReceipt["accepted"]>>();
   let accepted = false;
@@ -233,6 +212,7 @@ export function enqueueSessionEventForHost(
       throw new Error("Session event occurrence is settled");
     }
     signal.throwIfAborted();
+    operatorAuthority?.assertCurrent();
     if (!accepted) {
       acceptanceAssertion?.();
     }
@@ -393,6 +373,8 @@ export function enqueueSessionEventForHost(
       } else {
         ownership.cancel();
       }
+      releaseOperatorAuthority?.();
+      releaseOperatorAuthority = undefined;
       if (!accepted) {
         acceptance.resolve(
           readmittedReceipt?.accepted ?? {
@@ -567,6 +549,7 @@ export function enqueueSessionEventForHost(
           },
         },
         replyOptions: {
+          operatorAuthority,
           admittedSessionSettings: settings,
           toolsAllow,
           onDeliberateSilentTerminalReply: () => {

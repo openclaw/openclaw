@@ -86,7 +86,9 @@ function transcriptPayloadBytes(command: Command): number | undefined {
         typeof append.input.event === "string"
           ? append.input.event
           : JSON.stringify(append.input.event),
-      ) + Buffer.byteLength(append.input.message?.messageJson ?? "")
+      ) +
+      Buffer.byteLength(append.input.message?.messageJson ?? "") +
+      (append.input.initialModel ? Buffer.byteLength(JSON.stringify(append.input.initialModel)) : 0)
     );
   }
   if ("eventJson" in input) {

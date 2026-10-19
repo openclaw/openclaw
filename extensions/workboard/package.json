@@ -10,7 +10,7 @@
     "@solidjs/web": "2.0.0-rc.14",
     "solid-js": "2.0.0-rc.14",
     "typebox": "1.3.36",
-    "zod": "4.6.5"
+    "zod": "4.6.6"
   },
   "devDependencies": {
     "@openclaw/gateway-client": "workspace:*",

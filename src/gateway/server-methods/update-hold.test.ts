@@ -31,7 +31,8 @@ vi.mock("../../infra/update-status-state.js", () => ({
   getUpdateSchedule: getUpdateScheduleMock,
 }));
 
-vi.mock("./validation.js", () => ({
+vi.mock("./validation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./validation.js")>()),
   assertValidParams: () => true,
 }));
 

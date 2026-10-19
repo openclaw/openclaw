@@ -44,31 +44,25 @@ export const skillsHandlers: GatewayRequestHandlers = {
   ...skillsWorkshopHandlers,
   ...skillsRetiredHandlers,
   "skills.status": handleSkillsStatus,
-  "skills.securityVerdicts": async ({ params, respond, context }) => {
-    if (
-      !assertValidParams(
-        params,
-        validateSkillsSecurityVerdictsParams,
-        "skills.securityVerdicts",
-        respond,
-      )
-    ) {
-      return;
-    }
-    const resolved = resolveSkillsAgentWorkspace(params, context);
-    if (!resolved.ok) {
-      respond(false, undefined, resolved.error);
-      return;
-    }
-    try {
-      const { report } = await buildRemoteAwareWorkspaceSkillStatus(resolved);
-      const targets = collectClawHubVerdictTargets(report);
-      const items = targets.length === 0 ? [] : await fetchOpenClawSkillSecurityVerdicts(targets);
-      respond(true, { schema: "openclaw.skills.security-verdicts.v1", items }, undefined);
-    } catch (error) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
-    }
-  },
+  "skills.securityVerdicts": defineValidatedGatewayHandler(
+    "skills.securityVerdicts",
+    validateSkillsSecurityVerdictsParams,
+    async ({ params, respond, context }) => {
+      const resolved = resolveSkillsAgentWorkspace(params, context);
+      if (!resolved.ok) {
+        respond(false, undefined, resolved.error);
+        return;
+      }
+      try {
+        const { report } = await buildRemoteAwareWorkspaceSkillStatus(resolved);
+        const targets = collectClawHubVerdictTargets(report);
+        const items = targets.length === 0 ? [] : await fetchOpenClawSkillSecurityVerdicts(targets);
+        respond(true, { schema: "openclaw.skills.security-verdicts.v1", items }, undefined);
+      } catch (error) {
+        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
+      }
+    },
+  ),
   "skills.skillCard": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateSkillsSkillCardParams, "skills.skillCard", respond)) {
       return;

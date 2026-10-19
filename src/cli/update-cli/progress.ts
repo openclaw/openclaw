@@ -269,7 +269,8 @@ function printStep(step: Omit<UpdateStepResult, "cwd">): void {
   }
 }
 
-export async function printResult(
+/** Prepare history and report artifacts while the caller still owns terminal effects. */
+export async function prepareResult(
   result: UpdateRunResult,
   opts: UpdateCommandOptions,
   reportHints: {
@@ -278,7 +279,9 @@ export async function printResult(
     record?: UpdateRunRecord;
     readHistory?: boolean;
   } = {},
-): Promise<void> {
+  assertCurrent?: () => void,
+): Promise<() => void> {
+  assertCurrent?.();
   const finalizeProgress = result.runId ? activeUpdateProgress.get(result.runId) : undefined;
   // Retire polling before waiting for report IO, including detached recovery.
   finalizeProgress?.pause();
@@ -287,6 +290,7 @@ export async function printResult(
   const readRun =
     result.runId && !reportHints.record && reportHints.readHistory !== false
       ? () => {
+          assertCurrent?.();
           try {
             return getUpdateRun(result.runId!, { env: opts.run?.env });
           } catch (error) {
@@ -298,8 +302,8 @@ export async function printResult(
   // The artifact owner reads under its lock and reconciles after publication.
   // Captured and detached reports never reopen retained history.
   const renderReport = (current?: UpdateRunRecord) => {
+    assertCurrent?.();
     run = reportHints.record ?? current;
-    finalizeProgress?.finish(run);
     report = renderUpdateRunReport(updateRunReportInputFromResult(result, run), {
       ...reportHints,
       mode: result.mode === "unknown" ? run?.target.kind : result.mode,
@@ -313,25 +317,38 @@ export async function printResult(
     readRun,
     env: opts.run?.env,
     detached: reportHints.readHistory === false,
+    assertCurrent,
   }).catch((error: unknown) => {
+    assertCurrent?.();
     defaultRuntime.error(`Update report could not be saved: ${formatErrorMessage(error)}`);
     return undefined;
   });
+  assertCurrent?.();
   report ??= renderReport(readRun?.());
-  if (opts.json) {
-    defaultRuntime.writeJson({
-      ...result,
-      ...(run ? { run: toPublicUpdateRun(run) } : {}),
-      reportPath,
-    });
-    return;
-  }
-  defaultRuntime.log("");
-  defaultRuntime.log(theme.heading(report.headline));
-  if (reportPath) {
-    defaultRuntime.log(`Report: ${reportPath}`);
-  }
-  for (const line of report.lines) {
-    defaultRuntime.log(line);
-  }
+  const preparedReport = report;
+  const publicResult = {
+    ...result,
+    ...(run ? { run: toPublicUpdateRun(run) } : {}),
+    reportPath,
+  };
+  return () => {
+    finalizeProgress?.finish(run);
+    if (opts.json) {
+      defaultRuntime.writeJson(publicResult);
+      return;
+    }
+    defaultRuntime.log("");
+    defaultRuntime.log(theme.heading(preparedReport.headline));
+    if (reportPath) {
+      defaultRuntime.log(`Report: ${reportPath}`);
+    }
+    for (const line of preparedReport.lines) {
+      defaultRuntime.log(line);
+    }
+  };
+}
+
+export async function printResult(...args: Parameters<typeof prepareResult>): Promise<void> {
+  const emit = await prepareResult(...args);
+  emit();
 }

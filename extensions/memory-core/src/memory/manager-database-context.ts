@@ -1,10 +1,6 @@
 // Owns the published index state and the isolated lifetime of shadow reindex work.
 import type { DatabaseSync } from "node:sqlite";
-import {
-  createSubsystemLogger,
-  resolveStateDir,
-  resolveUserPath,
-} from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import {
   openSqliteWorkerStore,
@@ -35,6 +31,7 @@ import type {
   MemoryEmbeddingCacheMutation,
   MemoryPublicationOperations,
   MemoryPublicationResult,
+  MemoryPublicationSchema,
   MemoryPublicationState,
 } from "./manager-publication-task.js";
 import { MEMORY_INDEX_WRITE_SCOPE } from "./manager-publication-task.js";
@@ -190,16 +187,6 @@ export class MemoryIndexDatabase {
     }
   }
 
-  static captureWriteOptions(agentId: string, databasePath: string, source?: MemoryIndexDatabase) {
-    const env = { ...(source?.writeOptions?.env ?? process.env) };
-    env.OPENCLAW_STATE_DIR = resolveStateDir(env);
-    return {
-      agentId,
-      path: source?.writeOptions?.path ?? resolveUserPath(databasePath),
-      env,
-    };
-  }
-
   readonly vector: {
     enabled: boolean;
     available: boolean | null;
@@ -225,6 +212,7 @@ export class MemoryIndexDatabase {
     hasVectorTable: false,
     vectorState: { state: "empty" },
   };
+  searchSchema: MemoryPublicationSchema = { fts: null, paths: null, vector: null };
   vectorDegradedWriteWarningShown = false;
   closed = false;
 
@@ -539,6 +527,7 @@ export class MemoryIndexDatabase {
     });
     if (result?.facts) {
       this.installFacts(result.facts, result.writeToken);
+      this.searchSchema = result.searchSchema ?? this.searchSchema;
     }
     return result?.value;
   }
@@ -706,7 +695,7 @@ export class MemoryIndexDatabase {
             ...input,
             state: {
               ...this.publicationState(),
-              extensionPath: input.sourceHasVectors ? input.extensionPath : undefined,
+              extensionPath: input.sourceSchema.vector ? input.extensionPath : undefined,
             },
           },
         },

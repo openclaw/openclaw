@@ -2,6 +2,7 @@ import { onTestFinished } from "vitest";
 import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credential-modes.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../../agents/auth-profiles.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
+import { mockRouteResolverFactory } from "../../agents/model-auth-availability.test-support.js";
 import { createModelCatalogDecisions } from "../../agents/model-catalog-decisions.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { createOpenAIModelRoutesResolver } from "../../agents/openai-model-routes.js";
@@ -150,6 +151,9 @@ export async function listModels(params: ListModelsParams) {
   const context = createModelsListTestContext(params);
   const agentId = params.agentId ?? "main";
   const config = params.cfg ?? ({} as OpenClawConfig);
+  if (params.routeResolverFactory) {
+    mockRouteResolverFactory(params.routeResolverFactory);
+  }
   return await buildModelsListResult({
     source: { kind: "gateway", context },
     agentId,
@@ -181,6 +185,5 @@ export async function listModels(params: ListModelsParams) {
           }),
         }
       : {}),
-    ...(params.routeResolverFactory ? { routeResolverFactory: params.routeResolverFactory } : {}),
   });
 }

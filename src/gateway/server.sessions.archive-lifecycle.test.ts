@@ -677,10 +677,10 @@ test.for([
       signal,
     );
     expect(beginInferenceSessionDrain).toHaveBeenCalledTimes(2);
-    expect(beginInferenceSessionDrain.mock.calls.map(([sessionId]) => sessionId)).toEqual([
-      firstSessionId,
-      secondSessionId,
-    ]);
+    // Independent preparations race their worker reads; releases stay in target order below.
+    expect(beginInferenceSessionDrain.mock.calls.map(([sessionId]) => sessionId)).toEqual(
+      expect.arrayContaining([firstSessionId, secondSessionId]),
+    );
     expect(firstRelease).not.toHaveBeenCalled();
     expect(secondRelease).not.toHaveBeenCalled();
     firstDrained.resolve();

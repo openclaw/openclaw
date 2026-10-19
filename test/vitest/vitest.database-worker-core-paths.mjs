@@ -1,5 +1,6 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "test/scripts/upgrade-survivor-acp-metadata.test.ts",
   "test/discord-live-policy.integration.test.ts",
   "src/commands/startup-config-preflight.fresh-profiles.test.ts",
   "src/channels/message/ingress-drain.handoff.test.ts",
@@ -181,6 +182,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/gateway/server-methods/chat-send-commentary-media.test.ts",
   "src/agents/model-auth.profiles.test.ts",
   // Native credential fixtures need the host's exclusive offline writer custody.
+  "test/decision-levanto-admission.integration.test.ts",
   "src/agents/agent-model-discovery.auth.test.ts",
   "src/agents/auth-profiles/session-override.model-endpoint.test.ts",
   "src/agents/tools/image-generate-tool.auth.test.ts",
@@ -347,6 +349,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/cli/update-cli/update-command-service-maintenance.test.ts",
   "src/cli/update-cli/update-command-service-maintenance-handoff.test.ts",
   "src/cli/update-cli/update-command-service-maintenance-native.test.ts",
+  "src/cli/update-cli/update-command-terminal-authority.test.ts",
   "src/cli/update-cli/update-command-terminal-outcome.test.ts",
   "src/state/session-repository-workspaces.test.ts",
   "src/infra/update-run-reconciliation.worker.test.ts",

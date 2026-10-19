@@ -5,6 +5,7 @@ import { listen } from "../lib/reactive/listener.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
+import { createTabFocus } from "../lib/tabs.ts";
 import { DockResizer } from "./dock-layout-solid.tsx";
 import { LinkReaderContent } from "./link-reader-content.tsx";
 import type { LinkReaderPanelProps } from "./link-reader-panel-lifecycle.ts";
@@ -155,6 +156,7 @@ function PanelView(
   props: LinkReaderPanelProps,
   host: SolidBridgeElement<LinkReaderPanelProps, Methods>,
 ) {
+  const tabFocus = createTabFocus();
   let address: HTMLInputElement | undefined;
   const content = new Map<string, HTMLElement>();
   const owner = createLinkReaderPanel(host, onSettled, (activeId) => ({
@@ -279,6 +281,7 @@ function PanelView(
             <header class="rail-header bp-header lr-tab-header">
               <openclaw-panel-tab-strip style={{ display: "contents" }}>
                 <PanelTabStrip
+                  focusOwner={tabFocus}
                   tabs={tabStripTabs()}
                   activeId={view().state.activeId}
                   ariaControls="link-reader-tab-panel"

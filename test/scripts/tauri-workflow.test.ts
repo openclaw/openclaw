@@ -3,6 +3,26 @@ import { minimatch } from "minimatch";
 import { expect, it } from "vitest";
 import { parse } from "yaml";
 
+it("keeps Node without workspace dependencies for the macOS Cargo tests", () => {
+  const workflow = parse(readFileSync(".github/workflows/linux-app.yml", "utf8"));
+  const job = workflow.jobs["test-macos"];
+  const setup = job.steps.find(
+    (step: { uses?: string }) => step.uses === "./.github/actions/setup-node-env",
+  );
+  expect(setup.with).toMatchObject({
+    "cache-mode": "off",
+    "install-bun": "false",
+    "install-deps": "false",
+  });
+  expect(job.steps.at(-1).run).toBe("cargo +stable test --locked --all-targets");
+  for (const name of ["build", "test-windows-power"]) {
+    const siblingSetup = workflow.jobs[name].steps.find(
+      (step: { uses?: string }) => step.uses === "./.github/actions/setup-node-env",
+    );
+    expect(siblingSetup.with["install-deps"]).not.toBe("false");
+  }
+});
+
 it("runs synthetic Gateway startup failures with the fixture-compiled candidate", () => {
   const workflow = parse(readFileSync(".github/workflows/linux-app.yml", "utf8"));
   const steps: { run?: string }[] = workflow.jobs.build.steps;

@@ -7,7 +7,6 @@ import {
   onSettled,
   runWithOwner,
   Show,
-  untrack,
 } from "solid-js";
 import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.ts";
 import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
@@ -126,8 +125,8 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     void waitForCommit();
     focusPending ||= runtime.focusComposer !== previousFocusComposer;
     previousFocusComposer = runtime.focusComposer;
-    // Persistence/scroll bookkeeping samples state; it is not a render dependency.
-    untrack(() => runtime.chatState.prepareRender());
+    // Other source frames may show a buffered stream before its normal RAF publishes it.
+    runtime.chatState.captureRenderChanges();
     // Target/activation checks make reconciliation idempotent; apply layout before sampling it.
     runtime.synchronizeInputs({});
   }

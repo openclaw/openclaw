@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { parseGatewayPortOption } from "../cli/gateway-port-option.js";
 import { parseTimeoutMsWithFallback } from "../cli/parse-timeout.js";
@@ -23,8 +24,29 @@ import {
   renderProbeSummaryLine,
   renderTargetHeader,
 } from "./gateway-status/helpers.js";
-import { buildGatewayStatusWarnings, pickPrimaryProbedTarget } from "./gateway-status/output.js";
-import { runGatewayStatusProbePass } from "./gateway-status/probe-run.js";
+import {
+  runGatewayStatusProbePass,
+  type GatewayStatusProbedTarget,
+} from "./gateway-status/probe-run.js";
+
+function gatewaySelfIdentityKey(entry: GatewayStatusProbedTarget): string | null {
+  if (!entry.self) {
+    return null;
+  }
+  const host = normalizeLowercaseStringOrEmpty(entry.self.host);
+  const ip = normalizeLowercaseStringOrEmpty(entry.self.ip);
+  const instanceId = normalizeLowercaseStringOrEmpty(entry.self.instanceId);
+  const deviceId = normalizeLowercaseStringOrEmpty(entry.self.deviceId);
+  const discriminator = instanceId
+    ? `instance:${instanceId}`
+    : deviceId
+      ? `device:${deviceId}`
+      : "";
+  if ((!host && !ip) || !discriminator) {
+    return null;
+  }
+  return `${host}\0${ip}\0${discriminator}`;
+}
 
 export async function gatewayStatusCommand(
   opts: {
@@ -147,17 +169,83 @@ export async function gatewayStatusCommand(
     return;
   }
 
-  const warnings = buildGatewayStatusWarnings({
-    probed: probePass.probed,
-    sshTarget: probePass.sshTarget,
-    sshTunnelStarted: probePass.sshTunnelStarted,
-    sshTunnelError: probePass.sshTunnelError,
-    discoveryCount: probePass.discovery.length,
-    localTlsLoadError: localCertificate && !localCertificate.ok ? localCertificate.error : null,
-  });
-  const primary = pickPrimaryProbedTarget(probePass.probed);
-
   const reachable = probePass.probed.filter((entry) => isProbeReachable(entry.probe));
+  const primary =
+    reachable.find((entry) => entry.target.kind === "explicit") ??
+    reachable.find((entry) => entry.target.kind === "sshTunnel") ??
+    reachable.find((entry) => entry.target.kind === "configRemote") ??
+    reachable.find((entry) => entry.target.kind === "localLoopback") ??
+    null;
+  const warnings: Array<{ code: string; message: string; targetIds?: string[] }> = [];
+  if (probePass.sshTarget && !probePass.sshTunnelStarted) {
+    warnings.push({
+      code: "ssh_tunnel_failed",
+      message: probePass.sshTunnelError
+        ? `SSH tunnel failed: ${probePass.sshTunnelError}`
+        : "SSH tunnel failed to start; falling back to direct checks.",
+    });
+  }
+  if (localCertificate && !localCertificate.ok && localCertificate.error) {
+    warnings.push({
+      code: "local_tls_runtime_unavailable",
+      message: `Local gateway TLS is enabled but OpenClaw could not load the local certificate fingerprint: ${localCertificate.error}`,
+      targetIds: ["localLoopback"],
+    });
+  }
+  if (reachable.length === 0 && probePass.discovery.length === 0) {
+    warnings.push({
+      code: "no_gateway_reachable",
+      message:
+        "No gateway answered any check and Bonjour discovery returned no local gateways. Run `openclaw gateway status --deep --require-rpc` to inspect service state, config paths, listener owners, and logs; include `ss -ltnp` or `lsof -nP -iTCP:<port> -sTCP:LISTEN` for the configured port when filing a report.",
+      targetIds: probePass.probed.map((entry) => entry.target.id),
+    });
+  }
+  const identityKeys = reachable.map(gatewaySelfIdentityKey);
+  if (
+    reachable.length > 1 &&
+    (identityKeys.some((key) => key === null) || new Set(identityKeys).size > 1)
+  ) {
+    // Multiple reachable gateways are valid for isolated profiles but surprising
+    // enough to call out before users debug against the wrong process.
+    warnings.push({
+      code: "multiple_gateways",
+      message:
+        "Unconventional setup: multiple reachable gateway identities detected. Usually one gateway per network is recommended unless you intentionally run isolated profiles, like a rescue bot (see docs: /gateway#multiple-gateways-same-host).",
+      targetIds: reachable.map((entry) => entry.target.id),
+    });
+  }
+  for (const result of probePass.probed) {
+    if (result.authDiagnostics.length === 0 || isProbeReachable(result.probe)) {
+      continue;
+    }
+    for (const diagnostic of result.authDiagnostics) {
+      warnings.push({
+        code: "auth_secretref_unresolved",
+        message: diagnostic,
+        targetIds: [result.target.id],
+      });
+    }
+  }
+  for (const result of probePass.probed.filter((entry) =>
+    isScopeLimitedProbeFailure(entry.probe),
+  )) {
+    warnings.push({
+      code: "probe_scope_limited",
+      message:
+        "Read-check diagnostics are limited by gateway scopes (missing operator.read). Connection succeeded, but read-only status calls are incomplete. Hint: pair device identity or use credentials with operator.read.",
+      targetIds: [result.target.id],
+    });
+  }
+  for (const result of probePass.probed.filter(
+    (entry) => isPostConnectProbeFailure(entry.probe) && !isScopeLimitedProbeFailure(entry.probe),
+  )) {
+    const detail = result.probe.error ? `: ${result.probe.error}` : ".";
+    warnings.push({
+      code: "probe_detail_failed",
+      message: `Gateway accepted the WebSocket connection, but follow-up read diagnostics failed${detail}`,
+      targetIds: [result.target.id],
+    });
+  }
   const capability = summarizeGatewayProbeCapability(reachable.map((entry) => entry.probe));
 
   if (opts.json) {

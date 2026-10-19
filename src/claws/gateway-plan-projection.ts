@@ -15,6 +15,7 @@ import { digestClawValue } from "./digest.js";
 import { clawActionNeedsEffect, projectClawAddActionEffect } from "./gateway-action-effects.js";
 import { projectClawAddScheduledJobs, projectClawConfiguredAccess } from "./gateway-disclosure.js";
 import { projectClawManifestDisclosure } from "./gateway-manifest-disclosure.js";
+import { collectClawSkillWarningReviews } from "./skill-warning-review.js";
 import type {
   ClawAddPlan,
   ClawDiagnostic,
@@ -97,34 +98,9 @@ function requestedPolicyBlockers(
 }
 
 function projectClawSkillWarningReviews(plan: ClawAddPlan): ClawSkillReview[] {
-  return plan.actions.flatMap((action) => {
-    const details = action.details;
-    if (
-      action.kind !== "package" ||
-      action.blocked ||
-      details?.kind !== "skill" ||
-      details.ownerAction !== "install" ||
-      typeof details.riskWarning !== "string" ||
-      !details.riskWarning
-    ) {
-      return [];
-    }
-    if (
-      typeof details.ref !== "string" ||
-      typeof details.version !== "string" ||
-      typeof details.integrity !== "string"
-    ) {
-      throw new Error("The Claw skill trust review is incomplete.");
-    }
-    const review = {
-      actionId: action.id,
-      ref: details.ref,
-      version: details.version,
-      integrity: details.integrity,
-      riskWarning: details.riskWarning,
-    };
-    return [{ ...review, reviewToken: digestClawValue(review) }];
-  });
+  return collectClawSkillWarningReviews(plan).map((review) =>
+    Object.assign(review, { reviewToken: digestClawValue(review) }),
+  );
 }
 
 function projectReadinessRequirement(requirement: ClawLocalPrerequisite) {

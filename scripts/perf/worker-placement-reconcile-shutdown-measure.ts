@@ -19,11 +19,26 @@ const { values } = parseArgs({
   options: {
     "state-dir": { type: "string" },
     "start-at": { type: "string" },
+    "idle-owner-read": { type: "boolean", default: false },
+    "blocked-shutdown-tail": { type: "boolean", default: false },
+    "open-existing": { type: "boolean", default: false },
   },
 });
-assert(values["state-dir"], "Usage: --state-dir <new-directory> [--start-at <unix-ms>]");
+assert(
+  values["state-dir"],
+  "Usage: --state-dir <directory> [--start-at <unix-ms>] [--idle-owner-read | --open-existing]",
+);
+assert(!(values["idle-owner-read"] && values["open-existing"]));
+assert(
+  !values["blocked-shutdown-tail"] || (!values["idle-owner-read"] && !values["open-existing"]),
+);
+const idleOwnerRead = values["idle-owner-read"];
+const blockedShutdownTail = values["blocked-shutdown-tail"];
+const placementCount = blockedShutdownTail ? 3 : 2;
 const stateDir = path.resolve(values["state-dir"]);
-await fs.mkdir(stateDir, { mode: 0o700 });
+if (!values["open-existing"]) {
+  await fs.mkdir(stateDir, { mode: 0o700 });
+}
 process.env.OPENCLAW_STATE_DIR = stateDir;
 process.env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
 process.env.OPENCLAW_GATEWAY_RESTART_TRACE = "1";
@@ -33,7 +48,9 @@ const config: OpenClawConfig = {
   cloudWorkers: { profiles: { synthetic: { provider: "synthetic", settings: {} } } },
   logging: { level: "info", file: logPath, consoleLevel: "error" },
 };
-await fs.writeFile(process.env.OPENCLAW_CONFIG_PATH, JSON.stringify(config));
+if (!values["open-existing"]) {
+  await fs.writeFile(process.env.OPENCLAW_CONFIG_PATH, JSON.stringify(config));
+}
 const [
   { WORKER_PROTOCOL_FEATURES, WORKER_RPC_SET_VERSION },
   { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES },
@@ -78,6 +95,66 @@ const [
   import("../../src/process/gateway-work-admission.js"),
 ]);
 setRuntimeConfigSnapshot(config);
+if (values["open-existing"]) {
+  const prior = JSON.parse(await fs.readFile(path.join(stateDir, "result.json"), "utf8"));
+  assert.equal(prior.script, "worker-placement-reconcile-shutdown-measure.ts");
+  const admission = await import("../../src/infra/sqlite-database-admission.js");
+  const diagnostics = await import("../../src/infra/diagnostic-events.js");
+  const gates: Array<Record<string, string | number | boolean>> = [];
+  const unsubscribe = diagnostics.onInternalDiagnosticEvent(
+    (event) => {
+      if (
+        event.type === "log.record" &&
+        event.message === "agent database integrity gate" &&
+        event.attributes?.agentId === "main"
+      ) {
+        gates.push(event.attributes);
+      }
+    },
+    { include: ["log.record"] },
+  );
+  const databasePath = agentDb.resolveOpenClawAgentSqlitePath({ agentId: "main" });
+  await fs.access(databasePath);
+  if (values["start-at"]) {
+    const startAt = Number(values["start-at"]);
+    assert(Number.isSafeInteger(startAt) && startAt > Date.now());
+    await sleep(startAt - Date.now());
+  }
+  const started = performance.now();
+  const sealMatched = admission.readSqliteDatabaseCleanClose(databasePath);
+  try {
+    agentDb.openOpenClawAgentDatabase({ agentId: "main" });
+    const openMs = performance.now() - started;
+    await diagnostics.waitForDiagnosticEventsDrained();
+    const fullScans = gates.filter((gate) => gate.integrityGateMode === "full").length;
+    const result = {
+      scenario: "cold-process-agent-open",
+      scope: "real agent SQLite admission after the synthetic sidecar fixture; no Gateway or model",
+      nodeVersion: process.version,
+      sqliteVersion: process.versions.sqlite,
+      sameRuntime:
+        prior.nodeVersion === process.version && prior.sqliteVersion === process.versions.sqlite,
+      sealMatched,
+      sealReused: sealMatched && fullScans === 0,
+      openMs,
+      fullScans,
+      integrityGateMode: fullScans > 0 ? "full" : sealMatched ? "seal-reuse" : "not-emitted",
+      integrityGateReason: gates.at(-1)?.integrityGateReason ?? null,
+      gates,
+    };
+    await fs.writeFile(
+      path.join(stateDir, "restart-result.json"),
+      `${JSON.stringify(result, null, 2)}\n`,
+    );
+    console.log(JSON.stringify(result));
+  } finally {
+    unsubscribe();
+    await agentDb.closeOpenClawAgentDatabasesAsync();
+    await stateDb.closeOpenClawStateDatabaseAsync();
+    await (await import("../../src/logging/logger.js")).flushLogger();
+  }
+  process.exit(0);
+}
 const database = stateDb.openOpenClawStateDatabase();
 const store = await createWorkerEnvironmentStore({ database });
 const placements = createWorkerSessionPlacementStore({ database });
@@ -140,11 +217,30 @@ const transport: NodeWorkerSupervisorTransport = {
       timeoutMs: request.timeoutMs,
       elapsedMs: performance.now() - fixtureStarted,
     });
+    if (idleOwnerRead) {
+      assert(
+        request.command === "worker.environment.stop.v1" ||
+          request.command === "worker.workspace.exec.v1",
+        "Idle fixture must not launch work",
+      );
+      return {
+        ok: true,
+        payloadJSON: JSON.stringify({
+          workspaceDir: "/synthetic-workspace",
+          stdout: "drained\n",
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        }),
+      };
+    }
     if (request.command === "worker.launch.v1") {
       const input = request.params as NodeWorkerLaunchInput;
       request.onDispatchReady?.(`synthetic-${input.launchId}`);
       launched.add(input.launchId);
-      if (launched.size === 2) {
+      if (launched.size === placementCount) {
         launchesReady.resolve();
       }
       return {
@@ -164,7 +260,7 @@ const transport: NodeWorkerSupervisorTransport = {
     if (request.command === "worker.cancel.v1") {
       const identity = request.params as { launchId: string };
       cancelled.add(identity.launchId);
-      if (cancelled.size === 2) {
+      if (cancelled.size === placementCount) {
         cancellationsReady.resolve();
       }
     }
@@ -256,7 +352,7 @@ runtime.dispatchService.reconcileActive = (...args) => {
 };
 const claims: WorkerSessionTurnClaim[] = [];
 const turns: Array<Promise<string>> = [];
-for (let index = 0; index < 2; index++) {
+for (let index = 0; index < placementCount; index++) {
   const sessionId = `synthetic-session-${index}`;
   const sessionKey = `agent:main:${sessionId}`;
   const environmentId = `synthetic-environment-${index}`;
@@ -332,6 +428,9 @@ for (let index = 0; index < 2; index++) {
       patch,
     });
   }
+  if (idleOwnerRead) {
+    continue;
+  }
   const claim = await placements.claimTurn({
     sessionId,
     sessionKey,
@@ -391,7 +490,9 @@ for (let index = 0; index < 2; index++) {
       ),
   );
 }
-await launchesReady.promise;
+if (!idleOwnerRead) {
+  await launchesReady.promise;
+}
 const startAt = values["start-at"] === undefined ? Date.now() : Number(values["start-at"]);
 assert(Number.isSafeInteger(startAt));
 if (values["start-at"]) {
@@ -401,20 +502,40 @@ if (values["start-at"]) {
 startGatewayRestartTrace("synthetic-reconcile-shutdown");
 // A changed provider isolation fact stops old tunnel owners before committing the new
 // scope. This is a real reconciliation path that holds launch cancellation settlement.
-sharedHost = false;
-clockOffsetMs += 60_001;
-assert(wake, "Placement maintenance must be scheduled");
-const sweep = Promise.resolve(wake());
+let ownerReads = 0;
+let sweep: Promise<unknown>;
+let ready: Promise<unknown>;
+if (idleOwnerRead) {
+  const readsEntered = Promise.withResolvers<void>();
+  const readEnvironmentOwner = placements.readEnvironmentOwner.bind(placements);
+  placements.readEnvironmentOwner = async (environmentId: string, signal?: AbortSignal) => {
+    if (++ownerReads === 2) {
+      readsEntered.resolve();
+    }
+    // Controlled stalled read, not an assertion about the production incident's exact await.
+    await sleep(85_000, undefined, { signal });
+    return readEnvironmentOwner(environmentId, signal);
+  };
+  sweep = environments.reconcileOnce();
+  ready = readsEntered.promise;
+} else {
+  sharedHost = false;
+  clockOffsetMs += 60_001;
+  assert(wake, "Placement maintenance must be scheduled");
+  sweep = Promise.resolve(wake());
+  ready = Promise.all([cancellationsReady.promise, reconcileEntered.promise]);
+}
 const keepAlive = setInterval(() => {}, 1_000);
 const setupDeadline = new AbortController();
 await Promise.race([
-  Promise.all([cancellationsReady.promise, reconcileEntered.promise]),
+  ready,
   sleep(20_000, undefined, { ref: false, signal: setupDeadline.signal }).then(async () => {
     const diagnostic = {
       launched: launched.size,
       cancelled: cancelled.size,
       activeReconciliations,
       providerInspections,
+      ownerReads,
       nextWakeAtMs: scheduler.nextWakeAtMs,
       requests,
       warnings,
@@ -424,11 +545,30 @@ await Promise.race([
       JSON.stringify(diagnostic, null, 2),
     );
     console.error(JSON.stringify(diagnostic));
-    throw new Error("Two active worker cancellations and reconciliation did not start");
+    throw new Error("Synthetic reconciliation fixture did not enter its expected wait");
   }),
 ]).finally(() => setupDeadline.abort());
 const shutdownStartedAtMs = Date.now();
 const shutdownStarted = performance.now();
+const postShutdownStoreOperations: string[] = [];
+if (blockedShutdownTail) {
+  // Model a busy shared-store queue without copying production data. This holds
+  // only newly submitted work, never an already accepted write's settlement.
+  const waitForStore = async (operation: string) => {
+    postShutdownStoreOperations.push(operation);
+    await sleep(Math.max(0, shutdownStartedAtMs + 35_000 - Date.now()));
+  };
+  const prune = store.pruneTerminalEnvironments.bind(store);
+  store.pruneTerminalEnvironments = async (input) => {
+    await waitForStore("retention");
+    return prune(input);
+  };
+  const readCandidates = placements.readRecoveryCandidates.bind(placements);
+  placements.readRecoveryCandidates = async () => {
+    await waitForStore("candidates");
+    return readCandidates();
+  };
+}
 markGatewayRestartDraining();
 await runWithProcessCleanupBudget(
   { deadline: shutdownStarted + 85_000, warn: (message) => warnings.push(message) },
@@ -438,7 +578,10 @@ const shutdownMs = performance.now() - shutdownStarted;
 await sweep;
 const turnResults = await Promise.all(turns);
 const retained = await placements.listAsync();
-assert.equal(retained.length, 2);
+assert.equal(retained.length, placementCount);
+if (idleOwnerRead) {
+  assert(retained.every((placement) => placement.turnClaim === null));
+}
 for (const claim of claims) {
   const placement = retained.find((candidate) => candidate.sessionId === claim.sessionId);
   assert.equal(
@@ -448,24 +591,43 @@ for (const claim of claims) {
   );
   assert(placement?.workspaceBaseManifestRef, "Workspace recovery manifest must survive");
 }
+await (await import("../../src/logging/logger.js")).flushLogger();
 const log = await fs.readFile(logPath, "utf8");
 const reconcileMatch = log.match(/shutdown\.worker-placement\.reconcile\.active ([\d.]+)ms/u);
-assert(reconcileMatch, "Shutdown must have joined the real active reconciliation phase");
+if (!idleOwnerRead) {
+  assert(reconcileMatch, "Shutdown must have joined the real active reconciliation phase");
+}
+const guardMatch = log.match(/shutdown\.worker-environments\.reconcile-guard ([\d.]+)ms/u);
+const environmentsMatch = log.match(/shutdown\.worker-placement\.environments ([\d.]+)ms/u);
+assert(guardMatch && environmentsMatch, "Shutdown must report the real environment close steps");
 const result = {
   script: "worker-placement-reconcile-shutdown-measure.ts",
   scriptSha256: createHash("sha256")
     .update(await fs.readFile(new URL(import.meta.url)))
     .digest("hex"),
-  scope:
-    "real placement sidecar, SQLite, environment service, node tunnel and launch adapter; synthetic provider and non-acknowledging node transport",
+  scope: idleOwnerRead
+    ? "real placement sidecar, SQLite and environment service; controlled stalled owner lookup, synthetic provider/node acknowledgements; exact production blocked await unknown"
+    : "real placement sidecar, SQLite, environment service, node tunnel and launch adapter; synthetic provider and non-acknowledging node transport",
+  scenario: blockedShutdownTail
+    ? "active-worker-cancellation-with-blocked-store-tail"
+    : idleOwnerRead
+      ? "controlled-stalled-owner-read"
+      : "active-worker-cancellation",
+  controlledStoreBusyMs: blockedShutdownTail ? 35_000 : null,
+  postShutdownStoreOperations,
+  controlledOwnerReadDelayMs: idleOwnerRead ? 85_000 : null,
   wholeGatewayRestart: false,
   realModelTurns: false,
   realRemoteWorkerProcesses: false,
   durableDatabase: true,
   nodeVersion: process.version,
+  sqliteVersion: process.versions.sqlite,
   shutdownStartedAtMs,
   shutdownMs,
-  reconcileActiveMs: Number(reconcileMatch[1]),
+  reconcileActiveMs: reconcileMatch ? Number(reconcileMatch[1]) : null,
+  reconcileGuardMs: Number(guardMatch[1]),
+  environmentsMs: Number(environmentsMatch[1]),
+  ownerReads,
   retainedClaims: retained.filter((placement) => placement.turnClaim).length,
   retainedPlacements: retained.map(({ state, turnClaim, workspaceBaseManifestRef }) => ({
     state,
@@ -476,12 +638,21 @@ const result = {
   requests,
   warnings,
 };
-await fs.writeFile(path.join(stateDir, "result.json"), `${JSON.stringify(result, null, 2)}\n`, {
-  flag: "wx",
-});
 await scheduler.stop();
 await store.close();
 await agentDb.closeOpenClawAgentDatabasesAsync();
 await stateDb.closeOpenClawStateDatabaseAsync();
+await (await import("../../src/logging/logger.js")).flushLogger();
+const completedResult = {
+  ...result,
+  cleanCloseReceipts: (await fs.readFile(logPath, "utf8"))
+    .split("\n")
+    .filter((line) => line.includes("agent database clean-close receipt:")),
+};
+await fs.writeFile(
+  path.join(stateDir, "result.json"),
+  `${JSON.stringify(completedResult, null, 2)}\n`,
+  { flag: "wx" },
+);
 clearInterval(keepAlive);
-console.log(JSON.stringify(result));
+console.log(JSON.stringify(completedResult));

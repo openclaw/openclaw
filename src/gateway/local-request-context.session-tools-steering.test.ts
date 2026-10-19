@@ -1,3 +1,4 @@
+import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   clearTestEmbeddedRun,
@@ -90,10 +91,11 @@ describe("sessions_send steering custody", () => {
               expect(receiver.pendingCount()).toBe(0);
             }
             const existingLeases = new Set(turn.authorityLeases);
-            const result = await createSessionsSendTool({
+            const acknowledged = vi.fn();
+            const sent = createSessionsSendTool({
               config: cfg,
               agentSessionKey: REQUESTER,
-              ...(reportSettlement ? { idempotencyKey: "participant-delayed-steer" } : {}),
+              idempotencyKey: "participant-delayed-steer",
             }).execute("participant-steer", {
               sessionKey: PARTICIPANT_SHARED,
               user: alice.profileId,
@@ -103,21 +105,23 @@ describe("sessions_send steering custody", () => {
               mode: "steer",
               timeoutSeconds: 0,
             });
-            expect(result.details).toMatchObject({
-              status: "accepted",
-              targetDisposition: "steered",
-            });
+            void sent.then(acknowledged, acknowledged);
+            await receiver.waitForAccepted();
+            await setImmediate();
+            expect(acknowledged).not.toHaveBeenCalled();
             expect(receiver.pendingCount()).toBe(1);
             await turn.complete();
+            await setImmediate();
+            expect(acknowledged).not.toHaveBeenCalled();
+            const custodyLeases = turn.authorityLeases.filter(
+              (lease) =>
+                !existingLeases.has(lease) &&
+                lease.profileId === alice.profileId &&
+                lease.releases === 0,
+            );
+            expect(custodyLeases.length).toBeGreaterThan(0);
             if (!reportSettlement) {
               // The receiving turn also owns policy leases until its prepared callback exits.
-              const custodyLeases = turn.authorityLeases.filter(
-                (lease) =>
-                  !existingLeases.has(lease) &&
-                  lease.profileId === alice.profileId &&
-                  lease.releases === 0,
-              );
-              expect(custodyLeases.length).toBeGreaterThan(0);
               if (outcome === "abort") {
                 expect(receiver.abort()).toBe(true);
               } else {
@@ -126,13 +130,7 @@ describe("sessions_send steering custody", () => {
                 }
                 receiver.end();
               }
-              await custodyReleased.promise;
-              for (const lease of custodyLeases) {
-                expect(lease.releases).toBe(1);
-              }
-              return;
-            }
-            if (outcome === "source revoked") {
+            } else if (outcome === "source revoked") {
               turn.revoke(alice.profileId);
               await expect(receiver.commit()).rejects.toThrow(/authority|access|revoked/i);
             } else if (outcome === "receiver cancelled") {
@@ -141,6 +139,14 @@ describe("sessions_send steering custody", () => {
             } else {
               await receiver.commit();
               expect(receiver.pendingCount()).toBe(0);
+            }
+            // Recipient custody can settle after the sender ends, but a closed
+            // personal-tool turn must never receive a fresh result.
+            await expect(sent).rejects.toThrow("This turn has ended");
+            expect(receiver.pendingCount()).toBe(0);
+            await custodyReleased.promise;
+            for (const lease of custodyLeases) {
+              expect(lease.releases).toBe(1);
             }
             const messages = (
               await loadTranscriptEvents({

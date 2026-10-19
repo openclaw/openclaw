@@ -1,8 +1,6 @@
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { messageEssay, useTlonMonitorFixture } from "./monitor.test-harness.js";
 
 const {
   authenticateMock,
@@ -10,96 +8,10 @@ const {
   ingressMock,
   inboundRuntimeMock,
   settingsManagerMock,
-  monitorFixture,
-} = vi.hoisted(() => ({
-  authenticateMock: vi.fn(),
-  sseClientMock: {
-    scry: vi.fn().mockResolvedValue({}),
-    subscribe: vi.fn().mockResolvedValue(undefined),
-    connect: vi.fn().mockResolvedValue(undefined),
-    stopReceiving: vi.fn(),
-    close: vi.fn().mockResolvedValue(undefined),
-    poke: vi.fn().mockResolvedValue(undefined),
-  },
-  ingressMock: {
-    receive: vi.fn().mockResolvedValue({ kind: "ignored" }),
-    start: vi.fn(),
-    stop: vi.fn().mockResolvedValue(undefined),
-  },
-  inboundRuntimeMock: {
-    buildContext: vi.fn().mockReturnValue({ kind: "tlon-inbound-context" }),
-    dispatch: vi.fn().mockResolvedValue(undefined),
-    resolveAgentRoute: vi.fn(() => ({
-      accountId: "default",
-      agentId: "main",
-      dmScope: "main",
-      sessionKey: "agent:main:main",
-    })),
-    resolveEffectiveMessagesConfig: vi.fn(() => ({ responsePrefix: undefined })),
-    shouldComputeCommandAuthorized: vi.fn(() => false),
-  },
-  settingsManagerMock: {
-    load: vi.fn().mockResolvedValue({}),
-    startSubscription: vi.fn().mockResolvedValue(undefined),
-  },
-  monitorFixture: {
-    config: {} as OpenClawConfig,
-    url: "https://urbit.example.com",
-  },
-}));
-
-vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
-  resolveHumanDelayConfig: vi.fn(() => undefined),
-}));
-
-vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>()),
-  createChannelInboundEnvelopeBuilderAsync: vi.fn(async () => vi.fn(() => "tlon-envelope")),
-}));
-
-vi.mock("../runtime.js", () => ({
-  getTlonRuntime: () => ({
-    config: { current: () => monitorFixture.config },
-    logging: { getChildLogger: () => ({}) },
-    channel: {
-      commands: {
-        shouldComputeCommandAuthorized: inboundRuntimeMock.shouldComputeCommandAuthorized,
-      },
-      inbound: {
-        ingress: createPluginRuntimeMock().channel.inbound.ingress,
-        buildContext: inboundRuntimeMock.buildContext,
-        dispatch: inboundRuntimeMock.dispatch,
-      },
-      reply: {
-        resolveEffectiveMessagesConfig: inboundRuntimeMock.resolveEffectiveMessagesConfig,
-      },
-      routing: { resolveAgentRoute: inboundRuntimeMock.resolveAgentRoute },
-    },
-  }),
-}));
-
-vi.mock("../urbit/auth.js", () => ({ authenticate: authenticateMock }));
-vi.mock("../urbit/sse-client.js", () => ({
-  UrbitSSEClient: vi.fn(function () {
-    return sseClientMock;
-  }),
-}));
-vi.mock("../settings.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../settings.js")>()),
-  createSettingsManager: vi.fn(() => settingsManagerMock),
-}));
-vi.mock("./ingress.js", () => ({
-  createTlonIngressMonitor: vi.fn(() => ingressMock),
-}));
-
-import { monitorTlonProvider } from "./index.js";
-
-afterEach(() => {
-  vi.clearAllMocks();
-  vi.restoreAllMocks();
-  vi.useRealTimers();
-  monitorFixture.config = {};
-});
+  configureTlon,
+  startMonitor,
+  getSubscription,
+} = useTlonMonitorFixture();
 
 describe("monitorTlonProvider summary delivery", () => {
   const channelNest = "chat/~zod/summary-boundary";
@@ -144,20 +56,11 @@ describe("monitorTlonProvider summary delivery", () => {
     watchedNest = channelNest,
     accountId = "default",
   ) {
-    const controller = new AbortController();
-    const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() } satisfies RuntimeEnv;
-    monitorFixture.config = {
-      channels: {
-        tlon: {
-          code: "code",
-          ship: "~zod",
-          url: monitorFixture.url,
-          ownerShip: "~nec",
-          groupChannels: [watchedNest],
-          accounts: { secondary: { ship: "~bus" } },
-        },
-      },
-    };
+    configureTlon({
+      ownerShip: "~nec",
+      groupChannels: [watchedNest],
+      accounts: { secondary: { ship: "~bus" } },
+    });
     authenticateMock.mockResolvedValueOnce(
       `urbauth-${accountId === "secondary" ? "~bus" : "~zod"}=proof`,
     );
@@ -168,17 +71,8 @@ describe("monitorTlonProvider summary delivery", () => {
     const connected = sseClientMock.connect.mock.calls.length;
     const started = Promise.withResolvers<void>();
     ingressMock.start.mockImplementationOnce(() => started.resolve());
-    const monitor = monitorTlonProvider({
-      scheduler: createTestPluginServiceScheduler(),
-      abortSignal: controller.signal,
-      accountId,
-      runtime,
-    });
+    const { runtime, monitor, stop } = startMonitor({ accountId });
     void monitor.catch(started.reject);
-    const stop = async () => {
-      controller.abort();
-      await monitor;
-    };
     try {
       await started.promise;
       expect(sseClientMock.connect).toHaveBeenCalledTimes(connected + 1);
@@ -187,13 +81,8 @@ describe("monitorTlonProvider summary delivery", () => {
       sseClientMock.poke.mockClear();
       await inspect(
         async (text, isGroup, id = "summary-request") => {
-          const subscription = sseClientMock.subscribe.mock.calls
-            .map(([value]) => value)
-            .findLast((value) => value.app === (isGroup ? "channels" : "chat"));
-          if (!subscription) {
-            throw new Error("expected message subscription");
-          }
-          const essay = { author: "~nec", content: [{ inline: [text] }], sent: sentAt };
+          const subscription = getSubscription(isGroup ? "channels" : "chat");
+          const essay = messageEssay("~nec", text, sentAt);
           await subscription.event(
             isGroup
               ? {
@@ -277,11 +166,11 @@ describe("monitorTlonProvider summary delivery", () => {
             sseClientMock.scry.mockImplementation(async (path) =>
               path === historyPath
                 ? Array.from({ length: 50 }, (_, index) => ({
-                    essay: {
-                      author: "~nec",
-                      content: [{ inline: [`current-server-message-${index}`] }],
-                      sent: 1_700_000_001_000 + index,
-                    },
+                    essay: messageEssay(
+                      "~nec",
+                      `current-server-message-${index}`,
+                      1_700_000_001_000 + index,
+                    ),
                   }))
                 : {},
             );

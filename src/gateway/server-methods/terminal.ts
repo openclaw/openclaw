@@ -47,7 +47,7 @@ import {
 } from "./terminal-open-plan.js";
 import { terminalUploadHandlers } from "./terminal-upload.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
-import { assertValidParams, type Validator } from "./validation.js";
+import { assertValidParams, defineValidatedGatewayHandler, type Validator } from "./validation.js";
 
 function invalid(respond: GatewayRequestHandlerOptions["respond"], detail: string): void {
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, detail));
@@ -528,11 +528,8 @@ function terminalSessionHandler<T extends { sessionId: string }>(
     params: T,
   ) => boolean,
 ): GatewayRequestHandlers[string] {
-  return async (opts) => {
+  return defineValidatedGatewayHandler(method, validate, async (opts) => {
     const { params, respond, context } = opts;
-    if (!assertValidParams(params, validate, method, respond)) {
-      return;
-    }
     const connId = requireConnId(opts);
     if (!connId) {
       return;
@@ -546,7 +543,7 @@ function terminalSessionHandler<T extends { sessionId: string }>(
     const manager = context.terminalSessions;
     const ok = (manager && operate(manager, connId, params)) ?? false;
     respond(true, { ok });
-  };
+  });
 }
 
 export const terminalHandlers: GatewayRequestHandlers = {

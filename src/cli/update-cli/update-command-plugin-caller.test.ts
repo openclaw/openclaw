@@ -2,7 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, assert, expect, it, vi } from "vitest";
 import * as convergence from "../../commands/doctor/shared/post-core-plugin-convergence.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import * as configIO from "../../config/io.factory.js";
@@ -190,6 +190,7 @@ async function exercisePersistence(state: OpenClawTestState, scenario: (typeof s
   };
   let configBoundaryReached = false;
   let refused: unknown;
+  let terminalFailure: UpdateCommandPendingRecoveryFailure | undefined;
   let completed: Awaited<ReturnType<typeof finishUpdate>> | undefined;
   const cohortScenario = scenario === "cohort-revoked";
   const npmUpdates = vi.spyOn(pluginUpdates, "updateNpmInstalledPlugins");
@@ -316,7 +317,8 @@ async function exercisePersistence(state: OpenClawTestState, scenario: (typeof s
           completed = await finishUpdate(params, { candidateRuntime });
         } catch (cause) {
           refused = cause;
-          // Terminal publication grants no new mutation authority or earlier history writes.
+          // Neither refusal nor its later diagnostic can rewrite history after
+          // the original executor has relinquished mutation authority.
           expect(readRun()).toEqual(runAtConvergence);
           expect(json).not.toHaveBeenCalled();
           throw cause;
@@ -330,16 +332,24 @@ async function exercisePersistence(state: OpenClawTestState, scenario: (typeof s
     withUpdateFailureTriage(
       { json: true, yes: true, run },
       { root: state.root, env: targetEnv },
-      () =>
-        withUpdateCommandTerminalResult((registerRun) => {
-          registerRun(run);
-          return execution();
-        }),
+      async () => {
+        try {
+          await withUpdateCommandTerminalResult((registerRun) => {
+            registerRun(run);
+            return execution();
+          });
+        } catch (cause) {
+          assert(cause instanceof UpdateCommandPendingRecoveryFailure);
+          terminalFailure = cause;
+          throw cause;
+        }
+      },
     );
   const terminal = finishWithTerminal();
   if (scenario === "healthy") {
     await terminal;
     expect(refused).toBeUndefined();
+    expect(terminalFailure).toBeUndefined();
     expect(completed).toMatchObject({
       status: "ok",
       postUpdate: { plugins: { changed: true, status: "ok", warnings: [] } },
@@ -352,8 +362,15 @@ async function exercisePersistence(state: OpenClawTestState, scenario: (typeof s
   } else {
     await expect(terminal).rejects.toMatchObject({ code: 1, name: new ExitError(1).name });
     expect(refused).toBeInstanceOf(UpdateCommandPendingRecoveryFailure);
+    assert(refused instanceof UpdateCommandPendingRecoveryFailure);
     expect(refused).toMatchObject({
-      result: { status: "error" },
+      result: {
+        status: "error",
+        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+      },
+      cause: expect.objectContaining({
+        message: expect.stringContaining("Update executor ownership is no longer current."),
+      }),
     });
     expect(await readConfig()).toBe(
       scenario === "registry-revoked" ? configAtRegistryRead : originalConfig,
@@ -371,23 +388,31 @@ async function exercisePersistence(state: OpenClawTestState, scenario: (typeof s
       expect(configAtRegistryRead).toBeDefined();
       expect(refused).toBe(registryRefusal);
     }
-    expect(json.mock.calls[0]?.[0]).toMatchObject({
+    const reported = json.mock.calls[0]?.[0];
+    assert(terminalFailure instanceof UpdateCommandPendingRecoveryFailure);
+    expect(terminalFailure.cause).toBe(refused);
+    expect(reported).toEqual({ ...terminalFailure.result, reportPath: expect.any(String) });
+    expect(reported).toMatchObject({
       status: "error",
-      reason: "update-executor-settlement-failed",
+      reason: "update-recovery-pending",
       steps: [
         {
-          name: "update-executor-settlement",
-          exitCode: 1,
-          stderrTail: expect.stringContaining("Update executor ownership is no longer current."),
+          name: "update",
+          exitCode: null,
+          failureFacts: expect.arrayContaining([
+            expect.objectContaining({
+              message: expect.stringContaining("Update executor ownership is no longer current."),
+            }),
+          ]),
         },
       ],
     });
-    expect(runAtPublication).toMatchObject({
-      status: "failed",
-      reason: "update-executor-settlement-failed",
-    });
+    expect(runAtConvergence).toBeDefined();
+    expect(runAtPublication).toEqual(runAtConvergence);
     expect(transport.exec).not.toHaveBeenCalled();
-    expect(error).not.toHaveBeenCalled();
+    expect(error).toHaveBeenCalledExactlyOnceWith(
+      `Update recovery remains pending (update-recovery-pending). Retained state and artifacts were left for the owning updater to reconcile; automatic restart and repair were not attempted.\n${terminalFailure.detail}`,
+    );
   }
   if (candidateRuntime) {
     expect(phase).toHaveBeenCalledOnce();
@@ -406,6 +431,7 @@ async function exercisePersistence(state: OpenClawTestState, scenario: (typeof s
   if (scenario === "host-link-recovery") {
     await expect(fs.lstat(peerLink)).rejects.toMatchObject({ code: "ENOENT" });
     const firstRunId = created.runId;
+    const firstRunSnapshot = runAtConvergence;
     const firstAssertCurrent = assertOriginalCurrent;
     recovering = true;
     configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
@@ -415,11 +441,13 @@ async function exercisePersistence(state: OpenClawTestState, scenario: (typeof s
     run = { runId: created.runId, env: state.env };
     completed = undefined;
     refused = undefined;
+    terminalFailure = undefined;
     await finishWithTerminal();
     expect(firstAssertCurrent).toThrow();
-    expect(readRun(firstRunId)?.status).toBe("failed");
+    expect(readRun(firstRunId)).toEqual(firstRunSnapshot);
     expect(created.runId).not.toBe(firstRunId);
     expect(refused).toBeUndefined();
+    expect(terminalFailure).toBeUndefined();
     expect(completed).toMatchObject({ status: "ok" });
     expect(runAtPublication?.status).toBe("succeeded");
     expect(await auditDeclaredOpenClawHostDependency({ packageDir: peerPackageDir })).toBeNull();

@@ -9,6 +9,7 @@ import {
 } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
+import { controlsForHovercard, HovercardControlsContext } from "../portaled-hovercard-focus.ts";
 import { createPortaledHovercard, createPortaledHovercardOwner } from "../portaled-hovercard.ts";
 import { SessionHovercardAutomations } from "../session-hovercard-automations.tsx";
 import "../session-hovercard.css";
@@ -60,17 +61,19 @@ it.each([1, 2])(
     controller.mount(trigger, card, "horizontal");
     const view = mountSolid(
       () => (
-        <div class="session-hovercard__context">
-          <SessionHovercardAutomations
-            automation={{
-              gateway: source.gateway,
-              sessionKey: "agent:main:task",
-              agentId: "main",
-              href: "/automations?session=agent%3Amain%3Atask&agent=main",
-              navigate: () => undefined,
-            }}
-          />
-        </div>
+        <HovercardControlsContext value={controlsForHovercard(card)}>
+          <div class="session-hovercard__context">
+            <SessionHovercardAutomations
+              automation={{
+                gateway: source.gateway,
+                sessionKey: "agent:main:task",
+                agentId: "main",
+                href: "/automations?session=agent%3Amain%3Atask&agent=main",
+                navigate: () => undefined,
+              }}
+            />
+          </div>
+        </HovercardControlsContext>
       ),
       { container: card },
     );

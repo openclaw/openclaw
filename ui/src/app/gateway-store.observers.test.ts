@@ -7,6 +7,7 @@ import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import { resolveAvatar } from "../lib/identity-avatar.ts";
 import { invalidateModelCatalogCache } from "../lib/model-catalog-cache.ts";
 import { loadModelCatalog } from "../lib/model-catalog-store.ts";
+import { requestSessionList } from "../lib/sessions/session-requests.ts";
 import {
   createGatewayEvent,
   createGatewayStoreTestStore as createStore,
@@ -138,7 +139,7 @@ describe("createApplicationGateway connection ownership", () => {
       expect(await loadModelCatalog(client, scope)).toEqual(catalog);
       expect(
         current().request.mock.calls.filter(([method]) => method === "models.list"),
-      ).toHaveLength(1);
+      ).toHaveLength(recovery === "refresh" ? 2 : 1);
     },
   );
 
@@ -401,13 +402,17 @@ describe("createApplicationGateway connection ownership", () => {
   });
 
   it.each([false, true])(
-    "discards a gapped frame when recovery replaces its client (observer=%s)",
-    (observer) => {
+    "retains row bases through gap recovery unless an observer replaces the client (observer=%s)",
+    async (observer) => {
       const listener = vi.fn();
       gateway.subscribeEventLog(() => {});
       gateway.subscribeEvents(listener);
       connect();
       const stale = current();
+      const row = { key: "agent:main:held", kind: "direct" as const };
+      stale.request.mockResolvedValue({ sessions: [row], rowsRevision: "held-revision" });
+      const query = { rowMode: "sidebar" as const };
+      await requestSessionList(gateway.snapshot.client!, query, () => true);
       if (observer) {
         gateway.subscribe((snapshot) => {
           if (snapshot.lastError?.startsWith("event gap detected")) {
@@ -415,12 +420,31 @@ describe("createApplicationGateway connection ownership", () => {
           }
         });
       }
-      // The protocol invokes onGap before onEvent for the same received frame.
+      // The protocol drops the gapped frame and owns socket reconnection.
       stale.opts.onGap?.({ expected: 2, received: 5 });
-      stale.opts.onEvent?.(createGatewayEvent("stale.gap", { stale: true }, 5));
+      expect(clients).toHaveLength(observer ? 2 : 1);
+      if (observer) {
+        stale.opts.onEvent?.(createGatewayEvent("stale.gap", { stale: true }, 5));
+      } else {
+        stale.opts.onClose?.({ code: 4000, reason: "event sequence gap", willRetry: true });
+        stale.opts.onHello?.(HELLO);
+        stale.request.mockResolvedValue({
+          sessions: [],
+          rowsRevision: "held-revision",
+          rowsUnchanged: true,
+        });
+        expect(await requestSessionList(gateway.snapshot.client!, query, () => true)).toMatchObject(
+          {
+            sessions: [row],
+          },
+        );
+        expect(stale.request).toHaveBeenLastCalledWith(
+          "sessions.list",
+          expect.objectContaining({ ifRowsRevision: "delta:held-revision" }),
+        );
+      }
       expect(listener).not.toHaveBeenCalled();
       expect(gateway.eventLog).toEqual([]);
-      expect(clients).toHaveLength(2);
       expect(current().started).toBe(1);
       expect(gateway.snapshot.client).toBe(current());
       const activeEvent = createGatewayEvent("fresh.event", { active: true }, 6);

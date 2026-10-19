@@ -79,8 +79,15 @@ export function ComposerPastedText(componentProps: {
       {t("chat.attachments.showInTextField")}
     </button>
   );
-  // Keep the focused composer control mounted when attachment props refresh.
+  // Peer attachment updates must preserve the composer's focused action nodes.
   const composerAction = restoreAction();
+  const composerRemoveAction = (
+    <AttachmentRemove
+      label={removeLabel()}
+      disabled={componentProps.controls.disabled}
+      onClick={remove}
+    />
+  );
   const open = () => {
     if (!current()) {
       return;
@@ -125,13 +132,7 @@ export function ComposerPastedText(componentProps: {
       scope={componentProps.attachment.id}
       onOpen={open}
       composerAction={composerAction}
-      composerRemoveAction={
-        <AttachmentRemove
-          label={removeLabel()}
-          disabled={componentProps.controls.disabled}
-          onClick={remove}
-        />
-      }
+      composerRemoveAction={composerRemoveAction}
     />
   );
 }

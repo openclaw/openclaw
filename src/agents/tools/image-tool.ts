@@ -52,7 +52,6 @@ import {
 import {
   buildToolModelConfigFromCandidates,
   hasToolModelConfig,
-  loadLegacyToolAuthProfileStore,
   prepareToolAuthProfileStore,
   resolveDefaultModelRef,
   resolveOpenAiImageMediaCandidate,
@@ -245,11 +244,6 @@ export function createImageTool(options?: {
   currentChannelId?: string | null;
   /** If true, the model has native vision capability and images in the prompt are auto-injected */
   modelHasVision?: boolean;
-  /**
-   * Avoid resolving auto image-provider/model candidates while registering the
-   * tool. The concrete image model is still resolved before execution.
-   */
-  deferAutoModelResolution?: boolean;
 }): AnyAgentTool | null {
   const agentDir = options?.agentDir?.trim();
   const modelHasVision = options?.modelHasVision === true;
@@ -267,24 +261,6 @@ export function createImageTool(options?: {
           imageModelConfig: explicit,
         })
       : null;
-  const shouldResolveAutoImageModel =
-    !modelHasVision && !explicitImageModelConfig && !options?.deferAutoModelResolution;
-  const resolveInitialModelConfig = (authStore: AuthProfileStore | undefined) =>
-    resolveImageModelConfigForTool({
-      cfg: options?.config,
-      agentDir,
-      workspaceDir: options?.workspaceDir,
-      authStore,
-      preparedModelRuntime: options?.preparedModelRuntime,
-    });
-  const resolvedImageModelConfig = shouldResolveAutoImageModel
-    ? resolveInitialModelConfig(
-        options?.authProfileStore ?? loadLegacyToolAuthProfileStore(agentDir),
-      )
-    : explicitImageModelConfig;
-  if (!modelHasVision && !resolvedImageModelConfig && !options?.deferAutoModelResolution) {
-    return null;
-  }
   const remoteMediaSsrfPolicy = options?.config?.tools?.web?.fetch?.ssrfPolicy;
 
   const description = modelHasVision
@@ -372,7 +348,7 @@ export function createImageTool(options?: {
           imageRoute = { kind: "native" };
         } else {
           let imageModelConfig =
-            resolvedImageModelConfig ??
+            explicitImageModelConfig ??
             resolveImageModelConfigForOverride({
               cfg: options?.config,
               modelOverride,
@@ -380,7 +356,13 @@ export function createImageTool(options?: {
           if (!imageModelConfig) {
             const authStore = await prepareToolAuthProfileStore(options);
             assertCurrent();
-            imageModelConfig = resolveInitialModelConfig(authStore);
+            imageModelConfig = resolveImageModelConfigForTool({
+              cfg: options?.config,
+              agentDir,
+              workspaceDir: options?.workspaceDir,
+              authStore,
+              preparedModelRuntime: options?.preparedModelRuntime,
+            });
           }
           if (!imageModelConfig) {
             throw new Error(

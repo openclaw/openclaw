@@ -5,10 +5,12 @@ import type { BoardViewCallbacks } from "../../lib/board/provider.ts";
 import type { BoardSnapshot } from "../../lib/board/types.ts";
 import type { BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
 import type { PresentationValue } from "../../lib/presentation.ts";
+import { elementRef } from "../../lib/reactive/element-ref.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { usePanePresentation } from "./chat-pane-presentation.ts";
 
 export type BoardSessionSurfaceProps = {
+  onViewRef?: (element: HTMLElementTagNameMap["openclaw-board-view"]) => void | (() => void);
   active: PresentationValue;
   session: BoardGetParams;
   snapshot: BoardSnapshot | undefined;
@@ -26,6 +28,7 @@ export function BoardSessionSurface(props: BoardSessionSurfaceProps & { elementR
     <div class="board-session-surface" hidden={!active()} inert={!active()}>
       <div class="board-session-surface__board">
         <openclaw-board-view
+          ref={[elementRef(props.onViewRef)]}
           prop:active={active()}
           prop:session={props.session}
           prop:snapshot={props.snapshot}
