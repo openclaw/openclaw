@@ -23,20 +23,26 @@ afterEach(resetSecretRedactionRegistryForTest);
 
 const anthropicModel = makeProviderModelFixture<"anthropic-messages">({
   id: "claude-test",
-  name: "Claude test",
   api: "anthropic-messages",
   provider: "anthropic",
   baseUrl: "https://api.anthropic.com",
-  maxTokens: 1_024,
 });
 
 const textBlock = (text: string) => ({ type: "text" as const, text });
+const imageBlock = (data: string, mimeType: string) => ({ type: "image" as const, data, mimeType });
 const wireImage = (data: string, media_type: string) => ({
   type: "image",
   source: { type: "base64", media_type, data },
 });
+const userMessage = (content: unknown[]) => ({ role: "user", content });
+const toolImageContent = <T>(image: T) => [
+  textBlock("before tool image"),
+  image,
+  textBlock("after tool image"),
+];
 
-function toolExchange(content: ToolResultMessage["content"], id = "call-1"): Context["messages"] {
+function toolExchange(content: ToolResultMessage["content"]): Context["messages"] {
+  const id = "call-1";
   return [
     {
       role: "assistant",
@@ -52,10 +58,7 @@ function toolExchange(content: ToolResultMessage["content"], id = "call-1"): Con
   ];
 }
 
-async function captureAnthropic(
-  context: Context,
-  model: Model<"anthropic-messages"> = anthropicModel,
-) {
+async function captureAnthropic(context: Context, model = anthropicModel) {
   let payload: unknown;
   const stream = streamSimpleAnthropic(model, context, {
     apiKey: "test-provider-key",
@@ -89,21 +92,10 @@ it("keeps complete canonical user and tool-result images through the installed h
             timestamp: 0,
             content: [
               { type: "text", text: "user image" },
-              {
-                type: "image",
-                data: ` ${jpegData.slice(0, 80)}\n${jpegData.slice(80)} `,
-                mimeType: "image/png",
-              },
+              imageBlock(` ${jpegData.slice(0, 80)}\n${jpegData.slice(80)} `, "image/png"),
             ],
           },
-          ...toolExchange(
-            [
-              textBlock("before tool image"),
-              { type: "image", data: pngData.replace(/=+$/, ""), mimeType: "image/jpeg" },
-              textBlock("after tool image"),
-            ],
-            "image-1",
-          ),
+          ...toolExchange(toolImageContent(imageBlock(pngData.replace(/=+$/, ""), "image/jpeg"))),
         ],
       },
       { ...anthropicModel, input: ["text", "image"] },
@@ -112,25 +104,15 @@ it("keeps complete canonical user and tool-result images through the installed h
     expect(network).not.toHaveBeenCalled();
     expect(payload).toMatchObject({
       messages: [
-        {
-          role: "user",
-          content: [textBlock("user image"), wireImage(jpegData, "image/jpeg")],
-        },
-        { role: "assistant", content: [{ type: "tool_use", id: "image-1" }] },
-        {
-          role: "user",
-          content: [
-            {
-              type: "tool_result",
-              tool_use_id: "image-1",
-              content: [
-                textBlock("before tool image"),
-                wireImage(pngData, "image/png"),
-                textBlock("after tool image"),
-              ],
-            },
-          ],
-        },
+        userMessage([textBlock("user image"), wireImage(jpegData, "image/jpeg")]),
+        { role: "assistant", content: [{ type: "tool_use", id: "call-1" }] },
+        userMessage([
+          {
+            type: "tool_result",
+            tool_use_id: "call-1",
+            content: toolImageContent(wireImage(pngData, "image/png")),
+          },
+        ]),
       ],
     });
   } finally {
@@ -138,51 +120,40 @@ it("keeps complete canonical user and tool-result images through the installed h
   }
 });
 
-it("preserves a nested transport code after installed host redaction", () => {
+it.each([false, true])("redacts nested codes only when registered (%s)", (registered) => {
+  if (registered) {
+    registerSecretValueForRedaction("EAI_AGAIN");
+  }
   const cause = Object.assign(new Error("getaddrinfo failed at fixture.invalid"), {
     code: "EAI_AGAIN",
     authorization: "Bearer fixture-sensitive-authorization",
   });
   const projected = projectProviderError(new Error("Connection error.", { cause }));
-  expect(projected).toEqual({
-    stopReason: "error",
-    errorMessage: "Connection error.",
-    errorCode: "EAI_AGAIN",
-  });
-});
-
-it("keeps registered transport strings secret in provider errors", () => {
-  registerSecretValueForRedaction("EAI_AGAIN");
-  const cause = Object.assign(new Error("lookup failed"), { code: "EAI_AGAIN" });
-  expect(projectProviderError(new Error("Connection error.", { cause })).errorCode).not.toBe(
-    "EAI_AGAIN",
+  expect(projected).toEqual(
+    registered
+      ? expect.not.objectContaining({ errorCode: "EAI_AGAIN" })
+      : {
+          stopReason: "error",
+          errorMessage: "Connection error.",
+          errorCode: "EAI_AGAIN",
+        },
   );
 });
 
 it("redacts registered opaque secrets from ordinary provider error messages", () => {
   const secret = "opaque-configured-provider-value";
   registerSecretValueForRedaction(secret);
-
-  const projected = projectProviderError({
-    message: `provider rejected configured value ${secret}`,
-  });
-
+  const message = `provider rejected configured value ${secret}`;
+  const projected = projectProviderError({ message });
   expect(projected.errorMessage).toContain("provider rejected configured value");
   expect(projected.errorMessage).not.toContain(secret);
 });
 
 it("carries original tool results into Anthropic and OpenAI-compatible payloads", async () => {
-  const configCredential = "unquoted-provider-config-credential-1234567890";
-  const envCredential = "provider-env-credential-1234567890";
-  const sourceLines = [
-    "API_TOKEN = computeToken()",
-    "API_KEY: str = computeKey()",
-    "api_key: ConfigValue",
-  ];
   const files: Record<string, string> = {
-    "settings.yaml": `api_key: ${configCredential}`,
-    "production.env": `API_KEY=${envCredential}`,
-    "settings.py": sourceLines.join("\n"),
+    "settings.yaml": "api_key: unquoted-provider-config-credential-1234567890",
+    "production.env": "API_KEY=provider-env-credential-1234567890",
+    "settings.py": "API_TOKEN = computeToken()\nAPI_KEY: str = computeKey()\napi_key: ConfigValue",
   };
   const readTool = createOpenClawReadTool({
     name: "read",
@@ -221,7 +192,6 @@ it("carries original tool results into Anthropic and OpenAI-compatible payloads"
   const openAiModel = {
     ...anthropicModel,
     id: "openai-compatible-test",
-    name: "OpenAI-compatible test",
     api: "openai-completions",
     provider: "openai",
     baseUrl: "https://api.openai.com/v1",
@@ -234,13 +204,13 @@ it("carries original tool results into Anthropic and OpenAI-compatible payloads"
 
   for (const payload of [anthropicPayload, openAiPayload]) {
     const serialized = JSON.stringify(payload);
-    expect(serialized).toContain("if let token = timeObserverToken {");
-    expect(serialized).toContain(String.raw`\\\"token\\\":\\\"timeObserverToken\\\"`);
-    for (const sourceLine of sourceLines) {
-      expect(serialized).toContain(sourceLine);
+    for (const text of [
+      "if let token = timeObserverToken {",
+      String.raw`\\\"token\\\":\\\"timeObserverToken\\\"`,
+      "provider-secret-value",
+      ...Object.values(files).flatMap((source) => source.split("\n")),
+    ]) {
+      expect(serialized).toContain(text);
     }
-    expect(serialized).toContain("provider-secret-value");
-    expect(serialized).toContain(configCredential);
-    expect(serialized).toContain(envCredential);
   }
 });
