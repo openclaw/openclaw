@@ -11,6 +11,15 @@ import { captureControlUiE2eRendererStall } from "./control-ui-e2e-renderer-stal
 const CONTROL_UI_E2E_DIAGNOSTIC_RING_LIMIT = 200;
 const controlUiE2ePageDiagnostics = new WeakMap<Page, ControlUiE2eDiagnosticEvent[]>();
 const controlUiE2eUnhandledRejectionPages = new WeakSet<Page>();
+const controlUiE2eFailureFacts = new WeakMap<Page, Record<string, boolean | number | null>>();
+
+/** Callers supply fixed diagnostic keys and scalar facts, never user content or identifiers. */
+export function recordControlUiE2eFailureFacts(
+  page: Page,
+  facts: Record<string, boolean | number | null>,
+): void {
+  controlUiE2eFailureFacts.set(page, { ...controlUiE2eFailureFacts.get(page), ...facts });
+}
 type ControlUiE2ePageLifecycle = {
   registeredAt: string;
   firstCrashAt: string | null;
@@ -621,6 +630,7 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
     rendererStall: await captureControlUiE2eRendererStall(page, rendererRead),
     models,
     gatewayRpc: controlUiRpcDiagnostics.get(page) ?? [],
+    scenarioFacts: controlUiE2eFailureFacts.get(page) ?? null,
     frameDepthCounts,
     route: {
       pathname: knownRoute ? pathForRoute(knownRoute) : null,

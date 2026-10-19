@@ -37,6 +37,7 @@ export class LobsterPetOwner {
   private anchor: plans.LobsterPetAnchor = "top";
   private readonly geometry = new LobsterComposerGeometry(
     this.host,
+    () => this.host.composerElements?.() ?? null,
     () => this.inputs.residentEnabled && this.twinPlanned,
     () => this.refresh(),
   );
@@ -126,7 +127,7 @@ export class LobsterPetOwner {
   private readonly listeners = new Set<() => void>();
 
   constructor(
-    private readonly host: HTMLElement,
+    private readonly host: HTMLElement & Pick<contract.LobsterPetProps, "composerElements">,
     private readonly disableVisits: () => void,
     private inputs: Readonly<contract.LobsterPetProps>,
   ) {}

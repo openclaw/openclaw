@@ -1,6 +1,7 @@
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { ProviderHttpError, readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import {
+  externalContentStamp,
   buildSearchCacheKey,
   DEFAULT_SEARCH_COUNT,
   mergeScopedSearchConfig,
@@ -385,12 +386,7 @@ export async function executeExaWebSearchProviderTool(
     provider: "exa",
     count: results.length,
     tookMs: Date.now() - start,
-    externalContent: {
-      untrusted: true,
-      source: "web_search",
-      provider: "exa",
-      wrapped: true,
-    },
+    externalContent: externalContentStamp("exa"),
     results: results.map((entry) => {
       const title = typeof entry.title === "string" ? entry.title : "";
       const url = typeof entry.url === "string" ? entry.url : "";

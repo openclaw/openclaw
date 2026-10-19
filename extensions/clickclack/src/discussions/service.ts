@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import type { OpenClawPluginGatewayEvents, PluginRuntime } from "openclaw/plugin-sdk/core";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
@@ -40,7 +39,6 @@ import {
 } from "./naming.js";
 import { DiscussionReconcileScheduler } from "./reconcile-scheduler.js";
 import {
-  clearClickClackDiscussionChannelRevoked,
   isClickClackDiscussionChannelRevokedAsync,
   markClickClackDiscussionChannelRevoked,
   prepareClickClackDiscussionChannelRevocation,
@@ -48,6 +46,7 @@ import {
 import { readDiscussionHistory } from "./service-history.js";
 import {
   assertChannelPatch,
+  finalizePendingDiscussionBinding,
   reconcilePendingDiscussionOpen,
   openClickClackDiscussionBinding,
   renameDiscussionChannel,
@@ -55,12 +54,6 @@ import {
 import { prepareDiscussionSessionEntry } from "./session-authority.js";
 
 const RECONCILE_INTERVAL_MS = 60_000;
-type DiscussionServiceOptions = {
-  clientFactory?: (account: ResolvedClickClackAccount) => ClickClackClient;
-  installationId?: string;
-  bindingGenerationFactory?: () => string;
-  maxRetainedDetachedBindings?: number;
-};
 
 type DiscussionBindingUseResolution = DiscussionBindingAccountResolution | { state: "retargeted" };
 
@@ -70,7 +63,6 @@ export class ClickClackDiscussionService {
   readonly #store: ClickClackDiscussionBindingStore;
   readonly #clientFactory: (account: ResolvedClickClackAccount) => ClickClackClient;
   #installationId: string | undefined;
-  readonly #bindingGenerationFactory: () => string;
   readonly #detachedBindings: DetachedDiscussionBindingRetention;
   readonly #sessionQueue = new KeyedAsyncQueue();
   #scheduler: PluginServiceSchedulerV1 | undefined;
@@ -84,18 +76,15 @@ export class ClickClackDiscussionService {
   #cleanupPromise: Promise<void> | undefined;
   readonly #operations = new Set<Promise<unknown>>();
 
-  constructor(runtime: PluginRuntime, options: DiscussionServiceOptions = {}) {
+  constructor(runtime: PluginRuntime) {
     this.#runtime = runtime;
     this.#store = getClickClackDiscussionBindingStore(runtime);
-    this.#clientFactory =
-      options.clientFactory ??
-      ((account) => createClickClackClient({ baseUrl: account.apiEndpoint, token: account.token }));
-    this.#installationId = options.installationId;
-    this.#bindingGenerationFactory = options.bindingGenerationFactory ?? randomUUID;
+    this.#clientFactory = (account) =>
+      createClickClackClient({ baseUrl: account.apiEndpoint, token: account.token });
     this.#detachedBindings = new DetachedDiscussionBindingRetention({
       runtime,
       store: this.#store,
-      maxRetained: options.maxRetainedDetachedBindings ?? MAX_RETAINED_DETACHED_DISCUSSION_BINDINGS,
+      maxRetained: MAX_RETAINED_DETACHED_DISCUSSION_BINDINGS,
     });
     this.provider = {
       id: "clickclack",
@@ -239,15 +228,12 @@ export class ClickClackDiscussionService {
         account,
         clientFactory: this.#clientFactory,
         installationId: this.#installationId,
-        bindingGenerationFactory: this.#bindingGenerationFactory,
         sessionKey,
         ensureTimer: () => this.#ensureTimer(),
         reconcilePendingOpen: (pending) =>
           this.#reconcilePendingOpen(pending, { allowRetry: false }),
         withChannelMutationLock: (run) => this.#withChannelMutationLock(run),
         ensureBindingCapacity: (key) => this.#detachedBindings.ensureCapacity(key),
-        finalizePendingBinding: (key, nextBinding) =>
-          this.#finalizePendingBinding(key, nextBinding),
         warn: (message) => this.#logger().warn(message),
       });
     } finally {
@@ -357,7 +343,7 @@ export class ClickClackDiscussionService {
     binding: ClickClackDiscussionBinding,
     resolvedAccount?: ResolvedClickClackAccount,
   ): Promise<void> {
-    await this.#finalizePendingBinding(sessionKey, binding);
+    await finalizePendingDiscussionBinding(this.#runtime, sessionKey, binding);
     if (
       await isClickClackDiscussionChannelRevokedAsync({
         runtime: this.#runtime,
@@ -587,7 +573,6 @@ export class ClickClackDiscussionService {
       clientFactory: this.#clientFactory,
       pending,
       ...options,
-      finalizePendingBinding: (key, binding) => this.#finalizePendingBinding(key, binding),
       open: (key) => this.#open(key),
     });
   }
@@ -619,28 +604,6 @@ export class ClickClackDiscussionService {
       return false;
     }
     return await this.#store.deleteIfCurrent(sessionKey, binding);
-  }
-
-  async #finalizePendingBinding(
-    sessionKey: string,
-    binding: ClickClackDiscussionBinding,
-  ): Promise<void> {
-    const pending = await getPendingDiscussionOpen(this.#runtime, sessionKey);
-    if (pending?.externalRef === binding.externalRef) {
-      // A matching binding is the durable commit record. Clear the fail-closed
-      // tombstone first, then the recovery reservation; every crash point can
-      // replay this sequence without orphaning the remote channel.
-      await clearClickClackDiscussionChannelRevoked({
-        runtime: this.#runtime,
-        serverBaseUrl: binding.serverBaseUrl,
-        channelId: binding.channelId,
-      });
-      await clearDiscussionBindingGeneration({
-        runtime: this.#runtime,
-        sessionKey,
-        expectedGeneration: pending.generation,
-      });
-    }
   }
 
   async #resolveBindingForUse(

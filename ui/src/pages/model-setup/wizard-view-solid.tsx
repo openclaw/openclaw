@@ -33,6 +33,12 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
   const autofocusRef = (element: HTMLElement) => {
     focusTargets.add(element);
   };
+  const initialFocus = () =>
+    [...focusTargets]
+      .filter((element) => element.isConnected && element.autofocus)
+      .toSorted((left, right) =>
+        left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
+      )[0] ?? null;
   // Focus the committed wizard step after its identity or completion actions change.
   createPendingFocus(
     () =>
@@ -43,12 +49,7 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
       requested: () => true,
       focus: () => {
         focusTargets = new Set([...focusTargets].filter((element) => element.isConnected));
-        const target = [...focusTargets]
-          .filter((element) => element.autofocus)
-          .toSorted((left, right) =>
-            left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
-          )[0];
-        target?.focus({ preventScroll: true });
+        initialFocus()?.focus({ preventScroll: true });
       },
     },
   );
@@ -61,6 +62,7 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
   return (
     <Show when={props.state.phase !== "idle"}>
       <openclaw-modal-dialog
+        prop:initialFocus={initialFocus}
         ref={(element) => props.onDialogRef?.(element)}
         label={t(copy().dialog)}
         onModal-cancel={() => (canCancel() ? props.onCancel() : props.onClose())}

@@ -1,5 +1,6 @@
-import { createMemo } from "solid-js";
+import { createMemo, onSettled } from "solid-js";
 import type { AgentSelectElement } from "../../components/agent-select.ts";
+import type { PopoverHandle } from "../../components/solid/popover.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { normalizeAgentTargetLabel } from "../../lib/agents/display.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
@@ -66,11 +67,17 @@ export function AgentSelect(props: {
 export function RequiredSessionPlacement(props: {
   gateway: DraftGatewayState;
   retryRef?: (button: HTMLButtonElement) => void;
+  ref?: (element: HTMLSpanElement) => void;
 }) {
   const profile = () =>
     props.gateway.cloudProfiles.find((candidate) => candidate.id === props.gateway.requiredProfile);
   return (
-    <span class="new-session-page__select" role="status" data-required-placement>
+    <span
+      class="new-session-page__select"
+      role="status"
+      data-required-placement
+      ref={(element) => props.ref?.(element)}
+    >
       {!props.gateway.placementPolicyReady
         ? t("newSession.placementNotReady")
         : !profile()
@@ -95,7 +102,27 @@ export function RequiredSessionPlacement(props: {
   );
 }
 
-export function NewSessionPlaceControls(props: { params: NewSessionPlaceControlsOptions }) {
+export function NewSessionPlaceControls(props: {
+  params: NewSessionPlaceControlsOptions;
+  ref?: (elements: () => readonly HTMLElement[]) => void;
+}) {
+  let required: HTMLSpanElement | undefined;
+  let terminal: HTMLElement | undefined;
+  let where: PopoverHandle | undefined;
+  let workspace: HTMLDivElement | undefined;
+  let deviceFolder: HTMLLabelElement | undefined;
+  onSettled(() => {
+    props.ref?.(() =>
+      [
+        required,
+        terminal,
+        where?.overlay.trigger?.parentElement ?? undefined,
+        where?.overlay.surface,
+        workspace,
+        deviceFolder,
+      ].filter((element): element is HTMLElement => element?.isConnected === true),
+    );
+  });
   const folderValue = liveValue(() => props.params.place.folder);
   const deviceFolderValue = liveValue(() => props.params.place.deviceFolder?.path ?? "");
   const view = createMemo(() => {
@@ -315,11 +342,19 @@ export function NewSessionPlaceControls(props: { params: NewSessionPlaceControls
   return (
     <>
       {props.params.place.requiredPlacement ? (
-        <RequiredSessionPlacement gateway={props.params.gateway} />
+        <RequiredSessionPlacement
+          gateway={props.params.gateway}
+          ref={(element) => {
+            required = element;
+          }}
+        />
       ) : (
         <>
           {view().nativeTerminal ? (
             <NewSessionTerminalHost
+              ref={(element) => {
+                terminal = element;
+              }}
               params={{
                 hosts: props.params.data?.terminalHosts,
                 hostId: props.params.place.terminalHostId,
@@ -328,9 +363,17 @@ export function NewSessionPlaceControls(props: { params: NewSessionPlaceControls
               }}
             />
           ) : (
-            <WhereChip params={whereParams()} />
+            <WhereChip
+              params={whereParams()}
+              ref={(handle) => {
+                where = handle;
+              }}
+            />
           )}
           <div
+            ref={(element) => {
+              workspace = element;
+            }}
             class={[
               "new-session-page__workspace",
               {
@@ -366,7 +409,12 @@ export function NewSessionPlaceControls(props: { params: NewSessionPlaceControls
             ) : undefined}
           </div>
           {props.params.place.deviceFolder ? (
-            <label class="new-session-page__select new-session-page__menu-field new-session-page__device-folder">
+            <label
+              class="new-session-page__select new-session-page__menu-field new-session-page__device-folder"
+              ref={(element) => {
+                deviceFolder = element;
+              }}
+            >
               <span>{t("newSession.deviceFolderPath")}</span>
               <input
                 aria-label={t("newSession.deviceFolderPath")}

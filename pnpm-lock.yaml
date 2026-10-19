@@ -2251,9 +2251,6 @@ importers:
       '@openclaw/fs-safe':
         specifier: 0.26.8
         version: 0.26.8
-      ws:
-        specifier: 8.22.0
-        version: 8.22.0
       zod:
         specifier: 4.6.5
         version: 4.6.5

@@ -9,7 +9,10 @@ import {
   type Page,
 } from "playwright";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, inject, vi } from "vitest";
-import { getActiveGatewayRootWorkCount } from "../../../src/process/gateway-work-admission.js";
+import {
+  getActiveGatewayRootWorkCount,
+  getActiveGatewayRootWorkHolders,
+} from "../../../src/process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../src/shared/deferred.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
@@ -360,10 +363,14 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
         held.pages.clear();
         // Requests outlive sockets; pending handlers must release their admission
         // roots before fixture cleanup. waitFor also works in afterAll.
-        await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0), {
-          interval: 100,
-          timeout: 15_000,
-        });
+        await vi.waitFor(
+          () =>
+            expect(
+              getActiveGatewayRootWorkCount(),
+              `Unsettled Gateway roots: ${getActiveGatewayRootWorkHolders().join(", ")}`,
+            ).toBe(0),
+          { interval: 100, timeout: 15_000 },
+        );
         openBrowserContexts.delete(context);
       });
       contextClosures.set(context, closing);
