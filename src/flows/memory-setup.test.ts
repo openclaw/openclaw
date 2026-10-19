@@ -48,22 +48,32 @@ vi.mock("../cli/command-secret-targets.js", () => ({
   getMemoryEmbeddingCommandSecretTargetIds: () => new Set(["models.providers.*.apiKey"]),
 }));
 
-function adapter(id = "remote-a", provider?: EmbeddingProvider): MemoryEmbeddingProviderAdapter {
+function embeddingProvider(overrides: Partial<EmbeddingProvider> = {}): EmbeddingProvider {
+  return {
+    id: "remote-a",
+    model: "embed-default",
+    embed: vi.fn(async () => [0.1, 0.2]),
+    embedBatch: vi.fn(async () => [[0.1, 0.2]]),
+    close: vi.fn(async () => {}),
+    ...overrides,
+  };
+}
+
+function adapter(
+  id = "remote-a",
+  provider = embeddingProvider({ id }),
+): MemoryEmbeddingProviderAdapter {
   return {
     id,
     defaultModel: "embed-default",
     transport: "remote",
     authProviderId: id,
-    create: vi.fn(async () => ({
-      provider: provider ?? {
-        id,
-        model: "embed-default",
-        embed: vi.fn(async () => [0.1, 0.2]),
-        embedBatch: vi.fn(async () => [[0.1, 0.2]]),
-        close: vi.fn(async () => {}),
-      },
-    })),
+    create: vi.fn(async () => ({ provider })),
   };
+}
+
+function memoryConfig(search: NonNullable<OpenClawConfig["memory"]>["search"]): OpenClawConfig {
+  return { memory: { search } };
 }
 
 function prompter(params: { confirms?: boolean[]; selects?: string[]; texts?: string[] } = {}) {
@@ -94,21 +104,15 @@ describe("memory setup", () => {
     chosen.supportsMultimodalEmbeddings = () => false;
     mocks.get.mockReturnValue(chosen);
     const config: OpenClawConfig = {
-      memory: {
-        search: {
-          provider: "gemini",
-          model: "gemini-embedding-2-preview",
-          fallback: "none",
-          query: { maxResults: 7 },
-        },
-      },
+      ...memoryConfig({
+        provider: "gemini",
+        model: "gemini-embedding-2-preview",
+        fallback: "none",
+        query: { maxResults: 7 },
+      }),
       agents: {
         entries: {
-          main: {
-            memory: {
-              search: { multimodal: { enabled: true, modalities: ["image"] } },
-            },
-          },
+          main: { memory: { search: { multimodal: { enabled: true, modalities: ["image"] } } } },
         },
       },
     };
@@ -129,7 +133,7 @@ describe("memory setup", () => {
   });
 
   it("skips before catalog or provider runtime access and preserves identity", async () => {
-    const config: OpenClawConfig = { memory: { search: { enabled: false } } };
+    const config = memoryConfig({ enabled: false });
     const result = await runMemorySetupFlow(config, prompter({ confirms: [false] }));
     expect(result).toBe(config);
     expect(mocks.snapshot).not.toHaveBeenCalled();
@@ -190,9 +194,7 @@ describe("memory setup", () => {
 
   it("keeps existing credentials as the ref-mode default and offers no plaintext entry", async () => {
     const prompts = prompter();
-    const config: OpenClawConfig = {
-      memory: { search: { provider: "remote-a", remote: { apiKey: "saved-key" } } },
-    };
+    const config = memoryConfig({ provider: "remote-a", remote: { apiKey: "saved-key" } });
     await runMemorySetupFlow(config, prompts, { secretInputMode: "ref" });
     const credentialPrompt = vi.mocked(prompts.select).mock.calls[1]?.[0];
     expect(credentialPrompt?.initialValue).toBe("existing");
@@ -204,9 +206,11 @@ describe("memory setup", () => {
     mocks.resolveRef.mockResolvedValue("current-probe-key");
     const chosen = adapter();
     mocks.get.mockReturnValue(chosen);
-    const config: OpenClawConfig = {
-      memory: { search: { provider: "remote-a", model: "embed-default", remote: { apiKey: ref } } },
-    };
+    const config = memoryConfig({
+      provider: "remote-a",
+      model: "embed-default",
+      remote: { apiKey: ref },
+    });
     const result = await runMemorySetupFlow(config, prompter());
     expect(result.memory?.search?.remote?.apiKey).toEqual(ref);
     expect(chosen.create).toHaveBeenCalledWith(
@@ -255,18 +259,9 @@ describe("memory setup", () => {
           expect(allowedPaths).toEqual(
             new Set([keyPath, keyPath.replace(/\.apiKey$/, '.headers["X.Tenant.Key"]')]),
           );
-          return {
-            effectiveConfig: {
-              ...draft,
-              models: {
-                ...draft.models,
-                providers: {
-                  ...draft.models?.providers,
-                  [owner]: { ...draft.models?.providers?.[owner], apiKey: "probe-only-key" },
-                },
-              },
-            },
-          };
+          const effectiveConfig = structuredClone(draft);
+          effectiveConfig.models!.providers![owner]!.apiKey = "probe-only-key";
+          return { effectiveConfig };
         },
       );
       const chosen = { ...adapter(selected), authProviderId: adapterOwner ?? owner };
@@ -276,37 +271,25 @@ describe("memory setup", () => {
         prompter({ selects: [selected, "existing"] }),
       );
       expect(result.models?.providers?.[owner]?.apiKey).toEqual(ref);
-      expect(chosen.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          config: expect.objectContaining({
-            models: expect.objectContaining({
-              providers: expect.objectContaining({
-                [owner]: expect.objectContaining({ apiKey: "probe-only-key" }),
-              }),
-            }),
-          }),
-        }),
-      );
+      expect(
+        vi.mocked(chosen.create).mock.calls[0]?.[0].config.models?.providers?.[owner],
+      ).toMatchObject({ apiKey: "probe-only-key" });
     },
   );
 
   it("does not send old destination credentials or headers to a new provider", async () => {
     const chosen = adapter("remote-b");
     mocks.get.mockReturnValue(chosen);
-    const config: OpenClawConfig = {
-      memory: {
-        search: {
-          provider: "remote-a",
-          model: "old",
-          remote: {
-            baseUrl: "https://old.example",
-            apiKey: "old-secret",
-            headers: { Authorization: "old-secret" },
-            batch: { enabled: false },
-          },
-        },
+    const config = memoryConfig({
+      provider: "remote-a",
+      model: "old",
+      remote: {
+        baseUrl: "https://old.example",
+        apiKey: "old-secret",
+        headers: { Authorization: "old-secret" },
+        batch: { enabled: false },
       },
-    };
+    });
     const result = await runMemorySetupFlow(
       config,
       prompter({ selects: ["remote-b", "existing"] }),
@@ -319,12 +302,14 @@ describe("memory setup", () => {
 
   it("keeps the original config on failed probe, save refusal, and cancellation", async () => {
     const config: OpenClawConfig = {};
-    const bad = adapter("remote-a", {
-      id: "remote-a",
-      model: "embed-default",
-      embed: vi.fn(async () => [Number.NaN]),
-      embedBatch: vi.fn(),
-    });
+    const bad = adapter(
+      "remote-a",
+      embeddingProvider({
+        embed: vi.fn(async () => [Number.NaN]),
+        embedBatch: vi.fn(),
+        close: undefined,
+      }),
+    );
     mocks.get.mockReturnValue(bad);
     expect(await runMemorySetupFlow(config, prompter())).toBe(config);
     mocks.get.mockReturnValue(adapter());
@@ -339,18 +324,15 @@ describe("memory setup", () => {
   it("does not reveal a provider error in a failed readiness note", async () => {
     const config: OpenClawConfig = {};
     const secretError = new Error("credential=private-probe-value rejected");
-    const chosen = adapter();
-    chosen.create = vi.fn(async () => ({
-      provider: {
-        id: "remote-a",
-        model: "embed-default",
+    const chosen = adapter(
+      "remote-a",
+      embeddingProvider({
         embed: vi.fn(async () => {
           throw secretError;
         }),
         embedBatch: vi.fn(),
-        close: vi.fn(async () => {}),
-      },
-    }));
+      }),
+    );
     mocks.get.mockReturnValue(chosen);
     const prompts = prompter();
     expect(await runMemorySetupFlow(config, prompts)).toBe(config);
@@ -364,9 +346,7 @@ describe("memory setup", () => {
       began = resolve;
     });
     let signal: AbortSignal | undefined;
-    const provider: EmbeddingProvider = {
-      id: "remote-a",
-      model: "embed-default",
+    const provider = embeddingProvider({
       embed: vi.fn((_input, options) => {
         signal = options?.signal;
         began();
@@ -374,7 +354,7 @@ describe("memory setup", () => {
       }),
       embedBatch: vi.fn(async () => []),
       close: vi.fn(() => new Promise<void>(() => {})),
-    };
+    });
     mocks.get.mockReturnValue(adapter("remote-a", provider));
     const config: OpenClawConfig = {};
     const running = runMemorySetupFlow(config, prompter());
@@ -409,15 +389,7 @@ describe("memory setup", () => {
     await started;
     await vi.advanceTimersByTimeAsync(150_000);
     expect(await running).toBe(config);
-    finishCreate({
-      provider: {
-        id: "remote-a",
-        model: "embed-default",
-        embed: vi.fn(),
-        embedBatch: vi.fn(),
-        close,
-      },
-    });
+    finishCreate({ provider: embeddingProvider({ embed: vi.fn(), embedBatch: vi.fn(), close }) });
     await Promise.resolve();
     await Promise.resolve();
     expect(close).toHaveBeenCalledOnce();

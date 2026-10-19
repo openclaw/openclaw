@@ -12,6 +12,21 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 const resolveModelAsync = vi.hoisted(() => vi.fn());
 vi.mock("../agents/embedded-agent-runner/model.js", () => ({ resolveModelAsync }));
 const { prepareDoctorToolSchemaFrames } = await import("./doctor-tool-schema-frames.js");
+const realModel = () =>
+  vi.importActual<typeof import("../agents/embedded-agent-runner/model.js")>(
+    "../agents/embedded-agent-runner/model.js",
+  );
+function model(id: string, contextWindow = 32000) {
+  return {
+    id,
+    name: id,
+    reasoning: false,
+    input: ["text" as const],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow,
+    maxTokens: 4096,
+  };
+}
 
 beforeEach(() => {
   resolveModelAsync.mockReset();
@@ -20,9 +35,7 @@ afterEach(() => clearPluginMetadataLifecycleCaches());
 
 it("retains the selected alias's runtime metadata instead of normalizing it again", async () => {
   await withOpenClawTestState({}, async (state) => {
-    const real = await vi.importActual<typeof import("../agents/embedded-agent-runner/model.js")>(
-      "../agents/embedded-agent-runner/model.js",
-    );
+    const real = await realModel();
     const provider = "doctor-selected";
     const metadataSnapshot = createPluginMetadataSnapshotFixture({
       plugins: [
@@ -39,26 +52,7 @@ it("retains the selected alias's runtime metadata instead of normalizing it agai
     stores.modelRegistry.registerProvider(provider, {
       api: "openai-completions",
       baseUrl: "https://doctor-selected.example/v1",
-      models: [
-        {
-          id: "middle",
-          name: "middle",
-          reasoning: false,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 32000,
-          maxTokens: 4096,
-        },
-        {
-          id: "final",
-          name: "final",
-          reasoning: false,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 4096,
-          maxTokens: 4096,
-        },
-      ],
+      models: [model("middle"), model("final", 4096)],
     });
     resolveModelAsync.mockImplementation(
       async (...args: Parameters<typeof real.resolveModelAsync>) =>
@@ -91,9 +85,7 @@ it.each([
     await withOpenClawTestState(
       { env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
       async (state) => {
-        const real = await vi.importActual<
-          typeof import("../agents/embedded-agent-runner/model.js")
-        >("../agents/embedded-agent-runner/model.js");
+        const real = await realModel();
         const stores = real.createEmptyAgentDiscoveryStores();
         const { resolveProviderRuntimePlugin } =
           await import("../plugins/provider-hook-runtime.js");
@@ -133,17 +125,7 @@ it.each([
           stores.modelRegistry.registerProvider(provider, {
             api: "openai-completions",
             baseUrl: "https://doctor-fixture.example/v1",
-            models: [
-              {
-                id: "selected",
-                name: "selected",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 32000,
-                maxTokens: 4096,
-              },
-            ],
+            models: [model("selected")],
           });
         }
         const cfg = captureRuntimeConfig({

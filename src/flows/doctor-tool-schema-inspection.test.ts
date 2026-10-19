@@ -67,30 +67,26 @@ it.each([
         const paths = ids.map((id) => {
           const root = state.path("plugins", id);
           fs.mkdirSync(root, { recursive: true });
-          fs.writeFileSync(
-            path.join(root, "package.json"),
-            JSON.stringify({
-              name: id,
-              version: "1.0.0",
-              openclaw: { extensions: ["./index.cjs"] },
-            }),
-          );
-          fs.writeFileSync(
-            path.join(root, "openclaw.plugin.json"),
-            JSON.stringify({
-              id,
-              contracts: {
-                ...(id !== providerPluginId
-                  ? { tools: [id === "fleet-tool" ? toolName : id.replaceAll("-", "_")] }
-                  : {}),
-                ...((id === providerPluginId && variant !== "legacy-provider-collision") ||
-                (id === "fleet-tool" && duplicateProvider)
-                  ? { webSearchProviders: ["fixture-search"] }
-                  : {}),
-              },
-              configSchema: { type: "object", additionalProperties: false },
-            }),
-          );
+          const writeJson = (name: string, value: unknown) =>
+            fs.writeFileSync(path.join(root, name), JSON.stringify(value));
+          writeJson("package.json", {
+            name: id,
+            version: "1.0.0",
+            openclaw: { extensions: ["./index.cjs"] },
+          });
+          writeJson("openclaw.plugin.json", {
+            id,
+            contracts: {
+              ...(id !== providerPluginId
+                ? { tools: [id === "fleet-tool" ? toolName : id.replaceAll("-", "_")] }
+                : {}),
+              ...((id === providerPluginId && variant !== "legacy-provider-collision") ||
+              (id === "fleet-tool" && duplicateProvider)
+                ? { webSearchProviders: ["fixture-search"] }
+                : {}),
+            },
+            configSchema: { type: "object", additionalProperties: false },
+          });
           fs.writeFileSync(
             path.join(root, "index.cjs"),
             `
@@ -129,27 +125,21 @@ module.exports = { id, register(api) {
           );
           return root;
         });
+        const inspectedAgent = (id: string) => ({
+          workspace: state.path(id),
+          tools: {
+            allow: withoutPluginTools
+              ? ["web_search", "requester__*"]
+              : [toolName, "failed_tool", "requester__*"],
+          },
+        });
         const cfg: OpenClawConfig = {
           agents: {
             ownership: "explicit",
             defaults: { systemAgent: { agentId: "alpha" }, model: "fixture/local" },
             entries: {
-              alpha: {
-                workspace: state.path("alpha"),
-                tools: {
-                  allow: withoutPluginTools
-                    ? ["web_search", "requester__*"]
-                    : [toolName, "failed_tool", "requester__*"],
-                },
-              },
-              beta: {
-                workspace: state.path("beta"),
-                tools: {
-                  allow: withoutPluginTools
-                    ? ["web_search", "requester__*"]
-                    : [toolName, "failed_tool", "requester__*"],
-                },
-              },
+              alpha: inspectedAgent("alpha"),
+              beta: inspectedAgent("beta"),
               excluded: { workspace: state.path("excluded"), tools: { deny: ["group:plugins"] } },
             },
           },
@@ -274,12 +264,12 @@ module.exports = { id, register(api) {
           .trim()
           .split("\n")
           .map((line) => JSON.parse(line));
-        expect(
+        const eventIds = (kind: string) =>
           observed
-            .filter((row) => row.kind === "register")
+            .filter((row) => row.kind === kind)
             .map((row) => row.id)
-            .toSorted((left, right) => left.localeCompare(right)),
-        ).toEqual(registeredPluginIds);
+            .toSorted((left, right) => left.localeCompare(right));
+        expect(eventIds("register")).toEqual(registeredPluginIds);
         expect(observed.filter((row) => row.kind === "factory")).toEqual(
           (withoutPluginTools ? [] : ["alpha", "beta"]).map((agentId) => ({
             id: "fleet-tool",
@@ -288,12 +278,7 @@ module.exports = { id, register(api) {
             workspaceDir: state.path(agentId),
           })),
         );
-        expect(
-          observed
-            .filter((row) => row.kind === "dispose")
-            .map((row) => row.id)
-            .toSorted((left, right) => left.localeCompare(right)),
-        ).toEqual(registeredPluginIds);
+        expect(eventIds("dispose")).toEqual(registeredPluginIds);
       },
     );
   },
