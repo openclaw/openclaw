@@ -31,6 +31,27 @@ const remoteSkill = {
   displayName: "Calendar",
 };
 
+function requestFor(handlers: Record<string, (params?: unknown) => unknown>) {
+  return vi.fn(async (method: string, params?: unknown) => {
+    if (!Object.hasOwn(handlers, method)) {
+      throw new Error(`Unexpected method: ${method}`);
+    }
+    return handlers[method]!(params);
+  });
+}
+
+function findButton(page: HTMLElement, label: string) {
+  return [...page.querySelectorAll<HTMLButtonElement>("button")].find(
+    (item) => item.textContent?.trim() === label,
+  )!;
+}
+
+function enter(input: HTMLInputElement | HTMLTextAreaElement, value: string) {
+  input.value = value;
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  flush();
+}
+
 function mountSkills(
   request: (method: string, params?: unknown) => Promise<unknown>,
   surface: "discovery" | "settings" = "discovery",
@@ -149,24 +170,13 @@ describe("Skills discovery lifecycle", () => {
         : { skills: [] };
     });
     const { page, connection } = mountSkills(request, "settings");
-    await waitForFast(() => {
-      const create = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
-        (button) => button.textContent?.trim() === "Create skill",
-      );
-      expect(create?.disabled).toBe(false);
-    });
-    [...page.querySelectorAll<HTMLButtonElement>("button")]
-      .find((button) => button.textContent?.trim() === "Create skill")!
-      .click();
+    await waitForFast(() => expect(findButton(page, "Create skill").disabled).toBe(false));
+    findButton(page, "Create skill").click();
     flush();
     const content = page.querySelector<HTMLTextAreaElement>('textarea[name="library-content"]')!;
-    content.value = "# Offline draft\nKeep this authored content.";
-    content.dispatchEvent(new Event("input", { bubbles: true }));
-    flush();
+    enter(content, "# Offline draft\nKeep this authored content.");
     const slug = page.querySelector<HTMLInputElement>('input[name="library-slug"]')!;
-    slug.value = "offline-draft";
-    slug.dispatchEvent(new Event("input", { bubbles: true }));
-    flush();
+    enter(slug, "offline-draft");
     const snapshot = connection.gateway.snapshot;
     connection.publish({ ...snapshot, phase: "reconnecting", hello: null });
     flush();
@@ -179,15 +189,8 @@ describe("Skills discovery lifecycle", () => {
     expect(page.querySelector<HTMLTextAreaElement>('textarea[name="library-content"]')?.value).toBe(
       content.value,
     );
-    await waitForFast(() => {
-      const save = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
-        (button) => button.textContent?.trim() === "Save skill",
-      );
-      expect(save?.disabled).toBe(false);
-    });
-    [...page.querySelectorAll<HTMLButtonElement>("button")]
-      .find((button) => button.textContent?.trim() === "Save skill")!
-      .click();
+    await waitForFast(() => expect(findButton(page, "Save skill").disabled).toBe(false));
+    findButton(page, "Save skill").click();
     await waitForFast(() =>
       expect(request).toHaveBeenCalledWith("skills.library.save", {
         expectedRevision: null,
@@ -200,9 +203,7 @@ describe("Skills discovery lifecycle", () => {
     flush();
     expect(page.querySelector('textarea[name="library-content"]')).toBeNull();
     await waitForFast(() => expect(page.textContent).toContain("retained-library-skill"));
-    [...page.querySelectorAll<HTMLButtonElement>("button")]
-      .find((button) => button.textContent?.trim() === "Create skill")!
-      .click();
+    findButton(page, "Create skill").click();
     flush();
     expect(page.querySelector('textarea[name="library-content"]')).not.toBeNull();
     connection.publish({
@@ -253,9 +254,7 @@ describe("Skills discovery lifecycle", () => {
     );
     const input = page.querySelector<HTMLInputElement>('input[name="skills-search"]')!;
     input.focus();
-    input.value = "calendar";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    flush();
+    enter(input, "calendar");
     expect(page.querySelector('input[name="skills-search"]')).toBe(input);
     expect(document.activeElement).toBe(input);
     expect(input.value).toBe("calendar");
@@ -263,23 +262,16 @@ describe("Skills discovery lifecycle", () => {
 
   it("follows sidebar selection and rejects old scope results before installing", async () => {
     const oldReport = deferred<unknown>();
-    const request = vi.fn(async (method: string, params?: unknown) => {
-      if (method === "skills.search") {
-        return { results: [remoteSkill] };
-      }
-      if (method === "skills.library.list") {
-        return { ...personalLibrary, defaultTarget: "workspace" };
-      }
-      if (method === "skills.status") {
+    const request = requestFor({
+      "skills.search": () => ({ results: [remoteSkill] }),
+      "skills.library.list": () => ({ ...personalLibrary, defaultTarget: "workspace" }),
+      "skills.status": (params) => {
         if ((params as { agentId: string }).agentId === "research") {
           return oldReport.promise;
         }
         return { skills: [createSkill({ name: "main-only", skillKey: "main-only" })] };
-      }
-      if (method === "skills.install") {
-        return { message: "Installed" };
-      }
-      throw new Error(`Unexpected method: ${method}`);
+      },
+      "skills.install": () => ({ message: "Installed" }),
     });
     const { page, context, refreshRouteData } = mountSkills(request);
     await waitForFast(() =>
@@ -321,15 +313,12 @@ describe("Skills discovery lifecycle", () => {
     expect(context.navigate).toHaveBeenCalledWith("skill-settings", { search: "?agent=research" });
   });
   it("keeps Settings scope independent of discovery and rejects an older route snapshot", async () => {
-    const request = vi.fn(async (method: string, params?: unknown) => {
-      if (method === "skills.library.list") {
-        return { ...personalLibrary, defaultTarget: "workspace" };
-      }
-      if (method === "skills.status") {
+    const request = requestFor({
+      "skills.library.list": () => ({ ...personalLibrary, defaultTarget: "workspace" }),
+      "skills.status": (params) => {
         const agentId = (params as { agentId: string }).agentId;
         return { skills: [createSkill({ name: `${agentId}-only`, skillKey: `${agentId}-only` })] };
-      }
-      throw new Error(`Unexpected method: ${method}`);
+      },
     });
     const { page, context, refreshRouteData } = mountSkills(request, "settings");
     flush();
@@ -354,18 +343,13 @@ describe("Skills discovery lifecycle", () => {
       managedSkillsDir: "/managed",
       skills: [createSkill({ name: `${agentId}-only`, skillKey: `${agentId}-only` })],
     });
-    const request = vi.fn(async (method: string, params?: unknown) => {
-      if (method === "skills.library.list") {
-        return { ...personalLibrary, defaultTarget: "workspace" };
-      }
-      if (method === "skills.search") {
-        return { results: [] };
-      }
-      if (method === "skills.status") {
+    const request = requestFor({
+      "skills.library.list": () => ({ ...personalLibrary, defaultTarget: "workspace" }),
+      "skills.search": () => ({ results: [] }),
+      "skills.status": (params) => {
         // SAFETY: This fixture only reads the typed skills.status request payload.
         return report((params as { agentId: string }).agentId);
-      }
-      throw new Error(`Unexpected method: ${method}`);
+      },
     });
     const { page, context, publishRouteData, changeSurface } = mountSkills(request);
     context.agentSelection.set("research");
@@ -401,17 +385,10 @@ describe("Skills discovery lifecycle", () => {
       .fn()
       .mockReturnValueOnce(staleSearch.promise)
       .mockResolvedValue({ results: [remoteSkill] });
-    const request = vi.fn(async (method: string) => {
-      if (method === "skills.search") {
-        return search();
-      }
-      if (method === "skills.library.list") {
-        return personalLibrary;
-      }
-      if (method === "skills.status") {
-        return { skills: [] };
-      }
-      throw new Error(`Unexpected method: ${method}`);
+    const request = requestFor({
+      "skills.search": () => search(),
+      "skills.library.list": () => personalLibrary,
+      "skills.status": () => ({ skills: [] }),
     });
     const { page, connection, agents } = mountSkills(request);
     await waitForFast(() => expect(search).toHaveBeenCalledOnce());
@@ -437,14 +414,9 @@ describe("Skills discovery lifecycle", () => {
     "waits for the library destination before allowing installation (%s)",
     async (outcome) => {
       const library = deferred<SkillsLibraryListResult>();
-      const request = vi.fn(async (method: string) => {
-        if (method === "skills.library.list") {
-          return library.promise;
-        }
-        if (method === "skills.search") {
-          return { results: [remoteSkill] };
-        }
-        throw new Error(`Unexpected method: ${method}`);
+      const request = requestFor({
+        "skills.library.list": () => library.promise,
+        "skills.search": () => ({ results: [remoteSkill] }),
       });
       const { page } = mountSkills(request);
       const install = () => page.querySelector<HTMLButtonElement>(".plugin-catalog-card__install");

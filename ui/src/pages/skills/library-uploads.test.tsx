@@ -132,8 +132,7 @@ describe("skill library upload policy", () => {
 
     oldList.reject(new Error("Previous connection list failed"));
     await loadingOld;
-    expect(library.state.loading).toBe(true);
-    expect(library.state.error).toBeNull();
+    expect(library.state).toMatchObject({ loading: true, error: null });
 
     newList.resolve(replacement);
     await loadingNew;
@@ -167,8 +166,7 @@ describe("skill library upload policy", () => {
 
     oldSave.reject(new Error("Previous connection failed"));
     await savingOld;
-    expect(library.state.busy).toBe(true);
-    expect(library.state.error).toBeNull();
+    expect(library.state).toMatchObject({ busy: true, error: null });
 
     newSave.resolve(savedReceipt(read));
     await savingNew;
