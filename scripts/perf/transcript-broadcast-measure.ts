@@ -1230,6 +1230,9 @@ try {
     if (!values.allocations) {
       await workload();
     }
+    if (listIntervalMs && listLatencies.length === 0) {
+      throw new Error("No sessions.list samples collected; shorten --list-interval-ms");
+    }
     measuring = false;
     const diagnostics = finishGatewayDiagnostics
       ? { gateway: await finishGatewayDiagnostics(), controller: finishControllerDiagnostics?.() }
