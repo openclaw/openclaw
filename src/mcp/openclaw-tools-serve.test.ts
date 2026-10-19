@@ -1,8 +1,10 @@
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { createSnapshot } from "../config/mutate.test-support.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { hashSystemAgentOperation } from "../system-agent/operator-approval.js";
+import { withSystemAgentOverviewSources } from "../system-agent/overview.test-support.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { resolveToolsMcpAgentId } from "./agent-session-env.js";
 import {
@@ -22,49 +24,19 @@ import { createPluginToolsMcpHandlers } from "./plugin-tools-handlers.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-mcp-subagent-policy-");
 
-vi.mock("../system-agent/overview.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../system-agent/overview.js")>();
-  const { withSystemAgentOverviewSources } =
-    await import("../system-agent/overview.test-support.js");
-  const config = {
-    agents: {
-      ownership: "explicit" as const,
-      entries: {
-        work: { model: "openai/gpt-5.6-luna" },
-        other: { model: "example/other" },
-      },
-    },
-    gateway: { port: 1 },
-  };
-  return {
-    ...actual,
-    loadSystemAgentOverview: (options?: Parameters<typeof actual.loadSystemAgentOverview>[0]) =>
-      withSystemAgentOverviewSources(
-        {
-          path: "/tmp/openclaw-mcp-owner.json",
-          exists: true,
-          valid: true,
-          raw: null,
-          parsed: config,
-          sourceConfig: config,
-          resolved: config,
-          runtimeConfig: config,
-          config,
-          issues: [],
-          warnings: [],
-          legacyIssues: [],
-        },
-        () => actual.loadSystemAgentOverview(options),
-      ),
-  };
-});
-
 afterEach(() => {
   vi.unstubAllEnvs();
 });
 
 async function handlersFor(params: Parameters<typeof resolveOpenClawToolsForMcp>[0]) {
   return createPluginToolsMcpHandlers(await resolveOpenClawToolsForMcp(params));
+}
+
+function serverConfig(options: Parameters<typeof buildSystemAgentToolsMcpServerConfig>[0]) {
+  return buildSystemAgentToolsMcpServerConfig(options).mcpServers.openclaw as {
+    args: string[];
+    env?: Record<string, string>;
+  };
 }
 
 async function propose(armed: string, configPath: string, value: string) {
@@ -137,15 +109,29 @@ describe("OpenClaw tools MCP server", () => {
   });
 
   it("keeps the generated helper owner through MCP diagnostic actions", async () => {
-    const config = buildSystemAgentToolsMcpServerConfig({ surface: "gateway", agentId: "work" });
-    const server = config.mcpServers.openclaw as { args: string[] };
+    const server = serverConfig({ surface: "gateway", agentId: "work" });
     const handlers = await handlersFor({
       tools: ["openclaw"],
       systemAgentSurface: "gateway",
       agentId: resolveToolsMcpAgentId(server.args),
     });
 
-    const result = await handlers.callTool({ name: "openclaw", arguments: { action: "models" } });
+    const result = await withSystemAgentOverviewSources(
+      createSnapshot({
+        hash: "fixture",
+        sourceConfig: {
+          agents: {
+            ownership: "explicit",
+            entries: {
+              work: { model: "openai/gpt-5.6-luna" },
+              other: { model: "example/other" },
+            },
+          },
+          gateway: { port: 1 },
+        },
+      }),
+      () => handlers.callTool({ name: "openclaw", arguments: { action: "models" } }),
+    );
 
     expect(JSON.stringify(result)).toContain("Default model: openai/gpt-5.6-luna");
     expect(result.isError).not.toBe(true);
@@ -168,21 +154,16 @@ describe("OpenClaw tools MCP server", () => {
   });
 
   it("serializes operator-approval-only through the native CLI MCP config", () => {
-    const config = buildSystemAgentToolsMcpServerConfig({
+    const server = serverConfig({
       surface: "cli",
       operatorApprovalOnly: true,
       proposalRef: { current: "deadbeef" },
     });
-    const server = config.mcpServers.openclaw as { env?: Record<string, string> };
     expect(server.env?.[ARMED_ENV]).toBe("operator-only");
 
-    const direct = buildSystemAgentToolsMcpServerConfig({ surface: "cli" });
-    const directServer = direct.mcpServers.openclaw as { env?: Record<string, string> };
-    expect(directServer.env).not.toHaveProperty(ARMED_ENV);
+    expect(serverConfig({ surface: "cli" }).env).not.toHaveProperty(ARMED_ENV);
 
-    const armed = buildSystemAgentToolsMcpServerConfig({ surface: "cli", approvalArmed: true });
-    const armedServer = armed.mcpServers.openclaw as { env?: Record<string, string> };
-    expect(armedServer.env?.[ARMED_ENV]).toBe("1");
+    expect(serverConfig({ surface: "cli", approvalArmed: true }).env?.[ARMED_ENV]).toBe("1");
   });
 
   it("reconstructs delegated proposal staging from env on the native CLI MCP tool", async () => {

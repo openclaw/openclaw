@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
+import { InMemoryTransport } from "@modelcontextprotocol/client";
 import { SdkError, SdkErrorCode } from "@modelcontextprotocol/server";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -33,6 +33,12 @@ import {
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import { createCodexSupervisionToolsMcpServer } from "./codex-supervision-tools-serve.js";
+import {
+  createMcpConnection,
+  failureOf,
+  waitForStart,
+  withMcpConnection,
+} from "./tools-mcp.test-support.js";
 import { createToolsMcpServer, serveRegisteredToolsMcpServer } from "./tools-stdio-server.js";
 
 let sequence = 0;
@@ -150,6 +156,10 @@ function causes(error: unknown): unknown[] {
   return error instanceof Error && error.cause !== undefined ? causes(error.cause) : [error];
 }
 
+function expectDisposed(fixture: ReturnType<typeof nativePlugin>) {
+  expect(fixture.state).toMatchObject({ database: { isOpen: false }, disposals: 1 });
+}
+
 describe("MCP serving registration ownership", () => {
   it("keeps supplied tools usable across close/reconnect until their caller releases registration", async () => {
     const fixture = nativePlugin();
@@ -160,23 +170,16 @@ describe("MCP serving registration ownership", () => {
     });
     try {
       for (let cycle = 0; cycle < 2; cycle++) {
-        const [outbound, inbound] = InMemoryTransport.createLinkedPair();
-        const client = new Client({ name: "native-client", version: "0.0.0" });
-        try {
-          await Promise.all([server.connect(inbound), client.connect(outbound)]);
+        await withMcpConnection(server, async (client) => {
           expect(await client.callTool({ name: "mcp_native_read" })).toMatchObject({
             content: [{ text: "42" }],
           });
-        } finally {
-          await server.close();
-          await client.close();
-        }
+        });
         expect(fixture.state.database?.isOpen).toBe(true);
         expect(fixture.state.disposals).toBe(0);
       }
       await acquisition.release();
-      expect(fixture.state.database?.isOpen).toBe(false);
-      expect(fixture.state.disposals).toBe(1);
+      expectDisposed(fixture);
     } finally {
       await server.close();
       await acquisition.release();
@@ -222,8 +225,7 @@ describe("MCP serving registration ownership", () => {
           "Install or update @openclaw/codex",
         );
         expect(fixture.state.factories).toBe(1);
-        expect(fixture.state.database?.isOpen).toBe(false);
-        expect(fixture.state.disposals).toBe(1);
+        expectDisposed(fixture);
         expect(scheduler.signal.aborted).toBe(ownership === "standalone");
         expect(scheduler.nextWakeAtMs).toBe(
           ownership === "standalone" ? null : clock.clock.now() + 30_000,
@@ -269,21 +271,15 @@ describe("MCP serving registration ownership", () => {
         sdkResourceHost: admittedHost,
       }),
     );
-    const [outbound, inbound] = InMemoryTransport.createLinkedPair();
-    const client = new Client({ name: "native-peer", version: "0.0.0" });
+    const { client, connect } = createMcpConnection(server);
     let call: Promise<unknown> | undefined;
     try {
-      await Promise.all([server.connect(inbound), client.connect(outbound)]);
+      await connect();
       const controller = new AbortController();
       call = client
         .callTool({ name: "mcp_native_read" }, { signal: controller.signal })
         .catch((error: unknown) => error);
-      await Promise.race([
-        fixture.state.started.promise,
-        call.then(() => {
-          throw new Error("The tool completed before native work started");
-        }),
-      ]);
+      await waitForStart(fixture.state.started.promise, call);
       // The peer shares the registry but owns a different SDK lifetime.
       foreignHost.run(() =>
         withPluginRuntimeRegistryScope(acquisition.registry, () =>
@@ -294,13 +290,14 @@ describe("MCP serving registration ownership", () => {
       fixture.state.finish.resolve();
       await server.close();
       await call;
-      expect(fixture.state.abortReason).toBe("peer cancellation reason");
+      expect(fixture.state).toMatchObject({
+        abortReason: "peer cancellation reason",
+        abortRead: 42,
+      });
       expect(fixture.state.abortFailure).toBeUndefined();
-      expect(fixture.state.abortRead).toBe(42);
       await acquisition.release();
       await admittedHost.close();
-      expect(fixture.state.database?.isOpen).toBe(false);
-      expect(fixture.state.disposals).toBe(1);
+      expectDisposed(fixture);
     } finally {
       fixture.state.finish.resolve();
       await server.close();
@@ -328,35 +325,30 @@ describe("MCP serving registration ownership", () => {
       let server: ReturnType<typeof createToolsMcpServer> | undefined;
       let selfClose: Promise<unknown> | undefined;
       try {
-        const servingFailure = await serveRegisteredToolsMcpServer({
-          acquireRegistry: fixture.acquire,
-          createServer(tools, sdkResourceHost) {
-            server = createToolsMcpServer({ name: "native-self-close", tools, sdkResourceHost });
-            // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MCP Server exposes callback properties, not EventTarget.
-            server.onclose = onclose;
-            const created = server;
-            queueMicrotask(() => {
-              const transport = created.transport;
-              if (!transport) {
-                throw new Error("Expected the connected owned stdio transport");
-              }
-              selfClose = transport.close().then(
-                () => undefined,
-                (error: unknown) => error,
-              );
-            });
-            return server;
-          },
-        }).then(
-          () => undefined,
-          (error: unknown) => error,
+        const servingFailure = await failureOf(
+          serveRegisteredToolsMcpServer({
+            acquireRegistry: fixture.acquire,
+            createServer(tools, sdkResourceHost) {
+              server = createToolsMcpServer({ name: "native-self-close", tools, sdkResourceHost });
+              // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MCP Server exposes callback properties, not EventTarget.
+              server.onclose = onclose;
+              const created = server;
+              queueMicrotask(() => {
+                const transport = created.transport;
+                if (!transport) {
+                  throw new Error("Expected the connected owned stdio transport");
+                }
+                selfClose = failureOf(transport.close());
+              });
+              return server;
+            },
+          }),
         );
         expect(await selfClose).toBe(throws ? closeError : undefined);
         expect(servingFailure).toBe(throws ? closeError : undefined);
         expect(callbacks).toBe(1);
         expect(server?.onclose).toBe(onclose);
-        expect(fixture.state.database?.isOpen).toBe(false);
-        expect(fixture.state.disposals).toBe(1);
+        expectDisposed(fixture);
       } finally {
         await selfClose;
         await server?.close();
@@ -377,37 +369,32 @@ describe("MCP serving registration ownership", () => {
     let connection: Promise<void> | undefined;
     let server: ReturnType<typeof createToolsMcpServer> | undefined;
     try {
-      const failure = await serveRegisteredToolsMcpServer({
-        acquireRegistry: fixture.acquire,
-        createServer(tools, sdkResourceHost) {
-          server = createToolsMcpServer({ name: "failed-native", tools, sdkResourceHost });
-          // The SDK rejects a second connection while this real transport is attached.
-          // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MCP Server exposes a callback property, not EventTarget.
-          server.onclose = previousOnClose;
-          connection = server.connect(inbound);
-          return server;
-        },
-      }).then(
-        () => undefined,
-        (error: unknown) => error,
+      const failure = await failureOf(
+        serveRegisteredToolsMcpServer({
+          acquireRegistry: fixture.acquire,
+          createServer(tools, sdkResourceHost) {
+            server = createToolsMcpServer({ name: "failed-native", tools, sdkResourceHost });
+            // The SDK rejects a second connection while this real transport is attached.
+            // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MCP Server exposes a callback property, not EventTarget.
+            server.onclose = previousOnClose;
+            connection = server.connect(inbound);
+            return server;
+          },
+        }),
       );
       await connection;
       const failures = causes(failure);
-      const messages = failures.map(String);
-      expect(messages).toHaveLength(3);
+      expect(failures).toHaveLength(3);
       expect(
-        failures.filter(
-          (error) => error instanceof SdkError && error.code === SdkErrorCode.AlreadyConnected,
-        ),
-      ).toHaveLength(1);
-      expect(
-        messages.filter((message) => message.includes("synthetic transport close failure")),
-      ).toHaveLength(1);
-      expect(
-        messages.filter((message) => message.includes("synthetic registration disposal failure")),
-      ).toHaveLength(1);
-      expect(fixture.state.database?.isOpen).toBe(false);
-      expect(fixture.state.disposals).toBe(1);
+        failures.map((error) => (error instanceof SdkError ? error.code : String(error))),
+      ).toEqual(
+        expect.arrayContaining([
+          SdkErrorCode.AlreadyConnected,
+          expect.stringContaining("synthetic transport close failure"),
+          expect.stringContaining("synthetic registration disposal failure"),
+        ]),
+      );
+      expectDisposed(fixture);
       expect(previousOnClose).toHaveBeenCalledOnce();
       expect(server?.onclose).toBe(previousOnClose);
     } finally {
