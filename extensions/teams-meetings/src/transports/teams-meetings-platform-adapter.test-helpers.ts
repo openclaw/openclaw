@@ -1,6 +1,5 @@
 import { runInNewContext } from "node:vm";
 import { teamsMeetingPageScripts } from "./teams-meetings-page-scripts.js";
-import { TEAMS_MEETINGS_PLATFORM_ADAPTER } from "./teams-meetings-platform-adapter.js";
 
 export const URL =
   "https://teams.microsoft.com/l/meetup-join/19%3ameeting_test%40thread.v2/0?context=%7b%7d";
@@ -12,23 +11,8 @@ export function consumerLightMeetingUrl(meetingCode: string, passcode: string) {
   return `https://teams.live.com/light-meetings/launch?coords=${encodeURIComponent(coordinates)}`;
 }
 
-export function status(reason: string, message = "manual action") {
-  const health = TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.parseStatus({
-    result: JSON.stringify({
-      inCall: false,
-      manualAction: { reason, message },
-      url: URL,
-    }),
-  });
-  if (!health) {
-    throw new Error("expected parsed health");
-  }
-  return health;
-}
-
 type PageControl = {
   checked?: boolean;
-  disabled?: boolean;
   clicks: number;
   isConnected: boolean;
   click(): void;
@@ -44,13 +28,10 @@ type PageControl = {
 export type PageMedia = {
   autoplay?: boolean;
   currentSrc?: string;
-  hidden?: boolean;
-  id?: string;
   isConnected?: boolean;
   muted?: boolean;
   readyState?: number;
   sinkId: string;
-  src?: string;
   srcObject?: { getAudioTracks(): Array<{ readyState: string }> };
   play?(): Promise<void>;
   pause?(): void;
@@ -111,66 +92,64 @@ export function control(params: {
   return node;
 }
 
-export function captionRow(
-  speaker: string,
-  captionText: string,
-  rowIdentity?: string,
-): PageControl {
+function findControl(
+  selector: string | undefined,
+  entries: Array<[string, PageControl | undefined]>,
+) {
+  return entries.find(([needles]) =>
+    needles.split("|").some((needle) => selector?.includes(needle)),
+  )?.[1];
+}
+
+export function captionRow(speaker: string, text: string, rowIdentity?: string): PageControl {
   const author = control({ label: "", text: speaker });
-  const content = control({ label: "", text: captionText });
+  const content = control({ label: "", text });
   const row = control({ label: "" });
   const getAttribute = row.getAttribute.bind(row);
   row.getAttribute = (name) =>
     name === "aria-posinset" && rowIdentity ? rowIdentity : getAttribute(name);
-  row.querySelector = (selector) => {
-    if (selector?.includes('data-tid="author"')) {
-      return author;
-    }
-    if (selector?.includes('data-tid="closed-caption-text"')) {
-      return content;
-    }
-    return undefined;
-  };
+  row.querySelector = (selector) =>
+    findControl(selector, [
+      ['data-tid="author"', author],
+      ['data-tid="closed-caption-text"', content],
+    ]);
   return row;
 }
 
-type StatusScriptParams = {
-  allowMicrophone?: boolean;
-  allowSessionAdoption?: boolean;
-  autoJoin?: boolean;
-  bodyText?: string;
-  currentUrl?: string;
-  meetingUrl?: string;
-  microphone?: PageControl;
-  camera?: PageControl;
-  captionClickIgnored?: boolean;
-  captionsInitiallyOn?: boolean;
-  captionRows?: PageControl[];
-  captureCaptions?: boolean;
-  bridgeMedia?: PageMedia | PageMedia[];
-  continueWithoutDevices?: PageControl;
-  deviceSettings?: PageControl;
-  join?: PageControl;
-  leave?: PageControl;
-  microphoneDevice?: PageControl;
-  microphoneDeviceAfterSettings?: PageControl;
-  microphoneDeviceMenuAfterSettings?: PageControl;
-  microphonePermissionState?: "denied" | "granted" | "prompt";
-  permissionPrompt?: PageControl;
-  priorAudioOutputs?: unknown[];
-  priorCaptions?: unknown;
-  priorMeeting?: Record<string, unknown>;
-  readOnly?: boolean;
-  waitForInCallMs?: number;
-  globalSelectedOption?: PageControl;
-  media?: PageMedia[];
-  meetingSessionId?: string;
-  devices?: Array<{ deviceId: string; kind: string; label: string }>;
-};
+type StatusScriptParams = Partial<
+  Record<"allowMicrophone" | "allowSessionAdoption" | "autoJoin" | "readOnly", boolean> &
+    Record<"captionClickIgnored" | "captionsInitiallyOn" | "captureCaptions", boolean> &
+    Record<"bodyText" | "currentUrl" | "meetingUrl" | "meetingSessionId", string> &
+    Record<"microphone" | "camera" | "join" | "leave" | "permissionPrompt", PageControl> &
+    Record<"continueWithoutDevices" | "deviceSettings" | "globalSelectedOption", PageControl> &
+    Record<
+      "microphoneDevice" | "microphoneDeviceAfterSettings" | "microphoneDeviceMenuAfterSettings",
+      PageControl
+    > & {
+      captionRows: PageControl[];
+      bridgeMedia: PageMedia;
+      microphonePermissionState: "denied" | "granted" | "prompt";
+      priorAudioOutputs: unknown[];
+      priorCaptions: unknown;
+      priorMeeting: Record<string, unknown>;
+      waitForInCallMs: number;
+      media: PageMedia[];
+      devices: Array<{ deviceId: string; kind: string; label: string }>;
+    }
+>;
+
+function priorWindow(params: StatusScriptParams): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries({
+      [MEETING_STATE_KEY]: params.priorMeeting,
+      __openclawTeamsAudioOutputs: params.priorAudioOutputs,
+      __openclawTeamsCaptions: params.priorCaptions,
+    }).filter(([, value]) => Boolean(value)),
+  );
+}
 
 export async function runStatusScript(params: StatusScriptParams) {
-  const currentUrl = params.currentUrl ?? URL;
-  const location = new globalThis.URL(currentUrl);
+  const location = new globalThis.URL(params.currentUrl ?? URL);
   const controls = [
     params.microphone,
     params.camera,
@@ -205,21 +184,13 @@ export async function runStatusScript(params: StatusScriptParams) {
       node.isConnected = true;
     },
   };
-  let bridgeMediaIndex = 0;
   const document = {
     body,
     createElement() {
       if (!params.bridgeMedia) {
         throw new Error("unexpected media bridge");
       }
-      if (!Array.isArray(params.bridgeMedia)) {
-        return params.bridgeMedia;
-      }
-      const bridge = params.bridgeMedia[bridgeMediaIndex++];
-      if (!bridge) {
-        throw new Error("missing media bridge fixture");
-      }
-      return bridge;
+      return params.bridgeMedia;
     },
     title: "Teams",
     querySelector(selector: string) {
@@ -233,7 +204,7 @@ export async function runStatusScript(params: StatusScriptParams) {
         ? (params.microphoneDeviceMenuAfterSettings ?? params.microphoneDeviceAfterSettings)
         : undefined;
       const captionsVisible = params.captionRows && captionsOn;
-      const matches: Array<[string, PageControl | undefined]> = [
+      return findControl(selector, [
         ["toggle-mute", params.microphone],
         ["toggle-video", params.camera],
         ["prejoin-join-button", params.join],
@@ -252,10 +223,7 @@ export async function runStatusScript(params: StatusScriptParams) {
         ],
         ["microphone-settings", menu],
         ["permission-prompt|permission-error", params.permissionPrompt],
-      ];
-      return matches.find(([needles]) =>
-        needles.split("|").some((needle) => selector.includes(needle)),
-      )?.[1];
+      ]);
     },
     querySelectorAll(selector: string) {
       return selector === "button"
@@ -267,20 +235,11 @@ export async function runStatusScript(params: StatusScriptParams) {
             : [];
     },
   };
-  const window: Record<string, unknown> = {};
+  const window = priorWindow(params);
   let captionObserverCallback:
     | ((records?: Array<{ removedNodes: PageControl[] }>) => void)
     | undefined;
   let captionObserverDisconnects = 0;
-  if (params.priorMeeting) {
-    window[MEETING_STATE_KEY] = params.priorMeeting;
-  }
-  if (params.priorAudioOutputs) {
-    window["__openclawTeamsAudioOutputs"] = params.priorAudioOutputs;
-  }
-  if (params.priorCaptions) {
-    window["__openclawTeamsCaptions"] = params.priorCaptions;
-  }
   const script = teamsMeetingPageScripts.status({
     allowMicrophone: params.allowMicrophone ?? false,
     allowSessionAdoption: params.allowSessionAdoption ?? true,
@@ -308,12 +267,8 @@ export async function runStatusScript(params: StatusScriptParams) {
     document,
     location,
     navigator: {
-      mediaDevices: {
-        enumerateDevices: async () => params.devices ?? [],
-      },
-      permissions: {
-        query: async () => ({ state: params.microphonePermissionState ?? "prompt" }),
-      },
+      mediaDevices: { enumerateDevices: async () => params.devices ?? [] },
+      permissions: { query: async () => ({ state: params.microphonePermissionState ?? "prompt" }) },
     },
     clearTimeout,
     setTimeout,
@@ -337,7 +292,6 @@ type StatusOverrides = Omit<StatusScriptParams, "allowMicrophone">;
 
 export function runCaptionStatusScript(params: StatusOverrides = {}) {
   return runStatusScript({
-    allowMicrophone: false,
     captureCaptions: true,
     leave: control({ label: "Leave" }),
     ...params,
@@ -401,37 +355,22 @@ export function runLeaveScript(params: {
   const document = {
     body: { textContent: params.bodyText ?? "" },
     querySelector(selector: string) {
-      if (selector.includes("call-hangup")) {
-        return params.leave;
-      }
-      if (
-        selector.includes("call-ended-screen") ||
-        selector.includes("post-call-screen") ||
-        selector.includes("prejoin-rejoin-button")
-      ) {
-        return params.postCall;
-      }
-      return undefined;
+      return findControl(selector, [
+        ["call-hangup", params.leave],
+        ["call-ended-screen|post-call-screen|prejoin-rejoin-button", params.postCall],
+      ]);
     },
   };
-  const window: Record<string, unknown> = {};
+  const window = priorWindow({ priorAudioOutputs: params.priorAudioOutputs });
   if (!params.omitMeetingState) {
     window[MEETING_STATE_KEY] = {
       sessionId: params.meetingSessionId ?? "session-1",
       ...params.priorMeeting,
     };
   }
-  if (params.priorAudioOutputs) {
-    window["__openclawTeamsAudioOutputs"] = params.priorAudioOutputs;
-  }
   const run = runInNewContext(
     `(${teamsMeetingPageScripts.leave({ leaveInitiated: params.leaveInitiated ?? false, meetingSessionId: params.meetingSessionId ?? "session-1", meetingUrl: URL })})`,
-    {
-      URL: globalThis.URL,
-      document,
-      location,
-      window,
-    },
+    { URL: globalThis.URL, document, location, window },
   ) as () => string;
   return { result: JSON.parse(run()) as Record<string, unknown>, window };
 }
