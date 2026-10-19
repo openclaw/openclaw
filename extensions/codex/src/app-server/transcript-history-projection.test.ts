@@ -1,7 +1,7 @@
 import { Buffer } from "node:buffer";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it } from "vitest";
-import type { CodexThread, CodexThreadItem } from "./protocol.js";
+import type { CodexThread, CodexThreadItem, CodexTurn } from "./protocol.js";
 import {
   projectBoundedCodexThreadHistory,
   projectBoundedCodexVisibleSessionHistory,
@@ -41,6 +41,19 @@ function userItem(id: string, text: string): CodexThreadItem {
   return historyItem(id, "", { type: "userMessage", content: [{ type: "text", text }] });
 }
 
+function turn(id: string, items: CodexThreadItem[], fields: Partial<CodexTurn> = {}): CodexTurn {
+  return { id, status: "completed", items, ...fields };
+}
+
+function responseMessage(role: "user" | "assistant", text: string, phase?: string) {
+  return {
+    type: "message",
+    role,
+    content: [{ type: role === "user" ? "input_text" : "output_text", text }],
+    ...(phase ? { phase } : {}),
+  };
+}
+
 function project(thread: CodexThread, throughTurnId: string | null, modelProvider?: string) {
   return projectBoundedCodexThreadHistory({
     thread,
@@ -56,36 +69,28 @@ describe("projectBoundedCodexThreadHistory", () => {
     projectId: null,
     createdAt: 1_700_000_000,
     turns: [
-      {
-        id: "turn-a",
-        status: "completed",
-        startedAt: 1_700_000_001,
-        completedAt: 1_700_000_002,
-        items: [
+      turn(
+        "turn-a",
+        [
           userItem("user-a", "First question"),
           historyItem("assistant-a", "First answer", { phase: "commentary" }),
         ],
-      },
-      {
-        id: "turn-b",
-        status: "completed",
-        startedAt: 1_700_000_003,
-        completedAt: 1_700_000_004,
-        items: [
+        { startedAt: 1_700_000_001, completedAt: 1_700_000_002 },
+      ),
+      turn(
+        "turn-b",
+        [
           userItem("user-b", "Second question"),
           historyItem("assistant-b", "Second answer", { phase: "final_answer" }),
         ],
-      },
-      {
-        id: "turn-active",
+        { startedAt: 1_700_000_003, completedAt: 1_700_000_004 },
+      ),
+      turn("turn-active", [historyItem("active-secret", "Do not import the active tail")], {
         status: "inProgress",
-        items: [historyItem("active-secret", "Do not import the active tail")],
-      },
-      {
-        id: "turn-failed",
+      }),
+      turn("turn-failed", [historyItem("failed-secret", "Do not import the failed tail")], {
         status: "failed",
-        items: [historyItem("failed-secret", "Do not import the failed tail")],
-      },
+      }),
     ],
   };
 
@@ -106,28 +111,10 @@ describe("projectBoundedCodexThreadHistory", () => {
       model: "native-history",
     });
     expect(projection.responseItems).toEqual([
-      {
-        type: "message",
-        role: "user",
-        content: [{ type: "input_text", text: "First question" }],
-      },
-      {
-        type: "message",
-        role: "assistant",
-        content: [{ type: "output_text", text: "First answer" }],
-        phase: "commentary",
-      },
-      {
-        type: "message",
-        role: "user",
-        content: [{ type: "input_text", text: "Second question" }],
-      },
-      {
-        type: "message",
-        role: "assistant",
-        content: [{ type: "output_text", text: "Second answer" }],
-        phase: "final_answer",
-      },
+      responseMessage("user", "First question"),
+      responseMessage("assistant", "First answer", "commentary"),
+      responseMessage("user", "Second question"),
+      responseMessage("assistant", "Second answer", "final_answer"),
     ]);
     expect(JSON.stringify(projection)).not.toContain("active tail");
     expect(JSON.stringify(projection)).not.toContain("failed tail");
@@ -137,22 +124,18 @@ describe("projectBoundedCodexThreadHistory", () => {
     const importedThread: CodexThread = {
       ...thread,
       turns: [
-        {
-          id: "turn-async-history",
-          status: "completed",
-          items: [
-            userItem("user-async-history", "Investigate this"),
-            historyItem("commentary-history", "Checking the deployment.", { phase: "commentary" }),
-            historyItem("async-history", "Which environment should I use?", {
-              phase: "final_answer",
-              delivery: "async",
-              questions: [
-                { title: "Which environment should I use?", options: ["Staging", "Local"] },
-              ],
-            }),
-            historyItem("final-history", "Deployment complete.", { phase: "final_answer" }),
-          ],
-        },
+        turn("turn-async-history", [
+          userItem("user-async-history", "Investigate this"),
+          historyItem("commentary-history", "Checking the deployment.", { phase: "commentary" }),
+          historyItem("async-history", "Which environment should I use?", {
+            phase: "final_answer",
+            delivery: "async",
+            questions: [
+              { title: "Which environment should I use?", options: ["Staging", "Local"] },
+            ],
+          }),
+          historyItem("final-history", "Deployment complete.", { phase: "final_answer" }),
+        ]),
       ],
     };
 
@@ -181,23 +164,9 @@ describe("projectBoundedCodexThreadHistory", () => {
       })),
     );
     expect(visibleSessionHistory).toEqual([
-      {
-        type: "message",
-        role: "user",
-        content: [{ type: "input_text", text: "Investigate this" }],
-      },
-      {
-        type: "message",
-        role: "assistant",
-        content: [{ type: "output_text", text: "Checking the deployment." }],
-        phase: "commentary",
-      },
-      {
-        type: "message",
-        role: "assistant",
-        content: [{ type: "output_text", text: "Deployment complete." }],
-        phase: "final_answer",
-      },
+      responseMessage("user", "Investigate this"),
+      responseMessage("assistant", "Checking the deployment.", "commentary"),
+      responseMessage("assistant", "Deployment complete.", "final_answer"),
     ]);
   });
 
@@ -230,16 +199,8 @@ describe("projectBoundedCodexThreadHistory", () => {
       expect(projection.responseItems).toHaveLength(status === "completed" ? 6 : 5);
       expect(projection.responseItems.at(-1)).toEqual(
         status === "completed"
-          ? {
-              type: "message",
-              role: "assistant",
-              content: [{ type: "output_text", text: "completed answer" }],
-            }
-          : {
-              type: "message",
-              role: "user",
-              content: [{ type: "input_text", text: `${status} question` }],
-            },
+          ? responseMessage("assistant", "completed answer")
+          : responseMessage("user", `${status} question`),
       );
       if (status === "failed") {
         expect(assistant).toMatchObject({ errorMessage: "provider disconnected" });
@@ -249,7 +210,7 @@ describe("projectBoundedCodexThreadHistory", () => {
     }
   });
 
-  it.each([true])("retains refused history with an assistant item: %s", (withAssistant) => {
+  it("retains refused history with an assistant item", () => {
     const explanation = "The proposed action differed from the requested task.";
     const continuation = { message: "  Continue only the requested task.\n" };
     const assistantItem = historyItem("assistant-refused", "The request was paused.");
@@ -268,7 +229,7 @@ describe("projectBoundedCodexThreadHistory", () => {
               steer: continuation,
             },
           },
-          items: withAssistant ? [assistantItem] : [],
+          items: [assistantItem],
         },
       ],
     };

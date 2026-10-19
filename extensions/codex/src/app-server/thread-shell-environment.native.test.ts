@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import http from "node:http";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createAdmittedHostCapabilityTestFixture } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -10,10 +9,15 @@ import { createCodexNativeTestState } from "./native-app-server.test-support.js"
 import { isJsonObject, type JsonObject } from "./protocol.js";
 import { createIsolatedCodexAppServerClient } from "./shared-client.js";
 import {
-  createAppServerOptions,
   createParams,
   resetThreadLifecycleTestFixtures,
 } from "./thread-lifecycle.test-fixtures.js";
+import {
+  listenForNativeResponses,
+  nativeAppServerOptions,
+  nativeProviderConfig,
+  sendNativeResponse,
+} from "./thread-native.test-support.js";
 import { buildThreadResumeParams, buildThreadStartParams } from "./thread-requests.js";
 import { mergeCodexNativeShellEnvironment } from "./thread-shell-environment.js";
 import { withCodexAppServerGitConfig } from "./transport-stdio.js";
@@ -48,7 +52,7 @@ describe.skipIf(process.platform === "win32")("native Codex tool PATH", () => {
       vi.stubEnv("PATH", native.env.PATH);
       const requests: JsonObject[] = [];
       const failures: unknown[] = [];
-      const server = http.createServer((request, response) => {
+      const port = await listenForNativeResponses(context, (request, response) => {
         let body = "";
         request.setEncoding("utf8");
         request.on("data", (chunk: string) => {
@@ -85,48 +89,13 @@ describe.skipIf(process.platform === "win32")("native Codex tool PATH", () => {
                     id: `answer-${requests.length}`,
                     content: [{ type: "output_text", text: "Command checked." }],
                   };
-            const events = [
-              { type: "response.created", response: { id: `response-${requests.length}` } },
-              { type: "response.output_item.done", item },
-              {
-                type: "response.completed",
-                response: {
-                  id: `response-${requests.length}`,
-                  usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
-                },
-              },
-            ];
-            response.writeHead(200, { "Content-Type": "text/event-stream" });
-            response.end(
-              events
-                .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
-                .join(""),
-            );
+            sendNativeResponse(response, `response-${requests.length}`, item);
           } catch (error) {
             failures.push(error);
             response.writeHead(500).end();
           }
         });
       });
-      context.onTestFinished(async () => {
-        server.closeAllConnections();
-        if (server.listening) {
-          await new Promise<void>((resolve, reject) => {
-            server.close((error) => (error ? reject(error) : resolve()));
-          });
-        }
-      });
-      await new Promise<void>((resolve, reject) => {
-        server.once("error", reject);
-        server.listen(0, "127.0.0.1", () => {
-          server.removeListener("error", reject);
-          resolve();
-        });
-      });
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Missing loopback provider address");
-      }
       const nativeBin = path.join(root, "native-bin");
       await fs.mkdir(nativeBin);
       await fs.writeFile(
@@ -136,67 +105,36 @@ describe.skipIf(process.platform === "win32")("native Codex tool PATH", () => {
       );
       await fs.writeFile(
         path.join(native.codexHome, "config.toml"),
-        [
-          'model="gpt-5.6-luna"',
-          'model_provider="path-fixture"',
-          'cli_auth_credentials_store="ephemeral"',
-          'web_search="disabled"',
-          'approval_policy="never"',
-          // This fixture tests lookup, not Linux namespace availability.
-          'sandbox_mode="danger-full-access"',
-          ...(!loginAllowed ? ["allow_login_shell=false"] : []),
-          ...(configured
-            ? [
-                "[shell_environment_policy.set]",
-                `PATH=${JSON.stringify([nativeBin, "/usr/bin", "/bin"].join(path.delimiter))}`,
-                'KEEP="preserved"',
-                `GIT_CONFIG_PARAMETERS=${JSON.stringify("'user.name=Native Git'")}`,
-              ]
-            : []),
-          ...(filters
-            ? [
-                "[shell_environment_policy.filters]",
-                'path="exclude"',
-                'KEEP="include"',
-                '"UNRELATED_*"="exclude"',
-              ]
-            : []),
-          "[features]",
-          "code_mode=false",
-          ...(!snapshots ? ["shell_snapshot=false"] : []),
-          "[analytics]",
-          "enabled=false",
-          "[feedback]",
-          "enabled=false",
-          "[model_providers.path-fixture]",
-          'name="Synthetic PATH provider"',
-          `base_url="http://127.0.0.1:${address.port}/v1"`,
-          'wire_api="responses"',
-          "requires_openai_auth=false",
-          "supports_websockets=false",
-          "request_max_retries=0",
-          "stream_max_retries=0",
-        ].join("\n"),
-      );
-      const childEnv = Object.fromEntries(
-        Object.entries(native.env).filter(
-          (entry): entry is [string, string] => entry[1] !== undefined,
+        nativeProviderConfig(
+          "path-fixture",
+          port,
+          [
+            // This fixture tests lookup, not Linux namespace availability.
+            'sandbox_mode="danger-full-access"',
+            ...(!loginAllowed ? ["allow_login_shell=false"] : []),
+            ...(configured
+              ? [
+                  "[shell_environment_policy.set]",
+                  `PATH=${JSON.stringify([nativeBin, "/usr/bin", "/bin"].join(path.delimiter))}`,
+                  'KEEP="preserved"',
+                  `GIT_CONFIG_PARAMETERS=${JSON.stringify("'user.name=Native Git'")}`,
+                ]
+              : []),
+            ...(filters
+              ? [
+                  "[shell_environment_policy.filters]",
+                  'path="exclude"',
+                  'KEEP="include"',
+                  '"UNRELATED_*"="exclude"',
+                ]
+              : []),
+          ],
+          ["code_mode=false", ...(!snapshots ? ["shell_snapshot=false"] : [])],
         ),
       );
-      childEnv.GIT_CONFIG_PARAMETERS = "'user.name=Inherited Git'";
       const appServer = {
-        ...createAppServerOptions(),
+        ...nativeAppServerOptions(native, { GIT_CONFIG_PARAMETERS: "'user.name=Inherited Git'" }),
         sandbox: "danger-full-access" as const,
-        start: {
-          transport: "stdio" as const,
-          command: native.command,
-          commandSource: "config" as const,
-          args: ["app-server"],
-          cwd: native.cwd,
-          headers: {},
-          env: childEnv,
-          clearEnv: Object.keys(process.env).filter((key) => !(key in childEnv)),
-        },
       };
       let threadId: string | undefined;
       for (const phase of ["fresh", "resumed"]) {

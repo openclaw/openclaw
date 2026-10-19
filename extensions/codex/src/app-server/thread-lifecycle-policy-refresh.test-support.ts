@@ -39,6 +39,44 @@ export function registerThreadPolicyRefreshTests({
   startOrResumeThread,
   writeCodexAppServerBinding,
 }: PolicyRefreshFixtures) {
+  function fixture(threadId: string) {
+    return {
+      threadId,
+      response: threadStartResult(threadId),
+      sessionFile: path.join(tempDir, `${threadId}.jsonl`),
+      cwd: path.join(tempDir, "workspace"),
+      agentDir: path.join(tempDir, "agent"),
+    };
+  }
+  function common(
+    wire: Awaited<ReturnType<PolicyRefreshFixtures["createLeasedLifecycleWireClient"]>>,
+    sessionFile: string,
+    cwd: string,
+  ) {
+    return {
+      client: wire.client,
+      params: { ...createParams(sessionFile, cwd), agentDir: path.join(tempDir, "agent") },
+      cwd,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+      userMcpServersEnabled: false,
+      signal: new AbortController().signal,
+    };
+  }
+  function close(wire: ReturnType<typeof createClientHarness>) {
+    releaseLeasedSharedCodexAppServerClient(wire.client);
+    wire.client.close();
+  }
+  function configResult(method: string) {
+    if (method === "config/read") {
+      return { config: {}, origins: {}, layers: [] };
+    }
+    if (method === "configRequirements/read") {
+      return { requirements: null };
+    }
+    throw new Error(`unexpected method: ${method}`);
+  }
+  const configReads = ["config/read", "configRequirements/read"];
   it.each(
     [
       { nativeStatus: "systemError", outcome: "unloaded", sibling: true },
@@ -65,11 +103,7 @@ export function registerThreadPolicyRefreshTests({
   )(
     "preserves managed $nativeStatus history across $outcome with sibling=$sibling, closing=$closing, early=$earlyClose",
     async ({ nativeStatus, outcome, sibling, closing, earlyClose }) => {
-      const sessionFile = path.join(tempDir, "managed-unload.jsonl");
-      const cwd = path.join(tempDir, "workspace");
-      const agentDir = path.join(tempDir, "agent");
-      const threadId = "managed-unload";
-      const response = threadStartResult(threadId);
+      const { sessionFile, cwd, agentDir, threadId, response } = fixture("managed-unload");
       const unsubscribed = createDeferred<void>();
       const resumeRequested = createDeferred<void>();
       const rejectClosing = createDeferred<void>();
@@ -84,10 +118,6 @@ export function registerThreadPolicyRefreshTests({
         async (request) => {
           requests.push(request);
           switch (request.method) {
-            case "config/read":
-              return { config: {}, origins: {}, layers: [] };
-            case "configRequirements/read":
-              return { requirements: null };
             case "thread/start":
               return response;
             case "thread/resume":
@@ -119,18 +149,13 @@ export function registerThreadPolicyRefreshTests({
             case "thread/inject_items":
               return {};
             default:
-              throw new Error(`unexpected method: ${request.method}`);
+              return configResult(request.method);
           }
         },
         "stdio",
       );
-      const common = {
-        client: wire.client,
-        params: { ...createParams(sessionFile, cwd), agentDir },
-        cwd,
-        dynamicTools: [],
-        appServer: createThreadLifecycleAppServerOptions(),
-        userMcpServersEnabled: false,
+      const options = {
+        ...common(wire, sessionFile, cwd),
         signal: controller.signal,
         abandonClient,
         assertCurrent: () => {
@@ -143,7 +168,10 @@ export function registerThreadPolicyRefreshTests({
         ? await claimCodexAppServerLiveThread(wire.client, "sibling")
         : undefined;
       try {
-        const first = await startOrResumeThread({ ...common, developerInstructions: "old policy" });
+        const first = await startOrResumeThread({
+          ...options,
+          developerInstructions: "old policy",
+        });
         await retainCodexAppServerLiveThread(
           wire.client,
           threadId,
@@ -152,7 +180,7 @@ export function registerThreadPolicyRefreshTests({
         );
         const before = await readCodexAppServerBinding(sessionFile);
         const resumed = startOrResumeThread({
-          ...common,
+          ...options,
           developerInstructions: "replacement policy",
         });
         const result =
@@ -237,8 +265,7 @@ export function registerThreadPolicyRefreshTests({
       } finally {
         vi.useRealTimers();
         await siblingOwner?.release("sibling");
-        releaseLeasedSharedCodexAppServerClient(wire.client);
-        wire.client.close();
+        close(wire);
       }
     },
   );
@@ -253,28 +280,14 @@ export function registerThreadPolicyRefreshTests({
   ])(
     "refreshes ordinary generic policy over $transport before admitting a resumed turn: $developerInstructions / $fault",
     async ({ developerInstructions, fault, transport }) => {
-      const sessionFile = path.join(tempDir, "ordinary-policy.jsonl");
-      const workspaceDir = path.join(tempDir, "workspace");
-      const threadId = "ordinary-policy";
-      const response = threadStartResult(threadId);
+      const { sessionFile, cwd, agentDir, threadId, response } = fixture("ordinary-policy");
       const requests: RpcRequest[] = [];
       const wire = await createLeasedLifecycleWireClient(
-        path.join(tempDir, "agent"),
+        agentDir,
         (request) => {
           requests.push(request);
-          if (request.method === "config/read") {
-            return { config: {}, origins: {}, layers: [] };
-          }
-          if (request.method === "configRequirements/read") {
-            return { requirements: null };
-          }
           if (request.method === "thread/read") {
-            return {
-              thread: {
-                ...response.thread,
-                status: { type: "notLoaded" },
-              },
-            };
+            return { thread: { ...response.thread, status: { type: "notLoaded" } } };
           }
           if (request.method === "thread/resume") {
             return response;
@@ -291,25 +304,16 @@ export function registerThreadPolicyRefreshTests({
           if (request.method === "thread/unsubscribe") {
             return { status: "unsubscribed" };
           }
-          throw new Error(`unexpected method: ${request.method}`);
+          return configResult(request.method);
         },
         transport,
       );
-      await writeCodexAppServerBinding(sessionFile, { threadId, cwd: workspaceDir });
+      await writeCodexAppServerBinding(sessionFile, { threadId, cwd });
       const before = await readCodexAppServerBinding(sessionFile);
       try {
         const run = startOrResumeThread({
-          client: wire.client,
-          params: {
-            ...createParams(sessionFile, workspaceDir),
-            agentDir: path.join(tempDir, "agent"),
-          },
-          cwd: workspaceDir,
-          dynamicTools: [],
-          appServer: createThreadLifecycleAppServerOptions(),
-          userMcpServersEnabled: false,
+          ...common(wire, sessionFile, cwd),
           developerInstructions,
-          signal: new AbortController().signal,
           ...(fault === "retirement failure"
             ? {
                 abandonClient: async () => {
@@ -323,20 +327,17 @@ export function registerThreadPolicyRefreshTests({
           await expect(run).rejects.toMatchObject({
             name: "CodexThreadPolicyHandoffError",
             scope: undefined,
-            outcome: fault === "retirement failure" ? "unknown" : "not-written",
+            outcome: "unknown",
           });
           expect(await readCodexAppServerBinding(sessionFile)).toEqual(before);
           expect(requests.filter(({ method }) => method === "thread/resume")).toHaveLength(1);
-          expect(requests.filter(({ method }) => method === "thread/inject_items")).toHaveLength(
-            fault === "retirement failure" ? 1 : 0,
-          );
+          expect(requests.filter(({ method }) => method === "thread/inject_items")).toHaveLength(1);
           expect(requests.some(({ method }) => method === "thread/start")).toBe(false);
           return;
         }
         expect((await run).threadId).toBe(threadId);
         expect(requests.map(({ method }) => method)).toEqual([
-          "config/read",
-          "configRequirements/read",
+          ...configReads,
           "thread/read",
           "thread/resume",
           "thread/inject_items",
@@ -348,8 +349,7 @@ export function registerThreadPolicyRefreshTests({
         expect(policy).toContain("It replaces earlier OpenClaw-supplied generic policy");
         expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe(threadId);
       } finally {
-        releaseLeasedSharedCodexAppServerClient(wire.client);
-        wire.client.close();
+        close(wire);
       }
     },
   );
@@ -362,24 +362,15 @@ export function registerThreadPolicyRefreshTests({
     "keeps ordinary warm configuration honest over $transport across $nativeStatus",
     async ({ nativeStatus, transport }) => {
       const developerInstructions = "replacement policy";
-      const sessionFile = path.join(tempDir, "ordinary-warm-policy.jsonl");
-      const workspaceDir = path.join(tempDir, "workspace");
-      const threadId = "ordinary-warm-policy";
-      const response = threadStartResult(threadId);
+      const { sessionFile, cwd, agentDir, threadId, response } = fixture("ordinary-warm-policy");
       const methods: string[] = [];
       let subscribed = true;
       const wire = await createLeasedLifecycleWireClient(
-        path.join(tempDir, "agent"),
+        agentDir,
         (request) => {
           methods.push(request.method);
           if (request.method === "thread/unsubscribe" || request.method === "thread/resume") {
             expect(request.params).toMatchObject({ threadId });
-          }
-          if (request.method === "config/read") {
-            return { config: {}, origins: {}, layers: [] };
-          }
-          if (request.method === "configRequirements/read") {
-            return { requirements: null };
           }
           if (request.method === "thread/start" || request.method === "thread/resume") {
             if (!subscribed && nativeStatus === "idle") {
@@ -401,7 +392,7 @@ export function registerThreadPolicyRefreshTests({
           if (request.method === "thread/inject_items") {
             return {};
           }
-          throw new Error(`unexpected method: ${request.method}`);
+          return configResult(request.method);
         },
         transport,
       );
@@ -409,24 +400,16 @@ export function registerThreadPolicyRefreshTests({
       const removeNotificationHandler = wire.client.addNotificationHandler((notification) => {
         notifications.push(notification.method);
       });
-      const common = {
-        client: wire.client,
-        params: {
-          ...createParams(sessionFile, workspaceDir),
-          agentDir: path.join(tempDir, "agent"),
-        },
-        cwd: workspaceDir,
-        dynamicTools: [],
+      const options = {
+        ...common(wire, sessionFile, cwd),
         appServer: {
           ...createThreadLifecycleAppServerOptions(),
           start: { ...createThreadLifecycleAppServerOptions().start, transport },
         },
-        userMcpServersEnabled: false,
-        signal: new AbortController().signal,
       };
       try {
         const first = await startOrResumeThread({
-          ...common,
+          ...options,
           developerInstructions: "initial policy",
         });
         await retainCodexAppServerLiveThread(
@@ -435,17 +418,10 @@ export function registerThreadPolicyRefreshTests({
           undefined,
           first.liveThreadConfigFingerprint,
         );
-        const resume = startOrResumeThread({ ...common, developerInstructions });
+        const resume = startOrResumeThread({ ...options, developerInstructions });
         if (nativeStatus === "active") {
           await expect(resume).rejects.toThrow("Codex session became active in another runner");
-          expect(methods).toEqual([
-            "config/read",
-            "configRequirements/read",
-            "thread/start",
-            "config/read",
-            "configRequirements/read",
-            "thread/read",
-          ]);
+          expect(methods).toEqual([...configReads, "thread/start", ...configReads, "thread/read"]);
           expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe(first.threadId);
           return;
         }
@@ -460,11 +436,9 @@ export function registerThreadPolicyRefreshTests({
         expect(notifications).toContain("thread/status/changed");
         expect(notifications).not.toContain("thread/closed");
         expect(methods).toEqual([
-          "config/read",
-          "configRequirements/read",
+          ...configReads,
           "thread/start",
-          "config/read",
-          "configRequirements/read",
+          ...configReads,
           "thread/read",
           "thread/unsubscribe",
           "thread/resume",
@@ -472,8 +446,7 @@ export function registerThreadPolicyRefreshTests({
         ]);
       } finally {
         removeNotificationHandler();
-        releaseLeasedSharedCodexAppServerClient(wire.client);
-        wire.client.close();
+        close(wire);
       }
     },
   );

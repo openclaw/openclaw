@@ -33,101 +33,63 @@ async function buildRequestConfig(
 }
 
 describe("Codex managed shell environment", () => {
-  it.each<{
-    label: string;
-    policy?: JsonObject;
-    expectedBase?: string;
-  }>([
-    { label: "ambient" },
-    {
-      label: "authored native",
-      policy: {
-        inherit: "none",
-        set: {
-          GIT_CONFIG_PARAMETERS: "'user.name=Native' 'user.email=native@example.invalid'",
-        },
-      },
-      expectedBase: "'user.name=Native' 'user.email=native@example.invalid'",
-    },
-    {
-      label: "authored native excluded by legacy include-only",
-      policy: {
-        include_only: ["PATH"],
-        set: { GIT_CONFIG_PARAMETERS: "'http.extraHeader=fixture-marker'" },
-      },
-      expectedBase: "",
-    },
-    {
-      label: "authored native excluded by include filters",
-      policy: {
-        filters: { PATH: "include" },
-        set: { GIT_CONFIG_PARAMETERS: "'http.extraHeader=fixture-marker'" },
-      },
-      expectedBase: "",
-    },
-    {
-      label: "authored native survives exclusion-only",
-      policy: {
-        exclude: ["GIT_*"],
-        set: { GIT_CONFIG_PARAMETERS: "'user.name=Native'" },
-      },
-      expectedBase: "'user.name=Native'",
-    },
-    {
-      label: "empty native",
-      policy: { set: { GIT_CONFIG_PARAMETERS: "" } },
-      expectedBase: "",
-    },
-    { label: "inherit none", policy: { inherit: "none" }, expectedBase: "" },
-    { label: "inherit core", policy: { inherit: "core" }, expectedBase: "" },
-    {
-      label: "legacy exclusion",
-      policy: { exclude: ["git_conf?g_*"] },
-      expectedBase: "",
-    },
-    {
-      label: "legacy include-only",
-      policy: { include_only: ["PATH"] },
-      expectedBase: "",
-    },
-    {
-      label: "filter exclusion wins over inclusion",
-      policy: { filters: { "git_*": "include", "git_conf?g_*": "exclude" } },
-      expectedBase: "",
-    },
-    {
-      label: "filter excludes unlisted variables",
-      policy: { filters: { PATH: "include" } },
-      expectedBase: "",
-    },
-    {
-      label: "filter admits inherited parameters",
-      policy: { filters: { "git_config_p?rameters": "include" } },
-    },
-  ])("preserves $label Git configuration before the host append", async (fixture) => {
-    const parameters = "'maintenance.auto=false' 'gc.auto=0'";
-    const options = {
-      config: { shell_environment_policy: fixture.policy ?? {} },
-      shellGitConfigParameters: parameters,
-    };
-    for (const action of ["start", "resume"] as const) {
-      const policy = (await buildRequestConfig(action, options))?.shell_environment_policy;
-      if (!isJsonObject(policy)) {
-        throw new Error("expected shell environment policy");
+  const nativeGit = "'user.name=Native' 'user.email=native@example.invalid'";
+  const setGit = (value: string) => ({ GIT_CONFIG_PARAMETERS: value });
+  it.each<[string, JsonObject | undefined, string?]>([
+    ["ambient", undefined],
+    ["authored native", { inherit: "none", set: setGit(nativeGit) }, nativeGit],
+    [
+      "authored native excluded by legacy include-only",
+      { include_only: ["PATH"], set: setGit("'http.extraHeader=fixture-marker'") },
+      "",
+    ],
+    [
+      "authored native excluded by include filters",
+      { filters: { PATH: "include" }, set: setGit("'http.extraHeader=fixture-marker'") },
+      "",
+    ],
+    [
+      "authored native survives exclusion-only",
+      { exclude: ["GIT_*"], set: setGit("'user.name=Native'") },
+      "'user.name=Native'",
+    ],
+    ["empty native", { set: setGit("") }, ""],
+    ["inherit none", { inherit: "none" }, ""],
+    ["inherit core", { inherit: "core" }, ""],
+    ["legacy exclusion", { exclude: ["git_conf?g_*"] }, ""],
+    ["legacy include-only", { include_only: ["PATH"] }, ""],
+    [
+      "filter exclusion wins over inclusion",
+      { filters: { "git_*": "include", "git_conf?g_*": "exclude" } },
+      "",
+    ],
+    ["filter excludes unlisted variables", { filters: { PATH: "include" } }, ""],
+    ["filter admits inherited parameters", { filters: { "git_config_p?rameters": "include" } }],
+  ])(
+    "preserves %s Git configuration before the host append",
+    async (_label, policy, expectedBase) => {
+      const parameters = "'maintenance.auto=false' 'gc.auto=0'";
+      const options = {
+        config: { shell_environment_policy: policy ?? {} },
+        shellGitConfigParameters: parameters,
+      };
+      for (const action of ["start", "resume"] as const) {
+        const merged = (await buildRequestConfig(action, options))?.shell_environment_policy;
+        if (!isJsonObject(merged)) {
+          throw new Error("expected shell environment policy");
+        }
+        if (expectedBase === undefined) {
+          expect(merged.set).not.toHaveProperty("GIT_CONFIG_PARAMETERS");
+        } else {
+          expect(merged).toMatchObject({
+            set: {
+              GIT_CONFIG_PARAMETERS: expectedBase ? `${expectedBase} ${parameters}` : parameters,
+            },
+          });
+        }
       }
-      if (fixture.expectedBase === undefined) {
-        expect(policy.set).not.toHaveProperty("GIT_CONFIG_PARAMETERS");
-      } else {
-        expect(policy).toMatchObject({
-          set: {
-            GIT_CONFIG_PARAMETERS: fixture.expectedBase
-              ? `${fixture.expectedBase} ${parameters}`
-              : parameters,
-          },
-        });
-      }
-    }
-  });
+    },
+  );
 
   it("omits native absent policy fields instead of sending null TOML overrides", () => {
     expect(

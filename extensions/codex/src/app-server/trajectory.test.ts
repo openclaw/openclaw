@@ -12,6 +12,7 @@ import {
   type SqliteTrajectoryRuntimeEventForTest,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import type { CodexDynamicToolFunctionSpec } from "./protocol.js";
 import {
   createCodexTrajectoryRecorder,
   recordCodexTrajectoryCompletion,
@@ -35,18 +36,8 @@ function expectTrajectoryRecorder(
   return recorder;
 }
 
-function createMemoryTrajectoryFacade(): {
-  events: Array<{ type: string; data?: Record<string, unknown> }>;
-  trajectory: CodexTrajectoryRecorder;
-} {
-  const events: Array<{ type: string; data?: Record<string, unknown> }> = [];
-  return {
-    events,
-    trajectory: {
-      recordEvent: (type, data) => events.push({ type, data }),
-      flush: async () => undefined,
-    },
-  };
+function tool(name: string, description: string): CodexDynamicToolFunctionSpec {
+  return { type: "function", name, description, inputSchema: { type: "object" } };
 }
 
 function createSqliteTrajectoryFacade(params: {
@@ -78,6 +69,17 @@ function createSqliteTrajectoryFacade(params: {
   };
 }
 
+async function createSessionTarget() {
+  const target = {
+    agentId: "main",
+    sessionId: "session-1",
+    sessionKey: "agent:main:session-1",
+    storePath: path.join(tempDir, "sessions", "sessions.json"),
+  };
+  await upsertSessionEntry({ ...target, entry: { sessionId: target.sessionId, updatedAt: 10 } });
+  return target;
+}
+
 describe("Codex trajectory recorder", () => {
   it("returns null when the host trajectory facade is unavailable", () => {
     expect(createCodexTrajectoryRecorder(undefined)).toBeNull();
@@ -86,32 +88,19 @@ describe("Codex trajectory recorder", () => {
   it("stores SQLite-backed captures for the canonical session-key target", async () => {
     // Regression: the host stopped emitting legacy `sqlite:` session-file
     // markers, so any marker re-derivation here drops every Codex capture.
-    const tmpDir = tempDir;
-    const storePath = path.join(tmpDir, "sessions", "sessions.json");
-    await upsertSessionEntry({
-      agentId: "main",
-      sessionKey: "agent:main:session-1",
-      storePath,
-      entry: { sessionId: "session-1", updatedAt: 10 },
-    });
-    const recorder = createCodexTrajectoryRecorder(
-      createSqliteTrajectoryFacade({
-        agentId: "main",
-        sessionId: "session-1",
-        storePath,
-      }),
-    );
+    const target = await createSessionTarget();
+    const recorder = createCodexTrajectoryRecorder(createSqliteTrajectoryFacade(target));
 
     const trajectoryRecorder = expectTrajectoryRecorder(recorder);
     trajectoryRecorder.recordEvent("session.started");
     await trajectoryRecorder.flush();
 
-    expect(fs.readdirSync(path.join(tmpDir, "sessions"))).not.toEqual(
+    expect(fs.readdirSync(path.dirname(target.storePath))).not.toEqual(
       expect.arrayContaining(["session.trajectory.jsonl", "session.trajectory-path.json"]),
     );
-    await expect(
-      loadSqliteTrajectoryRuntimeEvents({ agentId: "main", sessionId: "session-1", storePath }),
-    ).resolves.toEqual([expect.objectContaining({ type: "session.started" })]);
+    await expect(loadSqliteTrajectoryRuntimeEvents(target)).resolves.toEqual([
+      expect.objectContaining({ type: "session.started" }),
+    ]);
   });
 
   it("records namespace dynamic tools as callable trajectory definitions", async () => {
@@ -120,19 +109,16 @@ describe("Codex trajectory recorder", () => {
         type: "namespace" as const,
         name: "openclaw",
         description: "",
-        tools: [
-          {
-            type: "function" as const,
-            name: "web_search",
-            description: "Search the web.",
-            inputSchema: { type: "object" },
-            deferLoading: true,
-          },
-        ],
+        tools: [{ ...tool("web_search", "Search the web."), deferLoading: true }],
       },
     ];
-    const { events, trajectory } = createMemoryTrajectoryFacade();
-    const recorder = expectTrajectoryRecorder(createCodexTrajectoryRecorder(trajectory));
+    const events: Array<{ type: string; data?: Record<string, unknown> }> = [];
+    const recorder = expectTrajectoryRecorder(
+      createCodexTrajectoryRecorder({
+        recordEvent: (type, data) => events.push({ type, data }),
+        flush: async () => undefined,
+      }),
+    );
 
     recordCodexTrajectoryContext(recorder, { attempt: {} as never, tools });
     await recorder.flush();
@@ -148,19 +134,7 @@ describe("Codex trajectory recorder", () => {
 
   it("lets the host bound oversized Codex events without losing terminal facts", async () => {
     const tmpDir = tempDir;
-    const storePath = path.join(tmpDir, "sessions", "sessions.json");
-    const sessionTarget = {
-      agentId: "main",
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      storePath,
-    };
-    await upsertSessionEntry({
-      agentId: sessionTarget.agentId,
-      sessionKey: sessionTarget.sessionKey,
-      storePath,
-      entry: { sessionId: sessionTarget.sessionId, updatedAt: 10 },
-    });
+    const sessionTarget = await createSessionTarget();
     const attempt = {
       agentId: "main",
       cwd: tmpDir,
@@ -199,20 +173,26 @@ describe("Codex trajectory recorder", () => {
     });
     const recorder = createCodexTrajectoryRecorder(host.capabilities.trajectory);
     const trajectoryRecorder = expectTrajectoryRecorder(recorder);
+    // Twelve entries fit the old plugin cap but exceed the host's unshrunk event cap.
+    const messagesSnapshot = () =>
+      Array.from({ length: 12 }, (_value, index) => ({
+        role: index % 2 === 0 ? "user" : "assistant",
+        content: `message-${index} ${"x".repeat(32_000)}`,
+      }));
+    const terminal = (error: string) => ({
+      kind: "timeout",
+      phase: "prompt",
+      source: "runtime",
+      aborted: true,
+      failure: { source: "prompt", error },
+    });
 
     try {
       recordCodexTrajectoryContext(trajectoryRecorder, {
         attempt: attempt as never,
         developerInstructions: `Bearer ${"s".repeat(40)} ${"x".repeat(40_000)}`,
         prompt: "inspect",
-        tools: [
-          {
-            type: "function",
-            name: "huge_tool",
-            description: "x".repeat(40_000),
-            inputSchema: { type: "object" },
-          },
-        ],
+        tools: [tool("huge_tool", "x".repeat(40_000))],
       } as never);
       trajectoryRecorder.recordEvent("tool.result", {
         toolCallId: "call-1",
@@ -227,21 +207,10 @@ describe("Codex trajectory recorder", () => {
         timedOut: true,
         yieldDetected: true,
         result: {
-          terminal: {
-            kind: "timeout",
-            phase: "prompt",
-            source: "runtime",
-            aborted: true,
-            failure: { source: "prompt", error: "terminal prompt error" },
-          },
+          terminal: terminal("terminal prompt error"),
           attemptUsage: usage,
           assistantTexts: ["done"],
-          // Twelve entries stay below the old plugin's post-sanitization cap,
-          // but exceed the host cap when forwarded without pre-shrinking.
-          messagesSnapshot: Array.from({ length: 12 }, (_value, index) => ({
-            role: index % 2 === 0 ? "user" : "assistant",
-            content: `message-${index} ${"x".repeat(32_000)}`,
-          })),
+          messagesSnapshot: messagesSnapshot(),
         } as never,
       });
       recordCodexTrajectoryCompletion(trajectoryRecorder, {
@@ -249,22 +218,13 @@ describe("Codex trajectory recorder", () => {
         turnId: "turn-compact",
         timedOut: true,
         result: {
-          terminal: {
-            kind: "timeout",
-            phase: "prompt",
-            source: "runtime",
-            aborted: true,
-            failure: { source: "prompt", error: "compact prompt error" },
-          },
+          terminal: terminal("compact prompt error"),
           attemptUsage: usage,
           assistantTexts: Array.from(
             { length: 12 },
             (_value, index) => `assistant-${index} ${"x".repeat(32_000)}`,
           ),
-          messagesSnapshot: Array.from({ length: 12 }, (_value, index) => ({
-            role: index % 2 === 0 ? "user" : "assistant",
-            content: `message-${index} ${"x".repeat(32_000)}`,
-          })),
+          messagesSnapshot: messagesSnapshot(),
         } as never,
       });
       await trajectoryRecorder.flush();
@@ -272,13 +232,17 @@ describe("Codex trajectory recorder", () => {
       host.close();
     }
 
-    const events = await loadSqliteTrajectoryRuntimeEvents({
-      agentId: sessionTarget.agentId,
-      sessionId: sessionTarget.sessionId,
-      storePath,
-    });
+    const events = await loadSqliteTrajectoryRuntimeEvents(sessionTarget);
+    const fieldLimit = { truncated: true, reason: "trajectory-field-size-limit" };
+    const completionFacts = {
+      truncated: true,
+      reason: "trajectory-event-size-limit",
+      timedOut: true,
+      aborted: true,
+      usage,
+    };
     const context = events.find((event) => event.type === "context.compiled");
-    const tool = events.find((event) => event.type === "tool.result");
+    const toolResult = events.find((event) => event.type === "tool.result");
     const completion = events.find(
       (event) => event.type === "model.completed" && event.data?.turnId === "turn-1",
     );
@@ -287,57 +251,40 @@ describe("Codex trajectory recorder", () => {
     );
     expect(context?.data).toMatchObject({
       prompt: "inspect",
-      systemPrompt: {
-        truncated: true,
-        reason: "trajectory-field-size-limit",
-      },
+      systemPrompt: fieldLimit,
       tools: [
         {
           name: "huge_tool",
-          description: {
-            truncated: true,
-            reason: "trajectory-field-size-limit",
-          },
+          description: fieldLimit,
           parameters: { type: "object" },
         },
       ],
     });
     expect(JSON.stringify(context)).not.toContain("s".repeat(40));
-    expect(tool?.data).toMatchObject({
+    expect(toolResult?.data).toMatchObject({
       toolCallId: "call-1",
       toolName: "huge_tool",
       status: "completed",
-      output: {
-        truncated: true,
-        reason: "trajectory-field-size-limit",
-      },
+      output: fieldLimit,
     });
-    expect(tool?.data?.authorization).toBe(`Bearer ${"t".repeat(40)}`);
-    expect(JSON.stringify(tool)).not.toContain(`token=${"t".repeat(40)}`);
+    expect(toolResult?.data?.authorization).toBe(`Bearer ${"t".repeat(40)}`);
+    expect(JSON.stringify(toolResult)).not.toContain(`token=${"t".repeat(40)}`);
     expect(completion?.data).toMatchObject({
-      truncated: true,
-      reason: "trajectory-event-size-limit",
+      ...completionFacts,
       threadId: "thread-1",
       turnId: "turn-1",
-      timedOut: true,
       yieldDetected: true,
-      aborted: true,
       promptError: "terminal prompt error",
-      usage,
       assistantTexts: ["done"],
     });
     expect(completion?.data?.messagesSnapshot).toBeUndefined();
     expect(completion?.data?.droppedFields).toEqual(["messagesSnapshot"]);
     expect(compactCompletion?.data).toMatchObject({
-      truncated: true,
-      reason: "trajectory-event-size-limit",
+      ...completionFacts,
       threadId: "thread-compact",
       turnId: "turn-compact",
-      timedOut: true,
       yieldDetected: false,
-      aborted: true,
       promptError: "compact prompt error",
-      usage,
     });
     expect(compactCompletion?.data?.assistantTexts).toBeUndefined();
     expect(compactCompletion?.data?.messagesSnapshot).toBeUndefined();
@@ -350,13 +297,11 @@ describe("Codex trajectory recorder", () => {
       sessionKey: sessionTarget.sessionKey,
       workspaceDir: tmpDir,
     });
-    const exportedCompletion = bundle.events.find(
-      (event) => event.type === "model.completed" && event.data?.turnId === "turn-1",
-    );
-    const exportedCompactCompletion = bundle.events.find(
-      (event) => event.type === "model.completed" && event.data?.turnId === "turn-compact",
-    );
-    expect(exportedCompletion?.data).toEqual(completion?.data);
-    expect(exportedCompactCompletion?.data).toEqual(compactCompletion?.data);
+    const exported = (turnId: string) =>
+      bundle.events.find(
+        (event) => event.type === "model.completed" && event.data?.turnId === turnId,
+      )?.data;
+    expect(exported("turn-1")).toEqual(completion?.data);
+    expect(exported("turn-compact")).toEqual(compactCompletion?.data);
   });
 });
