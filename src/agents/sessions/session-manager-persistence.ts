@@ -310,7 +310,9 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
       let mutationAt =
         expectedMutationAt !== undefined ? expectedMutationAt : this.transcriptMutationAt;
       if (retryMutationConflicts && expectedMutationAt === undefined) {
-        // Content-preserving rewrites publish the actor watermark before this manager adopts it.
+        // Rewrites can publish a watermark before the manager adopts it. This pre-adoption
+        // matches the retry below: same parent/content, with the DB check authoritative.
+        // Remove it if retries ever recompute parent/content from a fresh view.
         const current = actor.snapshot(authority);
         if (current) {
           mutationAt = current.transcript.version.updatedAt;
