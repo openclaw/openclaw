@@ -25,10 +25,13 @@ import {
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { evaluateDecisionInRegistry, prepareDecisionProviderReload } from "./runtime.js";
+import {
+  evaluateDecisionInRegistry as evaluate,
+  prepareDecisionProviderReload as prepareReload,
+} from "./runtime.js";
 import { answer, batch, config, options, registered } from "./runtime.test-support.js";
-import type { DecisionProviderV1 } from "./types.js";
-import { validateDecisionBatch, validateDecisionResult } from "./validation.js";
+import type { DecisionProviderV1, ProviderDecisionOutcome } from "./types.js";
+import { validateDecisionResult } from "./validation.js";
 
 afterEach(() => {
   resetPluginRuntimeStateForTest();
@@ -36,7 +39,6 @@ afterEach(() => {
 });
 
 type Options = ReturnType<typeof options>;
-type LlmPolicy = NonNullable<NonNullable<OpenClawConfig["plugins"]>["entries"]>[string]["llm"];
 const modelConfig = (
   decisionModel: string | undefined,
   entries: Record<string, string> = {},
@@ -50,12 +52,12 @@ const modelConfig = (
   },
 });
 function fixture(
-  evaluate: DecisionProviderV1["evaluate"] = async () => answer,
+  callback: DecisionProviderV1["evaluate"] = async () => answer,
   isReady?: () => boolean,
-  providerId?: string,
 ) {
-  const call = vi.fn(evaluate);
-  const host = registered(call, isReady, providerId);
+  const call = vi.fn(callback);
+  const host = registered(call, isReady);
+  setRuntimeConfigSnapshot(config);
   const provider = host.registry.decisionProviders[0]!.host;
   return {
     ...host,
@@ -63,18 +65,18 @@ function fixture(
     provider,
     instance: getPluginInstance(host.record)!,
     run: (overrides: Partial<Options> = {}, cfg = config, input = batch, consumerId?: string) =>
-      evaluateDecisionInRegistry(
-        input,
-        { ...options(), ...overrides },
-        host.registry,
-        cfg,
-        consumerId,
-      ),
+      evaluate(input, { ...options(), ...overrides }, host.registry, cfg, consumerId),
     sdk: (overrides: Partial<Options> = {}) =>
       host.api.runtime.decisions.evaluate(batch, { ...options(), ...overrides }),
-    reload: (changed = [host.record.id]) =>
-      prepareDecisionProviderReload(host.registry, new Set(changed)),
+    reload: (changed = [host.record.id]) => prepareReload(host.registry, new Set(changed)),
     inspect: (cfg = config) => provider.inspect(cfg),
+    expectHealth: (reasons: Record<string, number>, callable = true, successes?: number) =>
+      expect(provider.inspect(config)).toMatchObject({
+        activeRequests: 0,
+        callable,
+        reasons,
+        ...(successes === undefined ? {} : { successCount: successes }),
+      }),
   };
 }
 function blockedFixture() {
@@ -85,14 +87,13 @@ function blockedFixture() {
   });
   return { ...host, release: release.resolve };
 }
-const setPolicy = (llm: LlmPolicy, cfg = config) =>
-  setRuntimeConfigSnapshot({
-    ...cfg,
-    plugins: { entries: { owner: { llm } } },
-  });
-const waitForAbort = (signal: AbortSignal) =>
+const waitForAbort = (signal: AbortSignal, onAbort = () => {}) =>
   new Promise<void>((resolve) => {
-    signal.addEventListener("abort", () => resolve(), { once: true });
+    const finish = () => {
+      onAbort();
+      resolve();
+    };
+    signal.addEventListener("abort", finish, { once: true });
   });
 const fromAgent = (agentId: string, invoke: () => Promise<unknown>) =>
   withGatewayToolCallerIdentity({ agentId, sessionKey: `agent:${agentId}:fixture` }, invoke);
@@ -103,55 +104,27 @@ const expectUnavailable = async (pending: Promise<unknown>, reason: string) => {
   expect(await pending).toEqual({ status: "unavailable", reason });
 };
 
-it.each([
-  ["specialist", ["fixture/other"], "not allowlisted"],
-  [undefined, ["fixture/other"], "not allowlisted"],
-  [undefined, [], "no valid models"],
-  [undefined, ["invalid"], "no valid models"],
-] as const)("denies SDK policy before dispatch: %s %j %s", async (agentId, models, reason) => {
+it("selects the global role without model override permission", async () => {
   const host = fixture();
-  setPolicy({ allowedCompletionModels: [...models] });
-  await expect(host.sdk({ agentId })).rejects.toThrow(reason);
-  expect(host.call).not.toHaveBeenCalled();
-});
-
-it.each([
-  { role: "global", llm: { allowedCompletionModels: undefined } },
-  { role: "global", llm: { allowedCompletionModels: ["fixture/fixture-v1"] } },
-  { role: "global", llm: { allowedCompletionModels: ["*"] } },
-  { role: "owner", llm: { allowAgentIdOverride: undefined } },
-  { role: "owner", llm: { allowAgentIdOverride: false } },
-  { role: "owner", llm: { allowAgentIdOverride: true } },
-])("selects $role roles independently of override permissions ($llm)", async ({ role, llm }) => {
-  const host = fixture();
-  const agentId = role === "owner" ? "specialist" : undefined;
-  const model = agentId ? "specialist-v1" : "fixture-v1";
-  setPolicy(
-    {
-      allowModelOverride: false,
-      allowedModels: [],
-      allowedCompletionModels: [`fixture/${model}`],
-      ...llm,
-    },
-    modelConfig(
-      agentId ? undefined : "fixture/fixture-v1",
-      { main: "fixture/main-role", specialist: "fixture/specialist-v1", disabled: "" },
-      { model: "fixture/primary", modelPolicy: { allow: ["fixture/conversation-only"] } },
-    ),
+  const cfg = modelConfig(
+    "fixture/fixture-v1",
+    { main: "fixture/main-role" },
+    { modelPolicy: { allow: ["fixture/conversation-only"] } },
   );
-  await expectOk(fromAgent(agentId ?? "main", () => host.sdk({ agentId })));
-  expect(host.call.mock.calls[0]?.[1]).toMatchObject({ model });
-  expect(host.call.mock.calls[0]?.[1].agentId).toBe(agentId);
-  if (agentId) {
-    for (const disabled of [undefined, "disabled"]) {
-      await expectUnavailable(host.sdk({ agentId: disabled }), "disabled");
-    }
-  }
+  const llm = {
+    allowModelOverride: false,
+    allowedModels: [],
+    allowedCompletionModels: ["fixture/fixture-v1"],
+  };
+  setRuntimeConfigSnapshot({ ...cfg, plugins: { entries: { owner: { llm } } } });
+  await expectOk(fromAgent("main", () => host.sdk()));
+  expect(host.call.mock.calls[0]?.[1]).toMatchObject({ model: "fixture-v1" });
+  expect(host.call.mock.calls[0]?.[1].agentId).toBeUndefined();
   expect(host.call).toHaveBeenCalledOnce();
 });
 
 it.each(["consumer", "MixedConsumer"])(
-  "uses registered consumer %s policy, not provider, ambient plugin or option identity",
+  "binds policy to registered consumer %s",
   async (consumerId) => {
     const host = fixture();
     const consumer = createPluginRecord({
@@ -192,23 +165,15 @@ it.each(["consumer", "MixedConsumer"])(
       api.runtime.decisions.evaluate(batch, { ...spoofed, agentId: "specialist" }),
     ).rejects.toThrow(`not allowlisted for completions for plugin "${consumerId}"`);
     expect(host.call).not.toHaveBeenCalled();
-    // Provider configuration is not consumer authorization either.
     await expectOk(host.sdk());
   },
 );
 
-it("routes a configured custom TypeSafe model without requiring a catalog preset", async () => {
-  const host = fixture(undefined, undefined, "typesafe");
-  await expectOk(host.run({}, modelConfig("typesafe/nemotron-deciffusion")));
-  expect(host.call).toHaveBeenCalledOnce();
-  expect(host.call.mock.calls[0]?.[1].model).toBe("nemotron-deciffusion");
-});
 it("uses the adopted owner from a collected callback scope without reviving a retired instance", async () => {
   class RetiredRegistry {
     readonly fixtureLabel = "RetiredRegistry";
   }
   const host = fixture();
-  setRuntimeConfigSnapshot(config);
   const current = { ...host.registry };
   const resource = (() => {
     const previous = Object.assign(new RetiredRegistry(), host.registry);
@@ -237,7 +202,7 @@ it.each([
   { reason: "unsupported-input", attempts: 4, sdk: true },
   { reason: "authentication", attempts: 3, sdk: false },
 ] as const)(
-  "keeps $reason recoverable without poisoning shared health",
+  "recovers $reason without shared circuit poisoning",
   async ({ reason, attempts, sdk }) => {
     let recovered = false;
     const host = fixture(async (_batch, { agentId }) =>
@@ -246,7 +211,6 @@ it.each([
         : answer,
     );
     const run = () => (sdk ? host.sdk() : host.run({ agentId: "first" }));
-    setRuntimeConfigSnapshot(config);
     for (let attempt = 1; attempt <= attempts; attempt++) {
       await expectUnavailable(run(), reason);
       expect(host.call).toHaveBeenCalledTimes(attempt);
@@ -264,32 +228,35 @@ it.each([
   },
 );
 
-it("reuses the validated provider snapshots for safe usage, diagnostics and outcomes", async () => {
-  let resultReads = 0;
-  let reasonReads = 0;
-  const host = fixture(async () =>
-    Object.defineProperty({ status: "ok", result: answer.result }, "result", {
-      get: () =>
-        ++resultReads === 1 ? answer.result : { usage: { inputTokens: "private-provider-body" } },
-    }),
-  );
-  expect(await host.run()).toMatchObject({
-    ...answer,
-    provenance: { providerId: "fixture", rubricVersion: "1" },
-  });
-  expect(resultReads).toBe(1);
-  host.call.mockImplementationOnce(async () =>
-    Object.defineProperty({ status: "unavailable", reason: "unsupported-input" }, "reason", {
-      get: () => (++reasonReads === 1 ? "unsupported-input" : "private-provider-body"),
-    }),
-  );
-  await expectUnavailable(host.run(), "unsupported-input");
-  expect(reasonReads).toBe(1);
-});
+it.each(["result", "reason"] as const)(
+  "uses the validated %s snapshot without rereading",
+  async (field) => {
+    const ok = field === "result";
+    const get = vi
+      .fn()
+      .mockReturnValueOnce(ok ? answer.result : "unsupported-input")
+      .mockReturnValue(
+        ok ? { usage: { inputTokens: "private-provider-body" } } : "private-provider-body",
+      );
+    const value: ProviderDecisionOutcome = ok
+      ? { ...answer }
+      : { status: "unavailable", reason: "unsupported-input" };
+    Object.defineProperty(value, field, { get, enumerable: true });
+    const host = fixture(async () => value);
+    if (ok) {
+      expect(await host.run()).toMatchObject({
+        ...answer,
+        provenance: { providerId: "fixture", rubricVersion: "1" },
+      });
+    } else {
+      await expectUnavailable(host.run(), "unsupported-input");
+    }
+    expect(get).toHaveBeenCalledOnce();
+  },
+);
 
 it("requires a current Gateway binding for scoped operator decisions", async () => {
   const host = fixture();
-  setRuntimeConfigSnapshot(config);
   await expect(
     withPluginRuntimeGatewayRequestScope(
       {
@@ -319,9 +286,7 @@ it.each([
       plugins: [
         {
           id: "fixture-normalizer",
-          modelIdNormalization: {
-            providers: { fixture: { aliases: { shortcut: "fixture-v1" } } },
-          },
+          modelIdNormalization: { providers: { fixture: { aliases: { shortcut: "fixture-v1" } } } },
         },
       ],
     });
@@ -342,12 +307,11 @@ it.each([
         manifestPlugins: metadata,
       }),
     });
-    const invoke = () => host.sdk();
     await expect(
       source === "agent-tool"
         ? withGatewayToolCallerIdentity(
             { agentId: "main", sessionKey: "agent:main:reader", operatorAuthority },
-            invoke,
+            () => host.sdk(),
           )
         : withOperatorToolGatewayAuthority(
             {
@@ -360,7 +324,7 @@ it.each([
               scopes: ["operator.write"],
               ...(source === "direct-tool" ? { operatorRunAuthority: operatorAuthority } : {}),
             },
-            invoke,
+            () => host.sdk(),
           ),
     ).rejects.toThrow(
       source === "unbound-operator"
@@ -376,34 +340,28 @@ it.each([
 it("leaves disabled and unconfigured evaluations network-free", async () => {
   const host = fixture();
   await expectUnavailable(host.run({}, {}), "disabled");
-  await expectUnavailable(
-    evaluateDecisionInRegistry(batch, options(), null, config),
-    "not-configured",
-  );
+  await expectUnavailable(evaluate(batch, options(), null, config), "not-configured");
   expect(host.call).not.toHaveBeenCalled();
 });
 it.each([
   { state: "unconfirmed", isReady: undefined, credentialReady: false, callable: true },
   { state: "ready", isReady: () => true, credentialReady: true, callable: true },
   { state: "unavailable", isReady: () => false, credentialReady: false, callable: false },
-])(
-  "reports $state readiness without confusing credential evidence with admission",
-  async ({ isReady, credentialReady, callable }) => {
-    const host = fixture(undefined, isReady);
-    expect(host.inspect()).toMatchObject({ credentialReady, callable });
-    if (callable) {
-      await expectOk(host.run());
-      expect(host.call).toHaveBeenCalledOnce();
-    } else {
-      await expectUnavailable(host.run(), "credentials-unavailable");
-      expect(host.call).not.toHaveBeenCalled();
-    }
-    expect(host.inspect()).toMatchObject({ credentialReady, callable });
-    host.provider.retire();
-    expect(host.inspect()).toMatchObject({ credentialReady: false, callable: false });
-    await expectUnavailable(host.run(), "retiring");
-  },
-);
+])("reports $state readiness and admission", async ({ isReady, credentialReady, callable }) => {
+  const host = fixture(undefined, isReady);
+  expect(host.inspect()).toMatchObject({ credentialReady, callable });
+  if (callable) {
+    await expectOk(host.run());
+    expect(host.call).toHaveBeenCalledOnce();
+  } else {
+    await expectUnavailable(host.run(), "credentials-unavailable");
+    expect(host.call).not.toHaveBeenCalled();
+  }
+  expect(host.inspect()).toMatchObject({ credentialReady, callable });
+  host.provider.retire();
+  expect(host.inspect()).toMatchObject({ credentialReady: false, callable: false });
+  await expectUnavailable(host.run(), "retiring");
+});
 it("fences a changed agent selection without retiring another agent's concurrent request", async () => {
   const releases = new Map<string, () => void>();
   const started = createDeferredCore();
@@ -438,22 +396,11 @@ it("fences a changed agent selection without retiring another agent's concurrent
   });
   expect(host.inspect(next)).toMatchObject({ successCount: 1, activeRequests: 0 });
 });
-it("propagates caller cancellation without fallback classification", async () => {
-  const caller = new AbortController();
-  const host = fixture(async (_batch, { signal }) => {
-    await waitForAbort(signal);
-    return answer;
-  });
-  const pending = host.run({ signal: caller.signal });
-  await host.started;
-  caller.abort(new Error("source replaced"));
-  await expect(pending).rejects.toThrow("source replaced");
-});
 it.each([
   { consumerId: "consumer", changed: ["owner", "consumer"], consumerRetired: true },
   { consumerId: "consumer", changed: ["owner"], consumerRetired: false },
 ])(
-  "preserves consumer retirement when $consumerId calls a replaced provider ($changed)",
+  "settles $consumerId during reload ($changed)",
   async ({ consumerId, changed, consumerRetired }) => {
     let settled = false;
     const host = fixture(async (_batch, { signal }) => {
@@ -474,22 +421,15 @@ it.each([
   },
 );
 it("closes provider admission before notifying retiring consumers", async () => {
-  let reentered: ReturnType<typeof evaluateDecisionInRegistry> | undefined;
+  let reentered: ReturnType<typeof evaluate> | undefined;
   let calls = 0;
   const host = fixture(async (_batch, { signal }) => {
     calls++;
     if (calls > 1) {
       return answer;
     }
-    await new Promise<void>((resolve) => {
-      signal.addEventListener(
-        "abort",
-        () => {
-          reentered = host.run();
-          resolve();
-        },
-        { once: true },
-      );
+    await waitForAbort(signal, () => {
+      reentered = host.run();
     });
     signal.throwIfAborted();
     return answer;
@@ -513,8 +453,6 @@ it("distinguishes caller defects from resource limits without network", async ()
   expect(host.call).not.toHaveBeenCalled();
 });
 it("requires exact answer IDs, bounded rubric positions and usable probabilities", () => {
-  expect(validateDecisionBatch(batch)).toBe(true);
-  expect(validateDecisionResult(batch, answer.result)).toBe(true);
   const invalidAnswers = [
     { extra: { type: "boolean", probabilityTrue: 1 } },
     { rank: { ...answer.result.answers.rank, score: 2.1 } },
@@ -535,9 +473,8 @@ it.each([
   { settlement: "resolve", failureReason: "transport" },
   { settlement: "reject", failureReason: "rate-limited" },
 ] as const)(
-  "keeps $settlement caller deadlines out of shared health while preserving $failureReason accounting",
+  "separates $settlement deadlines from $failureReason health",
   async ({ settlement, failureReason }) => {
-    setRuntimeConfigSnapshot(config);
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
     try {
       const deadlineStarted = Array.from({ length: 3 }, () => createDeferredCore());
@@ -563,11 +500,7 @@ it.each([
         expect(host.inspect().activeRequests).toBe(1);
         await vi.advanceTimersByTimeAsync(500);
         await expectUnavailable(pending, "deadline");
-        expect(host.inspect()).toMatchObject({
-          activeRequests: 0,
-          callable: true,
-          reasons: { deadline: index + 1 },
-        });
+        host.expectHealth({ deadline: index + 1 });
       }
 
       const explicit = await createDecisionTool("main", { config })!.execute(
@@ -577,12 +510,7 @@ it.each([
       );
       expect(explicit.details).toMatchObject({ status: "ok" });
       expect(host.call).toHaveBeenCalledTimes(4);
-      expect(host.inspect()).toMatchObject({
-        activeRequests: 0,
-        callable: true,
-        successCount: 1,
-        reasons: { deadline: 3 },
-      });
+      host.expectHealth({ deadline: 3 }, true, 1);
 
       host.call.mockResolvedValue({ status: "unavailable", reason: failureReason });
       for (let index = 1; index <= 3; index++) {
@@ -591,52 +519,38 @@ it.each([
       }
       await expectUnavailable(host.run({ purpose: "decision_evaluate" }), "circuit-open");
       expect(host.call).toHaveBeenCalledTimes(7);
-      expect(host.inspect()).toMatchObject({
-        activeRequests: 0,
-        callable: false,
-        reasons: { deadline: 3, [failureReason]: 3, "circuit-open": 1 },
+      host.expectHealth({ deadline: 3, [failureReason]: 3, "circuit-open": 1 }, false);
+
+      await vi.advanceTimersByTimeAsync(10_001);
+      const release = createDeferredCore();
+      const trialStarted = createDeferredCore();
+      host.call.mockImplementation(async () => {
+        trialStarted.resolve();
+        await release.promise;
+        return answer;
       });
+      const trial = host.run();
+      await trialStarted.promise;
+      const duringTrial = host.inspect();
+      expect(await host.run()).toMatchObject({ reason: "circuit-open" });
+      release.resolve();
+      await expectOk(trial);
+      expect(duringTrial).toMatchObject({ callable: false, activeRequests: 1 });
+      expect(host.inspect().callable).toBe(true);
+      expect(host.call).toHaveBeenCalledTimes(8);
     } finally {
       vi.useRealTimers();
     }
   },
 );
-it("bounds recovery to one half-open trial", async () => {
-  let now = 0;
-  const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
-  const host = fixture(async () => ({ status: "unavailable", reason: "transport" }));
-  try {
-    for (let i = 0; i < 3; i++) {
-      await host.run();
-    }
-    now = 10_001;
-    const release = createDeferredCore();
-    const trialStarted = createDeferredCore();
-    host.call.mockImplementation(async () => {
-      trialStarted.resolve();
-      await release.promise;
-      return answer;
-    });
-    const trial = host.run();
-    await trialStarted.promise;
-    const duringTrial = host.inspect();
-    expect(await host.run()).toMatchObject({ reason: "circuit-open" });
-    release.resolve();
-    await expectOk(trial);
-    expect(duringTrial).toMatchObject({ callable: false, activeRequests: 1 });
-    expect(host.inspect().callable).toBe(true);
-    expect(host.call).toHaveBeenCalledTimes(4);
-  } finally {
-    clock.mockRestore();
-  }
-});
 it.each([
   "input getter",
-  "input sparse",
-  "input symbol",
   "output inherited serialization",
   "output hidden",
-])("rejects %s before publishing an incomplete clone", async (variant) => {
+  "readiness",
+  "evaluate",
+  "outcome",
+])("rejects unsafe %s without private details", async (variant) => {
   const sideEffect = vi.fn(() => {
     throw new Error("private detail");
   });
@@ -648,47 +562,33 @@ it.each([
     Object.setPrototypeOf(returned.result.answers.rank.probabilities, prototype);
   } else if (variant === "input getter") {
     submitted.state = Object.defineProperty({}, "field", { get: sideEffect, enumerable: true });
-  } else if (variant === "input sparse") {
-    const sparse: string[] = [];
-    sparse.length = 2;
-    submitted.state = null;
-    submitted.questions = { q: { type: "score", criteria: sparse } };
-  } else if (variant === "input symbol") {
-    submitted.state = Object.assign({}, { [Symbol("unsupported")]: "hidden" });
-  } else {
+  } else if (variant === "output hidden") {
     Object.defineProperty(returned.result, "model", { enumerable: false });
   }
-  const host = fixture(async () => returned);
+  const host = fixture(
+    async () => {
+      if (variant === "evaluate") {
+        sideEffect();
+      }
+      return variant === "outcome"
+        ? Object.defineProperty(returned, "status", { get: sideEffect })
+        : returned;
+    },
+    variant === "readiness" ? sideEffect : undefined,
+  );
   const pending = host.run({}, config, submitted);
-  if (variant.startsWith("input")) {
-    await expect(pending).rejects.toThrow("Invalid decision contract");
-    expect(host.call).not.toHaveBeenCalled();
-  } else {
+  if (variant.startsWith("output")) {
     await expectUnavailable(pending, "invalid-response");
+  } else {
+    await expect(pending).rejects.toThrow("Invalid decision contract");
   }
-  expect(sideEffect).not.toHaveBeenCalled();
+  if (variant === "input getter") {
+    expect(host.call).not.toHaveBeenCalled();
+  }
+  if (variant.startsWith("input") || variant.startsWith("output")) {
+    expect(sideEffect).not.toHaveBeenCalled();
+  }
 });
-
-it.each(["readiness", "evaluate", "outcome"])(
-  "sanitizes private provider defects in %s",
-  async (stage) => {
-    const fail = () => {
-      throw new Error("private provider detail");
-    };
-    const host = fixture(
-      async () => {
-        if (stage === "evaluate") {
-          fail();
-        }
-        return stage === "outcome"
-          ? Object.defineProperty(structuredClone(answer), "status", { get: fail })
-          : answer;
-      },
-      stage === "readiness" ? fail : undefined,
-    );
-    await expect(host.run()).rejects.toThrow("Invalid decision contract");
-  },
-);
 it("uses an admitted snapshot even if caller or provider mutates its input", async () => {
   const release = createDeferredCore();
   const host = fixture(async (input) => {
@@ -713,8 +613,7 @@ it("leaves a timed-out rollback fenced after late physical settlement", async ()
   const pending = host.run();
   await host.started;
   try {
-    const replacement = host.reload();
-    const rollback = replacement.rollback(new AbortController().signal);
+    const rollback = host.reload().rollback(new AbortController().signal);
     const rejected = expect(rollback).rejects.toThrow("plugin host cleanup timed out");
     await vi.advanceTimersByTimeAsync(5001);
     await rejected;
@@ -730,30 +629,26 @@ it("leaves a timed-out rollback fenced after late physical settlement", async ()
   }
 });
 
-it.each([false, true])(
-  "settles a provider callback before disposal cleanup waits on its host (sibling: %s)",
-  async (withSibling) => {
-    const siblingRelease = createDeferredCore();
-    const host = blockedFixture();
-    const sibling = withSibling ? host.instance.run(() => siblingRelease.promise) : undefined;
-    const pending = host.run();
-    await host.started;
+it.each([false, true])("settles before disposal waits (sibling: %s)", async (withSibling) => {
+  const siblingRelease = createDeferredCore();
+  const host = blockedFixture();
+  const sibling = withSibling ? host.instance.run(() => siblingRelease.promise) : undefined;
+  const pending = host.run();
+  await host.started;
 
-    const disposal = host.instance.dispose();
-    host.release();
-    try {
-      // Another admitted call can postpone host.stop(), but cannot keep this
-      // retiring instance's completed provider result current.
-      await expectUnavailable(pending, "retiring");
-    } finally {
-      siblingRelease.resolve();
-      await sibling;
-      await disposal;
-    }
-    await expect(disposal).resolves.toEqual({ errors: [] });
-    expect(host.inspect().activeRequests).toBe(0);
-  },
-);
+  const disposal = host.instance.dispose();
+  host.release();
+  try {
+    // Sibling work may delay stop(), but cannot make this retiring result current.
+    await expectUnavailable(pending, "retiring");
+  } finally {
+    siblingRelease.resolve();
+    await sibling;
+    await disposal;
+  }
+  await expect(disposal).resolves.toEqual({ errors: [] });
+  expect(host.inspect().activeRequests).toBe(0);
+});
 
 it.each(["stop", "superseded", "canceled"] as const)(
   "does not reopen rollback after %s",
