@@ -338,17 +338,23 @@ suite.define(() => {
         const isAvatarRequest = (request: Request) =>
           new URL(request.url()).pathname === "/api/users/profile-ada/avatar";
         const onAvatarRequest = (request: Request) => {
-          if (isAvatarRequest(request)) avatarRequests.avatarRequests += 1;
+          if (isAvatarRequest(request)) {
+            avatarRequests.avatarRequests += 1;
+          }
         };
         const onAvatarResponse = (response: Response) => {
-          if (!isAvatarRequest(response.request())) return;
+          if (!isAvatarRequest(response.request())) {
+            return;
+          }
           avatarRequests.avatarResponses += 1;
           avatarRequests.avatarResponseStatus = response.status();
           avatarRequests.avatarResponseImageMime =
             response.headers()["content-type"]?.startsWith("image/") ?? false;
         };
         const onAvatarFailure = (request: Request) => {
-          if (isAvatarRequest(request)) avatarRequests.avatarRequestFailures += 1;
+          if (isAvatarRequest(request)) {
+            avatarRequests.avatarRequestFailures += 1;
+          }
         };
         const stopAvatarDiagnostics = () => {
           page.off("request", onAvatarRequest);
@@ -401,18 +407,24 @@ suite.define(() => {
           recordControlUiE2eFailureFacts(page, avatarRequests);
           await withTimeout(
             page.evaluate(() => {
-              const menu = document.querySelector("openclaw-session-menu");
-              const trigger = menu?.querySelector('[role="menuitem"][aria-label="Assign to…"]');
-              const panel = trigger?.parentElement?.querySelector(':scope > [role="menu"]');
-              const me = panel?.querySelector('[data-value="assign-owner:human:profile-ada"]');
+              const browserMenu = document.querySelector("openclaw-session-menu");
+              const browserTrigger = browserMenu?.querySelector(
+                '[role="menuitem"][aria-label="Assign to…"]',
+              );
+              const browserPanel =
+                browserTrigger?.parentElement?.querySelector(':scope > [role="menu"]');
+              const me = browserPanel?.querySelector(
+                '[data-value="assign-owner:human:profile-ada"]',
+              );
               const avatar = me?.querySelector("openclaw-viewer-avatar");
               const user = avatar?.user;
               const face = avatar?.querySelector(".viewer-avatar");
               const image = avatar?.querySelector("img");
               return {
-                ownerMenuPresent: Boolean(menu),
-                ownerTriggerExpanded: trigger?.getAttribute("aria-expanded") === "true",
-                ownerPanelVisible: panel?.checkVisibility({ visibilityProperty: true }) ?? false,
+                ownerMenuPresent: Boolean(browserMenu),
+                ownerTriggerExpanded: browserTrigger?.getAttribute("aria-expanded") === "true",
+                ownerPanelVisible:
+                  browserPanel?.checkVisibility({ visibilityProperty: true }) ?? false,
                 ownerMePresent: Boolean(me),
                 avatarHostPresent: Boolean(avatar),
                 avatarUserPresent: Boolean(user),
