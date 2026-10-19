@@ -590,10 +590,11 @@ export function registerCronEditCommand(cron: Command) {
               );
             }
             if (typeof opts.failureAlertChannel === "string") {
-              failureAlert.channel = normalizeOptionalLowercaseString(opts.failureAlertChannel);
+              failureAlert.channel =
+                normalizeOptionalLowercaseString(opts.failureAlertChannel) ?? null;
             }
             if (typeof opts.failureAlertTo === "string") {
-              failureAlert.to = normalizeOptionalString(opts.failureAlertTo);
+              failureAlert.to = normalizeOptionalString(opts.failureAlertTo) ?? null;
             }
             if (typeof opts.failureAlertCooldown === "string") {
               let cooldownMs: number;
@@ -617,7 +618,7 @@ export function registerCronEditCommand(cron: Command) {
               failureAlert.mode = mode;
             }
             if (typeof opts.failureAlertAccountId === "string") {
-              failureAlert.accountId = normalizeOptionalString(opts.failureAlertAccountId);
+              failureAlert.accountId = normalizeOptionalString(opts.failureAlertAccountId) ?? null;
             }
             patch.failureAlert = failureAlert;
           }
