@@ -119,7 +119,11 @@ extension OpenClawClientCredentialStore {
             guard receipt.format == 1, Set(receipt.legacyImports.keys).isSubset(of: allowed),
                   receipt.source
                       .map({ ["canonical", "independent"].contains($0.kind) &&
-                              ["sqlite", "postgres", "native-v0"].contains($0.engine) && $0.destinationVersion == 1
+                              ["sqlite", "postgres", "native-v0"].contains($0.engine) && $0.destinationVersion == 1 &&
+                              !$0.identity.isEmpty && !$0.generation.isEmpty &&
+                              $0.sha256.utf8.count == 64 && $0.sha256.utf8.allSatisfy {
+                                  (48...57).contains($0) || (97...102).contains($0)
+                              }
                       }) ??
                       true
             else {

@@ -79,6 +79,55 @@ struct ClientCredentialProtocolTests {
         }
     }
 
+    @Test(arguments: [
+        "valid", "whitespace", "emptyIdentity", "emptyGeneration", "shortDigest", "uppercaseDigest", "nonHexDigest",
+    ])
+    func `canonical receipt admission validates source metadata`(_ variant: String) throws {
+        let url = try #require(Bundle.module.url(
+            forResource: "receipts", withExtension: "json", subdirectory: "Fixtures/ClientCredentials"))
+        let fixture = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let cases = try #require(fixture["cases"] as? [[String: Any]])
+        let item = try #require(cases.first { $0["name"] as? String == "canonical-sqlite" })
+        let serialized = try #require(item["source_store"] as? String)
+        var receipt = try JSONDecoder().decode(ClientCredentialReceipt.self, from: Data(serialized.utf8))
+        let root = URL(fileURLWithPath: ProcessInfo.processInfo.environment["TMPDIR"] ?? NSTemporaryDirectory())
+            .appendingPathComponent("credential-source-metadata-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("state/openclaw.sqlite")
+        try FileManager.default.createDirectory(
+            at: source.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let before = Data("opaque selected database".utf8)
+        try before.write(to: source)
+        let binding = try ClientCredentialReceipt.SharedFile.inspect(source)
+        receipt.sharedFile = binding
+        receipt.source?.identity = binding.path + ":123"
+        switch variant {
+        case "whitespace":
+            receipt.source?.identity = " "
+            receipt.source?.generation = " "
+        case "emptyIdentity": receipt.source?.identity = ""
+        case "emptyGeneration": receipt.source?.generation = ""
+        case "shortDigest": receipt.source?.sha256 = String(repeating: "a", count: 63)
+        case "uppercaseDigest": receipt.source?.sha256 = String(repeating: "A", count: 64)
+        case "nonHexDigest": receipt.source?.sha256 = String(repeating: "g", count: 64)
+        default: break
+        }
+        let owner = try OpenClawClientCredentialStore(rootURL: root, migration: true)
+        let raw = try #require(String(data: JSONEncoder().encode(receipt), encoding: .utf8))
+        try owner.run("INSERT INTO client_credential_migration VALUES (1, ?, 'complete', 0)", [.text(raw)])
+        owner.close()
+        if variant == "valid" || variant == "whitespace" {
+            let admitted = try OpenClawClientCredentialStore(rootURL: root)
+            admitted.close()
+        } else {
+            #expect(throws: OpenClawNativeStateError.self) {
+                let admitted = try OpenClawClientCredentialStore(rootURL: root)
+                admitted.close()
+            }
+        }
+        #expect(try Data(contentsOf: source) == before)
+    }
+
     @Test(arguments: ["./../state/openclaw.sqlite", "./state//openclaw.sqlite", "./state\\openclaw.sqlite"])
     func `unsafe relative receipt bindings are refused`(_ binding: String) throws {
         let root = URL(fileURLWithPath: ProcessInfo.processInfo.environment["TMPDIR"] ?? NSTemporaryDirectory())

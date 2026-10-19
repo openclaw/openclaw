@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
@@ -89,6 +90,7 @@ describe("worker deploy build plugin", () => {
     ).map((artifact) => `worker/${artifact.replace(/\.mjs$/u, "")}`);
     let preparedDist: string;
     let preparedArchive: string;
+    let watchModuleFacts: unknown[] = [];
 
     afterEach(() => fixtureLifetime.cleanup());
 
@@ -146,6 +148,19 @@ describe("worker deploy build plugin", () => {
           config.plugins,
           {
             name: "test:worker-runtime-initialization",
+            buildEnd() {
+              watchModuleFacts = [...this.getModuleIds()]
+                .filter((id) => id.endsWith("/watch-io-worker.js"))
+                .map((id) => {
+                  const info = this.getModuleInfo(id);
+                  return {
+                    id,
+                    sideEffects: info?.moduleSideEffects,
+                    isEntry: info?.isEntry,
+                    imports: info?.importedIds,
+                  };
+                });
+            },
             transform(code, id) {
               if (id === entrySource) {
                 return `${code}
@@ -617,6 +632,63 @@ console.log("relocated worker facade activation follows the shared config snapsh
               },
             ),
           );
+          if (result.error || result.status !== 0) {
+            // Keep Linux-only optimizer failures inspectable after fixture cleanup.
+            try {
+              const queue = ["worker-chunk-fs-safe-watch-io.mjs"];
+              const modules: Array<{
+                file: string;
+                bytes: number;
+                sha256: string;
+                source: string;
+              }> = [];
+              const seen = new Set<string>();
+              let remaining = 256 * 1024;
+              while (queue.length && modules.length < 32 && remaining > 0) {
+                const file = queue.shift()!;
+                if (seen.has(file)) {
+                  continue;
+                }
+                seen.add(file);
+                const source = fs.readFileSync(path.join(relocated, file), "utf8");
+                const bytes = Buffer.byteLength(source);
+                const excerpt = source.slice(0, Math.min(64 * 1024, remaining));
+                modules.push({
+                  file,
+                  bytes,
+                  sha256: createHash("sha256").update(source).digest("hex"),
+                  source: excerpt,
+                });
+                remaining -= Buffer.byteLength(excerpt);
+                for (const match of source.matchAll(/(?:from|import)\s*["']\.\/([^"']+)["']/gu)) {
+                  const imported = match[1]!;
+                  if (WORKER_BUNDLE_CHUNK_PATH_PATTERN.test(imported)) {
+                    queue.push(imported);
+                  }
+                }
+              }
+              console.error(
+                "[worker-watch-build-diagnostic]",
+                JSON.stringify({
+                  platform: process.platform,
+                  versions: { node: process.versions.node, bun: process.versions.bun },
+                  expectedEntry: fs.realpathSync(
+                    path.resolve("node_modules/@openclaw/fs-safe/dist/watch-io-worker.js"),
+                  ),
+                  factoryHasPreservation: createWorkerDeployBuildPlugin
+                    .toString()
+                    .includes("no-treeshake"),
+                  watchModuleFacts,
+                  modules,
+                  truncated:
+                    queue.length > 0 ||
+                    modules.some((module) => Buffer.byteLength(module.source) < module.bytes),
+                }),
+              );
+            } catch (error) {
+              console.error("[worker-watch-build-diagnostic] unavailable", String(error));
+            }
+          }
           expect(result.error, `${root}\n${result.stderr}`).toBeUndefined();
           expect(result.status, result.stderr).toBe(0);
           expect(result.stdout.trim()).toBe(
