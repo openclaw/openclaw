@@ -1781,7 +1781,6 @@ src/cron/store/row-codec.ts	3
 src/daemon/arg-split.ts	2
 src/daemon/launchd-install.ts	4
 src/daemon/launchd-lifecycle.ts	3
-src/daemon/launchd-service-files.ts	1
 src/daemon/launchd-stop.ts	2
 src/daemon/schtasks-control.ts	5
 src/daemon/schtasks-install.ts	2
