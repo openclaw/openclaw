@@ -83,10 +83,10 @@ export function listBundledPluginMetadata(params?: {
       tryReadJsonSync<PackageManifest>(path.join(pluginDir, "package.json")) ?? undefined;
     const packageManifest = getPackageManifestMetadata(packageJson);
     const extensions = normalizeBundledPluginStringList(packageManifest?.extensions);
-    if (extensions.length === 0) {
+    const sourceEntry = extensions[0];
+    if (sourceEntry === undefined) {
       continue;
     }
-    const sourceEntry = extensions[0];
     const builtEntry = rewriteBundledPluginEntryToBuiltPath(sourceEntry);
     if (!builtEntry) {
       continue;
