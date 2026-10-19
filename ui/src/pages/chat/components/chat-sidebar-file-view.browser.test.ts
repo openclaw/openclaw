@@ -308,6 +308,15 @@ describe.runIf(browserMode)("chat file editor", () => {
         expect(counter()).toBe(control === "Previous match" ? "2/3" : "3/3");
         await userEvent.keyboard(" ");
         expect(counter()).toBe("1/3");
+        await userEvent.hover(editorOf(panel));
+        await userEvent.hover(navigation);
+        const tooltip = navigation.closest("openclaw-tooltip")!;
+        await expect.poll(() => tooltip.hasAttribute("open")).toBe(true);
+        // Escape dismisses the active tooltip before the surrounding find controls.
+        await userEvent.keyboard("{Escape}");
+        await expect.poll(() => tooltip.hasAttribute("open")).toBe(false);
+        await expect.element(input).toBeVisible();
+        expect(document.activeElement).toBe(navigation);
       }
       await userEvent.keyboard("{Escape}");
       await expect.poll(() => panel.querySelector('input[type="search"]')).toBeNull();
