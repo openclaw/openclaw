@@ -20,7 +20,7 @@ it("refuses commit when session source authority expires after transaction admis
 
   const request = (stage: SqliteWorkerAdmissionRequest["stage"]) => {
     const decision = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
-    admission.port.postMessage({ stage, decision: decision.buffer });
+    admission.port.postMessage({ stage, decision: decision.buffer }, []);
     admission.service();
     return Atomics.load(decision, 0);
   };
