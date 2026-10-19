@@ -7,8 +7,7 @@ import {
 
 function trackStringOperations(value: string) {
   const counts = { indexedReads: 0, indexOfCalls: 0 };
-  const source = Object(value) as object;
-  const text = new Proxy(source, {
+  const text = new Proxy(Object(value) as object, {
     get(target, property) {
       if (typeof property === "string" && /^(?:0|[1-9]\d*)$/.test(property)) {
         counts.indexedReads += 1;
@@ -34,48 +33,29 @@ function expectStripped(
   expect(stripPlainTextToolCallBlocks(raw, options)).toBe(expected);
 }
 
-function expectProjection(
-  raw: string,
-  text: string,
-  retainStart: number,
-  retainedOutputStart = 0,
-  options?: Parameters<typeof projectPlainTextToolCallBlocks>[1],
-) {
-  expect(projectPlainTextToolCallBlocks(raw, options)).toEqual({
-    text,
-    retainStart,
-    retainedOutputStart,
+function projection(raw: string, settleBefore?: number) {
+  const { text, retainStart, retainedOutputStart } = projectPlainTextToolCallBlocks(raw, {
+    settleBefore,
   });
+  return [text, retainStart, retainedOutputStart];
 }
 
 describe("scanPlainTextJsonToolCall", () => {
   it("returns the complete Harmony call before a visible suffix", () => {
     const raw = '<|channel|>commentary to=read code<|message|>{"path":"/tmp/file"}<|call|>visible';
-    const scan = scanPlainTextJsonToolCall(raw);
-
-    expect(scan.kind).toBe("complete");
-    if (scan.kind !== "complete") {
-      return;
-    }
-    expect(raw.slice(scan.end)).toBe("visible");
-    expect(raw.slice(scan.name.start, scan.name.end)).toBe("read");
-    expect(raw.slice(scan.payload.start, scan.payload.end)).toBe('{"path":"/tmp/file"}');
+    expect(scanPlainTextJsonToolCall(raw)).toMatchObject({
+      kind: "complete",
+      end: raw.indexOf("visible"),
+      name: { start: raw.indexOf("read"), end: raw.indexOf("read") + 4 },
+      payload: { start: raw.indexOf("{"), end: raw.indexOf("}") + 1 },
+    });
   });
 
   it("classifies the streaming Harmony prefix", () => {
-    const raw = "commentary to=read co";
-    const scan = scanPlainTextJsonToolCall(raw);
-
-    expect(scan.kind).toBe("prefix");
-    if (scan.kind !== "prefix") {
-      return;
-    }
-    expect(scan.candidate).toMatchObject({ syntax: "harmony", nameComplete: true });
-    expect(
-      scan.candidate?.name
-        ? raw.slice(scan.candidate.name.start, scan.candidate.name.end)
-        : undefined,
-    ).toBe("read");
+    expect(scanPlainTextJsonToolCall("commentary to=read co")).toMatchObject({
+      kind: "prefix",
+      candidate: { syntax: "harmony", nameComplete: true, name: { start: 14, end: 18 } },
+    });
   });
 
   it.each([
@@ -117,14 +97,12 @@ describe("stripPlainTextToolCallBlocks", () => {
     expect(resolveProtectedRanges).not.toHaveBeenCalled();
   });
 
-  it("preserves inline bracket text", () => {
-    expectStripped('Example [tool:read]{"path":"example.txt"}');
-  });
+  it.each(['Example [tool:read]{"path":"example.txt"}', '[read]\n{"path":}\n[/read]'])(
+    "preserves non-call text: %s",
+    (raw) => expectStripped(raw),
+  );
 
-  it.each([
-    ["CR", "\r"],
-    ["CRLF", "\r\n"],
-  ])("strips Unicode-indented bracket calls after %s", (_name, lineBreak) => {
+  it.each(["\r", "\r\n"])("strips Unicode-indented bracket calls after %j", (lineBreak) => {
     const prefix = `Before${lineBreak}`;
     const suffix = `${lineBreak}After`;
     const json = `[read]${lineBreak}{"path":"example.txt"}[/read]`;
@@ -146,38 +124,27 @@ describe("stripPlainTextToolCallBlocks", () => {
     expectStripped(raw, "");
   });
 
-  it("preserves a balanced tool block whose JSON is invalid", () => {
-    expectStripped('[read]\n{"path":}\n[/read]');
-  });
-
   it("preserves a long repeated incomplete JSON candidate in one scan", () => {
     const raw = "[tool:read] {\n".repeat(20_000);
-    const result = scanPlainTextJsonToolCall(raw);
-
-    expect(result.kind).toBe("prefix");
-    if (result.kind !== "prefix") {
-      return;
-    }
-    expect(result.candidate?.payload?.end).toBe(raw.length);
+    expect(scanPlainTextJsonToolCall(raw)).toMatchObject({
+      kind: "prefix",
+      candidate: { payload: { end: raw.length } },
+    });
     expectStripped(raw);
   });
 
-  it("advances once through a far-invalid XML parameter", () => {
-    const repeats = 256;
-    const raw = "<function=read><parameter=x>x\n".repeat(repeats) + "</parameter>X";
+  it.each([
+    [
+      "XML",
+      "<function=read><parameter=x>x\n".repeat(256) + "</parameter>X",
+      "indexOfCalls",
+      256 * 8,
+    ],
+    ["JSON", "[read]\n{\n".repeat(256) + "}".repeat(256) + "[/wrong]", "indexedReads", undefined],
+  ] as const)("advances once through a far-invalid %s payload", (_name, raw, counter, limit) => {
     const tracked = trackStringOperations(raw);
-
     expectStripped(tracked.text, raw);
-    expect(tracked.counts.indexOfCalls).toBeLessThan(repeats * 8);
-  });
-
-  it("advances once through a far-invalid named JSON payload", () => {
-    const repeats = 256;
-    const raw = "[read]\n{\n".repeat(repeats) + "}".repeat(repeats) + "[/wrong]";
-    const tracked = trackStringOperations(raw);
-
-    expectStripped(tracked.text, raw);
-    expect(tracked.counts.indexedReads).toBeLessThan(raw.length * 16);
+    expect(tracked.counts[counter]).toBeLessThan(limit ?? raw.length * 16);
   });
 });
 
@@ -190,21 +157,19 @@ describe("projectPlainTextToolCallBlocks", () => {
     ["[read]\n{}[/read] [write]\n", " [write]\n"],
   ])("retains calls whose suffix can change the projection: %s", (pending, visible) => {
     const prefix = "Before\n";
-    expectProjection(prefix + pending, prefix + visible, prefix.length, prefix.length);
+    expect(projection(prefix + pending)).toEqual([prefix + visible, prefix.length, prefix.length]);
   });
 
   it("reports source and output boundaries after a settled removed line", () => {
     const settled = "Before\n[read]\n{}[/read]\n";
     const before = "Before\n".length;
-    expectProjection(`${settled}Tail`, "Before\nTail", settled.length, before);
-    expectProjection(`${settled}Tail`, "Before\nTail", before, before, {
-      settleBefore: before,
-    });
+    expect(projection(`${settled}Tail`)).toEqual(["Before\nTail", settled.length, before]);
+    expect(projection(`${settled}Tail`, before)).toEqual(["Before\nTail", before, before]);
   });
 
   it("retains a terminal CR until newline consumption settles", () => {
     const source = "[read]\n{}[/read]\r";
-    expectProjection(source, "", 0);
-    expectProjection(`${source}\n`, "", source.length + 1);
+    expect(projection(source)).toEqual(["", 0, 0]);
+    expect(projection(`${source}\n`)).toEqual(["", source.length + 1, 0]);
   });
 });
