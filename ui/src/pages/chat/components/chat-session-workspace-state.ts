@@ -674,10 +674,7 @@ export function browseSessionWorkspacePreviewPath(
   return true;
 }
 
-export function showSessionWorkspacePreviewReader(
-  state: SessionWorkspaceHost,
-  id: string,
-): boolean {
+function showSessionWorkspacePreviewReader(state: SessionWorkspaceHost, id: string): boolean {
   const workspace = state.sessionWorkspaceState;
   const preview = workspace?.previews.find((entry) => entry.id === id);
   if (!workspace || !preview || !isCurrentSessionWorkspace(state, workspace)) {
