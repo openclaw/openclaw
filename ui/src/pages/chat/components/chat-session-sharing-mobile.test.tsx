@@ -3,7 +3,6 @@ import { createSignal, flush } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import type { PreparedChatSessionSharing } from "../chat-pane-sharing-actions.ts";
 import {
   createChatSessionSharingMobileAdapter,
   type ChatSessionSharingMobileAdapter,
@@ -12,7 +11,10 @@ import {
   ChatSessionAccessMobile,
   ChatSessionSharingMobile,
 } from "./chat-session-sharing-mobile.tsx";
-import type { ChatSessionSharingOutcome } from "./chat-session-sharing-shared.tsx";
+import type {
+  PreparedChatSessionSharing,
+  ChatSessionSharingOutcome,
+} from "./chat-session-sharing-shared.tsx";
 
 function prepared(overrides: Partial<PreparedChatSessionSharing> = {}): PreparedChatSessionSharing {
   return {

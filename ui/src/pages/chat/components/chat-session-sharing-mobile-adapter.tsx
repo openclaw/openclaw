@@ -1,14 +1,14 @@
 import { createMemo } from "solid-js";
 import type { SessionVisibility } from "../../../api/types.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import type { PreparedChatSessionSharing } from "../chat-pane-sharing-actions.ts";
 import type {
   ChatSessionAccessMobileProps,
   ChatSessionSharingMobileLabels,
   ChatSessionSharingMobileProps,
   ChatSessionSharingModePresentation,
-  ChatSessionSharingOptionsProps,
 } from "./chat-session-sharing-mobile.tsx";
+import type { ChatSessionSharingOptionsProps } from "./chat-session-sharing-options.tsx";
+import type { PreparedChatSessionSharing } from "./chat-session-sharing-shared.tsx";
 import {
   canManageChatSessionSharing,
   CHAT_SESSION_SHARING_DESCRIPTION_KEYS,
