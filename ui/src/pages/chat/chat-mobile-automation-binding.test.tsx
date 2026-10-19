@@ -1,7 +1,8 @@
+import type { CronHistoryResult } from "@openclaw/gateway-protocol";
 /* @vitest-environment jsdom */
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { CronHistoryResult, CronJob, CronRunLogEntry } from "../../api/types.ts";
+import type { CronJob, CronRunLogEntry } from "../../api/types.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import {
   createGatewayRequestMock,
