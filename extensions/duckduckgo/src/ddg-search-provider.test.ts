@@ -62,7 +62,15 @@ it("aborts an in-flight DuckDuckGo request without caching its result", async ()
     const signal = init?.signal;
     assert(signal, "DuckDuckGo request lost caller cancellation");
     return await new Promise<Response>((_resolve, reject) => {
-      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      signal.addEventListener(
+        "abort",
+        () => {
+          const reason: unknown = signal.reason;
+          assert(reason instanceof Error, "Expected the fixture's cancellation error");
+          reject(reason);
+        },
+        { once: true },
+      );
     });
   });
   const controller = new AbortController();

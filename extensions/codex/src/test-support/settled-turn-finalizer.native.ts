@@ -60,7 +60,7 @@ async function createNativeFixture(
   const livePhases: NativePhase[] = [];
   let emptyTerminalInjections = 0;
   const upstreamAbort = new AbortController();
-  const server = http.createServer(async (request, response) => {
+  const respond = async (request: http.IncomingMessage, response: http.ServerResponse) => {
     try {
       const body = (await buffer(request)).toString("utf8");
       if (request.url === "/v1/responses" && request.method === "GET") {
@@ -177,11 +177,14 @@ async function createNativeFixture(
       failures.push(error);
       response.writeHead(500).end();
     }
+  };
+  const server = http.createServer((request, response) => {
+    void respond(request, response);
   });
   cleanups.push(async () => {
     upstreamAbort.abort();
     server.closeAllConnections();
-    await promisify(server.close).call(server);
+    await promisify(server.close.bind(server))();
   });
   await once(server.listen(0, "127.0.0.1"), "listening");
   const address = server.address();
