@@ -285,7 +285,7 @@ describe("registered native catalog access", () => {
       const published = vi.fn();
       guardedPublication = state.instance.wrap(published);
       const owner = new AbortController();
-      const lifetime = new SessionCatalogListLifetime([owner.signal], [state.provider.id]);
+      const lifetime = new SessionCatalogListLifetime([owner.signal]);
       const pending = state.inRequestScope(() =>
         lifetime.runProvider(undefined, (params) =>
           listSessionCatalogProvider(state.provider, params),

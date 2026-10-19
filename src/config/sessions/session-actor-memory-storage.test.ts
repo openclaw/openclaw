@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type {
   SessionActor,
   SessionActorAuthority,
@@ -112,6 +113,50 @@ const fields = (changes: Partial<SessionEntry>) => ({
 });
 
 describe("actor-owned memory storage", () => {
+  it("holds later work behind companion rollback and rechecks policy after preparation", async () => {
+    const { store } = await fixture(true);
+    const prepared = createDeferred();
+    const releasePreparation = createDeferred();
+    const restoring = createDeferred();
+    const releaseRestoration = createDeferred();
+    let allowed = true;
+    const deletion = store.mutate(
+      { type: "session.lifecycle.delete", input: { expectedSessionId: "session-1" } },
+      {
+        assertCurrent() {},
+        authorize() {
+          if (!allowed) {
+            throw new Error("Deletion permission revoked");
+          }
+        },
+      },
+      {
+        async beforeCommit() {
+          prepared.resolve();
+          await releasePreparation.promise;
+        },
+        async settled(outcome) {
+          expect(outcome.kind).toBe("rolled-back");
+          restoring.resolve();
+          await releaseRestoration.promise;
+        },
+      },
+    );
+    await prepared.promise;
+    let readFinished = false;
+    const following = entry(store).then((value) => {
+      readFinished = true;
+      return value;
+    });
+    allowed = false;
+    releasePreparation.resolve();
+    await restoring.promise;
+    expect(readFinished).toBe(false);
+    releaseRestoration.resolve();
+    expectRollback(await deletion, { message: "Deletion permission revoked" });
+    expect(await following).toMatchObject({ sessionId: "session-1" });
+  });
+
   it("creates without a user turn and serializes typed patches with phase writes across handles", async () => {
     const { actor, store, acquire } = await fixture();
     expect(await create(store)).toMatchObject({ kind: "committed", value: { incognito: true } });

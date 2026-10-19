@@ -469,6 +469,7 @@ export function ChannelSettingsSlot(props: {
   const locale = projectI18n(i18n);
   onSettled(() => {
     const detach = props.presentation.attach(props.channelId, container);
+    // Locale receipts refresh the separately mounted channel settings presentation.
     const stopLocale = locale.subscribe(() => props.presentation.sync());
     return () => {
       stopLocale();

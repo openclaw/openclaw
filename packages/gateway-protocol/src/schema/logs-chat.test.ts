@@ -175,6 +175,7 @@ describe("ChatErrorEventSchema", () => {
     model: "gpt-5.6-luna",
     failoverReason: "server_error",
     providerRuntimeFailureKind: "timeout",
+    providerErrorCode: "server_error",
     providerErrorType: "server_error",
     httpStatus: 502,
     providerErrorMessagePreview: "Upstream unavailable",

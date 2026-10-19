@@ -82,7 +82,7 @@ class VoiceWakeSettingsOwner {
   private connection: CatalogConnection | null = null;
   private voiceWakeTimer: ReturnType<typeof setTimeout> | undefined;
   private voiceWakeWrite: VoiceWakeWrite | null = null;
-  private readonly listeners = new Set<() => void>();
+  private render?: () => void;
 
   constructor(private readonly gateway: ApplicationContext["gateway"]) {
     // Retire queued voice-wake writes synchronously, including while this route is absent.
@@ -95,13 +95,11 @@ class VoiceWakeSettingsOwner {
 
   private update(nextState: VoiceWakeEditorState) {
     this.value = nextState;
-    for (const notify of this.listeners) {
-      notify();
-    }
+    this.render?.();
   }
 
   subscribe(notify: () => void) {
-    this.listeners.add(notify);
+    this.render = notify;
     this.sync();
     const connection = this.connection;
     if (
@@ -113,7 +111,7 @@ class VoiceWakeSettingsOwner {
       void this.loadVoiceWake(connection);
     }
     return () => {
-      this.listeners.delete(notify);
+      this.render = undefined;
     };
   }
 
@@ -164,7 +162,7 @@ class VoiceWakeSettingsOwner {
         ? { ...draft, phase: "pending", error: t("configPage.deviceTalk.triggerWordsDisconnected") }
         : { kind: "unavailable" },
     );
-    if (client && connected && voiceWake && !draft && this.listeners.size > 0) {
+    if (client && connected && voiceWake && !draft && this.render) {
       void this.loadVoiceWake(connection);
     }
   }

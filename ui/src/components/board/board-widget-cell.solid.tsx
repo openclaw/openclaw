@@ -272,7 +272,7 @@ function BoardWidgetCellContent(
       appView.synchronize(props.callbacks, root ?? null);
       frame.update();
       if (props.loadingCovered && presentationReady()) {
-        host.dispatchEvent(new Event("openclaw-board-widget-presentation", { bubbles: true }));
+        props.callbacks?.presentationReady?.();
       }
     },
   );

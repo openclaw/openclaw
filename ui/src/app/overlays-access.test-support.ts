@@ -43,6 +43,7 @@ export function createGatewayHarness(
     eventLogRevision: 0,
     loadSelfProfile: async () => null,
     connect,
+    defer: () => false,
     setSessionKey() {},
     start() {},
     stop() {},

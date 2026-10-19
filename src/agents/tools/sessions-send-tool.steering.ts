@@ -32,39 +32,44 @@ export async function queueSessionsSendSteeringWithCustody(
   void (async () => {
     try {
       await custody.run(() =>
-        runWithInProcessGatewaySessionMutation("agent", target, async (assertMutationCurrent) => {
-          const assertCurrent = () => {
-            if (!accepted) {
-              assertCallerCurrent?.("agent");
-              assertSelectionCurrent();
-            }
-            assertMutationCurrent();
-          };
-          assertCurrent();
-          const attemptSettlement = getControllerEmbeddedAttachment(operation)?.settlement.promise;
-          const queued = queue(assertCurrent, {
-            onQueueAccepted: (value) => {
-              accepted ||= value;
-            },
-            onQueueSettled: () => settlement.resolve(),
-          });
-          void queued.then(
-            (outcome) => {
-              admission.resolve(outcome);
-              if (outcome.status === "rejected") {
-                settlement.resolve();
+        runWithInProcessGatewaySessionMutation(
+          "sessions.send",
+          target,
+          async (assertMutationCurrent) => {
+            const assertCurrent = () => {
+              if (!accepted) {
+                assertCallerCurrent?.("sessions.send");
+                assertSelectionCurrent();
               }
-            },
-            (error: unknown) => {
-              admission.reject(error);
-              settlement.resolve();
-            },
-          );
-          // Receiver teardown can precede a backend's queue receipt.
-          await (attemptSettlement
-            ? Promise.race([settlement.promise, attemptSettlement])
-            : settlement.promise);
-        }),
+              assertMutationCurrent();
+            };
+            assertCurrent();
+            const attemptSettlement =
+              getControllerEmbeddedAttachment(operation)?.settlement.promise;
+            const queued = queue(assertCurrent, {
+              onQueueAccepted: (value) => {
+                accepted ||= value;
+              },
+              onQueueSettled: () => settlement.resolve(),
+            });
+            void queued.then(
+              (outcome) => {
+                admission.resolve(outcome);
+                if (outcome.status === "rejected") {
+                  settlement.resolve();
+                }
+              },
+              (error: unknown) => {
+                admission.reject(error);
+                settlement.resolve();
+              },
+            );
+            // Receiver teardown can precede a backend's queue receipt.
+            await (attemptSettlement
+              ? Promise.race([settlement.promise, attemptSettlement])
+              : settlement.promise);
+          },
+        ),
       );
     } catch (error) {
       admission.reject(error);

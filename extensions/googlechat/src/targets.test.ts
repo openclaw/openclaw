@@ -141,7 +141,7 @@ function send(overrides: Partial<Parameters<typeof sendGoogleChatMessage>[0]> = 
   return sendGoogleChatMessage({ account, space: "spaces/AAA", text: "hello", ...overrides });
 }
 
-function download(maxBytes: number | undefined = 10) {
+function download(maxBytes = 10) {
   return downloadGoogleChatMedia({ account, resourceName: "media/123", maxBytes });
 }
 
@@ -283,7 +283,7 @@ describe("downloadGoogleChatMedia", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it("bounds chunked endpoint media downloads even when callers omit maxBytes", async () => {
+  it("bounds chunked endpoint media downloads at the configured cap", async () => {
     const chunk = Buffer.alloc(1024 * 1024);
     const totalBytes = 32 * chunk.length;
     let bytesSent = 0;
@@ -336,7 +336,7 @@ describe("downloadGoogleChatMedia", () => {
     }));
 
     try {
-      await expect(downloadGoogleChatMedia({ account, resourceName: "media/123" })).rejects.toThrow(
+      await expect(download(20 * 1024 * 1024)).rejects.toThrow(
         "Google Chat media exceeds max bytes (20971520)",
       );
       await responseClosedPromise;

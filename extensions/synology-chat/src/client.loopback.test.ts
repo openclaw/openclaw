@@ -332,7 +332,7 @@ describe("Synology Chat client loopback", () => {
 
     await synologyChatPlugin.outbound.sendText({ cfg, text, to: "42" });
     await synologyChatPlugin.message.send?.text?.({ cfg, text, to: "42" });
-    await sendMessage(incomingUrl, text, 42);
+    await sendMessage(incomingUrl, text, "42");
 
     expect(receivedPayloads).toHaveLength(6);
     expect(receivedPayloads.map(({ text: chunk }) => chunk).join("")).toBe(text + text + text);

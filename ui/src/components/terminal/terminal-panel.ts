@@ -65,7 +65,7 @@ export function createTerminalPanel(
   let completion: Promise<boolean> = Promise.resolve(true);
   let complete: ((value: boolean) => void) | undefined;
   let changes = new Set<keyof TerminalInputs>();
-  const listeners = new Set<() => void>();
+  let render: (() => void) | undefined;
   let fileInput: HTMLInputElement | undefined;
   let viewport: HTMLDivElement | undefined;
   let sessionPicker: ReturnType<typeof createTerminalSessionPicker> | undefined;
@@ -81,9 +81,7 @@ export function createTerminalPanel(
       });
     }
     const pending = complete;
-    for (const listener of listeners) {
-      listener();
-    }
+    render?.();
     if (needsCommit) {
       scheduleAfterRender(() => {
         // Detach retires this receipt before a retained host starts another render.
@@ -279,9 +277,9 @@ export function createTerminalPanel(
     publish,
     bindPresentation,
     subscribe(listener: () => void) {
-      listeners.add(listener);
+      render = listener;
       return () => {
-        listeners.delete(listener);
+        render = undefined;
       };
     },
     inputsChanged(name: keyof TerminalInputs) {
@@ -313,11 +311,14 @@ export function createTerminalPanel(
             handleToggleRequest(event);
           }
         }),
+        // Hosted tab labels are published to the external header after the panel commits.
         i18n.subscribe(publish),
+        // Configuration receipts retire disallowed uploads before their next operation.
         context?.config.subscribe(() => {
           terminalPanelUploadController.syncPolicy();
           publish();
         }),
+        // The commit applies font changes to imperative Ghostty controllers.
         context?.theme.subscribe(publish),
       ];
       if (element.embedded || dockLayout.open) {

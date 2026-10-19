@@ -1,4 +1,3 @@
-import { i18n } from "../../i18n/lib/translate.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import type { createDockLayout } from "../dock-layout.ts";
 import { DESKTOP_PANEL_TOGGLE_EVENT } from "../panel-toggle-contract.ts";
@@ -36,9 +35,9 @@ export function createDesktopPanelLifecycle(
   scheduleAfterRender: (callback: () => void | (() => void)) => void,
   options: DesktopPanelLifecycleOptions,
 ) {
-  const listeners = new Set<() => void>();
+  let publish: (() => void) | undefined;
   const notify = () => {
-    listeners.forEach((listener) => listener());
+    publish?.();
     scheduleReconciliation();
   };
   let mounted = false;
@@ -113,9 +112,9 @@ export function createDesktopPanelLifecycle(
   return {
     notify,
     subscribe(this: void, listener: () => void) {
-      listeners.add(listener);
+      publish = listener;
       return () => {
-        listeners.delete(listener);
+        publish = undefined;
       };
     },
     surface: () => surface,
@@ -137,7 +136,6 @@ export function createDesktopPanelLifecycle(
         }
         mounted = true;
         stops = [
-          i18n.subscribe(notify),
           listen(window, DESKTOP_PANEL_TOGGLE_EVENT, (event) => {
             if (!host.embedded) {
               options.handleToggleRequest(event);

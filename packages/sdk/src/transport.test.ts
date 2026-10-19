@@ -1,4 +1,5 @@
 // OpenClaw SDK tests cover transport behavior.
+import assert from "node:assert/strict";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { OpenClaw } from "./client.js";
 import { createAgentEvent, createChatEvent } from "./client.test-support.js";
@@ -200,6 +201,41 @@ describe("GatewayClientTransport", () => {
 
     await expect(transport.connect()).rejects.toThrow("gateway transport is closed");
     expect(gatewayClientMocks.instances).toHaveLength(0);
+  });
+
+  it.each(["success", "failure"])("joins parallel and repeated close after %s", async (outcome) => {
+    const transport = new GatewayClientTransport();
+    const connecting = transport.connect();
+    const client = gatewayClientMocks.instances[0];
+    assert(client);
+    client.opts.onHelloOk?.({ sessionId: "closing-session" });
+    await connecting;
+    const drain = Promise.withResolvers<void>();
+    client.stopAndWait.mockReturnValue(drain.promise);
+    let settled = false;
+    const closing = Promise.allSettled([transport.close(), transport.close()]).then((results) => {
+      settled = true;
+      return results;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    const failure = new Error("stop failed");
+    if (outcome === "failure") {
+      drain.reject(failure);
+    } else {
+      drain.resolve();
+    }
+    const expected =
+      outcome === "failure"
+        ? { status: "rejected", reason: failure }
+        : { status: "fulfilled", value: undefined };
+    expect(await closing).toEqual([expected, expected]);
+    if (outcome === "failure") {
+      await expect(transport.close()).rejects.toBe(failure);
+    } else {
+      await expect(transport.close()).resolves.toBeUndefined();
+    }
+    expect(client.stopAndWait).toHaveBeenCalledOnce();
   });
 
   it("resolves connect when a hello observer throws", async () => {

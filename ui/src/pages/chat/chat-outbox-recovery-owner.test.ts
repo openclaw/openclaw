@@ -100,7 +100,7 @@ async function mountRecovery(kind: "draft" | "queue" = "draft") {
     identity: "current-owner",
   });
   const restored = vi.fn();
-  element.addEventListener("outbox-restored", restored);
+  element.onRestored = restored;
   document.body.append(element);
   await waitForSolid(() =>
     expect(element.querySelector(".chat-outbox-recovery__preview")?.textContent).toBe(preview),

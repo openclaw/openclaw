@@ -39,6 +39,7 @@ export function createScopeUpgradeCapability(gateway: ApplicationGateway) {
     owner?.sync(snapshot);
     publish(owner?.state ?? readScopeUpgradeAvailability(snapshot));
   };
+  // Refresh upgrade authority even while the lazy prompt is not mounted.
   const stopGateway = gateway.subscribe(syncGateway);
 
   return {

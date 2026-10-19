@@ -184,9 +184,7 @@ export function createIrcIngressMonitor(options: {
     },
     drain: {
       resolveNonRetryableFailure: resolveIrcIngressNonRetryableFailure,
-      ...(options.adoptionStallTimeoutMs === undefined
-        ? {}
-        : { adoptionStallTimeoutMs: options.adoptionStallTimeoutMs }),
+      adoptionStallTimeoutMs: options.adoptionStallTimeoutMs,
       onLog: (message) => options.runtime.log?.(`irc ${message}`),
     },
     createStoppedError: () => new Error("IRC ingress is stopped."),

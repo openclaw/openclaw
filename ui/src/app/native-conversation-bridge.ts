@@ -13,7 +13,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { RouteLocation } from "@openclaw/uirouter";
 import { z } from "zod";
-import { registerListener } from "../../../src/shared/listeners.js";
 import { routeIdFromPath } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
 import type { StoredSidebarSessionFacts } from "../lib/chat/outbox-store-projection.ts";
@@ -152,7 +151,7 @@ export function createNativeConversationBridge(
   let stateDelivery = Promise.resolve<Delivery>("rejected");
   let stateDeliveryFailed = false;
   const requests = new Set<string>();
-  const listeners = new Set<() => void>();
+  let render: (() => void) | undefined;
   const pending = new Set<() => void>();
   const current = () =>
     !disposed &&
@@ -451,7 +450,7 @@ export function createNativeConversationBridge(
           return "invalid-command";
         }
         presentation = next.data;
-        listeners.forEach((listener) => listener());
+        render?.();
         return undefined;
       }
       case "focus-composer": {
@@ -557,6 +556,7 @@ export function createNativeConversationBridge(
     surface: "conversation",
     capabilities: ["navigate", "presentation", "focus-composer", ...features],
   });
+  // Publish accepted native-host state from owner receipts, independently of Solid commits.
   stops.push(
     listen(document, CHAT_RUN_ACTIVITY_CHANGED_EVENT, refreshConversation),
     listen(document, CHAT_PANE_LIFECYCLE_CHANGED_EVENT, refreshConversation),
@@ -570,14 +570,19 @@ export function createNativeConversationBridge(
     get presentation() {
       return presentation;
     },
-    subscribe: (listener) => registerListener(listeners, listener),
+    subscribe(listener: () => void) {
+      render = listener;
+      return () => {
+        render = undefined;
+      };
+    },
     interceptNavigation,
     publishSessionFacts,
     dispose() {
       disposed = true;
       pending.forEach((expire) => expire());
       stops.forEach((stop) => stop());
-      listeners.clear();
+      render = undefined;
       if (host["__OPENCLAW_NATIVE_CONVERSATION_DOCUMENT__"] === binding) {
         delete host["__OPENCLAW_NATIVE_CONVERSATION_DOCUMENT__"];
       }

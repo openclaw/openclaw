@@ -1,6 +1,5 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { hasNativeBrowserBridge } from "../../app/native-browser-bridge.ts";
-import { i18n } from "../../i18n/lib/translate.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { createDockLayout } from "../dock-layout.ts";
 import { browserPanelLayout } from "../dock-panel-layout.ts";
@@ -60,7 +59,7 @@ export function createBrowserPanelPresentation(
   let consumedPreferredRevision: string | undefined;
   let completion: Promise<boolean> = Promise.resolve(true);
   let complete: ((value: boolean) => void) | undefined;
-  const listeners = new Set<() => void>();
+  let render: (() => void) | undefined;
   let changes = new Set<keyof BrowserPanelInputs>([
     "client",
     "available",
@@ -79,9 +78,7 @@ export function createBrowserPanelPresentation(
       });
     }
     const pending = complete;
-    for (const listener of listeners) {
-      listener();
-    }
+    render?.();
     if (needsCommit) {
       scheduleAfterRender(() => {
         // Detach retires this receipt before a retained host starts another render.
@@ -349,9 +346,7 @@ export function createBrowserPanelPresentation(
     toggle,
     handleToggleRequest,
     closePanel,
-    selectHostedTab: (id: string) => {
-      void browser.selectTab(id);
-    },
+    selectHostedTab: (id: string) => void browser.selectTab(id),
     closeHostedTab: (id: string) => browser.closeTab(id),
     get hostedTabs() {
       return browserPanelHostedTabs(browser.tabs, element.ownerDocument);
@@ -363,9 +358,9 @@ export function createBrowserPanelPresentation(
       return completion;
     },
     subscribe(listener: () => void) {
-      listeners.add(listener);
+      render = listener;
       return () => {
-        listeners.delete(listener);
+        render = undefined;
       };
     },
     inputsChanged(key: keyof BrowserPanelInputs) {
@@ -383,7 +378,6 @@ export function createBrowserPanelPresentation(
             handleToggleRequest(event);
           }
         }),
-        i18n.subscribe(publish),
       ];
       // A takeover already owning the viewport suppresses the restored dock first.
       dockLayout.setSuppressed(element.suppressed);

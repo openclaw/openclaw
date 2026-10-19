@@ -8,6 +8,7 @@ import {
   addProviderUsageModel,
   asProviderUsageObject,
   buildProviderUsageHistorySnapshot,
+  buildUsageErrorSnapshot,
   buildUsageHttpErrorSnapshot,
   cleanProviderUsageCredential,
   createProviderUsageDailyAccumulator,
@@ -184,21 +185,11 @@ async function fetchOpenAIAdminUsage(params: {
         ? completions.status
         : undefined;
     if (failedStatus === 401 || failedStatus === 403) {
-      return {
-        provider: "openai",
-        displayName: "OpenAI",
-        windows: [],
-        error: "Admin API key required",
-      };
+      return buildUsageErrorSnapshot("openai", "Admin API key required");
     }
     return failedStatus
       ? buildUsageHttpErrorSnapshot({ provider: "openai", status: failedStatus })
-      : {
-          provider: "openai",
-          displayName: "OpenAI",
-          windows: [],
-          error: "Usage unavailable",
-        };
+      : buildUsageErrorSnapshot("openai", "Usage unavailable");
   }
   return aggregateHistory({
     costs: costs.data,

@@ -188,13 +188,9 @@ function SessionMenu(props: { state: TerminalSessionPickerState; dialogId: strin
           >
             <For each={props.state.sessions()} keyed={(session) => session.sessionId}>
               {(session) => {
-                const current = createMemo(() =>
-                  props.state.currentSessionIds.has(session().sessionId),
-                );
-                const label = createMemo(
-                  () =>
-                    `${session().owner?.startsWith("agent:") ? `${t("terminal.agentOwnedBadge")} · ` : ""}${current() ? t("terminal.currentSession") : session().attached ? t("terminal.sessionAttached") : t("terminal.detached")}`,
-                );
+                const current = () => props.state.currentSessionIds.has(session().sessionId);
+                const label = () =>
+                  `${session().owner?.startsWith("agent:") ? `${t("terminal.agentOwnedBadge")} · ` : ""}${current() ? t("terminal.currentSession") : session().attached ? t("terminal.sessionAttached") : t("terminal.detached")}`;
                 return (
                   <button
                     class="tp-session"
@@ -306,7 +302,7 @@ function Actions(props: { state: TerminalPanelViewState; dialogId: string }) {
 
 function UploadLayer(props: { state: TerminalPanelViewState }) {
   const progress = createMemo(() => props.state.upload.progress());
-  const label = createMemo(() => {
+  const label = () => {
     const current = progress();
     return (
       current &&
@@ -317,7 +313,7 @@ function UploadLayer(props: { state: TerminalPanelViewState }) {
             total: String(current.total),
           }))
     );
-  });
+  };
   return (
     <>
       <Show when={props.state.upload.dragActive()}>

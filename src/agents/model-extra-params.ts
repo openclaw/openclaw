@@ -2,6 +2,7 @@ import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-
 import { normalizeFastMode } from "@openclaw/normalization-core/string-coerce";
 import { normalizeThinkLevel } from "../auto-reply/thinking.shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { modelKey } from "../shared/model-key.js";
 import { resolveAgentEntry } from "./agent-scope-config.js";
 
@@ -96,11 +97,7 @@ export function sanitizeExtraParamsRecord(
   if (!value) {
     return undefined;
   }
-  return Object.fromEntries(
-    Object.entries(value).filter(
-      ([key]) => key !== "__proto__" && key !== "prototype" && key !== "constructor",
-    ),
-  );
+  return Object.fromEntries(Object.entries(value).filter(([key]) => !isBlockedObjectKey(key)));
 }
 
 /** Later sources win; each source's first own alias wins, including null and undefined. */

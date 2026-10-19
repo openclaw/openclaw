@@ -295,6 +295,7 @@ export class DraftPlaceBrowser {
       }
       this.callbacks.changed();
     };
+    // Catalog receipts clear vanished project selections before the next draft read.
     this.projectCatalogCleanup = this.projectCatalog?.subscribe(update);
     update();
   }

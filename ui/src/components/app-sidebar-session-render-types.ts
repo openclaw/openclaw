@@ -273,6 +273,7 @@ declare module "@solidjs/web" {
       > &
         Properties<HTMLElementTagNameMap["openclaw-theme-mode-toggle"]> & {
           "prop:menuAttributes"?: HTMLElementTagNameMap["openclaw-theme-mode-toggle"]["menuAttributes"];
+          "prop:onChange"?: HTMLElementTagNameMap["openclaw-theme-mode-toggle"]["onChange"];
         };
     }
   }

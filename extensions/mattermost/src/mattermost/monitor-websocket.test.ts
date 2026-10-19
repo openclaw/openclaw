@@ -10,6 +10,11 @@ import { runWithReconnect } from "./reconnect.js";
 
 const createWebSocket = vi.hoisted(() => vi.fn());
 
+vi.mock("node:timers/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:timers/promises")>()),
+  setTimeout: async () => {},
+}));
+
 vi.mock("openclaw/plugin-sdk/websocket-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/websocket-runtime")>();
   return {
@@ -130,10 +135,12 @@ beforeEach(() => {
   vi.useRealTimers();
 });
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
 it("backs off across attempts when authentication never completes", async () => {
+  vi.spyOn(Math, "random").mockReturnValue(0.5);
   createWebSocket.mockImplementation(() => {
     const socket = new FakeWebSocket();
     queueMicrotask(() => {
@@ -151,9 +158,6 @@ it("backs off across attempts when authentication never completes", async () => 
   const reconnectDelays: number[] = [];
   const abort = new AbortController();
   await runWithReconnect(connectOnce, {
-    initialDelayMs: 10,
-    maxDelayMs: 1000,
-    jitterRatio: 0,
     abortSignal: abort.signal,
     onError: (err) => {
       expect(String(err)).toContain("bot token");
@@ -169,7 +173,7 @@ it("backs off across attempts when authentication never completes", async () => 
   expect(connectErrors).toEqual(
     Array.from({ length: 3 }, () => "WebSocketClosedBeforeAuthenticationError"),
   );
-  expect(reconnectDelays).toEqual([10, 20]);
+  expect(reconnectDelays).toEqual([2000, 4000]);
 });
 
 it("terminates the connection when the authentication reply never arrives", async () => {
@@ -468,6 +472,7 @@ it("does not overlap health checks when a prior poll is still running", async ()
 });
 
 it("returns control to reconnect after a stalled handshake", async () => {
+  vi.spyOn(Math, "random").mockReturnValue(0.5);
   const stalledServer = await startStalledWebSocketHandshakeServer();
 
   const runtime = testRuntime();
@@ -489,9 +494,6 @@ it("returns control to reconnect after a stalled handshake", async () => {
   const abort = new AbortController();
   try {
     await runWithReconnect(connectOnce, {
-      initialDelayMs: 50,
-      maxDelayMs: 50,
-      jitterRatio: 0,
       abortSignal: abort.signal,
       onError: (err) => {
         connectErrors.push(err instanceof Error ? err.name : String(err));
@@ -508,7 +510,7 @@ it("returns control to reconnect after a stalled handshake", async () => {
       "WebSocketClosedBeforeOpenError",
       "WebSocketClosedBeforeOpenError",
     ]);
-    expect(reconnectDelays).toEqual([50]);
+    expect(reconnectDelays).toEqual([2000]);
   } finally {
     await stalledServer.close();
   }

@@ -11,15 +11,8 @@ export abstract class ShellPresentation {
   private connectionKind: GatewayStatusProps["kind"] | undefined;
   private connectionRecoveryTimer: ReturnType<typeof setTimeout> | undefined;
   private connectionFlagTimer: ReturnType<typeof setTimeout> | undefined;
-  private readonly readRevision: () => number;
-  private readonly writeRevision: (next: (revision: number) => number) => number;
-  readonly shellRevision = () => this.readRevision();
-
-  constructor() {
-    const [read, write] = createSignal(0, { ownedWrite: true });
-    this.readRevision = read;
-    this.writeRevision = write;
-  }
+  private readonly revision = createSignal(0, { ownedWrite: true });
+  readonly shellRevision = this.revision[0];
   private disposed = false;
   private presentationMounted = false;
   private pendingCommit: object | undefined;
@@ -182,7 +175,7 @@ export abstract class ShellPresentation {
         this.resolveCommit = resolve;
       });
     }
-    this.writeRevision((revision) => revision + 1);
+    this.revision[1]((revision) => revision + 1);
     this.scheduleCommit();
   }
 
