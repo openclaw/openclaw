@@ -85,10 +85,19 @@ describe("session workspace file reference resolution", () => {
         entries: [{ path: nestedPath, name: "ORGANIZATION_REPORT.md", kind: "file" }],
       },
     });
-    const setFile = vi.fn(async (sessionKey: string, path: string) => ({
-      sessionKey,
-      file: { path, hash: "saved-hash" },
-    }));
+    const setFile = vi.fn<SessionWorkspaceHost["sessions"]["setFile"]>(
+      async (sessionKey, path) => ({
+        sessionKey,
+        file: {
+          path,
+          workspacePath: path,
+          name: path.split("/").at(-1) ?? path,
+          kind: "modified",
+          missing: false,
+          hash: "saved-hash",
+        },
+      }),
+    );
     const state: SessionWorkspaceHost = {
       client: createGatewayBrowserClientFixture(),
       connected: true,
@@ -173,10 +182,19 @@ describe("session workspace file reference resolution", () => {
         },
       };
     });
-    const setFile = vi.fn(async (sessionKey: string, path: string) => ({
-      sessionKey,
-      file: { path, hash: "saved-hash" },
-    }));
+    const setFile = vi.fn<SessionWorkspaceHost["sessions"]["setFile"]>(
+      async (sessionKey, path) => ({
+        sessionKey,
+        file: {
+          path,
+          workspacePath: path,
+          name: path.split("/").at(-1) ?? path,
+          kind: "modified",
+          missing: false,
+          hash: "saved-hash",
+        },
+      }),
+    );
     const state: SessionWorkspaceHost = {
       client: createGatewayBrowserClientFixture(),
       connected: true,
@@ -253,7 +271,9 @@ describe("session workspace file reference resolution", () => {
     openSessionWorkspaceFile(state, { path: "REPORT.md" });
 
     const sidebarContent = await loadedSidebarContent(state);
-    expect(sidebarContent.kind).toBe("markdown");
+    if (sidebarContent.kind !== "markdown") {
+      throw new Error("expected Markdown preview for REPORT.md");
+    }
     expect(sidebarContent.fileDownload?.path).toBe(`/workspace/${nestedPath}`);
     expect(sidebarContent.rawText).toContain(`/workspace/${nestedPath}`);
   });
