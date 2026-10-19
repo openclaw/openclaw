@@ -437,7 +437,6 @@ async function preview(
       assertPreparedPolicy();
     }
   };
-  assertExecutionCurrent();
   const result = await callMcpAppToolWithElicitation({
     options,
     origin,
