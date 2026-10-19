@@ -18,6 +18,7 @@ export function createQueue<T>(
   const pending = new Map<string, ChannelIngressQueueRecord<T>>();
   const claims = new Map<string, ChannelIngressQueueClaim<T>>();
   const completed = new Map<string, typeof scope & { id: string; completedAt: number }>();
+  const stores = [pending, claims, completed];
   let sequence = 0;
   const queue: ChannelIngressQueue<T> = {
     async enqueue(id, payload, params) {
@@ -109,19 +110,16 @@ export function createQueue<T>(
     fail: async (ref) => queue.delete(ref),
     async delete(ref) {
       const id = typeof ref === "string" ? ref : ref.id;
-      const removedPending = pending.delete(id);
-      const removedClaim = claims.delete(id);
-      const removedCompleted = completed.delete(id);
-      return removedPending || removedClaim || removedCompleted;
+      return stores.map((store) => store.delete(id)).some(Boolean);
     },
     recoverStaleClaims: async () => 0,
     prune: async () => 0,
     async purge() {
-      const count = pending.size + claims.size + completed.size;
-      pending.clear();
-      claims.clear();
-      completed.clear();
-      return count;
+      return stores.reduce((count, store) => {
+        const size = store.size;
+        store.clear();
+        return count + size;
+      }, 0);
     },
   };
   return queue;
@@ -133,12 +131,8 @@ export function createKeyedState(
 ) {
   const namespaces = new Map<string, Map<string, string>>();
   return <T>({ namespace }: { namespace: string }): PluginStateKeyedStore<T> => {
-    let data = namespaces.get(namespace);
-    if (!data) {
-      data = new Map();
-      namespaces.set(namespace, data);
-    }
-    const rows = data;
+    const rows = namespaces.get(namespace) ?? new Map<string, string>();
+    namespaces.set(namespace, rows);
     const read = (key: string): T | undefined => {
       const serialized = rows.get(key);
       // The host store's JSON boundary is represented without sharing mutable fixture objects.
