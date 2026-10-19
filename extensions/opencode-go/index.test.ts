@@ -128,7 +128,7 @@ describe("opencode-go provider plugin", () => {
     clearLiveCatalogCacheForTests();
   });
 
-  it.each(["deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3"] as const)(
+  it.each(["deepseek-v4-pro", "deepseek-v4.1-flash", "kimi-k3"] as const)(
     "keeps %s thinking per invocation on one standalone completion wrapper",
     async (modelId) => {
       const provider = await registerSingleProviderPlugin(plugin);
@@ -200,7 +200,7 @@ describe("opencode-go provider plugin", () => {
         provider: "opencode-go",
       });
     }
-    expect(requireCatalogEntry(supplemental, "hy3-preview").status).toBe("preview");
+    expect(requireCatalogEntry(supplemental, "deepseek-v4-flash").status).toBe("deprecated");
     expect(provider.resolveDynamicModel?.({ modelId: "kimi-k2.6" } as never)).toMatchObject({
       id: "kimi-k2.6",
       input: ["text", "image"],
@@ -296,7 +296,7 @@ describe("opencode-go provider plugin", () => {
     expect(provider.resolveDynamicModel?.({ modelId: "legacy-model" } as never)).toBeUndefined();
     const supplemental = await provider.augmentModelCatalog?.({ entries: [] } as never);
     expect(requireCatalogEntry(supplemental, "legacy-model").status).toBe("deprecated");
-    expect(requireCatalogEntry(supplemental, "hy3-preview").status).toBe("preview");
+    expect(requireCatalogEntry(supplemental, "deepseek-v4-flash").status).toBe("deprecated");
   });
 
   it("never resolves another account's upstream-only Go model outside its authenticated catalog", async () => {
@@ -374,7 +374,7 @@ describe("opencode-go provider plugin", () => {
     const entries = await provider.augmentModelCatalog?.({ entries: [] } as never);
     expect(entries?.some((entry) => entry.id === "withdrawn-model")).toBe(false);
     expect(entries?.some((entry) => entry.id === "unsafe-model")).toBe(false);
-    expect(requireCatalogEntry(entries, "hy3-preview").status).toBe("preview");
+    expect(requireCatalogEntry(entries, "kimi-k2.6").status).toBe("deprecated");
   });
 
   it("exposes only trusted offline starter models through provider discovery", async () => {
@@ -385,7 +385,9 @@ describe("opencode-go provider plugin", () => {
       throw new Error("expected OpenCode Go static provider");
     }
     const deepSeekPro = result.provider.models.find((model) => model.id === "deepseek-v4-pro");
-    const deepSeekFlash = result.provider.models.find((model) => model.id === "deepseek-v4-flash");
+    const deepSeekFlash = result.provider.models.find(
+      (model) => model.id === "deepseek-v4.1-flash",
+    );
     const modelIds = result.provider.models.map((model) => model.id);
     expect(new Set(modelIds).size).toBe(modelIds.length);
     expect(modelIds.toSorted()).toEqual(ACTIVE_MODEL_IDS.toSorted());
@@ -402,6 +404,8 @@ describe("opencode-go provider plugin", () => {
       compat: { supportedReasoningEfforts: ["low", "high", "max"] },
     });
     expect(modelIds).not.toContain("hy3-preview");
+    expect(modelIds).not.toContain("deepseek-v4-flash");
+    expect(modelIds).not.toContain("kimi-k2.6");
   });
 
   it("skips unrelated scoped discovery even when OpenCode credentials are configured", async () => {
@@ -668,6 +672,9 @@ describe("opencode-go provider plugin", () => {
     ["deepseek-v4-flash", "low", "low"],
     ["deepseek-v4-flash", "high", "high"],
     ["deepseek-v4-flash", "max", "max"],
+    ["deepseek-v4.1-flash", "low", "low"],
+    ["deepseek-v4.1-flash", "high", "high"],
+    ["deepseek-v4.1-flash", "max", "max"],
   ] as const)(
     "maps OpenCode Go %s thinking %s to %s reasoning effort",
     async (modelId, thinkingLevel, reasoningEffort) => {

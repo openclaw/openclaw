@@ -10,5 +10,5 @@ export {
 export { resolveQueueSettings } from "./queue/settings-runtime.js";
 export { clearRemovedQueuedAuthProfiles, refreshQueuedFollowupSession } from "./queue/state.js";
 export type { FollowupRun, QueueSettings } from "./queue/types.js";
-export { FollowupRunDeferredError, resolveFollowupAbortSignal } from "./queue/types.js";
+export { resolveFollowupAbortSignal } from "./queue/types.js";
 export { admitFollowupRunLifecycle, completeFollowupRunLifecycle } from "./queue/lifecycle.js";

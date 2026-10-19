@@ -29,7 +29,7 @@ import {
 const execFileAsync = promisify(execFile);
 const CONTAINER_WIRE_ENABLED = process.env.OPENCLAW_DOCKER_NODE_WORKER_E2E === "1";
 const CONTROL_UI_PROOF_ENABLED = process.env.OPENCLAW_DOCKER_NODE_WORKER_UI_PROOF === "1";
-const CONTAINER_IMAGE = process.env.OPENCLAW_DOCKER_NODE_WORKER_IMAGE ?? "node:24-bookworm";
+const CONTAINER_IMAGE = process.env.OPENCLAW_DOCKER_NODE_WORKER_IMAGE ?? "node:24-trixie";
 const CONTAINER_GATEWAY_HOST =
   process.env.OPENCLAW_DOCKER_NODE_WORKER_GATEWAY_HOST ?? "host.docker.internal";
 const SESSION_KEY = "agent:qa:node-worker-container-wire";

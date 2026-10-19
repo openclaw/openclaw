@@ -1064,8 +1064,12 @@ turn to audited read-only core tools and explicitly replay-safe plugin tools,
 including when Code Mode is disabled after the restart. Other interrupted
 Code Mode work resumes for model reconciliation: Full Access keeps its configured
 tool surface unless the current turn has an explicitly replay-safe checkpoint.
-Other sessions retain the restart-safe restriction. Old process-local runs and
-approval handles are not revived.
+Other sessions retain the restart-safe restriction. Recovery uses producer-owned
+checkpoint metadata in the transcript, not the rendered tool output: network
+wrapping, output truncation, and display hooks cannot change whether a current
+checkpoint is replay-safe. Missing or unowned checkpoint facts do not authorize
+Code Mode reconstruction. Older text-only checkpoints remain readable during
+upgrades. Old process-local runs and approval handles are not revived.
 
 ### Subagents
 
@@ -1282,7 +1286,23 @@ existing restart delivery and continuation behavior.
   waits for workers or database admission. Within `deliveryMs`,
   `deliveryNoticesMs` measures blocked-notice selection and persistence, and
   `retryWaitMs` measures retry backoff; these nested totals are not additional
-  phase time. Notice selection can wait for database writer admission even
+  phase time. Registry activation includes `registryActivationBindMs`,
+  `registryActivationRequestersMs`, `registryActivationResumeMs`, and
+  `registryActivationInterruptedMs`. Binding includes
+  `registryActivationAuthorityRestoreMs` (original operator authority and
+  requester reads) and `registryActivationPublishMs` (recovered owner writes,
+  including writer admission). Resume includes `registryActivationReserveMs`
+  (controller reservations) and `registryActivationSessionReadMs` (unfinished
+  child session reads). `registryActivationYieldMs` totals cooperative event-loop
+  waits across binding and resume. These are elapsed, overlapping totals, not
+  CPU time or a separate measurement of database queue time. Inventory hydration
+  precedes activation; `registryLoadMs` measures loading the activation module.
+  `registryActivationRuns` counts the captured inventory,
+  `registryActivationActiveRuns` counts visited nonterminal runs,
+  `registryActivationRecoveredRuns` counts restored Gateway owners, and
+  `registryActivationPublishedRuns` counts initial and recovered Gateway bindings.
+  Counts and partial timings remain visible on failure, without per-run output.
+  Notice selection can wait for database writer admission even
   when an unchanged notice does not need another write. Set
   `OPENCLAW_GATEWAY_STARTUP_TRACE=1` to also log each individual span. The phase
   runs after readiness; its duration does not measure time until the Gateway

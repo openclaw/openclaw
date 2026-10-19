@@ -6,9 +6,9 @@ import type { AgentRuntimeIdentity } from "../../gateway/agent-runtime-identity-
 import type { ReplyToolAuthorityOverlay } from "../../sessions/session-controller.contracts.js";
 import {
   beginReplyMessageInjectionTarget,
-  captureCurrentReplyMessageInjectionTarget,
   getSessionControllerOperation,
 } from "../../sessions/session-controller.js";
+import { captureCurrentReplyMessageInjectionTarget } from "../../sessions/session-controller.message-injection.js";
 import { testing as replyTesting } from "../../sessions/session-controller.test-support.js";
 import {
   createAdmittedRunOperatorAuthority,

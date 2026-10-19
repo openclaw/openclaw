@@ -60,8 +60,13 @@ export function observeNativeCommit(module: typeof admission, observe = () => {}
 export function captureCommandWorker(type: string) {
   let terminate: (() => Promise<number>) | undefined;
   // Preserve the original receiver and target only the worker carrying this command.
-  // oxlint-disable-next-line typescript/unbound-method
-  const posted = Worker.prototype.postMessage;
+  const workerPrototype: {
+    postMessage: (
+      this: Worker,
+      ...args: Parameters<Worker["postMessage"]>
+    ) => ReturnType<Worker["postMessage"]>;
+  } = Worker.prototype;
+  const posted = workerPrototype.postMessage;
   vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (this: Worker, ...args) {
     const message: unknown = args[0];
     if (isRecord(message) && message.type === "execute" && message.input instanceof Uint8Array) {
@@ -70,7 +75,7 @@ export function captureCommandWorker(type: string) {
         terminate = () => this.terminate();
       }
     }
-    return Reflect.apply(posted, this, args);
+    return posted.apply(this, args);
   });
   return () => {
     assert(terminate, "the requested command must dispatch before its commit grant");

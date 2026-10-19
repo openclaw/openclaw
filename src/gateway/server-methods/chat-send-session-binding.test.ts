@@ -410,6 +410,8 @@ it.each(admissionScenarios)(
             releaseSessionControllerClaim(claim);
           });
           expect(admission.activeRunAbort.controller.signal.aborted).toBe(false);
+          // The finished runtime still owns its source until the held dispatch settles.
+          expect(rpcSourceTesting.get(runId)).toBe(original);
         } else {
           rotateAgentEventLifecycleGeneration();
         }
@@ -447,14 +449,14 @@ it.each(admissionScenarios)(
         }
       } finally {
         namespaceRun.close();
+        reply?.complete();
+        release.resolve();
         if (queuedRun) {
           completeFollowupRunLifecycle(queuedRun);
           await queuedRun.controllerInput?.settlement.promise;
         } else {
           await options?.replyOptions?.turnAdoptionLifecycle?.onSettled?.();
         }
-        reply?.complete();
-        release.resolve();
         if (owned) {
           await vi.waitFor(() => expect(rpcSourceTesting.has(runId)).toBe(false));
           owned.admission.cleanupAdmittedRun();
@@ -767,6 +769,9 @@ it.each(
           probe?.mockRestore();
           revokeMessageActionTurnCapability(token);
           execution.close();
+          for (const source of sources.values()) {
+            source.release.resolve();
+          }
           if (queuedReaction) {
             completeFollowupRunLifecycle(queuedReaction);
             await queuedReaction.controllerInput?.settlement.promise;
@@ -774,7 +779,6 @@ it.each(
           await Promise.all(
             [...sources.values()].map(async (source) => {
               const settled = source.options?.replyOptions?.turnAdoptionLifecycle?.onSettled?.();
-              source.release.resolve();
               await settled;
               if (source.owned) {
                 await source.finished.promise;

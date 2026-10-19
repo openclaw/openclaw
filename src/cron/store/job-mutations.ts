@@ -1,58 +1,25 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
-import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
-import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { declarativeFields } from "../service/jobs-declarative.js";
 import { cloneCronJobForMutation, finalizeUpdatedJob } from "../service/jobs-mutation.js";
 import { recomputeSingleJobForMaintenance } from "../service/jobs-scheduling.js";
 import {
   reconcileCronChannelRequesterAuthority,
+  reconcileCronOperatorSource,
   reconcileRuntimeAuthority,
 } from "../service/jobs-tool-policy.js";
 import { applyDeclarativeJobSpec, applyJobPatch, createJob } from "../service/jobs.js";
 import { isSystemMonitorDeclaration } from "../system-owned-declaration.js";
 import type { CronStoredJob, CronStoreFile } from "../types.js";
-import type {
-  CronJobMutation,
-  CronJobMutationPlan,
-  CronJobMutationSnapshot,
-} from "./job-mutations.types.js";
-import { loadedCronStoreFromRows, loadCronRows } from "./row-codec.js";
-import { loadCronRuntimeAuthorities } from "./runtime-authority-store.js";
+import type { CronJobMutation, CronJobMutationPlan } from "./job-mutations.types.js";
 import { createCronMutationLogger } from "./runtime-mutation.worker.js";
-import type { CronRuntimeWorkerOperations } from "./runtime-worker.types.js";
 import type { CronSchedulerConfig } from "./scheduler-actor.types.js";
-import {
-  getCronSchedulerSnapshot,
-  installCronSchedulerSnapshot,
-} from "./scheduler-config.worker.js";
 
 type CronJobMutationContext = Pick<
   CronSchedulerConfig,
   "defaultAgentId" | "cronConfig" | "configuredChannels"
 > & { nowMs: number };
-
-export function resolveCronJobMutationSnapshot(
-  storeKey: string,
-  snapshot: CronJobMutationSnapshot,
-  databasePath: string,
-): CronJobMutationContext {
-  const configured = (
-    snapshot.scheduler
-      ? installCronSchedulerSnapshot(storeKey, snapshot.scheduler, databasePath)
-      : getCronSchedulerSnapshot(storeKey, databasePath)
-  )?.config;
-  return configured
-    ? {
-        ...snapshot,
-        defaultAgentId: configured.defaultAgentId,
-        cronConfig: configured.cronConfig,
-        configuredChannels: configured.configuredChannels,
-      }
-    : { nowMs: snapshot.nowMs };
-}
 
 /** Both preparation and commit use this owner; only committed results are published. */
 export function planCronJobMutation(
@@ -183,6 +150,7 @@ export function planCronJobMutation(
       reauthorizeCallerOrigin: mutation.kind === "update" && explicitlyMutatesToolsAllow,
     });
     resolveCronJobEffectiveAgentId(nextJob, defaultAgentId);
+    reconcileCronOperatorSource({ job: nextJob, previousJob, captured: options.operatorSource });
     plan.created = !previousJob;
     plan.updated =
       previousJob !== undefined &&
@@ -225,20 +193,4 @@ export function planCronJobMutation(
     }
   }
   return plan;
-}
-
-export function prepareCronJobMutationInWorker(
-  database: OpenClawStateDatabase,
-  input: CronRuntimeWorkerOperations["cron.prepareJobMutation"]["input"],
-): CronRuntimeWorkerOperations["cron.prepareJobMutation"]["output"] {
-  const snapshot = resolveCronJobMutationSnapshot(input.storeKey, input.snapshot, database.path);
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const store = loadedCronStoreFromRows(loadCronRows(db, input.storeKey)).store;
-      loadCronRuntimeAuthorities({ db, storeKey: input.storeKey, jobs: store.jobs });
-      return { outcome: planCronJobMutation(store, input.mutation, snapshot) };
-    },
-    { database, path: database.path, env: getSqliteWorkerStateContext().environment },
-    { operationLabel: "cron.prepare-job-mutation" },
-  );
 }

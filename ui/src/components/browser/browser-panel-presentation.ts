@@ -49,7 +49,10 @@ export type BrowserPanelElement = HTMLElement &
   Pick<BrowserPanelPresentation, "hostedTabs" | "activeHostedTabId" | "updateComplete">;
 
 /** Keeps browser admission synchronous while Solid consumes its published presentation. */
-export function createBrowserPanelPresentation(element: HTMLElement & BrowserPanelInputs) {
+export function createBrowserPanelPresentation(
+  element: HTMLElement & BrowserPanelInputs,
+  scheduleAfterRender: (callback: () => void) => void,
+) {
   let connected = false;
   let activeSessionKey = "";
   let activeDashboardKey: string | undefined;
@@ -69,13 +72,23 @@ export function createBrowserPanelPresentation(element: HTMLElement & BrowserPan
     if (!connected) {
       return;
     }
-    completion = complete
-      ? completion
-      : new Promise((resolve) => {
-          complete = resolve;
-        });
+    const needsCommit = !complete;
+    if (needsCommit) {
+      completion = new Promise((resolve) => {
+        complete = resolve;
+      });
+    }
+    const pending = complete;
     for (const listener of listeners) {
       listener();
+    }
+    if (needsCommit) {
+      scheduleAfterRender(() => {
+        // Detach retires this receipt before a retained host starts another render.
+        if (complete === pending) {
+          rendered();
+        }
+      });
     }
   }
   const dockLayout = createDockLayout({
@@ -317,6 +330,17 @@ export function createBrowserPanelPresentation(element: HTMLElement & BrowserPan
     browser.suspendView();
     dockLayout.setOpen(false);
   }
+  function rendered(): void {
+    if (!connected) {
+      return;
+    }
+    const resolve = complete;
+    complete = undefined;
+    const changed = changes;
+    changes = new Set();
+    updatePresentation(changed);
+    resolve?.(true);
+  }
   return {
     inputs: element,
     browser,
@@ -378,17 +402,6 @@ export function createBrowserPanelPresentation(element: HTMLElement & BrowserPan
         complete?.(false);
         complete = undefined;
       };
-    },
-    rendered() {
-      if (!connected) {
-        return;
-      }
-      const resolve = complete;
-      complete = undefined;
-      const changed = changes;
-      changes = new Set();
-      updatePresentation(changed);
-      resolve?.(true);
     },
   };
 }

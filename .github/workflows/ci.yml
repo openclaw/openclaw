@@ -112,6 +112,9 @@ env:
   IOS_SCREENSHOT_NODE_VERSION: "24.16.0"
   IOS_SCREENSHOT_XCODE_VERSION: "Xcode 27.0 Build version 27A266a"
   NODE_VERSION: "24.21.0"
+  # Type check with tsrs, except full release validation, which re-checks every
+  # type graph with tsgo (scripts/lib/local-check-runtime.mts).
+  OPENCLAW_TYPECHECKER: ${{ github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && 'tsgo' || '' }}
 
 jobs:
   preflight:
@@ -3500,7 +3503,7 @@ jobs:
         if: matrix.requires_sandbox_image == true && runner.os == 'Linux'
         shell: bash
         run: |
-          if ! docker image inspect openclaw-sandbox:bookworm-slim >/dev/null 2>&1; then
+          if ! docker image inspect openclaw-sandbox:trixie-slim >/dev/null 2>&1; then
             scripts/sandbox-setup.sh
           fi
 

@@ -2,7 +2,12 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
-import { readConfigMachineState } from "../state/config-machine-state.js";
+import {
+  readConfigMachineState,
+  readConfigMachineStateRowInDatabase,
+} from "../state/config-machine-state.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import "../test-utils/prepare-compiled-subprocesses.js";
@@ -76,6 +81,15 @@ describe("remote model catalog store", () => {
       status: "retained-newer",
       row: { bundle_json: expect.stringContaining("updated") },
     });
+    // An unused older client's malformed bytes must not block a current-generation check.
+    writeConfigMachineState("modelCatalog.remote.v2", null, options);
+    runOpenClawStateWriteTransaction(({ db }) => {
+      db.prepare("UPDATE config_machine_state SET value_json = ? WHERE state_key = ?").run(
+        "{",
+        "modelCatalog.remote.v2",
+      );
+    }, options);
+    expect(readRemoteModelCatalog(options)?.generated_at).toBe(3);
     expect(
       await markRemoteModelCatalogCheckedAsync(
         5,
@@ -105,6 +119,12 @@ describe("remote model catalog store", () => {
       last_modified: null,
       checked_at: 6,
     });
+    expect(
+      withExistingOpenClawStateDatabaseReadOnly(
+        ({ db }) => readConfigMachineStateRowInDatabase(db, "modelCatalog.remote.v2")?.value_json,
+        options,
+      ),
+    ).toBe("{");
   });
 
   it.each(["modelCatalog.remote", "modelCatalog.remote.v2"])(
@@ -169,6 +189,17 @@ describe("remote model catalog store", () => {
     expect(readConfigMachineState("modelCatalog.remote", options)).toEqual(newer);
     const latest = { ...newer, generated_at: 300, etag: '"latest"' };
     writeConfigMachineState("modelCatalog.remote", latest, options);
+    expect(readRemoteModelCatalog(options)).toEqual({ id: 1, ...latest });
+    // markChecked retains its raw v2-slot precedence even when that payload parses as null.
+    writeConfigMachineState("modelCatalog.remote.v2", null, options);
+    expect(
+      await markRemoteModelCatalogCheckedAsync(
+        30,
+        { expected: latest },
+        captureOpenClawStateWorkerContext(options),
+      ),
+    ).toBe(false);
+    expect(readConfigMachineState("modelCatalog.remote.v3", options)).toBeUndefined();
     expect(readRemoteModelCatalog(options)).toEqual({ id: 1, ...latest });
   });
 });

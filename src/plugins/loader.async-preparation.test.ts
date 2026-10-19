@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { loadOpenClawPlugins, loadOpenClawPluginsAsync } from "./loader.js";
@@ -61,17 +62,24 @@ it("waits for selected external source acquisition before publishing registratio
   const entered = createDeferredCore();
   const release = createDeferredCore();
   const prepare = preparation.preparePluginGenerationArtifact;
+  const detail = vi.fn();
+  const now = performance.now.bind(performance);
+  let preparationDelay = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => now() + preparationDelay);
   let published = false;
   vi.spyOn(preparation, "preparePluginGenerationArtifact").mockImplementation(async (params) => {
     entered.resolve();
     await release.promise;
+    preparationDelay += 1_000;
     return prepare(params);
   });
   await isolated(async () => {
-    const loading = loadOpenClawPluginsAsync(options).then((registry) => {
-      published = true;
-      return registry;
-    });
+    const loading = loadOpenClawPluginsAsync({ ...options, startupTrace: { detail } }).then(
+      (registry) => {
+        published = true;
+        return registry;
+      },
+    );
     try {
       await Promise.race([
         entered.promise,
@@ -86,6 +94,13 @@ it("waits for selected external source acquisition before publishing registratio
     const registry = await loading;
     expect(registry.providers.map(({ provider }) => provider.label)).toEqual(["First", "Second"]);
     expect(registry.plugins.every((plugin) => plugin.status === "loaded")).toBe(true);
+    for (const id of ["first-external", "second-external"]) {
+      const metrics = Object.fromEntries(
+        detail.mock.calls.find(([name]) => name === `plugins.gateway-load.plugin.${id}`)![1],
+      );
+      expect(metrics.modulePreparationMs).toBeGreaterThanOrEqual(1_000);
+      expect(metrics.modulePreparationMs).toBeLessThanOrEqual(metrics.loadMs);
+    }
   });
 });
 

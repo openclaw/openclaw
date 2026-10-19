@@ -30,7 +30,7 @@ import {
   type InitialSessionTranscriptWriter,
   type SessionTranscriptWriterFence,
 } from "../../../config/sessions/transcript-write-context.js";
-import type { InternalSessionEntry, SessionEntry } from "../../../config/sessions/types.js";
+import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import type { ContextEngineSessionTarget } from "../../../context-engine/types.js";
 import {
   emitAgentEventIfCurrent,
@@ -218,6 +218,7 @@ export async function resetNoRealConversationTokenSnapshot(params: {
         },
       },
       {
+        result: "none",
         skipMaintenance: true,
         takeCacheOwnership: true,
         ...sessionEntryCommitGuardOptions(params.assertActive),
@@ -638,40 +639,6 @@ async function claimPersistedAgentSessionWriter(
           (!operation || isCurrentSessionControllerOperation(operation)),
       }),
   };
-}
-
-/** Claims a persisted writer from the authoritative row retained by CLI candidate admission. */
-export async function claimAgentSessionWriterFromAdmission(
-  params: RunEmbeddedAgentParams,
-  admission: { entry: SessionEntry; target: SessionTranscriptRuntimeTarget },
-): Promise<AgentSessionWriterFence | undefined> {
-  if (params.sessionPersistence === "detached") {
-    return undefined;
-  }
-  const sessionKey = normalizeOptionalString(params.sessionKey);
-  if (
-    !sessionKey ||
-    sessionKey !== admission.target.sessionKey ||
-    params.sessionId !== admission.target.sessionId
-  ) {
-    throw new Error("Session changed before writer admission");
-  }
-  const admissionError = resolveAgentHarnessRunAdmissionError({
-    agentHarnessId: params.agentHarnessId,
-    entry: admission.entry,
-    modelSelectionLocked: params.modelSelectionLocked,
-    sessionId: params.sessionId,
-    sessionKey,
-  });
-  if (admissionError) {
-    throw new Error(admissionError);
-  }
-  return claimPersistedAgentSessionWriter(params, {
-    agentId: admission.target.agentId,
-    entry: admission.entry,
-    sessionKey,
-    storePath: admission.target.storePath,
-  });
 }
 
 export async function claimAgentSessionWriter(

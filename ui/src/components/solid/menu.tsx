@@ -73,7 +73,13 @@ export type MenuEntry =
   | { kind: "content"; id: string; content: JSX.Element }
   | { kind: "group"; id: string; class?: string; items: readonly MenuEntry[] };
 
-export type MenuHandle = { overlay: Overlay; open(): boolean; close(): boolean };
+export type MenuHandle = {
+  overlay: Overlay;
+  open(): boolean;
+  close(): boolean;
+  focusFirst(): void;
+  itemElement(id: string): HTMLElement | undefined;
+};
 
 /** Close through the owner even when a menu surface has moved into the top layer. */
 export function closeMenusWithin(root: Pick<Node, "contains"> & { ownerDocument: Document }): void {
@@ -190,16 +196,7 @@ export function Menu(props: BranchProps): JSX.Element {
     acquireOcclusion: acquireNativeOverlaySurface,
     onRootChange: (root) =>
       root instanceof ShadowRoot ? retainShadowStyles(root, [overlayStyles]) : undefined,
-    onInitialFocus(intent) {
-      const items = ownItems();
-      const initial = [
-        ...overlay.surface.querySelectorAll<HTMLElement>("[data-initial-focus], [autofocus]"),
-      ].find((node) => node.closest('[role="menu"]') === overlay.surface);
-      (intent === "last"
-        ? (items.at(-1) ?? formControls().at(-1))
-        : (initial ?? items[0] ?? formControls()[0])
-      )?.focus({ preventScroll: true });
-    },
+    onInitialFocus: (intent) => focusItem(intent),
     onEscape(event) {
       if (props.onEscape?.(event)) {
         return true;
@@ -229,6 +226,16 @@ export function Menu(props: BranchProps): JSX.Element {
         !control.closest("[inert]") &&
         control.checkVisibility({ checkVisibilityCSS: true }),
     );
+  const focusItem = (intent: "first" | "last") => {
+    const items = ownItems();
+    const initial = [
+      ...overlay.surface.querySelectorAll<HTMLElement>("[data-initial-focus], [autofocus]"),
+    ].find((node) => node.closest('[role="menu"]') === overlay.surface);
+    (intent === "last"
+      ? (items.at(-1) ?? formControls().at(-1))
+      : (initial ?? items[0] ?? formControls()[0])
+    )?.focus({ preventScroll: true });
+  };
   const menuRoot = initialIdentity.root ?? overlay;
   const placement = () =>
     props.placement ??
@@ -359,6 +366,8 @@ export function Menu(props: BranchProps): JSX.Element {
         overlay,
         open: () => overlay.request(true, "first"),
         close: () => overlay.request(false, "return"),
+        focusFirst: () => focusItem("first"),
+        itemElement: (id) => ownItems().find((item) => item.dataset.value === id),
       }),
     );
     return () => {

@@ -243,6 +243,14 @@ Supply the message body in the required `message` argument. Hidden aliases such 
 
 `sessions_send` runs another session on the same Gateway and optionally waits for the response. Its `sessionKey`, `label`, or `agentId` selects local model context, not an external destination. A peer's reply reaches the requester once, either inline or as a later inter-session input. Continue the conversation with another `sessions_send`. To post to a channel, use `message` with an explicit channel and target.
 
+Waiting sends recover long inline replies from the accepted run's stored answer instead
+of returning its 4,096-character lifecycle preview. If that answer is unavailable,
+`replyTruncated: true` and a note identify the possibly incomplete reply. The normal
+model tool-result budget still applies and reports truncation explicitly. Ask the
+target for the missing section or a file containing the full reply; `sessions_history`
+also caps individual messages and cannot always recover their tail. Delayed
+inter-session replies still use the bounded lifecycle preview.
+
 Sessions keep their addresses when execution moves between the Gateway, a paired device, and a cloud worker. An OpenClaw worker can send to an authorized parent, child, or sibling using its exact session key, including a target running on the Gateway. The Gateway validates the current session identities, visibility, and any per-agent send-only policy before admitting the target turn; target placement does not grant messaging access. Targets outside both the configured visibility scope and an authorized send-only rule, archived targets, and replaced targets remain denied.
 
 An explicit `agents.entries.<agentId>.tools.agentToAgent.send` list can authorize

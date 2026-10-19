@@ -17,6 +17,7 @@ export function AttachmentPreviewChip(props: {
   onReveal?: () => void;
   removal?: AttachmentChipRemoval;
   elementRef?: (element: Element | undefined) => void;
+  triggerRef?: (element: HTMLButtonElement) => void;
 }) {
   const ref = attachmentAdmissionRef(() => props.elementRef);
   const label = () => (
@@ -50,7 +51,11 @@ export function AttachmentPreviewChip(props: {
       }}
     >
       <Show when={props.removal} fallback={<span class="chat-attachment-file">{label()}</span>}>
-        <button type="button" class="chat-attachment-file chat-selection-annotations__trigger">
+        <button
+          ref={props.triggerRef}
+          type="button"
+          class="chat-attachment-file chat-selection-annotations__trigger"
+        >
           {label()}
         </button>
       </Show>

@@ -551,6 +551,13 @@ validates the complete candidate and current caller authority before granting
 COMMIT, then publishes only a confirmed native receipt. FIFO ordering, durability,
 schemas, stored formats, and update behavior are unchanged.
 
+Closed entry operations whose callers discard the result can omit the returned
+entry from that candidate. Commit observers still receive their entry, and required
+publication facts and final authority checks remain unchanged. Exact-row queries
+share one retained row per connection, capped at 1 MiB of estimated string storage.
+A different query or observed admission revision retires that row; oversized rows
+remain readable without caching. Compiled queries survive payload eviction.
+
 Durable heartbeat outcome claims check the current row in their existing worker FIFO.
 Persistence and claims retain the agent executor directly, without opening a native
 database on the Gateway thread. Absent storage has no durable base session or outcome
@@ -2163,8 +2170,9 @@ resets, cold archives, and incompatible writes invalidate its retained facts.
 SQLite and PostgreSQL turn preparation in the serialized execution worker reuse the actor's
 committed exact entry, window, pending-input rows, and transcript version. Existing
 write receipts keep these facts current; missing residency, moved keys, cold
-archives, and turn mutations retain canonical readers. Idempotency still reads
-the canonical identity because a bounded transcript window cannot prove absence.
+archives, and turn mutations retain canonical readers. A complete resident identity
+index proves a fresh idempotency key is absent without reading SQL. Truncated
+indexes, matching keys, and assistant-body scans retain canonical lookups.
 Source validation, pending-input custody, and final write authority remain with
 their existing owners.
 Bounded context reads inside the actor transaction also derive logical parents
@@ -2713,7 +2721,9 @@ Workers inherit completed native SQLite capability checks, required schema
 comparison definitions, and physical-database admission facts through the existing
 worker launcher. Runtime facts remain bound to the originating process,
 executable, runtime, and selected library; comparison definitions also bind their
-original source and format. Physical-database facts belong to their admitted file
+original source and format. Runtime initialization probes the loaded SQLite library
+before starting workers; later module generations and sibling workers reuse that
+process-owned result. Physical-database facts belong to their admitted file
 identity. Missing facts request that identity's first admission. A SQLite writer returns its
 completed native capability fact with an existing successful reply, so later
 sibling workers can inherit it without another probe. The native runtime owner
@@ -6330,6 +6340,11 @@ writes retain their interval through the existing writer's commit and settlement
 Synchronous guards perform no receipt SQL or worker submission. Agent database
 admission refusals remain with their in-memory admission owner.
 
+Cron mutation preparation uses the service's complete resident store and existing
+write-receipt invalidation. The shared planner runs locally without a worker request
+or preparation transaction. The committing worker rereads authoritative rows,
+replans, and retains definition, precondition, and final authority checks.
+
 Cron mutations share host-owned receipt-authority custody for the physical shared
 database, across store partitions and approval writers. Runtime mutations, raw
 saves, mutable-load repairs, grant consumption, and agent-deletion
@@ -6441,12 +6456,13 @@ their transaction-local append cursor. Root checks read metadata without saved
 prompt payloads. No cross-transaction root cache is introduced.
 
 Bulk appends resolve prepared arrays' identity and idempotency-key conflicts in
-one read, then insert payloads, identities, and active projection rows in bounded
-groups. Streaming imports retain per-row acceptance feedback and buffer only the
-accepted writes. Payloads precede their dependent rows, preserving immediate
-foreign keys. The cursor flushes its watermark once and folds final recency into
-the transcript mutation write. Rejected identities still update attempt recency
-without advancing the mutation watermark. If an iterator fails, its accepted
+one read, then insert payloads, identities, and active projection rows in groups
+of up to 512 rows, flushing earlier when buffered payloads reach 1 MiB. Streaming
+imports retain per-row acceptance feedback and buffer only the accepted writes.
+Payloads precede their dependent rows, preserving immediate foreign keys. The
+cursor reuses its initial context-classification fact, flushes its watermark once,
+and folds final recency into the transcript mutation write. Rejected identities
+still update attempt recency without advancing the mutation watermark. If an iterator fails, its accepted
 prefix settles before the error escapes; the enclosing transaction owns rollback.
 Scalar appends without complete actor facts fold identity rejection into the
 payload insertion. Rewrite generations, stored payloads, and commit boundaries

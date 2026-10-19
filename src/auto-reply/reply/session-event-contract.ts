@@ -2,6 +2,7 @@
 import type { SessionEntryCreationOperation } from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { ExecRequestOwner } from "../../infra/exec-request-context.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { NormalizeReplySkipReason } from "./normalize-reply-skip-reason.js";
 
@@ -59,6 +60,8 @@ export type SessionEventSourcePolicy = Readonly<
 
 /** Producer callbacks stay bound to the queued occurrence, not a later dispatcher. */
 export type SessionEventExecution = {
+  /** Admit the prepared input to the occurrence's durable custody before queueing. */
+  prepareInput?: (recorder: UserTurnTranscriptRecorder) => Promise<void>;
   /** Original command custody survives process eviction and deferred reply execution. */
   execRequestOwners?: readonly ExecRequestOwner[];
   /** Background producers inherit this turn's automatic-delivery restriction. */

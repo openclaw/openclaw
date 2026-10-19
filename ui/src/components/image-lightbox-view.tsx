@@ -5,7 +5,10 @@ import { showToast } from "../lib/toast.ts";
 import type { ImageLightboxItem } from "./image-lightbox.types.ts";
 import { Icon } from "./solid/icon.tsx";
 
+type FocusableRef = () => (element: HTMLElement) => void;
+
 export function LightboxAction(props: {
+  focusableRef: FocusableRef;
   class: string;
   label: string;
   disabled: boolean;
@@ -14,6 +17,7 @@ export function LightboxAction(props: {
 }) {
   return (
     <button
+      ref={props.focusableRef()}
       class={["action", props.class]}
       type="button"
       aria-label={t(props.label)}
@@ -26,6 +30,7 @@ export function LightboxAction(props: {
 }
 
 export function LightboxChrome(props: {
+  focusableRef: FocusableRef;
   title: string;
   originalUrl: string;
   externalImageUrl: string;
@@ -37,9 +42,15 @@ export function LightboxChrome(props: {
 }) {
   return (
     <section class="lightbox">
-      <LightboxHeader title={props.title} isVideo={props.isVideo} onClose={props.onClose} />
+      <LightboxHeader
+        focusableRef={props.focusableRef}
+        title={props.title}
+        isVideo={props.isVideo}
+        onClose={props.onClose}
+      />
       {props.children}
       <LightboxFooter
+        focusableRef={props.focusableRef}
         originalUrl={props.originalUrl}
         externalImageUrl={props.externalImageUrl}
         resolvingOriginal={props.resolvingOriginal}
@@ -51,6 +62,7 @@ export function LightboxChrome(props: {
 }
 
 function LightboxHeader(props: {
+  focusableRef: FocusableRef;
   title: string;
   isVideo: boolean;
   onClose: (event?: Event) => void;
@@ -60,6 +72,7 @@ function LightboxHeader(props: {
       <strong class="title">{props.title}</strong>
       <div class="actions">
         <button
+          ref={props.focusableRef()}
           class="action close"
           type="button"
           autofocus
@@ -76,6 +89,7 @@ function LightboxHeader(props: {
 }
 
 function LightboxFooter(props: {
+  focusableRef: FocusableRef;
   originalUrl: string;
   externalImageUrl: string;
   resolvingOriginal: boolean;
@@ -87,9 +101,15 @@ function LightboxFooter(props: {
       <openclaw-modal-actions class="lightbox-footer">
         <Show
           when={props.isVideo}
-          fallback={<LightboxImageDownload onDownload={props.onDownloadImage} />}
+          fallback={
+            <LightboxImageDownload
+              focusableRef={props.focusableRef}
+              onDownload={props.onDownloadImage}
+            />
+          }
         >
           <a
+            ref={props.focusableRef()}
             class="action open-original"
             href={props.originalUrl || undefined}
             aria-disabled={props.originalUrl ? "false" : "true"}
@@ -106,6 +126,7 @@ function LightboxFooter(props: {
         </Show>
         <Show when={!props.isVideo && props.externalImageUrl}>
           <a
+            ref={props.focusableRef()}
             class="action external-image"
             href={props.externalImageUrl}
             target="_blank"
@@ -134,6 +155,7 @@ export function lightboxImageStyle(image: ImageLightboxItem | undefined) {
 }
 
 export function LightboxImageQualityStatus(props: {
+  focusableRef: FocusableRef;
   upgrading: boolean;
   failed: boolean;
   onRetry: () => void;
@@ -147,7 +169,12 @@ export function LightboxImageQualityStatus(props: {
             : t("chat.imageLightbox.detailFailed")}
         </span>
         <Show when={props.failed}>
-          <button type="button" class="action" onClick={() => props.onRetry()}>
+          <button
+            ref={props.focusableRef()}
+            type="button"
+            class="action"
+            onClick={() => props.onRetry()}
+          >
             {t("common.retry")}
           </button>
         </Show>
@@ -156,7 +183,10 @@ export function LightboxImageQualityStatus(props: {
   );
 }
 
-function LightboxImageDownload(props: { onDownload: () => Promise<void> }) {
+function LightboxImageDownload(props: {
+  focusableRef: FocusableRef;
+  onDownload: () => Promise<void>;
+}) {
   const [downloading, setDownloading] = createSignal(false, { ownedWrite: true });
   let active = true;
   onCleanup(() => {
@@ -181,6 +211,7 @@ function LightboxImageDownload(props: { onDownload: () => Promise<void> }) {
   };
   return (
     <button
+      ref={props.focusableRef()}
       class="action download-image"
       type="button"
       disabled={downloading()}

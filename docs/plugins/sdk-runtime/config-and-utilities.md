@@ -422,8 +422,10 @@ accepts only untrusted events that pass `include`/`exclude`. Event payload field
 cannot override the dispatcher's trust metadata. Accepted plain event payloads
 share one frozen snapshot across listeners in a dispatch. Payloads with mutable
 opaque values (such as Maps or Dates) and private listener data retain individual
-copies. Listener mutations remain isolated from other listeners and producers;
-filtering does not change diagnostic collection or queue behavior.
+copies. Absent private data uses a shared frozen empty payload, including for
+OTel listeners without host-plugin attribution. Listener mutations remain isolated
+from other listeners and producers; filtering does not change diagnostic collection
+or queue behavior.
 
 ## Darwin process inspection
 

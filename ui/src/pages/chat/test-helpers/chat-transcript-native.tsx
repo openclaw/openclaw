@@ -1,7 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import type { JSX } from "@solidjs/web";
 import { createMemo, createSignal, Show } from "solid-js";
-import { vi } from "vitest";
+import { onTestFinished, vi } from "vitest";
+import { registerMcpAppUnmountTarget } from "../../../components/mcp-app-unmount.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
@@ -199,7 +200,9 @@ export function stubMcpAppLifecycle(
     restartAfterTeardown: vi.fn(),
     teardown: vi.fn(teardown),
   };
-  return { app: Object.assign(app, lifecycle), ...lifecycle };
+  const target = Object.assign(app, lifecycle);
+  onTestFinished(registerMcpAppUnmountTarget(target));
+  return { app: target, ...lifecycle };
 }
 
 export function numberedContentRows(length: number): TestContentRow[] {

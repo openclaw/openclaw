@@ -13,7 +13,6 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
-  isRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -188,22 +187,6 @@ function sortManagedJobs(managed: ManagedCronJobLike[]): ManagedCronJobLike[] {
     }
     return a.id.localeCompare(b.id);
   });
-}
-
-function isCronServiceLike(candidate: unknown): candidate is CronServiceLike {
-  return (
-    isRecord(candidate) &&
-    (candidate.isEnabled === undefined || typeof candidate.isEnabled === "function") &&
-    typeof candidate.list === "function" &&
-    typeof candidate.add === "function" &&
-    typeof candidate.update === "function" &&
-    typeof candidate.remove === "function"
-  );
-}
-
-export function resolveCronServiceFromGatewayContext(context: { getCron?: () => unknown }) {
-  const cron = context.getCron?.();
-  return isCronServiceLike(cron) ? cron : null;
 }
 
 export async function reconcileShortTermDreamingCronJob(params: {

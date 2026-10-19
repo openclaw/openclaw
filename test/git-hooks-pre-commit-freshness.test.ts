@@ -1,4 +1,4 @@
-import { rmSync, symlinkSync, writeFileSync, appendFileSync } from "node:fs";
+import { rmSync, symlinkSync, writeFileSync, appendFileSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -72,6 +72,38 @@ describe("pre-commit freshness checks", () => {
     expect(run(dir, "git", ["show", "HEAD:docs/page.md"])).toBe("# Updated page");
   });
 
+  it.each([0, 1])("runs package-script checks and preserves exit code %i", (exitCode) => {
+    const dir = freshnessFixture();
+    // Quoted executables take the package-manager path, not the direct-node fast path.
+    stage(
+      dir,
+      "package.json",
+      JSON.stringify({ scripts: { "lint:docs": 'node "lint-docs.cjs"' } }),
+    );
+    stage(
+      dir,
+      "lint-docs.cjs",
+      [
+        'require("node:fs").writeFileSync("checker-args.json", JSON.stringify(process.argv.slice(2)));',
+        'console.error("package-script checker ran");',
+        `process.exit(${exitCode});`,
+      ].join("\n"),
+    );
+    stage(dir, "docs/page with spaces.md", "# Updated page\n");
+
+    if (exitCode === 0) {
+      run(dir, "bash", ["git-hooks/pre-commit"]);
+    } else {
+      const result = runFailure(dir, "bash", ["git-hooks/pre-commit"]);
+      expect(result.status).toBe(exitCode);
+      expect(result.stderr).toContain("package-script checker ran");
+      expect(result.stderr).toContain("docs markdown lint failed (pnpm lint:docs)");
+    }
+    expect(JSON.parse(readFileSync(path.join(dir, "checker-args.json"), "utf8"))).toEqual([
+      "--no-globs",
+      "docs/page with spaces.md",
+    ]);
+  });
   it("skips a check whose staged input also has unstaged edits", () => {
     const dir = freshnessFixture();
     stage(dir, "docs/page.md", "# Page\n\nClean line.\n");

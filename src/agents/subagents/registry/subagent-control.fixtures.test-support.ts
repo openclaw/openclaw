@@ -87,11 +87,13 @@ export function beginControlAdmission(
   sessionKey: string,
   sessionId: string,
   onInterrupt?: Parameters<typeof beginSessionEffect>[0]["onInterrupt"],
+  runId?: string,
 ) {
   return beginSessionEffect({
     agentId: "main",
     scope,
     identities: [sessionKey, sessionId],
+    run: runId ? { runId, sessionKey, sessionId, agentId: "main" } : undefined,
     assertAllowed: () => {},
     onInterrupt,
   });
