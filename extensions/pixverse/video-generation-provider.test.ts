@@ -10,6 +10,8 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 
 const { postJsonRequestMock, postMultipartRequestMock, fetchWithTimeoutMock } =
   getProviderHttpMocks();
+const baseUrl = "https://app-api.pixverse.ai/openapi/v2";
+const videoUrl = "https://media.pixverse.ai/out.mp4";
 
 let buildPixVerseVideoGenerationProvider: typeof import("./video-generation-provider.js").buildPixVerseVideoGenerationProvider;
 
@@ -33,57 +35,43 @@ function successfulResponse(Resp: unknown) {
   return streamedJsonResponse({ ErrCode: 0, ErrMsg: "success", Resp });
 }
 
+type Request<Body> = { url?: string; body?: Body; headers?: Headers };
+function firstRequest<Body>(mock: typeof postJsonRequestMock): Request<Body> {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error("expected PixVerse request");
+  }
+  return call[0] as Request<Body>;
+}
 function firstPostJsonRequest() {
-  const [call] = postJsonRequestMock.mock.calls;
-  if (!call) {
-    throw new Error("expected PixVerse create request");
-  }
-  return call[0] as { url?: string; body?: Record<string, unknown>; headers?: Headers };
+  return firstRequest<Record<string, unknown>>(postJsonRequestMock);
 }
-
 function firstMultipartRequest() {
-  const [call] = postMultipartRequestMock.mock.calls;
-  if (!call) {
-    throw new Error("expected PixVerse image upload request");
-  }
-  return call[0] as { url?: string; body?: FormData; headers?: Headers };
+  return firstRequest<FormData>(postMultipartRequestMock);
 }
-
 function pollFetchHeaders(callIndex: number): Headers | undefined {
   const [, init] = fetchWithTimeoutMock.mock.calls[callIndex] ?? [];
   return (init as { headers?: Headers } | undefined)?.headers;
 }
-
-function mockPixVerseVideoSubmit(videoId = 123) {
-  postJsonRequestMock.mockImplementation(async () => ({
-    response: successfulResponse({ video_id: videoId }),
-    release: vi.fn(async () => {}),
-  }));
+function releasedResponse(response: Response) {
+  return { response, release: vi.fn(async () => {}) };
 }
-
+function mockPixVerseVideoSubmit(videoId = 123) {
+  postJsonRequestMock.mockImplementation(async () =>
+    releasedResponse(successfulResponse({ video_id: videoId })),
+  );
+}
 function mockPixVersePoll(result: Record<string, unknown>) {
   fetchWithTimeoutMock.mockResolvedValueOnce(successfulResponse(result));
 }
-
-function mockPixVerseVideoTask(
-  params: {
-    videoId?: number;
-    videoUrl?: string;
-    seed?: number;
-    outputWidth?: number;
-    outputHeight?: number;
-  } = {},
-) {
-  const videoId = params.videoId ?? 123;
-  mockPixVerseVideoSubmit(videoId);
-  mockPixVersePoll({
-    id: videoId,
-    status: 1,
-    url: params.videoUrl ?? "https://media.pixverse.ai/out.mp4",
-    seed: params.seed,
-    outputWidth: params.outputWidth,
-    outputHeight: params.outputHeight,
-  });
+function mockPixVerseVideoTask(result: Record<string, number> = {}) {
+  mockPixVerseVideoSubmit();
+  mockPixVersePoll({ id: 123, status: 1, url: videoUrl, ...result });
+}
+function mockImageUpload(img_id: number) {
+  postMultipartRequestMock.mockImplementation(async () =>
+    releasedResponse(successfulResponse({ img_id })),
+  );
 }
 
 describe("pixverse video generation provider", () => {
@@ -106,16 +94,12 @@ describe("pixverse video generation provider", () => {
       aspectRatio: "21:9",
       resolution: "720P",
       audio: true,
-      providerOptions: {
-        seed: 42,
-        negativePrompt: "blur",
-        cameraMovement: "zoom_in",
-      },
+      providerOptions: { seed: 42, negativePrompt: "blur", cameraMovement: "zoom_in" },
     });
 
     expect(postJsonRequestMock).toHaveBeenCalledTimes(1);
     const createRequest = firstPostJsonRequest();
-    expect(createRequest.url).toBe("https://app-api.pixverse.ai/openapi/v2/video/text/generate");
+    expect(createRequest.url).toBe(`${baseUrl}/video/text/generate`);
     expect(createRequest.body).toEqual({
       duration: 4,
       model: "v6",
@@ -130,20 +114,14 @@ describe("pixverse video generation provider", () => {
     expect(createRequest.headers?.get("API-KEY")).toBe("provider-key");
     expect(createRequest.headers?.get("Ai-trace-id")).toMatch(/^[0-9a-f-]{36}$/u);
     expect(fetchWithTimeoutMock).toHaveBeenCalledTimes(1);
-    expect(fetchWithTimeoutMock.mock.calls[0]?.[0]).toBe(
-      "https://app-api.pixverse.ai/openapi/v2/video/result/123",
-    );
+    expect(fetchWithTimeoutMock.mock.calls[0]?.[0]).toBe(`${baseUrl}/video/result/123`);
     expect(result).toEqual({
       videos: [
         {
-          url: "https://media.pixverse.ai/out.mp4",
+          url: videoUrl,
           mimeType: "video/mp4",
           fileName: "video-1.mp4",
-          metadata: {
-            sourceUrl: "https://media.pixverse.ai/out.mp4",
-            outputWidth: 960,
-            outputHeight: 540,
-          },
+          metadata: { sourceUrl: videoUrl, outputWidth: 960, outputHeight: 540 },
         },
       ],
       model: "v6",
@@ -190,10 +168,7 @@ describe("pixverse video generation provider", () => {
 
   it("bounds an unbounded successful PixVerse create JSON body and cancels the stream", async () => {
     const oversized = oversizedJsonResponse();
-    postJsonRequestMock.mockResolvedValue({
-      response: oversized.response,
-      release: vi.fn(async () => {}),
-    });
+    postJsonRequestMock.mockResolvedValue(releasedResponse(oversized.response));
 
     await expect(generateVideo()).rejects.toThrow(
       "PixVerse video generation failed: JSON response exceeds 16777216 bytes",
@@ -204,32 +179,26 @@ describe("pixverse video generation provider", () => {
   });
 
   it("uploads local image input before submitting image-to-video", async () => {
-    postMultipartRequestMock.mockImplementation(async () => ({
-      response: successfulResponse({ img_id: 456, img_url: "https://media.pixverse.ai/image.png" }),
-      release: vi.fn(async () => {}),
-    }));
-    mockPixVerseVideoTask({ videoId: 789, videoUrl: "https://media.pixverse.ai/i2v.mp4" });
+    mockImageUpload(456);
+    mockPixVerseVideoTask();
 
     await generateVideo({
       model: "c1",
       prompt: "animate the product",
       inputImages: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
       durationSeconds: 99,
-      providerOptions: {
-        motionMode: "fast",
-        templateId: 302325299692608,
-      },
+      providerOptions: { motionMode: "fast", templateId: 302325299692608 },
     });
 
     expect(postMultipartRequestMock).toHaveBeenCalledOnce();
     const uploadRequest = firstMultipartRequest();
-    expect(uploadRequest.url).toBe("https://app-api.pixverse.ai/openapi/v2/image/upload");
+    expect(uploadRequest.url).toBe(`${baseUrl}/image/upload`);
     expect(uploadRequest.headers?.get("Content-Type")).toBeNull();
     expect(uploadRequest.body?.get("image")).toBeInstanceOf(File);
 
     expect(postJsonRequestMock).toHaveBeenCalledOnce();
     const createRequest = firstPostJsonRequest();
-    expect(createRequest.url).toBe("https://app-api.pixverse.ai/openapi/v2/video/img/generate");
+    expect(createRequest.url).toBe(`${baseUrl}/video/img/generate`);
     expect(createRequest.body).toEqual({
       duration: 15,
       model: "c1",
@@ -242,11 +211,8 @@ describe("pixverse video generation provider", () => {
   });
 
   it("uploads remote image URLs through PixVerse image upload", async () => {
-    postMultipartRequestMock.mockImplementation(async () => ({
-      response: successfulResponse({ img_id: 111 }),
-      release: vi.fn(async () => {}),
-    }));
-    mockPixVerseVideoTask({ videoId: 222, videoUrl: "https://media.pixverse.ai/remote.mp4" });
+    mockImageUpload(111);
+    mockPixVerseVideoTask();
 
     await generateVideo({
       model: "v6",
@@ -260,13 +226,9 @@ describe("pixverse video generation provider", () => {
   });
 
   it("rejects PixVerse API errors before polling", async () => {
-    postJsonRequestMock.mockImplementation(async () => ({
-      response: streamedJsonResponse({
-        ErrCode: 400017,
-        ErrMsg: "Invalid parameter",
-      }),
-      release: vi.fn(async () => {}),
-    }));
+    postJsonRequestMock.mockImplementation(async () =>
+      releasedResponse(streamedJsonResponse({ ErrCode: 400017, ErrMsg: "Invalid parameter" })),
+    );
 
     await expect(generateVideo()).rejects.toThrow(
       "PixVerse video generation failed: Invalid parameter",
@@ -284,27 +246,15 @@ describe("pixverse video generation provider", () => {
   });
 
   it.each([
-    {
-      name: "uses the configured CN API region",
-      providerConfig: { region: "cn" },
-      expectedBaseUrl: "https://app-api.pixverseai.cn/openapi/v2",
-    },
-    {
-      name: "prefers configured baseUrl over API region",
-      providerConfig: { baseUrl: "https://proxy.example/openapi/v2", region: "cn" },
-      expectedBaseUrl: "https://proxy.example/openapi/v2",
-    },
-  ])("$name", async ({ providerConfig, expectedBaseUrl }) => {
+    [undefined, "https://app-api.pixverseai.cn/openapi/v2"],
+    ["https://proxy.example/openapi/v2", "https://proxy.example/openapi/v2"],
+  ])("resolves CN region with baseUrl %s", async (configuredBaseUrl, expectedBaseUrl) => {
     mockPixVerseVideoTask();
 
     await generateVideo({
       model: "v6",
       cfg: {
-        models: {
-          providers: {
-            pixverse: providerConfig,
-          },
-        },
+        models: { providers: { pixverse: { baseUrl: configuredBaseUrl, region: "cn" } } },
       } as never,
     });
 
@@ -317,7 +267,7 @@ describe("pixverse video generation provider", () => {
     try {
       mockPixVerseVideoSubmit();
       mockPixVersePoll({ id: 123, status: 5 });
-      mockPixVersePoll({ id: 123, status: 1, url: "https://media.pixverse.ai/out.mp4" });
+      mockPixVersePoll({ id: 123, status: 1, url: videoUrl });
 
       const pending = generateVideo();
       await vi.advanceTimersByTimeAsync(0);
