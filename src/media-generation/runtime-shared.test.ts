@@ -1,6 +1,6 @@
-// Covers shared media-generation runtime polling and timeout helpers.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
+import { parseGenerationModelRef } from "../../packages/media-generation-core/src/model-ref.js";
 import { buildDashscopeVideoGenerationProvider } from "../plugin-sdk/video-generation.js";
 import {
   normalizeDurationToClosestMax,
@@ -15,24 +15,48 @@ import {
   throwCapabilityGenerationFailure,
 } from "./runtime-shared.js";
 
-function parseModelRef(raw?: string) {
-  const trimmed = raw?.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const slash = trimmed.indexOf("/");
-  if (slash <= 0 || slash === trimmed.length - 1) {
-    return null;
-  }
-  return {
-    provider: trimmed.slice(0, slash),
-    model: trimmed.slice(slash + 1),
-  };
-}
-
 function configuredProvider(id: string, defaultModel: string) {
   return { id, defaultModel, isConfiguredAsync: async () => true };
 }
+
+type CandidateParams = Parameters<typeof resolveCapabilityModelCandidatesAsync>[0];
+function candidateParams(overrides: Partial<Omit<CandidateParams, "parseModelRef">>) {
+  return { cfg: {}, modelConfig: undefined, parseModelRef: parseGenerationModelRef, ...overrides };
+}
+
+function resolveCandidates(
+  providers: ReturnType<NonNullable<CandidateParams["listProviders"]>>,
+  overrides: Parameters<typeof candidateParams>[0] = {},
+) {
+  return resolveCapabilityModelCandidatesAsync(
+    candidateParams({ listProviders: () => providers, ...overrides }),
+  );
+}
+
+function providerConfig(id: string, apiKey: string, baseUrl: string, auth?: "api-key") {
+  return {
+    models: { providers: { [id]: { apiKey, baseUrl, models: [], ...(auth && { auth }) } } },
+  };
+}
+
+function candidateRequest(capability: "image" | "video", fallbacks: string[]) {
+  return {
+    cfg: {
+      agents: {
+        defaults: {
+          mediaModels: { [capability]: { primary: fallbacks[0], fallbacks: fallbacks.slice(1) } },
+        },
+      },
+    },
+    autoProviderFallback: false,
+  };
+}
+
+const imageModels = {
+  primary: "google/gemini-3.1-flash-image-preview",
+  fallbacks: ["fal/fal-ai/flux/dev"],
+};
+const googleProvider = () => configuredProvider("google", "gemini-3.1-flash-image-preview");
 
 describe("media-generation runtime shared candidates", () => {
   it.each([
@@ -53,18 +77,10 @@ describe("media-generation runtime shared candidates", () => {
           unsupportedMessage: "Use Standard credentials and endpoint",
         },
       });
-      const params = {
-        cfg: {
-          models: {
-            providers: {
-              qwen: { apiKey, baseUrl, auth: "api-key" as const, models: [] },
-            },
-          },
-        },
-        modelConfig: undefined,
-        parseModelRef,
+      const params = candidateParams({
+        cfg: providerConfig("qwen", apiKey, baseUrl, "api-key"),
         listProviders: () => [provider],
-      };
+      });
       const expected = allowed ? [{ provider: "qwen", model: provider.defaultModel }] : [];
       expect(resolveCapabilityModelCandidates(params)).toEqual(expected);
       expect(await resolveCapabilityModelCandidatesAsync(params)).toEqual(expected);
@@ -94,19 +110,17 @@ describe("media-generation runtime shared candidates", () => {
   );
 
   it("appends auth-backed provider defaults after explicit refs by default", async () => {
-    const candidates = await resolveCapabilityModelCandidatesAsync({
-      cfg: { agents: { defaults: { model: { primary: "openai/gpt-5.4" } } } },
-      modelConfig: {
-        primary: "google/gemini-3.1-flash-image-preview",
-        fallbacks: ["fal/fal-ai/flux/dev"],
-      },
-      parseModelRef,
-      listProviders: () => [
-        configuredProvider("google", "gemini-3.1-flash-image-preview"),
+    const candidates = await resolveCandidates(
+      [
+        googleProvider(),
         configuredProvider("openai", "gpt-image-1"),
         configuredProvider("minimax", "image-01"),
       ],
-    });
+      {
+        cfg: { agents: { defaults: { model: { primary: "openai/gpt-5.4" } } } },
+        modelConfig: imageModels,
+      },
+    );
 
     expect(candidates).toEqual([
       { provider: "google", model: "gemini-3.1-flash-image-preview" },
@@ -124,45 +138,31 @@ describe("media-generation runtime shared candidates", () => {
     ],
     ["honors an owner readiness veto over generic auth", () => false, []],
   ] as const)("%s", async (_name, isConfigured, expected) => {
-    const candidates = await resolveCapabilityModelCandidatesAsync({
-      cfg: {
-        models: {
-          providers: {
-            "media-config-only": {
-              apiKey: "config-only-media-key",
-              baseUrl: "https://media.example.test/v1",
-              models: [],
-            },
-          },
-        },
+    const candidates = await resolveCandidates(
+      [{ id: "media-config-only", defaultModel: "configured-video", isConfigured }],
+      {
+        cfg: providerConfig(
+          "media-config-only",
+          "config-only-media-key",
+          "https://media.example.test/v1",
+        ),
       },
-      modelConfig: undefined,
-      parseModelRef,
-      listProviders: () => [
-        {
-          id: "media-config-only",
-          defaultModel: "configured-video",
-          isConfigured,
-        },
-      ],
-    });
+    );
 
     expect(candidates).toEqual(expected);
   });
 
   it("orders auto-detected provider defaults by canonical aliases", async () => {
-    const candidates = await resolveCapabilityModelCandidatesAsync({
-      cfg: { agents: { defaults: { model: { primary: "media-alias/gpt-5.5" } } } },
-      modelConfig: undefined,
-      parseModelRef,
-      listProviders: () => [
+    const candidates = await resolveCandidates(
+      [
         configuredProvider("fal", "fal-ai/flux/dev"),
         {
           ...configuredProvider("openai", "gpt-image-2"),
           aliases: ["media-alias"],
         },
       ],
-    });
+      { cfg: { agents: { defaults: { model: { primary: "media-alias/gpt-5.5" } } } } },
+    );
 
     expect(candidates).toEqual([
       { provider: "openai", model: "gpt-image-2" },
@@ -173,21 +173,16 @@ describe("media-generation runtime shared candidates", () => {
   it("uses async readiness and observes an in-process credential change", async () => {
     let configured = false;
     const resolve = () =>
-      resolveCapabilityModelCandidatesAsync({
-        cfg: {},
-        modelConfig: undefined,
-        parseModelRef,
-        listProviders: () => [
-          {
-            id: "media",
-            defaultModel: "image",
-            isConfigured: () => {
-              throw new Error("deprecated readiness must not run");
-            },
-            isConfiguredAsync: async () => configured,
+      resolveCandidates([
+        {
+          id: "media",
+          defaultModel: "image",
+          isConfigured: () => {
+            throw new Error("deprecated readiness must not run");
           },
-        ],
-      });
+          isConfiguredAsync: async () => configured,
+        },
+      ]);
 
     expect(await resolve()).toEqual([]);
     configured = true;
@@ -195,15 +190,9 @@ describe("media-generation runtime shared candidates", () => {
   });
 
   it("treats an explicit model override as exact-only", async () => {
-    const candidates = await resolveCapabilityModelCandidatesAsync({
-      cfg: {},
-      modelConfig: {
-        primary: "google/gemini-3.1-flash-image-preview",
-        fallbacks: ["fal/fal-ai/flux/dev"],
-      },
+    const candidates = await resolveCandidates([googleProvider()], {
+      modelConfig: imageModels,
       modelOverride: "openai/gpt-image-2",
-      parseModelRef,
-      listProviders: () => [configuredProvider("google", "gemini-3.1-flash-image-preview")],
     });
 
     expect(candidates).toEqual([{ provider: "openai", model: "gpt-image-2" }]);
@@ -214,21 +203,13 @@ describe("media-generation candidate lifecycle", () => {
   it("preserves missing, skipped, and failed attempts before the first usable result", async () => {
     const calls: string[] = [];
     const result = await runMediaGenerationCandidates({
-      request: {
-        cfg: {
-          agents: {
-            defaults: {
-              mediaModels: {
-                image: {
-                  primary: "missing/model",
-                  fallbacks: ["skipped/model", "failed/model", "success/model", "unused/model"],
-                },
-              },
-            },
-          },
-        },
-        autoProviderFallback: false,
-      },
+      request: candidateRequest("image", [
+        "missing/model",
+        "skipped/model",
+        "failed/model",
+        "success/model",
+        "unused/model",
+      ]),
       listProviders: () => [],
       capability: "image",
       getProvider(id) {
@@ -250,6 +231,7 @@ describe("media-generation candidate lifecycle", () => {
     });
 
     expect(result.model).toBe("selected-model");
+    const noFailureDetails = { reason: undefined, status: undefined, code: undefined };
     expect(result.attempts).toStrictEqual([
       {
         provider: "missing",
@@ -260,17 +242,13 @@ describe("media-generation candidate lifecycle", () => {
         provider: "skipped",
         model: "model",
         error: "reference inputs unsupported",
-        reason: undefined,
-        status: undefined,
-        code: undefined,
+        ...noFailureDetails,
       },
       {
         provider: "failed",
         model: "model",
         error: "generation failed",
-        reason: undefined,
-        status: undefined,
-        code: undefined,
+        ...noFailureDetails,
       },
     ]);
     expect(calls).toEqual([
@@ -283,117 +261,83 @@ describe("media-generation candidate lifecycle", () => {
     ]);
   });
 
-  it.each(["async prepare"])(
-    "propagates %s failures without submitting a fallback",
-    async (stage) => {
-      const error = new Error("provider registry unavailable");
-      const lookedUp: string[] = [];
-      let executions = 0;
-      const result = runMediaGenerationCandidates({
-        request: {
-          cfg: {
-            agents: {
-              defaults: {
-                mediaModels: { video: { primary: "primary/model", fallbacks: ["fallback/model"] } },
-              },
-            },
-          },
-          autoProviderFallback: false,
-        },
-        listProviders: () => [],
-        capability: "video",
-        getProvider(id) {
-          lookedUp.push(id);
-          if (stage === "lookup") {
-            throw error;
-          }
-          return { id };
-        },
-        prepareCandidate() {
-          if (stage === "prepare") {
-            throw error;
-          }
-          if (stage === "async prepare") {
-            return Promise.reject(error);
-          }
-          return async () => {
-            executions += 1;
-            return "unexpected generation";
-          };
-        },
-      });
+  it("propagates async prepare failures without submitting a fallback", async () => {
+    const error = new Error("provider registry unavailable");
+    const lookedUp: string[] = [];
+    const result = runMediaGenerationCandidates({
+      request: candidateRequest("video", ["primary/model", "fallback/model"]),
+      listProviders: () => [],
+      capability: "video",
+      getProvider(id) {
+        lookedUp.push(id);
+        return { id };
+      },
+      prepareCandidate() {
+        return Promise.reject(error);
+      },
+    });
 
-      await expect(result).rejects.toBe(error);
-      expect(lookedUp).toEqual(["primary"]);
-      expect(executions).toBe(0);
-    },
-  );
+    await expect(result).rejects.toBe(error);
+    expect(lookedUp).toEqual(["primary"]);
+  });
 });
 
 describe("media-generation runtime shared normalization", () => {
   it("caps media provider timeouts to the timer-safe range", () => {
-    expect(
-      resolveMediaProviderRequestTimeoutMs({
-        timeoutMs: Number.MAX_SAFE_INTEGER,
-        providerDefaultTimeoutMs: 30_000,
-      }),
-    ).toBe(MAX_TIMER_TIMEOUT_MS);
-    expect(
-      resolveMediaProviderRequestTimeoutMs({
-        timeoutMs: 0,
-        providerDefaultTimeoutMs: 45_000,
-      }),
-    ).toBe(45_000);
+    const capped = resolveMediaProviderRequestTimeoutMs({
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+      providerDefaultTimeoutMs: 30_000,
+    });
+    expect(capped).toBe(MAX_TIMER_TIMEOUT_MS);
+    const fallback = resolveMediaProviderRequestTimeoutMs({
+      timeoutMs: 0,
+      providerDefaultTimeoutMs: 45_000,
+    });
+    expect(fallback).toBe(45_000);
   });
 
   it("rejects unsafe size dimensions before deriving ratios", () => {
-    expect(
-      resolveClosestSize({
-        requestedSize: "9007199254740993x3",
-        supportedSizes: ["1024x1024", "1536x1024"],
-      }),
-    ).toBeUndefined();
+    const size = resolveClosestSize({
+      requestedSize: "9007199254740993x3",
+      supportedSizes: ["1024x1024", "1536x1024"],
+    });
+    expect(size).toBeUndefined();
   });
 
   it("maps unsupported sizes to the closest supported size", () => {
-    expect(
-      resolveClosestSize({
-        requestedSize: "1792x1024",
-        supportedSizes: ["1024x1024", "1024x1536", "1536x1024"],
-      }),
-    ).toBe("1536x1024");
+    const size = resolveClosestSize({
+      requestedSize: "1792x1024",
+      supportedSizes: ["1024x1024", "1024x1536", "1536x1024"],
+    });
+    expect(size).toBe("1536x1024");
   });
 
   it("does not map across image and video resolution units", () => {
-    expect(
-      resolveClosestResolution({
-        requestedResolution: "4K",
-        supportedResolutions: ["768P", "1080P"],
-      }),
-    ).toBeUndefined();
+    const resolution = resolveClosestResolution({
+      requestedResolution: "4K",
+      supportedResolutions: ["768P", "1080P"],
+    });
+    expect(resolution).toBeUndefined();
   });
 
   it("keeps geometry tie-breaking independent of provider declaration order", () => {
     for (const reverse of [false, true]) {
       const ordered = <T>(values: T[]) => (reverse ? values.toReversed() : values);
-      expect(
-        resolveClosestAspectRatio({
-          requestedAspectRatio: "3:3",
-          supportedAspectRatios: ordered(["invalid", "2:2", "1:1"]),
-        }),
-      ).toBe("1:1");
-      expect(
-        resolveClosestSize({
-          requestedAspectRatio: "1:1",
-          supportedSizes: ordered(["invalid", "128x128", "64x64"]),
-        }),
-      ).toBe("64x64");
-      expect(
-        resolveClosestResolution({
-          requestedResolution: "480P",
-          supportedResolutions: ordered(["invalid", "360P", "600P"]),
-        }),
-      ).toBe("600P");
+      const aspectRatio = resolveClosestAspectRatio({
+        requestedAspectRatio: "3:3",
+        supportedAspectRatios: ordered(["invalid", "2:2", "1:1"]),
+      });
+      expect(aspectRatio).toBe("1:1");
+      const size = resolveClosestSize({
+        requestedAspectRatio: "1:1",
+        supportedSizes: ordered(["invalid", "128x128", "64x64"]),
+      });
+      expect(size).toBe("64x64");
+      const resolution = resolveClosestResolution({
+        requestedResolution: "480P",
+        supportedResolutions: ordered(["invalid", "360P", "600P"]),
+      });
+      expect(resolution).toBe("600P");
     }
   });
 
