@@ -1,13 +1,16 @@
 import "../src/test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../src/config/runtime-snapshot.js";
-import { runBuiltCli } from "./cli-json-stdout.test-support.js";
+import {
+  withCliHome,
+  expectFailure,
+  runIsolatedCli,
+} from "./cli-json-stdout-contract.test-support.js";
 
 afterEach(() => clearRuntimeConfigSnapshot());
 
@@ -90,118 +93,81 @@ describe("cli json stdout contract", () => {
       tty: true,
     },
   ])("renders sessions $name through the canonical failure owner", async (testCase) => {
-    await withTempHome(
-      async (tempHome) => {
-        if ("exporterFailure" in testCase) {
-          await seedTrajectorySession(tempHome, "agent:main:trajectory-process");
-        }
-        const preload = Buffer.from(
-          [
-            'import net from "node:net";',
-            'net.Socket.prototype.connect = function () { throw new Error("AUTOQA_NETWORK_FORBIDDEN"); };',
-            'globalThis.fetch = async () => { throw new Error("AUTOQA_NETWORK_FORBIDDEN"); };',
-            ...("exporterFailure" in testCase
-              ? [
-                  'import fs from "node:fs/promises";',
-                  "const originalRealpath = fs.realpath;",
-                  `fs.realpath = async (target, ...args) => { if (target === ${JSON.stringify(tempHome)}) { throw new Error("injected trajectory exporter failure"); } return originalRealpath(target, ...args); };`,
-                ]
-              : []),
-            ...("tty" in testCase
-              ? [
-                  'Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });',
-                  'Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });',
-                ]
-              : []),
-          ].join("\n"),
-        ).toString("base64");
-        const args = testCase.args.map((arg) => (arg === "$TRAJECTORY_WORKSPACE" ? tempHome : arg));
-        const result = runBuiltCli(
-          tempHome,
-          args,
-          {
-            OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
-            OPENCLAW_GATEWAY_PORT: "29791",
-            OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
-            ...("commander" in testCase ? { OPENCLAW_DISABLE_ROUTE_FIRST: "1" } : {}),
-            ...("tty" in testCase ? { FORCE_COLOR: "1" } : {}),
-          },
-          { execArgv: [`--import=data:text/javascript;base64,${preload}`] },
-        );
+    await withCliHome(async (tempHome) => {
+      if ("exporterFailure" in testCase) {
+        await seedTrajectorySession(tempHome, "agent:main:trajectory-process");
+      }
+      const args = testCase.args.map((arg) => (arg === "$TRAJECTORY_WORKSPACE" ? tempHome : arg));
+      const result = runIsolatedCli(tempHome, args, {
+        ...testCase,
+        env: { OPENCLAW_GATEWAY_PORT: "29791" },
+        source: [
+          'import net from "node:net";',
+          'net.Socket.prototype.connect = function () { throw new Error("AUTOQA_NETWORK_FORBIDDEN"); };',
+          'globalThis.fetch = async () => { throw new Error("AUTOQA_NETWORK_FORBIDDEN"); };',
+          ...("exporterFailure" in testCase
+            ? [
+                'import fs from "node:fs/promises";',
+                "const originalRealpath = fs.realpath;",
+                `fs.realpath = async (target, ...args) => { if (target === ${JSON.stringify(tempHome)}) { throw new Error("injected trajectory exporter failure"); } return originalRealpath(target, ...args); };`,
+              ]
+            : []),
+        ],
+      });
 
-        expect(result.status, result.stderr).toBe(1);
-        expect(result.stdout, result.stderr).not.toContain("\u001B");
-        expect(result.stdout, result.stderr).not.toContain("\u0007");
-        if ("human" in testCase) {
-          expect(result.stdout).toBe("");
-        } else {
-          expect(JSON.parse(result.stdout)).toEqual({
-            ok: false,
-            error: { type: "cli_error", message: testCase.message },
-          });
-        }
-        expect(result.stderr).toContain(testCase.message);
-        expect(result.stderr.split(testCase.message)).toHaveLength(2);
-        expect(result.stderr).not.toContain("AUTOQA_NETWORK_FORBIDDEN");
-        if ("tty" in testCase) {
-          expect(result.stderr).toContain("\u001B[?25h");
-        }
-      },
-      { prefix: "openclaw-sessions-registration-json-failure-e2e-" },
-    );
+      expectFailure(result, testCase.message, {
+        ...testCase,
+        cleanHuman: true,
+        once: true,
+        network: true,
+      });
+    });
   });
 
   it.each([
     { name: "direct JSON export", encoded: false, json: true },
     { name: "encoded request precedence with plain output", encoded: true, json: false },
   ])("preserves successful trajectory $name", async (testCase) => {
-    await withTempHome(
-      async (tempHome) => {
-        const sessionKey = "agent:main:trajectory-process";
-        await seedTrajectorySession(tempHome, sessionKey);
-        const output = testCase.encoded ? "encoded-export" : "direct-export";
-        const args = [
-          "sessions",
-          "export-trajectory",
-          "--session-key",
-          testCase.encoded ? "agent:main:missing" : sessionKey,
-          "--output",
-          "direct-export",
-          "--workspace",
-          tempHome,
-        ];
-        if (testCase.encoded) {
-          args.push(
-            "--request-json-base64",
-            Buffer.from(JSON.stringify({ sessionKey, output }), "utf8").toString("base64url"),
-          );
-        }
-        if (testCase.json) {
-          args.push("--json");
-        }
-
-        const result = runBuiltCli(tempHome, args, {
-          OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
-          OPENCLAW_GATEWAY_PORT: "29791",
-          OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
-        });
-
-        expect(result.status, result.stderr).toBe(0);
-        if (testCase.json) {
-          expect(JSON.parse(result.stdout)).toMatchObject({
-            displayPath: `.openclaw/trajectory-exports/${output}`,
-            sessionId: "trajectory-process-session",
-          });
-        } else {
-          expect(result.stdout).toContain("✅ Trajectory exported!");
-          expect(result.stdout).toContain(`.openclaw/trajectory-exports/${output}`);
-          expect(result.stdout).toContain("trajectory-process-session");
-        }
-        await fs.access(
-          path.join(tempHome, ".openclaw", "trajectory-exports", output, "manifest.json"),
+    await withCliHome(async (tempHome) => {
+      const sessionKey = "agent:main:trajectory-process";
+      await seedTrajectorySession(tempHome, sessionKey);
+      const output = testCase.encoded ? "encoded-export" : "direct-export";
+      const args = [
+        "sessions",
+        "export-trajectory",
+        "--session-key",
+        testCase.encoded ? "agent:main:missing" : sessionKey,
+        "--output",
+        "direct-export",
+        "--workspace",
+        tempHome,
+      ];
+      if (testCase.encoded) {
+        args.push(
+          "--request-json-base64",
+          Buffer.from(JSON.stringify({ sessionKey, output }), "utf8").toString("base64url"),
         );
-      },
-      { prefix: "openclaw-trajectory-success-e2e-" },
-    );
+      }
+      if (testCase.json) {
+        args.push("--json");
+      }
+
+      const result = runIsolatedCli(tempHome, args, { env: { OPENCLAW_GATEWAY_PORT: "29791" } });
+
+      expect(result.status, result.stderr).toBe(0);
+      if (testCase.json) {
+        expect(JSON.parse(result.stdout)).toMatchObject({
+          displayPath: `.openclaw/trajectory-exports/${output}`,
+          sessionId: "trajectory-process-session",
+        });
+      } else {
+        expect(result.stdout).toContain("✅ Trajectory exported!");
+        expect(result.stdout).toContain(`.openclaw/trajectory-exports/${output}`);
+        expect(result.stdout).toContain("trajectory-process-session");
+      }
+      await fs.access(
+        path.join(tempHome, ".openclaw", "trajectory-exports", output, "manifest.json"),
+      );
+    });
   });
 });

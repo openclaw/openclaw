@@ -1,9 +1,14 @@
 import "../src/test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
-import { runBuiltCli } from "./cli-json-stdout.test-support.js";
+import {
+  withCliHome,
+  expectCleanOutput,
+  expectMissing,
+  writeJson,
+  runIsolatedCli,
+} from "./cli-json-stdout-contract.test-support.js";
 
 describe("cli json stdout contract", () => {
   it.each([
@@ -111,130 +116,105 @@ describe("cli json stdout contract", () => {
       human: true,
     },
   ])("renders hooks read failures through their canonical owner for $name", async (testCase) => {
-    await withTempHome(
-      async (tempHome) => {
-        const stateDir = path.join(tempHome, "isolated-state");
-        const configPath = path.join(tempHome, "missing-openclaw.json");
-        const workspaceHooksDir = path.join(stateDir, "workspace", "hooks");
-        if ("remoteMissing" in testCase) {
-          await fs.writeFile(configPath, JSON.stringify({ gateway: { mode: "remote" } }));
-        }
-        if ("reportFailure" in testCase) {
-          await fs.mkdir(workspaceHooksDir, { recursive: true });
-        }
-        const socketError =
-          "explicitGateway" in testCase
-            ? "AUTOQA_SELECTED_GATEWAY_FAILURE"
-            : "AUTOQA_NETWORK_FORBIDDEN";
-        const socketErrorDetails =
-          "explicitGateway" in testCase ? "{}" : '{ code: "ECONNREFUSED" }';
-        const preload = Buffer.from(
-          [
-            'import net from "node:net";',
-            `net.Socket.prototype.connect = function () { throw Object.assign(new Error(${JSON.stringify(socketError)}), ${socketErrorDetails}); };`,
-            'globalThis.fetch = async () => { throw new Error("AUTOQA_NETWORK_FORBIDDEN"); };',
-            ...("reportFailure" in testCase
-              ? [
-                  'import fs from "node:fs";',
-                  "const originalReadDir = fs.readdirSync;",
-                  `fs.readdirSync = (target, ...args) => { if (String(target) === ${JSON.stringify(workspaceHooksDir)}) { throw new Error("injected hook report loading failure"); } return originalReadDir(target, ...args); };`,
-                ]
-              : []),
-            ...("tty" in testCase
-              ? [
-                  'Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });',
-                  'Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });',
-                ]
-              : []),
-          ].join("\n"),
-        ).toString("base64");
-        const result = runBuiltCli(
-          tempHome,
-          testCase.args,
-          {
-            OPENCLAW_CONFIG_PATH: configPath,
-            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-            OPENCLAW_GATEWAY_PORT: "29791",
-            OPENCLAW_STATE_DIR: stateDir,
-            ...("explicitGateway" in testCase
-              ? {
-                  OPENCLAW_GATEWAY_URL: "ws://127.0.0.1:9",
-                  OPENCLAW_GATEWAY_TOKEN: "fixture-token",
-                }
-              : {}),
-            ...("commander" in testCase ? { OPENCLAW_DISABLE_ROUTE_FIRST: "1" } : {}),
-            ...("tty" in testCase ? { FORCE_COLOR: "1" } : {}),
-          },
-          { execArgv: [`--import=data:text/javascript;base64,${preload}`] },
-        );
-        const message =
-          "remoteMissing" in testCase
+    await withCliHome(async (tempHome) => {
+      const stateDir = path.join(tempHome, "isolated-state");
+      const configPath = path.join(tempHome, "missing-openclaw.json");
+      const workspaceHooksDir = path.join(stateDir, "workspace", "hooks");
+      if ("remoteMissing" in testCase) {
+        await writeJson(configPath, { gateway: { mode: "remote" } });
+      }
+      if ("reportFailure" in testCase) {
+        await fs.mkdir(workspaceHooksDir, { recursive: true });
+      }
+      const socketError =
+        "explicitGateway" in testCase
+          ? "AUTOQA_SELECTED_GATEWAY_FAILURE"
+          : "AUTOQA_NETWORK_FORBIDDEN";
+      const socketErrorDetails = "explicitGateway" in testCase ? "{}" : '{ code: "ECONNREFUSED" }';
+      const result = runIsolatedCli(tempHome, testCase.args, {
+        ...testCase,
+        source: [
+          'import net from "node:net";',
+          `net.Socket.prototype.connect = function () { throw Object.assign(new Error(${JSON.stringify(socketError)}), ${socketErrorDetails}); };`,
+          'globalThis.fetch = async () => { throw new Error("AUTOQA_NETWORK_FORBIDDEN"); };',
+          ...("reportFailure" in testCase
             ? [
-                testCase.message,
-                `Config: ${configPath}`,
-                "Fix: set gateway.remote.url, or set gateway.mode=local.",
-              ].join("\n")
-            : (testCase.message ??
-              'Unknown agent id "retired". Run openclaw agents list to see configured agents.');
+                'import fs from "node:fs";',
+                "const originalReadDir = fs.readdirSync;",
+                `fs.readdirSync = (target, ...args) => { if (String(target) === ${JSON.stringify(workspaceHooksDir)}) { throw new Error("injected hook report loading failure"); } return originalReadDir(target, ...args); };`,
+              ]
+            : []),
+        ],
+        env: {
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+          OPENCLAW_GATEWAY_PORT: "29791",
+          ...("explicitGateway" in testCase
+            ? {
+                OPENCLAW_GATEWAY_URL: "ws://127.0.0.1:9",
+                OPENCLAW_GATEWAY_TOKEN: "fixture-token",
+              }
+            : {}),
+        },
+      });
+      const message =
+        "remoteMissing" in testCase
+          ? [
+              testCase.message,
+              `Config: ${configPath}`,
+              "Fix: set gateway.remote.url, or set gateway.mode=local.",
+            ].join("\n")
+          : (testCase.message ??
+            'Unknown agent id "retired". Run openclaw agents list to see configured agents.');
 
-        expect(result.status, result.stderr).toBe(1);
-        expect(result.stdout, result.stderr).not.toContain("\u001B");
-        expect(result.stdout, result.stderr).not.toContain("\u0007");
-        if ("human" in testCase) {
-          if ("missingHook" in testCase) {
-            expect(result.stdout.trim()).toBe(message);
+      expect(result.status, result.stderr).toBe(1);
+      expectCleanOutput(result.stdout, result.stderr);
+      if ("human" in testCase) {
+        if ("missingHook" in testCase) {
+          expect(result.stdout.trim()).toBe(message);
+        } else {
+          expect(result.stdout).toBe("");
+          expect(result.stderr).toContain(`Error: ${message}`);
+        }
+      } else {
+        expect(JSON.parse(result.stdout)).toEqual({
+          ok: false,
+          error: { type: "cli_error", message },
+          ...("missingHook" in testCase ? { hook: "missing-hook" } : {}),
+        });
+        if (!("missingHook" in testCase)) {
+          if ("genericStderr" in testCase) {
+            expect(result.stderr).toContain("[openclaw] The CLI command failed.");
+            expect(result.stderr).not.toContain(message);
           } else {
-            expect(result.stdout).toBe("");
-            expect(result.stderr).toContain(`Error: ${message}`);
-          }
-        } else {
-          expect(JSON.parse(result.stdout)).toEqual({
-            ok: false,
-            error: { type: "cli_error", message },
-            ...("missingHook" in testCase ? { hook: "missing-hook" } : {}),
-          });
-          if (!("missingHook" in testCase)) {
-            if ("genericStderr" in testCase) {
-              expect(result.stderr).toContain("[openclaw] The CLI command failed.");
-              expect(result.stderr).not.toContain(message);
-            } else {
-              expect(result.stderr).toContain(message);
-            }
+            expect(result.stderr).toContain(message);
           }
         }
-        expect(result.stderr).not.toContain("AUTOQA_NETWORK_FORBIDDEN");
-        if ("tty" in testCase) {
-          expect(result.stderr).toContain("\u001B[?25h");
-        }
-        if ("remoteMissing" in testCase) {
-          await expect(fs.readFile(configPath, "utf8")).resolves.toBe(
-            JSON.stringify({ gateway: { mode: "remote" } }),
-          );
-        } else {
-          await expect(fs.stat(configPath)).rejects.toMatchObject({ code: "ENOENT" });
-        }
-      },
-      { prefix: "openclaw-hooks-json-failure-e2e-" },
-    );
+      }
+      expect(result.stderr).not.toContain("AUTOQA_NETWORK_FORBIDDEN");
+      if ("tty" in testCase) {
+        expect(result.stderr).toContain("\u001B[?25h");
+      }
+      if ("remoteMissing" in testCase) {
+        await expect(fs.readFile(configPath, "utf8")).resolves.toBe(
+          JSON.stringify({ gateway: { mode: "remote" } }),
+        );
+      } else {
+        await expectMissing(configPath);
+      }
+    });
   });
 
   it("preserves successful hooks report JSON and offline discovery", async () => {
-    await withTempHome(
-      async (tempHome) => {
-        const result = runBuiltCli(tempHome, ["hooks", "--json", "list"], {
-          OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-          OPENCLAW_GATEWAY_PORT: "1",
-          OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
-        });
+    await withCliHome(async (tempHome) => {
+      const result = runIsolatedCli(tempHome, ["hooks", "--json", "list"], {
+        env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", OPENCLAW_GATEWAY_PORT: "1" },
+      });
 
-        expect(result.status, result.stderr).toBe(0);
-        expect(JSON.parse(result.stdout)).toEqual(
-          expect.objectContaining({ hooks: expect.any(Array) }),
-        );
-        expect(result.stderr).toBe("");
-      },
-      { prefix: "openclaw-hooks-json-success-e2e-" },
-    );
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual(
+        expect.objectContaining({ hooks: expect.any(Array) }),
+      );
+      expect(result.stderr).toBe("");
+    });
   });
 });

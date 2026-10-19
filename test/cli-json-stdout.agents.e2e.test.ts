@@ -1,9 +1,14 @@
 import "../src/test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
-import { runBuiltCli } from "./cli-json-stdout.test-support.js";
+import {
+  withCliHome,
+  expectCliError,
+  expectMissing,
+  expectFailure,
+  runIsolatedCli,
+} from "./cli-json-stdout-contract.test-support.js";
 
 describe("cli json stdout contract", () => {
   // Command-level suites own the individual validation branches. Keep one
@@ -52,86 +57,43 @@ describe("cli json stdout contract", () => {
       tty: true,
     },
   ])("renders agent management $name through the canonical failure owner", async (testCase) => {
-    await withTempHome(
-      async (tempHome) => {
-        const configPath = path.join(tempHome, "missing-openclaw.json");
-        const workspace = path.join(tempHome, "workspace");
-        const preload = `data:text/javascript,${encodeURIComponent(
-          'Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true }); Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });',
-        )}`;
-        const args = testCase.args.map((argument) =>
-          argument === "$WORKSPACE" ? workspace : argument,
-        );
-        const result = runBuiltCli(
-          tempHome,
-          args,
-          {
-            OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
-            OPENCLAW_CONFIG_PATH: configPath,
-            ...("tty" in testCase ? { FORCE_COLOR: "1" } : {}),
-          },
-          { execArgv: "tty" in testCase ? [`--import=${preload}`] : [] },
-        );
+    await withCliHome(async (tempHome) => {
+      const configPath = path.join(tempHome, "missing-openclaw.json");
+      const workspace = path.join(tempHome, "workspace");
+      const result = runIsolatedCli(tempHome, testCase.args, testCase);
 
-        expect(result.status, result.stderr).toBe(1);
-        if ("human" in testCase) {
-          expect(result.stdout).toBe("");
-        } else {
-          expect(result.stdout, result.stderr).not.toContain("\u001B");
-          expect(result.stdout, result.stderr).not.toContain("\u0007");
-          expect(JSON.parse(result.stdout)).toEqual({
-            ok: false,
-            error: { type: "cli_error", message: testCase.message },
-          });
-        }
-        expect(result.stderr).toContain(testCase.message);
-        expect(result.stderr.split(testCase.message)).toHaveLength(2);
-        if ("tty" in testCase) {
-          expect(result.stderr).toContain("\u001B[?25h");
-        }
-        await expect(fs.access(configPath)).rejects.toMatchObject({ code: "ENOENT" });
-        await expect(fs.access(workspace)).rejects.toMatchObject({ code: "ENOENT" });
-      },
-      { prefix: "openclaw-agent-management-json-failure-e2e-" },
-    );
+      expectFailure(result, testCase.message, { ...testCase, once: true });
+      await expectMissing(configPath, workspace);
+    });
   });
 
   it("leaves existing config and IDENTITY.md untouched when set-identity rejects an agent", async () => {
-    await withTempHome(
-      async (tempHome) => {
-        const configPath = path.join(tempHome, "openclaw.json");
-        const workspace = path.join(tempHome, "workspace");
-        const identityPath = path.join(workspace, "IDENTITY.md");
-        const originalConfig = `${JSON.stringify({
-          agents: { entries: { main: { workspace, identity: { name: "Original" } } } },
-        })}\n`;
-        const originalIdentity = "- Name: Original workspace identity\n";
-        await fs.mkdir(workspace, { recursive: true });
-        await fs.writeFile(configPath, originalConfig, "utf8");
-        await fs.writeFile(identityPath, originalIdentity, "utf8");
+    await withCliHome(async (tempHome) => {
+      const configPath = path.join(tempHome, "openclaw.json");
+      const workspace = path.join(tempHome, "workspace");
+      const identityPath = path.join(workspace, "IDENTITY.md");
+      const originalConfig = `${JSON.stringify({
+        agents: { entries: { main: { workspace, identity: { name: "Original" } } } },
+      })}\n`;
+      const originalIdentity = "- Name: Original workspace identity\n";
+      await fs.mkdir(workspace, { recursive: true });
+      await fs.writeFile(configPath, originalConfig, "utf8");
+      await fs.writeFile(identityPath, originalIdentity, "utf8");
 
-        const result = runBuiltCli(
-          tempHome,
-          ["agents", "set-identity", "--agent", "ghost", "--name", "Ghost", "--json"],
-          {
-            OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
-            OPENCLAW_CONFIG_PATH: configPath,
-          },
-        );
+      const result = runIsolatedCli(
+        tempHome,
+        ["agents", "set-identity", "--agent", "ghost", "--name", "Ghost", "--json"],
+        { env: { OPENCLAW_CONFIG_PATH: configPath } },
+      );
 
-        expect(result.status, result.stderr).toBe(1);
-        expect(JSON.parse(result.stdout)).toEqual({
-          ok: false,
-          error: {
-            type: "cli_error",
-            message: 'Agent "ghost" not found. Create it with `openclaw agents add`.',
-          },
-        });
-        await expect(fs.readFile(configPath, "utf8")).resolves.toBe(originalConfig);
-        await expect(fs.readFile(identityPath, "utf8")).resolves.toBe(originalIdentity);
-      },
-      { prefix: "openclaw-agent-identity-json-failure-e2e-" },
-    );
+      expect(result.status, result.stderr).toBe(1);
+      expectCliError(
+        result.stdout,
+        'Agent "ghost" not found. Create it with `openclaw agents add`.',
+      );
+      await expect(fs.readFile(configPath, "utf8")).resolves.toBe(originalConfig);
+      await expect(fs.readFile(identityPath, "utf8")).resolves.toBe(originalIdentity);
+    });
   });
 
   it.each([
@@ -181,42 +143,38 @@ describe("cli json stdout contract", () => {
       conflict: true,
     },
   ])("preserves agent binding $name as its existing domain payload", async (testCase) => {
-    await withTempHome(
-      async (tempHome) => {
-        const configPath = path.join(tempHome, "openclaw.json");
-        const existingConfig = `${JSON.stringify({
-          agents: {
-            ownership: "explicit",
-            entries: {
-              main: { workspace: path.join(tempHome, "main") },
-              ops: { workspace: path.join(tempHome, "ops") },
-            },
+    await withCliHome(async (tempHome) => {
+      const configPath = path.join(tempHome, "openclaw.json");
+      const existingConfig = `${JSON.stringify({
+        agents: {
+          ownership: "explicit",
+          entries: {
+            main: { workspace: path.join(tempHome, "main") },
+            ops: { workspace: path.join(tempHome, "ops") },
           },
-          bindings: [
-            { type: "route", agentId: "ops", match: { channel: "telegram", accountId: "work" } },
-          ],
-        })}\n`;
-        if ("conflict" in testCase) {
-          await fs.writeFile(configPath, existingConfig, "utf8");
-        }
+        },
+        bindings: [
+          { type: "route", agentId: "ops", match: { channel: "telegram", accountId: "work" } },
+        ],
+      })}\n`;
+      if ("conflict" in testCase) {
+        await fs.writeFile(configPath, existingConfig, "utf8");
+      }
 
-        const result = runBuiltCli(tempHome, testCase.args, {
-          OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
-          OPENCLAW_CONFIG_PATH: configPath,
-        });
+      const result = runIsolatedCli(tempHome, testCase.args, {
+        env: { OPENCLAW_CONFIG_PATH: configPath },
+      });
 
-        expect(result.status, result.stderr).toBe("conflict" in testCase ? 1 : 0);
-        expect(result.stdout, result.stderr).not.toBe("");
-        expect(JSON.parse(result.stdout)).toEqual(testCase.payload);
-        if ("writesConfig" in testCase) {
-          await fs.access(configPath);
-        } else if ("conflict" in testCase) {
-          await expect(fs.readFile(configPath, "utf8")).resolves.toBe(existingConfig);
-        } else {
-          await expect(fs.access(configPath)).rejects.toMatchObject({ code: "ENOENT" });
-        }
-      },
-      { prefix: "openclaw-agent-bindings-domain-payload-e2e-" },
-    );
+      expect(result.status, result.stderr).toBe("conflict" in testCase ? 1 : 0);
+      expect(result.stdout, result.stderr).not.toBe("");
+      expect(JSON.parse(result.stdout)).toEqual(testCase.payload);
+      if ("writesConfig" in testCase) {
+        await fs.access(configPath);
+      } else if ("conflict" in testCase) {
+        await expect(fs.readFile(configPath, "utf8")).resolves.toBe(existingConfig);
+      } else {
+        await expectMissing(configPath);
+      }
+    });
   });
 });

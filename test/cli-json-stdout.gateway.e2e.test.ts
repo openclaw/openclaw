@@ -1,184 +1,127 @@
 import "../src/test-utils/prepare-compiled-subprocesses.js";
-import fs from "node:fs/promises";
 import path from "node:path";
-import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
+import {
+  withCliHome,
+  isolatedEnv,
+  expectCleanOutput,
+  expectCliError,
+  expectMissing,
+  runIsolatedCli,
+} from "./cli-json-stdout-contract.test-support.js";
 import { runBuiltCli } from "./cli-json-stdout.test-support.js";
+
+function queryCases(
+  name: string,
+  args: string[],
+  message: string,
+  extra: { configReadFailure?: boolean } = {},
+) {
+  return [
+    { name: "in JSON mode", flags: ["--json"] },
+    { name: "in human mode", flags: [], human: true },
+    { name: "through forced Commander", flags: ["--json"], commander: true },
+    { name: "with dual TTYs", flags: ["--json"], tty: true },
+  ].map(({ name: mode, flags, ...options }) =>
+    Object.assign({ name: `${name} ${mode}`, args: [...args, ...flags], message }, options, extra),
+  );
+}
 
 describe("cli json stdout contract", () => {
   it.each([
-    {
-      name: "invalid call params in JSON mode",
-      args: ["gateway", "call", "system-presence", "--params", "not-json", "--json"],
-      message: "--params must be valid JSON.",
-    },
-    {
-      name: "invalid call params in human mode",
-      args: ["gateway", "call", "system-presence", "--params", "not-json"],
-      message: "--params must be valid JSON.",
-      human: true,
-    },
-    {
-      name: "invalid call params through forced Commander",
-      args: ["gateway", "call", "system-presence", "--params", "not-json", "--json"],
-      message: "--params must be valid JSON.",
-      commander: true,
-    },
-    {
-      name: "invalid call params with dual TTYs",
-      args: ["gateway", "call", "system-presence", "--params", "not-json", "--json"],
-      message: "--params must be valid JSON.",
-      tty: true,
-    },
-    {
-      name: "contradictory usage options in JSON mode",
-      args: ["gateway", "usage-cost", "--agent", "alpha", "--all-agents", "--json"],
-      message: "Use --agent or --all-agents, not both",
-    },
-    {
-      name: "contradictory usage options in human mode",
-      args: ["gateway", "usage-cost", "--agent", "alpha", "--all-agents"],
-      message: "Use --agent or --all-agents, not both",
-      human: true,
-    },
-    {
-      name: "contradictory usage options through forced Commander",
-      args: ["gateway", "usage-cost", "--agent", "alpha", "--all-agents", "--json"],
-      message: "Use --agent or --all-agents, not both",
-      commander: true,
-    },
-    {
-      name: "contradictory usage options with dual TTYs",
-      args: ["gateway", "usage-cost", "--agent", "alpha", "--all-agents", "--json"],
-      message: "Use --agent or --all-agents, not both",
-      tty: true,
-    },
-    {
-      name: "routed Gateway health config failure in JSON mode",
-      args: ["gateway", "health", "--port", "29793", "--json"],
-      message: "AUTOQA_ROUTE_CONFIG_READ_FAILURE",
-      configReadFailure: true,
-    },
-    {
-      name: "Gateway health config failure in human mode",
-      args: ["gateway", "health", "--port", "29793"],
-      message: "AUTOQA_ROUTE_CONFIG_READ_FAILURE",
-      configReadFailure: true,
-      human: true,
-    },
-    {
-      name: "Gateway health config failure through forced Commander",
-      args: ["gateway", "health", "--port", "29793", "--json"],
-      message: "AUTOQA_ROUTE_CONFIG_READ_FAILURE",
-      configReadFailure: true,
-      commander: true,
-    },
-    {
-      name: "routed Gateway health config failure with dual TTYs",
-      args: ["gateway", "health", "--port", "29793", "--json"],
-      message: "AUTOQA_ROUTE_CONFIG_READ_FAILURE",
-      configReadFailure: true,
-      tty: true,
-    },
+    ...queryCases(
+      "invalid call params",
+      ["gateway", "call", "system-presence", "--params", "not-json"],
+      "--params must be valid JSON.",
+    ),
+    ...queryCases(
+      "contradictory usage options",
+      ["gateway", "usage-cost", "--agent", "alpha", "--all-agents"],
+      "Use --agent or --all-agents, not both",
+    ),
+    ...queryCases(
+      "Gateway health config failure",
+      ["gateway", "health", "--port", "29793"],
+      "AUTOQA_ROUTE_CONFIG_READ_FAILURE",
+      { configReadFailure: true },
+    ),
     {
       name: "specialized explicit Gateway authentication failure",
       args: ["gateway", "call", "system-presence", "--url", "ws://127.0.0.1:29793", "--json"],
       specializedAuth: true,
     },
   ])("renders Gateway query failures through the Gateway owner for $name", async (testCase) => {
-    await withTempHome(
-      async (tempHome) => {
-        const configPath = path.join(tempHome, "missing-openclaw.json");
-        const stateDir = path.join(tempHome, "isolated-state");
-        const gatewayError = "AUTOQA_INJECTED_GATEWAY_FAILURE";
-        const concurrentSparkplug = "AUTOQA_CONCURRENT_SPARKPLUG";
-        const preload = Buffer.from(
-          [
-            'import net from "node:net";',
-            `net.Socket.prototype.connect = function () { throw new Error(${JSON.stringify(gatewayError)}); };`,
-            `if (!process.versions.bun && !process.execArgv.includes("--no-concurrent-sparkplug")) process.stderr.write(${JSON.stringify(`${concurrentSparkplug}\n`)});`,
-            ...("configReadFailure" in testCase
-              ? [
-                  'import fs from "node:fs";',
-                  "Error.stackTraceLimit = 50;",
-                  "const originalReadFileSync = fs.readFileSync;",
-                  "fs.readFileSync = function (target, ...args) {",
-                  '  if (String(target) === process.env.OPENCLAW_CONFIG_PATH && new Error().stack?.includes("readNonObservingHealthConfig")) {',
-                  `    throw Object.assign(new Error(${JSON.stringify(testCase.message)}), { code: "EIO" });`,
-                  "  }",
-                  "  return originalReadFileSync.call(this, target, ...args);",
-                  "};",
-                ]
-              : []),
-            ...("tty" in testCase
-              ? [
-                  'Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });',
-                  'Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });',
-                ]
-              : []),
-          ].join("\n"),
-        ).toString("base64");
-        const result = runBuiltCli(
-          tempHome,
-          testCase.args,
-          {
-            OPENCLAW_CONFIG_PATH: configPath,
-            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-            OPENCLAW_STATE_DIR: stateDir,
-            ...("commander" in testCase ? { OPENCLAW_DISABLE_ROUTE_FIRST: "1" } : {}),
-            ...("tty" in testCase ? { FORCE_COLOR: "1", NO_COLOR: undefined } : {}),
-          },
-          { execArgv: [`--import=data:text/javascript;base64,${preload}`] },
-        );
+    await withCliHome(async (tempHome) => {
+      const configPath = path.join(tempHome, "missing-openclaw.json");
+      const stateDir = path.join(tempHome, "isolated-state");
+      const gatewayError = "AUTOQA_INJECTED_GATEWAY_FAILURE";
+      const concurrentSparkplug = "AUTOQA_CONCURRENT_SPARKPLUG";
+      const result = runIsolatedCli(tempHome, testCase.args, {
+        ...testCase,
+        source: [
+          'import net from "node:net";',
+          `net.Socket.prototype.connect = function () { throw new Error(${JSON.stringify(gatewayError)}); };`,
+          `if (!process.versions.bun && !process.execArgv.includes("--no-concurrent-sparkplug")) process.stderr.write(${JSON.stringify(`${concurrentSparkplug}\n`)});`,
+          ...("configReadFailure" in testCase
+            ? [
+                'import fs from "node:fs";',
+                "Error.stackTraceLimit = 50;",
+                "const originalReadFileSync = fs.readFileSync;",
+                "fs.readFileSync = function (target, ...args) {",
+                '  if (String(target) === process.env.OPENCLAW_CONFIG_PATH && new Error().stack?.includes("readNonObservingHealthConfig")) {',
+                `    throw Object.assign(new Error(${JSON.stringify(testCase.message)}), { code: "EIO" });`,
+                "  }",
+                "  return originalReadFileSync.call(this, target, ...args);",
+                "};",
+              ]
+            : []),
+        ],
+        env: {
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+          ...("tty" in testCase ? { NO_COLOR: undefined } : {}),
+        },
+      });
 
-        // Concurrent Sparkplug can deadlock process.exit, so the child times out with status null.
-        expect(result.stderr).not.toContain(concurrentSparkplug);
-        expect(result.status, result.stderr).toBe(1);
-        expect(result.stdout, result.stderr).not.toContain("\u001B");
-        expect(result.stdout, result.stderr).not.toContain("\u0007");
-        expect(result.stdout).not.toContain(gatewayError);
-        expect(result.stderr).not.toContain(gatewayError);
-        if ("human" in testCase) {
-          expect(result.stdout).toBe("");
-          expect(result.stderr).toContain(testCase.message);
-        } else if ("specializedAuth" in testCase) {
-          expect(JSON.parse(result.stdout)).toEqual({
-            ok: false,
-            error: {
-              type: "gateway_credentials_required",
-              message: [
-                "gateway url override requires explicit credentials",
-                "Fix: pass --token or --password with --url (or gatewayToken in tools).",
-                "For the default local or SSH-tunneled Gateway, remove --url to use the configured target.",
-                `Config: ${configPath}`,
-              ].join("\n"),
-            },
-          });
-          expect(result.stderr).toBe("");
-        } else {
-          expect(JSON.parse(result.stdout)).toEqual({
-            ok: false,
-            error: {
-              type: "cli_error",
-              message:
-                "configReadFailure" in testCase
-                  ? `Config could not be read at ${configPath}:\n- <root>: read failed at ${configPath}: Error: ${testCase.message}`
-                  : testCase.message,
-            },
-          });
-          if ("configReadFailure" in testCase && !("commander" in testCase)) {
-            expect(result.stderr).toContain("[openclaw] The CLI command failed.");
-          }
-          expect(result.stderr).not.toContain(testCase.message);
+      // Concurrent Sparkplug can deadlock process.exit, so the child times out with status null.
+      expect(result.stderr).not.toContain(concurrentSparkplug);
+      expect(result.status, result.stderr).toBe(1);
+      expectCleanOutput(result.stdout, result.stderr);
+      expect(result.stdout).not.toContain(gatewayError);
+      expect(result.stderr).not.toContain(gatewayError);
+      if ("human" in testCase) {
+        expect(result.stdout).toBe("");
+        expect(result.stderr).toContain(testCase.message);
+      } else if ("specializedAuth" in testCase) {
+        expect(JSON.parse(result.stdout)).toEqual({
+          ok: false,
+          error: {
+            type: "gateway_credentials_required",
+            message: [
+              "gateway url override requires explicit credentials",
+              "Fix: pass --token or --password with --url (or gatewayToken in tools).",
+              "For the default local or SSH-tunneled Gateway, remove --url to use the configured target.",
+              `Config: ${configPath}`,
+            ].join("\n"),
+          },
+        });
+        expect(result.stderr).toBe("");
+      } else {
+        expectCliError(
+          result.stdout,
+          "configReadFailure" in testCase
+            ? `Config could not be read at ${configPath}:\n- <root>: read failed at ${configPath}: Error: ${testCase.message}`
+            : testCase.message,
+        );
+        if ("configReadFailure" in testCase && !("commander" in testCase)) {
+          expect(result.stderr).toContain("[openclaw] The CLI command failed.");
         }
-        if ("tty" in testCase) {
-          expect(result.stderr).toContain("\u001B[?25h");
-        }
-        await expect(fs.stat(stateDir)).rejects.toMatchObject({ code: "ENOENT" });
-        await expect(fs.stat(configPath)).rejects.toMatchObject({ code: "ENOENT" });
-      },
-      { prefix: "openclaw-gateway-query-json-failure-e2e-" },
-    );
+        expect(result.stderr).not.toContain(testCase.message);
+      }
+      if ("tty" in testCase) {
+        expect(result.stderr).toContain("\u001B[?25h");
+      }
+      await expectMissing(stateDir, configPath);
+    });
   });
 
   it.each([
@@ -206,40 +149,22 @@ describe("cli json stdout contract", () => {
       tty: true,
     },
   ])("renders invalid status/health timeouts as canonical JSON for $name", async (testCase) => {
-    await withTempHome(
-      async (tempHome) => {
-        const preload = `data:text/javascript,${encodeURIComponent(
-          'Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true }); Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });',
-        )}`;
-        const result = runBuiltCli(
-          tempHome,
-          testCase.args,
-          {
-            OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
-            OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
-            OPENCLAW_GATEWAY_PORT: "29791",
-            ...("commander" in testCase ? { OPENCLAW_DISABLE_ROUTE_FIRST: "1" } : {}),
-            ...("tty" in testCase ? { FORCE_COLOR: "1" } : {}),
-          },
-          { execArgv: "tty" in testCase ? [`--import=${preload}`] : [] },
-        );
-        const message = "--timeout must be a positive integer (milliseconds)";
+    await withCliHome(async (tempHome) => {
+      const result = runIsolatedCli(tempHome, testCase.args, {
+        ...testCase,
+        env: { OPENCLAW_GATEWAY_PORT: "29791" },
+      });
+      const message = "--timeout must be a positive integer (milliseconds)";
 
-        expect(result.status, result.stderr).toBe(1);
-        expect(result.stdout, result.stderr).not.toContain("\u001B");
-        expect(result.stdout, result.stderr).not.toContain("\u0007");
-        expect(JSON.parse(result.stdout)).toEqual({
-          ok: false,
-          error: { type: "cli_error", message },
-        });
-        expect(result.stderr).toContain("[openclaw] The CLI command failed.");
-        expect(result.stderr).not.toContain(message);
-        if ("tty" in testCase) {
-          expect(result.stderr).toContain("\u001B[?25h");
-        }
-      },
-      { prefix: "openclaw-status-health-json-timeout-e2e-" },
-    );
+      expect(result.status, result.stderr).toBe(1);
+      expectCleanOutput(result.stdout, result.stderr);
+      expectCliError(result.stdout, message);
+      expect(result.stderr).toContain("[openclaw] The CLI command failed.");
+      expect(result.stderr).not.toContain(message);
+      if ("tty" in testCase) {
+        expect(result.stderr).toContain("\u001B[?25h");
+      }
+    });
   });
 
   it.each([
@@ -301,47 +226,37 @@ describe("cli json stdout contract", () => {
       message: "--name must not be empty",
     },
   ])("renders nodes $name through the shared validation owner", async (testCase) => {
-    await withTempHome(
-      async (tempHome) => {
-        const denyNetwork = Buffer.from(
-          `import net from "node:net";
+    await withCliHome(async (tempHome) => {
+      const denyNetwork = Buffer.from(
+        `import net from "node:net";
            net.Socket.prototype.connect = function () { throw new Error("AUTOQA_NETWORK_FORBIDDEN"); };
            globalThis.fetch = async () => { throw new Error("AUTOQA_NETWORK_FORBIDDEN"); };`,
-        ).toString("base64");
-        const result = runBuiltCli(
-          tempHome,
-          testCase.args,
-          {
-            // Startup probes SQLite in a worker; filesystem writes remain denied in the CLI.
-            NODE_OPTIONS: "--permission --allow-fs-read=* --allow-worker",
-            NODE_DISABLE_COMPILE_CACHE: "1",
-            OPENCLAW_NO_RESPAWN: "1",
-            OPENCLAW_LOG_LEVEL: "silent",
-            OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
-            OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
-          },
-          { execArgv: [`--import=data:text/javascript;base64,${denyNetwork}`] },
-        );
+      ).toString("base64");
+      const result = runBuiltCli(
+        tempHome,
+        testCase.args,
+        {
+          // Startup probes SQLite in a worker; filesystem writes remain denied in the CLI.
+          NODE_OPTIONS: "--permission --allow-fs-read=* --allow-worker",
+          NODE_DISABLE_COMPILE_CACHE: "1",
+          OPENCLAW_NO_RESPAWN: "1",
+          OPENCLAW_LOG_LEVEL: "silent",
+          ...isolatedEnv(tempHome),
+        },
+        { execArgv: [`--import=data:text/javascript;base64,${denyNetwork}`] },
+      );
 
-        expect(result.status, result.stderr).toBe(1);
-        if ("human" in testCase && testCase.human) {
-          expect(result.stdout).toBe("");
-          expect(result.stderr).toContain(`nodes ${testCase.args[1]} failed:`);
-          expect(result.stderr).toContain(testCase.message);
-        } else {
-          expect(JSON.parse(result.stdout)).toEqual({
-            ok: false,
-            error: {
-              type: "cli_error",
-              message: expect.stringContaining(testCase.message),
-            },
-          });
-          expect(result.stderr).toContain("[openclaw] The CLI command failed.");
-          expect(result.stderr).not.toContain(testCase.message);
-        }
-        expect(result.stderr).not.toContain("AUTOQA_NETWORK_FORBIDDEN");
-      },
-      { prefix: "openclaw-nodes-json-failure-e2e-" },
-    );
+      expect(result.status, result.stderr).toBe(1);
+      if ("human" in testCase && testCase.human) {
+        expect(result.stdout).toBe("");
+        expect(result.stderr).toContain(`nodes ${testCase.args[1]} failed:`);
+        expect(result.stderr).toContain(testCase.message);
+      } else {
+        expectCliError(result.stdout, expect.stringContaining(testCase.message));
+        expect(result.stderr).toContain("[openclaw] The CLI command failed.");
+        expect(result.stderr).not.toContain(testCase.message);
+      }
+      expect(result.stderr).not.toContain("AUTOQA_NETWORK_FORBIDDEN");
+    });
   });
 });
