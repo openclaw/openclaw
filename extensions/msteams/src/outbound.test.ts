@@ -309,7 +309,9 @@ describe("msteamsOutbound cfg threading", () => {
     const payload = {
       text: "photo",
       mediaUrl: "file:///tmp/photo.png",
-      presentation: { blocks: [] },
+      presentation: {
+        blocks: [{ type: "buttons" as const, buttons: [{ label: "Open", value: "open" }] }],
+      },
     };
     const rendered = await render(payload);
 

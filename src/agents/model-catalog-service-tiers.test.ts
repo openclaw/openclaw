@@ -63,7 +63,8 @@ it.each(["synthetic-provider-key", undefined])(
       env: { OPENAI_API_KEY: "synthetic-provider-key" },
       ref: { modelId: "synthetic-api-model", runtimeId: "openclaw" },
     });
-    expect(selected).toMatchObject({ availability: true, selectedProfileId: undefined });
+    expect(selected.availability).toBe(true);
+    expect(selected.selectedProfileId).toBeUndefined();
     expect(apiTiers(selected)).toEqual(["priority", "ultrafast"]);
   },
 );

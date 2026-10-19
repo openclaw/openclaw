@@ -369,9 +369,9 @@ describe("prepared native catalog readiness", () => {
     expect(decision).toMatchObject(
       nativeResult(undefined, {
         availabilityAuthoritative: true,
-        unavailableReason: undefined,
       }),
     );
+    expect(decision.unavailableReason).toBeUndefined();
   });
 
   it("reuses captured host configuration while observing native readiness and selection", () => {

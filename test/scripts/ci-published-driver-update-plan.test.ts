@@ -80,7 +80,9 @@ it.each([
   expect(shouldRunPublishedDriverUpdate(paths, "pull_request")).toBe(false);
 });
 
-it.each<[Parameters<typeof runCiManifestFixture>[0]["eventName"], string, boolean, boolean?]>([
+it.each<
+  [NonNullable<Parameters<typeof runCiManifestFixture>[0]["eventName"]>, string, boolean, boolean?]
+>([
   ["pull_request", "src/infra/update-managed-service-handoff.ts", false],
   ["pull_request", "src/state/openclaw-state-lease.ts", false],
   ["push", "src/agents/context-window-guard.ts", true],

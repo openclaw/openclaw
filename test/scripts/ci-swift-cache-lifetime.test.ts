@@ -95,6 +95,7 @@ it("bounds optional Swift cache writes after required artifacts", () => {
     minutes += owner["timeout-minutes"]!;
   }
   expect(minutes).toBe(5);
+  expect(20 + minutes).toBeLessThanOrEqual(jobTimeout - 5);
 });
 
 it.each([
