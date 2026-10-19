@@ -562,6 +562,7 @@ suite.define(() => {
         '.sidebar-identity-menu [data-value="command:retry-connect"]',
       );
       await retryConnection.waitFor({ state: "visible", timeout: 10_000 });
+      await gateway.closeLatest(1006, "synthetic failed attempt");
       await retryConnection.click();
       await expect.poll(() => pinnedEntry.count()).toBe(1);
       await captureUiProof(suite, page, "sidebar-sessions-during-client-replacement.png");

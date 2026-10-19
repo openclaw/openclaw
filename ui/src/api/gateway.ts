@@ -105,6 +105,7 @@ export type GatewayBrowserClientOptions = GatewayBrowserConnectOptions & {
     willRetry: boolean;
     busy?: boolean;
   }) => void;
+  onConnecting?: () => void;
   onReconnectScheduled?: (delayMs: number) => void;
   onGap?: (info: { expected: number; received: number }) => void;
   onRequestTiming?: (timing: GatewayProtocolRequestTiming) => void;
@@ -171,6 +172,7 @@ export class GatewayBrowserClient {
     }
     this.client = new GatewayProtocolClient<ConnectPlan>({
       createSocket: (handlers) => {
+        this.opts.onConnecting?.();
         this.catalogRetryAbort.abort();
         this.catalogRetryAbort = new AbortController();
         this.connectionHello = null;

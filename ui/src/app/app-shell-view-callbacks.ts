@@ -1,4 +1,5 @@
 import { isRouteId } from "../app-routes.ts";
+import { isGatewayConnectionAttemptPending } from "../lib/gateway-status.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
@@ -25,7 +26,12 @@ export function createShellViewCallbacks(host: ShellViewCallbackHost) {
             pane.presented &&
             areUiSessionKeysEquivalent(pane.sessionKey, sessionKey),
         ),
-    retryGateway: () => host.context?.gateway.connect(),
+    retryGateway: () => {
+      const gateway = host.context?.gateway;
+      if (gateway && !isGatewayConnectionAttemptPending(gateway.snapshot)) {
+        gateway.connect();
+      }
+    },
     toggleSidebar: () => host.toggleNavigationSurface(),
     updateSidebarEntries: (entries: string[]) =>
       host.context?.navigation.update({ sidebarEntries: entries }),

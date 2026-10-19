@@ -50,6 +50,7 @@ suite.define(() => {
       await connectionStatus
         .getByRole("button", { name: "Reconnecting… · 1 queued — Retry now", exact: true })
         .waitFor();
+      await gateway.closeLatest(1006, "synthetic failed attempt");
       await connectionStatus.getByRole("button").click();
       await waitForControlUiGatewayReconnecting(page);
       await expect.poll(() => row.textContent()).toContain("Renamed offline");
@@ -129,6 +130,7 @@ suite.define(() => {
         await sidebar.locator('[data-session-key="' + key + '"]').waitFor({ state: "visible" });
       }
       await page.locator(".sidebar-identity-card").click();
+      await gateway.closeLatest(1006, "synthetic failed attempt");
       await page.locator('.sidebar-identity-menu [data-value="command:retry-connect"]').click();
       await expect.poll(() => rows.count()).toBe(2);
       expect(await ownerFilter.getAttribute("aria-label")).toBe("Owners: My sessions");
