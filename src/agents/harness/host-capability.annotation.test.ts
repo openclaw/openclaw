@@ -227,20 +227,20 @@ describe("host-owned current admission annotation", () => {
         const entered = createDeferred();
         const release = createDeferred();
         const rewrite = sessionMessageRewrite.rewritePreparedTranscriptMessageAtAnchor;
-        vi.spyOn(
-          sessionMessageRewrite,
-          "rewritePreparedTranscriptMessageAtAnchor",
-        ).mockImplementationOnce(async (...args) => {
-          entered.resolve();
-          await release.promise;
-          return rewrite(...args);
-        });
+        const rewriteCall = vi
+          .spyOn(sessionMessageRewrite, "rewritePreparedTranscriptMessageAtAnchor")
+          .mockImplementationOnce(async (...args) => {
+            entered.resolve();
+            await release.promise;
+            return rewrite(...args);
+          });
         const updates = vi.fn();
         const unsubscribe = onInternalSessionTranscriptUpdate(updates);
         const pending = f.annotate();
         try {
           // Publish only after the real selector captured authority, before the real SQLite rewrite.
           await Promise.race([entered.promise, pending]);
+          expect(rewriteCall).toHaveBeenCalledOnce();
           await upsertSessionEntryCore(base, {
             sessionId: f.target.sessionId,
             updatedAt: 2,
