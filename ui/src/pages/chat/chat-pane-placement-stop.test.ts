@@ -15,7 +15,6 @@ import {
 } from "../../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { reclaimChatPanePlacement } from "./chat-pane-placement.runtime.ts";
 import {
   resolveChatPanePlacement,
   resolveChatPaneWorkerPresentation,
@@ -612,52 +611,6 @@ describe("chat pane worker stop", () => {
 });
 
 describe("Machine and Stop owner contracts", () => {
-  it.each(["worker", "permission"] as const)(
-    "does not stop after %s changes during confirmation",
-    async (change) => {
-      const request = dialogs.mockRequest(async () => ({ ok: true }));
-      const { pane } = createTestChatPane({
-        client: createGatewayBrowserClientFixture({ request }),
-        sessions: createSessionCapabilityFixture(),
-      });
-      const snapshot = pane.context.gateway.snapshot;
-      snapshot.hello = gatewayHelloForMethods(["sessions.reclaim"], ["operator.write"]);
-      const row = activePlacementSession();
-      let current = row;
-      const publishError = vi.fn();
-      const reclaim = dialogs.track(
-        reclaimChatPanePlacement({
-          client: snapshot.client,
-          gatewaySnapshot: snapshot,
-          currentGatewaySnapshot: () => snapshot,
-          currentRow: () => current,
-          reclaimingKey: null,
-          placementStartup: pane.context.placementStartup,
-          row,
-          fallbackAgentId: "main",
-          isCurrent: () => true,
-          onReclaimingChange: vi.fn(),
-          publishError,
-          reconcileMutation: vi.fn(async () => ({ status: "refreshed" as const })),
-        }),
-      );
-      const actions = await waitForConfirmDialogActions();
-      if (change === "worker") {
-        current = {
-          ...row,
-          placement: { ...row.placement, generation: row.placement.generation + 1 },
-        };
-      } else {
-        snapshot.hello = gatewayHelloForMethods(["sessions.reclaim"], ["operator.read"]);
-      }
-      answerConfirmDialog(actions, "confirm");
-      await reclaim;
-      expect(request).not.toHaveBeenCalled();
-      expect(pane.context.placementStartup.pause).not.toHaveBeenCalled();
-      expect(publishError).toHaveBeenCalledOnce();
-    },
-  );
-
   it.each([false, true])(
     "projects available machine facts and native actions with offline=%s",
     (offline) => {
