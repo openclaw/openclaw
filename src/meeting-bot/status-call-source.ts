@@ -596,9 +596,9 @@ ${withLiveOwnership("  }\n")}${
     if (!captionsFinalized && canMutateSession && inCall && !captionState.observerInstalled) {
       captionState.observerInstalled = true;
       captionState.observer = new MutationObserver(scrapeCaptions);
-      // Captions may render in a call window listed by the platform's control documents.
-      for (const content of captionContents()) {
-        captionState.observer.observe((content.ownerDocument || document).body, {
+      // Watch every control document, even before captions render: a call window can hold them.
+      for (const root of controlDocuments()) {
+        captionState.observer.observe(root.body, {
           childList: true,
           subtree: true,
           characterData: true,
