@@ -14,9 +14,7 @@ const MATRIX_ACTION_TEST_CFG = { channels: { matrix: {} } };
 
 function installMatrixActionTestRuntime(): void {
   setMatrixRuntime({
-    config: {
-      current: () => ({}),
-    },
+    config: { current: () => ({}) },
     channel: {
       text: {
         resolveMarkdownTableMode: () => "code",
@@ -89,14 +87,14 @@ function createHistoryMessage(
 }
 
 function createMessagesClient(params: {
-  chunk: Array<Record<string, unknown>>;
+  chunk?: Array<Record<string, unknown>>;
   hydratedChunk?: Array<Record<string, unknown>>;
   pollRoot?: Record<string, unknown>;
   pollRelations?: Array<Record<string, unknown>>;
   threadRelations?: Array<Record<string, unknown>>;
 }) {
   const doRequest = vi.fn(async () => ({
-    chunk: params.chunk,
+    chunk: params.chunk ?? [],
     start: "start-token",
     end: "end-token",
   }));
@@ -104,12 +102,9 @@ function createMessagesClient(params: {
     async (_roomId: string, _events: Array<Record<string, unknown>>) =>
       (params.hydratedChunk ?? _events) as unknown,
   );
-  const getEvent = vi.fn(async (_roomId: string, eventId: string) => {
-    if (params.pollRoot?.event_id === eventId) {
-      return params.pollRoot;
-    }
-    return null;
-  });
+  const getEvent = vi.fn(async (_roomId: string, eventId: string) =>
+    params.pollRoot?.event_id === eventId ? params.pollRoot : null,
+  );
   const getRelations = vi.fn(
     async (
       _roomId: string,
@@ -145,6 +140,7 @@ function createMessagesClient(params: {
 }
 
 function createEditClient(originalContent: Record<string, unknown>) {
+  installMatrixActionTestRuntime();
   const sendMessage = vi.fn().mockResolvedValue("evt-edit");
   const client = {
     getEvent: vi.fn().mockResolvedValue({ content: originalContent }),
@@ -161,27 +157,13 @@ function createEditClient(originalContent: Record<string, unknown>) {
   return { client, sendMessage };
 }
 
-function expectEdit(
-  sendMessage: ReturnType<typeof vi.fn>,
-  mentions: string[],
-  newContent: Record<string, unknown>,
-) {
-  expect(sendMessage).toHaveBeenNthCalledWith(
-    1,
-    ROOM,
-    expect.objectContaining({
-      "m.mentions": mentions.length ? { user_ids: mentions } : {},
-      "m.new_content": expect.objectContaining(newContent),
-    }),
-  );
-}
-
 const readHistory = (opts: Parameters<typeof readMatrixMessages>[1]) =>
   readMatrixMessages("room:!room:example.org", opts);
+const readThread = (client: MatrixClient, before?: string) =>
+  readHistory({ client, threadId: "$thread-root", limit: 1, before });
 
 function threadPage(root = createHistoryMessage("$thread-root", "thread root", 10)) {
   return createMessagesClient({
-    chunk: [],
     pollRoot: root,
     threadRelations: [
       createHistoryMessage("$thread-reply", "thread reply", 20, { threadId: "$thread-root" }),
@@ -189,17 +171,8 @@ function threadPage(root = createHistoryMessage("$thread-root", "thread root", 1
   });
 }
 
-function expectThreadRequest(
-  getRelations: ReturnType<typeof createMessagesClient>["getRelations"],
-  threadId: string,
-  limit: number,
-  from?: string,
-) {
-  expect(getRelations).toHaveBeenLastCalledWith(ROOM, threadId, "m.thread", undefined, {
-    dir: "b",
-    from,
-    limit,
-  });
+function threadRequest(threadId: string, limit: number, from?: string) {
+  return [ROOM, threadId, "m.thread", undefined, { dir: "b", from, limit }] as const;
 }
 
 describe("matrix message actions", () => {
@@ -209,40 +182,39 @@ describe("matrix message actions", () => {
     ).rejects.toThrow("Matrix edit requires content");
   });
 
-  it("routes edits through the shared Matrix edit helper so mentions are preserved", async () => {
-    installMatrixActionTestRuntime();
+  it.each([
+    {
+      name: "notifies only newly added mentions",
+      previous: ["@alice:example.org"],
+      text: "hello @alice:example.org and @bob:example.org",
+      notify: { user_ids: ["@bob:example.org"] },
+      users: ["@alice:example.org", "@bob:example.org"],
+    },
+    {
+      name: "does not re-notify legacy mentions",
+      previous: undefined,
+      text: "hello again @alice:example.org",
+      notify: {},
+      users: ["@alice:example.org"],
+    },
+  ])("$name when editing", async ({ previous, text, notify, users }) => {
     const { client, sendMessage } = createEditClient({
       body: "hello @alice:example.org",
-      "m.mentions": { user_ids: ["@alice:example.org"] },
+      ...(previous ? { "m.mentions": { user_ids: previous } } : {}),
     });
-
-    const result = await editMatrixMessage(
-      ROOM,
-      "$original",
-      "hello @alice:example.org and @bob:example.org",
-      { cfg: MATRIX_ACTION_TEST_CFG, client },
-    );
-
-    expect(result).toEqual({ eventId: "evt-edit" });
-    expectEdit(sendMessage, ["@bob:example.org"], {
-      "m.mentions": { user_ids: ["@alice:example.org", "@bob:example.org"] },
-    });
-  });
-
-  it("does not re-notify legacy mentions when action edits target pre-m.mentions messages", async () => {
-    installMatrixActionTestRuntime();
-    const { client, sendMessage } = createEditClient({ body: "hello @alice:example.org" });
-
-    const result = await editMatrixMessage(ROOM, "$original", "hello again @alice:example.org", {
+    const result = await editMatrixMessage(ROOM, "$original", text, {
       cfg: MATRIX_ACTION_TEST_CFG,
       client,
     });
-
     expect(result).toEqual({ eventId: "evt-edit" });
-    expectEdit(sendMessage, [], {
-      body: "hello again @alice:example.org",
-      "m.mentions": { user_ids: ["@alice:example.org"] },
-    });
+    expect(sendMessage).toHaveBeenNthCalledWith(
+      1,
+      ROOM,
+      expect.objectContaining({
+        "m.mentions": notify,
+        "m.new_content": expect.objectContaining({ body: text, "m.mentions": { user_ids: users } }),
+      }),
+    );
   });
 
   it.each([
@@ -321,9 +293,9 @@ describe("matrix message actions", () => {
 
     const result = await readHistory({ client });
 
-    expect(result.messages).toHaveLength(1);
-    expect(result.messages[0]?.eventId).toBe("$poll");
-    expect(result.messages[0]?.body).toContain("[Poll]");
+    expect(result.messages).toMatchObject([
+      { eventId: "$poll", body: expect.stringContaining("[Poll]") },
+    ]);
     expect(getEvent).toHaveBeenCalledTimes(2);
     expect(hydrateEvents).toHaveBeenNthCalledWith(1, ROOM, [encrypted]);
   });
@@ -372,9 +344,9 @@ describe("matrix message actions", () => {
 
     const result = await readHistory({ client });
 
-    expect(result.messages).toHaveLength(1);
-    expect(result.messages[0]).toMatchObject({ eventId: "$original", body: "winning tie" });
-    expect(result.messages[0]?.relatesTo).toBeUndefined();
+    expect(result.messages).toMatchObject([
+      { eventId: "$original", body: "winning tie", relatesTo: undefined },
+    ]);
   });
 
   it("ignores malformed and cross-sender Matrix replacements", async () => {
@@ -394,8 +366,7 @@ describe("matrix message actions", () => {
 
     const result = await readHistory({ client });
 
-    expect(result.messages).toHaveLength(1);
-    expect(result.messages[0]).toMatchObject({ eventId: "$original", body: "original text" });
+    expect(result.messages).toMatchObject([{ eventId: "$original", body: "original text" }]);
   });
 
   it("preserves a valid edit when its original is on another history page", async () => {
@@ -407,12 +378,13 @@ describe("matrix message actions", () => {
 
     const result = await readHistory({ client, after: "previous-page" });
 
-    expect(result.messages).toHaveLength(1);
-    expect(result.messages[0]).toMatchObject({
-      eventId: "$edit",
-      body: "cross-page final text",
-      relatesTo: { relType: "m.replace", eventId: "$original" },
-    });
+    expect(result.messages).toMatchObject([
+      {
+        eventId: "$edit",
+        body: "cross-page final text",
+        relatesTo: { relType: "m.replace", eventId: "$original" },
+      },
+    ]);
   });
 
   it("does not revive a redacted original through a replacement event", async () => {
@@ -439,12 +411,11 @@ describe("matrix message actions", () => {
         }),
       },
     };
-    const { client } = createMessagesClient({ chunk: [], pollRoot: threadRoot });
+    const { client } = createMessagesClient({ pollRoot: threadRoot });
 
     const result = await readHistory({ client, threadId: "$thread-root" });
 
-    expect(result.messages).toHaveLength(1);
-    expect(result.messages[0]).toMatchObject({ eventId: "$thread-root", body: "edited root" });
+    expect(result.messages).toMatchObject([{ eventId: "$thread-root", body: "edited root" }]);
   });
 
   it("filters Matrix thread events out of main-room reads", async () => {
@@ -481,7 +452,6 @@ describe("matrix message actions", () => {
 
   it("includes poll snapshots from threaded reads", async () => {
     const { client, getEvent, getRelations } = createMessagesClient({
-      chunk: [],
       pollRoot: createPollStartEvent({
         includeDisclosedKind: true,
         maxSelections: 1,
@@ -495,18 +465,13 @@ describe("matrix message actions", () => {
 
     const result = await readHistory({ client, threadId: "$thread-root", limit: 5 });
 
-    expect(getRelations).toHaveBeenCalledWith(ROOM, "$thread-root", "m.thread", undefined, {
-      dir: "b",
-      from: undefined,
-      limit: 5,
-    });
+    expect(getRelations).toHaveBeenCalledWith(...threadRequest("$thread-root", 5));
     expect(getEvent).toHaveBeenCalledWith(ROOM, "$poll");
     expect(result.messages[0]?.body).toContain("1. Apple (1 vote)");
   });
 
   it("does not summarize non-start poll events as thread roots", async () => {
     const { client, getRelations } = createMessagesClient({
-      chunk: [],
       pollRoot: createPollResponseEvent(),
       threadRelations: [
         createHistoryMessage("$thread-reply", "thread reply", 20, { threadId: "$vote" }),
@@ -515,20 +480,16 @@ describe("matrix message actions", () => {
 
     const result = await readHistory({ client, threadId: "$vote", limit: 5 });
 
-    expect(getRelations).toHaveBeenCalledWith(ROOM, "$vote", "m.thread", undefined, {
-      dir: "b",
-      from: undefined,
-      limit: 5,
-    });
+    expect(getRelations).toHaveBeenCalledWith(...threadRequest("$vote", 5));
     expect(result.messages.map((message) => message.eventId)).toEqual(["$thread-reply"]);
   });
 
   it("counts the thread root toward the requested first-page limit", async () => {
     const { client, doRequest, getEvent, getRelations } = threadPage();
 
-    const result = await readHistory({ client, threadId: "$thread-root", limit: 1 });
+    const result = await readThread(client);
 
-    expectThreadRequest(getRelations, "$thread-root", 1);
+    expect(getRelations).toHaveBeenLastCalledWith(...threadRequest("$thread-root", 1));
     expect(doRequest).not.toHaveBeenCalled();
     expect(getEvent).toHaveBeenCalledWith(ROOM, "$thread-root");
     expect(result.messages.map((message) => message.eventId)).toEqual(["$thread-root"]);
@@ -536,39 +497,27 @@ describe("matrix message actions", () => {
       expect.stringContaining("openclaw.matrix.thread-relations-start:"),
     );
 
-    const next = await readHistory({
-      client,
-      threadId: "$thread-root",
-      limit: 1,
-      before: result.nextBatch ?? undefined,
-    });
+    const next = await readThread(client, result.nextBatch ?? undefined);
 
-    expectThreadRequest(getRelations, "$thread-root", 1);
+    expect(getRelations).toHaveBeenLastCalledWith(...threadRequest("$thread-root", 1));
     expect(next.messages.map((message) => message.eventId)).toEqual(["$thread-reply"]);
   });
 
   it("forwards a noncanonical synthetic thread cursor as an opaque Matrix token", async () => {
     const firstPage = threadPage();
-    const first = await readHistory({
-      client: firstPage.client,
-      threadId: "$thread-root",
-      limit: 1,
-    });
+    const first = await readThread(firstPage.client);
     const cursor = first.nextBatch;
     if (!cursor) {
       throw new Error("Expected a synthetic thread cursor");
     }
     const nonCanonicalCursor = `${cursor}!`;
-    const nextPage = createMessagesClient({ chunk: [], threadRelations: [] });
+    const nextPage = createMessagesClient({});
 
-    await readHistory({
-      client: nextPage.client,
-      threadId: "$thread-root",
-      limit: 1,
-      before: nonCanonicalCursor,
-    });
+    await readThread(nextPage.client, nonCanonicalCursor);
 
-    expectThreadRequest(nextPage.getRelations, "$thread-root", 1, nonCanonicalCursor);
+    expect(nextPage.getRelations).toHaveBeenLastCalledWith(
+      ...threadRequest("$thread-root", 1, nonCanonicalCursor),
+    );
   });
 
   it("does not reserve first-page thread capacity for a redacted root", async () => {
@@ -578,9 +527,9 @@ describe("matrix message actions", () => {
       content: {},
     });
 
-    const result = await readHistory({ client, threadId: "$thread-root", limit: 1 });
+    const result = await readThread(client);
 
-    expectThreadRequest(getRelations, "$thread-root", 1);
+    expect(getRelations).toHaveBeenLastCalledWith(...threadRequest("$thread-root", 1));
     expect(doRequest).not.toHaveBeenCalled();
     expect(getEvent).toHaveBeenCalledWith(ROOM, "$thread-root");
     expect(result.messages.map((message) => message.eventId)).toEqual(["$thread-reply"]);
@@ -609,7 +558,7 @@ describe("matrix message actions", () => {
   ])(
     "names the cursor contract when the homeserver rejects a $page cursor",
     async ({ threadId, serverText, failure }) => {
-      const { client, doRequest, getRelations } = createMessagesClient({ chunk: [] });
+      const { client, doRequest, getRelations } = createMessagesClient({});
       (threadId ? getRelations : doRequest).mockRejectedValueOnce(failure);
 
       const error = await readHistory({ client, threadId, after: "$event-id" }).catch(
@@ -628,18 +577,18 @@ describe("matrix message actions", () => {
       500,
       JSON.stringify({ errcode: "M_UNKNOWN", error: "boom" }),
     );
-    const firstPage = createMessagesClient({ chunk: [] });
+    const firstPage = createMessagesClient({});
     firstPage.doRequest.mockRejectedValueOnce(serverError);
     await expect(readHistory({ client: firstPage.client })).rejects.toBe(serverError);
 
     const forbidden = buildHttpError(403, JSON.stringify({ errcode: "M_FORBIDDEN", error: "no" }));
-    const pagedRead = createMessagesClient({ chunk: [] });
+    const pagedRead = createMessagesClient({});
     pagedRead.doRequest.mockRejectedValueOnce(forbidden);
     await expect(readHistory({ client: pagedRead.client, before: "t1" })).rejects.toBe(forbidden);
   });
 
   it("rejects before and after together instead of paging one token in the other direction", async () => {
-    const { client, doRequest, getRelations } = createMessagesClient({ chunk: [] });
+    const { client, doRequest, getRelations } = createMessagesClient({});
 
     await expect(readHistory({ client, before: "t1", after: "t2" })).rejects.toThrow(
       "Matrix read accepts either before or after, not both.",

@@ -5,6 +5,7 @@ import { listMatrixEmojis, listMatrixReactions, removeMatrixReactions } from "./
 const ROOM = "!room:example.org";
 const REACTIONS_PATH =
   "/_matrix/client/v1/rooms/!room%3Aexample.org/relations/%24msg/m.annotation/m.reaction";
+type ReactionPage = { chunk: ReturnType<typeof reaction>[]; next_batch?: string };
 
 function emotePack(images: unknown, state_key = "", pack?: { usage: string[] }) {
   return { type: "im.ponies.room_emotes", state_key, content: { images, pack } };
@@ -22,21 +23,13 @@ function createReactionsClient(
   chunk: ReturnType<typeof reaction>[] = [],
   userId: string | null = null,
 ) {
-  const doRequest = vi
-    .fn<
-      (...args: [string, string, unknown]) => Promise<{
-        chunk: Array<Record<string, unknown>>;
-        next_batch?: string;
-      }>
-    >()
-    .mockResolvedValue({ chunk });
-  const getUserId = vi.fn(async () => userId);
+  const doRequest = vi.fn(async (): Promise<ReactionPage> => ({ chunk }));
   const redactEvent = vi.fn(async () => undefined);
 
   return {
     client: {
       doRequest,
-      getUserId,
+      getUserId: vi.fn(async () => userId),
       redactEvent,
       stop: vi.fn(),
     } as unknown as MatrixClient,
@@ -127,12 +120,9 @@ describe("matrix reaction actions", () => {
     );
     doRequest.mockResolvedValueOnce({ chunk: [], next_batch: "older-reactions" });
 
-    const result = await removeMatrixReactions(ROOM, "$msg", {
-      client,
-      emoji: "👍",
+    await expect(removeMatrixReactions(ROOM, "$msg", { client, emoji: "👍" })).resolves.toEqual({
+      removed: 1,
     });
-
-    expect(result).toEqual({ removed: 1 });
     expect(redactEvent).toHaveBeenCalledTimes(1);
     expect(redactEvent).toHaveBeenCalledWith(ROOM, "$1");
     expect(doRequest).toHaveBeenNthCalledWith(2, "GET", REACTIONS_PATH, {
@@ -170,9 +160,7 @@ describe("matrix reaction actions", () => {
       reaction("$1", "@me:example.org", "👍"),
     ]);
 
-    const result = await removeMatrixReactions(ROOM, "$msg", { client });
-
-    expect(result).toEqual({ removed: 0 });
+    await expect(removeMatrixReactions(ROOM, "$msg", { client })).resolves.toEqual({ removed: 0 });
     expect(redactEvent).not.toHaveBeenCalled();
   });
 
