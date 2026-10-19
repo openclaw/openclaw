@@ -66,17 +66,28 @@ test("abandonment fixture joins canceled startup and teardown before admitting a
   });
   const closeDatabase = vi.fn();
   const createTunnel = () => ({});
-  const modules: string[] = [];
-  const mock = (id: string, factory: Parameters<typeof vi.doMock>[1]) => {
-    modules.push(id);
-    vi.doMock(id, factory);
-  };
-  const expectBlocked = async (failed: boolean) => {
-    await expect(run!({ persisted: true, failed }, fixtureContext)).rejects.toThrow(
-      "Previous placement abandonment fixture",
-    );
-    expect(createState).toHaveBeenCalledTimes(1);
-  };
+  const modules = [
+    "vitest",
+    "node:child_process",
+    "../../scripts/lib/gateway-bench-child.js",
+    "../../scripts/lib/gateway-bench-probes.js",
+    "../../scripts/lib/managed-child-process.mts",
+    "../test-utils/openclaw-test-state.js",
+    "./test-helpers.e2e.js",
+    "./test-openai-responses-model.js",
+    "./worker-environments/node-worker-tunnel.js",
+    "./worker-environments/node-worker-tunnel.test-support.js",
+    "../agents/worktrees/registry.js",
+    "../config/sessions/archive-compression.js",
+    "../config/sessions/session-accessor.js",
+    "../state/openclaw-state-db.js",
+    "./session-utils.js",
+    "./worker-environments/placement-dispatch-test-fixtures.js",
+    "./worker-environments/placement-record.js",
+    "./worker-environments/placement-store.js",
+    "./worker-environments/placement-test-fixtures.js",
+    "./worker-environments/store.js",
+  ];
   return runQaGatewayTestFixture(
     context,
     async () => {
@@ -87,42 +98,42 @@ test("abandonment fixture joins canceled startup and teardown before admitting a
         run = callback;
       };
       // Load the real registered fixture body, supporting its pre-fix each registration too.
-      mock("vitest", () => ({ ...vitest, it: { each: collect, for: collect } }));
-      mock("node:child_process", async () => ({
+      vi.doMock("vitest", () => ({ ...vitest, it: { each: collect, for: collect } }));
+      vi.doMock("node:child_process", async () => ({
         ...(await vi.importActual<typeof import("node:child_process")>("node:child_process")),
         spawn,
       }));
-      mock("../../scripts/lib/gateway-bench-child.js", () => ({ stopChild }));
-      mock("../../scripts/lib/gateway-bench-probes.js", () => ({
+      vi.doMock("../../scripts/lib/gateway-bench-child.js", () => ({ stopChild }));
+      vi.doMock("../../scripts/lib/gateway-bench-probes.js", () => ({
         getFreePort: async () => 1,
       }));
-      mock("../../scripts/lib/managed-child-process.mts", async () => ({
+      vi.doMock("../../scripts/lib/managed-child-process.mts", async () => ({
         ...(await vi.importActual<typeof import("../../scripts/lib/managed-child-process.mts")>(
           "../../scripts/lib/managed-child-process.mts",
         )),
         inspectManagedProcessGroup: () => "dead",
       }));
-      mock("../test-utils/openclaw-test-state.js", () => ({
+      vi.doMock("../test-utils/openclaw-test-state.js", () => ({
         createOpenClawTestState: createState,
       }));
-      mock("./worker-environments/node-worker-tunnel.js", () => ({
+      vi.doMock("./worker-environments/node-worker-tunnel.js", () => ({
         createNodeWorkerTunnelManager: createTunnel,
       }));
-      mock("./worker-environments/node-worker-tunnel.test-support.js", () => ({
+      vi.doMock("./worker-environments/node-worker-tunnel.test-support.js", () => ({
         transport: () => ({
           getCurrentNode: async () => undefined,
           listCurrentNodes: async () => [],
           invoke: async () => ({ ok: true }),
         }),
       }));
-      mock("./test-openai-responses-model.js", () => ({
+      vi.doMock("./test-openai-responses-model.js", () => ({
         buildMockOpenAiResponsesProvider: () => ({
           modelRef: "fixture/model",
           providerId: "fixture",
           config: {},
         }),
       }));
-      mock("./test-helpers.e2e.js", () => ({
+      vi.doMock("./test-helpers.e2e.js", () => ({
         disconnectGatewayClient: disconnect,
         startGatewayWithClient: async () => {
           const tunnel = await import("./worker-environments/node-worker-tunnel.js");
@@ -134,32 +145,37 @@ test("abandonment fixture joins canceled startup and teardown before admitting a
           return { client: {}, port: 2, server: { startupSettled: Promise.resolve(), close } };
         },
       }));
-      mock("../state/openclaw-state-db.js", () => ({
+      vi.doMock("../state/openclaw-state-db.js", () => ({
         closeOpenClawStateDatabaseAsync: async () => {},
         closeOpenClawStateDatabaseForTest: closeDatabase,
         openOpenClawStateDatabase: vi.fn(),
       }));
       // Cancellation must fence seeding/RPC work after late startup returns.
-      for (const [id, name] of [
-        ["../agents/worktrees/registry.js", "insertRegistryWorktree"],
-        ["../config/sessions/archive-compression.js", "readSessionArchiveContentSync"],
-        ["../config/sessions/session-accessor.js", "upsertSessionEntryCore"],
-        ["./session-utils.js", "loadGatewaySessionEntryReadOnlyAsync"],
-        ["./worker-environments/placement-store.js", "createWorkerSessionPlacementStore"],
-        ["./worker-environments/placement-test-fixtures.js", "seedAttachedPlacementEnvironment"],
-        ["./worker-environments/store.js", "createWorkerEnvironmentStore"],
+      for (const [id, names] of [
+        ["../agents/worktrees/registry.js", ["insertRegistryWorktree"]],
+        ["../config/sessions/archive-compression.js", ["readSessionArchiveContentSync"]],
+        ["../config/sessions/session-accessor.js", ["upsertSessionEntryCore"]],
+        ["./session-utils.js", ["loadGatewaySessionEntryReadOnlyAsync"]],
+        ["./worker-environments/placement-store.js", ["createWorkerSessionPlacementStore"]],
+        ["./worker-environments/placement-test-fixtures.js", ["seedAttachedPlacementEnvironment"]],
+        ["./worker-environments/store.js", ["createWorkerEnvironmentStore"]],
       ] as const) {
-        mock(id, () => ({
-          [name]: () => {
-            throw new Error("canceled fixture reached " + name);
-          },
-        }));
+        vi.doMock(id, () =>
+          Object.fromEntries(
+            names.map((name) => [
+              name,
+              () => {
+                throw new Error("canceled fixture reached " + name);
+              },
+            ]),
+          ),
+        );
       }
-      mock("./worker-environments/placement-dispatch-test-fixtures.js", () => ({
+      vi.doMock("./worker-environments/placement-dispatch-test-fixtures.js", () => ({
         REQUEST: { sessionId: "session-1", sessionKey: "agent:main:session-1", agentId: "main" },
         seedActivePlacement: vi.fn(),
       }));
-      mock("./worker-environments/placement-record.js", () => ({
+      vi.doMock("./worker-environments/placement-record.js", () => ({
         FORCED_WORKER_ABANDONMENT_ERROR: "abandoned",
       }));
       vi.stubGlobal(
@@ -175,16 +191,18 @@ test("abandonment fixture joins canceled startup and teardown before admitting a
       await importing;
       expect(run).toBeTypeOf("function");
       expect(timeout).toBe(90_000);
-      body = run!({ persisted: false, failed: false }, fixtureContext)
-        .catch((error: unknown) => {
+      body = run!({ persisted: false, failed: false }, fixtureContext).then(
+        () => {
+          bodyFinished = true;
+        },
+        (error: unknown) => {
+          bodyFinished = true;
           if (error !== cancellation) {
             throw error;
           }
           return error;
-        })
-        .finally(() => {
-          bodyFinished = true;
-        });
+        },
+      );
       const firstPhase = await Promise.race([
         startupEntered.promise.then(() => "startup" as const),
         cleanupEntered.promise.then(() => "cleanup" as const),
@@ -199,12 +217,19 @@ test("abandonment fixture joins canceled startup and teardown before admitting a
       expect(spawn).toHaveBeenCalledTimes(1);
       cancel.abort(cancellation);
       expect(finishers).toHaveLength(1);
-      finishing = Promise.resolve(finishers[0]!(fixtureContext))
-        .catch((error: unknown) => error)
-        .finally(() => {
+      finishing = Promise.resolve(finishers[0]!(fixtureContext)).then(
+        () => {
           hookFinished = true;
-        });
-      await expectBlocked(false);
+        },
+        (error: unknown) => {
+          hookFinished = true;
+          return error;
+        },
+      );
+      await expect(run!({ persisted: true, failed: false }, fixtureContext)).rejects.toThrow(
+        "Previous placement abandonment fixture",
+      );
+      expect(createState).toHaveBeenCalledTimes(1);
       expect(spawn).toHaveBeenCalledTimes(1);
       expect(close).not.toHaveBeenCalled();
       expect(hookFinished).toBe(false);
@@ -222,13 +247,18 @@ test("abandonment fixture joins canceled startup and teardown before admitting a
       // the finish hook would allow this callback to satisfy the 90-second timer.
       expect(bodyFinished).toBe(false);
       expect(hookFinished).toBe(false);
-      await expectBlocked(true);
+      await expect(run!({ persisted: true, failed: true }, fixtureContext)).rejects.toThrow(
+        "Previous placement abandonment fixture",
+      );
+      expect(createState).toHaveBeenCalledTimes(1);
       releaseCleanup.resolve();
       expect(await body).toBe(cancellation);
       expect(await finishing).toBeUndefined();
-      for (const cleanup of [disconnect, close, stopChild, closeDatabase, state.cleanup]) {
-        expect(cleanup).toHaveBeenCalledTimes(1);
-      }
+      expect(disconnect).toHaveBeenCalledTimes(1);
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(stopChild).toHaveBeenCalledTimes(1);
+      expect(closeDatabase).toHaveBeenCalledTimes(1);
+      expect(state.cleanup).toHaveBeenCalledTimes(1);
       const tunnel = await import("./worker-environments/node-worker-tunnel.js");
       expect(tunnel.createNodeWorkerTunnelManager).toBe(createTunnel);
     },
