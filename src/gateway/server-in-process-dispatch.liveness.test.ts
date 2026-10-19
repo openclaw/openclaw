@@ -9,7 +9,7 @@ import {
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
 import {
-  BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
+  BLOCKED_TOOL_CALL_ABORT_FLOOR_MS as recoveryMs,
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticEmbeddedRunStarted,
   resetDiagnosticRunActivityForTest,
@@ -27,15 +27,12 @@ const ref = { sessionId: "gateway-wait", sessionKey: "agent:main:gateway-wait" }
 const result = { content: [], details: { status: "ok" } };
 const cleanupGates: (() => void)[] = [];
 const pendingWork: Promise<unknown>[] = [];
-const handlers = new Map<string, (options: GatewayRequestOptions) => Promise<void>>();
 const startedAt = Date.parse("2026-09-20T00:00:00Z");
 const snapshot = () => getDiagnosticSessionActivitySnapshot(ref);
 
 function expectDeadline(minutes?: number) {
   expect(snapshot().activeToolDeadlineAtMs).toBe(
-    minutes === undefined
-      ? undefined
-      : startedAt + minutes * 60_000 + BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
+    minutes === undefined ? undefined : startedAt + minutes * 60_000 + recoveryMs,
   );
 }
 
@@ -45,8 +42,13 @@ function completionGate() {
   return gate;
 }
 
-function startNestedTool(execute: () => Promise<unknown>, runId = "current-run", owned = true) {
-  const finished = createDeferred();
+function startNestedTool(
+  requests: ReturnType<typeof pendingRequest>[],
+  runId = "current-run",
+  owned = true,
+  captureError = false,
+) {
+  const finished = createDeferred<unknown[]>();
   const finish = completionGate();
   if (owned) {
     markDiagnosticEmbeddedRunStarted({ ...ref, runId });
@@ -57,8 +59,17 @@ function startNestedTool(execute: () => Promise<unknown>, runId = "current-run",
       { ...ref, runId },
     );
   const inner = wrap("crabbox", async () => {
-    await execute();
-    finished.resolve();
+    const responses: Promise<unknown>[] = [];
+    for (const request of requests) {
+      responses.push(request.call());
+      // Admit siblings only after the manual mock loader's import has settled.
+      await request.entered;
+    }
+    finished.resolve(
+      await Promise.all(
+        responses.map((response) => (captureError ? response.catch((error) => error) : response)),
+      ),
+    );
     await finish.promise;
     return result;
   });
@@ -66,6 +77,7 @@ function startNestedTool(execute: () => Promise<unknown>, runId = "current-run",
   const execution = outer.execute("outer", {});
   pendingWork.push(execution);
   return {
+    ready: Promise.all(requests.map((request) => request.entered)),
     finished: finished.promise,
     stop: async () => {
       finish.resolve();
@@ -74,19 +86,15 @@ function startNestedTool(execute: () => Promise<unknown>, runId = "current-run",
   };
 }
 
-function pendingRequest(
-  method: string,
-  timeoutMs?: number,
-  signal?: AbortSignal,
-  expectFinal = false,
-) {
+function pendingRequest(method: string, timeout?: number, signal?: AbortSignal, final = false) {
   const entered = createDeferred();
   const completed = completionGate();
   const settled = createDeferred();
   let response: Promise<unknown> | undefined;
-  handlers.set(method, async (options) => {
+  handleGatewayRequest.mockImplementationOnce(async (options: GatewayRequestOptions) => {
+    expect(options.req.method).toBe(method);
     entered.resolve();
-    if (expectFinal) {
+    if (final) {
       options.respond(true, { status: "accepted" });
     }
     try {
@@ -111,9 +119,9 @@ function pendingRequest(
         {
           client: null,
           context: { trackExecution: trackAsyncWork } as GatewayRequestContext,
-          timeoutMs,
+          timeoutMs: timeout,
           signal,
-          expectFinal,
+          expectFinal: final,
           onExecution: (execution) => {
             pendingWork.push(execution);
           },
@@ -130,13 +138,6 @@ beforeEach(() => {
   vi.setSystemTime(startedAt);
   setDiagnosticsEnabledForProcess(true);
   startDiagnosticRunActivityTracking();
-  handleGatewayRequest.mockImplementation((options: GatewayRequestOptions) => {
-    const handler = handlers.get(options.req.method);
-    if (!handler) {
-      throw new Error(`Unexpected method: ${options.req.method}`);
-    }
-    return handler(options);
-  });
 });
 
 afterEach(async () => {
@@ -150,7 +151,6 @@ afterEach(async () => {
   resetDiagnosticRunActivityForTest();
   resetDiagnosticEventsForTest();
   handleGatewayRequest.mockReset();
-  handlers.clear();
   vi.useRealTimers();
 });
 
@@ -164,16 +164,16 @@ describe("nested tool Gateway response deadlines", () => {
     "tracks recovery allowance for a %s",
     async (_name, timeoutMs, owned, expectFinal) => {
       const request = pendingRequest("environments.create", timeoutMs, undefined, expectFinal);
-      const tool = startNestedTool(request.call, "current-run", owned);
-      await request.entered;
-      await vi.advanceTimersByTimeAsync(BLOCKED_TOOL_CALL_ABORT_FLOOR_MS + 1);
+      const tool = startNestedTool([request], "current-run", owned);
+      await tool.ready;
+      await vi.advanceTimersByTimeAsync(recoveryMs + 1);
       const activity = snapshot();
       if (owned && timeoutMs !== undefined) {
         expect(activity).toMatchObject({
           activeToolName: "dispatch_action",
           activeToolCallId: "outer",
-          activeToolAgeMs: BLOCKED_TOOL_CALL_ABORT_FLOOR_MS + 1,
-          activeToolDeadlineAtMs: startedAt + timeoutMs + BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
+          activeToolAgeMs: recoveryMs + 1,
+          activeToolDeadlineAtMs: startedAt + timeoutMs + recoveryMs,
         });
         expect(activity.lastProgressAgeMs).toBeLessThan(resolveRunStaleThresholdMs(activity));
       } else {
@@ -181,7 +181,6 @@ describe("nested tool Gateway response deadlines", () => {
         expect(activity.lastProgressAgeMs).toBeGreaterThan(resolveRunStaleThresholdMs(activity));
       }
       request.completed.resolve();
-      await tool.finished;
       await tool.stop();
       await waitForDiagnosticEventsDrained();
       expectDeadline();
@@ -195,15 +194,8 @@ describe("nested tool Gateway response deadlines", () => {
         long: pendingRequest("long", 30 * 60_000),
         short: pendingRequest("short", 20 * 60_000),
       };
-      const tool = startNestedTool(async () => {
-        // Vitest's manual mock loader cannot resolve concurrent router imports.
-        // Admit the sibling after import settles, with both responses still pending.
-        const calls = [requests.long.call()];
-        await requests.long.entered;
-        calls.push(requests.short.call());
-        await Promise.all(calls);
-      });
-      await Promise.all([requests.long.entered, requests.short.entered]);
+      const tool = startNestedTool([requests.long, requests.short]);
+      await tool.ready;
       expectDeadline(30);
 
       await requests[first].finish();
@@ -224,11 +216,10 @@ describe("nested tool Gateway response deadlines", () => {
     async (ending) => {
       const controller = new AbortController();
       const request = pendingRequest("environments.create", 20 * 60_000, controller.signal);
-      const failed = createDeferred<unknown>();
       const handlerSettled = vi.fn();
       void request.settled.promise.then(handlerSettled);
-      const tool = startNestedTool(() => request.call().catch(failed.resolve));
-      await request.entered;
+      const tool = startNestedTool([request], "current-run", true, true);
+      await tool.ready;
       expect(snapshot().activeToolDeadlineAtMs).toBeDefined();
       if (ending === "cancel") {
         controller.abort(new Error("stop waiting"));
@@ -237,7 +228,7 @@ describe("nested tool Gateway response deadlines", () => {
       } else {
         request.completed.reject(new Error("handler failed"));
       }
-      expect(await failed.promise).toBeInstanceOf(Error);
+      expect((await tool.finished)[0]).toBeInstanceOf(Error);
       expectDeadline();
       if (ending !== "error") {
         expect(handlerSettled).not.toHaveBeenCalled();
@@ -251,15 +242,15 @@ describe("nested tool Gateway response deadlines", () => {
   it("uses only the current run's waits when a prior run still has a longer pending request", async () => {
     const previous = pendingRequest("previous", 40 * 60_000);
     const current = pendingRequest("current", 20 * 60_000);
-    const oldTool = startNestedTool(previous.call, "previous-run");
-    await previous.entered;
-    const tool = startNestedTool(current.call);
-    await current.entered;
+    const oldTool = startNestedTool([previous], "previous-run");
+    await oldTool.ready;
+    const tool = startNestedTool([current]);
+    await tool.ready;
     expectDeadline(20);
 
     current.completed.resolve();
     await tool.finished;
-    await vi.advanceTimersByTimeAsync(BLOCKED_TOOL_CALL_ABORT_FLOOR_MS + 1);
+    await vi.advanceTimersByTimeAsync(recoveryMs + 1);
     const activity = snapshot();
     expectDeadline();
     expect(activity.lastProgressAgeMs).toBeGreaterThan(resolveRunStaleThresholdMs(activity));

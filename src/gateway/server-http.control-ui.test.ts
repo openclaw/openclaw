@@ -1,7 +1,7 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import nodePath from "node:path";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { saveMediaBuffer } from "../media/store.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
@@ -17,7 +17,7 @@ type ServerOptions = Parameters<typeof withGatewayServer>[0];
 type Check = (
   path: string,
   status: number,
-  options?: Omit<Request, "path">,
+  options?: Omit<Request, "path"> & { body?: unknown },
 ) => ReturnType<typeof sendRequest>;
 
 function withUiServer(
@@ -30,9 +30,12 @@ function withUiServer(
     resolvedAuth,
     overrides: { controlUiEnabled: true, controlUiBasePath: "", ...overrides },
     run: async (server) =>
-      run(async (path, status, options = {}) => {
+      run(async (path, status, { body, ...options } = {}) => {
         const response = await sendRequest(server, { path, ...options });
         expect(response.res.statusCode, `${options.method ?? "GET"} ${path}`).toBe(status);
+        if (body !== undefined) {
+          expect(response.getBody()).toEqual(body);
+        }
         return response;
       }),
   });
@@ -41,11 +44,10 @@ function withUiServer(
 function withUiRoot(
   run: (check: Check, root: string) => Promise<void>,
   configure: (root: string) => ServerOptions["overrides"] | Promise<ServerOptions["overrides"]>,
-  html = "<html>synthetic UI</html>\n",
 ) {
   return withTempDir("openclaw-http-ui-", async (directory) => {
     const root = await fs.realpath(directory);
-    await fs.writeFile(nodePath.join(root, "index.html"), html);
+    await fs.writeFile(nodePath.join(root, "index.html"), "<html>spa fallback</html>\n");
     await fs.mkdir(nodePath.join(root, "assets"));
     await fs.writeFile(nodePath.join(root, "assets", "app.js"), "// synthetic asset\n");
     await withUiServer((check) => run(check, root), {
@@ -58,76 +60,66 @@ function withUiRoot(
 it.each([
   { basePath: "", enabled: true },
   { basePath: "/console/", enabled: false },
-])(
-  "keeps authenticated media available at $basePath with dashboard enabled=$enabled",
-  async ({ basePath, enabled }) => {
-    await withUiServer(
-      async (check) => {
-        const base = basePath.replace(/\/$/, "");
-        const media = await saveMediaBuffer(
-          createSolidPngBuffer(4, 2, { r: 24, g: 64, b: 128 }),
-          "image/png",
-        );
-        const query = new URLSearchParams({ meta: "1", source: `media://inbound/${media.id}` });
-        const mediaPath = `${base}/__openclaw__/assistant-media?${query}`;
-        for (const [method, path] of [
-          ["GET", mediaPath],
-          ["POST", `${mediaPath}&allow=1`],
-        ] as const) {
-          await check(path, 401, { method });
-        }
-        const metadata = await check(mediaPath, 200, {
-          authorization: `Bearer ${AUTH_TOKEN.token}`,
-        });
-        expect(JSON.parse(metadata.getBody())).toMatchObject({
-          available: true,
-          mimeType: "image/png",
-          mediaTicket: expect.any(String),
-        });
-        await check(`${base}/avatar/main?meta=1`, enabled ? 401 : 404);
-        if (!enabled) {
-          await check(`${base}/`, 404);
-        }
-      },
-      { controlUiEnabled: enabled, controlUiBasePath: basePath },
-      AUTH_TOKEN,
-    );
-  },
+])("authenticates media at $basePath with UI enabled=$enabled", ({ basePath, enabled }) =>
+  withUiServer(
+    async (check) => {
+      const base = basePath.replace(/\/$/, "");
+      const media = await saveMediaBuffer(
+        createSolidPngBuffer(4, 2, { r: 24, g: 64, b: 128 }),
+        "image/png",
+      );
+      const query = new URLSearchParams({ meta: "1", source: `media://inbound/${media.id}` });
+      const mediaPath = `${base}/__openclaw__/assistant-media?${query}`;
+      for (const [method, path] of [
+        ["GET", mediaPath],
+        ["POST", `${mediaPath}&allow=1`],
+      ] as const) {
+        await check(path, 401, { method });
+      }
+      const metadata = await check(mediaPath, 200, {
+        authorization: `Bearer ${AUTH_TOKEN.token}`,
+      });
+      expect(JSON.parse(metadata.getBody())).toMatchObject({
+        available: true,
+        mimeType: "image/png",
+        mediaTicket: expect.any(String),
+      });
+      await check(`${base}/avatar/main?meta=1`, enabled ? 401 : 404);
+      if (!enabled) {
+        await check(`${base}/`, 404);
+      }
+    },
+    { controlUiEnabled: enabled, controlUiBasePath: basePath },
+    AUTH_TOKEN,
+  ),
 );
 
-it("keeps the root UI POST rejection ahead of the startup fallback", async () => {
-  await withUiServer(
+it("rejects UI POST before startup fallback", () =>
+  withUiServer(
     async (check) => {
-      const response = await check("/ui", 404, { method: "POST" });
-      expect(response.getBody()).toBe("Not Found");
+      const response = await check("/ui", 404, { method: "POST", body: "Not Found" });
       expect(response.setHeader).toHaveBeenCalledWith(
         "Permissions-Policy",
         "camera=(self), microphone=*, geolocation=*, clipboard-write=*",
       );
     },
     { isStartupPluginRuntimeReady: () => false },
-  );
-});
+  ));
 
-it.each(["", "/console/"])(
-  "leaves unclaimed media writes to startup at base %j",
-  async (basePath) => {
-    await withUiServer(
-      async (check) => {
-        const base = basePath.replace(/\/$/, "");
-        for (const query of ["meta=1", "allow=1", "meta=1&allow=0"]) {
-          const response = await check(
-            `${base}/__openclaw__/assistant-media?${query}&source=missing.png`,
-            503,
-            { method: "POST" },
-          );
-          expect(response.getBody()).toBe("Plugin runtime is starting");
-        }
-      },
-      { controlUiBasePath: basePath, isStartupPluginRuntimeReady: () => false },
-      AUTH_TOKEN,
-    );
-  },
+it.each(["", "/console/"])("leaves unclaimed media writes to startup at base %j", (basePath) =>
+  withUiServer(
+    async (check) => {
+      const base = basePath.replace(/\/$/, "");
+      for (const query of ["meta=1", "allow=1", "meta=1&allow=0"]) {
+        await check(`${base}/__openclaw__/assistant-media?${query}&source=missing.png`, 503, {
+          method: "POST",
+          body: "Plugin runtime is starting",
+        });
+      }
+    },
+    { controlUiBasePath: basePath, isStartupPluginRuntimeReady: () => false },
+    AUTH_TOKEN,
+  ),
 );
 
 it("applies dashboard enablement to subsequent requests without replacing the listener", async () => {
@@ -149,47 +141,42 @@ it("applies dashboard enablement to subsequent requests without replacing the li
   );
 });
 
-it("keeps assets independent of identity reads while documents and bootstrap resolve identity", async () => {
-  await withUiRoot(
+it("resolves identity for documents and bootstrap, not assets", () =>
+  withUiRoot(
     async (check, workspace) => {
       const identityRuntime = await import("../agents/identity-file-runtime.js");
       const prepareIdentity = vi.spyOn(identityRuntime, "prepareIdentityFile");
       const realpath = vi.spyOn(fsSync, "realpathSync");
-      const identityReads = () =>
-        realpath.mock.calls.filter(([file]) => nodePath.basename(String(file)) === "IDENTITY.md");
-      try {
-        for (const method of ["GET", "HEAD"]) {
-          const response = await check("/assets/app.js", 200, { method });
-          if (method === "HEAD") {
-            expect(response.getBody()).toBe("");
-          }
-        }
-        expect(identityReads()).toHaveLength(0);
-        expect(prepareIdentity).not.toHaveBeenCalled();
-
-        for (const path of ["/", "/chat"]) {
-          const response = await check(path, 200);
-          for (const fragment of [
-            'data-openclaw-bootstrap-config="',
-            "&quot;assistantAgentId&quot;:&quot;research&quot;",
-            "&quot;assistantName&quot;:&quot;Synthetic assistant&quot;",
-          ]) {
-            expect(response.getBody()).toContain(fragment);
-          }
-          expect(response.setHeader).toHaveBeenCalledWith("Cache-Control", "private, no-store");
-        }
-
-        const bootstrap = await check("/control-ui-config.json", 200);
-        expect(JSON.parse(bootstrap.getBody())).toMatchObject({
-          assistantAgentId: "research",
-          assistantName: "Synthetic assistant",
-        });
-        expect(prepareIdentity).toHaveBeenCalledWith(nodePath.join(workspace, "IDENTITY.md"));
-        expect(identityReads()).toHaveLength(0);
-      } finally {
+      onTestFinished(() => {
         prepareIdentity.mockRestore();
         realpath.mockRestore();
+      });
+      const identityReads = () =>
+        realpath.mock.calls.filter(([file]) => nodePath.basename(String(file)) === "IDENTITY.md");
+      await check("/assets/app.js", 200);
+      await check("/assets/app.js", 200, { method: "HEAD", body: "" });
+      expect(identityReads()).toHaveLength(0);
+      expect(prepareIdentity).not.toHaveBeenCalled();
+
+      for (const path of ["/", "/chat"]) {
+        const response = await check(path, 200);
+        for (const fragment of [
+          'data-openclaw-bootstrap-config="',
+          "&quot;assistantAgentId&quot;:&quot;research&quot;",
+          "&quot;assistantName&quot;:&quot;Synthetic assistant&quot;",
+        ]) {
+          expect(response.getBody()).toContain(fragment);
+        }
+        expect(response.setHeader).toHaveBeenCalledWith("Cache-Control", "private, no-store");
       }
+
+      const bootstrap = await check("/control-ui-config.json", 200);
+      expect(JSON.parse(bootstrap.getBody())).toMatchObject({
+        assistantAgentId: "research",
+        assistantName: "Synthetic assistant",
+      });
+      expect(prepareIdentity).toHaveBeenCalledWith(nodePath.join(workspace, "IDENTITY.md"));
+      expect(identityReads()).toHaveLength(0);
     },
     async (workspace) => {
       await fs.writeFile(nodePath.join(workspace, "IDENTITY.md"), "- Name: Synthetic assistant\n");
@@ -203,28 +190,18 @@ it("keeps assets independent of identity reads while documents and bootstrap res
         }),
       };
     },
-  );
-});
-it("serves marketplace browser reads while preserving plugin HTTP boundaries", async () => {
-  await withUiRoot(
+  ));
+it("serves marketplace documents without claiming plugin HTTP routes", () =>
+  withUiRoot(
     async (check) => {
-      const browserRequest = (path: string, status: number, method = "GET", accept = "text/html") =>
-        check(path, status, { method, headers: { accept } });
-      const documentPaths = [
-        "/plugins",
-        "/plugins/",
-        "/plugins/ch_bWF0cml4",
-        "/plugins/local_bWVtb3J5",
-      ];
+      const browserRequest: Check = (path, status, options) =>
+        check(path, status, { headers: { accept: "text/html" }, ...options });
+      const documentPaths = ["", "/", "/ch_bWF0cml4", "/local_bWVtb3J5"].map(
+        (path) => `/plugins${path}`,
+      );
       for (const pathname of documentPaths) {
-        for (const method of ["GET", "HEAD"]) {
-          const { getBody } = await browserRequest(pathname, 200, method);
-          if (method === "GET") {
-            expect(getBody()).toContain("spa fallback");
-          } else {
-            expect(getBody()).toBe("");
-          }
-        }
+        await browserRequest(pathname, 200, { body: expect.stringContaining("spa fallback") });
+        await browserRequest(pathname, 200, { method: "HEAD", body: "" });
       }
       for (const [path, method, accept] of [
         ...documentPaths.flatMap((pathname) => [
@@ -236,13 +213,12 @@ it("serves marketplace browser reads while preserving plugin HTTP boundaries", a
           (pathname) => [pathname, "GET", "text/html"] as const,
         ),
       ]) {
-        const { getBody } = await browserRequest(path, 404, method, accept);
-        expect(getBody()).toBe("Not Found");
+        await browserRequest(path, 404, { method, headers: { accept }, body: "Not Found" });
       }
-      const plugin = await browserRequest("/plugins/webhook", 202);
-      expect(plugin.getBody()).toBe("plugin response");
-      const pluginManager = await browserRequest("/settings/plugins", 200);
-      expect(pluginManager.getBody()).toContain("spa fallback");
+      await browserRequest("/plugins/webhook", 202, { body: "plugin response" });
+      await browserRequest("/settings/plugins", 200, {
+        body: expect.stringContaining("spa fallback"),
+      });
     },
     () => ({
       handlePluginRequest: async (req, res) => {
@@ -256,6 +232,4 @@ it("serves marketplace browser reads while preserving plugin HTTP boundaries", a
       shouldEnforcePluginGatewayAuth: () => false,
       isStartupPluginRuntimeReady: () => true,
     }),
-    "<html>spa fallback</html>\n",
-  );
-});
+  ));

@@ -28,11 +28,23 @@ vi.mock("../commands/agent.js", () => ({
 
 const PNG_IMAGE_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+const PNG_PREFIX = "data:image/png;base64,";
 
 const endpoints = ["chatCompletions", "responses"] as const;
 const routes = { chatCompletions: "/v1/chat/completions", responses: "/v1/responses" };
 
-function mediaBody(path: string, content: unknown[], stream?: boolean) {
+type Kind = "image" | "file";
+function mediaBody(path: string, urls: string[], stream?: boolean, kind: Kind = "image") {
+  const content = urls.map((url) =>
+    path === routes.chatCompletions
+      ? { type: "image_url", image_url: { url } }
+      : {
+          type: kind === "image" ? "input_image" : "input_file",
+          source: url.startsWith(PNG_PREFIX)
+            ? { type: "base64", media_type: "image/png", data: url.slice(PNG_PREFIX.length) }
+            : { type: "url", url },
+        },
+  );
   return {
     model: "openclaw/main",
     ...(stream === undefined ? {} : { stream }),
@@ -47,9 +59,7 @@ const requestHeaders = {
   "content-type": "application/json",
 };
 
-function publishConfig(config: OpenClawConfig) {
-  setRuntimeConfigSnapshot(config, config);
-}
+const publishConfig = (config: OpenClawConfig) => setRuntimeConfigSnapshot(config, config);
 
 it.each(endpoints)("hot reloads %s routes on the same server", async (endpoint) => {
   const path = routes[endpoint];
@@ -76,7 +86,6 @@ it.each(endpoints)("hot reloads %s routes on the same server", async (endpoint) 
         ]) {
           const { res, getBody } = await sendRequest(server, {
             path: requestPath,
-            method: "GET",
             headers: { "x-openclaw-scopes": "operator.read" },
           });
           const isModels = requestPath.startsWith("/v1/models");
@@ -100,14 +109,7 @@ it.each(endpoints)("hot reloads %s routes on the same server", async (endpoint) 
 it.each(endpoints)("hot reloads %s image limits for real HTTP requests", async (endpoint) => {
   const path = routes[endpoint];
   vi.mocked(agentCommandFromGatewayIngress).mockClear();
-  const image =
-    endpoint === "chatCompletions"
-      ? { type: "image_url", image_url: { url: `data:image/png;base64,${PNG_IMAGE_BASE64}` } }
-      : {
-          type: "input_image",
-          source: { type: "base64", media_type: "image/png", data: PNG_IMAGE_BASE64 },
-        };
-  const body = JSON.stringify(mediaBody(path, [image]));
+  const body = JSON.stringify(mediaBody(path, [`${PNG_PREFIX}${PNG_IMAGE_BASE64}`]));
   await withGatewayServer({
     prefix: "openai-compat-image-limit-reload",
     resolvedAuth: AUTH_TOKEN,
@@ -144,53 +146,38 @@ it.each(endpoints)("hot reloads %s image limits for real HTTP requests", async (
 
 const IMAGE_BYTES = Buffer.from(PNG_IMAGE_BASE64, "base64");
 const SOURCE_ORIGIN = "https://cdn.example.com";
+const SOURCE_URLS = ["first", "second"].map((name) => `${SOURCE_ORIGIN}/${name}`);
 const inputCases = [
   { name: "chat image", path: "/v1/chat/completions", kind: "image" },
   { name: "response image", path: "/v1/responses", kind: "image" },
   { name: "response file", path: "/v1/responses", kind: "file" },
 ] as const;
-
-function requestBody(input: { path: string; kind: "image" | "file" }, stream: boolean) {
-  const urls = ["first", "second"].map((name) => `${SOURCE_ORIGIN}/${name}`);
-  return mediaBody(
-    input.path,
-    urls.map((url) =>
-      input.path === "/v1/chat/completions"
-        ? { type: "image_url", image_url: { url } }
-        : {
-            type: input.kind === "image" ? "input_image" : "input_file",
-            source: { type: "url", url },
-          },
-    ),
-    stream,
-  );
-}
+const phases = [
+  ["complete", false],
+  ["complete", true],
+  ["before headers", false],
+  ["during body", false],
+  ["policy changed", false],
+] as const;
 
 it.each(
-  inputCases.flatMap(({ name, path, kind }) =>
-    (["complete", "before headers", "during body", "policy changed"] as const).flatMap((phase) =>
-      (phase === "complete" ? [false, true] : [false]).map((stream) => ({
-        name,
-        path,
-        kind,
-        stream,
-        phase,
-      })),
-    ),
+  inputCases.flatMap((input) =>
+    phases.map(([phase, stream]) => Object.assign({}, input, { phase, stream })),
   ),
-)("$name stream=$stream: $phase", async (testCase) => {
+)("$name stream=$stream: $phase", async ({ path, kind, stream, phase }) => {
   const initialRoots = getActiveGatewayRootWorkCount();
   const firstStarted = createDeferredCore();
   const firstHeaders = createDeferredCore();
   const requestClosed = createDeferredCore();
   const requestedSources: string[] = [];
-  const bytes = testCase.kind === "image" ? IMAGE_BYTES : Buffer.from("fixture file text");
+  const bytes = kind === "image" ? IMAGE_BYTES : Buffer.from("fixture file text");
+  const complete = phase === "complete";
   let firstResponse: ServerResponse | undefined;
   let firstCanceled = false;
   const upstream = http.createServer((req, res) => {
     requestedSources.push(req.url ?? "");
-    res.setHeader("Content-Type", testCase.kind === "image" ? "image/png" : "text/plain");
-    if (req.url !== "/first" || testCase.phase === "complete") {
+    res.setHeader("Content-Type", kind === "image" ? "image/png" : "text/plain");
+    if (req.url !== "/first" || complete) {
       res.end(bytes);
       return;
     }
@@ -198,13 +185,12 @@ it.each(
     res.once("close", () => {
       firstCanceled = !res.writableFinished;
     });
-    if (testCase.phase === "during body") {
+    if (phase === "during body") {
       res.write(bytes.subarray(0, 4));
     }
     firstStarted.resolve();
   });
   const upstreamOrigin = await listen(upstream);
-  // Remap only the fixture origin; actual Undici owns request/body cancellation.
   const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : input.toString());
     if (url.origin !== SOURCE_ORIGIN) {
@@ -223,32 +209,27 @@ it.each(
       resolvedAuth: AUTH_TOKEN,
       overrides: { openAiChatCompletionsEnabled: true, openResponsesEnabled: true },
       run: async (server) => {
+        const mediaEndpoints = {
+          chatCompletions: { images: { allowUrl: true } },
+          responses: { images: { allowUrl: true }, files: { allowUrl: true } },
+        };
         const config: OpenClawConfig = {
           agents: { entries: { main: {} } },
-          gateway: {
-            http: {
-              endpoints: {
-                chatCompletions: { images: { allowUrl: true } },
-                responses: { images: { allowUrl: true }, files: { allowUrl: true } },
-              },
-            },
-          },
+          gateway: { http: { endpoints: mediaEndpoints } },
         };
         publishConfig(config);
         server.on("request", (_req, res) => res.once("close", requestClosed.resolve));
         const origin = await listen(server);
-        const client = http.request(`${origin}${testCase.path}`, {
+        const client = http.request(`${origin}${path}`, {
           method: "POST",
           headers: requestHeaders,
         });
         client.on("error", () => {});
         const completed =
-          testCase.phase === "complete" || testCase.phase === "policy changed"
-            ? once(client, "response")
-            : undefined;
-        client.end(JSON.stringify(requestBody(testCase, testCase.stream)));
+          complete || phase === "policy changed" ? once(client, "response") : undefined;
+        client.end(JSON.stringify(mediaBody(path, SOURCE_URLS, stream, kind)));
         try {
-          if (testCase.phase === "policy changed") {
+          if (phase === "policy changed") {
             await firstStarted.promise;
             publishConfig({
               ...config,
@@ -259,26 +240,21 @@ it.each(
           if (completed) {
             const [response] = await completed;
             const body = await text(response);
-            const success = testCase.phase === "complete";
-            expect(response.statusCode).toBe(success ? 200 : 401);
-            if (success) {
+            expect(response.statusCode).toBe(complete ? 200 : 401);
+            if (complete) {
               expect(body).toContain("image accepted");
             }
           } else {
             await firstStarted.promise;
-            if (testCase.phase === "during body") {
+            if (phase === "during body") {
               await firstHeaders.promise;
             }
             client.destroy();
             await requestClosed.promise;
             await vi.waitFor(() => expect(firstCanceled).toBe(true), { timeout: 1_000 });
           }
-          expect(requestedSources).toEqual(
-            testCase.phase === "complete" ? ["/first", "/second"] : ["/first"],
-          );
-          expect(agentCommandFromGatewayIngress).toHaveBeenCalledTimes(
-            testCase.phase === "complete" ? 1 : 0,
-          );
+          expect(requestedSources).toEqual(complete ? ["/first", "/second"] : ["/first"]);
+          expect(agentCommandFromGatewayIngress).toHaveBeenCalledTimes(complete ? 1 : 0);
         } finally {
           client.destroy();
           firstResponse?.destroy();
