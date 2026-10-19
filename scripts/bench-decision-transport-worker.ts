@@ -20,7 +20,7 @@ export async function benchmarkDecisionTransport(requests: number) {
   let connections = 0;
   let received = 0;
   let responseBytes = 0;
-  let fixtureError: unknown;
+  let fixtureError: Error | undefined;
   const answer = JSON.stringify({
     model: "kev-latest",
     answers: {
@@ -63,7 +63,7 @@ export async function benchmarkDecisionTransport(requests: number) {
       response.setHeader("Content-Type", "application/json");
       response.end(answer);
     })().catch((error: unknown) => {
-      fixtureError = error;
+      fixtureError = new Error("Loopback fixture request failed", { cause: error });
       response.writeHead(500).end();
     });
   });
