@@ -192,13 +192,30 @@ describe("gateway restart handlers", () => {
     expectRejected(respond, "invalid safe targeted restart mode");
   });
 
-  it("retains prepared suspension when the exact restart target is stale", async () => {
+  it.each([
+    {
+      failure: "stale target",
+      code: "INVALID_REQUEST",
+      message: "target gateway no longer owns the active lock",
+      signals: 0,
+    },
+    {
+      failure: "delivery failure",
+      code: "UNAVAILABLE",
+      message: "target gateway restart delivery failed",
+      signals: 1,
+    },
+  ])("retains prepared suspension after $failure", async ({ code, message, signals }) => {
     const suspension = prepareSuspension();
-    readActiveGatewayLockIdentity.mockResolvedValue({
-      ...lockIdentity,
-      ownerId: "replacement-owner",
-      createdAt: "2026-07-16T12:00:01.000Z",
-    });
+    if (signals === 0) {
+      readActiveGatewayLockIdentity.mockResolvedValue({
+        ...lockIdentity,
+        ownerId: "replacement-owner",
+        createdAt: "2026-07-16T12:00:01.000Z",
+      });
+    } else {
+      requestGatewayRestartWithSignalAdmission.mockReturnValueOnce({ status: "failed" });
+    }
 
     const respond = await invokeRestartRequestThroughGateway({
       reason: "operator",
@@ -206,24 +223,8 @@ describe("gateway restart handlers", () => {
     });
 
     expect(readActiveGatewayLockIdentity).toHaveBeenCalledOnce();
-    expect(requestGatewayRestartWithSignalAdmission).not.toHaveBeenCalled();
-    expectRejected(respond, "target gateway no longer owns the active lock");
-    expect(getGatewaySuspendAdmissionPhase()).toBe("prepared");
-    expect(suspension?.release()).toBe(true);
-  });
-
-  it("retains prepared suspension when exact restart delivery fails", async () => {
-    const suspension = prepareSuspension();
-    requestGatewayRestartWithSignalAdmission.mockReturnValueOnce({ status: "failed" });
-
-    const respond = await invokeRestartRequestThroughGateway({
-      reason: "operator",
-      target: restartTarget,
-    });
-
-    expect(readActiveGatewayLockIdentity).toHaveBeenCalledOnce();
-    expect(requestGatewayRestartWithSignalAdmission).toHaveBeenCalledOnce();
-    expectRejected(respond, "target gateway restart delivery failed", "UNAVAILABLE");
+    expect(requestGatewayRestartWithSignalAdmission).toHaveBeenCalledTimes(signals);
+    expectRejected(respond, message, code);
     expect(getGatewaySuspendAdmissionPhase()).toBe("prepared");
     expect(suspension?.release()).toBe(true);
   });

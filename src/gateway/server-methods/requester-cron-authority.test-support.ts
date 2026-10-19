@@ -3,9 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
-  createOperationalRunInstanceRef,
   getAdmittedRunDelegatedAuthority,
-  prepareAgentRunAdmission,
   resolveAdmittedRunActiveAssertion,
   type AdmittedRunContext,
   type AdmittedRunOperatorAuthority,
@@ -54,6 +52,7 @@ import {
   mintMcpLoopbackClientGrant,
   revokeMcpLoopbackClientGrant,
 } from "../mcp-grant-store.js";
+import { json, prepareAdmission, request } from "../mcp-http-request.test-support.js";
 import { getActiveMcpLoopbackRuntime } from "../mcp-http.loopback-runtime.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { createRequestGatewayMethodRegistry } from "../server-methods.js";
@@ -134,15 +133,9 @@ export async function inRun<T>(
   run: RequesterRun<T>,
   operatorAuthority?: AdmittedRunOperatorAuthority,
 ) {
-  const runAdmission = prepareAgentRunAdmission({
+  const runAdmission = prepareAdmission(runId, "requester-cron-test", {
     cfg: getRuntimeConfig(),
     operatorAuthority,
-    operationalRunInstance: createOperationalRunInstanceRef(runId),
-    facts: {
-      runId,
-      agentId: "main",
-      ingress: { kind: "system", boundary: "requester-cron-test", state: "present" },
-    },
   });
   try {
     const admittedRun = await runAdmission.admit("gateway", runId);
@@ -234,6 +227,11 @@ export async function createCreatorTransportTools(params: {
   const workspaceDir = params.workspaceDir ?? stateDir;
   const { runId } = admitted.operationalRunInstance;
   const toolsAllow = expectDefined(config.tools?.allow, "fixture tool allowlist");
+  const session = { sessionKey: SESSION, sessionId: SESSION_ID };
+  const toolContext = { ...session, runId, workspaceDir, agentAccountId: "default", senderIsOwner };
+  const expectedTools = expect.arrayContaining(
+    toolsAllow.map((name) => expect.objectContaining({ name })),
+  );
   let sequence = 0;
   if (transport === "cli") {
     const runtime = expectDefined(getActiveMcpLoopbackRuntime(), "MCP runtime");
@@ -242,18 +240,13 @@ export async function createCreatorTransportTools(params: {
         finalizeCliMcpGrant(
           buildCliMcpGrantContext({
             run: {
-              sessionKey: SESSION,
-              sessionId: SESSION_ID,
+              ...toolContext,
               sessionFile: path.join(workspaceDir, "creator.jsonl"),
-              runId,
-              workspaceDir,
               provider: "claude-cli",
               model: "creator-fixture",
               prompt: "Update an automation",
               timeoutMs: 30_000,
-              agentAccountId: "default",
               cronCreatorCallerOrigin: creator?.callerOrigin,
-              senderIsOwner,
             },
             config,
             agentId: "main",
@@ -276,17 +269,16 @@ export async function createCreatorTransportTools(params: {
       captureKey: `capture-${runId}`,
     };
     const rpc = async (method: string, rpcParams?: Record<string, unknown>) => {
-      const response = await fetch(`http://127.0.0.1:${runtime.port}/mcp`, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${grant.token}`,
-          "content-type": "application/json",
-          "x-openclaw-cli-capture-key": mcpCapture.captureKey,
+      const response = await request(
+        runtime,
+        { jsonrpc: "2.0", id: ++sequence, method, params: rpcParams },
+        {
+          token: grant.token,
+          captureKey: mcpCapture.captureKey,
+          signal: AbortSignal.timeout(15_000),
         },
-        body: JSON.stringify({ jsonrpc: "2.0", id: ++sequence, method, params: rpcParams }),
-        signal: AbortSignal.timeout(15_000),
-      });
-      const message = (await response.json()) as {
+      );
+      const message = (await json(response)) as {
         error?: unknown;
         result?: {
           tools?: Array<{ name: string }>;
@@ -294,7 +286,6 @@ export async function createCreatorTransportTools(params: {
           content?: Array<{ text?: string }>;
         };
       };
-      expect(response.status).toBe(200);
       expect(message.error).toBeUndefined();
       if (message.result?.isError) {
         throw new Error(message.result.content?.map((item) => item.text).join("\n"));
@@ -303,9 +294,7 @@ export async function createCreatorTransportTools(params: {
     };
     try {
       expect(activateMcpLoopbackClientGrantCapture(mcpCapture)).not.toBe(false);
-      expect((await rpc("tools/list"))?.tools).toEqual(
-        expect.arrayContaining(toolsAllow.map((name) => expect.objectContaining({ name }))),
-      );
+      expect((await rpc("tools/list"))?.tools).toEqual(expectedTools);
       return {
         invoke: (name, args) => rpc("tools/call", { name, arguments: args }),
         mcpCapture,
@@ -323,8 +312,7 @@ export async function createCreatorTransportTools(params: {
         agentAccountId: "default",
         admittedRunContext: admitted,
         agentId: "main",
-        sessionKey: SESSION,
-        sessionId: SESSION_ID,
+        ...session,
         agentHarnessId: "openclaw",
       },
       async () => getGatewayToolCallerIdentity(),
@@ -337,12 +325,7 @@ export async function createCreatorTransportTools(params: {
     createOpenClawCodingTools({
       config,
       agentId: "main",
-      sessionKey: SESSION,
-      sessionId: SESSION_ID,
-      runId,
-      workspaceDir,
-      agentAccountId: "default",
-      senderIsOwner,
+      ...toolContext,
       cronCreatorToolAllowlistRef: creatorTools,
       cronCreatorToolAllowlistCaptureRef: creatorCapture,
       toolConstructionPlan: {
@@ -360,9 +343,7 @@ export async function createCreatorTransportTools(params: {
     tools,
     getPluginToolMeta,
   );
-  expect(tools).toEqual(
-    expect.arrayContaining(toolsAllow.map((name) => expect.objectContaining({ name }))),
-  );
+  expect(tools).toEqual(expectedTools);
   return {
     invoke: (name, args) => {
       const tool = expectDefined(
