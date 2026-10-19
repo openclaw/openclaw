@@ -91,6 +91,7 @@ vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => {
                 await prepared.releaseResources?.();
               }
             }
+            poolOptions.onRotationComplete?.();
           } catch (error) {
             void Promise.resolve(poolOptions.onRetirementFailure?.(error)).catch(() => undefined);
             throw error;
@@ -109,7 +110,8 @@ vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => {
     },
   };
 });
-vi.mock("../../state/openclaw-agent-db-resources.js", () => ({
+vi.mock("../../state/openclaw-agent-db-resources.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/openclaw-agent-db-resources.js")>()),
   matchesAgentDatabaseReadCandidatePath: (candidate: { path: string }, targetPath: string) =>
     candidate.path === targetPath,
   registerOpenClawAgentDatabaseReadCandidateResource: (resource: Resource) => {
