@@ -17,6 +17,9 @@ import {
   waitText,
   configPatch,
   change,
+  makeWorker,
+  preparedInventory,
+  machineProfile,
 } from "./cloud-workers.test-support.ts";
 
 vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
@@ -203,13 +206,10 @@ describe("Cloud environments", () => {
         config: {
           cloudWorkers: {
             profiles: {
-              "linux-build": {
-                provider: "crabbox",
-                settings: { provider: "aws", class: "standard" },
-              },
+              "linux-build": machineProfile(),
               ...(current
                 ? {
-                    large: { provider: "crabbox", settings: { provider: "aws", class: "large" } },
+                    large: machineProfile("large"),
                   }
                 : {}),
             },
@@ -262,30 +262,19 @@ describe("Cloud environments", () => {
   });
 
   it("counts only usable pool workers and keeps capacity editable in Advanced", async () => {
-    const ready = { ...buildEnvironmentFixture("ready"), status: "available" };
-    const withDetails = (details: { expiresAtMs?: number; consumedAtMs?: number }) => ({
-      ...ready,
-      preparation: { ...ready.preparation, details: { ...ready.preparation.details, ...details } },
-    });
     const inventory = [
-      ready,
-      { ...ready, status: "unavailable" },
-      { ...ready, status: "error" },
-      { ...ready, status: "stopping" },
-      withDetails({ expiresAtMs: Date.now() - 1 }),
-      withDetails({ consumedAtMs: Date.now() }),
-      { ...ready, preparation: { ...ready.preparation, details: undefined } },
-      { ...ready, worker: { ...ready.worker, destroyRequestedAtMs: Date.now() } },
-      { ...ready, worker: { ...ready.worker, attachedSessionIds: ["active-session"] } },
-    ];
-    for (const [index, environment] of inventory.entries()) {
-      environment.id = `pool-${index}`;
-    }
+      makeWorker("ready"),
+      ...(["unavailable", "error", "stopping"] as const).map((status) =>
+        makeWorker("ready", { status }),
+      ),
+      makeWorker("ready", { details: { expiresAtMs: Date.now() - 1 } }),
+      makeWorker("ready", { details: { consumedAtMs: Date.now() } }),
+      makeWorker("ready", { details: null }),
+      makeWorker("ready", { worker: { destroyRequestedAtMs: Date.now() } }),
+      makeWorker("ready", { worker: { attachedSessionIds: ["active-session"] } }),
+    ].map((environment, index) => Object.assign(environment, { id: `pool-${index}` }));
     const { page, request } = mountTestPage(methods, {
-      response: (method, params) =>
-        method === "environments.list" && params?.includePreparedDetails
-          ? { environments: inventory, profiles: [] }
-          : undefined,
+      response: preparedInventory(inventory),
     });
     await waitForSolid(() => expect(input(page, "Pool cap").disabled).toBe(false));
     await waitText(() => page, "1 ready workers · Pool cap");

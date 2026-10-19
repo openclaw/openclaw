@@ -1,12 +1,53 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { flush } from "solid-js";
 import { afterEach, expect } from "vitest";
+import type { EnvironmentSummary } from "../../../../packages/gateway-protocol/src/index.js";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   button,
   mountPage,
   setupSnapshotsDomSuite,
 } from "./cloud-worker-snapshots-dom.test-support.ts";
+import { buildEnvironmentFixture } from "./cloud-worker-snapshots.test-support.ts";
+
+type WorkerFixture = ReturnType<typeof buildEnvironmentFixture>;
+type WorkerDetails = NonNullable<NonNullable<EnvironmentSummary["preparation"]>["details"]>;
+export function makeWorker(
+  state = "provisioning",
+  options: {
+    id?: string;
+    error?: string;
+    status?: EnvironmentSummary["status"];
+    details?: Partial<WorkerDetails> | null;
+    worker?: Partial<NonNullable<EnvironmentSummary["worker"]>>;
+  } = {},
+) {
+  const base = buildEnvironmentFixture(state, options.error);
+  return {
+    ...base,
+    id: options.id ?? base.id,
+    status: options.status ?? base.status,
+    preparation: {
+      ...base.preparation,
+      details:
+        options.details === null ? undefined : { ...base.preparation.details, ...options.details },
+    },
+    worker: { ...base.worker, ...options.worker },
+  };
+}
+
+export function preparedInventory(
+  environments: Array<WorkerFixture | ReturnType<typeof makeWorker>>,
+) {
+  return (method: string, params?: Record<string, unknown>) =>
+    method === "environments.list" && params?.includePreparedDetails
+      ? { environments, profiles: [] }
+      : undefined;
+}
+
+export function machineProfile(machineClass = "standard", settings: Record<string, unknown> = {}) {
+  return { provider: "crabbox", settings: { provider: "aws", class: machineClass, ...settings } };
+}
 
 export function setupSnapshotTests() {
   const disposers: Array<() => void> = [];

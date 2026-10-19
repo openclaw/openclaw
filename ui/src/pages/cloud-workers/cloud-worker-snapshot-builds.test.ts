@@ -1,13 +1,13 @@
 /* @vitest-environment jsdom */
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { flush } from "solid-js";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { button, mountPage } from "./cloud-worker-snapshots-dom.test-support.ts";
+import { button } from "./cloud-worker-snapshots-dom.test-support.ts";
 import {
   buildEnvironmentFixture,
   snapshotListFixture,
@@ -19,6 +19,11 @@ import {
   waitText,
   waitRequest,
   configSnapshot,
+  makeWorker,
+  preparedInventory,
+  machineProfile,
+  change,
+  field,
 } from "./cloud-workers.test-support.ts";
 
 vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
@@ -34,292 +39,246 @@ const methods = [
 function localSnapshot() {
   const result = snapshotListFixture();
   result.images = [
-    {
-      ...expectDefined(result.images[0], "App snapshot"),
+    Object.assign(expectDefined(result.images[0], "App snapshot"), {
       held: false,
       retirement: undefined,
       projectRoot: "/projects/app",
-    },
+    }),
   ];
   return result;
 }
 
-describe("Cloud environment builds", () => {
-  it("rebuilds the selected local repository and shows capacity failures", async () => {
-    const { page, request } = mountTestPage(methods, {
-      result: localSnapshot(),
-      response: (method) => {
-        if (method === "environments.prepare") {
-          throw new GatewayRequestError({
-            code: "INVALID_REQUEST",
-            message: "full",
-            details: { code: "capacity" },
-          });
-        }
-      },
-    });
-    await waitForSolid(() => expect(button(sheet(page), "Rebuild").disabled).toBe(false));
-    click(sheet(page), "Rebuild");
-    await waitText(() => page, "The prepared worker pool is full");
-    expect(request).toHaveBeenCalledWith("environments.prepare", {
-      profileId: "linux-build",
-      projectPath: "/projects/app",
-    });
+it("rebuilds the selected local repository and shows capacity failures", async () => {
+  const { page, request } = mountTestPage(methods, {
+    result: localSnapshot(),
+    response: (method) => {
+      if (method === "environments.prepare") {
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "full",
+          details: { code: "capacity" },
+        });
+      }
+    },
   });
-  it("refreshes rebuild eligibility after a machine configuration save", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    let enabled = false;
-    const configuration = () => ({
-      cloudWorkers: {
-        profiles: {
-          "linux-build": {
-            provider: "crabbox",
-            settings: {
-              provider: "aws",
-              class: "standard",
-              target: "linux",
-              warmImage: enabled,
-            },
-          },
-        },
-      },
-    });
-    const { page, request } = mountTestPage([...methods, "config.patch"], {
-      response: (method, params) => {
-        if (method === "config.get") {
-          const config = configuration();
-          const hash = enabled ? "enabled" : "disabled";
-          return configSnapshot(config, hash);
-        }
-        if (method === "config.patch") {
-          expect(
-            JSON.parse(String(params?.raw)).cloudWorkers.profiles["linux-build"].settings.warmImage,
-          ).toBe(true);
-          enabled = true;
-          return { config: configuration(), hash: "enabled" };
-        }
-        if (method === "crabbox.images.list") {
-          const result = localSnapshot();
-          result.profiles[0]!.warmImages = enabled ? "on" : "off";
-          return result;
-        }
-        return undefined;
-      },
-    });
-    await waitText(() => sheet(page), "01234567");
-    expect(button(sheet(page), "Rebuild").disabled).toBe(true);
-    click(page, "Edit");
-    const warmImages = expectDefined(
-      page.querySelector<HTMLSelectElement>('select[aria-label="Warm images"]'),
-      "Warm image selector",
-    );
-    warmImages.value = "on";
-    warmImages.dispatchEvent(new Event("change", { bubbles: true }));
-    flush();
-    button(page, "Save").click();
-    await waitForSolid(() =>
-      expect(page.querySelector('select[aria-label="Warm images"]')).toBeNull(),
-    );
-    await vi.advanceTimersByTimeAsync(250);
-    flush();
-    await waitForSolid(() => expect(button(sheet(page), "Rebuild").disabled).toBe(false));
-    button(sheet(page), "Rebuild").click();
-    await waitRequest(request, "environments.prepare", {
-      profileId: "linux-build",
-      projectPath: "/projects/app",
-    });
+  await waitForSolid(() => expect(button(sheet(page), "Rebuild").disabled).toBe(false));
+  click(sheet(page), "Rebuild");
+  await waitText(() => page, "The prepared worker pool is full");
+  expect(request).toHaveBeenCalledWith("environments.prepare", {
+    profileId: "linux-build",
+    projectPath: "/projects/app",
   });
+});
+it("refreshes rebuild eligibility after a machine configuration save", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  let enabled = false;
+  const configuration = () => ({
+    cloudWorkers: {
+      profiles: {
+        "linux-build": machineProfile("standard", { target: "linux", warmImage: enabled }),
+      },
+    },
+  });
+  const { page, request } = mountTestPage([...methods, "config.patch"], {
+    response: (method, params) => {
+      if (method === "config.get") {
+        return configSnapshot(configuration(), enabled ? "enabled" : "disabled");
+      }
+      if (method === "config.patch") {
+        expect(
+          JSON.parse(String(params?.raw)).cloudWorkers.profiles["linux-build"].settings.warmImage,
+        ).toBe(true);
+        enabled = true;
+        return { config: configuration(), hash: "enabled" };
+      }
+      if (method === "crabbox.images.list") {
+        const result = localSnapshot();
+        result.profiles[0]!.warmImages = enabled ? "on" : "off";
+        return result;
+      }
+    },
+  });
+  await waitText(() => sheet(page), "01234567");
+  expect(button(sheet(page), "Rebuild").disabled).toBe(true);
+  click(page, "Edit");
+  change(field<HTMLSelectElement>(page, 'select[aria-label="Warm images"]'), "on");
+  button(page, "Save").click();
+  await waitForSolid(() =>
+    expect(page.querySelector('select[aria-label="Warm images"]')).toBeNull(),
+  );
+  await vi.advanceTimersByTimeAsync(250);
+  flush();
+  await waitForSolid(() => expect(button(sheet(page), "Rebuild").disabled).toBe(false));
+  button(sheet(page), "Rebuild").click();
+  await waitRequest(request, "environments.prepare", {
+    profileId: "linux-build",
+    projectPath: "/projects/app",
+  });
+});
 
-  it("keeps unlabeled builds inspectable and actionable in Advanced", async () => {
-    const pending = buildEnvironmentFixture();
-    const failed = buildEnvironmentFixture("failed", "Unlabeled setup failed");
-    let workers = [
-      {
-        ...pending,
-        id: "unlabeled-pending",
-        preparation: { ...pending.preparation, details: undefined },
+it("keeps unlabeled builds inspectable and actionable in Advanced", async () => {
+  let workers = [
+    makeWorker("provisioning", { id: "unlabeled-pending", details: null }),
+    makeWorker("failed", {
+      id: "unlabeled-failed",
+      error: "Unlabeled setup failed",
+      details: { project: { baseCommit: "abcdef" } },
+    }),
+  ];
+  const { page, request } = mountTestPage(methods, {
+    result: { ...localSnapshot(), images: [], legacyLeases: [] },
+    response: (method, params) => {
+      if (method === "environments.list" && params?.includePreparedDetails) {
+        return { environments: workers, profiles: [] };
+      }
+      if (method === "environments.destroy") {
+        workers = workers.filter((worker) => worker.id !== params?.environmentId);
+        return {};
+      }
+    },
+  });
+  const advanced = expectDefined(page.querySelector(".cloud-environments__advanced"), "Advanced");
+  await waitText(() => advanced, "Unlabeled setup failed");
+  expect(page.querySelectorAll(".cloud-environments__row")).toHaveLength(0);
+  button(advanced, "Cancel").click();
+  await waitRequest(request, "environments.destroy", {
+    environmentId: "unlabeled-pending",
+  });
+  await waitForSolid(() => expect(button(advanced, "Dismiss").disabled).toBe(false));
+  button(advanced, "Dismiss").click();
+  await waitRequest(request, "environments.destroy", {
+    environmentId: "unlabeled-failed",
+  });
+  await waitForSolid(() => expect(advanced.textContent).not.toContain("Unlabeled setup failed"));
+});
+
+it.each([true, false])(
+  "keeps ready-worker cleanup failures actionable (repository label: %s)",
+  async (labeled) => {
+    const worker = makeWorker("ready", {
+      error: "Provider cleanup failed",
+      status: "error",
+      worker: { destroyRequestedAtMs: Date.now() },
+      details: {
+        project: { baseCommit: "abcdef", ...(labeled ? { label: "github.com/acme/app" } : {}) },
       },
-      {
-        ...failed,
-        id: "unlabeled-failed",
-        preparation: {
-          ...failed.preparation,
-          details: { ...failed.preparation.details, project: { baseCommit: "abcdef" } },
-        },
-      },
-    ];
+    });
     const { page, request } = mountTestPage(methods, {
       result: { ...localSnapshot(), images: [], legacyLeases: [] },
-      response: (method, params) => {
-        if (method === "environments.list" && params?.includePreparedDetails) {
-          return { environments: workers, profiles: [] };
-        }
-        if (method === "environments.destroy") {
-          workers = workers.filter((worker) => worker.id !== params?.environmentId);
-          return {};
-        }
-        return undefined;
-      },
+      response: preparedInventory([worker]),
     });
-    const advanced = expectDefined(page.querySelector(".cloud-environments__advanced"), "Advanced");
-    await waitText(() => advanced, "Unlabeled setup failed");
-    expect(page.querySelectorAll(".cloud-environments__row")).toHaveLength(0);
-    button(advanced, "Cancel").click();
+    await waitText(() => page, "Provider cleanup failed");
+    const surface = labeled
+      ? sheet(page)
+      : expectDefined(page.querySelector(".cloud-environments__advanced"), "Advanced");
+    expect(surface.textContent).toContain("Needs attention");
+    button(surface, "Cancel").click();
     await waitRequest(request, "environments.destroy", {
-      environmentId: "unlabeled-pending",
-    });
-    await waitForSolid(() => expect(button(advanced, "Dismiss").disabled).toBe(false));
-    button(advanced, "Dismiss").click();
-    await waitRequest(request, "environments.destroy", {
-      environmentId: "unlabeled-failed",
-    });
-    await waitForSolid(() => expect(advanced.textContent).not.toContain("Unlabeled setup failed"));
-  });
-
-  it.each([true, false])(
-    "keeps ready-worker cleanup failures actionable (repository label: %s)",
-    async (labeled) => {
-      const ready = buildEnvironmentFixture("ready", "Provider cleanup failed");
-      const worker = {
-        ...ready,
-        status: "error",
-        worker: { ...ready.worker, destroyRequestedAtMs: Date.now() },
-        preparation: {
-          ...ready.preparation,
-          details: {
-            ...ready.preparation.details,
-            project: { baseCommit: "abcdef", ...(labeled ? { label: "github.com/acme/app" } : {}) },
-          },
-        },
-      };
-      const { page, request } = mountTestPage(methods, {
-        result: { ...localSnapshot(), images: [], legacyLeases: [] },
-        response: (method, params) =>
-          method === "environments.list" && params?.includePreparedDetails
-            ? { environments: [worker], profiles: [] }
-            : undefined,
-      });
-      await waitText(() => page, "Provider cleanup failed");
-      const surface = labeled
-        ? sheet(page)
-        : expectDefined(page.querySelector(".cloud-environments__advanced"), "Advanced");
-      expect(surface.textContent).toContain("Needs attention");
-      button(surface, "Cancel").click();
-      await waitRequest(request, "environments.destroy", {
-        environmentId: "build-app",
-      });
-    },
-  );
-
-  it("fences recovery when the connection changes during confirmation", async () => {
-    const result = localSnapshot();
-    result.images[0]!.capture = { selector: "capture-app", phase: "uncertain", stale: false };
-    const fixture = mountPage(methods, {
-      result,
-      response: (method, params) =>
-        method === "environments.list" && params?.includePreparedDetails
-          ? { environments: [buildEnvironmentFixture()], profiles: [] }
-          : undefined,
-    });
-    const confirmation = createDeferred<boolean>();
-    vi.mocked(showConfirmDialog).mockReturnValue(confirmation.promise);
-    try {
-      await waitText(() => sheet(fixture.page), "Paused: uncertain");
-      click(sheet(fixture.page), "Recover");
-      await waitForSolid(() => expect(showConfirmDialog).toHaveBeenCalled());
-      expect(vi.mocked(showConfirmDialog).mock.calls[0]?.[0].requiredAcknowledgement).toBe(
-        "I stopped the owning capture and worker and reconciled provider artifacts",
-      );
-      fixture.harness.publish(false);
-      flush();
-      fixture.harness.publish(true, fixture.client, gatewayHelloForMethods(methods));
-      flush();
-      confirmation.resolve(true);
-      await Promise.resolve();
-      flush();
-      expect(fixture.request).not.toHaveBeenCalledWith("crabbox.images.recover", expect.anything());
-    } finally {
-      fixture.dispose();
-    }
-  });
-  it("dismisses a failed build immediately even when its inventory refresh fails", async () => {
-    let dismissed = false;
-    const { page, request } = mountTestPage(methods, {
-      result: localSnapshot(),
-      response: (method, params) => {
-        if (method === "environments.destroy") {
-          dismissed = true;
-          return {};
-        }
-        if (method === "environments.list" && params?.includePreparedDetails) {
-          if (dismissed) {
-            throw new Error("Inventory unavailable");
-          }
-          return {
-            environments: [buildEnvironmentFixture("failed", "Setup failed")],
-            profiles: [],
-          };
-        }
-        return undefined;
-      },
-    });
-    await waitText(() => sheet(page), "Setup failed");
-    expect(page.querySelector(".cloud-environments__row")?.textContent).toBe(
-      "github.com/acme/appNeeds attention",
-    );
-    click(sheet(page), "Dismiss");
-    await waitText(() => page, "Inventory unavailable");
-    expect(sheet(page).textContent).not.toContain("Setup failed");
-    expect(request).toHaveBeenCalledWith("environments.destroy", {
       environmentId: "build-app",
     });
+  },
+);
+
+it("fences recovery when the connection changes during confirmation", async () => {
+  const result = localSnapshot();
+  result.images[0]!.capture = { selector: "capture-app", phase: "uncertain", stale: false };
+  const fixture = mountTestPage(methods, {
+    result,
+    response: preparedInventory([buildEnvironmentFixture()]),
   });
-  it("polls automatic preparation through worker readiness before reading the published snapshot", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    let ready = false;
-    let consumed = false;
-    const build = buildEnvironmentFixture();
-    build.preparation.purpose = "reserve";
-    const result = localSnapshot();
-    result.images = [];
-    const { page, request } = mountTestPage(methods, {
-      result,
-      response: (method, params) => {
-        if (method === "environments.list" && params?.includePreparedDetails) {
-          return {
-            environments: consumed
-              ? []
-              : [ready ? { ...build, worker: { ...build.worker, state: "ready" } } : build],
-            profiles: [],
-          };
+  const confirmation = createDeferred<boolean>();
+  vi.mocked(showConfirmDialog).mockReturnValue(confirmation.promise);
+  await waitText(() => sheet(fixture.page), "Paused: uncertain");
+  click(sheet(fixture.page), "Recover");
+  await waitForSolid(() => expect(showConfirmDialog).toHaveBeenCalled());
+  expect(vi.mocked(showConfirmDialog).mock.calls[0]?.[0].requiredAcknowledgement).toBe(
+    "I stopped the owning capture and worker and reconciled provider artifacts",
+  );
+  fixture.harness.publish(false);
+  flush();
+  fixture.harness.publish(true, fixture.client, gatewayHelloForMethods(methods));
+  flush();
+  confirmation.resolve(true);
+  await Promise.resolve();
+  flush();
+  expect(fixture.request).not.toHaveBeenCalledWith("crabbox.images.recover", expect.anything());
+});
+it("dismisses a failed build immediately even when its inventory refresh fails", async () => {
+  let dismissed = false;
+  const { page, request } = mountTestPage(methods, {
+    result: localSnapshot(),
+    response: (method, params) => {
+      if (method === "environments.destroy") {
+        dismissed = true;
+        return {};
+      }
+      if (method === "environments.list" && params?.includePreparedDetails) {
+        if (dismissed) {
+          throw new Error("Inventory unavailable");
         }
-        if (method === "crabbox.images.list") {
-          return ready ? localSnapshot() : result;
-        }
-        return undefined;
-      },
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    flush();
-    expect(page.querySelector(".cloud-environments__row")?.textContent).toBe(
-      "github.com/acme/appBuilding",
-    );
-    ready = true;
-    await vi.advanceTimersByTimeAsync(10_000);
-    flush();
-    expect(page.querySelector(".cloud-environments__row")?.textContent).toContain("Ready ·");
-    consumed = true;
-    await vi.advanceTimersByTimeAsync(10_000);
-    flush();
-    const count = request.mock.calls.filter(
+        return {
+          environments: [buildEnvironmentFixture("failed", "Setup failed")],
+          profiles: [],
+        };
+      }
+    },
+  });
+  await waitText(() => sheet(page), "Setup failed");
+  expect(page.querySelector(".cloud-environments__row")?.textContent).toBe(
+    "github.com/acme/appNeeds attention",
+  );
+  click(sheet(page), "Dismiss");
+  await waitText(() => page, "Inventory unavailable");
+  expect(sheet(page).textContent).not.toContain("Setup failed");
+  expect(request).toHaveBeenCalledWith("environments.destroy", {
+    environmentId: "build-app",
+  });
+});
+it("polls automatic preparation through worker readiness before reading the published snapshot", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  let ready = false;
+  let consumed = false;
+  const build = buildEnvironmentFixture();
+  build.preparation.purpose = "reserve";
+  const result = localSnapshot();
+  result.images = [];
+  const { page, request } = mountTestPage(methods, {
+    result,
+    response: (method, params) => {
+      if (method === "environments.list" && params?.includePreparedDetails) {
+        return {
+          environments: consumed
+            ? []
+            : [ready ? { ...build, worker: { ...build.worker, state: "ready" } } : build],
+          profiles: [],
+        };
+      }
+      if (method === "crabbox.images.list") {
+        return ready ? localSnapshot() : result;
+      }
+      return undefined;
+    },
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  flush();
+  expect(page.querySelector(".cloud-environments__row")?.textContent).toBe(
+    "github.com/acme/appBuilding",
+  );
+  ready = true;
+  await vi.advanceTimersByTimeAsync(10_000);
+  flush();
+  expect(page.querySelector(".cloud-environments__row")?.textContent).toContain("Ready ·");
+  consumed = true;
+  await vi.advanceTimersByTimeAsync(10_000);
+  flush();
+  const count = request.mock.calls.filter(
+    ([method, params]) => method === "environments.list" && params?.includePreparedDetails,
+  ).length;
+  await vi.advanceTimersByTimeAsync(30_000);
+  flush();
+  expect(
+    request.mock.calls.filter(
       ([method, params]) => method === "environments.list" && params?.includePreparedDetails,
-    ).length;
-    await vi.advanceTimersByTimeAsync(30_000);
-    flush();
-    expect(
-      request.mock.calls.filter(
-        ([method, params]) => method === "environments.list" && params?.includePreparedDetails,
-      ),
-    ).toHaveLength(count);
-  });
+    ),
+  ).toHaveLength(count);
 });
