@@ -276,3 +276,57 @@ it("keeps untracked scroll state until the next layout observation", () => {
   vi.advanceTimersToNextFrame();
   expect(element.dataset.atEnd).toBe("true");
 });
+
+it("restores a destination after readiness without overwriting subsequent reader scroll", () => {
+  const outer = document.body.appendChild(document.createElement("div"));
+  const element = outer.appendChild(document.createElement("div"));
+  cleanup.push(() => outer.remove());
+  Object.defineProperty(element, "scrollWidth", { value: 700 });
+  outer.scrollTop = 400;
+  const [target, setTarget] = createSignal<HTMLElement>();
+  const [ready, setReady] = createSignal(false);
+  const [destination, setDestination] = createSignal("root");
+  const [savedTop, setSavedTop] = createSignal(37);
+  const stop = createRoot((dispose) => {
+    createScrollPosition(() => {
+      const currentTarget = target();
+      return {
+        restore: ready()
+          ? {
+              identity: [destination(), currentTarget],
+              target: currentTarget,
+              top: savedTop(),
+              left: "end",
+            }
+          : undefined,
+      };
+    });
+    return dispose;
+  });
+  cleanup.push(stop);
+  setReady(true);
+  flush();
+  setTarget(element);
+  flush();
+  expect(element.scrollTop).toBe(37);
+  expect(element.scrollLeft).toBe(700);
+
+  element.scrollTop = 91;
+  setSavedTop(91);
+  flush();
+  expect(element.scrollTop).toBe(91);
+  setSavedTop(37);
+  flush();
+  expect(element.scrollTop).toBe(91);
+
+  setReady(false);
+  flush();
+  setDestination("folder");
+  setSavedTop(12);
+  flush();
+  expect(element.scrollTop).toBe(91);
+  setReady(true);
+  flush();
+  expect(element.scrollTop).toBe(12);
+  expect(outer.scrollTop).toBe(400);
+});
