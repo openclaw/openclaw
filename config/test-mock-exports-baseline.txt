@@ -7104,7 +7104,6 @@
 ["src/infra/sqlite-snapshot-staging.worker.test.ts","./sqlite-snapshot-staging-runtime.js","0953ba0d690b183934b18baea64ef179a70a1104e145fd4255959580afc488f6",1]
 ["src/infra/sqlite-snapshot-staging.worker.test.ts","./worker-task-server.js","b30698992ae5593d28bdfd8b8ee497933a9581d1188c5c4794a6ba2b0d747aa0",1]
 ["src/infra/sqlite-wal.nocow.test.ts","../logging/subsystem.js","b8cda70e858ef4812d631f99d56eab2018f0ea4ce29baadd8470fa981fea3da6",1]
-["src/infra/sqlite-worker-broker-lifecycle.test.ts","./worker-cpu.js","c5415e87fa92eb720242e95cc5e9df896844f167aa16a672aa6ed5531ebd5b70",1]
 ["src/infra/ssh-client.test.ts","./resolve-system-bin.js","3c80b47fc5cde11e672816839a96ca59af14ecf9fa443ab9c5f81d7e5c935ae5",1]
 ["src/infra/ssh-client.test.ts","./windows-install-roots.js","75e6df6b1cb8c149211733bc22c8aa8fd68e43b41475baae815b4435a123dd19",1]
 ["src/infra/ssh-config.test.ts","../process/exec.js","3d49de00ee16b6d099bcdf42e70a252cd2165a6419c8cbae1970eac583554ed3",1]
