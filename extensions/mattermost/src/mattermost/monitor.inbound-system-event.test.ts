@@ -26,7 +26,7 @@ import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MattermostPost } from "./client.js";
 import type { MattermostEventPayload } from "./monitor-websocket.js";
-import { FakeWebSocket } from "./monitor-websocket.test-support.js";
+import { FakeWebSocket, mattermostPostEvent } from "./monitor-websocket.test-support.js";
 import { registerMattermostBlockProgressTests } from "./monitor.block-progress.test-support.js";
 import { monitorMattermostProvider } from "./monitor.js";
 import { registerMattermostPreviewDeliveryTests } from "./monitor.preview-delivery.test-support.js";
@@ -48,6 +48,7 @@ const mockState = vi.hoisted(() => ({
   progressDrafts: [] as Array<{ getSnapshot: () => { lines: readonly unknown[] } }>,
   registerMattermostMonitorSlashCommands: vi.fn(),
   registerPluginHttpRoute: vi.fn(),
+  receiveMattermostEvent: vi.fn<(rawEvent: string) => Promise<void>>(),
   recordMattermostThreadParticipation: vi.fn(),
   resolveChannelInfo: vi.fn(),
   resolveMattermostMedia: vi.fn(),
@@ -120,37 +121,40 @@ vi.mock("./monitor-ingress.js", async (importOriginal) => {
     createMattermostIngressMonitor: (
       options: Parameters<typeof actual.createMattermostIngressMonitor>[0],
     ) => {
-      if (mockState.ingressQueue) {
-        return actual.createMattermostIngressMonitor({
-          ...options,
-          queue: mockState.ingressQueue as NonNullable<typeof options.queue>,
-          pollIntervalMs: 60_000,
-        });
-      }
+      const monitor = mockState.ingressQueue
+        ? actual.createMattermostIngressMonitor({
+            ...options,
+            queue: mockState.ingressQueue as NonNullable<typeof options.queue>,
+            pollIntervalMs: 60_000,
+          })
+        : {
+            receive: async (rawEvent: string) => {
+              const payload = JSON.parse(rawEvent) as MattermostEventPayload;
+              const post =
+                typeof payload.data?.post === "string"
+                  ? (JSON.parse(payload.data.post) as MattermostPost)
+                  : (payload.data?.post as MattermostPost | undefined);
+              if (payload.event !== "posted" || !post) {
+                return;
+              }
+              const senderId = post.user_id?.trim();
+              if (!senderId) {
+                throw new Error("Mattermost posted event is missing post.user_id");
+              }
+              await options.dispatch({ ...post, user_id: senderId }, payload, {
+                abortSignal: new AbortController().signal,
+                onAdopted: async () => {},
+                onDeferred: () => {},
+                onAdoptionFinalizing: () => {},
+                onAbandoned: async () => {},
+              });
+            },
+            stop: async () => {},
+            waitForIdle: async () => {},
+          };
       return {
-        receive: async (rawEvent: string) => {
-          const payload = JSON.parse(rawEvent) as MattermostEventPayload;
-          const post =
-            typeof payload.data?.post === "string"
-              ? (JSON.parse(payload.data.post) as MattermostPost)
-              : (payload.data?.post as MattermostPost | undefined);
-          if (payload.event !== "posted" || !post) {
-            return;
-          }
-          const senderId = post.user_id?.trim();
-          if (!senderId) {
-            throw new Error("Mattermost posted event is missing post.user_id");
-          }
-          await options.dispatch({ ...post, user_id: senderId }, payload, {
-            abortSignal: new AbortController().signal,
-            onAdopted: async () => {},
-            onDeferred: () => {},
-            onAdoptionFinalizing: () => {},
-            onAbandoned: async () => {},
-          });
-        },
-        stop: async () => {},
-        waitForIdle: async () => {},
+        ...monitor,
+        receive: mockState.receiveMattermostEvent.mockImplementation(monitor.receive),
       };
     },
   };
@@ -421,47 +425,13 @@ async function openMonitor(config: OpenClawConfig = testConfig) {
   return provider;
 }
 
-function mattermostPostEvent(params: {
-  id: string;
-  message: string;
-  channelId?: string;
-  rootId?: string;
-  senderId?: string;
-  senderName?: string;
-  createAt?: number;
-  type?: string;
-  fileIds?: string[];
-  channelType?: string;
-  includeChannelLabels?: boolean;
-}) {
-  const senderId = params.senderId ?? "user-1";
-  const channelId = params.channelId ?? "chan-1";
-  return {
-    event: "posted",
-    data: {
-      ...(params.includeChannelLabels === false
-        ? {}
-        : { channel_name: "town-square", channel_display_name: "Town Square" }),
-      channel_type: params.channelType,
-      sender_name: params.senderName ?? "alice",
-      post: JSON.stringify({
-        id: params.id,
-        channel_id: channelId,
-        user_id: senderId,
-        message: params.message,
-        root_id: params.rootId,
-        create_at: params.createAt ?? 1_714_000_000_000,
-        type: params.type,
-        file_ids: params.fileIds,
-      }),
-    },
-  };
-}
 async function emitMattermostChannelPost(
   socket: FakeWebSocket,
   post: Parameters<typeof mattermostPostEvent>[0],
 ) {
   await socket.emitMessage(mattermostPostEvent(post));
+  // EventEmitter listeners return void; join the ingress owner, not the socket callback.
+  await mockState.receiveMattermostEvent.mock.results.at(-1)?.value;
 }
 
 async function receivePost(
@@ -1058,4 +1028,3 @@ describe("mattermost inbound user posts", () => {
   registerMattermostBlockProgressTests(harness);
   registerMattermostPreviewDeliveryTests(harness);
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
