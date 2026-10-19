@@ -47,6 +47,19 @@ const guildId = "123456789012345678";
 const channelId = "223456789012345678";
 const sutId = "323456789012345678";
 const driverId = "423456789012345678";
+const messagePath = (id?: string, channel = channelId) =>
+  `/channels/${channel}/messages${id ? `/${id}` : ""}`;
+const mutation = (method: string, id?: string, actor = "driver") => ({
+  method,
+  route: messagePath(id),
+  token: `Bot ${actor}-token`,
+});
+function nativeMessage(id: string, content: string, extra: Partial<DiscordE2eNativeMessage> = {}) {
+  return { id, content, channel_id: channelId, author: { id: sutId }, ...extra };
+}
+function expectEvidence(rows: Record<string, unknown>[], expected: Record<string, unknown>[]) {
+  expect(rows).toEqual(expect.arrayContaining(expected.map((row) => expect.objectContaining(row))));
+}
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const sessions: DiscordChannelE2eSession[] = [];
 afterEach(async () => {
@@ -170,6 +183,10 @@ function fixture(options: { manageThreads?: boolean; missingPermissions?: boolea
     messages,
     mutations,
     fetcher,
+    async finish() {
+      await session.stop();
+      await session.cleanup();
+    },
     loseLease: () => {
       leaseActive = false;
     },
@@ -203,12 +220,10 @@ describe("Discord agent E2E authority and evidence", () => {
   it("reading an unrelated message does not grant mutation or cleanup ownership", async () => {
     const f = fixture();
     const unrelated = "623456789012345678";
-    f.messages.set(unrelated, {
-      id: unrelated,
-      channel_id: channelId,
-      content: "preexisting",
-      author: { id: driverId },
-    });
+    f.messages.set(
+      unrelated,
+      nativeMessage(unrelated, "preexisting", { author: { id: driverId } }),
+    );
     await f.driver.doctor();
     await f.driver.read({ messageId: unrelated });
     await expect(f.driver.edit({ messageId: unrelated, text: "changed" })).rejects.toThrow(
@@ -222,18 +237,10 @@ describe("Discord agent E2E authority and evidence", () => {
       "not created",
     );
     const own = await f.driver.send({ text: "owned" });
-    await f.session.stop();
-    await f.session.cleanup();
+    await f.finish();
     expect(f.messages.has(own.id)).toBe(false);
     expect(f.messages.get(unrelated)?.content).toBe("preexisting");
-    expect(f.mutations).toEqual([
-      { method: "POST", route: `/channels/${channelId}/messages`, token: "Bot driver-token" },
-      {
-        method: "DELETE",
-        route: `/channels/${channelId}/messages/${own.id}`,
-        token: "Bot driver-token",
-      },
-    ]);
+    expect(f.mutations).toEqual([mutation("POST"), mutation("DELETE", own.id)]);
   });
 
   it("reports missing native permissions as failures instead of skipping lifecycle operations", async () => {
@@ -260,23 +267,15 @@ describe("Discord agent E2E authority and evidence", () => {
     const rejected = expect(sending).rejects.toThrow("scenario cancelled");
     await started.promise;
     f.controller.abort(new Error("scenario cancelled"));
-    f.messages.set(id, {
-      id,
-      channel_id: channelId,
-      content: "racing abort",
-      author: { id: driverId },
-    });
+    f.messages.set(id, nativeMessage(id, "racing abort", { author: { id: driverId } }));
     response.resolve(Response.json(f.messages.get(id)));
     await rejected;
     await expect(f.driver.send({ text: "after cancellation" })).rejects.toThrow(
       "scenario cancelled",
     );
-    await f.session.stop();
-    await f.session.cleanup();
+    await f.finish();
     expect(f.messages.has(id)).toBe(false);
-    expect((await f.evidence()).some((row) => row.source === "cleanup" && row.ok === true)).toBe(
-      true,
-    );
+    expectEvidence(await f.evidence(), [{ source: "cleanup", ok: true }]);
   });
 
   it("retains a correlated SUT reply delivered after fixture admission stops", async () => {
@@ -285,22 +284,14 @@ describe("Discord agent E2E authority and evidence", () => {
     await f.session.stop();
     await expect(f.driver.send({ text: "too late" })).rejects.toThrow();
     const id = "623456789012345678";
-    const lateReply = {
-      id,
-      channel_id: channelId,
-      author: { id: sutId },
-      content: "shutdown reply",
+    const lateReply = nativeMessage(id, "shutdown reply", {
       message_reference: { message_id: trigger.id },
-    };
+    });
     f.messages.set(id, lateReply);
     f.emit("MESSAGE_CREATE", lateReply);
     await f.session.cleanup();
     expect(f.messages.has(id)).toBe(false);
-    expect(f.mutations).toContainEqual({
-      method: "DELETE",
-      route: `/channels/${channelId}/messages/${id}`,
-      token: "Bot sut-token",
-    });
+    expect(f.mutations).toContainEqual(mutation("DELETE", id, "sut"));
   });
 
   it("cleans marker-correlated replies after a recorder failure without claiming unrelated messages", async () => {
@@ -312,12 +303,7 @@ describe("Discord agent E2E authority and evidence", () => {
     const waiting = f.driver.waitForReply({ afterMessageId: trigger.id, textIncludes: marker });
     const rejected = expect(waiting).rejects.toThrow("closed (1006)");
     await vi.advanceTimersByTimeAsync(0);
-    const reply = {
-      id: "623456789012345678",
-      channel_id: channelId,
-      author: { id: sutId },
-      content: marker,
-    };
+    const reply = nativeMessage("623456789012345678", marker);
     const unrelated: DiscordE2eNativeMessage[] = [
       { ...reply, id: "523456789012345677" },
       { ...reply, id: "623456789012345679", content: "another conversation" },
@@ -342,31 +328,15 @@ describe("Discord agent E2E authority and evidence", () => {
     expect(f.messages.has(trigger.id)).toBe(false);
     expect(f.messages.has(reply.id)).toBe(false);
     expect(unrelated.every((message) => f.messages.has(message.id))).toBe(true);
-    expect(f.mutations.filter((row) => row.method === "DELETE")).toEqual(
-      expect.arrayContaining([
-        {
-          method: "DELETE",
-          route: `/channels/${channelId}/messages/${trigger.id}`,
-          token: "Bot driver-token",
-        },
-        {
-          method: "DELETE",
-          route: `/channels/${channelId}/messages/${reply.id}`,
-          token: "Bot sut-token",
-        },
-      ]),
+    const deletions = f.mutations.filter((row) => row.method === "DELETE");
+    expect(deletions).toEqual(
+      expect.arrayContaining([mutation("DELETE", trigger.id), mutation("DELETE", reply.id, "sut")]),
     );
-    expect(f.mutations.filter((row) => row.method === "DELETE")).toHaveLength(2);
-    expect(await f.evidence()).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          source: "correlation",
-          messageId: reply.id,
-          triggerMessageId: trigger.id,
-        }),
-        expect.objectContaining({ source: "recorder", continuous: false }),
-      ]),
-    );
+    expect(deletions).toHaveLength(2);
+    expectEvidence(await f.evidence(), [
+      { source: "correlation", messageId: reply.id, triggerMessageId: trigger.id },
+      { source: "recorder", continuous: false },
+    ]);
   });
 
   it("never retries an uncertain write or sweeps the channel to conceal its missing receipt", async () => {
@@ -389,32 +359,14 @@ describe("Discord agent E2E authority and evidence", () => {
   it("matches SUT identity, cursor and reference while preserving authorless revisions and reaction actors", async () => {
     const f = fixture();
     const trigger = await f.driver.send({ text: "reply with UNIQUE_MARKER", mention: true });
-    f.emit("MESSAGE_CREATE", {
-      id: "523456789012345677",
-      author: { id: sutId },
-      content: "UNIQUE_MARKER",
-    });
-    f.emit("MESSAGE_CREATE", {
-      id: "523456789012345679",
-      author: { id: driverId },
-      content: "UNIQUE_MARKER",
-    });
-    f.emit("MESSAGE_CREATE", {
-      id: "523456789012345680",
-      channel_id: "923456789012345678",
-      author: { id: sutId },
-      content: "UNIQUE_MARKER",
-    });
-    f.emit("MESSAGE_CREATE", {
-      id: "523456789012345681",
-      author: { id: sutId },
-      content: "UNIQUE_MARKER",
-      message_reference: { message_id: "923456789012345678" },
-    });
+    const emitReply = (id: string, extra: Partial<DiscordE2eNativeMessage> = {}) =>
+      f.emit("MESSAGE_CREATE", nativeMessage(id, "UNIQUE_MARKER", extra));
+    emitReply("523456789012345677");
+    emitReply("523456789012345679", { author: { id: driverId } });
+    emitReply("523456789012345680", { channel_id: "923456789012345678" });
+    emitReply("523456789012345681", { message_reference: { message_id: "923456789012345678" } });
     const sutReplyId = "523456789012345682";
-    f.emit("MESSAGE_CREATE", {
-      id: sutReplyId,
-      author: { id: sutId },
+    emitReply(sutReplyId, {
       content: "draft",
       message_reference: { message_id: trigger.id },
     });
@@ -437,35 +389,33 @@ describe("Discord agent E2E authority and evidence", () => {
     await f.session.stop();
     await expect(f.session.cleanup()).rejects.toThrow("closed");
     const evidence = await f.evidence();
-    expect(evidence).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          kind: "MESSAGE_UPDATE",
-          actor: "sut",
-          messageId: sutReplyId,
-          triggerMessageId: trigger.id,
-          text: "UNIQUE_MARKER",
-        }),
-        expect.objectContaining({
-          kind: "MESSAGE_DELETE",
-          actor: "sut",
-          messageId: sutReplyId,
-          deletedText: "UNIQUE_MARKER",
-        }),
-        expect.objectContaining({
-          kind: "MESSAGE_REACTION_ADD",
-          actor: "sut",
-          isDrivenMessage: true,
-          messageId: trigger.id,
-        }),
-        expect.objectContaining({ kind: "TYPING_START", actor: "sut" }),
-        expect.objectContaining({ source: "recorder", continuous: false }),
-      ]),
-    );
+    expectEvidence(evidence, [
+      {
+        kind: "MESSAGE_UPDATE",
+        actor: "sut",
+        messageId: sutReplyId,
+        triggerMessageId: trigger.id,
+        text: "UNIQUE_MARKER",
+      },
+      {
+        kind: "MESSAGE_DELETE",
+        actor: "sut",
+        messageId: sutReplyId,
+        deletedText: "UNIQUE_MARKER",
+      },
+      {
+        kind: "MESSAGE_REACTION_ADD",
+        actor: "sut",
+        isDrivenMessage: true,
+        messageId: trigger.id,
+      },
+      { kind: "TYPING_START", actor: "sut" },
+      { source: "recorder", continuous: false },
+    ]);
     expect(evidence.some((row) => row.messageId === "523456789012345680")).toBe(false);
     expect(f.mutations.filter((row) => row.method === "DELETE").map((row) => row.route)).toEqual([
-      `/channels/${channelId}/messages/${trigger.id}`,
-      `/channels/${channelId}/messages/${sutReplyId}`,
+      messagePath(trigger.id),
+      messagePath(sutReplyId),
     ]);
   });
 
@@ -476,8 +426,7 @@ describe("Discord agent E2E authority and evidence", () => {
       const root = await f.driver.send({ text: "thread root" });
       const thread = await f.driver.thread({ name: "qa-owned", messageId: root.id });
       const child = await f.driver.send({ text: "thread child", threadId: thread.threadId });
-      await f.session.stop();
-      await f.session.cleanup();
+      await f.finish();
       const cleanup = (await f.evidence()).find((row) => row.source === "cleanup");
       expect(cleanup).toMatchObject({
         ok: true,
@@ -494,10 +443,7 @@ describe("Discord agent E2E authority and evidence", () => {
           .filter((row) => row.method === "DELETE")
           .slice(0, 2)
           .map((row) => row.route),
-      ).toEqual([
-        `/channels/${thread.threadId}/messages/${child.id}`,
-        `/channels/${channelId}/messages/${root.id}`,
-      ]);
+      ).toEqual([messagePath(child.id, thread.threadId), messagePath(root.id)]);
     },
   );
 
