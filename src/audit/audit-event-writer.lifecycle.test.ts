@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { withSqliteWorkerCleanupFailure } from "../infra/sqlite-worker-broker-reply.js";
 import { SqliteWorkerError, type SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
@@ -280,12 +281,14 @@ describe("audit writer async settlement", () => {
     }
   });
 
-  it("replays an unknown batch outcome before newer queued events", async () => {
+  it("replays a cleanup-wrapped unknown outcome before newer queued events", async () => {
     let failed = false;
+    const unknown = new SqliteWorkerError("Audit write outcome is unknown", "outcome-unknown");
+    const failure = withSqliteWorkerCleanupFailure(unknown, new Error("Synthetic cleanup failure"));
     const requests = mockEventRequests(async (sourceId) => {
       if (sourceId === "unknown-outcome" && !failed) {
         failed = true;
-        throw new SqliteWorkerError("Audit write outcome is unknown", "outcome-unknown");
+        throw failure;
       }
       return { status: "settled" };
     });
@@ -304,13 +307,14 @@ describe("audit writer async settlement", () => {
       expect(requests).toEqual(["unknown-outcome"]);
       expect(writer.record(event("newer"))).toBe(true);
       await vi.advanceTimersByTimeAsync(25);
+      await advanceDispatch();
       expect(requests).toEqual(["unknown-outcome", "unknown-outcome", "tail", "newer"]);
       const batches = execute.mock.calls.flatMap(([command]) =>
         command.type === "audit.writer.process" ? [command.input] : [],
       );
       expect(batches[0]?.[0]).toMatchObject({ eventId: expect.any(String) });
-      expect(batches[1]?.slice(0, 2)).toEqual(batches[0]);
-      expect(errors).toEqual(["Audit write outcome is unknown"]);
+      expect(batches[1]).toEqual(batches[0]);
+      expect(errors).toEqual([failure.message]);
     } finally {
       const stopping = writer.stop();
       await vi.advanceTimersByTimeAsync(10_000);

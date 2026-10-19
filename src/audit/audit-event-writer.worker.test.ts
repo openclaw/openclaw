@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useSqliteWorkerFault } from "../../test/helpers/sqlite-worker-fault.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { onInternalDiagnosticEvent } from "../infra/diagnostic-events.js";
@@ -208,8 +209,9 @@ describe("audit writer shared worker", () => {
     },
   );
 
-  it("drops a repeatedly crashing batch and persists later queued work", async () => {
+  it("drops a repeatedly crashing batch and persists work queued after its first failure", async () => {
     const stateDir = tempDirs.make("openclaw-audit-poison-batch-");
+    const newerQueued = createDeferred();
     const errors: string[] = [];
     const writer = createAuditEventWriter({
       scheduler: createTestGatewayScheduler(),
@@ -218,6 +220,10 @@ describe("audit writer shared worker", () => {
         errors.push(error);
         // Every attempt to insert an audit event kills the real worker again.
         pruneFault.enable(2);
+        if (errors.length === 1) {
+          recorder.recordMessage(messageEvent("message.outbound.queued"));
+          newerQueued.resolve();
+        }
       },
     });
     const recorder = createAuditEventRecorder({
@@ -228,10 +234,8 @@ describe("audit writer shared worker", () => {
     try {
       await writer.ready;
       pruneFault.enable(2);
-      for (let index = 0; index < 32; index++) {
-        expect(writer.record({ ...input(), sourceId: `poison-${index}` })).toBe(true);
-      }
-      recorder.recordMessage(messageEvent("message.outbound.queued"));
+      expect(writer.record({ ...input(), sourceId: "poison" })).toBe(true);
+      await newerQueued.promise;
       await recorder.stop();
 
       const owner = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } }).db;

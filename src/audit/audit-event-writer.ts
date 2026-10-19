@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { DecisionReceiptV1 } from "../../packages/gateway-protocol/src/index.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
-import { isSqliteWorkerError } from "../infra/sqlite-worker-contract.js";
+import { hasSqliteWorkerOutcomeUnknown } from "../infra/sqlite-worker-contract.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { AuditEventInput } from "./audit-event-types.js";
@@ -63,7 +63,7 @@ export function createAuditEventWriter(options: {
   let retryAttempt = 0;
   let retryDelayMs = 0;
   let retryReported = false;
-  let consecutiveUnknownOutcomes = 0;
+  let unknownBatch: { size: number; attempts: number } | undefined;
   let resolveReady!: () => void;
   const ready = new Promise<void>((resolve) => {
     resolveReady = resolve;
@@ -131,21 +131,22 @@ export function createAuditEventWriter(options: {
   const processRequests = async (requests: AuditWriterRequest[]): Promise<AuditWriterResult[]> => {
     try {
       const results = await execute({ type: "audit.writer.process", input: requests });
-      consecutiveUnknownOutcomes = 0;
+      unknownBatch = undefined;
       return results ?? requests.map(() => ({ status: "settled" as const }));
     } catch (error) {
-      if (isSqliteWorkerError(error, "outcome-unknown")) {
-        consecutiveUnknownOutcomes += 1;
+      if (hasSqliteWorkerOutcomeUnknown(error)) {
+        unknownBatch ??= { size: requests.length, attempts: 0 };
+        unknownBatch.attempts += 1;
         fail(error);
-        if (consecutiveUnknownOutcomes < MAX_CONSECUTIVE_UNKNOWN_OUTCOMES) {
+        if (unknownBatch.attempts < MAX_CONSECUTIVE_UNKNOWN_OUTCOMES) {
           // Replay original IDs; committed items are no-ops.
           return [{ status: "retry" }];
         }
         // Drop a repeatedly crashing batch so later queued work can proceed.
-        consecutiveUnknownOutcomes = 0;
+        unknownBatch = undefined;
         return requests.map(() => ({ status: "settled" }));
       }
-      consecutiveUnknownOutcomes = 0;
+      unknownBatch = undefined;
       return requests.map((request) => ({
         status: "settled",
         error: formatAuditWriterRequestError(request, error),
@@ -225,7 +226,7 @@ export function createAuditEventWriter(options: {
         return;
       }
       // Keep submitted items in the bounded queue until their native attempts settle.
-      const requests = queue.slice(0, MAX_AUDIT_BATCH_SIZE);
+      const requests = queue.slice(0, unknownBatch?.size ?? MAX_AUDIT_BATCH_SIZE);
       if (requests.length > 0) {
         const results = await processRequests(requests);
         retry = results.at(-1)?.status === "retry";
