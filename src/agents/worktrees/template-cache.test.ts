@@ -107,6 +107,12 @@ it.each(["cold", "idle"])("shares %s preparation and reader custody", async (sta
   await collect();
   expect(await list()).toHaveLength(1);
   await right.release();
+  await fs.writeFile(path.join(left.path, "source"), "changed");
+  const rebuilt = await prepare();
+  assert(rebuilt, "Invalid idle templates must be rebuilt");
+  expect(rebuilt.id).not.toBe(left.id);
+  expect(await source(rebuilt)).toBe("source");
+  await rebuilt.release();
   await collect();
   expect(await list()).toEqual([]);
   await expect(fs.access(left.path)).rejects.toMatchObject({ code: "ENOENT" });
