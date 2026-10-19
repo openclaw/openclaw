@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { asNonNegativeFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { resolvePositiveTimeoutSeconds } from "openclaw/plugin-sdk/provider-web-fetch";
 import { resolveProviderWebSearchPluginConfig } from "openclaw/plugin-sdk/provider-web-search-config-contract";
 import { normalizeSecretInput } from "openclaw/plugin-sdk/secret-input";
@@ -24,15 +25,8 @@ type FirecrawlFetchConfig = {
   timeoutSeconds?: number;
 };
 
-type PluginEntryConfig =
-  | {
-      webFetch?: FirecrawlFetchConfig;
-    }
-  | undefined;
-
 function resolveFirecrawlFetchConfig(cfg?: OpenClawConfig): FirecrawlFetchConfig | undefined {
-  const pluginConfig = cfg?.plugins?.entries?.firecrawl?.config as PluginEntryConfig;
-  return asOptionalRecord(pluginConfig?.webFetch);
+  return asOptionalRecord(resolvePluginConfigObject(cfg, "firecrawl")?.webFetch);
 }
 
 function resolveConfiguredSecret(value: unknown, path: string, cfg?: OpenClawConfig) {
@@ -46,11 +40,11 @@ function resolveConfiguredSecret(value: unknown, path: string, cfg?: OpenClawCon
 }
 
 export function resolveFirecrawlApiKey(cfg?: OpenClawConfig): string | undefined {
-  const pluginConfig = cfg?.plugins?.entries?.firecrawl?.config as PluginEntryConfig;
+  const fetch = resolveFirecrawlFetchConfig(cfg);
   const search = resolveProviderWebSearchPluginConfig(cfg, "firecrawl");
   const configuredCandidates: Array<{ value: unknown; path: string }> = [
     {
-      value: pluginConfig?.webFetch?.apiKey,
+      value: fetch?.apiKey,
       path: "plugins.entries.firecrawl.config.webFetch.apiKey",
     },
     {
