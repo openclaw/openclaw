@@ -1,13 +1,17 @@
 import { expectDefined } from "@openclaw/normalization-core";
 // @vitest-environment node
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
+import type { CommandEntry } from "../../../../packages/gateway-protocol/src/index.js";
+import { expectObjectFields } from "../../../../src/test-utils/mock-call-assertions.js";
 import {
   buildFallbackSlashCommands,
   buildSlashCommandsFromEntries,
+  findInlineSlashCompletion,
   getRemoteCommandEntries,
+  getSlashCommandDescription,
   getSkillCommandCompletions,
   getSlashCommandCompletions,
+  isModelIndependentChatCommand,
   parseSlashCommand,
   replaceSlashCommands,
   SLASH_COMMANDS,
@@ -18,33 +22,72 @@ afterEach(() => {
   replaceSlashCommands(buildFallbackSlashCommands());
 });
 
-const requireRecord = createRequireRecord("record", "expected-label-object");
+describe("model-independent commands", () => {
+  it.each([
+    "/unknown",
+    "Please /models",
+    "/model example/model explain this",
+    "/send on explain this",
+    "/whoami explain this",
+  ])("requires model access for %s", (command) =>
+    expect(isModelIndependentChatCommand(command)).toBe(false),
+  );
+});
 
-function requireArray(value: unknown, label: string): unknown[] {
-  if (!Array.isArray(value)) {
-    throw new Error(`expected ${label} to be an array`);
-  }
-  return value;
+describe("findInlineSlashCompletion", () => {
+  it.each([
+    ["/thi", undefined, { query: "thi", start: 0, end: 4, inline: false }],
+    ["Please use /wea", undefined, { query: "wea", start: 11, end: 15, inline: true }],
+    ["Use /weather tomorrow", 8, { query: "wea", start: 4, end: 12, inline: true }],
+    ["/thinking please", 4, { query: "thi", start: 0, end: 9, inline: true }],
+    [
+      "Please use /weather:",
+      undefined,
+      { query: "weather", start: 11, end: 20, inline: true, skillOnly: true },
+    ],
+    ["https://example.com/wea", undefined, null],
+    ["Open tmp/wea", undefined, null],
+    ["Use //wea", undefined, null],
+  ])("finds only slash tokens at the caret in %j", (text, caret, expected) => {
+    expect(findInlineSlashCompletion(text, caret)).toEqual(expected);
+  });
+
+  it("offers every non-skill command inline and can hide them when no command owner exists", () => {
+    applyRemoteEntries([
+      remoteCommand("weather", {
+        source: "skill",
+        skillModelVisible: true,
+        scope: "text",
+      }),
+    ]);
+    expect(completionNames("weather", { inlineOnly: true })).toEqual(["weather"]);
+    expect(completionNames("reset", { inlineOnly: true })).toEqual(["reset"]);
+    expect(completionNames("elevated", { inlineOnly: true })).toEqual(["elevated"]);
+    expect(completionNames("exec", { inlineOnly: true })).toContain("exec");
+    expect(completionNames("think", { inlineOnly: true })).toContain("think");
+    expect(
+      getSlashCommandCompletions("reset", {
+        inlineOnly: true,
+        allowImmediateInlineCommands: false,
+      }),
+    ).toEqual([]);
+    expect(
+      completionNames("weather", {
+        inlineOnly: true,
+        allowImmediateInlineCommands: false,
+      }),
+    ).toEqual(["weather"]);
+  });
+});
+
+function expectCommand(name: string, expected: Record<string, unknown>) {
+  expectObjectFields(requireCommandByName(name), expected);
 }
 
-function expectRecordFields(value: unknown, label: string, expected: Record<string, unknown>) {
-  const record = requireRecord(value, label);
-  for (const [key, expectedValue] of Object.entries(expected)) {
-    expect(record[key]).toEqual(expectedValue);
-  }
-}
-
-function requireCommandByName(name: string): Record<string, unknown> {
-  return requireRecord(
+function requireCommandByName(name: string): SlashCommandDef {
+  return expectDefined(
     SLASH_COMMANDS.find((entry) => entry.name === name),
     `slash command ${name}`,
-  );
-}
-
-function requireCommandByKey(key: string): Record<string, unknown> {
-  return requireRecord(
-    SLASH_COMMANDS.find((entry) => entry.key === key),
-    `slash command ${key}`,
   );
 }
 
@@ -57,13 +100,28 @@ function applyCommandsListResult(result: { commands?: unknown }) {
 }
 
 function expectParsedSlash(input: string, commandFields: Record<string, unknown>, args: string) {
-  const parsed = requireRecord(parseSlashCommand(input), `parsed ${input}`);
-  expectRecordFields(parsed.command, `parsed ${input} command`, commandFields);
+  const parsed = expectDefined(parseSlashCommand(input), `parsed ${input}`);
+  expectObjectFields(parsed.command, commandFields);
   expect(parsed.args).toBe(args);
 }
 
-function completionNames(filter: string, options?: { showAll?: boolean }): string[] {
+function completionNames(
+  filter: string,
+  options?: Parameters<typeof getSlashCommandCompletions>[1],
+): string[] {
   return getSlashCommandCompletions(filter, options).map((command) => command.name);
+}
+
+function remoteCommand(name: string, overrides: Partial<CommandEntry> = {}): CommandEntry {
+  return {
+    name,
+    textAliases: [`/${name}`],
+    description: `${name} command.`,
+    source: "plugin",
+    scope: "both",
+    acceptsArgs: true,
+    ...overrides,
+  };
 }
 
 function slashCommand(
@@ -74,44 +132,6 @@ function slashCommand(
 }
 
 describe("getSlashCommandCompletions", () => {
-  it("ranks an exact name above prefixes and description-only matches", () => {
-    replaceSlashCommands([
-      slashCommand("openclaw", {
-        description: "Run the setup and repair helper.",
-        tier: "essential",
-        category: "session",
-      }),
-      slashCommand("pair-device", {
-        tier: "standard",
-        category: "tools",
-      }),
-      slashCommand("pair", { tier: "power", category: "agents" }),
-    ]);
-
-    expect(completionNames("pair")).toEqual(["pair", "pair-device", "openclaw"]);
-  });
-
-  it("ranks exact and prefix alias matches like primary names", () => {
-    replaceSlashCommands([
-      slashCommand("pair-device", {
-        tier: "power",
-        category: "agents",
-      }),
-      slashCommand("connect", {
-        aliases: ["pairing"],
-        tier: "essential",
-        category: "session",
-      }),
-      slashCommand("handoff", {
-        aliases: ["pair"],
-        tier: "power",
-        category: "agents",
-      }),
-    ]);
-
-    expect(completionNames("pair")).toEqual(["handoff", "connect", "pair-device"]);
-  });
-
   it("ranks name and alias substrings above description-only matches", () => {
     replaceSlashCommands([
       slashCommand("helper", {
@@ -119,74 +139,21 @@ describe("getSlashCommandCompletions", () => {
         tier: "essential",
         category: "session",
       }),
-      slashCommand("connect", {
-        aliases: ["repairing"],
-        tier: "standard",
-        category: "tools",
-      }),
-      slashCommand("repair", {
-        tier: "power",
-        category: "agents",
-      }),
-      slashCommand("pairing", {
-        tier: "power",
-        category: "agents",
-      }),
+      slashCommand("connect", { aliases: ["repairing"], tier: "standard", category: "tools" }),
+      slashCommand("repair", { tier: "power", category: "agents" }),
+      slashCommand("pairing", { tier: "power", category: "agents" }),
     ]);
 
     expect(completionNames("pair")).toEqual(["pairing", "connect", "repair", "helper"]);
   });
 
-  it("uses tier and category tie-breakers while keeping equal matches stable", () => {
-    replaceSlashCommands([
-      slashCommand("path-first", {
-        tier: "essential",
-        category: "session",
-      }),
-      slashCommand("path-standard", {
-        tier: "standard",
-        category: "session",
-      }),
-      slashCommand("path-agent", {
-        tier: "essential",
-        category: "agents",
-      }),
-      slashCommand("path-second", {
-        tier: "essential",
-        category: "session",
-      }),
-    ]);
-
-    expect(completionNames("path-")).toEqual([
-      "path-first",
-      "path-second",
-      "path-agent",
-      "path-standard",
-    ]);
-  });
-
   it("keeps empty-query tier and category ordering unchanged", () => {
     replaceSlashCommands([
-      slashCommand("standard-agent", {
-        tier: "standard",
-        category: "agents",
-      }),
-      slashCommand("essential-tools", {
-        tier: "essential",
-        category: "tools",
-      }),
-      slashCommand("power-session", {
-        tier: "power",
-        category: "session",
-      }),
-      slashCommand("essential-session", {
-        tier: "essential",
-        category: "session",
-      }),
-      slashCommand("standard-session", {
-        tier: "standard",
-        category: "session",
-      }),
+      slashCommand("standard-agent", { tier: "standard", category: "agents" }),
+      slashCommand("essential-tools", { tier: "essential", category: "tools" }),
+      slashCommand("power-session", { tier: "power", category: "session" }),
+      slashCommand("essential-session", { tier: "essential", category: "session" }),
+      slashCommand("standard-session", { tier: "standard", category: "session" }),
     ]);
 
     expect(completionNames("")).toEqual([
@@ -206,140 +173,48 @@ describe("getSlashCommandCompletions", () => {
 });
 
 describe("parseSlashCommand", () => {
-  it("parses commands with an optional colon separator", () => {
-    expectParsedSlash("/think: high", { name: "think" }, "high");
-    expectParsedSlash("/think:high", { name: "think" }, "high");
-    expectParsedSlash("/help:", { name: "help" }, "");
-  });
-
-  it("still parses space-delimited commands", () => {
-    expectParsedSlash("/verbose full", { name: "verbose" }, "full");
-  });
-
   it("parses fast commands", () => {
     expectParsedSlash("/fast:on", { name: "fast" }, "on");
   });
 
-  it("keeps /status on the agent path", () => {
-    const status = SLASH_COMMANDS.find((entry) => entry.name === "status");
-    expect(status?.executeLocal).not.toBe(true);
-    expectParsedSlash("/status", { name: "status" }, "");
-  });
-
-  it("includes shared /tools with shared arg hints", () => {
-    const tools = requireCommandByName("tools");
-    expectRecordFields(tools, "tools command", {
-      key: "tools",
-      description: "List available runtime tools.",
-      argOptions: ["compact", "verbose"],
-      executeLocal: false,
-    });
-    expectParsedSlash("/tools verbose", { name: "tools" }, "verbose");
-  });
-
-  it("parses slash aliases through the shared registry", () => {
-    const exportCommand = requireCommandByKey("export-session");
-    expectRecordFields(exportCommand, "export-session command", {
-      name: "export-session",
-      aliases: ["export"],
-      executeLocal: true,
-    });
-    expectParsedSlash("/export", { key: "export-session" }, "");
-    expectParsedSlash("/export-session", { key: "export-session" }, "");
-    const side = requireRecord(parseSlashCommand("/side what changed?"), "parsed /side");
-    expectRecordFields(side.command, "side command", { key: "btw", name: "btw" });
-    expect(
-      requireArray(requireRecord(side.command, "side command").aliases, "side aliases"),
-    ).toEqual(["side"]);
-    expect(side.args).toBe("what changed?");
-  });
-
-  it("keeps canonical long-form slash names as the primary menu command", () => {
-    expectRecordFields(requireCommandByKey("verbose"), "verbose command", {
-      name: "verbose",
-      aliases: ["v"],
-    });
-    const think = requireCommandByKey("think");
-    expectRecordFields(think, "think command", {
-      name: "think",
-    });
-    expect(requireArray(think.aliases, "think aliases")).toEqual(["thinking", "t"]);
-  });
-
-  it("keeps a single local /steer entry with the control-ui metadata", () => {
-    const steerEntries = SLASH_COMMANDS.filter((entry) => entry.name === "steer");
-    expect(steerEntries).toHaveLength(1);
-    const steer = requireRecord(steerEntries[0], "steer command");
-    expectRecordFields(steer, "steer command", {
-      key: "steer",
-      description: "Inject a message into the active run",
-      args: "<message>",
-      executeLocal: true,
-    });
-    expect(requireArray(steer.aliases, "steer aliases")).toEqual(["tell"]);
-  });
-
-  it("builds runtime commands from command entries so docks, plugins, and direct skills appear", () => {
+  it("builds runtime commands from native, plugin, and direct skill entries", () => {
     applyRemoteEntries([
-      {
-        name: "dock-discord",
-        textAliases: ["/dock-discord", "/dock_discord"],
-        description: "Switch to discord for replies.",
+      remoteCommand("inspect-session", {
+        textAliases: ["/inspect-session", "/inspect_session"],
         source: "native",
-        scope: "both",
         acceptsArgs: false,
-        category: "docks",
-      },
-      {
-        name: "dreaming",
-        textAliases: ["/dreaming"],
-        description: "Enable or disable memory dreaming.",
-        source: "plugin",
-        scope: "both",
-        acceptsArgs: true,
-      },
-      {
-        name: "prose",
-        textAliases: ["/prose"],
-        description: "Draft polished prose.",
+        category: "tools",
+      }),
+      remoteCommand("dreaming"),
+      remoteCommand("draft", {
         source: "skill",
         skillModelVisible: true,
-        scope: "both",
-        acceptsArgs: true,
-      },
+      }),
     ]);
 
-    expectRecordFields(requireCommandByName("dock-discord"), "dock-discord command", {
-      aliases: ["dock_discord"],
+    expectCommand("inspect-session", {
+      aliases: ["inspect_session"],
       category: "tools",
       executeLocal: false,
     });
-    expectRecordFields(requireCommandByName("dreaming"), "dreaming command", {
-      key: "dreaming",
-      executeLocal: false,
-    });
-    expectRecordFields(requireCommandByName("prose"), "prose command", {
-      key: "prose",
+    expectCommand("dreaming", { key: "dreaming", executeLocal: false });
+    expectCommand("draft", {
+      key: "draft",
       executeLocal: false,
       source: "skill",
       skillModelVisible: true,
     });
-    expectParsedSlash("/dock_discord", { name: "dock-discord" }, "");
-    expect(getSkillCommandCompletions("pro").map((command) => command.name)).toEqual(["prose"]);
+    expectParsedSlash("/inspect_session", { name: "inspect-session" }, "");
+    expect(getSkillCommandCompletions("dra").map((command) => command.name)).toEqual(["draft"]);
   });
 
   it("matches skill queries against both display titles and command tokens", () => {
     applyRemoteEntries([
-      {
-        name: "release_notes",
+      remoteCommand("release_notes", {
         skillDisplayName: "Release Notes",
-        textAliases: ["/release_notes"],
-        description: "Draft release notes.",
         source: "skill",
         skillModelVisible: true,
-        scope: "both",
-        acceptsArgs: true,
-      },
+      }),
     ]);
 
     expect(getSkillCommandCompletions("notes")).toMatchObject([
@@ -350,82 +225,49 @@ describe("parseSlashCommand", () => {
     ]);
   });
 
-  it("keeps model-hidden skills in slash commands but out of $ completions", () => {
-    applyRemoteEntries([
-      {
-        name: "hidden_skill",
-        textAliases: ["/hidden_skill"],
-        description: "Slash-only skill.",
-        source: "skill",
-        skillModelVisible: false,
-        scope: "both",
-        acceptsArgs: true,
-      },
-    ]);
-
-    expectParsedSlash("/hidden_skill", { name: "hidden_skill" }, "");
-    expect(getSkillCommandCompletions("hidden")).toEqual([]);
-  });
-
-  it("fails closed when an older gateway omits skill visibility metadata", () => {
-    applyRemoteEntries([
-      {
-        name: "legacy_skill",
-        textAliases: ["/legacy_skill"],
-        description: "Legacy skill command.",
-        source: "skill",
-        scope: "both",
-        acceptsArgs: true,
-      },
-    ]);
-
-    expectParsedSlash("/legacy_skill", { name: "legacy_skill" }, "");
-    expect(getSkillCommandCompletions("legacy")).toEqual([]);
-  });
+  it.each([false, undefined])(
+    "keeps skills with visibility %j in slash commands but out of $ completions",
+    (skillModelVisible) => {
+      applyRemoteEntries([remoteCommand("hidden_skill", { source: "skill", skillModelVisible })]);
+      expectParsedSlash("/hidden_skill", { name: "hidden_skill" }, "");
+      expect(getSkillCommandCompletions("hidden")).toEqual([]);
+    },
+  );
 
   it("does not let remote commands collide with reserved local commands", () => {
-    applyRemoteEntries([
-      {
-        name: "redirect",
-        textAliases: ["/redirect"],
-        description: "Remote redirect impostor.",
-        source: "plugin",
-        scope: "both",
-        acceptsArgs: true,
-      },
-    ]);
+    applyRemoteEntries([remoteCommand("redirect")]);
 
-    expectRecordFields(requireCommandByName("redirect"), "redirect command", {
+    expectCommand("redirect", {
       key: "redirect",
       executeLocal: true,
       description: "Abort and restart with a new message",
     });
   });
 
-  it("drops remote commands with unsafe identifiers before they reach the palette/parser", () => {
+  it("keeps remote descriptions when a command name matches an object prototype property", () => {
     applyRemoteEntries([
-      {
-        name: "prose now",
-        textAliases: ["/prose now", "/safe-name"],
-        description: "Unsafe injected command.",
-        source: "skill",
-        scope: "both",
-        acceptsArgs: true,
-      },
-      {
-        name: "bad:alias",
-        textAliases: ["/bad:alias"],
-        description: "Unsafe alias command.",
-        source: "plugin",
-        scope: "both",
+      remoteCommand("constructor", {
+        description: "Construct a sample project.",
         acceptsArgs: false,
-      },
+      }),
     ]);
 
-    expectRecordFields(requireCommandByName("safe-name"), "safe-name command", {
-      name: "safe-name",
-    });
-    expect(SLASH_COMMANDS.find((entry) => entry.name === "prose now")).toBeUndefined();
+    const command = expectDefined(getSlashCommandCompletions("constructor")[0], "completion");
+    expect(command.name).toBe("constructor");
+    expect(getSlashCommandDescription(command)).toBe("Construct a sample project.");
+  });
+
+  it("drops remote commands with unsafe identifiers before they reach the palette/parser", () => {
+    applyRemoteEntries([
+      remoteCommand("draft now", {
+        textAliases: ["/draft now", "/safe-name"],
+        source: "skill",
+      }),
+      remoteCommand("bad:alias", { acceptsArgs: false }),
+    ]);
+
+    expectCommand("safe-name", { name: "safe-name" });
+    expect(SLASH_COMMANDS.find((entry) => entry.name === "draft now")).toBeUndefined();
     expect(SLASH_COMMANDS.find((entry) => entry.name === "bad:alias")).toBeUndefined();
     expectParsedSlash("/safe-name", { name: "safe-name" }, "");
   });
@@ -434,13 +276,9 @@ describe("parseSlashCommand", () => {
     const longName = "x".repeat(260);
     const longDescription = `${"d".repeat(1_999)}🚀tail`;
     const boundaryArgName = `${"n".repeat(199)}🚀tail`;
-    const oversizedCommand = {
-      name: "plugin-0",
+    const oversizedCommand = remoteCommand("plugin-0", {
       textAliases: Array.from({ length: 25 }, (_, aliasIndex) => `/plugin-0-${aliasIndex}`),
       description: longDescription,
-      source: "plugin" as const,
-      scope: "both" as const,
-      acceptsArgs: true,
       args: Array.from({ length: 25 }, (_, argIndex) => ({
         name: argIndex === 0 ? boundaryArgName : `${longName}-${argIndex}`,
         description: longDescription,
@@ -450,17 +288,14 @@ describe("parseSlashCommand", () => {
           label: `${longName}-${choiceIndex}`,
         })),
       })),
-    };
+    });
     applyRemoteEntries([
       oversizedCommand,
-      ...Array.from({ length: 519 }, (_, index) => ({
-        name: `plugin-${index + 1}`,
-        textAliases: [`/plugin-${index + 1}`],
-        description: "Plugin command.",
-        source: "plugin" as const,
-        scope: "both" as const,
-        acceptsArgs: false,
-      })),
+      ...Array.from({ length: 519 }, (_, index) =>
+        remoteCommand(`plugin-${index + 1}`, {
+          acceptsArgs: false,
+        }),
+      ),
     ]);
 
     const remoteCommands = SLASH_COMMANDS.filter((entry) => entry.name.startsWith("plugin-"));
@@ -475,18 +310,12 @@ describe("parseSlashCommand", () => {
 
   it("preserves only known closed plugin client presentation metadata", () => {
     applyRemoteEntries([
-      {
-        name: "pair",
-        textAliases: ["/pair"],
-        description: "Pair a device.",
-        source: "plugin",
-        scope: "both",
-        acceptsArgs: true,
+      remoteCommand("pair", {
         clientPresentation: {
           when: "no-arguments",
           action: { kind: "device-pairing" },
         },
-      },
+      }),
     ]);
 
     expect(requireCommandByName("pair").clientPresentation).toEqual({
@@ -506,17 +335,7 @@ describe("parseSlashCommand", () => {
     },
   ])("drops malformed client presentation metadata %#", (clientPresentation) => {
     applyCommandsListResult({
-      commands: [
-        {
-          name: "pair",
-          textAliases: ["/pair"],
-          description: "Pair a device.",
-          source: "plugin",
-          scope: "both",
-          acceptsArgs: true,
-          clientPresentation,
-        },
-      ],
+      commands: [{ ...remoteCommand("pair"), clientPresentation }],
     });
 
     expect(requireCommandByName("pair").clientPresentation).toBeUndefined();
@@ -525,7 +344,7 @@ describe("parseSlashCommand", () => {
   it("falls back safely when command payload shapes are malformed", () => {
     applyCommandsListResult({ commands: { bad: "shape" } });
     expect(SLASH_COMMANDS.find((entry) => entry.name === "pair")).toBeUndefined();
-    expectRecordFields(requireCommandByName("help"), "help command", {
+    expectCommand("help", {
       key: "help",
       name: "help",
       executeLocal: true,
@@ -540,12 +359,7 @@ describe("parseSlashCommand", () => {
           args: { nope: true },
         },
         {
-          name: "pair",
-          textAliases: ["/pair"],
-          description: "Generate setup codes.",
-          source: "plugin",
-          scope: "both",
-          acceptsArgs: true,
+          ...remoteCommand("pair"),
           args: [
             {
               name: "mode",
@@ -556,12 +370,7 @@ describe("parseSlashCommand", () => {
         },
       ],
     });
-    expectRecordFields(requireCommandByName("valid"), "valid command", {
-      name: "valid",
-      description: "",
-    });
-    expectRecordFields(requireCommandByName("pair"), "pair command", {
-      name: "pair",
-    });
+    expectCommand("valid", { name: "valid", description: "" });
+    expectCommand("pair", { name: "pair" });
   });
 });

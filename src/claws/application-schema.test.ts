@@ -2,10 +2,10 @@ import { mkdir, realpath, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { clawProfileExtensionPackages } from "./application-plan.js";
 import { buildClawAddPlan } from "./lifecycle.js";
+import { emptyPluginCapabilityEvidence } from "./packages.test-support.js";
 import { parseClawManifest, parseClawOpenClawProfile } from "./schema.js";
-import type { ClawManifest, ClawSourceIdentity } from "./types.js";
+import type { ClawManifest, ClawPackagePreflightResult, ClawSourceIdentity } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -45,6 +45,27 @@ const extension = {
   version: "2.0.1",
 } as const;
 
+function extensionPreflight(
+  overrides: Partial<ClawPackagePreflightResult> = {},
+): ClawPackagePreflightResult {
+  return {
+    ok: true,
+    action: "install",
+    integrity: `sha256:${"b".repeat(64)}`,
+    installId: "market-data",
+    detectedFormat: "claude",
+    mapped: ["skills"],
+    unavailable: [],
+    adapterIdentity: "openclaw/test",
+    declaredCapabilities: emptyPluginCapabilityEvidence.declared,
+    capabilityGrants: emptyPluginCapabilityEvidence.grants,
+    capabilityGrantsByPluginId: {
+      "market-data": emptyPluginCapabilityEvidence.grants,
+    },
+    ...overrides,
+  };
+}
+
 describe("Claw application schema v1", () => {
   it("accepts strict native extension assertions without a schema bump", () => {
     expect(
@@ -75,18 +96,21 @@ describe("Claw application schema v1", () => {
 });
 
 describe("Claw application planning v1", () => {
-  it("projects profile extensions onto canonical plugin package identities", () => {
-    expect(
-      clawProfileExtensionPackages({ schemaVersion: 1, agent: {}, extensions: [extension] }),
-    ).toEqual([
-      {
-        kind: "plugin",
-        source: "clawhub",
-        ref: "@acme/market-data",
-        version: "2.0.1",
-      },
-    ]);
-    expect(clawProfileExtensionPackages(undefined)).toEqual([]);
+  it("allows ordinary sessions_spawn tool authority without model or named delegates", async () => {
+    const { source, workspace } = await createPlanSource();
+    const plan = await buildClawAddPlan({
+      manifest: requireManifest({ schemaVersion: 1, agent: { id: "analyst" } }),
+      openClawProfile: { schemaVersion: 1, agent: { tools: { allow: ["sessions_spawn"] } } },
+      source,
+      context: { workspace },
+    });
+    expect(plan.agent.config).not.toHaveProperty("model");
+    expect(plan.agent.config).not.toHaveProperty("subagents");
+    expect(plan.capabilityChanges).toContainEqual(
+      expect.objectContaining({ kind: "agent", effect: { tools: { allow: ["sessions_spawn"] } } }),
+    );
+    expect(plan.blockers).toEqual([]);
+    expect(plan.diagnostics).toEqual([]);
   });
 
   it("plans a canonical extension and an ordinary managed schema asset", async () => {
@@ -104,16 +128,8 @@ describe("Claw application planning v1", () => {
       source,
       context: {
         workspace,
-        packagePreflight: async () => ({
-          ok: true,
-          action: "install",
-          integrity: `sha256:${"b".repeat(64)}`,
-          installId: "market-data",
-          detectedFormat: "claude",
-          mapped: ["commands", "skills"],
-          unavailable: ["agents"],
-          adapterIdentity: "openclaw/test",
-        }),
+        packagePreflight: async () =>
+          extensionPreflight({ mapped: ["commands", "skills"], unavailable: ["agents"] }),
       },
     });
 
@@ -160,17 +176,8 @@ describe("Claw application planning v1", () => {
       source,
       context: {
         workspace,
-        packagePreflight: async () => ({
-          ok: true,
-          action: "reuse",
-          integrity: `sha256:${"b".repeat(64)}`,
-          installId: "market-data",
-          detectedFormat: "claude",
-          mapped: ["skills"],
-          unavailable: [],
-          adapterIdentity: "openclaw/test",
-          requirements: [prerequisite],
-        }),
+        packagePreflight: async () =>
+          extensionPreflight({ action: "reuse", requirements: [prerequisite] }),
       },
     });
 
@@ -196,15 +203,7 @@ describe("Claw application planning v1", () => {
       source,
       context: {
         workspace,
-        packagePreflight: async () => ({
-          ok: true,
-          action: "install",
-          integrity: `sha256:${"b".repeat(64)}`,
-          installId: "market-data",
-          detectedFormat: "claude",
-          mapped: ["skills"],
-          unavailable: [],
-        }),
+        packagePreflight: async () => extensionPreflight({ adapterIdentity: undefined }),
       },
     });
 
@@ -236,16 +235,7 @@ describe("Claw application planning v1", () => {
       source,
       context: {
         workspace,
-        packagePreflight: async () => ({
-          ok: true,
-          action: "install",
-          integrity: `sha256:${"b".repeat(64)}`,
-          installId: "market-data",
-          detectedFormat: "claude",
-          mapped: ["skills"],
-          unavailable: [],
-          adapterIdentity: "openclaw/test",
-        }),
+        packagePreflight: async () => extensionPreflight(),
       },
     });
 
@@ -269,16 +259,7 @@ describe("Claw application planning v1", () => {
       source,
       context: {
         workspace,
-        packagePreflight: async () => ({
-          ok: true,
-          action: "install",
-          integrity: `sha256:${"b".repeat(64)}`,
-          installId: "market-data",
-          detectedFormat: "claude",
-          mapped: ["skills"],
-          unavailable: [],
-          adapterIdentity: "openclaw/test",
-        }),
+        packagePreflight: async () => extensionPreflight(),
       },
     });
 
@@ -289,5 +270,28 @@ describe("Claw application planning v1", () => {
         path: "$.profiles.openclaw.extensions[0].format",
       }),
     );
+  });
+});
+
+describe("parseClawOpenClawProfile package authority", () => {
+  it.each([
+    { model: { primary: "acme/model" } },
+    { provider: "acme" },
+    { subagents: { allowAgents: ["researcher"] } },
+    { subagents: { delegationMode: "prefer" } },
+    { model: {} },
+    { model: "acme/model" },
+    { subagents: {} },
+  ])("rejects host-owned profile fields: %j", (agent) => {
+    expect(parseClawOpenClawProfile({ schemaVersion: 1, agent }).ok).toBe(false);
+  });
+
+  it("accepts the ordinary sessions_spawn tool grant", () => {
+    expect(
+      parseClawOpenClawProfile({
+        schemaVersion: 1,
+        agent: { tools: { allow: ["sessions_spawn"] } },
+      }).ok,
+    ).toBe(true);
   });
 });

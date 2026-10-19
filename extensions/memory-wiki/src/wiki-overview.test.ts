@@ -2,16 +2,18 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { compileMemoryWikiVault } from "./compile.js";
+import { loadMemoryWikiCompiledDashboards } from "./compiled-cache.js";
 import { renderWikiMarkdown } from "./markdown.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
-import { listMemoryWikiOverview } from "./wiki-overview.js";
 
 const { createVault } = createMemoryWikiTestHarness();
 
-describe("listMemoryWikiOverview", () => {
+describe("compiled wiki overview", () => {
   it("groups wiki pages by kind and surfaces claims, questions, and contradictions", async () => {
     const { rootDir, config } = await createVault({
       prefix: "memory-wiki-overview-",
+      config: { render: { createBacklinks: false, createDashboards: false } },
       initialize: true,
     });
 
@@ -73,7 +75,14 @@ describe("listMemoryWikiOverview", () => {
       "utf8",
     );
 
-    const result = await listMemoryWikiOverview(config);
+    await compileMemoryWikiVault(config);
+    await Promise.all([
+      fs.unlink(path.join(rootDir, "syntheses", "travel-system.md")),
+      fs.unlink(path.join(rootDir, "sources", "raw-chat.md")),
+      fs.unlink(path.join(rootDir, "entities", "mariano.md")),
+    ]);
+
+    const { overview: result } = await loadMemoryWikiCompiledDashboards(config);
 
     expect(result.totalItems).toBe(2);
     expect(result.totalPages).toBe(3);

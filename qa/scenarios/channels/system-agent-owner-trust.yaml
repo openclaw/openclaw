@@ -1,0 +1,160 @@
+title: OpenClaw stores an owner's chat key without taking over an existing entry, and ignores a non-owner's
+
+scenario:
+  id: system-agent-owner-trust
+  surface: channel
+  coverage:
+    primary:
+      - agent-runtime.delegated-tool-access
+    secondary:
+      - channels.qa-channel-outbound
+  objective: Verify a Full Access chat can hand OpenClaw an API key that lands in the secret store, next to an existing entry that already uses the preferred name.
+  gatewayConfigPatch:
+    commands:
+      ownerAllowFrom: [qa-channel:alice]
+      # Bob may talk to the agent but is not an owner.
+      allowFrom:
+        qa-channel: [alice, bob]
+    agents:
+      entries:
+        qa:
+          tools:
+            alsoAllow: [openclaw]
+  successCriteria:
+    - A non-owner who sends the same key gets no store entry and no config change.
+    - A token given in chat is saved as a store SecretRef at the requested config key without an approval prompt, and never appears in chat or config.
+    - An unrelated store entry named like the config key keeps its value; the chat token gets its own entry.
+  docsRefs:
+    - docs/cli/openclaw.md
+  codeRefs:
+    - src/system-agent/operations-execution-helpers.ts
+    - src/secrets/store/secret-store-config-ref.kernel.ts
+  execution:
+    kind: flow
+    summary: Drive a Full Access delegated key save through an ephemeral Gateway, qa-channel, and mock provider.
+    config:
+      requiredProviderMode: mock-openai
+      requiredProvider: mock-openai
+      secretConversationId: qa-system-agent-owner-trust-secret
+      nonOwnerConversationId: qa-system-agent-owner-trust-non-owner
+      secret: qa-owner-remote-token-5c1e8f2a9b7d
+      existingSecret: qa-existing-unrelated-token-1b4d
+      secretPrompt: "@openclaw tool search qa check target=openclaw openclaw_fixture=chat-secret. My remote Gateway token is qa-owner-remote-token-5c1e8f2a9b7d, save it. Call the openclaw tool exactly once, then reply exactly: QA-OWNER-TRUST-SECRET-OK."
+      secretMarker: QA-OWNER-TRUST-SECRET-OK
+
+flow:
+  steps:
+    - name: stores an owner's key beside an existing entry and ignores a non-owner's
+      actions:
+        - assert:
+            expr: "env.providerMode === 'mock-openai'"
+            message: this boundary scenario is mock-openai only
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - call: reset
+        - call: env.gateway.call
+          args:
+            - secrets.store.set
+            - name: GATEWAY_REMOTE_TOKEN
+              value:
+                expr: config.existingSecret
+              kind: secret
+            - timeoutMs: 60000
+        - set: existingBefore
+          value:
+            expr: "((await env.gateway.call('secrets.store.list', {}, { timeoutMs: 60000 })).entries ?? []).find((entry) => entry.name === 'GATEWAY_REMOTE_TOKEN')"
+        - set: nonOwnerConversation
+          value:
+            id:
+              expr: config.nonOwnerConversationId
+            kind: channel
+            title: QA Owner Trust Non-Owner
+        - sendInbound:
+            conversation:
+              ref: nonOwnerConversation
+            senderId: bob
+            senderName: Bob
+            text:
+              expr: config.secretPrompt
+        - call: waitForOutboundMessage
+          saveAs: nonOwnerReply
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.direction === 'outbound' && candidate.conversation.id === nonOwnerConversation.id"
+            - expr: liveTurnTimeoutMs(env, 180000)
+        - set: nonOwnerEntries
+          value:
+            expr: "(await env.gateway.call('secrets.store.list', {}, { timeoutMs: 60000 })).entries ?? []"
+        - set: nonOwnerRef
+          value:
+            expr: "(await env.gateway.call('config.get', {}, { timeoutMs: 60000 })).config?.gateway?.remote?.token ?? null"
+        - assert:
+            expr: "nonOwnerRef === null && nonOwnerEntries.length === 1 && nonOwnerEntries[0].name === 'GATEWAY_REMOTE_TOKEN'"
+            message:
+              expr: "`a non-owner's key reached the store or config: ${JSON.stringify({ nonOwnerRef, names: nonOwnerEntries.map((entry) => entry.name) })}`"
+        - assert:
+            expr: "!String(nonOwnerReply.text ?? '').includes(config.secret)"
+            message: the non-owner reply echoed the key
+        - set: secretConversation
+          value:
+            id:
+              expr: config.secretConversationId
+            kind: channel
+            title: QA Owner Trust Secret
+        - sendInbound:
+            conversation:
+              ref: secretConversation
+            senderId: alice
+            senderName: Alice
+            text:
+              expr: config.secretPrompt
+        - call: waitForOutboundMessage
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.direction === 'outbound' && candidate.conversation.id === secretConversation.id && String(candidate.text ?? '').includes(config.secretMarker)"
+            - expr: liveTurnTimeoutMs(env, 180000)
+        - set: storedRef
+          value:
+            expr: "(await env.gateway.call('config.get', {}, { timeoutMs: 60000 })).config?.gateway?.remote?.token ?? null"
+        - assert:
+            expr: "storedRef?.source === 'store'"
+            message:
+              expr: "`expected a store SecretRef at gateway.remote.token, saw ${JSON.stringify(storedRef)}`"
+        - set: storeEntries
+          value:
+            expr: "(await env.gateway.call('secrets.store.list', {}, { timeoutMs: 60000 })).entries ?? []"
+        - set: existingAfter
+          value:
+            expr: "storeEntries.find((entry) => entry.name === 'GATEWAY_REMOTE_TOKEN')"
+        - assert:
+            expr: "existingBefore && existingAfter && existingAfter.updatedAtMs === existingBefore.updatedAtMs && existingAfter.updatedBy === existingBefore.updatedBy"
+            message:
+              expr: "`the existing GATEWAY_REMOTE_TOKEN entry was replaced: ${JSON.stringify({ existingBefore, existingAfter })}`"
+        - assert:
+            expr: "storeEntries.some((entry) => /^GATEWAY_REMOTE_TOKEN_[0-9A-F]{16}$/.test(entry.name) && entry.kind === 'secret')"
+            message:
+              expr: "`the chat token has no entry of its own: ${JSON.stringify(storeEntries.map((entry) => entry.name))}`"
+        - set: configRaw
+          value:
+            expr: "JSON.stringify(await env.gateway.call('config.get', {}, { timeoutMs: 60000 }))"
+        - assert:
+            expr: "!configRaw.includes(config.secret) && !JSON.stringify(storeEntries).includes(config.secret)"
+            message: the chat-provided token appeared in config or the store listing
+        - set: outboundTexts
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && !message.deleted && message.conversation.id === secretConversation.id).map((message) => String(message.text ?? ''))"
+        - assert:
+            expr: "!outboundTexts.some((text) => text.includes(config.secret)) && !outboundTexts.some((text) => text.includes('/approve'))"
+            message:
+              expr: "`the token was echoed, or Full Access asked for approval: ${JSON.stringify(outboundTexts)}`"
+      detailsExpr: "JSON.stringify({ nonOwnerReply: nonOwnerReply.text, nonOwnerEntryNames: nonOwnerEntries.map((entry) => entry.name), storedRef, storeEntryNames: storeEntries.map((entry) => entry.name), existingBefore, existingAfter, outboundTexts }, null, 2)"

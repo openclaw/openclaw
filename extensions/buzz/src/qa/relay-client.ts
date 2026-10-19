@@ -1,110 +1,56 @@
 import { finalizeEvent, type Event, type Relay } from "nostr-tools";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
+import { isNewerBuzzRevision } from "../event-order.js";
 import {
+  BUZZ_NORMAL_MESSAGE_KIND,
   buildBuzzMessageTags,
   parseBuzzMessageEvent,
   type BuzzInboundMessage,
 } from "../message-event.js";
 import { connectAuthenticatedBuzzRelaySession, parseBuzzAuthTag } from "../relay-auth.js";
-import { openBuzzRelaySubscription } from "../relay-subscription.js";
+import { openBuzzRelaySubscription, queryBuzzRelaySnapshot } from "../relay-subscription.js";
 import {
   BUZZ_ROOM_MEMBERSHIP_KIND,
-  isNewerBuzzRoomMembership,
   parseBuzzRoomMembershipEvent,
   type BuzzRoomMembership,
 } from "../room-membership.js";
 import { decodeBuzzPrivateKey } from "../types.js";
 import type { BuzzQaCredentials } from "./credentials.js";
 
-const BUZZ_MESSAGE_KIND = 9;
-const MEMBERSHIP_TIMEOUT_MS = 10_000;
 const OBSERVER_READY_TIMEOUT_MS = 10_000;
-
-type BuzzQaRelayDriver = {
-  assertHealthy(): void;
-  close(): Promise<void>;
-  sendMessage(input: {
-    text: string;
-    mentionSut: boolean;
-    threadId?: string;
-    replyToId?: string;
-  }): Promise<{ eventId: string; timestamp: number }>;
-};
 
 async function loadBuzzQaRoomMembership(params: {
   relay: Relay;
   relayPublicKey: string;
   roomId: string;
 }): Promise<BuzzRoomMembership> {
-  return await new Promise<BuzzRoomMembership>((resolve, reject) => {
-    let latest: BuzzRoomMembership | undefined;
-    let settled = false;
-    let receivedEose = false;
-    const subscriptionRef: { current?: ReturnType<Relay["prepareSubscription"]> } = {};
-    const finish = (error?: Error) => {
-      if (settled) {
-        return;
+  let latest: BuzzRoomMembership | undefined;
+  await queryBuzzRelaySnapshot({
+    relay: params.relay,
+    filters: [
+      {
+        kinds: [BUZZ_ROOM_MEMBERSHIP_KIND],
+        authors: [params.relayPublicKey],
+        "#d": [params.roomId],
+        limit: 1,
+      },
+    ],
+    timeoutMessage: `Timed out loading Buzz QA room ${params.roomId} membership.`,
+    abortMessage: "Buzz QA membership query aborted",
+    closeReason: "membership loaded",
+    closeMessage: (reason) => `Buzz QA membership subscription closed: ${reason}`,
+    onEvent: (event) => {
+      const membership = parseBuzzRoomMembershipEvent(event, params.relayPublicKey);
+      if (membership?.roomId === params.roomId && isNewerBuzzRevision(membership, latest)) {
+        latest = membership;
       }
-      settled = true;
-      clearTimeout(timeout);
-      if (receivedEose) {
-        subscriptionRef.current?.close("membership loaded");
-      }
-      if (error) {
-        reject(error);
-      } else if (latest) {
-        resolve(latest);
-      } else {
-        reject(new Error(`Buzz QA room ${params.roomId} has no membership roster.`));
-      }
-    };
-    const timeout = setTimeout(() => {
-      finish(new Error(`Timed out loading Buzz QA room ${params.roomId} membership.`));
-      params.relay.close();
-    }, MEMBERSHIP_TIMEOUT_MS);
-    try {
-      subscriptionRef.current = openBuzzRelaySubscription(
-        params.relay,
-        [
-          {
-            kinds: [BUZZ_ROOM_MEMBERSHIP_KIND],
-            authors: [params.relayPublicKey],
-            "#d": [params.roomId],
-            limit: 1,
-          },
-        ],
-        {
-          onevent: (event) => {
-            const membership = parseBuzzRoomMembershipEvent(event, params.relayPublicKey);
-            if (
-              membership?.roomId === params.roomId &&
-              isNewerBuzzRoomMembership(membership, latest)
-            ) {
-              latest = membership;
-            }
-          },
-          oneose: () => {
-            receivedEose = true;
-            if (settled) {
-              subscriptionRef.current?.close("membership loaded");
-            } else {
-              finish();
-            }
-          },
-          onclose: (reason) => {
-            if (reason !== "membership loaded") {
-              finish(new Error(`Buzz QA membership subscription closed: ${reason}`));
-            }
-          },
-        },
-      );
-    } catch (error) {
-      finish(error instanceof Error ? error : new Error(String(error)));
-      return;
-    }
-    if (settled && receivedEose) {
-      subscriptionRef.current.close("membership loaded");
-    }
+    },
+    result: () => {},
   });
+  if (!latest) {
+    throw new Error(`Buzz QA room ${params.roomId} has no membership roster.`);
+  }
+  return latest;
 }
 
 function assertBuzzQaMembership(membership: BuzzRoomMembership, credentials: BuzzQaCredentials) {
@@ -126,7 +72,7 @@ function assertBuzzQaMembership(membership: BuzzRoomMembership, credentials: Buz
 export async function createBuzzQaRelayDriver(params: {
   credentials: BuzzQaCredentials;
   onMessage: (message: BuzzInboundMessage) => Promise<void>;
-}): Promise<BuzzQaRelayDriver> {
+}) {
   const credentials = params.credentials;
   const secretKey = decodeBuzzPrivateKey(credentials.driverPrivateKey);
   const lifecycleAbort = new AbortController();
@@ -155,14 +101,9 @@ export async function createBuzzQaRelayDriver(params: {
   }
 
   let observerReady = false;
-  let resolveObserverReady: (() => void) | undefined;
-  let rejectObserverReady: ((error: Error) => void) | undefined;
-  const observerReadyPromise = new Promise<void>((resolve, reject) => {
-    resolveObserverReady = resolve;
-    rejectObserverReady = reject;
-  });
+  const readiness = createDeferred();
   const observerReadyTimeout = setTimeout(() => {
-    rejectObserverReady?.(new Error("Timed out waiting for the Buzz QA message observer."));
+    readiness.reject(new Error("Timed out waiting for the Buzz QA message observer."));
   }, OBSERVER_READY_TIMEOUT_MS);
   let subscription: ReturnType<Relay["prepareSubscription"]>;
   try {
@@ -170,7 +111,7 @@ export async function createBuzzQaRelayDriver(params: {
       relay,
       [
         {
-          kinds: [BUZZ_MESSAGE_KIND],
+          kinds: [BUZZ_NORMAL_MESSAGE_KIND],
           authors: [credentials.sutPublicKey],
           "#h": [credentials.roomId],
           since: Math.floor(Date.now() / 1_000) - 5,
@@ -202,12 +143,12 @@ export async function createBuzzQaRelayDriver(params: {
         oneose: () => {
           observerReady = true;
           clearTimeout(observerReadyTimeout);
-          resolveObserverReady?.();
+          readiness.resolve();
         },
         onclose: (reason) => {
           if (!observerReady) {
             clearTimeout(observerReadyTimeout);
-            rejectObserverReady?.(
+            readiness.reject(
               new Error(`Buzz QA message observer closed before it was ready: ${reason}`),
             );
             return;
@@ -225,7 +166,7 @@ export async function createBuzzQaRelayDriver(params: {
     throw error;
   }
   try {
-    await observerReadyPromise;
+    await readiness.promise;
   } catch (error) {
     lifecycleAbort.abort(error);
     relay.close();
@@ -238,7 +179,12 @@ export async function createBuzzQaRelayDriver(params: {
         throw transportError;
       }
     },
-    async sendMessage(input) {
+    async sendMessage(input: {
+      text: string;
+      mentionSut: boolean;
+      threadId?: string;
+      replyToId?: string;
+    }) {
       if (transportError) {
         throw transportError;
       }
@@ -252,7 +198,7 @@ export async function createBuzzQaRelayDriver(params: {
       }
       const event = finalizeEvent(
         {
-          kind: BUZZ_MESSAGE_KIND,
+          kind: BUZZ_NORMAL_MESSAGE_KIND,
           content: input.text,
           created_at: Math.floor(Date.now() / 1_000),
           tags,

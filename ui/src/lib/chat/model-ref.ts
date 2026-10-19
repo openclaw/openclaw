@@ -1,21 +1,10 @@
-// Chat model reference normalization.
+import { isLegacyCodexProviderId } from "../../../../src/config/legacy-codex-provider.js";
+import { normalizeAgentModelRefForConfig } from "../../../../src/config/model-input.js";
 import type { ModelCatalogEntry } from "../../api/types.ts";
-
-const LEGACY_OPENAI_PROVIDER_IDS = new Set(["codex", "openai-codex"]);
-
-export type ChatModelOverride =
-  | {
-      kind: "qualified";
-      value: string;
-    }
-  | {
-      kind: "raw";
-      value: string;
-    };
 
 export function normalizeChatModelProviderId(provider: string): string {
   const normalized = provider.trim().toLowerCase();
-  return LEGACY_OPENAI_PROVIDER_IDS.has(normalized) ? "openai" : normalized;
+  return isLegacyCodexProviderId(normalized) ? "openai" : normalized;
 }
 
 export function buildQualifiedChatModelValue(model: string, provider?: string | null): string {
@@ -33,55 +22,17 @@ export function buildQualifiedChatModelValue(model: string, provider?: string | 
     : `${trimmedProvider}/${trimmedModel}`;
 }
 
-export function createChatModelOverride(value: string): ChatModelOverride | null {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-  if (trimmed.includes("/")) {
-    return { kind: "qualified", value: trimmed };
-  }
-  return { kind: "raw", value: trimmed };
-}
-
 export function normalizeChatModelOverrideValue(
-  override: ChatModelOverride | null | undefined,
+  value: string | null | undefined,
   catalog: ModelCatalogEntry[],
 ): string {
-  if (!override) {
-    return "";
-  }
-  const trimmed = override?.value.trim();
+  const trimmed = value?.trim();
   if (!trimmed) {
     return "";
   }
-  if (override.kind === "qualified") {
-    return trimmed;
-  }
-
-  return resolveUniqueCatalogValueById(trimmed, catalog) || trimmed;
-}
-
-function resolveServerChatModelValue(model?: string | null, provider?: string | null): string {
-  if (typeof model !== "string") {
-    return "";
-  }
-  const trimmedModel = model.trim();
-  if (!trimmedModel) {
-    return "";
-  }
-  const trimmedProvider = provider?.trim();
-  if (!trimmedProvider) {
-    return trimmedModel;
-  }
-  const providerPrefix = `${trimmedProvider.toLowerCase()}/`;
-  if (trimmedModel.toLowerCase().startsWith(providerPrefix)) {
-    return trimmedModel;
-  }
-  if (trimmedModel.includes("/")) {
-    return trimmedModel;
-  }
-  return buildQualifiedChatModelValue(trimmedModel, trimmedProvider);
+  return trimmed.includes("/")
+    ? trimmed
+    : resolveUniqueCatalogValueById(trimmed, catalog) || trimmed;
 }
 
 function hasCatalogQualifiedValue(catalog: ModelCatalogEntry[], value: string): boolean {
@@ -98,22 +49,11 @@ function resolveUniqueCatalogValueById(model: string, catalog: ModelCatalogEntry
     return "";
   }
 
-  let matchedValue = "";
-  for (const entry of catalog) {
-    if (entry.id.trim().toLowerCase() !== normalizedModel) {
-      continue;
-    }
-    const candidate = buildQualifiedChatModelValue(entry.id, entry.provider);
-    if (!matchedValue) {
-      matchedValue = candidate;
-      continue;
-    }
-    if (matchedValue.toLowerCase() !== candidate.toLowerCase()) {
-      return "";
-    }
-  }
-
-  return matchedValue;
+  const values = catalog
+    .filter((entry) => entry.id.trim().toLowerCase() === normalizedModel)
+    .map((entry) => buildQualifiedChatModelValue(entry.id, entry.provider));
+  const first = values[0] ?? "";
+  return values.every((value) => value.toLowerCase() === first.toLowerCase()) ? first : "";
 }
 
 export function resolvePreferredServerChatModelValue(
@@ -132,17 +72,14 @@ export function resolvePreferredServerChatModelValue(
   const trimmedProvider = provider?.trim();
 
   if (!trimmedProvider) {
-    return normalizeChatModelOverrideValue(createChatModelOverride(trimmedModel), catalog);
+    return normalizeChatModelOverrideValue(trimmedModel, catalog);
   }
 
   if (!trimmedModel.includes("/")) {
-    const normalized = normalizeChatModelOverrideValue(
-      createChatModelOverride(trimmedModel),
-      catalog,
-    );
+    const normalized = normalizeChatModelOverrideValue(trimmedModel, catalog);
     return normalized !== trimmedModel
       ? normalized
-      : resolveServerChatModelValue(trimmedModel, trimmedProvider);
+      : buildQualifiedChatModelValue(trimmedModel, trimmedProvider);
   }
 
   const qualifiedServerValue = buildQualifiedChatModelValue(trimmedModel, trimmedProvider);
@@ -176,7 +113,7 @@ export function resolvePreferredServerChatModelValue(
   // Without catalog confirmation, preserve slash-containing server values as-is.
   // Re-qualifying them here can turn an already-qualified ref under a stale
   // provider into a nonsense double-prefix like "zai/openai/gpt-5-mini".
-  return resolveServerChatModelValue(trimmedModel, trimmedProvider);
+  return trimmedModel;
 }
 
 function formatChatModelDisplay(value: string): string {
@@ -211,7 +148,7 @@ function resolveCatalogDisplayName(entry: ModelCatalogEntry): string {
 }
 
 function createQualifiedCatalogKey(entry: ModelCatalogEntry): string {
-  return buildQualifiedChatModelValue(entry.id, entry.provider).trim().toLowerCase();
+  return buildQualifiedChatModelValue(entry.id, entry.provider).toLowerCase();
 }
 
 function createNameProviderKey(name: string, provider?: string | null): string {
@@ -223,58 +160,45 @@ type ChatModelDisplayLookup = ReadonlyMap<string, string>;
 export function buildCatalogDisplayLookup(catalog: ModelCatalogEntry[]): Map<string, string> {
   const nameToValues = new Map<string, Set<string>>();
   const nameProviderToValues = new Map<string, Set<string>>();
-
-  for (const entry of catalog) {
+  const entries = catalog.map((entry) => {
     const name = resolveCatalogDisplayName(entry);
+    return {
+      entry,
+      name,
+      qualifiedKey: normalizeAgentModelRefForConfig(
+        buildQualifiedChatModelValue(entry.id, entry.provider),
+      ),
+      nameKey: name.toLowerCase(),
+      providerKey: createNameProviderKey(name, entry.provider),
+    };
+  });
+
+  for (const { name, qualifiedKey, nameKey, providerKey } of entries) {
     if (!name) {
       continue;
     }
-
-    const qualifiedKey = createQualifiedCatalogKey(entry);
-    const normalizedName = name.toLowerCase();
-    const providerKey = createNameProviderKey(name, entry.provider);
-
-    const nameValues = nameToValues.get(normalizedName) ?? new Set<string>();
+    const nameValues = nameToValues.get(nameKey) ?? new Set<string>();
     nameValues.add(qualifiedKey);
-    nameToValues.set(normalizedName, nameValues);
+    nameToValues.set(nameKey, nameValues);
 
     const nameProviderValues = nameProviderToValues.get(providerKey) ?? new Set<string>();
     nameProviderValues.add(qualifiedKey);
     nameProviderToValues.set(providerKey, nameProviderValues);
   }
 
-  const displayLookup = new Map<string, string>();
-  for (const entry of catalog) {
-    const qualifiedKey = createQualifiedCatalogKey(entry);
-    const name = resolveCatalogDisplayName(entry);
-    if (!name) {
-      displayLookup.set(qualifiedKey, formatRawCatalogLabel(entry));
-      continue;
-    }
-
-    const normalizedName = name.toLowerCase();
-    if ((nameToValues.get(normalizedName)?.size ?? 0) <= 1) {
-      displayLookup.set(qualifiedKey, name);
-      continue;
-    }
-
-    const provider = entry.provider?.trim();
-    if ((nameProviderToValues.get(createNameProviderKey(name, provider))?.size ?? 0) <= 1) {
-      displayLookup.set(qualifiedKey, provider ? `${name} · ${provider}` : `${name} · ${entry.id}`);
-      continue;
-    }
-
-    displayLookup.set(qualifiedKey, `${name} · ${formatRawCatalogLabel(entry)}`);
-  }
-
-  return displayLookup;
-}
-
-function formatCatalogEntryDisplay(
-  entry: ModelCatalogEntry,
-  displayLookup: ChatModelDisplayLookup,
-): string {
-  return displayLookup.get(createQualifiedCatalogKey(entry)) ?? formatRawCatalogLabel(entry);
+  return new Map(
+    entries.map(({ entry, name, qualifiedKey, nameKey, providerKey }) => {
+      let label = name || formatRawCatalogLabel(entry);
+      if (name && (nameToValues.get(nameKey)?.size ?? 0) > 1) {
+        const detail =
+          (nameProviderToValues.get(providerKey)?.size ?? 0) <= 1
+            ? entry.provider?.trim() || entry.id
+            : formatRawCatalogLabel(entry);
+        label = `${name} · ${detail}`;
+      }
+      return [qualifiedKey, label];
+    }),
+  );
 }
 
 export function formatCatalogChatModelDisplayFromLookup(
@@ -286,16 +210,19 @@ export function formatCatalogChatModelDisplayFromLookup(
     return "";
   }
 
-  return displayLookup.get(trimmed.toLowerCase()) ?? formatChatModelDisplay(trimmed);
+  return (
+    displayLookup.get(normalizeAgentModelRefForConfig(trimmed)) ?? formatChatModelDisplay(trimmed)
+  );
 }
 
 export function buildChatModelOptionFromLookup(
   entry: ModelCatalogEntry,
   displayLookup: ChatModelDisplayLookup,
 ): { value: string; label: string } {
-  const provider = entry.provider?.trim();
+  const value = buildQualifiedChatModelValue(entry.id, entry.provider);
   return {
-    value: buildQualifiedChatModelValue(entry.id, provider),
-    label: formatCatalogEntryDisplay(entry, displayLookup),
+    value,
+    label:
+      displayLookup.get(normalizeAgentModelRefForConfig(value)) ?? formatRawCatalogLabel(entry),
   };
 }

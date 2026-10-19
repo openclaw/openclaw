@@ -1,5 +1,6 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer } from "@modelcontextprotocol/server";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { throwIfSettledRejected } from "../infra/error-graph-internal.js";
 import { VERSION } from "../version.js";
 import { OpenClawChannelBridge } from "./channel-bridge.js";
 import { ClaudePermissionRequestSchema, type ClaudeChannelMode } from "./channel-shared.js";
@@ -9,8 +10,8 @@ async function resolveMcpConfig(config: OpenClawConfig | undefined): Promise<Ope
   if (config) {
     return config;
   }
-  const { getRuntimeConfig } = await import("../config/config.js");
-  return getRuntimeConfig();
+  const { captureRuntimeConfigAsyncReader } = await import("../config/config.js");
+  return await captureRuntimeConfigAsyncReader()();
 }
 
 export async function createChannelMcpRuntime(
@@ -44,14 +45,18 @@ export async function createChannelMcpRuntime(
   });
   bridge.setServer(server);
 
-  server.server.setNotificationHandler(ClaudePermissionRequestSchema, async ({ params }) => {
-    await bridge.handleClaudePermissionRequest({
-      requestId: params.request_id,
-      toolName: params.tool_name,
-      description: params.description,
-      inputPreview: params.input_preview,
-    });
-  });
+  server.server.setNotificationHandler(
+    "notifications/claude/channel/permission_request",
+    { params: ClaudePermissionRequestSchema.shape.params },
+    async (params) => {
+      await bridge.handleClaudePermissionRequest({
+        requestId: params.request_id,
+        toolName: params.tool_name,
+        description: params.description,
+        inputPreview: params.input_preview,
+      });
+    },
+  );
   registerChannelMcpTools(server, bridge);
 
   return {
@@ -61,8 +66,9 @@ export async function createChannelMcpRuntime(
       await bridge.start();
     },
     close: async () => {
-      await bridge.close();
-      await server.close();
+      // Both lifecycle owners must always close; one failure cannot strand the other.
+      const results = await Promise.allSettled([bridge.close(), server.close()]);
+      throwIfSettledRejected(results, "OpenClaw channel MCP shutdown failed");
     },
   };
 }

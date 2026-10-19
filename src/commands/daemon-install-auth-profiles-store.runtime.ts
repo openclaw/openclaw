@@ -1,2 +1,2 @@
 // Lazy runtime facade for loading auth profiles during daemon service environment planning.
-export { loadAuthProfileStoreForSecretsRuntime } from "../agents/auth-profiles/store.js";
+export { loadAuthProfileStoreForSecretsRuntimeAsync } from "../agents/auth-profiles/store-runtime.js";

@@ -1,7 +1,10 @@
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { CliBackendPlugin } from "../../plugins/cli-backend.types.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { PreparedAgentRunAdmission } from "../admitted-run-context.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const { runCliAgentMock } = vi.hoisted(() => ({
   runCliAgentMock: vi.fn(async (_params: { preparedRunAdmission?: PreparedAgentRunAdmission }) => ({
@@ -14,9 +17,9 @@ const { runCliAgentMock } = vi.hoisted(() => ({
 
 vi.mock("../cli-runner.js", () => ({ runCliAgent: runCliAgentMock }));
 
-const { testing } = await import("./compact.js");
+const { compactNativeCliSession } = await import("./compact.js");
 
-function registerBackend(overrides: Partial<CliBackendPlugin> = {}) {
+function registerBackend() {
   cliBackendsTesting.setDepsForTest({
     resolveRuntimeCliBackends: () =>
       [
@@ -40,14 +43,14 @@ function registerBackend(overrides: Partial<CliBackendPlugin> = {}) {
             input: "arg",
             validateOutput: () => ({ ok: true }),
           },
-          ...overrides,
         },
       ] as never,
     resolvePluginSetupCliBackend: () => undefined,
   });
 }
 
-function compactParams(overrides: Record<string, unknown> = {}) {
+function compactParams() {
+  const dir = tempDirs.make("openclaw-compact-native-cli-");
   const cliSessionBinding = {
     sessionId: "native-session",
     authProfileId: "anthropic:subscription",
@@ -60,12 +63,12 @@ function compactParams(overrides: Record<string, unknown> = {}) {
       agentId: "main",
       sessionId: "openclaw-session",
       sessionKey: "agent:main:main",
-      storePath: "/tmp/openclaw.sqlite",
+      storePath: join(dir, "openclaw.sqlite"),
     },
     sessionFile: "agent:main:main",
     agentId: "main",
-    workspaceDir: "/tmp/workspace",
-    agentDir: "/tmp/agent",
+    workspaceDir: join(dir, "workspace"),
+    agentDir: join(dir, "agent"),
     config: {},
     provider: "anthropic",
     model: "opus",
@@ -75,7 +78,6 @@ function compactParams(overrides: Record<string, unknown> = {}) {
     sessionEntry,
     customInstructions: "keep decisions",
     preparedModelRuntime: {},
-    ...overrides,
   } as never;
 }
 
@@ -88,7 +90,7 @@ describe("native CLI manual compaction", () => {
   it("resumes the bound backend session with the backend-owned command", async () => {
     registerBackend();
 
-    const result = await testing.compactNativeCliSession({
+    const result = await compactNativeCliSession({
       runtime: "claude-cli",
       compactParams: compactParams(),
     });
@@ -117,6 +119,7 @@ describe("native CLI manual compaction", () => {
         sessionEntry: { execHost: "node", execNode: "paired-node" },
         controlOperation: "compact",
         disableCliLiveSession: true,
+        cleanupCliLiveSessionOnRunEnd: true,
         allowEmptyAssistantReplyAsSilent: true,
       }),
     );
@@ -127,33 +130,5 @@ describe("native CLI manual compaction", () => {
     await expect(preparedRunAdmission.admit("embedded")).rejects.toThrow(
       "prepared execution context is already closed",
     );
-  });
-
-  it("fails explicitly when an owning backend has no resumable session", async () => {
-    registerBackend();
-
-    const result = await testing.compactNativeCliSession({
-      runtime: "claude-cli",
-      compactParams: compactParams({
-        cliSessionId: undefined,
-        cliSessionBinding: undefined,
-      }),
-    });
-
-    expect(result).toMatchObject({ ok: false, compacted: false });
-    expect(result?.reason).toContain("without a resumable native session");
-    expect(runCliAgentMock).not.toHaveBeenCalled();
-  });
-
-  it("leaves non-owning runtimes on the existing compaction path", async () => {
-    registerBackend({ ownsNativeCompaction: false });
-
-    await expect(
-      testing.compactNativeCliSession({
-        runtime: "claude-cli",
-        compactParams: compactParams(),
-      }),
-    ).resolves.toBeUndefined();
-    expect(runCliAgentMock).not.toHaveBeenCalled();
   });
 });

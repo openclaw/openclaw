@@ -1,439 +1,284 @@
-// Exa tests cover exa web search provider plugin behavior.
-import { describe, expect, it, vi } from "vitest";
-import { testing } from "../test-api.js";
-import { createExaWebSearchProvider as createContractExaWebSearchProvider } from "../web-search-contract-api.js";
-import { createExaWebSearchProvider } from "./exa-web-search-provider.js";
+import type { MockInstance } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import {
+  cancelTrackedTextResponse,
+  createStreamingResponse,
+} from "../../test-support/streaming-error-response.js";
+import { createExaWebSearchProvider } from "../web-search-contract-api.js";
 
-function cancelTrackedResponse(
-  text: string,
-  init: ResponseInit,
-): {
-  response: Response;
-  wasCanceled: () => boolean;
-} {
-  let canceled = false;
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode(text));
-    },
-    cancel() {
-      canceled = true;
-    },
+type JsonRecord = Record<string, unknown>;
+let fetchMock: MockInstance<typeof fetch>;
+const validationErrors = {
+  invalid_base_url:
+    "plugins.entries.exa.config.webSearch.baseUrl must be a valid http(s) URL. Got: ftp://proxy.example/exa",
+  invalid_contents: "contents.highlights.numSentences must be a positive integer.",
+  conflicting_time_filters:
+    "freshness cannot be combined with date_after or date_before. Use one time-filter mode.",
+  invalid_date: "date_after must be YYYY-MM-DD format.",
+};
+
+function requireExaTool(webSearch: JsonRecord = {}, searchConfig: JsonRecord = {}) {
+  const exa = { config: { webSearch: { apiKey: "exa-test-key", ...webSearch } } };
+  const tool = createExaWebSearchProvider().createTool({
+    config: { plugins: { entries: { exa } } },
+    searchConfig,
   });
-  return {
-    response: new Response(stream, init),
-    wasCanceled: () => canceled,
-  };
+  if (!tool) {
+    throw new Error("Expected Exa tool definition");
+  }
+  return tool;
 }
 
-function streamingJsonResponse(params: { chunkCount: number; chunkSize: number }): {
-  response: Response;
-  getReadCount: () => number;
-} {
-  // Streaming fixture proves an oversized success body stops being read before
-  // the whole payload is buffered into memory.
-  let reads = 0;
-  const encoder = new TextEncoder();
-  const stream = new ReadableStream<Uint8Array>({
-    pull(controller) {
-      if (reads >= params.chunkCount) {
-        controller.close();
-        return;
-      }
-      reads += 1;
-      controller.enqueue(encoder.encode("a".repeat(params.chunkSize)));
-    },
-  });
-  return {
-    response: new Response(stream, {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    }),
-    getReadCount: () => reads,
-  };
+async function expectSearchFailure(response: Response, query: string, message: string) {
+  fetchMock.mockResolvedValue(response);
+  const result = requireExaTool({}, { cacheTtlMinutes: 0 }).execute({ query });
+  await expect(result).rejects.toThrow(message);
+  expect(fetchMock).toHaveBeenCalledOnce();
 }
 
-describe("exa web search provider", () => {
-  it("does not send or cache an already canceled search", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ results: [] }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-    );
-    const tool = createExaWebSearchProvider().createTool({
-      config: {
-        plugins: { entries: { exa: { config: { webSearch: { apiKey: "exa-test-key" } } } } },
-      },
-      searchConfig: {},
-    });
-    if (!tool) {
-      throw new Error("Expected tool definition");
+function respondWith(results: JsonRecord[]) {
+  fetchMock.mockImplementation(async () => Response.json({ results }));
+}
+
+beforeEach(() => {
+  fetchMock = vi.spyOn(globalThis, "fetch");
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+it("caps returned and cached results when Exa exceeds the requested count", async () => {
+  respondWith([
+    { url: "https://example.com/first", title: "First" },
+    { url: "https://example.com/second" },
+  ]);
+  const tool = requireExaTool();
+  const args = { query: "exa result count owner", count: 1 };
+  const first = await tool.execute(args);
+  expect(await tool.execute(args)).toEqual({ ...first, cached: true });
+
+  expect(fetchMock).toHaveBeenCalledOnce();
+  expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(
+    '{"query":"exa result count owner","numResults":1,"type":"auto","contents":{"highlights":true}}',
+  );
+  expect(first).toMatchObject({
+    provider: "exa",
+    count: 1,
+    results: [
+      { url: "https://example.com/first", title: expect.stringMatching(/\n---\nFirst\n<<<END/) },
+    ],
+  });
+});
+
+it.each(["before", "during"])("preserves cancellation %s transport", async (timing) => {
+  const controller = new AbortController();
+  const reason = new Error(`Exa canceled ${timing} transport`);
+  fetchMock.mockImplementation(async (_url, init) => {
+    const signal = init?.signal;
+    if (!signal) {
+      throw new Error("Exa request lost caller cancellation");
     }
-    const controller = new AbortController();
-    controller.abort(new Error("Exa caller canceled"));
-
-    try {
-      await expect(
-        tool.execute({ query: "exa pre-canceled" }, { signal: controller.signal }),
-      ).rejects.toThrow("Exa caller canceled");
-      expect(fetchMock).not.toHaveBeenCalled();
-    } finally {
-      fetchMock.mockRestore();
-    }
-  });
-
-  it("aborts the guarded Exa request without losing the caller's reason", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
-      async (_url, init) =>
-        await new Promise<Response>((_resolve, reject) => {
-          if (!init?.signal) {
-            reject(new Error("Exa request lost caller cancellation"));
-            return;
-          }
-          init.signal.addEventListener("abort", () => reject(init.signal?.reason as Error), {
-            once: true,
-          });
-        }),
-    );
-    const tool = createExaWebSearchProvider().createTool({
-      config: {
-        plugins: { entries: { exa: { config: { webSearch: { apiKey: "exa-test-key" } } } } },
-      },
-      searchConfig: {},
-    });
-    if (!tool) {
-      throw new Error("Expected tool definition");
-    }
-    const controller = new AbortController();
-    const result = tool.execute(
-      { query: "exa in-flight cancellation" },
-      { signal: controller.signal },
-    );
-
-    try {
-      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
-      controller.abort(new Error("Exa request canceled in flight"));
-      await expect(result).rejects.toThrow("Exa request canceled in flight");
-      expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
-    } finally {
-      fetchMock.mockRestore();
-    }
-  });
-
-  it("exposes the expected metadata and selection wiring", () => {
-    const provider = createExaWebSearchProvider();
-    if (!provider.applySelectionConfig) {
-      throw new Error("Expected applySelectionConfig to be defined");
-    }
-    const applied = provider.applySelectionConfig({});
-
-    expect(provider.id).toBe("exa");
-    expect(provider.onboardingScopes).toEqual(["text-inference"]);
-    expect(provider.credentialPath).toBe("plugins.entries.exa.config.webSearch.apiKey");
-    const pluginEntry = applied.plugins?.entries?.exa;
-    if (!pluginEntry) {
-      throw new Error("expected Exa plugin entry");
-    }
-    expect(pluginEntry.enabled).toBe(true);
-  });
-
-  it("keeps the lightweight contract surface aligned with provider metadata", () => {
-    const provider = createExaWebSearchProvider();
-    const contractProvider = createContractExaWebSearchProvider();
-    if (!contractProvider.applySelectionConfig) {
-      throw new Error("Expected contract applySelectionConfig to be defined");
-    }
-    const applied = contractProvider.applySelectionConfig({});
-
-    expect({
-      id: contractProvider.id,
-      label: contractProvider.label,
-      hint: contractProvider.hint,
-      onboardingScopes: contractProvider.onboardingScopes,
-      credentialLabel: contractProvider.credentialLabel,
-      envVars: contractProvider.envVars,
-      placeholder: contractProvider.placeholder,
-      signupUrl: contractProvider.signupUrl,
-      docsUrl: contractProvider.docsUrl,
-      autoDetectOrder: contractProvider.autoDetectOrder,
-      credentialPath: contractProvider.credentialPath,
-    }).toEqual({
-      id: provider.id,
-      label: provider.label,
-      hint: provider.hint,
-      onboardingScopes: provider.onboardingScopes,
-      credentialLabel: provider.credentialLabel,
-      envVars: provider.envVars,
-      placeholder: provider.placeholder,
-      signupUrl: provider.signupUrl,
-      docsUrl: provider.docsUrl,
-      autoDetectOrder: provider.autoDetectOrder,
-      credentialPath: provider.credentialPath,
-    });
-    expect(contractProvider.createTool({ config: {}, searchConfig: {} })).toBeNull();
-    const pluginEntry = applied.plugins?.entries?.exa;
-    if (!pluginEntry) {
-      throw new Error("expected contract Exa plugin entry");
-    }
-    expect(pluginEntry.enabled).toBe(true);
-  });
-
-  it("prefers scoped configured api keys over environment fallbacks", () => {
-    expect(testing.resolveExaApiKey({ apiKey: "exa-secret" })).toBe("exa-secret");
-  });
-
-  it("resolves Exa search base URL overrides", () => {
-    expect(testing.resolveExaSearchEndpoint()).toEqual({
-      endpoint: "https://api.exa.ai/search",
-    });
-    expect(testing.resolveExaSearchEndpoint({ baseUrl: "https://proxy.example/exa" })).toEqual({
-      endpoint: "https://proxy.example/exa/search",
-    });
-    expect(testing.resolveExaSearchEndpoint({ baseUrl: "proxy.example/exa/search/" })).toEqual({
-      endpoint: "https://proxy.example/exa/search",
-    });
-    expect(testing.resolveExaSearchEndpoint({ baseUrl: "ftp://proxy.example/exa" })).toEqual({
-      docs: "https://docs.openclaw.ai/tools/exa-search",
-      error: "invalid_base_url",
-      message:
-        "plugins.entries.exa.config.webSearch.baseUrl must be a valid http(s) URL. Got: ftp://proxy.example/exa",
-    });
-  });
-
-  it("partitions Exa cache keys by resolved endpoint", () => {
-    const base = {
-      type: "auto" as const,
-      query: "openclaw",
-      count: 5,
-    };
-    expect(
-      testing.buildExaCacheKey({
-        ...base,
-        endpoint: "https://api.exa.ai/search",
-      }),
-    ).not.toBe(
-      testing.buildExaCacheKey({
-        ...base,
-        endpoint: "https://proxy.example/exa/search",
-      }),
-    );
-  });
-
-  it("partitions Exa cache keys by effective content options", () => {
-    const base = {
-      endpoint: "https://api.exa.ai/search",
-      type: "auto" as const,
-      query: "openclaw",
-      count: 5,
-    };
-    const defaultKey = testing.buildExaCacheKey(base);
-
-    expect(testing.buildExaCacheKey({ ...base, contents: { highlights: true } })).toBe(defaultKey);
-
-    const disabledKeys = [
-      testing.buildExaCacheKey({ ...base, contents: { highlights: false } }),
-      testing.buildExaCacheKey({ ...base, contents: { text: false } }),
-      testing.buildExaCacheKey({ ...base, contents: { summary: false } }),
-    ];
-    expect(disabledKeys).not.toContain(defaultKey);
-    expect(new Set(disabledKeys).size).toBe(disabledKeys.length);
-  });
-
-  it("normalizes Exa result descriptions from highlights before text", () => {
-    expect(
-      testing.resolveExaDescription({
-        highlights: ["first", "", "second"],
-        text: "full text",
-      }),
-    ).toBe("first\nsecond");
-    expect(testing.resolveExaDescription({ text: "full text" })).toBe("full text");
-  });
-
-  it("handles month freshness without date overflow", () => {
-    const iso = testing.resolveFreshnessStartDate("month");
-    expect(Number.isNaN(Date.parse(iso))).toBe(false);
-  });
-
-  it("accepts current Exa contents object options from the docs", () => {
-    expect(
-      testing.parseExaContents({
-        text: { maxCharacters: 1200 },
-        highlights: {
-          maxCharacters: 4000,
-          query: "latest model launches",
-          numSentences: 4,
-          highlightsPerUrl: 2,
+    signal.throwIfAborted();
+    return new Promise<Response>((_resolve, reject) => {
+      signal.addEventListener(
+        "abort",
+        () => {
+          const abortReason: unknown = signal.reason;
+          reject(
+            abortReason instanceof Error
+              ? abortReason
+              : new Error("Exa request lost caller cancellation reason"),
+          );
         },
-        summary: { query: "launch details" },
-      }),
-    ).toEqual({
-      value: {
-        text: { maxCharacters: 1200 },
-        highlights: {
-          maxCharacters: 4000,
-          query: "latest model launches",
-          numSentences: 4,
-          highlightsPerUrl: 2,
-        },
-        summary: { query: "launch details" },
-      },
+        { once: true },
+      );
+      // Cancel at transport entry, after cold runtime loading has completed.
+      controller.abort(reason);
+      expect(signal.aborted).toBe(true);
     });
   });
-
-  it("rejects invalid Exa contents objects", () => {
-    expect(
-      testing.parseExaContents({
-        highlights: { numSentences: 0 },
-      }),
-    ).toEqual({
-      error: "invalid_contents",
-      message: "contents.highlights.numSentences must be a positive integer.",
-      docs: "https://docs.openclaw.ai/tools/web",
-    });
+  if (timing === "before") {
+    controller.abort(reason);
+  }
+  const result = requireExaTool().execute(
+    { query: `cancel ${timing}` },
+    { signal: controller.signal },
+  );
+  onTestFinished(async () => {
+    controller.abort(reason);
+    await result.catch(() => {});
   });
 
-  it("exposes newer documented Exa search types and count limits", () => {
-    const provider = createExaWebSearchProvider();
-    const tool = provider.createTool({
-      config: {
-        plugins: { entries: { exa: { config: { webSearch: { apiKey: "exa-secret" } } } } },
-      },
-      searchConfig: {},
-    });
-    if (!tool) {
-      throw new Error("Expected tool definition");
+  await expect(result).rejects.toBe(reason);
+  expect(fetchMock).toHaveBeenCalledTimes(timing === "before" ? 0 : 1);
+  if (timing === "during") {
+    expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+  }
+});
+
+it("applies scoped auth, endpoint, contents, freshness, and result normalization at the tool boundary", async () => {
+  respondWith([
+    { highlights: ["first", "", "second"], text: "ignored" },
+    { text: "text fallback" },
+  ]);
+  const makeTool = (baseUrl?: string) =>
+    requireExaTool({ apiKey: "exa-config-key", baseUrl }, { maxResults: 120 });
+  const tool = makeTool("https://proxy.example/exa/");
+
+  const args = {
+    query: "Exa boundary",
+    freshness: "month",
+    contents: {
+      text: { maxCharacters: 1200 },
+      highlights: { maxCharacters: 4000, query: "q", numSentences: 4, highlightsPerUrl: 2 },
+      summary: { query: "launch" },
+    },
+  };
+  const result = await tool.execute(args);
+  expect(
+    (result.results as Array<{ description: string }>).map(
+      ({ description }) => description.split("\n---\n")[1]?.split("\n<<<END")[0],
+    ),
+  ).toEqual(["first\nsecond", "text fallback"]);
+  expect(fetchMock.mock.calls[0]?.[0]).toBe("https://proxy.example/exa/search");
+  expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({ "x-api-key": "exa-config-key" });
+  const rawBodyAt = (index: number) => {
+    const body = fetchMock.mock.calls[index]?.[1]?.body;
+    if (typeof body !== "string") {
+      throw new Error("Expected Exa JSON request body");
     }
+    return body;
+  };
+  const bodyAt = (index = fetchMock.mock.calls.length - 1) => JSON.parse(rawBodyAt(index));
+  expect(
+    rawBodyAt(0).replace(/"startPublishedDate":"[^"]*"/, '"startPublishedDate":"<dynamic-date>"'),
+  ).toBe(
+    '{"query":"Exa boundary","numResults":100,"type":"auto","contents":{"text":{"maxCharacters":1200},"highlights":{"maxCharacters":4000,"query":"q","numSentences":4,"highlightsPerUrl":2},"summary":{"query":"launch"}},"startPublishedDate":"<dynamic-date>"}',
+  );
+  expect(Date.parse(bodyAt(0).startPublishedDate)).not.toBeNaN();
 
-    const parameters = tool.parameters as {
-      properties?: {
-        count?: { maximum?: number };
-        type?: { enum?: string[] };
-      };
-    };
+  await tool.execute({ query: "cache partitions" });
+  await tool.execute({ query: "cache partitions", contents: { highlights: true } });
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  await tool.execute({ query: "cache partitions", contents: { highlights: false } });
+  await tool.execute({ query: "cache partitions", contents: { text: false } });
+  await tool.execute({ query: "cache partitions", contents: { summary: false } });
+  const defaultTool = makeTool();
+  await defaultTool.execute(args);
+  await makeTool("proxy.example/exa/search/").execute({ ...args, query: "bare endpoint" });
+  expect(fetchMock.mock.calls[5]?.[0]).toBe("https://api.exa.ai/search");
+  expect(fetchMock.mock.calls[6]?.[0]).toBe("https://proxy.example/exa/search");
 
-    expect(parameters.properties?.count?.maximum).toBe(100);
-    expect(parameters.properties?.type?.enum).toEqual([
-      "auto",
-      "neural",
-      "fast",
-      "deep",
-      "deep-reasoning",
-      "instant",
-    ]);
-    expect(testing.resolveExaSearchCount(80, 10)).toBe(80);
-    expect(testing.resolveExaSearchCount(120, 10)).toBe(100);
-    expect(testing.resolveExaSearchCount("+05", 10)).toBe(5);
-    expect(testing.resolveExaSearchCount("0x10", 10)).toBe(10);
-    expect(testing.resolveExaSearchCount("1e2", 10)).toBe(10);
-    expect(testing.resolveExaSearchCount(1.5, 10)).toBe(10);
-  });
-
-  it("returns validation errors for conflicting time filters", async () => {
-    const provider = createExaWebSearchProvider();
-    const tool = provider.createTool({
-      config: {
-        plugins: { entries: { exa: { config: { webSearch: { apiKey: "exa-secret" } } } } },
-      },
-      searchConfig: {},
-    });
-    if (!tool) {
-      throw new Error("Expected tool definition");
-    }
-
-    const result = await tool.execute({
-      query: "latest gpu news",
-      freshness: "day",
-      date_after: "2026-03-01",
-    });
-
-    expect(result).toEqual({
-      error: "conflicting_time_filters",
-      message:
-        "freshness cannot be combined with date_after or date_before. Use one time-filter mode.",
-      docs: "https://docs.openclaw.ai/tools/web",
-    });
-  });
-
-  it("returns validation errors for invalid date input", async () => {
-    const provider = createExaWebSearchProvider();
-    const tool = provider.createTool({
-      config: {
-        plugins: { entries: { exa: { config: { webSearch: { apiKey: "exa-secret" } } } } },
-      },
-      searchConfig: {},
-    });
-    if (!tool) {
-      throw new Error("Expected tool definition");
-    }
-
-    const result = await tool.execute({
-      query: "latest gpu news",
-      date_after: "2026-02-31",
-    });
-
-    expect(result).toEqual({
-      error: "invalid_date",
-      message: "date_after must be YYYY-MM-DD format.",
-      docs: "https://docs.openclaw.ai/tools/web",
-    });
-  });
-
-  it("reports malformed Exa API JSON with a stable provider error", async () => {
-    await expect(testing.readExaSearchResults(new Response("{ nope"))).rejects.toThrow(
-      "Exa API returned malformed JSON",
+  for (const [count, expected] of [
+    ["+05", 5],
+    ["2e1", 20],
+  ] as const) {
+    await defaultTool.execute({ query: `count ${count}`, count });
+    expect(bodyAt().numResults).toBe(expected);
+  }
+  for (const count of ["0x10", 1.5]) {
+    await expect(defaultTool.execute({ query: `count ${count}`, count })).rejects.toThrow(
+      "count must be an integer from 1 to 100",
     );
+  }
+  const inheritedText = { maxCharacters: 1 };
+  const inheritedPrototype = Object.defineProperty({}, "query", {
+    get: () => {
+      throw new Error("read");
+    },
   });
+  Object.setPrototypeOf(inheritedText, inheritedPrototype);
+  await defaultTool.execute({ query: "inherited", contents: { text: inheritedText } });
+  expect(bodyAt().contents).toEqual({ text: { maxCharacters: 1 } });
+});
 
-  it("rejects invalid UTF-8 in Exa search JSON", async () => {
-    const prefix = new TextEncoder().encode(
-      '{"results":[{"url":"https://example.com","title":"bad',
-    );
-    const suffix = new TextEncoder().encode('"}]}');
-    const body = new Uint8Array(prefix.length + 1 + suffix.length);
-    body.set(prefix);
-    body[prefix.length] = 0xff;
-    body.set(suffix, prefix.length + 1);
-
-    await expect(testing.readExaSearchResults(new Response(body))).rejects.toThrow(
-      "Exa API returned malformed JSON",
-    );
+it.each([
+  ["invalid_base_url", {}, { baseUrl: "ftp://proxy.example/exa" }],
+  ["invalid_contents", { contents: { highlights: { numSentences: 0 } } }, {}],
+  ["conflicting_time_filters", { freshness: "day", date_after: "2026-03-01" }, {}],
+  ["invalid_date", { date_after: "2026-02-31" }, {}],
+] as const)("returns %s", async (error, args, webSearch) => {
+  await expect(
+    requireExaTool(webSearch).execute({ query: "validation", ...args }),
+  ).resolves.toEqual({
+    error,
+    message: validationErrors[error],
+    docs: `https://docs.openclaw.ai/tools/${error === "invalid_base_url" ? "exa-search" : "web"}`,
   });
+});
 
-  it("parses well-formed Exa search JSON under the byte cap", async () => {
-    const response = new Response(
-      JSON.stringify({ results: [{ url: "https://example.com", title: "Example" }] }),
-      { status: 200, headers: { "content-type": "application/json" } },
-    );
+it.each([0, 1])("honors the current cache TTL %s", async (cacheTtlMinutes) => {
+  const now = Date.now();
+  const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+  let requestCount = 0;
+  fetchMock.mockImplementation(async () =>
+    Response.json({ results: [{ url: `https://example.com/${++requestCount}` }] }),
+  );
+  const cachedTool = requireExaTool({}, { cacheTtlMinutes: 15 });
+  const currentTool = requireExaTool({}, { cacheTtlMinutes });
+  const args = { query: `exa cache TTL ${cacheTtlMinutes}` };
 
-    await expect(testing.readExaSearchResults(response)).resolves.toEqual([
-      { url: "https://example.com", title: "Example" },
-    ]);
+  const original = await cachedTool.execute(args);
+  expect(original).toMatchObject({ results: [{ url: "https://example.com/1" }] });
+  expect(await cachedTool.execute(args)).toEqual({ ...original, cached: true });
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+
+  clock.mockReturnValue(now + 60_000);
+  const fresh = await currentTool.execute(args);
+  expect(fresh).toMatchObject({ results: [{ url: "https://example.com/2" }] });
+  expect(fresh).not.toHaveProperty("cached");
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+
+  if (cacheTtlMinutes === 0) {
+    const uncached = await currentTool.execute(args);
+    expect(uncached).toMatchObject({ results: [{ url: "https://example.com/3" }] });
+    expect(await cachedTool.execute(args)).toEqual({ ...original, cached: true });
+  } else {
+    expect(await currentTool.execute(args)).toEqual({ ...fresh, cached: true });
+  }
+  expect(fetchMock).toHaveBeenCalledTimes(cacheTtlMinutes === 0 ? 3 : 2);
+});
+
+it.each([
+  ["malformed JSON", "{ nope"],
+  // A quoted invalid byte: valid JSON if decoded non-fatally.
+  ["invalid UTF-8", new Uint8Array([34, 0xff, 34])],
+] as const)("rejects %s with a stable provider error", async (query, body) => {
+  await expectSearchFailure(new Response(body), query, "Exa API returned malformed JSON");
+});
+
+it("cancels oversized Exa JSON before buffering it all", async () => {
+  const streamed = createStreamingResponse({ chunkCount: 32, chunkSize: 1024 * 1024 });
+  await expectSearchFailure(
+    streamed.response,
+    "oversized Exa JSON",
+    "Exa API response exceeds 16777216 bytes",
+  );
+  expect(streamed.getReadCount()).toBeLessThan(32);
+  expect(streamed.wasCanceled()).toBe(true);
+});
+
+it("bounds Exa API error bodies without using response.text()", async () => {
+  const tracked = cancelTrackedTextResponse(`${"upstream ".repeat(2048)}tail`, { status: 503 });
+  const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
+  fetchMock
+    .mockResolvedValueOnce(tracked.response)
+    .mockResolvedValueOnce(new Response("short", { status: 503 }));
+  const tool = requireExaTool({}, { cacheTtlMinutes: 0 });
+
+  const failure = tool.execute({ query: "bounded Exa error" });
+  await expect(failure).rejects.toMatchObject({
+    message: expect.stringContaining("upstream"),
+    status: 503,
+    statusCode: 503,
   });
-
-  it("caps oversized Exa search JSON instead of buffering the whole body", async () => {
-    const streamed = streamingJsonResponse({ chunkCount: 64, chunkSize: 1024 });
-
-    await expect(
-      testing.readExaSearchResults(streamed.response, { maxBytes: 4096 }),
-    ).rejects.toThrow(/Exa API response exceeds 4096 bytes/);
-
-    expect(streamed.getReadCount()).toBeLessThan(64);
+  await expect(failure).rejects.not.toThrow("tail");
+  await expect(tool.execute({ query: "short Exa error" })).rejects.toMatchObject({
+    message: "Exa API error (503): short",
+    status: 503,
+    statusCode: 503,
   });
-
-  it("bounds Exa API error bodies without using response.text()", async () => {
-    const tracked = cancelTrackedResponse(`${"exa upstream unavailable ".repeat(1024)}tail`, {
-      status: 503,
-      headers: { "content-type": "text/plain" },
-    });
-    const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
-
-    const detail = await testing.readExaErrorDetail(tracked.response);
-
-    expect(detail).toContain("exa upstream unavailable");
-    expect(detail).not.toContain("tail");
-    expect(await testing.readExaErrorDetail(new Response("short"))).toBe("short");
-    expect(tracked.wasCanceled()).toBe(true);
-    expect(textSpy).not.toHaveBeenCalled();
-  });
+  expect(tracked.wasCanceled()).toBe(true);
+  expect(textSpy).not.toHaveBeenCalled();
+  expect(fetchMock).toHaveBeenCalledTimes(2);
 });

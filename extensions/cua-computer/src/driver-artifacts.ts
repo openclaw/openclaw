@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import pluginManifest from "../package.json" with { type: "json" };
 import {
   inspectCuaDriverArtifacts,
@@ -9,14 +10,43 @@ import {
 
 const requireFromPlugin = createRequire(import.meta.url);
 
+function resolvePackageEntry(packageName: string): string | undefined {
+  try {
+    return requireFromPlugin.resolve(packageName);
+  } catch {
+    // Import-only packages are resolved with import conditions below.
+  }
+  // The CUA Driver SDK is ESM-only: its exports map carries only the "import"
+  // condition, so require-condition resolution throws PATH_NOT_EXPORTED even
+  // when the package is installed. Resolve with import conditions before
+  // concluding the package is missing.
+  try {
+    return fileURLToPath(import.meta.resolve(packageName));
+  } catch {
+    return undefined;
+  }
+}
+
 function resolvePackageJson(packageName: string): string | undefined {
+  if (packageName !== "@trycua/cua-driver") {
+    const sdkManifestPath = resolvePackageJson("@trycua/cua-driver");
+    if (!sdkManifestPath) {
+      return undefined;
+    }
+    // Native packages belong to the SDK, not the plugin's dependency tree.
+    try {
+      return createRequire(sdkManifestPath).resolve(`${packageName}/package.json`);
+    } catch {
+      return undefined;
+    }
+  }
   try {
     return requireFromPlugin.resolve(`${packageName}/package.json`);
-  } catch {}
-  let entry: string;
-  try {
-    entry = requireFromPlugin.resolve(packageName);
   } catch {
+    // The exports map may hide package.json; find the manifest from its entry below.
+  }
+  const entry = resolvePackageEntry(packageName);
+  if (!entry) {
     return undefined;
   }
   let current = path.dirname(entry);
@@ -26,7 +56,9 @@ function resolvePackageJson(packageName: string): string | undefined {
       if (readPackageIdentity(candidate).name === packageName) {
         return candidate;
       }
-    } catch {}
+    } catch {
+      // Ancestors without a readable matching manifest are not the package root.
+    }
     const parent = path.dirname(current);
     if (parent === current) {
       return undefined;

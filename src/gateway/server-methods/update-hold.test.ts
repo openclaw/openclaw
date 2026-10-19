@@ -1,6 +1,7 @@
 // Update hold tests cover campaign deferral and its validated schedule response.
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { updateHandlers } from "./update.js";
 
 type UpdateScheduleState =
   import("../../../packages/gateway-protocol/src/index.js").UpdateScheduleState;
@@ -11,25 +12,32 @@ const getUpdateCampaignStateMock = vi.hoisted(() =>
   vi.fn<() => UpdateCampaignState | undefined>(() => undefined),
 );
 const getUpdateScheduleMock = vi.hoisted(() => vi.fn<() => UpdateScheduleState | null>(() => null));
+const campaignOwner = vi.hoisted(() => ({ present: true }));
 
-vi.mock("../../infra/update-campaign.js", () => ({
-  gatewayUpdateCampaign: {
-    adopt: () => undefined,
-    getState: getUpdateCampaignStateMock,
-    hold: holdUpdateCampaignMock,
-  },
+vi.mock("../../infra/update-check-lifecycle.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/update-check-lifecycle.js")>()),
+  currentUpdateCheckLifecycle: () => ({
+    campaign: campaignOwner.present
+      ? {
+          getState: getUpdateCampaignStateMock,
+          hold: holdUpdateCampaignMock,
+        }
+      : undefined,
+  }),
 }));
 
-vi.mock("../../infra/update-startup.js", () => ({
+vi.mock("../../infra/update-status-state.js", () => ({
   getUpdateAvailable: () => null,
   getUpdateSchedule: getUpdateScheduleMock,
 }));
 
-vi.mock("./validation.js", () => ({
+vi.mock("./validation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./validation.js")>()),
   assertValidParams: () => true,
 }));
 
 beforeEach(() => {
+  campaignOwner.present = true;
   holdUpdateCampaignMock.mockReset();
   holdUpdateCampaignMock.mockReturnValue(false);
   getUpdateCampaignStateMock.mockReset();
@@ -42,7 +50,6 @@ async function invokeUpdateHold(
   respond: ReturnType<typeof vi.fn>,
   logInfo = vi.fn(),
 ): Promise<void> {
-  const { updateHandlers } = await import("./update.js");
   await expectDefined(
     updateHandlers["update.hold"],
     'updateHandlers["update.hold"] test invariant',
@@ -110,13 +117,14 @@ describe("update.hold", () => {
   });
 
   it("returns ok=false when there is no active campaign", async () => {
+    campaignOwner.present = false;
     const respond = vi.fn();
     const logInfo = vi.fn();
 
     await invokeUpdateHold(respond, logInfo);
 
-    expect(holdUpdateCampaignMock).toHaveBeenCalledOnce();
     expect(respond).toHaveBeenCalledWith(true, { ok: false });
+    expect(holdUpdateCampaignMock).not.toHaveBeenCalled();
     expect(logInfo).toHaveBeenCalledWith(
       expect.stringMatching(/^update\.hold refused actor=control-ui /),
       { reason: "no campaign" },

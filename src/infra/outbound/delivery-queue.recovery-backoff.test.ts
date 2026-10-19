@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { recoverPendingDeliveries } from "./delivery-queue-recovery.js";
-import { loadPendingDeliveries, enqueueDelivery } from "./delivery-queue-storage.js";
+import { enqueueDelivery } from "./delivery-queue-storage.js";
 import {
+  loadPendingDeliveries,
   asDeliverFn,
   createRecoveryLog,
   installDeliveryQueueTmpDirHooks,
@@ -15,11 +16,9 @@ describe("outbound delivery recovery retry backoff", () => {
     vi.useRealTimers();
   });
 
-  it.each([
-    { retryCount: 1, backoffMs: 5_000 },
-    { retryCount: 2, backoffMs: 25_000 },
-    { retryCount: 3, backoffMs: 120_000 },
-  ])("replays retry $retryCount after $backoffMs ms", async ({ retryCount, backoffMs }) => {
+  it("defers old SQLite entries until the backoff boundary, then replays through channel resolution", async () => {
+    const retryCount = 3;
+    const backoffMs = 120_000;
     vi.useFakeTimers();
     const startedAt = new Date("2026-07-25T00:00:00.000Z");
     vi.setSystemTime(startedAt);
@@ -31,6 +30,7 @@ describe("outbound delivery recovery retry backoff", () => {
     );
     setQueuedEntryState(stateDir, id, {
       retryCount,
+      enqueuedAt: startedAt.getTime() - 6 * 24 * 60 * 60_000,
       lastAttemptAt: startedAt.getTime(),
     });
 

@@ -1,30 +1,65 @@
 ---
-summary: "ComfyUI workflow image, video, and music generation setup in OpenClaw"
+summary: "ComfyUI workflow generation and Comfy Cloud MCP OAuth setup in OpenClaw"
 title: "ComfyUI"
 read_when:
   - You want to use local ComfyUI workflows with OpenClaw
   - You want to use Comfy Cloud with image, video, or music workflows
+  - You want to connect Comfy Cloud with account OAuth through MCP
   - You need the comfy plugin config keys
 ---
+
+Use Comfy Cloud's hosted MCP server for account OAuth and Comfy's own discovery
+and generation tools. Use the `comfy` plugin for workflow-driven runs through
+OpenClaw's shared media tools, with an API key for cloud workflows.
+
+## Comfy Cloud with MCP OAuth
+
+Save the hosted server and sign in with your Comfy account:
+
+```bash
+openclaw mcp set comfy '{"url":"https://cloud.comfy.org/mcp","transport":"streamable-http","auth":"oauth"}'
+openclaw mcp login comfy
+openclaw mcp status --verbose
+```
+
+Open the authorization URL printed by `login` and follow the CLI instructions.
+If the browser cannot reach the loopback callback, use the printed `--code`
+fallback. See the [MCP OAuth workflow](/cli/mcp/transports#oauth-workflow)
+for callback, refresh, and sign-in recovery details.
+
+After authorization, ask your agent to discover Comfy templates or generate media
+through the MCP tools. Comfy requires an active Cloud subscription for generation.
+Its [MCP setup guide](https://docs.comfy.org/agent-tools/mcp) also documents an
+optional OpenClaw skill.
+
+MCP credentials belong to the `https://cloud.comfy.org/mcp` resource. This
+connection does not configure `comfy/workflow` or supply the workflow plugin's
+`apiKey`. Keep native cloud workflow API-key setup separate, as described below.
+To clear the stored MCP credentials while keeping the server definition, run
+`openclaw mcp logout comfy`.
+
+## Workflow plugin
 
 Install the official `comfy` plugin for workflow-driven ComfyUI runs:
 
 ```bash
 openclaw plugins install @openclaw/comfy-provider
-openclaw gateway restart
 ```
+
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 The plugin is entirely workflow-driven: OpenClaw does not map generic `size`,
 `aspectRatio`, `resolution`, `durationSeconds`, or TTS-style controls onto
 your graph.
 
-| Property     | Detail                                                                           |
-| ------------ | -------------------------------------------------------------------------------- |
-| Provider     | `comfy`                                                                          |
-| Model        | `comfy/workflow`                                                                 |
-| Shared tools | `image_generate`, `video_generate`, `music_generate`                             |
-| Auth         | None for local ComfyUI; `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` for Comfy Cloud |
-| API          | ComfyUI `/prompt` / `/history` / `/view`; Comfy Cloud `/api/*`                   |
+| Property     | Detail                                                                                     |
+| ------------ | ------------------------------------------------------------------------------------------ |
+| Provider     | `comfy`                                                                                    |
+| Model        | `comfy/workflow`                                                                           |
+| Shared tools | `image_generate`, `video_generate`, `music_generate`                                       |
+| Auth         | Optional `headers` for local HTTP auth; `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` for cloud |
+| API          | ComfyUI `/prompt` / `/history` / `/view`; Comfy Cloud `/api/*`                             |
 
 ## What it supports
 
@@ -215,8 +250,17 @@ Comfy supports shared top-level connection settings plus per-capability workflow
 | --------------------- | ---------------------- | ------------------------------------------------------------------------------------- |
 | `mode`                | `"local"` or `"cloud"` | Connection mode. Defaults to `"local"`.                                               |
 | `baseUrl`             | string                 | Defaults to `http://127.0.0.1:8188` for local or `https://cloud.comfy.org` for cloud. |
-| `apiKey`              | string                 | Optional inline key, alternative to `COMFY_API_KEY` / `COMFY_CLOUD_API_KEY` env vars. |
+| `apiKey`              | string or SecretRef    | Optional cloud key, alternative to `COMFY_API_KEY` / `COMFY_CLOUD_API_KEY` env vars.  |
 | `allowPrivateNetwork` | boolean                | Allow a private/LAN `baseUrl` in cloud mode or a local private-DNS FQDN.              |
+| `headers`             | object                 | Extra request headers; each value accepts a string or SecretRef.                      |
+
+Use `headers.Authorization` for a ComfyUI instance behind HTTP authentication.
+Prefer a [secret reference](/gateway/config-secrets-env#secrets) for credentials.
+Headers apply to uploads, workflow submissions, polling, and downloads in both
+modes. They override default headers case-insensitively, except `Content-Type`
+on image uploads: the runtime sets the multipart boundary. An unavailable
+header SecretRef fails before any request is sent. Reflected header values are
+redacted from response errors.
 
 <Note>
 In `local` mode, loopback/private IP literals and single-label service names such as `http://comfyui:8188` work without `allowPrivateNetwork`. Public-looking private-DNS FQDNs such as `https://comfy.local.example.com` require `allowPrivateNetwork: true`. Private-origin trust stays scoped to the configured scheme, hostname, and port; local redirects cannot leave the configured hostname, while cloud redirects to public CDNs are checked with the default SSRF policy.
@@ -226,14 +270,16 @@ In `local` mode, loopback/private IP literals and single-label service names suc
 
 These keys apply inside the `image`, `video`, or `music` sections:
 
-| Key                          | Required | Default  | Description                                                                  |
-| ---------------------------- | -------- | -------- | ---------------------------------------------------------------------------- |
-| `workflow` or `workflowPath` | Yes      | --       | Inline workflow JSON, or path to the ComfyUI workflow JSON file.             |
-| `promptNodeId`               | Yes      | --       | Node ID that receives the text prompt.                                       |
-| `promptInputName`            | No       | `"text"` | Input name on the prompt node.                                               |
-| `outputNodeId`               | No       | --       | Node ID to read output from. If omitted, all matching output nodes are used. |
-| `pollIntervalMs`             | No       | `1500`   | Polling interval in milliseconds for job completion.                         |
-| `timeoutMs`                  | No       | `300000` | Timeout in milliseconds for the workflow run.                                |
+| Key                          | Required | Default  | Description                                                                                                                                     |
+| ---------------------------- | -------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `workflow` or `workflowPath` | Yes      | --       | Inline workflow JSON, or path to the ComfyUI workflow JSON file.                                                                                |
+| `promptNodeId`               | Yes      | --       | Node ID that receives the text prompt.                                                                                                          |
+| `promptInputName`            | No       | `"text"` | Input name on the prompt node.                                                                                                                  |
+| `seedNodeId`                 | No       | --       | Node ID whose input receives a fresh random seed on every submission. Omit to reuse whatever seed is baked into the workflow file on every run. |
+| `seedInputName`              | No       | `"seed"` | Input name on the seed node.                                                                                                                    |
+| `outputNodeId`               | No       | --       | Node ID to read output from. If omitted, all matching output nodes are used.                                                                    |
+| `pollIntervalMs`             | No       | `1500`   | Polling interval in milliseconds for job completion.                                                                                            |
+| `timeoutMs`                  | No       | `300000` | Timeout in milliseconds for the workflow run.                                                                                                   |
 
 The `image` and `video` sections also support a reference-image input node:
 
@@ -242,7 +288,7 @@ The `image` and `video` sections also support a reference-image input node:
 | `inputImageNodeId`    | Yes (when passing a reference image) | --        | Node ID that receives the uploaded reference image. |
 | `inputImageInputName` | No                                   | `"image"` | Input name on the image node.                       |
 
-`apiKey` accepts either a literal string or a [secret reference](/gateway/configuration-reference#secrets) object.
+`apiKey` accepts either a literal string or a [secret reference](/gateway/config-secrets-env#secrets) object.
 
 ## Workflow details
 

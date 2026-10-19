@@ -1,42 +1,11 @@
-// Device Pair doctor contract migrates shipped plugin-owned state.
 import path from "node:path";
-import {
-  defineLegacyJsonStateMigration,
-  type PluginDoctorStateMigration,
-} from "openclaw/plugin-sdk/runtime-doctor-migrations";
-import {
-  DEVICE_PAIR_NOTIFY_LEGACY_STATE_FILE,
-  DEVICE_PAIR_NOTIFY_SUBSCRIBER_MAX_ENTRIES,
-  DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE,
-  normalizeLegacyNotifyState,
-  notifySubscriberStoreKey,
-  type LegacyNotifyStateFile,
-} from "./notify-state.js";
+import { defineRetiredPluginStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 
-function resolveLegacyNotifyStatePath(stateDir: string): string {
-  return path.join(stateDir, DEVICE_PAIR_NOTIFY_LEGACY_STATE_FILE);
-}
-
-export const stateMigrations: PluginDoctorStateMigration[] = [
-  defineLegacyJsonStateMigration<LegacyNotifyStateFile>({
-    id: "device-pair-notify-json-to-plugin-state",
-    label: "Device Pair notify subscribers",
-    resolvePath: resolveLegacyNotifyStatePath,
-    parse: normalizeLegacyNotifyState,
-    namespace: DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE,
-    maxEntries: DEVICE_PAIR_NOTIFY_SUBSCRIBER_MAX_ENTRIES,
-    archiveLabel: "Device Pair notify-state",
-    describeEntries: (state, { filePath }) => ({
-      preview: [
-        `- Device Pair notify subscribers: ${filePath} -> plugin state (${DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE}, ${state.subscribers.length} subscriber(s))`,
-      ],
-      change: ({ imported, alreadyPresent }) =>
-        `Migrated Device Pair notify subscribers -> plugin state (${imported} imported, ${alreadyPresent} already present)`,
-    }),
-    toRows: (state) =>
-      state.subscribers.map((subscriber) => ({
-        key: notifySubscriberStoreKey(subscriber),
-        value: subscriber,
-      })),
+export const stateMigrations = [
+  defineRetiredPluginStateMigration({
+    id: "device-pair-retired-state",
+    label: "Device Pair retired notify state",
+    intermediateVersion: "2026.9.5",
+    findSources: ({ stateDir }) => [path.join(stateDir, "device-pair-notify.json")],
   }),
 ];

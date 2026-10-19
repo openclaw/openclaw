@@ -24,8 +24,8 @@ scenario:
     kind: flow
     summary: Force the packaged dist-runtime plugin tree and verify an enabled bundled plugin skill survives discovery.
     config:
-      pluginId: open-prose
-      expectedSkillName: prose
+      pluginId: diffs
+      expectedSkillName: diffs
 
 flow:
   steps:
@@ -62,7 +62,14 @@ flow:
                   configPath,
                   `${JSON.stringify(
                     {
-                      agents: { defaults: { workspace: workspaceDir } },
+                      agents: {
+                        ownership: "explicit",
+                        defaults: {
+                          workspace: workspaceDir,
+                          systemAgent: { agentId: "main" },
+                        },
+                        entries: { main: {} },
+                      },
                       plugins: {
                         allow: [config.pluginId],
                         entries: { [config.pluginId]: { enabled: true } },
@@ -81,6 +88,10 @@ flow:
                   OPENCLAW_STATE_DIR: stateDir,
                   OPENCLAW_OAUTH_DIR: path.join(stateDir, "credentials"),
                   OPENCLAW_BUNDLED_PLUGINS_DIR: distRuntimeExtensions,
+                  OPENCLAW_GATEWAY_PORT: undefined,
+                  OPENCLAW_GATEWAY_URL: undefined,
+                  OPENCLAW_GATEWAY_TOKEN: undefined,
+                  OPENCLAW_GATEWAY_PASSWORD: undefined,
                   XDG_CONFIG_HOME: xdgConfigHome,
                   XDG_DATA_HOME: xdgDataHome,
                   XDG_CACHE_HOME: xdgCacheHome,

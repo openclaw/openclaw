@@ -1,4 +1,3 @@
-// Github Copilot plugin module implements usage behavior.
 import { buildCopilotIdeHeaders } from "openclaw/plugin-sdk/provider-auth";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
@@ -50,20 +49,14 @@ export async function fetchCopilotUsage(
   const data = isRecord(payload) ? (payload as CopilotUsageResponse) : {};
   const windows: UsageWindow[] = [];
 
-  if (data.quota_snapshots?.premium_interactions) {
-    const remaining = data.quota_snapshots.premium_interactions.percent_remaining;
-    windows.push({
-      label: "Premium",
-      usedPercent: clampPercent(100 - (remaining ?? 0)),
-    });
-  }
-
-  if (data.quota_snapshots?.chat) {
-    const remaining = data.quota_snapshots.chat.percent_remaining;
-    windows.push({
-      label: "Chat",
-      usedPercent: clampPercent(100 - (remaining ?? 0)),
-    });
+  for (const [key, label] of [
+    ["premium_interactions", "Premium"],
+    ["chat", "Chat"],
+  ] as const) {
+    const quota = data.quota_snapshots?.[key];
+    if (quota) {
+      windows.push({ label, usedPercent: clampPercent(100 - (quota.percent_remaining ?? 0)) });
+    }
   }
 
   return {

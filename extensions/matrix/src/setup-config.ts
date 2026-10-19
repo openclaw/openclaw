@@ -1,9 +1,9 @@
-// Matrix helper module supports setup config behavior.
 import {
   applyAccountNameToChannelSection,
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
   normalizeSecretInputString,
+  patchTopLevelChannelConfigSection,
   type ChannelSetupInput,
 } from "openclaw/plugin-sdk/setup";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -55,22 +55,6 @@ export type MatrixSetupInput = ChannelSetupInput & {
   avatarUrl?: string;
   initialSyncLimit?: number;
 };
-
-function cloneIfObject<T>(value: T): T {
-  if (value && typeof value === "object") {
-    return structuredClone(value);
-  }
-  return value;
-}
-
-function resolveSetupAvatarUrl(input: MatrixSetupInput): string | undefined {
-  const avatarUrl = input.avatarUrl;
-  if (typeof avatarUrl !== "string") {
-    return undefined;
-  }
-  const trimmed = avatarUrl.trim();
-  return trimmed || undefined;
-}
 
 function resolveExistingMatrixAccountKey(
   accounts: Record<string, Record<string, unknown>>,
@@ -126,26 +110,19 @@ export function moveSingleMatrixAccountConfigToNamedAccount(cfg: CoreConfig): Co
 
   const nextAccount: Record<string, unknown> = { ...accounts[resolvedTargetAccountId] };
   for (const key of keysToMove) {
-    nextAccount[key] = cloneIfObject(base[key]);
+    nextAccount[key] = base[key];
   }
-  const nextChannel = { ...base };
-  for (const key of keysToMove) {
-    delete nextChannel[key];
-  }
-
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      [channel]: {
-        ...nextChannel,
-        accounts: {
-          ...accounts,
-          [resolvedTargetAccountId]: nextAccount,
-        },
+  return patchTopLevelChannelConfigSection({
+    cfg,
+    channel,
+    clearFields: keysToMove,
+    patch: {
+      accounts: {
+        ...accounts,
+        [resolvedTargetAccountId]: nextAccount,
       },
     },
-  };
+  });
 }
 
 export function validateMatrixSetupInput(params: {
@@ -153,7 +130,7 @@ export function validateMatrixSetupInput(params: {
   input: ChannelSetupInput;
 }): string | null {
   const input = params.input as MatrixSetupInput;
-  const avatarUrl = resolveSetupAvatarUrl(input);
+  const avatarUrl = normalizeOptionalString(input.avatarUrl);
   if (avatarUrl && !isSupportedMatrixAvatarSource(avatarUrl)) {
     return "Matrix avatar URL must be an mxc:// URI or an http(s) URL.";
   }
@@ -170,13 +147,8 @@ export function validateMatrixSetupInput(params: {
   if (!accessToken && !password) {
     return "Matrix requires --access-token or --password";
   }
-  if (!accessToken) {
-    if (!userId) {
-      return "Matrix requires --user-id when using --password";
-    }
-    if (!password) {
-      return "Matrix requires --password when using --user-id";
-    }
+  if (!accessToken && !userId) {
+    return "Matrix requires --user-id when using --password";
   }
   return null;
 }
@@ -198,7 +170,7 @@ export function applyMatrixSetupAccountConfig(params: {
     accountId: normalizedAccountId,
     name: input.name,
   }) as CoreConfig;
-  const avatarUrl = resolveSetupAvatarUrl(input);
+  const avatarUrl = normalizeOptionalString(input.avatarUrl);
 
   if (input.useEnv) {
     return updateMatrixAccountConfig(next, normalizedAccountId, {

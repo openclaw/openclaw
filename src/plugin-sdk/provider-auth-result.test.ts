@@ -44,6 +44,7 @@ describe("buildOauthProviderAuthResult", () => {
           providers: {
             google: {
               baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+              headers: { Authorization: undefined, "X-Route": "keep" },
               models: [
                 {
                   id: "google/gemini-3-pro-preview",
@@ -78,6 +79,7 @@ describe("buildOauthProviderAuthResult", () => {
         providers: {
           google: {
             baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+            headers: { Authorization: undefined, "X-Route": "keep" },
             models: [
               {
                 id: "google/gemini-3.1-pro-preview",
@@ -93,6 +95,15 @@ describe("buildOauthProviderAuthResult", () => {
         },
       },
     });
+
+    expect(
+      buildOauthProviderAuthResult({
+        providerId: "google",
+        defaultModel: "google/gemini-3.1-pro-preview",
+        access: "access-token",
+        configPatch: result.configPatch,
+      }).configPatch,
+    ).toBe(result.configPatch);
   });
 
   it("omits OAuth expiry values outside the Date timestamp range", () => {

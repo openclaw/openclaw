@@ -7,6 +7,39 @@ import {
 } from "./ingress-drain.test-helpers.js";
 
 describe("channel ingress drain supersede", () => {
+  it.each([true, false])("checks prepared policy at cancellation (current=%s)", async (current) => {
+    await withTempState(async (stateDir) => {
+      const queue = createTestIngressQueue(stateDir);
+      await queue.enqueue("old", { text: "old" }, { laneKey: "shared" });
+      const guard = vi.fn(() => current);
+      let signal: AbortSignal | undefined;
+      const drain = createChannelIngressDrain<Payload>({
+        queue,
+        shouldSupersedePending: async () => guard,
+        dispatchClaimedEvent: async (event, lifecycle) => {
+          if (event.id === "old") {
+            signal = lifecycle.abortSignal;
+            return { kind: "deferred" };
+          }
+          await lifecycle.onAdopted();
+          return { kind: "completed" };
+        },
+      });
+      try {
+        await drain.drainOnce();
+        await queue.enqueue("new", { text: "new" }, { laneKey: "shared" });
+        expect(await drain.drainOnce()).toEqual({ started: current ? 1 : 0 });
+        expect(guard).toHaveBeenCalledOnce();
+        expect(signal?.aborted).toBe(current);
+        expect((await queue.enqueue("old", { text: "old" })).kind).toBe(
+          current ? "completed" : "claimed",
+        );
+      } finally {
+        drain.dispose();
+      }
+    });
+  });
+
   it("supersedes every released pre-adoption state on one lane", async () => {
     await withTempState(async (stateDir) => {
       const queue = createTestIngressQueue(stateDir);

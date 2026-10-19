@@ -1,15 +1,16 @@
 // Status JSON tests cover command output and runtime JSON writes.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { RuntimeEnv } from "../runtime.js";
+import { createMockGatewayService } from "../daemon/service.test-helpers.js";
 import { statusJsonCommand } from "./status-json.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   scanStatusJsonFast: vi.fn(),
   runSecurityAudit: vi.fn(),
   loadProviderUsageSummary: vi.fn(),
   callGateway: vi.fn(),
-  getDaemonStatusSummary: vi.fn(),
-  getNodeDaemonStatusSummary: vi.fn(),
+  resolveGatewayService: vi.fn(),
+  resolveNodeService: vi.fn(),
   normalizeUpdateChannel: vi.fn((value?: string | null) => value ?? null),
   resolveUpdateChannelDisplay: vi.fn(() => ({
     channel: "stable",
@@ -19,6 +20,17 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./status.scan.fast-json.js", () => ({
   scanStatusJsonFast: mocks.scanStatusJsonFast,
+}));
+
+// mock-isolation: Command policy tests consume a fixed unavailable snapshot without reading stores.
+vi.mock("./status-database-engines.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./status-database-engines.js")>()),
+  resolveStatusDatabaseEngines: async () => ({
+    source: "unavailable",
+    stores: [],
+    reason:
+      "Physical stores unknown: admitted facts unavailable. Run openclaw doctor for recovery steps.",
+  }),
 }));
 
 vi.mock("../security/audit.runtime.js", () => ({
@@ -33,23 +45,17 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
 }));
 
-vi.mock("../channels/plugins/read-only.js", () => ({
-  resolveReadOnlyChannelPluginsForConfig: vi.fn(() => ({
-    plugins: [
-      { id: "discord" },
-      { id: "imessage" },
-      { id: "signal" },
-      { id: "slack" },
-      { id: "telegram" },
-      { id: "whatsapp" },
-    ],
-    missingConfiguredChannelIds: [],
-  })),
+vi.mock("../daemon/service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/service.js")>()),
+  resolveGatewayService: mocks.resolveGatewayService,
 }));
-
-vi.mock("./status.daemon.js", () => ({
-  getDaemonStatusSummary: mocks.getDaemonStatusSummary,
-  getNodeDaemonStatusSummary: mocks.getNodeDaemonStatusSummary,
+vi.mock("../daemon/node-service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/node-service.js")>()),
+  resolveNodeService: mocks.resolveNodeService,
+}));
+vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/openclaw-root.js")>()),
+  resolveOpenClawPackageRoot: async () => null,
 }));
 
 vi.mock("../infra/update-channels.js", () => ({
@@ -59,12 +65,11 @@ vi.mock("../infra/update-channels.js", () => ({
 
 function createRuntimeCapture() {
   const logs: string[] = [];
-  const runtime: RuntimeEnv = {
+  const runtime = {
+    ...createTestRuntime(),
     log: vi.fn((value: unknown) => {
       logs.push(String(value));
     }),
-    error: vi.fn(),
-    exit: vi.fn() as unknown as RuntimeEnv["exit"],
   };
   return { runtime, logs };
 }
@@ -100,6 +105,30 @@ function createExpectedStatusPayload() {
     updateChannelSource: "config",
     memory: null,
     memoryPlugin: null,
+    databaseEngines: {
+      source: "unavailable",
+      experimental: false,
+      families: [
+        ["state", "Shared state", false],
+        ["agent", "Agent data", false],
+        ["workboard", "Workboard", false],
+        ["logbook", "Logbook", false],
+        ["team-reports", "Team Reports", false],
+        ["quarantine", "Database quarantine", true],
+        ["managed-update", "Managed update handoffs", true],
+        ["package-activation", "Package activation journal", true],
+      ].map(([id, label, fixedLocal]) => ({
+        id,
+        label,
+        default: "sqlite",
+        override: null,
+        fixedLocal,
+        effective: "sqlite",
+      })),
+      stores: [],
+      reason:
+        "Physical stores unknown: admitted facts unavailable. Run openclaw doctor for recovery steps.",
+    },
     gateway: {
       mode: "local",
       url: "ws://127.0.0.1:18789",
@@ -111,8 +140,28 @@ function createExpectedStatusPayload() {
       error: null,
       authWarning: null,
     },
-    gatewayService: { installed: false },
-    nodeService: { installed: false },
+    gatewayService: {
+      label: "LaunchAgent",
+      installed: false,
+      loadState: { status: "not-loaded" },
+      managedByOpenClaw: false,
+      externallyManaged: false,
+      loadedText: "not loaded",
+      runtime: { status: "stopped" },
+      loaded: false,
+      runtimeShort: "stopped",
+    },
+    nodeService: {
+      label: "LaunchAgent",
+      installed: false,
+      loadState: { status: "not-loaded" },
+      managedByOpenClaw: false,
+      externallyManaged: false,
+      loadedText: "not loaded",
+      runtime: { status: "stopped" },
+      loaded: false,
+      runtimeShort: "stopped",
+    },
     agents: [],
     secretDiagnostics: [],
   };
@@ -126,8 +175,8 @@ describe("statusJsonCommand", () => {
       summary: { critical: 1, warn: 0, info: 0 },
       findings: [],
     });
-    mocks.getDaemonStatusSummary.mockResolvedValue({ installed: false });
-    mocks.getNodeDaemonStatusSummary.mockResolvedValue({ installed: false });
+    mocks.resolveGatewayService.mockReturnValue(createMockGatewayService());
+    mocks.resolveNodeService.mockReturnValue(createMockGatewayService());
     mocks.loadProviderUsageSummary.mockResolvedValue({ providers: [] });
     mocks.callGateway.mockResolvedValue({});
   });
@@ -159,32 +208,14 @@ describe("statusJsonCommand", () => {
 
     await statusJsonCommand({ all: true }, runtime);
 
-    expect(mocks.runSecurityAudit).toHaveBeenCalledOnce();
-    const auditInput = mocks.runSecurityAudit.mock.calls[0]?.[0] as
-      | {
-          config?: unknown;
-          sourceConfig?: unknown;
-          deep?: unknown;
-          includeFilesystem?: unknown;
-          includeChannelSecurity?: unknown;
-          loadPluginSecurityCollectors?: unknown;
-          plugins?: Array<{ id: string }>;
-        }
-      | undefined;
-    expect(auditInput?.config).toStrictEqual({ update: { channel: "stable" } });
-    expect(auditInput?.sourceConfig).toStrictEqual({});
-    expect(auditInput?.deep).toBe(false);
-    expect(auditInput?.includeFilesystem).toBe(true);
-    expect(auditInput?.includeChannelSecurity).toBe(true);
-    expect(auditInput?.loadPluginSecurityCollectors).toBe(false);
-    expect(auditInput?.plugins?.map((plugin) => plugin.id)).toStrictEqual([
-      "discord",
-      "imessage",
-      "signal",
-      "slack",
-      "telegram",
-      "whatsapp",
-    ]);
+    expect(mocks.runSecurityAudit).toHaveBeenCalledExactlyOnceWith({
+      config: { update: { channel: "stable" } },
+      sourceConfig: {},
+      deep: false,
+      includeFilesystem: true,
+      includeChannelSecurity: true,
+      loadPluginSecurityCollectors: false,
+    });
     expect(logs).toStrictEqual([expect.any(String)]);
     const payload = JSON.parse(logs[0] ?? "{}") as Record<string, unknown>;
     expect(payload).toEqual({

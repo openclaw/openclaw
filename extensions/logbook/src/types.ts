@@ -1,5 +1,3 @@
-// Shared Logbook domain shapes used by the store, pipeline, and gateway methods.
-
 export type LogbookFrame = {
   id: number;
   capturedAtMs: number;

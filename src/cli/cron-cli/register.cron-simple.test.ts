@@ -1,11 +1,10 @@
-// Cron simple register tests cover basic cron command registration and execution.
 import { Command } from "commander";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CronJob } from "../../cron/types.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { defaultRuntime } from "../../runtime.js";
+import { ExpectedCliError, formatCliJsonFailure } from "../failure-output.js";
+import { isCommandJsonOutputMode } from "../program/json-mode.js";
 
 const callGatewayFromCli = vi.fn();
-
 vi.mock("../gateway-rpc.js", async () => {
   const actual = await vi.importActual<typeof import("../gateway-rpc.js")>("../gateway-rpc.js");
   return {
@@ -14,32 +13,22 @@ vi.mock("../gateway-rpc.js", async () => {
       callGatewayFromCli(...args),
   };
 });
-
-const { isCronMachineOutput } = await import("./output-mode.js");
 const { registerCronCli } = await import("./register.js");
 const { registerCronSimpleCommands } = await import("./register.cron-simple.js");
-const originalStderrIsTTY = Object.getOwnPropertyDescriptor(process.stderr, "isTTY");
-
-async function runCronShow(id: string): Promise<void> {
-  const cron = new Command();
-  registerCronSimpleCommands(cron);
-  await cron.parseAsync(["show", id, "--json"], { from: "user" });
-}
-
-async function runCronToggle(command: "enable" | "disable"): Promise<void> {
-  const program = new Command();
-  program.exitOverride();
+const stderrIsTTY = Object.getOwnPropertyDescriptor(process.stderr, "isTTY");
+async function run(args: string[]) {
+  const program = new Command().exitOverride();
   registerCronSimpleCommands(program);
-  await program.parseAsync([command, "job-1"], { from: "user" });
+  await program.parseAsync(args, { from: "user" });
 }
-
-function mockCronShowPages(readPage: (params: { offset?: number }) => unknown): void {
+function mockPages(readPage: (params: { offset?: number }) => unknown, legacy = false) {
   callGatewayFromCli.mockImplementation(
     async (method: string, _opts: unknown, params?: { id?: string; offset?: number }) => {
       if (method === "cron.get") {
-        // Mirrors the gateway's stable wire wording; older shipped CLI matchers
-        // parse exactly this form, so the server must not reword it.
-        throw Object.assign(new Error(`cron job not found: ${params?.id ?? ""}`), {
+        const message = legacy
+          ? "unknown method: cron.get"
+          : `cron job not found: ${params?.id ?? ""}`;
+        throw Object.assign(new Error(message), {
           name: "GatewayClientRequestError",
           gatewayCode: "INVALID_REQUEST",
         });
@@ -51,250 +40,172 @@ function mockCronShowPages(readPage: (params: { offset?: number }) => unknown): 
     },
   );
 }
-
-function setStderrIsTTY(value: boolean): void {
-  Object.defineProperty(process.stderr, "isTTY", {
-    value,
-    configurable: true,
-  });
+const listCalls = () => callGatewayFromCli.mock.calls.filter(([method]) => method === "cron.list");
+function expectRequest(method: string, params: unknown) {
+  expect(callGatewayFromCli).toHaveBeenCalledExactlyOnceWith(method, expect.anything(), params);
 }
-
-function restoreStderrIsTTY(): void {
-  if (originalStderrIsTTY) {
-    Object.defineProperty(process.stderr, "isTTY", originalStderrIsTTY);
+const page = {
+  snapshotRevision: "stable",
+  offset: 0,
+  limit: 200,
+  hasMore: false,
+  nextOffset: null,
+};
+beforeEach(() => {
+  callGatewayFromCli
+    .mockReset()
+    .mockImplementation(async (method: string) =>
+      method === "cron.status" ? { enabled: true } : { ok: true },
+    );
+  vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+  vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+  vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
+    throw new Error(`exit ${code}`);
+  });
+});
+afterEach(() => {
+  if (stderrIsTTY) {
+    Object.defineProperty(process.stderr, "isTTY", stderrIsTTY);
   } else {
     Reflect.deleteProperty(process.stderr, "isTTY");
   }
-}
+  vi.restoreAllMocks();
+});
 
-function createRegisteredCronCommand(): Command {
+it("inherits parent Gateway options without losing JSON mode", async () => {
   const program = new Command().name("openclaw");
   registerCronCli(program);
-  const cron = program.commands.find((command) => command.name() === "cron");
-  if (!cron) {
-    throw new Error("cron command was not registered");
-  }
-  return cron;
-}
-
-describe("cron machine-output help", () => {
-  it.each([
-    { name: "status", aliases: [] },
-    { name: "add", aliases: ["create"] },
-    { name: "rm", aliases: ["remove", "delete"] },
-    { name: "enable", aliases: [] },
-    { name: "disable", aliases: [] },
-    { name: "get", aliases: [] },
-    { name: "runs", aliases: [] },
-    { name: "run", aliases: [] },
-    { name: "edit", aliases: [] },
-  ])("documents $name as always-JSON machine output", ({ name, aliases }) => {
-    const command = createRegisteredCronCommand().commands.find((candidate) =>
-      [candidate.name(), ...candidate.aliases()].includes(name),
-    );
-    const jsonOption = command?.options.find((option) => option.long === "--json");
-
-    expect(command?.aliases()).toEqual(aliases);
-    expect(jsonOption?.description).toBe(
-      "Explicit machine-output spelling (command results are JSON by default)",
-    );
-    expect(jsonOption?.defaultValue).toBeUndefined();
-    for (const commandName of [name, ...aliases]) {
-      expect(isCronMachineOutput(["node", "openclaw", "cron", commandName])).toBe(true);
-    }
+  const argv = ["node", "openclaw", "automations", "--port", "18789", "status"];
+  program.hook("preAction", (_parent, command) => {
+    expect(isCommandJsonOutputMode(command, argv)).toBe(true);
   });
-
-  it("keeps registered command output declarations aligned with early stdout routing", () => {
-    const cron = createRegisteredCronCommand();
-    for (const command of cron.commands) {
-      const jsonOption = command.options.find((option) => option.long === "--json");
-      const alwaysJson =
-        jsonOption?.description ===
-        "Explicit machine-output spelling (command results are JSON by default)";
-      const reservesMachineOutput = command.name() === "scratch" || alwaysJson;
-      for (const commandName of [command.name(), ...command.aliases()]) {
-        expect(isCronMachineOutput(["node", "openclaw", "cron", commandName]), commandName).toBe(
-          reservesMachineOutput,
-        );
-      }
-    }
-  });
+  await program.parseAsync(argv);
+  expect(callGatewayFromCli).toHaveBeenCalledWith(
+    "cron.status",
+    expect.objectContaining({ port: "18789" }),
+    {},
+  );
+  expect(defaultRuntime.writeJson).toHaveBeenCalledWith({ enabled: true });
 });
 
-describe("cron show pagination guard (regression for #83856)", () => {
-  beforeEach(() => {
-    callGatewayFromCli.mockReset();
-    vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-    vi.spyOn(defaultRuntime, "exit").mockImplementation(((code: number) => {
-      throw new Error(`exit ${code}`);
-    }) as never);
-    vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-  });
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it("throws when nextOffset fails to advance", async () => {
-    mockCronShowPages(() => ({
-      jobs: [],
-      snapshotRevision: "test-stable-cron-inventory",
-      total: 1,
-      offset: 0,
-      limit: 200,
+it.each([
+  {
+    label: "non-advancing cursor",
+    read: () => ({ ...page, jobs: [], total: 1, hasMore: true, nextOffset: 0 }),
+    error: "pagination did not advance",
+    calls: 1,
+  },
+  {
+    label: "page bound",
+    read: ({ offset = 0 }: { offset?: number }) => ({
+      ...page,
+      jobs: [{ id: `page-${offset}`, name: `Page ${offset}` }],
+      total: 51,
+      offset,
       hasMore: true,
-      nextOffset: 0,
-    }));
-    await expect(runCronShow("missing")).rejects.toThrow("exit 1");
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining("pagination did not advance"),
-    );
-    expect(callGatewayFromCli.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(
-      1,
-    );
-  });
+      nextOffset: offset + 1,
+    }),
+    error: "pagination exceeded maximum pages",
+    calls: 50,
+  },
+  {
+    label: "missing job",
+    read: () => ({ ...page, jobs: [], total: 0 }),
+    error: "Automation not found: missing. Run `openclaw cron list` to see recent automation ids.",
+    calls: 1,
+  },
+])("cron show rejects $label (#83856)", async ({ read, error, calls }) => {
+  mockPages(read);
+  await expect(run(["show", "missing", "--json"])).rejects.toThrow("exit 1");
+  expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining(error));
+  expect(listCalls()).toHaveLength(calls);
+});
 
-  it("throws when pagination exceeds the max page count", async () => {
-    mockCronShowPages(({ offset = 0 }) => {
-      return {
-        jobs: [{ id: `page-${offset}`, name: `Page ${offset}` }],
-        snapshotRevision: "test-stable-cron-inventory",
-        total: 51,
-        offset,
-        limit: 200,
-        hasMore: true,
-        nextOffset: offset + 1,
-      };
-    });
-    await expect(runCronShow("missing")).rejects.toThrow("exit 1");
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining("pagination exceeded maximum pages"),
-    );
-    const listCalls = callGatewayFromCli.mock.calls.filter(([method]) => method === "cron.list");
-    expect(listCalls.length).toBeGreaterThan(1);
-    expect(listCalls.length).toBeLessThanOrEqual(50);
+it("renders a legacy job without state instead of crashing (#173631)", async () => {
+  // Protocol-v4 rows can omit state, formerly crashing printCronShow.
+  mockPages(() => ({ jobs: [{ id: "legacy-job", name: "Legacy job", enabled: true }] }), true);
+  const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+  await run(["show", "legacy-job"]);
+  expect(callGatewayFromCli).toHaveBeenCalledWith("cron.get", expect.anything(), {
+    id: "legacy-job",
   });
+  const output = log.mock.calls.flat().map(String).join("\n");
+  expect(output).toContain("id: legacy-job");
+  expect(output).toContain("name: Legacy job");
+});
 
-  it("returns the job when found on a later page", async () => {
-    const job: CronJob = { id: "abc", name: "wanted" } as unknown as CronJob;
-    mockCronShowPages(({ offset }) =>
-      offset
-        ? {
-            jobs: [job],
-            snapshotRevision: "test-stable-cron-inventory",
-            total: 201,
-            offset,
-            limit: 200,
-            hasMore: false,
-            nextOffset: null,
-          }
-        : {
-            jobs: Array.from({ length: 200 }, (_, index) => ({
-              id: `page-${index}`,
-              name: `Page ${index}`,
-            })),
-            snapshotRevision: "test-stable-cron-inventory",
-            total: 201,
-            offset: 0,
-            limit: 200,
-            hasMore: true,
-            nextOffset: 200,
-          },
-    );
-    await runCronShow("wanted");
-    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(expect.objectContaining({ id: "abc" }));
-    expect(callGatewayFromCli.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(
-      2,
-    );
+it("emits the hidden-job hint when disabling from a terminal", async () => {
+  Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });
+  const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  await run(["disable", "job-1"]);
+  expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
+    id: "job-1",
+    patch: { enabled: false },
   });
+  expect(stderr).toHaveBeenCalledWith(expect.stringContaining("openclaw cron list --all"));
+});
 
-  it("uses the canonical lookup miss when pagination terminates without a match", async () => {
-    mockCronShowPages(() => ({
-      jobs: [],
-      snapshotRevision: "test-empty-cron-inventory",
-      total: 0,
-      offset: 0,
-      limit: 200,
-      hasMore: false,
-      nextOffset: null,
-    }));
-    await expect(runCronShow("missing")).rejects.toThrow("exit 1");
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "Automation not found: missing. Run `openclaw cron list` to see recent automation ids.",
-      ),
-    );
+it("warns for a known disabled scheduler", async () => {
+  callGatewayFromCli.mockImplementation(async (method: string) =>
+    method === "cron.status" ? { enabled: false } : { ok: true },
+  );
+  await run(["enable", "job-1"]);
+  expect(defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith({ ok: true });
+  for (const text of ["scheduler is disabled", "cron.enabled", "OPENCLAW_SKIP_CRON=1"]) {
+    expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining(text));
+  }
+});
+
+it.each([
+  { args: ["--all"], selector: { scope: "all" } },
+  { args: ["--id", "job-1"], selector: { id: "job-1" } },
+])("cron runs preserves default paging for $args", async ({ args, selector }) => {
+  const response = { entries: [], total: 0 };
+  callGatewayFromCli.mockResolvedValueOnce(response);
+  await run(["runs", ...args]);
+  expectRequest("cron.runs", { ...selector, limit: 50 });
+  expect(defaultRuntime.writeJson).toHaveBeenCalledWith(response);
+});
+
+it("retains filters and pagination in the all-jobs request", async () => {
+  await run(
+    (
+      "runs --all --status error --delivery-status not-delivered --query timeout " +
+      "--sort asc --offset 1 --limit 2 --run-id run-1"
+    ).split(" "),
+  );
+  expectRequest("cron.runs", {
+    scope: "all",
+    status: "error",
+    deliveryStatus: "not-delivered",
+    query: "timeout",
+    sortDir: "asc",
+    offset: 1,
+    limit: 2,
+    runId: "run-1",
   });
 });
 
-describe("cron disable hint", () => {
-  beforeEach(() => {
-    callGatewayFromCli.mockReset();
-    callGatewayFromCli.mockImplementation(async (method: string) => {
-      if (method === "cron.status") {
-        return { enabled: true };
-      }
-      return { ok: true };
-    });
-    vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-  });
-
-  afterEach(() => {
-    restoreStderrIsTTY();
-    vi.restoreAllMocks();
-  });
-
-  it.each([
-    { command: "disable" as const, tty: false, expectedHint: false },
-    { command: "disable" as const, tty: true, expectedHint: true },
-    { command: "enable" as const, tty: true, expectedHint: false },
-  ])("$command with stderr TTY=$tty emits hint=$expectedHint", async (params) => {
-    setStderrIsTTY(params.tty);
-    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-
-    await runCronToggle(params.command);
-
-    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
-      id: "job-1",
-      patch: { enabled: params.command === "enable" },
-    });
-    if (params.expectedHint) {
-      expect(stderrWrite).toHaveBeenCalledWith(expect.stringContaining("openclaw cron list --all"));
-    } else {
-      expect(stderrWrite).not.toHaveBeenCalled();
-    }
-  });
+it("rejects --all combined with a supplied selector before RPC", async () => {
+  await expect(run(["runs", "--all", "job-1"])).rejects.toThrow("exit 1");
+  expect(defaultRuntime.error).toHaveBeenCalledWith("--all cannot be combined with a job id");
+  expect(callGatewayFromCli).not.toHaveBeenCalled();
 });
 
-describe("cron scheduler status warnings", () => {
-  beforeEach(() => {
-    callGatewayFromCli.mockReset();
-    vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-    vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it.each([
-    { status: undefined, disabled: false },
-    { status: null, disabled: false },
-    { status: {}, disabled: false },
-    { status: { enabled: true }, disabled: false },
-    { status: { enabled: false }, disabled: true },
-  ])("warns only when scheduler disabled is known ($status)", async ({ status, disabled }) => {
-    callGatewayFromCli.mockImplementation(async (method: string) =>
-      method === "cron.status" ? status : { ok: true },
-    );
-
-    await runCronToggle("enable");
-
-    if (disabled) {
-      expect(defaultRuntime.error).toHaveBeenCalledWith(
-        expect.stringContaining("scheduler is disabled"),
-      );
-    } else {
-      expect(defaultRuntime.error).not.toHaveBeenCalled();
-    }
-  });
+it("reports an invalid offset as an expected JSON failure before RPC", async () => {
+  const program = new Command().name("openclaw").exitOverride();
+  registerCronCli(program);
+  const argv = process.argv;
+  process.argv = [...argv.slice(0, 2), "cron", "runs", "job-1", "--offset", "-1", "--json"];
+  try {
+    const thrown = await program.parseAsync(process.argv).catch((error: unknown) => error);
+    expect(thrown).toBeInstanceOf(ExpectedCliError);
+    expect(formatCliJsonFailure(thrown)).toEqual({
+      ok: false,
+      error: { type: "cli_error", message: "Invalid --offset (must be a non-negative integer)." },
+    });
+    expect(callGatewayFromCli).not.toHaveBeenCalled();
+  } finally {
+    process.argv = argv;
+  }
 });

@@ -4,6 +4,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.net.InetAddress
@@ -11,12 +12,28 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketException
 import java.security.cert.X509Certificate
+import java.util.concurrent.CountDownLatch
+import javax.net.ssl.HttpsURLConnection
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLEngine
 import javax.net.ssl.X509ExtendedTrustManager
 import kotlin.concurrent.thread
 
 class GatewayTlsTest {
+  @Test
+  fun unreachableEndpointDoesNotAskForFingerprintButRetainsAnExistingPin() {
+    val result = GatewayTlsProbeResult(failure = GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE)
+    assertEquals(
+      GatewayTlsTrustDecision.Failed(GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE),
+      decideGatewayTlsTrust(storedFingerprint = null, systemTrustCandidate = true, probeResult = result),
+    )
+    val pin = "ab".repeat(32)
+    assertEquals(
+      GatewayTlsTrustDecision.PinnedTrust(pin),
+      decideGatewayTlsTrust(storedFingerprint = pin, systemTrustCandidate = true, probeResult = result),
+    )
+  }
+
   @Test
   fun splitGatewayTlsFallbackProbeTimeouts_skipsFallbackAfterBudgetExpires() {
     assertNull(
@@ -141,10 +158,7 @@ class GatewayTlsTest {
       buildGatewayTlsConfig(
         params =
           GatewayTlsParams(
-            required = true,
             expectedFingerprint = "SHA-256: $expected",
-            allowTOFU = false,
-            stableId = "gateway-1",
           ),
         defaultTrust = RecordingExtendedTrustManager(),
       )
@@ -159,14 +173,12 @@ class GatewayTlsTest {
       buildGatewayTlsConfig(
         params =
           GatewayTlsParams(
-            required = true,
             expectedFingerprint = null,
-            allowTOFU = false,
-            stableId = "gateway-1",
           ),
         defaultTrust = defaultTrust,
       )
     val extendedTrust = config.trustManager as X509ExtendedTrustManager
+    assertSame(HttpsURLConnection.getDefaultHostnameVerifier(), config.hostnameVerifier)
 
     Socket().use { socket ->
       extendedTrust.checkServerTrusted(emptyArray(), "RSA", socket)
@@ -189,10 +201,7 @@ class GatewayTlsTest {
       buildGatewayTlsConfig(
         params =
           GatewayTlsParams(
-            required = true,
             expectedFingerprint = "not-a-sha256-fingerprint",
-            allowTOFU = false,
-            stableId = "gateway-1",
           ),
         defaultTrust = defaultTrust,
       )
@@ -216,20 +225,22 @@ class GatewayTlsTest {
   @Test
   fun probeGatewayTlsFingerprint_reportsHandshakeTimeoutAfterTcpConnect() =
     runBlocking {
-      TcpTestServer { socket ->
-        socket.soTimeout = 1_000
-        runCatching { socket.getInputStream().read(ByteArray(512)) }
-        Thread.sleep(700)
-      }.use { server ->
-        val result =
-          probeGatewayTlsFingerprint(
-            host = LOOPBACK_HOST,
-            port = server.port,
-            connectTimeoutMs = 250,
-            handshakeTimeoutMs = 250,
-          )
+      // Keep the peer open until the probe finishes so EOF cannot race the timeout.
+      val releaseConnection = CountDownLatch(1)
+      TcpTestServer { releaseConnection.await() }.use { server ->
+        try {
+          val result =
+            probeGatewayTlsFingerprint(
+              host = LOOPBACK_HOST,
+              port = server.port,
+              connectTimeoutMs = 250,
+              handshakeTimeoutMs = 250,
+            )
 
-        assertEquals(GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT, result.failure)
+          assertEquals(GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT, result.failure)
+        } finally {
+          releaseConnection.countDown()
+        }
       }
     }
 

@@ -1,7 +1,6 @@
 // Proves local Ollama inference crosses a real Gateway and paired node socket.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { once } from "node:events";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
@@ -9,6 +8,7 @@ import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import type { OpenClawPluginNodeHostCommand } from "openclaw/plugin-sdk/plugin-entry";
+import { stopChildProcess } from "openclaw/plugin-sdk/test-env";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { describe, expect, it, vi } from "vitest";
 import { createOllamaNodeHostCommands } from "./node-inference.js";
@@ -38,6 +38,13 @@ type NodeInvokeFrame = {
   command?: string;
   params?: unknown;
   paramsJSON?: string | null;
+};
+
+type PairedNode = {
+  nodeId: string;
+  displayName?: string;
+  connected?: boolean;
+  commands?: string[];
 };
 
 describe("Ollama paired-node Gateway inference", () => {
@@ -74,7 +81,7 @@ describe("Ollama paired-node Gateway inference", () => {
           },
           agents: {
             defaults: { heartbeat: { every: "0m" }, skipBootstrap: true },
-            entries: { main: { default: true, tools: { allow: ["node_inference"] } } },
+            entries: { main: { tools: { allow: ["node_inference"] } } },
           },
           models: {
             providers: {
@@ -83,12 +90,14 @@ describe("Ollama paired-node Gateway inference", () => {
           },
         });
 
+        const gatewayEntryArgs =
+          process.env.OPENCLAW_E2E_USE_PREBUILT_DIST === "1"
+            ? ["dist/entry.js"]
+            : ["--import", "tsx", "src/entry.ts"];
         gateway = spawn(
           process.execPath,
           [
-            "--import",
-            "tsx",
-            "src/entry.ts",
+            ...gatewayEntryArgs,
             "gateway",
             "--port",
             String(gatewayPort),
@@ -270,10 +279,18 @@ describe("Ollama paired-node Gateway inference", () => {
           ...(node ? [node.stopAndWait({ timeoutMs: 1000 })] : []),
           ...(operator ? [operator.stopAndWait({ timeoutMs: 1000 })] : []),
         ]);
-        if (gateway) {
-          await stopGatewayProcess(gateway);
+        try {
+          if (gateway) {
+            await stopChildProcess(gateway, 2_000).catch(async (error: unknown) => {
+              // The child keeps its copied env and retained files; join the parent's
+              // state work before restoring selectors for the next fixture.
+              await state.restoreEnv();
+              throw error;
+            });
+          }
+        } finally {
+          await Promise.allSettled([nodeOllama.close(), gatewayOllama.close()]);
         }
-        await Promise.allSettled([nodeOllama.close(), gatewayOllama.close()]);
         await state.cleanup();
       }
     },
@@ -404,29 +421,20 @@ async function approvePendingNodePairings(
   const pairingOptions = () => ({
     timeoutMs: remainingPhaseTimeoutMs(readinessDeadline, "Gateway node pairing"),
   });
-  const devices = await operator.request<{
-    pending?: Array<{ requestId?: string; role?: string }>;
-  }>("device.pair.list", {}, pairingOptions());
-  for (const request of devices.pending ?? []) {
-    if (request.requestId) {
-      await operator.request(
-        "device.pair.approve",
-        { requestId: request.requestId },
-        pairingOptions(),
-      );
-    }
-  }
-
-  const nodes = await operator.request<{
-    pending?: Array<{ requestId?: string; displayName?: string }>;
-  }>("node.pair.list", {}, pairingOptions());
-  for (const request of nodes.pending ?? []) {
-    if (request.requestId) {
-      await operator.request(
-        "node.pair.approve",
-        { requestId: request.requestId },
-        pairingOptions(),
-      );
+  for (const owner of ["device", "node"]) {
+    const result = await operator.request<{ pending?: Array<{ requestId?: string }> }>(
+      `${owner}.pair.list`,
+      {},
+      pairingOptions(),
+    );
+    for (const request of result.pending ?? []) {
+      if (request.requestId) {
+        await operator.request(
+          `${owner}.pair.approve`,
+          { requestId: request.requestId },
+          pairingOptions(),
+        );
+      }
     }
   }
 }
@@ -454,20 +462,11 @@ async function waitForPairedInferenceNode(
   logs: string[],
   readinessDeadline: number,
 ) {
-  let paired:
-    | { nodeId: string; displayName?: string; connected?: boolean; commands?: string[] }
-    | undefined;
+  let paired: PairedNode | undefined;
   await vi.waitFor(
     async () => {
       await approvePendingNodePairings(operator, readinessDeadline);
-      const result = await operator.request<{
-        nodes?: Array<{
-          nodeId: string;
-          displayName?: string;
-          connected?: boolean;
-          commands?: string[];
-        }>;
-      }>(
+      const result = await operator.request<{ nodes?: PairedNode[] }>(
         "node.list",
         {},
         {
@@ -638,17 +637,4 @@ async function handleFakeOllamaRequest(
   }
   response.statusCode = 404;
   response.end(JSON.stringify({ error: "not found" }));
-}
-
-async function stopGatewayProcess(child: ChildProcessWithoutNullStreams): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) {
-    return;
-  }
-  const exited = once(child, "exit").then(() => true);
-  child.kill("SIGTERM");
-  if (await Promise.race([exited, delay(2_000).then(() => false)])) {
-    return;
-  }
-  child.kill("SIGKILL");
-  await Promise.race([exited, delay(2_000)]);
 }

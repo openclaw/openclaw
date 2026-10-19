@@ -53,13 +53,15 @@ If the work is vendor-only and no shared contract exists yet, define the contrac
 | **Vendor plugin**          | Vendor API calls, vendor auth handling, vendor-specific request normalization, and registration of the capability implementation.                                                                                                     |
 | **Feature/channel plugin** | Calls `api.runtime.*` or the matching `plugin-sdk/*-runtime` helper. Never calls a vendor implementation directly.                                                                                                                    |
 
-## Provider and harness seams
+<a id="provider-and-harness-seams" />
+
+## Provider and harness hooks
 
 Use **provider hooks** when the behavior belongs to the model provider contract rather than the generic agent loop. Examples include provider-specific request params after transport selection, auth-profile preference, prompt overlays, and follow-up fallback routing after model/profile failover.
 
 Use **agent harness hooks** when the behavior belongs to the runtime that is executing a turn. Harnesses can classify explicit protocol outcomes such as empty output, reasoning without visible output, or a structured plan without a final answer so the outer model fallback policy can make the retry decision.
 
-Keep both seams narrow:
+Keep both hooks narrow:
 
 - Core owns the retry/fallback policy.
 - Provider plugins own provider-specific request/auth/routing hints.
@@ -131,3 +133,4 @@ If a PR skips the capability layer and hardcodes vendor behavior into a channel/
 - [Building plugins](/plugins/building-plugins) — first-plugin tutorial.
 - [SDK overview](/plugins/sdk-overview) — import map and registration API reference.
 - [Creating skills](/tools/creating-skills) — companion contributor surface.
+- [Plugin architecture internals](/plugins/architecture-internals) — load pipeline, registry model, and the guide to adding a capability.

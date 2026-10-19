@@ -22,6 +22,21 @@ export function resolveAnthropicImageMediaType(value: string): AnthropicImageMed
   throw new Error(`Unsupported Anthropic image media type after normalization: ${value}`);
 }
 
+function measureInlineImagesWithinBudget(
+  content: readonly (TextContent | ImageContent)[],
+  budget: AnthropicInlineImageBudget,
+): number {
+  const bytes = content.reduce(
+    (total, block) =>
+      block.type === "image" ? total + estimateBase64DecodedBytes(block.data) : total,
+    0,
+  );
+  if (budget.totalBytes + bytes > ANTHROPIC_INLINE_IMAGES_DECODE_SAFETY_BYTES) {
+    throw new Error("Anthropic inline images exceed the 64 MB aggregate decoded safety limit.");
+  }
+  return bytes;
+}
+
 export async function normalizeAnthropicInlineContent(
   content: readonly (TextContent | ImageContent)[],
   budget: AnthropicInlineImageBudget,
@@ -29,14 +44,7 @@ export async function normalizeAnthropicInlineContent(
   if (!content.some((block) => block.type === "image")) {
     return content.filter((block): block is TextContent => block.type === "text");
   }
-  const inputBytes = content.reduce(
-    (total, block) =>
-      block.type === "image" ? total + estimateBase64DecodedBytes(block.data) : total,
-    0,
-  );
-  if (budget.totalBytes + inputBytes > ANTHROPIC_INLINE_IMAGES_DECODE_SAFETY_BYTES) {
-    throw new Error("Anthropic inline images exceed the 64 MB aggregate decoded safety limit.");
-  }
+  measureInlineImagesWithinBudget(content, budget);
   const normalized: Array<TextContent | ImageContent> = [];
   for (const block of content) {
     if (block.type !== "image") {
@@ -46,17 +54,7 @@ export async function normalizeAnthropicInlineContent(
     const normalizedBlocks = await getAiTransportHost().normalizeAnthropicInlineContentBlocks([
       block,
     ]);
-    const outputBytes = normalizedBlocks.reduce(
-      (total, normalizedBlock) =>
-        normalizedBlock.type === "image"
-          ? total + estimateBase64DecodedBytes(normalizedBlock.data)
-          : total,
-      0,
-    );
-    if (budget.totalBytes + outputBytes > ANTHROPIC_INLINE_IMAGES_DECODE_SAFETY_BYTES) {
-      throw new Error("Anthropic inline images exceed the 64 MB aggregate decoded safety limit.");
-    }
-    budget.totalBytes += outputBytes;
+    budget.totalBytes += measureInlineImagesWithinBudget(normalizedBlocks, budget);
     normalized.push(...normalizedBlocks);
   }
   return normalized;

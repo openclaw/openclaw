@@ -4,7 +4,6 @@ import SwiftUI
 
 struct TalkOverlayView: View {
     var controller: TalkOverlayController
-    @State private var appState = AppStateStore.shared
     @State private var hoveringWindow = false
 
     var body: some View {
@@ -23,22 +22,24 @@ struct TalkOverlayView: View {
                 .opacity(isPaused ? 0.55 : 1)
                 .background(
                     TalkOrbInteractionView(
-                        onSingleClick: { TalkModeController.shared.togglePaused() },
-                        onDoubleClick: { TalkModeController.shared.stopSpeaking(reason: .userTap) },
-                        onDragStart: { TalkModeController.shared.setPaused(true) }))
+                        onSingleClick: { self.controller.actions()?.togglePaused() },
+                        onDoubleClick: { self.controller.actions()?.stopSpeaking() },
+                        onDragStart: { self.controller.actions()?.pauseForDrag() }))
                 .overlay(alignment: .topLeading) {
                     Button {
-                        TalkModeController.shared.exitTalkMode()
+                        self.controller.actions()?.exit()
                     } label: {
                         Image(systemName: "xmark")
-                            .font(.system(size: 10, weight: .bold))
+                            .font(.system(size: 12, weight: .semibold))
                             .foregroundStyle(Color.white.opacity(0.95))
-                            .frame(width: 18, height: 18)
+                            .frame(width: 28, height: 28)
                             .background(Color.black.opacity(0.4))
                             .clipShape(Circle())
+                            .contentShape(Circle())
                     }
                     .buttonStyle(.plain)
-                    .contentShape(Circle())
+                    .help("Stop Talk Mode")
+                    .accessibilityLabel("Stop Talk Mode")
                     .offset(x: -2, y: -2)
                     .opacity(self.hoveringWindow ? 1 : 0)
                     .animation(.easeOut(duration: 0.12), value: self.hoveringWindow)
@@ -54,7 +55,7 @@ struct TalkOverlayView: View {
     private static let defaultSeamColor = Color(red: 79 / 255.0, green: 122 / 255.0, blue: 154 / 255.0)
 
     private var seamColor: Color {
-        ColorHexSupport.color(fromHex: self.appState.seamColorHex) ?? Self.defaultSeamColor
+        ColorHexSupport.color(fromHex: self.controller.state()?.effectiveAccentHex) ?? Self.defaultSeamColor
     }
 }
 
@@ -63,18 +64,15 @@ private struct TalkOrbInteractionView: NSViewRepresentable {
     let onDoubleClick: () -> Void
     let onDragStart: () -> Void
 
-    func makeNSView(context: Context) -> NSView {
+    func makeNSView(context: Context) -> OrbInteractionNSView {
         let view = OrbInteractionNSView()
-        view.onSingleClick = self.onSingleClick
-        view.onDoubleClick = self.onDoubleClick
-        view.onDragStart = self.onDragStart
+        self.updateNSView(view, context: context)
         view.wantsLayer = true
         view.layer?.backgroundColor = NSColor.clear.cgColor
         return view
     }
 
-    func updateNSView(_ nsView: NSView, context: Context) {
-        guard let view = nsView as? OrbInteractionNSView else { return }
+    func updateNSView(_ view: OrbInteractionNSView, context: Context) {
         view.onSingleClick = self.onSingleClick
         view.onDoubleClick = self.onDoubleClick
         view.onDragStart = self.onDragStart

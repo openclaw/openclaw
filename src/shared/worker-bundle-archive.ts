@@ -1,10 +1,15 @@
 import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pipeline } from "node:stream/promises";
 import * as tar from "tar";
+import { sha256File } from "../infra/directory-durability.js";
+import { root as fsSafeRoot } from "../infra/fs-safe.js";
 import {
   compareWorkerBundlePaths,
   hashWorkerBundleManifest,
+  WORKER_BUNDLE_ARTIFACT_MODE,
   type WorkerBundleHashEntry,
 } from "./worker-bundle-hash.js";
 
@@ -35,19 +40,6 @@ function requireArchivePath(value: string): string {
   return value;
 }
 
-async function hashFile(filePath: string): Promise<string> {
-  const hash = createHash("sha256");
-  const handle = await fs.open(filePath, "r");
-  try {
-    for await (const chunk of handle.createReadStream()) {
-      hash.update(chunk);
-    }
-  } finally {
-    await handle.close();
-  }
-  return hash.digest("hex");
-}
-
 export async function readWorkerBundleArchiveManifest(
   tarballPath: string,
   limits: WorkerBundleArchiveLimits,
@@ -63,48 +55,60 @@ export async function readWorkerBundleArchiveManifest(
   }> = [];
   const paths = new Set<string>();
   let expandedBytes = 0;
-  await tar.list({
-    file: tarballPath,
+  const parser = tar.list({
     strict: true,
     maxDepth: MAX_ARCHIVE_DEPTH,
     maxDecompressionRatio: MAX_DECOMPRESSION_RATIO,
     onReadEntry(entry) {
-      const entryPath = requireArchivePath(entry.path);
-      if (paths.has(entryPath)) {
-        throw new Error(`Duplicate worker bundle archive path: ${entryPath}`);
+      try {
+        const entryPath = requireArchivePath(entry.path);
+        if (paths.has(entryPath)) {
+          throw new Error(`Duplicate worker bundle archive path: ${entryPath}`);
+        }
+        paths.add(entryPath);
+        if (paths.size > limits.maxEntries) {
+          throw new Error("Worker bundle archive exceeds its entry limit");
+        }
+        if (!Number.isSafeInteger(entry.size) || entry.size < 0) {
+          throw new Error(`Invalid worker bundle archive size: ${entryPath}`);
+        }
+        expandedBytes += entry.size;
+        if (!Number.isSafeInteger(expandedBytes) || expandedBytes > limits.maxExpandedBytes) {
+          throw new Error("Worker bundle archive exceeds its expanded byte limit");
+        }
+        const hash = createHash("sha256");
+        const item = {
+          path: entryPath,
+          mode: entry.mode,
+          headerSize: entry.size,
+          actualSize: 0,
+          type: entry.type,
+        } as (typeof pending)[number];
+        pending.push(item);
+        entry.on("data", (chunk: Buffer) => {
+          item.actualSize += chunk.byteLength;
+          hash.update(chunk);
+        });
+        entry.on("end", () => {
+          item.sha256 = hash.digest("hex");
+        });
+        entry.on("error", (error) => {
+          item.error = error instanceof Error ? error : new Error(String(error));
+        });
+      } catch (error) {
+        // Entry callbacks run outside the awaited promise. Abort through tar's error owner.
+        parser.abort(error instanceof Error ? error : new Error(String(error)));
       }
-      paths.add(entryPath);
-      if (paths.size > limits.maxEntries) {
-        throw new Error("Worker bundle archive exceeds its entry limit");
-      }
-      if (!Number.isSafeInteger(entry.size) || entry.size < 0) {
-        throw new Error(`Invalid worker bundle archive size: ${entryPath}`);
-      }
-      expandedBytes += entry.size;
-      if (!Number.isSafeInteger(expandedBytes) || expandedBytes > limits.maxExpandedBytes) {
-        throw new Error("Worker bundle archive exceeds its expanded byte limit");
-      }
-      const hash = createHash("sha256");
-      const item = {
-        path: entryPath,
-        mode: entry.mode,
-        headerSize: entry.size,
-        actualSize: 0,
-        type: entry.type,
-      } as (typeof pending)[number];
-      pending.push(item);
-      entry.on("data", (chunk: Buffer) => {
-        item.actualSize += chunk.byteLength;
-        hash.update(chunk);
-      });
-      entry.on("end", () => {
-        item.sha256 = hash.digest("hex");
-      });
-      entry.on("error", (error) => {
-        item.error = error instanceof Error ? error : new Error(String(error));
-      });
     },
   });
+  try {
+    // Match tar.list(file): compressed read grouping affects its prefix ratio check.
+    await pipeline(createReadStream(tarballPath, { highWaterMark: 16 * 1024 * 1024 }), parser);
+  } catch (error) {
+    // Parser has no destroy method; release its decompressor on parser and input failures too.
+    parser.abort(error instanceof Error ? error : new Error(String(error)));
+    throw error;
+  }
   return pending
     .map((entry): WorkerBundleHashEntry => {
       if (entry.error) {
@@ -120,7 +124,7 @@ export async function readWorkerBundleArchiveManifest(
       }
       return {
         path: entry.path,
-        mode: entry.mode,
+        mode: process.platform === "win32" ? WORKER_BUNDLE_ARTIFACT_MODE : entry.mode,
         size: entry.actualSize,
         sha256: entry.sha256,
       };
@@ -133,7 +137,7 @@ export async function readWorkerBundleDirectoryManifest(params: {
   limits: WorkerBundleArchiveLimits;
   ignoreTopLevel?: ReadonlySet<string>;
 }): Promise<WorkerBundleHashEntry[]> {
-  const root = await fs.realpath(params.root);
+  const root = await fsSafeRoot(params.root);
   const entries: WorkerBundleHashEntry[] = [];
   let totalBytes = 0;
   const visit = async (directory: string, relativeRoot: string): Promise<void> => {
@@ -157,23 +161,34 @@ export async function readWorkerBundleDirectoryManifest(params: {
       if (!stats.isFile()) {
         throw new Error(`Worker bundle contains an unsupported entry: ${relative}`);
       }
-      totalBytes += stats.size;
-      if (
-        entries.length >= params.limits.maxEntries ||
-        !Number.isSafeInteger(totalBytes) ||
-        totalBytes > params.limits.maxExpandedBytes
-      ) {
-        throw new Error("Worker bundle directory exceeds its limits");
+      // Keep literal inventory names such as "~/worker.mjs" from expanding to the home directory.
+      const opened = await root.open(absolute, { symlinks: "reject", hardlinks: "allow" });
+      try {
+        totalBytes += opened.stat.size;
+        if (
+          entries.length >= params.limits.maxEntries ||
+          !Number.isSafeInteger(totalBytes) ||
+          totalBytes > params.limits.maxExpandedBytes
+        ) {
+          throw new Error("Worker bundle directory exceeds its limits");
+        }
+        const hash = await sha256File(opened.handle, { maxBytes: opened.stat.size });
+        if (hash.bytes !== opened.stat.size) {
+          throw new Error(`Worker bundle file changed while hashing: ${relative}`);
+        }
+        entries.push({
+          path: relative,
+          mode:
+            process.platform === "win32" ? WORKER_BUNDLE_ARTIFACT_MODE : opened.stat.mode & 0o777,
+          size: opened.stat.size,
+          sha256: hash.digest,
+        });
+      } finally {
+        await opened.handle.close();
       }
-      entries.push({
-        path: relative,
-        mode: stats.mode & 0o777,
-        size: stats.size,
-        sha256: await hashFile(absolute),
-      });
     }
   };
-  await visit(root, "");
+  await visit(root.rootReal, "");
   return entries.toSorted((left, right) => compareWorkerBundlePaths(left.path, right.path));
 }
 

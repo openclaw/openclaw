@@ -12,9 +12,9 @@ import { isLiveTestEnabled, readLiveTestConfig } from "../agents/live-test-helpe
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { clearPluginLoaderCache } from "../plugins/loader.test-fixtures.js";
-import { getActivePluginRegistry, resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { activateTestChannelRegistry, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import { sleep } from "../utils.js";
 import type { GatewayClient } from "./client.js";
@@ -45,7 +45,7 @@ const ACP_CRON_MCP_PROBE_VERIFY_POLLS = 5;
 const ACP_CRON_MCP_PROBE_VERIFY_POLL_MS = 1_000;
 const DEFAULT_LIVE_CODEX_MODEL = "gpt-5.6-luna";
 const DEFAULT_LIVE_PARENT_MODEL = "openai/gpt-5.4";
-type LiveAcpAgent = "claude" | "codex" | "droid" | "gemini" | "opencode";
+type LiveAcpAgent = "claude" | "codex" | "droid" | "gemini" | "grok-build" | "opencode";
 
 function snapshotAcpBindLiveEnv(): LiveEnvSnapshot {
   return snapshotLiveEnv(["CODEX_HOME"]);
@@ -97,6 +97,9 @@ function normalizeAcpAgent(raw: string | undefined): LiveAcpAgent {
   }
   if (normalized === "opencode") {
     return "opencode";
+  }
+  if (normalized === "grok-build") {
+    return "grok-build";
   }
   return "claude";
 }
@@ -401,17 +404,10 @@ async function bindConversationAndWait(params: {
   while (Date.now() - startedAt < timeoutMs) {
     attempt += 1;
     const backend = getAcpRuntimeBackend("acpx");
-    const runtime = backend?.runtime as
-      | {
-          probeAvailability?: () => Promise<void>;
-          doctor?: () => Promise<{ message?: string; details?: string[] }>;
-        }
-      | undefined;
+    const runtime = backend?.runtime;
     const backendUnavailable = !backend || (backend.healthy && !backend.healthy());
     if (backendUnavailable) {
-      if (runtime?.probeAvailability) {
-        await runtime.probeAvailability().catch(() => {});
-      }
+      await runtime?.doctor?.().catch(() => {});
       const backendReadyAfterProbe = backend && (!backend.healthy || backend.healthy());
       if (backendReadyAfterProbe) {
         logLiveStep(`acpx backend became healthy before bind attempt ${attempt}`);
@@ -751,6 +747,8 @@ describeLive("gateway live (ACP bind)", () => {
           auth: { mode: "token", token },
           controlUiEnabled: false,
         });
+        await server.startupSettled;
+        await activateTestChannelRegistry(createSlackCurrentConversationBindingRegistry());
         logLiveStep("gateway startup returned");
         await waitForGatewayPort({ host: "127.0.0.1", port, timeoutMs: CONNECT_TIMEOUT_MS });
         logLiveStep("gateway port is reachable");
@@ -760,11 +758,6 @@ describeLive("gateway live (ACP bind)", () => {
           timeoutMs: CONNECT_TIMEOUT_MS,
         });
         logLiveStep("gateway websocket connected");
-        const activeRegistry = getActivePluginRegistry();
-        if (!activeRegistry) {
-          throw new Error("expected gateway root plugin registry");
-        }
-        activeRegistry.channels.push(...createSlackCurrentConversationBindingRegistry().channels);
 
         const bindResult = await bindConversationAndWait({
           client,

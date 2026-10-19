@@ -1,14 +1,15 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-// Perplexity provider module implements model/runtime integration.
 import {
   mergeScopedSearchConfig,
   resolveProviderWebSearchPluginConfig,
+  WEB_SEARCH_QUERY_COUNT_PROPERTIES,
   type WebSearchProviderPlugin,
   type WebSearchProviderToolDefinition,
 } from "openclaw/plugin-sdk/provider-web-search-config-contract";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createPerplexityWebSearchProviderBase,
+  hasPerplexityLegacyOverride,
+  resolvePerplexityConfig,
   resolvePerplexityWebSearchRuntimeMetadata,
 } from "./perplexity-web-search-provider.shared.js";
 
@@ -18,13 +19,7 @@ const loadPerplexityWebSearchRuntime = createLazyRuntimeModule(
 
 function createPerplexityParameters(transport?: string): Record<string, unknown> {
   const properties: Record<string, unknown> = {
-    query: { type: "string", description: "Search query string." },
-    count: {
-      type: "integer",
-      description: "Number of results to return (1-10).",
-      minimum: 1,
-      maximum: 10,
-    },
+    ...WEB_SEARCH_QUERY_COUNT_PROPERTIES,
     freshness: {
       type: "string",
       description: "Filter by time: 'day' (24h), 'week', 'month', or 'year'.",
@@ -75,21 +70,15 @@ function createPerplexityParameters(transport?: string): Record<string, unknown>
   };
 }
 
-function hasPerplexityLegacyOverride(searchConfig?: Record<string, unknown>): boolean {
-  const perplexity = isRecord(searchConfig?.perplexity) ? searchConfig.perplexity : undefined;
-  return (
-    (typeof perplexity?.baseUrl === "string" && perplexity.baseUrl.trim().length > 0) ||
-    (typeof perplexity?.model === "string" && perplexity.model.trim().length > 0)
-  );
-}
-
 function createPerplexityToolDefinition(
   searchConfig?: Record<string, unknown>,
   runtimeTransport?: string,
 ): WebSearchProviderToolDefinition {
   const schemaTransport =
     runtimeTransport ??
-    (hasPerplexityLegacyOverride(searchConfig) ? "chat_completions" : undefined);
+    (hasPerplexityLegacyOverride(resolvePerplexityConfig(searchConfig))
+      ? "chat_completions"
+      : undefined);
 
   return {
     description:

@@ -123,7 +123,10 @@ describe("local TUI PTY fixture support", () => {
     let acceptanceTimer: ReturnType<typeof setTimeout> | undefined;
     const run = {
       cols: 100,
+      exited: new Promise<never>(() => {}),
+      onOutput: () => () => {},
       output: () => output,
+      pid: 123,
       rows: 30,
       visibleOutput: () => output.replace(/\s+/gu, " "),
       write: async (data: string) => {

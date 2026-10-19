@@ -1,17 +1,14 @@
-/**
- * Arcee AI provider plugin entry. It supports direct Arcee auth and OpenRouter
- * routing while normalizing OpenRouter model ids and base URLs.
- */
-import { buildOpenAICompatibleLiveModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { buildOpenAICompatibleLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import {
   readConfiguredProviderCatalogEntries,
+  resolveMergedModelProviderConfig,
   type ProviderCatalogContext,
 } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import {
-  applyArceeConfig,
-  applyArceeOpenRouterConfig,
+  applyArceeOnboardConfig,
+  applyArceeOpenRouterOnboardConfig,
   ARCEE_DEFAULT_MODEL_REF,
   ARCEE_OPENROUTER_DEFAULT_MODEL_REF,
 } from "./onboard.js";
@@ -30,24 +27,27 @@ const ARCEE_WIZARD_GROUP = {
 } as const;
 
 async function resolveArceeCatalog(ctx: ProviderCatalogContext) {
-  const directAuth = ctx.resolveProviderApiKey(PROVIDER_ID);
-  if (directAuth.apiKey) {
-    return {
-      provider: await buildOpenAICompatibleLiveModelProviderConfig({
+  const configuredBaseUrl = resolveMergedModelProviderConfig(ctx.config, PROVIDER_ID)?.baseUrl;
+  if (!normalizeArceeOpenRouterBaseUrl(configuredBaseUrl)) {
+    const directAuth = ctx.resolveProviderApiKey(PROVIDER_ID);
+    if (directAuth.apiKey) {
+      return await buildOpenAICompatibleLiveProviderCatalog({
+        discoveryMode: "strict",
         providerId: PROVIDER_ID,
         providerConfig: buildArceeProvider(),
         apiKey: directAuth.apiKey,
         discoveryApiKey: directAuth.discoveryApiKey,
-      }),
-    };
+        profileId: directAuth.profileId,
+      });
+    }
+    if (configuredBaseUrl) {
+      return null;
+    }
   }
-
   const openRouterKey = ctx.resolveProviderApiKey("openrouter").apiKey;
-  if (openRouterKey) {
-    return { provider: { ...buildArceeOpenRouterProvider(), apiKey: openRouterKey } };
-  }
-
-  return null;
+  return openRouterKey
+    ? { provider: { ...buildArceeOpenRouterProvider(), apiKey: openRouterKey } }
+    : null;
 }
 
 function normalizeArceeResolvedModel<T extends { baseUrl?: string; id: string }>(
@@ -68,7 +68,6 @@ function normalizeArceeResolvedModel<T extends { baseUrl?: string; id: string }>
   };
 }
 
-/** Provider entry for Arcee direct and OpenRouter-backed models. */
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "Arcee AI Provider",
@@ -87,7 +86,7 @@ export default defineSingleProviderPluginEntry({
         envVar: "ARCEEAI_API_KEY",
         promptMessage: "Enter Arcee AI API key",
         defaultModel: ARCEE_DEFAULT_MODEL_REF,
-        applyConfig: applyArceeConfig,
+        applyConfig: applyArceeOnboardConfig,
         wizard: {
           choiceId: "arceeai-api-key",
           choiceLabel: "Arcee AI API key",
@@ -106,7 +105,7 @@ export default defineSingleProviderPluginEntry({
         profileId: "openrouter:default",
         defaultModel: ARCEE_OPENROUTER_DEFAULT_MODEL_REF,
         expectedProviders: [PROVIDER_ID, "openrouter"],
-        applyConfig: applyArceeOpenRouterConfig,
+        applyConfig: applyArceeOpenRouterOnboardConfig,
         wizard: {
           choiceId: "arceeai-openrouter",
           choiceLabel: "OpenRouter API key",

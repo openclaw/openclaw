@@ -1,5 +1,6 @@
 import { expect, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { taskSuggestionsHandlers } from "./task-suggestions.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -26,13 +27,15 @@ export async function call(
   const config =
     overrides.config ??
     (overrides.client !== undefined || overrides.context !== undefined ? {} : overrides);
+  const context = { broadcast, getRuntimeConfig: () => config, ...overrides.context };
+  setRuntimeConfigSnapshot(context.getRuntimeConfig());
   await taskSuggestionsHandlers[method]?.({
     req: { type: "req", id: "request-1", method, params },
     params,
     respond: (...args: Parameters<RespondFn>) => calls.push(args),
     client: overrides.client ?? null,
     isWebchatConnect: () => true,
-    context: { broadcast, getRuntimeConfig: () => config, ...overrides.context },
+    context,
   } as never);
   return { response: calls[0], broadcast };
 }

@@ -1,151 +1,194 @@
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { startQaBusServer } from "./bus-server.js";
 import { createQaBusState } from "./bus-state.js";
-import { startQaGatewayChild } from "./gateway-child.js";
+import { createQaGatewayChild } from "./gateway-child.js";
 import { QA_SUBAGENT_SELF_YIELD_MARKER } from "./providers/mock-openai/mock-openai-contracts.js";
 import { startQaMockOpenAiServer } from "./providers/mock-openai/server.js";
 import { createQaChannelTransport } from "./qa-channel-transport.js";
 
 const PLUGIN_ID = "qa-self-yield-followup-subagent";
-const TRIGGER = "qa self yield follow-up";
 const REQUESTER_CONVERSATION = { id: "requester-user", kind: "direct" as const };
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../..");
 const PLUGIN_DIR = path.join(
   REPO_ROOT,
   "extensions/qa-lab/test-fixtures/self-yield-followup-subagent-plugin",
 );
+const VERDICT_PATH = path.join(
+  REPO_ROOT,
+  ".artifacts/qa-e2e/handoff-adoption/channel-handoff-verdict.json",
+);
 
 function withFixturePlugin(config: OpenClawConfig): OpenClawConfig {
-  return {
-    ...config,
-    plugins: {
-      ...config.plugins,
-      enabled: true,
-      allow: [...new Set([...(config.plugins?.allow ?? []), PLUGIN_ID])],
-      load: {
-        ...config.plugins?.load,
-        paths: [...new Set([...(config.plugins?.load?.paths ?? []), PLUGIN_DIR])],
-      },
-      entries: {
-        ...config.plugins?.entries,
-        [PLUGIN_ID]: { enabled: true },
-      },
-    },
-  };
+  const plugins = (config.plugins ??= {});
+  plugins.enabled = true;
+  plugins.allow = [...new Set([...(plugins.allow ?? []), PLUGIN_ID])];
+  const load = (plugins.load ??= {});
+  load.paths = [...new Set([...(load.paths ?? []), PLUGIN_DIR])];
+  plugins.entries = { ...plugins.entries, [PLUGIN_ID]: { enabled: true } };
+  return config;
 }
 
-describe("plugin subagent sessions_yield follow-up", () => {
-  const cleanups: Array<() => Promise<void>> = [];
+const cleanups: Array<() => Promise<void>> = [];
 
-  afterEach(async () => {
-    for (const cleanup of cleanups.splice(0).toReversed()) {
-      await cleanup();
-    }
+afterEach(async () => {
+  for (const cleanup of cleanups.splice(0).toReversed()) {
+    await cleanup();
+  }
+});
+
+it("announces to the original requester only after the follow-up run ends", async () => {
+  const state = createQaBusState();
+  const transport = createQaChannelTransport(state);
+  const bus = await startQaBusServer({ state });
+  cleanups.push(() => bus.stop());
+  const mock = await startQaMockOpenAiServer();
+  cleanups.push(() => mock.stop());
+  const owner = createQaGatewayChild();
+  cleanups.push(async () => {
+    expect((await owner.stop()).errors).toEqual([]);
+  });
+  const gateway = await owner.start({
+    repoRoot: REPO_ROOT,
+    providerBaseUrl: `${mock.baseUrl}/v1`,
+    mockSessionObserverUrl: mock.sessionObserverUrl,
+    providerMode: "mock-openai",
+    transport,
+    transportBaseUrl: bus.baseUrl,
+    controlUiEnabled: false,
+    mutateConfig: withFixturePlugin,
+    // E2E prerequisites own the build; keep the packaged plugin/auth path.
+    command: {
+      executablePath: process.execPath,
+      argsPrefix: [path.join(REPO_ROOT, "dist/index.js")],
+      cwd: REPO_ROOT,
+      usePackagedPlugins: true,
+    },
+  });
+  await transport.waitReady({ gateway });
+
+  const outboundMessages = () =>
+    state.getSnapshot().messages.filter((message) => message.direction === "outbound");
+  const completionCount = () =>
+    outboundMessages().filter((message) => message.text.includes(QA_SUBAGENT_SELF_YIELD_MARKER))
+      .length;
+  const outboundStartIndex = outboundMessages().length;
+  const waitForReply = (textIncludes: string, timeoutMs: number) =>
+    transport.waitForOutbound({
+      conversation: REQUESTER_CONVERSATION,
+      sinceIndex: outboundStartIndex,
+      textIncludes,
+      timeoutMs,
+    });
+  const post = async (route: string, expectedStatus: number) => {
+    const response = await fetch(`${gateway.baseUrl}/qa/self-yield/${route}`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${gateway.token}`,
+        ...(route === "follow-up" ? { "Content-Type": "application/json" } : {}),
+      },
+      ...(route === "follow-up" ? { body: JSON.stringify({}) } : {}),
+    });
+    expect(response.status).toBe(expectedStatus);
+    return response.json();
+  };
+  await transport.sendInbound({
+    accountId: "default",
+    conversation: REQUESTER_CONVERSATION,
+    senderId: REQUESTER_CONVERSATION.id,
+    text: "qa self yield follow-up",
   });
 
-  it("announces to the original requester only after the follow-up run ends", async () => {
-    const state = createQaBusState();
-    const transport = createQaChannelTransport(state);
-    const bus = await startQaBusServer({ state });
-    cleanups.push(() => bus.stop());
+  let distinctFollowupRun: boolean;
 
-    const mock = await startQaMockOpenAiServer();
-    cleanups.push(() => mock.stop());
-
-    const gateway = await startQaGatewayChild({
-      repoRoot: REPO_ROOT,
-      useRepoCli: true,
-      providerBaseUrl: `${mock.baseUrl}/v1`,
-      providerMode: "mock-openai",
-      transport,
-      transportBaseUrl: bus.baseUrl,
-      controlUiEnabled: false,
-      mutateConfig: withFixturePlugin,
+  try {
+    await waitForReply("QA-SELF-YIELD-SPAWNED", 30_000);
+    const followUp = (await post("follow-up", 202)) as { runId: string };
+    expect(followUp.runId).toBeTruthy();
+    const release = (await post("release", 200)) as {
+      finalReply?: string;
+      kickoffRunId?: string;
+      runId?: string;
+      status?: string;
+    };
+    expect(release).toMatchObject({
+      finalReply: QA_SUBAGENT_SELF_YIELD_MARKER,
+      status: "ok",
+      runId: followUp.runId,
     });
-    cleanups.push(() => gateway.stop());
-    await transport.waitReady({ gateway });
+    expect(release.kickoffRunId).toBeTruthy();
+    distinctFollowupRun = release.runId !== release.kickoffRunId;
 
-    const outboundStartIndex = state
-      .getSnapshot()
-      .messages.filter((message) => message.direction === "outbound").length;
-    await transport.sendInbound({
+    await expect(waitForReply(QA_SUBAGENT_SELF_YIELD_MARKER, 90_000)).resolves.toMatchObject({
       accountId: "default",
-      conversation: REQUESTER_CONVERSATION,
-      senderId: REQUESTER_CONVERSATION.id,
-      text: TRIGGER,
     });
+  } catch (error) {
+    throw new Error(
+      [
+        error instanceof Error ? error.message : String(error),
+        `bus=${JSON.stringify(state.getSnapshot())}`,
+        `gateway=${gateway.logs()}`,
+      ].join("\n"),
+      { cause: error },
+    );
+  }
 
-    const failureContext = (error: unknown) =>
-      new Error(
-        [
-          error instanceof Error ? error.message : String(error),
-          `bus=${JSON.stringify(state.getSnapshot())}`,
-          `gateway=${gateway.logs()}`,
-        ].join("\n"),
-        { cause: error },
-      );
-
-    try {
-      const spawn = await transport.waitForOutbound({
-        conversation: REQUESTER_CONVERSATION,
-        sinceIndex: outboundStartIndex,
-        textIncludes: "QA-SELF-YIELD-SPAWNED",
-        timeoutMs: 30_000,
-      });
-
-      // Anchor the quiet window on the spawn acknowledgement itself rather than a
-      // snapshot taken afterwards, so an announce arriving between the two is
-      // still observed instead of being skipped as already-seen traffic.
-      const outboundAfterSpawn =
-        state
-          .getSnapshot()
-          .messages.filter((message) => message.direction === "outbound")
-          .findIndex((message) => message.id === spawn.id) + 1;
-      // The child pauses itself here. The requester must stay parked: an announce
-      // now would report a run that has produced no result yet, which is the
-      // silent-wrong-outcome this flow exists to prevent.
-      await transport.waitForNoOutbound({
-        sinceIndex: outboundAfterSpawn,
-        quietMs: 15_000,
-      });
-
-      const [, kickoffRunId, childSessionKey] = spawn.text.split(" ");
-      expect(childSessionKey).toBeTruthy();
-
-      const followUpResponse = await fetch(`${gateway.baseUrl}/qa/self-yield/follow-up`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${gateway.token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ sessionKey: childSessionKey }),
-      });
-      expect(followUpResponse.status).toBe(200);
-      const followUp = (await followUpResponse.json()) as { runId: string };
-      // Adoption retires the paused run in favour of the follow-up, so the two
-      // runs are distinct gateway ids over one continued unit of work.
-      expect(followUp.runId).not.toBe(kickoffRunId);
-
-      const completion = await transport.waitForOutbound({
-        conversation: REQUESTER_CONVERSATION,
-        sinceIndex: outboundStartIndex,
-        textIncludes: QA_SUBAGENT_SELF_YIELD_MARKER,
-        timeoutMs: 90_000,
-      });
-      expect(completion.accountId).toBe("default");
-    } catch (error) {
-      throw failureContext(error);
-    }
-
-    const outbound = state
-      .getSnapshot()
-      .messages.filter((message) => message.direction === "outbound");
-    // Exactly one announce for the whole continued run: the paused kickoff must
-    // not announce separately, and the follow-up must not announce twice.
-    expect(
-      outbound.filter((message) => message.text.includes(QA_SUBAGENT_SELF_YIELD_MARKER)),
-    ).toHaveLength(1);
-  }, 180_000);
-});
+  const outbound = outboundMessages();
+  expect(outbound).toHaveLength(outboundStartIndex + 2);
+  const visibleRepliesBeforeQuiet = completionCount();
+  const waitForQuiet = () =>
+    transport.waitForNoOutbound({ sinceIndex: outbound.length, quietMs: 1_000 });
+  await waitForQuiet();
+  const visibleRepliesAfterQuiet = completionCount();
+  await gateway.restartAfterStateMutation(async () => {});
+  await transport.waitReady({ gateway });
+  await waitForQuiet();
+  const visibleRepliesAfterRestart = completionCount();
+  const requests = (await fetch(`${mock.baseUrl}/debug/requests`).then((response) =>
+    response.json(),
+  )) as Array<{ allInputText?: string; plannedToolName?: string; prompt?: string }>;
+  const count = (matches: (request: (typeof requests)[number]) => boolean | undefined) =>
+    requests.filter(matches).length;
+  expect(requests).toHaveLength(3);
+  const facts = {
+    sessionsYieldCalls: count((request) => request.plannedToolName === "sessions_yield"),
+    childModelRequests: count(
+      (request) =>
+        request.prompt?.includes("Subagent self yield qa worker") ||
+        request.prompt?.includes("Subagent self yield qa remote job finished"),
+    ),
+    requesterCompletionTurns: count((request) =>
+      request.allInputText?.includes("A background task completed."),
+    ),
+    pauseNoticeRequests: count((request) =>
+      request.prompt?.includes("A child is paused awaiting a continuation"),
+    ),
+    visibleReplies: visibleRepliesBeforeQuiet,
+    duplicateRepliesAfterQuietWindow: visibleRepliesAfterQuiet - visibleRepliesBeforeQuiet,
+    duplicateRepliesAfterGatewayRestart: visibleRepliesAfterRestart - visibleRepliesAfterQuiet,
+    distinctFollowupRun,
+  };
+  expect(facts).toEqual({
+    sessionsYieldCalls: 1,
+    childModelRequests: 2,
+    requesterCompletionTurns: 1,
+    pauseNoticeRequests: 0,
+    visibleReplies: 1,
+    duplicateRepliesAfterQuietWindow: 0,
+    duplicateRepliesAfterGatewayRestart: 0,
+    distinctFollowupRun: true,
+  });
+  const verdict = {
+    schemaVersion: 1,
+    scenario: "channel-handoff-adoption",
+    status: "pass",
+    channel: "qa-channel",
+    provider: "mock-openai",
+    gateway: "ephemeral",
+    facts,
+  };
+  await mkdir(path.dirname(VERDICT_PATH), { recursive: true });
+  await writeFile(VERDICT_PATH, `${JSON.stringify(verdict, null, 2)}\n`, "utf8");
+}, 180_000);

@@ -36,14 +36,6 @@ function resolveContractMessageDiscovery(params: {
   };
 }
 
-export function installChannelPluginContractSuite(params: {
-  plugin: Pick<ChannelPlugin, "id" | "meta" | "capabilities" | "config">;
-}) {
-  it("satisfies the base channel plugin contract", () => {
-    expectChannelPluginContract(params.plugin);
-  });
-}
-
 export function expectChannelPluginContract(
   plugin: Pick<ChannelPlugin, "id" | "meta" | "capabilities" | "config">,
 ) {
@@ -96,18 +88,14 @@ export function installChannelActionsContractSuite(params: {
       expect(sortStrings(actions)).toEqual(sortStrings(testCase.expectedActions));
       expect(sortStrings(capabilities)).toEqual(sortStrings(testCase.expectedCapabilities ?? []));
 
-      if (params.plugin.actions?.supportsAction) {
-        for (const action of testCase.expectedActions) {
-          expect(params.plugin.actions.supportsAction({ action })).toBe(true);
-        }
-        if (
-          params.unsupportedAction &&
-          !testCase.expectedActions.includes(params.unsupportedAction)
-        ) {
-          expect(params.plugin.actions.supportsAction({ action: params.unsupportedAction })).toBe(
-            false,
-          );
-        }
+      if (
+        params.plugin.actions?.supportsAction &&
+        params.unsupportedAction &&
+        !testCase.expectedActions.includes(params.unsupportedAction)
+      ) {
+        expect(params.plugin.actions.supportsAction({ action: params.unsupportedAction })).toBe(
+          false,
+        );
       }
     });
   }

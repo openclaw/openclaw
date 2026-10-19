@@ -1,6 +1,5 @@
-// Public media-understanding helpers and types for provider plugins.
-
 export type {
+  AudioTranscriptionConfigContext,
   AudioTranscriptionRequest,
   AudioTranscriptionResult,
   ImageDescriptionRequest,
@@ -31,6 +30,7 @@ export {
 export {
   buildOpenAiCompatibleVideoRequestBody,
   coerceOpenAiCompatibleVideoText,
+  describeOpenAiCompatibleVideo,
   resolveMediaUnderstandingString,
   type OpenAiCompatibleVideoPayload,
 } from "../media-understanding/openai-compatible-video.ts";

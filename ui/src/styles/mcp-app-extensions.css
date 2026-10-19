@@ -1,0 +1,156 @@
+.mcp-app-catalog {
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  margin-bottom: 16px;
+}
+.mcp-app-catalog--compact {
+  display: inline-block;
+  padding: 0;
+  border: 0;
+  margin: 0;
+}
+.mcp-app-catalog__entries {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-block: 8px;
+}
+.mcp-app-catalog__entry {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.mcp-app-catalog__entry small {
+  display: block;
+  color: var(--muted);
+  text-align: start;
+}
+.mcp-app-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 240px;
+  gap: 12px;
+}
+.mcp-app-panel__toolbar,
+.mcp-app-resources__search,
+.mcp-app-context__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.mcp-app-panel__toolbar strong {
+  flex: 1;
+}
+.mcp-app-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.mcp-app-settings fieldset {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 12px;
+}
+.mcp-app-settings__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.mcp-app-settings__field input[type="checkbox"] {
+  align-self: flex-start;
+}
+.mcp-app-context {
+  max-height: 160px;
+  overflow-y: auto;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.mcp-app-context svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+.mcp-app-context__header {
+  color: var(--muted);
+  font-size: 12px;
+}
+.mcp-app-context__items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.mcp-app-context__item {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  max-width: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 4px 8px;
+}
+.mcp-app-context__item img {
+  width: 36px;
+  height: 36px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+}
+.mcp-app-context__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 240px;
+}
+.mcp-app-context__item button {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+}
+.mcp-app-resources {
+  padding: 6px 12px;
+}
+.mcp-app-resources__results {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 260px;
+  overflow: auto;
+  margin-block: 8px;
+}
+.mcp-app-resources__result {
+  text-align: start;
+  white-space: normal;
+}
+.mcp-app-resources__result small {
+  display: block;
+  color: var(--muted);
+}
+
+.mcp-app-conversation {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: calc(100dvh - 160px);
+  flex: none;
+}
+
+.mcp-app-settings__field input:not([type="checkbox"]),
+.mcp-app-settings__field select {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  padding: 8px 10px;
+  font: inherit;
+}
+
+.mcp-app-icon {
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+}

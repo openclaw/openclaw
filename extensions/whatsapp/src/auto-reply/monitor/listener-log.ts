@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements listener log behavior.
 export function formatWhatsAppInboundListeningLog(account: {
   groups?: Record<string, unknown>;
   groupPolicy: "open" | "allowlist" | "disabled";

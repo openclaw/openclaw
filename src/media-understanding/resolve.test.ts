@@ -56,6 +56,7 @@ describe("resolveModelEntries", () => {
       tools: {
         media: {
           models: [
+            { type: "cli", command: "unused-media-fixture" },
             { provider: "openai", model: "gpt-5.4-mini", capabilities: ["image"] },
             { provider: "openai", model: "gpt-5.4", capabilities: ["image"] },
           ],
@@ -73,6 +74,10 @@ describe("resolveModelEntries", () => {
     expect(imageEntries).toHaveLength(2);
     expect(imageEntries[0]).toMatchObject({
       entry: { model: "gpt-5.4" },
+      secretOwnerId: "media-model:shared:2",
+    });
+    expect(imageEntries[1]).toMatchObject({
+      entry: { model: "gpt-5.4-mini" },
       secretOwnerId: "media-model:shared:1",
     });
   });
@@ -119,22 +124,5 @@ describe("resolveModelEntries", () => {
       providerRegistry,
     });
     expect(entries[0]?.entry.provider).toBe("openai");
-  });
-
-  it("skips shared CLI entries without capabilities", () => {
-    const cfg: OpenClawConfig = {
-      tools: {
-        media: {
-          models: [{ type: "cli", command: "gemini", args: ["--file", "{{MediaPath}}"] }],
-        },
-      },
-    };
-
-    const entries = resolveModelEntries({
-      cfg,
-      capability: "image",
-      providerRegistry,
-    });
-    expect(entries).toHaveLength(0);
   });
 });

@@ -1,8 +1,8 @@
-// Googlechat plugin module implements monitor reply delivery behavior.
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import type { OpenClawConfig } from "../runtime-api.js";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import {
   deleteGoogleChatMessage,
@@ -10,32 +10,23 @@ import {
   sendGoogleChatMessage,
   updateGoogleChatMessage,
 } from "./api.js";
+import { formatGoogleChatTextChunks } from "./format.js";
 import type { GoogleChatCoreRuntime, GoogleChatRuntimeEnv } from "./monitor-types.js";
 
-export type GoogleChatTypingMessage =
-  | {
-      placement: "top-level";
-      name: string;
-    }
-  | {
-      placement: "thread";
-      name: string;
-      requestedThreadName: string;
-      deliveredThreadName: string;
-    };
+export type GoogleChatTypingMessage = ReturnType<typeof createGoogleChatTypingMessage>;
 
 export function createGoogleChatTypingMessage(params: {
   messageName: string;
   requestedThreadName?: string;
   deliveredThreadName?: string;
-}): GoogleChatTypingMessage {
+}) {
   const name = params.messageName.trim();
   const requestedThreadName = params.requestedThreadName?.trim();
   if (!requestedThreadName) {
-    return { placement: "top-level", name };
+    return { placement: "top-level" as const, name };
   }
   return {
-    placement: "thread",
+    placement: "thread" as const,
     name,
     requestedThreadName,
     deliveredThreadName: params.deliveredThreadName?.trim() || requestedThreadName,
@@ -43,12 +34,7 @@ export function createGoogleChatTypingMessage(params: {
 }
 
 export async function deliverGoogleChatReply(params: {
-  payload: {
-    text?: string;
-    mediaUrls?: string[];
-    mediaUrl?: string;
-    replyToId?: string;
-  };
+  payload: ReplyPayload;
   account: ResolvedGoogleChatAccount;
   spaceId: string;
   runtime: GoogleChatRuntimeEnv;
@@ -104,7 +90,18 @@ export async function deliverGoogleChatReply(params: {
     );
   }
 
-  if (reply.hasMedia && !reply.hasText) {
+  const chunkLimit = account.config.textChunkLimit ?? 4000;
+  const chunkMode = core.channel.text.resolveChunkMode(config, "googlechat", account.accountId);
+  const chunks = formatGoogleChatTextChunks(reply.text, chunkLimit).flatMap((chunk) =>
+    core.channel.text.chunkMarkdownTextWithMode(chunk, chunkLimit, chunkMode),
+  );
+  const rejection =
+    reply.hasMedia && !reply.hasText
+      ? "Google Chat outbound attachments require user OAuth and no text fallback is available."
+      : reply.hasText && !chunks.some((chunk) => chunk)
+        ? "Google Chat reply has no visible text after formatting."
+        : undefined;
+  if (rejection) {
     try {
       if (typingMessage) {
         await deleteGoogleChatMessage({ account, messageName: typingMessage.name });
@@ -114,14 +111,9 @@ export async function deliverGoogleChatReply(params: {
     }
     // Permanent policy rejection before any recipient-visible send; the typed
     // contract keeps delivery custody from recording a false ambiguous attempt.
-    throw new PlatformMessageNotDispatchedError(
-      "Google Chat outbound attachments require user OAuth and no text fallback is available.",
-      { cause: undefined, retryable: false },
-    );
+    throw new PlatformMessageNotDispatchedError(rejection, { cause: undefined, retryable: false });
   }
 
-  const chunkLimit = account.config.textChunkLimit ?? 4000;
-  const chunkMode = core.channel.text.resolveChunkMode(config, "googlechat", account.accountId);
   const recordOutboundStatus = () => {
     try {
       statusSink?.({ lastOutboundAt: Date.now() });
@@ -145,7 +137,6 @@ export async function deliverGoogleChatReply(params: {
       deliveryThreadName = sent?.threadName?.trim() || deliveryThreadName;
     }
   };
-  const chunks = core.channel.text.chunkMarkdownTextWithMode(reply.text, chunkLimit, chunkMode);
   for (const chunk of chunks) {
     if (!chunk) {
       continue;

@@ -1,4 +1,26 @@
-import { clampOpenAIPromptCacheKey } from "@openclaw/ai/providers";
+import { OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH } from "@openclaw/ai/providers";
+import { truncateCodePoints } from "@openclaw/normalization-core/code-points";
+import { sha256HexPrefixCore } from "@openclaw/normalization-core/node-crypto";
+import { normalizeAgentId } from "../../../routing/session-key.js";
+
+export function resolveWebchatPromptCacheKey(params: {
+  agentId: string;
+  model: string;
+  provider: string;
+  sessionKey: string;
+}): string {
+  const digest = sha256HexPrefixCore(
+    [
+      "v1",
+      params.provider.trim().toLowerCase(),
+      params.model.trim(),
+      normalizeAgentId(params.agentId),
+      params.sessionKey,
+    ].join("\0"),
+    32,
+  );
+  return `openclaw-webchat-${digest}`;
+}
 
 export function resolveSessionBoundaryPromptCacheKey(params: {
   api: string;
@@ -10,15 +32,11 @@ export function resolveSessionBoundaryPromptCacheKey(params: {
   if (explicit) {
     return explicit;
   }
-  const usesOpenAIPromptCacheKey =
-    params.api === "openai-completions" ||
-    params.api === "openai-responses" ||
-    params.api.includes("openai");
-  if (!usesOpenAIPromptCacheKey) {
+  if (!params.api.includes("openai")) {
     return undefined;
   }
-  // Clamp at derivation, not only in provider param builders: proxy runtimes
-  // serialize this key verbatim, and long internal-effects session ids
-  // (companion/btw) otherwise exceed OpenAI's 64-char prompt_cache_key limit.
-  return clampOpenAIPromptCacheKey(`${params.sessionId}:${params.boundaryCount}`);
+  // Reserve the lifecycle suffix inside OpenAI's 64-code-point limit for proxy runtimes.
+  const suffix = `:${params.boundaryCount}`;
+  const maxSessionIdLength = OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH - suffix.length;
+  return `${truncateCodePoints(params.sessionId, maxSessionIdLength)}${suffix}`;
 }

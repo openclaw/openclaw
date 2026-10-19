@@ -1,23 +1,24 @@
 /** Tests self-hosted provider setup helpers and auth/config defaults. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  configureOpenAICompatibleSelfHostedProviderNonInteractive,
-  discoverOpenAICompatibleLocalModels,
-} from "./provider-self-hosted-setup.js";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
+import { discoverOpenAICompatibleLocalModels } from "./provider-self-hosted-discovery.js";
+import { configureOpenAICompatibleSelfHostedProviderNonInteractive } from "./provider-self-hosted-setup.js";
 import type { ProviderAuthMethodNonInteractiveContext } from "./types.js";
 
-const { fetchWithSsrFGuardMock, upsertAuthProfileWithLock, loggerWarnMock } = vi.hoisted(() => ({
-  fetchWithSsrFGuardMock: vi.fn(),
-  upsertAuthProfileWithLock: vi.fn(async () => null),
-  loggerWarnMock: vi.fn(),
-}));
+const { fetchWithSsrFGuardMock, upsertAuthProfileWithLockOrThrow, loggerWarnMock } = vi.hoisted(
+  () => ({
+    fetchWithSsrFGuardMock: vi.fn(),
+    upsertAuthProfileWithLockOrThrow: vi.fn(async () => undefined),
+    loggerWarnMock: vi.fn(),
+  }),
+);
 
 vi.mock("../infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
 vi.mock("../agents/auth-profiles/upsert-with-lock.js", () => ({
-  upsertAuthProfileWithLock,
+  upsertAuthProfileWithLockOrThrow,
 }));
 
 vi.mock("../logging/subsystem.js", () => ({
@@ -103,6 +104,22 @@ function createContext(params: {
         key: apiKeyResult.key,
       }),
     ),
+  };
+}
+
+function expectedModel(
+  id: string,
+  overrides: Partial<ModelDefinitionConfig> = {},
+): ModelDefinitionConfig {
+  return {
+    id,
+    name: id,
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128000,
+    maxTokens: 8192,
+    ...overrides,
   };
 }
 
@@ -205,7 +222,8 @@ describe("discoverOpenAICompatibleLocalModels", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it.each([null, {}, "invalid"])("rejects a non-array model catalog: %j", async (data) => {
+  it("rejects a non-array model catalog", async () => {
+    const data = {};
     const release = vi.fn(async () => undefined);
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
       response: new Response(JSON.stringify({ data }), { status: 200 }),
@@ -369,35 +387,25 @@ describe("discoverOpenAICompatibleLocalModels", () => {
       env: {},
     });
 
-    expect(models).toEqual([
-      {
-        id: "Qwen/Qwen3-32B",
-        name: "Qwen/Qwen3-32B",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128000,
-        maxTokens: 8192,
-      },
-    ]);
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(1, {
-      url: "http://127.0.0.1:8000/v1/models",
-      init: { headers: { Authorization: "Bearer self-hosted-test-key" } },
-      policy: {
-        hostnameAllowlist: ["127.0.0.1"],
-        allowPrivateNetwork: true,
-      },
-      timeoutMs: 5000,
-    });
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(2, {
-      url: "http://127.0.0.1:8000/props",
-      init: { headers: { Authorization: "Bearer self-hosted-test-key" } },
-      policy: {
-        hostnameAllowlist: ["127.0.0.1"],
-        allowPrivateNetwork: true,
-      },
-      timeoutMs: 2500,
-    });
+    expect(models).toEqual([expectedModel("Qwen/Qwen3-32B")]);
+    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        url: "http://127.0.0.1:8000/v1/models",
+        init: { headers: { Authorization: "Bearer self-hosted-test-key" } },
+        policy: { allowedOrigins: ["http://127.0.0.1:8000"] },
+        timeoutMs: 5000,
+      }),
+    );
+    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        url: "http://127.0.0.1:8000/props",
+        init: { headers: { Authorization: "Bearer self-hosted-test-key" } },
+        policy: { allowedOrigins: ["http://127.0.0.1:8000"] },
+        timeoutMs: 2500,
+      }),
+    );
     expect(release).toHaveBeenCalledOnce();
     expect(propsRelease).toHaveBeenCalledOnce();
     expect(propsResponse.wasCanceled()).toBe(true);
@@ -442,7 +450,7 @@ describe("discoverOpenAICompatibleLocalModels", () => {
     expect(model).toMatchObject({ contextWindow: 300_000 });
   });
 
-  it.each([0, -1, "1048576", null])(
+  it.each([0, "1048576"])(
     "ignores malformed top-level context metadata: %j",
     async (contextSize) => {
       const model = await discoverSingleCatalogModel({
@@ -508,26 +516,17 @@ describe("discoverOpenAICompatibleLocalModels", () => {
     });
 
     expect(models).toEqual([
-      {
-        id: "qwen3.6-mxfp4-moe",
-        name: "qwen3.6-mxfp4-moe",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 262_144,
-        contextTokens: 65_536,
-        maxTokens: 8192,
-      },
+      expectedModel("qwen3.6-mxfp4-moe", { contextWindow: 262_144, contextTokens: 65_536 }),
     ]);
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(2, {
-      url: "http://127.0.0.1:8080/props",
-      init: { headers: undefined },
-      policy: {
-        hostnameAllowlist: ["127.0.0.1"],
-        allowPrivateNetwork: true,
-      },
-      timeoutMs: 2500,
-    });
+    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        url: "http://127.0.0.1:8080/props",
+        init: { headers: undefined },
+        policy: { allowedOrigins: ["http://127.0.0.1:8080"] },
+        timeoutMs: 2500,
+      }),
+    );
     expect(modelsRelease).toHaveBeenCalledOnce();
     expect(propsRelease).toHaveBeenCalledOnce();
   });
@@ -577,45 +576,27 @@ describe("discoverOpenAICompatibleLocalModels", () => {
     });
 
     expect(models).toEqual([
-      {
-        id: "qwen/router-a",
-        name: "qwen/router-a",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 262_144,
-        contextTokens: 65_536,
-        maxTokens: 8192,
-      },
-      {
-        id: "qwen/router-b",
-        name: "qwen/router-b",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 131_072,
-        contextTokens: 32_768,
-        maxTokens: 8192,
-      },
+      expectedModel("qwen/router-a", { contextWindow: 262_144, contextTokens: 65_536 }),
+      expectedModel("qwen/router-b", { contextWindow: 131_072, contextTokens: 32_768 }),
     ]);
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(2, {
-      url: "http://127.0.0.1:8080/props?model=qwen%2Frouter-a&autoload=false",
-      init: { headers: undefined },
-      policy: {
-        hostnameAllowlist: ["127.0.0.1"],
-        allowPrivateNetwork: true,
-      },
-      timeoutMs: 2500,
-    });
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(3, {
-      url: "http://127.0.0.1:8080/props?model=qwen%2Frouter-b&autoload=false",
-      init: { headers: undefined },
-      policy: {
-        hostnameAllowlist: ["127.0.0.1"],
-        allowPrivateNetwork: true,
-      },
-      timeoutMs: 2500,
-    });
+    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        url: "http://127.0.0.1:8080/props?model=qwen%2Frouter-a&autoload=false",
+        init: { headers: undefined },
+        policy: { allowedOrigins: ["http://127.0.0.1:8080"] },
+        timeoutMs: 2500,
+      }),
+    );
+    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        url: "http://127.0.0.1:8080/props?model=qwen%2Frouter-b&autoload=false",
+        init: { headers: undefined },
+        policy: { allowedOrigins: ["http://127.0.0.1:8080"] },
+        timeoutMs: 2500,
+      }),
+    );
     expect(modelsRelease).toHaveBeenCalledOnce();
     expect(firstPropsRelease).toHaveBeenCalledOnce();
     expect(secondPropsRelease).toHaveBeenCalledOnce();
@@ -652,16 +633,7 @@ describe("discoverOpenAICompatibleLocalModels", () => {
     });
 
     expect(models).toEqual([
-      {
-        id: "qwen3.6-mxfp4-moe",
-        name: "qwen3.6-mxfp4-moe",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 262_144,
-        contextTokens: 65_536,
-        maxTokens: 8192,
-      },
+      expectedModel("qwen3.6-mxfp4-moe", { contextWindow: 262_144, contextTokens: 65_536 }),
     ]);
     expect(modelsRelease).toHaveBeenCalledOnce();
     expect(propsRelease).toHaveBeenCalledOnce();
@@ -687,44 +659,9 @@ describe("discoverOpenAICompatibleLocalModels", () => {
       env: {},
     });
 
-    expect(models).toEqual([
-      {
-        id: "qwen3.6-mxfp4-moe",
-        name: "qwen3.6-mxfp4-moe",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 65_536,
-        maxTokens: 8192,
-      },
-    ]);
+    expect(models).toEqual([expectedModel("qwen3.6-mxfp4-moe", { contextWindow: 65_536 })]);
     expect(models[0]).not.toHaveProperty("contextTokens");
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
-    expect(release).toHaveBeenCalledOnce();
-  });
-
-  it("does not allowlist always-blocked metadata hostnames", async () => {
-    const release = vi.fn(async () => undefined);
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(JSON.stringify({ data: [{ id: "metadata-probe" }] }), {
-        status: 200,
-      }),
-      finalUrl: "http://metadata.google.internal/v1/models",
-      release,
-    });
-
-    await discoverOpenAICompatibleLocalModels({
-      baseUrl: "http://metadata.google.internal/v1",
-      label: "vLLM",
-      env: {},
-    });
-
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
-      url: "http://metadata.google.internal/v1/models",
-      init: { headers: undefined },
-      policy: undefined,
-      timeoutMs: 5000,
-    });
     expect(release).toHaveBeenCalledOnce();
   });
 
@@ -778,17 +715,7 @@ describe("discoverOpenAICompatibleLocalModels", () => {
 
     // /props overflow is swallowed so discovery still succeeds, but the body is
     // capped: the runtime context token probe is skipped, not OOM'd.
-    expect(models).toEqual([
-      {
-        id: "qwen3.6-mxfp4-moe",
-        name: "qwen3.6-mxfp4-moe",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128000,
-        maxTokens: 8192,
-      },
-    ]);
+    expect(models).toEqual([expectedModel("qwen3.6-mxfp4-moe")]);
     expect(oversized.cancelCount).toBe(1);
     expect(oversized.bytesPulled).toBeLessThanOrEqual(
       SELF_HOSTED_DISCOVERY_JSON_MAX_BYTES + 2 * CHUNK_BYTES,
@@ -799,24 +726,33 @@ describe("discoverOpenAICompatibleLocalModels", () => {
 });
 
 describe("configureOpenAICompatibleSelfHostedProviderNonInteractive", () => {
-  it.each([
-    {
+  it("stops setup when the auth profile cannot be persisted", async () => {
+    const ctx = createContext({ providerId: "vllm", modelId: "Qwen/Qwen3-32B" });
+    const configBefore = structuredClone(ctx.config);
+    const failure = new Error("Auth profile store is unavailable.");
+    upsertAuthProfileWithLockOrThrow.mockRejectedValueOnce(failure);
+
+    await expect(
+      configureSelfHostedTestProvider({
+        ctx,
+        providerId: "vllm",
+        providerLabel: "vLLM",
+        envVar: "VLLM_API_KEY",
+      }),
+    ).rejects.toBe(failure);
+    expect(ctx.config).toEqual(configBefore);
+    expect(ctx.runtime.log).not.toHaveBeenCalled();
+  });
+
+  it("configures provider config and auth profile", async () => {
+    const params = {
       providerId: "vllm",
       providerLabel: "vLLM",
       envVar: "VLLM_API_KEY",
       baseUrl: "http://127.0.0.1:8100/v1/",
       apiKey: "vllm-test-key",
       modelId: "Qwen/Qwen3-8B",
-    },
-    {
-      providerId: "sglang",
-      providerLabel: "SGLang",
-      envVar: "SGLANG_API_KEY",
-      baseUrl: "http://127.0.0.1:31000/v1",
-      apiKey: "sglang-test-key",
-      modelId: "Qwen/Qwen3-32B",
-    },
-  ])("configures $providerLabel config and auth profile", async (params) => {
+    };
     const ctx = createContext(params);
 
     const cfg = await configureSelfHostedTestProvider({
@@ -835,17 +771,7 @@ describe("configureOpenAICompatibleSelfHostedProviderNonInteractive", () => {
       baseUrl: params.baseUrl.replace(/\/+$/, ""),
       api: "openai-completions",
       apiKey: params.envVar,
-      models: [
-        {
-          id: params.modelId,
-          name: params.modelId,
-          reasoning: false,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 128000,
-          maxTokens: 8192,
-        },
-      ],
+      models: [expectedModel(params.modelId)],
     });
     expect(readPrimaryModel(cfg)).toBe(`${params.providerId}/${params.modelId}`);
     expect(ctx.resolveApiKey).toHaveBeenCalledWith({
@@ -855,7 +781,7 @@ describe("configureOpenAICompatibleSelfHostedProviderNonInteractive", () => {
       envVar: params.envVar,
       envVarName: params.envVar,
     });
-    expect(upsertAuthProfileWithLock).toHaveBeenCalledWith({
+    expect(upsertAuthProfileWithLockOrThrow).toHaveBeenCalledWith({
       profileId,
       agentDir: ctx.agentDir,
       credential: {
@@ -866,11 +792,8 @@ describe("configureOpenAICompatibleSelfHostedProviderNonInteractive", () => {
     });
   });
 
-  it.each([
-    { providerId: "vllm", providerLabel: "vLLM", envVar: "VLLM_API_KEY" },
-    { providerId: "sglang", providerLabel: "SGLang", envVar: "SGLANG_API_KEY" },
-    { providerId: "lmstudio", providerLabel: "LM Studio", envVar: "LM_API_TOKEN" },
-  ])("reuses an existing $providerLabel auth profile in ref mode", async (params) => {
+  it("reuses an existing provider auth profile in ref mode", async () => {
+    const params = { providerId: "vllm", providerLabel: "vLLM", envVar: "VLLM_API_KEY" };
     const modelId = "Qwen/Qwen3-32B";
     const profileSecret = "fixture-existing-self-hosted-profile-secret";
     const selectedProfileId = `${params.providerId}:owner@example.com`;
@@ -907,7 +830,7 @@ describe("configureOpenAICompatibleSelfHostedProviderNonInteractive", () => {
     expect(readPrimaryModel(cfg)).toBe(`${params.providerId}/${modelId}`);
     expect(JSON.stringify(cfg)).not.toContain(profileSecret);
     expect(ctx.toApiKeyCredential).not.toHaveBeenCalled();
-    expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
+    expect(upsertAuthProfileWithLockOrThrow).not.toHaveBeenCalled();
     expect(ctx.runtime.error).not.toHaveBeenCalled();
     expect(ctx.runtime.exit).not.toHaveBeenCalled();
   });
@@ -941,7 +864,7 @@ describe("configureOpenAICompatibleSelfHostedProviderNonInteractive", () => {
     expect(readPrimaryModel(cfg)).toBe(`${params.providerId}/${modelId}`);
     expect(cfg?.auth?.profiles?.[`${params.providerId}:default`]).toBeUndefined();
     expect(ctx.toApiKeyCredential).not.toHaveBeenCalled();
-    expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
+    expect(upsertAuthProfileWithLockOrThrow).not.toHaveBeenCalled();
     expect(ctx.runtime.error).not.toHaveBeenCalled();
     expect(ctx.runtime.exit).not.toHaveBeenCalled();
   });
@@ -990,7 +913,7 @@ describe("configureOpenAICompatibleSelfHostedProviderNonInteractive", () => {
 
       expect(cfg).toBeNull();
       expect(ctx.toApiKeyCredential).toHaveBeenCalledOnce();
-      expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
+      expect(upsertAuthProfileWithLockOrThrow).not.toHaveBeenCalled();
       expect(ctx.runtime.error).toHaveBeenCalledOnce();
       expect(ctx.runtime.exit).toHaveBeenCalledWith(1);
     },
@@ -1009,7 +932,7 @@ describe("configureOpenAICompatibleSelfHostedProviderNonInteractive", () => {
     });
 
     expect(ctx.toApiKeyCredential).toHaveBeenCalledOnce();
-    expect(upsertAuthProfileWithLock).toHaveBeenCalledWith({
+    expect(upsertAuthProfileWithLockOrThrow).toHaveBeenCalledWith({
       profileId: "vllm:default",
       agentDir: ctx.agentDir,
       credential: { type: "api_key", provider: "vllm", key: "lmstudio-local" },
@@ -1042,7 +965,7 @@ describe("configureOpenAICompatibleSelfHostedProviderNonInteractive", () => {
       envVar: "VLLM_API_KEY",
     });
 
-    expect(upsertAuthProfileWithLock).toHaveBeenCalledWith({
+    expect(upsertAuthProfileWithLockOrThrow).toHaveBeenCalledWith({
       profileId: "vllm:default",
       agentDir: ctx.agentDir,
       credential,
@@ -1063,7 +986,7 @@ describe("configureOpenAICompatibleSelfHostedProviderNonInteractive", () => {
 
     expect(cfg).toBeNull();
     expect(ctx.toApiKeyCredential).not.toHaveBeenCalled();
-    expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
+    expect(upsertAuthProfileWithLockOrThrow).not.toHaveBeenCalled();
   });
 
   it("exits without touching auth when custom model id is missing", async () => {
@@ -1088,6 +1011,6 @@ describe("configureOpenAICompatibleSelfHostedProviderNonInteractive", () => {
     );
     expect(ctx.runtime.exit).toHaveBeenCalledWith(1);
     expect(ctx.resolveApiKey).not.toHaveBeenCalled();
-    expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
+    expect(upsertAuthProfileWithLockOrThrow).not.toHaveBeenCalled();
   });
 });

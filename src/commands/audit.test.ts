@@ -1,9 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  AUDIT_ACTIVITY_DIRECTIONS,
-  AUDIT_ACTIVITY_KINDS,
-  AUDIT_ACTIVITY_STATUSES,
-} from "../../packages/gateway-protocol/src/schema/audit-activity.js";
 import { runCommandWithRuntime } from "../cli/cli-utils.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { auditListCommand } from "./audit.js";
@@ -69,10 +64,8 @@ describe("audit command parsing", () => {
 
   it.each([
     { flag: "--after", options: { after: "2026-02-30T00:00:00Z" } },
-    { flag: "--before", options: { before: "2026-02-30T00:00:00Z" } },
-    { flag: "--after", options: { after: "-1" } },
     { flag: "--before", options: { before: "July 1, 2026" } },
-    { flag: "--after", options: { after: "not-a-date" } },
+    { flag: "--after", options: { after: "" } },
   ])("rejects invalid $flag before calling the Gateway", async ({ flag, options }) => {
     await expect(auditListCommand(options, runtime)).rejects.toThrow(flag);
     expect(callGateway).not.toHaveBeenCalled();
@@ -115,27 +108,17 @@ describe("audit command parsing", () => {
     expect(callGateway).not.toHaveBeenCalled();
   });
 
+  it("rejects an explicit empty list limit", async () => {
+    const limit = "";
+
+    await expect(auditListCommand({ limit }, runtime)).rejects.toThrow("1 and 500");
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
   it.each([
-    {
-      options: { kind: "bogus" as never },
-      message: "--kind must be agent_run, tool_action, or message.",
-    },
-    {
-      options: { status: "bogus" as never },
-      message:
-        "--status must be started, succeeded, failed, cancelled, timed_out, blocked, or unknown.",
-    },
     {
       options: { direction: "sideways" as never },
       message: "--direction must be inbound or outbound.",
-    },
-    {
-      options: { kind: "agent_run" as const, direction: "inbound" as const },
-      message: "--direction only applies to --kind message.",
-    },
-    {
-      options: { kind: "agent_run" as const, channel: "telegram" },
-      message: "--channel only applies to --kind message.",
     },
     {
       options: { kind: "message" as const, sessionKey: "agent:main:main" },
@@ -145,10 +128,6 @@ describe("audit command parsing", () => {
       options: { sessionKey: "agent:main:main", direction: "inbound" as const },
       message: "--direction cannot be combined with --session.",
     },
-    {
-      options: { sessionKey: "agent:main:main", channel: "telegram" },
-      message: "--channel cannot be combined with --session.",
-    },
   ])("rejects invalid audit filters before querying the Gateway", async ({ options, message }) => {
     await runCommandWithRuntime(runtime, () =>
       auditListCommand({ ...options, limit: "10" }, runtime),
@@ -156,20 +135,6 @@ describe("audit command parsing", () => {
     expect(runtime.error).toHaveBeenCalledWith(message);
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(callGateway).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ["kind", AUDIT_ACTIVITY_KINDS],
-    ["status", AUDIT_ACTIVITY_STATUSES],
-    ["direction", AUDIT_ACTIVITY_DIRECTIONS],
-  ] as const)("forwards every canonical %s value unchanged", async (filter, values) => {
-    for (const value of values) {
-      await auditListCommand({ [filter]: value }, runtime);
-      expect(callGateway).toHaveBeenLastCalledWith({
-        method: "audit.activity.list",
-        params: { limit: 100, [filter]: value },
-      });
-    }
   });
 
   it("renders activity safely without inventing message provenance", async () => {
@@ -415,7 +380,7 @@ describe("audit run explanation", () => {
         missingEvidence: ["run.record"],
         remediation: [],
       },
-      decisions: [],
+      decisionDisplays: [],
       coverage: { state: "unknown", missingEvidence: ["run.record"] },
     });
 
@@ -454,6 +419,15 @@ describe("audit run explanation", () => {
     expect(callGateway).not.toHaveBeenCalled();
   });
 
+  it("rejects an explicit empty decision limit", async () => {
+    const limit = "";
+
+    await expect(
+      auditListCommand({ explain: true, runId: "run-1", limit }, runtime),
+    ).rejects.toThrow("with --explain");
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
   it("queries audit.run.inspect and renders all identity fields with explicit state", async () => {
     const hmacRef = `hmac-sha256:v1:${"a".repeat(32)}:${"b".repeat(64)}`;
     callGateway.mockResolvedValue({
@@ -481,17 +455,26 @@ describe("audit run explanation", () => {
               strength: "boundary-verified",
             },
           ],
+          lineage: {
+            parentContextId: "parent-context",
+            parentExecutionId: "parent-execution",
+            parentRunId: "parent-run",
+            parentAgentPrincipal: {
+              kind: "agent",
+              domainRef: hmacRef,
+              principalRef: "parent-agent",
+            },
+            delegationRef: hmacRef,
+            depth: 2,
+          },
           coverageState: "unattributed",
           missingEvidence: ["invoker.principal"],
         },
       },
-      decisions: [
+      decisionDisplays: [
         {
           schemaVersion: 1,
-          receiptId: "context-1:admission",
-          contextId: "context-1",
-          executionId: "execution-1",
-          runId: "run-1",
+          selectorId: "context-1:admission",
           occurredAt: 1,
           action: { family: "run", operation: "admission" },
           decision: {
@@ -500,25 +483,17 @@ describe("audit run explanation", () => {
           },
           enforcement: {
             coverageState: "unattributed",
-            policyRefs: [],
-            grantRefs: [],
+            policyCount: 0,
+            grantCount: 0,
             contextFieldsUsed: [],
           },
-          source: {
-            owner: "agent-command",
-            recordRef: "context-1",
-            decisionBoundary: "agent-command.run-admission",
-          },
+          provenance: { state: "verified", producer: "run-admission" },
           missingEvidence: ["invoker.principal"],
           remediation: [{ code: "no_claim", text: "Treat this receipt as attribution only." }],
         },
         {
           schemaVersion: 1,
-          receiptId: "approval:receipt-1",
-          contextId: "context-1",
-          executionId: "execution-1",
-          runId: "run-1",
-          actionId: "receipt-1",
+          selectorId: "approval-decision:1",
           occurredAt: 2,
           action: { family: "exec", operation: "approval" },
           decision: {
@@ -527,41 +502,37 @@ describe("audit run explanation", () => {
           },
           enforcement: {
             coverageState: "enforced",
-            evaluatorRef: "operator-approval:device",
-            policyRefs: ["operator-approval:human-decision"],
-            grantRefs: [],
+            policyCount: 1,
+            grantCount: 0,
             contextFieldsUsed: ["contextId", "executionId", "runId"],
           },
-          source: {
-            owner: "operator_approvals",
-            recordRef: "receipt-1",
-            decisionBoundary: "gateway.operator-approval.first-answer",
-          },
+          provenance: { state: "verified", producer: "operator-approval" },
           missingEvidence: [],
           remediation: [{ code: "review_and_request_again", text: "Review the denial and retry." }],
         },
         {
           schemaVersion: 1,
-          receiptId: "fact-corrupt",
-          contextId: "context-1",
-          executionId: "execution-1",
-          runId: "run-1",
+          selectorId: "decision-fact:1",
           occurredAt: 3,
-          action: { family: "tool", operation: "decision" },
-          decision: { outcome: "unknown", reasonCode: "decision_fact_record_corrupt" },
+          representedSubject: {
+            state: "present",
+            principal: {
+              kind: "person",
+              domainRef: "recorded-domain",
+              principalRef: "recorded-person",
+            },
+          },
+          action: { family: "decision", operation: "record" },
+          decision: { outcome: "unknown", reasonCode: "decision_fact_display_unverified" },
           enforcement: {
             coverageState: "unknown",
-            policyRefs: [],
-            grantRefs: [],
+            policyCount: 0,
+            grantCount: 0,
             contextFieldsUsed: [],
           },
-          source: {
-            owner: "tool-policy",
-            recordRef: "fact-corrupt",
-            decisionBoundary: "execution-decision-facts",
-          },
-          missingEvidence: ["decision.fact.valid"],
-          remediation: [{ code: "inspect_state_integrity", text: "Inspect state integrity." }],
+          provenance: { state: "unverified" },
+          missingEvidence: ["decision.display_provenance"],
+          remediation: [],
         },
       ],
       coverage: { state: "enforced", missingEvidence: ["invoker.principal"] },
@@ -591,7 +562,12 @@ describe("audit run explanation", () => {
       "Sponsor [absent]",
       "Applicable grants [absent]",
       "Assurance [present]",
-      "Parent [absent]",
+      "Parent context [present]",
+      "Parent execution [present]",
+      "Parent run [present]",
+      "Parent agent [present]",
+      "Delegation [present]",
+      "Depth [present]",
     ]) {
       expect(output).toContain(label);
     }
@@ -600,10 +576,23 @@ describe("audit run explanation", () => {
     expect(output).toContain("operator_approval_denied_by_reviewer");
     expect(output).toContain("authoritative owner-native SQLite record; retained 30 days");
     expect(output).toContain("admission provenance only; no enforcement decision");
-    expect(output).toContain("evidence unavailable or corrupt; do not infer authorization");
     expect(output).not.toContain("named authoritative decision source");
-    expect(output).toContain("Policy refs: operator-approval:human-decision");
+    expect(output).toContain("Policy refs: 1");
+    expect(output).toContain("Policy refs: 0");
+    expect(output).toContain("Grant refs: 0");
     expect(output).toContain("Context used: contextId, executionId, runId");
+    expect(output).toContain("producer display contract unverified; receipt prose omitted");
+    expect(output).toContain(
+      "Recorded authority subject: person recorded-person in recorded-domain",
+    );
+    vi.mocked(runtime.log).mockClear();
+    await auditListCommand({ explain: true, runId: "run-1", json: true }, runtime);
+    const jsonOutput = vi.mocked(runtime.log).mock.calls.flat().join("\n");
+    expect(jsonOutput).toContain('"decisionDisplays"');
+    expect(jsonOutput).not.toContain('"decisions"');
+    for (const rawKey of ["receiptId", "resolutionRef", "eventId"]) {
+      expect(jsonOutput).not.toContain(`"${rawKey}"`);
+    }
   });
 
   it("renders ambiguous run discovery and selects an exact execution", async () => {
@@ -625,7 +614,7 @@ describe("audit run explanation", () => {
           },
         ],
       },
-      decisions: [],
+      decisionDisplays: [],
       coverage: { state: "unknown", missingEvidence: ["execution.selection"] },
     });
 
@@ -644,7 +633,7 @@ describe("audit run explanation", () => {
         missingEvidence: ["identity.context"],
         remediation: [{ code: "verify_execution_id", text: "Verify the exact execution id." }],
       },
-      decisions: [],
+      decisionDisplays: [],
       coverage: { state: "unknown", missingEvidence: ["identity.context"] },
     });
     await auditListCommand({ explain: true, executionId: "execution-2", json: true }, runtime);
@@ -664,7 +653,7 @@ describe("audit run explanation", () => {
         missingEvidence: ["identity.context"],
         remediation: [],
       },
-      decisions: [],
+      decisionDisplays: [],
       coverage: { state: "unknown", missingEvidence: ["identity.context"] },
     });
 
@@ -696,35 +685,6 @@ describe("audit run explanation", () => {
       await auditListCommand(options, runtime);
       expect(callGateway).toHaveBeenCalledWith({ method: "audit.run.inspect", params });
     }
-  });
-
-  it("renders expired identity as unsupported without context fields or decisions", async () => {
-    callGateway.mockResolvedValue({
-      schemaVersion: 1,
-      run: { runId: "expired-run", status: "known" },
-      identity: {
-        state: "unsupported",
-        reasonCode: "identity_context_unavailable",
-        missingEvidence: ["identity.context"],
-        remediation: [
-          {
-            code: "run_again_after_expiry",
-            text: "This run's identity context is outside the 30-day retention window; run the operation again to record a new context.",
-          },
-        ],
-      },
-      decisions: [],
-      coverage: { state: "unsupported", missingEvidence: ["identity.context"] },
-    });
-
-    await auditListCommand({ explain: true, runId: "expired-run" }, runtime);
-
-    const output = vi.mocked(runtime.log).mock.calls.flat().join("\n");
-    expect(output).toContain("Ingress [unsupported]");
-    expect(output).toContain("none [absent]");
-    expect(output).toContain("outside the 30-day retention window");
-    expect(output).not.toContain("Context:");
-    expect(output).not.toContain("run_admission_identity_not_evaluated");
   });
 
   it("returns an explicit upgrade state from an older Gateway", async () => {

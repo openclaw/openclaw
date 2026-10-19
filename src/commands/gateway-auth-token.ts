@@ -3,6 +3,7 @@ import { isTerminalInteractive } from "../cli/terminal-interactivity.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { assertExplicitGatewayAuthModeWhenBothConfigured } from "../gateway/auth-mode-policy.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
+import { assertGatewayAuthNotKnownWeak } from "../gateway/known-weak-gateway-secrets.js";
 import { defaultRuntime, type OutputRuntimeEnv } from "../runtime.js";
 
 type GatewayAuthTokenOptions = {
@@ -65,5 +66,6 @@ export async function gatewayAuthTokenCommand(
     );
   }
 
+  assertGatewayAuthNotKnownWeak(resolvedAuth);
   runtime.writeStdout(`${resolvedAuth.token}\n`);
 }

@@ -1,14 +1,9 @@
 // Matrix setup module handles plugin onboarding behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import type { OutputRuntimeEnv } from "openclaw/plugin-sdk/runtime";
-import type { ChannelSetupWizardAdapter } from "openclaw/plugin-sdk/setup";
 import { afterEach, vi } from "vitest";
 import type { RuntimeEnv, WizardPrompter } from "../runtime-api.js";
 import type { CoreConfig } from "./types.js";
-
-type MatrixInteractiveOptions = Parameters<
-  NonNullable<ChannelSetupWizardAdapter["configureInteractive"]>
->[0]["options"];
 
 const MATRIX_ENV_KEYS = [
   "MATRIX_HOMESERVER",
@@ -38,7 +33,9 @@ function createNonExitingTypedRuntimeEnv<TRuntime>(): TRuntime {
 
 export function installMatrixOnboardingEnvRestoreHooks() {
   afterEach(() => {
-    for (const [key, value] of Object.entries(previousMatrixEnv)) {
+    // Restore only the fixed Matrix allowlist; never replay arbitrary keys into host env.
+    for (const key of MATRIX_ENV_KEYS) {
+      const value = previousMatrixEnv[key];
       if (value === undefined) {
         delete process.env[key];
       } else {
@@ -55,8 +52,6 @@ export function createMatrixWizardPrompter(params: {
   select?: Record<string, string>;
   text?: Record<string, string>;
   confirm?: Record<string, boolean>;
-  onNote?: PromptHandler<void | Promise<void>>;
-  onSelect?: PromptHandler<string | Promise<string>>;
   onText?: PromptHandler<string | Promise<string>>;
   onConfirm?: PromptHandler<boolean | Promise<boolean>>;
 }): WizardPrompter {
@@ -79,10 +74,9 @@ export function createMatrixWizardPrompter(params: {
     note: vi.fn(async (message: unknown) => {
       const text = String(message);
       params.notes?.push(text);
-      await params.onNote?.(text);
     }),
     select: vi.fn(async ({ message }: { message: string }) => {
-      return await resolvePromptValue("select", message, params.select, params.onSelect);
+      return await resolvePromptValue("select", message, params.select, undefined);
     }),
     text: vi.fn(async ({ message }: { message: string }) => {
       return await resolvePromptValue("text", message, params.text, params.onText);
@@ -105,8 +99,6 @@ export function installMatrixScopedEnvShortcut() {
 export async function runMatrixInteractiveConfigure(params: {
   cfg: CoreConfig;
   prompter: WizardPrompter;
-  options?: MatrixInteractiveOptions;
-  accountOverrides?: Record<string, string>;
   shouldPromptAccountIds?: boolean;
   forceAllowFrom?: boolean;
   configured?: boolean;
@@ -116,8 +108,8 @@ export async function runMatrixInteractiveConfigure(params: {
     cfg: params.cfg,
     runtime: createNonExitingTypedRuntimeEnv<RuntimeEnv>(),
     prompter: params.prompter,
-    options: params.options,
-    accountOverrides: params.accountOverrides ?? {},
+    options: undefined,
+    accountOverrides: {},
     shouldPromptAccountIds: params.shouldPromptAccountIds ?? false,
     forceAllowFrom: params.forceAllowFrom ?? false,
     configured: params.configured ?? false,
@@ -129,7 +121,6 @@ export async function runMatrixAddAccountAllowlistConfigure(params: {
   cfg: CoreConfig;
   allowFromInput: string;
   roomsAllowlistInput: string;
-  autoJoinPolicy?: "always" | "allowlist" | "off";
   autoJoinAllowlistInput?: string;
   deviceName?: string;
   notes?: string[];
@@ -140,7 +131,7 @@ export async function runMatrixAddAccountAllowlistConfigure(params: {
       "Matrix already configured. What do you want to do?": "add-account",
       "Matrix auth method": "token",
       "Matrix rooms access": "allowlist",
-      "Matrix invite auto-join": params.autoJoinPolicy ?? "allowlist",
+      "Matrix invite auto-join": "allowlist",
     },
     text: {
       "Matrix account name": "ops",
@@ -197,22 +188,17 @@ export function createLegacyMatrixTopLevelConfig(): CoreConfig {
   } as CoreConfig;
 }
 
-export function createMatrixTokenAddAccountPrompter(params?: {
-  accountName?: string;
-  homeserver?: string;
-  accessToken?: string;
-  deviceName?: string;
-}) {
+export function createMatrixTokenAddAccountPrompter() {
   return createMatrixWizardPrompter({
     select: {
       "Matrix already configured. What do you want to do?": "add-account",
       "Matrix auth method": "token",
     },
     text: {
-      "Matrix account name": params?.accountName ?? "ops",
-      "Matrix homeserver URL": params?.homeserver ?? "https://matrix.ops.example.org",
-      "Matrix access token": params?.accessToken ?? "ops-token",
-      "Matrix device name (optional)": params?.deviceName ?? "",
+      "Matrix account name": "ops",
+      "Matrix homeserver URL": "https://matrix.ops.example.org",
+      "Matrix access token": "ops-token",
+      "Matrix device name (optional)": "",
     },
     onConfirm: async () => false,
   });
@@ -242,7 +228,6 @@ export function createMatrixEnvShortcutAddAccountPrompter(params?: {
 }
 
 export function createConfiguredMatrixTopLevelConfig(params?: {
-  homeserver?: string;
   accessToken?: string | { source: "env"; provider: "default"; id: string };
   autoJoin?: "allowlist" | "off";
   autoJoinAllowlist?: string[];
@@ -250,7 +235,7 @@ export function createConfiguredMatrixTopLevelConfig(params?: {
   return {
     channels: {
       matrix: {
-        homeserver: params?.homeserver ?? "https://matrix.example.org",
+        homeserver: "https://matrix.example.org",
         accessToken: params?.accessToken ?? "matrix-token",
         ...(params?.autoJoin ? { autoJoin: params.autoJoin } : {}),
         ...(params?.autoJoinAllowlist ? { autoJoinAllowlist: params.autoJoinAllowlist } : {}),
@@ -262,9 +247,8 @@ export function createConfiguredMatrixTopLevelConfig(params?: {
 export function createMatrixUpdateKeepCredentialsPrompter(params?: {
   notes?: string[];
   inviteAutoJoin?: "off" | "allowlist";
-  updateAutoJoin?: boolean;
-  homeserver?: string;
-  deviceName?: string;
+  configureRoomsAccess?: boolean;
+  roomsAllowlist?: string;
   onText?: PromptHandler<string | Promise<string>>;
 }) {
   return createMatrixWizardPrompter({
@@ -272,19 +256,21 @@ export function createMatrixUpdateKeepCredentialsPrompter(params?: {
     select: {
       "Matrix already configured. What do you want to do?": "update",
       ...(params?.inviteAutoJoin ? { "Matrix invite auto-join": params.inviteAutoJoin } : {}),
+      ...(params?.configureRoomsAccess ? { "Matrix rooms access": "allowlist" } : {}),
     },
     text: {
-      "Matrix homeserver URL": params?.homeserver ?? "https://matrix.example.org",
-      "Matrix device name (optional)": params?.deviceName ?? "OpenClaw Gateway",
+      "Matrix homeserver URL": "https://matrix.example.org",
+      "Matrix device name (optional)": "OpenClaw Gateway",
+      ...(params?.roomsAllowlist
+        ? { "Matrix rooms allowlist (comma-separated)": params.roomsAllowlist }
+        : {}),
     },
     confirm: {
       "Matrix credentials already configured. Keep them?": true,
       "Enable end-to-end encryption (E2EE)?": false,
-      "Configure Matrix rooms access?": false,
+      "Configure Matrix rooms access?": params?.configureRoomsAccess ?? false,
       "Configure Matrix invite auto-join?": params?.inviteAutoJoin !== undefined,
-      ...(params?.inviteAutoJoin !== undefined
-        ? { "Update Matrix invite auto-join?": params?.updateAutoJoin ?? true }
-        : {}),
+      ...(params?.inviteAutoJoin !== undefined ? { "Update Matrix invite auto-join?": true } : {}),
     },
     ...(params?.onText ? { onText: params.onText } : {}),
   });

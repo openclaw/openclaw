@@ -3,28 +3,26 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parse as parseYaml } from "yaml";
+import type { PluginPackageInstall } from "../src/plugins/package-manifest.types.js";
 import officialExternalChannelSeed from "./lib/official-external-channel-seed.json" with { type: "json" };
 import { collectExcludedPackagedExtensionDirs } from "./lib/packaged-extension-dirs.mts";
 import { isRecord, trimString } from "./lib/record-shared.mjs";
 import { writeTextFileIfChanged } from "./runtime-postbuild-shared.mjs";
 
 type CatalogParams = { repoRoot?: string; cwd?: string };
-type CatalogInstall = Partial<
-  Record<"clawhubSpec" | "npmSpec" | "localPath" | "minHostVersion" | "expectedIntegrity", string>
-> & {
-  defaultChoice?: "clawhub" | "npm" | "local";
-  allowInvalidConfigRecovery?: boolean;
-};
+type CatalogInstall = Omit<PluginPackageInstall, "requiredPlatformPackages">;
 type CatalogEntry = Partial<Record<"version" | "description" | "source" | "kind", string>> & {
   name: string;
   openclaw: {
     plugin?: Record<string, unknown>;
+    setupFeatures?: Record<string, unknown>;
     catalog?: Record<string, unknown>;
     contracts?: Record<string, string[] | undefined>;
     channel: Record<string, unknown>;
     channelHostConfig?: Record<string, unknown>;
-    channelConfigs?: Record<string, { schema?: unknown }>;
+    channelConfigs?: Record<string, { schema?: unknown; label?: string }>;
     providerEndpoints?: Array<Record<string, unknown>>;
+    legacyNpmPackageNames?: string[];
     install: CatalogInstall;
   };
 };
@@ -35,16 +33,12 @@ type ChannelDocsEntry = { id: string; docsPath: string; source: ChannelDocsSourc
 type CompleteChannelDocsEntry = ChannelDocsEntry & { label: string; summary: string };
 
 /** Generated official channel catalog committed for source and packaged runtime consumers. */
-export const OFFICIAL_CHANNEL_CATALOG_SOURCE_RELATIVE_PATH =
+const OFFICIAL_CHANNEL_CATALOG_SOURCE_RELATIVE_PATH =
   "scripts/lib/official-external-channel-catalog.json";
-export const OFFICIAL_CHANNEL_DOCS_INDEX_RELATIVE_PATH = "docs/channels/index.md";
+const OFFICIAL_CHANNEL_DOCS_INDEX_RELATIVE_PATH = "docs/channels/index.md";
 const OFFICIAL_CHANNEL_DOCS_NAV_RELATIVE_PATH = "docs/docs.json";
 
-/**
- * Generated official channel catalog path in dist.
- * @internal Directly tested script implementation detail.
- */
-export const OFFICIAL_CHANNEL_CATALOG_RELATIVE_PATH = "dist/channel-catalog.json";
+const OFFICIAL_CHANNEL_CATALOG_RELATIVE_PATH = "dist/channel-catalog.json";
 
 const OFFICIAL_CHANNEL_DOCS_START_MARKER = "<!-- BEGIN GENERATED: official channel catalog -->";
 const OFFICIAL_CHANNEL_DOCS_END_MARKER = "<!-- END GENERATED: official channel catalog -->";
@@ -96,13 +90,10 @@ function readExcludedPackagedExtensionDirs(repoRoot: string) {
   return collectExcludedPackagedExtensionDirs({ files: Array.isArray(files) ? files : undefined });
 }
 
-function toCatalogInstall(value: unknown, packageName: string): CatalogInstall | null {
+function toCatalogInstall(value: unknown, packageName: string): CatalogInstall {
   const install = isRecord(value) ? value : {};
   const clawhubSpec = trimString(install.clawhubSpec);
   const npmSpec = trimString(install.npmSpec) || packageName;
-  if (!clawhubSpec && !npmSpec) {
-    return null;
-  }
   const rawDefaultChoice = trimString(install.defaultChoice);
   const defaultChoice =
     rawDefaultChoice === "clawhub" || rawDefaultChoice === "npm" || rawDefaultChoice === "local"
@@ -179,9 +170,6 @@ function buildCatalogEntry(packageJson: unknown, pluginManifest: unknown): Catal
     return null;
   }
   const install = toCatalogInstall(manifest?.install, packageName);
-  if (!install) {
-    return null;
-  }
   const version = trimString(packageJson.version);
   const description = trimString(packageJson.description);
   return {
@@ -192,6 +180,10 @@ function buildCatalogEntry(packageJson: unknown, pluginManifest: unknown): Catal
     kind: "channel",
     openclaw: {
       ...toCatalogManifestFields(pluginManifest),
+      ...(isRecord(manifest?.setupFeatures) &&
+      manifest.setupFeatures.configPromotion === "preserve-root"
+        ? { setupFeatures: { configPromotion: "preserve-root" } }
+        : {}),
       channel,
       install,
     },
@@ -202,17 +194,13 @@ function getCatalogChannelId(entry: CatalogEntry) {
   return trimString(entry.openclaw.channel.id) || trimString(entry.name);
 }
 
-function getCatalogChannelKey(entry: CatalogEntry) {
-  return getCatalogChannelId(entry).toLowerCase();
-}
-
 function setUniqueCatalogEntry(
   entriesByChannelId: Map<string, CatalogOwnerEntry>,
   entry: CatalogEntry,
   owner: string,
 ) {
   const channelId = getCatalogChannelId(entry);
-  const channelKey = getCatalogChannelKey(entry);
+  const channelKey = channelId.toLowerCase();
   if (!channelKey) {
     throw new Error(`official channel catalog entry from ${owner} is missing a channel id`);
   }
@@ -298,16 +286,30 @@ export function buildOfficialChannelCatalog(params: CatalogParams = {}): {
   }
   const entries = [...entriesByChannelId.values()].map(({ entry }) => entry);
   entries.sort((left, right) => {
-    const leftId = trimString(left.openclaw?.channel?.id) || left.name;
-    const rightId = trimString(right.openclaw?.channel?.id) || right.name;
+    const leftId = getCatalogChannelId(left);
+    const rightId = getCatalogChannelId(right);
     return leftId.localeCompare(rightId);
   });
 
   return { entries };
 }
 
+function serializeOfficialChannelCatalog(catalog: { entries: readonly CatalogEntry[] }): string {
+  return [
+    "{",
+    '  "entries": [',
+    ...catalog.entries.map(
+      (entry, index) =>
+        `    ${JSON.stringify(entry)}${index === catalog.entries.length - 1 ? "" : ","}`,
+    ),
+    "  ]",
+    "}",
+    "",
+  ].join("\n");
+}
+
 function renderOfficialChannelCatalog(params: CatalogParams = {}) {
-  return `${JSON.stringify(buildOfficialChannelCatalog(params), null, 2)}\n`;
+  return serializeOfficialChannelCatalog(buildOfficialChannelCatalog(params));
 }
 
 export function writeOfficialChannelCatalog(params: CatalogParams = {}) {
@@ -316,13 +318,13 @@ export function writeOfficialChannelCatalog(params: CatalogParams = {}) {
   return writeTextFileIfChanged(outputPath, renderOfficialChannelCatalog({ repoRoot }));
 }
 
-export function writeOfficialChannelCatalogSource(params: CatalogParams = {}) {
+function writeOfficialChannelCatalogSource(params: CatalogParams = {}) {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
   const outputPath = path.join(repoRoot, OFFICIAL_CHANNEL_CATALOG_SOURCE_RELATIVE_PATH);
   return writeTextFileIfChanged(outputPath, renderOfficialChannelCatalog({ repoRoot }));
 }
 
-export function checkOfficialChannelCatalogSource(params: CatalogParams = {}) {
+function checkOfficialChannelCatalogSource(params: CatalogParams = {}) {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
   const outputPath = path.join(repoRoot, OFFICIAL_CHANNEL_CATALOG_SOURCE_RELATIVE_PATH);
   const current = fs.existsSync(outputPath) ? fs.readFileSync(outputPath, "utf8") : "";
@@ -503,20 +505,20 @@ function replaceOfficialChannelDocsBlock(current: string, block: string) {
   return `${current.slice(0, startIndex)}${block}${current.slice(afterEndIndex)}`;
 }
 
-export function renderOfficialChannelDocsIndex(params: CatalogParams = {}) {
+function renderOfficialChannelDocsIndex(params: CatalogParams = {}) {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
   const outputPath = path.join(repoRoot, OFFICIAL_CHANNEL_DOCS_INDEX_RELATIVE_PATH);
   const current = fs.readFileSync(outputPath, "utf8");
   return replaceOfficialChannelDocsBlock(current, renderOfficialChannelDocsBlock({ repoRoot }));
 }
 
-export function writeOfficialChannelDocsIndex(params: CatalogParams = {}) {
+function writeOfficialChannelDocsIndex(params: CatalogParams = {}) {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
   const outputPath = path.join(repoRoot, OFFICIAL_CHANNEL_DOCS_INDEX_RELATIVE_PATH);
   return writeTextFileIfChanged(outputPath, renderOfficialChannelDocsIndex({ repoRoot }));
 }
 
-export function checkOfficialChannelDocsIndex(params: CatalogParams = {}) {
+function checkOfficialChannelDocsIndex(params: CatalogParams = {}) {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
   const outputPath = path.join(repoRoot, OFFICIAL_CHANNEL_DOCS_INDEX_RELATIVE_PATH);
   if (!fs.existsSync(outputPath)) {
@@ -614,7 +616,7 @@ function buildHiddenChannelDocsRoutes(repoRoot: string) {
   return routes;
 }
 
-export function findMissingOfficialChannelDocsNavRoutes(params: CatalogParams = {}) {
+function findMissingOfficialChannelDocsNavRoutes(params: CatalogParams = {}) {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
   const navCounts = readDocsNavCounts(repoRoot);
   const missing = new Set<string>();
@@ -631,7 +633,7 @@ export function findMissingOfficialChannelDocsNavRoutes(params: CatalogParams = 
   return [...missing].toSorted((left, right) => left.localeCompare(right, "en"));
 }
 
-export function findUnexpectedOfficialChannelDocsNavRoutes(params: CatalogParams = {}) {
+function findUnexpectedOfficialChannelDocsNavRoutes(params: CatalogParams = {}) {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
   const navCounts = readDocsNavCounts(repoRoot).all;
   return [...buildHiddenChannelDocsRoutes(repoRoot)]
@@ -639,7 +641,7 @@ export function findUnexpectedOfficialChannelDocsNavRoutes(params: CatalogParams
     .toSorted((left, right) => left.localeCompare(right, "en"));
 }
 
-export function findDuplicateOfficialChannelDocsNavRoutes(params: CatalogParams = {}) {
+function findDuplicateOfficialChannelDocsNavRoutes(params: CatalogParams = {}) {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
   const navCounts = readDocsNavCounts(repoRoot).all;
   const duplicateRoutes = new Set<string>();

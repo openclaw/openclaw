@@ -1,48 +1,58 @@
-// Shared model catalog data contracts for provider manifests and normalized rows.
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  MODEL_DATA_APIS,
+  MODEL_DATA_THINKING_FORMATS,
+  MODEL_DATA_THINKING_LEVELS,
+  type ModelDataCostRates,
+  type ModelDataImageInputConfig,
+  type ModelDataMediaInputConfig,
+  type ModelDataRawPricingTier,
+  type ModelDataThinkingLevelMap,
+  type ModelRoutingMaxPrice,
+  type ModelRoutingPercentiles,
+  type ModelRoutingSortConfig,
+} from "../../llm-core/src/model-data.js";
+import type { ModelInferenceCapabilities } from "./model-inference-capabilities.js";
 
-/** Supported API protocols for model catalog entries. */
-export const MODEL_CATALOG_APIS = [
-  "openai-completions",
-  "openai-responses",
-  "openai-chatgpt-responses",
-  "anthropic-messages",
-  "google-generative-ai",
-  "google-vertex",
-  "github-copilot",
-  "bedrock-converse-stream",
-  "ollama",
-  "azure-openai-responses",
-] as const;
+export type {
+  ModelInferenceCapabilities,
+  ModelDecisionCapabilities,
+} from "./model-inference-capabilities.js";
 
-/** API protocol for a model catalog entry. */
+// Tier capacity is separate from the model's full context window. Leave room
+// below the observed serving boundary for output and tool-round growth.
+const OPENAI_ULTRAFAST_CONTEXT_TOKENS = 260_000;
+
+/** Prompt capacity for models served through a context-limited processing tier. */
+export function resolveModelServiceTierContextTokens(
+  provider: string | undefined,
+  serviceTier: string | undefined,
+): number | undefined {
+  return provider === "openai" && serviceTier === "ultrafast"
+    ? OPENAI_ULTRAFAST_CONTEXT_TOKENS
+    : undefined;
+}
+
+export const MODEL_CATALOG_APIS = [...MODEL_DATA_APIS] as const;
+
 export type ModelCatalogApi = (typeof MODEL_CATALOG_APIS)[number];
 
-/** Supported model thinking/reasoning wire formats. */
-export const MODEL_CATALOG_THINKING_FORMATS = [
-  "openai",
-  "openrouter",
-  "deepseek",
-  "together",
-  "qwen",
-  "qwen-chat-template",
-  "zai",
-] as const;
+export const MODEL_CATALOG_THINKING_FORMATS = [...MODEL_DATA_THINKING_FORMATS] as const;
 
-/** Thinking/reasoning wire format for model compatibility. */
 export type ModelCatalogThinkingFormat = (typeof MODEL_CATALOG_THINKING_FORMATS)[number];
 
-/** Narrow a string to a supported model catalog thinking format. */
 export function isModelCatalogThinkingFormat(value: string): value is ModelCatalogThinkingFormat {
   return (MODEL_CATALOG_THINKING_FORMATS as readonly string[]).includes(value);
 }
 
-/** Compatibility flags and provider-specific routing metadata for one model. */
 export type ModelCatalogCompatConfig = {
   supportsStore?: boolean;
   supportsDeveloperRole?: boolean;
   supportsReasoningEffort?: boolean;
   /** Whether the model accepts the temperature parameter (GPT-5.6 family rejects it). */
   supportsTemperature?: boolean;
+  /** Whether the provider honors top-level `instructions` on Responses requests. */
+  supportsInstructions?: boolean;
   supportsUsageInStreaming?: boolean;
   supportsStrictMode?: boolean;
   supportsJsonSchemaResponseFormat?: boolean;
@@ -60,6 +70,8 @@ export type ModelCatalogCompatConfig = {
   supportsEagerToolInputStreaming?: boolean;
   supportsLongCacheRetention?: boolean;
   supportsPromptCacheKey?: boolean;
+  /** Explicit per-model opt-in for HTTP continuation on a custom/proxy OpenAI-Responses-compatible endpoint. */
+  supportsResponsesContinuation?: boolean;
   supportsTools?: boolean;
   /** Code-mode tier consumed by `tools.codeMode.enabled: "auto"`; absent means "capable". */
   codeMode?: "preferred" | "capable";
@@ -86,78 +98,73 @@ export type ModelCatalogOpenRouterRouting = {
   only?: string[];
   ignore?: string[];
   quantizations?: string[];
-  sort?:
-    | string
-    | {
-        by?: string;
-        partition?: string | null;
-      };
-  max_price?: {
-    prompt?: number | string;
-    completion?: number | string;
-    image?: number | string;
-    audio?: number | string;
-    request?: number | string;
-  };
-  preferred_min_throughput?:
-    | number
-    | {
-        p50?: number;
-        p75?: number;
-        p90?: number;
-        p99?: number;
-      };
-  preferred_max_latency?:
-    | number
-    | {
-        p50?: number;
-        p75?: number;
-        p90?: number;
-        p99?: number;
-      };
+  sort?: string | ModelRoutingSortConfig;
+  max_price?: ModelRoutingMaxPrice;
+  preferred_min_throughput?: number | ModelRoutingPercentiles;
+  preferred_max_latency?: number | ModelRoutingPercentiles;
 };
 
-/** Vercel AI Gateway routing preferences. */
 export type ModelCatalogVercelGatewayRouting = {
   only?: string[];
   order?: string[];
 };
 
-/** Image input limits for a model. */
-export type ModelCatalogImageInputConfig = {
-  maxBytes?: number;
-  maxPixels?: number;
-  maxSidePx?: number;
-  preferredSidePx?: number;
-  tokenMode?: "tile" | "detail" | "provider";
-};
+export type ModelCatalogImageInputConfig = ModelDataImageInputConfig;
 
-/** Media input limits for a model. */
-export type ModelCatalogMediaInputConfig = {
-  image?: ModelCatalogImageInputConfig;
-};
+export type ModelCatalogMediaInputConfig = ModelDataMediaInputConfig;
 
-/** Supported input modality for a model. */
-export type ModelCatalogInput = "text" | "image" | "document";
-/** Model-level thinking settings carried by provider catalog metadata. */
-export const MODEL_CATALOG_THINKING_LEVELS = [
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-] as const;
+export const MODEL_CATALOG_INPUTS = ["text", "image", "video", "document"] as const;
+export type ModelCatalogInput = (typeof MODEL_CATALOG_INPUTS)[number];
+export const MODEL_CATALOG_THINKING_LEVELS = [...MODEL_DATA_THINKING_LEVELS] as const;
 export type ModelCatalogThinkingLevel = (typeof MODEL_CATALOG_THINKING_LEVELS)[number];
-export type ModelCatalogThinkingLevelMap = Partial<
-  Record<ModelCatalogThinkingLevel, string | null>
->;
-/** Discovery lifecycle for a provider catalog. */
+export type ModelCatalogThinkingLevelMap = ModelDataThinkingLevelMap;
+
+const OPENAI_THINKING_APIS = new Set([
+  "openai-completions",
+  "openai-responses",
+  "openai-chatgpt-responses",
+  "azure-openai-responses",
+]);
+
+/** Managed API aliases retain the source adapter's reasoning contract. */
+export function resolveOpenAIThinkingApi(api: unknown): string | undefined {
+  if (typeof api !== "string") {
+    return undefined;
+  }
+  const sourceApi = api.replace(/^openclaw-(.+)-transport$/u, "$1");
+  return OPENAI_THINKING_APIS.has(sourceApi) ? sourceApi : undefined;
+}
+
+/** Map keys describe logical choices; provider-native values retain their spelling. */
+export function listMappedModelThinkingLevels(model: {
+  api?: string | null;
+  compat?: unknown;
+}): ModelCatalogThinkingLevel[] {
+  const compat = asOptionalRecord(model.compat);
+  const efforts = compat?.supportedReasoningEfforts;
+  const api = resolveOpenAIThinkingApi(model.api);
+  const format = compat?.thinkingFormat;
+  const binaryOnly = format === "qwen" || format === "qwen-chat-template" || format === "zai";
+  if (
+    !api ||
+    (api === "openai-completions" && binaryOnly) ||
+    compat?.supportsReasoningEffort === false ||
+    (Array.isArray(efforts) && efforts.length === 0)
+  ) {
+    return [];
+  }
+  const mapping = asOptionalRecord(compat?.reasoningEffortMap);
+  const mapped = new Set(
+    Object.entries(mapping ?? {}).flatMap(([level, effort]) =>
+      typeof effort === "string" && effort.trim() ? [level.trim().toLowerCase()] : [],
+    ),
+  );
+  return MODEL_CATALOG_THINKING_LEVELS.filter((level) => mapped.has(level));
+}
+
 export type ModelCatalogDiscovery = "static" | "refreshable" | "runtime";
-/** Availability state for a model. */
-export type ModelCatalogStatus = "available" | "preview" | "deprecated" | "disabled";
-/** Source of a model catalog row. */
+export const MODEL_CATALOG_STATUSES = ["available", "preview", "deprecated", "disabled"] as const;
+export type ModelCatalogStatus = (typeof MODEL_CATALOG_STATUSES)[number];
 export type ModelCatalogSource =
   | "manifest"
   | "provider-index"
@@ -165,7 +172,6 @@ export type ModelCatalogSource =
   | "config"
   | "runtime-refresh";
 
-/** Unified catalog kind across text and generated media models. */
 export type UnifiedModelCatalogKind =
   | "text"
   | "voice"
@@ -173,7 +179,6 @@ export type UnifiedModelCatalogKind =
   | "video_generation"
   | "music_generation";
 
-/** Source for unified model catalog entries. */
 export type UnifiedModelCatalogSource =
   | "manifest"
   | "provider-index"
@@ -201,27 +206,25 @@ export type UnifiedModelCatalogEntry<TCapabilities = unknown> = {
   warnings?: readonly string[];
 };
 
-/** Tiered token cost row. */
-export type ModelCatalogTieredCost = {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  range: [number, number] | [number];
-};
+export type ModelCatalogTieredCost = ModelDataRawPricingTier;
 
-/** Token cost metadata for one model. */
-export type ModelCatalogCost = {
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
+export type ModelCatalogCost = Partial<ModelDataCostRates> & {
   tieredPricing?: ModelCatalogTieredCost[];
 };
 
-/** Provider manifest model entry. */
+/** Bounded provider-declared context-window choice for one model. */
+export type ModelCatalogContextWindowOption = {
+  id: string;
+  label: string;
+  contextWindow: number;
+};
+
+export const MODEL_CATALOG_MAX_CONTEXT_WINDOWS = 16;
+
 export type ModelCatalogModel = {
   id: string;
+  /** Task facts for this exact served route, independent of chat wire metadata. */
+  inference?: ModelInferenceCapabilities;
   name?: string;
   api?: ModelCatalogApi;
   baseUrl?: string;
@@ -229,7 +232,11 @@ export type ModelCatalogModel = {
   input?: ModelCatalogInput[];
   reasoning?: boolean;
   contextWindow?: number;
+  contextWindows?: ModelCatalogContextWindowOption[];
+  contextWindowDefault?: string;
   contextTokens?: number;
+  /** Total model parameters, including inactive experts. */
+  parameterCount?: number;
   maxTokens?: number;
   thinkingLevelMap?: ModelCatalogThinkingLevelMap;
   cost?: ModelCatalogCost;
@@ -249,8 +256,9 @@ export type ModelCatalogModel = {
   tags?: string[];
 };
 
-/** Provider manifest catalog entry. */
 export type ModelCatalogProvider = {
+  /** Credential owner; omitted providers keep agent-owned profile/env/config auth. */
+  authScope?: "agent" | "plugin";
   baseUrl?: string;
   api?: ModelCatalogApi;
   headers?: Record<string, string>;
@@ -258,10 +266,14 @@ export type ModelCatalogProvider = {
   defaultModel?: string;
   /** Provider-recommended small model id for short internal utility tasks. */
   defaultUtilityModel?: string;
+  /**
+   * Hosted catalog v2 projection of the curated global list onto this provider's
+   * model ids, best first; reserved for picker ordering and not yet used.
+   */
+  recommendedModels?: string[];
   models: ModelCatalogModel[];
 };
 
-/** Provider alias entry. */
 export type ModelCatalogAlias = {
   provider: string;
   api?: ModelCatalogApi;
@@ -273,6 +285,8 @@ export type ModelCatalogSuppression = {
   provider: string;
   model: string;
   reason?: string;
+  /** Explicit retirement and optional provider-local successor; otherwise doctor clears overrides. */
+  retirement?: { replacedBy?: string };
   when?: {
     baseUrlHosts?: string[];
     providerConfigApiIn?: string[];
@@ -281,6 +295,8 @@ export type ModelCatalogSuppression = {
 
 /** Raw model catalog manifest shape. */
 export type ModelCatalog = {
+  /** Publication-time opt-in: owned OpenClaw provider id -> models.dev provider id. */
+  modelsDev?: Record<string, string>;
   providers?: Record<string, ModelCatalogProvider>;
   aliases?: Record<string, ModelCatalogAlias>;
   suppressions?: ModelCatalogSuppression[];
@@ -289,9 +305,8 @@ export type ModelCatalog = {
 };
 
 /** Normalized model catalog row used by runtime lookup and UI surfaces. */
-export type NormalizedModelCatalogRow = {
+export type NormalizedModelCatalogRow = Omit<ModelCatalogModel, "upstreamModel"> & {
   provider: string;
-  id: string;
   ref: string;
   mergeKey: string;
   name: string;
@@ -299,18 +314,4 @@ export type NormalizedModelCatalogRow = {
   input: ModelCatalogInput[];
   reasoning: boolean;
   status: ModelCatalogStatus;
-  api?: ModelCatalogApi;
-  baseUrl?: string;
-  headers?: Record<string, string>;
-  contextWindow?: number;
-  contextTokens?: number;
-  maxTokens?: number;
-  thinkingLevelMap?: ModelCatalogThinkingLevelMap;
-  cost?: ModelCatalogCost;
-  compat?: ModelCatalogCompatConfig;
-  mediaInput?: ModelCatalogMediaInputConfig;
-  statusReason?: string;
-  replaces?: string[];
-  replacedBy?: string;
-  tags?: string[];
 };

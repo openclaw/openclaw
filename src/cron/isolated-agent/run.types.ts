@@ -1,11 +1,24 @@
-import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply.js";
-/** Result types returned by isolated cron agent runs. */
+import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
+import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply-skip-reason.js";
+/** Execution and result contracts for isolated cron agent runs. */
 import type {
   CronDeliveryTrace,
+  CronResolvedDeliveryState,
   CronNextCheckProposal,
   CronRunOutcome,
   CronRunTelemetry,
 } from "../types.js";
+
+/**
+ * Lane wait transitions for isolated cron work. `waiting: false` ends a wait;
+ * only signals without `stage` come from the execution lane and mean the run was admitted.
+ * Session preparation reports its own waits so callers can pause timers without
+ * treating per-session lane entry as execution admission.
+ */
+export type CronLaneWaitCallback = (info?: {
+  waiting?: boolean;
+  stage?: "session-preparation";
+}) => void;
 
 /** Pre-run disposition returned when isolated cron work never enters an agent runner. */
 export type CronAgentAdmissionDisposition = "session-conflict" | "rejected";
@@ -14,14 +27,11 @@ export type CronAgentAdmissionDisposition = "session-conflict" | "rejected";
 export type RunCronAgentTurnResult = {
   /** Typed pre-run rejection so callers never infer admission state from error prose. */
   admissionDisposition?: CronAgentAdmissionDisposition;
+  /** Delivery fact authored by the dispatcher, separate from execution status. */
+  deliveryState?: CronResolvedDeliveryState;
   /** Last non-empty agent text output (not truncated). */
   outputText?: string;
-  /**
-   * `true` when the isolated runner already handled the run's user-visible
-   * delivery outcome, either through runner fallback delivery, explicit
-   * suppression, or a matching message-tool send that already reached the
-   * target.
-   */
+  /** Confirmed target delivery, including matching message-tool sends; unknown is omitted. */
   delivered?: boolean;
   /**
    * `true` when cron attempted announce/direct delivery for this run.
@@ -37,3 +47,25 @@ export type RunCronAgentTurnResult = {
   nextCheck?: CronNextCheckProposal;
 } & CronRunOutcome &
   CronRunTelemetry;
+
+/** Runner-start metadata delivered to the outer execution owner. */
+export type CronRunnerStartedInfo = {
+  lifecycleGeneration?: string;
+  isFallback?: boolean;
+  provider?: string;
+  model?: string;
+};
+
+/** Completed prompt result recorded by the outer execution owner. */
+export type CronCompletedPromptRun = {
+  runResult: EmbeddedAgentRunResult;
+  fallbackProvider: string;
+  fallbackModel: string;
+  runStartedAt: number;
+  runEndedAt: number;
+};
+
+/** Result envelope returned after an isolated cron prompt completes. */
+export type CronExecutionResult = CronCompletedPromptRun & {
+  completedPromptRuns: readonly CronCompletedPromptRun[];
+};

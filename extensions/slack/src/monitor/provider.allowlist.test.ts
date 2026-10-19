@@ -1,36 +1,61 @@
-// Slack tests cover provider.allowlist plugin behavior.
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig, SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  setRuntimeConfigSnapshot,
+  clearRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import {
   flush,
   getSlackClient,
   getSlackHandlerOrThrow,
   getSlackTestState,
   resetSlackTestState,
+  runSlackHandlerWithDispatch,
   startSlackMonitor,
   stopSlackMonitor,
 } from "../monitor.test-helpers.js";
-import { formatSlackChannelResolved, formatSlackUserResolved } from "./provider-support.js";
 
 const { monitorSlackProvider } = await import("./provider.js");
-const slackTestState = getSlackTestState();
+const { replyMock, sendMock, appStopMock, resolveSlackUserAllowlistMock } = getSlackTestState();
 
-beforeEach(() => {
-  resetSlackTestState();
-});
+beforeEach(() => resetSlackTestState());
+afterEach(() => clearRuntimeConfigSnapshot());
 
-function createRuntimeContextCapture(): {
-  channelRuntime: ChannelRuntimeSurface;
-  register: ChannelRuntimeSurface["runtimeContexts"]["register"];
-} {
-  const register = vi.fn(() => ({ dispose: vi.fn() }));
+function userEvent(user: string, ts: string, channel: string, channel_type: "im" | "channel") {
+  return { event: { type: "message", user, ts, text: "hello", channel, channel_type } };
+}
+
+function slackConfig(slack: SlackAccountConfig): OpenClawConfig {
+  return { channels: { slack: { enabled: true, ...slack } } };
+}
+
+function approvalConfig(slack: SlackAccountConfig): OpenClawConfig {
+  return slackConfig({ botToken: "xoxb-test", appToken: "xapp-test", ...slack });
+}
+
+async function withMonitor(
+  run: (handler: Awaited<ReturnType<typeof getSlackHandlerOrThrow>>) => Promise<void>,
+  options?: Parameters<typeof startSlackMonitor>[1],
+) {
+  const monitor = startSlackMonitor(monitorSlackProvider, options);
+  try {
+    await run(await getSlackHandlerOrThrow("message"));
+  } finally {
+    await stopSlackMonitor(monitor);
+  }
+}
+
+function createRuntimeContextCapture() {
+  const register = vi.fn<ChannelRuntimeSurface["runtimeContexts"]["register"]>(() => ({
+    dispose: vi.fn(),
+  }));
   return {
     channelRuntime: {
-      inbound: {
-        buildContext: buildChannelInboundEventContext,
-      },
+      inbound: { buildContext: buildChannelInboundEventContext },
       runtimeContexts: {
         register,
         get: vi.fn(),
@@ -41,88 +66,116 @@ function createRuntimeContextCapture(): {
   };
 }
 
-function resolveAllowlistCallAt(index: number): { entries?: unknown } {
-  const call = slackTestState.resolveSlackUserAllowlistMock.mock.calls[index];
-  if (!call) {
-    throw new Error(`expected allowlist resolver call ${index}`);
-  }
-  return call[0] as { entries?: unknown };
-}
-
-describe("slack allowlist log formatting", () => {
-  it("prints channel names without repeating the id input", () => {
-    expect(
-      formatSlackChannelResolved({
-        input: "C0AQXEG6QFJ",
-        resolved: true,
-        id: "C0AQXEG6QFJ",
-        name: "openclawtest",
-      }),
-    ).toBe("C0AQXEG6QFJ→openclawtest");
-  });
-
-  it("prints user names without repeating the id input", () => {
-    expect(
-      formatSlackUserResolved({
-        input: "U090HHQ029J",
-        resolved: true,
-        id: "U090HHQ029J",
-        name: "steipete",
-      }),
-    ).toBe("U090HHQ029J→steipete");
-  });
-
-  it("includes the id when resolving from a display name", () => {
-    expect(
-      formatSlackUserResolved({
-        input: "@steipete",
-        resolved: true,
-        id: "U090HHQ029J",
-        name: "steipete",
-      }),
-    ).toBe("@steipete→steipete (id:U090HHQ029J)");
-  });
-
-  it("omits identity lookups that resolved to themselves without a name", () => {
-    expect(
-      formatSlackUserResolved({
-        input: "U090HHQ029J",
-        resolved: true,
-        id: "U090HHQ029J",
-      }),
-    ).toBeNull();
-  });
-
-  it("keeps bare-name lookups that resolved to an id, even when the name matches the input", () => {
-    expect(
-      formatSlackChannelResolved({
-        input: "general",
-        resolved: true,
-        id: "C123",
-        name: "general",
-      }),
-    ).toBe("general→general (id:C123)");
-  });
-});
-
 describe("slack startup user allowlist resolution", () => {
-  it("registers one native approval client per Enterprise Grid team", async () => {
-    resetSlackTestState({
-      channels: {
-        slack: {
-          enabled: true,
-          botToken: "xoxb-test",
-          appToken: "xapp-1-A123-test",
-          dmPolicy: "disabled",
-          groupPolicy: "open",
-          execApprovals: {
-            enabled: true,
-            approvers: ["U123OWNER"],
-            target: "both",
-          },
-        },
-      },
+  it.each(["allowBots", "room users"] as const)(
+    "delivers an allowed bot's reply by default and stops subsequent turns after %s revocation",
+    async (revokedPolicy) => {
+      const initial: OpenClawConfig = slackConfig({
+        groupPolicy: "open",
+        historyLimit: 0,
+        streaming: { mode: "off" },
+        channels: { C123: { requireMention: true, users: ["B123BOT"] } },
+      });
+      await resetSlackTestState(initial);
+      setRuntimeConfigSnapshot(initial, initial);
+      getSlackClient().conversations.info.mockResolvedValue({
+        channel: { name: "releases", is_channel: true },
+      });
+      replyMock.mockResolvedValue({ text: "Release is ready." });
+      await withMonitor(async (handler) => {
+        // Core dedupe survives monitor replacement; each case uses distinct Slack messages.
+        const timestampPrefix = revokedPolicy === "allowBots" ? "202" : "203";
+        const receive = (botId: string, sequence: string) =>
+          runSlackHandlerWithDispatch(handler, {
+            event: {
+              type: "message",
+              subtype: "bot_message",
+              bot_id: botId,
+              text: "<@bot-user> release status",
+              ts: `${timestampPrefix}.${sequence}`,
+              channel: "C123",
+              channel_type: "channel",
+            },
+          });
+
+        await receive("B123BOT", "001");
+        expect(replyMock).toHaveBeenCalledTimes(1);
+        expect(replyMock.mock.calls[0]?.[0]).toMatchObject({ SenderIsBot: true });
+        expect(sendMock).toHaveBeenCalledExactlyOnceWith(
+          "channel:C123",
+          "Release is ready.",
+          expect.objectContaining({ accountId: "default" }),
+        );
+
+        replyMock.mockClear();
+        sendMock.mockClear();
+        await receive("BDENIED", "002");
+        expect([replyMock.mock.calls, sendMock.mock.calls]).toEqual([[], []]);
+
+        const revoked: OpenClawConfig = slackConfig({
+          ...initial.channels?.slack,
+          ...(revokedPolicy === "allowBots"
+            ? { allowBots: false }
+            : { channels: { C123: { requireMention: true, users: ["UOTHER"] } } }),
+        });
+        setRuntimeConfigSnapshot(revoked, revoked);
+        await receive("B123BOT", "003");
+        expect([replyMock.mock.calls, sendMock.mock.calls]).toEqual([[], []]);
+        expect(appStopMock).not.toHaveBeenCalled();
+      });
+    },
+  );
+
+  it("rejects a sender revoked while workspace policy resolution is pending", async () => {
+    const initial: OpenClawConfig = slackConfig({
+      dangerouslyAllowNameMatching: true,
+      dmPolicy: "allowlist",
+      allowFrom: ["UOLD"],
     });
+    await resetSlackTestState(initial);
+    setRuntimeConfigSnapshot(initial, initial);
+    replyMock.mockResolvedValue({ text: "ok" });
+    const lookup = createDeferred<Array<{ input: string; resolved: boolean }>>();
+    const monitor = startSlackMonitor(monitorSlackProvider);
+    try {
+      const handler = await getSlackHandlerOrThrow("message");
+      await flush();
+      const send = async (user: string, ts: string) => handler(userEvent(user, ts, "D123", "im"));
+      await send("UOLD", "201.001");
+      expect(replyMock).toHaveBeenCalledTimes(1);
+      const resolving = slackConfig({ ...initial.channels?.slack, allowFrom: ["UOLD", "@lookup"] });
+      resolveSlackUserAllowlistMock.mockImplementationOnce(() => lookup.promise);
+      setRuntimeConfigSnapshot(resolving, resolving);
+      const pending = send("UOLD", "201.002");
+      await vi.waitFor(() =>
+        expect(resolveSlackUserAllowlistMock).toHaveBeenLastCalledWith(
+          expect.objectContaining({ entries: ["UOLD", "@lookup"] }),
+        ),
+      );
+      expect(replyMock).toHaveBeenCalledTimes(1);
+      const revoked = slackConfig({ ...initial.channels?.slack, allowFrom: ["UNEW"] });
+      setRuntimeConfigSnapshot(revoked, revoked);
+      lookup.resolve([]);
+      await pending;
+      expect(replyMock).toHaveBeenCalledTimes(1);
+      await send("UNEW", "201.003");
+      expect(replyMock).toHaveBeenCalledTimes(2);
+      expect(appStopMock).not.toHaveBeenCalled();
+    } finally {
+      lookup.resolve([]);
+      await stopSlackMonitor(monitor);
+    }
+  });
+
+  it("registers one native approval client per Enterprise Grid team", async () => {
+    await resetSlackTestState(
+      approvalConfig({
+        appToken: "xapp-1-A123-test",
+        dmPolicy: "disabled",
+        groupPolicy: "open",
+        execApprovals: { enabled: true, approvers: ["U123OWNER"], target: "both" },
+      }),
+    );
     getSlackClient().auth.test.mockResolvedValueOnce({
       user_id: "UENTERPRISE",
       bot_id: "BENTERPRISE",
@@ -132,47 +185,32 @@ describe("slack startup user allowlist resolution", () => {
     });
     const { channelRuntime, register } = createRuntimeContextCapture();
 
-    const monitor = startSlackMonitor(monitorSlackProvider, {
-      channelRuntime,
-      appToken: "xapp-1-A123-test",
-    });
-    try {
-      await getSlackHandlerOrThrow("message");
-      await flush();
+    await withMonitor(
+      async () => {
+        await flush();
 
-      const registration = vi.mocked(register).mock.calls[0]?.[0] as
-        | { context?: { resolveClient?: (teamId?: string) => unknown } }
-        | undefined;
-      const resolveClient = registration?.context?.resolveClient;
-      expect(resolveClient).toBeTypeOf("function");
-      const teamOne = resolveClient?.("T111") as { teamId?: string };
-      const teamOneAgain = resolveClient?.("T111") as { teamId?: string };
-      const teamTwo = resolveClient?.("T222") as { teamId?: string };
+        const registration = vi.mocked(register).mock.calls[0]?.[0] as
+          | { context?: { resolveClient?: (teamId?: string) => unknown } }
+          | undefined;
+        const resolveClient = registration?.context?.resolveClient;
+        expect(resolveClient).toBeTypeOf("function");
+        const teamOne = resolveClient?.("T111") as { teamId?: string };
+        expect(resolveClient?.("T111")).toBe(teamOne);
+        const teamTwo = resolveClient?.("T222") as { teamId?: string };
 
-      expect(teamOneAgain).toBe(teamOne);
-      expect(teamTwo).not.toBe(teamOne);
-      expect(teamOne.teamId).toBe("T111");
-      expect(teamTwo.teamId).toBe("T222");
-    } finally {
-      await stopSlackMonitor(monitor);
-    }
+        expect(teamTwo).not.toBe(teamOne);
+        expect([teamOne.teamId, teamTwo.teamId]).toEqual(["T111", "T222"]);
+      },
+      { channelRuntime, appToken: "xapp-1-A123-test" },
+    );
   });
 
   it("registers the native approval runtime for plugin-only Slack approvals", async () => {
-    resetSlackTestState({
-      channels: {
-        slack: {
-          enabled: true,
-          botToken: "xoxb-test",
-          appToken: "xapp-test",
-          allowFrom: ["U123OWNER"],
-          execApprovals: {
-            enabled: false,
-            approvers: ["U999EXEC"],
-            target: "both",
-          },
-        },
-      },
+    await resetSlackTestState({
+      ...approvalConfig({
+        allowFrom: ["U123OWNER"],
+        execApprovals: { enabled: false, approvers: ["U999EXEC"], target: "both" },
+      }),
       approvals: {
         plugin: {
           enabled: true,
@@ -183,113 +221,55 @@ describe("slack startup user allowlist resolution", () => {
     });
     const { channelRuntime, register } = createRuntimeContextCapture();
 
-    const monitor = startSlackMonitor(monitorSlackProvider, { channelRuntime });
-    try {
-      await getSlackHandlerOrThrow("message");
-      await flush();
+    await withMonitor(
+      async () => {
+        await flush();
 
-      expect(register).toHaveBeenCalledWith(
-        expect.objectContaining({
-          channelId: "slack",
-          accountId: "default",
-          capability: CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
-          context: expect.objectContaining({
-            config: expect.objectContaining({ enabled: false }),
+        expect(register).toHaveBeenCalledWith(
+          expect.objectContaining({
+            channelId: "slack",
+            accountId: "default",
+            capability: CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
+            context: expect.objectContaining({
+              config: expect.objectContaining({ enabled: false }),
+              workspaceTeamId: "T_TEST",
+            }),
           }),
-        }),
-      );
-    } finally {
-      await stopSlackMonitor(monitor);
-    }
+        );
+      },
+      { channelRuntime },
+    );
   });
 
   it("skips user entry resolution when name matching is not enabled", async () => {
-    resetSlackTestState({
-      messages: {
-        responsePrefix: "PFX",
-      },
-      channels: {
-        slack: {
-          enabled: true,
-          dmPolicy: "allowlist",
-          allowFrom: ["<@U123GLOBAL>", "@global-user"],
-          channels: {
-            C123: {
-              enabled: true,
-              requireMention: false,
-              users: ["<@U123CHANNEL>", "@channel-user"],
-            },
+    await resetSlackTestState({
+      messages: { responsePrefix: "PFX" },
+      ...slackConfig({
+        dmPolicy: "allowlist",
+        allowFrom: ["<@U123GLOBAL>", "@global-user"],
+        channels: {
+          C123: {
+            enabled: true,
+            requireMention: false,
+            users: ["<@U123CHANNEL>", "@channel-user"],
           },
         },
-      },
+      }),
     });
-    slackTestState.replyMock.mockResolvedValue({ text: "ok" });
+    replyMock.mockResolvedValue({ text: "ok" });
 
-    const monitor = startSlackMonitor(monitorSlackProvider);
-    try {
-      const handler = await getSlackHandlerOrThrow("message");
+    await withMonitor(async (handler) => {
       await flush();
       await flush();
 
-      expect(slackTestState.resolveSlackUserAllowlistMock).not.toHaveBeenCalled();
+      expect(resolveSlackUserAllowlistMock).not.toHaveBeenCalled();
 
-      await handler({
-        event: {
-          type: "message",
-          user: "U123GLOBAL",
-          text: "hello",
-          ts: "100.000",
-          channel: "D123",
-          channel_type: "im",
-        },
-      });
-      expect(slackTestState.replyMock).toHaveBeenCalledTimes(1);
+      await handler(userEvent("U123GLOBAL", "100.000", "D123", "im"));
+      expect(replyMock).toHaveBeenCalledTimes(1);
 
-      slackTestState.replyMock.mockClear();
-      await handler({
-        event: {
-          type: "message",
-          user: "U123CHANNEL",
-          text: "hello",
-          ts: "101.000",
-          channel: "C123",
-          channel_type: "channel",
-        },
-      });
-      expect(slackTestState.replyMock).toHaveBeenCalledTimes(1);
-    } finally {
-      await stopSlackMonitor(monitor);
-    }
-  });
-
-  it("resolves user entries when name matching is enabled", async () => {
-    resetSlackTestState({
-      channels: {
-        slack: {
-          enabled: true,
-          dangerouslyAllowNameMatching: true,
-          dmPolicy: "allowlist",
-          allowFrom: ["@global-user"],
-          channels: {
-            C123: { users: ["@channel-user"] },
-          },
-        },
-      },
+      replyMock.mockClear();
+      await handler(userEvent("U123CHANNEL", "101.000", "C123", "channel"));
+      expect(replyMock).toHaveBeenCalledTimes(1);
     });
-
-    const monitor = startSlackMonitor(monitorSlackProvider);
-    try {
-      await getSlackHandlerOrThrow("message");
-      await flush();
-      await flush();
-
-      expect(slackTestState.resolveSlackUserAllowlistMock).toHaveBeenCalledTimes(2);
-      const globalAllowlist = resolveAllowlistCallAt(0);
-      const channelAllowlist = resolveAllowlistCallAt(1);
-      expect(globalAllowlist?.entries).toEqual(["@global-user"]);
-      expect(channelAllowlist?.entries).toEqual(["@channel-user"]);
-    } finally {
-      await stopSlackMonitor(monitor);
-    }
   });
 });

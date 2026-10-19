@@ -16,22 +16,3 @@ export function normalizeSessionIdentities(
     .map((identity) => JSON.stringify([normalizedScope, identity]))
     .toSorted();
 }
-
-export function decodeSessionIdentity(
-  normalizedIdentity: string,
-): { scope: string; identity: string } | undefined {
-  try {
-    const decoded: unknown = JSON.parse(normalizedIdentity);
-    if (
-      !Array.isArray(decoded) ||
-      decoded.length !== 2 ||
-      typeof decoded[0] !== "string" ||
-      typeof decoded[1] !== "string"
-    ) {
-      return undefined;
-    }
-    return { scope: decoded[0], identity: decoded[1] };
-  } catch {
-    return undefined;
-  }
-}

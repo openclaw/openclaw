@@ -3,6 +3,7 @@
  *
  * Creates temporary agent/workspace directories and OpenAI-compatible mock config.
  */
+import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -20,7 +21,8 @@ export type EmbeddedAgentRunnerTestWorkspace = {
 export async function createEmbeddedAgentRunnerTestWorkspace(
   prefix: string,
 ): Promise<EmbeddedAgentRunnerTestWorkspace> {
-  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  // openclaw-temp-dir: allow suite-owned workspace drains agent databases before removal
+  const tempRoot = await fs.mkdtemp(path.join(realpathSync.native(os.tmpdir()), prefix));
   const agentDir = path.join(tempRoot, "agent");
   const workspaceDir = path.join(tempRoot, "workspace");
   await fs.mkdir(agentDir, { recursive: true });
@@ -34,13 +36,18 @@ export async function cleanupEmbeddedAgentRunnerTestWorkspace(
   if (!workspace) {
     return;
   }
+  // Message fixtures stay runtime-free; workspace teardown still joins SQLite owners
+  // before removing their files.
+  const { closeOpenClawAgentDatabasesAsync } =
+    await import("../../state/openclaw-agent-db-lifecycle.js");
+  await closeOpenClawAgentDatabasesAsync(workspace.tempRoot);
   await fs.rm(workspace.tempRoot, { recursive: true, force: true });
 }
 
 export function createEmbeddedAgentRunnerOpenAiConfig(modelIds: string[]): OpenClawConfig {
   return {
     agents: {
-      list: [{ id: "main" }, { id: "test" }, { id: "embedded-agent" }],
+      entries: { main: {}, test: {}, "embedded-agent": {} },
     },
     models: {
       providers: {
@@ -119,6 +126,9 @@ export function makeEmbeddedRunnerAttempt(
     assistantTexts: [],
     toolMetas,
     lastAssistant: undefined,
+    // The harness backfills omitted provenance; explicit undefined in overrides
+    // still represents an attempt that produced no response.
+    currentAttemptAssistant: overrides.lastAssistant,
     replayMetadata:
       overrides.replayMetadata ??
       buildAttemptReplayMetadata({
@@ -145,6 +155,7 @@ export function createResolvedEmbeddedRunnerModel(
   options?: { baseUrl?: string },
 ) {
   return {
+    logicalRef: { provider, model: modelId },
     model: {
       id: modelId,
       name: modelId,

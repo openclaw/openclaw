@@ -1,23 +1,49 @@
-// Helpers for package install tests that inspect npm spec output.
 import fs from "node:fs";
 import path from "node:path";
 import { expect } from "vitest";
 import type { CommandOptions, SpawnResult } from "../process/exec.js";
 import { expectSingleNpmInstallIgnoreScriptsCall } from "./exec-assertions.js";
+import { npmCommandArgs } from "./npm-command.js";
 
-type InstallResultLike = {
-  ok: boolean;
-  error?: string;
-};
+function failure(label: string, overrides: Partial<SpawnResult>, expectedDetail: string) {
+  return { label, npmResult: createCommandResult({ code: 1, ...overrides }), expectedDetail };
+}
 
-type NpmPackMetadata = {
-  id: string;
-  name: string;
-  version: string;
-  filename: string;
-  integrity: string;
-  shasum: string;
-};
+export const npmCommandFailureCases = [
+  failure(
+    "stderr before stdout",
+    { stderr: " registry unavailable ", stdout: "ignored" },
+    "registry unavailable",
+  ),
+  failure(
+    "stdout when stderr is blank",
+    { stderr: " ", stdout: " registry unavailable " },
+    "registry unavailable",
+  ),
+  failure("exit code without output", {}, "exit code 1 (no output from npm)"),
+  failure(
+    "signal without output",
+    { code: null, signal: "SIGKILL", killed: true, termination: "signal" },
+    "signal SIGKILL (no output from npm)",
+  ),
+  failure(
+    "abort before spawn",
+    { code: null, termination: "signal" },
+    "termination signal (no output from npm)",
+  ),
+  failure(
+    "cancellation followed by a nonzero exit",
+    { termination: "signal", killed: true },
+    "termination signal (no output from npm)",
+  ),
+  ...(["timeout", "no-output-timeout"] as const).map((termination) =>
+    failure(
+      `${termination} with normalized exit code`,
+      { code: 124, signal: "SIGTERM", killed: true, termination },
+      `termination ${termination} (no output from npm)`,
+    ),
+  ),
+];
 
 type NpmViewMetadata = {
   name: string;
@@ -25,77 +51,51 @@ type NpmViewMetadata = {
   integrity?: string;
   shasum?: string;
 };
+type NpmPackMetadata = Required<NpmViewMetadata> & { id: string; filename: string };
 
-// Keep spawn doubles shaped like the real process helper so install tests stay narrow.
-function createSuccessfulSpawnResult(stdout = ""): SpawnResult {
+type CommandMock = {
+  mockImplementation: (
+    implementation: (
+      argv: string[],
+      optionsOrTimeout: number | CommandOptions,
+    ) => Promise<SpawnResult>,
+  ) => unknown;
+};
+
+// Keep command doubles shaped like the real process helper across install and update tests.
+export function createCommandResult(overrides: Partial<SpawnResult> = {}): SpawnResult {
   return {
-    code: 0,
-    stdout,
+    stdout: "",
     stderr: "",
+    code: 0,
     signal: null,
     killed: false,
     termination: "exit",
+    ...overrides,
   };
 }
 
-/** Mocks npm view JSON metadata for package install validation tests. */
-export function mockNpmViewMetadataResult(
-  run: {
-    mockImplementation: (
-      implementation: (
-        argv: string[],
-        optionsOrTimeout: number | CommandOptions,
-      ) => Promise<SpawnResult>,
-    ) => unknown;
-  },
-  metadata: NpmViewMetadata,
+function mockNpmMetadata(
+  run: CommandMock,
+  command: "view" | "pack",
+  metadata: (options: number | CommandOptions) => unknown,
 ) {
-  run.mockImplementation(async (argv) => {
-    if (argv[0] !== "npm" || argv[1] !== "view") {
+  run.mockImplementation(async (argv, options) => {
+    if (npmCommandArgs(argv)?.[0] !== command) {
       throw new Error(`unexpected command: ${argv.join(" ")}`);
     }
-
-    return createSuccessfulSpawnResult(
-      JSON.stringify({
-        name: metadata.name,
-        version: metadata.version,
-        dist: {
-          integrity: metadata.integrity,
-          shasum: metadata.shasum,
-        },
-      }),
-    );
+    return createCommandResult({ stdout: JSON.stringify(metadata(options)) });
+  });
+}
+export function mockNpmViewMetadataResult(run: CommandMock, metadata: NpmViewMetadata) {
+  mockNpmMetadata(run, "view", () => {
+    const { name, version, integrity, shasum } = metadata;
+    return { name, version, dist: { integrity, shasum } };
   });
 }
 
-export async function expectUnsupportedNpmSpec(
-  install: (spec: string) => Promise<InstallResultLike>,
-  spec = "github:evil/evil",
-) {
-  const result = await install(spec);
-  expect(result.ok).toBe(false);
-  if (result.ok) {
-    return;
-  }
-  expect(result.error).toContain("unsupported npm spec");
-}
-
-export function mockNpmPackMetadataResult(
-  run: {
-    mockImplementation: (
-      implementation: (
-        argv: string[],
-        optionsOrTimeout: number | CommandOptions,
-      ) => Promise<SpawnResult>,
-    ) => unknown;
-  },
-  metadata: NpmPackMetadata,
-) {
-  run.mockImplementation(async (argv, optionsOrTimeout) => {
-    if (argv[0] !== "npm" || argv[1] !== "pack") {
-      throw new Error(`unexpected command: ${argv.join(" ")}`);
-    }
-
+export function mockNpmPackMetadataResult(run: CommandMock, metadata: NpmPackMetadata) {
+  mockNpmMetadata(run, "pack", (optionsOrTimeout) => {
     const cwd =
       typeof optionsOrTimeout === "object" && optionsOrTimeout !== null
         ? optionsOrTimeout.cwd
@@ -104,13 +104,13 @@ export function mockNpmPackMetadataResult(
       fs.writeFileSync(path.join(cwd, metadata.filename), "");
     }
 
-    return createSuccessfulSpawnResult(JSON.stringify([metadata]));
+    return [metadata];
   });
 }
 
 export function expectIntegrityDriftRejected(params: {
   onIntegrityDrift: (...args: unknown[]) => unknown;
-  result: InstallResultLike;
+  result: { ok: boolean; error?: string };
   expectedIntegrity: string;
   actualIntegrity: string;
 }) {
@@ -120,11 +120,10 @@ export function expectIntegrityDriftRejected(params: {
       actualIntegrity: params.actualIntegrity,
     }),
   );
-  expect(params.result.ok).toBe(false);
-  if (params.result.ok) {
-    return;
-  }
-  expect(params.result.error).toContain("integrity drift");
+  expect(params.result).toMatchObject({
+    ok: false,
+    error: expect.stringContaining("integrity drift"),
+  });
 }
 
 export async function expectInstallUsesIgnoreScripts(params: {
@@ -132,18 +131,9 @@ export async function expectInstallUsesIgnoreScripts(params: {
     mockResolvedValue: (value: SpawnResult) => unknown;
     mock: { calls: unknown[][] };
   };
-  install: () => Promise<
-    | {
-        ok: true;
-        targetDir: string;
-      }
-    | {
-        ok: false;
-        error?: string;
-      }
-  >;
+  install: () => Promise<{ ok: true; targetDir: string } | { ok: false; error?: string }>;
 }) {
-  params.run.mockResolvedValue(createSuccessfulSpawnResult());
+  params.run.mockResolvedValue(createCommandResult());
   const result = await params.install();
   expect(result.ok).toBe(true);
   if (!result.ok) {

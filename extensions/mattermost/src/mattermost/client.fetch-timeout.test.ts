@@ -1,11 +1,18 @@
 // Mattermost tests cover real REST client timeout behavior.
+import { createRequire } from "node:module";
+import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
 import { withServer } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createMattermostClient,
   createMattermostDirectChannelWithRetry,
   fetchMattermostMe,
 } from "./client.js";
+
+// Undici's testing-only reset releases timers that retain Vitest's retired clock.
+const undiciTimers: { reset: () => void } = createRequire(import.meta.url)(
+  "undici/lib/util/timers.js",
+);
 
 type OperationOutcome =
   | { status: "resolved" }
@@ -14,27 +21,27 @@ type OperationOutcome =
       status: "pending";
     };
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
 async function settleWithin(
   promise: Promise<unknown>,
   timeoutMs: number,
 ): Promise<OperationOutcome> {
-  return await Promise.race([
-    promise.then(
-      () => ({ status: "resolved" as const }),
-      (error: unknown) => ({ status: "rejected" as const, error }),
-    ),
-    delay(timeoutMs).then(() => ({ status: "pending" as const })),
-  ]);
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise.then(
+        () => ({ status: "resolved" as const }),
+        (error: unknown) => ({ status: "rejected" as const, error }),
+      ),
+      new Promise<OperationOutcome>((resolve) => {
+        timeout = setTimeout(() => resolve({ status: "pending" }), timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
-async function expectTimeoutRejection(promise: Promise<unknown>, timeoutMs: number): Promise<void> {
-  const outcome = await settleWithin(promise, timeoutMs);
+function expectTimeoutOutcome(outcome: OperationOutcome): void {
   expect(outcome.status).toBe("rejected");
   if (outcome.status !== "rejected") {
     throw new Error(`expected timeout rejection, got ${outcome.status}`);
@@ -63,7 +70,17 @@ async function withHangingMattermostServer(
       notifyRequest();
       request.resume();
     },
-    async (baseUrl) => run({ baseUrl, received, requestCount: () => requestCount }),
+    async (baseUrl) => {
+      // Keep real socket I/O, but advance deadlines only after the request arrives.
+      // A loaded worker can otherwise exhaust the 50ms deadline before connecting.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      try {
+        await run({ baseUrl, received, requestCount: () => requestCount });
+      } finally {
+        undiciTimers.reset();
+        vi.useRealTimers();
+      }
+    },
   );
 }
 
@@ -77,10 +94,12 @@ describe("Mattermost REST client fetch timeout", () => {
         timeoutMs: 50,
       });
       const request = fetchMattermostMe(client);
+      const outcome = settleWithin(request, 750);
 
-      await server.received;
+      await Promise.race([server.received, request]);
       expect(server.requestCount()).toBe(1);
-      await expectTimeoutRejection(request, 750);
+      await vi.advanceTimersByTimeAsync(750);
+      expectTimeoutOutcome(await outcome);
     });
   });
 
@@ -94,14 +113,16 @@ describe("Mattermost REST client fetch timeout", () => {
       });
       const controller = new AbortController();
       const request = client.request("/users/me", { signal: controller.signal });
+      const outcome = settleWithin(request, 750);
 
-      await server.received;
+      await Promise.race([server.received, request]);
       controller.abort();
-      await expectTimeoutRejection(request, 750);
+      await vi.advanceTimersByTimeAsync(750);
+      expectTimeoutOutcome(await outcome);
     });
   });
 
-  it("preserves caller cancellation through a custom fetch response body", async () => {
+  it("preserves caller cancellation through a guarded response body", async () => {
     let notifyFetchResolved: () => void = () => {};
     const fetchResolved = new Promise<void>((resolve) => {
       notifyFetchResolved = resolve;
@@ -112,31 +133,38 @@ describe("Mattermost REST client fetch timeout", () => {
         response.write('{"id":"partial');
       },
       async (baseUrl) => {
-        const fetchImpl: typeof fetch = async (input, init) => {
-          const response = await fetch(input, init);
-          notifyFetchResolved();
-          return response;
-        };
+        const guardedFetch = ssrfRuntime.fetchWithSsrFGuard;
+        const guard = vi
+          .spyOn(ssrfRuntime, "fetchWithSsrFGuard")
+          .mockImplementation(async (params) => {
+            const result = await guardedFetch(params);
+            notifyFetchResolved();
+            return result;
+          });
         const client = createMattermostClient({
           baseUrl,
           botToken: "bot-token",
-          fetchImpl,
+          allowPrivateNetwork: true,
           timeoutMs: 30_000,
         });
         const controller = new AbortController();
         const reason = new Error("caller stopped after headers");
         const request = client.request("/users/me", { signal: controller.signal });
 
-        await fetchResolved;
-        // Let the client's post-fetch cleanup run before cancellation so this
-        // specifically covers the response-body phase.
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-        controller.abort(reason);
+        try {
+          await fetchResolved;
+          // Let the client's post-fetch cleanup run before cancellation so this
+          // specifically covers the response-body phase.
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
+          controller.abort(reason);
 
-        const outcome = await settleWithin(request, 750);
-        expect(outcome).toEqual({ status: "rejected", error: reason });
+          const outcome = await settleWithin(request, 750);
+          expect(outcome).toEqual({ status: "rejected", error: reason });
+        } finally {
+          guard.mockRestore();
+        }
       },
     );
   });
@@ -153,11 +181,14 @@ describe("Mattermost REST client fetch timeout", () => {
         maxRetries: 0,
         timeoutMs: 250,
       });
-      request.catch(() => undefined);
+      const earlyOutcome = settleWithin(request, 120);
 
-      await server.received;
-      expect(await settleWithin(request, 120)).toEqual({ status: "pending" });
-      await expectTimeoutRejection(request, 600);
+      await Promise.race([server.received, request]);
+      await vi.advanceTimersByTimeAsync(120);
+      expect(await earlyOutcome).toEqual({ status: "pending" });
+      const outcome = settleWithin(request, 600);
+      await vi.advanceTimersByTimeAsync(600);
+      expectTimeoutOutcome(await outcome);
     });
   });
 });

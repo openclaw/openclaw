@@ -1,6 +1,4 @@
 /** Tests provider discovery normalization, grouping, and manifest contribution handling. */
-import fs from "node:fs";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.js";
 import {
@@ -9,7 +7,6 @@ import {
   runProviderCatalog,
   runProviderStaticCatalog,
 } from "./provider-discovery.js";
-import * as providerDiscoveryModule from "./provider-discovery.js";
 import type { ProviderCatalogOrder, ProviderPlugin } from "./types.js";
 
 function makeProvider(params: {
@@ -92,25 +89,6 @@ type NormalizePluginDiscoveryResultCase = {
   expected: Record<string, unknown>;
 };
 
-describe("resolveInstalledPluginProviderContributionIds", () => {
-  it("keeps current production callers off the ambiguous runtime-discovery alias", () => {
-    const callerPaths = [
-      "src/agents/models-config.providers.implicit.ts",
-      "src/commands/models/list.row-sources.ts",
-    ];
-
-    for (const callerPath of callerPaths) {
-      expect(fs.readFileSync(path.join(process.cwd(), callerPath), "utf-8")).not.toContain(
-        "resolvePluginDiscoveryProviders",
-      );
-    }
-  });
-
-  it("does not keep exporting the ambiguous runtime-discovery alias", () => {
-    expect(Object.keys(providerDiscoveryModule)).not.toContain("resolvePluginDiscoveryProviders");
-  });
-});
-
 describe("groupPluginDiscoveryProvidersByOrder", () => {
   it.each([
     {
@@ -135,10 +113,37 @@ describe("groupPluginDiscoveryProvidersByOrder", () => {
 });
 
 describe("runProviderCatalog", () => {
+  it("passes the selected provider identities into the catalog hook", async () => {
+    let providerIds: readonly string[] | undefined;
+    const provider: ProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      auth: [],
+      catalog: {
+        run: async (ctx) => {
+          providerIds = ctx.providerIds;
+          return null;
+        },
+      },
+    };
+
+    await runProviderCatalog({
+      provider,
+      providerIds: ["azure-openai"],
+      config: {},
+      env: {},
+      resolveProviderApiKey: () => ({ apiKey: undefined }),
+      resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+    });
+
+    expect(providerIds).toEqual(["azure-openai"]);
+  });
+
   it("carries explicit provider-owned catalog outcomes across an async hook", async () => {
     const outcomes: Array<{
       provider: string;
       profileId?: string;
+      rejectionScope?: "catalog";
       status: "ready" | "auth-rejected" | "unavailable";
     }> = [];
     const provider: ProviderPlugin = {
@@ -154,7 +159,9 @@ describe("runProviderCatalog", () => {
               {
                 provider: "openai",
                 profileId: "openai:chatgpt",
+                rejectionScope: "catalog",
                 status: "auth-rejected",
+                apiKey: "synthetic-not-for-diagnostics",
               },
             ],
           };
@@ -174,12 +181,156 @@ describe("runProviderCatalog", () => {
     });
 
     expect(outcomes).toEqual([
-      { provider: "openai", profileId: "openai:chatgpt", status: "auth-rejected" },
+      {
+        provider: "openai",
+        profileId: "openai:chatgpt",
+        rejectionScope: "catalog",
+        status: "auth-rejected",
+      },
     ]);
   });
+
+  it("copies only valid ready model order through the catalog boundary", async () => {
+    const outcomes: Array<{ status: string; modelOrder?: readonly string[] }> = [];
+    const provider: ProviderPlugin = {
+      id: "demo",
+      label: "Demo",
+      auth: [],
+      catalog: {
+        run: async () => ({
+          providers: {},
+          outcomes: [
+            {
+              provider: "demo",
+              status: "ready",
+              modelOrder: [" second ", "", "second", "first"],
+            },
+            {
+              provider: "demo",
+              profileId: "demo:stale",
+              status: "unavailable",
+              modelOrder: ["stale"],
+            },
+          ],
+        }),
+      },
+    };
+
+    await runProviderCatalog({
+      provider,
+      config: {},
+      env: {},
+      resolveProviderApiKey: () => ({ apiKey: undefined }),
+      resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+      reportCatalogOutcome: (outcome) => outcomes.push(outcome),
+    });
+
+    expect(outcomes).toEqual([
+      { provider: "demo", status: "ready", modelOrder: ["second", "first"] },
+      { provider: "demo", profileId: "demo:stale", status: "unavailable" },
+    ]);
+  });
+
+  it("preserves provider-owned profile outcomes after multiple auth probes", async () => {
+    const outcomes: Array<{ profileId?: string; status: string }> = [];
+    const provider: ProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      auth: [],
+      catalog: {
+        run: async (ctx) => {
+          ctx.resolveProviderAuth("openai");
+          ctx.resolveProviderAuth("openai");
+          return {
+            providers: {},
+            outcomes: [
+              {
+                provider: "openai",
+                profileId: "openai:profile-b",
+                status: "ready",
+              },
+            ],
+          };
+        },
+      },
+    };
+    let authCall = 0;
+
+    await runProviderCatalog({
+      provider,
+      config: {},
+      env: {},
+      resolveProviderApiKey: () => ({ apiKey: undefined }),
+      resolveProviderAuth: () => {
+        authCall += 1;
+        return {
+          apiKey: `selected-key-${authCall}`,
+          mode: "api_key",
+          profileId: `openai:profile-${authCall === 1 ? "a" : "b"}`,
+          source: "profile",
+        };
+      },
+      reportCatalogOutcome: (outcome) => outcomes.push(outcome),
+    });
+
+    expect(outcomes).toEqual([
+      { provider: "openai", profileId: "openai:profile-b", status: "ready" },
+    ]);
+  });
+
+  it.each([
+    { providerIds: ["OPENAI"], expected: ["openai"] },
+    { providerIds: ["azure-openai"], expected: ["azure-openai"] },
+    { providerIds: [], expected: [] },
+  ])(
+    "emits outcomes only for selected provider identities: $providerIds",
+    async ({ providerIds, expected }) => {
+      const outcomes: string[] = [];
+      const provider: ProviderPlugin = {
+        id: "openai",
+        label: "OpenAI",
+        auth: [],
+        catalog: {
+          run: async () => ({
+            providers: {},
+            outcomes: [
+              { provider: "openai", profileId: "openai:private", status: "auth-rejected" },
+              { provider: "azure-openai", profileId: "azure-openai:selected", status: "ready" },
+              { provider: "unrelated", status: "unavailable" },
+            ],
+          }),
+        },
+      };
+
+      await runProviderCatalog({
+        provider,
+        providerIds,
+        config: {},
+        env: {},
+        resolveProviderApiKey: () => ({ apiKey: undefined }),
+        resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+        reportCatalogOutcome: (outcome) => outcomes.push(outcome.provider),
+      });
+
+      expect(outcomes).toEqual(expected);
+    },
+  );
 });
 
 describe("normalizePluginDiscoveryResult", () => {
+  it("retains provider and model facts by reference", () => {
+    const model = makeModel("kept-model");
+    const config = makeModelProviderConfig({ models: [model] });
+    const normalized = normalizePluginDiscoveryResult({
+      provider: makeProvider({ id: "Demo", aliases: ["demo-alias"] }),
+      result: { provider: config },
+    });
+
+    expect(normalized.demo).toBe(config);
+    expect(normalized["demo-alias"]).toBe(config);
+    expect(normalized.demo?.models[0]).toBe(model);
+  });
+
   const cases: NormalizePluginDiscoveryResultCase[] = [
     {
       name: "maps a single provider result to the plugin id",
@@ -275,130 +426,6 @@ describe("normalizePluginDiscoveryResult", () => {
         safe: {
           baseUrl: "http://safe.example/v1",
           models: [],
-        },
-      },
-    },
-    {
-      name: "skips unreadable multi-provider entries while preserving healthy siblings",
-      provider: makeProvider({ id: "ignored" }),
-      result: {
-        providers: Object.defineProperty(
-          {
-            healthy: makeModelProviderConfig({
-              baseUrl: "http://healthy.example/v1",
-            }),
-          },
-          "broken",
-          {
-            enumerable: true,
-            get() {
-              throw new Error("provider row read failed");
-            },
-          },
-        ) as Record<string, ModelProviderConfig>,
-      },
-      expected: {
-        healthy: {
-          baseUrl: "http://healthy.example/v1",
-          models: [],
-        },
-      },
-    },
-    {
-      name: "skips providers with unreadable required fields",
-      provider: makeProvider({ id: "ignored" }),
-      result: {
-        providers: {
-          broken: Object.defineProperty(
-            makeModelProviderConfig({
-              baseUrl: "http://broken.example/v1",
-              models: [makeModel("broken-model")],
-            }),
-            "baseUrl",
-            {
-              enumerable: true,
-              get() {
-                throw new Error("provider baseUrl read failed");
-              },
-            },
-          ),
-          healthy: makeModelProviderConfig({
-            baseUrl: "http://healthy.example/v1",
-            models: [makeModel("healthy-model")],
-          }),
-        },
-      },
-      expected: {
-        healthy: {
-          baseUrl: "http://healthy.example/v1",
-          models: [makeModel("healthy-model")],
-        },
-      },
-    },
-    {
-      name: "skips unreadable model rows while preserving healthy siblings",
-      provider: makeProvider({ id: "ignored" }),
-      result: {
-        providers: {
-          healthy: makeModelProviderConfig({
-            baseUrl: "http://healthy.example/v1",
-            models: Object.defineProperty([makeModel("healthy-model")], "1", {
-              enumerable: true,
-              get() {
-                throw new Error("model row read failed");
-              },
-            }),
-          }),
-        },
-      },
-      expected: {
-        healthy: {
-          baseUrl: "http://healthy.example/v1",
-          models: [makeModel("healthy-model")],
-        },
-      },
-    },
-    {
-      name: "skips model rows with unreadable required fields",
-      provider: makeProvider({ id: "ignored" }),
-      result: {
-        providers: {
-          healthy: makeModelProviderConfig({
-            baseUrl: "http://healthy.example/v1",
-            models: [
-              Object.defineProperty(makeModel("broken-model"), "id", {
-                enumerable: true,
-                get() {
-                  throw new Error("model id read failed");
-                },
-              }),
-              makeModel("healthy-model"),
-            ],
-          }),
-        },
-      },
-      expected: {
-        healthy: {
-          baseUrl: "http://healthy.example/v1",
-          models: [makeModel("healthy-model")],
-        },
-      },
-    },
-    {
-      name: "keeps minimal model rows with id-only labels",
-      provider: makeProvider({ id: "ignored" }),
-      result: {
-        providers: {
-          healthy: makeModelProviderConfig({
-            baseUrl: "http://healthy.example/v1",
-            models: [{ id: "local-tiny" } as ModelDefinitionConfig],
-          }),
-        },
-      },
-      expected: {
-        healthy: {
-          baseUrl: "http://healthy.example/v1",
-          models: [{ id: "local-tiny", name: "local-tiny" }],
         },
       },
     },

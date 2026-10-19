@@ -16,12 +16,14 @@ vi.mock("./monitor-runtime.js", () => ({
   monitorNextcloudTalkProvider: hoisted.monitorNextcloudTalkProvider,
 }));
 
-const { nextcloudTalkGatewayAdapter } = await import("./gateway.js");
+const { nextcloudTalkPlugin } = await import("./channel.js");
 
-type NextcloudTalkStartAccount = NonNullable<typeof nextcloudTalkGatewayAdapter.startAccount>;
+type NextcloudTalkStartAccount = NonNullable<
+  NonNullable<typeof nextcloudTalkPlugin.gateway>["startAccount"]
+>;
 
 function requireStartAccount(): NextcloudTalkStartAccount {
-  const startAccount = nextcloudTalkGatewayAdapter.startAccount;
+  const startAccount = nextcloudTalkPlugin.gateway?.startAccount;
   if (!startAccount) {
     throw new Error("Expected Nextcloud Talk gateway startAccount");
   }
@@ -39,7 +41,6 @@ function buildAccount(): ResolvedNextcloudTalkAccount {
       baseUrl: "https://nextcloud.example.com",
       botSecret: "secret", // pragma: allowlist secret
       webhookPath: "/nextcloud-talk-webhook",
-      webhookPort: 8788,
     },
   };
 }
@@ -88,5 +89,17 @@ describe("nextcloud-talk startAccount lifecycle", () => {
 
     expect(hoisted.monitorNextcloudTalkProvider).toHaveBeenCalledOnce();
     expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it("does not start the gateway monitor for an unavailable account credential", async () => {
+    const account: ResolvedNextcloudTalkAccount = {
+      ...buildAccount(),
+      secret: "",
+      tokenStatus: "configured_unavailable",
+    };
+    await expect(requireStartAccount()(createStartAccountContext({ account }))).rejects.toThrow(
+      /secret|unavailable/i,
+    );
+    expect(hoisted.monitorNextcloudTalkProvider).not.toHaveBeenCalled();
   });
 });

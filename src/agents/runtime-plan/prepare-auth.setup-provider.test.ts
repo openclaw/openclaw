@@ -9,15 +9,6 @@ import {
   resolvePreparedRuntimeModelAuth,
 } from "./resolve-auth.js";
 
-const authLookupMocks = vi.hoisted(() => ({
-  resolveProviderEnvAuthLookupMaps: vi.fn(() => ({
-    aliasMap: {},
-    envCandidateMap: {},
-    authEvidenceMap: {},
-    setupProviderFallbackRefs: ["anthropic-vertex"],
-  })),
-}));
-
 const setupRegistryMocks = vi.hoisted(() => ({
   resolvePluginSetupProviderCore: vi.fn(() => ({
     resolveConfigApiKey: () => "gcp-vertex-credentials",
@@ -26,7 +17,12 @@ const setupRegistryMocks = vi.hoisted(() => ({
 
 vi.mock("../model-auth-env-vars.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../model-auth-env-vars.js")>()),
-  resolveProviderEnvAuthLookupMaps: authLookupMocks.resolveProviderEnvAuthLookupMaps,
+  resolveProviderEnvAuthLookupMaps: () => ({
+    aliasMap: {},
+    envCandidateMap: {},
+    authEvidenceMap: {},
+    setupProviderFallbackRefs: ["anthropic-vertex"],
+  }),
 }));
 
 vi.mock("../../plugins/setup-registry.js", async (importOriginal) => ({

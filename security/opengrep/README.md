@@ -16,8 +16,9 @@ check and as a manual full-repository audit.
 
 `precise.yml` is the checked-in compiled rulepack. Prefer changing source rule
 YAML and rerunning `security/opengrep/compile-rules.mjs` instead of hand-editing
-compiled rules. The compiler appends new rule IDs by default; use
-`--replace-precise` only when intentionally rebuilding the rulepack from a
+compiled rules. The compiler appends new rule IDs by default. Use `--update-existing` to repair
+selected existing rules without changing unrelated rules or their formatting.
+Use `--replace-precise` only when intentionally rebuilding the rulepack from a
 complete source folder. Direct edits are discouraged because they can bypass ID,
 metadata, duplicate, and OpenGrep validation.
 
@@ -56,6 +57,37 @@ The script:
 8. Writes `precise.yml`
 
 Skipped, duplicate, or invalid rules are summarized on stdout/stderr for follow-up.
+
+For a scoped correction, pass the source folder for that rule:
+
+```bash
+node security/opengrep/compile-rules.mjs \
+  --rules-dir security/opengrep/rules/ghsa-82g8-464f-2mv7 \
+  --update-existing
+```
+
+This mode requires nonempty valid input and unique existing and generated IDs.
+Unknown IDs, duplicate IDs, YAML errors, or failed OpenGrep validation stop the
+operation without changing `precise.yml`. It validates the whole candidate pack
+and replaces only the selected YAML nodes, preserving unrelated bytes. Unlike
+append/rebuild mode, it never drops invalid rules. It cannot be combined with
+`--replace-precise`.
+
+Run the non-executing TypeScript and JavaScript scanner fixtures with:
+
+```bash
+opengrep test --config security/opengrep/rules/ghsa-82g8-464f-2mv7 \
+  security/opengrep/rules/ghsa-82g8-464f-2mv7
+```
+
+The skill-environment rule follows skill configuration, resolved entries, and
+metadata-derived keys into host environment writes. Only the consumed `allowed`
+output of `sanitizeSkillEnvOverrides` clears that flow; an unrelated or ignored
+sanitizer call and the generic sandbox sanitizer do not. Trusted service
+configuration and saved host environment restoration are not skill inputs.
+The rule uses local dataflow, including explicit tuple-loop/map propagation; it
+is not an interprocedural proof of every possible wrapper or mutation. Keep new
+source, mutation, and sanitizer shapes covered by scanner fixtures.
 
 ## Validating locally
 

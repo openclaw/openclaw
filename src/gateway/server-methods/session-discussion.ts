@@ -7,15 +7,23 @@ import {
   validateSessionDiscussionOpenParams,
   validateSessionDiscussionOpenResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { raceWithTimeout } from "../../../packages/retry/src/index.js";
 import { getSessionDiscussionProvider } from "../../plugins/session-discussion-registry.js";
-import { hasExplicitSessionName, maybeGenerateSessionTitle } from "../dashboard-session-title.js";
+import { maybeGenerateSessionTitle } from "../dashboard-session-title.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
+import { hasExplicitSessionName } from "../session-title-state.js";
+import { withGatewaySessionStoreTarget } from "../session-utils-store-lookup.js";
+import { resolveCanonicalSessionEntryFromStoreKeys } from "../session-utils-store.js";
 import { formatForLog } from "../ws-log.js";
-import { emitSessionsChanged } from "./session-change-event.js";
-import { loadAccessorSessionEntryForGatewayTarget } from "./sessions-shared.js";
-import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import { emitSessionTitleChanged } from "./session-change-event.js";
+import { measureSessionCollaborationPhase } from "./sessions-collaboration-diagnostics.js";
+import type {
+  GatewayRequestContext,
+  GatewayRequestHandler,
+  GatewayRequestHandlers,
+} from "./types.js";
+import { defineValidatedGatewayHandler } from "./validation.js";
 
 const DISCUSSION_TITLE_TIMEOUT_MS = 10_000;
 
@@ -24,23 +32,28 @@ async function maybeGenerateTitleBeforeDiscussionOpen(params: {
   sessionKey: string;
   agentId?: string;
 }): Promise<void> {
+  const warn = (error: unknown) =>
+    params.context.logGateway.warn(
+      `dashboard session title generation failed: ${formatForLog(error)}`,
+    );
   try {
     const cfg = params.context.getRuntimeConfig();
-    const resolved = loadAccessorSessionEntryForGatewayTarget({
-      cfg,
-      key: params.sessionKey,
-      agentId: params.agentId,
-    });
+    const resolved = await withGatewaySessionStoreTarget(
+      { cfg, key: params.sessionKey, agentId: params.agentId },
+      (target) => ({
+        target,
+        entry: resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys),
+        canonicalKey: target.canonicalKey,
+        storePath: target.storePath,
+      }),
+    );
     const { entry } = resolved;
     const sessionId = entry?.sessionId;
     if (!entry || !sessionId || hasExplicitSessionName(entry)) {
       return;
     }
 
-    // Owning attempts and joins of an in-flight dashboard request both settle
-    // through this promise; joins report false so only the owner claims the
-    // persistence (and the emit below stays single-shot per title).
-    const titleRequest = maybeGenerateSessionTitle({
+    const observedTitleRequest = maybeGenerateSessionTitle({
       cfg,
       agentId: resolved.target.agentId,
       entry,
@@ -50,174 +63,98 @@ async function maybeGenerateTitleBeforeDiscussionOpen(params: {
       sessionKey: resolved.canonicalKey,
       storePath: resolved.storePath,
       userMessage: "",
-    }).then(async (attempt) => {
-      if (attempt.kind === "in-flight") {
-        await attempt.settled.catch(() => {});
-        return false;
-      }
-      return attempt.kind === "persisted";
-    });
-    const observedTitleRequest = titleRequest.catch((error: unknown) => {
-      params.context.logGateway.warn(
-        `dashboard session title generation failed: ${formatForLog(error)}`,
-      );
+      onTitleStateChanged: () =>
+        emitSessionTitleChanged(params.context, {
+          sessionKey: resolved.canonicalKey,
+          sessionId,
+          agentId: resolved.target.agentId,
+        }),
+    }).catch((error: unknown) => {
+      warn(error);
       return false;
     });
-    let timeout: NodeJS.Timeout | undefined;
-    let persisted = false;
-    // Discussion open waits at most 10 seconds for best-effort titling.
-    // If generation fails or finishes later, open proceeds; a later plugin reconcile
-    // picks up any title that completes after the timeout.
-    try {
-      persisted = await Promise.race([
-        observedTitleRequest,
-        new Promise<boolean>((resolve) => {
-          timeout = setTimeout(() => resolve(false), DISCUSSION_TITLE_TIMEOUT_MS);
-          timeout.unref?.();
-        }),
-      ]);
-    } finally {
-      if (timeout) {
-        clearTimeout(timeout);
-      }
-    }
-    if (persisted) {
-      // Mirror the dashboard first-turn path so session lists learn the new
-      // title immediately instead of on their next full refresh.
-      emitSessionsChanged(params.context, {
-        sessionKey: resolved.canonicalKey,
-        agentId: resolved.target.agentId,
-        reason: "chat.title",
-      });
-    }
+    // Late titles remain owned by generation; discussion open bounds only its wait.
+    await raceWithTimeout(observedTitleRequest, DISCUSSION_TITLE_TIMEOUT_MS, () => false, {
+      ref: false,
+    });
   } catch (error) {
     // Titling is best-effort; provider open remains the authoritative operation.
-    params.context.logGateway.warn(
-      `dashboard session title generation failed: ${formatForLog(error)}`,
-    );
+    warn(error);
   }
 }
 
+function sessionDiscussionHandler(operation: "info" | "open"): GatewayRequestHandler {
+  const method = operation === "info" ? "session.discussion.info" : "session.discussion.open";
+  const validateParams =
+    operation === "info"
+      ? validateSessionDiscussionInfoParams
+      : validateSessionDiscussionOpenParams;
+  const validateResult =
+    operation === "info"
+      ? validateSessionDiscussionInfoResult
+      : validateSessionDiscussionOpenResult;
+  return defineValidatedGatewayHandler(
+    method,
+    validateParams,
+    async ({ params, respond, context }) => {
+      const requestedAgent = resolveRequestedSessionAgentId(
+        context.getRuntimeConfig(),
+        params.sessionKey,
+        params.agentId,
+      );
+      if (!requestedAgent.ok) {
+        respond(false, undefined, requestedAgent.error);
+        return;
+      }
+      const provider = getSessionDiscussionProvider();
+      if (!provider) {
+        respond(true, { state: "none" }, undefined);
+        return;
+      }
+      try {
+        if (operation === "open") {
+          await maybeGenerateTitleBeforeDiscussionOpen({
+            context,
+            sessionKey: params.sessionKey,
+            agentId: requestedAgent.agentId,
+          });
+        }
+        const sessionKey = resolveStoredSessionKeyForAgentStore({
+          cfg: context.getRuntimeConfig(),
+          agentId: requestedAgent.agentId,
+          sessionKey: params.sessionKey,
+        });
+        const result = await measureSessionCollaborationPhase(`${method}.provider`, () =>
+          provider[operation]({ sessionKey, agentId: requestedAgent.agentId }),
+        );
+        if (!validateResult(result)) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.UNAVAILABLE,
+              `invalid ${method} result: ${formatValidationErrors(validateResult.errors)}`,
+            ),
+          );
+          return;
+        }
+        respond(true, result, undefined);
+      } catch (error) {
+        // Only an absent provider means "none"; hiding a failed provider would suppress retries.
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.UNAVAILABLE,
+            error instanceof Error ? error.message : "session discussion provider failed",
+          ),
+        );
+      }
+    },
+  );
+}
+
 export const sessionDiscussionHandlers: GatewayRequestHandlers = {
-  "session.discussion.info": async ({ params, respond, context }) => {
-    if (
-      !assertValidParams(
-        params,
-        validateSessionDiscussionInfoParams,
-        "session.discussion.info",
-        respond,
-      )
-    ) {
-      return;
-    }
-    const requestedAgent = resolveRequestedSessionAgentId(
-      context.getRuntimeConfig(),
-      params.sessionKey,
-      params.agentId,
-    );
-    if (!requestedAgent.ok) {
-      respond(false, undefined, requestedAgent.error);
-      return;
-    }
-    const provider = getSessionDiscussionProvider();
-    if (!provider) {
-      respond(true, { state: "none" }, undefined);
-      return;
-    }
-    try {
-      const sessionKey = resolveStoredSessionKeyForAgentStore({
-        cfg: context.getRuntimeConfig(),
-        agentId: requestedAgent.agentId,
-        sessionKey: params.sessionKey,
-      });
-      const result = await provider.info({ sessionKey, agentId: requestedAgent.agentId });
-      if (!validateSessionDiscussionInfoResult(result)) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            `invalid session.discussion.info result: ${formatValidationErrors(validateSessionDiscussionInfoResult.errors)}`,
-          ),
-        );
-        return;
-      }
-      respond(true, result, undefined);
-    } catch (error) {
-      // A throwing provider is a transient failure, not "no discussion":
-      // returning none here would make the UI cache-hide the feature until
-      // reconnect. Only an absent provider means none.
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          error instanceof Error ? error.message : "session discussion provider failed",
-        ),
-      );
-    }
-  },
-  "session.discussion.open": async ({ params, respond, context }) => {
-    if (
-      !assertValidParams(
-        params,
-        validateSessionDiscussionOpenParams,
-        "session.discussion.open",
-        respond,
-      )
-    ) {
-      return;
-    }
-    const requestedAgent = resolveRequestedSessionAgentId(
-      context.getRuntimeConfig(),
-      params.sessionKey,
-      params.agentId,
-    );
-    if (!requestedAgent.ok) {
-      respond(false, undefined, requestedAgent.error);
-      return;
-    }
-    const provider = getSessionDiscussionProvider();
-    if (!provider) {
-      respond(true, { state: "none" }, undefined);
-      return;
-    }
-    try {
-      await maybeGenerateTitleBeforeDiscussionOpen({
-        context,
-        sessionKey: params.sessionKey,
-        agentId: requestedAgent.agentId,
-      });
-      const sessionKey = resolveStoredSessionKeyForAgentStore({
-        cfg: context.getRuntimeConfig(),
-        agentId: requestedAgent.agentId,
-        sessionKey: params.sessionKey,
-      });
-      const result = await provider.open({ sessionKey, agentId: requestedAgent.agentId });
-      if (!validateSessionDiscussionOpenResult(result)) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            `invalid session.discussion.open result: ${formatValidationErrors(validateSessionDiscussionOpenResult.errors)}`,
-          ),
-        );
-        return;
-      }
-      respond(true, result, undefined);
-    } catch (error) {
-      // A throwing provider is a transient failure, not "no discussion":
-      // returning none here would make the UI cache-hide the feature until
-      // reconnect. Only an absent provider means none.
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          error instanceof Error ? error.message : "session discussion provider failed",
-        ),
-      );
-    }
-  },
+  "session.discussion.info": sessionDiscussionHandler("info"),
+  "session.discussion.open": sessionDiscussionHandler("open"),
 };

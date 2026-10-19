@@ -1,3 +1,4 @@
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -11,32 +12,47 @@ import type {
   CliStreamingDelta,
   CliThinkingDelta,
   CliThinkingProgress,
+  CliToolInputDelta,
   CliToolResultDelta,
   CliToolUseStartDelta,
   CliUsage,
 } from "./cli-output-contracts.js";
-import { isGeminiStreamJsonDialect, supportsCliJsonlToolEvents } from "./cli-output-records.js";
+import {
+  isClaudeSubagentRecord,
+  isClaudeToolResultBlockType,
+  isClaudeToolUseBlockType,
+  isGeminiStreamJsonDialect,
+  supportsCliJsonlToolEvents,
+} from "./cli-output-records.js";
+import {
+  updateLiveEditDiffProgressFromInput,
+  type LiveEditDiffProgressState,
+} from "./embedded-agent-live-edit-diff.js";
 
 type PendingToolUse = {
   toolCallId: string;
   name: string;
   kind: CliToolUseStartDelta["kind"];
   inputJsonParts: string[];
+  inputJsonLength: number;
+  /**
+   * Complete input carried on `content_block_start`. Some CLI backends send the
+   * whole tool input there and never emit `input_json_delta` chunks, so without
+   * this the start event reports empty args and the later complete copy is
+   * dropped by the `startedIds` dedup in `emitToolStartOnce`.
+   */
+  blockInput?: Record<string, unknown>;
 };
 
-type ToolUseTracker = {
-  pendingByIndex: Map<number, PendingToolUse>;
-  nameById: Map<string, string>;
-  startedIds: Set<string>;
-  resultDeliveredIds: Set<string>;
-};
+type ToolUseTracker = ReturnType<typeof createToolUseTracker>;
 
-export function createToolUseTracker(): ToolUseTracker {
+export function createToolUseTracker() {
   return {
-    pendingByIndex: new Map(),
-    nameById: new Map(),
-    startedIds: new Set(),
-    resultDeliveredIds: new Set(),
+    pendingByIndex: new Map<number, PendingToolUse>(),
+    inputProgressById: new Map<string, LiveEditDiffProgressState>(),
+    nameById: new Map<string, string>(),
+    startedIds: new Set<string>(),
+    resultDeliveredIds: new Set<string>(),
   };
 }
 
@@ -48,6 +64,7 @@ function emitToolStartOnce(
   args: Record<string, unknown>,
   onToolUseStart?: (delta: CliToolUseStartDelta) => void,
 ): void {
+  tracker.inputProgressById.delete(toolCallId);
   // Streaming and final assistant records may both describe the same tool call.
   if (tracker.startedIds.has(toolCallId)) {
     return;
@@ -105,12 +122,14 @@ export function projectCliBackendEvent(params: {
     return;
   }
   state.sawCustomJsonlEvent = true;
-  if (event.kind === "sessionId") {
-    const sessionId = event.sessionId.trim();
+  const observeSessionId = (sessionId: string | undefined) => {
     if (sessionId && sessionId !== state.sessionId) {
       state.sessionId = sessionId;
       params.onSessionId?.(sessionId);
     }
+  };
+  if (event.kind === "sessionId") {
+    observeSessionId(event.sessionId.trim());
     if (state.output) {
       state.output = { ...state.output, sessionId: state.sessionId };
     }
@@ -165,23 +184,18 @@ export function projectCliBackendEvent(params: {
     );
     return;
   }
-  const normalizedSessionId = event.sessionId?.trim();
-  if (normalizedSessionId && normalizedSessionId !== state.sessionId) {
-    state.sessionId = normalizedSessionId;
-    params.onSessionId?.(normalizedSessionId);
-  }
+  observeSessionId(event.sessionId?.trim());
   if (event.usage) {
     state.usage = event.usage;
     params.onUsage?.(event.usage, true);
   }
   const existingErrorText = state.output?.errorText;
-  const eventText = event.text?.trim() ?? "";
-  const existingText = state.output?.text.trim() ?? "";
-  const streamedText = state.assistantText.trim();
-  const delegatedText = params.texts.join("\n").trim();
-  const resultText = existingErrorText
-    ? existingText || delegatedText || streamedText
-    : eventText || existingText || delegatedText || streamedText;
+  // Stop at the authoritative winner before composing fallback transcripts.
+  const resultText =
+    (!existingErrorText && event.text?.trim()) ||
+    state.output?.text.trim() ||
+    params.texts.join("\n").trim() ||
+    state.assistantText.trim();
   const errorText = existingErrorText || event.errorText;
   state.output = {
     ...state.output,
@@ -217,27 +231,29 @@ export function projectCliTaggedReasoning(params: {
   return text;
 }
 
-export function isClaudeToolUseBlockType(type: unknown): type is CliToolUseStartDelta["kind"] {
-  return type === "tool_use" || type === "server_tool_use" || type === "mcp_tool_use";
-}
-
 function isClaudeAssistantToolResultBlockType(type: unknown): boolean {
-  return typeof type === "string" && type.endsWith("_tool_result") && type !== "tool_result";
+  return isClaudeToolResultBlockType(type) && type !== "tool_result";
 }
 
 function isClaudeToolResultError(content: unknown): boolean {
   return isRecord(content) && typeof content.type === "string" && content.type.endsWith("_error");
 }
 
-function parseToolInputJson(parts: string[]): Record<string, unknown> {
-  if (parts.length === 0) {
-    return {};
-  }
-  try {
-    const parsed: unknown = JSON.parse(parts.join(""));
-    return isRecord(parsed) ? parsed : {};
-  } catch {
-    return {};
+function emitClaudeToolResultBlock(
+  tracker: ToolUseTracker,
+  block: Record<string, unknown>,
+  onToolResult: ((delta: CliToolResultDelta) => void) | undefined,
+): void {
+  const toolCallId = typeof block.tool_use_id === "string" ? block.tool_use_id.trim() : "";
+  if (toolCallId) {
+    emitToolResultOnce(
+      tracker,
+      toolCallId,
+      block.is_error === true ||
+        (block.type !== "tool_result" && isClaudeToolResultError(block.content)),
+      block.content,
+      onToolResult,
+    );
   }
 }
 
@@ -247,9 +263,10 @@ export function dispatchClaudeCliStreamingToolEvent(params: {
   parsed: Record<string, unknown>;
   tracker: ToolUseTracker;
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
+  onToolInputDelta?: (delta: CliToolInputDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
 }): void {
-  if (!supportsCliJsonlToolEvents(params)) {
+  if (!supportsCliJsonlToolEvents(params) || isClaudeSubagentRecord(params.parsed)) {
     return;
   }
   const tracker = params.tracker;
@@ -262,6 +279,12 @@ export function dispatchClaudeCliStreamingToolEvent(params: {
       isRecord(event.content_block)
     ) {
       const block = event.content_block;
+      const previous = tracker.pendingByIndex.get(event.index);
+      tracker.pendingByIndex.delete(event.index);
+      const nextToolCallId = typeof block.id === "string" ? block.id.trim() : "";
+      if (previous && previous.toolCallId !== nextToolCallId) {
+        tracker.inputProgressById.delete(previous.toolCallId);
+      }
       if (isClaudeToolUseBlockType(block.type)) {
         const toolCallId = typeof block.id === "string" ? block.id.trim() : "";
         const name = typeof block.name === "string" ? block.name.trim() : "";
@@ -271,19 +294,12 @@ export function dispatchClaudeCliStreamingToolEvent(params: {
             name,
             kind: block.type,
             inputJsonParts: [],
+            inputJsonLength: 0,
+            ...(isRecord(block.input) ? { blockInput: block.input } : {}),
           });
         }
       } else if (isClaudeAssistantToolResultBlockType(block.type)) {
-        const toolCallId = typeof block.tool_use_id === "string" ? block.tool_use_id.trim() : "";
-        if (toolCallId) {
-          emitToolResultOnce(
-            tracker,
-            toolCallId,
-            block.is_error === true || isClaudeToolResultError(block.content),
-            block.content,
-            params.onToolResult,
-          );
-        }
+        emitClaudeToolResultBlock(tracker, block, params.onToolResult);
       }
       return;
     }
@@ -293,7 +309,22 @@ export function dispatchClaudeCliStreamingToolEvent(params: {
       isRecord(event.delta)
     ) {
       if (event.delta.type === "input_json_delta" && typeof event.delta.partial_json === "string") {
-        tracker.pendingByIndex.get(event.index)?.inputJsonParts.push(event.delta.partial_json);
+        const pending = tracker.pendingByIndex.get(event.index);
+        if (pending) {
+          pending.inputJsonParts.push(event.delta.partial_json);
+          pending.inputJsonLength += event.delta.partial_json.length;
+          if (params.onToolInputDelta && !tracker.startedIds.has(pending.toolCallId)) {
+            const progress = updateLiveEditDiffProgressFromInput(tracker.inputProgressById, {
+              toolCallId: pending.toolCallId,
+              name: pending.name,
+              partialJsonLength: pending.inputJsonLength,
+              readPartialJson: () => pending.inputJsonParts.join(""),
+            });
+            if (progress) {
+              params.onToolInputDelta(progress);
+            }
+          }
+        }
       }
       return;
     }
@@ -301,12 +332,19 @@ export function dispatchClaudeCliStreamingToolEvent(params: {
       const pending = tracker.pendingByIndex.get(event.index);
       tracker.pendingByIndex.delete(event.index);
       if (pending) {
+        // Delta presence, not key count, decides the winner: a no-argument call
+        // arrives as an explicit `{}` delta, so keying on key count would let the
+        // start snapshot overwrite it.
+        const args =
+          pending.inputJsonParts.length > 0
+            ? (safeParseJsonRecord(pending.inputJsonParts.join("")) ?? {})
+            : (pending.blockInput ?? {});
         emitToolStartOnce(
           tracker,
           pending.toolCallId,
           pending.name,
           pending.kind,
-          parseToolInputJson(pending.inputJsonParts),
+          args,
           params.onToolUseStart,
         );
       }
@@ -315,67 +353,38 @@ export function dispatchClaudeCliStreamingToolEvent(params: {
     return;
   }
 
-  if (params.parsed.type === "assistant" && isRecord(params.parsed.message)) {
+  const assistant = params.parsed.type === "assistant";
+  if ((assistant || params.parsed.type === "user") && isRecord(params.parsed.message)) {
     const message = params.parsed.message;
     const content = Array.isArray(message.content) ? message.content : [];
     for (const block of content) {
       if (!isRecord(block)) {
         continue;
       }
-      if (isClaudeToolUseBlockType(block.type)) {
+      if (assistant && isClaudeToolUseBlockType(block.type)) {
         const toolCallId = typeof block.id === "string" ? block.id.trim() : "";
         const name = typeof block.name === "string" ? block.name.trim() : "";
-        if (!toolCallId || !name) {
-          continue;
+        if (toolCallId && name) {
+          const args = isRecord(block.input) ? block.input : {};
+          emitToolStartOnce(tracker, toolCallId, name, block.type, args, params.onToolUseStart);
         }
-        const args: Record<string, unknown> = isRecord(block.input) ? block.input : {};
-        emitToolStartOnce(tracker, toolCallId, name, block.type, args, params.onToolUseStart);
-      } else if (isClaudeAssistantToolResultBlockType(block.type)) {
-        const toolCallId = typeof block.tool_use_id === "string" ? block.tool_use_id.trim() : "";
-        if (!toolCallId) {
-          continue;
-        }
-        emitToolResultOnce(
-          tracker,
-          toolCallId,
-          block.is_error === true || isClaudeToolResultError(block.content),
-          block.content,
-          params.onToolResult,
-        );
+      } else if (
+        assistant ? isClaudeAssistantToolResultBlockType(block.type) : block.type === "tool_result"
+      ) {
+        emitClaudeToolResultBlock(tracker, block, params.onToolResult);
       }
-    }
-    return;
-  }
-
-  if (params.parsed.type === "user" && isRecord(params.parsed.message)) {
-    const message = params.parsed.message;
-    const content = Array.isArray(message.content) ? message.content : [];
-    for (const block of content) {
-      if (!isRecord(block) || block.type !== "tool_result") {
-        continue;
-      }
-      const toolCallId = typeof block.tool_use_id === "string" ? block.tool_use_id.trim() : "";
-      if (!toolCallId) {
-        continue;
-      }
-      emitToolResultOnce(
-        tracker,
-        toolCallId,
-        block.is_error === true,
-        block.content,
-        params.onToolResult,
-      );
     }
   }
 }
 
-type ThinkingTracker = {
+export type ThinkingTracker = {
   currentMessageId?: string;
   // Thinking text already streamed via thinking_delta, keyed by the Anthropic
   // content-block index. Snapshot frames repeat streamed thinking, so each block
   // is deduped against its own index; a single global concatenation misfires
   // once a message carries more than one thinking block (re-emits or reorders).
   streamedByIndex: Map<number, string>;
+  highestStreamedIndex: number;
   // Full thinking already emitted for the message in block order. The callback
   // contract exposes this as the running snapshot text for downstream coalescing,
   // so it stays a message-level concatenation, not a per-index value.
@@ -385,17 +394,9 @@ type ThinkingTracker = {
   progressTokens: number;
 };
 
-export function createThinkingTracker(): ThinkingTracker {
-  return {
-    streamedByIndex: new Map(),
-    emittedText: "",
-    nextSyntheticBlockIndex: 0,
-    progressTokens: 0,
-  };
-}
-
 function resetThinkingBlockState(tracker: ThinkingTracker): void {
   tracker.streamedByIndex.clear();
+  tracker.highestStreamedIndex = Number.NEGATIVE_INFINITY;
   tracker.emittedText = "";
   tracker.currentSyntheticBlockIndex = undefined;
   tracker.nextSyntheticBlockIndex = 0;
@@ -420,21 +421,10 @@ function resetThinkingTrackerForMessage(
 }
 
 function beginClaudeContentBlock(tracker: ThinkingTracker, index: unknown): void {
-  if (typeof index === "number") {
-    tracker.currentSyntheticBlockIndex = index;
-    tracker.nextSyntheticBlockIndex = Math.max(tracker.nextSyntheticBlockIndex, index + 1);
-    return;
-  }
-  if (index !== undefined) {
-    tracker.currentSyntheticBlockIndex = undefined;
-    return;
-  }
-  tracker.currentSyntheticBlockIndex = tracker.nextSyntheticBlockIndex;
-  tracker.nextSyntheticBlockIndex += 1;
-}
-
-function stopClaudeContentBlock(tracker: ThinkingTracker): void {
-  tracker.currentSyntheticBlockIndex = undefined;
+  tracker.currentSyntheticBlockIndex =
+    index === undefined
+      ? tracker.nextSyntheticBlockIndex++
+      : (resolveClaudeContentBlockIndex(tracker, index) ?? undefined);
 }
 
 function resolveClaudeContentBlockIndex(tracker: ThinkingTracker, index: unknown): number | null {
@@ -462,8 +452,12 @@ function emitClaudeThinking(
   delta: string,
   onThinkingDelta: (delta: CliThinkingDelta) => void,
 ): void {
+  const appendToAggregate = index >= tracker.highestStreamedIndex;
   tracker.streamedByIndex.set(index, `${streamed}${delta}`);
-  tracker.emittedText = assembleThinkingTextByIndex(tracker.streamedByIndex);
+  tracker.highestStreamedIndex = Math.max(tracker.highestStreamedIndex, index);
+  tracker.emittedText = appendToAggregate
+    ? `${tracker.emittedText}${delta}`
+    : assembleThinkingTextByIndex(tracker.streamedByIndex);
   onThinkingDelta({ text: tracker.emittedText, delta, isReasoningSnapshot: true });
 }
 
@@ -474,15 +468,6 @@ function readThinkingProgressTokens(delta: Record<string, unknown>): number | un
   return asPositiveFiniteNumber(delta.estimated_tokens);
 }
 
-function emitClaudeThinkingProgress(
-  tracker: ThinkingTracker,
-  progressTokensDelta: number,
-  onThinkingProgress: (progress: CliThinkingProgress) => void,
-): void {
-  tracker.progressTokens += progressTokensDelta;
-  onThinkingProgress({ progressTokens: tracker.progressTokens });
-}
-
 export function dispatchClaudeCliThinking(params: {
   backend: CliBackendConfig;
   providerId: string;
@@ -491,7 +476,7 @@ export function dispatchClaudeCliThinking(params: {
   onThinkingDelta?: (delta: CliThinkingDelta) => void;
   onThinkingProgress?: (progress: CliThinkingProgress) => void;
 }): void {
-  if (!supportsCliJsonlToolEvents(params)) {
+  if (!supportsCliJsonlToolEvents(params) || isClaudeSubagentRecord(params.parsed)) {
     return;
   }
   const tracker = params.tracker;
@@ -511,7 +496,7 @@ export function dispatchClaudeCliThinking(params: {
       return;
     }
     if (event.type === "content_block_stop") {
-      stopClaudeContentBlock(tracker);
+      tracker.currentSyntheticBlockIndex = undefined;
       return;
     }
     if (event.type !== "content_block_delta" || !isRecord(event.delta)) {
@@ -524,8 +509,10 @@ export function dispatchClaudeCliThinking(params: {
       return;
     }
     const progressTokensDelta = readThinkingProgressTokens(event.delta);
-    if (progressTokensDelta !== undefined && params.onThinkingProgress) {
-      emitClaudeThinkingProgress(tracker, progressTokensDelta, params.onThinkingProgress);
+    const onThinkingProgress = params.onThinkingProgress;
+    if (progressTokensDelta !== undefined && onThinkingProgress) {
+      tracker.progressTokens += progressTokensDelta;
+      onThinkingProgress({ progressTokens: tracker.progressTokens });
       return;
     }
     // signature_delta carries opaque continuation material; the Claude CLI owns
@@ -533,10 +520,7 @@ export function dispatchClaudeCliThinking(params: {
     if (event.delta.type !== "thinking_delta" || typeof event.delta.thinking !== "string") {
       return;
     }
-    if (!event.delta.thinking) {
-      return;
-    }
-    if (!params.onThinkingDelta) {
+    if (!event.delta.thinking || !params.onThinkingDelta) {
       return;
     }
     const streamed = tracker.streamedByIndex.get(blockIndex) ?? "";
@@ -561,6 +545,7 @@ export function dispatchClaudeCliThinking(params: {
         continue;
       }
       tracker.streamedByIndex.set(index, block.thinking);
+      tracker.highestStreamedIndex = Math.max(tracker.highestStreamedIndex, index);
       const text = assembleThinkingTextByIndex(tracker.streamedByIndex);
       if (text === tracker.emittedText) {
         continue;
@@ -616,10 +601,14 @@ export function dispatchGeminiCliStreamingToolEvent(params: {
 export function partitionLeadingTaggedReasoning(
   text: string,
   final: boolean,
-): { pending: true } | { pending: false; reasoningText: string; visibleText: string } {
+):
+  | { pending: true; openWithoutPendingTag: boolean }
+  | { pending: false; reasoningText: string; visibleText: string } {
   const first = text.search(/\S/u);
   if (first === -1) {
-    return final ? { pending: false, reasoningText: "", visibleText: text } : { pending: true };
+    return final
+      ? { pending: false, reasoningText: "", visibleText: text }
+      : { pending: true, openWithoutPendingTag: false };
   }
   if (text.charAt(first) !== "<") {
     return { pending: false, reasoningText: "", visibleText: text };
@@ -647,11 +636,11 @@ export function partitionLeadingTaggedReasoning(
     const pendingLeadingTag =
       scan.pendingStart !== undefined && !text.slice(first, scan.pendingStart).trim();
     return !final && (depth > 0 || pendingLeadingTag)
-      ? { pending: true }
+      ? { pending: true, openWithoutPendingTag: depth > 0 && scan.pendingStart === undefined }
       : { pending: false, reasoningText: "", visibleText: text };
   }
   if (!final && (depth > 0 || pendingTagAfterBlock || !text.slice(end).trim())) {
-    return { pending: true };
+    return { pending: true, openWithoutPendingTag: depth > 0 && scan.pendingStart === undefined };
   }
 
   const partitioner = createReasoningTagTextPartitioner();
@@ -668,13 +657,19 @@ export function partitionLeadingTaggedReasoning(
 export function createLeadingTaggedReasoningRouter() {
   let pending = "";
   let settled = false;
+  let openWithoutPendingTag = false;
   const consume = (chunk: string, final: boolean): ReasoningTagTextDelta[] => {
     if (settled) {
       return chunk ? [{ kind: "text", text: chunk }] : [];
     }
     pending += chunk;
+    // Without an unfinished tag, only '<' can change the open lexical block.
+    if (!final && openWithoutPendingTag && !chunk.includes("<")) {
+      return [];
+    }
     const result = partitionLeadingTaggedReasoning(pending, final);
     if (result.pending) {
+      openWithoutPendingTag = result.openWithoutPendingTag;
       return [];
     }
     settled = true;
@@ -691,5 +686,3 @@ export function createLeadingTaggedReasoningRouter() {
     finish: () => consume("", true),
   };
 }
-
-/** Creates a stateful parser for streaming JSONL CLI backend output. */

@@ -1,13 +1,13 @@
-import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  resolveCodexAppServerReasoningEffort,
-  type CodexReasoningEffort,
-} from "./reasoning-effort.js";
 import {
   isCodexAppServerNativeAuthProfile,
   type CodexAppServerAuthProfileLookup,
-  type CodexAppServerThreadBinding,
-} from "./session-binding.js";
+} from "./auth-profile.js";
+import type { CodexAppServerHomeScope } from "./config-contracts.js";
+import {
+  CODEX_RESPONSES_OAUTH_PROVIDER,
+  isCodexResponsesOAuthCredential,
+} from "./responses-oauth.js";
+import type { CodexAppServerThreadBinding } from "./session-binding.js";
 
 export const CODEX_NATIVE_PERSONALITY_NONE = "none";
 
@@ -31,28 +31,32 @@ export function resolveCodexBindingModelProviderFallback(params: {
   ) {
     return params.bindingModelProvider;
   }
-  return hasProviderQualifiedModelRef(currentModel) ? undefined : params.bindingModelProvider;
+  const slashIndex = currentModel?.indexOf("/") ?? -1;
+  return slashIndex > 0 && slashIndex < (currentModel?.length ?? 0) - 1
+    ? undefined
+    : params.bindingModelProvider;
 }
 
-export function resolveCodexAppServerThreadModelSelection(params: {
-  provider: string;
-  model: string;
-  binding?: Pick<
-    CodexAppServerThreadBinding,
-    "threadId" | "authProfileId" | "model" | "modelProvider"
-  >;
-  authProfileId?: string;
-  authProfileStore?: CodexAppServerAuthProfileLookup["authProfileStore"];
-  agentDir?: string;
-  config?: CodexAppServerAuthProfileLookup["config"];
-}): { model: string; modelProvider?: string } {
-  const authProfileId = params.authProfileId ?? params.binding?.authProfileId;
-  const explicitModelProvider = resolveCodexAppServerModelProvider({
-    provider: params.provider,
+export async function resolveCodexAppServerThreadModelSelection(
+  params: CodexAppServerAuthProfileLookup & {
+    provider: string;
+    homeScope?: CodexAppServerHomeScope;
+    model: string;
+    requestModel?: string;
+    inheritBindingAuthProfile?: boolean;
+    binding?: Pick<
+      CodexAppServerThreadBinding,
+      "threadId" | "authProfileId" | "model" | "modelProvider"
+    >;
+  },
+): Promise<{ model: string; modelProvider?: string }> {
+  const authProfileId =
+    params.inheritBindingAuthProfile === false
+      ? params.authProfileId
+      : (params.authProfileId ?? params.binding?.authProfileId);
+  const explicitModelProvider = await resolveCodexAppServerModelProvider({
+    ...params,
     authProfileId,
-    authProfileStore: params.authProfileStore,
-    agentDir: params.agentDir,
-    config: params.config,
   });
   const bindingModelProvider = params.binding?.threadId
     ? resolveCodexBindingModelProviderFallback({
@@ -62,24 +66,21 @@ export function resolveCodexAppServerThreadModelSelection(params: {
         bindingModelProvider: params.binding.modelProvider,
       })
     : undefined;
-  return resolveCodexAppServerRequestModelSelection({
-    model: params.model,
+  return await resolveCodexAppServerRequestModelSelection({
+    ...params,
+    model: params.requestModel ?? params.model,
     modelProvider: explicitModelProvider ?? bindingModelProvider,
     authProfileId,
-    authProfileStore: params.authProfileStore,
-    agentDir: params.agentDir,
-    config: params.config,
   });
 }
 
-export function resolveCodexAppServerRequestModelSelection(params: {
-  model: string;
-  modelProvider?: string | null;
-  authProfileId?: string;
-  authProfileStore?: CodexAppServerAuthProfileLookup["authProfileStore"];
-  agentDir?: string;
-  config?: CodexAppServerAuthProfileLookup["config"];
-}): { model: string; modelProvider?: string } {
+export async function resolveCodexAppServerRequestModelSelection(
+  params: CodexAppServerAuthProfileLookup & {
+    model: string;
+    homeScope?: CodexAppServerHomeScope;
+    modelProvider?: string | null;
+  },
+): Promise<{ model: string; modelProvider?: string }> {
   const model = params.model.trim();
   const modelProvider = params.modelProvider?.trim();
   if (modelProvider) {
@@ -92,12 +93,9 @@ export function resolveCodexAppServerRequestModelSelection(params: {
     return { model };
   }
   const inferredProvider = model.slice(0, slashIndex);
-  const inferredModelProvider = resolveCodexAppServerModelProvider({
+  const inferredModelProvider = await resolveCodexAppServerModelProvider({
+    ...params,
     provider: inferredProvider,
-    authProfileId: params.authProfileId,
-    authProfileStore: params.authProfileStore,
-    agentDir: params.agentDir,
-    config: params.config,
   });
   return {
     model: model.slice(slashIndex + 1).trim(),
@@ -105,45 +103,34 @@ export function resolveCodexAppServerRequestModelSelection(params: {
   };
 }
 
-function hasProviderQualifiedModelRef(model: string | undefined): boolean {
-  const trimmed = model?.trim();
-  const slashIndex = trimmed?.indexOf("/") ?? -1;
-  return slashIndex > 0 && slashIndex < (trimmed?.length ?? 0) - 1;
-}
-
-export function resolveCodexAppServerModelProvider(params: {
-  provider: string;
-  authProfileId?: string;
-  authProfileStore?: CodexAppServerAuthProfileLookup["authProfileStore"];
-  agentDir?: string;
-  config?: CodexAppServerAuthProfileLookup["config"];
-}): string | undefined {
+export async function resolveCodexAppServerModelProvider(
+  params: CodexAppServerAuthProfileLookup & {
+    provider: string;
+    homeScope?: CodexAppServerHomeScope;
+  },
+): Promise<string | undefined> {
   const normalized = params.provider.trim();
   const normalizedLower = normalized.toLowerCase();
+  if (
+    normalizedLower === "openai" &&
+    params.authProfileId &&
+    isCodexResponsesOAuthCredential(params.authProfileStore?.profiles[params.authProfileId])
+  ) {
+    return CODEX_RESPONSES_OAUTH_PROVIDER;
+  }
   if (!normalized || normalizedLower === "codex") {
     // `codex` is OpenClaw's virtual provider; let Codex app-server keep its
     // native provider/auth selection instead of forcing the legacy OpenAI path.
     return undefined;
   }
-  if (isCodexAppServerNativeAuthProfile(params) && normalizedLower === "openai") {
-    // When OpenClaw is forwarding ChatGPT/Codex OAuth, `openai` is Codex's
-    // native provider id, not a public OpenAI API-key choice. Omit the override
-    // so app-server keeps its configured provider/auth pair for this session.
+  if (
+    normalizedLower === "openai" &&
+    (params.homeScope === "user" || (await isCodexAppServerNativeAuthProfile(params)))
+  ) {
+    // User-home connections own native auth and provider selection, as do forwarded
+    // ChatGPT profiles. Keep that pair together; account/route checks still run
+    // at the auth boundary before starting a thread.
     return undefined;
   }
   return normalizedLower === "openai" ? "openai" : normalized;
-}
-
-// Provider catalog metadata owns model-specific effort support. Keeping this
-// bridge model-agnostic prevents the picker and native runtime from drifting.
-export function resolveReasoningEffort(
-  thinkLevel: EmbeddedRunAttemptParams["thinkLevel"] | "ultra",
-  modelId: string,
-  supportedReasoningEfforts?: readonly string[],
-): CodexReasoningEffort | null {
-  return resolveCodexAppServerReasoningEffort({
-    thinkLevel,
-    modelId,
-    supportedReasoningEfforts,
-  });
 }

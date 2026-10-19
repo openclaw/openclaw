@@ -1,8 +1,27 @@
-// Human-only arming for delegated OpenClaw changes.
-import { hashSystemAgentOperation } from "../agents/tools/system-agent-tool.js";
-import { isPersistentSystemAgentOperation, type SystemAgentOperation } from "./operations.js";
+// Host-owned authorization for exact delegated OpenClaw changes.
+import { createHash } from "node:crypto";
+import { stableStringify } from "@openclaw/normalization-core";
+import type { SystemAgentOperation } from "./operation-types.js";
+import { isPersistentSystemAgentOperation } from "./operations-parse.js";
 
-type ProposalRef = { current?: string; operation?: SystemAgentOperation };
+export type SystemAgentProposalRef = { current?: string; operation?: SystemAgentOperation };
+
+const APPROVAL_RETRY_GUIDANCE =
+  "If the change is still needed, submit a fresh request and approve it in the Control UI or OpenClaw apps, or through the approval prompt in the requesting chat. Retrying alone does not approve the change.";
+
+export const SYSTEM_AGENT_APPROVAL_APPLICATION_UNCONFIRMED_TEXT =
+  "The approved change's application status is unconfirmed. Check the current settings and OpenClaw status before retrying.";
+
+export const SYSTEM_AGENT_APPROVAL_TERMINAL_MESSAGES = {
+  expired: `OpenClaw approval request expired without a decision. No change was made. The expired request can no longer be approved. ${APPROVAL_RETRY_GUIDANCE}`,
+  cancelled: `OpenClaw change cancelled before application. No change was made. The approval request is no longer active. ${APPROVAL_RETRY_GUIDANCE}`,
+  failed: `OpenClaw change failed to complete. ${SYSTEM_AGENT_APPROVAL_APPLICATION_UNCONFIRMED_TEXT}`,
+};
+
+/** Canonical operation fingerprint used to bind approval to one exact mutation. */
+export function hashSystemAgentOperation(operation: SystemAgentOperation): string {
+  return createHash("sha256").update(stableStringify(operation)).digest("hex");
+}
 
 export type SystemAgentApprovalIntent = "approve" | "decline" | "other";
 
@@ -30,7 +49,7 @@ export function classifySystemAgentApprovalText(message: string): SystemAgentApp
 
 export function resolvePendingOperatorProposal(
   pending: SystemAgentOperation | null,
-  proposalRef: ProposalRef,
+  proposalRef: SystemAgentProposalRef,
 ): { operation: SystemAgentOperation; hash: string } | null {
   const operation = pending ?? proposalRef.operation;
   if (!operation || !isPersistentSystemAgentOperation(operation)) {
@@ -40,8 +59,6 @@ export function resolvePendingOperatorProposal(
   if (proposalRef.current && proposalRef.current !== hash) {
     return null;
   }
-  proposalRef.current = hash;
-  proposalRef.operation = operation;
   return { operation, hash };
 }
 

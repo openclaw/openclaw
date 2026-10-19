@@ -39,6 +39,19 @@ export const DesktopObserveResultSchema = closedObject({
   wsPath: NonEmptyString,
   expiresAtMs: Type.Integer({ minimum: 0 }),
   control: Type.Boolean(),
+  // Separate, screen-owned stream; capture waits for an explicit viewer action.
+  audio: Type.Optional(
+    closedObject({
+      wsPath: NonEmptyString,
+      encoding: Type.Literal("pcm-s16le"),
+      sampleRate: Type.Literal(48000),
+      channels: Type.Literal(2),
+    }),
+  ),
+  // A fixed diagnostic category, never native stderr or host paths.
+  audioUnavailableReason: Type.Optional(Type.Literal("setup-unavailable")),
+  // Permission to request resizing, not proof that the RFB server supports it.
+  canResize: Type.Optional(Type.Boolean()),
   vncPassword: Type.Optional(NonEmptyString),
   // Auth drives credential prompting without coupling clients to RFB security numbers.
   auth: Type.Optional(Type.String({ enum: ["none", "vnc-password", "ard-account"] })),
@@ -51,7 +64,17 @@ export const DesktopLaunchParamsSchema = closedObject({
   app: WorkerDesktopAppIdSchema,
 });
 
+export const DesktopReleaseParamsSchema = closedObject({
+  wsPath: NonEmptyString,
+});
+
+export const DesktopReleaseResultSchema = closedObject({
+  released: Type.Boolean(),
+});
+
 export type DesktopSource = Static<typeof DesktopSourceSchema>;
 export type DesktopObserveParams = Static<typeof DesktopObserveParamsSchema>;
 export type DesktopObserveResult = Static<typeof DesktopObserveResultSchema>;
 export type DesktopLaunchParams = Static<typeof DesktopLaunchParamsSchema>;
+export type DesktopReleaseParams = Static<typeof DesktopReleaseParamsSchema>;
+export type DesktopReleaseResult = Static<typeof DesktopReleaseResultSchema>;

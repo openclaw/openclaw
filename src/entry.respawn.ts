@@ -1,6 +1,6 @@
-// Respawns the CLI with adjusted process flags when startup requires it.
-import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import { isStandaloneRuntimeExecutable, resolveOpenClawCliRespawn } from "../cli-invocation.mjs";
 import { resolveNodeStartupTlsEnvironment } from "./bootstrap/node-startup-env.js";
 import {
   isTerminalInteractiveRespawnArgv,
@@ -9,11 +9,7 @@ import {
 } from "./cli/respawn-policy.js";
 import { normalizeWindowsArgv } from "./cli/windows-argv.js";
 import { isTruthyEnvValue } from "./infra/env.js";
-import { attachChildProcessBridge } from "./process/child-process-bridge.js";
-import {
-  runRespawnChildWithSignalBridge,
-  type RespawnChildRuntime,
-} from "./process/respawn-child-runner.js";
+import { runRespawnChildWithSignalBridge } from "./process/respawn-child-runner.js";
 
 const EXPERIMENTAL_WARNING_FLAG = "--disable-warning=ExperimentalWarning";
 const OPENCLAW_NODE_OPTIONS_READY = "OPENCLAW_NODE_OPTIONS_READY";
@@ -27,9 +23,7 @@ type CliRespawnPlan = {
   detachForProcessTree: boolean;
 };
 
-type CliRespawnRuntime = RespawnChildRuntime & {
-  writeError: (message: string, error?: unknown) => void;
-};
+type CliRespawnErrorWriter = (message: string, error?: unknown) => void | Promise<void>;
 
 function pathModuleForPlatform(platform: NodeJS.Platform): typeof path.posix {
   return platform === "win32" ? path.win32 : path.posix;
@@ -89,6 +83,14 @@ export function buildCliRespawnPlan(
   const platform = params.platform ?? process.platform;
   const normalizedArgv =
     platform === "win32" ? normalizeWindowsArgv(argv, { platform, execPath }) : argv;
+  const invocation = (runtimeArgs: string[]) =>
+    resolveOpenClawCliRespawn({
+      execPath: resolveCliRespawnCommand({ execPath, platform }),
+      entryPath: normalizedArgv[1],
+      args: normalizedArgv.slice(2),
+      execArgv: runtimeArgs,
+      env: childEnv,
+    });
 
   if (
     shouldSkipStartupEnvironmentRespawnForArgv(normalizedArgv, platform) ||
@@ -98,6 +100,9 @@ export function buildCliRespawnPlan(
   }
 
   const childEnv: NodeJS.ProcessEnv = { ...env };
+  if (!readNonBlankString(childEnv.NODE_EXTRA_CA_CERTS)) {
+    delete childEnv.NODE_EXTRA_CA_CERTS;
+  }
   const childExecArgv = [...execArgv];
   let needsRespawn = false;
 
@@ -111,10 +116,11 @@ export function buildCliRespawnPlan(
       return null;
     }
 
+    const child = invocation(childExecArgv);
     return {
-      command: resolveCliRespawnCommand({ execPath, platform }),
-      argv: [...childExecArgv, ...normalizedArgv.slice(1)],
-      env: childEnv,
+      command: child.command,
+      argv: child.args,
+      env: child.env,
       detachForProcessTree: false,
     };
   }
@@ -129,7 +135,7 @@ export function buildCliRespawnPlan(
   if (
     autoNodeExtraCaCerts &&
     !isTruthyEnvValue(env[OPENCLAW_NODE_EXTRA_CA_CERTS_READY]) &&
-    !env.NODE_EXTRA_CA_CERTS
+    !childEnv.NODE_EXTRA_CA_CERTS
   ) {
     childEnv.NODE_EXTRA_CA_CERTS = autoNodeExtraCaCerts;
     childEnv[OPENCLAW_NODE_EXTRA_CA_CERTS_READY] = "1";
@@ -142,7 +148,14 @@ export function buildCliRespawnPlan(
     !hasExperimentalWarningSuppressed({ env, execArgv })
   ) {
     childEnv[OPENCLAW_NODE_OPTIONS_READY] = "1";
-    childExecArgv.unshift(EXPERIMENTAL_WARNING_FLAG);
+    if (isStandaloneRuntimeExecutable(execPath)) {
+      // Compiled Bun treats runtime flags as CLI arguments, but honors NODE_OPTIONS.
+      childEnv.NODE_OPTIONS = [childEnv.NODE_OPTIONS, EXPERIMENTAL_WARNING_FLAG]
+        .filter(Boolean)
+        .join(" ");
+    } else {
+      childExecArgv.unshift(EXPERIMENTAL_WARNING_FLAG);
+    }
     needsRespawn = true;
   }
 
@@ -150,36 +163,28 @@ export function buildCliRespawnPlan(
     return null;
   }
 
+  const child = invocation(childExecArgv);
   return {
-    command: resolveCliRespawnCommand({ execPath, platform }),
-    argv: [...childExecArgv, ...argv.slice(1)],
-    env: childEnv,
+    command: child.command,
+    argv: child.args,
+    env: child.env,
     detachForProcessTree: !isTerminalInteractiveRespawnArgv(argv),
   };
 }
 
-export function runCliRespawnPlan(
+export async function runCliRespawnPlan(
   plan: CliRespawnPlan,
-  runtime?: CliRespawnRuntime,
-  writeError: CliRespawnRuntime["writeError"] = (message, error) => console.error(message, error),
-): ChildProcess {
-  const resolvedRuntime: CliRespawnRuntime = runtime ?? {
-    spawn,
-    attachChildProcessBridge,
-    exit: process.exit.bind(process) as (code?: number) => never,
-    writeError,
-  };
-  return runRespawnChildWithSignalBridge({
+  writeError: CliRespawnErrorWriter = (message, error) => console.error(message, error),
+): Promise<void> {
+  process.exitCode = await runRespawnChildWithSignalBridge({
     command: plan.command,
     args: plan.argv,
     env: plan.env,
     detachForProcessTree: plan.detachForProcessTree,
-    runtime: resolvedRuntime,
-    onError: (error) => {
-      resolvedRuntime.writeError(
+    onError: (error) =>
+      writeError(
         "[openclaw] Failed to respawn CLI:",
         error instanceof Error ? (error.stack ?? error.message) : error,
-      );
-    },
+      ),
   });
 }

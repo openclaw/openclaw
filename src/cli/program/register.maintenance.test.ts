@@ -1,10 +1,16 @@
-// Register maintenance tests cover maintenance command registration in the CLI program.
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as nodeSqlite from "../../../node-sqlite.mjs";
+import { runDoctorLintCli as runDoctorLintCliEntry } from "../../commands/doctor-lint.js";
+import { parseReleasedDoctorLintReport } from "../../infra/test-fixtures/update-doctor-lint.v2026-9-5.js";
+import { ExitError } from "../../runtime.js";
+import { UpdateSchemaRefusalError } from "../../state/openclaw-update-schema-refusal.js";
+import { expectNoCalls } from "./program.test-helpers.js";
 import { registerMaintenanceCommands } from "./register.maintenance.js";
 
 const mocks = vi.hoisted(() => ({
   doctorCommand: vi.fn(),
+  triageCommand: vi.fn(),
   dashboardCommand: vi.fn(),
   resetCommand: vi.fn(),
   uninstallCommand: vi.fn(),
@@ -17,515 +23,293 @@ const mocks = vi.hoisted(() => ({
   runDoctorLintCli: vi.fn(),
 }));
 
-const {
-  doctorCommand,
-  dashboardCommand,
-  resetCommand,
-  uninstallCommand,
-  runtime,
-  runDoctorLintCli,
-} = mocks;
+const { doctorCommand, triageCommand, dashboardCommand, resetCommand, uninstallCommand, runtime } =
+  mocks;
+const runDoctorLintCli = vi.mocked(runDoctorLintCliEntry);
 
-vi.mock("../../commands/doctor.js", () => ({
-  doctorCommand: mocks.doctorCommand,
-}));
+// mock-isolation: Verify maintenance dispatch without executing repair, reset, or uninstall operations.
+vi.mock("../../commands/doctor.js", () => ({ doctorCommand: mocks.doctorCommand }));
+// mock-isolation: Verify maintenance dispatch without executing repair, reset, or uninstall operations.
+vi.mock("../../commands/triage.js", () => ({ triageCommand: mocks.triageCommand }));
+// mock-isolation: Verify maintenance dispatch without executing repair, reset, or uninstall operations.
+vi.mock("../../commands/dashboard.js", () => ({ dashboardCommand: mocks.dashboardCommand }));
+// mock-isolation: Verify maintenance dispatch without executing repair, reset, or uninstall operations.
+vi.mock("../../commands/reset.js", () => ({ resetCommand: mocks.resetCommand }));
+// mock-isolation: Verify maintenance dispatch without executing repair, reset, or uninstall operations.
+vi.mock("../../commands/uninstall.js", () => ({ uninstallCommand: mocks.uninstallCommand }));
 
-vi.mock("../../commands/dashboard.js", () => ({
-  dashboardCommand: mocks.dashboardCommand,
-}));
-
-vi.mock("../../commands/reset.js", () => ({
-  resetCommand: mocks.resetCommand,
-}));
-
-vi.mock("../../commands/uninstall.js", () => ({
-  uninstallCommand: mocks.uninstallCommand,
-}));
-
-vi.mock("../../commands/doctor-lint.js", () => ({
+vi.mock("../../commands/doctor-lint.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../commands/doctor-lint.js")>()),
   runDoctorLintCli: mocks.runDoctorLintCli,
 }));
 
-vi.mock("../../runtime.js", () => ({
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
   defaultRuntime: mocks.runtime,
 }));
-
-function commandCall(mock: ReturnType<typeof vi.fn>): [typeof runtime, Record<string, unknown>] {
-  const call = mock.mock.calls[0] as [typeof runtime, Record<string, unknown>] | undefined;
-  if (!call) {
-    throw new Error("expected command call");
-  }
-  return call;
-}
 
 function jsonFailure(message: string) {
   return { ok: false, error: { type: "cli_error", message } };
 }
 
-describe("registerMaintenanceCommands doctor action", () => {
-  async function runMaintenanceCli(args: string[]) {
-    const program = new Command();
-    registerMaintenanceCommands(program);
+function expectDoctorOptions(options: object) {
+  expect(doctorCommand).toHaveBeenCalledExactlyOnceWith(
+    runtime,
+    expect.objectContaining(options),
+    undefined,
+  );
+  expectNoCalls(runDoctorLintCli);
+  expect(runtime.exit).toHaveBeenCalledWith(0);
+}
+
+function expectFailure(message: string, json: boolean) {
+  expect(json ? runtime.writeJson : runtime.error).toHaveBeenCalledWith(
+    json ? jsonFailure(message) : message,
+  );
+  expectNoCalls(json ? runtime.error : runtime.writeJson);
+  expect(runtime.exit).toHaveBeenCalledWith(2);
+}
+
+async function runCli(input: string) {
+  const args = input.split(" ");
+  const program = new Command();
+  registerMaintenanceCommands(program);
+  const previousArgv = process.argv;
+  process.argv = [process.execPath, "openclaw", ...args];
+  try {
     await program.parseAsync(args, { from: "user" });
+  } catch (error) {
+    if (!(error instanceof ExitError)) {
+      throw error;
+    }
+    runtime.exit(error.code);
+  } finally {
+    process.argv = previousArgv;
   }
+}
 
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
+async function withTerminal(action: () => Promise<void>) {
+  const descriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+  Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
+  try {
+    await action();
+  } finally {
+    if (descriptor) {
+      Object.defineProperty(process.stdout, "isTTY", descriptor);
+    } else {
+      Reflect.deleteProperty(process.stdout, "isTTY");
+    }
+  }
+}
 
-  it("exits with code 0 after successful doctor run", async () => {
-    doctorCommand.mockResolvedValue(undefined);
+beforeEach(() => vi.resetAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
-    await runMaintenanceCli(["doctor", "--non-interactive", "--yes", "--allow-exec"]);
-
-    expect(doctorCommand).toHaveBeenCalledTimes(1);
-    const [runtimeArg, options] = commandCall(doctorCommand);
-    expect(runtimeArg).toBe(runtime);
-    expect(options.nonInteractive).toBe(true);
-    expect(options.yes).toBe(true);
-    expect(options.allowExec).toBe(true);
-    expect(runtime.exit).toHaveBeenCalledWith(0);
-  });
-
-  it("enables workspace suggestions by default and allows disabling them", async () => {
-    doctorCommand.mockResolvedValue(undefined);
-
-    await runMaintenanceCli(["doctor", "--non-interactive", "--yes"]);
-
-    expect(doctorCommand).toHaveBeenCalledTimes(1);
-    const [, defaultOptions] = commandCall(doctorCommand);
-    expect(defaultOptions.workspaceSuggestions).toBe(true);
-
-    vi.clearAllMocks();
-    doctorCommand.mockResolvedValue(undefined);
-
-    await runMaintenanceCli(["doctor", "--non-interactive", "--yes", "--no-workspace-suggestions"]);
-
-    expect(doctorCommand).toHaveBeenCalledTimes(1);
-    const [, disabledOptions] = commandCall(doctorCommand);
-    expect(disabledOptions.workspaceSuggestions).toBe(false);
-  });
-
-  it("exits with code 1 when doctor fails", async () => {
-    doctorCommand.mockRejectedValue(new Error("doctor failed"));
-
-    await runMaintenanceCli(["doctor"]);
-
-    expect(runtime.error).toHaveBeenCalledWith("doctor failed");
+describe("registered maintenance commands", () => {
+  it("keeps plain doctor read-only on unsupported Node", async () => {
+    vi.stubGlobal("process", {
+      ...process,
+      versions: { ...process.versions, bun: undefined, node: "22.23.2" },
+    });
+    const capabilities = await nodeSqlite.detectCurrentSqliteCapabilities();
+    vi.spyOn(nodeSqlite, "detectCurrentSqliteCapabilities").mockResolvedValue({
+      ...capabilities,
+      text: false,
+    });
+    runDoctorLintCli.mockResolvedValue(1);
+    await runCli("doctor");
+    expect(runDoctorLintCli).toHaveBeenCalledOnce();
+    expect(doctorCommand).not.toHaveBeenCalled();
     expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(runtime.exit).not.toHaveBeenCalledWith(0);
   });
 
-  it("writes JSON when Doctor maintenance fails before producing a report", async () => {
+  it.each([
+    ["--fix --force", true, undefined],
+    ["--fix --full-integrity-check", false, true],
+  ] as const)("dispatches Doctor mutation posture %s", async (args, force, fullIntegrityCheck) => {
+    await runCli(`doctor ${args}`);
+    expectDoctorOptions({
+      repair: true,
+      force,
+      yes: false,
+      workspaceSuggestions: true,
+      allowExec: false,
+      nonInteractive: false,
+    });
+    expect(doctorCommand.mock.calls[0]?.[1].fullIntegrityCheck).toBe(fullIntegrityCheck);
+  });
+
+  it.each([
+    ["--state-sqlite compact", doctorCommand, "maintenance failed"],
+    ["--lint", runDoctorLintCli, "lint failed"],
+  ] as const)("redacts credentials in %s JSON failures", async (args, handler, message) => {
     const token = "sk-abcdefghijklmnopqrstuv";
-    doctorCommand.mockRejectedValue(
-      new Error(`maintenance failed: Authorization: Bearer ${token}`),
+    handler.mockRejectedValueOnce(new Error(`${message}: Authorization: Bearer ${token}`));
+    await runCli(`doctor ${args} --json`);
+    const expected = jsonFailure(expect.stringContaining(`${message}: Authorization: Bearer`));
+    expect(runtime.writeJson).toHaveBeenCalledWith(
+      args === "--lint" ? expect.objectContaining(expected) : expected,
     );
+    if (args === "--lint") {
+      expect(
+        parseReleasedDoctorLintReport(JSON.stringify(runtime.writeJson.mock.calls.at(-1)?.[0])),
+      ).toMatchObject({
+        ok: false,
+        checksRun: 0,
+        findings: [{ severity: "error", message: expect.stringContaining(message) }],
+      });
+    }
+    expect(JSON.stringify(runtime.writeJson.mock.calls)).not.toContain(token);
+    expectNoCalls(runtime.error);
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
 
-    await runMaintenanceCli(["doctor", "--state-sqlite", "compact", "--json"]);
-
-    expect(runtime.writeJson).toHaveBeenCalledWith({
+  it("preserves structured recovery fields in Doctor JSON failures", async () => {
+    doctorCommand.mockRejectedValueOnce(
+      new UpdateSchemaRefusalError([], "2026.9.2", { targetVersion: "2026.9.4" }),
+    );
+    await runCli("doctor --state-sqlite compact --json");
+    expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith({
       ok: false,
       error: {
         type: "cli_error",
-        message: expect.stringContaining("maintenance failed: Authorization: Bearer"),
+        message: expect.stringContaining("Doctor refused update-time schema repair"),
+        code: "update-schema-bump-unfenced",
+        databases: [],
+        updaterVersion: "2026.9.2",
+        targetVersion: "2026.9.4",
+        commands: expect.arrayContaining(["openclaw doctor --fix"]),
       },
     });
-    expect(JSON.stringify(runtime.writeJson.mock.calls)).not.toContain(token);
-    expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).toHaveBeenCalledWith(2);
   });
 
-  it("maps --fix to repair=true", async () => {
-    doctorCommand.mockResolvedValue(undefined);
-
-    await runMaintenanceCli(["doctor", "--fix"]);
-
-    expect(doctorCommand).toHaveBeenCalledTimes(1);
-    const [runtimeArg, options] = commandCall(doctorCommand);
-    expect(runtimeArg).toBe(runtime);
-    expect(options.repair).toBe(true);
-  });
-
-  it("passes session sqlite options to doctor command", async () => {
-    doctorCommand.mockResolvedValue(undefined);
-
-    await runMaintenanceCli([
-      "doctor",
-      "--session-sqlite",
-      "import",
-      "--session-sqlite-store",
-      "/tmp/openclaw/sessions.json",
-      "--json",
-    ]);
-
-    expect(doctorCommand).toHaveBeenCalledTimes(1);
-    const [runtimeArg, options] = commandCall(doctorCommand);
-    expect(runtimeArg).toBe(runtime);
-    expect(options.sessionSqlite).toBe("import");
-    expect(options.sessionSqliteStore).toBe("/tmp/openclaw/sessions.json");
-    expect(options.json).toBe(true);
-    expect(runtime.exit).toHaveBeenCalledWith(0);
-  });
-
-  it("passes session sqlite recover GitHub issue option to doctor command", async () => {
-    doctorCommand.mockResolvedValue(undefined);
-
-    await runMaintenanceCli(["doctor", "--session-sqlite", "recover", "--github-issue", "--yes"]);
-
-    expect(doctorCommand).toHaveBeenCalledTimes(1);
-    const [, options] = commandCall(doctorCommand);
-    expect(options.sessionSqlite).toBe("recover");
-    expect(options.sessionSqliteGithubIssue).toBe(true);
-    expect(options.yes).toBe(true);
-    expect(runtime.exit).toHaveBeenCalledWith(0);
-  });
-
-  it("passes session sqlite compact mode to doctor command", async () => {
-    doctorCommand.mockResolvedValue(undefined);
-
-    await runMaintenanceCli([
-      "doctor",
-      "--session-sqlite",
-      "compact",
-      "--session-sqlite-agent",
-      "main",
-    ]);
-
-    expect(doctorCommand).toHaveBeenCalledTimes(1);
-    const [, options] = commandCall(doctorCommand);
-    expect(options.sessionSqlite).toBe("compact");
-    expect(options.sessionSqliteAgent).toBe("main");
-    expect(runtime.exit).toHaveBeenCalledWith(0);
-  });
-
-  it("passes shared-state sqlite compact mode and JSON output to doctor command", async () => {
-    doctorCommand.mockResolvedValue(undefined);
-
-    await runMaintenanceCli(["doctor", "--state-sqlite", "compact", "--json"]);
-
-    expect(doctorCommand).toHaveBeenCalledTimes(1);
-    const [, options] = commandCall(doctorCommand);
-    expect(options.stateSqlite).toBe("compact");
-    expect(options.json).toBe(true);
-    expect(runtime.exit).toHaveBeenCalledWith(0);
-  });
-
-  it("rejects simultaneous shared-state and session SQLite modes", async () => {
-    await runMaintenanceCli(["doctor", "--state-sqlite", "compact", "--session-sqlite", "compact"]);
-
-    expect(doctorCommand).not.toHaveBeenCalled();
-    expect(runtime.error).toHaveBeenCalledWith(
-      "doctor shared-state SQLite maintenance can only be combined with --json.",
+  it("dispatches session SQLite recover with its selectors", async () => {
+    await runCli(
+      "doctor --session-sqlite recover --session-sqlite-agent main --session-sqlite-store /tmp/sessions.json --json --github-issue --yes",
     );
-    expect(runtime.exit).toHaveBeenCalledWith(2);
-  });
-
-  it("writes JSON errors for conflicting shared-state SQLite modes", async () => {
-    const message = "doctor shared-state SQLite maintenance can only be combined with --json.";
-
-    await runMaintenanceCli([
-      "doctor",
-      "--state-sqlite",
-      "compact",
-      "--session-sqlite",
-      "compact",
-      "--json",
-    ]);
-
-    expect(runtime.writeJson).toHaveBeenCalledWith(jsonFailure(message));
-    expect(runtime.error).not.toHaveBeenCalled();
-    expect(runtime.exit).toHaveBeenCalledWith(2);
-  });
-
-  it("rejects shared-state SQLite maintenance combined with lint mode", async () => {
-    await runMaintenanceCli(["doctor", "--state-sqlite", "compact", "--lint"]);
-
-    expect(doctorCommand).not.toHaveBeenCalled();
-    expect(runDoctorLintCli).not.toHaveBeenCalled();
-    expect(runtime.error).toHaveBeenCalledWith(
-      "doctor shared-state SQLite maintenance can only be combined with --json.",
-    );
-    expect(runtime.exit).toHaveBeenCalledWith(2);
-  });
-
-  it.each([
-    ["workspace suggestions", ["--no-workspace-suggestions"]],
-    ["yes mode", ["--yes"]],
-    ["repair mode", ["--repair"]],
-    ["fix mode", ["--fix"]],
-    ["force mode", ["--force"]],
-    ["non-interactive mode", ["--non-interactive"]],
-    ["gateway token generation", ["--generate-gateway-token"]],
-    ["exec secret resolution", ["--allow-exec"]],
-    ["deep scans", ["--deep"]],
-    ["post-upgrade mode", ["--post-upgrade"]],
-    ["session SQLite selectors", ["--session-sqlite-agent", "main"]],
-    ["lint selectors", ["--only", "core/example"]],
-  ])("rejects shared-state SQLite maintenance combined with %s", async (_label, args) => {
-    await runMaintenanceCli(["doctor", "--state-sqlite", "compact", ...args]);
-
-    expect(doctorCommand).not.toHaveBeenCalled();
-    expect(runDoctorLintCli).not.toHaveBeenCalled();
-    expect(runtime.error).toHaveBeenCalledWith(
-      "doctor shared-state SQLite maintenance can only be combined with --json.",
-    );
-    expect(runtime.exit).toHaveBeenCalledWith(2);
-  });
-
-  it.each([
-    ["without JSON", false, ["--session-sqlite-agent", "main"]],
-    ["with JSON", true, ["--json", "--session-sqlite-agent", "main"]],
-  ])(
-    "rejects session sqlite selectors without session sqlite mode %s",
-    async (_label, json, args) => {
-      const message =
-        "doctor session SQLite options require --session-sqlite. Use `openclaw doctor --session-sqlite dry-run ...`.";
-
-      await runMaintenanceCli(["doctor", ...args]);
-
-      expect(doctorCommand).not.toHaveBeenCalled();
-      expect(runDoctorLintCli).not.toHaveBeenCalled();
-      if (json) {
-        expect(runtime.writeJson).toHaveBeenCalledWith(jsonFailure(message));
-        expect(runtime.error).not.toHaveBeenCalled();
-      } else {
-        expect(runtime.error).toHaveBeenCalledWith(message);
-        expect(runtime.writeJson).not.toHaveBeenCalled();
-      }
-      expect(runtime.exit).toHaveBeenCalledWith(2);
-    },
-  );
-
-  it("runs doctor lint mode without invoking repair doctor", async () => {
-    runDoctorLintCli.mockResolvedValue(1);
-
-    await runMaintenanceCli([
-      "doctor",
-      "--lint",
-      "--json",
-      "--severity-min",
-      "error",
-      "--all",
-      "--skip",
-      "a",
-      "--only",
-      "b",
-      "--allow-exec",
-    ]);
-
-    expect(doctorCommand).not.toHaveBeenCalled();
-    expect(runDoctorLintCli).toHaveBeenCalledWith(runtime, {
+    expectDoctorOptions({
+      sessionSqlite: "recover",
+      sessionSqliteAgent: "main",
+      sessionSqliteStore: "/tmp/sessions.json",
       json: true,
-      severityMin: "error",
-      includeAllChecks: true,
-      skipIds: ["a"],
-      onlyIds: ["b"],
-      allowExec: true,
+      sessionSqliteGithubIssue: true,
+      yes: true,
+    });
+  });
+
+  const errors = {
+    state: "doctor shared-state SQLite maintenance can only be combined with --json.",
+    orphan:
+      "doctor session SQLite options require --session-sqlite. Use `openclaw doctor --session-sqlite dry-run ...`.",
+    operations:
+      "doctor operations are mutually exclusive: choose one of --lint, --fix/--repair, --post-upgrade, --state-sqlite, or --session-sqlite.",
+    github: "--github-issue requires --session-sqlite recover.",
+    selectors: "doctor lint options require --lint. Use `openclaw doctor --lint ...`.",
+    repair:
+      "doctor --lint runs read-only lint checks and cannot be combined with --repair, --fix, or --force.",
+    yes: "doctor --lint runs read-only lint checks and cannot be combined with --yes.",
+    token:
+      "doctor --lint runs read-only lint checks and cannot be combined with --generate-gateway-token.",
+    session:
+      "doctor --lint runs read-only lint checks and cannot be combined with --session-sqlite recover.",
+    json: "doctor --json runs read-only lint checks and cannot be combined with --repair, --fix, or --force.",
+  };
+  it.each([
+    ["--state-sqlite compact --lint --json", "state", true],
+    ["--session-sqlite-agent main", "orphan", false],
+    ["--lint --post-upgrade --json", "operations", true],
+    ["--session-sqlite inspect --github-issue --json", "github", true],
+    ["--only b --json", "selectors", true],
+    ["--lint --repair", "repair", true],
+    ["--lint --yes", "yes", true],
+    ["--lint --generate-gateway-token", "token", true],
+    ["--lint --session-sqlite recover", "session", true],
+    ["--json --repair", "json", true],
+  ] as const)("rejects incompatible Doctor options %s", async (args, error, json) => {
+    const message = errors[error];
+    await runCli(`doctor ${args}`);
+    expectNoCalls(doctorCommand, runDoctorLintCli);
+    expectFailure(message, json);
+  });
+
+  it.each([true, false])("runs lint with explicit=%s exit policy", async (explicit) => {
+    runDoctorLintCli.mockResolvedValueOnce(1);
+    await runCli(
+      explicit
+        ? "doctor --lint --json --severity-min error --all --skip a --only b --allow-exec"
+        : "doctor --json",
+    );
+    expect(runDoctorLintCli).toHaveBeenCalledExactlyOnceWith(runtime, {
+      json: true,
+      severityMin: explicit ? "error" : undefined,
+      includeAllChecks: explicit,
+      skipIds: explicit ? ["a"] : [],
+      onlyIds: explicit ? ["b"] : [],
+      allowExec: explicit,
       deep: false,
     });
-    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runtime.exit).toHaveBeenCalledWith(explicit ? 1 : 0);
   });
 
-  it("keeps bare --json advisory while preserving machine-readable findings", async () => {
-    const output: string[] = [];
-    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
-      output.push(String(chunk));
-      return true;
-    });
-    runDoctorLintCli.mockImplementationOnce(async () => {
-      process.stdout.write(
-        '{"ok":false,"checksRun":1,"checksSkipped":0,"findings":[{"checkId":"core/example","severity":"error","message":"broken"}]}\n',
-      );
-      return 1;
-    });
+  it("keeps interactive lint failures on stderr", async () => {
+    runDoctorLintCli.mockRejectedValueOnce(new Error("lint failed"));
+    await withTerminal(() => runCli("doctor --lint"));
+    expectFailure("lint failed", false);
+  });
 
-    try {
-      await runMaintenanceCli(["doctor", "--json"]);
-
-      expect(doctorCommand).not.toHaveBeenCalled();
-      expect(runDoctorLintCli).toHaveBeenCalledWith(runtime, {
+  it.each([
+    [
+      "triage --json --no-export --non-interactive --update-result /tmp/failure.json",
+      triageCommand,
+      {
         json: true,
-        severityMin: undefined,
-        includeAllChecks: false,
-        skipIds: [],
-        onlyIds: [],
-        allowExec: false,
-        deep: false,
-      });
-      expect(JSON.parse(output.join(""))).toEqual({
-        ok: false,
-        checksRun: 1,
-        checksSkipped: 0,
-        findings: [
-          {
-            checkId: "core/example",
-            severity: "error",
-            message: "broken",
-          },
-        ],
-      });
-      expect(runtime.exit).toHaveBeenCalledWith(0);
-    } finally {
-      writeSpy.mockRestore();
-      runDoctorLintCli.mockReset();
-    }
-  });
-
-  it("rejects JSON repair mode before running doctor", async () => {
-    const message =
-      "doctor --json runs read-only lint checks and cannot be combined with --repair, --fix, or --force.";
-
-    await runMaintenanceCli(["doctor", "--json", "--repair"]);
-
-    expect(doctorCommand).not.toHaveBeenCalled();
-    expect(runDoctorLintCli).not.toHaveBeenCalled();
-    expect(runtime.writeJson).toHaveBeenCalledWith(jsonFailure(message));
-    expect(runtime.error).not.toHaveBeenCalled();
-    expect(runtime.exit).toHaveBeenCalledWith(2);
-  });
-
-  it("rejects lint selectors outside doctor lint mode", async () => {
-    await runMaintenanceCli(["doctor", "--fix", "--only", "policy/channels-denied-provider"]);
-
-    expect(doctorCommand).not.toHaveBeenCalled();
-    expect(runtime.error).toHaveBeenCalledWith(
-      "doctor lint options require --lint. Use `openclaw doctor --lint ...`.",
+        noExport: true,
+        run: false,
+        nonInteractive: true,
+        updateResult: "/tmp/failure.json",
+      },
+    ],
+    [
+      "triage --agent qwen",
+      triageCommand,
+      { json: false, noExport: false, run: false, agent: "qwen" },
+    ],
+    ["dashboard --no-open --json", dashboardCommand, { noOpen: true, json: true }],
+    [
+      "reset --scope full --yes --non-interactive --dry-run",
+      resetCommand,
+      { scope: "full", yes: true, nonInteractive: true, dryRun: true },
+    ],
+    [
+      "uninstall --all --yes --non-interactive --dry-run",
+      uninstallCommand,
+      { all: true, yes: true, nonInteractive: true, dryRun: true },
+    ],
+  ] as const)("dispatches %s", async (args, command, options) => {
+    await runCli(args);
+    expect(command).toHaveBeenCalledExactlyOnceWith(
+      runtime,
+      command === triageCommand ? options : expect.objectContaining(options),
     );
-    expect(runtime.exit).toHaveBeenCalledWith(2);
   });
 
-  it("writes JSON when another Doctor machine mode rejects lint selectors", async () => {
-    const message = "doctor lint options require --lint. Use `openclaw doctor --lint ...`.";
-
-    await runMaintenanceCli(["doctor", "--post-upgrade", "--json", "--only", "core/example"]);
-
-    expect(doctorCommand).not.toHaveBeenCalled();
-    expect(runDoctorLintCli).not.toHaveBeenCalled();
-    expect(runtime.writeJson).toHaveBeenCalledWith(jsonFailure(message));
-    expect(runtime.error).not.toHaveBeenCalled();
-    expect(runtime.exit).toHaveBeenCalledWith(2);
-  });
-
-  it("rejects --all outside doctor lint mode", async () => {
-    await runMaintenanceCli(["doctor", "--all"]);
-
-    expect(doctorCommand).not.toHaveBeenCalled();
-    expect(runDoctorLintCli).not.toHaveBeenCalled();
-    expect(runtime.error).toHaveBeenCalledWith(
-      "doctor lint options require --lint. Use `openclaw doctor --lint ...`.",
-    );
-    expect(runtime.exit).toHaveBeenCalledWith(2);
-  });
-
-  it("writes JSON to stdout when doctor JSON mode fails before findings are emitted", async () => {
-    runDoctorLintCli.mockRejectedValue(new Error("lint failed"));
-
-    await runMaintenanceCli(["doctor", "--json"]);
-
-    expect(runtime.writeJson).toHaveBeenCalledWith(jsonFailure("lint failed"));
-    expect(runtime.error).not.toHaveBeenCalled();
-    expect(runtime.exit).toHaveBeenCalledWith(2);
-  });
-
-  it("keeps Doctor lint failures on stderr for an interactive terminal", async () => {
-    const stdoutDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
-    Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
-    runDoctorLintCli.mockRejectedValue(new Error("lint failed"));
-
-    try {
-      await runMaintenanceCli(["doctor", "--lint"]);
-
-      expect(runtime.error).toHaveBeenCalledWith("lint failed");
-      expect(runtime.writeJson).not.toHaveBeenCalled();
-      expect(runtime.exit).toHaveBeenCalledWith(2);
-    } finally {
-      if (stdoutDescriptor) {
-        Object.defineProperty(process.stdout, "isTTY", stdoutDescriptor);
-      } else {
-        Reflect.deleteProperty(process.stdout, "isTTY");
-      }
-    }
-  });
-
-  it("rejects lint-only selectors outside lint mode", async () => {
-    await runMaintenanceCli(["doctor", "--only", "core/example"]);
-
-    expect(doctorCommand).not.toHaveBeenCalled();
-    expect(runDoctorLintCli).not.toHaveBeenCalled();
-    expect(runtime.error).toHaveBeenCalledWith(
-      "doctor lint options require --lint. Use `openclaw doctor --lint ...`.",
-    );
-    expect(runtime.exit).toHaveBeenCalledWith(2);
-  });
-
-  it("passes output options to dashboard command", async () => {
-    dashboardCommand.mockResolvedValue(undefined);
-
-    await runMaintenanceCli(["dashboard", "--no-open", "--json"]);
-
-    expect(dashboardCommand).toHaveBeenCalledTimes(1);
-    const [runtimeArg, options] = commandCall(dashboardCommand);
-    expect(runtimeArg).toBe(runtime);
-    expect(options.noOpen).toBe(true);
-    expect(options.json).toBe(true);
-  });
-
-  it("passes reset options to reset command", async () => {
-    resetCommand.mockResolvedValue(undefined);
-
-    await runMaintenanceCli([
-      "reset",
-      "--scope",
-      "full",
-      "--yes",
-      "--non-interactive",
-      "--dry-run",
-    ]);
-
-    expect(resetCommand).toHaveBeenCalledTimes(1);
-    const [runtimeArg, options] = commandCall(resetCommand);
-    expect(runtimeArg).toBe(runtime);
-    expect(options.scope).toBe("full");
-    expect(options.yes).toBe(true);
-    expect(options.nonInteractive).toBe(true);
-    expect(options.dryRun).toBe(true);
-  });
-
-  it("passes uninstall options to uninstall command", async () => {
-    uninstallCommand.mockResolvedValue(undefined);
-
-    await runMaintenanceCli([
-      "uninstall",
-      "--service",
-      "--state",
-      "--workspace",
-      "--app",
-      "--all",
-      "--yes",
-      "--non-interactive",
-      "--dry-run",
-    ]);
-
-    expect(uninstallCommand).toHaveBeenCalledTimes(1);
-    const [runtimeArg, options] = commandCall(uninstallCommand);
-    expect(runtimeArg).toBe(runtime);
-    expect(options.service).toBe(true);
-    expect(options.state).toBe(true);
-    expect(options.workspace).toBe(true);
-    expect(options.app).toBe(true);
-    expect(options.all).toBe(true);
-    expect(options.yes).toBe(true);
-    expect(options.nonInteractive).toBe(true);
-    expect(options.dryRun).toBe(true);
-  });
-
-  it("exits with code 1 when dashboard fails", async () => {
-    dashboardCommand.mockRejectedValue(new Error("dashboard failed"));
-
-    await runMaintenanceCli(["dashboard"]);
-
-    expect(runtime.error).toHaveBeenCalledWith("dashboard failed");
-    expect(runtime.exit).toHaveBeenCalledWith(1);
+  it.each([
+    ["--json --run", true, "triage --json cannot be combined with --run."],
+    ["--non-interactive --run", false, "triage --non-interactive cannot be combined with --run."],
+    ["--run --agent codex", false, "triage --run cannot be combined with --agent."],
+    [
+      "--agent unknown-agent",
+      false,
+      "Invalid --agent. Use agy, claude, codex, cursor, grok, kimi, muse, opencode, pi, qwen.",
+    ],
+  ] as const)("rejects incompatible triage options %s", async (args, json, message) => {
+    await runCli(`triage ${args}`);
+    expectNoCalls(triageCommand);
+    expectFailure(message, json);
   });
 });

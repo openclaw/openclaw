@@ -1,8 +1,10 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
+import { copyWithPathPatch } from "./config-form-copy-on-write.ts";
 import {
   arrayInputConstraints,
   canApplyArrayCandidate,
+  canApplyObjectCandidate,
   configValuesEqual,
   defaultValue,
   isSupportedConfigValueValid,
@@ -13,16 +15,54 @@ import {
   objectPropertySchema,
   requiredPropertyKeys,
 } from "./config-form.constraints.ts";
-import { coerceConfigFormNumberString } from "./config-form.numeric.ts";
+import { coerceConfigFormNumberString, formatConfigFormNumber } from "./config-form.numeric.ts";
 import type { JsonSchema } from "./config-form.shared.ts";
 
 describe("config form schema constraints", () => {
+  it("rejects newly invalid keys without blocking repairs to existing invalid entries", () => {
+    const schema = {
+      type: "object",
+      propertyNames: { type: "string", pattern: "^[a-z]+$" },
+      additionalProperties: { type: "integer", minimum: 0 },
+    };
+    const current = { primary: -1 };
+    expect(canApplyObjectCandidate(schema, current, { "bad/key": -1 })).toBe(false);
+    expect(canApplyObjectCandidate(schema, current, { ...current, "bad/key": 1 })).toBe(false);
+    expect(canApplyObjectCandidate(schema, current, { ...current, backup: 1 })).toBe(true);
+    expect(canApplyObjectCandidate(schema, current, { primary: 1 })).toBe(true);
+    expect(canApplyObjectCandidate(schema, { "old/key": -1 }, { "old/key": 1 })).toBe(true);
+  });
+
   it("coerces only decimal and scientific config number spellings", () => {
     expect(coerceConfigFormNumberString("42.5", false)).toBe(42.5);
     expect(coerceConfigFormNumberString(".5e2", false)).toBe(50);
     expect(coerceConfigFormNumberString("-2.5E-3", false)).toBe(-0.0025);
     expect(coerceConfigFormNumberString("1e5", true)).toBe(100_000);
     expect(coerceConfigFormNumberString("", false)).toBeUndefined();
+    expect(coerceConfigFormNumberString("9007199254740991", true)).toBe(Number.MAX_SAFE_INTEGER);
+    expect(coerceConfigFormNumberString("9.007199254740991e15", true)).toBe(
+      Number.MAX_SAFE_INTEGER,
+    );
+    expect(coerceConfigFormNumberString("9007199254740992", true)).toBe(9_007_199_254_740_992);
+    expect(coerceConfigFormNumberString("9007199254740993", true)).toBe("9007199254740993");
+    expect(coerceConfigFormNumberString("-9007199254740993", false)).toBe("-9007199254740993");
+    expect(coerceConfigFormNumberString("9007199254740992.0", true)).toBe(9_007_199_254_740_992);
+    expect(coerceConfigFormNumberString("9007199254740993.0", true)).toBe("9007199254740993.0");
+    expect(coerceConfigFormNumberString("10481133113146081487e0", true)).toBe(
+      "10481133113146081487e0",
+    );
+    expect(coerceConfigFormNumberString("9.007199254740993e15", true)).toBe("9.007199254740993e15");
+    expect(coerceConfigFormNumberString("9.007199254740992e15", true)).toBe(9_007_199_254_740_992);
+    expect(coerceConfigFormNumberString("-9.007199254740993e15", true)).toBe(
+      "-9.007199254740993e15",
+    );
+    expect(coerceConfigFormNumberString("0.10", false)).toBe(0.1);
+    expect(coerceConfigFormNumberString("1.0000000000000002", false)).toBe(1.0000000000000002);
+    expect(coerceConfigFormNumberString("1.0000000000000001", false)).toBe("1.0000000000000001");
+    expect(coerceConfigFormNumberString("9007199254740991.1", false)).toBe("9007199254740991.1");
+    expect(coerceConfigFormNumberString("1e-324", false)).toBe("1e-324");
+    expect(coerceConfigFormNumberString("0e-1025", false)).toBe(0);
+    expect(Object.is(coerceConfigFormNumberString("-0e2000", false), -0)).toBe(true);
 
     for (const spelling of [
       "0x10",
@@ -40,11 +80,22 @@ describe("config form schema constraints", () => {
     expect(coerceConfigFormNumberString("42.5", true)).toBe("42.5");
   });
 
-  it("rejects non-finite decimal rationals and schema multiples", () => {
-    expect(numericInputConstraints({ type: "number", multipleOf: Number.NaN }).step).toBe("any");
-    expect(
-      numericInputConstraints({ type: "integer", multipleOf: Number.POSITIVE_INFINITY }).step,
-    ).toBe(1);
+  it("compares integer spellings against the exact binary double", () => {
+    const exactLargeInteger = Number("1000000000000000128");
+    expect(coerceConfigFormNumberString("1000000000000000100", true)).toBe("1000000000000000100");
+    expect(coerceConfigFormNumberString("1000000000000000100", false)).toBe("1000000000000000100");
+    expect(coerceConfigFormNumberString("-1000000000000000100", false)).toBe(
+      "-1000000000000000100",
+    );
+    expect(coerceConfigFormNumberString("1000000000000000127", true)).toBe("1000000000000000127");
+    expect(coerceConfigFormNumberString("1000000000000000128", true)).toBe(exactLargeInteger);
+    expect(formatConfigFormNumber(exactLargeInteger)).toBe("1000000000000000128");
+    expect(formatConfigFormNumber(-0)).toBe("0");
+    expect(formatConfigFormNumber(0.1)).toBe("0.1");
+    expect(coerceConfigFormNumberString(formatConfigFormNumber(exactLargeInteger), true)).toBe(
+      exactLargeInteger,
+    );
+    expect(coerceConfigFormNumberString("9007199254740994", true)).toBe(9_007_199_254_740_994);
   });
 
   it("aligns native numeric bounds to JSON Schema multiples", () => {
@@ -124,12 +175,6 @@ describe("config form schema constraints", () => {
         multipleOf: 1.5e-7,
       }),
     ).toBe(4.5e-7);
-  });
-
-  it("derives integer-compatible steps from fractional multiples", () => {
-    expect(numericInputConstraints({ type: "integer", multipleOf: 0.5 }).step).toBe(1);
-    expect(numericInputConstraints({ type: "integer", multipleOf: 2.5 }).step).toBe(5);
-    expect(normalizeNumericValue(3, { type: "integer", multipleOf: 2.5 })).toBe(5);
   });
 
   it("derives valid defaults for exclusive unconstrained bounds", () => {
@@ -411,27 +456,8 @@ describe("config form schema constraints", () => {
     ).toBe(NO_SAFE_DEFAULT);
   });
 
-  it("clones mutable schema defaults and repeated derived defaults", () => {
-    const expectIndependentCandidates = (
-      schema: JsonSchema,
-      source: { nested: { enabled: boolean } },
-    ) => {
-      const first = defaultValue(schema) as typeof source;
-      const second = defaultValue(schema) as typeof source;
-
-      expect(first).not.toBe(source);
-      expect(second).not.toBe(first);
-      first.nested.enabled = false;
-      expect(second.nested.enabled).toBe(true);
-      expect(source.nested.enabled).toBe(true);
-    };
-    const explicitDefault = { nested: { enabled: true } };
-    expectIndependentCandidates({ type: "object", default: explicitDefault }, explicitDefault);
-    const constant = { nested: { enabled: true } };
-    expectIndependentCandidates({ type: "object", const: constant }, constant);
-    const enumerated = { nested: { enabled: true } };
-    expectIndependentCandidates({ type: "object", enum: [enumerated] }, enumerated);
-
+  it("edits repeated defaults without changing another row or the schema", () => {
+    const tags = ["primary"];
     const repeated = defaultValue({
       type: "array",
       minItems: 2,
@@ -439,15 +465,16 @@ describe("config form schema constraints", () => {
         type: "object",
         required: ["tags"],
         properties: {
-          tags: { type: "array", default: ["primary"] },
+          tags: { type: "array", default: tags },
         },
       },
-    }) as Array<{ tags: string[] }>;
-
-    expect(repeated).toHaveLength(2);
-    expect(repeated[0]).not.toBe(repeated[1]);
-    expect(repeated[0]?.tags).not.toBe(repeated[1]?.tags);
-    repeated[0]?.tags.push("changed");
-    expect(repeated[1]?.tags).toEqual(["primary"]);
+    });
+    const edited = copyWithPathPatch(repeated, [0, "tags", 0], "changed");
+    expect(edited).toEqual({
+      ok: true,
+      value: [{ tags: ["changed"] }, { tags: ["primary"] }],
+    });
+    expect(repeated).toEqual([{ tags: ["primary"] }, { tags: ["primary"] }]);
+    expect(tags).toEqual(["primary"]);
   });
 });

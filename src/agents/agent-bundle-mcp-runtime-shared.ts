@@ -11,11 +11,23 @@ import type {
 import type { McpServerConnectionResolved } from "./mcp-connection-resolver.js";
 
 export const SESSION_MCP_RUNTIME_MANAGER_KEY = Symbol.for("openclaw.sessionMcpRuntimeManager");
-export const DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS = 10 * 60 * 1000;
 export const SESSION_MCP_RUNTIME_SWEEP_INTERVAL_MS = 60 * 1000;
-// Bounds live per-sender MCP transports in one session between idle sweeps;
-// far above concurrent-run parallelism, so active requesters never evict.
-export const SESSION_MCP_MAX_IDLE_REQUESTER_RUNTIMES = 64;
+// Includes runtimes being created or drained; idle owners yield capacity at the limit.
+export const SESSION_MCP_MAX_LIVE_RUNTIMES = 256;
+
+export class SessionMcpRuntimeCapacityError extends Error {
+  constructor(
+    readonly notify: boolean,
+    message = "MCP tools are temporarily unavailable: all 256 Gateway MCP runtimes are in use. This turn will continue without MCP tools; retry on the next turn.",
+  ) {
+    super(message);
+  }
+}
+
+/** TTL eviction is opt-in; capacity eviction also applies when zero. */
+export function resolveSessionMcpRuntimeIdleTtlMs(cfg?: OpenClawConfig): number {
+  return Math.floor(cfg?.mcp?.sessionIdleTtlMs ?? 0);
+}
 
 /** Checks whether harness-scoped MCP can affect a turn without loading its runtime graph. */
 export function shouldLoadRequesterScopedMcpHarnessRuntime(params: {
@@ -34,6 +46,7 @@ export function shouldLoadRequesterScopedMcpHarnessRuntime(params: {
 export type CreateSessionMcpRuntime = (params: {
   sessionId: string;
   sessionKey?: string;
+  agentId?: string;
   workspaceDir: string;
   agentDir?: string;
   cfg?: OpenClawConfig;
@@ -47,8 +60,5 @@ export type CreateSessionMcpRuntime = (params: {
   requesterConnect?: RequesterMcpConnect;
   configFingerprint?: string;
   toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
-}) => SessionMcpRuntime;
-
-export function resolveSessionMcpRuntimeIdleTtlMs(): number {
-  return DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS;
-}
+  toolDenylist?: string[];
+}) => SessionMcpRuntime | Promise<SessionMcpRuntime>;

@@ -1,15 +1,19 @@
-// Test Report Utils tests cover test report utils script behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   collectVitestAssertionDurations,
   collectVitestFileDurations,
   normalizeTrackedRepoPath,
-  tryReadJsonFile,
 } from "../../scripts/test-report-utils.mts";
+import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
+import { requireNodeTool } from "../helpers/node-toolchain.js";
+import { runNodeScript } from "../helpers/run-node-script.js";
+import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
+import { createPreparedVitestCliFixture } from "./run-vitest-bounded-fixture.test-support.js";
 
 const { spawnSyncMock } = vi.hoisted(() => ({
   spawnSyncMock: vi.fn(),
@@ -19,139 +23,138 @@ vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return {
     ...actual,
-    spawnSync: spawnSyncMock,
+    spawnSync: spawnSyncMock.mockImplementation(actual.spawnSync),
   };
 });
 
-describe("scripts/test-report-utils normalizeTrackedRepoPath", () => {
-  it("normalizes repo-local absolute paths to repo-relative slash paths", () => {
-    const absoluteFile = path.join(process.cwd(), "src", "tools", "example.test.ts");
+it("preserves external absolute paths as normalized absolute paths", () => {
+  const externalFile = path.join(path.parse(process.cwd()).root, "tmp", "outside.test.ts");
 
-    expect(normalizeTrackedRepoPath(absoluteFile)).toBe("src/tools/example.test.ts");
-  });
-
-  it("preserves external absolute paths as normalized absolute paths", () => {
-    const externalFile = path.join(path.parse(process.cwd()).root, "tmp", "outside.test.ts");
-
-    expect(normalizeTrackedRepoPath(externalFile)).toBe(externalFile.split(path.sep).join("/"));
-  });
+  expect(normalizeTrackedRepoPath(externalFile)).toBe(externalFile.split(path.sep).join("/"));
 });
 
-describe("scripts/test-report-utils collectVitestFileDurations", () => {
-  it("extracts per-file durations and applies file normalization", () => {
-    const report = {
-      testResults: [
-        {
-          name: path.join(process.cwd(), "src", "alpha.test.ts"),
-          startTime: 100,
-          endTime: 460,
-          assertionResults: [{}, {}],
-        },
-        {
-          name: "src/zero.test.ts",
-          startTime: 300,
-          endTime: 300,
-          assertionResults: [{}],
-        },
-      ],
-    };
-
-    expect(collectVitestFileDurations(report, normalizeTrackedRepoPath)).toEqual([
+it.each([
+  {
+    kind: "file",
+    collect: collectVitestFileDurations,
+    testResults: [
       {
-        file: "src/alpha.test.ts",
-        durationMs: 360,
-        testCount: 2,
+        name: path.join(process.cwd(), "src", "alpha.test.ts"),
+        startTime: 100,
+        endTime: 460,
+        assertionResults: [{}, {}],
       },
-    ]);
-  });
-});
-
-describe("scripts/test-report-utils collectVitestAssertionDurations", () => {
-  it("extracts per-test durations with normalized files", () => {
-    const report = {
-      testResults: [
-        {
-          name: path.join(process.cwd(), "src", "alpha.test.ts"),
-          assertionResults: [
-            { duration: 25, fullName: "alpha fast", status: "passed" },
-            { duration: 0, fullName: "alpha zero", status: "passed" },
-          ],
-        },
-      ],
-    };
-
-    expect(collectVitestAssertionDurations(report, normalizeTrackedRepoPath)).toEqual([
+      { name: "src/zero.test.ts", startTime: 300, endTime: 300, assertionResults: [{}] },
+    ],
+    expected: [{ file: "src/alpha.test.ts", durationMs: 360, testCount: 2 }],
+  },
+  {
+    kind: "assertion",
+    collect: collectVitestAssertionDurations,
+    testResults: [
       {
-        file: "src/alpha.test.ts",
-        durationMs: 25,
-        fullName: "alpha fast",
-        status: "passed",
+        name: path.join(process.cwd(), "src", "alpha.test.ts"),
+        assertionResults: [
+          { duration: 25, fullName: "alpha fast", status: "passed" },
+          { duration: 0, fullName: "alpha zero", status: "passed" },
+        ],
       },
-    ]);
-  });
-});
-
-describe("scripts/test-report-utils tryReadJsonFile", () => {
-  it("returns the fallback when the file is missing", () => {
-    const missingPath = path.join(os.tmpdir(), `openclaw-missing-${Date.now()}.json`);
-
-    expect(tryReadJsonFile(missingPath, { ok: true })).toEqual({ ok: true });
-  });
-
-  it("reads valid JSON files", () => {
-    const tempPath = path.join(os.tmpdir(), `openclaw-json-${Date.now()}.json`);
-    fs.writeFileSync(tempPath, JSON.stringify({ ok: true }));
-
-    try {
-      expect(tryReadJsonFile(tempPath, null)).toEqual({ ok: true });
-    } finally {
-      fs.unlinkSync(tempPath);
-    }
-  });
+    ],
+    expected: [
+      { file: "src/alpha.test.ts", durationMs: 25, fullName: "alpha fast", status: "passed" },
+    ],
+  },
+])("extracts $kind durations with normalized paths", ({ collect, testResults, expected }) => {
+  expect(collect({ testResults }, normalizeTrackedRepoPath)).toEqual(expected);
 });
 
 describe("scripts/test-report-utils runVitestJsonReport", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.resetModules();
-    spawnSyncMock.mockReset();
+    const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    // Keep process-cleanup probes native; report-only cases override the implementation below.
+    spawnSyncMock.mockReset().mockImplementation(actual.spawnSync);
   });
 
-  it("launches Vitest through pnpm exec", async () => {
-    const { runVitestJsonReport } = await import("../../scripts/test-report-utils.mts");
-    const reportPath = path.join(os.tmpdir(), `openclaw-vitest-json-${Date.now()}.json`);
-    spawnSyncMock.mockImplementation(() => {
-      fs.writeFileSync(reportPath, `${JSON.stringify({ testResults: [] })}\n`, "utf8");
-      return { status: 0 };
-    });
-
-    try {
+  it("creates and reuses a native JSON report without a package-manager PATH", async ({
+    signal,
+    onTestFinished,
+  }) => {
+    const lifetime = createFixtureLifetime();
+    onTestFinished(() => lifetime.cleanup());
+    await lifetime.run(async () => {
+      const repoRoot = process.cwd();
+      const prepared = await lifetime.acquire(async (rollback) => {
+        const fixture = createPreparedVitestCliFixture(repoRoot, [
+          "test-report-utils.mts",
+          "run-vitest.mts",
+        ]);
+        try {
+          await fixture.prepare();
+          return fixture;
+        } catch (error) {
+          return rollback(error, () => fixture.cleanup());
+        }
+      });
+      const root = prepared.root;
+      const bin = path.join(root, "bin");
+      fs.mkdirSync(bin);
+      const linkBin = (name: string, target: string) =>
+        fs.symlinkSync(
+          target,
+          path.join(bin, `${name}${process.platform === "win32" ? ".exe" : ""}`),
+          "file",
+        );
+      linkBin("node", requireNodeTool("node"));
+      if (process.versions.bun) {
+        linkBin("bun", process.execPath);
+      }
+      const config = path.join(root, "vitest.config.mjs");
+      const reportPath = path.join(root, "report.json");
+      const entry = path.join(root, "report.mjs");
+      fs.writeFileSync(
+        config,
+        `export default { root: ${JSON.stringify(root)}, test: { include: ["case.test.mjs"], globals: true, maxWorkers: 1 } };`,
+      );
+      fs.writeFileSync(
+        path.join(root, "case.test.mjs"),
+        'test("native report fixture", () => expect(2 + 2).toBe(4));',
+      );
+      fs.writeFileSync(
+        entry,
+        `import assert from "node:assert/strict";
+import { runVitestJsonReport } from ${JSON.stringify(pathToFileURL(path.join(root, "scripts/test-report-utils.js")).href)};
+assert.equal(runVitestJsonReport(${JSON.stringify({ config, reportPath })}), ${JSON.stringify(reportPath)});
+assert.equal(runVitestJsonReport(${JSON.stringify({ config: path.join(root, "missing.config.mjs"), reportPath })}), ${JSON.stringify(reportPath)});
+`,
+      );
+      const result = await lifetime.track(
+        runNodeScript(
+          [entry],
+          testRunnerFixtureEnv({
+            PATH: bin,
+            OPENCLAW_BUN_PATH: process.versions.bun ? process.execPath : undefined,
+            OPENCLAW_LIVE_USE_REAL_HOME: "0",
+            TSX_TSCONFIG_PATH: path.join(repoRoot, "tsconfig.json"),
+          }),
+          30_000,
+          { cwd: root, signal, requireProcessTreeExit: process.platform !== "win32" },
+        ),
+      );
+      const { error, status: exitStatus } = result;
+      expect({ error, status: exitStatus }, result.stdout + result.stderr).toEqual({
+        error: undefined,
+        status: 0,
+      });
+      const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
+      expect(report.success).toBe(true);
       expect(
-        runVitestJsonReport({
-          config: "test/vitest/vitest.unit.config.ts",
-          reportPath,
-        }),
-      ).toBe(reportPath);
-    } finally {
-      fs.rmSync(reportPath, { force: true });
-    }
-
-    expect(spawnSyncMock).toHaveBeenCalledWith(
-      "pnpm",
-      [
-        "exec",
-        "vitest",
-        "run",
-        "--config",
-        "test/vitest/vitest.unit.config.ts",
-        "--reporter=json",
-        "--outputFile",
-        reportPath,
-      ],
-      {
-        stdio: "inherit",
-        env: process.env,
-      },
-    );
+        report.testResults.flatMap(
+          (file: { assertionResults: { title: string; status: string }[] }) =>
+            file.assertionResults.map(({ title, status }) => [title, status]),
+        ),
+      ).toEqual([["native report fixture", "passed"]]);
+    });
   });
 
   it("uses distinct default report paths when invocations share a clock tick", async () => {
@@ -167,12 +170,8 @@ describe("scripts/test-report-utils runVitestJsonReport", () => {
     });
 
     try {
-      runVitestJsonReport({
-        config: "test/vitest/vitest.unit.config.ts",
-      });
-      runVitestJsonReport({
-        config: "test/vitest/vitest.unit.config.ts",
-      });
+      runVitestJsonReport({ config: "test/vitest/vitest.unit.config.ts" });
+      runVitestJsonReport({ config: "test/vitest/vitest.unit.config.ts" });
 
       expect(reportPaths).toHaveLength(2);
       expect(reportPaths[0]).not.toBe(reportPaths[1]);
@@ -201,10 +200,7 @@ describe("scripts/test-report-utils runVitestJsonReport", () => {
 
     try {
       expect(() =>
-        runVitestJsonReport({
-          config: "test/vitest/vitest.unit.config.ts",
-          reportPath,
-        }),
+        runVitestJsonReport({ config: "test/vitest/vitest.unit.config.ts", reportPath }),
       ).toThrow("process.exit 1");
       expect(errorSpy).toHaveBeenCalledWith(
         expect.stringContaining("[test-report-utils] missing Vitest JSON report:"),

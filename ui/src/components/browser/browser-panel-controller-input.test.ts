@@ -1,5 +1,10 @@
+import { runInNewContext } from "node:vm";
+import { createSignal, createComponent } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { GatewayRequestError } from "../../api/gateway.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import {
   createBrowserClient,
   createBrowserPanelTestController,
@@ -14,11 +19,11 @@ import {
   TestBrowserPanelHost,
   type BrowserRequestEnvelope,
 } from "./browser-panel-controller-test-support.ts";
-import { BrowserPanelController } from "./browser-panel-controller.ts";
+import { BrowserPanelChrome } from "./browser-panel-render.tsx";
 
 setupBrowserPanelTestCleanup();
 
-describe("BrowserPanelController capture and input ownership", () => {
+describe("BrowserPanel capture and input ownership", () => {
   it("restores the prior selected screenshot when tab focus is rejected", async () => {
     const previousCapture = createDeferred<unknown>();
     const focus = createDeferred<unknown>();
@@ -73,8 +78,15 @@ describe("BrowserPanelController capture and input ownership", () => {
       });
       const controller = createBrowserPanelTestController(client, "tab-a", initialUrl);
       controller.tabs = [
-        { id: "tab-a", targetId: "raw-a", title: "Initial", url: initialUrl },
         {
+          kind: "remote" as const,
+          id: "tab-a",
+          targetId: "raw-a",
+          title: "Initial",
+          url: initialUrl,
+        },
+        {
+          kind: "remote" as const,
           id: "tab-b",
           targetId: "raw-b",
           title: "Selected",
@@ -282,13 +294,20 @@ describe("BrowserPanelController capture and input ownership", () => {
       }
       throw new Error(`Unexpected browser route: ${envelope.method} ${envelope.path}`);
     });
-    const controller = new BrowserPanelController(new TestBrowserPanelHost(client));
+    const controller = new TestBrowserPanelHost(client).createPanel();
     controller.activeTargetId = "active-tab";
     const activeView = createView("active-tab", activeUrl);
     controller.view = activeView;
     controller.tabs = [
-      { id: "active-tab", targetId: "raw-active", title: "Active", url: activeUrl },
       {
+        kind: "remote" as const,
+        id: "active-tab",
+        targetId: "raw-active",
+        title: "Active",
+        url: activeUrl,
+      },
+      {
+        kind: "remote" as const,
         id: "background-tab",
         targetId: "raw-background",
         title: "Background",
@@ -455,8 +474,20 @@ describe("BrowserPanelController capture and input ownership", () => {
     });
     const controller = createBrowserPanelTestController(client, "tab-a", initialUrl);
     controller.tabs = [
-      { id: "tab-a", targetId: "raw-a", title: "Initial", url: initialUrl },
-      { id: "tab-b", targetId: "raw-b", title: "Selected", url: selectedUrl },
+      {
+        kind: "remote" as const,
+        id: "tab-a",
+        targetId: "raw-a",
+        title: "Initial",
+        url: initialUrl,
+      },
+      {
+        kind: "remote" as const,
+        id: "tab-b",
+        targetId: "raw-b",
+        title: "Selected",
+        url: selectedUrl,
+      },
     ];
 
     const pendingNavigation = controller.openUrl(destinationUrl, { newTab: false });
@@ -550,6 +581,115 @@ describe("BrowserPanelController capture and input ownership", () => {
     expect(controller.loading).toBe(false);
   });
 
+  it("clears stale inspected elements and owned errors across a failed inspection retry", async () => {
+    vi.useFakeTimers({ now: 1_000 });
+    let inspections = 0;
+    const initialNode = createInspectedNode("initial");
+    const recoveredNode = createInspectedNode("recovered");
+    const { client } = createBrowserClient(async () => {
+      inspections += 1;
+      if (inspections === 2) {
+        throw new Error("Browser connection temporarily unavailable");
+      }
+      return { result: inspections === 1 ? initialNode : recoveredNode };
+    });
+    const controller = createBrowserPanelTestController(client, "tab-a");
+    controller.setMode("inspect");
+
+    controller.handleOverlayPointerMove(createPointer(10, 20));
+    await flushBrowserResponses();
+    expect(controller.inspected).toEqual(initialNode);
+
+    await vi.advanceTimersByTimeAsync(120);
+    controller.handleOverlayPointerMove(createPointer(30, 40));
+    expect(controller.inspected).toBeNull();
+    await flushBrowserResponses();
+
+    expect(controller.errorText).toBe(
+      "Browser request failed: Browser connection temporarily unavailable",
+    );
+    expect(controller.mode).toBe("inspect");
+    expect(controller.evaluateUnavailable).toBe(false);
+    expect(controller.inspected).toBeNull();
+    const renderedPanel = document.createElement("div");
+    const [revision, setRevision] = createSignal(0);
+    mountSolid(
+      () =>
+        createComponent(BrowserPanelChrome, {
+          get controller() {
+            revision();
+            return controller;
+          },
+          dock: "right",
+          height: 400,
+          width: 400,
+          onDockChange() {},
+          onClose() {},
+          embedded: false,
+          tabsInHeader: false,
+        }),
+      { container: renderedPanel },
+    );
+    flush();
+    vi.spyOn(renderedPanel.querySelector(".bp-stage")!, "getBoundingClientRect").mockReturnValue(
+      controller.host.renderRoot.firstElementChild!.getBoundingClientRect(),
+    );
+    expect(renderedPanel.querySelector('[role="alert"]')?.textContent).toBe(
+      "Browser request failed: Browser connection temporarily unavailable",
+    );
+
+    await vi.advanceTimersByTimeAsync(120);
+    controller.handleOverlayPointerMove(createPointer(70, 80));
+    await flushBrowserResponses();
+
+    expect(controller.inspected).toEqual(recoveredNode);
+    expect(controller.errorText).toBeNull();
+    expect(controller.inspectPointer).toEqual({ x: 0.7, y: 0.8 });
+    setRevision((value) => value + 1);
+    flush();
+    expect(renderedPanel.querySelector('[role="alert"]')).toBeNull();
+    expect(
+      renderedPanel.querySelector<HTMLButtonElement>('button[aria-label="Inspect element"]')
+        ?.disabled,
+    ).toBe(false);
+  });
+
+  it.each([
+    {
+      name: "legacy Browser node message without an action code",
+      message: "403: act:evaluate is disabled by config (browser.evaluateEnabled=false).",
+      details: { nodeError: { message: "legacy Browser node" } },
+      expected: true,
+    },
+    {
+      name: "sanitized unknown action code with matching prose",
+      message: "act:evaluate is disabled by config (browser.evaluateEnabled=false).",
+      details: { unrecognizedCode: true },
+      expected: false,
+    },
+  ])(
+    "classifies $name without reinterpreting structured errors",
+    async ({ message, details, expected }) => {
+      const { client } = createBrowserClient(async () => {
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message,
+          details,
+        });
+      });
+      const controller = createBrowserPanelTestController(client, "tab-a");
+      controller.setMode("inspect");
+
+      controller.handleOverlayPointerMove(createPointer(10, 20));
+      await flushBrowserResponses();
+
+      expect(controller.evaluateUnavailable).toBe(expected);
+      expect(controller.mode).toBe(expected ? "interact" : "inspect");
+      expect(controller.errorText).toBeTruthy();
+      expect(controller.errorText?.includes("Browser request failed")).toBe(!expected);
+    },
+  );
+
   it("keeps the newest inspected element when pointer responses finish out of order", async () => {
     vi.useFakeTimers({ now: 1_000 });
     const first = createDeferred<unknown>();
@@ -589,8 +729,10 @@ describe("BrowserPanelController capture and input ownership", () => {
     vi.useFakeTimers({ now: 1_000 });
     const latestInspection = createDeferred<unknown>();
     let inspectionCount = 0;
+    const elementFromPoint = vi.fn(() => null);
     const { client, request } = createBrowserClient(async (envelope) => {
       if (envelope.path === "/act" && envelope.body?.kind === "evaluate") {
+        runInNewContext(`(${String(envelope.body.fn)})()`, { document: { elementFromPoint } });
         inspectionCount += 1;
         if (inspectionCount === 1) {
           return { result: createInspectedNode("initial") };
@@ -619,10 +761,10 @@ describe("BrowserPanelController capture and input ownership", () => {
         body: expect.objectContaining({
           kind: "evaluate",
           targetId: "tab-a",
-          fn: expect.stringContaining("document.elementFromPoint(70, 80)"),
         }),
       }),
     );
+    expect(elementFromPoint).toHaveBeenLastCalledWith(70, 80);
     const latestNode = createInspectedNode("latest-coalesced");
     latestInspection.resolve({ result: latestNode });
     await flushBrowserResponses();
@@ -712,8 +854,15 @@ describe("BrowserPanelController capture and input ownership", () => {
     });
     const controller = createBrowserPanelTestController(client, "tab-a", currentUrl);
     controller.tabs = [
-      { id: "tab-a", targetId: "raw-a", title: "Current", url: currentUrl },
       {
+        kind: "remote" as const,
+        id: "tab-a",
+        targetId: "raw-a",
+        title: "Current",
+        url: currentUrl,
+      },
+      {
+        kind: "remote" as const,
         id: "tab-b",
         targetId: "raw-b",
         title: "Background",
@@ -729,8 +878,15 @@ describe("BrowserPanelController capture and input ownership", () => {
     await flushBrowserResponses();
 
     expect(controller.tabs).toEqual([
-      { id: "tab-a", targetId: "raw-a", title: "Previous", url: previousUrl },
       {
+        kind: "remote" as const,
+        id: "tab-a",
+        targetId: "raw-a",
+        title: "Previous",
+        url: previousUrl,
+      },
+      {
+        kind: "remote" as const,
         id: "tab-b",
         targetId: "raw-b",
         title: "Background",
@@ -743,6 +899,43 @@ describe("BrowserPanelController capture and input ownership", () => {
         return (envelope as BrowserRequestEnvelope).path === "/tabs";
       }),
     ).toEqual([]);
+  });
+
+  it("scrolls at the remote point under the wheel pointer", async () => {
+    vi.useFakeTimers();
+    const scroll = vi.fn();
+    const hitTest = vi.fn(() => null);
+    const { client, request } = createBrowserClient(async (envelope) => {
+      if (envelope.path === "/act") {
+        const fn = envelope.body?.fn;
+        if (typeof fn !== "string") {
+          throw new Error("Expected a browser evaluate script");
+        }
+        return {
+          result: runInNewContext(`(${fn})()`, {
+            document: { elementFromPoint: hitTest },
+            window: { scrollBy: scroll },
+          }),
+        };
+      }
+      throw new Error(`Unexpected browser route: ${envelope.path}`);
+    });
+    const controller = createBrowserPanelTestController(client, "tab-a");
+
+    controller.input.handleWheel(
+      new WheelEvent("wheel", { deltaY: 60, clientX: 30, clientY: 40, cancelable: true }),
+    );
+    controller.input.handleWheel(
+      new WheelEvent("wheel", { deltaY: 40, clientX: 32, clientY: 44, cancelable: true }),
+    );
+    await vi.advanceTimersByTimeAsync(150);
+
+    const actions = request.mock.calls
+      .map(([, envelope]) => envelope as BrowserRequestEnvelope)
+      .filter((envelope) => envelope.path === "/act");
+    expect(actions).toHaveLength(1);
+    expect(hitTest).toHaveBeenCalledExactlyOnceWith(32, 44);
+    expect(scroll).toHaveBeenCalledExactlyOnceWith(0, 100);
   });
 
   it("never forwards a queued wheel action to a newly selected tab", async () => {
@@ -761,7 +954,7 @@ describe("BrowserPanelController capture and input ownership", () => {
     });
     const controller = createBrowserPanelTestController(client, "tab-a");
 
-    controller.handleWheel(new WheelEvent("wheel", { deltaY: 60, cancelable: true }));
+    controller.input.handleWheel(new WheelEvent("wheel", { deltaY: 60, cancelable: true }));
     void controller.selectTab("tab-b");
     await vi.advanceTimersByTimeAsync(150);
 
@@ -776,6 +969,8 @@ describe("BrowserPanelController capture and input ownership", () => {
     const oldCapture = createDeferred<unknown>();
     const freshCapture = createDeferred<unknown>();
     const captures = [oldCapture, freshCapture];
+    const oldStarted = createDeferred();
+    const freshStarted = createDeferred();
     const url = "https://example.test/page";
     const { client, request } = createBrowserClient(async (envelope) => {
       if (envelope.path === "/tabs") {
@@ -789,6 +984,7 @@ describe("BrowserPanelController capture and input ownership", () => {
         if (!capture) {
           throw new Error("Unexpected screenshot capture");
         }
+        (capture === oldCapture ? oldStarted : freshStarted).resolve();
         return await capture.promise;
       }
       if (envelope.path === "/act") {
@@ -797,12 +993,13 @@ describe("BrowserPanelController capture and input ownership", () => {
       throw new Error(`Unexpected browser route: ${envelope.path}`);
     });
     const host = new TestBrowserPanelHost(client);
-    const controller = new BrowserPanelController(host);
+    const controller = host.createPanel();
     controller.activeTargetId = "tab-a";
 
     const oldRefresh = controller.refreshAll();
+    await oldStarted.promise;
     const freshRefresh = controller.refreshAll();
-    await flushBrowserResponses();
+    await freshStarted.promise;
     expect(
       request.mock.calls.filter(([, envelope]) => {
         return (envelope as BrowserRequestEnvelope).path === "/screenshot";
@@ -847,7 +1044,7 @@ describe("BrowserPanelController capture and input ownership", () => {
       throw new Error(`Unexpected browser route: ${envelope.path}`);
     });
     const host = new TestBrowserPanelHost(client);
-    const controller = new BrowserPanelController(host);
+    const controller = host.createPanel();
     controller.activeTargetId = "tab-a";
 
     await controller.refreshAll();

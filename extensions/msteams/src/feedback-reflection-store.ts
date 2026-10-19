@@ -19,17 +19,30 @@ export async function storeSessionLearning(params: {
   sessionKey: string;
   learning: string;
 }): Promise<void> {
-  const store = getMSTeamsRuntime().state.openKeyedStore<FeedbackLearningEntry>({
+  const store = getMSTeamsRuntime().state.openKeyedStoreV2<FeedbackLearningEntry>({
     namespace: LEARNINGS_NAMESPACE,
     maxEntries: MAX_LEARNING_ENTRIES,
   });
   const key = learningStoreKey(params.storePath, params.sessionKey);
-  if (!store.update) {
-    throw new Error("plugin state atomic update is unavailable");
-  }
-  await store.update(key, (existing) => ({
+  const prepared = {
     sessionKey: params.sessionKey,
-    learnings: [...(existing?.learnings ?? []), params.learning].slice(-10),
+    learning: params.learning,
     updatedAt: Date.now(),
-  }));
+  };
+  let observed = await store.observe(key);
+  while (true) {
+    const result = await store.compareAndApply(key, observed.comparison, {
+      operation: "update",
+      action: "set",
+      value: {
+        sessionKey: prepared.sessionKey,
+        learnings: [...(observed.value?.learnings ?? []), prepared.learning].slice(-10),
+        updatedAt: prepared.updatedAt,
+      },
+    });
+    if (result.status !== "conflict") {
+      return;
+    }
+    observed = result.current;
+  }
 }

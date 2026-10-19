@@ -1,14 +1,19 @@
-// LLM Core module implements validation behavior.
+import { parseLocalSchemaRefPointer } from "@openclaw/normalization-core/json-schema";
+import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { Compile } from "typebox/compile";
 import type { TLocalizedValidationError } from "typebox/error";
+import { Pointer } from "typebox/schema";
 import type { Tool, ToolCall } from "./types.js";
 
-const validatorCache = new WeakMap<object, ReturnType<typeof Compile>>();
+const validatorCache = new WeakMap<object, WeakMap<object, ReturnType<typeof Compile>>>();
 
 /** Maximum string length accepted for schema-gated JSON coercion. */
 const MAX_JSON_COERCE_LENGTH = 64 * 1024;
 
 interface JsonSchemaObject {
+  $ref?: string;
+  $defs?: Record<string, JsonSchemaObject>;
+  definitions?: Record<string, JsonSchemaObject>;
   type?: string | string[];
   properties?: Record<string, JsonSchemaObject>;
   items?: JsonSchemaObject | JsonSchemaObject[];
@@ -26,7 +31,43 @@ function isJsonSchemaObject(value: unknown): value is JsonSchemaObject {
   return isObjectBackedRecord(value);
 }
 
-function getSchemaTypes(schema: JsonSchemaObject): string[] {
+function hasSchemaScope(schema: JsonSchemaObject): boolean {
+  return ["$id", "id", "$defs", "definitions"].some((key) => key in schema);
+}
+
+function resolveRootSchemaRef(
+  schema: JsonSchemaObject,
+  root: JsonSchemaObject | undefined,
+): JsonSchemaObject | undefined {
+  const tokens =
+    typeof schema.$ref === "string" ? parseLocalSchemaRefPointer(schema.$ref) : undefined;
+  const [tableName, name] = tokens ?? [];
+  if (
+    !root ||
+    tokens?.length !== 2 ||
+    (tableName !== "$defs" && tableName !== "definitions") ||
+    !name ||
+    hasSchemaScope(schema)
+  ) {
+    return undefined;
+  }
+  const table = tableName === "$defs" ? root.$defs : root.definitions;
+  const target = table && Object.hasOwn(table, name) ? table[name] : undefined;
+  // Scoped documents stay on their existing path; never reinterpret their refs at the tool root.
+  return isJsonSchemaObject(target) && !hasSchemaScope(target) ? target : undefined;
+}
+
+function getSchemaTypes(initialSchema: JsonSchemaObject, root?: JsonSchemaObject): string[] {
+  let schema = initialSchema;
+  const seen = new Set<JsonSchemaObject>();
+  while (schema.type === undefined && !seen.has(schema)) {
+    seen.add(schema);
+    const target = resolveRootSchemaRef(schema, root);
+    if (!target) {
+      break;
+    }
+    schema = target;
+  }
   if (typeof schema.type === "string") {
     return [schema.type];
   }
@@ -61,28 +102,15 @@ function isValidatorSchema(value: unknown): value is Tool["parameters"] {
   return isObjectBackedRecord(value);
 }
 
-const JSON_NUMBER_TOKEN_RE = /^[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))(?:e[+-]?\d+)?$/iu;
-
-function parseJsonNumberString(value: string): number | undefined {
-  const trimmed = value.trim();
-  if (!trimmed || !JSON_NUMBER_TOKEN_RE.test(trimmed)) {
-    return undefined;
-  }
-  const parsed = Number(trimmed);
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
-
-function parseJsonIntegerString(value: string): number | undefined {
-  const parsed = parseJsonNumberString(value);
-  return parsed !== undefined && Number.isSafeInteger(parsed) ? parsed : undefined;
-}
-
-function getSubSchemaValidator(schema: JsonSchemaObject): ReturnType<typeof Compile> | undefined {
+function getSubSchemaValidator(
+  schema: JsonSchemaObject,
+  root?: JsonSchemaObject,
+): ReturnType<typeof Compile> | undefined {
   if (!isValidatorSchema(schema)) {
     return undefined;
   }
   try {
-    return getValidator(schema);
+    return getValidator(schema, hasSchemaScope(schema) ? undefined : root);
   } catch {
     return undefined;
   }
@@ -90,28 +118,14 @@ function getSubSchemaValidator(schema: JsonSchemaObject): ReturnType<typeof Comp
 
 function coercePrimitiveByType(value: unknown, type: string): unknown {
   switch (type) {
-    case "number": {
-      if (value === null) {
-        return 0;
-      }
-      if (typeof value === "string" && value.trim() !== "") {
-        const parsed = parseJsonNumberString(value);
-        if (parsed !== undefined) {
-          return parsed;
-        }
-      }
-      if (typeof value === "boolean") {
-        return value ? 1 : 0;
-      }
-      return value;
-    }
+    case "number":
     case "integer": {
       if (value === null) {
         return 0;
       }
-      if (typeof value === "string" && value.trim() !== "") {
-        const parsed = parseJsonIntegerString(value);
-        if (parsed !== undefined) {
+      if (typeof value === "string") {
+        const parsed = parseStrictFiniteNumber(value);
+        if (parsed !== undefined && (type === "number" || Number.isSafeInteger(parsed))) {
           return parsed;
         }
       }
@@ -121,24 +135,11 @@ function coercePrimitiveByType(value: unknown, type: string): unknown {
       return value;
     }
     case "boolean": {
-      if (value === null) {
+      if (value === null || value === "false" || value === 0) {
         return false;
       }
-      if (typeof value === "string") {
-        if (value === "true") {
-          return true;
-        }
-        if (value === "false") {
-          return false;
-        }
-      }
-      if (typeof value === "number") {
-        if (value === 1) {
-          return true;
-        }
-        if (value === 0) {
-          return false;
-        }
+      if (value === "true" || value === 1) {
+        return true;
       }
       return value;
     }
@@ -151,23 +152,7 @@ function coercePrimitiveByType(value: unknown, type: string): unknown {
       }
       return value;
     }
-    case "array": {
-      if (
-        typeof value === "string" &&
-        value.trim() !== "" &&
-        value.length <= MAX_JSON_COERCE_LENGTH
-      ) {
-        try {
-          const parsed: unknown = JSON.parse(value);
-          if (Array.isArray(parsed)) {
-            return parsed;
-          }
-        } catch {
-          // Not valid JSON; leave as-is for the validator to reject.
-        }
-      }
-      return value;
-    }
+    case "array":
     case "object": {
       if (
         typeof value === "string" &&
@@ -176,7 +161,7 @@ function coercePrimitiveByType(value: unknown, type: string): unknown {
       ) {
         try {
           const parsed: unknown = JSON.parse(value);
-          if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+          if (matchesJsonType(parsed, type)) {
             return parsed;
           }
         } catch {
@@ -196,65 +181,71 @@ function coercePrimitiveByType(value: unknown, type: string): unknown {
   }
 }
 
-function applySchemaObjectCoercion(value: Record<string, unknown>, schema: JsonSchemaObject): void {
+function applySchemaObjectCoercion(
+  value: Record<string, unknown>,
+  schema: JsonSchemaObject,
+  root: JsonSchemaObject | undefined,
+): void {
   const properties = schema.properties;
-  const definedKeys = new Set<string>(properties ? Object.keys(properties) : []);
+  const propertyKeys = properties ? Object.keys(properties) : [];
 
   if (properties) {
     for (const [key, propertySchema] of Object.entries(properties)) {
       if (key in value) {
-        value[key] = coerceWithJsonSchema(value[key], propertySchema);
+        value[key] = coerceWithJsonSchema(value[key], propertySchema, root);
       }
     }
   }
 
   if (schema.additionalProperties && isJsonSchemaObject(schema.additionalProperties)) {
+    const definedKeys = new Set<string>(propertyKeys);
     for (const [key, propertyValue] of Object.entries(value)) {
       if (!definedKeys.has(key)) {
-        value[key] = coerceWithJsonSchema(propertyValue, schema.additionalProperties);
+        value[key] = coerceWithJsonSchema(propertyValue, schema.additionalProperties, root);
       }
     }
   }
 }
 
-function applySchemaArrayCoercion(value: unknown[], schema: JsonSchemaObject): void {
-  if (Array.isArray(schema.items)) {
-    for (let index = 0; index < value.length; index++) {
-      const itemSchema = schema.items[index];
-      if (itemSchema) {
-        value[index] = coerceWithJsonSchema(value[index], itemSchema);
-      }
-    }
+function applySchemaArrayCoercion(
+  value: unknown[],
+  schema: JsonSchemaObject,
+  root: JsonSchemaObject | undefined,
+): void {
+  const items = schema.items;
+  if (!isJsonSchemaObject(items)) {
     return;
   }
-
-  if (isJsonSchemaObject(schema.items)) {
-    for (let index = 0; index < value.length; index++) {
-      value[index] = coerceWithJsonSchema(value[index], schema.items);
+  for (let index = 0; index < value.length; index++) {
+    const itemSchema = Array.isArray(items) ? items[index] : items;
+    if (itemSchema) {
+      value[index] = coerceWithJsonSchema(value[index], itemSchema, root);
     }
   }
 }
 
-function coerceWithUnionSchema(value: unknown, schemas: JsonSchemaObject[]): unknown {
-  // When value is null, check if any union member accepts null directly
-  // (type: "null") before falling through to coercion.  Without this check,
-  // anyOf [{type: "string"}, {type: "null"}] coerces null → "" via the
-  // string branch and never reaches the null branch.
-  if (value === null) {
-    for (const schema of schemas) {
-      const types = getSchemaTypes(schema);
-      if (types.includes("null")) {
-        const validator = getSubSchemaValidator(schema);
-        if (!validator || validator.Check(value)) {
-          return value;
-        }
-      }
+function coerceWithUnionSchema(
+  value: unknown,
+  schemas: JsonSchemaObject[],
+  root: JsonSchemaObject | undefined,
+  refs: ReadonlySet<JsonSchemaObject> | undefined,
+): unknown {
+  // Preserve accepted values before trying a conversion to another union branch.
+  for (const schema of schemas) {
+    if (getSubSchemaValidator(schema, root)?.Check(value)) {
+      return value;
     }
   }
   for (const schema of schemas) {
+    const types = getSchemaTypes(schema, root);
+    // A nullable alternative represents absence, not a fallback for invalid
+    // non-null values such as zero below an integer branch's minimum.
+    if (value !== null && types.length === 1 && types[0] === "null") {
+      continue;
+    }
     const candidate = structuredClone(value);
-    const coerced = coerceWithJsonSchema(candidate, schema);
-    const validator = getSubSchemaValidator(schema);
+    const coerced = coerceWithJsonSchema(candidate, schema, root, refs);
+    const validator = getSubSchemaValidator(schema, root);
     if (validator?.Check(coerced)) {
       return coerced;
     }
@@ -262,29 +253,50 @@ function coerceWithUnionSchema(value: unknown, schemas: JsonSchemaObject[]): unk
   return value;
 }
 
-function coerceWithJsonSchema(value: unknown, schema: JsonSchemaObject): unknown {
+function coerceWithJsonSchema(
+  value: unknown,
+  schema: JsonSchemaObject,
+  contextRoot: JsonSchemaObject | undefined,
+  refs?: ReadonlySet<JsonSchemaObject>,
+): unknown {
+  if (!isJsonSchemaObject(schema)) {
+    return value;
+  }
+  const root =
+    "$id" in schema || "id" in schema || (schema !== contextRoot && hasSchemaScope(schema))
+      ? undefined
+      : contextRoot;
   let nextValue = value;
+  const target = resolveRootSchemaRef(schema, root);
+  if (target && !refs?.has(target)) {
+    // Keep the guard through compositions at this value, but reset it when descending into data.
+    // A recursive definition can legitimately occur again at each child object or array item.
+    const nextRefs = new Set(refs);
+    nextRefs.add(target);
+    nextValue = coerceWithJsonSchema(nextValue, target, root, nextRefs);
+  }
 
   if (Array.isArray(schema.allOf)) {
     for (const nested of schema.allOf) {
-      nextValue = coerceWithJsonSchema(nextValue, nested);
+      nextValue = coerceWithJsonSchema(nextValue, nested, root, refs);
     }
   }
 
-  if (Array.isArray(schema.anyOf)) {
-    nextValue = coerceWithUnionSchema(nextValue, schema.anyOf);
+  for (const keyword of ["anyOf", "oneOf"] as const) {
+    if (Array.isArray(schema[keyword])) {
+      nextValue = coerceWithUnionSchema(nextValue, schema[keyword], root, refs);
+    }
   }
 
-  if (Array.isArray(schema.oneOf)) {
-    nextValue = coerceWithUnionSchema(nextValue, schema.oneOf);
-  }
-
-  const schemaTypes = getSchemaTypes(schema);
+  const schemaTypes = getSchemaTypes(schema, root);
   const matchesUnionMember =
     schemaTypes.length > 1 &&
     schemaTypes.some((schemaType) => matchesJsonType(nextValue, schemaType));
   if (schemaTypes.length > 0 && !matchesUnionMember) {
     for (const schemaType of schemaTypes) {
+      if (schemaType === "null" && nextValue !== null && schemaTypes.length > 1) {
+        continue;
+      }
       const candidate = coercePrimitiveByType(nextValue, schemaType);
       if (candidate !== nextValue) {
         nextValue = candidate;
@@ -298,37 +310,49 @@ function coerceWithJsonSchema(value: unknown, schema: JsonSchemaObject): unknown
     isObjectBackedRecord(nextValue) &&
     !Array.isArray(nextValue)
   ) {
-    applySchemaObjectCoercion(nextValue, schema);
+    applySchemaObjectCoercion(nextValue, schema, root);
   }
 
   if (schemaTypes.includes("array") && Array.isArray(nextValue)) {
-    applySchemaArrayCoercion(nextValue, schema);
+    applySchemaArrayCoercion(nextValue, schema, root);
   }
 
   return nextValue;
 }
 
-function getValidator(schema: Tool["parameters"]): ReturnType<typeof Compile> {
-  const key = schema as object;
-  const cached = validatorCache.get(key);
+function getValidator(
+  schema: Tool["parameters"],
+  root?: JsonSchemaObject,
+): ReturnType<typeof Compile> {
+  const scope = root ?? schema;
+  let validators = validatorCache.get(scope);
+  const cached = validators?.get(schema);
   if (cached) {
     return cached;
   }
-  const validator = Compile(schema);
-  validatorCache.set(key, validator);
+  // Keep root refs and non-enumerable TypeBox refinements when checking union candidates.
+  const validator = Compile(
+    root && root !== schema
+      ? { $defs: root.$defs, definitions: root.definitions, allOf: [schema] }
+      : schema,
+  );
+  if (!validators) {
+    validators = new WeakMap();
+    validatorCache.set(scope, validators);
+  }
+  validators.set(schema, validator);
   return validator;
 }
 
 function formatValidationPath(error: TLocalizedValidationError): string {
+  const path = Pointer.Indices(error.instancePath).join(".").replace(/\//g, ".");
   if (error.keyword === "required") {
     const requiredProperty = (error.params as { requiredProperties?: string[] })
       .requiredProperties?.[0];
     if (requiredProperty) {
-      const basePath = error.instancePath.replace(/^\//, "").replace(/\//g, ".");
-      return basePath ? `${basePath}.${requiredProperty}` : requiredProperty;
+      return path ? `${path}.${requiredProperty}` : requiredProperty;
     }
   }
-  const path = error.instancePath.replace(/^\//, "").replace(/\//g, ".");
   return path || "root";
 }
 
@@ -341,16 +365,27 @@ export function validateToolCall(tools: Tool[], toolCall: ToolCall): unknown {
   return validateToolArguments(tool, toolCall);
 }
 
+function introducesNullValue(previous: unknown, converted: unknown): boolean {
+  if (converted === null) {
+    return previous !== null;
+  }
+  if (!isObjectBackedRecord(previous) || !isObjectBackedRecord(converted)) {
+    return false;
+  }
+  return Object.entries(converted).some(([key, value]) =>
+    introducesNullValue(previous[key], value),
+  );
+}
+
 /** Validates tool arguments against TypeBox or plain JSON-schema parameters. */
 export function validateToolArguments(tool: Tool, toolCall: ToolCall): unknown {
   const args = structuredClone(toolCall.arguments);
   const validator = getValidator(tool.parameters);
-  validator.Convert(args);
 
   if (isJsonSchemaObject(tool.parameters)) {
-    // TypeBox conversion is intentionally conservative for plain JSON schemas;
-    // mirror the provider-facing coercions so model-emitted string numbers validate.
-    const coerced = coerceWithJsonSchema(args, tool.parameters);
+    // Apply nullable-union policy before TypeBox's more permissive conversion
+    // can replace invalid non-null values with null.
+    const coerced = coerceWithJsonSchema(args, tool.parameters, tool.parameters);
     if (coerced !== args) {
       if (isObjectBackedRecord(args) && isObjectBackedRecord(coerced)) {
         for (const key of Object.keys(args)) {
@@ -365,6 +400,13 @@ export function validateToolArguments(tool: Tool, toolCall: ToolCall): unknown {
 
   if (validator.Check(args)) {
     return args;
+  }
+
+  // Retain TypeBox-specific recovery (for example numeric enums and records),
+  // but never turn a rejected value into a nullable placeholder to pass validation.
+  const converted = validator.Convert(structuredClone(args));
+  if (!introducesNullValue(args, converted) && validator.Check(converted)) {
+    return converted;
   }
 
   const errors =

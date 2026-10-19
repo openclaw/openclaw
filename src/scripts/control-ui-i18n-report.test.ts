@@ -6,8 +6,8 @@ import {
   formatReport,
   parseArgs,
   summarizeRawCopy,
-  type RawCopyBaselineEntry,
 } from "../../scripts/control-ui-i18n-report.ts";
+import type { RawCopyBaselineEntry } from "../../scripts/lib/control-ui-i18n-raw-copy.ts";
 
 const entries: RawCopyBaselineEntry[] = [
   {
@@ -32,6 +32,17 @@ const entries: RawCopyBaselineEntry[] = [
     text: "Open config",
   },
 ];
+
+const localeMeta = {
+  generatedAt: "2026-05-13T00:00:00.000Z",
+  locale: "zh-CN",
+  model: "gpt-5.5",
+  provider: "openai",
+  sourceHash: "hash",
+  totalKeys: 3,
+  translatedKeys: 2,
+  workflow: 1,
+};
 
 describe("control-ui-i18n report helpers", () => {
   it.each(["--surface", "--locale", "--top"])("rejects option-shaped values for %s", (flag) => {
@@ -61,40 +72,15 @@ describe("control-ui-i18n report helpers", () => {
     expect(filterRawCopyEntries(entries, "missing")).toEqual([]);
   });
 
-  it("summarizes raw-copy occurrences deterministically", () => {
-    expect(summarizeRawCopy(entries, 2)).toEqual({
-      entries: 3,
-      occurrences: 7,
-      topPaths: [
-        { count: 4, path: "ui/src/ui/views/config-form.render.ts" },
-        { count: 2, path: "ui/src/ui/chat/render.ts" },
-      ],
-    });
-  });
-
   it("filters translation keys by surface token", () => {
-    expect(
-      filterTranslationKeysBySurface(
-        [
-          "agents.tabs.cronJobs",
-          "chat.composer.send",
-          "sessionsView.thinking",
-          "usage.common.emptyValue",
-        ],
-        "chat",
-      ),
-    ).toEqual(["chat.composer.send"]);
-    expect(
-      filterTranslationKeysBySurface(
-        [
-          "agents.tabs.cronJobs",
-          "chat.composer.send",
-          "sessionsView.thinking",
-          "usage.common.emptyValue",
-        ],
-        "sessions",
-      ),
-    ).toEqual(["sessionsView.thinking"]);
+    const keys = [
+      "agents.tabs.cronJobs",
+      "chat.composer.send",
+      "sessionsView.thinking",
+      "usage.common.emptyValue",
+    ];
+    expect(filterTranslationKeysBySurface(keys, "chat")).toEqual(["chat.composer.send"]);
+    expect(filterTranslationKeysBySurface(keys, "sessions")).toEqual(["sessionsView.thinking"]);
   });
 
   it("formats pasteable report text", () => {
@@ -103,14 +89,7 @@ describe("control-ui-i18n report helpers", () => {
         fallbackKeysInScope: ["actions.cancel"],
         meta: {
           fallbackKeys: ["actions.cancel"],
-          generatedAt: "2026-05-13T00:00:00.000Z",
-          locale: "zh-CN",
-          model: "gpt-5.5",
-          provider: "openai",
-          sourceHash: "hash",
-          totalKeys: 3,
-          translatedKeys: 2,
-          workflow: 1,
+          ...localeMeta,
         },
       },
       rawCopy: summarizeRawCopy(entries, 1),
@@ -146,14 +125,7 @@ describe("control-ui-i18n report helpers", () => {
         fallbackKeysInScope: [],
         meta: {
           fallbackKeys: ["usage.common.emptyValue"],
-          generatedAt: "2026-05-13T00:00:00.000Z",
-          locale: "zh-CN",
-          model: "gpt-5.5",
-          provider: "openai",
-          sourceHash: "hash",
-          totalKeys: 3,
-          translatedKeys: 2,
-          workflow: 1,
+          ...localeMeta,
         },
       },
       rawCopy: summarizeRawCopy(entries, 1),

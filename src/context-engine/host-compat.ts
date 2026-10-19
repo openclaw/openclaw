@@ -1,4 +1,3 @@
-// Context-engine host compatibility checks prevent engines from running on unsupported harnesses.
 import type {
   ContextEngine,
   ContextEngineHostCapability,
@@ -20,12 +19,6 @@ export function supportsContextEngineDurableTurnAdvancement(engine: ContextEngin
     typeof engine.commitTurn === "function"
   );
 }
-
-const GENERIC_CLI_CONTEXT_ENGINE_HOST_CAPABILITIES = [
-  "bootstrap",
-  "after-turn",
-  "maintain",
-] as const satisfies readonly ContextEngineHostCapability[];
 
 export const OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST = {
   id: "openclaw-embedded",
@@ -74,7 +67,7 @@ export function buildGenericCliContextEngineHostSupport(params: {
   return {
     id: `cli:${params.backendId}`,
     label: `CLI backend "${params.backendId}"`,
-    capabilities: params.capabilities ?? GENERIC_CLI_CONTEXT_ENGINE_HOST_CAPABILITIES,
+    capabilities: params.capabilities ?? ["bootstrap", "after-turn", "maintain"],
   };
 }
 

@@ -1,31 +1,109 @@
-/**
- * Claude CLI auth seam. Setup may prompt for keychain-backed credentials while
- * runtime paths stay non-interactive.
- */
-import { readClaudeCliCredentialsCached } from "openclaw/plugin-sdk/provider-auth";
+import { runUtf8CommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
+import {
+  filterStringEntries,
+  isRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  materializeWindowsSpawnProgram,
+  resolveWindowsSpawnProgram,
+} from "openclaw/plugin-sdk/windows-spawn";
+import { CLAUDE_CLI_CLEAR_ENV } from "./cli-constants.js";
 
-/** Read Claude CLI credentials for interactive setup paths. */
-export function readClaudeCliCredentialsForSetup() {
-  return readClaudeCliCredentialsCached();
+const CLAUDE_CLI_AUTH_TIMEOUT_MS = 10_000;
+
+const CLAUDE_CLI_AUTH_METHODS = [
+  "claude.ai",
+  "api_key",
+  "api_key_helper",
+  "oauth_token",
+  "third_party",
+  "none",
+] as const;
+
+type ClaudeCliAuthStatus =
+  | {
+      status: "available";
+      authMethod?: (typeof CLAUDE_CLI_AUTH_METHODS)[number];
+      email?: string;
+    }
+  | { status: "missing" | "unreadable" }
+  | { status: "timeout"; timeoutMs: number };
+
+// Mirrors the CLI runner's child-env contract (src/agents/cli-runner/execute.ts): keys listed
+// here survive the Claude clear list for native-login runs, so readiness must probe them too.
+const CLI_BACKEND_PRESERVE_ENV = "OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV";
+
+function readPreservedCliEnv(env: NodeJS.ProcessEnv): ReadonlySet<string> {
+  const raw = env[CLI_BACKEND_PRESERVE_ENV]?.trim();
+  if (!raw) {
+    return new Set();
+  }
+  if (raw.startsWith("[")) {
+    try {
+      return new Set(filterStringEntries(JSON.parse(raw)));
+    } catch {
+      return new Set();
+    }
+  }
+  return new Set(raw.split(/[,\s]+/).filter(Boolean));
 }
 
-/** Read Claude CLI credentials for setup checks that must not prompt. */
-export function readClaudeCliCredentialsForSetupNonInteractive() {
-  let unreadable = false;
-  const credential = readClaudeCliCredentialsCached({
-    allowKeychainPrompt: false,
-    tryKeychainWithoutPrompt: true,
-    ttlMs: 0,
-    onStoredCredentialUnreadable: () => {
-      unreadable = true;
-    },
-  });
-  return credential
-    ? ({ status: "available", credential } as const)
-    : ({ status: unreadable ? "unreadable" : "missing" } as const);
-}
-
-/** Read Claude CLI credentials for runtime without keychain prompts. */
-export function readClaudeCliCredentialsForRuntime() {
-  return readClaudeCliCredentialsCached({ allowKeychainPrompt: false });
+/** Ask Claude CLI whether its own login is usable without reading token material. */
+export async function probeClaudeCliAuthStatus(params?: {
+  command?: string;
+  env?: NodeJS.ProcessEnv;
+  signal?: AbortSignal;
+}): Promise<ClaudeCliAuthStatus> {
+  const env = { ...(params?.env ?? process.env) };
+  const preserved = readPreservedCliEnv(env);
+  for (const name of CLAUDE_CLI_CLEAR_ENV) {
+    if (!preserved.has(name)) {
+      delete env[name];
+    }
+  }
+  try {
+    const program = resolveWindowsSpawnProgram({
+      command: params?.command ?? "claude",
+      env,
+      packageName: "@anthropic-ai/claude-code",
+    });
+    const invocation = materializeWindowsSpawnProgram(program, ["auth", "status", "--json"]);
+    const result = await runUtf8CommandWithTimeout([invocation.command, ...invocation.argv], {
+      baseEnv: env,
+      maxOutputBytes: 64 * 1024,
+      maxCombinedOutputBytes: 64 * 1024,
+      terminateOnOutputLimit: true,
+      timeoutMs: CLAUDE_CLI_AUTH_TIMEOUT_MS,
+      signal: params?.signal,
+      killProcessTree: true,
+    });
+    params?.signal?.throwIfAborted();
+    if (result.termination === "timeout") {
+      return { status: "timeout", timeoutMs: CLAUDE_CLI_AUTH_TIMEOUT_MS };
+    }
+    if (result.termination !== "exit" || result.code === null) {
+      return { status: "unreadable" };
+    }
+    const parsed: unknown = JSON.parse(result.stdout);
+    if (!isRecord(parsed) || typeof parsed.loggedIn !== "boolean") {
+      return { status: "unreadable" };
+    }
+    if (!parsed.loggedIn) {
+      return { status: "missing" };
+    }
+    if (result.code !== 0) {
+      return { status: "unreadable" };
+    }
+    const authMethod = CLAUDE_CLI_AUTH_METHODS.find((method) => method === parsed.authMethod);
+    const email = authMethod === "claude.ai" ? normalizeOptionalString(parsed.email) : undefined;
+    return {
+      status: "available",
+      ...(authMethod ? { authMethod } : {}),
+      ...(email && email.length <= 320 && !/[\r\n]/u.test(email) ? { email } : {}),
+    };
+  } catch {
+    params?.signal?.throwIfAborted();
+    return { status: "unreadable" };
+  }
 }

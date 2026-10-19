@@ -1,8 +1,17 @@
 import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { Readable } from "node:stream";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
+import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { vi } from "vitest";
+import { openAIRealtimeHost } from "./realtime-host.js";
+import { OpenAIQuicksilverDelegationController } from "./realtime-quicksilver-delegation-controller.js";
 import { createOpenAIQuicksilverBrowserSessionBroker } from "./realtime-quicksilver-session.js";
+
+const createLogger = () => ({
+  debug: vi.fn<NonNullable<PluginLogger["debug"]>>(),
+  warn: vi.fn<PluginLogger["warn"]>(),
+});
 
 export class FakeSocket extends EventEmitter {
   readyState: 0 | 1 | 2 | 3 = 0;
@@ -30,42 +39,33 @@ export class FakeSocket extends EventEmitter {
   }
 
   close(code?: number, reason?: string): void {
-    if (this.closed) {
-      return;
+    if (!this.closed) {
+      this.closed = true;
+      this.closeCode = code;
+      this.closeReason = reason;
+      this.readyState = 3;
+      this.emit("close", code ?? 1000, Buffer.from(reason ?? ""));
     }
-    this.closed = true;
-    this.closeCode = code;
-    this.closeReason = reason;
-    this.readyState = 3;
-    this.emit("close", code ?? 1000, Buffer.from(reason ?? ""));
   }
 }
 
-export function createRequest(params: {
-  method?: string;
-  token?: string;
-  origin?: string;
-  host?: string;
-  contentType?: string;
-  body?: string;
-}): IncomingMessage {
-  return Object.assign(Readable.from([params.body ?? "v=offer\r\n"]), {
+export function createRequest(
+  params: Partial<Record<"method" | "token" | "origin" | "host" | "contentType" | "body", string>>,
+): IncomingMessage {
+  const contentType = params.contentType ?? "application/sdp";
+  return Object.assign(createMockIncomingRequest([params.body ?? "v=offer\r\n"]), {
     method: params.method ?? "POST",
     headers: {
       ...(params.token ? { authorization: `Bearer ${params.token}` } : {}),
-      ...(params.contentType === undefined
-        ? { "content-type": "application/sdp" }
-        : params.contentType
-          ? { "content-type": params.contentType }
-          : {}),
+      ...(contentType ? { "content-type": contentType } : {}),
       ...(params.origin ? { origin: params.origin } : {}),
       ...(params.host ? { host: params.host } : {}),
     },
-  }) as unknown as IncomingMessage;
+  });
 }
 
 export function createPreflightRequest(origin: string, host?: string): IncomingMessage {
-  return Object.assign(Readable.from([]), {
+  return Object.assign(createMockIncomingRequest([]), {
     method: "OPTIONS",
     headers: {
       origin,
@@ -74,15 +74,10 @@ export function createPreflightRequest(origin: string, host?: string): IncomingM
       "access-control-request-headers": "authorization,content-type",
       "access-control-request-private-network": "true",
     },
-  }) as unknown as IncomingMessage;
+  });
 }
 
-export function createResponseHarness(): {
-  res: ServerResponse;
-  end: ReturnType<typeof vi.fn>;
-  setHeader: ReturnType<typeof vi.fn>;
-  readBody: () => string;
-} {
+export function createResponseHarness() {
   let body = "";
   const setHeader = vi.fn();
   const end = vi.fn((value?: string) => {
@@ -119,23 +114,78 @@ export function createBroker(params?: {
 }) {
   const sockets: FakeSocket[] = [];
   const socketRequests: Array<{ url: string; headers?: Record<string, string> }> = [];
-  const logger = { debug: vi.fn(), warn: vi.fn() };
-  const realtime = createOpenAIQuicksilverBrowserSessionBroker({
-    getConfig: () => ({
-      gateway: { controlUi: { allowedOrigins: ["https://control.example"] } },
-    }),
-    logger,
-    fetchImpl: params?.fetchImpl ?? vi.fn(async () => createCallResponse()),
-    webSocketFactory: (url, options) => {
-      const socket = params?.socketFactory?.(sockets.length) ?? new FakeSocket();
-      sockets.push(socket);
-      socketRequests.push({
-        url,
-        headers: options.headers as Record<string, string> | undefined,
-      });
-      return socket;
+  const logger = createLogger();
+  const realtime = createOpenAIQuicksilverBrowserSessionBroker(
+    {
+      getConfig: () => ({
+        gateway: { controlUi: { allowedOrigins: ["https://control.example"] } },
+      }),
+      logger,
+      fetchImpl: params?.fetchImpl ?? vi.fn(async () => createCallResponse()),
+      webSocketFactory: (url, options) => {
+        const socket = params?.socketFactory?.(sockets.length) ?? new FakeSocket();
+        sockets.push(socket);
+        socketRequests.push({
+          url,
+          headers: options.headers as Record<string, string> | undefined,
+        });
+        return socket;
+      },
     },
-  });
-  const runAgentConsult = params?.runAgentConsult ?? vi.fn(async () => ({ text: "Done" }));
+    openAIRealtimeHost,
+  );
+  const runAgentConsult = Object.assign(
+    params?.runAgentConsult ?? vi.fn(async () => ({ text: "Done" })),
+    { claimAppend: vi.fn(() => true) },
+  );
   return { realtime, sockets, socketRequests, logger, runAgentConsult };
+}
+
+type DelegationOptions = ConstructorParameters<typeof OpenAIQuicksilverDelegationController>[0];
+export type ConsultRunner = DelegationOptions["runAgentConsult"];
+
+export function createDelegationHarness(params?: {
+  model?: string;
+  claimAppend?: (() => boolean) | null;
+  claimFailureAppend?: (() => boolean) | null;
+  revokeRequesterFinal?: () => void;
+  runAgentConsult?: ConsultRunner;
+  steerAgentConsult?: ConsultRunner["steer"];
+  handleDelegationInput?: DelegationOptions["handleDelegationInput"];
+  getSocket?: () => FakeSocket;
+  onWireEventType?: (eventType: string) => void;
+  onTranscript?: DelegationOptions["onTranscript"];
+}) {
+  const {
+    claimAppend = () => true,
+    claimFailureAppend = () => true,
+    revokeRequesterFinal,
+    runAgentConsult: runner = vi.fn(async () => ({ text: "Done" })),
+    steerAgentConsult: steer,
+    ...options
+  } = params ?? {};
+  const socket = new FakeSocket("manual");
+  socket.readyState = 1;
+  const logger = createLogger();
+  const onFatalError = vi.fn<DelegationOptions["onFatalError"]>();
+  const sessionController = new AbortController();
+  const runAgentConsult: ConsultRunner = Object.assign(runner, {
+    ...(claimAppend ? { claimAppend } : {}),
+    ...(claimFailureAppend ? { claimFailureAppend } : {}),
+    ...(revokeRequesterFinal ? { revokeRequesterFinal } : {}),
+    ...(steer ? { steer } : {}),
+  });
+  const controller = new OpenAIQuicksilverDelegationController(
+    {
+      ...options,
+      getSocket: options.getSocket ?? (() => socket),
+      logger,
+      model: options.model ?? "gpt-live-test-canary",
+      onFatalError,
+      runAgentConsult,
+      signal: sessionController.signal,
+    },
+    formatErrorMessage,
+  );
+  return { controller, logger, onFatalError, runAgentConsult, sessionController, socket };
 }

@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
+import { loadAuthProfileStoreForRuntimeAsync } from "../agents/auth-profiles/store-runtime.js";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
   resolveCliAuthBindingFingerprint,
   resolveCliRuntimeArtifactFingerprint,
@@ -25,14 +26,14 @@ import { resolveAgentHarnessOwnerPluginIds } from "../agents/harness/runtime-plu
 import type { AgentHarnessAuthBindingFingerprintParams } from "../agents/harness/types.js";
 import type { ResolvedProviderAuth } from "../agents/model-auth-runtime-shared.js";
 import { resolveApiKeyForProviderCore } from "../agents/model-auth.js";
+import { cloneConfigWithResolutionFacts } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { passesManifestOwnerBasePolicy } from "../plugins/manifest-owner-policy.js";
-import type { OpenClawPackageBuild } from "../plugins/manifest.js";
-import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { loadPluginRegistrySnapshot } from "../plugins/plugin-registry.js";
 import {
   fingerprintPluginRuntimeArtifact,
+  loadPluginRuntimeArtifactIdentitySources,
   type PluginRuntimeArtifactIdentitySource,
 } from "../plugins/plugin-runtime-artifact-identity.js";
 import {
@@ -48,7 +49,7 @@ import {
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 type SystemAgentConfiguredRouteIdentity = DistributiveOmit<
   SystemAgentConfiguredRoute,
-  "runConfig" | "authProfileId"
+  "runConfig" | "sourceConfig" | "authProfileId"
 >;
 type SystemAgentVerifiedExecutionRoute =
   | Extract<SystemAgentConfiguredRoute, { runner: "cli" }>
@@ -61,29 +62,10 @@ type SystemAgentVerifiedInferenceState = Readonly<{
   route: SystemAgentVerifiedExecutionRoute;
 }>;
 
-type SystemAgentVerifiedExecutionFingerprint = {
-  route: unknown;
-  defaultSelection: unknown;
-  auth: unknown;
-  models: unknown;
-  defaults: unknown;
-  agent?: unknown;
-  plugins: unknown;
-  ownerPluginRuntimes: readonly SystemAgentOwnerPluginRuntimeIdentity[];
-};
-
-type SystemAgentOwnerPluginRuntimeIdentity = Readonly<{
-  pluginId: string;
-  origin: string;
-  rootDir: string;
-  manifestPath: string;
-  manifestHash: string;
-  source: string | null;
-  packageName: string | null;
-  packageVersion: string | null;
-  installRecordHash: string | null;
-  packageJson: Readonly<{ path: string; hash: string }> | null;
-}>;
+type SystemAgentVerifiedExecutionFingerprint = Awaited<
+  ReturnType<typeof projectVerifiedExecutionFingerprint>
+>;
+type SystemAgentOwnerPluginRuntimeIdentity = Readonly<ReturnType<typeof projectOwnerPluginRuntime>>;
 
 type SystemAgentOwnerPluginArtifactIdentity = Readonly<{
   pluginId: string;
@@ -95,25 +77,14 @@ export type SystemAgentOwnerPluginArtifactSnapshot = Readonly<{
   ownerPluginArtifacts: readonly SystemAgentOwnerPluginArtifactIdentity[];
 }>;
 
-type SystemAgentOwnerPluginRegistryRecord = {
-  pluginId: string;
-  origin: PluginOrigin;
-  rootDir: string;
+type SystemAgentOwnerPluginRegistryRecord = PluginRuntimeArtifactIdentitySource & {
   manifestPath: string;
   manifestHash: string;
-  source?: string;
   packageName?: string;
   packageVersion?: string;
   installRecordHash?: string;
   packageJson?: { path: string; hash: string };
-  packageBuild?: OpenClawPackageBuild;
 };
-
-type SystemAgentOwnerPluginRegistryLoader = (params: {
-  config: OpenClawConfig;
-  workspaceDir: string;
-  env: NodeJS.ProcessEnv;
-}) => { plugins: readonly SystemAgentOwnerPluginRegistryRecord[] };
 
 /** Server-local proof returned only after the exact route completes a live turn. */
 export type SystemAgentVerifiedInferenceBinding = Readonly<{
@@ -137,22 +108,7 @@ export type SystemAgentVerifiedInferenceBinding = Readonly<{
   }>;
 }>;
 
-export type SystemAgentVerifiedInferenceDeps = SystemAgentConfiguredRouteDeps & {
-  ensureAuthProfileStore?: typeof ensureAuthProfileStore;
-  resolveCliAuthBindingFingerprint?: typeof resolveCliAuthBindingFingerprint;
-  resolveCliRuntimeOwnerFingerprint?: typeof resolveCliRuntimeOwnerFingerprint;
-  resolveCliRuntimeArtifactFingerprint?: typeof resolveCliRuntimeArtifactFingerprint;
-  resolveApiKeyForProvider?: typeof resolveApiKeyForProviderCore;
-  validateAgentHarnessRuntimeArtifact?: (params: {
-    harnessId: string;
-    artifact: AgentHarnessRuntimeArtifactBinding;
-  }) => Promise<boolean>;
-  resolveAgentHarnessAuthBindingFingerprint?: (
-    params: AgentHarnessAuthBindingFingerprintParams & { harnessId: string },
-  ) => Promise<string | undefined>;
-  loadPluginRegistrySnapshot?: SystemAgentOwnerPluginRegistryLoader;
-  fingerprintPluginRuntimeArtifact?: (record: PluginRuntimeArtifactIdentitySource) => string;
-};
+export type SystemAgentVerifiedInferenceDeps = SystemAgentConfiguredRouteDeps;
 
 /** Exact child harness artifact every verified embedded OpenClaw call must carry. */
 export function resolveSystemAgentExpectedAgentHarnessRuntimeArtifact(
@@ -179,15 +135,8 @@ export function resolveSystemAgentExpectedAgentHarnessRuntimeArtifact(
 async function validateAgentHarnessRuntimeArtifact(params: {
   harnessId: string;
   artifact: AgentHarnessRuntimeArtifactBinding;
-  deps: SystemAgentVerifiedInferenceDeps;
 }): Promise<boolean> {
   try {
-    if (params.deps.validateAgentHarnessRuntimeArtifact) {
-      return await params.deps.validateAgentHarnessRuntimeArtifact({
-        harnessId: params.harnessId,
-        artifact: params.artifact,
-      });
-    }
     const harness = getRegisteredAgentHarness(params.harnessId)?.harness;
     return (await harness?.runtimeArtifact?.validate(params.artifact)) === true;
   } catch {
@@ -201,7 +150,6 @@ async function resolveAgentHarnessAuthBindingFingerprint(params: {
   authProfileStore: AgentHarnessAuthBindingFingerprintParams["authProfileStore"];
   agentDir: string;
   config: OpenClawConfig;
-  deps: SystemAgentVerifiedInferenceDeps;
 }): Promise<string | undefined> {
   const input = {
     harnessId: params.harnessId,
@@ -210,17 +158,31 @@ async function resolveAgentHarnessAuthBindingFingerprint(params: {
     agentDir: params.agentDir,
     config: params.config,
   };
-  if (params.deps.resolveAgentHarnessAuthBindingFingerprint) {
-    return params.deps.resolveAgentHarnessAuthBindingFingerprint(input);
-  }
   return getRegisteredAgentHarness(params.harnessId)?.harness.authBinding?.fingerprint(input);
 }
 
 function systemAgentRouteIdentity(
   route: SystemAgentConfiguredRoute,
 ): SystemAgentConfiguredRouteIdentity {
-  const { runConfig: _runConfig, authProfileId: _authProfileId, ...identity } = route;
+  const {
+    runConfig: _runConfig,
+    sourceConfig: _sourceConfig,
+    authProfileId: _authProfileId,
+    ...identity
+  } = route;
   return identity;
+}
+
+function loadRouteAuthProfileStore(
+  route: SystemAgentVerifiedExecutionRoute,
+): Promise<AuthProfileStore> {
+  return loadAuthProfileStoreForRuntimeAsync(route.agentDir, {
+    readOnly: true,
+    migrationProvider: route.provider,
+    allowKeychainPrompt: false,
+    config: route.runConfig,
+    externalCliProviderIds: [route.provider],
+  });
 }
 
 async function resolveCurrentRuntimeOwnerFingerprint(params: {
@@ -230,15 +192,12 @@ async function resolveCurrentRuntimeOwnerFingerprint(params: {
   authProfileId?: string;
   skipLocalCredential?: boolean;
   runtimeArtifactFingerprint?: string;
-  deps: SystemAgentVerifiedInferenceDeps;
 }): Promise<string | undefined> {
   if (params.route.runner === "cli") {
     if (params.kind !== "cli-runtime") {
       return undefined;
     }
-    const resolveOwner =
-      params.deps.resolveCliRuntimeOwnerFingerprint ?? resolveCliRuntimeOwnerFingerprint;
-    return resolveOwner({
+    return resolveCliRuntimeOwnerFingerprint({
       provider: params.route.provider,
       config: params.route.runConfig,
       agentDir: params.route.agentDir,
@@ -253,13 +212,7 @@ async function resolveCurrentRuntimeOwnerFingerprint(params: {
   }
   let authProfileOwnerFingerprint: string | undefined;
   if (params.authProfileId) {
-    const ensureStore = params.deps.ensureAuthProfileStore ?? ensureAuthProfileStore;
-    const store = ensureStore(params.route.agentDir, {
-      readOnly: true,
-      allowKeychainPrompt: false,
-      config: params.route.runConfig,
-      externalCliProviderIds: [params.route.provider],
-    });
+    const store = await loadRouteAuthProfileStore(params.route);
     authProfileOwnerFingerprint = fingerprintAuthProfileOwnerShape({
       profileId: params.authProfileId,
       credential: store.profiles[params.authProfileId],
@@ -287,8 +240,7 @@ async function resolveCurrentRuntimeOwnerFingerprint(params: {
   if (params.kind !== "aws-sdk") {
     return undefined;
   }
-  const resolveAuth = params.deps.resolveApiKeyForProvider ?? resolveApiKeyForProviderCore;
-  const auth = await resolveAuth({
+  const auth = await resolveApiKeyForProviderCore({
     provider: params.route.provider,
     cfg: params.route.runConfig,
     agentDir: params.route.agentDir,
@@ -335,9 +287,7 @@ function projectRelevantPlugins(
   );
 }
 
-function projectOwnerPluginRuntime(
-  record: SystemAgentOwnerPluginRegistryRecord,
-): SystemAgentOwnerPluginRuntimeIdentity {
+function projectOwnerPluginRuntime(record: SystemAgentOwnerPluginRegistryRecord) {
   return {
     pluginId: record.pluginId,
     origin: record.origin,
@@ -349,7 +299,7 @@ function projectOwnerPluginRuntime(
     packageVersion: record.packageVersion ?? null,
     installRecordHash: record.installRecordHash ?? null,
     packageJson: record.packageJson
-      ? { path: record.packageJson.path, hash: record.packageJson.hash }
+      ? ({ path: record.packageJson.path, hash: record.packageJson.hash } as const)
       : null,
   };
 }
@@ -360,14 +310,16 @@ function projectOwnerPluginRuntimes(params: {
   config: OpenClawConfig;
   route: SystemAgentConfiguredRoute;
   ownerPluginIds: readonly string[];
-  deps: SystemAgentVerifiedInferenceDeps;
-}): SystemAgentOwnerPluginRuntimeIdentity[] {
+}): readonly SystemAgentOwnerPluginRuntimeIdentity[] {
   if (params.ownerPluginIds.length === 0) {
     return [];
   }
-  const loadRegistry = params.deps.loadPluginRegistrySnapshot ?? loadPluginRegistrySnapshot;
   const workspaceDir = resolveAgentWorkspaceDir(params.config, params.route.agentId, process.env);
-  const registry = loadRegistry({ config: params.config, workspaceDir, env: process.env });
+  const registry = loadPluginRegistrySnapshot({
+    config: params.config,
+    workspaceDir,
+    env: process.env,
+  });
   const recordsById = new Map(registry.plugins.map((record) => [record.pluginId, record]));
   return params.ownerPluginIds.map((pluginId) => {
     const record = recordsById.get(pluginId);
@@ -382,17 +334,14 @@ function projectOwnerPluginArtifacts(params: {
   config: OpenClawConfig;
   route: SystemAgentConfiguredRoute;
   ownerPluginIds: readonly string[];
-  deps: SystemAgentVerifiedInferenceDeps;
 }): SystemAgentOwnerPluginArtifactIdentity[] {
   if (params.ownerPluginIds.length === 0) {
     return [];
   }
-  const loadRegistry = params.deps.loadPluginRegistrySnapshot ?? loadPluginRegistrySnapshot;
-  const fingerprintArtifact =
-    params.deps.fingerprintPluginRuntimeArtifact ?? fingerprintPluginRuntimeArtifact;
   const workspaceDir = resolveAgentWorkspaceDir(params.config, params.route.agentId, process.env);
-  const registry = loadRegistry({ config: params.config, workspaceDir, env: process.env });
-  const recordsById = new Map(registry.plugins.map((record) => [record.pluginId, record]));
+  const registryParams = { config: params.config, workspaceDir, env: process.env };
+  const records = loadPluginRuntimeArtifactIdentitySources(registryParams);
+  const recordsById = new Map(records.map((record) => [record.pluginId, record]));
   return params.ownerPluginIds.map((pluginId) => {
     const record = recordsById.get(pluginId);
     if (!record) {
@@ -400,12 +349,13 @@ function projectOwnerPluginArtifacts(params: {
     }
     return {
       pluginId,
-      fingerprint: fingerprintArtifact({
+      fingerprint: fingerprintPluginRuntimeArtifact({
         pluginId,
         origin: record.origin,
         rootDir: record.rootDir,
         ...(record.source ? { source: record.source } : {}),
         ...(record.packageBuild ? { packageBuild: record.packageBuild } : {}),
+        sourcePreferred: record.sourcePreferred,
       }),
     };
   });
@@ -415,15 +365,14 @@ async function projectVerifiedExecutionFingerprint(
   route: SystemAgentVerifiedExecutionRoute,
   ownerPluginIds: readonly string[],
   deps: SystemAgentVerifiedInferenceDeps,
-): Promise<SystemAgentVerifiedExecutionFingerprint> {
-  const projection = await projectInferenceRoute(config, route.agentId, deps);
+) {
+  const projection = await projectInferenceRoute(config, route.agentId, {
+    ...deps,
+    modelTarget: route.modelTarget,
+  });
+  const { authProfileId: _authProfileId, ...routeIdentity } = projection.route ?? {};
   return {
-    route: projection.route
-      ? (() => {
-          const { authProfileId: _authProfileId, ...routeWithoutAuthProfile } = projection.route;
-          return routeWithoutAuthProfile;
-        })()
-      : null,
+    route: projection.route ? routeIdentity : null,
     defaultSelection: projection.defaultSelection,
     auth: projection.auth,
     models: projection.models,
@@ -434,7 +383,6 @@ async function projectVerifiedExecutionFingerprint(
       config,
       route,
       ownerPluginIds,
-      deps,
     }),
   };
 }
@@ -487,9 +435,7 @@ function resolveRouteOwnerPluginIds(
 export function captureSystemAgentOwnerPluginArtifacts(params: {
   config: OpenClawConfig;
   executionRoute: SystemAgentConfiguredRoute;
-  deps?: SystemAgentVerifiedInferenceDeps;
 }): SystemAgentOwnerPluginArtifactSnapshot {
-  const deps = params.deps ?? {};
   const ownerPluginIds = resolveRouteOwnerPluginIds(params.config, params.executionRoute);
   return {
     ownerPluginIds,
@@ -497,7 +443,6 @@ export function captureSystemAgentOwnerPluginArtifacts(params: {
       config: params.config,
       route: params.executionRoute,
       ownerPluginIds,
-      deps,
     }),
   };
 }
@@ -508,27 +453,18 @@ async function resolveCurrentAuthFingerprint(params: {
   modelId?: string;
   modelApi?: string;
   skipLocalCredential?: boolean;
-  deps: SystemAgentVerifiedInferenceDeps;
 }): Promise<string | undefined> {
   if (params.route.runner === "cli") {
-    const resolveBinding =
-      params.deps.resolveCliAuthBindingFingerprint ?? resolveCliAuthBindingFingerprint;
     let resolvedAuth: ResolvedProviderAuth | undefined;
     if (params.authProfileId) {
-      const ensureStore = params.deps.ensureAuthProfileStore ?? ensureAuthProfileStore;
-      const store = ensureStore(params.route.agentDir, {
-        readOnly: true,
-        allowKeychainPrompt: false,
-        config: params.route.runConfig,
-        externalCliProviderIds: [params.route.provider],
-      });
+      const store = await loadRouteAuthProfileStore(params.route);
       const authCredential = store.profiles[params.authProfileId];
       const needsMaterializedSecret =
         (authCredential?.type === "api_key" && !authCredential.key) ||
         (authCredential?.type === "token" && !authCredential.token);
       if (needsMaterializedSecret) {
-        const resolveAuth = params.deps.resolveApiKeyForProvider ?? resolveApiKeyForProviderCore;
-        resolvedAuth = await resolveAuth({
+        resolvedAuth = await resolveApiKeyForProviderCore({
+          store,
           provider: params.route.provider,
           cfg: params.route.runConfig,
           agentDir: params.route.agentDir,
@@ -552,7 +488,7 @@ async function resolveCurrentAuthFingerprint(params: {
         }
       }
     }
-    return resolveBinding({
+    return resolveCliAuthBindingFingerprint({
       provider: params.route.provider,
       config: params.route.runConfig,
       agentDir: params.route.agentDir,
@@ -561,29 +497,23 @@ async function resolveCurrentAuthFingerprint(params: {
       ...(params.skipLocalCredential ? { skipLocalCredential: true } : {}),
     });
   }
+  let store: AuthProfileStore | undefined;
+  let materializedProfile:
+    | { profileId: string; credential: AuthProfileStore["profiles"][string] }
+    | undefined;
   if (params.authProfileId) {
-    const ensureStore = params.deps.ensureAuthProfileStore ?? ensureAuthProfileStore;
-    const store = ensureStore(params.route.agentDir, {
-      readOnly: true,
-      allowKeychainPrompt: false,
-      config: params.route.runConfig,
-      externalCliProviderIds: [params.route.provider],
-    });
+    store = await loadRouteAuthProfileStore(params.route);
     const credential = store.profiles[params.authProfileId];
     if (!credential) {
       return undefined;
     }
-    if (
-      credential.type === "oauth" ||
-      (params.route.runner === "embedded" &&
-        params.route.agentHarnessRuntimeOverride !== "openclaw")
-    ) {
-      if (credential.type === "oauth") {
-        return fingerprintAuthProfileCredential({
-          profileId: params.authProfileId,
-          credential,
-        });
-      }
+    if (credential.type === "oauth") {
+      return fingerprintAuthProfileCredential({
+        profileId: params.authProfileId,
+        credential,
+      });
+    }
+    if (params.route.agentHarnessRuntimeOverride !== "openclaw") {
       const harnessId = params.route.agentHarnessRuntimeOverride;
       const harness = getRegisteredAgentHarness(harnessId)?.harness;
       if (harness?.authBootstrap === "harness") {
@@ -593,36 +523,12 @@ async function resolveCurrentAuthFingerprint(params: {
           authProfileStore: store,
           agentDir: params.route.agentDir,
           config: params.route.runConfig,
-          deps: params.deps,
         });
       }
-      if (!params.modelId || !params.modelApi) {
-        return undefined;
-      }
-      const resolveAuth = params.deps.resolveApiKeyForProvider ?? resolveApiKeyForProviderCore;
-      const auth = await resolveAuth({
-        provider: params.route.provider,
-        cfg: params.route.runConfig,
-        agentDir: params.route.agentDir,
-        workspaceDir: resolveAgentWorkspaceDir(
-          params.route.runConfig,
-          params.route.agentId,
-          process.env,
-        ),
-        profileId: params.authProfileId,
-        lockedProfile: true,
-        modelId: params.modelId,
-        modelApi: params.modelApi,
-        secretSentinels: false,
-      });
-      if (auth.profileId !== params.authProfileId || !auth.apiKey) {
-        return undefined;
-      }
-      return fingerprintResolvedAuthProfileCredential({
+      materializedProfile = {
         profileId: params.authProfileId,
         credential,
-        resolvedAuth: auth,
-      });
+      };
     }
   }
   // Credential selection is transport-sensitive. Reuse the facts from the
@@ -630,8 +536,8 @@ async function resolveCurrentAuthFingerprint(params: {
   if (!params.modelId || !params.modelApi) {
     return undefined;
   }
-  const resolveAuth = params.deps.resolveApiKeyForProvider ?? resolveApiKeyForProviderCore;
-  const auth = await resolveAuth({
+  const auth = await resolveApiKeyForProviderCore({
+    store,
     provider: params.route.provider,
     cfg: params.route.runConfig,
     agentDir: params.route.agentDir,
@@ -642,15 +548,41 @@ async function resolveCurrentAuthFingerprint(params: {
     ),
     ...(params.authProfileId
       ? { profileId: params.authProfileId, lockedProfile: true as const }
-      : {}),
+      : { allowAuthProfileFallback: false }),
     modelId: params.modelId,
     modelApi: params.modelApi,
-    secretSentinels: true,
+    secretSentinels: materializedProfile === undefined,
   });
   if (params.authProfileId && auth.profileId !== params.authProfileId) {
     return undefined;
   }
+  if (materializedProfile) {
+    return auth.apiKey
+      ? fingerprintResolvedAuthProfileCredential({ ...materializedProfile, resolvedAuth: auth })
+      : undefined;
+  }
   return fingerprintResolvedProviderAuth(auth);
+}
+
+function resolveExecutionAuthFingerprint(
+  route: SystemAgentVerifiedExecutionRoute,
+  auth: AgentExecutionAuthBinding,
+  proofKind: "runtime-owner" | "credential" | undefined,
+  runtimeArtifactFingerprint: string | undefined,
+): Promise<string | undefined> {
+  const common = {
+    route,
+    authProfileId: auth.authProfileId,
+    skipLocalCredential: auth.skipLocalCredential,
+  };
+  return proofKind === "runtime-owner"
+    ? resolveCurrentRuntimeOwnerFingerprint({
+        ...common,
+        kind: auth.runtimeOwnerKind!,
+        runtimeOwnerId: auth.runtimeOwnerId!,
+        runtimeArtifactFingerprint,
+      })
+    : resolveCurrentAuthFingerprint({ ...common, modelId: auth.modelId, modelApi: auth.modelApi });
 }
 
 export async function createSystemAgentVerifiedInferenceBinding(params: {
@@ -660,9 +592,10 @@ export async function createSystemAgentVerifiedInferenceBinding(params: {
   deps?: SystemAgentVerifiedInferenceDeps;
 }): Promise<SystemAgentVerifiedInferenceBinding> {
   const deps = params.deps ?? {};
-  const runConfig = structuredClone(params.executionRoute.runConfig);
+  const runConfig = cloneConfigWithResolutionFacts(params.executionRoute.runConfig);
   const configuredExecution = {
     ...params.executionRoute,
+    sourceConfig: cloneConfigWithResolutionFacts(params.executionRoute.sourceConfig),
     runConfig,
   } as SystemAgentConfiguredRoute;
   const authProfileId = params.auth.authProfileId ?? configuredExecution.authProfileId;
@@ -713,9 +646,7 @@ export async function createSystemAgentVerifiedInferenceBinding(params: {
     if (!params.auth.runtimeArtifactFingerprint || !params.auth.runtimeArtifactId?.trim()) {
       throw new Error("The successful CLI inference run did not report its runtime artifact.");
     }
-    const resolveArtifact =
-      deps.resolveCliRuntimeArtifactFingerprint ?? resolveCliRuntimeArtifactFingerprint;
-    currentRuntimeArtifactFingerprint = await resolveArtifact({
+    currentRuntimeArtifactFingerprint = await resolveCliRuntimeArtifactFingerprint({
       provider: execution.provider,
       config: execution.runConfig,
       agentId: execution.agentId,
@@ -744,59 +675,40 @@ export async function createSystemAgentVerifiedInferenceBinding(params: {
       id: params.auth.runtimeArtifactId.trim(),
       fingerprint: params.auth.runtimeArtifactFingerprint,
     };
-    if (
-      !(await validateAgentHarnessRuntimeArtifact({ harnessId: pluginHarnessId, artifact, deps }))
-    ) {
+    if (!(await validateAgentHarnessRuntimeArtifact({ harnessId: pluginHarnessId, artifact }))) {
       throw new Error("The successful inference harness runtime artifact is no longer active.");
     }
     currentRuntimeArtifactFingerprint = artifact.fingerprint;
   }
-  const currentAuthFingerprint = await (proofKind === "runtime-owner"
-    ? resolveCurrentRuntimeOwnerFingerprint({
-        route: execution,
-        kind: params.auth.runtimeOwnerKind!,
-        runtimeOwnerId: params.auth.runtimeOwnerId!,
-        ...(authProfileId ? { authProfileId } : {}),
-        ...(params.auth.skipLocalCredential ? { skipLocalCredential: true } : {}),
-        ...(currentRuntimeArtifactFingerprint
-          ? { runtimeArtifactFingerprint: currentRuntimeArtifactFingerprint }
-          : {}),
-        deps,
-      })
-    : resolveCurrentAuthFingerprint({
-        route: execution,
-        ...(authProfileId ? { authProfileId } : {}),
-        ...(modelId ? { modelId } : {}),
-        ...(modelApi ? { modelApi } : {}),
-        ...(params.auth.skipLocalCredential ? { skipLocalCredential: true } : {}),
-        deps,
-      }));
+  // The operation owner supplies the refreshed live or staged route. Do not
+  // substitute on-disk credentials for an unsaved candidate here.
+  const currentAuthFingerprint = await resolveExecutionAuthFingerprint(
+    execution,
+    { ...params.auth, authProfileId, modelId, modelApi },
+    proofKind,
+    currentRuntimeArtifactFingerprint,
+  );
   const reportedAuthFingerprint =
     params.auth.authFingerprint ?? params.auth.runtimeOwnerFingerprint;
   if (!currentAuthFingerprint || reportedAuthFingerprint !== currentAuthFingerprint) {
     throw new Error("The successful inference credential is no longer the active route owner.");
   }
-  const authFingerprint = reportedAuthFingerprint;
-  if (!authFingerprint) {
-    throw new Error("The successful inference run did not report an execution owner.");
-  }
   if (
     pluginHarnessId &&
-    resolveRouteHarnessOwnerPluginIds(params.configuredRoute.runConfig, execution).length === 0
+    resolveRouteHarnessOwnerPluginIds(params.configuredRoute.sourceConfig, execution).length === 0
   ) {
     throw new Error("The successful inference harness has no trusted manifest owner.");
   }
   const ownerPluginArtifactSnapshot = captureSystemAgentOwnerPluginArtifacts({
-    config: params.configuredRoute.runConfig,
+    config: params.configuredRoute.sourceConfig,
     executionRoute: execution,
-    deps,
   });
   const { ownerPluginIds, ownerPluginArtifacts } = ownerPluginArtifactSnapshot;
   return {
     configuredRoute: systemAgentRouteIdentity(params.configuredRoute),
     execution,
     executionFingerprint: await projectVerifiedExecutionFingerprint(
-      params.configuredRoute.runConfig,
+      params.configuredRoute.sourceConfig,
       execution,
       ownerPluginIds,
       deps,
@@ -808,7 +720,7 @@ export async function createSystemAgentVerifiedInferenceBinding(params: {
       ...(successfulHarnessId ? { agentHarnessId: successfulHarnessId } : {}),
       ...(modelId ? { modelId } : {}),
       ...(modelApi ? { modelApi } : {}),
-      authFingerprint,
+      authFingerprint: currentAuthFingerprint,
       ...(proofKind === "runtime-owner" ? { proofKind } : {}),
       ...(params.auth.runtimeOwnerKind ? { runtimeOwnerKind: params.auth.runtimeOwnerKind } : {}),
       ...(runtimeOwnerId ? { runtimeOwnerId } : {}),
@@ -845,7 +757,6 @@ export async function hasCurrentSystemAgentOwnerPluginArtifacts(
         config,
         route: binding.execution,
         ownerPluginIds,
-        deps,
       }),
       binding.ownerPluginArtifacts,
     );
@@ -860,7 +771,7 @@ export async function hasCurrentSystemAgentOwnerPluginArtifacts(
  * switch this frozen run, while relevant runtime plugin membership and the
  * actual selected credential are checked explicitly.
  */
-async function resolveSystemAgentVerifiedInferenceStateInternal(
+export async function resolveSystemAgentVerifiedInferenceState(
   binding: SystemAgentVerifiedInferenceBinding,
   deps: SystemAgentVerifiedInferenceDeps = {},
 ): Promise<SystemAgentVerifiedInferenceState | null> {
@@ -875,6 +786,7 @@ async function resolveSystemAgentVerifiedInferenceStateInternal(
     config,
     binding.execution.agentId,
     deps,
+    snapshot,
   );
   if (
     !currentRoute ||
@@ -886,6 +798,7 @@ async function resolveSystemAgentVerifiedInferenceStateInternal(
   // owner through current config so policy/backend changes cannot reuse proof.
   const currentExecution: SystemAgentVerifiedExecutionRoute = {
     ...binding.execution,
+    sourceConfig: currentRoute.sourceConfig,
     runConfig: currentRoute.runConfig,
   };
   let currentOwnerPluginIds: string[];
@@ -915,9 +828,7 @@ async function resolveSystemAgentVerifiedInferenceStateInternal(
   }
   let currentRuntimeArtifactFingerprint: string | undefined;
   if (binding.execution.runner === "cli") {
-    const resolveArtifact =
-      deps.resolveCliRuntimeArtifactFingerprint ?? resolveCliRuntimeArtifactFingerprint;
-    currentRuntimeArtifactFingerprint = await resolveArtifact({
+    currentRuntimeArtifactFingerprint = await resolveCliRuntimeArtifactFingerprint({
       provider: currentExecution.provider,
       config: currentExecution.runConfig,
       agentId: currentExecution.agentId,
@@ -940,34 +851,17 @@ async function resolveSystemAgentVerifiedInferenceStateInternal(
       !(await validateAgentHarnessRuntimeArtifact({
         harnessId,
         artifact: { id: artifactId, fingerprint: artifactFingerprint },
-        deps,
       }))
     ) {
       return null;
     }
     currentRuntimeArtifactFingerprint = artifactFingerprint;
   }
-  const currentAuthFingerprint = await (
-    binding.auth.proofKind === "runtime-owner"
-      ? resolveCurrentRuntimeOwnerFingerprint({
-          route: currentExecution,
-          kind: binding.auth.runtimeOwnerKind!,
-          runtimeOwnerId: binding.auth.runtimeOwnerId!,
-          ...(binding.auth.authProfileId ? { authProfileId: binding.auth.authProfileId } : {}),
-          ...(binding.auth.skipLocalCredential ? { skipLocalCredential: true } : {}),
-          ...(currentRuntimeArtifactFingerprint
-            ? { runtimeArtifactFingerprint: currentRuntimeArtifactFingerprint }
-            : {}),
-          deps,
-        })
-      : resolveCurrentAuthFingerprint({
-          route: currentExecution,
-          ...(binding.auth.authProfileId ? { authProfileId: binding.auth.authProfileId } : {}),
-          ...(binding.auth.modelId ? { modelId: binding.auth.modelId } : {}),
-          ...(binding.auth.modelApi ? { modelApi: binding.auth.modelApi } : {}),
-          ...(binding.auth.skipLocalCredential ? { skipLocalCredential: true } : {}),
-          deps,
-        })
+  const currentAuthFingerprint = await resolveExecutionAuthFingerprint(
+    currentExecution,
+    binding.auth,
+    binding.auth.proofKind,
+    currentRuntimeArtifactFingerprint,
   ).catch(() => undefined);
   if (currentAuthFingerprint !== binding.auth.authFingerprint) {
     return null;
@@ -975,17 +869,10 @@ async function resolveSystemAgentVerifiedInferenceStateInternal(
   return { config, route: binding.execution };
 }
 
-export async function resolveSystemAgentVerifiedInferenceState(
-  binding: SystemAgentVerifiedInferenceBinding,
-  deps: SystemAgentVerifiedInferenceDeps = {},
-): Promise<SystemAgentVerifiedInferenceState | null> {
-  return resolveSystemAgentVerifiedInferenceStateInternal(binding, deps);
-}
-
 export async function resolveSystemAgentVerifiedInferenceRoute(
   binding: SystemAgentVerifiedInferenceBinding,
   deps: SystemAgentVerifiedInferenceDeps = {},
 ): Promise<SystemAgentVerifiedExecutionRoute | null> {
-  return (await resolveSystemAgentVerifiedInferenceStateInternal(binding, deps))?.route ?? null;
+  return (await resolveSystemAgentVerifiedInferenceState(binding, deps))?.route ?? null;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

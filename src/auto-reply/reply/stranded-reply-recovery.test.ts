@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { completeFollowupRunLifecycle, markFollowupRunEnqueued } from "./queue/types.js";
+import { attachToolAllowlistIntersection } from "../../agents/tool-policy-shared.js";
+import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
+import { completeFollowupRunLifecycle, markFollowupRunEnqueued } from "./queue/lifecycle.js";
+import type { ReplyOperationRunState } from "./reply-operation-run-state.js";
 import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
 import { createMockFollowupRun } from "./test-helpers.js";
 
@@ -7,6 +10,7 @@ const STRANDED_REPLY_RETRY_MARKER = "stranded-reply-retry";
 
 describe("buildStrandedReplyRetryFollowupRun lifecycle ownership", () => {
   it("does not share the client turn's turnAdoptionLifecycle with the system retry", () => {
+    const receipts: ReplyOperationRunState[] = [{ agentTurn: "ok" }];
     const onComplete = vi.fn();
     const onEnqueued = vi.fn(() => true);
     const parent = createMockFollowupRun({
@@ -18,12 +22,14 @@ describe("buildStrandedReplyRetryFollowupRun lifecycle ownership", () => {
         onDeferred: onEnqueued,
       },
       admissionSessionId: "sess-rotated",
+      replyOperationRunStates: receipts,
     });
 
     const recovery = resolveStrandedReplyRecovery({
       base: parent,
-      finalText:
-        "A substantive stranded final must be re-delivered via message(action=send). It includes enough user-facing detail to require the one-shot recovery path.",
+      payloads: [],
+      finalText: "The answer is ready.",
+      terminalReply: { disposition: "visible", text: "The answer is ready." },
       sourceReplyDeliveryMode: "message_tool_only",
       sendPolicyDenied: false,
       successfulSourceReplyDelivery: false,
@@ -37,6 +43,8 @@ describe("buildStrandedReplyRetryFollowupRun lifecycle ownership", () => {
     const retry = recovery.run;
 
     expect(retry.turnAdoptionLifecycle).toBeUndefined();
+    expect(retry.replyOperationRunStates).toBeUndefined();
+    expect(parent.replyOperationRunStates).toBe(receipts);
     expect(retry.strandedReplyRetry).toBe(true);
     expect(retry.summaryLine).toBe(STRANDED_REPLY_RETRY_MARKER);
     // Session routing stays; only the client-turn lifecycle identity is detached.
@@ -60,15 +68,53 @@ describe("buildStrandedReplyRetryFollowupRun lifecycle ownership", () => {
 });
 
 describe("resolveStrandedReplyRecovery", () => {
-  const substantiveFinal =
-    "This reply is substantive enough to look user-facing. It contains a second sentence so the private-final policy treats it as stranded output.";
+  const finalText = "The answer is ready.";
+  const terminalReply = { disposition: "visible", text: finalText } as const;
 
-  it("creates one priority retry for a substantive private final", () => {
-    const base = createMockFollowupRun({ prompt: "question" });
+  it.each([
+    { payload: { text: "The recovered answer is ready." }, expected: "none" },
+    {
+      payload: { text: "The fallback model is active.", isFallbackNotice: true },
+      expected: "retry",
+    },
+  ])(
+    "distinguishes a pending terminal answer from a notice: $expected",
+    ({ payload, expected }) => {
+      const recovery = resolveStrandedReplyRecovery({
+        base: createMockFollowupRun({ prompt: "question" }),
+        payloads: [markReplyPayloadForSourceSuppressionDelivery(payload)],
+        finalText,
+        terminalReply,
+        sourceReplyDeliveryMode: "message_tool_only",
+        sendPolicyDenied: false,
+        successfulSourceReplyDelivery: false,
+        isHeartbeat: false,
+        isRoomEvent: false,
+      });
+
+      expect(recovery.kind).toBe(expected);
+    },
+  );
+
+  it.each([
+    { label: "uncapped", toolsAllow: undefined, expected: ["message"] },
+    { label: "wildcard", toolsAllow: ["*"], expected: ["message"] },
+    { label: "messaging group", toolsAllow: ["group:messaging", "exec"], expected: ["message"] },
+    { label: "empty cap", toolsAllow: [], expected: [] },
+    { label: "non-messaging cap", toolsAllow: ["exec"], expected: [] },
+    {
+      label: "intersected denial",
+      toolsAllow: attachToolAllowlistIntersection(["message"], [["*"], ["exec"]]),
+      expected: [],
+    },
+  ])("restricts the priority retry to authorized messaging: $label", ({ toolsAllow, expected }) => {
+    const base = createMockFollowupRun({ prompt: "question", toolsAllow });
 
     const recovery = resolveStrandedReplyRecovery({
       base,
-      finalText: substantiveFinal,
+      payloads: [],
+      finalText,
+      terminalReply,
       sourceReplyDeliveryMode: "message_tool_only",
       sendPolicyDenied: false,
       successfulSourceReplyDelivery: false,
@@ -80,41 +126,9 @@ describe("resolveStrandedReplyRecovery", () => {
     if (recovery.kind === "retry") {
       expect(recovery.run.strandedReplyRetry).toBe(true);
       expect(recovery.run.disableCollectBatching).toBe(true);
-      expect(recovery.run.prompt).toBe(
-        `[System] Your previous reply was not delivered to the conversation because ` +
-          `you did not call message(action=send). Your reply text was:\n\n` +
-          `"${substantiveFinal}"\n\n` +
-          `Please deliver this reply now by calling message(action=send). ` +
-          `Do not add any extra commentary; just deliver the original reply.`,
-      );
-    }
-  });
-
-  it("creates the same retry for a substantive CJK private final", () => {
-    // Full-width terminators carry no trailing whitespace, so a CJK reply of the
-    // same shape used to score zero sentence terminators and skip recovery entirely.
-    const base = createMockFollowupRun({ prompt: "question" });
-    const substantiveCjkFinal =
-      "近 7 日營收較前期增加 5.09%，已連續兩週回升。最大風險是集中：前五大站台占正營收 86.5%，已超過 85% 觀察門檻。" +
-      "近 30 日最大單一產品占 44.2%，亦超過 40% 門檻。建議先維持成長節奏並優先降低集中風險，不建議只看總額就全面加碼。" +
-      "成長主因仍待業務確認，我尚未取得該線的回覆。";
-
-    const recovery = resolveStrandedReplyRecovery({
-      base,
-      finalText: substantiveCjkFinal,
-      sourceReplyDeliveryMode: "message_tool_only",
-      sendPolicyDenied: false,
-      successfulSourceReplyDelivery: false,
-      isHeartbeat: false,
-      isRoomEvent: false,
-    });
-
-    expect(recovery.kind).toBe("retry");
-    if (recovery.kind === "retry") {
-      expect(recovery.run.strandedReplyRetry).toBe(true);
-      expect(recovery.run.disableCollectBatching).toBe(true);
-      expect(recovery.run.prompt).toContain(substantiveCjkFinal);
-      expect(recovery.run.prompt).toContain("message(action=send)");
+      expect(recovery.run.toolsAllow).toEqual(expected);
+      expect(recovery.run.run.suppressNextUserMessagePersistence).toBe(true);
+      expect(recovery.run.transcriptPrompt).toBeUndefined();
     }
   });
 
@@ -123,7 +137,9 @@ describe("resolveStrandedReplyRecovery", () => {
 
     const recovery = resolveStrandedReplyRecovery({
       base,
+      payloads: [],
       finalText: "",
+      terminalReply: { disposition: "empty" },
       sourceReplyDeliveryMode: "message_tool_only",
       sendPolicyDenied: false,
       successfulSourceReplyDelivery: false,
@@ -131,7 +147,14 @@ describe("resolveStrandedReplyRecovery", () => {
       isRoomEvent: false,
     });
 
-    expect(recovery).toMatchObject({ kind: "diagnostic", warn: false });
+    expect(recovery).toMatchObject({
+      kind: "diagnostic",
+      payload: {
+        text: "No answer was returned. Ask again if you still need one.",
+        isError: true,
+        isStatusNotice: true,
+      },
+    });
   });
 
   it.each([
@@ -144,7 +167,9 @@ describe("resolveStrandedReplyRecovery", () => {
 
     const recovery = resolveStrandedReplyRecovery({
       base,
-      finalText: substantiveFinal,
+      payloads: [],
+      finalText,
+      terminalReply,
       sourceReplyDeliveryMode: "message_tool_only",
       sendPolicyDenied: false,
       successfulSourceReplyDelivery: false,

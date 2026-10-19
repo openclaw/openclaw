@@ -1,7 +1,6 @@
-// Discord provider module implements model/runtime integration.
 import {
   listNativeCommandSpecsForConfig,
-  listSkillCommandsForAgents,
+  prepareSkillCommandsForAgents,
 } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
@@ -9,15 +8,12 @@ import {
   mergeNativeCommandSpecs,
   type NativeCommandSpec,
 } from "openclaw/plugin-sdk/native-command-registry";
-import type {
-  PluginCommandNativeCandidate,
-  PluginCommandRuntime,
-} from "openclaw/plugin-sdk/plugin-command-runtime";
+import type { PluginCommandNativeCandidate } from "openclaw/plugin-sdk/plugin-command-runtime";
 import { danger, warn, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { DISCORD_VOICE_COMMAND_SPEC } from "../voice/command.js";
 
-export type DiscordProviderCommandSpec = NativeCommandSpec | PluginCommandNativeCandidate;
+type DiscordProviderCommandSpec = NativeCommandSpec | PluginCommandNativeCandidate;
 
 const loadPluginCommandRuntime = createLazyRuntimeModule(
   () => import("openclaw/plugin-sdk/plugin-command-runtime"),
@@ -29,22 +25,13 @@ export async function resolveDiscordProviderCommandSpecs(params: {
   nativeEnabled: boolean;
   nativeSkillsEnabled: boolean;
   voiceEnabled: boolean;
-  maxDiscordCommands?: number;
-  listSkillCommandsForAgents?: typeof listSkillCommandsForAgents;
-  listNativeCommandSpecsForConfig?: typeof listNativeCommandSpecsForConfig;
-}): Promise<{
-  skillCommands: ReturnType<typeof listSkillCommandsForAgents>;
-  commandSpecs: DiscordProviderCommandSpec[];
-}> {
-  const listSkillCommands = params.listSkillCommandsForAgents ?? listSkillCommandsForAgents;
-  const listNativeCommandSpecs =
-    params.listNativeCommandSpecsForConfig ?? listNativeCommandSpecsForConfig;
-  const maxDiscordCommands = params.maxDiscordCommands ?? 100;
-  let pluginCommandRuntime: PluginCommandRuntime | undefined;
-  if (params.nativeEnabled) {
-    pluginCommandRuntime = (await loadPluginCommandRuntime()).createPluginCommandRuntime();
-  }
-  const pluginCommandSpecs = pluginCommandRuntime?.listNativeCandidates("discord") ?? [];
+}) {
+  const maxDiscordCommands = 100;
+  const pluginCommandSpecs = params.nativeEnabled
+    ? (await loadPluginCommandRuntime())
+        .createPluginCommandRuntime()
+        .listNativeCandidates("discord")
+    : [];
   const onCollision = (normalizedName: string) => {
     params.runtime.error?.(
       danger(
@@ -62,9 +49,9 @@ export async function resolveDiscordProviderCommandSpecs(params: {
       onCollision: collisionHandler,
     });
   const listPrimaryCommandSpecs = (
-    skillCommands: ReturnType<typeof listSkillCommandsForAgents>,
+    skillCommands: Awaited<ReturnType<typeof prepareSkillCommandsForAgents>>,
   ): NativeCommandSpec[] => {
-    const standardSpecs = listNativeCommandSpecs(params.cfg, {
+    const standardSpecs = listNativeCommandSpecsForConfig(params.cfg, {
       skillCommands,
       provider: "discord",
     });
@@ -84,7 +71,7 @@ export async function resolveDiscordProviderCommandSpecs(params: {
   const provisionalCollisions: string[] = [];
   let skillCommands =
     params.nativeEnabled && params.nativeSkillsEnabled
-      ? listSkillCommands({ cfg: params.cfg })
+      ? await prepareSkillCommandsForAgents({ cfg: params.cfg })
       : [];
   let commandSpecs: DiscordProviderCommandSpec[] = params.nativeEnabled
     ? mergePluginCommandSpecs(listPrimaryCommandSpecs(skillCommands), (normalizedName) =>
@@ -115,9 +102,6 @@ export async function resolveDiscordProviderCommandSpecs(params: {
         `${commandSpecs.length} commands exceed the ${maxDiscordCommands}-command Discord limit; some commands may fail to deploy.`,
       ),
     );
-  }
-  if (commandSpecs.some((command) => "prepareDispatch" in command)) {
-    pluginCommandRuntime?.retainNativeCatalog("discord");
   }
   return { skillCommands, commandSpecs };
 }

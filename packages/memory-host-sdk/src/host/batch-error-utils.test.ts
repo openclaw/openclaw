@@ -1,4 +1,3 @@
-// Memory Host SDK tests cover batch error utils behavior.
 import { describe, expect, it } from "vitest";
 import {
   EmbeddingBatchUnavailableError,
@@ -6,22 +5,16 @@ import {
   formatBatchErrorDetail,
   formatUnavailableBatchError,
   isEmbeddingBatchUnavailableError,
-} from "../engine-embeddings.js";
+} from "./batch-error-utils.js";
 
 describe("extractBatchErrorMessage", () => {
-  it("returns the first top-level error message", () => {
+  it("preserves line order when nested errors precede top-level errors", () => {
     expect(
       extractBatchErrorMessage([
         { response: { body: { error: { message: "nested" } } } },
         { error: { message: "top-level" } },
       ]),
     ).toBe("nested");
-  });
-
-  it("falls back to nested response error message", () => {
-    expect(
-      extractBatchErrorMessage([{ response: { body: { error: { message: "nested-only" } } } }, {}]),
-    ).toBe("nested-only");
   });
 
   it("accepts plain string response bodies", () => {

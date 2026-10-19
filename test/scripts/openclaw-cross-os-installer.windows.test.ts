@@ -10,54 +10,48 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.ts";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function powerShellSingleQuote(value: string) {
-  return value.replace(/'/gu, "''");
+function installerTempFiles(dir: string) {
+  return readdirSync(dir).filter((entry) => entry.startsWith("openclaw-installer-"));
 }
 
-async function runPowerShell(params: {
-  script: string;
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-  logPath: string;
-}) {
-  return runCommand(
-    "powershell.exe",
-    [
-      "-NoLogo",
-      "-NoProfile",
-      "-NonInteractive",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-Command",
-      params.script,
-    ],
-    {
-      check: false,
-      cwd: params.cwd,
-      env: params.env,
-      logPath: params.logPath,
-      timeoutMs: 10_000,
-    },
-  );
+async function listen(server: ReturnType<typeof createServer>) {
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Installer proof server did not bind to a TCP port.");
+  }
+  return `http://127.0.0.1:${address.port}`;
 }
 
-async function runPosixShell(params: {
-  script: string;
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-  logPath: string;
-}) {
-  return runCommand("/bin/bash", ["-lc", params.script], {
-    check: false,
-    cwd: params.cwd,
-    env: params.env,
-    logPath: params.logPath,
-    timeoutMs: 10_000,
+async function close(server: ReturnType<typeof createServer>) {
+  server.closeAllConnections();
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
   });
 }
 
-function installerTempFiles(dir: string) {
-  return readdirSync(dir).filter((entry) => entry.startsWith("openclaw-installer-"));
+function installer(baseUrl: string, route: string, platform: "linux" | "win32") {
+  return buildInstallerSmokeScript(
+    { installerUrl: `${baseUrl}/${route}`, installTarget: "proof-target", platform },
+    { connectTimeoutSeconds: 2, requestTimeoutSeconds: 1 },
+  );
+}
+
+function runShell(script: string, cwd: string, env: NodeJS.ProcessEnv, logPath: string) {
+  const windows = process.platform === "win32";
+  return runCommand(
+    windows ? "powershell.exe" : "/bin/bash",
+    windows
+      ? [
+          ..."-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command".split(" "),
+          script,
+        ]
+      : ["-lc", script],
+    { check: false, cwd, env, logPath, timeoutMs: 10_000 },
+  );
 }
 
 describe("cross-OS installer fetch", () => {
@@ -77,63 +71,36 @@ describe("cross-OS installer fetch", () => {
       });
 
       try {
-        await new Promise<void>((resolvePromise, rejectPromise) => {
-          server.once("error", rejectPromise);
-          server.listen(0, "127.0.0.1", resolvePromise);
-        });
-        const address = server.address();
-        if (!address || typeof address === "string") {
-          throw new Error("POSIX installer proof server did not bind to a TCP port.");
-        }
-        const baseUrl = `http://127.0.0.1:${address.port}`;
+        const baseUrl = await listen(server);
         const env = {
           ...process.env,
           TMPDIR: dir,
           OPENCLAW_PROOF_HEALTHY_MARKER: healthyMarker,
           OPENCLAW_PROOF_STALL_MARKER: stalledMarker,
         };
-        const timeouts = { connectTimeoutSeconds: 2, requestTimeoutSeconds: 1 };
-
-        const healthy = await runPosixShell({
-          script: buildInstallerSmokeScript(
-            {
-              installerUrl: `${baseUrl}/healthy`,
-              installTarget: "proof-target",
-              platform: "linux",
-            },
-            timeouts,
-          ),
-          cwd: dir,
+        const healthy = await runShell(
+          installer(baseUrl, "healthy", "linux"),
+          dir,
           env,
-          logPath: join(dir, "healthy.log"),
-        });
+          join(dir, "healthy.log"),
+        );
 
         expect(healthy.exitCode).toBe(0);
         expect(readFileSync(healthyMarker, "utf8")).toBe("--version|proof-target|--no-onboard");
         expect(installerTempFiles(dir)).toEqual([]);
 
-        const stalled = await runPosixShell({
-          script: buildInstallerSmokeScript(
-            {
-              installerUrl: `${baseUrl}/stalled`,
-              installTarget: "proof-target",
-              platform: "linux",
-            },
-            timeouts,
-          ),
-          cwd: dir,
+        const stalled = await runShell(
+          installer(baseUrl, "stalled", "linux"),
+          dir,
           env,
-          logPath: join(dir, "stalled.log"),
-        });
+          join(dir, "stalled.log"),
+        );
 
         expect(stalled.exitCode).toBe(28);
         expect(existsSync(stalledMarker)).toBe(false);
         expect(installerTempFiles(dir)).toEqual([]);
       } finally {
-        server.closeAllConnections();
-        await new Promise<void>((resolvePromise) => {
-          server.close(() => resolvePromise());
-        });
+        await close(server);
       }
     },
     15_000,
@@ -145,76 +112,53 @@ describe("cross-OS installer fetch", () => {
       const dir = tempDirs.make("openclaw-cross-os-installer-");
       const healthyMarker = join(dir, "healthy.txt");
       const stalledMarker = join(dir, "stalled.txt");
+      const logPath = join(dir, "installer.log");
+      const requests: Array<string | undefined> = [];
       const server = createServer((request, response) => {
+        requests.push(request.url);
         response.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
         if (request.url === "/healthy") {
           response.end(
             [
               "param([string] $Tag, [switch] $NoOnboard)",
-              `[System.IO.File]::WriteAllText('${powerShellSingleQuote(healthyMarker)}', "tag=$Tag noOnboard=$($NoOnboard.IsPresent)")`,
+              `[System.IO.File]::WriteAllText('${healthyMarker.replace(/'/gu, "''")}', "tag=$Tag noOnboard=$($NoOnboard.IsPresent)")`,
             ].join("\n"),
           );
           return;
         }
         response.write(
-          `[System.IO.File]::WriteAllText('${powerShellSingleQuote(stalledMarker)}', 'executed')\n`,
+          `[System.IO.File]::WriteAllText('${stalledMarker.replace(/'/gu, "''")}', 'executed')\n`,
         );
       });
 
       try {
-        await new Promise<void>((resolvePromise, rejectPromise) => {
-          server.once("error", rejectPromise);
-          server.listen(0, "127.0.0.1", resolvePromise);
-        });
-        const address = server.address();
-        if (!address || typeof address === "string") {
-          throw new Error("Windows installer proof server did not bind to a TCP port.");
-        }
-        const baseUrl = `http://127.0.0.1:${address.port}`;
+        const baseUrl = await listen(server);
         const env = { ...process.env, TEMP: dir, TMP: dir };
-        const timeouts = { connectTimeoutSeconds: 2, requestTimeoutSeconds: 1 };
-
-        const healthy = await runPowerShell({
-          script: buildInstallerSmokeScript(
-            {
-              installerUrl: `${baseUrl}/healthy`,
-              installTarget: "proof-target",
-              platform: "win32",
-            },
-            timeouts,
-          ),
-          cwd: dir,
+        const result = await runShell(
+          [
+            "[Console]::Out.WriteLine('OPENCLAW_INSTALLER_PROOF:started ' + [DateTime]::UtcNow.ToString('O'))",
+            installer(baseUrl, "healthy", "win32"),
+            "if (-not $?) { throw 'Healthy installer command failed' }",
+            "[Console]::Out.WriteLine('OPENCLAW_INSTALLER_PROOF:healthy-complete ' + [DateTime]::UtcNow.ToString('O'))",
+            installer(baseUrl, "stalled", "win32"),
+          ].join("\n"),
+          dir,
           env,
-          logPath: join(dir, "healthy.log"),
-        });
+          logPath,
+        );
 
-        expect(healthy.exitCode).toBe(0);
+        expect(result.stdout, result.stderr).toContain(
+          "OPENCLAW_INSTALLER_PROOF:healthy-complete ",
+        );
         expect(readFileSync(healthyMarker, "utf8")).toBe("tag=proof-target noOnboard=True");
-        expect(installerTempFiles(dir)).toEqual([]);
-
-        const stalled = await runPowerShell({
-          script: buildInstallerSmokeScript(
-            {
-              installerUrl: `${baseUrl}/stalled`,
-              installTarget: "proof-target",
-              platform: "win32",
-            },
-            timeouts,
-          ),
-          cwd: dir,
-          env,
-          logPath: join(dir, "stalled.log"),
-        });
-
-        expect(stalled.exitCode).not.toBe(0);
-        expect(`${stalled.stdout}\n${stalled.stderr}`).toContain("exit 28");
+        expect(requests).toEqual(["/healthy", "/stalled"]);
+        expect(result.exitCode).not.toBe(0);
+        expect(`${result.stdout}\n${result.stderr}`).toContain("exit 28");
         expect(existsSync(stalledMarker)).toBe(false);
+        // Each installer uses a distinct GUID, so the final inventory covers both cleanups.
         expect(installerTempFiles(dir)).toEqual([]);
       } finally {
-        server.closeAllConnections();
-        await new Promise<void>((resolvePromise) => {
-          server.close(() => resolvePromise());
-        });
+        await close(server);
       }
     },
     15_000,

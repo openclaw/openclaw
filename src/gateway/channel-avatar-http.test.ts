@@ -1,0 +1,413 @@
+import { createServer, type ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { channelAvatarRevision } from "./channel-avatar-reference.js";
+import { buildControlUiChannelAvatarUrl } from "./control-ui-contract.js";
+import { finishFailedGatewayHttpResponse } from "./http-common.js";
+import { HTTP_IMAGE_MAX_BYTES } from "./http-image-response.js";
+import { APNG_BYTES } from "./http-image.test-support.js";
+import { bindHttpResponseAuthority } from "./http-request-authority.js";
+
+const mocks = vi.hoisted(() => ({
+  authorize: vi.fn(),
+  loadEntry: vi.fn(),
+  resolveReference: vi.fn(),
+  readMedia: vi.fn(),
+}));
+
+vi.mock("./http-utils.js", () => ({
+  authorizeControlUiSessionOwnerReadRequestOrReply: (...args: unknown[]) =>
+    mocks.authorize(...args),
+}));
+
+// mock-isolation: avatar HTTP tests use request-local config without loading operator state.
+vi.mock("../config/io.js", () => ({
+  getRuntimeConfig: () => ({}),
+}));
+
+// mock-isolation: avatar authorization tests supply session ownership without a database worker.
+vi.mock("./session-utils-store-worker.js", () => ({
+  loadGatewaySessionEntryReadOnlyInWorker: (...args: unknown[]) => mocks.loadEntry(...args),
+}));
+
+vi.mock("../media/media-reference.js", () => ({
+  resolveInboundMediaReference: (...args: unknown[]) => mocks.resolveReference(...args),
+}));
+
+vi.mock("../media/store.js", () => ({
+  readMediaBuffer: (...args: unknown[]) => mocks.readMedia(...args),
+}));
+
+const { handleChannelAvatarHttpRequest } = await import("./channel-avatar-http.js");
+
+const PNG_BYTES = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zb0YAAAAASUVORK5CYII=",
+  "base64",
+);
+const AVATAR_REFERENCE = "/state/media/inbound/channel-avatar.png";
+
+function avatarEntry(reference = AVATAR_REFERENCE) {
+  return {
+    delivery: {
+      kind: "external" as const,
+      route: { channel: "discord", target: { to: "user:1" } },
+      context: { channel: "discord", to: "user:1" },
+      origin: { provider: "discord", to: "user:1", avatar: reference },
+    },
+  };
+}
+
+describe("handleChannelAvatarHttpRequest", () => {
+  let port = 0;
+  let server: ReturnType<typeof createServer>;
+  let authorityCurrent = true;
+
+  beforeAll(async () => {
+    server = createServer((req, res) => {
+      void handleChannelAvatarHttpRequest(req, res, {
+        auth: { mode: "token", token: "test-token", allowTailscale: false },
+      })
+        .then((handled) => {
+          if (!handled) {
+            res.statusCode = 418;
+            res.end("unhandled");
+          }
+        })
+        .catch(() => finishFailedGatewayHttpResponse(res));
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        port = (server.address() as AddressInfo).port;
+        resolve();
+      });
+    });
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
+  });
+
+  afterEach(() => {
+    memorySessionActorOwners.reset();
+    vi.unstubAllEnvs();
+  });
+
+  beforeEach(() => {
+    authorityCurrent = true;
+    mocks.authorize
+      .mockReset()
+      .mockImplementation(({ res }: { res: ServerResponse }) =>
+        bindHttpResponseAuthority(
+          { authMethod: "token", operatorScopes: ["operator.admin", "operator.read"] },
+          res,
+          () => authorityCurrent,
+        ),
+      );
+    mocks.loadEntry.mockReset().mockResolvedValue({ entry: avatarEntry() });
+    mocks.resolveReference.mockReset().mockResolvedValue({
+      id: "channel-avatar.png",
+      normalizedSource: AVATAR_REFERENCE,
+      physicalPath: AVATAR_REFERENCE,
+      sourceType: "path",
+    });
+    mocks.readMedia.mockReset().mockResolvedValue({
+      id: "channel-avatar.png",
+      path: AVATAR_REFERENCE,
+      buffer: PNG_BYTES,
+      size: PNG_BYTES.byteLength,
+    });
+  });
+
+  const avatarRoute = (sessionKey: string) =>
+    `http://127.0.0.1:${port}${buildControlUiChannelAvatarUrl("", sessionKey, "test-revision")}`;
+
+  it("serves current memory avatars and refuses bytes after the captured owner closes", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/synthetic/channel-avatar");
+    const owner = memorySessionActorOwners.get({
+      agentId: "main",
+      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+    });
+    const sessionKey = "agent:main:dashboard:incognito-avatar";
+    const authority = { assertCurrent() {}, authorize() {} };
+    const actor = await owner.acquire(
+      { sessionKey, database: owner.identity },
+      { assertCurrent() {}, assertReadable() {} },
+    );
+    const release = createDeferredCore();
+    let pending: Promise<Response> | undefined;
+    try {
+      const created = await actor.storage!.mutate(
+        {
+          type: "session.entry.create",
+          input: {
+            entry: { ...avatarEntry(), sessionId: "private-avatar", updatedAt: 1, incognito: true },
+          },
+        },
+        authority,
+      );
+      expect(created.kind).toBe("committed");
+      const initial = await fetch(avatarRoute(sessionKey));
+      expect(Buffer.from(await initial.arrayBuffer())).toEqual(PNG_BYTES);
+      expect(mocks.loadEntry).not.toHaveBeenCalled();
+      const patch = await actor.storage!.mutate(
+        {
+          type: "session.entry.patch",
+          input: {
+            operation: {
+              kind: "fields",
+              patch: avatarEntry("/state/media/inbound/new-private-avatar.png"),
+            },
+          },
+        },
+        authority,
+      );
+      expect(patch.kind).toBe("committed");
+      const reading = createDeferredCore();
+      mocks.readMedia.mockImplementationOnce(async () => {
+        reading.resolve();
+        await release.promise;
+        return { buffer: PNG_BYTES };
+      });
+      pending = fetch(avatarRoute(sessionKey));
+      await reading.promise;
+      memorySessionActorOwners.closeDatabase(owner);
+      release.resolve();
+      const response = await pending;
+      expect(response.status).not.toBe(200);
+      expect(response.headers.get("content-type")).not.toBe("image/png");
+      await response.arrayBuffer();
+    } finally {
+      release.resolve();
+      await pending;
+      await actor.release();
+    }
+  });
+
+  it("binds transcript avatar bytes to the exact native sender and media snapshot", async () => {
+    const entry = avatarEntry();
+    mocks.loadEntry.mockReturnValue({
+      entry: {
+        ...entry,
+        delivery: {
+          ...entry.delivery,
+          origin: {
+            ...entry.delivery.origin,
+            provider: "telegram",
+            accountId: "sample-bot",
+            from: "telegram:1000000001",
+            chatType: "direct",
+          },
+        },
+      },
+    });
+    const url = new URL(avatarRoute("agent:main:portrait-binding"));
+    url.searchParams.set("v", channelAvatarRevision(AVATAR_REFERENCE));
+    url.searchParams.set("provider", "telegram");
+    url.searchParams.set("account", "sample-bot");
+    url.searchParams.set("sender", "1000000001");
+    expect((await fetch(url)).status).toBe(200);
+    const reads = mocks.readMedia.mock.calls.length;
+    for (const [key, value] of [
+      ["sender", "1000000002"],
+      ["account", "another-bot"],
+      ["provider", "slack"],
+      ["v", "stale-revision"],
+    ] as const) {
+      const stale = new URL(url);
+      stale.searchParams.set(key, value);
+      expect((await fetch(stale)).status).toBe(404);
+    }
+    expect(mocks.readMedia).toHaveBeenCalledTimes(reads);
+  });
+
+  it("rejects revoked authority while channel avatar bytes are loading", async () => {
+    const reading = createDeferredCore();
+    const release = createDeferredCore();
+    mocks.readMedia.mockImplementationOnce(async () => {
+      reading.resolve();
+      await release.promise;
+      return { buffer: PNG_BYTES };
+    });
+
+    const pending = fetch(avatarRoute("agent:main:revoked"));
+    await reading.promise;
+    authorityCurrent = false;
+    release.resolve();
+
+    const response = await pending;
+    expect(response.status).toBe(401);
+    expect(response.headers.get("etag")).toBeNull();
+    expect(await response.json()).toEqual({
+      error: { message: "Unauthorized", type: "unauthorized" },
+    });
+  });
+
+  it.each([
+    { label: "PNG", buffer: PNG_BYTES },
+    { label: "APNG", buffer: APNG_BYTES },
+  ])(
+    "serves and revalidates cached conversation $label bytes with sandboxed headers",
+    async ({ label, buffer }) => {
+      mocks.readMedia.mockResolvedValue({ buffer });
+      const route = avatarRoute(`agent:main:discord:direct:${label}`);
+      const response = await fetch(route);
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toBe("image/png");
+      expect(response.headers.get("content-length")).toBe(String(buffer.byteLength));
+      expect(response.headers.get("cache-control")).toBe("private, max-age=3600");
+      expect(response.headers.get("cross-origin-resource-policy")).toBe("same-origin");
+      expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+      expect(response.headers.get("content-security-policy")).toContain("sandbox");
+      expect(response.headers.get("content-disposition")).toBe(
+        'attachment; filename="channel-avatar"',
+      );
+      expect(Buffer.from(await response.arrayBuffer())).toEqual(buffer);
+      expect(mocks.resolveReference).toHaveBeenCalledWith(AVATAR_REFERENCE);
+      expect(mocks.readMedia).toHaveBeenCalledWith(
+        "channel-avatar.png",
+        "inbound",
+        HTTP_IMAGE_MAX_BYTES,
+      );
+      const etag = response.headers.get("etag");
+      const revalidated = await fetch(route, { headers: { "If-None-Match": etag ?? "" } });
+      expect(etag).toBeTruthy();
+      expect(revalidated.status).toBe(304);
+      expect((await revalidated.arrayBuffer()).byteLength).toBe(0);
+      expect(mocks.readMedia).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("shares one cold load across concurrent GET and HEAD requests", async () => {
+    const arrived = createDeferredCore();
+    const release = createDeferredCore();
+    let readers = 0;
+    mocks.loadEntry.mockImplementation(() => {
+      if (++readers === 10) {
+        arrived.resolve();
+      }
+      return { entry: avatarEntry() };
+    });
+    mocks.readMedia.mockImplementation(async () => {
+      await release.promise;
+      return { buffer: PNG_BYTES };
+    });
+
+    const requests = Array.from({ length: 10 }, (_, index) =>
+      fetch(avatarRoute("agent:main:concurrent"), { method: index % 2 ? "HEAD" : "GET" }),
+    );
+    await arrived.promise;
+    release.resolve();
+    const responses = await Promise.all(requests);
+    const etag = responses[0]?.headers.get("etag");
+    expect(etag).toBeTruthy();
+    for (const [index, response] of responses.entries()) {
+      expect(response.status).toBe(200);
+      expect(response.headers.get("etag")).toBe(etag);
+      expect(response.headers.get("content-type")).toBe("image/png");
+      expect(response.headers.get("content-length")).toBe(String(PNG_BYTES.byteLength));
+      expect(Buffer.from(await response.arrayBuffer())).toEqual(
+        index % 2 ? Buffer.alloc(0) : PNG_BYTES,
+      );
+    }
+    expect(mocks.resolveReference).toHaveBeenCalledTimes(1);
+    expect(mocks.readMedia).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["missing", "failed", "invalid"])(
+    "retries an avatar after a %s load settles",
+    async (failure) => {
+      if (failure === "missing") {
+        mocks.resolveReference.mockResolvedValueOnce(null);
+      } else if (failure === "failed") {
+        mocks.readMedia.mockRejectedValueOnce(new Error("media unavailable"));
+      } else {
+        mocks.readMedia.mockResolvedValueOnce({ buffer: Buffer.from("not an image") });
+      }
+      const route = avatarRoute(`agent:main:recover:${failure}`);
+      const unavailable = await fetch(route);
+      await unavailable.arrayBuffer();
+      const recovered = await fetch(route);
+
+      expect(unavailable.status).toBe(404);
+      expect(unavailable.headers.get("cache-control")).toBe("no-store");
+      expect(recovered.status).toBe(200);
+      expect(Buffer.from(await recovered.arrayBuffer())).toEqual(PNG_BYTES);
+      expect(mocks.resolveReference).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("releases superseded avatars without evicting another session's cached image", async () => {
+    const stable = await fetch(avatarRoute("agent:main:stable-avatar"));
+    await stable.arrayBuffer();
+
+    for (let revision = 0; revision < 130; revision++) {
+      const reference = `/state/media/inbound/rotating-avatar-${revision}.png`;
+      const buffer = Buffer.concat([PNG_BYTES, Buffer.from(String(revision))]);
+      mocks.loadEntry.mockReturnValue({ entry: avatarEntry(reference) });
+      mocks.readMedia.mockResolvedValue({ buffer });
+      const response = await fetch(avatarRoute("agent:main:rotating-avatar"));
+      expect(Buffer.from(await response.arrayBuffer()).equals(buffer)).toBe(true);
+    }
+
+    mocks.loadEntry.mockReturnValue({ entry: avatarEntry() });
+    mocks.readMedia.mockResolvedValue({ buffer: PNG_BYTES });
+    const readsBeforeRevisit = mocks.readMedia.mock.calls.length;
+    const revisited = await fetch(avatarRoute("agent:main:stable-avatar"));
+
+    expect(Buffer.from(await revisited.arrayBuffer()).equals(PNG_BYTES)).toBe(true);
+    expect(mocks.readMedia).toHaveBeenCalledTimes(readsBeforeRevisit);
+  });
+
+  it.each([
+    { label: "missing session", entry: undefined },
+    { label: "session without an avatar", entry: avatarEntry("") },
+  ])("returns an uncacheable 404 for a $label", async ({ entry }) => {
+    mocks.loadEntry.mockReturnValue({ entry });
+
+    const response = await fetch(avatarRoute("agent:main:missing"));
+
+    expect(response.status).toBe(404);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(mocks.resolveReference).not.toHaveBeenCalled();
+  });
+
+  it("never reads session or media state when authentication or owner access is denied", async () => {
+    for (const statusCode of [401, 403]) {
+      mocks.authorize.mockImplementation(async ({ res }: { res: ServerResponse }) => {
+        res.statusCode = statusCode;
+        res.end();
+        return null;
+      });
+      const response = await fetch(avatarRoute("agent:main:hidden"));
+      expect(response.status).toBe(statusCode);
+      expect(mocks.loadEntry).not.toHaveBeenCalled();
+      expect(mocks.resolveReference).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each(["/__openclaw__/channel-avatar/", "/__openclaw__/channel-avatar/a/b"])(
+    "claims malformed route %s as a 404",
+    async (pathname) => {
+      const response = await fetch(`http://127.0.0.1:${port}${pathname}`);
+
+      expect(response.status).toBe(404);
+      expect(mocks.loadEntry).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects non-read methods and leaves unrelated paths unhandled", async () => {
+    const rejected = await fetch(avatarRoute("agent:main:one"), { method: "POST" });
+    const unhandled = await fetch(`http://127.0.0.1:${port}/__openclaw__/workspace-icon/one`);
+
+    expect(rejected.status).toBe(405);
+    expect(rejected.headers.get("allow")).toBe("GET, HEAD");
+    expect(unhandled.status).toBe(418);
+  });
+});

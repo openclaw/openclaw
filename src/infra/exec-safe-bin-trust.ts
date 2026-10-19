@@ -2,10 +2,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
-  normalizeSortedUniqueStringEntries,
   sortUniqueStrings,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
+import { sameFsObject, swapAsciiCase } from "./path-case.js";
 
 // Keep defaults to OS-managed immutable bins only.
 // User/package-manager bins must be opted in via tools.exec.safeBinTrustedDirs.
@@ -16,29 +16,11 @@ type TrustedSafeBinPathParams = {
   trustedDirs?: ReadonlySet<string>;
 };
 
-type TrustedSafeBinCache = {
-  key: string;
-  dirs: Set<string>;
-};
-
 export type WritableTrustedSafeBinDir = {
   dir: string;
   groupWritable: boolean;
   worldWritable: boolean;
 };
-
-let trustedSafeBinCache: TrustedSafeBinCache | null = null;
-
-function swapAsciiCase(value: string): string {
-  return value.replace(/[A-Za-z]/g, (char) => {
-    const lower = char.toLowerCase();
-    return char === lower ? char.toUpperCase() : lower;
-  });
-}
-
-function sameFsObject(a: fs.Stats, b: fs.Stats): boolean {
-  return a.dev === b.dev && a.ino === b.ino;
-}
 
 function pathCaseInsensitive(value: string): boolean {
   let candidate = value;
@@ -149,23 +131,11 @@ function resolveTrustedSafeBinTargetDirs(
   return sortUniqueStrings(dirs);
 }
 
-function buildTrustedSafeBinCacheKey(
-  entries: readonly string[],
-  safeBins: readonly string[],
-  targetDirs: readonly string[],
-): string {
-  const dirsKey = resolveTrustedSafeBinDirs(normalizeTrustedSafeBinDirs(entries)).join("\u0001");
-  const binsKey = normalizeSortedUniqueStringEntries(safeBins).join("\u0001");
-  const targetDirsKey = targetDirs.join("\u0001");
-  return `${dirsKey}\u0002${binsKey}\u0002${targetDirsKey}`;
-}
-
 export function getTrustedSafeBinDirs(
   params: {
     baseDirs?: readonly string[];
     extraDirs?: readonly string[];
     safeBins?: readonly string[];
-    refresh?: boolean;
   } = {},
 ): Set<string> {
   const baseDirs = params.baseDirs ?? DEFAULT_SAFE_BIN_TRUSTED_DIRS;
@@ -176,15 +146,7 @@ export function getTrustedSafeBinDirs(
     ...normalizeTrustedSafeBinDirs(extraDirs),
   ];
   const targetDirs = resolveTrustedSafeBinTargetDirs(entries, safeBins);
-  const key = buildTrustedSafeBinCacheKey(entries, safeBins, targetDirs);
-
-  if (!params.refresh && trustedSafeBinCache?.key === key) {
-    return trustedSafeBinCache.dirs;
-  }
-
-  const dirs = new Set([...resolveTrustedSafeBinDirs(entries), ...targetDirs]);
-  trustedSafeBinCache = { key, dirs };
-  return dirs;
+  return new Set([...resolveTrustedSafeBinDirs(entries), ...targetDirs]);
 }
 
 export function isTrustedSafeBinPath(params: TrustedSafeBinPathParams): boolean {

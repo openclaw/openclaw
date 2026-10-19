@@ -1,0 +1,234 @@
+import { once } from "node:events";
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import { beforeEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+const mocks = vi.hoisted(() => ({
+  command: vi.fn<typeof import("./container-engine.js").execContainer>(),
+  current: vi.fn(),
+  read: vi.fn(),
+  browsers: vi.fn(),
+  browserCurrent: vi.fn(),
+}));
+vi.mock("./registry.js", () => ({
+  readRegistry: mocks.read,
+  readBrowserRegistry: mocks.browsers,
+  assertSandboxRegistryEntryCurrent: mocks.current,
+  assertSandboxBrowserRegistryEntryCurrent: mocks.browserCurrent,
+}));
+vi.mock("./docker.js", () => ({
+  DOCKER_SANDBOX_ENGINE: { id: "docker" },
+  bindPodmanSandboxEngine: () => ({ id: "podman" }),
+  execContainer: mocks.command,
+  validateSandboxContainerEngineTarget: async () => {},
+}));
+import {
+  quiesceLocalWorkspace,
+  type LocalWorkspacePausedRuntime,
+} from "./local-workspace-quiescence.js";
+const id = "a".repeat(64);
+const entry = {
+  containerName: "owned",
+  backendId: "docker",
+  sessionKey: "owner",
+  workspaceDir: "/owned/projection",
+};
+const success = (stdout = "") => ({ code: 0, stdout, stderr: "" });
+let retained: LocalWorkspacePausedRuntime[];
+const persist = vi.fn((rows: LocalWorkspacePausedRuntime[]) => {
+  retained = [...rows];
+});
+const commands = (action: string) =>
+  mocks.command.mock.calls.map(([, args]) => args).filter(([name]) => name === action);
+type EngineReply = ReturnType<typeof success>;
+type EngineCommand = {
+  action: string;
+  target: string;
+  apply: () => EngineReply;
+  signal?: AbortSignal;
+};
+function mockEngine(
+  ids: Record<string, string>,
+  intercept: (command: EngineCommand) => EngineReply | void | Promise<EngineReply>,
+) {
+  const paused = new Set<string>();
+  mocks.command.mockImplementation(async (_engine, args, options) => {
+    const action = args.includes("{{.State.Paused}}") ? "resume-inspect" : args[0]!;
+    const target = ids[args.at(-1)!] ?? args.at(-1)!;
+    const apply = () => {
+      if (action === "pause") {
+        paused.add(target);
+      }
+      if (action === "unpause" && !paused.delete(target)) {
+        return { code: 1, stdout: "", stderr: "container is not paused" };
+      }
+      if (action === "inspect") {
+        return success(`${target} true ${paused.has(target)}`);
+      }
+      return success(action === "resume-inspect" ? String(paused.has(target)) : "");
+    };
+    return (await intercept({ action, target, apply, signal: options?.signal })) ?? apply();
+  });
+  return paused;
+}
+const quiesce = (overrides: Partial<Parameters<typeof quiesceLocalWorkspace>[0]> = {}) =>
+  quiesceLocalWorkspace({
+    workspaceDir: entry.workspaceDir,
+    retained,
+    persist,
+    assertCurrent: () => {},
+    ...overrides,
+  });
+beforeEach(() => {
+  Object.values(mocks).forEach((mock) => mock.mockReset());
+  retained = [];
+  persist.mockClear();
+  mocks.read.mockResolvedValue({ entries: [entry] });
+  mocks.browsers.mockResolvedValue({ entries: [] });
+});
+
+it.each(["true", "false"])("recovers only owned pauses (Running=%s)", async (running) => {
+  mocks.command.mockImplementation(async (_engine, args) =>
+    success(args.includes("{{.State.Paused}}") ? "true" : id + ` ${running} true`),
+  );
+  await expect(quiesce()).rejects.toThrow("another owner");
+  const { resume } = await quiesce({ retained: [{ name: "owned", id }] });
+  await resume();
+  expect(commands("pause")).toHaveLength(0);
+  expect(commands("unpause").length).toBeGreaterThan(0);
+});
+
+it("persists exact container and browser custody before pausing and resumes only those IDs", async () => {
+  const browserId = "b".repeat(64);
+  const ids: Record<string, string> = { owned: id, "browser-owned": browserId };
+  const expected = Object.entries(ids).map(([name, runtimeId]) => ({ name, id: runtimeId }));
+  mocks.browsers.mockResolvedValue({
+    entries: [
+      { ...entry, containerName: "browser-owned" },
+      { ...entry, containerName: "foreign", workspaceDir: "/other" },
+    ],
+  });
+  mockEngine(ids, ({ action, target }) => {
+    if (action === "pause") {
+      expect(persist).toHaveBeenLastCalledWith(target === id ? expected.slice(0, 1) : expected);
+    }
+  });
+  const { resume } = await quiesce();
+  expect(mocks.browserCurrent).toHaveBeenCalledTimes(3);
+  await resume();
+  expect(commands("unpause")).toEqual([browserId, id].map((runtimeId) => ["unpause", runtimeId]));
+});
+
+it("records each released generation before a later resume failure and re-fences running recovery", async () => {
+  const otherId = "b".repeat(64);
+  let failFirst = true;
+  mocks.read.mockResolvedValue({ entries: [entry, { ...entry, containerName: "other" }] });
+  const pausedIds = mockEngine({ owned: id, other: otherId }, ({ action, target }) => {
+    if (action === "unpause" && target === id && failFirst) {
+      return { code: 1, stdout: "", stderr: "temporary engine fault" };
+    }
+    return undefined;
+  });
+  const { resume } = await quiesce();
+  await expect(resume()).rejects.toThrow("resume failed");
+  expect(retained).toEqual([{ name: "owned", id }]);
+  failFirst = false;
+  const { resume: recovered } = await quiesce();
+  expect(pausedIds).toEqual(new Set([id, otherId]));
+  await recovered();
+  expect({ retained, paused: [...pausedIds] }).toEqual({ retained: [], paused: [] });
+});
+
+it.each(["inspect", "pause", "resume-inspect", "unpause"])(
+  "bounds a hung %s, joins command cleanup, and preserves uncertain custody for recovery",
+  async (phase) => {
+    vi.useFakeTimers();
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(new DOMException("Timed out", "TimeoutError")), ms);
+      return controller.signal;
+    });
+    const entered = createDeferred();
+    const cleanup = createDeferred();
+    const abortedCommand = Object.assign(new Error("Aborted"), { name: "AbortError" });
+    let fail = true;
+    let aborted = false;
+    const settled = vi.fn();
+    const paused = mockEngine({ owned: id }, async ({ action, apply, signal: commandSignal }) => {
+      const signal = expectDefined(commandSignal, "bounded engine command signal");
+      signal.throwIfAborted();
+      // The engine may accept a mutation before its client stops responding.
+      const result = apply();
+      if (fail && action === phase) {
+        fail = false;
+        entered.resolve();
+        await once(signal, "abort");
+        aborted = true;
+        await cleanup.promise;
+        throw abortedCommand;
+      }
+      return result;
+    });
+    const operation = quiesce()
+      .then((control) => control.resume())
+      .catch((error: unknown) => error)
+      .finally(settled);
+    try {
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(aborted).toBe(true);
+      expect(settled).not.toHaveBeenCalled();
+      cleanup.resolve();
+      expect(await operation).toBe(abortedCommand);
+      expect(retained).toEqual(phase === "inspect" ? [] : [{ name: "owned", id }]);
+      await (await quiesce()).resume();
+      expect({ retained, paused: [...paused] }).toEqual({ retained: [], paused: [] });
+    } finally {
+      cleanup.resolve();
+      timeout.mockRestore();
+      vi.useRealTimers();
+    }
+  },
+);
+
+it.each([
+  ["inspect", "registry", false, "retired"],
+  ["inspect", "engine", false, "could not be inspected"],
+  ["resume", "workspace", false, "revoked"],
+  ["resume", "registry", false, "runtime retired"],
+  ["resume", "registry", true, "runtime retired"],
+] as const)("fences %s after %s loss (removed=%s)", async (phase, owner, removed, error) => {
+  const authority = new AbortController();
+  mockEngine({ owned: id }, ({ action }) => {
+    if (phase === "inspect") {
+      if (owner === "engine") {
+        return { code: 125, stdout: "", stderr: "connection refused" };
+      }
+      authority.abort(new Error(error));
+    }
+    if (action === "resume-inspect" && removed) {
+      return { code: 1, stdout: "", stderr: "no such container" };
+    }
+    return undefined;
+  });
+  const assertCurrent = () => authority.signal.throwIfAborted();
+  mocks.current.mockImplementation(owner === "registry" ? assertCurrent : () => {});
+  const prepare = () =>
+    quiesce({ assertCurrent: owner === "workspace" ? assertCurrent : () => {} });
+  if (phase === "inspect") {
+    await expect(prepare()).rejects.toThrow(error);
+    expect(mocks.command).toHaveBeenCalledOnce();
+  } else {
+    const { resume } = await prepare();
+    authority.abort(new Error(error));
+    if (removed) {
+      await resume();
+      expect(persist).toHaveBeenLastCalledWith([]);
+    } else {
+      await expect(resume()).rejects.toThrow(error);
+      expect(persist).toHaveBeenLastCalledWith([{ name: "owned", id }]);
+    }
+  }
+  expect(commands("unpause")).toHaveLength(0);
+});

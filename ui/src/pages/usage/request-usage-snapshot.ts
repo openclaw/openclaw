@@ -1,34 +1,35 @@
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CostUsageSummary } from "../../api/types.ts";
-import { buildSessionUsageDateParams, requestSessionUsage } from "../../lib/sessions/index.ts";
-import type { ProviderUsageSummary } from "./data-types.ts";
+import { requestSessionUsage, type SessionUsageQuery } from "../../lib/sessions/usage.ts";
+
+type UsageSnapshotValue = {
+  result: Awaited<ReturnType<typeof requestSessionUsage>>;
+  costSummary: CostUsageSummary;
+};
+
+/** Provider plans load separately: session usage never waits on provider APIs. */
+type UsageSnapshotResult = Result<UsageSnapshotValue, { cause: unknown }>;
 
 export async function requestUsageSnapshot(
   client: GatewayBrowserClient,
-  query: {
-    startDate: string;
-    endDate: string;
-    scope: "instance" | "family";
-    timeZone: "local" | "utc";
-    agentId?: string;
-  },
+  query: SessionUsageQuery,
   signal?: AbortSignal,
-) {
-  const costParams = {
-    startDate: query.startDate,
-    endDate: query.endDate,
-    ...(query.agentId ? { agentId: query.agentId } : { agentScope: "all" as const }),
-    ...buildSessionUsageDateParams(query.timeZone),
-  };
-  const [result, costSummary, providerUsageSummary] = await Promise.all([
-    requestSessionUsage(client, query),
-    signal
-      ? client.request<CostUsageSummary>("usage.cost", costParams, { signal })
-      : client.request<CostUsageSummary>("usage.cost", costParams),
-    (signal
-      ? client.request<ProviderUsageSummary>("usage.status", undefined, { signal })
-      : client.request<ProviderUsageSummary>("usage.status")
-    ).catch(() => null),
-  ]);
-  return { result, costSummary, providerUsageSummary };
+): Promise<UsageSnapshotResult> {
+  try {
+    const result = await requestSessionUsage(client, query, { projection: "overview", signal });
+    const costSummary: CostUsageSummary = {
+      updatedAt: result.updatedAt,
+      days: (Date.parse(result.endDate) - Date.parse(result.startDate)) / 86_400_000 + 1,
+      daily: result.aggregates.costDaily ?? [],
+      totals: result.totals,
+      cacheStatus: result.cacheStatus,
+    };
+    return ok({ result, costSummary });
+  } catch (cause) {
+    if (signal?.aborted) {
+      throw cause;
+    }
+    return err({ cause });
+  }
 }

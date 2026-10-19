@@ -1,9 +1,9 @@
 // Local media access tests cover workspace path authorization.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
   assertLocalMediaAllowed,
@@ -11,23 +11,43 @@ import {
   readLocalMediaFile,
 } from "./local-media-access.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 const { hoistedRoots } = vi.hoisted(() => ({ hoistedRoots: [] as string[] }));
 
 vi.mock("./local-roots.js", () => ({
   getDefaultMediaLocalRoots: () => hoistedRoots,
 }));
 
+async function write(file: string, contents = "png") {
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, contents);
+}
+
+async function denied(operation: Promise<void>, message?: string) {
+  const error = await operation.catch((failure: unknown) => failure);
+  expect(error).toBeInstanceOf(LocalMediaAccessError);
+  expect(error).toMatchObject({
+    name: "LocalMediaAccessError",
+    code: "path-not-allowed",
+    ...(message ? { message } : {}),
+  });
+}
+
+const read = (file: string, roots: string[], inboundRoots?: string[]) =>
+  readLocalMediaFile(file, roots, { maxBytes: 1024, ...(inboundRoots ? { inboundRoots } : {}) });
+
 describe("assertLocalMediaAllowed", () => {
   afterEach(() => {
     __setFsSafeTestHooksForTest(undefined);
+    hoistedRoots.length = 0;
   });
 
   it("allows managed inbound media paths before explicit root checks", async () => {
     const stateDir = resolveStateDir();
     const id = `managed-local-${Date.now()}-${Math.random().toString(36).slice(2)}.png`;
     const filePath = path.join(stateDir, "media", "inbound", id);
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.writeFile(filePath, Buffer.from("png"));
+    await write(filePath);
 
     try {
       await expect(assertLocalMediaAllowed(filePath, [])).resolves.toBeUndefined();
@@ -39,23 +59,11 @@ describe("assertLocalMediaAllowed", () => {
   it("does not allow nested inbound paths as managed media", async () => {
     const stateDir = resolveStateDir();
     const filePath = path.join(stateDir, "media", "inbound", "nested", "hidden.png");
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.writeFile(filePath, Buffer.from("png"));
+    await write(filePath);
 
     try {
-      let accessError: unknown;
-      try {
-        await assertLocalMediaAllowed(filePath, []);
-      } catch (error) {
-        accessError = error;
-      }
-      expect(accessError).toBeInstanceOf(LocalMediaAccessError);
-      if (!(accessError instanceof LocalMediaAccessError)) {
-        throw new Error("expected LocalMediaAccessError");
-      }
-      expect(accessError.name).toBe("LocalMediaAccessError");
-      expect(accessError.code).toBe("path-not-allowed");
-      expect(accessError.message).toBe(
+      await denied(
+        assertLocalMediaAllowed(filePath, []),
         `Local media path is not under an allowed directory: ${filePath}`,
       );
     } finally {
@@ -64,44 +72,22 @@ describe("assertLocalMediaAllowed", () => {
   });
 
   it("rejects workspace-* sibling paths when localRoots is undefined (unscoped)", async () => {
-    const tmpDir = path.join(
-      os.tmpdir(),
-      `ocl-local-media-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    );
+    const tmpDir = tempDirs.make("ocl-local-media-");
     const workspaceDir = path.join(tmpDir, "workspace");
     const workspaceXiaoqianDir = path.join(tmpDir, "workspace-xiaoqian");
     await fs.mkdir(workspaceDir, { recursive: true });
-    await fs.mkdir(workspaceXiaoqianDir, { recursive: true });
 
     const mediaPath = path.join(workspaceXiaoqianDir, "report.html");
-    await fs.writeFile(mediaPath, "<html>test</html>");
+    await write(mediaPath, "<html>test</html>");
 
     hoistedRoots.length = 0;
     hoistedRoots.push(workspaceDir);
 
-    try {
-      let accessError: unknown;
-      try {
-        await assertLocalMediaAllowed(mediaPath, undefined);
-      } catch (error) {
-        accessError = error;
-      }
-      expect(accessError).toBeInstanceOf(LocalMediaAccessError);
-      if (!(accessError instanceof LocalMediaAccessError)) {
-        throw new Error("expected LocalMediaAccessError");
-      }
-      expect(accessError.code).toBe("path-not-allowed");
-    } finally {
-      hoistedRoots.length = 0;
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
+    await denied(assertLocalMediaAllowed(mediaPath, undefined));
   });
 
   it("allows only the explicitly scoped workspace-* path under a broad root", async () => {
-    const tmpDir = path.join(
-      os.tmpdir(),
-      `ocl-local-media-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    );
+    const tmpDir = tempDirs.make("ocl-local-media-");
     const workspaceDir = path.join(tmpDir, "workspace");
     const workspaceXiaoqianDir = path.join(tmpDir, "workspace-xiaoqian");
     const workspaceMerlinDir = path.join(tmpDir, "workspace-merlin");
@@ -114,21 +100,17 @@ describe("assertLocalMediaAllowed", () => {
     await fs.writeFile(mediaPath, "<html>test</html>");
     await fs.writeFile(siblingMediaPath, "<html>secret</html>");
 
-    try {
-      const roots = [tmpDir, workspaceDir, workspaceXiaoqianDir];
-      await expect(assertLocalMediaAllowed(mediaPath, roots)).resolves.toBeUndefined();
-      await expect(assertLocalMediaAllowed(siblingMediaPath, roots)).rejects.toMatchObject({
-        code: "path-not-allowed",
-      });
-    } finally {
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
+    const roots = [tmpDir, workspaceDir, workspaceXiaoqianDir];
+    await expect(assertLocalMediaAllowed(mediaPath, roots)).resolves.toBeUndefined();
+    await expect(assertLocalMediaAllowed(siblingMediaPath, roots)).rejects.toMatchObject({
+      code: "path-not-allowed",
+    });
   });
 
   it.runIf(process.platform !== "win32")(
     "keeps sibling isolation when the default workspace is symlinked",
     async () => {
-      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "ocl-local-media-symlink-"));
+      const tmpDir = tempDirs.make("ocl-local-media-symlink-");
       const stateDir = path.join(tmpDir, "state");
       const workspaceDir = path.join(stateDir, "workspace");
       const realWorkspaceDir = path.join(tmpDir, "main-real");
@@ -136,93 +118,68 @@ describe("assertLocalMediaAllowed", () => {
       const siblingWorkspaceDir = path.join(stateDir, "workspace-merlin");
       await fs.mkdir(stateDir, { recursive: true });
       await fs.mkdir(realWorkspaceDir, { recursive: true });
-      await fs.mkdir(ownWorkspaceDir, { recursive: true });
-      await fs.mkdir(siblingWorkspaceDir, { recursive: true });
       await fs.symlink(realWorkspaceDir, workspaceDir);
       const ownMediaPath = path.join(ownWorkspaceDir, "report.html");
       const siblingMediaPath = path.join(siblingWorkspaceDir, "secret.html");
-      await fs.writeFile(ownMediaPath, "<html>test</html>");
-      await fs.writeFile(siblingMediaPath, "<html>secret</html>");
+      await write(ownMediaPath, "<html>test</html>");
+      await write(siblingMediaPath, "<html>secret</html>");
 
-      try {
-        const roots = [tmpDir, workspaceDir, ownWorkspaceDir];
-        await expect(assertLocalMediaAllowed(ownMediaPath, roots)).resolves.toBeUndefined();
-        await expect(assertLocalMediaAllowed(siblingMediaPath, roots)).rejects.toMatchObject({
-          code: "path-not-allowed",
-        });
-      } finally {
-        await fs.rm(tmpDir, { recursive: true, force: true });
-      }
+      const roots = [tmpDir, workspaceDir, ownWorkspaceDir];
+      await expect(assertLocalMediaAllowed(ownMediaPath, roots)).resolves.toBeUndefined();
+      await expect(assertLocalMediaAllowed(siblingMediaPath, roots)).rejects.toMatchObject({
+        code: "path-not-allowed",
+      });
     },
   );
 
   it.runIf(process.platform !== "win32")(
     "reads through an in-root directory symlink but rejects a final symlink",
     async () => {
-      const base = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-root-alias-"));
+      const base = tempDirs.make("openclaw-media-root-alias-");
       const root = path.join(base, "root");
       const realDir = path.join(root, "real");
       const aliasDir = path.join(root, "alias");
       const realFile = path.join(realDir, "inside.bin");
       const aliasFile = path.join(aliasDir, "inside.bin");
       const finalLink = path.join(root, "final.bin");
-      await fs.mkdir(realDir, { recursive: true });
-      await fs.writeFile(realFile, "inside");
+      await write(realFile, "inside");
       await fs.symlink(realDir, aliasDir);
       await fs.symlink(realFile, finalLink);
 
-      try {
-        await expect(readLocalMediaFile(aliasFile, [root], { maxBytes: 1024 })).resolves.toEqual(
-          Buffer.from("inside"),
-        );
-        await expect(
-          readLocalMediaFile(finalLink, [root], { maxBytes: 1024 }),
-        ).rejects.toMatchObject({ code: "symlink" });
-      } finally {
-        await fs.rm(base, { recursive: true, force: true });
-      }
+      await expect(read(aliasFile, [root])).resolves.toEqual(Buffer.from("inside"));
+      await expect(read(finalLink, [root])).rejects.toMatchObject({ code: "symlink" });
     },
   );
 
   it.runIf(process.platform !== "win32")(
     "rejects inbound-root reads through a pre-existing directory symlink outside the root",
     async () => {
-      const base = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-inbound-root-alias-"));
+      const base = tempDirs.make("openclaw-inbound-root-alias-");
       const inboundRoot = path.join(base, "inbound");
       const outsideDir = path.join(base, "outside");
       const aliasDir = path.join(inboundRoot, "alias");
       const filePath = path.join(aliasDir, "secret.bin");
       await fs.mkdir(inboundRoot, { recursive: true });
-      await fs.mkdir(outsideDir, { recursive: true });
-      await fs.writeFile(path.join(outsideDir, "secret.bin"), "outside-secret");
+      await write(path.join(outsideDir, "secret.bin"), "outside-secret");
       await fs.symlink(outsideDir, aliasDir);
 
-      try {
-        await expect(
-          readLocalMediaFile(filePath, [], {
-            inboundRoots: [inboundRoot],
-            maxBytes: 1024,
-          }),
-        ).rejects.toMatchObject({ code: "path-not-allowed" });
-      } finally {
-        await fs.rm(base, { recursive: true, force: true });
-      }
+      await expect(read(filePath, [], [inboundRoot])).rejects.toMatchObject({
+        code: "path-not-allowed",
+      });
     },
   );
 
   it.runIf(process.platform !== "win32")(
     "rejects inbound wildcard reads when a nested directory symlink retargets before open",
     async () => {
-      const base = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-inbound-root-race-"));
+      const base = tempDirs.make("openclaw-inbound-root-race-");
       const inboundRoot = path.join(base, "alice", "Attachments");
       const insideDir = path.join(inboundRoot, "inside");
       const outsideDir = path.join(base, "outside");
       const aliasDir = path.join(inboundRoot, "slot");
       const filePath = path.join(aliasDir, "report.csv");
-      await fs.mkdir(insideDir, { recursive: true });
-      await fs.mkdir(outsideDir, { recursive: true });
-      await fs.writeFile(path.join(insideDir, "report.csv"), "inside");
-      await fs.writeFile(path.join(outsideDir, "report.csv"), "outside-secret");
+      await write(path.join(insideDir, "report.csv"), "inside");
+      await write(path.join(outsideDir, "report.csv"), "outside-secret");
       await fs.symlink(insideDir, aliasDir);
       __setFsSafeTestHooksForTest({
         afterPreOpenLstat: async (openedPath) => {
@@ -234,50 +191,34 @@ describe("assertLocalMediaAllowed", () => {
         },
       });
 
-      try {
-        await expect(
-          readLocalMediaFile(filePath, [], {
-            inboundRoots: [path.join(base, "*", "Attachments")],
-            maxBytes: 1024,
-          }),
-          // fs-safe 0.5.2 reports pre-open identity drift as path-mismatch.
-        ).rejects.toMatchObject({ code: "path-mismatch" });
-      } finally {
-        await fs.rm(base, { recursive: true, force: true });
-      }
+      await expect(
+        read(filePath, [], [path.join(base, "*", "Attachments")]),
+        // fs-safe 0.5.2 reports pre-open identity drift as path-mismatch.
+      ).rejects.toMatchObject({ code: "path-mismatch" });
     },
   );
 
   it.runIf(process.platform !== "win32")(
     "rejects inbound wildcard roots whose wildcard segment already resolves outside the anchor",
     async () => {
-      const base = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-inbound-anchor-"));
-      const outside = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-inbound-outside-"));
+      const base = tempDirs.make("openclaw-inbound-anchor-");
+      const outside = tempDirs.make("openclaw-inbound-outside-");
       const alias = path.join(base, "alice");
       const outsideAttachments = path.join(outside, "Attachments");
       const filePath = path.join(alias, "Attachments", "secret.bin");
-      await fs.mkdir(outsideAttachments, { recursive: true });
-      await fs.writeFile(path.join(outsideAttachments, "secret.bin"), "outside-secret");
+      await write(path.join(outsideAttachments, "secret.bin"), "outside-secret");
       await fs.symlink(outside, alias);
 
-      try {
-        await expect(
-          readLocalMediaFile(filePath, [], {
-            inboundRoots: [path.join(base, "*", "Attachments")],
-            maxBytes: 1024,
-          }),
-        ).rejects.toMatchObject({ code: "path-not-allowed" });
-      } finally {
-        await fs.rm(base, { recursive: true, force: true });
-        await fs.rm(outside, { recursive: true, force: true });
-      }
+      await expect(read(filePath, [], [path.join(base, "*", "Attachments")])).rejects.toMatchObject(
+        { code: "path-not-allowed" },
+      );
     },
   );
 
   it.runIf(process.platform !== "win32")(
     "rejects hardlink aliases inside channel inbound roots",
     async () => {
-      const base = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-inbound-hardlink-"));
+      const base = tempDirs.make("openclaw-inbound-hardlink-");
       const inboundRoot = path.join(base, "inbound");
       const outsidePath = path.join(base, "outside.bin");
       const filePath = path.join(inboundRoot, "alias.bin");
@@ -285,16 +226,7 @@ describe("assertLocalMediaAllowed", () => {
       await fs.writeFile(outsidePath, "outside-secret");
       await fs.link(outsidePath, filePath);
 
-      try {
-        await expect(
-          readLocalMediaFile(filePath, [], {
-            inboundRoots: [inboundRoot],
-            maxBytes: 1024,
-          }),
-        ).rejects.toMatchObject({ code: "hardlink" });
-      } finally {
-        await fs.rm(base, { recursive: true, force: true });
-      }
+      await expect(read(filePath, [], [inboundRoot])).rejects.toMatchObject({ code: "hardlink" });
     },
   );
 
@@ -312,33 +244,25 @@ describe("assertLocalMediaAllowed", () => {
   });
 
   it("preserves valid root-level wildcard inbound patterns", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-inbound-root-wildcard-"));
+    const root = tempDirs.make("openclaw-inbound-root-wildcard-");
     const filePath = path.join(root, "inside.bin");
     await fs.writeFile(filePath, "inside");
 
-    try {
-      await expect(
-        readLocalMediaFile(filePath, [], {
-          inboundRoots: ["/*"],
-          maxBytes: 1024,
-        }),
-      ).resolves.toEqual(Buffer.from("inside"));
-    } finally {
-      await fs.rm(root, { recursive: true, force: true });
-    }
+    await expect(
+      readLocalMediaFile(filePath, [], {
+        inboundRoots: ["/*"],
+        maxBytes: 1024,
+      }),
+    ).resolves.toEqual(Buffer.from("inside"));
   });
 
   it("preserves not-found and not-file errors for root-bound reads", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-read-errors-"));
-    try {
-      await expect(
-        readLocalMediaFile(path.join(root, "missing.bin"), [root], { maxBytes: 1024 }),
-      ).rejects.toMatchObject({ code: "not-found" });
-      await expect(readLocalMediaFile(root, [root], { maxBytes: 1024 })).rejects.toMatchObject({
-        code: "not-file",
-      });
-    } finally {
-      await fs.rm(root, { recursive: true, force: true });
-    }
+    const root = tempDirs.make("openclaw-media-read-errors-");
+    await expect(read(path.join(root, "missing.bin"), [root])).rejects.toMatchObject({
+      code: "not-found",
+    });
+    await expect(read(root, [root])).rejects.toMatchObject({
+      code: "not-file",
+    });
   });
 });

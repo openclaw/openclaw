@@ -12,33 +12,42 @@ import ai.openclaw.app.ui.image.isPubliclyRoutableHost
 import ai.openclaw.app.ui.image.resolveRedirect
 import android.graphics.Bitmap
 import android.graphics.Color
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.selects.select
+import okhttp3.Call
 import okhttp3.Dns
+import okhttp3.EventListener
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okhttp3.Response
+import okhttp3.ResponseBody
 import okhttp3.ResponseBody.Companion.toResponseBody
+import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.RecordedRequest
 import okhttp3.mockwebserver.SocketPolicy
 import okio.Buffer
+import okio.ForwardingSource
+import okio.buffer
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.GraphicsMode
 import java.io.ByteArrayOutputStream
+import java.io.IOException
 import java.net.InetAddress
 import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
@@ -285,26 +294,33 @@ class ChatLinkPreviewTest {
   fun cancellationCancelsActiveMetadataAndImageCalls() {
     withServer { server ->
       coroutineScope {
-        server.enqueue(
-          MockResponse()
-            // Cancel before OkHttp produces a Response.
-            .setHeader("Content-Type", "text/html")
-            .setHeadersDelay(30, TimeUnit.SECONDS)
-            .setBody("<title>Never delivered</title>"),
-        )
+        val requestReceived = CompletableDeferred<Unit>()
+        val events = CancellationEvents()
+        server.dispatcher =
+          object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+              requestReceived.complete(Unit)
+              return MockResponse()
+                // Cancel before OkHttp produces a Response.
+                .setHeader("Content-Type", "text/html")
+                .setHeadersDelay(30, TimeUnit.SECONDS)
+                .setBody("<title>Never delivered</title>")
+            }
+          }
 
-        val metadataFetch = async { fetcher(timeoutMillis = 60_000).fetch(server.url("/slow-page").toString()) }
-        assertTrue(withContext(Dispatchers.IO) { server.takeRequest(1, TimeUnit.SECONDS) } != null)
-        delay(100)
-
-        withTimeout(1_000) {
-          metadataFetch.cancelAndJoin()
+        val metadataFetch = async { fetcher(timeoutMillis = 60_000, eventListener = events).fetch(server.url("/slow-page").toString()) }
+        select<Unit> {
+          metadataFetch.onAwait { error("Metadata fetch completed before the server received its request: $it") }
+          requestReceived.onAwait { }
         }
+        assertCancelsCall(metadataFetch, events)
       }
     }
 
     withServer { server ->
       coroutineScope {
+        val bodyReadStarted = CompletableDeferred<Unit>()
+        val events = CancellationEvents()
         server.enqueue(
           MockResponse()
             // Cancel while OkHttp is reading the response body.
@@ -313,13 +329,44 @@ class ChatLinkPreviewTest {
             .setBody(Buffer().write(pngBytes(width = 10, height = 10))),
         )
 
-        val imageFetch = async { imageFetcher(timeoutMillis = 60_000).fetch(server.url("/slow-image.png").toString()) }
-        assertTrue(withContext(Dispatchers.IO) { server.takeRequest(1, TimeUnit.SECONDS) } != null)
-        delay(100)
+        val client =
+          baseClient(events)
+            .addNetworkInterceptor { chain ->
+              val response = chain.proceed(chain.request())
+              val body = response.body
+              val source =
+                object : ForwardingSource(body.source()) {
+                  override fun read(
+                    sink: Buffer,
+                    byteCount: Long,
+                  ): Long {
+                    // OkHttp's responseBodyStart fires after the first read; signal before the delayed socket read.
+                    bodyReadStarted.complete(Unit)
+                    return super.read(sink, byteCount)
+                  }
+                }.buffer()
+              response
+                .newBuilder()
+                .body(
+                  object : ResponseBody() {
+                    override fun contentType() = body.contentType()
 
-        withTimeout(1_000) {
-          imageFetch.cancelAndJoin()
+                    override fun contentLength() = body.contentLength()
+
+                    override fun source() = source
+                  },
+                ).build()
+            }.build()
+        val imageFetch =
+          async {
+            SafeRemoteImageFetcher(SafeWebFetcher(client, 60_000, permissiveHostPolicy))
+              .fetch(server.url("/slow-image.png").toString())
+          }
+        select<Unit> {
+          imageFetch.onAwait { error("Image fetch completed before response body reading began: $it") }
+          bodyReadStarted.onAwait { }
         }
+        assertCancelsCall(imageFetch, events)
       }
     }
   }
@@ -526,6 +573,7 @@ class ChatLinkPreviewTest {
   }
 
   @Test
+  @GraphicsMode(GraphicsMode.Mode.NATIVE)
   fun imageDecodeDownsamplesLargeSource() {
     val decoded = decodeRemoteImageBitmap(pngBytes(width = 2_400, height = 1_200))
 
@@ -546,7 +594,50 @@ class ChatLinkPreviewTest {
       assertEquals(1, server.requestCount)
     }
 
-  private fun fetcher(timeoutMillis: Long = 6_000): LinkPreviewFetcher = LinkPreviewFetcher(baseClient().build(), timeoutMillis, permissiveHostPolicy)
+  private suspend fun assertCancelsCall(
+    fetch: Deferred<*>,
+    events: CancellationEvents,
+  ) {
+    fetch.cancelAndJoin()
+    assertTrue("OkHttp must observe cancellation", events.canceled.isCompleted)
+    assertTrue("The canceled call must fail", events.failed.isCompleted)
+    assertFalse("The canceled call must not complete normally", events.ended.isCompleted)
+    assertFalse("The delayed response body must not complete normally", events.bodyEnded.isCompleted)
+  }
+
+  private class CancellationEvents : EventListener() {
+    val canceled = CompletableDeferred<Unit>()
+    val failed = CompletableDeferred<Unit>()
+    val ended = CompletableDeferred<Unit>()
+    val bodyEnded = CompletableDeferred<Unit>()
+
+    override fun canceled(call: Call) {
+      canceled.complete(Unit)
+    }
+
+    override fun callFailed(
+      call: Call,
+      ioe: IOException,
+    ) {
+      failed.complete(Unit)
+    }
+
+    override fun callEnd(call: Call) {
+      ended.complete(Unit)
+    }
+
+    override fun responseBodyEnd(
+      call: Call,
+      byteCount: Long,
+    ) {
+      bodyEnded.complete(Unit)
+    }
+  }
+
+  private fun fetcher(
+    timeoutMillis: Long = 6_000,
+    eventListener: EventListener = EventListener.NONE,
+  ): LinkPreviewFetcher = LinkPreviewFetcher(baseClient(eventListener).build(), timeoutMillis, permissiveHostPolicy)
 
   private fun realPolicyFetcher(): LinkPreviewFetcher = LinkPreviewFetcher(baseClient().build())
 
@@ -554,9 +645,10 @@ class ChatLinkPreviewTest {
 
   private fun realPolicyImageFetcher(): SafeRemoteImageFetcher = SafeRemoteImageFetcher(SafeWebFetcher(baseClient().build()))
 
-  private fun baseClient(): OkHttpClient.Builder =
+  private fun baseClient(eventListener: EventListener = EventListener.NONE): OkHttpClient.Builder =
     OkHttpClient
       .Builder()
+      .eventListener(eventListener)
       .followRedirects(false)
       .followSslRedirects(false)
 

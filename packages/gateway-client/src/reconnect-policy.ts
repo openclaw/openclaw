@@ -13,8 +13,11 @@ const NON_RECOVERABLE_AUTH_ERRORS = new Set<string>([
   ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH,
   ConnectErrorDetailCodes.AUTH_SCOPE_MISMATCH,
   ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED,
+  ConnectErrorDetailCodes.AUTH_VERIFIED_USER_REQUIRED,
   ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH,
   ConnectErrorDetailCodes.PAIRING_REQUIRED,
+  ConnectErrorDetailCodes.PAIRING_REJECTED,
+  ConnectErrorDetailCodes.PAIRING_EXPIRED,
   ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED,
   ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED,
 ]);

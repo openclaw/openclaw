@@ -6,8 +6,9 @@ import {
   type ProviderContext,
   type ProviderModel,
   type ProviderStreamFunction,
+  type SimpleStreamOptions,
 } from "openclaw/plugin-sdk/llm";
-import { resolveFfmpegBin } from "openclaw/plugin-sdk/media-runtime";
+import { resolveFfmpegBin } from "openclaw/plugin-sdk/media-ffmpeg";
 import {
   createCapturedPluginRegistration,
   registerProviderPlugin,
@@ -16,9 +17,10 @@ import {
 import { normalizeTranscriptForMatch } from "openclaw/plugin-sdk/provider-test-contracts";
 import type { RealtimeVoiceBridge } from "openclaw/plugin-sdk/realtime-voice";
 import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
+import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
-import { buildGoogleLiveCatalogProvider } from "./provider-catalog.js";
+import { buildGoogleLiveCatalogProvider } from "./provider-catalog-runtime.js";
 import { buildGoogleRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 import { createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";
 
@@ -140,7 +142,7 @@ function registerGoogleRealtimeVoiceProvider() {
 }
 
 describeLive("google plugin live", () => {
-  it.each(["gemini-3.7-flash", "gemini-3.5-flash-lite"])(
+  it.each(["gemini-4-argon", "gemini-3.8-flash", "gemini-3.5-flash-lite"])(
     "discovers and completes through %s",
     async (modelId) => {
       const provider = await buildGoogleLiveCatalogProvider({
@@ -176,6 +178,94 @@ describeLive("google plugin live", () => {
     },
     90_000,
   );
+
+  it("completes a Gemini 4 tool-call round trip with unsigned replay through the registered transport", async () => {
+    const catalog = await buildGoogleLiveCatalogProvider({
+      apiKey: "GEMINI_API_KEY",
+      discoveryApiKey: GOOGLE_API_KEY,
+    });
+    const definition = catalog.models.find((model) => model.id === "gemini-4-argon");
+    expect(definition, "gemini-4-argon missing from Google models.list").toBeDefined();
+    const model = {
+      ...definition!,
+      provider: "google",
+      baseUrl: catalog.baseUrl,
+      api: "google-generative-ai",
+    } as ProviderModel<"google-generative-ai">;
+    const { providers } = await registerGooglePlugin();
+    const provider = requireRegisteredProvider(providers, "google");
+    const streamFn = provider.createStreamFn?.({
+      provider: "google",
+      modelId: model.id,
+      model: model as never,
+    }) as
+      | ProviderStreamFunction<
+          "google-generative-ai",
+          SimpleStreamOptions & { toolChoice: "required" | "none" }
+        >
+      | undefined;
+    if (!streamFn) {
+      throw new Error("registered Google provider did not create its chat transport");
+    }
+    const tool = {
+      name: "live_echo",
+      description: "Return the supplied value.",
+      parameters: Type.Object({ value: Type.String() }, { additionalProperties: false }),
+    };
+    const userPrompt = {
+      role: "user" as const,
+      content: "Call live_echo with value argon. Do not answer directly.",
+      timestamp: Date.now(),
+    };
+    const first = await streamFn(
+      model,
+      { messages: [userPrompt], tools: [tool] },
+      { apiKey: GOOGLE_API_KEY, reasoning: "low", maxTokens: 2048, toolChoice: "required" },
+    ).result();
+    expect(first.stopReason, first.errorMessage).toBe("toolUse");
+    const call = first.content.find((block) => block.type === "toolCall");
+    if (!call || call.type !== "toolCall") {
+      throw new Error("Gemini 4 did not return the requested tool call");
+    }
+    expect(call.name).toBe("live_echo");
+    expect(call.arguments).toEqual({ value: "argon" });
+    expect(call.thoughtSignature).toBeTruthy();
+
+    // Cross-model/transcript history lacks Google's signature; the transport must repair it.
+    const unsignedCall = {
+      type: "toolCall" as const,
+      id: call.id,
+      name: call.name,
+      arguments: call.arguments,
+    };
+    const second = await streamFn(
+      model,
+      {
+        messages: [
+          userPrompt,
+          { ...first, content: [unsignedCall] },
+          {
+            role: "toolResult",
+            toolCallId: call.id,
+            toolName: call.name,
+            content: [{ type: "text", text: "argon" }],
+            isError: false,
+            timestamp: Date.now(),
+          },
+          { role: "user", content: "Reply with exactly: argon", timestamp: Date.now() },
+        ],
+        tools: [tool],
+      },
+      { apiKey: GOOGLE_API_KEY, reasoning: "low", maxTokens: 2048, toolChoice: "none" },
+    ).result();
+    expect(second.stopReason, second.errorMessage).toBe("stop");
+    const answer = second.content
+      .filter((block) => block.type === "text")
+      .map((block) => block.text)
+      .join(" ")
+      .trim();
+    expect(answer).toMatch(/^argon[.!]?$/iu);
+  }, 180_000);
 
   it("understands native video through the registered Google chat transport", async () => {
     const catalog = await buildGoogleLiveCatalogProvider({
@@ -383,7 +473,7 @@ describeLive("google plugin live", () => {
       expect(assistantPartialCount).toBeGreaterThan(0);
       expect(errors).toStrictEqual([]);
     } finally {
-      bridge.close();
+      await bridge.close();
     }
 
     await waitForGoogleLive(
@@ -461,8 +551,8 @@ describeLive("google plugin live", () => {
       expect(assistantPartialCount).toBeGreaterThan(0);
       expect(errors).toStrictEqual([]);
     } finally {
-      bridge.close();
-      bridge.close();
+      await bridge.close();
+      await bridge.close();
     }
 
     await waitForGoogleLive(
@@ -484,36 +574,50 @@ describeLive("google plugin live", () => {
     expect(closeReasons).toEqual(["completed"]);
   }, 120_000);
 
-  it("runs Gemini web search through the registered provider tool", async () => {
-    const provider = createGeminiWebSearchProvider();
-    const tool = provider.createTool?.({
-      config: {},
-      searchConfig: { gemini: { apiKey: GOOGLE_API_KEY }, cacheTtlMinutes: 0, timeoutSeconds: 90 },
-    } as never);
+  it.each([undefined, "gemini-3.5-flash"])(
+    "runs Gemini web search with model %j",
+    async (model) => {
+      const provider = createGeminiWebSearchProvider();
+      const tool = provider.createTool?.({
+        config: {
+          plugins: {
+            entries: {
+              google: { config: { webSearch: { apiKey: GOOGLE_API_KEY, model } } },
+            },
+          },
+        },
+        searchConfig: { provider: "gemini", cacheTtlMinutes: 0, timeoutSeconds: 90 },
+      } as never);
 
-    let result: { provider?: string; content?: unknown; citations?: unknown } | undefined;
-    let lastError: unknown;
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      try {
-        result = await tool?.execute({ query: "OpenClaw GitHub", count: 1 });
-        lastError = undefined;
-        break;
-      } catch (error) {
-        lastError = error;
-        if (!isTransientGeminiSearchError(error) || attempt === 1) {
-          throw error;
+      let result:
+        | { provider?: string; model?: string; content?: unknown; citations?: unknown }
+        | undefined;
+      let lastError: unknown;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          result = await tool?.execute({ query: "OpenClaw GitHub", count: 1 });
+          lastError = undefined;
+          break;
+        } catch (error) {
+          lastError = error;
+          if (!isTransientGeminiSearchError(error) || attempt === 1) {
+            throw error;
+          }
         }
       }
-    }
-    if (lastError) {
-      throw toLintErrorObject(lastError, "Non-Error thrown");
-    }
+      if (lastError) {
+        throw toLintErrorObject(lastError, "Non-Error thrown");
+      }
 
-    expect(result?.provider).toBe("gemini");
-    expect(typeof result?.content).toBe("string");
-    expect((result!.content as string).length).toBeGreaterThan(20);
-    expect(Array.isArray(result?.citations)).toBe(true);
-  }, 120_000);
+      expect(result?.provider).toBe("gemini");
+      expect(result?.model).toBe(model ?? "gemini-3.6-flash");
+      expect(typeof result?.content).toBe("string");
+      expect((result!.content as string).length).toBeGreaterThan(20);
+      expect(Array.isArray(result?.citations)).toBe(true);
+      expect((result!.citations as unknown[]).length).toBeGreaterThan(0);
+    },
+    120_000,
+  );
 
   it("runs Gemini web search through the Google model provider config fallback", async () => {
     await withGoogleApiEnvUnset(async () => {
@@ -536,6 +640,7 @@ describeLive("google plugin live", () => {
       expect(process.env.GEMINI_API_KEY).toBeUndefined();
       expect(process.env.GOOGLE_API_KEY).toBeUndefined();
       expect(result?.provider).toBe("gemini");
+      expect(result?.model).toBe("gemini-3.6-flash");
       expect(typeof result?.content).toBe("string");
       expect((result!.content as string).length).toBeGreaterThan(20);
       expect(Array.isArray(result?.citations)).toBe(true);

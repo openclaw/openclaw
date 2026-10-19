@@ -1,4 +1,3 @@
-// Memory Core tests cover manager sync yield plugin behavior.
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -15,40 +14,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { buildSessionEntryMock } = vi.hoisted(() => ({
-  buildSessionEntryMock: vi.fn(),
-}));
-const originalSyncYieldStateDir = process.env.OPENCLAW_STATE_DIR;
-
-function setSyncYieldStateDir(): void {
-  Reflect.set(
-    process.env,
-    "OPENCLAW_STATE_DIR",
-    path.join(os.tmpdir(), "openclaw-session-sync-yield"),
-  );
-}
-
-function restoreSyncYieldStateDir(): void {
-  if (originalSyncYieldStateDir === undefined) {
-    Reflect.deleteProperty(process.env, "OPENCLAW_STATE_DIR");
-  } else {
-    Reflect.set(process.env, "OPENCLAW_STATE_DIR", originalSyncYieldStateDir);
-  }
-}
-
-vi.mock("undici", async () => {
-  const actual = await vi.importActual<typeof import("undici")>("undici");
-  return {
-    ...actual,
-    Agent: vi.fn(),
-    EnvHttpProxyAgent: vi.fn(),
-    ProxyAgent: vi.fn(),
-    fetch: vi.fn(),
-    getGlobalDispatcher: vi.fn(),
-    setGlobalDispatcher: vi.fn(),
-  };
-});
-
+const { buildSessionEntryMock } = vi.hoisted(() => ({ buildSessionEntryMock: vi.fn() }));
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-sessions", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-engine-sessions")>();
@@ -56,18 +22,14 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-sessions", async (importOri
   return {
     ...actual,
     buildSessionEntry: buildSessionEntryMock,
+    buildSessionEntries: (inputs: Array<{ absPath: string; options?: unknown }>) =>
+      Promise.all(inputs.map(({ absPath, options }) => buildSessionEntryMock(absPath, options))),
     isSessionArchiveArtifactName: (fileName: string) => /\.jsonl\.(reset|deleted)\./.test(fileName),
     isUsageCountedSessionTranscriptFileName: (fileName: string) => fileName.endsWith(".jsonl"),
-    listSessionFilesForAgent: vi.fn(async () => []),
     listSessionTranscriptCorpusEntriesForAgent: vi.fn(async () => []),
     parseCanonicalSessionSyncTargetFromPath: (filePath: string) => ({
       agentId: "main",
       sessionId: basename(filePath).replace(/\.jsonl$/, ""),
-    }),
-    resolveSessionFileForSyncTarget: (target: { agentId?: string; sessionId: string }) => ({
-      agentId: target.agentId ?? "main",
-      sessionFile: `/tmp/${target.sessionId}.jsonl`,
-      sessionId: target.sessionId,
     }),
     sessionPathForFile: (filePath: string) => `sessions/${basename(filePath)}`,
     sessionPathForSessionIdentity: (agentId: string, sessionId: string) =>
@@ -75,47 +37,27 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-sessions", async (importOri
   };
 });
 
-vi.mock("./embeddings.js", () => ({
-  resolveEmbeddingProviderAdapterId: (providerId: string) => providerId,
-  resolveEmbeddingProviderAdapterTransport: (providerId: string) =>
-    providerId === "local" ? "local" : "remote",
-  resolveEmbeddingProviderIndexIdentity: () => undefined,
-  createEmbeddingProvider: vi.fn(),
-}));
+import { MemoryIndexDatabase } from "./manager-database-context.js";
+import type { MemoryIndexEntry } from "./manager-index-preparation.js";
+import { loadMemorySourceFileState } from "./manager-source-state.js";
+import { MemorySyncTestHarness } from "./manager-sync-ops.test-support.js";
 
-import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
-
-type MemoryIndexEntry = {
-  path: string;
-  absPath: string;
-  mtimeMs: number;
-  size: number;
-  hash: string;
-  content?: string;
-};
-
-function createDbMock(): DatabaseSync {
-  return {
-    prepare: vi.fn(() => ({
-      all: vi.fn(() => []),
-      get: vi.fn(() => undefined),
-      run: vi.fn(),
-    })),
-  } as unknown as DatabaseSync;
+function createDb(): DatabaseSync {
+  const { DatabaseSync: NodeDatabaseSync } = requireNodeSqlite();
+  const db = new NodeDatabaseSync(":memory:");
+  ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: false, ftsTokenizer: "unicode61" });
+  return db;
 }
 
-class SessionSyncYieldHarness extends MemoryManagerSyncOps {
+class SessionSyncYieldHarness extends MemorySyncTestHarness {
+  protected readonly createProvider = (): never => {
+    throw new Error("Sync yield harness does not acquire embedding providers");
+  };
   protected readonly cfg = {} as OpenClawConfig;
   protected readonly agentId = "main";
   protected readonly workspaceDir = "/tmp/openclaw-test-workspace";
   protected readonly settings = {
-    sync: {
-      sessions: {
-        deltaBytes: 100_000,
-        deltaMessages: 50,
-        postCompactionForce: true,
-      },
-    },
+    sync: { sessions: { deltaBytes: 100_000, deltaMessages: 50, postCompactionForce: true } },
   } as ResolvedMemorySearchConfig;
   protected readonly batch = {
     enabled: false,
@@ -124,32 +66,31 @@ class SessionSyncYieldHarness extends MemoryManagerSyncOps {
     pollIntervalMs: 0,
     timeoutMs: 0,
   };
-  protected readonly vector = { enabled: false, available: false };
   protected readonly cache = { enabled: false };
   protected providerUnavailableReason?: string;
   protected providerLifecycle = { mode: "active" as const, providerId: "test" };
-  protected db = createDbMock();
+  protected publishedDatabase: MemoryIndexDatabase;
 
   readonly indexedPaths: string[] = [];
   private corpusFiles: string[] = [];
 
-  constructor(private readonly onIndexFile: (count: number) => void) {
+  constructor(
+    db: DatabaseSync,
+    private readonly onIndexFile: (count: number) => void,
+    private readonly indexConcurrency: number,
+  ) {
     super();
+    this.publishedDatabase = new MemoryIndexDatabase(db);
+    // Keep this scheduler fixture microtask-only; worker I/O could hide a missing yield.
+    this.publishedDatabase.readSourceState = async (query) =>
+      loadMemorySourceFileState({ db, ...query });
   }
 
-  async syncTargetArchiveFiles(files: string[]): Promise<void> {
+  async reindexArchiveFiles(files: string[]): Promise<void> {
     this.corpusFiles = files;
-    await (
-      this as unknown as {
-        syncArchiveFiles: (params: {
-          needsFullReindex: boolean;
-          targetArchiveFiles: string[];
-        }) => Promise<void>;
-      }
-    ).syncArchiveFiles({
-      needsFullReindex: false,
-      targetArchiveFiles: files,
-    });
+    // Source-wide reindexing reads one in-memory hash snapshot. Worker round trips
+    // in targeted sync would yield on their own and hide a missing scheduler yield.
+    await this.syncArchiveFiles({ needsFullReindex: true });
   }
 
   protected override async listSessionCorpusEntries(): Promise<SessionTranscriptCorpusEntry[]> {
@@ -171,163 +112,90 @@ class SessionSyncYieldHarness extends MemoryManagerSyncOps {
 
   protected async sync(): Promise<void> {}
 
-  protected async withTimeout<T>(
-    promise: Promise<T>,
-    _timeoutMs: number,
-    _message: string,
-  ): Promise<T> {
+  protected async withTimeout<T>(promise: Promise<T>): Promise<T> {
     return await promise;
   }
 
   protected getIndexConcurrency(): number {
-    return 1;
+    return this.indexConcurrency;
   }
 
-  protected pruneEmbeddingCacheIfNeeded(): void {}
-
+  protected async pruneEmbeddingCacheIfNeeded(): Promise<void> {}
   protected resetProviderInitializationForRetry(): void {}
-
   protected assertRequiredProviderAvailable(): void {}
 
-  protected async indexFile(
-    entry: MemoryIndexEntry,
-    _options: { source: MemorySource; content?: string },
-  ): Promise<void> {
+  protected async indexFile(entry: MemoryIndexEntry, _source: MemorySource): Promise<void> {
     this.indexedPaths.push(entry.path);
     this.onIndexFile(this.indexedPaths.length);
   }
 }
 
-class EmbeddingCacheSeedHarness extends SessionSyncYieldHarness {
-  protected override readonly cache = { enabled: true };
-  protected override db: DatabaseSync;
-
-  constructor(db: DatabaseSync) {
-    super(() => {});
-    this.db = db;
-  }
-
-  async seedCache(sourceDb: DatabaseSync): Promise<void> {
-    await this.seedEmbeddingCache(sourceDb);
-  }
-}
-
 describe("session sync responsiveness", () => {
   beforeEach(() => {
-    setSyncYieldStateDir();
-    buildSessionEntryMock.mockImplementation(async (absPath: string) => {
-      const name = path.basename(absPath);
-      return {
-        path: `sessions/${name}`,
-        absPath,
-        mtimeMs: 1,
-        size: 1,
-        hash: `hash-${name}`,
-        content: `user message for ${name}`,
-      };
-    });
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(os.tmpdir(), "openclaw-session-sync-yield"));
   });
 
   afterEach(() => {
-    restoreSyncYieldStateDir();
+    vi.unstubAllEnvs();
     vi.clearAllMocks();
   });
 
-  it("yields to the event loop between session file batches", async () => {
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-    const files = Array.from({ length: 11 }, (_value, index) =>
-      path.join(sessionsDir, `session-${index}.jsonl.deleted.2026-07-11T00-00-00.000Z`),
-    );
-    let immediateRan = false;
-    const immediate = new Promise<void>((resolve) => {
-      setImmediate(() => {
-        immediateRan = true;
-        resolve();
-      });
-    });
-    const observedBeforeLastFile: boolean[] = [];
-    const harness = new SessionSyncYieldHarness((count) => {
-      if (count === 11) {
-        observedBeforeLastFile.push(immediateRan);
-      }
-    });
-
-    await harness.syncTargetArchiveFiles(files);
-
-    expect(harness.indexedPaths).toHaveLength(files.length);
-    expect(observedBeforeLastFile).toEqual([true]);
-    await immediate;
-  });
-});
-
-describe("embedding cache seed responsiveness", () => {
-  const { DatabaseSync: NodeDatabaseSync } = requireNodeSqlite();
-
-  function createCacheDb(): DatabaseSync {
-    const db = new NodeDatabaseSync(":memory:");
-    ensureMemoryIndexSchema({
-      db,
-      cacheEnabled: true,
-      ftsEnabled: false,
-      ftsTokenizer: "unicode61",
-    });
-    return db;
-  }
-
-  function countCacheRows(db: DatabaseSync): number {
-    const row = db.prepare("SELECT count(*) AS count FROM memory_embedding_cache").get() as {
-      count: number;
-    };
-    return row.count;
-  }
-
-  it("commits each materialized page before yielding", async () => {
-    const sourceDb = createCacheDb();
-    const targetDb = createCacheDb();
-    try {
-      const insert = sourceDb.prepare(
-        `INSERT INTO memory_embedding_cache
-           (provider, model, provider_key, hash, embedding, dims, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  it.each([
+    { concurrency: 1, fileCount: 4 },
+    { concurrency: 4, fileCount: 40 },
+  ])(
+    "serves queued work before publishing a prepared session batch with $concurrency workers",
+    async ({ concurrency, fileCount }) => {
+      const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
+      const files = Array.from({ length: fileCount }, (_value, index) =>
+        path.join(sessionsDir, `session-${index}.jsonl.deleted.2026-07-11T00-00-00.000Z`),
       );
-      sourceDb.exec("BEGIN");
-      for (let index = 0; index < 1_001; index += 1) {
-        insert.run("test", "model", "key", `hash-${index}`, "[0.5]", 1, index);
-      }
-      sourceDb.exec("COMMIT");
-
-      let duringYield: {
-        sourceInTransaction: boolean;
-        targetInTransaction: boolean;
-        rows: number;
-      } | null = null;
-      const observedYield = new Promise<void>((resolve, reject) => {
+      let immediateRan = false;
+      const immediate = new Promise<void>((resolve) => {
         setImmediate(() => {
-          try {
-            duringYield = {
-              sourceInTransaction: sourceDb.isTransaction,
-              targetInTransaction: targetDb.isTransaction,
-              rows: countCacheRows(targetDb),
-            };
-            resolve();
-          } catch (error) {
-            reject(error instanceof Error ? error : new Error(String(error)));
-          }
+          immediateRan = true;
+          resolve();
         });
       });
-
-      await new EmbeddingCacheSeedHarness(targetDb).seedCache(sourceDb);
-      await observedYield;
-
-      expect(duringYield).toEqual({
-        sourceInTransaction: false,
-        targetInTransaction: false,
-        rows: 1_000,
+      const observedBeforePublication: boolean[] = [];
+      const db = createDb();
+      let elapsedMs = 0;
+      buildSessionEntryMock.mockImplementation(async (absPath: string) => {
+        // Model worker preparation time; microtask-only I/O keeps the owner's yield observable.
+        elapsedMs += 20;
+        const name = path.basename(absPath);
+        return {
+          path: `sessions/${name}`,
+          absPath,
+          mtimeMs: 1,
+          size: 1,
+          hash: `hash-${name}`,
+          content: `user message for ${name}`,
+        };
       });
-      expect(countCacheRows(targetDb)).toBe(1_001);
-    } finally {
-      sourceDb.close();
-      targetDb.close();
-    }
-  });
+      const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+      const harness = new SessionSyncYieldHarness(
+        db,
+        (count) => {
+          if (count === 1) {
+            observedBeforePublication.push(immediateRan);
+          }
+        },
+        concurrency,
+      );
+
+      try {
+        await harness.reindexArchiveFiles(files);
+        expect(harness.indexedPaths).toEqual(
+          files.map((file) => `sessions/${path.basename(file)}`),
+        );
+        expect(observedBeforePublication).toEqual([true]);
+        await immediate;
+      } finally {
+        clock.mockRestore();
+        await immediate;
+        db.close();
+      }
+    },
+  );
 });

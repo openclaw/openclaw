@@ -1,39 +1,28 @@
-// Public web-fetch registration helpers for provider plugins.
-
-import type {
-  WebFetchCredentialResolutionSource,
-  WebFetchProviderPlugin,
-  WebFetchProviderToolDefinition,
-} from "../plugins/types.js";
-export {
-  jsonResult,
-  readNumberParam,
-  readToolStringParam as readStringParam,
-} from "../agents/tools/common.js";
+export type { WebFetchProviderToolDefinition } from "../plugins/types.js";
 export {
   withSelfHostedWebToolsEndpoint,
   withStrictWebToolsEndpoint,
-  withTrustedWebToolsEndpoint,
 } from "../agents/tools/web-guarded-fetch.js";
+/** @deprecated Retained for plugins built against OpenClaw 2026.10.4 and earlier; tracked by `plugin-sdk-private-runtime-shipped-exports`. */
+export { withTrustedWebToolsEndpoint } from "../agents/tools/web-guarded-fetch.js";
+/** @deprecated Retained for plugins built against OpenClaw 2026.10.4 and earlier; tracked by `plugin-sdk-private-runtime-shipped-exports`. */
+export { jsonResult } from "../agents/tools/common.js";
+/** @deprecated Retained for plugins built against OpenClaw 2026.10.4 and earlier; tracked by `plugin-sdk-private-runtime-shipped-exports`. */
+export { enablePluginInConfig } from "../plugins/enable.js";
+/** @deprecated Retained for plugins built against OpenClaw 2026.10.4 and earlier; tracked by `plugin-sdk-private-runtime-shipped-exports`. */
+export { wrapExternalContent } from "../security/external-content.js";
+/** @deprecated Retained for plugins built against OpenClaw 2026.10.4 and earlier; tracked by `plugin-sdk-private-runtime-shipped-exports`. */
+export { wrapWebContent } from "../security/external-content.js";
 export {
   markdownToText,
   truncateWebFetchText as truncateText,
 } from "../agents/tools/web-fetch-utils.js";
 export {
   DEFAULT_CACHE_TTL_MINUTES,
-  DEFAULT_TIMEOUT_SECONDS,
   normalizeCacheKey,
   readCache,
   readResponseText,
   resolveCacheTtlMs,
   resolvePositiveTimeoutSeconds,
-  resolveTimeoutSeconds,
   writeCache,
 } from "../agents/tools/web-shared.js";
-export { enablePluginInConfig } from "../plugins/enable.js";
-export { wrapExternalContent, wrapWebContent } from "../security/external-content.js";
-export type {
-  WebFetchCredentialResolutionSource,
-  WebFetchProviderPlugin,
-  WebFetchProviderToolDefinition,
-};

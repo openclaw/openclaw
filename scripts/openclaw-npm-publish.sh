@@ -39,6 +39,7 @@ if [[ -n "${publish_target}" && -f "${publish_target}" ]]; then
   esac
 fi
 
+tooling_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 package_version="$(node -p "require('./package.json').version")"
 if [[ -n "${publish_target}" ]]; then
   if [[ ! -f "${publish_target}" ]]; then
@@ -72,7 +73,7 @@ fi
 publish_plan="$(
   PACKAGE_VERSION="${package_version}" REQUESTED_PUBLISH_TAG="${OPENCLAW_NPM_PUBLISH_TAG:-}" \
     BYPASS_EXTENDED_STABLE_GUARD="${BYPASS_EXTENDED_STABLE_GUARD:-}" \
-    node scripts/openclaw-npm-extended-stable-release.mjs publish-plan
+    node "${tooling_root}/scripts/openclaw-npm-extended-stable-release.mjs" publish-plan
 )"
 
 release_channel="${publish_plan%%$'\n'*}"
@@ -94,5 +95,12 @@ fi
 printf 'Publish command:'
 printf ' %q' "${publish_cmd[@]}"
 printf '\n'
+
+# GitHub publication uses the pinned publisher's guard, never candidate code.
+# Keep it after tarball inspection and planning, and repeat it for every write.
+if [[ "${GITHUB_ACTIONS:-}" == "true" || -n "${WORKFLOW_SHA:-}" ]]; then
+  EXPECTED_RELEASE_SHA="$(git rev-parse HEAD)" \
+    node "${tooling_root}/scripts/npm-preflight-tooling-identity.mjs" --verify-publication-authority
+fi
 
 "${publish_cmd[@]}"

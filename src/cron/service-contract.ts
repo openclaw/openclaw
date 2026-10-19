@@ -1,4 +1,9 @@
 /** Public cron service interface shared by callers and implementations. */
+import type {
+  CronEventRunOptions,
+  CronEventRunResult,
+  CronEventSourceSnapshot,
+} from "./event-source.js";
 import type { CronListPageOptions, CronListPageResult } from "./service/list-page-types.js";
 import type {
   CronAddInput,
@@ -7,6 +12,7 @@ import type {
   CronCommitGuardOptions,
   CronListResult,
   CronRemoveResult,
+  CronRemoveOptions,
   CronRunMode,
   CronRunResult,
   CronStatusSummary,
@@ -39,11 +45,17 @@ export type CronServiceRunOptions = {
 
 /** Public cron service facade used by gateway, plugin SDK, and tests. */
 export interface CronServiceContract {
+  readEventSources(source: string): Promise<CronEventSourceSnapshot[]>;
+  runEvent(id: string, opts: CronEventRunOptions): Promise<CronEventRunResult>;
   start(): Promise<void>;
   stop(): void;
   status(): Promise<CronStatusSummary>;
   list(opts?: { includeDisabled?: boolean }): Promise<CronListResult>;
-  listPage(opts?: CronListPageOptions): Promise<CronListPageResult>;
+  /** The in-process predicate runs under the store lock and must not mutate borrowed jobs. */
+  listPage(
+    opts?: CronListPageOptions,
+    matchesJob?: (job: CronJob) => boolean,
+  ): Promise<CronListPageResult>;
   add(input: CronAddInput, opts?: CronAddOptions): Promise<CronAddResult>;
   update(id: string, patch: CronUpdateInput, opts?: CronUpdateOptions): Promise<CronUpdateResult>;
   updateWithPrecondition(
@@ -52,10 +64,7 @@ export interface CronServiceContract {
     precondition: CronUpdatePrecondition,
     opts?: CronUpdateOptions,
   ): Promise<CronUpdateResult>;
-  remove(
-    id: string,
-    opts?: { systemOwned?: boolean } & CronCommitGuardOptions,
-  ): Promise<CronRemoveResult>;
+  remove(id: string, opts?: CronRemoveOptions): Promise<CronRemoveResult>;
   run(id: string, mode?: CronRunMode, opts?: CronServiceRunOptions): Promise<CronServiceRunResult>;
   enqueueRun(
     id: string,
@@ -70,5 +79,6 @@ export interface CronServiceContract {
     text: string;
     sessionKey?: string;
     agentId?: string;
-  }): CronWakeResult;
+    commitGuard?: () => void;
+  }): Promise<CronWakeResult>;
 }

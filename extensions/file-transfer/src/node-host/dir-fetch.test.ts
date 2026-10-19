@@ -1,110 +1,147 @@
-// File Transfer tests cover dir fetch plugin behavior.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
+import { createTarArchive } from "./dir-fetch-archive.js";
 import { handleDirFetch } from "./dir-fetch.js";
+import { useFiles } from "./node-host.test-support.js";
 
-let tmpRoot: string;
+const { at, dir: makeDir, file: makeFile, seed } = useFiles("dir-fetch-test-");
 
-beforeEach(async () => {
-  // realpath: see file-fetch.test.ts for the macOS symlinked-tmpdir reason.
-  tmpRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dir-fetch-test-")));
-});
-
-afterEach(async () => {
-  await fs.rm(tmpRoot, { recursive: true, force: true });
-});
-
-// dir-fetch shells out to /usr/bin/tar. Skip the body of these tests on
-// platforms without it (Windows CI). They still register, just no-op.
+// dir-fetch needs /usr/bin/tar, unavailable on Windows CI.
 const HAS_TAR = process.platform !== "win32";
+
+async function fetchDirectory(input: Parameters<typeof handleDirFetch>[0]) {
+  const result = await handleDirFetch(input);
+  if (!result.ok) {
+    throw new Error(`expected ok, got ${result.code}: ${result.message}`);
+  }
+  return result;
+}
 
 async function expectDirFetchError(input: Parameters<typeof handleDirFetch>[0], code: string) {
   const result = await handleDirFetch(input);
-  if (result.ok) {
-    throw new Error("expected directory fetch error");
-  }
-  expect(result.code).toBe(code);
+  expect(result).toMatchObject({ ok: false, code });
 }
 
-describe("handleDirFetch — input validation", () => {
+describe("handleDirFetch", () => {
   it("rejects empty / non-string path", async () => {
     await expectDirFetchError({ path: "" }, "INVALID_PATH");
   });
-
-  it("rejects relative paths", async () => {
-    await expectDirFetchError({ path: "relative" }, "INVALID_PATH");
-  });
-
-  it("rejects paths with NUL bytes", async () => {
-    await expectDirFetchError({ path: "/tmp/foo\0bar" }, "INVALID_PATH");
-  });
-});
-
-describe("handleDirFetch — fs errors", () => {
-  it.runIf(HAS_TAR)("returns NOT_FOUND for a missing directory", async () => {
-    await expectDirFetchError({ path: path.join(tmpRoot, "missing") }, "NOT_FOUND");
-  });
-
-  it.runIf(HAS_TAR)("returns IS_FILE when path resolves to a file", async () => {
-    const f = path.join(tmpRoot, "f.txt");
-    await fs.writeFile(f, "x");
-    await expectDirFetchError({ path: f }, "IS_FILE");
-  });
-});
-
-describe("handleDirFetch — happy path", () => {
-  it.runIf(HAS_TAR)("preflights directory entries without returning a tarball", async () => {
-    await fs.writeFile(path.join(tmpRoot, "a.txt"), "alpha\n");
-    await fs.mkdir(path.join(tmpRoot, ".ssh"));
-    await fs.writeFile(path.join(tmpRoot, ".ssh", "id_rsa"), "secret\n");
-    await fs.mkdir(path.join(tmpRoot, "sub"));
-    await fs.writeFile(path.join(tmpRoot, "sub", "b.txt"), "beta\n");
-
-    const r = await handleDirFetch({ path: tmpRoot, preflightOnly: true });
-    if (!r.ok) {
-      throw new Error(`expected ok, got ${r.code}: ${r.message}`);
+  it.runIf(HAS_TAR).each(["alias", "inode"])("rejects changed tar %s binding", async (kind) => {
+    const target = await makeDir("target");
+    const stats = await fs.stat(target, { bigint: true });
+    let requested = target;
+    if (kind === "alias") {
+      requested = at("current");
+      await fs.symlink(await makeDir("second"), requested);
+    } else {
+      await fs.rename(target, at("moved"));
+      await makeDir("target");
+      await makeFile("target/secret.txt", "secret");
     }
+    await expect(
+      createTarArchive(requested, target, String(stats.dev), String(stats.ino), 1024 * 1024),
+    ).resolves.toBe("CANONICAL_PATH_CHANGED");
+  });
 
-    expect(r.path).toBe(tmpRoot);
-    expect(r.tarBase64).toBe("");
-    expect(r.tarBytes).toBe(0);
-    expect(r.sha256).toBe("");
-    expect(r.preflightOnly).toBe(true);
-    expect(r.entries).toEqual([".ssh", ".ssh/id_rsa", "a.txt", "sub", "sub/b.txt"]);
+  it.runIf(HAS_TAR)("preflights directory entries without returning a tarball", async () => {
+    await seed(["a.txt", ".ssh/id_rsa", "sub/b.txt", "c/z.txt", "c\u200d/a.txt"]);
+    await fs.symlink("missing-target", at("dangling-link"));
+
+    const r = await fetchDirectory({ path: at(), preflightOnly: true });
+    expect(r).toMatchObject({
+      path: at(),
+      tarBase64: "",
+      tarBytes: 0,
+      sha256: "",
+      preflightOnly: true,
+    });
+    expect(r.entries).toEqual(
+      ".ssh .ssh/id_rsa a.txt c c/z.txt c\u200d c\u200d/a.txt dangling-link sub sub/b.txt".split(
+        " ",
+      ),
+    );
     expect(r.fileCount).toBe(r.entries?.length);
   });
 
   it.runIf(HAS_TAR && process.platform !== "win32")(
-    "preflights symlinks without following their targets",
+    "rejects a retargeted path before creating an archive",
     async () => {
-      await fs.writeFile(path.join(tmpRoot, "a.txt"), "alpha\n");
-      await fs.symlink("missing-target", path.join(tmpRoot, "dangling-link"));
+      const first = at("first");
+      const second = at("second");
+      const link = at("current");
+      await seed(["first/approved.txt", "second/not-approved.txt"]);
+      await fs.symlink(first, link);
 
-      const r = await handleDirFetch({ path: tmpRoot, preflightOnly: true });
-      if (!r.ok) {
-        throw new Error(`expected ok, got ${r.code}: ${r.message}`);
-      }
+      const preflight = await fetchDirectory({
+        path: link,
+        followSymlinks: true,
+        preflightOnly: true,
+      });
+      await fs.unlink(link);
+      await fs.symlink(second, link);
 
-      expect(r.tarBase64).toBe("");
-      expect(r.entries).toContain("a.txt");
-      expect(r.entries).toContain("dangling-link");
-      expect(r.fileCount).toBe(r.entries?.length);
+      const result = await handleDirFetch({
+        path: link,
+        followSymlinks: true,
+        expectedCanonicalPath: preflight.path,
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        code: "CANONICAL_PATH_CHANGED",
+        message: "resolved path differs from the authorized target",
+        canonicalPath: second,
+      });
+    },
+  );
+
+  it.runIf(process.platform === "linux")(
+    "returns an invalid-path error for a non-UTF-8 filename instead of a partial preflight",
+    async () => {
+      await makeFile("valid.txt", "valid sibling");
+      const nested = await makeDir("nested");
+      await fs.writeFile(
+        Buffer.concat([Buffer.from(`${nested}/`), Buffer.from([0xff])]),
+        "unrepresentable filename",
+      );
+
+      const result = await handleDirFetch({ path: at(), preflightOnly: true });
+
+      expect(result).toEqual({
+        ok: false,
+        code: "INVALID_PATH",
+        message: expect.stringContaining("directory entry name is not valid UTF-8"),
+        canonicalPath: at(),
+      });
+    },
+  );
+
+  it.runIf(HAS_TAR)(
+    "rejects a replacement at the same canonical pathname before creating an archive",
+    async () => {
+      const target = await makeDir("target");
+      const moved = at("moved");
+      await fs.writeFile(path.join(target, "approved.txt"), "approved");
+      const preflight = await fetchDirectory({ path: target, preflightOnly: true });
+      await fs.rename(target, moved);
+      await fs.mkdir(target);
+      await fs.writeFile(path.join(target, "secret.txt"), "secret");
+
+      const result = await handleDirFetch({
+        path: target,
+        expectedCanonicalPath: preflight.path,
+        expectedBinding: preflight.binding,
+      });
+
+      expect(result).toMatchObject({ ok: false, code: "CANONICAL_PATH_CHANGED" });
     },
   );
 
   it.runIf(HAS_TAR)("returns a gzipped tar with byte count and sha256", async () => {
-    await fs.writeFile(path.join(tmpRoot, "a.txt"), "alpha\n");
-    await fs.writeFile(path.join(tmpRoot, "b.txt"), "beta\n");
-    await fs.mkdir(path.join(tmpRoot, "sub"));
-    await fs.writeFile(path.join(tmpRoot, "sub", "c.txt"), "gamma\n");
-
-    const r = await handleDirFetch({ path: tmpRoot });
-    if (!r.ok) {
-      throw new Error(`expected ok, got ${r.code}: ${r.message}`);
-    }
+    await seed(["a.txt", "b.txt", "sub/c.txt", ".root-note", ".hidden/note.txt"]);
+    const r = await fetchDirectory({ path: at() });
 
     expect(r.tarBytes).toBeGreaterThan(0);
     expect(r.tarBase64.length).toBeGreaterThan(0);
@@ -115,28 +152,21 @@ describe("handleDirFetch — happy path", () => {
     const expectedSha = crypto.createHash("sha256").update(buf).digest("hex");
     expect(r.sha256).toBe(expectedSha);
 
-    // gzip magic bytes
-    expect(buf[0]).toBe(0x1f);
-    expect(buf[1]).toBe(0x8b);
+    expect(buf.subarray(0, 2)).toEqual(Buffer.from([0x1f, 0x8b]));
 
-    // file count covers the regular files we created (3); BSD tar may also
+    // file count covers the regular files we created (5); BSD tar may also
     // list directory entries, so be generous.
-    expect(r.fileCount).toBeGreaterThanOrEqual(3);
-    expect(r.entries).toContain("a.txt");
-    expect(r.entries).toContain("b.txt");
-    expect(r.entries).toContain("sub");
-    expect(r.entries).toContain("sub/c.txt");
+    expect(r.fileCount).toBeGreaterThanOrEqual(5);
+    expect(r.entries).toEqual(
+      expect.arrayContaining("a.txt b.txt sub sub/c.txt .root-note .hidden/note.txt".split(" ")),
+    );
     expect(r.fileCount).toBe(r.entries?.length);
   });
-});
-
-describe("handleDirFetch — size cap", () => {
   it.runIf(HAS_TAR)("returns TREE_TOO_LARGE for oversized preflight-only directories", async () => {
-    const largePath = path.join(tmpRoot, "large.bin");
-    await fs.writeFile(largePath, crypto.randomBytes(1024 * 1024));
+    await makeFile("large.bin", crypto.randomBytes(1024 * 1024));
 
     await expectDirFetchError(
-      { path: tmpRoot, maxBytes: 64 * 1024, preflightOnly: true },
+      { path: at(), maxBytes: 64 * 1024, preflightOnly: true },
       "TREE_TOO_LARGE",
     );
   });
@@ -147,12 +177,10 @@ describe("handleDirFetch — size cap", () => {
       // Write enough random content to exceed a small maxBytes. Random bytes
       // don't compress, so gzip output is roughly the same size as input.
       const big = crypto.randomBytes(512 * 1024);
-      await fs.writeFile(path.join(tmpRoot, "big1.bin"), big);
-      await fs.writeFile(path.join(tmpRoot, "big2.bin"), big);
-      await fs.writeFile(path.join(tmpRoot, "big3.bin"), big);
+      await seed(["big1.bin", "big2.bin", "big3.bin"], big);
 
       // 64KB cap should trip either the du preflight or the streaming SIGTERM.
-      await expectDirFetchError({ path: tmpRoot, maxBytes: 64 * 1024 }, "TREE_TOO_LARGE");
+      await expectDirFetchError({ path: at(), maxBytes: 64 * 1024 }, "TREE_TOO_LARGE");
     },
     30_000,
   );

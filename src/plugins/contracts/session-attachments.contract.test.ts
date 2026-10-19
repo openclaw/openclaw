@@ -3,12 +3,12 @@ import * as fs from "node:fs/promises";
 import path from "node:path";
 import { FILE_TYPE_SNIFF_MAX_BYTES } from "@openclaw/media-core/mime";
 import { registerTestPlugin } from "openclaw/plugin-sdk/plugin-test-contracts";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
-import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { withTempConfig } from "../../gateway/test-temp-config.js";
-import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { sendPluginSessionAttachment } from "../host-hook-attachments.js";
 import { clearPluginLoaderCache } from "../loader.test-fixtures.js";
@@ -54,12 +54,12 @@ function createSilentPluginLogger() {
   };
 }
 
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-attachments-");
+
 async function withSessionStore(
   run: (params: { stateDir: string; storePath: string; filePath: string }) => Promise<void>,
 ) {
-  const stateDir = await fs.mkdtemp(
-    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-session-attachments-"),
-  );
+  const stateDir = sessionDirs.make();
   const storePath = path.join(stateDir, "sessions.json");
   const filePath = path.join(stateDir, "x.txt");
   await fs.writeFile(filePath, "x", "utf8");
@@ -76,7 +76,6 @@ async function withSessionStore(
     } else {
       process.env.OPENCLAW_STATE_DIR = previousStateDir;
     }
-    await fs.rm(stateDir, { recursive: true, force: true });
   }
 }
 
@@ -244,7 +243,7 @@ describe("plugin session attachments", () => {
         config: {
           session: { store: storePath },
           agents: {
-            list: [{ id: "main", default: true, workspace: workspaceDir }],
+            entries: { main: { workspace: workspaceDir } },
           },
         },
       });
@@ -475,19 +474,21 @@ describe("plugin session attachments", () => {
     });
   });
 
-  it("uses the live runtime config when a captured API sends an attachment", async () => {
+  it("uses replacement runtime config when captured async session hooks resume", async () => {
     await withSessionStore(async ({ stateDir, storePath, filePath }) => {
       await writeSessionEntry(storePath);
       mockSuccessfulAttachmentDelivery();
 
       const staleStorePath = path.join(stateDir, "stale-sessions.json");
+      await writeSessionEntry(staleStorePath);
       const registrationConfig = { session: { store: staleStorePath } };
       const liveConfig = { session: { store: storePath } };
+      let runtimeConfig = registrationConfig;
       const registry = createPluginRegistry({
         logger: createSilentPluginLogger(),
         runtime: {
           config: {
-            current: () => liveConfig,
+            current: () => runtimeConfig,
           },
         } as unknown as PluginRuntime,
       });
@@ -506,13 +507,40 @@ describe("plugin session attachments", () => {
       });
       setActivePluginRegistry(registry.registry);
 
-      const result = await capturedApi?.sendSessionAttachment({
+      const attachment = capturedApi?.sendSessionAttachment({
         sessionKey: MAIN_SESSION_KEY,
         files: [{ path: filePath }],
       });
+      const injection = capturedApi?.enqueueNextTurnInjection({
+        sessionKey: MAIN_SESSION_KEY,
+        text: "resume with current config",
+        idempotencyKey: "live-config-injection",
+      });
+      runtimeConfig = liveConfig;
+
+      const result = await attachment;
       expectTelegramAttachmentResult(result, 1);
       expect(workflowMocks.sendMessage).toHaveBeenCalledTimes(1);
       expect(requireFirstSendMessageParams().cfg).toBe(liveConfig);
+      await expect(injection).resolves.toEqual({
+        enqueued: true,
+        id: "live-config-injection",
+        sessionKey: MAIN_SESSION_KEY,
+      });
+      expect(
+        loadSessionEntry({ storePath, sessionKey: MAIN_SESSION_KEY })?.pluginNextTurnInjections?.[
+          "live-config-attachment-plugin"
+        ],
+      ).toEqual([
+        expect.objectContaining({
+          id: "live-config-injection",
+          text: "resume with current config",
+        }),
+      ]);
+      expect(
+        loadSessionEntry({ storePath: staleStorePath, sessionKey: MAIN_SESSION_KEY })
+          ?.pluginNextTurnInjections,
+      ).toBeUndefined();
     });
   });
 

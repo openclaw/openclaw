@@ -1,4 +1,3 @@
-// Qa Lab plugin module owns gateway child process lifecycle behavior.
 import type { ChildProcess } from "node:child_process";
 import type { WriteStream } from "node:fs";
 import { finished } from "node:stream/promises";
@@ -10,8 +9,10 @@ import { QaSuiteInfraError } from "./errors.js";
 import { formatQaGatewayLogsForError, redactQaGatewayDebugText } from "./gateway-log-redaction.js";
 import {
   inspectLinuxProcessGroup,
+  isQaPosixProcessGroupAlive,
   type QaLinuxProcessGroupInspector,
 } from "./posix-process-group.js";
+import { boundProcessGroupDiagnostics } from "./posix-process-stat.js";
 import { runQaWindowsTaskkill } from "./windows-system-tools.js";
 
 const QA_GATEWAY_CHILD_GRACEFUL_SHUTDOWN_TIMEOUT_MS = 30_000;
@@ -83,10 +84,40 @@ export function createQaGatewayChildLogCollector() {
   let recent = "";
   let end = 0;
 
-  const readFrom = (mark: number) => {
+  const resolveRead = (mark: number) => {
     const start = end - recent.length;
     const wasTruncated = mark < start;
-    const text = recent.slice(Math.max(0, mark - start));
+    const offset = Math.min(recent.length, Math.max(0, mark - start));
+    return {
+      text: recent.slice(offset),
+      wasTruncated,
+    };
+  };
+  const resolveRedactedRead = (mark: number) => {
+    const retainedStart = end - recent.length;
+    const firstSafeOffset =
+      retainedStart === 0
+        ? 0
+        : (() => {
+            const newline = recent.indexOf("\n");
+            return newline < 0 ? recent.length : newline + 1;
+          })();
+    const redactionSafeRecent = recent.slice(firstSafeOffset);
+    const start = retainedStart + firstSafeOffset;
+    const offset = Math.min(redactionSafeRecent.length, Math.max(0, mark - start));
+    const lineBoundaryOffset =
+      offset === 0 || redactionSafeRecent[offset - 1] === "\n"
+        ? offset
+        : (() => {
+            const newline = redactionSafeRecent.indexOf("\n", offset);
+            return newline < 0 ? redactionSafeRecent.length : newline + 1;
+          })();
+    return {
+      text: redactionSafeRecent.slice(lineBoundaryOffset),
+      wasTruncated: mark < start,
+    };
+  };
+  const withTruncationMarker = (text: string, wasTruncated: boolean) => {
     return `${wasTruncated ? QA_GATEWAY_CHILD_LOG_TRUNCATION_MARKER : ""}${text}`;
   };
   return {
@@ -102,7 +133,14 @@ export function createQaGatewayChildLogCollector() {
       return end;
     },
     readSince(mark: number) {
-      return readFrom(mark);
+      const read = resolveRead(mark);
+      return withTruncationMarker(read.text, read.wasTruncated);
+    },
+    readRedactedSince(mark: number) {
+      const read = resolveRedactedRead(mark);
+      // Redaction can change string length. Expose only a complete suffix so a
+      // raw cursor can never reconstruct a command or credential across lines.
+      return withTruncationMarker(redactQaGatewayDebugText(read.text), read.wasTruncated);
     },
     text() {
       return `${end > recent.length ? QA_GATEWAY_CHILD_LOG_TRUNCATION_MARKER : ""}${recent}`.trim();
@@ -110,9 +148,19 @@ export function createQaGatewayChildLogCollector() {
   };
 }
 
+export function createQaGatewayChildLogAccess(output: {
+  mark(): number;
+  readRedactedSince(mark: number): string;
+}) {
+  return {
+    markLogs: () => output.mark(),
+    readLogsSince: (mark: number) => output.readRedactedSince(mark),
+  };
+}
+
 function formatQaGatewayChildFailure(failure: QaChildFailure) {
   return failure.source === "process"
-    ? `gateway failed to spawn: ${formatErrorMessage(failure.error)}`
+    ? `gateway child process failed: ${formatErrorMessage(failure.error)}`
     : `gateway child ${failure.source} stream failed: ${formatErrorMessage(failure.error)}`;
 }
 
@@ -134,19 +182,30 @@ export function throwQaGatewayChildFailure(
 export function monitorQaGatewayChildFailure(
   child: ChildProcess,
   output: { push(source: QaGatewayChildLogSource, chunk: Buffer): void },
+  shouldReportExit?: () => boolean,
 ) {
   let childFailure: QaChildFailure | null = null;
-  monitorQaChildFailure(child, (failure) => {
+  const report = (failure: QaChildFailure) => {
+    if (childFailure) {
+      return;
+    }
     childFailure = failure;
-    const description =
-      failure.source === "process"
-        ? `gateway child process error: ${formatErrorMessage(failure.error)}`
-        : formatQaGatewayChildFailure(failure);
-    output.push("internal", Buffer.from(`[qa-lab] ${description}\n`));
+    output.push("internal", Buffer.from(`[qa-lab] ${formatQaGatewayChildFailure(failure)}\n`));
     if (failure.source !== "process" && !hasQaGatewayChildExited(child)) {
       // A broken parent-side pipe means QA can no longer observe the Gateway.
       // Stop the detached process tree so the existing lifecycle reports the failure.
       signalQaGatewayChildProcessTree(child, "SIGTERM");
+    }
+  };
+  monitorQaChildFailure(child, report);
+  child.once("exit", (exitCode, signal) => {
+    if (shouldReportExit?.() !== false) {
+      report({
+        source: "process",
+        error: new Error(
+          `gateway child exited unexpectedly (exitCode=${exitCode}, signal=${signal})`,
+        ),
+      });
     }
   });
   return () => childFailure;
@@ -160,17 +219,6 @@ export function formatQaGatewayProcessBoundaryStartupFailure(error: unknown, log
   return `${formatErrorMessage(error)}${formatQaGatewayLogsForError(logTail)}`;
 }
 
-function isProcessAlreadyExitedError(error: unknown): boolean {
-  return (error as NodeJS.ErrnoException | undefined)?.code === "ESRCH";
-}
-
-function boundQaGatewayProcessTreeDiagnostics(details: string) {
-  if (details.length <= 2_048) {
-    return details;
-  }
-  return `${sliceUtf16Safe(details, 0, 2_045)}...`;
-}
-
 function isQaGatewayChildProcessTreeAlive(
   child: ChildProcess,
   inspectLinuxProcessGroupFn: QaLinuxProcessGroupInspector = inspectLinuxProcessGroup,
@@ -181,20 +229,7 @@ function isQaGatewayChildProcessTreeAlive(
   if (process.platform === "win32") {
     return !hasQaGatewayChildExited(child);
   }
-  try {
-    process.kill(-child.pid, 0);
-    if (process.platform === "linux") {
-      // Linux can retain zombie-only process groups after SIGKILL while Node's
-      // child metadata is still unsettled. Runnable /proc members are the owner.
-      return inspectLinuxProcessGroupFn(child.pid)?.alive ?? true;
-    }
-    return true;
-  } catch (error) {
-    if (!isProcessAlreadyExitedError(error) && !hasQaGatewayChildExited(child)) {
-      return true;
-    }
-  }
-  return false;
+  return isQaPosixProcessGroupAlive(child.pid, inspectLinuxProcessGroupFn);
 }
 
 function signalQaGatewayChildProcessTree(child: ChildProcess, signal: NodeJS.Signals) {
@@ -240,13 +275,6 @@ type QaGatewayChildStopOptions = {
   inspectLinuxProcessGroup?: QaLinuxProcessGroupInspector;
 };
 
-function resolveQaGatewayChildStopTimeouts(opts?: QaGatewayChildStopOptions) {
-  return {
-    gracefulTimeoutMs: opts?.gracefulTimeoutMs ?? QA_GATEWAY_CHILD_GRACEFUL_SHUTDOWN_TIMEOUT_MS,
-    forceTimeoutMs: opts?.forceTimeoutMs ?? QA_GATEWAY_CHILD_FORCE_SHUTDOWN_TIMEOUT_MS,
-  };
-}
-
 function formatQaGatewayProcessTreeDiagnostics(
   child: ChildProcess,
   inspectLinuxProcessGroupFn: QaLinuxProcessGroupInspector,
@@ -258,7 +286,7 @@ function formatQaGatewayProcessTreeDiagnostics(
   const inspection = inspectLinuxProcessGroupFn(child.pid);
   const processGroupDetails =
     inspection?.diagnostics ?? `pgid=${child.pid} members=unknown (/proc unavailable)`;
-  return boundQaGatewayProcessTreeDiagnostics(
+  return boundProcessGroupDiagnostics(
     `${processGroupDetails} childExitRecorded=${childExitRecorded}`,
   );
 }
@@ -271,17 +299,20 @@ export async function stopQaGatewayChildProcessTree(
   if (!isQaGatewayChildProcessTreeAlive(child, inspectLinuxProcessGroupFn)) {
     return;
   }
-  const timeouts = resolveQaGatewayChildStopTimeouts(opts);
   signalQaGatewayChildProcessTree(child, "SIGTERM");
   if (
-    await waitForQaGatewayChildExit(child, timeouts.gracefulTimeoutMs, inspectLinuxProcessGroupFn)
+    await waitForQaGatewayChildExit(
+      child,
+      opts?.gracefulTimeoutMs ?? QA_GATEWAY_CHILD_GRACEFUL_SHUTDOWN_TIMEOUT_MS,
+      inspectLinuxProcessGroupFn,
+    )
   ) {
     return;
   }
   signalQaGatewayChildProcessTree(child, "SIGKILL");
   const stopped = await waitForQaGatewayChildExit(
     child,
-    timeouts.forceTimeoutMs,
+    opts?.forceTimeoutMs ?? QA_GATEWAY_CHILD_FORCE_SHUTDOWN_TIMEOUT_MS,
     inspectLinuxProcessGroupFn,
   );
   if (!stopped) {

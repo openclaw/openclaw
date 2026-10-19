@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 const UNKNOWN_PACKAGE = "@openclaw/not-a-real-release-wrapper-test-package";
 const tempDirs: string[] = [];
-const tsxImport = import.meta.resolve("tsx");
+const tsxImport = new URL("../../scripts/tsx.mjs", import.meta.url).href;
 
 afterEach(() => {
   for (const directory of tempDirs.splice(0)) {
@@ -99,6 +99,8 @@ describe("release wrapper scripts", () => {
         releaseSha,
         "--release-publish-branch",
         "main",
+        "--release-publish-full-ref",
+        "refs/heads/main",
         "--release-publish-run-attempt",
         "1",
         "--release-publish-run-id",
@@ -112,7 +114,7 @@ describe("release wrapper scripts", () => {
     expect(JSON.parse(plan.stdout)).toMatchObject({
       bootstrapWorkflowSha: "b".repeat(40),
       bootstrap: { ref: bootstrapWorkflowRef, shouldDispatch: false },
-      normal: { ref: "v2026.7.1-beta.3", shouldDispatch: false },
+      normal: { ref: bootstrapWorkflowRef, shouldDispatch: false },
     });
     expect(plan.stderr).not.toContain("old target planner invoked");
 

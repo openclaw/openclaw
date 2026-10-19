@@ -1,4 +1,5 @@
 // Verifies config path normalization and platform-specific behavior.
+import "../test-utils/prepare-compiled-subprocesses.js";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
@@ -8,6 +9,7 @@ describe("normalizeConfigPaths", () => {
   it("expands tilde for path-ish keys only", async () => {
     await withTempHome(async (home) => {
       const cfg = normalizeConfigPaths({
+        worktreeRoot: "~/worktrees",
         tools: { exec: { pathPrepend: ["~/bin"] } },
         plugins: { load: { paths: ["~/plugins/a"] } },
         logging: { file: "~/.openclaw/logs/openclaw.log" },
@@ -36,9 +38,8 @@ describe("normalizeConfigPaths", () => {
         },
         agents: {
           defaults: { workspace: "~/ws-default" },
-          list: [
-            {
-              id: "main",
+          entries: {
+            main: {
               workspace: "~/ws-agent",
               agentDir: "~/.openclaw/agents/main",
               identity: {
@@ -46,10 +47,11 @@ describe("normalizeConfigPaths", () => {
               },
               sandbox: { workspaceRoot: "~/sandbox-root" },
             },
-          ],
+          },
         },
       });
 
+      expect(cfg.worktreeRoot).toBe(path.join(home, "worktrees"));
       expect(cfg.plugins?.load?.paths?.[0]).toBe(path.join(home, "plugins", "a"));
       expect(cfg.logging?.file).toBe(path.join(home, ".openclaw", "logs", "openclaw.log"));
       expect(cfg.hooks?.path).toBe(path.join(home, ".openclaw", "hooks.json5"));
@@ -65,12 +67,16 @@ describe("normalizeConfigPaths", () => {
         path.join(home, "Library", "Messages", "chat.db"),
       );
       expect(cfg.agents?.defaults?.workspace).toBe(path.join(home, "ws-default"));
-      expect(cfg.agents?.list?.[0]?.workspace).toBe(path.join(home, "ws-agent"));
-      expect(cfg.agents?.list?.[0]?.agentDir).toBe(path.join(home, ".openclaw", "agents", "main"));
-      expect(cfg.agents?.list?.[0]?.sandbox?.workspaceRoot).toBe(path.join(home, "sandbox-root"));
+      expect(cfg.agents?.entries?.main?.workspace).toBe(path.join(home, "ws-agent"));
+      expect(cfg.agents?.entries?.main?.agentDir).toBe(
+        path.join(home, ".openclaw", "agents", "main"),
+      );
+      expect(cfg.agents?.entries?.main?.sandbox?.workspaceRoot).toBe(
+        path.join(home, "sandbox-root"),
+      );
 
       // Non-path key => do not treat "~" as home expansion.
-      expect(cfg.agents?.list?.[0]?.identity?.name).toBe("~not-a-path");
+      expect(cfg.agents?.entries?.main?.identity?.name).toBe("~not-a-path");
     });
   });
 });

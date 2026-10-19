@@ -1,30 +1,32 @@
-// Slack delivery trace goldens: replayable wire-level lifecycle recordings.
-//
-// Drives the real dispatch wiring (dispatchPreparedSlackMessage → deliverSlackPayload
-// → native stream / draft preview / preview finalize / deliverReplies → sendMessageSlack)
-// with the core agent turn mocked at the channel-inbound dispatch seam:
-// the scripted steps stand in for the reply dispatcher callbacks (typing, partials,
-// tool progress, per-payload deliver). OUT events are the Slack Web API calls observed
-// at a recording WebClient stand-in. Native streaming runs through the REAL
-// @slack/web-api ChatStreamer so the SDK's buffered-ack contract is captured as-is:
-// append() returns null and issues NO network call until its local buffer crosses
-// buffer_size (256 chars), and stop() can be the first network call for short replies.
-// Refresh goldens with OPENCLAW_TRACE_UPDATE=1 (see delivery-trace harness docs).
+import type { WebClient } from "@slack/web-api";
+// Scripted agent turns drive real dispatch, delivery, and SDK buffering; only
+// Slack I/O is recorded. Refresh goldens with OPENCLAW_TRACE_UPDATE=1.
 import { ChatStreamer } from "@slack/web-api/dist/chat-stream.js";
+import { projectAgentToolActivity } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   expectDeliveryTraceMatchesGolden,
   runDeliveryTraceScenario,
   type DeliveryTraceInStep,
   type DeliveryTraceStep,
-  type TraceEvent,
-  type TraceNormalizer,
 } from "openclaw/plugin-sdk/channel-contract-testing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { mergeSlackAccountConfig } from "./accounts.js";
+import {
+  BLOCKS_FINAL_PRESENTATION,
+  BLOCKS_FINAL_TEXT,
+  SHORT_FINAL_TEXT,
+  assertSlackSteeringTransportTrace,
+  collectSlackWireTexts,
+  createSlackTsNormalizer,
+  assertSlackProgressMentionHttpTrace,
+} from "./delivery-trace.test-support.js";
 import { noteSlackDraftConversationMessage } from "./draft-message-boundaries.js";
 import type { PreparedSlackMessage } from "./monitor/message-handler/types.js";
+import { setSlackSessionStatus } from "./session-status.js";
+import { markSlackStreamsStopped } from "./streaming.js";
 
 type RecordedWireCall = {
   method: string;
@@ -33,37 +35,9 @@ type RecordedWireCall = {
   result?: unknown;
 };
 
-type CapturedDispatcherOptions = {
-  deliver: (payload: ReplyPayload, info: { kind: ReplyDispatchKind }) => Promise<unknown>;
-  onError?: (err: unknown, info: { kind: string }) => Promise<void> | void;
-  typingCallbacks?: {
-    onReplyStart?: () => Promise<void>;
-    onIdle?: () => void;
-    onCleanup?: () => void;
-  };
-};
-
-type CapturedReplyOptions = {
-  suppressDefaultToolProgressMessages?: boolean;
-  onPartialReply?: (payload: { text: string }) => Promise<void> | void;
-  onToolStart?: (payload: {
-    name: string;
-    phase: "start" | "result";
-    itemId?: string;
-    toolCallId?: string;
-    args?: Record<string, unknown>;
-  }) => Promise<void> | void;
-  onItemEvent?: (payload: {
-    kind: string;
-    itemId?: string;
-    toolCallId?: string;
-    phase?: string;
-    status?: string;
-    progressText?: string;
-    name?: string;
-  }) => Promise<void> | void;
-};
-
+type CapturedTurn = Parameters<
+  typeof import("openclaw/plugin-sdk/channel-inbound").dispatchChannelInboundTurn
+>[0];
 type TurnCounts = Record<ReplyDispatchKind, number>;
 
 type Deferred<T> = { promise: Promise<T>; resolve: (value: T) => void };
@@ -71,48 +45,35 @@ type Deferred<T> = { promise: Promise<T>; resolve: (value: T) => void };
 type SlackTraceState = {
   recordWireCall: (call: RecordedWireCall) => void;
   client: Record<string, unknown> | null;
-  turn: { options: CapturedDispatcherOptions; replyOptions: CapturedReplyOptions } | null;
+  turn: CapturedTurn | null;
   turnStarted: Deferred<void> | null;
   turnOutcome: Deferred<{ queuedFinal: boolean; counts: TurnCounts }> | null;
   dispatchDone: Promise<void> | null;
-  counts: TurnCounts;
   tsCounter: number;
   /** Scripted benign rejection for the next chat.startStream call (scenario-owned). */
   rejectStartStreamCode: string | undefined;
 };
 
-const traceState = vi.hoisted(
-  (): SlackTraceState => ({
-    recordWireCall: () => {},
-    client: null,
-    turn: null,
-    turnStarted: null,
-    turnOutcome: null,
-    dispatchDone: null,
-    counts: { tool: 0, block: 0, final: 0 },
-    tsCounter: 0,
-    rejectStartStreamCode: undefined,
-  }),
-);
+const traceRuntimeError = vi.fn();
 
-// Replace only the core agent turn. Everything downstream of the captured
-// deliver/typing/replyOptions wiring (dedupe, thread plan, native stream ladder,
-// draft preview, preview finalize, deliverReplies chunking, sendMessageSlack)
-// stays the real production code.
+const traceState = vi.hoisted((): SlackTraceState => ({
+  recordWireCall: () => {},
+  client: null,
+  turn: null,
+  turnStarted: null,
+  turnOutcome: null,
+  dispatchDone: null,
+  tsCounter: 0,
+  rejectStartStreamCode: undefined,
+}));
+
+// Replace the agent turn, not the downstream delivery lifecycle.
 vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
-  type DispatchParams = Parameters<typeof actual.dispatchChannelInboundTurn>[0];
   return {
     ...actual,
-    dispatchChannelInboundTurn: async (params: DispatchParams) => {
-      traceState.turn = {
-        options: {
-          ...params.dispatcherOptions,
-          deliver: params.delivery.deliver,
-          onError: params.delivery.onError,
-        } as CapturedDispatcherOptions,
-        replyOptions: (params.replyOptions ?? {}) as CapturedReplyOptions,
-      };
+    dispatchChannelInboundTurn: async (params: CapturedTurn) => {
+      traceState.turn = params;
       traceState.turnStarted?.resolve();
       if (!traceState.turnOutcome) {
         throw new Error("trace turn outcome gate not initialized");
@@ -144,6 +105,7 @@ vi.mock("./client.js", async (importOriginal) => {
     createSlackWebClient: traceClient,
     createSlackWriteClient: traceClient,
     getSlackWriteClient: traceClient,
+    getSlackListenerWriteClient: traceClient,
   };
 });
 
@@ -171,90 +133,54 @@ afterEach(async () => {
 const CHANNEL_ID = "C0TRACE";
 const USER_ID = "U0TRACE";
 const TEAM_ID = "T0TRACE";
-// Matches the harness epoch (2026-01-01T00:00:00Z → 1767225600) so the inbound
-// ts is plausible under the fake clock; the normalizer canonicalizes it anyway.
+// Matches the harness's fake-clock epoch.
 const INBOUND_TS = "1767225600.000100";
 
 type SlackTraceScenarioName =
   | "streaming-happy-native"
-  | "stream-stop-first-network-call"
+  | "short-final-native-rejection"
   | "final-blocks-and-text"
   | "cancel-mid-stream"
-  | "preview-edit-fallback"
+  | "progress-compact-commentary"
   | "progress-session-card"
-  | "progress-native-unified";
+  | "progress-native-unified"
+  | "native-prose-then-exec-failed"
+  | "preview-exec-failed-then-prose";
 
 const NATIVE_SCENARIOS = new Set<SlackTraceScenarioName>([
   "streaming-happy-native",
-  "stream-stop-first-network-call",
+  "short-final-native-rejection",
   "final-blocks-and-text",
+  "native-prose-then-exec-failed",
 ]);
 
 const NATIVE_PROGRESS_NARRATION =
   "I’m checking the native Slack stream before applying the focused patch.";
 const NATIVE_PROGRESS_NARRATION_UPDATED = `${NATIVE_PROGRESS_NARRATION} I’m applying it now.`;
 
-// Long enough that the second stream append pushes the SDK buffer past
-// buffer_size (256), forcing the first visible flush via chat.startStream.
-const NATIVE_FINAL_TEXT =
-  "Deploy status: build is green. Canary rollout reached 50 percent with the error " +
-  "budget intact, latency holding steady at the p95 target, and no alerts firing " +
-  "across the fleet. Rolling out to production now and watching the dashboards for " +
-  "the next fifteen minutes before closing out the change.";
+const EXEC_FAILED_TRACE = "⚠️ 🛠️ Exec failed: ";
+const EXEC_FAILED_PROSE = "The directory is missing.";
+const COMPACT_COMMENTARY_TEXT = "Checking the current Slack behavior.";
+const COMPACT_COMMENTARY_TEXT_UPDATED =
+  "Checking the current Slack behavior and preparing the focused fix.";
+const COMPACT_FINAL_TEXT = "Compact Slack progress is ready.";
 
-// Short enough that every append stays inside the SDK's local buffer, so the
-// finalize stop() is the first Slack streaming network call of the turn.
-const SHORT_FINAL_TEXT = "All checks passed. Ship it.";
+function turnSteps(...steps: DeliveryTraceStep[]): DeliveryTraceStep[] {
+  return [{ kind: "reply-start" }, ...steps, { kind: "idle" }];
+}
 
-const PREVIEW_PARTIAL_ONE = "Compiling the changelog";
-const PREVIEW_PARTIAL_TWO = "Compiling the changelog for 2026.1.0.";
-const PREVIEW_FINAL_TEXT = "Compiling the changelog for 2026.1.0.\n\nDone: 12 entries.";
-
-const BLOCKS_FINAL_TEXT = "Release 2026.1.0 is ready to ship.";
-// Portable presentation actions; slack renders them as Block Kit and must
-// synthesize accessible fallback text because blocks hide top-level text.
-const BLOCKS_FINAL_PRESENTATION = {
-  blocks: [
-    {
-      type: "buttons",
-      buttons: [
-        { label: "Approve release", action: { type: "callback", value: "approve-release" } },
-        { label: "Release notes", url: "https://docs.openclaw.ai/release" },
-      ],
-    },
-  ],
-};
-
-// Slack-specific scenario scripts; the runner only consumes `steps` and the
-// name (outside the shared scenario library) keys the golden filename.
-const slackTraceScenarios: Record<SlackTraceScenarioName, readonly DeliveryTraceStep[]> = {
-  "streaming-happy-native": [
-    { kind: "reply-start" },
-    // Native streaming has no partial preview (onPartialReply is undefined);
-    // the partial is recorded as IN-only script context.
-    { kind: "partial", text: "Deploy status:" },
-    { kind: "advance", ms: 300 },
-    // Default tool progress messages flow as tool-kind payloads under native
-    // streaming; short text stays inside the SDK buffer (accepted, not visible).
-    { kind: "tool-progress", name: "deploy_checks", phase: "start" },
-    { kind: "advance", ms: 300 },
-    { kind: "final", text: NATIVE_FINAL_TEXT },
-    { kind: "idle" },
-  ],
-  "stream-stop-first-network-call": [
-    { kind: "reply-start" },
+// Scenario names key the golden filenames.
+const slackTraceScenarios: Record<
+  Exclude<SlackTraceScenarioName, "streaming-happy-native">,
+  readonly DeliveryTraceStep[]
+> = {
+  "short-final-native-rejection": turnSteps(
     { kind: "partial", text: "All checks passed." },
     { kind: "advance", ms: 300 },
     { kind: "final", text: SHORT_FINAL_TEXT },
-    { kind: "idle" },
-  ],
-  "final-blocks-and-text": [
-    { kind: "reply-start" },
-    { kind: "final", text: BLOCKS_FINAL_TEXT },
-    { kind: "idle" },
-  ],
-  "cancel-mid-stream": [
-    { kind: "reply-start" },
+  ),
+  "final-blocks-and-text": turnSteps({ kind: "final", text: BLOCKS_FINAL_TEXT }),
+  "cancel-mid-stream": turnSteps(
     { kind: "partial", text: "Working on the fix" },
     { kind: "advance", ms: 300 },
     { kind: "partial", text: "Working on the fix: patching now." },
@@ -262,68 +188,41 @@ const slackTraceScenarios: Record<SlackTraceScenarioName, readonly DeliveryTrace
     // before the run is aborted.
     { kind: "advance", ms: 1100 },
     { kind: "cancel" },
-    { kind: "idle" },
-  ],
-  // Edit-preview tier: native transport ineligible → draft post + throttled
-  // chat.update, and the final promotes the draft in place. Custom identity uses
-  // a disposable app-authored draft plus a separate customized final instead.
-  "preview-edit-fallback": [
-    { kind: "reply-start" },
-    { kind: "partial", text: PREVIEW_PARTIAL_ONE },
-    { kind: "advance", ms: 300 },
-    { kind: "partial", text: PREVIEW_PARTIAL_TWO },
-    { kind: "advance", ms: 1100 },
-    { kind: "final", text: PREVIEW_FINAL_TEXT },
-    { kind: "idle" },
-  ],
-  "progress-session-card": [
-    { kind: "reply-start" },
+  ),
+  "progress-compact-commentary": turnSteps(
+    { kind: "partial", text: COMPACT_COMMENTARY_TEXT },
+    { kind: "advance", ms: 2000 },
+    { kind: "tool-progress", name: "read", phase: "start" },
+    { kind: "partial", text: COMPACT_COMMENTARY_TEXT_UPDATED },
+    { kind: "advance", ms: 2000 },
+    { kind: "final", text: COMPACT_FINAL_TEXT },
+  ),
+  "progress-session-card": turnSteps(
     { kind: "tool-progress", name: "read", phase: "start" },
     { kind: "advance", ms: 2000 },
+    { kind: "tool-progress", name: "read", phase: "result" },
     { kind: "final", text: "The session card is complete." },
-    { kind: "idle" },
-  ],
-  "progress-native-unified": [
-    { kind: "reply-start" },
+  ),
+  "progress-native-unified": turnSteps(
     { kind: "partial", text: NATIVE_PROGRESS_NARRATION },
     { kind: "tool-progress", name: "write", phase: "start" },
     { kind: "advance", ms: 2000 },
     { kind: "partial", text: NATIVE_PROGRESS_NARRATION_UPDATED },
     { kind: "tool-progress", name: "write", phase: "result" },
     { kind: "final", text: "The unified native Slack turn is complete." },
-    { kind: "idle" },
-  ],
+  ),
+  "native-prose-then-exec-failed": turnSteps(
+    { kind: "final", text: EXEC_FAILED_PROSE },
+    { kind: "final", text: EXEC_FAILED_TRACE },
+  ),
+  "preview-exec-failed-then-prose": turnSteps(
+    { kind: "partial", text: EXEC_FAILED_TRACE },
+    { kind: "advance", ms: 1100 },
+    { kind: "partial", text: EXEC_FAILED_PROSE },
+    { kind: "advance", ms: 1100 },
+    { kind: "final", text: EXEC_FAILED_PROSE },
+  ),
 };
-
-/** Canonicalizes Slack `sec.micro` timestamps to `ts#N` in first-seen order. */
-function createSlackTsNormalizer(): TraceNormalizer {
-  const seen = new Map<string, string>();
-  const canonicalize = (value: string) =>
-    value.replace(/\b\d{10}\.\d{6}\b/g, (ts) => {
-      let mapped = seen.get(ts);
-      if (!mapped) {
-        mapped = `ts#${seen.size + 1}`;
-        seen.set(ts, mapped);
-      }
-      return mapped;
-    });
-  const walk = (value: unknown): unknown => {
-    if (typeof value === "string") {
-      return canonicalize(value);
-    }
-    if (Array.isArray(value)) {
-      return value.map(walk);
-    }
-    if (value && typeof value === "object") {
-      return Object.fromEntries(
-        Object.entries(value as Record<string, unknown>).map(([key, entry]) => [key, walk(entry)]),
-      );
-    }
-    return value;
-  };
-  return (event: TraceEvent) =>
-    event.data === undefined ? event : { ...event, data: walk(event.data) };
-}
 
 function nextSlackTs(): string {
   traceState.tsCounter += 1;
@@ -342,8 +241,18 @@ function stripToken(args: Record<string, unknown>): Record<string, unknown> {
 }
 
 function createRecordingSlackClient(): Record<string, unknown> {
-  const record = (call: RecordedWireCall) => {
-    traceState.recordWireCall(call);
+  const record = (
+    method: string,
+    args: Record<string, unknown>,
+    target: unknown,
+    result?: unknown,
+  ) => {
+    traceState.recordWireCall({
+      method,
+      target: asWireString(target),
+      payload: stripToken(args),
+      result,
+    });
   };
   const unexpected = (method: string) => async () => {
     throw new Error(`unexpected Slack wire call: ${method}`);
@@ -352,12 +261,7 @@ function createRecordingSlackClient(): Record<string, unknown> {
     chat: {
       postMessage: async (args: Record<string, unknown>) => {
         const ts = nextSlackTs();
-        record({
-          method: "chat.postMessage",
-          target: asWireString(args.channel),
-          payload: stripToken(args),
-          result: { ts },
-        });
+        record("chat.postMessage", args, args.channel, { ts });
         return {
           ok: true,
           channel: args.channel,
@@ -366,94 +270,59 @@ function createRecordingSlackClient(): Record<string, unknown> {
         };
       },
       update: async (args: Record<string, unknown>) => {
-        record({
-          method: "chat.update",
-          target: asWireString(args.ts),
-          payload: stripToken(args),
-          result: { ok: true },
-        });
+        record("chat.update", args, args.ts, { ok: true });
         return { ok: true, channel: args.channel, ts: args.ts };
       },
       delete: async (args: Record<string, unknown>) => {
-        record({
-          method: "chat.delete",
-          target: asWireString(args.ts),
-          payload: stripToken(args),
-          result: { ok: true },
-        });
+        record("chat.delete", args, args.ts, { ok: true });
         return { ok: true };
       },
       startStream: async (args: Record<string, unknown>) => {
         const rejectCode = traceState.rejectStartStreamCode;
         if (rejectCode) {
           traceState.rejectStartStreamCode = undefined;
-          record({
-            method: "chat.startStream",
-            target: asWireString(args.channel),
-            payload: stripToken(args),
-            result: { ok: false, error: rejectCode },
-          });
+          record("chat.startStream", args, args.channel, { ok: false, error: rejectCode });
           const err = new Error(`An API error occurred: ${rejectCode}`);
           (err as Error & { data?: unknown }).data = { ok: false, error: rejectCode };
           throw err;
         }
         const ts = nextSlackTs();
-        record({
-          method: "chat.startStream",
-          target: asWireString(args.channel),
-          payload: stripToken(args),
-          result: { ts },
-        });
+        record("chat.startStream", args, args.channel, { ts });
         return { ok: true, ts };
       },
       appendStream: async (args: Record<string, unknown>) => {
-        record({
-          method: "chat.appendStream",
-          target: asWireString(args.ts),
-          payload: stripToken(args),
-          result: { ok: true },
-        });
+        record("chat.appendStream", args, args.ts, { ok: true });
         return { ok: true, ts: args.ts };
       },
       stopStream: async (args: Record<string, unknown>) => {
-        record({
-          method: "chat.stopStream",
-          target: asWireString(args.ts),
-          payload: stripToken(args),
-          result: { ok: true },
-        });
+        record("chat.stopStream", args, args.ts, { ok: true });
         return { ok: true, ts: args.ts };
       },
     },
     users: {
       info: async (args: Record<string, unknown>) => {
-        record({
-          method: "users.info",
-          target: asWireString(args.user),
-          payload: stripToken(args),
-          result: { team_id: TEAM_ID },
-        });
+        record("users.info", args, args.user, { team_id: TEAM_ID });
         return { ok: true, user: { team_id: TEAM_ID } };
       },
     },
-    assistant: {
-      threads: {
-        setStatus: async (args: Record<string, unknown>) => {
-          record({
-            method: "assistant.threads.setStatus",
-            target: `${asWireString(args.channel_id)}/${asWireString(args.thread_ts)}`,
-            payload: stripToken(args),
-            result: { ok: true },
-          });
-          return { ok: true };
-        },
-      },
+    apiCall: async (method: string, args: Record<string, unknown>) => {
+      record(method, args, `${asWireString(args.channel_id)}/${asWireString(args.thread_ts)}`, {
+        ok: true,
+      });
+      return { ok: true };
     },
     conversations: { open: unexpected("conversations.open") },
-    reactions: { add: unexpected("reactions.add"), remove: unexpected("reactions.remove") },
+    reactions: Object.fromEntries(
+      ["add", "remove"].map((action) => [
+        action,
+        async (args: Record<string, unknown>) => {
+          traceState.recordWireCall({ method: `reactions.${action}`, payload: stripToken(args) });
+          return { ok: true };
+        },
+      ]),
+    ),
   };
-  // Mirror WebClient.chatStream: the REAL SDK ChatStreamer runs against this
-  // recording client, so its local buffering decides when wire calls happen.
+  // Let the real SDK own buffering.
   client.chatStream = (args: unknown) =>
     new ChatStreamer(client as never, { debug: () => {} } as never, args as never, {});
   return client;
@@ -462,32 +331,45 @@ function createRecordingSlackClient(): Record<string, unknown> {
 function createPreparedTraceMessage(scenario: SlackTraceScenarioName): PreparedSlackMessage {
   const progressCard = scenario === "progress-session-card";
   const nativeProgress = scenario === "progress-native-unified";
-  const cfg = {
-    channels: { slack: { enabled: true } },
-    ...(progressCard || nativeProgress
-      ? {
-          gateway: {
-            publicOrigin: "https://team.openclaw.ai",
-            controlUi: { basePath: "/openclaw" },
-          },
-        }
-      : {}),
-  } as OpenClawConfig;
+  const progressModes = {
+    "progress-compact-commentary": {
+      mode: "progress",
+      nativeTransport: true,
+      progress: {
+        style: "compact",
+        nativeTaskCards: true,
+        label: false,
+        commentary: true,
+        toolProgress: false,
+      },
+    },
+    "progress-session-card": { progress: { nativeTaskCards: false, toolProgress: true } },
+    "progress-native-unified": { mode: "progress", progress: { toolProgress: true } },
+  } satisfies Partial<
+    Record<
+      SlackTraceScenarioName,
+      NonNullable<PreparedSlackMessage["account"]["config"]["streaming"]>
+    >
+  >;
+  const streaming =
+    scenario === "progress-compact-commentary" || progressCard || nativeProgress
+      ? progressModes[scenario]
+      : { mode: "partial", nativeTransport: NATIVE_SCENARIOS.has(scenario) };
+  const cfg: OpenClawConfig = { channels: { slack: { enabled: true } } };
+  if (progressCard || nativeProgress) {
+    cfg.gateway = {
+      publicOrigin: "https://team.openclaw.ai",
+      controlUi: { basePath: "/openclaw" },
+    };
+  }
   const client = traceState.client;
   if (!client) {
     throw new Error("trace Slack client not initialized");
   }
-  const setStatus = (
-    client as {
-      assistant: {
-        threads: { setStatus: (args: Record<string, unknown>) => Promise<unknown> };
-      };
-    }
-  ).assistant.threads.setStatus;
   const prepared = {
     ctx: {
       cfg,
-      runtime: { log: () => {}, error: () => {} },
+      runtime: { log: () => {}, error: traceRuntimeError },
       botToken: "xoxb-trace",
       app: { client },
       teamId: TEAM_ID,
@@ -496,43 +378,14 @@ function createPreparedTraceMessage(scenario: SlackTraceScenarioName): PreparedS
       textLimit: 4000,
       typingReaction: "",
       allowFrom: [],
-      // Mirrors the monitor's setSlackThreadStatus wiring
-      // (extensions/slack/src/monitor/context.ts): typing travels over
-      // assistant.threads.setStatus and is part of the recorded lifecycle.
-      setSlackThreadStatus: async (p: {
-        channelId: string;
-        threadTs?: string;
-        status: string;
-        loadingMessages?: string[];
-      }) => {
-        if (!p.threadTs) {
-          return;
-        }
-        await setStatus({
-          channel_id: p.channelId,
-          thread_ts: p.threadTs,
-          status: p.status,
-          ...(p.loadingMessages?.length
-            ? { loading_messages: p.loadingMessages.slice(0, 10) }
-            : {}),
-        });
-      },
+      setSlackSessionStatus: ((p) =>
+        setSlackSessionStatus({ ...p, client: client as unknown as WebClient }).then(
+          ({ ok }) => ok,
+        )) satisfies PreparedSlackMessage["ctx"]["setSlackSessionStatus"],
     },
     account: {
       accountId: "default",
-      config: progressCard
-        ? // Native task cards are the progress default; this scenario owns the
-          // Block Kit opt-out path.
-          { streaming: { progress: { nativeTaskCards: false } } }
-        : nativeProgress
-          ? // Empty progress config on purpose: proves the shipped default.
-            { streaming: { mode: "progress" } }
-          : {
-              streaming: {
-                mode: "partial",
-                nativeTransport: NATIVE_SCENARIOS.has(scenario),
-              },
-            },
+      config: { streaming },
     },
     message: {
       type: "message",
@@ -553,13 +406,10 @@ function createPreparedTraceMessage(scenario: SlackTraceScenarioName): PreparedS
     channelConfig: null,
     replyTarget: `channel:${CHANNEL_ID}`,
     ctxPayload: { SessionKey: "slack:channel:c0trace", ChatType: "channel" },
-    turn: { storePath: "/unused/slack-trace-sessions.json", record: {} },
+    turn: { record: {} },
     replyToMode: "all",
-    requireMention: true,
     isDirectMessage: false,
     isRoomish: true,
-    historyKey: "slack:trace",
-    preview: "",
     ackReactionValue: "eyes",
     ackReactionPromise: null,
   };
@@ -569,90 +419,96 @@ function createPreparedTraceMessage(scenario: SlackTraceScenarioName): PreparedS
 async function setupSlackTrace(
   recorder: { recordWireCall: (call: RecordedWireCall) => void },
   scenario: SlackTraceScenarioName,
+  configure?: (prepared: PreparedSlackMessage) => void,
+  httpClient?: WebClient,
 ) {
   traceState.recordWireCall = recorder.recordWireCall;
   traceState.tsCounter = 0;
-  traceState.counts = { tool: 0, block: 0, final: 0 };
+  traceRuntimeError.mockClear();
+  const counts: TurnCounts = { tool: 0, block: 0, final: 0 };
   traceState.turn = null;
   traceState.turnStarted = createDeferred<void>();
   traceState.turnOutcome = createDeferred<{ queuedFinal: boolean; counts: TurnCounts }>();
-  // stop() rejections with a benign finalize code while text is still buffered
-  // must fall back to the durable full-text path (streaming.ts contract).
   traceState.rejectStartStreamCode =
-    scenario === "stream-stop-first-network-call"
+    scenario === "short-final-native-rejection"
       ? "method_not_supported_for_channel_type"
       : undefined;
-  traceState.client = createRecordingSlackClient();
+  traceState.client = httpClient
+    ? (httpClient as unknown as Record<string, unknown>)
+    : createRecordingSlackClient();
 
-  const dispatchDone = dispatchPreparedSlackMessage(createPreparedTraceMessage(scenario));
+  const prepared = createPreparedTraceMessage(scenario);
+  configure?.(prepared);
+  const dispatchDone = dispatchPreparedSlackMessage(prepared);
   traceState.dispatchDone = dispatchDone;
   await traceState.turnStarted.promise;
   const turn = traceState.turn as SlackTraceState["turn"];
   if (!turn) {
     throw new Error("trace turn wiring was not captured");
   }
+  const { dispatcherOptions: options, delivery, replyOptions = {} } = turn;
 
   const deliver = async (payload: ReplyPayload, kind: ReplyDispatchKind) => {
+    const transformed = options?.transformReplyPayload
+      ? options.transformReplyPayload(payload)
+      : payload;
+    if (!transformed) {
+      return;
+    }
     try {
-      await turn.options.deliver(payload, { kind });
-      traceState.counts[kind] += 1;
+      await delivery.deliver(transformed, { kind });
+      counts[kind] += 1;
     } catch (err) {
       // Mirrors the reply dispatcher: failed deliveries report onError and are
       // not counted as dispatched.
-      await turn.options.onError?.(err, { kind });
+      delivery.onError?.(err, { kind });
     }
   };
 
   return async (step: DeliveryTraceInStep) => {
     switch (step.kind) {
       case "reply-start":
-        await turn.options.typingCallbacks?.onReplyStart?.();
+        await options?.typingCallbacks?.onReplyStart?.();
         break;
       case "partial":
-        // Present only on the draft-preview tier; native streaming leaves
-        // onPartialReply undefined and partials stay IN-only script context.
-        if (scenario === "progress-native-unified") {
-          await turn.replyOptions.onItemEvent?.({
+        if (scenario === "progress-compact-commentary" || scenario === "progress-native-unified") {
+          await replyOptions.onItemEvent?.({
             kind: "preamble",
             itemId: "preamble-1",
             progressText: step.text,
           });
-          await deliver({ text: step.text, isCommentary: true }, "block");
-        } else {
-          await turn.replyOptions.onPartialReply?.({ text: step.text });
-        }
-        break;
-      case "tool-progress":
-        if (scenario === "progress-native-unified") {
-          if (step.phase === "start") {
-            await turn.replyOptions.onToolStart?.({
-              name: step.name,
-              phase: step.phase,
-              itemId: "write-1",
-              toolCallId: "write-call-1",
-              args: { path: "src/native-card.ts", content: "const unified = true;\n" },
-            });
-          } else {
-            await turn.replyOptions.onItemEvent?.({
-              kind: "tool",
-              itemId: "write-1",
-              toolCallId: "write-call-1",
-              phase: "end",
-              status: "completed",
-              progressText: "src/native-card.ts",
-              name: step.name,
-            });
+          if (scenario === "progress-native-unified") {
+            await deliver({ text: step.text, isCommentary: true }, "block");
           }
         } else {
-          await turn.replyOptions.onToolStart?.({ name: step.name, phase: step.phase });
+          await replyOptions.onPartialReply?.({ text: step.text });
         }
-        // The mocked core dispatcher owns default tool progress messages; when
-        // dispatch did not suppress them it would deliver a tool-kind payload,
-        // so the script forwards a deterministic stand-in text.
-        if (turn.replyOptions.suppressDefaultToolProgressMessages !== true) {
+        break;
+      case "tool-progress": {
+        const activity = {
+          toolCallId: `${step.name}-call-1`,
+          name: step.name,
+          phase: step.phase,
+          args:
+            scenario === "progress-native-unified"
+              ? { path: "src/native-card.ts", content: "const unified = true;\n" }
+              : undefined,
+        };
+        await replyOptions.onItemEvent?.(
+          projectAgentToolActivity({
+            ...activity,
+            ...(step.phase === "result" ? { status: "completed" as const } : {}),
+          }),
+        );
+        if (step.phase === "start") {
+          await replyOptions.onToolStart?.(activity);
+        }
+        // Mirror the core dispatcher's default tool progress delivery.
+        if (replyOptions.suppressDefaultToolProgressMessages !== true) {
           await deliver({ text: `Using tool: ${step.name} (${step.phase})` }, "tool");
         }
         break;
+      }
       case "final":
         await deliver(
           {
@@ -670,14 +526,14 @@ async function setupSlackTrace(
         // An aborted run stops emitting payloads; closeout happens on idle.
         break;
       case "idle": {
-        turn.options.typingCallbacks?.onIdle?.();
-        turn.options.typingCallbacks?.onCleanup?.();
+        options?.typingCallbacks?.onIdle?.();
+        options?.typingCallbacks?.onCleanup?.();
         // Let the fire-and-forget typing stop record before post-turn finalize,
         // matching the production settle-then-finalize order.
         await vi.advanceTimersByTimeAsync(0);
         traceState.turnOutcome?.resolve({
-          queuedFinal: traceState.counts.final > 0,
-          counts: { ...traceState.counts },
+          queuedFinal: counts.final > 0,
+          counts: { ...counts },
         });
         await traceState.dispatchDone;
         break;
@@ -692,62 +548,353 @@ async function setupSlackTrace(
   };
 }
 
+function runSlackTrace(
+  scenario: keyof typeof slackTraceScenarios,
+  options: {
+    name?: string;
+    steps?: readonly DeliveryTraceStep[];
+    configure?: Parameters<typeof setupSlackTrace>[2];
+    record?: (call: RecordedWireCall) => void;
+    beforeStep?: (step: DeliveryTraceInStep) => void;
+    normalize?: boolean;
+  } = {},
+) {
+  const {
+    name = scenario,
+    steps = slackTraceScenarios[scenario],
+    configure,
+    record,
+    beforeStep,
+    normalize,
+  } = options;
+  return runDeliveryTraceScenario({
+    scenario: { name, steps },
+    setup: async (recorder) => {
+      const dispatch = await setupSlackTrace(
+        {
+          recordWireCall(call) {
+            record?.(call);
+            recorder.recordWireCall(call);
+          },
+        },
+        scenario,
+        configure,
+      );
+      if (!beforeStep) {
+        return dispatch;
+      }
+      return async (step) => {
+        beforeStep(step);
+        await dispatch(step);
+      };
+    },
+    normalize: normalize ? createSlackTsNormalizer() : undefined,
+  });
+}
+
 describe("slack delivery trace goldens", () => {
-  for (const scenarioName of Object.keys(slackTraceScenarios) as SlackTraceScenarioName[]) {
-    it(`records ${scenarioName}`, async () => {
-      const events = await runDeliveryTraceScenario({
-        scenario: { name: scenarioName, steps: slackTraceScenarios[scenarioName] },
-        setup: (recorder) => setupSlackTrace(recorder, scenarioName),
-        normalize: createSlackTsNormalizer(),
+  it.each(["compact", "inferred-compact", "partial", "card"] as const)(
+    "keeps native mention policy through serialized %s posts and edits",
+    async (mode) => {
+      await assertSlackProgressMentionHttpTrace({
+        mode,
+        setup: (recorder, client) =>
+          setupSlackTrace(
+            recorder,
+            mode === "partial" ? "cancel-mid-stream" : "progress-compact-commentary",
+            (prepared) => {
+              if (mode !== "partial") {
+                prepared.account.config.streaming = {
+                  mode: "progress",
+                  progress: {
+                    ...(mode === "inferred-compact" ? {} : { style: mode }),
+                    nativeTaskCards: false,
+                    label: false,
+                    maxLineChars: 1000,
+                    commentary: true,
+                    toolProgress: false,
+                  },
+                };
+              }
+            },
+            client,
+          ),
       });
+      expect(traceRuntimeError).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["explicit progress mode", { mode: "progress" }, undefined, "hourglass_flowing_sand"],
+    [
+      "thread-only native cards",
+      { progress: { nativeTaskCards: true } },
+      undefined,
+      "hourglass_flowing_sand",
+    ],
+    [
+      "empty card with hidden tool activity",
+      { progress: { style: "card", nativeTaskCards: false, toolProgress: false } },
+      "",
+      undefined,
+    ],
+  ] as const)(
+    "leaves only the final answer on a top-level turn with %s",
+    async (_name, streaming, typingReaction, emoji) => {
+      const events = await runSlackTrace("progress-session-card", {
+        name: "quiet-top-level",
+        configure: (prepared) => {
+          prepared.replyToMode = "off";
+          prepared.account.config = { streaming, typingReaction };
+          prepared.ctx.typingReaction = typingReaction ?? "";
+        },
+      });
+      const out = events.filter((event) => event.dir === "out");
+      expect(out.map((event) => event.kind)).toEqual(
+        emoji ? ["reactions.add", "chat.postMessage", "reactions.remove"] : ["chat.postMessage"],
+      );
+      expect(collectSlackWireTexts(events)).toEqual(["The session card is complete."]);
+      for (const reaction of out.filter((event) => event.kind.startsWith("reactions."))) {
+        expect(reaction.data).toMatchObject({
+          payload: { channel: CHANNEL_ID, timestamp: INBOUND_TS, name: emoji },
+        });
+      }
+      expect(traceRuntimeError).not.toHaveBeenCalled();
+    },
+  );
+
+  it("shows top-level commentary with only root commentary opted in", async () => {
+    const events = await runSlackTrace("progress-compact-commentary", {
+      name: "explicit-top-level-commentary",
+      configure: (prepared) => {
+        prepared.replyToMode = "off";
+        prepared.ctx.cfg.channels = {
+          slack: {
+            streaming: { progress: { commentary: true } },
+            accounts: { default: { streaming: { progress: { nativeTaskCards: true } } } },
+          },
+        };
+        prepared.account.config = mergeSlackAccountConfig(prepared.ctx.cfg, "default");
+      },
+    });
+    expect(traceState.turn?.replyOptions).toMatchObject({
+      commentaryProgressEnabled: true,
+      commentaryPayloadsEnabled: true,
+    });
+    const wireTexts = collectSlackWireTexts(events);
+    expect(wireTexts.some((text) => text.includes(COMPACT_COMMENTARY_TEXT_UPDATED))).toBe(true);
+    expect(wireTexts.filter((text) => text === COMPACT_FINAL_TEXT)).toHaveLength(1);
+    expect(events.some((event) => event.kind.startsWith("reactions."))).toBe(false);
+    expect(traceRuntimeError).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "error", isError: true, title: "Failed", label: undefined },
+    { name: "explicit title only", isError: false, title: "Review", label: "Review" },
+  ])(
+    "keeps an explicit top-level card with the $name terminal title",
+    async ({ isError, title, label }) => {
+      const events = await runSlackTrace("progress-session-card", {
+        name: "explicit-top-level-card",
+        steps: turnSteps(
+          { kind: "tool-progress", name: "read", phase: "start" },
+          { kind: "advance", ms: 2000 },
+          { kind: "final", text: "The answer.", isError },
+        ),
+        configure: (prepared) => {
+          prepared.replyToMode = "off";
+          prepared.account.config = {
+            streaming: { progress: { style: "card", toolProgress: true, label } },
+          };
+        },
+      });
+      const posts = events.filter((event) => event.kind === "chat.postMessage");
+      expect(posts.map((event) => event.data)).toMatchObject([
+        { payload: { text: `${label ? `${label}\n\n` : ""}Read — running\n\n1 tool · 2s` } },
+        { payload: { text: "The answer." } },
+      ]);
+      expect(events.findLast((event) => event.kind === "chat.update")?.data).toMatchObject({
+        payload: {
+          text: `${title ? `${title}\n\n` : ""}Read — running\n\nOpen in OpenClaw`,
+        },
+      });
+      expect(
+        events.some((event) => event.kind === "chat.delete" || event.kind.startsWith("reactions.")),
+      ).toBe(false);
+    },
+  );
+
+  it.each(["native", "card"])(
+    "links the dispatched session from the %s surface",
+    async (surface) => {
+      const events = await runSlackTrace("progress-session-card", {
+        name: "dispatched-session-link",
+        configure: (prepared) => {
+          prepared.message.thread_ts = INBOUND_TS;
+          prepared.message.ts = "1767225600.000200";
+          prepared.replyToMode = "off";
+          prepared.ctxPayload.SessionKey = `agent:trace-agent:slack:channel:c0trace:thread:${INBOUND_TS}`;
+          prepared.ctx.cfg.session = { mainKey: "inbox" };
+          if (surface === "native") {
+            prepared.account.config = {};
+          }
+        },
+      });
+      const out = events.filter((event) => event.dir === "out");
+      const url =
+        "https://team.openclaw.ai/openclaw/chat/trace-agent/slack/channel/c0trace/thread/1767225600%2E000100";
+      if (surface === "native") {
+        expect(out.some((event) => event.kind === "chat.postMessage")).toBe(false);
+        expect(out.filter((event) => event.kind === "chat.startStream")).toHaveLength(1);
+        expect(out.find((event) => event.kind === "chat.startStream")?.data).toMatchObject({
+          payload: { thread_ts: INBOUND_TS, task_display_mode: "plan" },
+        });
+        expect(out).toContainEqual(
+          expect.objectContaining({
+            kind: "chat.appendStream",
+            data: expect.objectContaining({
+              payload: expect.objectContaining({
+                chunks: expect.arrayContaining([
+                  expect.objectContaining({
+                    type: "task_update",
+                    id: "openclaw_summary",
+                    title: "Completed",
+                    status: "complete",
+                    sources: [{ type: "url_source", url, text: "Open in OpenClaw" }],
+                  }),
+                ]),
+              }),
+            }),
+          }),
+        );
+        expect(
+          collectSlackWireTexts(events).filter((text) =>
+            text.includes("The session card is complete."),
+          ),
+        ).toHaveLength(1);
+      } else {
+        const terminal = out.findLast((event) => event.kind === "chat.update");
+        expect(terminal?.data).toMatchObject({
+          payload: {
+            blocks: expect.arrayContaining([
+              expect.objectContaining({
+                type: "actions",
+                elements: [expect.objectContaining({ type: "button", url })],
+              }),
+            ]),
+          },
+        });
+      }
+    },
+  );
+
+  for (const scenarioName of [
+    "short-final-native-rejection",
+    "final-blocks-and-text",
+    "cancel-mid-stream",
+    "progress-compact-commentary",
+    "progress-native-unified",
+    "native-prose-then-exec-failed",
+    "preview-exec-failed-then-prose",
+  ] as const) {
+    it(`records ${scenarioName}`, async () => {
+      const events = await runSlackTrace(scenarioName, { normalize: true });
       expectDeliveryTraceMatchesGolden({
         goldenUrl: new URL(`./__traces__/${scenarioName}.trace.jsonl`, import.meta.url),
         events,
       });
+      const wireTexts = collectSlackWireTexts(events);
+      expect(wireTexts.join("\n")).not.toMatch(/Exec failed/i);
+      if (
+        scenarioName === "native-prose-then-exec-failed" ||
+        scenarioName === "preview-exec-failed-then-prose"
+      ) {
+        expect(wireTexts.some((text) => text.includes(EXEC_FAILED_PROSE))).toBe(true);
+      }
     });
   }
 
+  it("discards a Slack-stopped native stream without a duplicate final or stop request", async () => {
+    let streamTs: string | undefined;
+    const events = await runSlackTrace("progress-native-unified", {
+      name: "slack-stopped-native-stream",
+      steps: turnSteps(
+        { kind: "partial", text: NATIVE_PROGRESS_NARRATION },
+        { kind: "tool-progress", name: "write", phase: "start" },
+        // The progress compositor emits its initial card at 1500ms.
+        { kind: "advance", ms: 2000 },
+        { kind: "cancel" },
+        { kind: "final", text: "Late answer that must not be posted" },
+      ),
+      record: (call) => {
+        if (call.method === "chat.startStream") {
+          streamTs = (call.result as { ts?: string })?.ts;
+        }
+      },
+      beforeStep: (step) => {
+        if (step.kind === "cancel") {
+          expect(streamTs).toBeDefined();
+          markSlackStreamsStopped(traceState.client as unknown as WebClient, CHANNEL_ID, [
+            streamTs!,
+          ]);
+        }
+      },
+      normalize: true,
+    });
+    const outMethods = events.filter((event) => event.dir === "out").map((event) => event.kind);
+    expect(outMethods).toContain("chat.startStream");
+    expect(outMethods).not.toContain("chat.stopStream");
+    expect(outMethods).not.toContain("chat.postMessage");
+    expect(collectSlackWireTexts(events).join("\n")).not.toContain("Late answer");
+    expect(traceRuntimeError).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    "keeps top-level native output below later ingress (Slack Stop: %s)",
+    async (stoppedBySlack) =>
+      assertSlackSteeringTransportTrace({
+        stoppedBySlack,
+        channelId: CHANNEL_ID,
+        inboundTs: INBOUND_TS,
+        setup: (recorder) => setupSlackTrace(recorder, "streaming-happy-native"),
+        getClient: () => traceState.client as unknown as WebClient,
+        assertNoRuntimeError: () => expect(traceRuntimeError).not.toHaveBeenCalled(),
+      }),
+  );
+
   it("removes a progress card detached by a later human message", async () => {
     let progressEvents = 0;
-    const events = await runDeliveryTraceScenario({
-      scenario: {
-        name: "progress-session-card-detached",
-        steps: [
-          { kind: "reply-start" },
-          { kind: "tool-progress", name: "read", phase: "start" },
-          { kind: "advance", ms: 2000 },
-          { kind: "tool-progress", name: "write", phase: "start" },
-          { kind: "advance", ms: 2000 },
-          { kind: "final", text: "The replacement session card is complete." },
-          { kind: "idle" },
-        ],
-      },
-      setup: async (recorder) => {
-        const dispatch = await setupSlackTrace(recorder, "progress-session-card");
-        return async (step) => {
-          if (step.kind === "tool-progress") {
-            progressEvents += 1;
-            if (progressEvents === 2) {
-              traceState.tsCounter += 1;
-              noteSlackDraftConversationMessage({
-                accountId: "default",
-                channelId: CHANNEL_ID,
-                threadTs: INBOUND_TS,
-                messageTs: `1767225601.${String(traceState.tsCounter).padStart(6, "0")}`,
-                userId: "U_SECOND",
-                botUserId: "UBOT",
-              });
-            }
+    const events = await runSlackTrace("progress-session-card", {
+      name: "progress-session-card-detached",
+      steps: turnSteps(
+        { kind: "tool-progress", name: "read", phase: "start" },
+        { kind: "advance", ms: 2000 },
+        { kind: "tool-progress", name: "write", phase: "start" },
+        { kind: "advance", ms: 2000 },
+        { kind: "final", text: "The replacement session card is complete." },
+      ),
+      beforeStep: (step) => {
+        if (step.kind === "tool-progress") {
+          progressEvents += 1;
+          if (progressEvents === 2) {
+            traceState.tsCounter += 1;
+            noteSlackDraftConversationMessage({
+              accountId: "default",
+              channelId: CHANNEL_ID,
+              threadTs: INBOUND_TS,
+              messageTs: `1767225601.${String(traceState.tsCounter).padStart(6, "0")}`,
+              userId: "U_SECOND",
+              botUserId: "UBOT",
+            });
           }
-          await dispatch(step);
-        };
+        }
       },
-      normalize: createSlackTsNormalizer(),
+      normalize: true,
     });
 
     const workingPosts = events.filter(
       (event) =>
-        event.kind === "chat.postMessage" && JSON.stringify(event.data).includes("🔄 *Working*"),
+        event.kind === "chat.postMessage" && JSON.stringify(event.data).includes('"blocks"'),
     );
     expect(workingPosts).toHaveLength(2);
     const firstCardId = (workingPosts[0]?.data as { result?: { ts?: string } } | undefined)?.result
@@ -768,7 +915,7 @@ describe("slack delivery trace goldens", () => {
         (event) =>
           event.kind === "chat.update" &&
           (event.data as { target?: string } | undefined)?.target === secondCardId &&
-          JSON.stringify(event.data).includes("✅ *Working*"),
+          JSON.stringify(event.data).includes("Open in OpenClaw"),
       ),
     ).toBe(true);
   });

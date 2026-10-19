@@ -1,78 +1,129 @@
 /* @vitest-environment jsdom */
 
-import { TaskStatus } from "@lit/task";
-import { nothing } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import type { SkillsLibraryListResult } from "@openclaw/gateway-protocol";
+import { createComponent, flush } from "solid-js";
+import { afterEach, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/context.ts";
+import type { AgentsListResult } from "../api/types.ts";
+import type { ApplicationContext } from "../app/context.ts";
+import { createGatewayMetadataObserver } from "../app/gateway-observers.ts";
+import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
+import { createApplicationGateway } from "../test-helpers/application-context-fixtures.ts";
+import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
-import type { SessionsRouteData } from "./sessions/route.ts";
-import type { SkillsRouteData } from "./skills/skills-page.ts";
-import type { UsageRefreshPolicy } from "./usage/refresh-policy.ts";
-import type { UsageRouteData } from "./usage/usage-page.ts";
-import "./cron/cron-page.ts";
-import "./debug/debug-page.ts";
-import "./logs/logs-page.ts";
-import "./sessions/sessions-page.ts";
-import "./skills/skills-page.ts";
-import "./tasks/tasks-page.ts";
-import "./usage/usage-page.ts";
+import { EMPTY_MODEL_PROVIDERS_DATA } from "./model-providers/load.ts";
+import {
+  createAuthStatus,
+  createEmptyModelProvidersRouteData,
+  createPage as createModelProvidersPage,
+  drainPageUpdates,
+  mountPage as mountModelProvidersPage,
+  unmountPage as unmountModelProvidersPage,
+} from "./model-providers/model-providers-page.test-support.tsx";
+import {
+  createContext as createSessionsContext,
+  createSessions,
+} from "./sessions/sessions-page.test-support.ts";
+import { SessionsPage } from "./sessions/sessions-page.tsx";
+import { SkillsPage, type SkillsRouteData } from "./skills/skills-page.tsx";
+import { createSkill } from "./skills/view.test-support.ts";
+import type { UsageRouteData } from "./usage/types.ts";
+import {
+  cacheSnapshot,
+  cleanupUsagePageTest,
+  createPage as createUsagePage,
+} from "./usage/usage-page.test-support.ts";
+import "./model-providers/model-providers-page.tsx";
 
 // Mirrors the module-private default usage TTL asserted below.
 const USAGE_PAYLOAD_TTL_MS = 5 * 60_000;
 
-type TestPage = HTMLElement & {
-  context: ApplicationContext;
-  render: () => unknown;
-  readonly updateComplete: Promise<boolean>;
-};
-
-type TestGatewayController = {
-  applySnapshot: (
-    snapshot: ApplicationGatewaySnapshot,
-    binding: { initial: boolean; sourceChanged: boolean },
-  ) => void;
-};
-
-function applyPageGatewaySnapshot(
-  page: TestPage & { gateway: TestGatewayController },
-  snapshot: ApplicationGatewaySnapshot,
-) {
-  page.gateway.applySnapshot(snapshot, { initial: false, sourceChanged: false });
+function usageResult(key?: string): NonNullable<UsageRouteData["result"]> {
+  return {
+    ...cacheSnapshot("fresh").result,
+    sessions: key ? [{ key, usage: null }] : [],
+  };
 }
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((nextResolve, nextReject) => {
-    resolve = nextResolve;
-    reject = nextReject;
+const emptySkillLibrary = {
+  entries: [],
+  profileId: null,
+  multipleProfiles: false,
+  defaultTarget: "workspace",
+  canManageWorkspace: true,
+  defaultSelectionLimit: 64,
+} satisfies SkillsLibraryListResult;
+
+function mockClient(handlers: Record<string, () => unknown>, fallback?: () => unknown) {
+  const request = vi.fn(async (method: string) => {
+    const handler = handlers[method] ?? fallback;
+    if (!handler) {
+      throw new Error(`Unexpected request: ${method}`);
+    }
+    return handler();
   });
-  return { promise, reject, resolve };
+  return { request, client: { request } as unknown as GatewayBrowserClient };
+}
+
+function modelClient(authStatus: () => unknown, hash: string) {
+  return mockClient(
+    {
+      "models.authStatus": authStatus,
+      "models.list": () => ({ models: [] }),
+      "config.get": () => ({ config: {}, hash }),
+      "usage.status": () => ({ updatedAt: 2, providers: [] }),
+      "sessions.usage": () => ({ aggregates: { byProvider: [] } }),
+    },
+    () => ({}),
+  );
+}
+
+function skillsClient(handlers: Record<string, () => unknown>) {
+  return mockClient({ "skills.library.list": () => emptySkillLibrary, ...handlers });
+}
+
+function agentContext(client: GatewayBrowserClient) {
+  return contextWithClient(client, {
+    connected: true,
+    agentsList: { defaultId: "main", agents: [{ id: "main" }] },
+    selectedAgentId: "main",
+  });
+}
+
+function securityVerdicts(withReasons = false) {
+  return {
+    schema: "openclaw.skills.security-verdicts.v1",
+    items: [
+      {
+        registry: "https://clawhub.ai",
+        ok: true,
+        decision: "pass",
+        requestedSlug: "agentreceipt",
+        requestedVersion: "1.2.3",
+        securityStatus: "clean",
+        ...(withReasons ? { reasons: [] } : {}),
+      },
+    ],
+  };
 }
 
 function gatewayWithClient(
   client: GatewayBrowserClient,
   connected: boolean,
 ): ApplicationContext["gateway"] {
-  const snapshot: ApplicationGatewaySnapshot = {
+  const source = createApplicationGateway();
+  source.publish({
+    ...source.gateway.snapshot,
     client,
     phase: connected ? "connected" : "stopped",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: null,
-    assistantAgentId: null,
+    hello: gatewayHelloForMethods([]),
     sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  };
-  return {
-    snapshot,
-    eventLog: [],
-    subscribe: () => () => undefined,
-    subscribeEvents: () => () => undefined,
-    subscribeEventLog: () => () => undefined,
-  } as unknown as ApplicationContext["gateway"];
+  });
+  return source.gateway;
 }
 
 function contextWithClient(
@@ -81,655 +132,531 @@ function contextWithClient(
     connected?: boolean;
     agentsList?: unknown;
     ensureList?: () => Promise<unknown>;
+    selectedAgentId?: string | null;
   } = {},
 ): ApplicationContext {
   const subscribe = () => () => undefined;
   const agentsList = options.agentsList ?? null;
+  const createSelection = () => ({
+    state: {
+      selectedId: options.selectedAgentId ?? null,
+      scopeId: options.selectedAgentId ?? null,
+    },
+    intentRevision: 0,
+    set: vi.fn(),
+    setScope: vi.fn(),
+    subscribe,
+  });
   return {
-    basePath: "",
     gateway: gatewayWithClient(client, options.connected ?? false),
     agents: {
       state: { agentsList, agentsLoading: false, agentsError: null },
       ensureList: options.ensureList ?? vi.fn(async () => agentsList),
       subscribe,
     },
-    agentIdentity: { get: () => undefined, ensure: vi.fn(async () => undefined), subscribe },
-    agentSelection: {
-      state: { selectedId: null, scopeId: null },
-      set: vi.fn(),
-      setScope: vi.fn(),
+    agentSelection: createSelection(),
+    settingsAgentSelection: createSelection(),
+    runtimeConfig: {
+      state: { configSnapshot: {}, configLoading: false },
+      ensureLoaded: vi.fn(async () => undefined),
       subscribe,
     },
-    channels: { subscribe },
-    runtimeConfig: { state: { configSnapshot: null }, subscribe },
-    sessions: {
-      state: { result: null, loading: false },
-      list: vi.fn(async () => null),
-      listSnapshot: () => ({ result: null, agentId: null, loading: false, error: null }),
-      subscribeList: () => () => undefined,
-      refreshList: vi.fn(async () => undefined),
+    overlays: {
+      snapshot: { updateRunning: false, updateReconciliationPending: false },
       subscribe,
     },
-    workboard: { subscribe },
     navigate: vi.fn(),
-    preload: vi.fn(async () => undefined),
   } as unknown as ApplicationContext;
 }
 
-function contextWithMutableGateway(client: GatewayBrowserClient) {
-  const context = contextWithClient(client, { connected: true });
-  let currentSnapshot = context.gateway.snapshot;
-  const listeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
-  const gateway = {
-    ...context.gateway,
-    get snapshot() {
-      return currentSnapshot;
-    },
-    subscribe: (listener: (snapshot: ApplicationGatewaySnapshot) => void) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-  } as ApplicationContext["gateway"];
+function contextWithMutableGateway(
+  client: GatewayBrowserClient,
+  options: { agentsList?: unknown; selectedAgentId?: string | null } = {},
+) {
+  const context = contextWithClient(client, { connected: true, ...options });
+  const { gateway, publish } = createApplicationGateway(context.gateway.snapshot);
   Object.defineProperty(context, "gateway", { value: gateway });
   return {
     context,
     emitConnected(connected: boolean) {
-      currentSnapshot = { ...currentSnapshot, phase: connected ? "connected" : "stopped" };
-      for (const listener of listeners) {
-        listener(currentSnapshot);
-      }
+      publish({
+        ...gateway.snapshot,
+        phase: connected ? "connected" : "stopped",
+        hello: connected ? gatewayHelloForMethods([]) : gateway.snapshot.hello,
+      });
     },
   };
 }
 
-function createPage(tagName: string, context: ApplicationContext): TestPage {
-  const page = document.createElement(tagName) as TestPage;
-  page.context = context;
-  page.render = () => nothing;
+function retireContext(context: ApplicationContext) {
+  const previous = context.gateway.snapshot;
+  createGatewayMetadataObserver(() => true).synchronize(previous, {
+    ...previous,
+    phase: "stopped",
+  });
+}
+
+async function mountUsagePage(
+  context: ApplicationContext,
+  result: UsageRouteData["result"],
+  gatewaySnapshot = context.gateway.snapshot,
+) {
+  const page = await createUsagePage(context.gateway.snapshot.client!, false, context);
+  page.routeData = {
+    gateway: context.gateway,
+    gatewaySnapshot,
+    query: {
+      startDate: "2026-07-08",
+      endDate: "2026-07-08",
+      scope: "family",
+      timeZone: "local",
+      agentId: null,
+    },
+    result,
+    costSummary: null,
+    loadedAtMs: Date.now(),
+    error: null,
+  };
+  document.body.append(page.element);
+  await page.updateComplete;
   return page;
 }
 
-async function replaceContext(
-  page: TestPage,
-  replacementClient: GatewayBrowserClient,
-  options: { connected?: boolean; agentsList?: unknown } = {},
-): Promise<void> {
-  page.remove();
-  page.context = contextWithClient(replacementClient, options);
-  document.body.append(page);
-  await page.updateComplete;
+function skillReport(
+  name: string,
+  overrides: Parameters<typeof createSkill>[0] = {},
+): NonNullable<SkillsRouteData["report"]> {
+  return {
+    workspaceDir: "/tmp/workspace",
+    managedSkillsDir: "/tmp/skills",
+    skills: [createSkill({ name, skillKey: name, ...overrides })],
+  };
+}
+
+function mountSkillsPage(
+  context: ApplicationContext,
+  report: SkillsRouteData["report"],
+  gatewaySnapshot = context.gateway.snapshot,
+) {
+  const provider = createSolidApplicationContextProvider(context);
+  const routeData: SkillsRouteData = {
+    gateway: context.gateway,
+    gatewaySnapshot,
+    agents: context.agents,
+    selectedAgentId: context.settingsAgentSelection.state.selectedId,
+    selectionIntentRevision: context.settingsAgentSelection.intentRevision,
+    report,
+    error: null,
+  };
+  const mounted = mountSolid(
+    () => createComponent(SkillsPage, { routeData, surface: "settings" }),
+    { wrapper: provider.wrapper },
+  );
+  let currentContext = context;
+  flush();
+  return {
+    find: (selector: string) =>
+      mounted.container.querySelector("openclaw-skills-page")!.querySelector<HTMLElement>(selector),
+    text: () => mounted.container.querySelector("openclaw-skills-page")!.textContent,
+    replaceContext(next: ApplicationContext) {
+      retireContext(currentContext);
+      currentContext = next;
+      provider.setContext(next);
+      flush();
+    },
+  };
+}
+
+function linkedSkillReport() {
+  return skillReport("Repo Skill", {
+    skillKey: "repo-skill",
+    clawhub: {
+      status: "linked",
+      valid: true,
+      registry: "https://clawhub.ai",
+      slug: "agentreceipt",
+      installedVersion: "1.2.3",
+      installedAt: 123,
+      originPath: "/tmp/.clawhub/origin.json",
+      lockPath: "/tmp/workspace/.clawhub/lock.json",
+    },
+  });
 }
 
 afterEach(() => {
+  cleanupUsagePageTest();
   document.body.replaceChildren();
   vi.restoreAllMocks();
 });
 
-describe("gateway source replacement across reconnect with a reused client", () => {
-  it("preserves matching sessions route data on the first bind", async () => {
-    const client = {} as GatewayBrowserClient;
-    const context = contextWithClient(client, { connected: true });
-    const routeData = {
-      gateway: context.gateway,
-      gatewaySnapshot: context.gateway.snapshot,
-      sessions: context.sessions,
-      result: { count: 1, sessions: [{ key: "old" }] },
-      loading: false,
-      error: null,
-      expandedSessionKey: null,
-      statusFilter: "active",
-    } as unknown as SessionsRouteData;
-    const page = createPage("openclaw-sessions-page", context) as TestPage & {
-      routeData: SessionsRouteData;
-      result: SessionsRouteData["result"];
-    };
-    page.routeData = routeData;
-
-    document.body.append(page);
-    await page.updateComplete;
-
-    expect(page.result?.sessions.map((session) => session.key)).toEqual(["old"]);
-    expect(context.sessions.list).not.toHaveBeenCalled();
+it("rejects usage route data from an earlier same-client gateway epoch", async () => {
+  const freshResult = usageResult("fresh");
+  const { client } = mockClient({ "sessions.usage": () => freshResult }, () => ({}));
+  const context = contextWithClient(client, { connected: true });
+  const page = await mountUsagePage(context, usageResult("stale"), {
+    ...context.gateway.snapshot,
+    hello: gatewayHelloForMethods([]),
   });
 
-  it("preserves matching usage route data on the first bind", async () => {
-    const request = vi.fn();
-    const client = { request } as unknown as GatewayBrowserClient;
-    const context = contextWithClient(client, { connected: true });
-    const result = { sessions: [{ key: "old" }] } as unknown as UsageRouteData["result"];
-    const routeData = {
-      gateway: context.gateway,
-      gatewaySnapshot: context.gateway.snapshot,
-      query: {
-        startDate: "2026-07-08",
-        endDate: "2026-07-08",
-        scope: "family",
-        timeZone: "local",
-        agentId: null,
-      },
-      result,
-      costSummary: null,
-      providerUsageSummary: null,
-      loadedAtMs: Date.now(),
-      error: null,
-    } satisfies UsageRouteData;
-    const page = createPage("openclaw-usage-page", context) as TestPage & {
-      routeData: UsageRouteData;
-      usageResult: UsageRouteData["result"];
-    };
-    page.routeData = routeData;
+  await waitForFast(() =>
+    expect(page.usageResult?.sessions.map(({ key }) => key)).toEqual(["fresh"]),
+  );
+});
 
-    document.body.append(page);
-    await page.updateComplete;
+it("retries a usage load interrupted by a same-client disconnect", async () => {
+  vi.spyOn(document, "hasFocus").mockReturnValue(true);
+  vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+  const interrupted = deferred<UsageRouteData["result"]>();
+  const freshResult = usageResult("fresh");
+  let usageRequestCount = 0;
+  const { client, request } = mockClient(
+    {
+      "sessions.usage": () => (++usageRequestCount === 1 ? interrupted.promise : freshResult),
+    },
+    () => ({}),
+  );
+  const harness = contextWithMutableGateway(client);
+  const page = await mountUsagePage(harness.context, usageResult("cached"));
+  const expectFresh = () =>
+    expect(page.usageResult?.sessions.map(({ key }) => key)).toEqual(["fresh"]);
+  void page.refresh();
+  await waitForFast(() => expect(usageRequestCount).toBe(1));
+  harness.emitConnected(false);
+  harness.emitConnected(true);
 
-    expect(page.usageResult).toBe(result);
-    expect(request).not.toHaveBeenCalled();
+  await waitForFast(() =>
+    expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(2),
+  );
+  await waitForFast(expectFresh);
+  interrupted.resolve(usageResult("stale"));
+  await Promise.resolve();
+  await Promise.resolve();
+  expectFresh();
+});
+
+it("gates same-client usage reconnects by payload age and page visibility", async () => {
+  const loadedAt = Date.now();
+  const clock = vi.spyOn(Date, "now").mockReturnValue(loadedAt);
+  vi.spyOn(document, "hasFocus").mockReturnValue(true);
+  const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+  const { client, request } = mockClient(
+    {
+      "sessions.usage": () => usageResult(),
+      "usage.status": () => ({ providers: [] }),
+    },
+    () => ({ daily: [] }),
+  );
+  const harness = contextWithMutableGateway(client);
+  const result = usageResult();
+  const page = await mountUsagePage(harness.context, result, {
+    ...harness.context.gateway.snapshot,
   });
 
-  it("rejects usage route data from an earlier same-client gateway epoch", async () => {
-    const freshResult = { sessions: [{ key: "fresh" }] } as unknown as UsageRouteData["result"];
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.usage") {
-        return freshResult;
-      }
-      return {};
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const context = contextWithClient(client, { connected: true });
-    const staleResult = { sessions: [{ key: "stale" }] } as unknown as UsageRouteData["result"];
-    const page = createPage("openclaw-usage-page", context) as TestPage & {
-      routeData: UsageRouteData;
-      usageResult: UsageRouteData["result"];
-    };
-    page.routeData = {
-      gateway: context.gateway,
-      gatewaySnapshot: { ...context.gateway.snapshot },
-      query: {
-        startDate: "2026-07-08",
-        endDate: "2026-07-08",
-        scope: "family",
-        timeZone: "local",
-        agentId: null,
-      },
-      result: staleResult,
-      costSummary: null,
-      providerUsageSummary: null,
-      loadedAtMs: Date.now(),
-      error: null,
-    };
-
-    document.body.append(page);
-    await page.updateComplete;
-    await waitForFast(() =>
-      expect(request).toHaveBeenCalledWith("sessions.usage", expect.any(Object)),
-    );
-    await waitForFast(() => expect(page.usageResult).toBe(freshResult));
-
-    expect(request).toHaveBeenCalledWith("sessions.usage", expect.any(Object));
-    expect(page.usageResult).not.toBe(staleResult);
+  expect(page.usageResult).toMatchObject({
+    totals: result.totals,
+    sessions: result.sessions,
   });
 
-  it("keeps loaded usage data across a same-client reconnect", async () => {
-    vi.spyOn(document, "hasFocus").mockReturnValue(true);
-    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
-    const request = vi.fn();
-    const client = { request } as unknown as GatewayBrowserClient;
-    const context = contextWithClient(client, { connected: true });
-    const result = { sessions: [{ key: "cached" }] } as unknown as UsageRouteData["result"];
-    const page = createPage("openclaw-usage-page", context) as TestPage & {
-      routeData: UsageRouteData;
-      gateway: TestGatewayController;
-    };
-    page.routeData = {
-      gateway: context.gateway,
-      gatewaySnapshot: context.gateway.snapshot,
-      query: {
-        startDate: "2026-07-08",
-        endDate: "2026-07-08",
-        scope: "family",
-        timeZone: "local",
-        agentId: null,
-      },
-      result,
-      costSummary: null,
-      providerUsageSummary: null,
-      loadedAtMs: Date.now(),
-      error: null,
-    };
+  // Route data carries only session usage; the page starts its own provider read.
+  expect(request.mock.calls.map(([method]) => method)).toEqual(["usage.status"]);
+  harness.emitConnected(false);
+  harness.emitConnected(true);
+  // Fresh session usage survives a same-client reconnect, even one that interrupts the
+  // page's provider read.
+  expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toEqual([]);
+  request.mockClear();
 
-    document.body.append(page);
-    await page.updateComplete;
-    applyPageGatewaySnapshot(page, {
-      ...context.gateway.snapshot,
-      phase: "stopped",
-    });
-    applyPageGatewaySnapshot(page, context.gateway.snapshot);
-    await Promise.resolve();
+  clock.mockReturnValue(loadedAt + USAGE_PAYLOAD_TTL_MS);
+  visibility.mockReturnValue("hidden");
+  harness.emitConnected(false);
+  harness.emitConnected(true);
+  expect(request).not.toHaveBeenCalled();
 
-    expect(request).not.toHaveBeenCalled();
+  visibility.mockReturnValue("visible");
+  document.dispatchEvent(new Event("visibilitychange"));
+  window.dispatchEvent(new Event("focus"));
+  await waitForFast(() => expect(page.usageLoading).toBe(false));
+  const initialMethods = request.mock.calls.map(([method]) => method);
+  expect(initialMethods.toSorted()).toEqual(["sessions.usage", "usage.status"]);
+
+  void page.refresh();
+  await waitForFast(() => expect(page.usageLoading).toBe(false));
+  expect(request).toHaveBeenCalledTimes(4);
+
+  const failedRefresh = deferred<never>();
+  request.mockImplementationOnce(() => failedRefresh.promise);
+  clock.mockReturnValue(loadedAt + 2 * USAGE_PAYLOAD_TTL_MS);
+  void page.refresh();
+  expect(request).toHaveBeenCalledTimes(6);
+  window.dispatchEvent(new Event("focus"));
+  failedRefresh.reject(new Error("connection interrupted"));
+  await waitForFast(() => expect(request).toHaveBeenCalledTimes(8));
+  await waitForFast(() => expect(page.usageLoading).toBe(false));
+});
+
+it("discards Model Providers work from a replaced source that reuses its client", async () => {
+  const staleAuth = deferred<unknown>();
+  let authCalls = 0;
+  const { client } = modelClient(
+    () =>
+      ++authCalls === 1
+        ? staleAuth.promise
+        : createAuthStatus([{ provider: "openai", displayName: "Fresh provider" }], 2),
+    "hash",
+  );
+  const page = createModelProvidersPage(agentContext(client));
+  const providerNames = () => page.view.props.cards.map((card) => card.displayName);
+  page.routeData = createEmptyModelProvidersRouteData(page.context);
+  mountModelProvidersPage(page);
+  await waitForFast(() => expect(authCalls).toBe(1));
+
+  retireContext(page.context);
+  unmountModelProvidersPage(page);
+  page.context = agentContext(client);
+  mountModelProvidersPage(page);
+  await page.updateComplete;
+  await waitForFast(() => expect(providerNames()).toContain("Fresh provider"));
+
+  staleAuth.resolve(createAuthStatus([{ provider: "openai", displayName: "Retired provider" }]));
+  await drainPageUpdates(page);
+  expect(providerNames()).toContain("Fresh provider");
+  expect(providerNames()).not.toContain("Retired provider");
+});
+
+it("rejects Model Providers route data from an earlier same-client gateway epoch", async () => {
+  const { client } = modelClient(
+    () => createAuthStatus([{ provider: "openai", displayName: "Fresh provider" }], 2),
+    "fresh",
+  );
+  const context = contextWithClient(client, {
+    connected: true,
+    selectedAgentId: "main",
   });
+  const staleData = {
+    ...EMPTY_MODEL_PROVIDERS_DATA,
+    authStatus: createAuthStatus([{ provider: "openai", displayName: "Retired provider" }]),
+  };
+  const page = createModelProvidersPage(context);
+  page.routeData = {
+    gateway: context.gateway,
+    gatewaySnapshot: { ...context.gateway.snapshot, hello: gatewayHelloForMethods([]) },
+    data: staleData,
+    client,
+    agentId: "main",
+    selectionIntentRevision: context.settingsAgentSelection.intentRevision,
+  };
 
-  it("retries a usage load interrupted by a same-client disconnect", async () => {
-    vi.spyOn(document, "hasFocus").mockReturnValue(true);
-    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
-    const interrupted = deferred<UsageRouteData["result"]>();
-    const freshResult = { sessions: [{ key: "fresh" }] } as unknown as UsageRouteData["result"];
-    let usageRequestCount = 0;
-    const request = vi.fn(async (method: string) => {
-      if (method !== "sessions.usage") {
-        return {};
-      }
-      usageRequestCount += 1;
-      return usageRequestCount === 1 ? interrupted.promise : freshResult;
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const context = contextWithClient(client, { connected: true });
-    const page = createPage("openclaw-usage-page", context) as TestPage & {
-      routeData: UsageRouteData;
-      usageResult: UsageRouteData["result"];
-      gateway: TestGatewayController;
-      refreshPolicy: UsageRefreshPolicy;
-    };
-    page.routeData = {
-      gateway: context.gateway,
-      gatewaySnapshot: context.gateway.snapshot,
-      query: {
-        startDate: "2026-07-08",
-        endDate: "2026-07-08",
-        scope: "family",
-        timeZone: "local",
-        agentId: null,
-      },
-      result: { sessions: [{ key: "cached" }] } as unknown as UsageRouteData["result"],
-      costSummary: null,
-      providerUsageSummary: null,
-      loadedAtMs: Date.now(),
-      error: null,
-    };
+  mountModelProvidersPage(page);
+  await waitForFast(() =>
+    expect(page.view.props.cards.map((card) => card.displayName)).toContain("Fresh provider"),
+  );
+  expect(page.view.props.cards.map((card) => card.displayName)).not.toContain("Retired provider");
+});
 
-    document.body.append(page);
-    await page.updateComplete;
-    page.refreshPolicy.request("manual");
-    await waitForFast(() => expect(usageRequestCount).toBe(1));
-    applyPageGatewaySnapshot(page, {
-      ...context.gateway.snapshot,
-      phase: "stopped",
-    });
-    applyPageGatewaySnapshot(page, context.gateway.snapshot);
-
-    await waitForFast(() =>
-      expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(2),
-    );
-    await waitForFast(() => expect(page.usageResult).toBe(freshResult));
-    interrupted.resolve({ sessions: [{ key: "stale" }] } as unknown as UsageRouteData["result"]);
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(page.usageResult).toBe(freshResult);
+it.each([false, true])("hydrates skill verdicts (disconnect: %s)", async (disconnect) => {
+  const pending = deferred<{ schema: string; items: unknown[] }>();
+  const verdicts = securityVerdicts(!disconnect);
+  let verdictRequests = 0;
+  const { client, request } = skillsClient({
+    ...(disconnect ? { "skills.status": () => linkedSkillReport() } : {}),
+    "skills.securityVerdicts": () =>
+      ++verdictRequests === 1 && disconnect ? pending.promise : verdicts,
   });
-
-  it("gates same-client usage reconnects by payload age and page visibility", async () => {
-    vi.spyOn(document, "hasFocus").mockReturnValue(true);
-    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.usage") {
-        return { sessions: [] };
-      }
-      if (method === "usage.status") {
-        return { providers: [] };
-      }
-      return { daily: [] };
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const harness = contextWithMutableGateway(client);
-    const result = { sessions: [] } as unknown as UsageRouteData["result"];
-    const page = createPage("openclaw-usage-page", harness.context) as TestPage & {
-      routeData: UsageRouteData;
-      readonly usageLoading: boolean;
-      refreshPolicy: UsageRefreshPolicy;
-    };
-    page.routeData = {
-      gateway: harness.context.gateway,
-      gatewaySnapshot: harness.context.gateway.snapshot,
-      query: {
-        startDate: "2026-07-08",
-        endDate: "2026-07-08",
-        scope: "family",
-        timeZone: "local",
-        agentId: null,
-      },
-      result,
-      costSummary: null,
-      providerUsageSummary: null,
-      loadedAtMs: Date.now(),
-      error: null,
-    };
-
-    document.body.append(page);
-    await page.updateComplete;
-
+  const harness = contextWithMutableGateway(client, {
+    agentsList: { defaultId: "main", agents: [{ id: "main" }] },
+    selectedAgentId: "main",
+  });
+  const mounted = mountSkillsPage(
+    harness.context,
+    linkedSkillReport(),
+    disconnect ? harness.context.gateway.snapshot : { ...harness.context.gateway.snapshot },
+  );
+  await waitForSolid(() =>
+    expect(mounted.find(".plugins-item")?.textContent).toContain(
+      disconnect ? "Refreshing" : "Clean",
+    ),
+  );
+  if (disconnect) {
+    const row = mounted.find(".plugins-item");
     harness.emitConnected(false);
-    harness.emitConnected(true);
-    expect(request).not.toHaveBeenCalled();
+    pending.resolve(verdicts);
+    await pending.promise;
+    await waitForSolid(() => expect(mounted.text()).not.toContain("Refreshing"));
+    expect(mounted.find(".plugins-item")).toBe(row);
+    expect(row?.textContent).toContain("Repo Skill");
+    expect(mounted.text()).not.toContain("Clean");
+    expect(mounted.find('[role="alert"]')).toBeNull();
+  } else {
+    expect(mounted.text()).toContain("Repo Skill");
+  }
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(request).toHaveBeenCalledWith("skills.library.list", { scope: "all" });
+  expect(request).toHaveBeenCalledWith("skills.securityVerdicts", { agentId: "main" });
+  if (!disconnect) {
+    return;
+  }
 
-    page.refreshPolicy.setLastLoadedAtMs(Date.now() - USAGE_PAYLOAD_TTL_MS);
-    visibility.mockReturnValue("hidden");
-    harness.emitConnected(false);
-    harness.emitConnected(true);
-    expect(request).not.toHaveBeenCalled();
+  harness.emitConnected(true);
+  await waitForSolid(() => expect(mounted.find(".plugins-item")?.textContent).toContain("Clean"));
+  expect(mounted.text()).toContain("Repo Skill");
+  expect(verdictRequests).toBe(2);
 
-    visibility.mockReturnValue("visible");
-    document.dispatchEvent(new Event("visibilitychange"));
-    window.dispatchEvent(new Event("focus"));
-    await waitForFast(() => expect(page.usageLoading).toBe(false));
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "sessions.usage",
-      "usage.cost",
-      "usage.status",
-    ]);
+  mounted.replaceContext(contextWithClient(client));
+  await waitForSolid(() => expect(mounted.find(".plugins-item")).toBeNull());
+  expect(mounted.text()).not.toContain("Repo Skill");
+  expect(mounted.text()).not.toContain("Clean");
+});
 
-    page.refreshPolicy.request("manual");
-    await waitForFast(() => expect(page.usageLoading).toBe(false));
-    expect(request).toHaveBeenCalledTimes(6);
-
-    const failedRefresh = deferred<never>();
-    request.mockImplementationOnce(() => failedRefresh.promise);
-    page.refreshPolicy.setLastLoadedAtMs(Date.now() - USAGE_PAYLOAD_TTL_MS);
-    page.refreshPolicy.request("manual");
-    expect(request).toHaveBeenCalledTimes(9);
-    page.refreshPolicy.request("focus");
-    failedRefresh.reject(new Error("connection interrupted"));
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(12));
-    await waitForFast(() => expect(page.usageLoading).toBe(false));
+it("rejects skills route data from an earlier same-client gateway epoch", async () => {
+  const freshReport = skillReport("Fresh skill");
+  const { client } = skillsClient({ "skills.status": () => freshReport });
+  const context = agentContext(client);
+  const mounted = mountSkillsPage(context, skillReport("Stale skill"), {
+    ...context.gateway.snapshot,
+    hello: gatewayHelloForMethods([]),
   });
-  it("preserves matching skills route data on the first bind", async () => {
-    const request = vi.fn();
-    const client = { request } as unknown as GatewayBrowserClient;
-    const agentsList = { defaultId: "main", agents: [{ id: "main" }] };
-    const context = contextWithClient(client, { connected: true, agentsList });
-    const report = { skills: [{ skillKey: "old" }] } as unknown as SkillsRouteData["report"];
-    const routeData = {
-      gateway: context.gateway,
-      gatewaySnapshot: context.gateway.snapshot,
-      agents: context.agents,
-      agentsList,
-      selectedAgentId: "main",
-      report,
-      error: null,
-    } as unknown as SkillsRouteData;
-    const page = createPage("openclaw-skills-page", context) as TestPage & {
-      routeData: SkillsRouteData;
-      skillsReport: SkillsRouteData["report"];
-    };
-    document.body.append(page);
-    page.routeData = routeData;
-    await page.updateComplete;
+  await waitForSolid(() => expect(mounted.text()).toContain("Fresh skill"));
+  expect(mounted.text()).not.toContain("Stale skill");
+});
 
-    expect(page.skillsReport).toBe(report);
-    expect(request).not.toHaveBeenCalled();
+it("clears sessions loaded by the previous provider", async () => {
+  const client = {} as GatewayBrowserClient;
+  const row = { key: "old", sessionId: "old-session", kind: "direct" as const };
+  const stopList = vi.fn();
+  const context = createSessionsContext(
+    gatewayWithClient(client, true),
+    createSessions({
+      listSnapshot: () => ({
+        result: sessionsResult([row], 1),
+        agentId: null,
+        loading: false,
+        error: null,
+      }),
+      subscribeList: () => stopList,
+    }),
+  );
+  const provider = createSolidApplicationContextProvider(context);
+  const mounted = mountSolid(() => createComponent(SessionsPage, {}), {
+    wrapper: provider.wrapper,
   });
+  const page = () => mounted.container.querySelector<HTMLElement>("openclaw-sessions-page")!;
+  const checkbox = () =>
+    page().querySelector<HTMLInputElement>('input[aria-label="Select session: old"]');
+  await waitForSolid(() => expect(checkbox()).not.toBeNull());
+  const previousPage = page();
+  checkbox()!.click();
+  await waitForSolid(() =>
+    expect(page().querySelector(".data-table-bulk-bar")?.textContent).toContain("1 selected"),
+  );
 
-  it("defers fallback skills loading until route data is initialized and invalidated", async () => {
-    const request = vi.fn(async () => ({ skills: [] }));
-    const client = { request } as unknown as GatewayBrowserClient;
-    const agentsList = {
-      defaultId: "main",
-      mainKey: "main",
-      scope: "global" as const,
-      agents: [{ id: "main" }, { id: "research" }],
-    };
-    const context = contextWithClient(client, { connected: true, agentsList });
-    const page = createPage("openclaw-skills-page", context) as TestPage & {
-      routeData: SkillsRouteData;
-    };
-
-    document.body.append(page);
-    await page.updateComplete;
-    expect(request).not.toHaveBeenCalled();
-
-    page.routeData = {
-      gateway: context.gateway,
-      gatewaySnapshot: { ...context.gateway.snapshot },
-      agents: context.agents,
-      agentsList,
-      selectedAgentId: "main",
-      report: null,
-      error: null,
-    };
-    await waitForFast(() =>
-      expect(request).toHaveBeenCalledWith("skills.status", { agentId: "main" }),
-    );
+  retireContext(context);
+  // Application contexts are owner-scoped: the keyed provider retires the old page tree.
+  provider.setContext(createSessionsContext(gatewayWithClient(client, false), createSessions()));
+  await waitForSolid(() => {
+    expect(page()).not.toBe(previousPage);
+    expect(previousPage.isConnected).toBe(false);
+    expect(checkbox()).toBeNull();
+    expect(page().querySelector(".data-table-bulk-bar")).toBeNull();
+    expect(stopList).toHaveBeenCalledOnce();
   });
+});
 
-  it("rejects skills route data from an earlier same-client gateway epoch", async () => {
-    const freshReport = { skills: [{ skillKey: "fresh" }] } as unknown as SkillsRouteData["report"];
-    const request = vi.fn(async (method: string) =>
-      method === "skills.status" ? freshReport : undefined,
-    );
-    const client = { request } as unknown as GatewayBrowserClient;
-    const agentsList = { defaultId: "main", agents: [{ id: "main" }] };
-    const context = contextWithClient(client, { connected: true, agentsList });
-    const staleReport = { skills: [{ skillKey: "stale" }] } as unknown as SkillsRouteData["report"];
-    const page = createPage("openclaw-skills-page", context) as TestPage & {
-      routeData: SkillsRouteData;
-      skillsReport: SkillsRouteData["report"];
-    };
-    page.routeData = {
-      gateway: context.gateway,
-      gatewaySnapshot: { ...context.gateway.snapshot },
-      agents: context.agents,
-      agentsList,
-      selectedAgentId: "main",
-      report: staleReport,
-      error: null,
-    } as unknown as SkillsRouteData;
-
-    document.body.append(page);
-    await page.updateComplete;
-    await waitForFast(() => expect(page.skillsReport).toBe(freshReport));
-
-    expect(page.skillsReport).not.toBe(staleReport);
+it("clears usage loaded by the previous provider", async () => {
+  const result = usageResult("old");
+  const providerUsage = {
+    updatedAt: 1,
+    providers: [{ provider: "old", displayName: "Old provider", windows: [] }],
+  };
+  const { client } = mockClient({
+    "sessions.usage": () => result,
+    "usage.status": () => providerUsage,
+    "sessions.usage.timeseries": () => null,
+    "sessions.usage.logs": () => ({ logs: [] }),
   });
-
-  it("clears sessions loaded by the previous provider", async () => {
-    const client = {} as GatewayBrowserClient;
-    const page = createPage("openclaw-sessions-page", contextWithClient(client)) as TestPage & {
-      result: unknown;
-      selectedKeys: Set<string>;
-      checkpointItemsByKey: Record<string, unknown>;
-    };
-    document.body.append(page);
-    await page.updateComplete;
-    page.result = { sessions: [{ key: "old" }] };
-    page.selectedKeys = new Set(["old"]);
-    page.checkpointItemsByKey = { old: [{}] };
-
-    await replaceContext(page, client);
-
-    expect(page.result).toBeNull();
-    expect(page.selectedKeys.size).toBe(0);
-    expect(page.checkpointItemsByKey).toEqual({});
+  const context = contextWithClient(client, { connected: true });
+  const page = await createUsagePage(client, false, context);
+  document.body.append(page.element);
+  await page.updateComplete;
+  await page.refresh();
+  expect(page.usageResult).toMatchObject({
+    totals: result.totals,
+    sessions: result.sessions,
   });
+  expect(page.read().data.providerUsage).toEqual(providerUsage.providers);
+  page.read().callbacks.details.onSelectSession("old", false, ["old"]);
+  expect(page.usageSelectedSessions).toEqual(["old"]);
 
-  it("clears usage loaded by the previous provider", async () => {
-    const client = {} as GatewayBrowserClient;
-    const page = createPage("openclaw-usage-page", contextWithClient(client)) as TestPage & {
-      usageResult: unknown;
-      providerUsageSummary: unknown;
-      usageSelectedSessions: string[];
-    };
-    document.body.append(page);
-    await page.updateComplete;
-    page.usageResult = { sessions: [{ key: "old" }] };
-    page.providerUsageSummary = { providers: [{ provider: "old" }] };
-    page.usageSelectedSessions = ["old"];
+  retireContext(page.context);
+  page.remove();
+  page.context = contextWithClient(client);
+  document.body.append(page.element);
+  await page.updateComplete;
 
-    await replaceContext(page, client);
+  expect(page.usageResult).toBeNull();
+  expect(page.read().data.providerUsage).toEqual([]);
+  expect(page.usageSelectedSessions).toEqual([]);
+});
 
-    expect(page.usageResult).toBeNull();
-    expect(page.providerUsageSummary).toBeNull();
-    expect(page.usageSelectedSessions).toEqual([]);
+it("clears skills and cached cards loaded by the previous provider", async () => {
+  const report = skillReport("Old provider skill");
+  report.skills[0]!.skillCard = { present: true, path: "/tmp/skill-card.md", sizeBytes: 20 };
+  const { client } = skillsClient({
+    "skills.skillCard": () => ({
+      skillKey: "Old provider skill",
+      content: "# Previous provider card",
+    }),
   });
+  const context = agentContext(client);
+  const mounted = mountSkillsPage(context, report);
+  const details = () => mounted.find('[aria-label="Open Old provider skill details"]');
+  await waitForSolid(() => expect(details()).not.toBeNull());
+  details()!.click();
+  await waitForSolid(() => expect(mounted.find("#skill-detail-tab-card")).not.toBeNull());
+  mounted
+    .find("#skill-detail-tab-card")!
+    .dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
+  await waitForSolid(() => expect(mounted.text()).toContain("Previous provider card"));
+  mounted.replaceContext(contextWithClient(client));
+  await waitForSolid(() => expect(mounted.text()).not.toContain("Old provider skill"));
+  expect(mounted.text()).not.toContain("Previous provider card");
+  expect(mounted.find("#skill-detail-panel")).toBeNull();
+});
 
-  it("clears skills loaded by the previous provider", async () => {
-    const client = {} as GatewayBrowserClient;
-    const page = createPage("openclaw-skills-page", contextWithClient(client)) as TestPage & {
-      skillsReport: unknown;
-      skillCardContents: Record<string, string>;
-    };
-    document.body.append(page);
-    await page.updateComplete;
-    page.skillsReport = { skills: [{ key: "old" }] };
-    page.skillCardContents = { old: "stale" };
-
-    await replaceContext(page, client);
-
-    expect(page.skillsReport).toBeNull();
-    expect(page.skillCardContents).toEqual({});
+it("discards an agent list from a replaced skills source that reuses its client", async () => {
+  const pending = deferred<AgentsListResult | null>();
+  const ensureList = vi.fn(() => pending.promise);
+  const { client, request } = skillsClient({
+    "skills.status": () => skillReport("Replacement agent skill"),
   });
-
-  it("discards an agent list from a replaced skills source that reuses its client", async () => {
-    const pending = deferred<SkillsRouteData["agentsList"]>();
-    const ensureList = vi.fn(() => pending.promise);
-    const request = vi.fn(async () => ({ skills: [] }));
-    const client = { request } as unknown as GatewayBrowserClient;
-    const context = contextWithClient(client, { connected: true, ensureList });
-    const page = createPage("openclaw-skills-page", context) as TestPage & {
-      loadAgents: () => Promise<void>;
-    };
-    document.body.append(page);
-    await page.updateComplete;
-    const load = page.loadAgents();
-    await waitForFast(() => expect(ensureList).toHaveBeenCalled());
-    const replacementAgents = {
-      defaultId: "fresh",
-      mainKey: "agent:fresh:main",
-      scope: "all",
-      agents: [{ id: "fresh" }],
-    } as unknown as NonNullable<SkillsRouteData["agentsList"]>;
-    await replaceContext(page, client, { connected: true, agentsList: replacementAgents });
-
-    pending.resolve({
-      defaultId: "stale",
-      mainKey: "agent:stale:main",
-      scope: "all",
-      agents: [{ id: "stale" }],
-    } as unknown as NonNullable<SkillsRouteData["agentsList"]>);
-    await load;
-
-    expect(page.context.agents.state.agentsList).toBe(replacementAgents);
+  const context = contextWithClient(client, { connected: true, ensureList });
+  const mounted = mountSkillsPage(context, null, {
+    ...context.gateway.snapshot,
+    hello: gatewayHelloForMethods([]),
   });
-
-  it("clears logs loaded by the previous provider", async () => {
-    const client = {} as GatewayBrowserClient;
-    const page = createPage("openclaw-logs-page", contextWithClient(client)) as TestPage & {
-      logsEntries: unknown[];
-      logsFile: string | null;
-      logsCursor: number | null;
-    };
-    document.body.append(page);
-    await page.updateComplete;
-    page.logsEntries = [{ raw: "old" }];
-    page.logsFile = "/old/provider.log";
-    page.logsCursor = 42;
-
-    await replaceContext(page, client);
-
-    expect(page.logsEntries).toEqual([]);
-    expect(page.logsFile).toBeNull();
-    expect(page.logsCursor).toBeNull();
-  });
-
-  it("clears diagnostics data and errors loaded by the previous provider", async () => {
-    const client = {} as GatewayBrowserClient;
-    const page = createPage("openclaw-debug-page", contextWithClient(client)) as TestPage & {
-      debugStatus: unknown;
-      debugHealth: unknown;
-      debugModels: unknown[];
-      debugHeartbeat: unknown;
-      debugDiagnosticsError: string | null;
-    };
-    document.body.append(page);
-    await page.updateComplete;
-    page.debugStatus = { version: "old" };
-    page.debugHealth = { ok: true };
-    page.debugModels = [{ id: "old" }];
-    page.debugHeartbeat = { provider: "old" };
-    page.debugDiagnosticsError = "old diagnostics failure";
-
-    await replaceContext(page, client);
-
-    expect(page.debugStatus).toBeNull();
-    expect(page.debugHealth).toBeNull();
-    expect(page.debugModels).toEqual([]);
-    expect(page.debugHeartbeat).toBeNull();
-    expect(page.debugDiagnosticsError).toBeNull();
-  });
-
-  it("discards diagnostics from a replaced provider that reuses its client", async () => {
-    const pending = deferred<unknown>();
-    const request = vi.fn(() => pending.promise);
-    const client = { request } as unknown as GatewayBrowserClient;
-    const context = contextWithClient(client, { connected: true });
-    const page = createPage("openclaw-debug-page", context) as TestPage & {
-      debugStatus: unknown;
-      diagnosticsTask: { run: () => Promise<void>; status: TaskStatus };
-    };
-    page.debugStatus = { seeded: true };
-    document.body.append(page);
-    await page.updateComplete;
-    page.debugStatus = null;
-
-    const load = page.diagnosticsTask.run();
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(3));
-    await replaceContext(page, client);
-    pending.resolve({ models: [{ id: "stale" }], stale: true });
-    await load;
-
-    expect(page.diagnosticsTask.status).not.toBe(TaskStatus.PENDING);
-    expect(page.debugStatus).toBeNull();
-  });
-
-  it("clears cron data loaded by the previous provider", async () => {
-    const client = {} as GatewayBrowserClient;
-    const page = createPage("openclaw-cron-page", contextWithClient(client)) as TestPage & {
-      cron: {
-        client: GatewayBrowserClient | null;
-        connected: boolean;
-        cronStatus: unknown;
-        cronJobs: unknown[];
-      };
-    };
-    document.body.append(page);
-    await page.updateComplete;
-    page.cron = {
-      ...page.cron,
-      cronStatus: { enabled: true },
-      cronJobs: [{ id: "old" }],
-    };
-
-    await replaceContext(page, client);
-
-    expect(page.cron.cronStatus).toBeNull();
-    expect(page.cron.cronJobs).toEqual([]);
-  });
-
-  it("clears tasks loaded by the previous provider", async () => {
-    const client = {} as GatewayBrowserClient;
-    const page = createPage("openclaw-tasks-page", contextWithClient(client)) as TestPage & {
-      tasks: unknown[];
-      error: string | null;
-      cancellingTaskIds: Set<string>;
-    };
-    document.body.append(page);
-    await page.updateComplete;
-    page.tasks = [{ taskId: "old" }];
-    page.error = "old error";
-    page.cancellingTaskIds = new Set(["old"]);
-
-    await replaceContext(page, client);
-
-    expect(page.tasks).toEqual([]);
-    expect(page.error).toBeNull();
-    expect(page.cancellingTaskIds.size).toBe(0);
-  });
+  await waitForSolid(() => expect(ensureList).toHaveBeenCalled());
+  const replacementAgents = {
+    defaultId: "fresh",
+    mainKey: "agent:fresh:main",
+    scope: "all",
+    agents: [{ id: "fresh" }],
+  };
+  mounted.replaceContext(
+    contextWithClient(client, {
+      connected: true,
+      agentsList: replacementAgents,
+      selectedAgentId: "fresh",
+    }),
+  );
+  await waitForSolid(() => expect(mounted.text()).toContain("Replacement agent skill"));
+  pending.resolve({
+    defaultId: "stale",
+    mainKey: "agent:stale:main",
+    scope: "all",
+    agents: [{ id: "stale" }],
+  } as unknown as AgentsListResult);
+  await pending.promise;
+  flush();
+  expect(mounted.text()).toContain("Replacement agent skill");
+  expect(request).toHaveBeenCalledWith("skills.status", { agentId: "fresh" });
+  expect(request).not.toHaveBeenCalledWith("skills.status", { agentId: "stale" });
 });

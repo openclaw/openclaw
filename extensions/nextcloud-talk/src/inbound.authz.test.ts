@@ -1,32 +1,62 @@
-// Nextcloud Talk tests cover inbound.authz plugin behavior.
-import { describe, expect, it, vi } from "vitest";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import type { PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 import { handleNextcloudTalkInbound } from "./inbound.js";
 import { setNextcloudTalkRuntime } from "./runtime.js";
 import type { CoreConfig, NextcloudTalkInboundMessage } from "./types.js";
 
+const resolveNextcloudTalkAuthenticatedMediaSourceMock = vi.hoisted(() => vi.fn());
+const beforeEnvelopePreparation = vi.hoisted(() => vi.fn(async () => {}));
+
+vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
+  return {
+    ...actual,
+    createChannelInboundEnvelopeBuilderAsync: async (
+      params: Parameters<typeof actual.createChannelInboundEnvelopeBuilderAsync>[0],
+    ) => {
+      await beforeEnvelopePreparation();
+      return actual.createChannelInboundEnvelopeBuilderAsync(params);
+    },
+  };
+});
+
+vi.mock("./inbound-media.js", async () => {
+  const actual = await vi.importActual<typeof import("./inbound-media.js")>("./inbound-media.js");
+  return {
+    ...actual,
+    resolveNextcloudTalkAuthenticatedMediaSource: resolveNextcloudTalkAuthenticatedMediaSourceMock,
+  };
+});
+
 function installInboundAuthzRuntime(params: {
   readAllowFromStore: () => Promise<string[]>;
   buildMentionRegexes: () => RegExp[];
 }) {
-  setNextcloudTalkRuntime({
-    channel: {
-      pairing: {
-        readAllowFromStore: params.readAllowFromStore,
+  const saveRemoteMedia = vi.fn();
+  setNextcloudTalkRuntime(
+    createPluginRuntimeMock({
+      channel: {
+        media: { saveRemoteMedia },
+        pairing: {
+          readAllowFromStore: params.readAllowFromStore,
+        },
+        commands: {
+          shouldHandleTextCommands: () => false,
+        },
+        text: {
+          hasControlCommand: () => false,
+        },
+        mentions: {
+          buildMentionRegexes: params.buildMentionRegexes,
+          matchesMentionPatterns: () => false,
+        },
       },
-      commands: {
-        shouldHandleTextCommands: () => false,
-      },
-      text: {
-        hasControlCommand: () => false,
-      },
-      mentions: {
-        buildMentionRegexes: params.buildMentionRegexes,
-        matchesMentionPatterns: () => false,
-      },
-    },
-  } as unknown as PluginRuntime);
+    }),
+  );
+  return { saveRemoteMedia };
 }
 
 function createTestRuntimeEnv(): RuntimeEnv {
@@ -36,101 +66,439 @@ function createTestRuntimeEnv(): RuntimeEnv {
   } as unknown as RuntimeEnv;
 }
 
+const TEST_ATTACHMENT = {
+  fileId: "9001",
+  name: "receipt.pdf",
+  mimeType: "application/pdf",
+  declaredSizeBytes: 1_024,
+  shareUrl: "https://cloud.example.com/s/redacted-share-token",
+  hideDownload: false,
+} as const;
+
+function createMessage(
+  overrides: Partial<NextcloudTalkInboundMessage> = {},
+): NextcloudTalkInboundMessage {
+  return {
+    messageId: "m-1",
+    roomToken: "room-1",
+    roomName: "Room 1",
+    senderId: "attacker",
+    senderName: "Attacker",
+    text: "hello",
+    mediaType: "text/plain",
+    timestamp: Date.now(),
+    isGroupChat: true,
+    ...overrides,
+  };
+}
+
+function createAccount(
+  config: ResolvedNextcloudTalkAccount["config"] = {},
+): ResolvedNextcloudTalkAccount {
+  return {
+    accountId: "default",
+    enabled: true,
+    baseUrl: "",
+    secret: "",
+    secretSource: "none",
+    config: {
+      dmPolicy: "pairing",
+      allowFrom: [],
+      groupPolicy: "allowlist",
+      groupAllowFrom: [],
+      ...config,
+    },
+  };
+}
+
 describe("nextcloud-talk inbound authz", () => {
+  beforeEach(() => {
+    beforeEnvelopePreparation.mockReset();
+  });
+
+  it.each(["revoked", "cancelled", "failed"] as const)(
+    "does not fetch or stage media when envelope preparation is %s",
+    async (outcome) => {
+      resolveNextcloudTalkAuthenticatedMediaSourceMock.mockReset();
+      let paired = true;
+      const abortController = new AbortController();
+      const preparationError = new Error("envelope preparation retired");
+      const coreRuntime = createPluginRuntimeMock();
+      coreRuntime.channel.pairing.readAllowFromStore = vi.fn(async () =>
+        paired ? ["paired-user"] : [],
+      );
+      setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
+      beforeEnvelopePreparation.mockImplementationOnce(async () => {
+        if (outcome === "revoked") {
+          paired = false;
+        } else if (outcome === "cancelled") {
+          abortController.abort(preparationError);
+        } else {
+          throw preparationError;
+        }
+      });
+      const account = {
+        ...createAccount({ mediaAllowFrom: ["paired-user"] }),
+        baseUrl: "https://cloud.example.com",
+      };
+      const inbound = handleNextcloudTalkInbound({
+        message: createMessage({
+          senderId: "paired-user",
+          isGroupChat: false,
+          attachment: TEST_ATTACHMENT,
+        }),
+        account,
+        config: { channels: { "nextcloud-talk": account.config } },
+        runtime: createTestRuntimeEnv(),
+        turnAdoptionLifecycle: {
+          abortSignal: abortController.signal,
+          onAdopted: vi.fn(),
+          onDeferred: vi.fn(),
+          onAdoptionFinalizing: vi.fn(),
+          onAbandoned: vi.fn(),
+        },
+      });
+
+      if (outcome === "revoked") {
+        await inbound;
+      } else {
+        await expect(inbound).rejects.toBe(preparationError);
+      }
+
+      expect(beforeEnvelopePreparation).toHaveBeenCalledOnce();
+      expect(resolveNextcloudTalkAuthenticatedMediaSourceMock).not.toHaveBeenCalled();
+      expect(coreRuntime.channel.media.saveRemoteMedia).not.toHaveBeenCalled();
+      expect(coreRuntime.channel.inbound.buildContext).not.toHaveBeenCalled();
+      expect(coreRuntime.channel.inbound.dispatch).not.toHaveBeenCalled();
+    },
+  );
+
+  it("revalidates paired DM access after metadata lookup before staging", async () => {
+    resolveNextcloudTalkAuthenticatedMediaSourceMock.mockReset();
+    let paired = true;
+    const readAllowFromStore = vi.fn(async () => (paired ? ["paired-user"] : []));
+    const coreRuntime = createPluginRuntimeMock();
+    coreRuntime.channel.pairing.readAllowFromStore = readAllowFromStore;
+    setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
+    resolveNextcloudTalkAuthenticatedMediaSourceMock.mockImplementationOnce(async () => {
+      paired = false;
+      return {
+        ok: true,
+        url: "https://cloud.example.com/remote.php/dav/files/test-user/Talk/receipt.pdf",
+        origin: "https://cloud.example.com",
+        hostname: "cloud.example.com",
+        fileName: "receipt.pdf",
+        authorization: "Basic redacted-test-credential",
+      };
+    });
+    const runtime = createTestRuntimeEnv();
+
+    await handleNextcloudTalkInbound({
+      message: {
+        messageId: "m-revoked",
+        roomToken: "room-revoked",
+        roomName: "Revoked DM",
+        senderId: "paired-user",
+        senderName: "Paired User",
+        text: "inspect this",
+        mediaType: "text/plain",
+        timestamp: Date.now(),
+        isGroupChat: false,
+        attachment: TEST_ATTACHMENT,
+      },
+      account: {
+        ...createAccount({ mediaAllowFrom: ["paired-user"] }),
+        baseUrl: "https://cloud.example.com",
+      },
+      config: {
+        channels: {
+          "nextcloud-talk": {
+            dmPolicy: "pairing",
+            allowFrom: [],
+          },
+        },
+      },
+      runtime,
+    });
+
+    expect(resolveNextcloudTalkAuthenticatedMediaSourceMock).toHaveBeenCalledTimes(1);
+    expect(coreRuntime.channel.media.saveRemoteMedia).not.toHaveBeenCalled();
+    expect(readAllowFromStore).toHaveBeenCalledTimes(3);
+    expect(coreRuntime.channel.inbound.buildContext).not.toHaveBeenCalled();
+    expect(coreRuntime.channel.inbound.dispatch).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(
+      "nextcloud-talk: drop DM room-revoked (authorization changed)",
+    );
+  });
+
+  it("deletes staged media when paired DM access changes during download", async () => {
+    resolveNextcloudTalkAuthenticatedMediaSourceMock.mockReset();
+    let paired = true;
+    const readAllowFromStore = vi.fn(async () => (paired ? ["paired-user"] : []));
+    const coreRuntime = createPluginRuntimeMock();
+    const deleteMediaBuffer = vi.fn(async () => undefined);
+    Object.assign(coreRuntime.channel.media, { deleteMediaBuffer });
+    coreRuntime.channel.pairing.readAllowFromStore = readAllowFromStore;
+    coreRuntime.channel.media.saveRemoteMedia = vi.fn(async () => {
+      paired = false;
+      return {
+        id: "staged-revoked.pdf",
+        path: "/tmp/staged-revoked.pdf",
+        size: 1_024,
+        contentType: "application/pdf",
+      };
+    });
+    setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
+    resolveNextcloudTalkAuthenticatedMediaSourceMock.mockResolvedValueOnce({
+      ok: true,
+      url: "https://cloud.example.com/remote.php/dav/files/test-user/Talk/receipt.pdf",
+      origin: "https://cloud.example.com",
+      hostname: "cloud.example.com",
+      fileName: "receipt.pdf",
+      authorization: "Basic redacted-test-credential",
+    });
+    const runtime = createTestRuntimeEnv();
+
+    await handleNextcloudTalkInbound({
+      message: {
+        messageId: "m-revoked-during-download",
+        roomToken: "room-revoked-during-download",
+        roomName: "Revoked During Download",
+        senderId: "paired-user",
+        senderName: "Paired User",
+        text: "inspect this",
+        mediaType: "text/plain",
+        timestamp: Date.now(),
+        isGroupChat: false,
+        attachment: TEST_ATTACHMENT,
+      },
+      account: {
+        ...createAccount({ mediaAllowFrom: ["paired-user"] }),
+        baseUrl: "https://cloud.example.com",
+      },
+      config: {
+        channels: {
+          "nextcloud-talk": {
+            dmPolicy: "pairing",
+            allowFrom: [],
+          },
+        },
+      },
+      runtime,
+    });
+
+    expect(resolveNextcloudTalkAuthenticatedMediaSourceMock).toHaveBeenCalledTimes(1);
+    expect(coreRuntime.channel.media.saveRemoteMedia).toHaveBeenCalledTimes(1);
+    expect(readAllowFromStore).toHaveBeenCalledTimes(4);
+    expect(deleteMediaBuffer).toHaveBeenCalledWith("staged-revoked.pdf");
+    expect(coreRuntime.channel.inbound.buildContext).not.toHaveBeenCalled();
+    expect(coreRuntime.channel.inbound.dispatch).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(
+      "nextcloud-talk: drop DM room-revoked-during-download (authorization changed)",
+    );
+  });
+
+  it("deletes media staged while the ingress claim is cancelled", async () => {
+    resolveNextcloudTalkAuthenticatedMediaSourceMock.mockReset();
+    const abortController = new AbortController();
+    const abortReason = new Error("ingress claim retired");
+    const readAllowFromStore = vi.fn(async () => ["paired-user"]);
+    const coreRuntime = createPluginRuntimeMock();
+    const deleteMediaBuffer = vi.fn(async () => undefined);
+    Object.assign(coreRuntime.channel.media, { deleteMediaBuffer });
+    coreRuntime.channel.pairing.readAllowFromStore = readAllowFromStore;
+    coreRuntime.channel.media.saveRemoteMedia = vi.fn(async () => {
+      abortController.abort(abortReason);
+      return {
+        id: "staged-cancelled.pdf",
+        path: "/tmp/staged-cancelled.pdf",
+        size: 1_024,
+        contentType: "application/pdf",
+      };
+    });
+    setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
+    resolveNextcloudTalkAuthenticatedMediaSourceMock.mockResolvedValueOnce({
+      ok: true,
+      url: "https://cloud.example.com/remote.php/dav/files/test-user/Talk/receipt.pdf",
+      origin: "https://cloud.example.com",
+      hostname: "cloud.example.com",
+      fileName: "receipt.pdf",
+      authorization: "Basic redacted-test-credential",
+    });
+    const runtime = createTestRuntimeEnv();
+
+    await expect(
+      handleNextcloudTalkInbound({
+        message: {
+          messageId: "m-cancelled-during-download",
+          roomToken: "room-cancelled-during-download",
+          roomName: "Cancelled During Download",
+          senderId: "paired-user",
+          senderName: "Paired User",
+          text: "inspect this",
+          mediaType: "text/plain",
+          timestamp: Date.now(),
+          isGroupChat: false,
+          attachment: TEST_ATTACHMENT,
+        },
+        account: {
+          ...createAccount({ mediaAllowFrom: ["paired-user"] }),
+          baseUrl: "https://cloud.example.com",
+        },
+        config: {
+          channels: {
+            "nextcloud-talk": {
+              dmPolicy: "pairing",
+              allowFrom: [],
+            },
+          },
+        },
+        runtime,
+        turnAdoptionLifecycle: {
+          abortSignal: abortController.signal,
+          onAdopted: vi.fn(),
+          onDeferred: vi.fn(),
+          onAdoptionFinalizing: vi.fn(),
+          onAbandoned: vi.fn(),
+        },
+      }),
+    ).rejects.toBe(abortReason);
+
+    expect(resolveNextcloudTalkAuthenticatedMediaSourceMock).toHaveBeenCalledWith(
+      expect.objectContaining({ signal: abortController.signal }),
+    );
+    expect(coreRuntime.channel.media.saveRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestInit: expect.objectContaining({ signal: abortController.signal }),
+      }),
+    );
+    expect(deleteMediaBuffer).toHaveBeenCalledWith("staged-cancelled.pdf");
+    expect(coreRuntime.channel.inbound.buildContext).not.toHaveBeenCalled();
+    expect(coreRuntime.channel.inbound.dispatch).not.toHaveBeenCalled();
+    expect(runtime.log).not.toHaveBeenCalledWith(
+      expect.stringContaining("inbound media non-outcome"),
+    );
+  });
+
+  it("does not yield between the final cancellation fence and dispatch", async () => {
+    resolveNextcloudTalkAuthenticatedMediaSourceMock.mockReset();
+    const abortController = new AbortController();
+    const abortReason = new Error("ingress claim retired");
+    const coreRuntime = createPluginRuntimeMock();
+    coreRuntime.channel.pairing.readAllowFromStore = vi.fn(async () => ["paired-user"]);
+    coreRuntime.channel.media.saveRemoteMedia = vi.fn(async () => ({
+      id: "staged-active.pdf",
+      path: "/tmp/staged-active.pdf",
+      size: 1_024,
+      contentType: "application/pdf",
+    }));
+    const buildContextMock = vi.mocked(coreRuntime.channel.inbound.buildContext);
+    const buildContext = buildContextMock.getMockImplementation();
+    buildContextMock.mockImplementation((params) => {
+      queueMicrotask(() => abortController.abort(abortReason));
+      return buildContext!(params);
+    });
+    let abortedAtDispatch: boolean | undefined;
+    vi.mocked(coreRuntime.channel.inbound.dispatch).mockImplementationOnce(async () => {
+      abortedAtDispatch = abortController.signal.aborted;
+      return undefined as never;
+    });
+    setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
+    resolveNextcloudTalkAuthenticatedMediaSourceMock.mockResolvedValueOnce({
+      ok: true,
+      url: "https://cloud.example.com/remote.php/dav/files/test-user/Talk/receipt.pdf",
+      origin: "https://cloud.example.com",
+      hostname: "cloud.example.com",
+      fileName: "receipt.pdf",
+      authorization: "Basic redacted-test-credential",
+    });
+
+    await handleNextcloudTalkInbound({
+      message: {
+        messageId: "m-final-cancellation-fence",
+        roomToken: "room-final-cancellation-fence",
+        roomName: "Final Cancellation Fence",
+        senderId: "paired-user",
+        senderName: "Paired User",
+        text: "inspect this",
+        mediaType: "text/plain",
+        timestamp: Date.now(),
+        isGroupChat: false,
+        attachment: TEST_ATTACHMENT,
+      },
+      account: {
+        ...createAccount({ mediaAllowFrom: ["paired-user"] }),
+        baseUrl: "https://cloud.example.com",
+      },
+      config: {
+        channels: {
+          "nextcloud-talk": {
+            dmPolicy: "pairing",
+            allowFrom: [],
+          },
+        },
+      },
+      runtime: createTestRuntimeEnv(),
+      turnAdoptionLifecycle: {
+        abortSignal: abortController.signal,
+        onAdopted: vi.fn(),
+        onDeferred: vi.fn(),
+        onAdoptionFinalizing: vi.fn(),
+        onAbandoned: vi.fn(),
+      },
+    });
+
+    expect(abortedAtDispatch).toBe(false);
+    expect(coreRuntime.channel.inbound.dispatch).toHaveBeenCalledOnce();
+  });
+
   it("does not treat DM pairing-store entries as group allowlist entries", async () => {
     const readAllowFromStore = vi.fn(async () => ["attacker"]);
     const buildMentionRegexes = vi.fn(() => [/@openclaw/i]);
 
-    installInboundAuthzRuntime({ readAllowFromStore, buildMentionRegexes });
+    const { saveRemoteMedia } = installInboundAuthzRuntime({
+      readAllowFromStore,
+      buildMentionRegexes,
+    });
 
-    const message: NextcloudTalkInboundMessage = {
-      messageId: "m-1",
-      roomToken: "room-1",
-      roomName: "Room 1",
-      senderId: "attacker",
-      senderName: "Attacker",
-      text: "hello",
-      mediaType: "text/plain",
-      timestamp: Date.now(),
-      isGroupChat: true,
-    };
-
-    const account: ResolvedNextcloudTalkAccount = {
-      accountId: "default",
-      enabled: true,
-      baseUrl: "",
-      secret: "",
-      secretSource: "none", // pragma: allowlist secret
-      config: {
-        dmPolicy: "pairing",
-        allowFrom: [],
-        groupPolicy: "allowlist",
-        groupAllowFrom: [],
-      },
-    };
-
-    const config: CoreConfig = {
-      channels: {
-        "nextcloud-talk": {
-          dmPolicy: "pairing",
-          allowFrom: [],
-          groupPolicy: "allowlist",
-          groupAllowFrom: [],
-        },
-      },
-    };
+    const account = createAccount({ mediaAllowFrom: ["*"] });
+    const config: CoreConfig = { channels: { "nextcloud-talk": account.config } };
 
     await handleNextcloudTalkInbound({
-      message,
+      message: createMessage({ attachment: TEST_ATTACHMENT }),
       account,
       config,
-      runtime: createTestRuntimeEnv(),
+      runtime: createRuntimeSpies(),
     });
 
     expect(readAllowFromStore).not.toHaveBeenCalled();
     expect(buildMentionRegexes).not.toHaveBeenCalled();
+    expect(saveRemoteMedia).not.toHaveBeenCalled();
   });
 
   it("matches group rooms by token instead of colliding room names", async () => {
     const readAllowFromStore = vi.fn(async () => []);
     const buildMentionRegexes = vi.fn(() => [/@openclaw/i]);
 
-    installInboundAuthzRuntime({ readAllowFromStore, buildMentionRegexes });
-
-    const message: NextcloudTalkInboundMessage = {
-      messageId: "m-2",
-      roomToken: "room-attacker",
-      roomName: "Room Trusted",
-      senderId: "trusted-user",
-      senderName: "Trusted User",
-      text: "hello",
-      mediaType: "text/plain",
-      timestamp: Date.now(),
-      isGroupChat: true,
-    };
-
-    const account: ResolvedNextcloudTalkAccount = {
-      accountId: "default",
-      enabled: true,
-      baseUrl: "",
-      secret: "",
-      secretSource: "none",
-      config: {
-        dmPolicy: "pairing",
-        allowFrom: [],
-        groupPolicy: "allowlist",
-        groupAllowFrom: ["trusted-user"],
-        rooms: {
-          "room-trusted": {
-            enabled: true,
-          },
-        },
-      },
-    };
+    const { saveRemoteMedia } = installInboundAuthzRuntime({
+      readAllowFromStore,
+      buildMentionRegexes,
+    });
 
     await handleNextcloudTalkInbound({
-      message,
-      account,
+      message: createMessage({
+        messageId: "m-2",
+        roomToken: "room-attacker",
+        roomName: "Room Trusted",
+        senderId: "trusted-user",
+        senderName: "Trusted User",
+        attachment: TEST_ATTACHMENT,
+      }),
+      account: createAccount({
+        groupAllowFrom: ["trusted-user"],
+        mediaAllowFrom: ["*"],
+        rooms: { "room-trusted": { enabled: true } },
+      }),
       config: {
         channels: {
           "nextcloud-talk": {
@@ -139,9 +507,99 @@ describe("nextcloud-talk inbound authz", () => {
           },
         },
       },
+      runtime: createRuntimeSpies(),
+    });
+
+    expect(buildMentionRegexes).not.toHaveBeenCalled();
+    expect(saveRemoteMedia).not.toHaveBeenCalled();
+  });
+
+  it("does not fetch media for a disabled room", async () => {
+    const readAllowFromStore = vi.fn(async () => []);
+    const buildMentionRegexes = vi.fn(() => [/@openclaw/i]);
+    const { saveRemoteMedia } = installInboundAuthzRuntime({
+      readAllowFromStore,
+      buildMentionRegexes,
+    });
+
+    await handleNextcloudTalkInbound({
+      message: {
+        messageId: "m-3",
+        roomToken: "room-disabled",
+        roomName: "Disabled Room",
+        senderId: "trusted-user",
+        senderName: "Trusted User",
+        text: "@openclaw inspect this",
+        mediaType: "text/plain",
+        timestamp: Date.now(),
+        isGroupChat: true,
+        attachment: TEST_ATTACHMENT,
+      },
+      account: {
+        ...createAccount({
+          groupAllowFrom: ["trusted-user"],
+          mediaAllowFrom: ["*"],
+          rooms: { "room-disabled": { enabled: false } },
+        }),
+        baseUrl: "https://cloud.example.com",
+      },
+      config: {
+        channels: {
+          "nextcloud-talk": {
+            groupPolicy: "allowlist",
+            groupAllowFrom: ["trusted-user"],
+            rooms: { "room-disabled": { enabled: false } },
+          },
+        },
+      },
       runtime: createTestRuntimeEnv(),
     });
 
     expect(buildMentionRegexes).not.toHaveBeenCalled();
+    expect(saveRemoteMedia).not.toHaveBeenCalled();
+  });
+
+  it("does not fetch media for a sender denied by the nested room allowlist", async () => {
+    const readAllowFromStore = vi.fn(async () => []);
+    const buildMentionRegexes = vi.fn(() => [/@openclaw/i]);
+    const { saveRemoteMedia } = installInboundAuthzRuntime({
+      readAllowFromStore,
+      buildMentionRegexes,
+    });
+
+    await handleNextcloudTalkInbound({
+      message: {
+        messageId: "m-4",
+        roomToken: "room-locked",
+        roomName: "Locked Room",
+        senderId: "blocked-user",
+        senderName: "Blocked User",
+        text: "@openclaw inspect this",
+        mediaType: "text/plain",
+        timestamp: Date.now(),
+        isGroupChat: true,
+        attachment: TEST_ATTACHMENT,
+      },
+      account: {
+        ...createAccount({
+          mediaAllowFrom: ["*"],
+          rooms: { "room-locked": { allowFrom: ["trusted-user"] } },
+        }),
+        baseUrl: "https://cloud.example.com",
+      },
+      config: {
+        channels: {
+          "nextcloud-talk": {
+            groupPolicy: "allowlist",
+            groupAllowFrom: [],
+            rooms: { "room-locked": { allowFrom: ["trusted-user"] } },
+          },
+        },
+      },
+      runtime: createTestRuntimeEnv(),
+    });
+
+    expect(buildMentionRegexes).not.toHaveBeenCalled();
+    expect(saveRemoteMedia).not.toHaveBeenCalled();
   });
 });

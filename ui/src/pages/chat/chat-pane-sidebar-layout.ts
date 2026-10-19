@@ -1,51 +1,128 @@
-import { html, type TemplateResult } from "lit";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
+import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
+import type { ApplicationGateway } from "../../app/gateway.ts";
+import { ensureCustomElementDefined } from "../../app/lazy-custom-element.ts";
+import {
+  isStaleChunkImportError,
+  retryStaleChunkReloadWhenReachable,
+} from "../../app/stale-chunk-reload.ts";
+import type { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
+import type { BoardProvider } from "../../lib/board/provider.ts";
+import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
+import { uiConversationMatches } from "../../lib/sessions/session-key.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
+import type { SidebarRegionParams } from "./chat-pane-sidebar-view.tsx";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import type {
-  SidebarPanelDefinition,
-  SidebarPanelTemplates,
-  SidebarRegionCallbacks,
-} from "./components/chat-sidebar-region-types.ts";
-import type { SidebarFullMessageLoader } from "./components/chat-sidebar.ts";
+import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
+import type { SidebarFullMessageLoader } from "./components/chat-sidebar-content-types.ts";
+import type { SidebarRegionCallbacks } from "./components/chat-sidebar-region-types.ts";
+import { createChatWidgetLayout } from "./session-message-cache.ts";
 import {
   activatePanel,
+  toggleSidebarPanelExpanded,
   closeSlot,
   fitSidebarLayout,
-  isSidebarRegionCollapsed,
   openSlot,
   reorderPanel,
-  setSidebarDock,
-  setSidebarExpanded,
-  sidebarDock,
+  isSidebarSlotVisible,
   type SidebarLayout,
   type SidebarSlotId,
 } from "./sidebar-layout.ts";
 
 const DETAIL_FULL_MESSAGE_MAX_CHARS = 500_000;
-let sidebarRegionLoad: Promise<boolean> | null = null;
-const panelRuntimeLoads = new Map<SidebarSlotId, Promise<unknown>>();
+type LazyPanelRuntime = {
+  error?: Parameters<typeof LazyViewError>[0];
+  pending?: Promise<void>;
+};
 
-function ensurePanelRuntime(slot: SidebarSlotId) {
-  if (panelRuntimeLoads.has(slot)) {
-    return;
+type LazyElementKey = "region" | "detail-panel" | SidebarSlotId;
+type LazyElement = readonly [tagName: string, loadModule: () => Promise<unknown>];
+
+const LAZY_SIDEBAR_ELEMENTS: Partial<Record<LazyElementKey, LazyElement>> = {
+  dashboard: ["openclaw-board-view", () => import("../../components/board/board-view.ts")],
+  region: [
+    "openclaw-chat-sidebar-region",
+    () => import("./components/chat-sidebar-region.runtime.tsx"),
+  ],
+  // Not a slot key: the detail slot also renders tool output and status
+  // templates synchronously, so only its panel branch waits for this element.
+  "detail-panel": [
+    "openclaw-chat-detail-panel",
+    () => import("./components/chat-detail-panel.tsx"),
+  ],
+  terminal: [
+    "openclaw-terminal-panel",
+    () => import("../../components/terminal/terminal-panel-registration.ts"),
+  ],
+  "link-reader": [
+    "openclaw-link-reader-panel",
+    () => import("../../components/link-reader-panel.tsx"),
+  ],
+  browser: ["openclaw-browser-panel", () => import("../../components/browser/browser-panel.ts")],
+  desktop: ["openclaw-desktop-panel", () => import("../../components/desktop/desktop-panel.ts")],
+  portal: ["openclaw-portals-page", () => import("../portals/portals-page.tsx")],
+  companion: ["openclaw-chat-session-rail", () => import("./components/chat-session-rail.tsx")],
+  processes: [
+    "openclaw-chat-processes-panel",
+    () => import("./components/chat-processes-panel.tsx"),
+  ],
+  subagents: [
+    "openclaw-chat-subagents-panel",
+    () => import("./components/chat-subagents-panel.tsx"),
+  ],
+  discussion: [
+    "openclaw-session-discussion",
+    () => import("./components/session-discussion-panel.tsx"),
+  ],
+};
+
+const lazyRuntimes = new Map<LazyElementKey, LazyPanelRuntime>();
+const lazyListeners = new Set<() => void>();
+
+export const lazySidebarElements = {
+  get snapshot(): ReadonlyMap<LazyElementKey, LazyPanelRuntime> {
+    return lazyRuntimes;
+  },
+  subscribe(listener: () => void) {
+    lazyListeners.add(listener);
+    return () => lazyListeners.delete(listener);
+  },
+};
+
+export function ensureLazySidebarElement(key: LazyElementKey) {
+  const element = LAZY_SIDEBAR_ELEMENTS[key];
+  if (!element) {
+    return undefined;
   }
-  const load =
-    slot === "terminal"
-      ? import("../../components/terminal/terminal-panel-registration.ts")
-      : slot === "browser"
-        ? import("../../components/browser/browser-panel.ts")
-        : slot === "desktop"
-          ? import("../../components/desktop/desktop-panel.ts")
-          : slot === "companion"
-            ? import("./components/chat-session-rail.ts")
-            : slot === "discussion"
-              ? import("./components/session-discussion-panel.ts")
-              : null;
-  if (load) {
-    panelRuntimeLoads.set(slot, load);
+  const [tagName, loadModule] = element;
+  if (customElements.get(tagName)) {
+    lazyRuntimes.delete(key);
+    return undefined;
   }
+  const runtime = lazyRuntimes.get(key) ?? {};
+  lazyRuntimes.set(key, runtime);
+  if (runtime.error !== undefined) {
+    return runtime.error;
+  }
+  if (runtime.pending) {
+    return null;
+  }
+  runtime.pending = ensureCustomElementDefined(tagName, loadModule)
+    .catch((error: unknown) => {
+      runtime.error = {
+        error,
+        stale: isStaleChunkImportError(error),
+        onRetry: () => void retryStaleChunkReloadWhenReachable(),
+      };
+    })
+    .finally(() => {
+      delete runtime.pending;
+      lazyListeners.forEach((listener) => listener());
+    });
+  return null;
 }
 
 /**
@@ -55,22 +132,33 @@ function ensurePanelRuntime(slot: SidebarSlotId) {
  */
 export function sidebarRegionCallbacks(params: {
   state: ChatPageHost;
+  layout: SidebarLayout;
   closePanelSlot: (slot: SidebarSlotId) => void;
   openPanelSlot: (slot: SidebarSlotId) => void;
-  hideBoard: () => void;
   forgetDiscussionUrl: () => void;
   resizePanel: (columnId: string, size: number) => void;
   setPanelOpen: (open: boolean) => void;
 }): SidebarRegionCallbacks {
-  const { state } = params;
+  const { layout, state } = params;
   return {
     activatePanel: (panelId) => {
-      state.updateSidebarLayout(activatePanel(state.sidebarLayout, panelId));
+      const slot = layout.columns[0]?.panels.find((panel) => panel.id === panelId)?.slot;
+      if (slot === "dashboard" && !isSidebarSlotVisible(layout, "dashboard")) {
+        params.openPanelSlot(slot);
+      } else {
+        state.updateSidebarLayout(activatePanel(layout, panelId));
+      }
+      state.updateSidebarActivePanel(panelId);
+    },
+    togglePanelExpanded: (panelId) => {
+      state.updateSidebarLayout(toggleSidebarPanelExpanded(layout, panelId), {
+        dashboardPresentation: "personal",
+      });
       state.updateSidebarActivePanel(panelId);
     },
     closeSlot: (slot) => {
-      if (slot === "chat") {
-        params.hideBoard();
+      if (slot === "conversation") {
+        params.setPanelOpen(false);
         return;
       }
       if (slot === "discussion") {
@@ -80,63 +168,54 @@ export function sidebarRegionCallbacks(params: {
     },
     openSlot: params.openPanelSlot,
     reorderPanel: (panelId, targetPanelId, placement) =>
-      state.updateSidebarLayout(
-        reorderPanel(state.sidebarLayout, panelId, targetPanelId, placement),
-      ),
+      state.updateSidebarLayout(reorderPanel(layout, panelId, targetPanelId, placement)),
     resizePanel: params.resizePanel,
-    setDock: (dock) => state.updateSidebarLayout(setSidebarDock(state.sidebarLayout, dock)),
-    setExpanded: (expanded) =>
-      state.updateSidebarLayout(setSidebarExpanded(state.sidebarLayout, expanded)),
     setOpen: params.setPanelOpen,
   };
 }
 
-export function renderSidebarRegion(params: {
-  availableWidth: number;
-  callbacks: SidebarRegionCallbacks;
-  availableSlots: SidebarSlotId[];
-  layout: SidebarLayout;
-  narrow: boolean;
-  panelDefinitions?: SidebarPanelDefinition[];
-  panelActions: SidebarPanelTemplates;
-  panelTemplates: SidebarPanelTemplates;
-  primary: TemplateResult;
-}): TemplateResult {
-  const panelOpen = params.layout.open === true;
-  if (panelOpen && !customElements.get("openclaw-chat-sidebar-region")) {
-    sidebarRegionLoad ??= import("./components/chat-sidebar-region.runtime.ts").then(
-      () => true,
-      () => {
-        sidebarRegionLoad = null;
-        return false;
-      },
-    );
-  }
+export function renderSidebarRegion(params: SidebarRegionParams) {
+  const panelIdPrefix = `chat-panel-${encodeURIComponent(params.presentationId)}`;
+  let panelDefinitions = params.panelDefinitions ?? sidebarPanelDefinitions();
+  const hasPanels = params.layout.columns.length > 0;
+  const regionError = hasPanels ? ensureLazySidebarElement("region") : undefined;
   for (const panel of params.layout.columns[0]?.panels ?? []) {
-    ensurePanelRuntime(panel.slot);
+    // A saved dashboard stays cold until its pane actually presents it.
+    if (panel.slot === "dashboard" && !isSidebarSlotVisible(params.layout, "dashboard")) {
+      continue;
+    }
+    const lazyState = ensureLazySidebarElement(panel.slot);
+    if (lazyState !== undefined) {
+      panelDefinitions = panelDefinitions.map((definition) =>
+        definition.slot === panel.slot
+          ? {
+              ...definition,
+              loadState: lazyState,
+            }
+          : definition,
+      );
+    }
   }
-  const availableWidth =
-    params.availableWidth > 0 ? params.availableWidth : Number.POSITIVE_INFINITY;
-  const collapsed = params.narrow || isSidebarRegionCollapsed(params.layout, availableWidth);
-  return html`<div
-    class="sidebar-region ${collapsed && panelOpen ? "sidebar-region--narrow" : ""} ${panelOpen &&
-    params.layout.expanded
-      ? "sidebar-region--expanded"
-      : ""} ${panelOpen && sidebarDock(params.layout) === "bottom" ? "sidebar-region--bottom" : ""}"
-  >
-    <openclaw-chat-sidebar-region
-      .layout=${params.layout}
-      .panelDefinitions=${params.panelDefinitions ?? sidebarPanelDefinitions()}
-      .panelTemplates=${params.panelTemplates}
-      .panelActions=${params.panelActions}
-      .availableSlots=${params.availableSlots}
-      .callbacks=${params.callbacks}
-      .narrow=${params.narrow}
-      .availableWidth=${params.availableWidth}
-    ></openclaw-chat-sidebar-region>
-    <div class="sidebar-region__primary">${params.primary}</div>
-    <div class="sidebar-region__right-runtime"></div>
-  </div>`;
+  return {
+    ...params,
+    panelIdPrefix,
+    panelDefinitions,
+    regionError,
+  };
+}
+
+export function chatWidgetRenderOptions(
+  state: ChatPageHost,
+  boardProvider: BoardProvider | undefined,
+) {
+  return {
+    canvasPluginSurfaceUrl: state.canvasPluginSurfaceUrl,
+    boardProvider,
+    widgetLayout: createChatWidgetLayout(state.chatMessagesBySession, state, {
+      sessionKey: state.sessionKey,
+      ...scopedAgentParamsForSession(state, state.sessionKey),
+    }),
+  };
 }
 
 export function resolveSidebarLayoutForBoard(params: {
@@ -145,36 +224,136 @@ export function resolveSidebarLayoutForBoard(params: {
   paneWidth: number;
 }): SidebarLayout {
   let layout = params.layout;
-  const chatSide =
-    params.board.hasBoard &&
-    params.board.face === "dashboard" &&
-    (params.board.dock === "left" || params.board.dock === "right")
-      ? params.board.dock
-      : null;
-  if (!chatSide) {
-    layout = closeSlot(layout, "chat");
-    return fitSidebarLayout(layout, params.paneWidth) ?? layout;
+  if (!params.board.available) {
+    layout = closeSlot(layout, "dashboard");
+  } else if (params.board.face === "dashboard" && layout.columns.length === 0) {
+    layout = openSlot(layout, "dashboard");
   }
-  layout = openSlot(layout, "chat");
   return fitSidebarLayout(layout, params.paneWidth) ?? layout;
 }
 
+type FullMessageScope = {
+  owner: object;
+  sessionKey?: string;
+  agentId?: string;
+  sessionId?: string;
+  displayedSessionId?: string;
+  lifecycleRevision?: string;
+  authorizationKey?: string;
+};
+
+function readSidebarFullMessageScope(
+  state: ChatPageHost,
+  gateway: ApplicationGateway,
+): FullMessageScope {
+  const auth = gateway.snapshot.hello?.auth;
+  const session = selectedChatSessionRow(state);
+  return {
+    owner: gatewayPresentationScope(gateway),
+    sessionKey: state.sessionKey,
+    agentId: resolveChatAgentId(state),
+    sessionId: session?.sessionId,
+    displayedSessionId: state.currentSessionId ?? undefined,
+    lifecycleRevision: session?.lifecycleRevision,
+    authorizationKey: JSON.stringify([
+      state.mediaPolicyEpoch ?? 0,
+      auth?.role,
+      (auth?.scopes ?? []).toSorted(),
+    ]),
+  };
+}
+
+type FullMessageCache = FullMessageScope & {
+  messages: Map<string, Awaited<ReturnType<SidebarFullMessageLoader>>>;
+};
+const fullMessageCaches = new WeakMap<object, FullMessageCache>();
+
 export function createSidebarFullMessageLoader(
-  state: { client: GatewayBrowserClient | null; connected: boolean },
-  disabled: boolean,
+  state: ChatPageHost,
+  gateway: ApplicationGateway,
 ): SidebarFullMessageLoader | null {
-  if (disabled || !state.client || !state.connected) {
+  if (parseCatalogSessionKey(state.sessionKey) || !state.client || !state.connected) {
     return null;
   }
+  const readScope = () => readSidebarFullMessageScope(state, gateway);
   return async (request) => {
     if (!state.client || !state.connected) {
       return null;
     }
-    return state.client.request("chat.message.get", {
-      sessionKey: request.sessionKey,
-      ...(request.agentId ? { agentId: request.agentId } : {}),
-      messageId: request.messageId,
-      maxChars: DETAIL_FULL_MESSAGE_MAX_CHARS,
-    });
+    const client = state.client;
+    const generation = state.connectionEpoch;
+    const scope = readScope();
+    const sameScope = (other: FullMessageScope) =>
+      scope.owner === other.owner &&
+      scope.sessionKey === other.sessionKey &&
+      scope.agentId === other.agentId &&
+      scope.sessionId === other.sessionId &&
+      scope.displayedSessionId === other.displayedSessionId &&
+      scope.lifecycleRevision === other.lifecycleRevision &&
+      scope.authorizationKey === other.authorizationKey;
+    let cache = fullMessageCaches.get(state);
+    if (!cache || !sameScope(cache)) {
+      cache = { ...scope, messages: new Map() };
+      fullMessageCaches.set(state, cache);
+    }
+    const maxChars = request.maxChars ?? DETAIL_FULL_MESSAGE_MAX_CHARS;
+    const pendingInput = request.messageId.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX);
+    const sameConversation = uiConversationMatches(
+      state,
+      scope.sessionKey,
+      request.sessionKey,
+      request.agentId,
+      scope.agentId,
+    );
+    const sessionId =
+      request.sessionId ??
+      (sameConversation && !pendingInput && scope.displayedSessionId !== scope.sessionId
+        ? scope.displayedSessionId
+        : undefined);
+    const cacheable =
+      !pendingInput &&
+      sameConversation &&
+      scope.sessionId !== undefined &&
+      scope.sessionId === scope.displayedSessionId &&
+      (sessionId === undefined || sessionId === scope.sessionId) &&
+      scope.lifecycleRevision !== undefined;
+    const key = JSON.stringify([scope.sessionKey, scope.agentId, request.messageId, maxChars]);
+    const cached = cacheable ? cache.messages.get(key) : undefined;
+    if (cached) {
+      return cached;
+    }
+    const result = await client.request<Awaited<ReturnType<SidebarFullMessageLoader>>>(
+      "chat.message.get",
+      {
+        sessionKey: request.sessionKey,
+        ...(request.agentId ? { agentId: request.agentId } : {}),
+        ...(sessionId ? { sessionId } : {}),
+        messageId: request.messageId,
+        maxChars,
+      },
+    );
+    if (
+      !state.connected ||
+      state.client !== client ||
+      state.connectionEpoch !== generation ||
+      !sameScope(readScope())
+    ) {
+      return null;
+    }
+    const message = asOptionalRecord(result?.message);
+    if (
+      cacheable &&
+      result?.ok &&
+      message &&
+      !asOptionalRecord(message["__openclaw"])?.importedFrom &&
+      !(message.role === "assistant" && message.stopReason === "error")
+    ) {
+      // Imported content and retry-hidden errors can change without a session lifecycle change.
+      if (cache.messages.size >= 16) {
+        cache.messages.delete(cache.messages.keys().next().value!);
+      }
+      cache.messages.set(key, result);
+    }
+    return result;
   };
 }

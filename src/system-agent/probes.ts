@@ -1,24 +1,21 @@
-// OpenClaw probes check local tools and Gateway health with bounded subprocess/network work.
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { runCommandWithTimeout } from "../process/exec.js";
 
 /**
- * Local environment probes used by OpenClaw overview loading.
- *
  * Probes are bounded by output and timeout limits so setup/status commands do
  * not hang or retain unbounded child output.
  */
-/** Result from probing a local command binary. */
 export type LocalCommandProbe = {
   command: string;
   found: boolean;
   version?: string;
   error?: string;
+  /** Missing executables are absence; failed probes must not hide installed backends. */
+  failure?: "not-found" | "error";
   timedOut?: boolean;
 };
 
 const LOCAL_COMMAND_PROBE_OUTPUT_MAX_CHARS = 16 * 1024;
-/** Probe a command by running a small version command with bounded output and timeout. */
 export async function probeLocalCommand(
   command: string,
   args: string[] = ["--version"],
@@ -37,6 +34,7 @@ export async function probeLocalCommand(
         command,
         found: true,
         error: `timed out after ${timeoutMs}ms`,
+        failure: "error",
         timedOut: true,
       };
     }
@@ -47,6 +45,7 @@ export async function probeLocalCommand(
       found: result.code === 0 || Boolean(text),
       version: text || undefined,
       error: result.code === 0 ? undefined : `exited ${String(result.code)}`,
+      ...(result.code === 0 ? {} : { failure: "error" as const }),
     };
   } catch (error) {
     const spawnError = error as NodeJS.ErrnoException;
@@ -54,11 +53,11 @@ export async function probeLocalCommand(
       command,
       found: spawnError.code !== "ENOENT",
       error: spawnError.code === "ENOENT" ? "not found" : spawnError.message,
+      failure: spawnError.code === "ENOENT" ? "not-found" : "error",
     };
   }
 }
 
-/** Probe a Gateway URL by translating it to its HTTP /healthz endpoint. */
 export async function probeGatewayUrl(
   url: string,
   opts: { timeoutMs?: number } = {},

@@ -2,9 +2,9 @@
 import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
+  normalizeOptionalLowercaseString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
@@ -19,8 +19,6 @@ import type {
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 import { expandHomePrefix, resolveHomeRelativePath } from "./home-dir.js";
 
-const toStringOrUndefined = readStringValue;
-
 const execSecuritySchema = z.enum(["allowlist", "full", "deny"]);
 const execAskSchema = z.enum(["always", "off", "on-miss"]);
 const persistedExecApprovalPolicySchema = z.looseObject({
@@ -32,41 +30,67 @@ const persistedExecApprovalPolicySchema = z.looseObject({
 function normalizePersistedAllowlistSource(value: string): "allow-always" | undefined {
   return value === "allow-always" ? value : undefined;
 }
-const persistedExecAllowlistEntrySchema = z
+const persistedExecAllowlistEntrySchema = z.looseObject({
+  pattern: z.string().refine((value) => value.trim().length > 0),
+  id: z.string().min(1),
+  source: z.literal("allow-always").optional(),
+  commandText: z.never().optional(),
+  argPattern: z.string().optional(),
+  lastUsedAt: z.number().finite().optional(),
+  lastUsedCommand: z.string().optional(),
+  lastResolvedPath: z.string().optional(),
+});
+const legacyExecAllowlistEntrySchema = z
   .union([
     z.string().trim().min(1),
-    z.looseObject({
-      pattern: z.string().refine((value) => value.trim().length > 0),
+    persistedExecAllowlistEntrySchema.extend({
       id: z.string().optional(),
       source: z.string().transform(normalizePersistedAllowlistSource).optional(),
       commandText: z.string().optional(),
-      argPattern: z.string().optional(),
-      lastUsedAt: z.number().finite().optional(),
-      lastUsedCommand: z.string().optional(),
-      lastResolvedPath: z.string().optional(),
     }),
   ])
-  .transform(
-    (value): ExecAllowlistEntry => (typeof value === "string" ? { pattern: value } : value),
+  .transform((value): ExecAllowlistEntry =>
+    typeof value === "string" ? { pattern: value } : value,
   );
-const persistedExecApprovalsAgentSchema = persistedExecApprovalPolicySchema.extend({
-  allowlist: z.array(persistedExecAllowlistEntrySchema).optional(),
-});
-const persistedExecApprovalsAgentsSchema = z
-  .unknown()
-  .refine((value) => !isRecord(value) || !Object.hasOwn(value, "__proto__"))
-  .pipe(z.record(z.string(), persistedExecApprovalsAgentSchema));
-const persistedExecApprovalsSchema = z.looseObject({
-  version: z.literal(1),
-  socket: z
-    .looseObject({
-      path: z.string().optional(),
-      token: z.string().optional(),
-    })
-    .optional(),
-  defaults: persistedExecApprovalPolicySchema.optional(),
-  agents: persistedExecApprovalsAgentsSchema.optional(),
-});
+function createExecApprovalsSchema(allowlistEntry: z.ZodType<ExecAllowlistEntry>, legacy: boolean) {
+  const agentSchema = persistedExecApprovalPolicySchema.extend({
+    allowlist: z.array(allowlistEntry).optional(),
+    mcpTools: z
+      .array(
+        z.looseObject({
+          server: z.string().refine((value) => value.trim().length > 0),
+          tool: z.string().refine((value) => value.trim().length > 0),
+          source: z.literal("allow-always"),
+          addedAt: z.number().finite().nonnegative(),
+          lastUsedAt: z.number().finite().nonnegative().optional(),
+        }),
+      )
+      .optional(),
+  });
+  const agentsSchema = z
+    .unknown()
+    .refine((value) => !isRecord(value) || !Object.hasOwn(value, "__proto__"))
+    .pipe(z.record(z.string(), agentSchema))
+    .refine((value) => legacy || !Object.hasOwn(value, "default"));
+  return z.looseObject({
+    version: z.literal(1),
+    socket: z
+      .looseObject({
+        path: z.string().optional(),
+        token: z.string().optional(),
+      })
+      .optional(),
+    defaults: persistedExecApprovalPolicySchema.optional(),
+    agents: agentsSchema.optional(),
+  });
+}
+const persistedExecApprovalsSchema = createExecApprovalsSchema(
+  persistedExecAllowlistEntrySchema,
+  false,
+);
+const legacyExecApprovalsSchema = createExecApprovalsSchema(legacyExecAllowlistEntrySchema, true);
+export const LEGACY_EXEC_APPROVALS_DIAGNOSTIC =
+  "Legacy exec approval policy requires Doctor repair";
 
 export const DEFAULT_SECURITY: ExecSecurity = "full";
 export const DEFAULT_ASK: ExecAsk = "off";
@@ -97,22 +121,16 @@ export function resolveExecApprovalsPath(env: NodeJS.ProcessEnv = process.env): 
   return path.join(resolveExecApprovalsStateDir(env).path, EXEC_APPROVALS_FILE);
 }
 
-export function resolveExecApprovalsSocketPath(): string {
-  return path.join(resolveExecApprovalsStateDir().path, EXEC_APPROVALS_SOCKET);
+export function resolveExecApprovalsSocketPath(env: NodeJS.ProcessEnv = process.env): string {
+  return path.join(resolveExecApprovalsStateDir(env).path, EXEC_APPROVALS_SOCKET);
 }
 
-export function resolveExecApprovalsDisplayPath(): string {
-  const stateDir = resolveExecApprovalsStateDir().displayPath;
+export function resolveExecApprovalsDisplayPath(env: NodeJS.ProcessEnv = process.env): string {
+  const stateDir = resolveExecApprovalsStateDir(env).displayPath;
   const locator = path.join("state", "openclaw.sqlite#exec_approvals_config");
   return stateDir === DEFAULT_EXEC_APPROVALS_STATE_DIR
     ? `${stateDir}/${locator}`
     : path.join(stateDir, locator);
-}
-
-export function resolveExecApprovalsTranscriptPath(): string {
-  return process.env.OPENCLAW_STATE_DIR?.trim()
-    ? "$OPENCLAW_STATE_DIR/state/openclaw.sqlite#exec_approvals_config"
-    : `${DEFAULT_EXEC_APPROVALS_STATE_DIR}/state/openclaw.sqlite#exec_approvals_config`;
 }
 
 export function createFailClosedExecApprovalsFallback(): ExecApprovalsFile {
@@ -128,23 +146,146 @@ export function createFailClosedExecApprovalsFallback(): ExecApprovalsFile {
   });
 }
 
-/** Parse only structurally valid persisted approvals without inventing fallback policy. */
-export function tryParsePersistedExecApprovals(raw: string): ExecApprovalsFile | null {
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    const result = persistedExecApprovalsSchema.safeParse(parsed);
-    if (result.success) {
-      return normalizeExecApprovalsInternal(result.data);
+// Only schema field names may enter diagnostics; agent keys are always replaced by ordinals.
+const diagnosticFields = new Set([
+  "version",
+  "socket",
+  "path",
+  "token",
+  "defaults",
+  "agents",
+  "security",
+  "ask",
+  "askFallback",
+  "autoAllowSkills",
+  "allowlist",
+  "mcpTools",
+  "server",
+  "tool",
+  "addedAt",
+  "pattern",
+  "id",
+  "source",
+  "commandText",
+  "argPattern",
+  "lastUsedAt",
+  "lastUsedCommand",
+  "lastResolvedPath",
+]);
+
+const diagnosticTypeReasons = new Map([
+  ["string", "expected a string"],
+  ["number", "expected a finite number"],
+  ["boolean", "expected a boolean"],
+  ["array", "expected an array"],
+  ["object", "expected an object"],
+]);
+
+function formatPersistedExecApprovalsIssue(issue: z.core.$ZodIssue, parsed: unknown): string {
+  // Only the object arm has field issues. The string arm's root error would
+  // misdiagnose object metadata; Zod's union child paths are relative.
+  const fieldIssue =
+    issue.code === "invalid_union"
+      ? issue.errors[1]?.find((child) => child.path.length === 1)
+      : undefined;
+  const detail = fieldIssue ?? issue;
+  const issuePath = fieldIssue ? [...issue.path, ...fieldIssue.path] : issue.path;
+  let location = "";
+  // The schema has at most five path segments. Fixed field names and numeric
+  // indices bound the output even when source keys or values are enormous.
+  for (const [index, segment] of issuePath.slice(0, 5).entries()) {
+    if (index === 1 && issuePath[0] === "agents") {
+      const agents = isRecord(parsed) && isRecord(parsed.agents) ? parsed.agents : {};
+      const ordinal = typeof segment === "string" ? Object.keys(agents).indexOf(segment) + 1 : 0;
+      if (!ordinal) {
+        break;
+      }
+      location += ` entry #${ordinal}`;
+    } else if (
+      index === 3 &&
+      (issuePath[2] === "allowlist" || issuePath[2] === "mcpTools") &&
+      typeof segment === "number" &&
+      Number.isSafeInteger(segment) &&
+      segment >= 0
+    ) {
+      location += `[${segment}]`;
+    } else if (typeof segment === "string" && diagnosticFields.has(segment)) {
+      location += `${location ? "." : ""}${segment}`;
+    } else {
+      break;
     }
-  } catch {
-    // A partial Windows fallback write is existing state, not a missing policy.
   }
-  return null;
+  let reason = "invalid value";
+  switch (detail.code) {
+    case "invalid_type":
+      reason = diagnosticTypeReasons.get(detail.expected) ?? reason;
+      break;
+    case "invalid_value":
+      reason = "expected a supported value";
+      break;
+    case "invalid_union":
+      reason = "expected a non-empty string or an object with a non-empty pattern";
+      break;
+    case "too_small":
+      reason = "expected a non-empty string";
+      break;
+    case "custom":
+      if (issuePath.at(-1) === "pattern") {
+        reason = "expected a non-empty string";
+      }
+      break;
+    default:
+      // Other Zod issue kinds retain a value-free reason, never raw error text.
+      break;
+  }
+  return `${location || "document"}: ${reason}`;
 }
 
-function normalizeAllowlistPattern(value: string | undefined): string | null {
-  const trimmed = normalizeOptionalString(value) ?? "";
-  return trimmed ? normalizeLowercaseStringOrEmpty(trimmed) : null;
+/** Validate canonical policy and expose only a bounded, value-free failure diagnostic. */
+function parseExecApprovals(
+  raw: string,
+  schema: z.ZodType<ExecApprovalsFile>,
+): Result<ExecApprovalsFile, string> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    return err("invalid JSON syntax");
+  }
+  try {
+    const result = schema.safeParse(parsed);
+    if (result.success) {
+      return ok(result.data);
+    }
+    if (
+      schema === persistedExecApprovalsSchema &&
+      legacyExecApprovalsSchema.safeParse(parsed).success
+    ) {
+      return err(LEGACY_EXEC_APPROVALS_DIAGNOSTIC);
+    }
+    const issue = result.error.issues[0];
+    return err(
+      issue ? formatPersistedExecApprovalsIssue(issue, parsed) : "invalid approvals structure",
+    );
+  } catch {
+    return err("invalid approvals structure");
+  }
+}
+
+export function parsePersistedExecApprovals(raw: string): Result<ExecApprovalsFile, string> {
+  return parseExecApprovals(raw, persistedExecApprovalsSchema);
+}
+
+/** Doctor imports historical documents before ordinary readers accept their canonical shape. */
+export function parseLegacyExecApprovals(raw: string): Result<ExecApprovalsFile, string> {
+  const parsed = parseExecApprovals(raw, legacyExecApprovalsSchema);
+  return parsed.ok ? ok(normalizeExecApprovalsInternal(parsed.value)) : parsed;
+}
+
+/** Parse only structurally valid persisted approvals without inventing fallback policy. */
+export function tryParsePersistedExecApprovals(raw: string): ExecApprovalsFile | null {
+  const result = parsePersistedExecApprovals(raw);
+  return result.ok ? result.value : null;
 }
 
 function mergeLegacyAgent(
@@ -154,7 +295,7 @@ function mergeLegacyAgent(
   const allowlist: ExecAllowlistEntry[] = [];
   const seen = new Set<string>();
   const pushEntry = (entry: ExecAllowlistEntry) => {
-    const patternKey = normalizeAllowlistPattern(entry.pattern);
+    const patternKey = normalizeOptionalLowercaseString(entry.pattern);
     if (!patternKey) {
       return;
     }
@@ -173,11 +314,25 @@ function mergeLegacyAgent(
   }
 
   return {
+    ...legacy,
+    ...current,
     security: current.security ?? legacy.security,
     ask: current.ask ?? legacy.ask,
     askFallback: current.askFallback ?? legacy.askFallback,
     autoAllowSkills: current.autoAllowSkills ?? legacy.autoAllowSkills,
     allowlist: allowlist.length > 0 ? allowlist : undefined,
+    mcpTools:
+      current.mcpTools || legacy.mcpTools
+        ? [
+            ...(current.mcpTools ?? []),
+            ...(legacy.mcpTools ?? []).filter(
+              (grant) =>
+                !current.mcpTools?.some(
+                  (entry) => entry.server === grant.server && entry.tool === grant.tool,
+                ),
+            ),
+          ]
+        : undefined,
   };
 }
 
@@ -190,27 +345,25 @@ function coerceAllowlistEntries(allowlist: unknown): ExecAllowlistEntry[] | unde
   for (const item of allowlist) {
     if (typeof item === "string") {
       const trimmed = item.trim();
+      changed = true;
       if (trimmed) {
         result.push({ pattern: trimmed });
-        changed = true;
-      } else {
-        changed = true; // dropped empty string
       }
     } else if (item && typeof item === "object" && !Array.isArray(item)) {
       const pattern = (item as { pattern?: unknown }).pattern;
       if (typeof pattern === "string" && pattern.trim().length > 0) {
         result.push(item as ExecAllowlistEntry);
       } else {
-        changed = true; // dropped invalid entry
+        changed = true;
       }
     } else {
-      changed = true; // dropped invalid entry
+      changed = true;
     }
   }
   return changed ? (result.length > 0 ? result : undefined) : (allowlist as ExecAllowlistEntry[]);
 }
 
-function ensureAllowlistIds(
+function normalizeAllowlistMetadata(
   allowlist: ExecAllowlistEntry[] | undefined,
 ): ExecAllowlistEntry[] | undefined {
   if (!Array.isArray(allowlist) || allowlist.length === 0) {
@@ -218,49 +371,39 @@ function ensureAllowlistIds(
   }
   let changed = false;
   const next = allowlist.map((entry) => {
-    if (entry.id) {
-      return entry;
+    let normalized = entry;
+    const source = normalizePersistedAllowlistSource(normalized.source ?? "");
+    if (normalized.source !== source) {
+      normalized = { ...normalized, source };
     }
-    changed = true;
-    return { ...entry, id: crypto.randomUUID() };
+    if (!normalized.id) {
+      normalized = { ...normalized, id: crypto.randomUUID() };
+    }
+    if (typeof normalized.commandText === "string") {
+      const { commandText: _commandText, ...rest } = normalized;
+      normalized = rest;
+    }
+    changed ||= normalized !== entry;
+    return normalized;
   });
   return changed ? next : allowlist;
 }
 
-function stripAllowlistCommandText(
-  allowlist: ExecAllowlistEntry[] | undefined,
-): ExecAllowlistEntry[] | undefined {
-  if (!Array.isArray(allowlist) || allowlist.length === 0) {
-    return allowlist;
-  }
-  let changed = false;
-  const next = allowlist.map((entry) => {
-    if (typeof entry.commandText !== "string") {
-      return entry;
-    }
-    changed = true;
-    const { commandText: _commandText, ...rest } = entry;
-    return rest;
-  });
-  return changed ? next : allowlist;
+function sanitizePolicyEnum<T extends string>(
+  value: unknown,
+  allowed: readonly T[],
+): T | undefined {
+  const normalized = readStringValue(value)?.trim();
+  return allowed.find((entry) => entry === normalized);
 }
 
 function sanitizeExecApprovalPolicy(
   policy: ExecApprovalsDefaults | ExecApprovalsAgent | undefined,
 ): ExecApprovalsDefaults {
-  const security = toStringOrUndefined(policy?.security)?.trim();
-  const ask = toStringOrUndefined(policy?.ask)?.trim();
-  const askFallback = toStringOrUndefined(policy?.askFallback)?.trim();
-  return {
-    security:
-      security === "deny" || security === "allowlist" || security === "full" ? security : undefined,
-    ask: ask === "off" || ask === "on-miss" || ask === "always" ? ask : undefined,
-    askFallback:
-      askFallback === "deny" || askFallback === "allowlist" || askFallback === "full"
-        ? askFallback
-        : undefined,
-    autoAllowSkills: policy?.autoAllowSkills,
-  };
+  const security = sanitizePolicyEnum(policy?.security, execSecuritySchema.options);
+  const ask = sanitizePolicyEnum(policy?.ask, execAskSchema.options);
+  const askFallback = sanitizePolicyEnum(policy?.askFallback, execSecuritySchema.options);
+  return { security, ask, askFallback, autoAllowSkills: policy?.autoAllowSkills };
 }
 
 export function normalizeExecApprovalsInternal(file: ExecApprovalsFile): ExecApprovalsFile {
@@ -276,8 +419,7 @@ export function normalizeExecApprovalsInternal(file: ExecApprovalsFile): ExecApp
   }
   for (const [key, agent] of Object.entries(agents)) {
     const coerced = coerceAllowlistEntries(agent.allowlist);
-    const withIds = ensureAllowlistIds(coerced);
-    const allowlist = stripAllowlistCommandText(withIds);
+    const allowlist = normalizeAllowlistMetadata(coerced);
     const sanitizedPolicy = sanitizeExecApprovalPolicy(agent);
     const agentChanged =
       allowlist !== agent.allowlist ||
@@ -295,18 +437,15 @@ export function normalizeExecApprovalsInternal(file: ExecApprovalsFile): ExecApp
     }
   }
   const sanitizedDefaults = sanitizeExecApprovalPolicy(file.defaults);
-  const normalized: ExecApprovalsFile = {
+  return {
     version: 1,
     socket: {
       path: socketPath && socketPath.length > 0 ? socketPath : undefined,
       token: token && token.length > 0 ? token : undefined,
     },
-    defaults: {
-      ...sanitizedDefaults,
-    },
+    defaults: sanitizedDefaults,
     agents,
   };
-  return normalized;
 }
 
 export function mergeExecApprovalsSocketDefaults(params: {

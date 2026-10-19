@@ -1,9 +1,22 @@
-import type { CliBackendParseJsonlEvent } from "openclaw/plugin-sdk/cli-backend";
+import type {
+  CliBackendParseJsonlEvent,
+  CliBackendParseJsonlLifecycleEvent,
+} from "openclaw/plugin-sdk/cli-backend";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { findCodeRegions, type CodeRegion } from "openclaw/plugin-sdk/text-chunking";
 
 const CLAUDE_RAW_TOOL_OUTPUT_ERROR =
   "Claude CLI returned malformed tool output (invalid request format): raw tool protocol appeared as assistant text. OpenClaw refused to persist or deliver it.";
+
+export function classifyClaudeCliErrorCode(message: string): string | undefined {
+  // Claude Code reports refresh-lock contention as server_error, distinct from
+  // authentication_failed for a dead refresh token. Keep that recovery fact.
+  return /Failed to refresh OAuth token: another Claude Code process is refreshing it or exited mid-refresh\b/i.test(
+    message,
+  )
+    ? "refresh_contention"
+    : undefined;
+}
 
 const RAW_INVOKE_TAG_RE = /<invoke(?=[ \t>])[^<>\r\n]*>/gu;
 const RAW_PARAMETER_TAG_RE = /<parameter(?=[ \t>])[^<>\r\n]*>/gu;
@@ -96,7 +109,7 @@ function findNextStandaloneTag(
 }
 
 /** Detect Claude's legacy tool protocol only when it occupies standalone assistant lines. */
-function hasClaudeRawToolInvocation(text: string): boolean {
+export function hasClaudeRawToolInvocation(text: string): boolean {
   if (!text.includes("<invoke") || !text.includes("<parameter")) {
     return false;
   }
@@ -158,13 +171,44 @@ function hasClaudeRawToolInvocation(text: string): boolean {
       // misses the latter; requiring a prefix misses the complete leak reproduced in this PR.
       // Complete unfenced examples remain the accepted false positive and surface as format errors.
       completeInvokeCloseIndex !== null ||
-      (completeInvokeCloseIndex === null && hasObservedTruncatedLeakPrefix(text, index, toolName))
+      hasObservedTruncatedLeakPrefix(text, index, toolName)
     ) {
       return true;
     }
   }
   return false;
 }
+
+function parseClaudeJsonlRecord(line: string): Record<string, unknown> | null {
+  try {
+    const parsed: unknown = JSON.parse(line);
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Project Claude-owned lifecycle records without widening the legacy parser event union. */
+export const parseClaudeCliJsonlLifecycleEvent: CliBackendParseJsonlLifecycleEvent = (line) => {
+  if (!line.includes("compacting") && !line.includes("compact_result")) {
+    return null;
+  }
+  const parsed = parseClaudeJsonlRecord(line);
+  if (!parsed) {
+    return null;
+  }
+  if (parsed.compact_result === "success" || parsed.compact_result === "failed") {
+    return {
+      kind: "compaction",
+      phase: "end",
+      completed: parsed.compact_result === "success",
+    };
+  }
+  if (parsed.type === "system" && parsed.subtype === "status") {
+    return parsed.status === "compacting" ? { kind: "compaction", phase: "start" } : null;
+  }
+  return null;
+};
 
 /** Reject malformed terminal Claude results before the generic CLI runner accepts them as prose. */
 export const parseClaudeCliJsonlEvent: CliBackendParseJsonlEvent = (line) => {
@@ -178,15 +222,9 @@ export const parseClaudeCliJsonlEvent: CliBackendParseJsonlEvent = (line) => {
   if (!mightContainRawToolProtocol) {
     return null;
   }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(line);
-  } catch {
-    return null;
-  }
+  const parsed = parseClaudeJsonlRecord(line);
   if (
-    !isRecord(parsed) ||
+    !parsed ||
     parsed.type !== "result" ||
     typeof parsed.result !== "string" ||
     !hasClaudeRawToolInvocation(parsed.result)

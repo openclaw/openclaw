@@ -1,27 +1,34 @@
-// Mattermost tests cover native model-picker interaction dispatch ownership.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import type * as SessionTranscriptRuntime from "openclaw/plugin-sdk/session-transcript-runtime";
+import { expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   authorize: vi.fn(),
   buildEventPlan: vi.fn(),
-  buildModelsProviderData: vi.fn(),
+  buildPreparedModelsProviderData: vi.fn(),
   deliverReply: vi.fn(),
   dispatch: vi.fn(),
-  markDeliverySettled: vi.fn(),
   parseContext: vi.fn(),
   runDetachedWebhookWork: vi.fn(),
+  recordDeliveredCommandExchange: vi.fn(
+    async (
+      _params: Parameters<typeof SessionTranscriptRuntime.recordDeliveredCommandExchange>[0],
+    ) => ({ ok: true }),
+  ),
 }));
 
 vi.mock("openclaw/plugin-sdk/webhook-request-guards", () => ({
   runDetachedWebhookWork: mocks.runDetachedWebhookWork,
 }));
 
-vi.mock("./model-picker.js", () => ({
-  buildMattermostAllowedModelRefs: () => new Set(["openai/gpt-5.4"]),
+vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof SessionTranscriptRuntime>()),
+  recordDeliveredCommandExchange: mocks.recordDeliveredCommandExchange,
+}));
+
+vi.mock("./model-picker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./model-picker.js")>()),
   parseMattermostModelPickerContext: mocks.parseContext,
-  renderMattermostModelsPickerView: () => ({ text: "updated picker", buttons: [] }),
-  renderMattermostProviderPickerView: () => ({ text: "provider picker", buttons: [] }),
-  resolveMattermostModelPickerCurrentModel: () => "openai/gpt-5.4",
+  resolveMattermostModelPickerCurrentModel: async () => "openai/gpt-5.4",
 }));
 
 vi.mock("./monitor-auth.js", () => ({
@@ -36,38 +43,27 @@ vi.mock("./reply-delivery.js", () => ({
   deliverMattermostReplyPayload: mocks.deliverReply,
 }));
 
-vi.mock("./runtime-api.js", async () => {
-  const actual = await vi.importActual<typeof import("./runtime-api.js")>("./runtime-api.js");
-  return {
-    ...actual,
-    buildModelsProviderData: mocks.buildModelsProviderData,
-  };
-});
+vi.mock("./runtime-api.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./runtime-api.js")>()),
+  buildPreparedModelsProviderData: mocks.buildPreparedModelsProviderData,
+}));
 
 import { createMattermostModelPickerInteractionHandler } from "./monitor-model-picker.js";
 import type { MattermostMonitorContext } from "./monitor-types.js";
 
-describe("Mattermost model-picker interaction dispatch", () => {
-  beforeEach(() => {
+const scenarios = ["providers", "back", "list", "select"].flatMap((action) =>
+  ["ready", "failed", "empty"].map((catalogStatus) => ({ action, catalogStatus })),
+);
+const replyToId = "interaction:picker-post-1:select:openai/gpt-5.4";
+it.each(scenarios)(
+  "updates the $action picker once with $catalogStatus catalog text and choices",
+  async ({ action, catalogStatus }) => {
     vi.clearAllMocks();
-    mocks.parseContext.mockReturnValue({
-      action: "select",
-      ownerUserId: "user-1",
-      provider: "openai",
-      model: "gpt-5.4",
-      page: 0,
-    });
     mocks.authorize.mockResolvedValue({
       ok: true,
       commandAuthorized: true,
       channelInfo: { id: "channel-1", team_id: "team-1", type: "O" },
-      kind: "channel",
-      chatType: "channel",
-      channelName: "lifecycle",
-      channelDisplay: "Lifecycle",
-      roomLabel: "#lifecycle",
     });
-    mocks.buildModelsProviderData.mockResolvedValue({ providers: [{ id: "openai" }] });
     mocks.deliverReply.mockResolvedValue({
       outcome: "text",
       visibleReplySent: true,
@@ -75,6 +71,7 @@ describe("Mattermost model-picker interaction dispatch", () => {
       content: "model updated",
     });
     mocks.buildEventPlan.mockResolvedValue({
+      channelId: "channel-1",
       channelDisplay: "Lifecycle",
       kind: "channel",
       roomLabel: "#lifecycle",
@@ -83,40 +80,55 @@ describe("Mattermost model-picker interaction dispatch", () => {
       to: "channel:channel-1",
       finalizeContext: (context: Record<string, unknown>) => context,
       createReplyPlan: () => ({
-        deliveryBarrier: {
-          trackDmChannelResolution: vi.fn(),
-          resolveTimeoutPolicy: vi.fn(),
-          markDeliverySettled: mocks.markDeliverySettled,
-        },
         replyOptions: {},
         replyPipeline: {},
         tableMode: "off",
         textLimit: 4000,
       }),
     });
-    mocks.dispatch.mockImplementation(async (params: Record<string, unknown>) => {
-      const delivery = params.delivery as
-        | { deliver?: (payload: { text: string; replyToId?: string }) => Promise<unknown> }
-        | undefined;
-      const dispatcherOptions = params.dispatcherOptions as
-        | { onDeliverySettled?: () => void }
-        | undefined;
-      await delivery?.deliver?.({
-        text: "model updated",
-        replyToId: "interaction:picker-post-1:select:openai/gpt-5.4",
-      });
-      dispatcherOptions?.onDeliverySettled?.();
-      return {};
+    mocks.dispatch.mockImplementation(
+      async (
+        params: Parameters<MattermostMonitorContext["core"]["channel"]["inbound"]["dispatch"]>[0],
+      ) => {
+        await params.delivery.deliver({ text: "model updated", replyToId }, { kind: "final" });
+        return {};
+      },
+    );
+    const order: string[] = [];
+    const hasModels = catalogStatus !== "empty";
+    const refreshWarning =
+      catalogStatus === "ready" ? undefined : "Some models could not be refreshed.";
+    mocks.parseContext.mockReturnValue({
+      action,
+      ownerUserId: "user-1",
+      provider: "openai",
+      model: "gpt-5.4",
+      page: 0,
     });
-  });
-
-  it("reserves independent work before ack and observes terminal settlement", async () => {
+    mocks.buildPreparedModelsProviderData.mockImplementationOnce(async () => {
+      order.push("load");
+      return {
+        providers: hasModels ? ["openai"] : [],
+        byProvider: new Map(hasModels ? [["openai", new Set(["gpt-5.4"])]] : []),
+        modelNames: new Map(),
+        modelCatalog: [],
+        resolvedDefault: { provider: "openai", model: "gpt-5.4" },
+        refreshWarning,
+      };
+    });
     let detachedRun: (() => Promise<void>) | undefined;
     mocks.runDetachedWebhookWork.mockImplementation((run: () => Promise<void>) => {
+      order.push("detach");
       detachedRun = run;
       return Promise.resolve();
     });
-    const updateModelPickerPost = vi.fn(async () => ({}));
+    const updateModelPickerPost = vi.fn<
+      MattermostMonitorContext["resources"]["updateModelPickerPost"]
+    >(async () => {
+      expect(mocks.recordDeliveredCommandExchange).not.toHaveBeenCalled();
+      order.push("update");
+      return {};
+    });
     const monitor = {
       account: { accountId: "default", config: {} },
       cfg: {},
@@ -145,6 +157,7 @@ describe("Mattermost model-picker interaction dispatch", () => {
         post_id: "picker-post-1",
         team_id: "team-1",
         user_id: "user-1",
+        ...(catalogStatus === "empty" ? {} : { trigger_id: `trigger-${action}` }),
       },
       userName: "tester",
       context: {},
@@ -152,27 +165,60 @@ describe("Mattermost model-picker interaction dispatch", () => {
     });
 
     expect(response).toEqual({});
-    expect(mocks.runDetachedWebhookWork).toHaveBeenCalledOnce();
+    expect(mocks.buildPreparedModelsProviderData).toHaveBeenCalledOnce();
     expect(mocks.dispatch).not.toHaveBeenCalled();
-    expect(detachedRun).toBeTypeOf("function");
-
-    await detachedRun?.();
-
-    expect(mocks.dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({
+    const selectsModel = action === "select" && hasModels;
+    const visibleText = !hasModels
+      ? "No models available."
+      : selectsModel
+        ? "Select a model to switch immediately."
+        : action === "list"
+          ? "Select a model"
+          : "Select a provider";
+    if (selectsModel) {
+      expect(mocks.runDetachedWebhookWork).toHaveBeenCalledOnce();
+      expect(detachedRun).toBeTypeOf("function");
+      expect(updateModelPickerPost).not.toHaveBeenCalled();
+      expect(order).toEqual(["load", "detach"]);
+      await detachedRun?.();
+      expect(mocks.dispatch.mock.calls[0]?.[0]).toMatchObject({
         channel: "mattermost",
-        delivery: expect.objectContaining({ observeMessageSent: true }),
-        dispatcherOptions: expect.objectContaining({
-          onDeliverySettled: mocks.markDeliverySettled,
-        }),
-      }),
+        delivery: { observeMessageSent: true },
+      });
+      expect(mocks.deliverReply).toHaveBeenCalledWith(
+        expect.objectContaining({ channelId: "channel-1", replyToId: "picker-post-1" }),
+      );
+    } else {
+      expect(mocks.runDetachedWebhookWork).not.toHaveBeenCalled();
+      expect(detachedRun).toBeUndefined();
+    }
+    expect(updateModelPickerPost).toHaveBeenCalledOnce();
+    expect(order).toEqual(selectsModel ? ["load", "detach", "update"] : ["load", "update"]);
+    const sent = updateModelPickerPost.mock.calls[0]?.[0];
+    expect(sent?.message).toContain(visibleText);
+    expect(sent?.message.includes("Some models could not be refreshed.")).toBe(
+      refreshWarning !== undefined,
     );
-    expect(mocks.markDeliverySettled).toHaveBeenCalledOnce();
-    expect(mocks.deliverReply).toHaveBeenCalledWith(
-      expect.objectContaining({ replyToId: "picker-post-1" }),
-    );
-    expect(updateModelPickerPost).toHaveBeenCalledWith(
-      expect.objectContaining({ message: "updated picker" }),
-    );
-  });
-});
+    if (hasModels) {
+      expect(JSON.stringify(sent?.buttons)).toContain(
+        action === "list" || selectsModel ? '"model":"gpt-5.4"' : '"provider":"openai"',
+      );
+    }
+    expect(mocks.recordDeliveredCommandExchange.mock.calls[0]?.[0]).toMatchObject({
+      sessionKey: "agent:main:mm",
+      commandText:
+        action === "select"
+          ? "/model openai/gpt-5.4"
+          : action === "list"
+            ? "/models openai"
+            : "/models",
+      commandId:
+        action === "select"
+          ? '["mattermost","default","channel:channel-1","interaction:picker-post-1:select:openai/gpt-5.4"]'
+          : catalogStatus === "empty"
+            ? expect.stringMatching(/^mattermost:default:channel-1:picker-post-1:/)
+            : `mattermost:default:channel-1:trigger-${action}`,
+      replyText: expect.stringContaining(visibleText),
+    });
+  },
+);

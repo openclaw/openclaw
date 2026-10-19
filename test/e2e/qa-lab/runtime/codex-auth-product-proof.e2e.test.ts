@@ -1,23 +1,47 @@
 // QA Lab Codex auth product proof exercises doctor, SQLite, Gateway, and app-server together.
-import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createJsonlRequestTailer } from "../../../../scripts/e2e/lib/codex-media-path/jsonl-request-tail.mts";
 import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
-import { loadBundledPluginFacade } from "../../../../src/test-utils/bundled-plugin-public-surface.js";
-import { connectGatewayStatusClient, postJson } from "../../../helpers/gateway-e2e-harness.js";
 import {
-  createOpenClawTestInstance,
-  type OpenClawTestInstance,
-} from "../../../helpers/openclaw-test-instance.js";
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../../../src/utils/message-channel.js";
+import type { FixtureReceiptChannel } from "../../../helpers/fixture-receipts.js";
+import { acquireGatewayTestClient } from "../../../helpers/gateway-client.js";
+import { connectGatewayStatusClient, postJson } from "../../../helpers/gateway-e2e-harness.js";
+import type { OpenClawTestInstance } from "../../../helpers/openclaw-test-instance.js";
+import { withinTest } from "../../../helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import { runCodexAuthDoctorMigrationProof } from "./codex-auth-product-proof.test-support.js";
+import {
+  createCodexProductInstance,
+  createCodexReceiptClient,
+} from "./codex-product.test-support.js";
 
 const oauthAccess = "test-oauth-access";
 const ACCOUNT_ID = "qa-codex-account";
 const MODEL = "openai/gpt-5.6-luna";
+const MISSING_PROFILE_ID = "openai:missing";
+const SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT =
+  "This saved login isn't available. Choose another login under Models in the Control UI or run `openclaw configure`.";
 const PRODUCT_OUTPUT = "QA_CODEX_AUTH_PRODUCT_PROOF_OK";
 const REQUEST_TIMEOUT_MS = 60_000;
 
 let instance: OpenClawTestInstance | undefined;
+let receipts: FixtureReceiptChannel;
+let receiptClientUrl: string;
+const tempDirs = useAutoCleanupTempDirTracker(afterAll);
+
+beforeAll(async () => {
+  ({ receipts, receiptClientUrl } = await createCodexReceiptClient(
+    tempDirs.make("codex-auth-receipts-"),
+  ));
+});
+
+afterAll(async () => {
+  await receipts?.close();
+});
 
 type AppServerLogEntry = {
   id?: number | string;
@@ -26,9 +50,30 @@ type AppServerLogEntry = {
   result?: unknown;
 };
 
-type AppServerRequestLog = { read(): AppServerLogEntry[] };
+type GatewayHistory = Record<string, unknown> & {
+  messages?: unknown[];
+  sessionInfo?: { lastRunError?: unknown };
+};
 
-type GatewayHistory = Record<string, unknown> & { messages?: unknown[] };
+type GatewayEvent = { event?: string; payload?: unknown };
+
+function expectBoundedMissingProfileRecovery(
+  value: unknown,
+  options?: { sessionError?: boolean; diagnostic?: string },
+) {
+  const serialized = JSON.stringify(value);
+  if (options?.sessionError) {
+    expect(typeof value).toBe("string");
+    expect(value).toBe(SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT);
+    expect(String(value).length).toBeLessThanOrEqual(160);
+  } else {
+    expect(serialized, options?.diagnostic).toContain(SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT);
+  }
+  expect(serialized).not.toContain(MISSING_PROFILE_ID);
+  expect(serialized).not.toContain("was not found");
+  expect(serialized).not.toContain("Codex app-server auth profile");
+  expect(serialized).not.toContain("/login codex");
+}
 
 afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
@@ -36,23 +81,39 @@ afterEach(async () => {
   instance = undefined;
 });
 
-function waitForRequest(requestLog: AppServerRequestLog, method: string) {
-  return vi.waitFor(
-    () => {
-      const entries = requestLog.read();
-      const request = entries.find((entry) => entry.method === method);
-      if (!request) {
-        const observedMethods = entries.flatMap((entry) =>
-          typeof entry.method === "string" ? [entry.method] : [],
-        );
-        throw new Error(
-          `waiting for Codex app-server method ${method}; observed ${observedMethods.join(", ") || "no methods"}`,
-        );
-      }
-      return request;
-    },
-    { interval: 25, timeout: REQUEST_TIMEOUT_MS },
-  );
+async function waitForRequest(
+  requestLog: { read(): AppServerLogEntry[] },
+  source: string,
+  method: string,
+  signal: AbortSignal,
+) {
+  // The transport records requests before their handlers report or reply; late receipts are safe.
+  if (!requestLog.read().some((entry) => entry.method === method)) {
+    await withinTest(receipts.waitFor(source, method), signal);
+  }
+  const entries = requestLog.read();
+  const request = entries.find((entry) => entry.method === method);
+  if (!request) {
+    const observedMethods = entries.flatMap((entry) =>
+      typeof entry.method === "string" ? [entry.method] : [],
+    );
+    throw new Error(
+      `waiting for Codex app-server method ${method}; observed ${observedMethods.join(", ") || "no methods"}`,
+    );
+  }
+  return request;
+}
+
+function chatgptAccessToken(accountId: string): string {
+  return [
+    Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url"),
+    Buffer.from(
+      JSON.stringify({
+        "https://api.openai.com/auth": { chatgpt_account_id: accountId },
+      }),
+    ).toString("base64url"),
+    "test-signature",
+  ].join(".");
 }
 
 async function waitForAssistantHistory(testInstance: OpenClawTestInstance, expected: string) {
@@ -105,60 +166,57 @@ async function waitForAssistantHistory(testInstance: OpenClawTestInstance, expec
   }
 }
 
+async function connectGatewayEventClient(
+  testInstance: OpenClawTestInstance,
+  events: GatewayEvent[],
+) {
+  return acquireGatewayTestClient(
+    {
+      url: `ws://127.0.0.1:${testInstance.port}`,
+      origin: `http://127.0.0.1:${testInstance.port}`,
+      token: testInstance.gatewayToken,
+      role: "operator",
+      clientName: GATEWAY_CLIENT_NAMES.WEBCHAT_UI,
+      clientDisplayName: "Codex missing auth profile QA",
+      mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+      scopes: ["operator.admin", "operator.read", "operator.write"],
+      platform: "qa",
+      requestTimeoutMs: REQUEST_TIMEOUT_MS,
+      onEvent: (event) => events.push(event),
+    },
+    {
+      timeoutMs: REQUEST_TIMEOUT_MS,
+      timeoutMessage: `Gateway client connection timed out:\n${testInstance.logs()}`,
+      closeMessage: "Gateway closed",
+      unrefTimeout: true,
+    },
+  );
+}
+
+async function createAuthGateway(missingProfile = false) {
+  return createCodexProductInstance({
+    name: missingProfile ? "qa-codex-missing-auth-profile" : "qa-codex-auth-product-proof",
+    receiptClientUrl,
+    model: missingProfile ? `${MODEL}@${MISSING_PROFILE_ID}` : MODEL,
+    nativeModel: MODEL,
+    logging: missingProfile ? { consoleLevel: "debug" } : undefined,
+    env: missingProfile
+      ? { OPENCLAW_LOG_LEVEL: undefined, VITEST: undefined, NODE_ENV: undefined }
+      : undefined,
+  });
+}
+
 describe("Codex auth product proof", () => {
   it(
     "repairs mixed legacy auth into SQLite and sends the selected OAuth profile to app-server",
     { timeout: 180_000 },
-    async () => {
-      const { CODEX_APP_SERVER_VERSION } = await loadBundledPluginFacade<{
-        CODEX_APP_SERVER_VERSION: string;
-      }>({ pluginId: "codex", artifactBasename: "test-api.js" });
-      const appServerFixture = fileURLToPath(
-        new URL("./codex-auth-app-server.fixture.mjs", import.meta.url),
-      );
-      instance = await createOpenClawTestInstance({
-        name: "qa-codex-auth-product-proof",
-        env: {
-          OPENCLAW_AGENT_HARNESS_FALLBACK: "none",
-          OPENCLAW_QA_CODEX_APP_SERVER_VERSION: CODEX_APP_SERVER_VERSION,
-          OPENCLAW_SKIP_PROVIDERS: undefined,
-        },
-        config: {
-          plugins: {
-            enabled: true,
-            allow: ["codex"],
-            entries: {
-              codex: {
-                enabled: true,
-                config: {
-                  appServer: {
-                    mode: "yolo",
-                    command: process.execPath,
-                    args: [appServerFixture],
-                    requestTimeoutMs: REQUEST_TIMEOUT_MS,
-                    turnCompletionIdleTimeoutMs: REQUEST_TIMEOUT_MS,
-                  },
-                },
-              },
-            },
-          },
-          agents: {
-            defaults: {
-              model: { primary: MODEL, fallbacks: [] },
-              models: { [MODEL]: { agentRuntime: { id: "codex" } } },
-              workspace: "~/workspace",
-              skipBootstrap: true,
-              timeoutSeconds: 60,
-              sandbox: { mode: "off" },
-            },
-          },
-        },
-      });
+    async ({ signal }) => {
+      instance = await createAuthGateway();
 
       const requestLog = instance.state.path("codex-auth-app-server.jsonl");
       instance.env.OPENCLAW_QA_CODEX_AUTH_APP_SERVER_LOG = requestLog;
       const appServerLog = createJsonlRequestTailer<AppServerLogEntry>(requestLog);
-      const canonicalStore = await runCodexAuthDoctorMigrationProof(instance, {
+      await runCodexAuthDoctorMigrationProof(instance, {
         accountId: ACCOUNT_ID,
         oauthAccess,
         shape: "mixed",
@@ -176,14 +234,21 @@ describe("Codex auth product proof", () => {
       );
       expect(hook.status, JSON.stringify(hook.json)).toBe(200);
 
-      const loginRequest = await waitForRequest(appServerLog, "account/login/start");
+      const loginRequest = await waitForRequest(
+        appServerLog,
+        requestLog,
+        "account/login/start",
+        signal,
+      );
       const loginParams = loginRequest.params as Record<string, unknown>;
-      expect(loginParams.type).toBe("chatgptAuthTokens");
-      expect(loginParams.accessToken === oauthAccess).toBe(true);
-      expect(loginParams.chatgptAccountId).toBe(ACCOUNT_ID);
-      expect(loginParams.chatgptPlanType).toBeNull();
+      expect(loginParams).toMatchObject({
+        type: "chatgptAuthTokens",
+        accessToken: oauthAccess,
+        chatgptAccountId: ACCOUNT_ID,
+        chatgptPlanType: null,
+      });
 
-      await waitForRequest(appServerLog, "turn/start");
+      await waitForRequest(appServerLog, requestLog, "turn/start", signal);
       const turnEntries = appServerLog.read();
       const threadStartIndex = turnEntries.findIndex(
         (request) => request.method === "thread/start",
@@ -191,16 +256,24 @@ describe("Codex auth product proof", () => {
       const turnStartIndex = turnEntries.findIndex((request) => request.method === "turn/start");
       expect(threadStartIndex).toBeGreaterThanOrEqual(0);
       expect(turnStartIndex).toBeGreaterThan(threadStartIndex);
-      const completedTurn = await waitForAssistantHistory(instance, PRODUCT_OUTPUT);
+      await waitForAssistantHistory(instance, PRODUCT_OUTPUT);
 
-      const beforeUsage = appServerLog.read().length;
-      const status = await instance.cli(["status", "--usage", "--json", "--timeout", "60000"], {
-        timeoutMs: 120_000,
-      });
+      const usageRequestLog = instance.state.path("codex-auth-usage-app-server.jsonl");
+      const usageLog = createJsonlRequestTailer<AppServerLogEntry>(usageRequestLog);
+      // The running Gateway keeps its original log, including background catalog reads.
+      const cliEnv = instance.env;
+      cliEnv.OPENCLAW_QA_CODEX_AUTH_APP_SERVER_LOG = usageRequestLog;
+      const status = await instance
+        .cli(["status", "--usage", "--json", "--timeout", "60000"], {
+          timeoutMs: 120_000,
+        })
+        .finally(() => {
+          cliEnv.OPENCLAW_QA_CODEX_AUTH_APP_SERVER_LOG = requestLog;
+        });
       expect(status.code, status.stderr).toBe(0);
       expect(status.stdout).toContain("qa-codex-account@example.com");
 
-      const usageEntries = appServerLog.read().slice(beforeUsage);
+      const usageEntries = usageLog.read();
       const usageLoginIndex = usageEntries.findIndex(
         (request) => request.method === "account/login/start",
       );
@@ -232,42 +305,172 @@ describe("Codex auth product proof", () => {
         },
         requiresOpenaiAuth: true,
       });
+    },
+  );
 
-      console.log(
-        `[qa-codex-auth-product-proof] ${JSON.stringify({
-          selectedProfileId: canonicalStore?.order?.openai?.[0],
-          canonicalStore: {
-            profileIds: Object.keys(canonicalStore?.profiles ?? {}).toSorted(),
-            order: canonicalStore?.order?.openai,
-            legacyJsonRemoved: true,
+  it(
+    "returns bounded recovery after the explicitly selected profile is removed",
+    { timeout: 180_000 },
+    async () => {
+      instance = await createAuthGateway(true);
+
+      const requestLog = instance.state.path("codex-auth-app-server.jsonl");
+      instance.env.OPENCLAW_QA_CODEX_AUTH_APP_SERVER_LOG = requestLog;
+      const appServerLog = createJsonlRequestTailer<AppServerLogEntry>(requestLog);
+      await instance.state.writeAuthProfiles({
+        version: 1,
+        profiles: {
+          [MISSING_PROFILE_ID]: {
+            type: "token",
+            provider: "openai",
+            token: chatgptAccessToken(ACCOUNT_ID),
+            accountId: ACCOUNT_ID,
           },
-          gatewayTurn: {
-            threadStartOrder: threadStartIndex,
-            turnStartOrder: turnStartIndex,
-            assistantOutput: PRODUCT_OUTPUT,
-            historySessionKey: completedTurn.sessionKey,
-            historySessionId: completedTurn.history.sessionId,
+        },
+      });
+
+      await instance.startGateway();
+      const sessionKey = "agent:main:qa-codex-missing-auth-profile";
+      const events: GatewayEvent[] = [];
+      const client = await connectGatewayEventClient(instance, events);
+      let runId = "";
+      let terminal: unknown;
+      let failedHistory: GatewayHistory | undefined;
+      let finalEvent: GatewayEvent | undefined;
+      let lifecycleEvent: GatewayEvent | undefined;
+      try {
+        const testInstance = instance;
+        const runConfiguredTurn = async (idempotencyKey: string) => {
+          const setup = await client.request<{ runId?: string; status?: string }>("chat.send", {
+            sessionKey,
+            message: `Reply with ${PRODUCT_OUTPUT}.`,
+            deliver: false,
+            idempotencyKey,
+          });
+          expect(setup).toMatchObject({ runId: expect.any(String), status: "started" });
+          const setupTerminal = await client.request(
+            "agent.wait",
+            { runId: setup.runId, timeoutMs: REQUEST_TIMEOUT_MS },
+            { timeoutMs: REQUEST_TIMEOUT_MS + 5_000 },
+          );
+          expect(
+            setupTerminal,
+            `${JSON.stringify(setupTerminal)}\n${JSON.stringify(appServerLog.read())}\n${testInstance.logs()}`,
+          ).toMatchObject({ runId: setup.runId, status: "ok" });
+        };
+        await runConfiguredTurn("qa-codex-profile-binding-setup");
+        await expect(
+          client.request("models.list", { agentId: "main", refresh: true }),
+        ).resolves.toMatchObject({
+          models: expect.arrayContaining([
+            expect.objectContaining({ id: "gpt-5.6-luna", provider: "openai" }),
+          ]),
+        });
+        await expect(
+          client.request("sessions.patch", {
+            key: sessionKey,
+            model: `${MODEL}@${MISSING_PROFILE_ID}`,
+          }),
+        ).resolves.toMatchObject({
+          ok: true,
+          entry: {
+            authProfileOverride: MISSING_PROFILE_ID,
+            authProfileOverrideSource: "user",
           },
-          appServer: [
-            {
-              order: usageLoginIndex,
-              method: usageLoginRequest?.method,
-              params: {
-                type: usageLoginParams.type,
-                accessToken: "redacted",
-                chatgptAccountId: usageLoginParams.chatgptAccountId,
-                chatgptPlanType: usageLoginParams.chatgptPlanType,
-              },
-            },
-            {
-              order: accountReadIndex,
-              method: accountReadRequest?.method,
-              params: accountReadRequest?.params,
-              result: accountReadResponse?.result,
-            },
-          ],
-        })}`,
+        });
+        // A metadata patch alone does not prove the selected profile reaches native execution.
+        await runConfiguredTurn("qa-codex-profile-binding-pinned");
+
+        const logoutResult = await client.request("models.authLogout", {
+          provider: "openai",
+          agentId: "main",
+          profileIds: [MISSING_PROFILE_ID],
+        });
+        expect(logoutResult, testInstance.logs()).toEqual({
+          provider: "openai",
+          removedProfiles: [MISSING_PROFILE_ID],
+          abortedRunIds: [],
+        });
+        await fs.writeFile(requestLog, "", "utf8");
+        events.length = 0;
+        await client.request("sessions.messages.subscribe", { key: sessionKey });
+        await client.request("sessions.subscribe", {});
+        const started = await client.request<{ runId?: string; status?: string }>("chat.send", {
+          sessionKey,
+          message: "Prove missing selected auth profile recovery.",
+          deliver: false,
+          idempotencyKey: "qa-codex-missing-auth-profile",
+        });
+        expect(started).toMatchObject({ runId: expect.any(String), status: "started" });
+        runId = started.runId ?? "";
+        terminal = await client.request(
+          "agent.wait",
+          { runId: started.runId, timeoutMs: REQUEST_TIMEOUT_MS },
+          { timeoutMs: REQUEST_TIMEOUT_MS + 5_000 },
+        );
+        expect(terminal).toMatchObject({ runId, status: "error" });
+        await vi.waitFor(
+          () => {
+            finalEvent = events.find(
+              (event) =>
+                event.event === "chat" &&
+                event.payload !== null &&
+                typeof event.payload === "object" &&
+                (event.payload as { runId?: unknown }).runId === runId &&
+                (event.payload as { state?: unknown }).state === "error",
+            );
+            lifecycleEvent = events.find(
+              (event) =>
+                event.event === "sessions.changed" &&
+                event.payload !== null &&
+                typeof event.payload === "object" &&
+                (event.payload as { sessionKey?: unknown }).sessionKey === sessionKey &&
+                (event.payload as { session?: { lastRunId?: unknown } }).session?.lastRunId ===
+                  runId &&
+                (event.payload as { session?: { status?: unknown } }).session?.status === "failed",
+            );
+            expect(finalEvent).toBeDefined();
+            expect(lifecycleEvent).toBeDefined();
+          },
+          { interval: 20, timeout: 5_000 },
+        );
+
+        failedHistory = await client.request<GatewayHistory>(
+          "chat.history",
+          { agentId: "main", sessionKey, limit: 50 },
+          { timeoutMs: 5_000 },
+        );
+      } finally {
+        client.stop();
+      }
+
+      const failureAppServerLog = createJsonlRequestTailer<AppServerLogEntry>(requestLog);
+
+      expectBoundedMissingProfileRecovery(finalEvent?.payload, { diagnostic: instance.logs() });
+      // Lifecycle metadata belongs to sessions.changed; transcript delivery has independent timing.
+      expectBoundedMissingProfileRecovery(
+        (lifecycleEvent?.payload as { session?: { lastRunError?: unknown } } | undefined)?.session
+          ?.lastRunError,
+        { sessionError: true },
       );
+      expectBoundedMissingProfileRecovery(terminal);
+      expectBoundedMissingProfileRecovery(failedHistory?.sessionInfo?.lastRunError, {
+        sessionError: true,
+      });
+      expect(JSON.stringify(failedHistory)).not.toContain(MISSING_PROFILE_ID);
+      expect(JSON.stringify(failedHistory)).not.toContain("Codex app-server auth profile");
+
+      const failureMethods = failureAppServerLog
+        .read()
+        .flatMap((entry) => (typeof entry.method === "string" ? [entry.method] : []));
+      const operationalMethods = failureMethods.filter(
+        (method) => method !== "initialize" && method !== "initialized",
+      );
+      // App-server may perform read-only capability discovery before OpenClaw rejects the
+      // removed profile, but it must not start or resume a conversation turn.
+      expect(
+        operationalMethods.filter((method) => method !== "model/list" && method !== "account/read"),
+      ).toEqual([]);
     },
   );
 });

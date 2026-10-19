@@ -1,23 +1,27 @@
 /** Normalizes cron create/patch payloads before validation and persistence. */
 import { parseBoolean } from "@openclaw/normalization-core/boolean-coercion";
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
+  readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalAccountId } from "../routing/account-id.js";
 import { sanitizeAgentId } from "../routing/session-key.js";
-import { isRecord } from "../utils.js";
 import { shouldDefaultCronDeliveryToAnnounce } from "./delivery-defaults.js";
 import { parseDeliveryInput } from "./delivery-field-schemas.js";
+import { normalizeCronInferenceBinding } from "./inference-binding.js";
 import { normalizeCronCommandArgv, normalizeCronPayload } from "./normalize-payload.js";
+import { snapshotOwnCronRecord } from "./own-record.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
 import { normalizeCronRuntimeAuthority } from "./runtime-authority.js";
 import { coerceFiniteScheduleNumber } from "./schedule-number.js";
 import {
-  normalizeCronScheduledToolCallerOrigin,
   normalizeCronScheduledToolPolicy,
+  normalizeCronToolsAllowExecTarget,
+  normalizeCronToolsAllowExecTargetRequirement,
 } from "./scheduled-tool-policy.js";
 import { inferCronJobName } from "./service/normalize.js";
 import {
@@ -26,7 +30,8 @@ import {
 } from "./session-target.js";
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "./stagger.js";
 import { normalizeCronStreamBatching } from "./stream-schedule.js";
-import type { CronJobCreate, CronJobPatch } from "./types.js";
+import { normalizeCronToolsAllowProvenance } from "./tools-allow-provenance.js";
+import { isSystemOwnedCronPayloadKind, type CronJobCreate, type CronJobPatch } from "./types.js";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -36,31 +41,28 @@ type NormalizeOptions = {
   sessionContext?: { sessionKey?: string };
 };
 
-const DEFAULT_OPTIONS: NormalizeOptions = {
-  applyDefaults: false,
-};
-
 function coerceSchedule(schedule: UnknownRecord) {
-  const next: UnknownRecord = { ...schedule };
-  const rawKind = normalizeLowercaseStringOrEmpty(schedule.kind);
+  const next = snapshotOwnCronRecord(schedule);
+  const rawKind = normalizeLowercaseStringOrEmpty(next.kind);
   const kind =
     rawKind === "at" ||
     rawKind === "every" ||
     rawKind === "cron" ||
     rawKind === "on-exit" ||
-    rawKind === "stream"
+    rawKind === "stream" ||
+    rawKind === "event"
       ? rawKind
       : undefined;
-  const exprRaw = normalizeOptionalString(schedule.expr) ?? "";
-  const timezone = normalizeOptionalString(schedule.tz);
-  const commandRaw = normalizeOptionalString(schedule.command) ?? "";
-  const streamCommand = normalizeCronCommandArgv(schedule.command);
-  const cwdRaw = normalizeOptionalString(schedule.cwd) ?? "";
-  const streamMode = normalizeOptionalLowercaseString(schedule.mode);
-  const streamMatch = typeof schedule.match === "string" ? schedule.match : undefined;
-  const everyMs = coerceFiniteScheduleNumber(schedule.everyMs);
-  const anchorMs = coerceFiniteScheduleNumber(schedule.anchorMs);
-  const atString = normalizeOptionalString(schedule.at) ?? "";
+  const exprRaw = normalizeOptionalString(next.expr) ?? "";
+  const timezone = normalizeOptionalString(next.tz);
+  const commandRaw = readNonBlankString(next.command) ?? "";
+  const streamCommand = normalizeCronCommandArgv(next.command);
+  const cwdRaw = normalizeOptionalString(next.cwd) ?? "";
+  const streamMode = normalizeOptionalLowercaseString(next.mode);
+  const streamMatch = typeof next.match === "string" ? next.match : undefined;
+  const everyMs = coerceFiniteScheduleNumber(next.everyMs);
+  const anchorMs = coerceFiniteScheduleNumber(next.anchorMs);
+  const atString = normalizeOptionalString(next.at) ?? "";
   const parsedAtMs = atString ? parseAbsoluteTimeMs(atString) : null;
 
   if (kind) {
@@ -70,8 +72,6 @@ function coerceSchedule(schedule: UnknownRecord) {
   const parsedAtIso = parsedAtMs !== null ? timestampMsToIsoString(parsedAtMs) : undefined;
   if (atString) {
     next.at = parsedAtIso ?? atString;
-  } else if (parsedAtIso !== undefined) {
-    next.at = parsedAtIso;
   }
 
   if (exprRaw) {
@@ -116,50 +116,32 @@ function coerceSchedule(schedule: UnknownRecord) {
     }
     normalizeCronStreamBatching(next);
   }
-  const staggerMs = normalizeCronStaggerMs(schedule.staggerMs);
+  const staggerMs = normalizeCronStaggerMs(next.staggerMs);
   if (staggerMs !== undefined) {
     next.staggerMs = staggerMs;
+  } else if (next.kind === "cron" && next.staggerMs !== undefined) {
+    // Dropping an authored invalid value would silently apply a default on create
+    // or retain the previous stagger on update before request validation runs.
+    throw new TypeError("schedule.staggerMs must be a valid number or non-negative integer string");
   } else if ("staggerMs" in next) {
     delete next.staggerMs;
   }
 
-  if (next.kind === "at") {
+  if (kind) {
     // Keep each schedule variant canonical so persisted jobs do not carry stale
     // fields from a previous kind after CLI/API normalization.
-    delete next.everyMs;
-    delete next.anchorMs;
-    delete next.expr;
-    delete next.tz;
-    delete next.staggerMs;
-  } else if (next.kind === "every") {
-    delete next.at;
-    delete next.expr;
-    delete next.tz;
-    delete next.staggerMs;
-  } else if (next.kind === "cron") {
-    delete next.at;
-    delete next.everyMs;
-    delete next.anchorMs;
-    delete next.command;
-    delete next.cwd;
-  } else if (next.kind === "on-exit") {
-    delete next.at;
-    delete next.everyMs;
-    delete next.anchorMs;
-    delete next.expr;
-    delete next.tz;
-    delete next.staggerMs;
-    delete next.mode;
-    delete next.match;
-    delete next.batchMs;
-    delete next.maxBatchBytes;
-  } else if (next.kind === "stream") {
-    delete next.at;
-    delete next.everyMs;
-    delete next.anchorMs;
-    delete next.expr;
-    delete next.tz;
-    delete next.staggerMs;
+    if (kind !== "at") {
+      delete next.at;
+    }
+    if (kind !== "every") {
+      delete next.everyMs;
+      delete next.anchorMs;
+    }
+    if (kind !== "cron") {
+      delete next.expr;
+      delete next.tz;
+      delete next.staggerMs;
+    }
   }
 
   if (next.kind !== "on-exit" && next.kind !== "stream") {
@@ -173,12 +155,17 @@ function coerceSchedule(schedule: UnknownRecord) {
     delete next.maxBatchBytes;
   }
 
-  return next;
+  if (next.kind !== "event") {
+    delete next.source;
+    delete next.options;
+  }
+  return { ...next };
 }
 
 function coerceTrigger(trigger: UnknownRecord): UnknownRecord {
-  const script = typeof trigger.script === "string" ? trigger.script.trim() : "";
-  const once = parseBoolean(trigger.once);
+  const input = snapshotOwnCronRecord(trigger);
+  const script = typeof input.script === "string" ? input.script.trim() : "";
+  const once = parseBoolean(input.once);
   return {
     script,
     ...(once !== undefined ? { once } : {}),
@@ -186,73 +173,48 @@ function coerceTrigger(trigger: UnknownRecord): UnknownRecord {
 }
 
 function coerceDelivery(delivery: UnknownRecord) {
-  const next: UnknownRecord = { ...delivery };
-  const parsed = parseDeliveryInput(delivery);
+  const next = snapshotOwnCronRecord(delivery);
+  const parsed = parseDeliveryInput(next);
   if (parsed.mode !== undefined) {
     next.mode = parsed.mode;
-  } else if ("mode" in next) {
-    delete next.mode;
   }
-  if ("channel" in delivery && delivery.channel === null) {
-    next.channel = null;
-  } else if (parsed.channel !== undefined) {
-    next.channel = parsed.channel;
-  } else if ("channel" in next) {
-    delete next.channel;
+  for (const field of ["channel", "to", "threadId", "accountId"] as const) {
+    if (next[field] === null) {
+      continue;
+    }
+    if (parsed[field] !== undefined) {
+      next[field] = parsed[field];
+    } else {
+      delete next[field];
+    }
   }
-  if ("to" in delivery && delivery.to === null) {
-    next.to = null;
-  } else if (parsed.to !== undefined) {
-    next.to = parsed.to;
-  } else if ("to" in next) {
-    delete next.to;
-  }
-  if ("threadId" in delivery && delivery.threadId === null) {
-    next.threadId = null;
-  } else if (parsed.threadId !== undefined) {
-    next.threadId = parsed.threadId;
-  } else if ("threadId" in next) {
-    delete next.threadId;
-  }
-  if ("accountId" in delivery && delivery.accountId === null) {
-    next.accountId = null;
-  } else if (parsed.accountId !== undefined) {
-    next.accountId = parsed.accountId;
-  } else if ("accountId" in next) {
-    delete next.accountId;
-  }
-  if ("failureDestination" in next) {
+  if ("failureDestination" in next && next.failureDestination !== null) {
     // Null is an explicit clear signal in patches; invalid objects are dropped.
-    if (next.failureDestination === null) {
-      next.failureDestination = null;
-    } else if (isRecord(next.failureDestination)) {
+    if (isRecord(next.failureDestination)) {
       next.failureDestination = coerceFailureDestination(next.failureDestination);
     } else {
       delete next.failureDestination;
     }
   }
-  if ("completionDestination" in next) {
+  if ("completionDestination" in next && next.completionDestination !== null) {
     // Completion destinations are currently webhook-only, so other shapes are
     // discarded before they can persist as ambiguous config.
-    if (next.completionDestination === null) {
-      next.completionDestination = null;
+    const completionDestination = isRecord(next.completionDestination)
+      ? coerceCompletionDestination(next.completionDestination)
+      : null;
+    if (completionDestination) {
+      next.completionDestination = completionDestination;
     } else {
-      const completionDestination = isRecord(next.completionDestination)
-        ? coerceCompletionDestination(next.completionDestination)
-        : null;
-      if (completionDestination) {
-        next.completionDestination = completionDestination;
-      } else {
-        delete next.completionDestination;
-      }
+      delete next.completionDestination;
     }
   }
-  return next;
+  return { ...next };
 }
 
 function coerceCompletionDestination(value: UnknownRecord) {
-  const mode = normalizeOptionalLowercaseString(value.mode);
-  const to = normalizeOptionalString(value.to);
+  const input = snapshotOwnCronRecord(value);
+  const mode = normalizeOptionalLowercaseString(input.mode);
+  const to = normalizeOptionalString(input.to);
   if (mode !== "webhook") {
     return null;
   }
@@ -263,64 +225,31 @@ function coerceCompletionDestination(value: UnknownRecord) {
 }
 
 function coerceFailureDestination(value: UnknownRecord) {
-  const next: UnknownRecord = { ...value };
-  if ("channel" in next) {
-    if (next.channel === null) {
-      next.channel = null;
-    } else if (next.channel === undefined) {
-      next.channel = undefined;
+  const next = snapshotOwnCronRecord(value);
+  for (const [field, normalize] of [
+    ["channel", normalizeOptionalLowercaseString],
+    ["to", normalizeOptionalString],
+    ["accountId", normalizeOptionalString],
+  ] as const) {
+    if (next[field] == null) {
+      continue;
+    }
+    const normalized = normalize(next[field]);
+    if (normalized) {
+      next[field] = normalized;
     } else {
-      const channel = normalizeOptionalLowercaseString(next.channel);
-      if (channel) {
-        next.channel = channel;
-      } else {
-        delete next.channel;
-      }
+      delete next[field];
     }
   }
-  if ("to" in next) {
-    if (next.to === null) {
-      next.to = null;
-    } else if (next.to === undefined) {
-      next.to = undefined;
+  if (next.mode != null) {
+    const mode = normalizeOptionalLowercaseString(next.mode);
+    if (mode === "announce" || mode === "webhook") {
+      next.mode = mode;
     } else {
-      const to = normalizeOptionalString(next.to);
-      if (to) {
-        next.to = to;
-      } else {
-        delete next.to;
-      }
+      delete next.mode;
     }
   }
-  if ("accountId" in next) {
-    if (next.accountId === null) {
-      next.accountId = null;
-    } else if (next.accountId === undefined) {
-      next.accountId = undefined;
-    } else {
-      const accountId = normalizeOptionalString(next.accountId);
-      if (accountId) {
-        next.accountId = accountId;
-      } else {
-        delete next.accountId;
-      }
-    }
-  }
-  if ("mode" in next) {
-    if (next.mode === null) {
-      next.mode = null;
-    } else if (next.mode === undefined) {
-      next.mode = undefined;
-    } else {
-      const mode = normalizeOptionalLowercaseString(next.mode);
-      if (mode === "announce" || mode === "webhook") {
-        next.mode = mode;
-      } else {
-        delete next.mode;
-      }
-    }
-  }
-  return next;
+  return { ...next };
 }
 
 function normalizeSessionTarget(raw: unknown) {
@@ -341,9 +270,6 @@ function normalizeSessionTarget(raw: unknown) {
 }
 
 function normalizeWakeMode(raw: unknown) {
-  if (typeof raw !== "string") {
-    return undefined;
-  }
   const trimmed = normalizeOptionalLowercaseString(raw);
   if (trimmed === "now" || trimmed === "next-heartbeat") {
     return trimmed;
@@ -354,13 +280,13 @@ function normalizeWakeMode(raw: unknown) {
 /** Normalizes raw cron job input without deciding whether create-time defaults apply. */
 export function normalizeCronJobInput(
   raw: unknown,
-  options: NormalizeOptions = DEFAULT_OPTIONS,
+  options: NormalizeOptions = { applyDefaults: false },
 ): UnknownRecord | null {
   if (!isRecord(raw)) {
     return null;
   }
-  const base = raw;
-  const next: UnknownRecord = { ...base };
+  const base = snapshotOwnCronRecord(raw);
+  const next = snapshotOwnCronRecord(base);
 
   for (const field of ["declarationKey", "displayName"] as const) {
     if (field in base && typeof base[field] === "string") {
@@ -374,10 +300,11 @@ export function normalizeCronJobInput(
   }
 
   if (isRecord(base.owner)) {
-    const agentId = normalizeOptionalString(base.owner.agentId);
-    const sessionKey = normalizeOptionalString(base.owner.sessionKey);
+    const owner = snapshotOwnCronRecord(base.owner);
+    const agentId = normalizeOptionalString(owner.agentId);
+    const sessionKey = normalizeOptionalString(owner.sessionKey);
     const accountId = normalizeOptionalAccountId(
-      typeof base.owner.accountId === "string" ? base.owner.accountId : undefined,
+      typeof owner.accountId === "string" ? owner.accountId : undefined,
     );
     if (agentId || sessionKey || accountId) {
       next.owner = {
@@ -390,38 +317,24 @@ export function normalizeCronJobInput(
     }
   }
 
-  if ("scheduledToolPolicy" in base) {
-    const scheduledToolPolicy = normalizeCronScheduledToolPolicy(base.scheduledToolPolicy);
-    if (scheduledToolPolicy) {
-      next.scheduledToolPolicy = scheduledToolPolicy;
-    } else {
-      delete next.scheduledToolPolicy;
+  // Preserve omitted patch fields; each authority owner decides whether an
+  // authored value is retained, discarded, or converted to recovery state.
+  for (const [field, normalize] of [
+    ["scheduledToolPolicy", normalizeCronScheduledToolPolicy],
+    ["toolsAllowProvenance", normalizeCronToolsAllowProvenance],
+    ["toolsAllowExecTarget", normalizeCronToolsAllowExecTarget],
+    ["toolsAllowExecTargetRequirement", normalizeCronToolsAllowExecTargetRequirement],
+    ["runtimeAuthority", normalizeCronRuntimeAuthority],
+    ["inferenceBinding", normalizeCronInferenceBinding],
+  ] as const) {
+    if (!(field in base)) {
+      continue;
     }
-  }
-
-  if ("toolsAllowProvenance" in base) {
-    const provenance = base.toolsAllowProvenance;
-    if (
-      isRecord(provenance) &&
-      provenance.version === 1 &&
-      provenance.source === "final-executable-surface"
-    ) {
-      next.toolsAllowProvenance = {
-        version: 1,
-        source: "final-executable-surface",
-        callerOrigin: normalizeCronScheduledToolCallerOrigin(provenance.callerOrigin),
-      };
+    const value = normalize(base[field]);
+    if (value) {
+      next[field] = value;
     } else {
-      delete next.toolsAllowProvenance;
-    }
-  }
-
-  if ("runtimeAuthority" in base) {
-    const runtimeAuthority = normalizeCronRuntimeAuthority(base.runtimeAuthority);
-    if (runtimeAuthority) {
-      next.runtimeAuthority = runtimeAuthority;
-    } else {
-      delete next.runtimeAuthority;
+      delete next[field];
     }
   }
   if (base.runtimeAuthorityRecoveryRequired === true) {
@@ -430,30 +343,13 @@ export function normalizeCronJobInput(
     delete next.runtimeAuthorityRecoveryRequired;
   }
 
-  if ("agentId" in base) {
-    const agentId = base.agentId;
-    if (agentId === null) {
-      next.agentId = null;
-    } else if (typeof agentId === "string") {
-      const trimmed = agentId.trim();
+  for (const field of ["agentId", "sessionKey"] as const) {
+    if (typeof base[field] === "string") {
+      const trimmed = base[field].trim();
       if (trimmed) {
-        next.agentId = sanitizeAgentId(trimmed);
+        next[field] = field === "agentId" ? sanitizeAgentId(trimmed) : trimmed;
       } else {
-        delete next.agentId;
-      }
-    }
-  }
-
-  if ("sessionKey" in base) {
-    const sessionKey = base.sessionKey;
-    if (sessionKey === null) {
-      next.sessionKey = null;
-    } else if (typeof sessionKey === "string") {
-      const trimmed = sessionKey.trim();
-      if (trimmed) {
-        next.sessionKey = trimmed;
-      } else {
-        delete next.sessionKey;
+        delete next[field];
       }
     }
   }
@@ -491,10 +387,8 @@ export function normalizeCronJobInput(
     next.payload = normalizeCronPayload(base.payload);
   }
 
-  if ("trigger" in base) {
-    if (base.trigger === null) {
-      next.trigger = null;
-    } else if (isRecord(base.trigger)) {
+  if ("trigger" in base && base.trigger !== null) {
+    if (isRecord(base.trigger)) {
       next.trigger = coerceTrigger(base.trigger);
     } else {
       delete next.trigger;
@@ -520,13 +414,8 @@ export function normalizeCronJobInput(
       isRecord(next.payload)
     ) {
       next.name = inferCronJobName({
-        schedule: next.schedule as { kind?: unknown; everyMs?: unknown; expr?: unknown },
-        payload: next.payload as {
-          kind?: unknown;
-          text?: unknown;
-          message?: unknown;
-          argv?: unknown;
-        },
+        schedule: next.schedule,
+        payload: next.payload,
       });
     } else if (typeof next.name === "string") {
       const trimmed = next.name.trim();
@@ -539,7 +428,7 @@ export function normalizeCronJobInput(
       // Agent turns bind to the creating conversation by default: the run carries
       // that chat's context and announces its result there. Callers without session
       // context are downgraded to isolated by resolveCronCurrentSessionTarget.
-      if (kind === "systemEvent" || kind === "heartbeat") {
+      if (kind === "systemEvent" || isSystemOwnedCronPayloadKind(kind)) {
         next.sessionTarget = "main";
       } else if (kind === "agentTurn") {
         next.sessionTarget = "current";
@@ -578,11 +467,8 @@ export function normalizeCronJobInput(
       next.deleteAfterRun = true;
     }
     if ("schedule" in next && isRecord(next.schedule) && next.schedule.kind === "cron") {
-      const schedule = next.schedule as UnknownRecord;
-      const explicit = normalizeCronStaggerMs(schedule.staggerMs);
-      if (explicit !== undefined) {
-        schedule.staggerMs = explicit;
-      } else {
+      const schedule = next.schedule;
+      if (schedule.staggerMs === undefined) {
         const expr = typeof schedule.expr === "string" ? schedule.expr : "";
         const defaultStaggerMs = resolveDefaultCronStaggerMs(expr);
         if (defaultStaggerMs !== undefined) {
@@ -601,7 +487,7 @@ export function normalizeCronJobInput(
     }
   }
 
-  return next;
+  return { ...next };
 }
 
 /** Normalizes a raw cron create request and applies create-time defaults. */

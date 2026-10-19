@@ -1,24 +1,28 @@
-// Control UI tests cover workboard behavior.
-import { copyFile, mkdir, rm, writeFile } from "node:fs/promises";
-import path from "node:path";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import type { BrowserContext, Locator, Page } from "playwright";
+import type { WorkboardBoardSummary, WorkboardCard } from "@openclaw/workboard-contract";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/version.js";
-import { WORKBOARD_CHANGED_EVENT } from "../../../../packages/workboard-contract/src/index.js";
+import {
+  WORKBOARD_CHANGED_EVENT,
+  WORKBOARD_STATUSES,
+} from "../../../../packages/workboard-contract/src/index.js";
+import { createRequireRecord } from "../../../../test/helpers/record.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
-import type {
-  WorkboardBoardSummary,
-  WorkboardCard,
-  WorkboardStatus,
-} from "../../lib/workboard/index.ts";
+import { waitForControlUiProofSurface } from "../../test-helpers/control-ui-e2e-screenshot.ts";
 import {
-  controlUiE2eWaitTimeoutMs,
   installMockGateway,
   type MockGatewayControls,
   type MockGatewayRequest,
 } from "../../test-helpers/control-ui-e2e.ts";
+import { workboardUi } from "../../test-helpers/control-ui-workboard-fixture.ts";
+import { openPicker } from "../../test-helpers/select-picker-e2e.ts";
+import {
+  configSnapshot,
+  createWorkboardProof,
+  makeBoard,
+  makeCard,
+  moved,
+} from "./workboard.e2e.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI Workboard mocked Gateway E2E",
@@ -26,33 +30,10 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not installed at ${executablePath}. Run \`pnpm --dir ui exec playwright install chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
 });
 
-const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/workboard");
 const viewport = { height: 1000, width: 2400 };
 const baseTime = Date.parse("2026-06-01T18:00:00.000Z");
 const linkedSessionKey = "agent:main:workboard-proof";
 const linkedSessionName = "Implementation session";
-const WORKBOARD_STATUSES: readonly WorkboardStatus[] = [
-  "triage",
-  "backlog",
-  "todo",
-  "scheduled",
-  "ready",
-  "running",
-  "review",
-  "blocked",
-  "done",
-];
-
-type RecordedPage = {
-  context: BrowserContext;
-  page: Page;
-  rawVideoDir: string;
-};
-
-type ProofArtifacts = {
-  screenshots: string[];
-  videos: string[];
-};
 
 const requireRecord = createRequireRecord("record", "expected-object-value");
 
@@ -64,68 +45,46 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function workboardField(scope: Page | Locator, label: string) {
-  return scope.locator(".workboard-field").filter({
-    hasText: new RegExp(`^\\s*${escapeRegExp(label)}\\b`, "u"),
+async function openWorkboardFilters(page: Page): Promise<void> {
+  const trigger = page.locator(".workboard-filter-trigger");
+  const panel = page.locator(".workboard-filter-popover__panel");
+  if (!(await panel.isVisible())) {
+    await trigger.click();
+    await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
+  }
+  await panel.waitFor();
+}
+
+async function chooseWorkboardDisplayOption(page: Page, option: string) {
+  await openWorkboardFilters(page);
+  await page
+    .getByRole("group", { name: "Empty columns", exact: true })
+    .getByRole("button", { name: option, exact: true })
+    .click();
+}
+
+async function openWorkboardBoardPicker(page: Page) {
+  await openWorkboardFilters(page);
+  const picker = page.locator("openclaw-select-picker").filter({
+    has: page.getByRole("button", { name: /^Filter by board:/u }),
   });
+  await openPicker(picker);
+  return picker;
 }
 
-type UpdatingElement = HTMLElement & {
-  requestUpdate?: () => void;
-  updateComplete: Promise<boolean>;
-};
-
-async function waitForWorkboardRender(page: Page, requestUpdate = false): Promise<void> {
-  await page.locator("openclaw-workboard-page").evaluate(async (element, shouldRequestUpdate) => {
-    const workboardPage = element as UpdatingElement;
-    if (shouldRequestUpdate) {
-      workboardPage.requestUpdate?.();
-    }
-    await workboardPage.updateComplete;
-  }, requestUpdate);
+async function chooseWorkboardBoard(page: Page, boardId: string) {
+  const picker = await openWorkboardBoardPicker(page);
+  await picker.locator(`[role="option"][data-value="${boardId}"]`).click();
 }
 
-async function waitForWorkboardSelectValue(control: Locator, value: string): Promise<void> {
-  // Web Awesome updates `value` before its deferred `change` event. Wait for
-  // that event's update boundary and the parent render that consumes it.
-  await control.evaluate(async (element) => {
-    await (element as UpdatingElement).updateComplete;
-  });
-  await waitForWorkboardRender(control.page());
-  await expect
-    .poll(() =>
-      control.evaluate((select) => (select as HTMLElement & { value?: string }).value ?? ""),
-    )
-    .toBe(value);
-}
-
-async function chooseWorkboardSelectOption(
-  scope: Page | Locator,
-  label: string,
-  optionLabel: string,
-): Promise<void> {
-  const field = workboardField(scope, label);
-  expect(await field.count()).toBe(1);
-  await chooseWorkboardSelectFieldOption(field, optionLabel);
-}
-
-async function chooseWorkboardSelectFieldOption(
-  field: Locator,
-  optionLabel: string,
-  control = field.locator("wa-select"),
-): Promise<void> {
-  const optionValue = await field.locator("wa-option").evaluateAll((options, optionText) => {
-    const option = options.find(
-      (candidate) => (candidate as HTMLElement & { label?: string }).label === optionText,
-    );
-    return option?.getAttribute("value") ?? null;
-  }, optionLabel);
-  expect(optionValue).not.toBeNull();
-  await control.evaluate((select, value) => {
-    (select as HTMLElement & { value: string }).value = String(value);
-    select.dispatchEvent(new Event("change", { bubbles: true }));
-  }, optionValue);
-  await waitForWorkboardSelectValue(control, optionValue ?? "");
+async function closeWorkboardFilters(page: Page) {
+  const popover = page.locator(".workboard-filter-popover");
+  if (await page.locator(".workboard-filter-popover__panel").isVisible()) {
+    await popover.evaluate((element) => {
+      (element as HTMLElement).hidePopover();
+    });
+    await expect.poll(() => page.locator(".workboard-filter-popover__panel").isHidden()).toBe(true);
+  }
 }
 
 async function setWorkboardDraftField(
@@ -135,59 +94,11 @@ async function setWorkboardDraftField(
 ): Promise<void> {
   const input = scope.getByLabel(label);
   await input.fill(value);
-  // Prove the delegated input handler reached canonical draft state. A DOM-only
-  // value check can pass even when the next parent render would restore stale data.
-  await waitForWorkboardRender(input.page(), true);
   await expect.poll(() => input.inputValue()).toBe(value);
 }
 
-async function waitForRequests(
-  gateway: MockGatewayControls,
-  method: string,
-  count: number,
-): Promise<MockGatewayRequest[]> {
-  const deadline = Date.now() + 10_000;
-  while (Date.now() < deadline) {
-    const requests = await gateway.getRequests(method);
-    if (requests.length >= count) {
-      return requests;
-    }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 10);
-    });
-  }
-  throw new Error(`Timed out waiting for ${count} ${method} requests`);
-}
-
-async function waitForNextRequest(
-  gateway: MockGatewayControls,
-  method: string,
-  previousCount: number,
-): Promise<MockGatewayRequest> {
-  const requests = await waitForRequests(gateway, method, previousCount + 1);
-  const request = requests.at(-1);
-  if (!request) {
-    throw new Error(`No ${method} request found`);
-  }
-  return request;
-}
-
-function workboardConfigSnapshot() {
-  const config = {
-    plugins: {
-      entries: {
-        workboard: { enabled: true },
-      },
-    },
-  };
-  return {
-    config,
-    hash: "workboard-e2e-config",
-    path: "/tmp/openclaw-e2e/openclaw.json",
-    raw: JSON.stringify(config, null, 2),
-    resolved: config,
-    sourceConfig: config,
-  };
+async function requestCount(gateway: MockGatewayControls, method: string): Promise<number> {
+  return (await gateway.getRequests(method)).length;
 }
 
 function sessionsListResponse(sessions: GatewaySessionRow[]) {
@@ -206,61 +117,26 @@ function sessionsListResponse(sessions: GatewaySessionRow[]) {
 
 function sessionRow(overrides: Partial<GatewaySessionRow> = {}): GatewaySessionRow {
   return {
-    contextTokens: 0,
     displayName: linkedSessionName,
     hasActiveRun: false,
     key: linkedSessionKey,
     kind: "direct",
     label: linkedSessionName,
-    model: "gpt-5.5",
-    modelProvider: "openai",
-    totalTokens: 0,
     updatedAt: baseTime,
     ...overrides,
-  };
-}
-
-function readOnlyConnectResponse() {
-  return {
-    auth: {
-      deviceToken: "e2e-read-only-device-token",
-      role: "operator",
-      scopes: ["operator.read"],
-    },
-    features: { events: [], methods: ["chat.startup"] },
-    protocol: PROTOCOL_VERSION,
-    server: { connId: "control-ui-e2e-read-only", version: "e2e" },
-    snapshot: {
-      sessionDefaults: {
-        defaultAgentId: "main",
-        mainKey: "main",
-        mainSessionKey: "main",
-        scope: "agent",
-      },
-    },
-    type: "hello-ok",
   };
 }
 
 function card(
   overrides: Partial<WorkboardCard> & Pick<WorkboardCard, "id" | "title">,
 ): WorkboardCard {
-  return {
-    createdAt: baseTime,
-    labels: [],
-    notes: "",
-    position: 1000,
-    priority: "normal",
-    status: "todo",
-    updatedAt: baseTime,
-    ...overrides,
-  };
+  return makeCard({ notes: "", ...overrides }, baseTime);
 }
 
 function cardsListResponse(
   cards: WorkboardCard[],
   boards: WorkboardBoardSummary[] = [
-    { id: "default", total: cards.length, active: cards.length, archived: 0, byStatus: {} },
+    makeBoard("default", { total: cards.length, active: cards.length }),
   ],
 ) {
   return {
@@ -270,83 +146,50 @@ function cardsListResponse(
   };
 }
 
+function installWorkboard(
+  page: Page,
+  cards: WorkboardCard[],
+  extra: Parameters<typeof installMockGateway>[1] = {},
+) {
+  return installMockGateway(page, {
+    ...workboardUi,
+    ...extra,
+    methodResponses: {
+      "config.get": configSnapshot("workboard-e2e-config", true, 2),
+      "sessions.list": sessionsListResponse([]),
+      "workboard.cards.list": cardsListResponse(cards),
+      ...extra.methodResponses,
+    },
+  });
+}
+
+function setCards(gateway: MockGatewayControls, cards: WorkboardCard[]) {
+  return gateway.setMethodResponse("workboard.cards.list", cardsListResponse(cards));
+}
+
 function statusColumn(page: Page, status: string) {
-  return page
-    .locator(".workboard-column")
-    .filter({
-      has: page.locator(".workboard-column__header h2", {
-        hasText: new RegExp(`^${status}$`, "u"),
-      }),
-    })
-    .first();
+  const statusClass = status.trim().toLowerCase().replaceAll(/\s+/gu, "-");
+  return page.locator(`.workboard-column--${statusClass}`).first();
 }
 
 function cardInColumn(page: Page, status: string, title: string) {
   return statusColumn(page, status).locator(".workboard-card", { hasText: title }).first();
 }
 
-async function newRecordedPage(label: string): Promise<RecordedPage> {
-  await mkdir(artifactDir, { recursive: true });
-  const rawVideoDir = path.join(artifactDir, `${label}-raw`);
-  await rm(rawVideoDir, { force: true, recursive: true });
-  await mkdir(rawVideoDir, { recursive: true });
-  let context: BrowserContext | undefined;
-  let page: Page | undefined;
-  try {
-    context = await suite.browser.newContext({
-      locale: "en-US",
-      recordVideo: {
-        dir: rawVideoDir,
-        size: viewport,
-      },
-      serviceWorkers: "block",
-      viewport,
-    });
-    page = await context.newPage();
-    page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
-    return { context, page, rawVideoDir };
-  } catch (error) {
-    await page?.close().catch(() => {});
-    await context?.close().catch(() => {});
-    await rm(rawVideoDir, { force: true, recursive: true });
-    throw error;
-  }
-}
+const opacity = (locator: Locator) =>
+  locator.evaluate((element) => getComputedStyle(element).opacity);
+const width = (locator: Locator) =>
+  locator.evaluate((element) => element.getBoundingClientRect().width);
 
-async function captureScreenshot(
-  page: Page,
-  artifacts: ProofArtifacts,
-  name: string,
-): Promise<void> {
-  const screenshotPath = path.join(artifactDir, `${name}.png`);
-  await page.screenshot({ fullPage: true, path: screenshotPath });
-  artifacts.screenshots.push(screenshotPath);
-}
-
-async function closeRecordedPage(
-  recorded: RecordedPage,
-  artifacts: ProofArtifacts,
-  label: string,
-): Promise<void> {
-  const video = recorded.page.video();
-  try {
-    await recorded.context.close();
-    if (!video) {
-      return;
-    }
-    const rawVideoPath = await video.path();
-    const videoPath = path.join(artifactDir, `${label}.webm`);
-    await copyFile(rawVideoPath, videoPath);
-    artifacts.videos.push(videoPath);
-  } finally {
-    await rm(recorded.rawVideoDir, { force: true, recursive: true });
-  }
+async function clickCardAction(cardLocator: Locator, name: string) {
+  await cardLocator.hover();
+  await cardLocator.locator(".workboard-card__menu-trigger").click();
+  await cardLocator.getByRole("button", { name, exact: true }).click();
 }
 
 suite.define(() => {
   it("persists Workboard create, edit, running move, lifecycle sync, reload, and read-only state", async () => {
-    await rm(artifactDir, { force: true, recursive: true });
-    const artifacts: ProofArtifacts = { screenshots: [], videos: [] };
+    const proof = createWorkboardProof(suite, "workboard-lifecycle", viewport);
     const createdCard = card({
       id: "card-1",
       labels: ["ui", "proof"],
@@ -370,87 +213,71 @@ suite.define(() => {
     });
     const reviewedCard = card({
       ...runningCard,
-      events: [
-        {
-          at: baseTime + 4,
-          fromStatus: "running",
-          id: "event-review",
-          kind: "moved",
-          toStatus: "review",
-        },
-      ],
+      events: [moved("event-review", baseTime + 4, "running", "review")],
       status: "review",
       updatedAt: baseTime + 4,
     });
     const liveRefreshedCard = card({
       ...reviewedCard,
       notes: "Acceptance: live Gateway invalidation refreshed this card",
+      title: "Workboard browser proof refreshed",
       updatedAt: baseTime + 5,
     });
 
-    const writable = await newRecordedPage("workboard-writable");
-    await writable.page.clock.install();
+    const writable = await proof.open("workboard-writable");
+    const { page } = writable;
+    await page.clock.install();
     try {
-      const writableGateway = await installMockGateway(writable.page, {
+      const gateway = await installWorkboard(page, [], {
         methodResponses: {
-          "config.get": workboardConfigSnapshot(),
           "sessions.list": sessionsListResponse([sessionRow()]),
-          "tasks.list": { nextCursor: null, tasks: [] },
-          "workboard.cards.list": cardsListResponse([]),
         },
       });
-      const response = await writable.page.goto(`${suite.server.baseUrl}workboard`);
+      const response = await page.goto(`${suite.server.baseUrl}workboard`);
       expect(response?.status()).toBe(200);
-      await statusColumn(writable.page, "Todo").waitFor({ state: "visible" });
-      await captureScreenshot(writable.page, artifacts, "01-empty-board");
+      await page
+        .locator(".workboard-heading__actions")
+        .getByRole("button", { name: /New card/u })
+        .waitFor();
+      await gateway.waitForRequest("workboard.cards.list");
+      await expect.poll(() => page.locator(".workboard-refresh").isEnabled()).toBe(true);
+      expect(await page.locator(".workboard-card").count()).toBe(0);
+      await proof.capture(page, "01-empty-board");
 
-      const prioritySelect = writable.page
-        .locator(".workboard-toolbar__filters .workboard-select")
-        .nth(1);
-      const priorityCombobox = prioritySelect.getByRole("combobox");
-      await priorityCombobox.focus();
-      await writable.page.keyboard.press("ArrowDown");
-      await expect.poll(() => priorityCombobox.getAttribute("aria-expanded")).toBe("true");
+      await openWorkboardFilters(page);
+      const highPriority = page
+        .getByRole("group", { name: "Priority", exact: true })
+        .getByRole("checkbox", { name: /High/u, disabled: false });
+      await highPriority.press("Space");
+      await expect.poll(() => highPriority.isChecked()).toBe(true);
+      await highPriority.uncheck();
+      await expect.poll(() => highPriority.isChecked()).toBe(false);
+      await closeWorkboardFilters(page);
 
-      await writable.page.keyboard.press("End");
-      await writable.page.keyboard.press("Enter");
-      await waitForWorkboardSelectValue(prioritySelect, "urgent");
-      await expect.poll(() => priorityCombobox.getAttribute("aria-expanded")).toBe("false");
-
-      await priorityCombobox.focus();
-      await writable.page.keyboard.press("ArrowDown");
-      await writable.page.keyboard.press("ArrowUp");
-      await writable.page.keyboard.press("Enter");
-      await waitForWorkboardSelectValue(prioritySelect, "high");
-      await expect.poll(() => priorityCombobox.getAttribute("aria-expanded")).toBe("false");
-
-      await priorityCombobox.focus();
-      await writable.page.keyboard.press("ArrowDown");
-      await writable.page.keyboard.press("Home");
-      await writable.page.keyboard.press("Enter");
-      await waitForWorkboardSelectValue(prioritySelect, "all");
-      await expect.poll(() => priorityCombobox.getAttribute("aria-expanded")).toBe("false");
-
-      await writableGateway.deferNext("workboard.cards.create");
-      await writable.page
-        .locator(".workboard-toolbar__actions")
+      await gateway.deferNext("workboard.cards.create");
+      await page
+        .locator(".workboard-heading__actions")
         .getByRole("button", { name: /New card/u })
         .click();
-      const createDialog = writable.page.getByRole("dialog", { name: "New card" });
-      const createForm = writable.page.locator('openclaw-modal-dialog[label="New card"]');
+      const createDialog = page.getByRole("dialog", { name: "New card" });
+      const createForm = page.locator(".workboard-draft");
       await expect.poll(() => createDialog.isVisible()).toBe(true);
       await setWorkboardDraftField(createForm, "Title", createdCard.title);
       await setWorkboardDraftField(createForm, "Notes", createdCard.notes ?? "");
-      await chooseWorkboardSelectOption(createForm, "Session", linkedSessionName);
+      await createForm.getByRole("button", { name: /^Session:/u }).click();
+      await createForm
+        .getByRole("option", { name: new RegExp(`^${escapeRegExp(linkedSessionName)}`, "u") })
+        .click();
       await setWorkboardDraftField(createForm, "Labels", "ui, proof");
-      await captureScreenshot(writable.page, artifacts, "02-create-dialog");
-      const createBefore = (await writableGateway.getRequests("workboard.cards.create")).length;
+      await proof.capture(page, "02-create-dialog", createDialog, [
+        createForm.getByLabel("Title"),
+        createForm.getByLabel("Notes"),
+      ]);
+      const createBefore = await requestCount(gateway, "workboard.cards.create");
       await createForm.getByRole("button", { name: /^Create$/u }).click();
-      const createRequest = await waitForNextRequest(
-        writableGateway,
-        "workboard.cards.create",
-        createBefore,
-      );
+      const createRequest = await gateway.waitForRequest("workboard.cards.create", {
+        after: createBefore,
+      });
       expect(requestParams(createRequest)).toMatchObject({
         labels: ["ui", "proof"],
         notes: createdCard.notes,
@@ -458,19 +285,19 @@ suite.define(() => {
         status: "todo",
         title: createdCard.title,
       });
-      expect(await createForm.getByLabel("Title").isDisabled()).toBe(true);
-      expect(await createForm.getByLabel("Notes").isDisabled()).toBe(true);
-      expect(await createForm.getByLabel("Labels").isDisabled()).toBe(true);
-      expect(
-        await createForm
-          .getByRole("combobox")
-          .evaluateAll(
-            (inputs) => inputs.filter((input) => (input as HTMLInputElement).disabled).length,
-          ),
-      ).toBe(3);
-      expect(
-        await createForm.locator(".workboard-agent-select .agent-select__trigger").isDisabled(),
-      ).toBe(true);
+      for (const control of [
+        ...["Title", "Notes", "Labels"].map((label) => createForm.getByLabel(label)),
+        createForm.getByRole("button", { name: /^Session:/u }),
+        createForm
+          .getByRole("group", { name: "Status", exact: true })
+          .getByRole("radio", { name: "Todo", exact: true }),
+        createForm
+          .getByRole("group", { name: "Priority", exact: true })
+          .getByRole("radio", { name: "Normal", exact: true }),
+        createForm.locator(".workboard-agent-select .agent-select__trigger"),
+      ]) {
+        expect(await control.isDisabled()).toBe(true);
+      }
       const pendingCancelButtons = createForm.getByRole("button", {
         name: "Cancel",
         exact: true,
@@ -479,61 +306,66 @@ suite.define(() => {
       expect(await pendingCancelButtons.first().isDisabled()).toBe(true);
       expect(await pendingCancelButtons.last().isDisabled()).toBe(true);
       expect(await createForm.locator(".workboard-template-strip button:disabled").count()).toBe(5);
-      await writable.page.keyboard.press("Escape");
+      await page.keyboard.press("Escape");
       await expect.poll(() => createDialog.isVisible()).toBe(true);
       await createDialog.click({ position: { x: 4, y: 4 } });
       await expect.poll(() => createDialog.isVisible()).toBe(true);
-      await writableGateway.resolveDeferred("workboard.cards.create", { card: createdCard });
-      await cardInColumn(writable.page, "Todo", createdCard.title).waitFor({ state: "visible" });
-      await captureScreenshot(writable.page, artifacts, "03-created-card");
+      await setCards(gateway, [createdCard]);
+      await gateway.resolveDeferred("workboard.cards.create", { card: createdCard });
+      await cardInColumn(page, "Todo", createdCard.title).waitFor();
+      await proof.capture(page, "03-created-card");
 
-      await writableGateway.deferNext("workboard.cards.update");
-      await cardInColumn(writable.page, "Todo", createdCard.title)
-        .locator('button[aria-label="Edit card"]')
-        .click();
-      const editDialog = writable.page.getByRole("dialog", { name: "Edit card" });
-      const editForm = writable.page.locator('openclaw-modal-dialog[label="Edit card"]');
+      await gateway.deferNext("workboard.cards.update");
+      await clickCardAction(cardInColumn(page, "Todo", createdCard.title), "Edit card");
+      const editDialog = page.getByRole("dialog", { name: "Edit card" });
+      const editForm = page.locator(".workboard-draft");
       await expect.poll(() => editDialog.isVisible()).toBe(true);
       await setWorkboardDraftField(editForm, "Title", editedCard.title);
       await setWorkboardDraftField(editForm, "Notes", editedCard.notes ?? "");
-      await chooseWorkboardSelectOption(editForm, "Priority", "High");
+      const priority = editForm.getByRole("radio", { name: "High", exact: true, disabled: false });
+      await priority.press("Space");
+      expect(await priority.isChecked()).toBe(true);
       await setWorkboardDraftField(editForm, "Labels", "ui, proof, e2e");
-      const updateBeforeEdit = (await writableGateway.getRequests("workboard.cards.update")).length;
+      const updateBeforeEdit = await requestCount(gateway, "workboard.cards.update");
       await editForm.getByRole("button", { name: /^Save$/u }).click();
-      const editRequest = await waitForNextRequest(
-        writableGateway,
-        "workboard.cards.update",
-        updateBeforeEdit,
-      );
-      expect(requestParams(editRequest)).toMatchObject({ id: createdCard.id });
-      expect(requireRecord(requestParams(editRequest).patch)).toMatchObject({
-        labels: ["ui", "proof", "e2e"],
-        notes: editedCard.notes,
-        priority: "high",
-        sessionKey: linkedSessionKey,
-        title: editedCard.title,
+      const editRequest = await gateway.waitForRequest("workboard.cards.update", {
+        after: updateBeforeEdit,
       });
-      await writableGateway.resolveDeferred("workboard.cards.update", { card: editedCard });
-      await cardInColumn(writable.page, "Todo", editedCard.title).waitFor({ state: "visible" });
-      await captureScreenshot(writable.page, artifacts, "04-edited-card");
+      expect(requestParams(editRequest)).toEqual({
+        id: createdCard.id,
+        expectedUpdatedAt: createdCard.updatedAt,
+        patch: {
+          labels: ["ui", "proof", "e2e"],
+          notes: editedCard.notes,
+          priority: "high",
+          title: editedCard.title,
+        },
+      });
+      await setCards(gateway, [editedCard]);
+      await gateway.resolveDeferred("workboard.cards.update", { card: editedCard });
+      await cardInColumn(page, "Todo", editedCard.title).waitFor();
+      await proof.capture(page, "04-edited-card");
 
-      await cardInColumn(writable.page, "Todo", editedCard.title).click();
-      const details = writable.page.locator(".workboard-detail");
-      await details.getByText(editedCard.title).waitFor({ state: "visible" });
-      await details.getByText("Acceptance: mocked Gateway browser proof").waitFor({
-        state: "visible",
-      });
-      await details.locator(".workboard-card__move-select").waitFor({ state: "visible" });
-      expect(await details.getByRole("button", { name: "Open session" }).count()).toBe(1);
-      expect(await details.getByRole("button", { name: "Edit card" }).count()).toBe(1);
-      expect(await details.getByRole("button", { name: "Archive card" }).count()).toBe(1);
-      expect(await details.getByRole("button", { name: "Delete card" }).count()).toBe(1);
+      await cardInColumn(page, "Todo", editedCard.title).click();
+      const details = page.locator(".workboard-detail");
+      await details.getByText(editedCard.title).waitFor();
+      await details.getByText("Acceptance: mocked Gateway browser proof").waitFor();
+      await details.getByRole("button", { name: /^Status:/u }).waitFor();
+      await details.locator("button[popovertarget=workboard-detail-actions]").click();
+      for (const name of ["Open session", "Edit card", "Archive card", "Delete card"]) {
+        expect(await details.getByRole("button", { name }).count()).toBe(1);
+      }
       expect(await details.getByRole("button", { name: "Stop session" }).count()).toBe(0);
-      await captureScreenshot(writable.page, artifacts, "05-detail-actions");
-      await details.locator('button[aria-label="Cancel"]').click();
+      await proof.capture(
+        page,
+        "05-detail-actions",
+        page.getByRole("dialog", { name: editedCard.title, exact: true }),
+        [details.getByRole("button", { name: "Open session" })],
+      );
+      await details.locator('button[aria-label="Close"]').click();
 
-      await writableGateway.deferNext("workboard.cards.move");
-      const dragSource = cardInColumn(writable.page, "Todo", editedCard.title);
+      await gateway.deferNext("workboard.cards.move");
+      const dragSource = cardInColumn(page, "Todo", editedCard.title);
       await dragSource.dispatchEvent("dragstart");
       await expect
         .poll(() => dragSource.getAttribute("class"))
@@ -541,188 +373,190 @@ suite.define(() => {
       await expect
         .poll(() => dragSource.evaluate((element) => window.getComputedStyle(element).opacity))
         .toBe("0.45");
-      expect(await writable.page.locator(".workboard-column--drop").count()).toBe(9);
-      await captureScreenshot(writable.page, artifacts, "06-drag-feedback");
+      expect(await page.locator(".workboard-column--drop-target").count()).toBe(0);
+      await statusColumn(page, "Running").dispatchEvent("dragover");
+      await expect.poll(() => page.locator(".workboard-column--drop-target").count()).toBe(1);
+      expect(await statusColumn(page, "Running").getAttribute("class")).toContain(
+        "workboard-column--drop-target",
+      );
+      await proof.capture(page, "06-drag-feedback");
       await dragSource.dispatchEvent("dragend");
       await expect
         .poll(() => dragSource.getAttribute("class"))
         .not.toContain("workboard-card--dragging");
 
-      const moveBefore = (await writableGateway.getRequests("workboard.cards.move")).length;
-      await dragSource.dragTo(
-        statusColumn(writable.page, "Running").locator(".workboard-column__cards"),
-      );
-      const moveRequest = await waitForNextRequest(
-        writableGateway,
-        "workboard.cards.move",
-        moveBefore,
-      );
+      const moveBefore = await requestCount(gateway, "workboard.cards.move");
+      await dragSource.dragTo(statusColumn(page, "Running"));
+      const moveRequest = await gateway.waitForRequest("workboard.cards.move", {
+        after: moveBefore,
+      });
       expect(requestParams(moveRequest)).toMatchObject({
         id: editedCard.id,
         status: "running",
       });
-      await writableGateway.resolveDeferred("workboard.cards.move", { card: runningCard });
-      await cardInColumn(writable.page, "Running", editedCard.title).waitFor({
-        state: "visible",
-      });
-      await captureScreenshot(writable.page, artifacts, "07-moved-running");
+      await setCards(gateway, [runningCard]);
+      await gateway.resolveDeferred("workboard.cards.move", { card: runningCard });
+      await cardInColumn(page, "Running", editedCard.title).waitFor();
+      await proof.capture(page, "07-moved-running");
 
-      const updateBeforeLifecycle = (await writableGateway.getRequests("workboard.cards.update"))
-        .length;
-      const sessionListBeforeSync = (await writableGateway.getRequests("sessions.list")).length;
-      await writableGateway.deferNext("sessions.list");
-      await writableGateway.emitGatewayEvent("sessions.changed", {
-        ...sessionRow({
-          hasActiveRun: false,
-          status: "done",
-          updatedAt: baseTime + 4,
-        }),
+      const updateBeforeLifecycle = await requestCount(gateway, "workboard.cards.update");
+      const sessionListBeforeSync = await requestCount(gateway, "sessions.list");
+      const completedSession = sessionRow({
+        hasActiveRun: false,
+        status: "done",
+        updatedAt: baseTime + 4,
+      });
+      await gateway.setMethodResponse("sessions.list", sessionsListResponse([completedSession]));
+      await gateway.deferNext("sessions.list");
+      await gateway.emitGatewayEvent("sessions.changed", {
+        ...completedSession,
         reason: "lifecycle",
         sessionKey: linkedSessionKey,
         ts: baseTime + 4,
       });
-      await waitForNextRequest(writableGateway, "sessions.list", sessionListBeforeSync);
-      await writableGateway.resolveDeferred(
-        "sessions.list",
-        sessionsListResponse([
-          sessionRow({ hasActiveRun: false, status: "done", updatedAt: baseTime + 4 }),
-        ]),
-      );
-      await writable.page.waitForTimeout(250);
-      expect(await writableGateway.getRequests("workboard.cards.update")).toHaveLength(
+      await gateway.waitForRequest("sessions.list", { after: sessionListBeforeSync });
+      await gateway.resolveDeferred("sessions.list");
+      await page.waitForTimeout(250);
+      expect(await gateway.getRequests("workboard.cards.update")).toHaveLength(
         updateBeforeLifecycle,
       );
 
-      const listBeforeLifecycle = (await writableGateway.getRequests("workboard.cards.list"))
-        .length;
-      await writableGateway.deferNext("workboard.cards.list");
-      await writableGateway.emitGatewayEvent(WORKBOARD_CHANGED_EVENT, {
+      const listBeforeLifecycle = await requestCount(gateway, "workboard.cards.list");
+      // The catalog reads summaries while the page reads full cards after the event.
+      await setCards(gateway, [reviewedCard]);
+      await gateway.deferNext("workboard.cards.list");
+      await gateway.emitGatewayEvent(WORKBOARD_CHANGED_EVENT, {
         epoch: "workboard-e2e",
         revision: 1,
       });
-      await waitForNextRequest(writableGateway, "workboard.cards.list", listBeforeLifecycle);
-      await writableGateway.resolveDeferred(
-        "workboard.cards.list",
-        cardsListResponse([reviewedCard]),
+      await gateway.waitForRequest("workboard.cards.list", { after: listBeforeLifecycle });
+      await gateway.resolveDeferred("workboard.cards.list");
+      const reviewedCardSurface = cardInColumn(page, "Review", editedCard.title);
+      await reviewedCardSurface.waitFor();
+      await clickCardAction(reviewedCardSurface, "View details");
+      await page.getByRole("tab", { name: "Activity", exact: true }).click();
+      await page.locator(".workboard-detail").getByText("Moved to Review").waitFor();
+      await proof.capture(
+        page,
+        "08-lifecycle-review",
+        page.getByRole("dialog", { name: editedCard.title, exact: true }),
+        [details.getByText("Moved to Review")],
       );
-      const reviewedCardSurface = cardInColumn(writable.page, "Review", editedCard.title);
-      await reviewedCardSurface.waitFor({ state: "visible" });
-      await reviewedCardSurface.getByRole("button", { name: "View details", exact: true }).click();
-      await writable.page.locator(".workboard-detail").getByText("Moved to Review").waitFor({
-        state: "visible",
-      });
-      await captureScreenshot(writable.page, artifacts, "08-lifecycle-review");
-      await details.locator('button[aria-label="Cancel"]').click();
+      await details.locator('button[aria-label="Close"]').click();
       await details.waitFor({ state: "hidden" });
 
-      await cardInColumn(writable.page, "Review", editedCard.title)
-        .locator('button[aria-label="Edit card"]')
-        .click();
+      await clickCardAction(cardInColumn(page, "Review", editedCard.title), "Edit card");
       await expect.poll(() => editDialog.isVisible()).toBe(true);
-      const listBeforeLiveRefresh = (await writableGateway.getRequests("workboard.cards.list"))
-        .length;
-      await writableGateway.deferNext("workboard.cards.list");
-      await writableGateway.emitGatewayEvent(WORKBOARD_CHANGED_EVENT, {
+      const unsavedNotes = "Keep these unfinished Workboard notes";
+      await setWorkboardDraftField(editForm, "Notes", unsavedNotes);
+      const listBeforeLiveRefresh = await requestCount(gateway, "workboard.cards.list");
+      const boardsBeforeLiveRefresh = await requestCount(gateway, "workboard.boards.list");
+      const liveRefreshResponse = cardsListResponse([liveRefreshedCard]);
+      liveRefreshResponse.boards.push(makeBoard("live", { name: "Live metadata" }));
+      await gateway.setMethodResponse("workboard.cards.list", liveRefreshResponse);
+      await gateway.setMethodResponse("workboard.boards.list", {
+        boards: liveRefreshResponse.boards,
+      });
+      await gateway.deferNext("workboard.boards.list");
+      await gateway.emitGatewayEvent(WORKBOARD_CHANGED_EVENT, {
         epoch: "workboard-e2e",
         revision: 2,
       });
-      await writable.page.waitForTimeout(250);
-      expect(await writableGateway.getRequests("workboard.cards.list")).toHaveLength(
-        listBeforeLiveRefresh,
-      );
+      await gateway.waitForRequest("workboard.boards.list", {
+        after: boardsBeforeLiveRefresh,
+      });
+      await gateway.resolveDeferred("workboard.boards.list");
+      expect(await gateway.getRequests("workboard.cards.list")).toHaveLength(listBeforeLiveRefresh);
+      expect(await editForm.getByLabel("Notes").inputValue()).toBe(unsavedNotes);
+      expect(
+        await reviewedCardSurface.getByRole("heading", { includeHidden: true }).textContent(),
+      ).toBe(reviewedCard.title);
+      expect(
+        await page
+          .getByRole("heading", { name: liveRefreshedCard.title, exact: true, includeHidden: true })
+          .count(),
+      ).toBe(0);
+      await gateway.deferNext("workboard.cards.list");
       await editForm
-        .locator("form > .workboard-modal__actions")
+        .locator(":scope > .workboard-modal__actions")
         .getByRole("button", { name: "Cancel", exact: true })
         .click();
-      await waitForNextRequest(writableGateway, "workboard.cards.list", listBeforeLiveRefresh);
-      await writableGateway.resolveDeferred("workboard.cards.list", {
-        cards: [liveRefreshedCard],
-        statuses: WORKBOARD_STATUSES,
+      await page
+        .locator(".workboard-discard")
+        .getByRole("button", { name: "Discard", exact: true })
+        .click();
+      await gateway.waitForRequest("workboard.cards.list", {
+        after: listBeforeLiveRefresh,
       });
-      await writable.page
-        .getByText("Acceptance: live Gateway invalidation refreshed this card")
-        .waitFor({ state: "visible" });
-      const listAfterLiveRefresh = (await writableGateway.getRequests("workboard.cards.list"))
-        .length;
-      await writable.page.clock.fastForward(1_250);
-      expect(await writableGateway.getRequests("workboard.cards.list")).toHaveLength(
-        listAfterLiveRefresh,
-      );
+      const liveBoardPicker = await openWorkboardBoardPicker(page);
+      await expect
+        .poll(() => liveBoardPicker.getByRole("option", { name: /Live metadata/u }).count())
+        .toBe(1);
+      await liveBoardPicker.locator(".picker-select__trigger").click();
+      await liveBoardPicker.locator(".picker-select__menu").waitFor({ state: "hidden" });
+      await closeWorkboardFilters(page);
+      await gateway.resolveDeferred("workboard.cards.list");
+      await cardInColumn(page, "Review", liveRefreshedCard.title).waitFor();
+      const listAfterLiveRefresh = await requestCount(gateway, "workboard.cards.list");
+      await page.clock.fastForward(1_250);
+      expect(await gateway.getRequests("workboard.cards.list")).toHaveLength(listAfterLiveRefresh);
 
-      await writableGateway.deferNext("workboard.cards.list");
-      const listBeforeReload = (await writableGateway.getRequests("workboard.cards.list")).length;
-      await writable.page
-        .locator(".workboard-toolbar__actions")
+      await gateway.deferNext("workboard.cards.list");
+      const listBeforeReload = await requestCount(gateway, "workboard.cards.list");
+      await page
+        .locator(".workboard-heading__actions")
         .getByRole("button", { name: /^Refresh$/u })
         .click();
-      await waitForNextRequest(writableGateway, "workboard.cards.list", listBeforeReload);
-      await writableGateway.resolveDeferred("workboard.cards.list", {
-        cards: [liveRefreshedCard],
-        statuses: WORKBOARD_STATUSES,
-      });
-      await cardInColumn(writable.page, "Review", editedCard.title).waitFor({ state: "visible" });
-      await writable.page
-        .getByText("Acceptance: live Gateway invalidation refreshed this card")
-        .waitFor({ state: "visible" });
-      await captureScreenshot(writable.page, artifacts, "09-reloaded-review");
+      await gateway.waitForRequest("workboard.cards.list", { after: listBeforeReload });
+      await gateway.resolveDeferred("workboard.cards.list");
+      await cardInColumn(page, "Review", liveRefreshedCard.title).waitFor();
+      await proof.capture(page, "09-reloaded-review");
     } finally {
-      await closeRecordedPage(writable, artifacts, "workboard-writable");
+      await writable.close();
     }
 
-    const readOnly = await newRecordedPage("workboard-read-only");
+    const readOnly = await proof.open("workboard-read-only");
     try {
-      const readOnlyGateway = await installMockGateway(readOnly.page, {
+      const gateway = await installWorkboard(readOnly.page, [runningCard], {
+        operatorScopes: ["operator.read"],
         methodResponses: {
-          connect: readOnlyConnectResponse(),
-          "config.get": workboardConfigSnapshot(),
           "sessions.list": sessionsListResponse([
             sessionRow({ hasActiveRun: false, status: "done", updatedAt: baseTime + 4 }),
           ]),
-          "tasks.list": { nextCursor: null, tasks: [] },
-          "workboard.cards.list": cardsListResponse([runningCard]),
         },
       });
       const response = await readOnly.page.goto(`${suite.server.baseUrl}workboard`);
       expect(response?.status()).toBe(200);
-      await cardInColumn(readOnly.page, "Running", editedCard.title).waitFor({
-        state: "visible",
-      });
-      await captureScreenshot(readOnly.page, artifacts, "09-read-only-board");
+      await cardInColumn(readOnly.page, "Running", editedCard.title).waitFor();
+      await proof.capture(readOnly.page, "09-read-only-board");
       expect(await readOnly.page.getByRole("button", { name: /New card/u }).count()).toBe(0);
-      expect(await readOnly.page.locator('button[aria-label="Edit card"]').count()).toBe(0);
-      expect(await readOnly.page.locator('button[aria-label="Delete card"]').count()).toBe(0);
-      expect(await readOnly.page.locator('button[aria-label="Run default agent"]').count()).toBe(0);
+      for (const name of ["Edit card", "Delete card", "Run default agent"]) {
+        expect(await readOnly.page.locator(`button[aria-label="${name}"]`).count()).toBe(0);
+      }
       expect(
         await cardInColumn(readOnly.page, "Running", editedCard.title).getAttribute("draggable"),
       ).toBe("false");
 
       await cardInColumn(readOnly.page, "Running", editedCard.title).click();
-      await readOnly.page.locator(".workboard-detail").getByText(editedCard.title).waitFor({
-        state: "visible",
-      });
+      await readOnly.page.locator(".workboard-detail").getByText(editedCard.title).waitFor();
       const readOnlyDetail = readOnly.page.locator(".workboard-detail");
-      expect(await readOnlyDetail.locator(".workboard-card__move-select").count()).toBe(0);
-      expect(await readOnlyDetail.getByRole("button", { name: "Edit card" }).count()).toBe(0);
-      expect(await readOnlyDetail.getByRole("button", { name: "Archive card" }).count()).toBe(0);
-      expect(await readOnlyDetail.getByRole("button", { name: "Delete card" }).count()).toBe(0);
+      for (const name of [/^Status:/u, "Edit card", "Archive card", "Delete card"]) {
+        expect(await readOnlyDetail.getByRole("button", { name }).count()).toBe(0);
+      }
       expect(await readOnly.page.locator(".workboard-detail__note").count()).toBe(0);
       expect(await readOnly.page.getByRole("button", { name: /Add note/u }).count()).toBe(0);
-      expect(await readOnlyGateway.getRequests("workboard.cards.update")).toHaveLength(0);
-      expect(await readOnlyGateway.getRequests("workboard.cards.move")).toHaveLength(0);
-      expect(await readOnlyGateway.getRequests("workboard.cards.create")).toHaveLength(0);
+      for (const action of ["update", "move", "create"]) {
+        expect(await gateway.getRequests(`workboard.cards.${action}`)).toHaveLength(0);
+      }
     } finally {
-      await closeRecordedPage(readOnly, artifacts, "workboard-read-only");
+      await readOnly.close();
     }
 
-    await writeFile(
-      path.join(artifactDir, "manifest.json"),
-      `${JSON.stringify(artifacts, null, 2)}\n`,
-      "utf-8",
-    );
+    await proof.writeManifest();
   });
 
   it("keeps card titles visible when a column overflows its height", async () => {
-    const artifacts: ProofArtifacts = { screenshots: [], videos: [] };
+    const proof = createWorkboardProof(suite, "workboard-overflow", viewport);
     const crowdedColumnCardCount = 8;
     const overflowTitle = (index: number) =>
       `Overflowing backlog card ${index + 1} with a long title that wraps onto two lines`;
@@ -737,24 +571,21 @@ suite.define(() => {
       }),
     );
 
-    const recorded = await newRecordedPage("workboard-overflow");
+    const { page, close } = await proof.open("workboard-overflow");
     try {
-      await installMockGateway(recorded.page, {
+      await installWorkboard(page, crowdedCards, {
         methodResponses: {
-          "config.get": workboardConfigSnapshot(),
           "sessions.list": sessionsListResponse([sessionRow()]),
-          "tasks.list": { nextCursor: null, tasks: [] },
-          "workboard.cards.list": cardsListResponse(crowdedCards),
         },
       });
       // Constrain the height so the Todo column must overflow its visible area.
-      await recorded.page.setViewportSize({ height: 720, width: 1400 });
-      const response = await recorded.page.goto(`${suite.server.baseUrl}workboard`);
+      await page.setViewportSize({ height: 720, width: 1400 });
+      const response = await page.goto(`${suite.server.baseUrl}workboard`);
       expect(response?.status()).toBe(200);
-      const column = statusColumn(recorded.page, "Todo");
-      await column.waitFor({ state: "visible" });
-      await cardInColumn(recorded.page, "Todo", overflowTitle(0)).waitFor({ state: "visible" });
-      await captureScreenshot(recorded.page, artifacts, "09-overflow-column");
+      const column = statusColumn(page, "Todo");
+      await column.waitFor();
+      await cardInColumn(page, "Todo", overflowTitle(0)).waitFor();
+      await proof.capture(page, "09-overflow-column");
 
       const titleHeights = await column
         .locator(".workboard-card h3")
@@ -770,12 +601,183 @@ suite.define(() => {
         .evaluate((cards) => cards.scrollHeight > cards.clientHeight + 1);
       expect(columnScrolls).toBe(true);
     } finally {
-      await closeRecordedPage(recorded, artifacts, "workboard-overflow");
+      await close();
     }
   });
 
+  it("collapses empty stages into rails without squeezing active columns", async () => {
+    const proof = createWorkboardProof(suite, "workboard-collapsed-columns", viewport);
+    const reviewCard = card({
+      id: "review-card",
+      status: "review",
+      title: "Review the completed implementation",
+    });
+    const doneCard = card({
+      id: "done-card",
+      status: "done",
+      title: "Previously completed work",
+    });
+    const { page, close } = await proof.open("workboard-collapsed-columns");
+    try {
+      const gateway = await installWorkboard(page, [reviewCard, doneCard], {
+        methodResponses: {
+          "workboard.cards.move": { card: { ...reviewCard, status: "ready" } },
+        },
+      });
+      await page.setViewportSize({ height: 760, width: 1200 });
+      const response = await page.goto(`${suite.server.baseUrl}workboard`);
+      expect(response?.status()).toBe(200);
+      await page.locator(".workboard-column--review .workboard-card").waitFor();
+
+      const reviewHeader = page.locator(".workboard-column--review .workboard-column__header");
+      const collapseButton = reviewHeader.getByRole("button", { name: "Collapse Review column" });
+      expect(await collapseButton.evaluate((button) => getComputedStyle(button).opacity)).toBe("0");
+      for (const [action, expected] of [
+        [() => collapseButton.focus(), "1"],
+        [() => collapseButton.blur(), "0"],
+        [() => reviewHeader.hover(), "1"],
+      ] as const) {
+        await action();
+        await expect.poll(() => opacity(collapseButton)).toBe(expected);
+      }
+
+      const collapsedColumns = page.locator(".workboard-column--collapsed");
+      await expect.poll(() => collapsedColumns.count()).toBe(0);
+      const emptyColumns = page.getByRole("group", { name: "Empty columns", exact: true });
+      for (const [option, count] of [
+        ["Hide empty", 2],
+        ["Show all", 9],
+      ] as const) {
+        await chooseWorkboardDisplayOption(page, option);
+        await expect.poll(() => page.locator(".workboard-column").count()).toBe(count);
+      }
+      await chooseWorkboardDisplayOption(page, "Collapse empty");
+      await expect.poll(() => collapsedColumns.count()).toBe(7);
+      const readyColumn = page.locator(".workboard-column--ready");
+      const collapsedWidth = await width(readyColumn);
+      const reviewWidth = await width(page.locator(".workboard-column--review"));
+      expect(collapsedWidth).toBeGreaterThanOrEqual(44);
+      expect(collapsedWidth).toBeLessThanOrEqual(52);
+      expect(reviewWidth).toBeGreaterThanOrEqual(262);
+
+      const readyRail = page.locator(".workboard-column--ready .workboard-column__rail");
+      const collapsedRailStyle = await readyRail.evaluate((rail) => ({
+        boxShadow: getComputedStyle(rail).boxShadow,
+      }));
+      expect(collapsedRailStyle.boxShadow).toBe("none");
+
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      const reducedMotionTransitions = await page.evaluate(() => ({
+        collapse: getComputedStyle(
+          document.querySelector(".workboard-column__collapse") as HTMLElement,
+        ).transitionDuration,
+        rail: getComputedStyle(
+          document.querySelector(".workboard-column__rail-icon") as HTMLElement,
+        ).transitionDuration,
+      }));
+      expect(reducedMotionTransitions).toEqual({ collapse: "0s", rail: "0s" });
+      await page.emulateMedia({ reducedMotion: "no-preference" });
+
+      await proof.capture(page, "10-collapsed-columns-desktop");
+
+      await page.getByRole("button", { name: "Expand Ready column" }).click();
+      await expect
+        .poll(() => page.locator(".workboard-column--ready").getAttribute("class"))
+        .not.toContain("workboard-column--collapsed");
+      const expandedWidth = await width(readyColumn);
+      expect(expandedWidth).toBeGreaterThanOrEqual(262);
+      await page.getByRole("button", { name: "Collapse Ready column" }).click();
+
+      await closeWorkboardFilters(page);
+      await page
+        .locator(".workboard-status-tabs")
+        .getByRole("button", { name: "Review", exact: true })
+        .click();
+      const singleColumnBoard = page.locator(
+        ".workboard-board--page.workboard-board--single-column",
+      );
+      const singleColumnGeometry = await singleColumnBoard.evaluate((board) => {
+        const column = board.querySelector(".workboard-column") as HTMLElement;
+        return {
+          leftOffset: column.getBoundingClientRect().left - board.getBoundingClientRect().left,
+          columnWidth: column.getBoundingClientRect().width,
+        };
+      });
+      expect(singleColumnGeometry.columnWidth).toBeCloseTo(reviewWidth, 0);
+      expect(singleColumnGeometry.leftOffset).toBeCloseTo(0, 0);
+      await page
+        .locator(".workboard-status-tabs")
+        .getByRole("button", { name: "All", exact: true })
+        .click();
+      await closeWorkboardFilters(page);
+      // Clear the single-column view's retained scroll offset so both drag endpoints are visible.
+      const board = page.locator(".workboard-board--page");
+      await board.evaluate((element) => element.scrollTo({ left: 0, behavior: "instant" }));
+      await expect.poll(() => board.evaluate((element) => element.scrollLeft)).toBe(0);
+
+      const moveCount = await requestCount(gateway, "workboard.cards.move");
+      await page
+        .locator(".workboard-column--review .workboard-card")
+        .dragTo(page.locator(".workboard-column--ready .workboard-column__rail"));
+      const moveRequest = await gateway.waitForRequest("workboard.cards.move", {
+        after: moveCount,
+      });
+      expect(requestParams(moveRequest)).toMatchObject({ id: reviewCard.id, status: "ready" });
+
+      await page.setViewportSize({ height: 760, width: 700 });
+      await openWorkboardFilters(page);
+      await expect.poll(() => emptyColumns.getByRole("button").count()).toBe(3);
+      await closeWorkboardFilters(page);
+      const backlogColumn = page.locator(".workboard-column--backlog");
+      const backlogRail = backlogColumn.getByRole("button", { name: "Expand Backlog column" });
+      await backlogRail.scrollIntoViewIfNeeded();
+      await backlogRail.focus();
+      await page.keyboard.press("Enter");
+      const collapseBacklog = backlogColumn.getByRole("button", {
+        name: "Collapse Backlog column",
+      });
+      await expect.poll(() => collapseBacklog.isVisible()).toBe(true);
+      await expect
+        .poll(() =>
+          backlogColumn.getByRole("button", { name: "New card in Backlog" }).last().isVisible(),
+        )
+        .toBe(true);
+      await collapseBacklog.click();
+      await expect.poll(() => backlogRail.isVisible()).toBe(true);
+      await proof.capture(page, "11-collapsed-columns-mobile");
+    } finally {
+      await close();
+    }
+  });
+
+  it("keeps touch collapse controls visible and at least 44px", async () => {
+    await suite.withPage({ hasTouch: true }, async ({ page }) => {
+      await installWorkboard(page, [
+        card({ id: "touch-review-card", status: "review", title: "Review on touch" }),
+      ]);
+      await page.setViewportSize({ height: 844, width: 390 });
+      const response = await page.goto(`${suite.server.baseUrl}workboard`);
+      expect(response?.status()).toBe(200);
+
+      const collapseButton = page.getByRole("button", { name: "Collapse Review column" });
+      await collapseButton.waitFor();
+      await waitForControlUiProofSurface(collapseButton, []);
+      const touchGeometry = await collapseButton.evaluate((button) => {
+        const bounds = button.getBoundingClientRect();
+        return {
+          height: bounds.height,
+          opacity: getComputedStyle(button).opacity,
+          width: bounds.width,
+        };
+      });
+      expect(touchGeometry.opacity).toBe("1");
+      expect(touchGeometry.width).toBeGreaterThanOrEqual(44);
+      expect(touchGeometry.height).toBeGreaterThanOrEqual(44);
+    });
+  });
+
   it("filters persisted boards and keeps the selection in the URL", async () => {
-    const artifacts: ProofArtifacts = { screenshots: [], videos: [] };
+    const proof = createWorkboardProof(suite, "workboard-board-filter", viewport);
     const defaultCard = card({ id: "default-card", title: "Default board work" });
     const opsCard = card({
       id: "ops-card",
@@ -783,57 +785,47 @@ suite.define(() => {
       metadata: { automation: { boardId: "ops" } },
     });
     const boards: WorkboardBoardSummary[] = [
-      { id: "default", total: 1, active: 1, archived: 0, byStatus: { todo: 1 } },
-      {
-        id: "ops",
-        name: "Operations",
-        total: 1,
-        active: 1,
-        archived: 0,
-        byStatus: { todo: 1 },
-      },
-      {
-        id: "archive",
-        name: "Old work",
-        total: 0,
-        active: 0,
-        archived: 0,
-        byStatus: {},
-        archivedAt: baseTime,
-      },
+      makeBoard("default", { total: 1, active: 1, byStatus: { todo: 1 } }),
+      makeBoard("ops", { name: "Operations", total: 1, active: 1, byStatus: { todo: 1 } }),
+      makeBoard("archive", { name: "Old work", archivedAt: baseTime }),
     ];
-    const recorded = await newRecordedPage("workboard-board-filter");
+    const { page, close } = await proof.open("workboard-board-filter");
     try {
-      await installMockGateway(recorded.page, {
+      await installWorkboard(page, [defaultCard, opsCard], {
         methodResponses: {
-          "config.get": workboardConfigSnapshot(),
-          "sessions.list": sessionsListResponse([]),
-          "tasks.list": { nextCursor: null, tasks: [] },
           "workboard.boards.list": { boards },
           "workboard.cards.list": cardsListResponse([defaultCard, opsCard], boards),
         },
       });
 
-      const response = await recorded.page.goto(`${suite.server.baseUrl}workboard?board=ops`);
+      const response = await page.goto(`${suite.server.baseUrl}workboard?board=ops&agent=main`);
       expect(response?.status()).toBe(200);
-      await cardInColumn(recorded.page, "Todo", opsCard.title).waitFor({ state: "visible" });
-      await expect.poll(() => new URL(recorded.page.url()).pathname).toBe("/workboard/ops");
-      await expect.poll(() => recorded.page.getByText(defaultCard.title).count()).toBe(0);
-      expect(new URL(recorded.page.url()).searchParams.has("board")).toBe(false);
+      await cardInColumn(page, "Todo", opsCard.title).waitFor();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/workboard/ops");
+      await expect.poll(() => page.getByText(defaultCard.title).count()).toBe(0);
+      expect(new URL(page.url()).searchParams.has("board")).toBe(false);
 
-      const boardFilter = recorded.page.locator(".workboard-select--toolbar-board");
-      await chooseWorkboardSelectFieldOption(boardFilter, "All boards", boardFilter);
-      await cardInColumn(recorded.page, "Todo", defaultCard.title).waitFor({ state: "visible" });
-      await expect.poll(() => new URL(recorded.page.url()).pathname).toBe("/workboard");
-      expect(new URL(recorded.page.url()).searchParams.has("board")).toBe(false);
-
-      await chooseWorkboardSelectFieldOption(boardFilter, "Operations (ops)", boardFilter);
-      await expect.poll(() => new URL(recorded.page.url()).pathname).toBe("/workboard/ops");
-      expect(await recorded.page.getByText(defaultCard.title).count()).toBe(0);
-      expect(await recorded.page.getByText("Old work (archive)").count()).toBeGreaterThan(0);
-      await captureScreenshot(recorded.page, artifacts, "10-board-filter-ops");
+      const historyBeforeFilter = await page.evaluate(() => history.length);
+      for (const [boardId, pathname] of [
+        ["__all__", "/workboard"],
+        ["ops", "/workboard/ops"],
+      ] as const) {
+        await chooseWorkboardBoard(page, boardId);
+        if (boardId === "__all__") {
+          await cardInColumn(page, "Todo", defaultCard.title).waitFor();
+        }
+        await expect.poll(() => new URL(page.url()).pathname).toBe(pathname);
+        expect(new URL(page.url()).search).toBe("?agent=main");
+      }
+      expect(await page.evaluate(() => history.length)).toBe(historyBeforeFilter);
+      expect(await page.getByText(defaultCard.title).count()).toBe(0);
+      const boardPicker = await openWorkboardBoardPicker(page);
+      expect(await boardPicker.getByRole("option", { name: /Old work/u }).count()).toBeGreaterThan(
+        0,
+      );
+      await proof.capture(page, "10-board-filter-ops");
     } finally {
-      await closeRecordedPage(recorded, artifacts, "workboard-board-filter");
+      await close();
     }
   });
 });

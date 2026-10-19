@@ -36,14 +36,29 @@ export type SessionSystemPromptReport = {
     // persisted transcript prompt; consumers add it on top of transcript sums.
     modelOnlyPromptChars?: number;
   };
-  injectedWorkspaceFiles: Array<{
-    name: string;
-    path: string;
-    missing: boolean;
-    rawChars: number;
-    injectedChars: number;
-    truncated: boolean;
-  }>;
+  injectedWorkspaceFiles: Array<
+    {
+      name: string;
+      path: string;
+      origin?: {
+        kind: "agent-workspace" | "execution-project" | "personal" | "other";
+        rootPath?: string;
+      };
+      missing: boolean;
+      rawChars: number;
+    } & (
+      | {
+          injectionStatus?: "verified";
+          injectedChars: number;
+          truncated: boolean;
+        }
+      | {
+          injectionStatus: "native_unverified";
+          injectedChars: null;
+          truncated: null;
+        }
+    )
+  >;
   skills: {
     promptChars: number;
     hash?: string;
@@ -54,11 +69,26 @@ export type SessionSystemPromptReport = {
     schemaChars: number;
     entries: Array<{
       name: string;
+      source?: "openclaw" | "mcp" | "client";
+      sourceName?: string;
+      serverName?: string;
       summaryChars: number;
       summaryHash?: string;
       schemaChars: number;
       schemaHash?: string;
       propertiesCount?: number | null;
     }>;
+    /** Available schemas, not part of the consumed schemaChars total. */
+    deferred?: {
+      /** Sum of known sizes; entries with null sizes remain unmeasured. */
+      schemaChars: number;
+      entries: Array<{
+        name: string;
+        source: "openclaw" | "mcp" | "client";
+        sourceName?: string;
+        serverName?: string;
+        schemaChars: number | null;
+      }>;
+    };
   };
 };

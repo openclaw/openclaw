@@ -1,20 +1,10 @@
-// Line plugin module implements gateway behavior.
-import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
+import { clearAccountFieldsFromConfigSection } from "openclaw/plugin-sdk/channel-config-helpers";
+import type { ChannelPlugin, PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-outbound";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveLineAccount } from "./accounts.js";
-import {
-  clearAccountEntryFields,
-  DEFAULT_ACCOUNT_ID,
-  type ChannelPlugin,
-  type LineConfig,
-  type OpenClawConfig,
-  type ResolvedLineAccount,
-} from "./channel-api.js";
 import { getLineRuntime } from "./runtime.js";
-
-const loadLineProbeRuntime = createLazyRuntimeModule(() => import("./probe.runtime.js"));
-const loadLineMonitorRuntime = createLazyRuntimeModule(() => import("./monitor.runtime.js"));
+import { describeLineWebhookDelivery } from "./status.js";
+import type { ResolvedLineAccount } from "./types.js";
 
 export const lineGatewayAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>["gateway"]> = {
   startAccount: async (ctx) => {
@@ -39,22 +29,29 @@ export const lineGatewayAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>[
 
     let lineBotLabel = "";
     try {
-      const probe = await (await loadLineProbeRuntime()).probeLineBot(token, 2500);
+      const probe = await (await import("./probe.runtime.js")).probeLineBot(token, 2500);
       const displayName = probe.ok ? probe.bot?.displayName?.trim() : null;
       if (displayName) {
         lineBotLabel = ` (${displayName})`;
       }
+      // Startup is where an operator is actually watching, and reaching the same
+      // report through status costs them a flag they have no reason to try when
+      // nothing looks wrong. The probe already has the answer here.
+      const delivery = describeLineWebhookDelivery({
+        webhook: probe.ok ? probe.webhook : undefined,
+      });
+      if (delivery) {
+        ctx.log?.warn(`[${account.accountId}] ${delivery.message} Fix: ${delivery.fix}.`);
+      }
     } catch (err) {
       if (getLineRuntime().logging.shouldLogVerbose()) {
-        ctx.log?.debug?.(`[${account.accountId}] bot probe failed: ${String(err)}`);
+        ctx.log?.debug?.(`[${account.accountId}] bot check failed: ${String(err)}`);
       }
     }
 
     ctx.log?.info(`[${account.accountId}] starting LINE provider${lineBotLabel}`);
 
-    const monitorLineProvider =
-      getLineRuntime().channel.line?.monitorLineProvider ??
-      (await loadLineMonitorRuntime()).monitorLineProvider;
+    const { monitorLineProvider } = await import("./monitor.runtime.js");
 
     return await monitorLineProvider({
       channelAccessToken: token,
@@ -71,66 +68,22 @@ export const lineGatewayAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>[
   },
   logoutAccount: async ({ accountId, cfg }) => {
     const envToken = process.env.LINE_CHANNEL_ACCESS_TOKEN?.trim() ?? "";
-    const nextCfg = { ...cfg } as OpenClawConfig;
-    const lineConfig = (cfg.channels?.line ?? {}) as LineConfig;
-    const nextLine = { ...lineConfig };
-    let cleared = false;
-    let changed = false;
-
-    if (accountId === DEFAULT_ACCOUNT_ID) {
-      if (
-        nextLine.channelAccessToken ||
-        nextLine.channelSecret ||
-        nextLine.tokenFile ||
-        nextLine.secretFile
-      ) {
-        delete nextLine.channelAccessToken;
-        delete nextLine.channelSecret;
-        delete nextLine.tokenFile;
-        delete nextLine.secretFile;
-        cleared = true;
-        changed = true;
-      }
-    }
-
-    const accountCleanup = clearAccountEntryFields({
-      accounts: nextLine.accounts,
+    const { nextConfig, changed, cleared } = clearAccountFieldsFromConfigSection({
+      cfg,
+      sectionKey: "line",
       accountId,
       fields: ["channelAccessToken", "channelSecret", "tokenFile", "secretFile"],
       markClearedOnFieldPresence: true,
     });
-    if (accountCleanup.changed) {
-      changed = true;
-      if (accountCleanup.cleared) {
-        cleared = true;
-      }
-      if (accountCleanup.nextAccounts) {
-        nextLine.accounts = accountCleanup.nextAccounts;
-      } else {
-        delete nextLine.accounts;
-      }
-    }
-
     if (changed) {
-      if (Object.keys(nextLine).length > 0) {
-        nextCfg.channels = { ...nextCfg.channels, line: nextLine };
-      } else {
-        const nextChannels = { ...nextCfg.channels };
-        delete (nextChannels as Record<string, unknown>).line;
-        if (Object.keys(nextChannels).length > 0) {
-          nextCfg.channels = nextChannels;
-        } else {
-          delete nextCfg.channels;
-        }
-      }
       await getLineRuntime().config.replaceConfigFile({
-        nextConfig: nextCfg,
+        nextConfig,
         afterWrite: { mode: "auto" },
       });
     }
 
     const resolved = resolveLineAccount({
-      cfg: changed ? nextCfg : cfg,
+      cfg: nextConfig,
       accountId,
     });
     const loggedOut = resolved.tokenSource === "none";

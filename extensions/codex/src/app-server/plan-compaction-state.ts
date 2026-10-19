@@ -1,12 +1,13 @@
 import { Buffer } from "node:buffer";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AgentPlanStep } from "openclaw/plugin-sdk/channel-outbound";
+import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
 import { stripInvisibleUnicode } from "openclaw/plugin-sdk/web-content-extractor";
 import type { CodexAppServerClient } from "./client.js";
 import { isJsonObject } from "./protocol.js";
 
 type AgentEvent = Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0];
-type StoredPlan = { markdown?: string; steps: AgentPlanStep[] };
+export type CodexNativePlan = { markdown?: string; steps: AgentPlanStep[] };
 
 const RESTORED_PLAN_PREAMBLE =
   "OpenClaw restored the session progress card after context compaction. " +
@@ -19,7 +20,7 @@ const RESTORED_PLAN_MAX_MARKDOWN_BYTES = 2 * 1024;
 const RESTORED_PLAN_MAX_PAYLOAD_BYTES = 32 * 1024;
 const RESTORED_PLAN_TRUNCATION_SUFFIX = "…";
 
-export function canonicalizeNativeProgressCardInput(input: StoredPlan): {
+export function canonicalizeNativeProgressCardInput(input: CodexNativePlan): {
   markdown?: string;
   plan: AgentPlanStep[];
 } {
@@ -52,14 +53,13 @@ export function canonicalizeNativeProgressCardInput(input: StoredPlan): {
 
 /** Retains the latest projected plan so Codex compaction cannot discard it. */
 export class CodexCompactionPlanState {
-  private latestPlan: StoredPlan | undefined;
+  private latestPlan: string | undefined;
 
   record(event: AgentEvent): void {
     if (event.stream !== "plan") {
       return;
     }
-    const plan = readBoundedPlan(event.data.explanation, event.data.steps);
-    this.latestPlan = plan;
+    this.latestPlan = readBoundedPlan(event.data.explanation, event.data.steps);
   }
 
   /** Retains markdown that migration-only plan events intentionally omit. */
@@ -90,7 +90,7 @@ export class CodexCompactionPlanState {
             content: [
               {
                 type: "input_text",
-                text: `${RESTORED_PLAN_PREAMBLE}\n${serializePlan(this.latestPlan)}`,
+                text: `${RESTORED_PLAN_PREAMBLE}\n${this.latestPlan}`,
               },
             ],
           },
@@ -101,7 +101,7 @@ export class CodexCompactionPlanState {
   }
 }
 
-function readBoundedPlan(markdownValue: unknown, stepsValue: unknown): StoredPlan | undefined {
+function readBoundedPlan(markdownValue: unknown, stepsValue: unknown): string | undefined {
   const canonical = canonicalizeNativeProgressCardInput({
     ...(typeof markdownValue === "string" ? { markdown: markdownValue } : {}),
     steps: readPlanSteps(stepsValue),
@@ -110,37 +110,26 @@ function readBoundedPlan(markdownValue: unknown, stepsValue: unknown): StoredPla
     canonical.markdown === undefined
       ? undefined
       : truncateUtf8(canonical.markdown, RESTORED_PLAN_MAX_MARKDOWN_BYTES);
-  const steps: AgentPlanStep[] = [];
+  const plan: AgentPlanStep[] = [];
+  const restored = { ...(markdown?.trim() ? { markdown } : {}), plan };
+  let serialized = markdown?.trim() ? JSON.stringify(restored) : undefined;
   for (const step of canonical.plan) {
-    const candidate = {
-      ...(markdown?.trim() ? { markdown } : {}),
-      steps: [...steps, step],
-    };
-    if (Buffer.byteLength(serializePlan(candidate), "utf8") > RESTORED_PLAN_MAX_PAYLOAD_BYTES) {
+    restored.plan.push(step);
+    const candidate = JSON.stringify(restored);
+    if (Buffer.byteLength(candidate, "utf8") > RESTORED_PLAN_MAX_PAYLOAD_BYTES) {
       break;
     }
-    steps.push(step);
+    serialized = candidate;
   }
-  return markdown?.trim() || steps.length > 0
-    ? { ...(markdown?.trim() ? { markdown } : {}), steps }
-    : undefined;
-}
-
-function serializePlan(plan: StoredPlan): string {
-  return JSON.stringify({ markdown: plan.markdown, plan: plan.steps });
+  return serialized;
 }
 
 function truncateUtf8(value: string, maxBytes: number): string {
-  const bytes = Buffer.from(value);
-  if (bytes.byteLength <= maxBytes) {
+  if (Buffer.byteLength(value, "utf8") <= maxBytes) {
     return value;
   }
   const suffixBytes = Buffer.byteLength(RESTORED_PLAN_TRUNCATION_SUFFIX, "utf8");
-  let end = Math.max(0, maxBytes - suffixBytes);
-  while (end > 0 && (bytes[end] ?? 0) >> 6 === 0b10) {
-    end -= 1;
-  }
-  return `${bytes.subarray(0, end).toString("utf8")}${RESTORED_PLAN_TRUNCATION_SUFFIX}`;
+  return `${truncateUtf8Prefix(value, maxBytes - suffixBytes)}${RESTORED_PLAN_TRUNCATION_SUFFIX}`;
 }
 
 function readPlanSteps(value: unknown): AgentPlanStep[] {
@@ -148,10 +137,10 @@ function readPlanSteps(value: unknown): AgentPlanStep[] {
     return [];
   }
   return value.flatMap((entry) => {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    if (!isJsonObject(entry)) {
       return [];
     }
-    const { step, status } = entry as { step?: unknown; status?: unknown };
+    const { step, status } = entry;
     if (typeof step !== "string" || !isPlanStatus(status)) {
       return [];
     }

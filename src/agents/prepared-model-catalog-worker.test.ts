@@ -1,78 +1,73 @@
 import { describe, expect, it, vi } from "vitest";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
+import * as cryptoDigest from "../infra/crypto-digest.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { fingerprintPreparedModelCatalogPluginContext } from "./prepared-model-catalog-fingerprints.js";
 import { createPreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.js";
-import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.facts.js";
-
-vi.mock("../plugins/manifest-registry-installed.js", () => ({
-  resolveInstalledManifestRegistryIndexFingerprint: () => "test-plugin-index",
-}));
+import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
+import { AuthStorage } from "./sessions/auth-storage.js";
 
 describe("prepared model catalog worker input", () => {
-  it("preserves SecretRef identity beside materialized literals", () => {
-    const authStore = {
-      version: 1,
-      profiles: {
-        "shared:named": {
-          type: "oauth" as const,
-          provider: "shared",
-          access: "access-token",
-          refresh: "refresh-token",
-          expires: 4_102_444_800_000,
-          projectId: "project-id",
-        },
-        "unrelated:default": {
-          type: "api_key" as const,
-          provider: "unrelated",
-          key: "materialized-key",
-          keyRef: { source: "env" as const, provider: "default", id: "UNRELATED_KEY" },
-        },
-        "ref-api:default": {
-          type: "api_key" as const,
-          provider: "ref-api",
-          keyRef: { source: "env" as const, provider: "default", id: "REF_API_KEY" },
-        },
-        "ref-token:default": {
-          type: "token" as const,
-          provider: "ref-token",
-          tokenRef: { source: "env" as const, provider: "default", id: "REF_TOKEN" },
-        },
+  it("reuses captured config digests for plugin context identities", () => {
+    const marker = "synthetic-worker-roster-boundary";
+    const digests = vi.spyOn(cryptoDigest, "sha256Base64Url");
+    const config = captureRuntimeConfig({
+      agents: {
+        entries: Object.fromEntries(
+          Array.from({ length: 32 }, (_, index) => [`agent-${index}`, { name: marker }]),
+        ),
       },
-      order: { shared: ["shared:named"] },
-      lastGood: { shared: "shared:named" },
+      plugins: { entries: { fixture: { config: { sentinel: undefined } } } },
+    });
+    const pluginMetadataSnapshot = createPluginMetadataSnapshotFixture();
+    const agentFacts: PreparedModelRuntimeAgentFacts = {
+      input: { config, agentDir: "/tmp/catalog-agent" },
+      env: {},
+      authStore: { version: 1, profiles: {} },
+      credentials: {},
+      providerIds: [],
+      configuredModelRefs: [],
+      configuredRuntimeModels: [],
+      runtimeCapabilityModels: [],
+      configuredGeneratedCatalogPluginIds: [],
+      templateAuthStorage: AuthStorage.inMemory({}),
     };
-    const workerInput = createPreparedModelCatalogWorkerInput({
-      agentFacts: {
-        input: { agentDir: "/tmp/agent", config: {}, workspaceDir: "/tmp/workspace" },
-        env: {},
-        authStore,
-        credentials: { shared: { ...authStore.profiles["shared:named"] } },
-        providerIds: ["configured"],
-        configuredModelRefs: [],
-        configuredRuntimeModels: [],
-        configuredGeneratedCatalogPluginIds: [],
-        templateAuthStorage: {} as never,
-      } satisfies PreparedModelRuntimeAgentFacts,
-      pluginMetadataSnapshot: {
-        policyHash: "test-policy",
-        configFingerprint: "test-config",
-        index: {} as never,
-        plugins: [],
-      } as unknown as PluginMetadataSnapshot,
-    });
-
-    const cloned = structuredClone(workerInput);
-    expect(cloned.authStore.profiles).toEqual({
-      "shared:named": authStore.profiles["shared:named"],
-      "unrelated:default": {
-        type: "api_key",
-        provider: "unrelated",
-        key: "materialized-key",
-        keyRef: { source: "env", provider: "default", id: "UNRELATED_KEY" },
-      },
-      "ref-api:default": authStore.profiles["ref-api:default"],
-      "ref-token:default": authStore.profiles["ref-token:default"],
-    });
-    expect(cloned.authStore.order).toEqual(authStore.order);
-    expect(cloned.authStore.lastGood).toEqual(authStore.lastGood);
+    try {
+      let captured: ReturnType<typeof createPreparedModelCatalogWorkerInput> | undefined;
+      for (let index = 0; index < 32; index++) {
+        captured = createPreparedModelCatalogWorkerInput({
+          agentFacts: { ...agentFacts, input: { config, agentDir: `/tmp/catalog-agent-${index}` } },
+          pluginMetadataSnapshot,
+        });
+        fingerprintPreparedModelCatalogPluginContext(captured);
+      }
+      expect(
+        digests.mock.calls.filter(([value]) => typeof value === "string" && value.includes(marker)),
+      ).toHaveLength(1);
+      const cloned = structuredClone(captured!);
+      const fingerprint = fingerprintPreparedModelCatalogPluginContext(captured!);
+      expect(
+        fingerprintPreparedModelCatalogPluginContext({ ...cloned, pluginMetadataSnapshot }),
+      ).toBe(fingerprint);
+      const builtInput = createPreparedModelCatalogWorkerInput({
+        agentFacts: { ...agentFacts, input: captured!.input },
+        pluginMetadataSnapshot,
+        preferBuiltPluginArtifacts: true,
+      });
+      expect(cloned.preferBuiltPluginArtifacts).toBe(false);
+      expect(builtInput.preferBuiltPluginArtifacts).toBe(true);
+      expect(fingerprintPreparedModelCatalogPluginContext(builtInput)).not.toBe(fingerprint);
+      const changedNull = structuredClone(cloned);
+      changedNull.input.config.plugins!.entries!.fixture!.config = { sentinel: null };
+      expect(
+        fingerprintPreparedModelCatalogPluginContext({ ...changedNull, pluginMetadataSnapshot }),
+      ).not.toBe(fingerprint);
+      cloned.input.config.agents!.entries!["agent-0"]!.name = "changed";
+      expect(
+        fingerprintPreparedModelCatalogPluginContext({ ...cloned, pluginMetadataSnapshot }),
+      ).not.toBe(fingerprint);
+    } finally {
+      digests.mockRestore();
+    }
   });
 });

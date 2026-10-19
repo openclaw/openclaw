@@ -1,11 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  getCurrentPluginMetadataSnapshot,
-  setCurrentPluginMetadataSnapshot,
-} from "../../plugins/current-plugin-metadata-snapshot.js";
+import { expect, it, vi } from "vitest";
+import { getPreparedModelRuntimePluginGeneration } from "../../agents/prepared-model-runtime-generation-scope.js";
+import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../../plugins/installed-plugin-index-policy.js";
 import { getPluginRuntimeGenerationRegistry } from "../../plugins/runtime/generation-scope.js";
 import { runPreparedReply } from "./get-reply-run.js";
+import type { RunPreparedReplyParams } from "./get-reply-run.types.js";
 import { bindPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 
 const mocks = vi.hoisted(() => ({
@@ -28,70 +28,100 @@ vi.mock("./get-reply-run-execute.js", () => ({
   executePreparedReplyRun: mocks.execute,
 }));
 
-describe("runPreparedReply prepared metadata", () => {
-  beforeEach(() => {
-    setCurrentPluginMetadataSnapshot(undefined);
-    vi.clearAllMocks();
+it("keeps the admitted Gateway generation active through a different reply workspace", async () => {
+  setCurrentPluginMetadataSnapshot(undefined);
+  vi.clearAllMocks();
+  const config = {};
+  const workspaceDir = "/tmp/openclaw-reply-workspace";
+  const gatewayWorkspaceDir = "/tmp/openclaw-configured-workspace";
+  const metadataSnapshot = {
+    index: { plugins: [] },
+    pluginIds: undefined,
+    policyHash: resolveInstalledPluginIndexPolicyHash(config),
+    workspaceDir: gatewayWorkspaceDir,
+  } as never;
+  const pluginRegistry = { registrations: [] } as never;
+  const pluginGeneration = {
+    remoteCatalog: null,
+    configuredCatalogEntries: [],
+    inlineProviderModels: [],
+    pluginMetadataSnapshot: metadataSnapshot,
+    pluginRegistry,
+  };
+  const release = vi.fn(async () => {});
+  const selectedGeneration = { ...pluginGeneration, pluginRegistry: { selected: true } };
+  mocks.prepareContext.mockResolvedValue({
+    kind: "ready",
+    params: { cfg: config, provider: "selected", model: "model" },
+    thinkingRuntime: "selected-harness",
+    workspaceDir,
   });
-
-  it("keeps the dynamic workspace metadata generation active through reply admission and execution", async () => {
-    const config = {};
-    const workspaceDir = "/tmp/openclaw-reply-workspace";
-    const metadataSnapshot = {
-      index: { plugins: [] },
-      pluginIds: undefined,
-      policyHash: resolveInstalledPluginIndexPolicyHash(config),
+  mocks.acquireRuntime.mockImplementation(async (_input, options) => ({
+    snapshot: {
+      config,
+      metadataSnapshot: options.pluginGeneration.pluginMetadataSnapshot,
+      pluginRegistry: selectedGeneration.pluginRegistry,
       workspaceDir,
-    } as never;
-    const pluginRegistry = { registrations: [] } as never;
-    const release = vi.fn();
-    mocks.prepareContext.mockResolvedValue({
-      kind: "run",
-      params: { cfg: config },
-      workspaceDir,
-    });
-    mocks.acquireRuntime.mockResolvedValue({
-      snapshot: { config, metadataSnapshot, pluginRegistry, workspaceDir },
-      release,
-    });
-    let admissionSnapshot: unknown;
-    let admissionRegistry: unknown;
-    mocks.prepareAdmission.mockImplementation(async () => {
-      admissionSnapshot = getCurrentPluginMetadataSnapshot({ config, workspaceDir });
-      admissionRegistry = getPluginRuntimeGenerationRegistry();
-      return { kind: "run" };
-    });
-    let executionSnapshot: unknown;
-    let executionRegistry: unknown;
-    mocks.execute.mockImplementation(async () => {
-      executionSnapshot = getCurrentPluginMetadataSnapshot({ config, workspaceDir });
-      executionRegistry = getPluginRuntimeGenerationRegistry();
-      return { text: "ok" };
-    });
+    },
+    [Symbol.asyncDispose]: release,
+    pluginGeneration: selectedGeneration,
+  }));
+  const expectSelectedScope = () => {
+    expect(getCurrentPluginMetadataSnapshot({ config, workspaceDir })).toBe(metadataSnapshot);
+    expect(getPluginRuntimeGenerationRegistry()).toBe(selectedGeneration.pluginRegistry);
+    expect(getPreparedModelRuntimePluginGeneration()).toBe(selectedGeneration);
+  };
+  mocks.prepareAdmission.mockImplementation(async () => {
+    expectSelectedScope();
+    return { kind: "ready" };
+  });
+  mocks.execute.mockImplementation(async () => {
+    expectSelectedScope();
+    return { text: "ok" };
+  });
+  const preparedInput = {
+    cfg: config,
+    sessionCtx: {},
+    ctx: {},
+    agentId: "main",
+    sessionKey: "",
+    workspaceDir,
+    provider: "selected",
+    model: "model",
+  } satisfies Pick<
+    RunPreparedReplyParams,
+    "cfg" | "sessionCtx" | "ctx" | "agentId" | "sessionKey" | "workspaceDir" | "provider" | "model"
+  >;
 
-    const run = bindPreparedReplyDispatchRuntime(
-      {
-        agentId: "main",
-        agentDir: "/tmp/openclaw-reply-agent",
-        workspaceDir: "/tmp/openclaw-configured-workspace",
-        config,
-      } as never,
-      async () => await runPreparedReply({} as never),
-    );
+  const run = bindPreparedReplyDispatchRuntime(
+    {
+      agentId: "main",
+      agentDir: "/tmp/openclaw-reply-agent",
+      workspaceDir: gatewayWorkspaceDir,
+      config,
+      pluginGeneration,
+    } as never,
+    async () => await runPreparedReply(preparedInput as RunPreparedReplyParams),
+  );
 
-    await expect(run()).resolves.toEqual({ text: "ok" });
-    expect(mocks.acquireRuntime).toHaveBeenCalledWith({
+  await expect(run()).resolves.toEqual({ text: "ok" });
+  expect(mocks.acquireRuntime).toHaveBeenCalledWith(
+    {
       config,
       agentId: "main",
       agentDir: "/tmp/openclaw-reply-agent",
+      allowGatewaySubagentBinding: true,
       workspaceDir,
-    });
-    expect(admissionSnapshot).toBe(metadataSnapshot);
-    expect(executionSnapshot).toBe(metadataSnapshot);
-    expect(admissionRegistry).toBe(pluginRegistry);
-    expect(executionRegistry).toBe(pluginRegistry);
-    expect(release).toHaveBeenCalledOnce();
-    expect(getCurrentPluginMetadataSnapshot({ config, workspaceDir })).toBeUndefined();
-    expect(getPluginRuntimeGenerationRegistry()).toBeUndefined();
-  });
+      runtimePluginSelections: [
+        { provider: "selected", modelId: "model", runtime: "selected-harness" },
+      ],
+    },
+    { catalogMode: "static", pluginGeneration },
+  );
+  expect(mocks.prepareAdmission).toHaveBeenCalledOnce();
+  expect(mocks.execute).toHaveBeenCalledOnce();
+  expect(release).toHaveBeenCalledOnce();
+  expect(getCurrentPluginMetadataSnapshot({ config, workspaceDir })).toBeUndefined();
+  expect(getPluginRuntimeGenerationRegistry()).toBeUndefined();
+  expect(getPreparedModelRuntimePluginGeneration()).toBeUndefined();
 });

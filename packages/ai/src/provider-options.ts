@@ -1,12 +1,17 @@
 import type Anthropic from "@anthropic-ai/sdk";
+import type { ProviderStreamOptions } from "./provider-types.js";
 import type { OpenAIReasoningEffort } from "./providers/openai-reasoning-effort.js";
 import type { OpenAICompletionsToolChoice } from "./providers/openai-tool-projection.js";
 import type { StreamOptions } from "./types.js";
 
-export type OpenAIResponsesCompactionRejection = {
+/** Identity of a provider compaction checkpoint the server rejected on replay. */
+export type CompactionReplayRejection = {
   data: string;
   id?: string;
 };
+
+/** @deprecated Use CompactionReplayRejection. */
+export type OpenAIResponsesCompactionRejection = CompactionReplayRejection;
 
 export type CodeModeToolSurfaceObservation = {
   beforeToolIdentities: readonly string[];
@@ -15,7 +20,16 @@ export type CodeModeToolSurfaceObservation = {
 
 const CODE_MODE_TOOL_SURFACE_OBSERVER = Symbol("openaiCodeModeToolSurfaceObserver");
 const CODE_MODE_TOOL_SURFACE_COLLECTOR = Symbol("openaiCodeModeToolSurfaceCollector");
+const STRICT_REASONING_TAG_TEXT = Symbol("openaiStrictReasoningTagText");
 type CodeModeToolSurfaceObserver = (observation: CodeModeToolSurfaceObservation) => void;
+
+function markStrictReasoningTagText(options: object): void {
+  Reflect.set(options, STRICT_REASONING_TAG_TEXT, true);
+}
+
+function isStrictReasoningTagText(options: object | undefined): boolean {
+  return options ? Reflect.get(options, STRICT_REASONING_TAG_TEXT) === true : false;
+}
 
 export const codeModeToolSurfaceObserver = {
   set(
@@ -44,12 +58,53 @@ export const codeModeToolSurfaceObserver = {
   },
 };
 
+/** Internal output policy for callers that must not recover ambiguous reasoning as visible text. */
+export const reasoningTagTextPolicy = {
+  markStrict: markStrictReasoningTagText,
+  isStrict: isStrictReasoningTagText,
+  copy(source: object | undefined, target: object): void {
+    if (isStrictReasoningTagText(source)) {
+      markStrictReasoningTagText(target);
+    }
+  },
+};
+
+const PREPARED_REQUEST_SUFFIX = Symbol("preparedRequestSuffix");
+
+/** The caller supplies a captured wire prefix; transport repair must retain its late tool results. */
+export const preparedRequestSuffix = {
+  mark(context: object, toolCallIds: ReadonlySet<string>): void {
+    Reflect.set(context, PREPARED_REQUEST_SUFFIX, toolCallIds);
+  },
+  has(context: object): boolean {
+    return Reflect.has(context, PREPARED_REQUEST_SUFFIX);
+  },
+  hasToolCall(context: object, id: string): boolean {
+    // SAFETY: Only mark() writes this private carrier, with captured prefix wire IDs.
+    const ids = Reflect.get(context, PREPARED_REQUEST_SUFFIX) as ReadonlySet<string> | undefined;
+    return ids?.has(id) ?? false;
+  },
+  toolCallId(context: object, id: string, normalized: string): string {
+    // SAFETY: Only mark() writes this private carrier, with the captured prefix's wire IDs.
+    const ids = Reflect.get(context, PREPARED_REQUEST_SUFFIX) as ReadonlySet<string> | undefined;
+    return ids && !ids.has(id) && ids.has(normalized) ? normalized : id;
+  },
+};
+
 export type AnthropicEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
 export type AnthropicThinkingDisplay = "summarized" | "omitted";
 
+export type AnthropicContextManagementOptions = {
+  anthropicServerCompaction?: boolean;
+  anthropicCompactThreshold?: number;
+  cacheTtlPruning?: { tools?: { allow?: string[]; deny?: string[] } };
+  /** Internal owner notification after Anthropic rejects a replayed compaction checkpoint. */
+  onCompactionRejected?: (checkpoint: CompactionReplayRejection) => void;
+};
+
 /** Provider options shared by the Anthropic provider and canonical transport. */
-export interface AnthropicOptions extends StreamOptions {
+export interface AnthropicOptions extends StreamOptions, AnthropicContextManagementOptions {
   /**
    * Enable extended thinking.
    * For Opus 4.6+ and Sonnet 4.6: uses adaptive thinking (model decides when/how much to think).
@@ -95,13 +150,13 @@ export interface AnthropicOptions extends StreamOptions {
 }
 
 /** Options shared by the OpenAI Responses and Completions transports. */
-export type BaseOpenAIStreamOptions = StreamOptions & {
+export type BaseOpenAIStreamOptions = ProviderStreamOptions & {
   topP?: number;
   authProfileId?: string;
   firstEventTimeoutMs?: number;
   onFirstEventTimeout?: (reason: Error) => void;
   /** Internal owner notification after a server rejects a persisted compaction checkpoint. */
-  onCompactionRejected?: (checkpoint: OpenAIResponsesCompactionRejection) => void;
+  onCompactionRejected?: (checkpoint: CompactionReplayRejection) => void;
   openclawCodeModeToolSurface?: boolean;
   openclawCodeModeAllowedHostedToolTypes?: Set<string>;
   frequencyPenalty?: number;
@@ -111,7 +166,8 @@ export type BaseOpenAIStreamOptions = StreamOptions & {
 
 /** Superset retained under the provider's published compatibility type name. */
 export type OpenAICompletionsOptions = BaseOpenAIStreamOptions & {
+  streaming?: boolean;
   toolChoice?: OpenAICompletionsToolChoice;
-  reasoning?: OpenAIReasoningEffort;
-  reasoningEffort?: OpenAIReasoningEffort;
+  reasoning?: OpenAIReasoningEffort | "off";
+  reasoningEffort?: OpenAIReasoningEffort | "off";
 };

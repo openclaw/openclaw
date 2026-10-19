@@ -1,18 +1,36 @@
-// Covers isolated heartbeat outbound session routing and base-session bookkeeping.
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import { afterEach, expect, it, vi } from "vitest";
+import { heartbeatRunnerWhatsAppPlugin } from "../../test/helpers/infra/heartbeat-runner-channel-plugins.js";
+import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
+import { buildChannelOutboundSessionRoute } from "../plugin-sdk/core.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { resolveHeartbeatPreflight } from "./heartbeat-runner-prompt.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import {
+  heartbeatTestConfig,
   readSessionStoreForTest,
-  seedHeartbeatScratchForTest,
   seedSessionStore,
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
+import type { DeliverOutboundPayloadsParams } from "./outbound/deliver.js";
+import { enqueueSystemEvent, resetSystemEventsForTest } from "./system-events.js";
 
+const recipient = "+15551234567";
+const destination = { channel: "whatsapp", to: recipient };
+
+const beforeMockDeliveryCompletion = vi.hoisted(() => vi.fn(async () => {}));
 const deliverOutboundPayloadsInternal = vi.hoisted(() =>
-  vi.fn().mockResolvedValue([{ channel: "whatsapp", messageId: "msg-1" }]),
+  vi.fn(async (request: DeliverOutboundPayloadsParams) => {
+    request.onDeliveredPayload?.({
+      text: request.payloads[0]?.text ?? "",
+      mediaUrls: [],
+    });
+    await beforeMockDeliveryCompletion();
+    return [{ channel: "whatsapp", messageId: "msg-1" }];
+  }),
 );
 
 vi.mock("./outbound/deliver.js", () => ({
@@ -23,141 +41,163 @@ vi.mock("./outbound/deliver.js", () => ({
 installHeartbeatRunnerTestRuntime();
 
 afterEach(() => {
+  beforeMockDeliveryCompletion.mockReset().mockResolvedValue(undefined);
   deliverOutboundPayloadsInternal.mockClear();
+  resetSystemEventsForTest();
 });
 
-type DeliveryRequest = {
-  channel?: string;
-  to?: string;
-  session?: {
-    key?: string;
-    policyKey?: string;
-  };
-};
+const latestDeliveryRequest = () => deliverOutboundPayloadsInternal.mock.calls.at(-1)?.[0];
 
-function latestDeliveryRequest(): DeliveryRequest {
-  const [request] = deliverOutboundPayloadsInternal.mock.calls.at(-1) ?? [];
-  if (!request || typeof request !== "object") {
-    throw new Error("expected heartbeat delivery request");
-  }
-  return request as DeliveryRequest;
-}
-
-function makeIsolatedLastTargetConfig(tmpDir: string, storePath: string): OpenClawConfig {
-  return {
-    agents: {
-      list: [{ id: "main", default: true }],
-      defaults: {
-        workspace: tmpDir,
-        heartbeat: {
-          every: "5m",
-          target: "last",
-          isolatedSession: true,
-        },
-      },
+function installWhatsAppRoute(exact: boolean) {
+  const plugin: ChannelPlugin = {
+    ...heartbeatRunnerWhatsAppPlugin,
+    messaging: {
+      ...heartbeatRunnerWhatsAppPlugin.messaging,
+      targetResolver: { looksLikeId: () => true },
+      resolveOutboundSessionRoute: exact
+        ? ({ cfg, agentId, accountId, target }) =>
+            buildChannelOutboundSessionRoute({
+              cfg,
+              agentId,
+              channel: "whatsapp",
+              accountId,
+              recipientSessionExact: true,
+              peer: { kind: "direct", id: target },
+              chatType: "direct",
+              from: target,
+              to: target,
+            })
+        : undefined,
     },
-    channels: { whatsapp: { allowFrom: ["*"] } },
-    session: { store: storePath },
   };
+  setActivePluginRegistry(createTestRegistry([{ pluginId: "whatsapp", plugin, source: "test" }]));
 }
 
-describe("runHeartbeatOnce - isolated heartbeat outbound session mirror", () => {
-  it("uses the isolated run key for outbound delivery while the base session owns delivery state", async () => {
-    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      const cfg = makeIsolatedLastTargetConfig(tmpDir, storePath);
-      const baseSessionKey = resolveMainSessionKey(cfg);
-      const isolatedSessionKey = `${baseSessionKey}:heartbeat`;
-      const nowMs = Date.now();
-      await seedHeartbeatScratchForTest({
-        content: "Check whether the user needs a status update.",
-      });
-      await seedSessionStore(storePath, baseSessionKey, {
-        sessionId: "base-session",
-        updatedAt: nowMs - 1_000,
-        lastChannel: "whatsapp",
-        lastProvider: "whatsapp",
-        lastTo: "+15551234567",
-      });
-      replySpy.mockResolvedValueOnce({ text: "Status needs attention." });
-
-      const result = await runHeartbeatOnce({
-        cfg,
-        deps: {
-          getReplyFromConfig: replySpy,
-          getQueueSize: () => 0,
-          nowMs: () => nowMs,
-        },
-      });
-
-      expect(result.status).toBe("ran");
-      expect(replySpy.mock.calls[0]?.[0]).toMatchObject({
-        SessionKey: isolatedSessionKey,
-      });
-      const deliveryRequest = latestDeliveryRequest();
-      expect(deliveryRequest).toMatchObject({
-        channel: "whatsapp",
-        to: "+15551234567",
-        session: {
-          key: isolatedSessionKey,
-          policyKey: baseSessionKey,
-        },
-      });
-
-      const store = readSessionStoreForTest<{
-        lastHeartbeatText?: string;
-        lastHeartbeatSentAt?: number;
-        heartbeatIsolatedBaseSessionKey?: string;
-      }>(storePath);
-      expect(store[baseSessionKey]).toMatchObject({
-        lastHeartbeatText: "Status needs attention.",
-        lastHeartbeatSentAt: nowMs,
-      });
-      expect(store[isolatedSessionKey]).toMatchObject({
-        heartbeatIsolatedBaseSessionKey: baseSessionKey,
-      });
-      expect(store[isolatedSessionKey]?.lastHeartbeatText).toBeUndefined();
+function withMirror(
+  fn: (fixture: Awaited<ReturnType<typeof createMirrorFixture>>) => Promise<void>,
+  projection: boolean | "inexact" = true,
+) {
+  return withTempHeartbeatSandbox(async (sandbox) =>
+    fn(await createMirrorFixture(sandbox, projection)),
+  );
+}
+async function createMirrorFixture(
+  sandbox: Parameters<Parameters<typeof withTempHeartbeatSandbox>[0]>[0],
+  projection: boolean | "inexact",
+) {
+  const { tmpDir, storePath, replySpy } = sandbox;
+  const cfg = heartbeatTestConfig(tmpDir, "last", "whatsapp", storePath);
+  cfg.agents!.entries = { main: {} };
+  cfg.agents!.defaults!.heartbeat!.isolatedSession = true;
+  if (projection) {
+    installWhatsAppRoute(projection !== "inexact");
+    cfg.session = { ...cfg.session, dmScope: "per-channel-peer" };
+  }
+  const baseKey = resolveMainSessionKey(cfg);
+  const isolatedKey = `${baseKey}:heartbeat`;
+  const targetKey = `agent:main:whatsapp:direct:${recipient}`;
+  const nowMs = Date.now();
+  const delivery = {
+    updatedAt: nowMs - 1000,
+    lastChannel: "whatsapp",
+    lastTo: recipient,
+  };
+  await seedSessionStore(storePath, baseKey, { ...delivery, sessionId: "base-session" });
+  if (projection) {
+    await seedSessionStore(storePath, targetKey, {
+      ...delivery,
+      sessionId: "target-session",
+      lifecycleRevision: "target-lifecycle-1",
     });
-  });
-
-  it("keeps the base policy key when wake re-entry starts from the isolated key", async () => {
-    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      const cfg = makeIsolatedLastTargetConfig(tmpDir, storePath);
-      const baseSessionKey = resolveMainSessionKey(cfg);
-      const isolatedSessionKey = `${baseSessionKey}:heartbeat`;
-      const nowMs = Date.now();
-
-      await seedSessionStore(storePath, isolatedSessionKey, {
-        sessionId: "isolated-session",
-        updatedAt: nowMs - 1_000,
-        lastChannel: "whatsapp",
-        lastProvider: "whatsapp",
-        lastTo: "+15551234567",
-        heartbeatIsolatedBaseSessionKey: baseSessionKey,
-      });
-      replySpy.mockResolvedValueOnce({ text: "Wake result needs attention." });
-
-      const result = await runHeartbeatOnce({
-        cfg,
-        sessionKey: isolatedSessionKey,
-        deps: {
-          getReplyFromConfig: replySpy,
-          getQueueSize: () => 0,
-          nowMs: () => nowMs,
-        },
-      });
-
-      expect(result.status).toBe("ran");
-      expect(replySpy.mock.calls[0]?.[0]).toMatchObject({
-        SessionKey: isolatedSessionKey,
-      });
-      expect(latestDeliveryRequest()).toMatchObject({
-        channel: "whatsapp",
-        to: "+15551234567",
-        session: {
-          key: isolatedSessionKey,
-          policyKey: baseSessionKey,
-        },
-      });
+  }
+  replySpy.mockResolvedValueOnce({ text: "Status needs attention." });
+  const run = (wake: Omit<Parameters<typeof runHeartbeatOnce>[0], "cfg" | "deps"> = {}) =>
+    runHeartbeatOnce({
+      cfg,
+      ...wake,
+      deps: { getReplyFromConfig: replySpy, nowMs: () => nowMs },
     });
-  });
-});
+  const awareness = (events?: Parameters<typeof drainFormattedSystemEvents>[0]["events"]) =>
+    drainFormattedSystemEvents({
+      cfg,
+      agentId: "main",
+      sessionKey: targetKey,
+      isMainSession: false,
+      isNewSession: false,
+      events,
+    });
+  return { ...sandbox, cfg, baseKey, isolatedKey, targetKey, nowMs, run, awareness };
+}
+
+it("keeps the base policy key when wake re-entry starts from the isolated key", () =>
+  withMirror(async ({ storePath, replySpy, baseKey, isolatedKey, nowMs, run }) => {
+    await seedSessionStore(storePath, isolatedKey, {
+      sessionId: "isolated-session",
+      updatedAt: nowMs - 1_000,
+      heartbeatIsolatedBaseSessionKey: baseKey,
+    });
+    enqueueSystemEvent("Exec completed (mirror-reentry, code 0) :: result needs attention", {
+      sessionKey: isolatedKey,
+    });
+    const result = await run({
+      sessionKey: isolatedKey,
+      source: "exec-event",
+      intent: "event",
+      reason: "exec-event",
+    });
+
+    expect(result.status).toBe("ran");
+    expect(replySpy.mock.calls[0]?.[0]).toMatchObject({ SessionKey: isolatedKey });
+    expect(latestDeliveryRequest()).toMatchObject({
+      ...destination,
+      session: { key: isolatedKey, policyKey: baseKey },
+    });
+    const store = readSessionStoreForTest(storePath);
+    expect(store[baseKey]).toMatchObject({
+      lastHeartbeatText: "Status needs attention.",
+      lastHeartbeatSentAt: nowMs,
+    });
+    expect(store[isolatedKey]?.heartbeatIsolatedBaseSessionKey).toBe(baseKey);
+    expect(store[isolatedKey]?.lastHeartbeatText).toBeUndefined();
+  }, false));
+
+it("queues a successful direct alert for the next ordinary target turn", () =>
+  withMirror(async ({ cfg, targetKey, run, awareness }) => {
+    // Observe publication after confirmation, while the transport still owns completion.
+    beforeMockDeliveryCompletion.mockImplementationOnce(async () => {
+      const { pendingEventEntries } = await resolveHeartbeatPreflight({
+        cfg,
+        agentId: "main",
+        sessionKey: targetKey,
+        heartbeat: { isolatedSession: true },
+      });
+      expect(pendingEventEntries).toEqual([]);
+      await expect(awareness(pendingEventEntries)).resolves.toBeUndefined();
+      const context = await awareness();
+      expect(context).toContain("A heartbeat delivered this message to this channel:");
+      expect(context).toContain("Status needs attention.");
+      await expect(awareness()).resolves.toBeUndefined();
+    });
+    await expect(run()).resolves.toMatchObject({ status: "ran" });
+    expect(beforeMockDeliveryCompletion).toHaveBeenCalledOnce();
+    expect(latestDeliveryRequest()).toMatchObject(destination);
+  }));
+
+it.each(["inexact route", "failed delivery"] as const)(
+  "does not project an alert after %s",
+  (scenario) =>
+    withMirror(
+      async ({ run, awareness }) => {
+        if (scenario === "failed delivery") {
+          deliverOutboundPayloadsInternal.mockRejectedValueOnce(new Error("channel unavailable"));
+        }
+        const result = await run();
+        expect(result.status).toBe(scenario === "failed delivery" ? "failed" : "ran");
+        if (scenario === "inexact route") {
+          expect(latestDeliveryRequest()).toMatchObject(destination);
+        }
+        await expect(awareness()).resolves.toBeUndefined();
+      },
+      scenario === "inexact route" ? "inexact" : true,
+    ),
+);

@@ -1,4 +1,5 @@
-// Rejects config files written by unsupported future versions.
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { VERSION } from "../version.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 import { shouldWarnOnTouchedVersion } from "./version.js";
@@ -31,15 +32,8 @@ function allowOlderBinaryDestructiveActions(env: Record<string, string | undefin
 
 function resolveTouchedVersion(params: FutureConfigGuardParams): string | null {
   const readSourceVersion = (value: unknown): string | undefined => {
-    if (!value || typeof value !== "object") {
-      return undefined;
-    }
-    const meta = (value as { meta?: unknown }).meta;
-    if (!meta || typeof meta !== "object") {
-      return undefined;
-    }
-    const version = (meta as { lastTouchedVersion?: unknown }).lastTouchedVersion;
-    return typeof version === "string" ? version.trim() || undefined : undefined;
+    const meta = asOptionalObjectRecord(asOptionalObjectRecord(value)?.meta);
+    return normalizeOptionalString(meta?.lastTouchedVersion);
   };
   return (
     readSourceVersion(params.snapshot?.sourceConfig) ??

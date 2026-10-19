@@ -40,11 +40,26 @@ export function createStreamingResponse(params: {
   };
 }
 
-export function createStreamingErrorResponse(params: {
-  status: number;
-  chunkCount: number;
-  chunkSize: number;
-  byte: number;
-}): StreamingResponseFixture {
-  return createStreamingResponse(params);
+// Keep the body open after its first chunk so cancellation reaches the source.
+// Provider 404 and overflow tests observe that callback.
+export function cancelTrackedTextResponse(
+  text: string,
+  init?: ResponseInit,
+): {
+  response: Response;
+  wasCanceled: () => boolean;
+} {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(text));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return {
+    response: new Response(stream, init),
+    wasCanceled: () => canceled,
+  };
 }

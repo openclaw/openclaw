@@ -1,47 +1,41 @@
 // Google Meet tests cover bounded Google API error handling.
 import { describe, expect, it, vi } from "vitest";
-import { googleApiError } from "./google-api-errors.js";
+import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
+import { fetchGoogleMeetSpace } from "./meet-api.js";
 
-function cancelTrackedResponse(
-  text: string,
-  init: ResponseInit,
-): {
-  response: Response;
-  wasCanceled: () => boolean;
-} {
-  let canceled = false;
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode(text));
-    },
-    cancel() {
-      canceled = true;
-    },
-  });
-  return {
-    response: new Response(stream, init),
-    wasCanceled: () => canceled,
-  };
-}
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+  fetchWithSsrFGuard: vi.fn(),
+}));
 
-describe("googleApiError", () => {
-  it("bounds Google API error bodies without using response.text()", async () => {
-    const tracked = cancelTrackedResponse(`${"access denied ".repeat(1024)}tail`, {
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+
+describe("Google Meet API errors", () => {
+  it("bounds error bodies and preserves the operation scope before releasing the request", async () => {
+    const body = `${"access denied ".repeat(1024)}tail`;
+    const tracked = cancelTrackedTextResponse(body, {
       status: 403,
       headers: { "content-type": "text/plain" },
     });
     const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
-
-    const error = await googleApiError({
+    const release = vi.fn(async () => {
+      expect(tracked.wasCanceled()).toBe(true);
+    });
+    vi.mocked(fetchWithSsrFGuard).mockResolvedValueOnce({
       response: tracked.response,
-      prefix: "Google Meet spaces.get",
-      scopes: ["https://www.googleapis.com/auth/meetings.space.readonly"],
+      finalUrl: "https://meet.googleapis.com/v2/spaces/abc-defg-hij",
+      release,
     });
 
-    expect(error.message).toContain("Google Meet spaces.get failed (403): access denied");
-    expect(error.message).not.toContain("tail");
-    expect(error.message.length).toBeLessThan(8_400);
+    await expect(
+      fetchGoogleMeetSpace({ accessToken: "test-token", meeting: "abc-defg-hij" }),
+    ).rejects.toMatchObject({
+      message:
+        `Google Meet spaces.get failed (403): ${body.slice(0, 8 * 1024)}` +
+        " Required OAuth scope: `https://www.googleapis.com/auth/meetings.space.readonly`." +
+        " Re-run `openclaw googlemeet auth login` and store the refreshed oauth block.",
+    });
     expect(tracked.wasCanceled()).toBe(true);
     expect(textSpy).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledTimes(1);
   });
 });

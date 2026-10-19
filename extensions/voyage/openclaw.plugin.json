@@ -1,5 +1,6 @@
 {
   "id": "voyage",
+  "categories": ["memory"],
   "activation": {
     "onStartup": false
   },

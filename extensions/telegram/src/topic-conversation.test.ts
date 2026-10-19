@@ -10,7 +10,7 @@ describe("parseTelegramTopicConversation", () => {
       }),
     ).toEqual({
       chatId: "-1001234567890",
-      topicId: "42",
+      thread: { id: 42, scope: "forum" },
       canonicalConversationId: "-1001234567890:topic:42",
     });
   });
@@ -23,32 +23,27 @@ describe("parseTelegramTopicConversation", () => {
       }),
     ).toEqual({
       chatId: "-1001234567890",
-      topicId: "42",
+      thread: { id: 42, scope: "forum" },
       canonicalConversationId: "-1001234567890:topic:42",
     });
   });
 
-  it("returns null when a DM binding carries the chat id in both fields", () => {
+  it("keeps direct-message and forum topics with the same numeric id distinct", () => {
     expect(
       parseTelegramTopicConversation({
-        conversationId: "1234",
-        parentConversationId: "1234",
+        conversationId: "-1001234567890:direct-topic:42",
       }),
-    ).toBeNull();
+    ).toEqual({
+      chatId: "-1001234567890",
+      thread: { id: 42, scope: "direct-messages" },
+      canonicalConversationId: "-1001234567890:direct-topic:42",
+    });
   });
 
   it("returns null when neither shape matches", () => {
     expect(
       parseTelegramTopicConversation({
         conversationId: "not-a-topic",
-      }),
-    ).toBeNull();
-  });
-
-  it("returns null for a bare topic id without a parentConversationId", () => {
-    expect(
-      parseTelegramTopicConversation({
-        conversationId: "42",
       }),
     ).toBeNull();
   });

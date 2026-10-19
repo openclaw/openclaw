@@ -7,7 +7,7 @@ const BUZZ_MEMBER_REMOVED_NOTIFICATION_KIND = 44_101;
 
 const MEMBERSHIP_NOTIFICATION_CLOSE_REASON = "membership notification shutdown";
 
-type BuzzRoomMembershipNotification = {
+export type BuzzRoomMembershipNotification = {
   eventId: string;
   kind: typeof BUZZ_MEMBER_ADDED_NOTIFICATION_KIND | typeof BUZZ_MEMBER_REMOVED_NOTIFICATION_KIND;
   roomId: string;
@@ -48,6 +48,7 @@ export function startBuzzRoomMembershipNotifications(params: {
   configuredRoomIds: string[];
   since: number;
   signal?: AbortSignal;
+  onNotification?: (notification: BuzzRoomMembershipNotification) => boolean;
   onFatalError: (error: Error) => void;
 }): void {
   const configuredRoomIds = new Set(params.configuredRoomIds.map(parseBuzzTarget));
@@ -68,7 +69,11 @@ export function startBuzzRoomMembershipNotifications(params: {
           relayPublicKey: params.relayPublicKey,
           botPublicKey: params.botPublicKey,
         });
-        if (notification && configuredRoomIds.has(notification.roomId)) {
+        if (
+          notification &&
+          configuredRoomIds.has(notification.roomId) &&
+          !params.onNotification?.(notification)
+        ) {
           params.onFatalError(
             new Error(
               `Buzz room ${notification.roomId} membership changed; rebuilding subscriptions`,

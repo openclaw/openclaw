@@ -1,10 +1,23 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as gateway from "./in-process-gateway.js";
 import { createProgressCardTool } from "./progress-card-tool.js";
 
-const DESCRIPTION =
-  'Maintain this session\'s progress card: the single durable status surface shown next to the session in OpenClaw\'s UIs, for someone who is not reading the transcript. Each call replaces the whole card. Two optional parts: `plan` — an ordered step list (pending | in_progress | completed, at most one in_progress) rendered as a checklist with progress counts; and `markdown` — a compact narrative (what happened, what is blocked, what comes next), plus optional <progress value="3" max="7"></progress> bars and small tables; other raw HTML is stripped. Use plan for multi-step work; keep statuses current. Use markdown when a glanceable note says more than steps; do not duplicate the step list inside it. Call with both parts empty to clear. Update when the picture meaningfully changes — a step completes, a blocker appears, results land — not every message. Max 8 KB markdown, 50 steps.';
+afterEach(() => vi.restoreAllMocks());
 
 describe("progress_card tool", () => {
+  it("limits creation to sequential work while preserving updates, clears, and optional checklists", () => {
+    const { description } = createProgressCardTool();
+
+    expect(description).toContain("Create a card only for substantial work");
+    expect(description).toContain("at least two meaningful sequential steps");
+    expect(description).toContain("Existing cards may still be updated or cleared");
+    expect(description).toContain(
+      "Do not create a card for greetings, quick questions, or single-step requests",
+    );
+    expect(description).not.toContain("any task that takes more than a moment");
+    expect(description).toContain("The checklist is optional");
+  });
+
   it("replaces the card and returns compact progress receipts", async () => {
     const steps = [
       { step: "Inspect", status: "completed" as const },
@@ -12,7 +25,7 @@ describe("progress_card tool", () => {
       { step: "Verify", status: "pending" as const },
     ];
     const callGateway = vi
-      .fn()
+      .spyOn(gateway, "callInProcessGatewayTool")
       .mockResolvedValueOnce({
         card: {
           sessionKey: "agent:main:main",
@@ -31,12 +44,12 @@ describe("progress_card tool", () => {
         },
       })
       .mockResolvedValueOnce({ card: null });
+    const savedPlans: boolean[] = [];
     const tool = createProgressCardTool({
       agentSessionKey: "agent:main:main",
-      callGateway,
+      onPlanSaved: (unfinished) => savedPlans.push(unfinished),
     });
 
-    expect(tool.description).toBe(DESCRIPTION);
     expect(tool.requiredClientCaps).toBeUndefined();
     const planned = await tool.execute("call-1", {
       markdown: "Implementation underway",
@@ -63,6 +76,11 @@ describe("progress_card tool", () => {
     });
     expect(cleared.details).toEqual({ revision: null, steps: null });
     expect(cleared.content[0]).toEqual({ type: "text", text: "Progress card cleared" });
+    expect(savedPlans).toEqual([true, false, false]);
+
+    callGateway.mockRejectedValueOnce(new Error("save rejected"));
+    await expect(tool.execute("call-failed", { plan: steps })).rejects.toThrow("save rejected");
+    expect(savedPlans).toEqual([true, false, false]);
   });
 
   it.each([
@@ -102,20 +120,37 @@ describe("progress_card tool", () => {
       message: "8192 UTF-8 bytes",
     },
   ])("rejects $name before writing", async ({ args, message }) => {
-    const callGateway = vi.fn();
-    const tool = createProgressCardTool({ agentSessionKey: "agent:main:main", callGateway });
+    const callGateway = vi.spyOn(gateway, "callInProcessGatewayTool");
+    const tool = createProgressCardTool({ agentSessionKey: "agent:main:main" });
 
     await expect(tool.execute("call-invalid", args)).rejects.toThrow(message);
     expect(callGateway).not.toHaveBeenCalled();
   });
 
   it("fails before calling the gateway without a session", async () => {
-    const callGateway = vi.fn();
-    const tool = createProgressCardTool({ callGateway });
+    const callGateway = vi.spyOn(gateway, "callInProcessGatewayTool");
+    const tool = createProgressCardTool();
 
     await expect(tool.execute("call-1", { markdown: "Working" })).rejects.toMatchObject({
       name: "ToolInputError",
     });
     expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("keeps the bound global owner when model arguments name another session", async () => {
+    const callGateway = vi
+      .spyOn(gateway, "callInProcessGatewayTool")
+      .mockResolvedValue({ card: null });
+    const options = { agentSessionKey: "global", agentId: "research" };
+    const tool = createProgressCardTool(options);
+
+    await tool.execute("call-owner", { sessionKey: "agent:main:main", agentId: "main" });
+
+    expect(callGateway).toHaveBeenCalledWith("progressCard.put", {
+      sessionKey: "global",
+      agentId: "research",
+    });
+    expect(tool.parameters).not.toHaveProperty("properties.agentId");
+    expect(tool.parameters).not.toHaveProperty("properties.sessionKey");
   });
 });

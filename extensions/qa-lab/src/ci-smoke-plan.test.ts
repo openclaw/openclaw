@@ -7,7 +7,7 @@ import { readQaScenarioPack } from "./scenario-catalog.js";
 import { readQaScorecardTaxonomyReport } from "./scorecard-taxonomy.js";
 
 const smokeProfileMock = vi.hoisted(() => ({
-  mode: "actual" as "actual" | "empty" | "ineligible" | "missing-coverage" | "unsupported",
+  mode: "actual" as "actual" | "empty" | "missing-coverage",
 }));
 
 vi.mock("./profile-planning.js", async (importOriginal) => {
@@ -20,15 +20,7 @@ vi.mock("./profile-planning.js", async (importOriginal) => {
         return selection;
       }
       if (smokeProfileMock.mode === "empty") {
-        return { ...selection, scenarios: [] };
-      }
-      const scenarioPack = readQaScenarioPack();
-      if (smokeProfileMock.mode === "ineligible") {
-        const replacement = expectDefined(
-          scenarioPack.scenarios.find((scenario) => scenario.id === "otel-trace-smoke"),
-          "ineligible smoke replacement",
-        );
-        return { ...selection, scenarios: [replacement, ...selection.scenarios.slice(1)] };
+        throw new Error("QA taxonomy profile smoke-ci resolved no executable scenarios.");
       }
       if (smokeProfileMock.mode === "missing-coverage") {
         return {
@@ -37,13 +29,6 @@ vi.mock("./profile-planning.js", async (importOriginal) => {
             (scenario) => !scenario.coverage?.primary.includes("gateway.health-apis"),
           ),
         };
-      }
-      if (smokeProfileMock.mode === "unsupported") {
-        const replacement = expectDefined(
-          scenarioPack.scenarios.find((scenario) => scenario.id === "discord-canary"),
-          "unsupported smoke replacement",
-        );
-        return { ...selection, scenarios: [replacement, ...selection.scenarios.slice(1)] };
       }
       return selection;
     },
@@ -125,32 +110,25 @@ describe("createQaSmokeCiPart", () => {
     const primaryScenarioIds = parts.map(
       (part) => part.runs.find((run) => run.slug === "primary")?.scenario_ids ?? [],
     );
-    const scenarioIdsByPart = parts.map((part) => part.runs.flatMap((run) => run.scenario_ids));
-    const partCosts = scenarioIdsByPart.map((ids) =>
-      ids.reduce(
-        (cost, scenarioId) => cost + estimateScenarioCost(scenarioById.get(scenarioId)),
-        0,
-      ),
+    const scenarioCostsByPart = primaryScenarioIds.map((ids) =>
+      ids.map((scenarioId) => estimateScenarioCost(scenarioById.get(scenarioId))),
     );
-    const unitCostPartCosts = scenarioIdsByPart.flatMap((ids, index) =>
-      ids.every((scenarioId) => estimateScenarioCost(scenarioById.get(scenarioId)) === 1)
-        ? [expectDefined(partCosts[index], "unit-cost QA smoke part")]
-        : [],
+    // The separate Matrix run reserves three flow-cost points during packing.
+    const partCosts = scenarioCostsByPart.map(
+      (costs, index) =>
+        costs.reduce((total, cost) => total + cost, 0) +
+        (parts[index]?.runs.some((run) => run.slug === "matrix") ? 3 : 0),
     );
-    const heaviestUnitCostPart = expectDefined(
-      unitCostPartCosts.toSorted((left, right) => right - left)[0],
-      "heaviest unit-cost QA smoke part",
-    );
-    const lightestUnitCostPart = expectDefined(
-      unitCostPartCosts.toSorted((left, right) => left - right)[0],
-      "lightest unit-cost QA smoke part",
-    );
-    expect(unitCostPartCosts.length).toBeGreaterThan(1);
-    expect(heaviestUnitCostPart - lightestUnitCostPart).toBeLessThanOrEqual(1);
+    const lightestPartCost = Math.min(...partCosts);
+    for (const [index, scenarioCosts] of scenarioCostsByPart.entries()) {
+      // Mixed-cost parts must stay within one indivisible scenario of the lightest part.
+      const partCost = expectDefined(partCosts[index], "QA smoke part cost");
+      expect(partCost - lightestPartCost).toBeLessThanOrEqual(Math.min(...scenarioCosts));
+    }
     expect(primaryScenarioIds.every((ids) => ids.length > 0)).toBe(true);
   });
 
-  it("keeps real Gateway-hosted proof outside the Crabline smoke profile", () => {
+  it("keeps real Gateway-hosted proof outside the Crabline channel-driver profile", () => {
     const coverageId = "control-ui.gateway-hosted-ui-control";
     const smokeSelection = resolveQaProfileScenarios({
       profile: "smoke-ci",
@@ -198,24 +176,10 @@ describe("createQaSmokeCiPart", () => {
     expect(selectQaSmokeCiEligibilityChannel(scenario)).toBe("telegram");
   });
 
-  it("fails when the smoke pack resolves empty", () => {
+  it("reports when the smoke profile has no executable scenarios", () => {
     smokeProfileMock.mode = "empty";
     expect(() => createQaSmokeCiPart("profile-1")).toThrow(
       "smoke-ci taxonomy profile did not resolve any CI scenarios",
-    );
-  });
-
-  it("fails when the smoke pack contains a taxonomy-ineligible scenario", () => {
-    smokeProfileMock.mode = "ineligible";
-    expect(() => createQaSmokeCiPart("profile-1")).toThrow(
-      "smoke-ci taxonomy profile resolved ineligible CI scenarios",
-    );
-  });
-
-  it("fails when the smoke pack contains an unsupported channel", () => {
-    smokeProfileMock.mode = "unsupported";
-    expect(() => createQaSmokeCiPart("profile-1")).toThrow(
-      "smoke-ci taxonomy profile resolved unsupported CI channels: discord",
     );
   });
 

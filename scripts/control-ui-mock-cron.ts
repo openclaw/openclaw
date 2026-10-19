@@ -5,6 +5,7 @@ import type {
   CronRunsResult,
   CronStatus,
 } from "../ui/src/api/types.ts";
+import { cronListResponseFixture } from "../ui/src/test-helpers/cron.ts";
 
 const CRON_LIST_SNAPSHOT_REVISION = "control-ui-mock-cron";
 
@@ -46,7 +47,11 @@ function singleJobListCases(jobs: CronJob[], match: Record<string, unknown>) {
   }));
 }
 
-export function buildCronMocks(baseTime: number) {
+export function buildCronMocks(
+  baseTime: number,
+  options: { richAttention?: boolean; secondAgentId?: string } = {},
+) {
+  const richAttention = options.richAttention === true;
   const minute = 60_000;
   const hour = 60 * minute;
   const day = 24 * hour;
@@ -66,6 +71,14 @@ export function buildCronMocks(baseTime: number) {
       message: "Sync the team calendar and summarize schedule conflicts.",
     },
     delivery: { mode: "announce", channel: "telegram", to: "@operations" },
+    failureAlert: {
+      after: 2,
+      channel: "telegram",
+      to: "@operations",
+      cooldownMs: 3_600_000,
+      includeSkipped: false,
+      mode: "announce",
+    },
     state: {
       nextRunAtMs: baseTime + 5 * hour,
       lastRunAtMs: baseTime - 5 * minute,
@@ -77,6 +90,68 @@ export function buildCronMocks(baseTime: number) {
       lastDeliveryStatus: "not-requested",
     },
   };
+  const extraFailedJobs: CronJob[] = richAttention
+    ? [
+        {
+          id: "mock-cron-release-notify",
+          agentId: "main",
+          name: "Notify release stakeholders about deployment readiness and rollback constraints",
+          description:
+            "Send the release decision, deploy window, rollback owner, and incident contact to every stakeholder group.",
+          enabled: true,
+          createdAtMs: baseTime - 24 * day,
+          updatedAtMs: baseTime - 7 * minute,
+          schedule: { kind: "every", everyMs: 20 * minute, anchorMs: baseTime - 24 * day },
+          sessionTarget: "isolated",
+          wakeMode: "now",
+          payload: {
+            kind: "agentTurn",
+            message:
+              "Prepare the release notification, verify the rollback owner, and publish the final deployment readiness summary.",
+          },
+          delivery: { mode: "announce", channel: "slack", to: "#release-operations" },
+          state: {
+            nextRunAtMs: baseTime + 20 * minute,
+            lastRunAtMs: baseTime - 9 * minute,
+            lastRunStatus: "error",
+            lastError:
+              "Delivery failed after the provider accepted the request but closed the stream before the final acknowledgement. The retry queue retained the payload, the release channel has not been notified, and the notification fan-out must be reconciled before another deployment attempt.",
+            lastDurationMs: 18_640,
+            consecutiveErrors: 3,
+            lastDeliveryStatus: "not-delivered",
+          },
+        },
+        {
+          id: "mock-cron-backup-verify",
+          agentId: "main",
+          name: "Verify encrypted backup rotation before the retention window closes",
+          description:
+            "Check the latest encrypted backup, key rotation receipt, and restore manifest before retention pruning.",
+          enabled: true,
+          createdAtMs: baseTime - 42 * day,
+          updatedAtMs: baseTime - 11 * minute,
+          schedule: { kind: "cron", expr: "15 * * * *", tz: "UTC" },
+          sessionTarget: "isolated",
+          wakeMode: "now",
+          payload: {
+            kind: "agentTurn",
+            message:
+              "Verify backup rotation and report any missing restore manifest or key receipt.",
+          },
+          delivery: { mode: "none" },
+          state: {
+            nextRunAtMs: baseTime + 15 * minute,
+            lastRunAtMs: baseTime - 13 * minute,
+            lastRunStatus: "error",
+            lastError:
+              "Restore verification could not read the encrypted manifest: checksum mismatch after the object store returned a partial range. Keep the current backup, do not prune the retention window, and retry after the storage replica is healthy.",
+            lastDurationMs: 42_900,
+            consecutiveErrors: 4,
+            lastDeliveryStatus: "not-requested",
+          },
+        },
+      ]
+    : [];
   const overdueJob: CronJob = {
     id: "mock-cron-inbox-triage",
     agentId: "main",
@@ -98,9 +173,34 @@ export function buildCronMocks(baseTime: number) {
       lastDeliveryStatus: "not-requested",
     },
   };
+  const extraOverdueJobs: CronJob[] = richAttention
+    ? [
+        {
+          id: "mock-cron-security-digest",
+          agentId: "main",
+          name: "Prepare the daily security digest",
+          description: "Summarize new security advisories and unresolved remediation work.",
+          enabled: true,
+          createdAtMs: baseTime - 31 * day,
+          updatedAtMs: baseTime - 50 * minute,
+          schedule: { kind: "every", everyMs: hour, anchorMs: baseTime - 31 * day },
+          sessionTarget: "isolated",
+          wakeMode: "now",
+          payload: { kind: "agentTurn", message: "Prepare the daily security digest." },
+          delivery: { mode: "none" },
+          state: {
+            nextRunAtMs: baseTime - 42 * minute,
+            lastRunAtMs: baseTime - 102 * minute,
+            lastRunStatus: "ok",
+            lastDurationMs: 38_420,
+            lastDeliveryStatus: "not-requested",
+          },
+        },
+      ]
+    : [];
   const healthyJob: CronJob = {
     id: "mock-cron-release-digest",
-    agentId: "main",
+    agentId: options.secondAgentId ?? "main",
     name: "Publish release digest",
     description: "Summarize merged changes for the engineering channel.",
     enabled: true,
@@ -120,22 +220,23 @@ export function buildCronMocks(baseTime: number) {
       lastDeliveryStatus: "delivered",
     },
   };
-  const jobs = [overdueJob, healthyJob, failedJob];
-  const failedRun: CronRunLogEntry = {
-    ts: baseTime - 5 * minute,
-    runAtMs: baseTime - 5 * minute,
-    jobId: failedJob.id,
-    jobName: failedJob.name,
+  const jobs = [overdueJob, ...extraOverdueJobs, healthyJob, failedJob, ...extraFailedJobs];
+  const failedJobs = [failedJob, ...extraFailedJobs];
+  const failedRuns: CronRunLogEntry[] = failedJobs.map((job, index) => ({
+    ts: baseTime - (5 + index * 4) * minute,
+    runAtMs: baseTime - (5 + index * 4) * minute,
+    jobId: job.id,
+    jobName: job.name,
     action: "finished",
     status: "error",
-    durationMs: failedJob.state?.lastDurationMs,
-    error: failedJob.state?.lastError,
+    durationMs: job.state?.lastDurationMs,
+    error: job.state?.lastError,
     deliveryStatus: "not-requested",
-    model: "gpt-5.6-sol",
-    provider: "openai",
-  };
+    model: index === 1 ? "claude-sonnet-4-6" : "gpt-5",
+    provider: index === 1 ? "anthropic" : "openai",
+  }));
   const runs: CronRunLogEntry[] = [
-    failedRun,
+    ...failedRuns,
     {
       ts: baseTime - 30 * minute,
       runAtMs: baseTime - 30 * minute,
@@ -160,7 +261,8 @@ export function buildCronMocks(baseTime: number) {
       durationMs: overdueJob.state?.lastDurationMs,
       summary: "Classified 23 messages and prepared 6 replies.",
       deliveryStatus: "not-requested",
-      model: "gpt-5.6-sol",
+      deliverySuppressionReason: "Delivery mode is none for this inbox-only automation.",
+      model: "gpt-5",
       provider: "openai",
     },
   ];
@@ -176,57 +278,67 @@ export function buildCronMocks(baseTime: number) {
       durationMs: 42_000 + index * 2_500,
       summary: `Completed an on-demand run for ${job.name}.`,
       deliveryStatus: "not-requested",
-      model: "gpt-5.6-sol",
+      model: "gpt-5",
       provider: "openai",
     },
   }));
+  for (const run of queuedRuns) {
+    run.entry.runId = run.runId;
+  }
+  const transcriptRuns = [...runs, ...queuedRuns.map((run) => run.entry)];
+  for (const [index, entry] of transcriptRuns.entries()) {
+    entry.runId ??= `mock-cron-history-${index}`;
+    const agentId = jobs.find((job) => job.id === entry.jobId)?.agentId ?? "main";
+    entry.sessionKey = `agent:${agentId}:cron:${entry.jobId}:run:${entry.runId}`;
+    entry.sessionId = `mock-cron-transcript-${index}`;
+  }
   const status: CronStatus = {
     enabled: true,
+    triggersEnabled: true,
     jobs: jobs.length,
-    nextWakeAtMs: overdueJob.state?.nextRunAtMs,
+    nextWakeAtMs: Math.min(
+      ...jobs.flatMap((job) =>
+        job.state?.nextRunAtMs === undefined ? [] : [job.state.nextRunAtMs],
+      ),
+    ),
   };
   const runByJobId = new Map(runs.map((entry) => [entry.jobId, entry]));
-  const sortedJobLists = [
-    { match: { sortBy: "nextRunAtMs", sortDir: "asc" }, jobs },
-    {
-      match: { sortBy: "nextRunAtMs", sortDir: "desc" },
-      jobs: [failedJob, healthyJob, overdueJob],
-    },
-    { match: { sortBy: "updatedAtMs", sortDir: "asc" }, jobs },
-    {
-      match: { sortBy: "updatedAtMs", sortDir: "desc" },
-      jobs: [failedJob, healthyJob, overdueJob],
-    },
-    { match: { sortBy: "name", sortDir: "asc" }, jobs: [healthyJob, failedJob, overdueJob] },
-    { match: { sortBy: "name", sortDir: "desc" }, jobs: [overdueJob, failedJob, healthyJob] },
-  ];
+  const sortComparators: Record<string, (left: CronJob, right: CronJob) => number> = {
+    nextRunAtMs: (left, right) => (left.state?.nextRunAtMs ?? 0) - (right.state?.nextRunAtMs ?? 0),
+    updatedAtMs: (left, right) => (left.updatedAtMs ?? 0) - (right.updatedAtMs ?? 0),
+    name: (left, right) => left.name.localeCompare(right.name),
+  };
+  const sortedJobLists = Object.entries(sortComparators).flatMap(([sortBy, compare]) =>
+    ["asc", "desc"].map((sortDir) => ({
+      match: { sortBy, sortDir },
+      jobs: jobs.toSorted(sortDir === "asc" ? compare : (left, right) => compare(right, left)),
+    })),
+  );
 
   return {
     "cron.status": status,
-    "cron.list": {
+    "cron.list": cronListResponseFixture([
       // Cases mirror the concrete queries today's Cron UI issues. Unknown combinations fall back
       // to the full fixture list; dynamic evaluation is intentionally out of scope because the
       // scenario is JSON-serialized into the page rather than installed as a live responder.
-      cases: [
-        {
-          match: { enabled: "enabled", lastRunStatus: "error" },
-          response: listResult([failedJob], { limit: 1 }),
-        },
-        { match: { enabled: "disabled" }, response: listResult([]) },
-        ...singleJobListCases(jobs, {
-          enabled: "enabled",
-          sortBy: "nextRunAtMs",
-          sortDir: "asc",
-          limit: 1,
-        }),
-        ...singleJobListCases(jobs, { includeDisabled: true, limit: 1 }),
-        ...sortedJobLists.map((entry) => ({
-          match: entry.match,
-          response: listResult(entry.jobs),
-        })),
-        { response: listResult(jobs) },
-      ],
-    },
+      {
+        match: { enabled: "enabled", lastRunStatus: "error" },
+        response: listResult(failedJobs, { limit: failedJobs.length }),
+      },
+      { match: { enabled: "disabled" }, response: listResult([]) },
+      ...singleJobListCases(jobs, {
+        enabled: "enabled",
+        sortBy: "nextRunAtMs",
+        sortDir: "asc",
+        limit: 1,
+      }),
+      ...singleJobListCases(jobs, { includeDisabled: true, limit: 1 }),
+      ...sortedJobLists.map((entry) => ({
+        match: entry.match,
+        response: listResult(entry.jobs),
+      })),
+      { response: listResult(jobs) },
+    ]),
     "cron.runs": {
       cases: [
         ...queuedRuns.map((run) => ({
@@ -246,9 +358,26 @@ export function buildCronMocks(baseTime: number) {
             },
           ];
         }),
-        { match: { statuses: ["error"] }, response: runsResult([failedRun]) },
+        { match: { statuses: ["error"] }, response: runsResult(failedRuns) },
         { response: runsResult(runs) },
       ],
+    },
+    "cron.history": {
+      cases: transcriptRuns.map((entry) => ({
+        match: { id: entry.jobId, runId: entry.runId },
+        response: {
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                { type: "text", text: entry.summary ?? entry.error ?? "Automation completed." },
+              ],
+              timestamp: entry.ts,
+              __openclaw: { id: `cron-result-${entry.runId}` },
+            },
+          ],
+        },
+      })),
     },
     // Writes acknowledge the UI action but intentionally keep the fixture snapshot immutable.
     "cron.add": { id: "mock-cron-created" },

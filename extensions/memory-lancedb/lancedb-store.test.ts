@@ -27,7 +27,7 @@ describe("MemoryDB agent isolation", () => {
     }
   });
 
-  test("scopes store, search, list, query, count, delete, and restart reads", async () => {
+  test("scopes store, search, list, query, delete, and restart reads", async () => {
     const db = new MemoryDB(getDbPath(), 2);
     const alpha = await db.store("alpha", {
       text: "alpha private preference",
@@ -46,7 +46,6 @@ describe("MemoryDB agent isolation", () => {
       { entry: { id: alpha.id, text: "alpha private preference" } },
     ]);
     await expect(db.list("beta")).resolves.toMatchObject([{ text: "beta private preference" }]);
-    await expect(db.count("alpha")).resolves.toBe(1);
     await expect(
       db.query("alpha", {
         columns: ["id", "text"],
@@ -55,7 +54,7 @@ describe("MemoryDB agent isolation", () => {
     ).resolves.toMatchObject([{ id: alpha.id, text: "alpha private preference" }]);
 
     await expect(db.delete("beta", alpha.id)).resolves.toBe(false);
-    await expect(db.count("alpha")).resolves.toBe(1);
+    await expect(db.list("alpha")).resolves.toMatchObject([{ id: alpha.id }]);
     db.close();
 
     const reopened = new MemoryDB(getDbPath(), 2);
@@ -66,6 +65,23 @@ describe("MemoryDB agent isolation", () => {
       { text: "beta private preference" },
     ]);
     reopened.close();
+  });
+
+  test("rejects search when a persisted table is reopened with a different vector dimension", async () => {
+    const db = new MemoryDB(getDbPath(), 2);
+    await db.store("main", {
+      text: "fixed-size vector",
+      vector: [1, 0],
+      importance: 0.7,
+      category: "fact",
+    });
+    db.close();
+
+    const incompatible = new MemoryDB(getDbPath(), 3);
+    await expect(incompatible.search("main", [1, 0, 0], 5, 0)).rejects.toThrow(
+      "No vector column found to match with the query vector dimension: 3",
+    );
+    incompatible.close();
   });
 
   test("refuses an unscoped legacy table until doctor migrates it", async () => {
@@ -84,10 +100,10 @@ describe("MemoryDB agent isolation", () => {
     connection.close();
 
     const db = new MemoryDB(getDbPath(), 2);
-    await expect(db.count("main")).rejects.toThrow(
+    await expect(db.list("main")).rejects.toThrow(
       'Run "openclaw doctor --fix" to assign legacy rows to the default agent',
     );
-    await expect(db.count("main")).rejects.toThrow(
+    await expect(db.list("main")).rejects.toThrow(
       'Run "openclaw doctor --fix" to assign legacy rows to the default agent',
     );
     db.close();

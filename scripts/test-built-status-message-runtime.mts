@@ -2,11 +2,13 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { createBuildSmokeEnv } from "./lib/build-smoke-env.mts";
 import { parsePackageRootArg } from "./lib/package-root-args.mts";
 
-const STATUS_MESSAGE_RUNTIME_RE = /^status-message\.runtime(?:-[A-Za-z0-9_-]+)?\.js$/u;
+const STATUS_MESSAGE_RUNTIME_RE = /^status-message\.runtime(?:-[A-Za-z0-9_-]+\.m?js|\.js)$/u;
 
 /**
  * Finds the preferred built status-message runtime bundle under dist.
@@ -40,7 +42,7 @@ function listBuiltStatusMessageRuntimeFiles(distDir: string) {
 function listFindBuiltStatusMessageRuntimeFiles(distDir: string) {
   const result = spawnSync(
     "find",
-    [distDir, "-maxdepth", "1", "-type", "f", "-name", "status-message.runtime*.js"],
+    [distDir, "-maxdepth", "1", "-type", "f", "-name", "status-message.runtime*.*js"],
     {
       encoding: "utf8",
       maxBuffer: 1024 * 1024,
@@ -59,25 +61,31 @@ function listFindBuiltStatusMessageRuntimeFiles(distDir: string) {
 }
 
 async function main() {
-  const { packageRoot } = parsePackageRootArg(
-    process.argv.slice(2),
-    "OPENCLAW_STATUS_MESSAGE_RUNTIME_ROOT",
-  );
-  const runtimePath = findBuiltStatusMessageRuntimePath(path.join(packageRoot, "dist"));
-  const runtimeModule = await import(pathToFileURL(runtimePath).href);
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-status-runtime-smoke-"));
+  Object.assign(process.env, createBuildSmokeEnv(tempRoot));
+  try {
+    const { packageRoot } = parsePackageRootArg(
+      process.argv.slice(2),
+      "OPENCLAW_STATUS_MESSAGE_RUNTIME_ROOT",
+    );
+    const runtimePath = findBuiltStatusMessageRuntimePath(path.join(packageRoot, "dist"));
+    const runtimeModule = await import(pathToFileURL(runtimePath).href);
 
-  assert.equal(
-    typeof runtimeModule.loadStatusMessageRuntimeModule,
-    "function",
-    `built status-message runtime did not export loadStatusMessageRuntimeModule: ${runtimePath}`,
-  );
+    assert.equal(
+      typeof runtimeModule.loadStatusMessageRuntimeModule,
+      "function",
+      `built status-message runtime did not export loadStatusMessageRuntimeModule: ${runtimePath}`,
+    );
 
-  const statusModule = await runtimeModule.loadStatusMessageRuntimeModule();
-  assert.equal(
-    typeof statusModule.buildStatusMessage,
-    "function",
-    "status-message runtime did not load buildStatusMessage",
-  );
+    const statusModule = await runtimeModule.loadStatusMessageRuntimeModule();
+    assert.equal(
+      typeof statusModule.buildStatusMessageParts,
+      "function",
+      "status-message runtime did not load buildStatusMessageParts",
+    );
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {

@@ -1,19 +1,9 @@
-import type {
-  ApplicationInitialUserMessage,
-  ApplicationInitialUserMessageHandoff,
-} from "../../app/initial-user-message-handoff.ts";
+import { registerListener } from "../../../../src/shared/listeners.js";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { outboxPayloadMatchesOwner } from "../../lib/chat/outbox-payload-store.runtime.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
-import {
-  getChatAttachmentDataUrl,
-  releaseChatAttachmentPayloads,
-} from "./attachment-payload-store.ts";
-import {
-  keepVolatileQueuedMessage,
-  readChatQueueForScope,
-  type ChatQueueScopedSessionHost,
-} from "./chat-queue.ts";
-import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
+import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
+import type { ChatHost } from "./chat-send-contract.ts";
 
 const INITIAL_TURN_HANDOFF_TTL_MS = 60_000;
 
@@ -21,9 +11,15 @@ type InitialTurnHandoff = {
   item: ChatQueueItem;
   sessionKey: string;
   timer: ReturnType<typeof globalThis.setTimeout>;
+  retryAfter?: Promise<boolean>;
 };
 
 let pending: InitialTurnHandoff | null = null;
+const listeners = new Set<() => void>();
+
+export function subscribeInitialTurnHandoff(listener: () => void): () => void {
+  return registerListener(listeners, listener);
+}
 
 function clearPending(releaseAttachments: boolean): void {
   if (!pending) {
@@ -36,74 +32,32 @@ function clearPending(releaseAttachments: boolean): void {
   pending = null;
 }
 
-/** Hands one storage-rejected initial turn to the chat route that owns its created session. */
-export function prepareInitialTurnHandoff(sessionKey: string, item: ChatQueueItem): void {
+/** Transfer the created session's rejected turn and optional consent-gated retry to its pane. */
+export function prepareInitialTurnHandoff(
+  sessionKey: string,
+  item: ChatQueueItem,
+  retryAfter?: Promise<boolean>,
+): void {
   clearPending(true);
   const timer = globalThis.setTimeout(() => clearPending(true), INITIAL_TURN_HANDOFF_TTL_MS);
-  pending = { item, sessionKey, timer };
-}
-
-/** Hands the accepted first prompt to chat before transcript persistence catches up. */
-export function prepareInitialUserMessageHandoff(
-  handoff: ApplicationInitialUserMessageHandoff,
-  sessionKey: string,
-  item: Pick<ChatQueueItem, "attachments" | "createdAt" | "text">,
-  owner: object,
-  identity: { runId?: string; messageSeq?: number } = {},
-): void {
-  const runId = identity.runId?.trim();
-  if (!runId) {
-    return;
+  pending = { item, sessionKey, timer, retryAfter };
+  for (const listener of listeners) {
+    listener();
   }
-  const durableAttachments = item.attachments?.map((attachment) => {
-    const dataUrl = getChatAttachmentDataUrl(attachment);
-    return dataUrl ? { ...attachment, dataUrl, previewUrl: dataUrl } : attachment;
-  });
-  const messageSequence =
-    typeof identity.messageSeq === "number" &&
-    Number.isSafeInteger(identity.messageSeq) &&
-    identity.messageSeq > 0
-      ? identity.messageSeq
-      : undefined;
-  const message: ApplicationInitialUserMessage = {
-    role: "user",
-    content: buildUserChatMessageContentBlocks(item.text, durableAttachments),
-    timestamp: item.createdAt,
-    __openclaw: {
-      idempotencyKey: `${runId}:user`,
-      ...(messageSequence === undefined ? {} : { seq: messageSequence }),
-    },
-  };
-  // This bounded process-local handoff owns the original inline bytes until
-  // the pane projection adopts the matching authoritative row.
-  handoff.prepare({
-    message,
-    owner,
-    sessionKey,
-    pendingRunId: runId,
-  });
 }
 
-function consumeInitialTurnHandoff(sessionKey: string): ChatQueueItem | null {
-  if (!pending || !areUiSessionKeysEquivalent(pending.sessionKey, sessionKey)) {
+export function takeInitialTurnHandoff(
+  host: ChatHost,
+  sessionKey: string,
+): InitialTurnHandoff | null {
+  if (
+    !pending ||
+    !areUiSessionKeysEquivalent(pending.sessionKey, sessionKey) ||
+    !outboxPayloadMatchesOwner(host, pending.item)
+  ) {
     return null;
   }
-  const item = pending.item;
+  const handoff = pending;
   clearPending(false);
-  return item;
-}
-
-export function admitInitialTurnHandoff(
-  host: ChatQueueScopedSessionHost,
-  sessionKey: string,
-): boolean {
-  const item = consumeInitialTurnHandoff(sessionKey);
-  if (!item) {
-    return false;
-  }
-  const queue = readChatQueueForScope(host, sessionKey, item.agentId);
-  if (!queue.some((entry) => entry.id === item.id)) {
-    keepVolatileQueuedMessage(host, sessionKey, item, item.agentId, { retryable: true });
-  }
-  return true;
+  return handoff;
 }

@@ -1,68 +1,28 @@
-// Cleans stale queue state and recent dedupe entries.
+// Cancels captured mailbox sources without releasing live source custody.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveEmbeddedSessionLane } from "../../../agents/embedded-agent-runner/lanes.js";
-import { clearCommandLane } from "../../../process/command-queue.js";
-import { clearFollowupDrainCallback } from "./drain.js";
-import { clearFollowupQueue } from "./state.js";
+import type { SessionTarget } from "../../../sessions/session-controller.lifecycle.js";
+import {
+  clearSessionControllerMailbox,
+  type SessionControllerInput,
+} from "../../../sessions/session-controller.mailbox.js";
+import { completeFollowupRunLifecycle } from "./lifecycle.js";
+import { getExistingFollowupQueue } from "./state.js";
 
 export type ClearSessionQueueResult = {
   followupCleared: number;
-  laneCleared: number;
   keys: string[];
 };
 
-const defaultQueueCleanupDeps = {
-  resolveEmbeddedSessionLane,
-  clearCommandLane,
-};
-
-const queueCleanupDeps = {
-  ...defaultQueueCleanupDeps,
-};
-
-function resolveQueueCleanupLaneResolver() {
-  return typeof queueCleanupDeps.resolveEmbeddedSessionLane === "function"
-    ? queueCleanupDeps.resolveEmbeddedSessionLane
-    : defaultQueueCleanupDeps.resolveEmbeddedSessionLane;
-}
-
-function resolveQueueCleanupLaneClearer() {
-  return typeof queueCleanupDeps.clearCommandLane === "function"
-    ? queueCleanupDeps.clearCommandLane
-    : defaultQueueCleanupDeps.clearCommandLane;
-}
-
-const queueCleanupTestApi = {
-  setDepsForTests(deps: Partial<typeof defaultQueueCleanupDeps> | undefined): void {
-    queueCleanupDeps.resolveEmbeddedSessionLane =
-      typeof deps?.resolveEmbeddedSessionLane === "function"
-        ? deps.resolveEmbeddedSessionLane
-        : defaultQueueCleanupDeps.resolveEmbeddedSessionLane;
-    queueCleanupDeps.clearCommandLane =
-      typeof deps?.clearCommandLane === "function"
-        ? deps.clearCommandLane
-        : defaultQueueCleanupDeps.clearCommandLane;
-  },
-  resetDepsForTests(): void {
-    queueCleanupDeps.resolveEmbeddedSessionLane =
-      defaultQueueCleanupDeps.resolveEmbeddedSessionLane;
-    queueCleanupDeps.clearCommandLane = defaultQueueCleanupDeps.clearCommandLane;
-  },
-};
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.queueCleanupTestApi")] =
-    queueCleanupTestApi;
-}
-
-export function clearSessionQueues(keys: Array<string | undefined>): ClearSessionQueueResult {
+export function clearSessionQueues(
+  keys: Array<string | undefined>,
+  target?: SessionTarget,
+  capturedInputs?: readonly SessionControllerInput[],
+  assertCurrent?: () => void,
+): ClearSessionQueueResult {
   const seen = new Set<string>();
+  const clearedQueues = new Set<NonNullable<ReturnType<typeof getExistingFollowupQueue>>>();
   let followupCleared = 0;
-  let laneCleared = 0;
   const clearedKeys: string[] = [];
-  const resolveLane = resolveQueueCleanupLaneResolver();
-  const clearLane = resolveQueueCleanupLaneClearer();
-
   for (const key of keys) {
     const cleaned = normalizeOptionalString(key);
     if (!cleaned || seen.has(cleaned)) {
@@ -70,10 +30,17 @@ export function clearSessionQueues(keys: Array<string | undefined>): ClearSessio
     }
     seen.add(cleaned);
     clearedKeys.push(cleaned);
-    followupCleared += clearFollowupQueue(cleaned);
-    clearFollowupDrainCallback(cleaned);
-    laneCleared += clearLane(resolveLane(cleaned));
+    assertCurrent?.();
+    const queue = getExistingFollowupQueue(cleaned, target);
+    if (queue && !clearedQueues.has(queue)) {
+      clearedQueues.add(queue);
+      followupCleared += clearSessionControllerMailbox(
+        queue,
+        completeFollowupRunLifecycle,
+        capturedInputs,
+        assertCurrent,
+      );
+    }
   }
-
-  return { followupCleared, laneCleared, keys: clearedKeys };
+  return { followupCleared, keys: clearedKeys };
 }

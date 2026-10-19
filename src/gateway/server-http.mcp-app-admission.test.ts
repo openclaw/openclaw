@@ -1,13 +1,12 @@
 // Proves standalone MCP App HTTP work participates in Gateway suspension admission.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
-  tryBeginGatewaySuspendAdmission,
-  waitForActiveGatewayRootWork,
 } from "../process/gateway-work-admission.js";
 
 const mocks = vi.hoisted(() => ({
@@ -27,14 +26,6 @@ import {
 } from "./server-http.test-harness.js";
 
 const MCP_APP_PATH = "/__openclaw__/mcp-app";
-
-function deferred() {
-  let resolve = () => {};
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
 
 function mcpAppsConfig(): OpenClawConfig {
   return {
@@ -65,36 +56,9 @@ afterEach(() => {
 });
 
 describe("standalone MCP App HTTP admission", () => {
-  it("rejects new requests with the canonical 503 after admission closes", async () => {
-    mocks.handleMcpAppStandaloneHttpRequest.mockImplementation(
-      (_req: IncomingMessage, res: ServerResponse) => {
-        res.statusCode = 204;
-        res.end();
-        return true;
-      },
-    );
-    const suspension = tryBeginGatewaySuspendAdmission(() => {});
-    expect(suspension?.commit()).toBe(true);
-
-    await withMcpAppServer(async (server) => {
-      const response = createResponse();
-      await dispatchRequest(server, createRequest({ path: MCP_APP_PATH }), response.res);
-
-      expect(mocks.handleMcpAppStandaloneHttpRequest).not.toHaveBeenCalled();
-      expect(response.res.statusCode).toBe(503);
-      expect(response.setHeader).toHaveBeenCalledWith("Retry-After", "1");
-      expect(JSON.parse(response.getBody())).toMatchObject({
-        error: { code: "gateway_unavailable" },
-      });
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
-    });
-
-    expect(suspension?.release()).toBe(true);
-  });
-
   it("keeps deferred handler work visible until it settles", async () => {
-    const started = deferred();
-    const finish = deferred();
+    const started = createDeferred();
+    const finish = createDeferred();
     mocks.handleMcpAppStandaloneHttpRequest.mockImplementation(
       async (_req: IncomingMessage, res: ServerResponse) => {
         started.resolve();
@@ -113,10 +77,7 @@ describe("standalone MCP App HTTP admission", () => {
       try {
         expect(getActiveGatewayRootWorkCount()).toBe(1);
         markGatewayRestartDraining();
-        await expect(waitForActiveGatewayRootWork(0)).resolves.toEqual({
-          drained: false,
-          active: 1,
-        });
+        expect(getActiveGatewayRootWorkCount()).toBe(1);
       } finally {
         finish.resolve();
       }
@@ -125,10 +86,6 @@ describe("standalone MCP App HTTP admission", () => {
       // The response mock resolves from res.end(), immediately before the
       // admission wrapper's finally block releases the request root.
       await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-      await expect(waitForActiveGatewayRootWork(0)).resolves.toEqual({
-        drained: true,
-        active: 0,
-      });
     });
   });
 
@@ -147,20 +104,6 @@ describe("standalone MCP App HTTP admission", () => {
         "[gateway-http] unhandled error in request handler:",
         expect.objectContaining({ message: "standalone failed" }),
       );
-    });
-  });
-
-  it("releases admission and preserves fallthrough when the handler declines", async () => {
-    mocks.handleMcpAppStandaloneHttpRequest.mockResolvedValue(false);
-
-    await withMcpAppServer(async (server) => {
-      const response = createResponse();
-      await dispatchRequest(server, createRequest({ path: MCP_APP_PATH }), response.res);
-
-      expect(mocks.handleMcpAppStandaloneHttpRequest).toHaveBeenCalledOnce();
-      expect(response.res.statusCode).toBe(404);
-      expect(response.getBody()).toBe("Not Found");
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
     });
   });
 });

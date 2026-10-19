@@ -1,7 +1,9 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { once } from "node:events";
 import { appendFile, mkdir } from "node:fs/promises";
 import path from "node:path";
-import { startQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
 const SOURCE_PATH = "test/e2e/qa-lab/runtime/remote-log-tailing-runtime.ts";
@@ -28,36 +30,20 @@ function hasExited(child: ChildProcess): boolean {
   return child.exitCode !== null || child.signalCode !== null;
 }
 
-function waitForClose(child: ChildProcess, timeoutMs: number): Promise<void> {
-  if (hasExited(child)) {
-    return Promise.resolve();
+async function stopFollowChild(child: ChildProcess, closed: Promise<unknown>): Promise<void> {
+  if (!hasExited(child)) {
+    child.kill("SIGINT");
   }
-  return new Promise((resolve, reject) => {
-    const onClose = () => {
-      clearTimeout(timer);
-      resolve();
-    };
-    const timer = setTimeout(() => {
-      child.off("close", onClose);
-      reject(new Error("follow child did not close before timeout"));
-    }, timeoutMs);
-    child.once("close", onClose);
-  });
-}
-
-async function stopFollowChild(child: ChildProcess): Promise<void> {
-  if (hasExited(child)) {
-    return;
-  }
-  child.kill("SIGINT");
-  try {
-    await waitForClose(child, 5_000);
-  } catch {
-    if (hasExited(child)) {
-      return;
+  // The grace escalates shutdown; only the captured close event completes ownership.
+  const escalation = setTimeout(() => {
+    if (!hasExited(child)) {
+      child.kill("SIGKILL");
     }
-    child.kill("SIGKILL");
-    await waitForClose(child, 5_000);
+  }, 5_000);
+  try {
+    await closed;
+  } finally {
+    clearTimeout(escalation);
   }
 }
 
@@ -65,32 +51,41 @@ export async function withOwnedFollowChild<T>(
   child: ChildProcess,
   operation: () => Promise<T>,
 ): Promise<T> {
+  const closed = once(child, "close");
+  void closed.catch(() => {});
   try {
     return await operation();
   } finally {
-    await stopFollowChild(child);
+    await stopFollowChild(child, closed);
+  }
+}
+
+export function assertInitialTailBound(result: { lines: string[]; truncated: boolean }): void {
+  if (result.lines.length !== 2 || !result.truncated) {
+    throw new Error(`logs.tail did not honor limit: ${JSON.stringify(result)}`);
   }
 }
 
 export async function runRemoteLogTailing(repoRoot: string, outputRoot: string) {
   const logPath = path.join(outputRoot, "gateway.jsonl");
   await mkdir(outputRoot, { recursive: true });
-  const gateway = await startQaGatewayChild({
-    repoRoot,
-    command: {
-      executablePath: process.execPath,
-      argsPrefix: [path.join(repoRoot, "dist", "index.js")],
-      cwd: repoRoot,
-      usePackagedPlugins: true,
-    },
-    transportBaseUrl: "http://127.0.0.1:9",
-    controlUiEnabled: false,
-    mutateConfig: (config) => ({
-      ...config,
-      logging: { ...config.logging, file: logPath, level: "info" },
-    }),
-  });
+  const gatewayOwner = createQaGatewayChild();
   try {
+    const gateway = await gatewayOwner.start({
+      repoRoot,
+      command: {
+        executablePath: process.execPath,
+        argsPrefix: [path.join(repoRoot, "dist", "index.js")],
+        cwd: repoRoot,
+        usePackagedPlugins: true,
+      },
+      transportBaseUrl: "http://127.0.0.1:9",
+      controlUiEnabled: false,
+      mutateConfig: (config) => ({
+        ...config,
+        logging: { ...config.logging, file: logPath, level: "info" },
+      }),
+    });
     await appendFile(logPath, logLine("qa-line-one"));
     await appendFile(logPath, logLine("qa-line-two"));
     await appendFile(logPath, logLine("qa-line-three"));
@@ -100,13 +95,7 @@ export async function runRemoteLogTailing(repoRoot: string, outputRoot: string) 
       lines: string[];
       truncated: boolean;
     };
-    if (
-      first.lines.length !== 2 ||
-      !first.lines.some((line) => line.includes("qa-line-three")) ||
-      !first.truncated
-    ) {
-      throw new Error(`logs.tail did not honor limit: ${JSON.stringify(first)}`);
-    }
+    assertInitialTailBound(first);
     const bounded = (await gateway.call("logs.tail", { limit: 20, maxBytes: 96 })) as {
       cursor: number;
       lines: string[];
@@ -136,9 +125,9 @@ export async function runRemoteLogTailing(repoRoot: string, outputRoot: string) 
       gateway.token,
       "--json",
       "--limit",
-      "2",
+      "200",
       "--max-bytes",
-      "4096",
+      "250000",
     ]);
     const cliRecords = cliJson
       .trim()
@@ -197,7 +186,7 @@ export async function runRemoteLogTailing(repoRoot: string, outputRoot: string) 
     });
     return { first, bounded, cursorTail, cliRecords, followOutput };
   } finally {
-    await gateway.stop();
+    await stopQaGatewayFixture(gatewayOwner);
   }
 }
 

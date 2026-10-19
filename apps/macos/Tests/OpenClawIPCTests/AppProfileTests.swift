@@ -23,12 +23,16 @@ struct AppProfileTests {
                 "/Users/test/.openclaw")
             #expect(profile.cliRootArguments.isEmpty)
         }
+    }
+
+    @Test func `current profile scopes credential service identities`() {
+        let suffix = AppProfile.current.name.map { ".profile.\($0)" } ?? ""
         #if DEBUG
-        #expect(MacGatewayProfileStore.service == "ai.openclaw.gateway-profiles.debug")
-        #expect(GatewayActivationBindingKeyStore.service == "ai.openclaw.onboarding-route-binding.debug")
+        #expect(MacGatewayProfileStore.service == "ai.openclaw.gateway-profiles.debug\(suffix)")
+        #expect(GatewayActivationBindingKeyStore.service == "ai.openclaw.onboarding-route-binding.debug\(suffix)")
         #else
-        #expect(MacGatewayProfileStore.service == "ai.openclaw.gateway-profiles")
-        #expect(GatewayActivationBindingKeyStore.service == "ai.openclaw.onboarding-route-binding")
+        #expect(MacGatewayProfileStore.service == "ai.openclaw.gateway-profiles\(suffix)")
+        #expect(GatewayActivationBindingKeyStore.service == "ai.openclaw.onboarding-route-binding\(suffix)")
         #endif
     }
 
@@ -59,14 +63,23 @@ struct AppProfileTests {
         ])
     }
 
-    @Test func `default worker commands preserve exact argument shapes`() {
-        let profile = AppProfile(environment: [:])
-        #expect(CommandResolver.nodeHostWorkerCommand(
-            prefix: ["/usr/bin/node", "/repo/scripts/run-node.mjs"],
-            profile: profile) == ["/usr/bin/node", "/repo/scripts/run-node.mjs", "node", "worker"])
-        #expect(CommandResolver.nodeHostWorkerCommand(
-            prefix: ["/opt/openclaw"],
-            profile: profile) == ["/opt/openclaw", "node", "worker"])
+    @Test func `worker commands preserve profiles and explicit desktop sharing choices`() {
+        let choices: [(Bool?, [String])] = [
+            (nil, []), (true, ["--desktop-sharing"]), (false, ["--no-desktop-sharing"]),
+        ]
+        for profileName in [nil, "work_2"] as [String?] {
+            let profile = AppProfile(environment: profileName.map { ["OPENCLAW_PROFILE": $0] } ?? [:])
+            let profileArguments = profileName.map { ["--profile", $0] } ?? []
+            for prefix in [["/usr/bin/node", "/repo/scripts/run-node.mjs"], ["/opt/openclaw"]] {
+                for (enabled, expectedFlags) in choices {
+                    #expect(CommandResolver.nodeHostWorkerCommand(
+                        prefix: prefix,
+                        profile: profile,
+                        desktopSharingEnabled: enabled) == prefix + profileArguments + ["node", "worker"] +
+                        expectedFlags)
+                }
+            }
+        }
     }
 
     @Test func `invalid and colliding profile names fail closed`() {
@@ -145,29 +158,6 @@ struct AppProfileTests {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.path)
         return root
-    }
-
-    @Test func `profile launch at login reason outranks bundle location`() {
-        let profiled = LaunchAtLoginPresentation.resolve(
-            profile: AppProfile(environment: ["OPENCLAW_PROFILE": "work"]),
-            bundleLocationAllowsPersistentIntegration: false,
-            isEnabled: false)
-        #expect(profiled.subtitle == "Launch at login is unavailable while an app profile is active.")
-        #expect(profiled.isDisabled)
-
-        let defaultUnavailable = LaunchAtLoginPresentation.resolve(
-            profile: AppProfile(environment: [:]),
-            bundleLocationAllowsPersistentIntegration: false,
-            isEnabled: false)
-        #expect(defaultUnavailable.subtitle == "Move OpenClaw to Applications before enabling launch at login.")
-        #expect(defaultUnavailable.isDisabled)
-
-        let defaultAvailable = LaunchAtLoginPresentation.resolve(
-            profile: AppProfile(environment: [:]),
-            bundleLocationAllowsPersistentIntegration: true,
-            isEnabled: false)
-        #expect(defaultAvailable.subtitle == "Automatically start OpenClaw after you sign in.")
-        #expect(!defaultAvailable.isDisabled)
     }
 
     @MainActor @Test func `profile lock excludes only the same profile`() throws {

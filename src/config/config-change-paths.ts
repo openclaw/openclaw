@@ -1,6 +1,21 @@
-// Reports config paths whose values differ between two snapshots.
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "../utils.js";
+
+export function collectConfigWriteChangedPaths(
+  base: unknown,
+  target: unknown,
+  explicitPaths: readonly (readonly string[])[],
+): Set<string> {
+  const changedPaths = new Set<string>();
+  collectChangedPaths(base, target, "", changedPaths);
+  for (const changedPath of explicitPaths) {
+    const normalizedPath = changedPath.filter((segment) => segment.length > 0).join(".");
+    if (normalizedPath) {
+      changedPaths.add(normalizedPath);
+    }
+  }
+  return changedPaths;
+}
 
 export function collectChangedPaths(
   base: unknown,
@@ -8,6 +23,9 @@ export function collectChangedPaths(
   path: string,
   output: Set<string>,
 ): void {
+  if (Object.is(base, target)) {
+    return;
+  }
   if (Array.isArray(base) && Array.isArray(target)) {
     const max = Math.max(base.length, target.length);
     for (let index = 0; index < max; index += 1) {

@@ -1,0 +1,112 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import type { SessionsSearchResult } from "../../../packages/gateway-protocol/src/index.js";
+import { indexFirstByKey } from "../../../src/shared/dedupe-by-key.ts";
+import { normalizeSessionSearchText } from "../../../src/shared/session-search-text.ts";
+import type { GatewaySessionRow } from "../api/types.ts";
+import { clampText } from "../lib/format.ts";
+import { resolveSessionDisplayName } from "../lib/session-display.ts";
+import type { CommandPaletteItem } from "./command-palette-catalog-search.ts";
+
+export const SESSION_ACTION_PREFIX = "session:";
+export const SESSION_SEARCH_LIMIT = 10;
+const SESSION_SEARCH_SNIPPET_MAX_CHARS = 160;
+
+function sessionMetadataMatchRank(
+  row: GatewaySessionRow,
+  normalizedSearch: string,
+  titleSearch: string,
+  label: string,
+): number {
+  const titles = [label, row.label, row.subject, row.category];
+  const fields = [
+    ...titles,
+    row.key,
+    row.kind,
+    row.model,
+    row.modelProvider,
+    row.owner?.actor.label,
+    row.owner?.actor.id,
+    row.createdActor?.label,
+    row.createdActor?.id,
+  ]
+    .map((value) => normalizeLowercaseStringOrEmpty(value))
+    .filter(Boolean);
+  const titleFields = titleSearch ? titles.map(normalizeSessionSearchText) : [];
+  if (
+    fields.some((field) => field === normalizedSearch) ||
+    titleFields.some((field) => field === titleSearch)
+  ) {
+    return 3;
+  }
+  if (
+    fields.some((field) => field.startsWith(normalizedSearch)) ||
+    titleFields.some((field) => field.startsWith(titleSearch))
+  ) {
+    return 2;
+  }
+  return fields.some((field) => field.includes(normalizedSearch)) ||
+    titleFields.some((field) => field.includes(titleSearch))
+    ? 1
+    : 0;
+}
+
+export function buildCommandPaletteSessionItems(params: {
+  visibleRows: readonly GatewaySessionRow[];
+  visibleKeys: ReadonlySet<string>;
+  transcriptResult: (SessionsSearchResult & { sessions: readonly GatewaySessionRow[] }) | null;
+  search: string;
+}): CommandPaletteItem[] {
+  const { visibleRows, visibleKeys, transcriptResult } = params;
+  const normalizedSearch = normalizeLowercaseStringOrEmpty(params.search);
+  const titleSearch = normalizeSessionSearchText(params.search);
+  const transcriptHitByKey = indexFirstByKey(
+    transcriptResult?.results ?? [],
+    (hit) => hit.sessionKey,
+  );
+  const rowsByKey = new Map(visibleRows.map((row) => [row.key, row] as const));
+  for (const row of transcriptResult?.sessions ?? []) {
+    if (!rowsByKey.has(row.key)) {
+      rowsByKey.set(row.key, row);
+    }
+  }
+  return [...rowsByKey.values()]
+    .map((row) => {
+      const label = resolveSessionDisplayName(row.key, row);
+      const rawMetadataRank = sessionMetadataMatchRank(row, normalizedSearch, titleSearch, label);
+      return {
+        row,
+        label,
+        rawMetadataRank,
+        metadataRank: Math.max(visibleKeys.has(row.key) ? 1 : 0, rawMetadataRank),
+        transcriptHit: transcriptHitByKey.get(row.key),
+      };
+    })
+    .filter(({ metadataRank, transcriptHit }) => metadataRank > 0 || transcriptHit)
+    .toSorted((left, right) => {
+      const metadataDiff = right.metadataRank - left.metadataRank;
+      if (metadataDiff !== 0) {
+        return metadataDiff;
+      }
+      const transcriptDiff =
+        (right.transcriptHit?.score ?? Number.NEGATIVE_INFINITY) -
+        (left.transcriptHit?.score ?? Number.NEGATIVE_INFINITY);
+      return transcriptDiff || (right.row.updatedAt ?? 0) - (left.row.updatedAt ?? 0);
+    })
+    .slice(0, SESSION_SEARCH_LIMIT)
+    .map<CommandPaletteItem>(({ row, label, rawMetadataRank, transcriptHit }) => ({
+      id: `session-${row.key}`,
+      label,
+      icon: "messageSquare",
+      category: transcriptHit && rawMetadataRank === 0 ? "messages" : "chats",
+      action: `${SESSION_ACTION_PREFIX}${row.key}`,
+      session: row,
+      // The server match floor affects ordering, not whether the local metadata matched.
+      description:
+        transcriptHit && rawMetadataRank === 0
+          ? clampText(
+              transcriptHit.snippet.replace(/\s+/gu, " ").trim(),
+              SESSION_SEARCH_SNIPPET_MAX_CHARS,
+            )
+          : undefined,
+    }));
+}

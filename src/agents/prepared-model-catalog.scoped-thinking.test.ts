@@ -1,106 +1,352 @@
-// Boundary proof for the turn-path thinking fallback: manifest first, then a provider-scoped
-// static catalog, then scoped live discovery only for runtime-only models (e.g. Ollama).
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
+import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { noteCommittedSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
+import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
+import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
+import { setPreparedModelFullCatalogAuth } from "./prepared-model-runtime-auth.js";
+import { withPreparedModelRuntimePluginGenerationScope } from "./prepared-model-runtime-generation-scope.js";
+import { capturePreparedModelRuntimeCatalog } from "./prepared-model-runtime.capture.js";
+import {
+  PreparedModelRuntimeOwnerNotPublishedError,
+  PreparedModelRuntimePublicationSupersededError,
+} from "./prepared-model-runtime.errors.js";
+import type {
+  PreparedModelRuntimeInput,
+  PreparedModelRuntimeSnapshot,
+} from "./prepared-model-runtime.types.js";
 
-const manifestCatalogMock = vi.fn((..._args: unknown[]): Array<Record<string, unknown>> => []);
-const scopedStaticMock = vi.fn(
-  async (..._args: unknown[]): Promise<Record<string, unknown>> => ({
-    entries: [],
-    routeVariants: [],
-  }),
-);
-const scopedLiveMock = vi.fn(
-  async (..._args: unknown[]): Promise<Record<string, unknown>> => ({
-    entries: [],
-    routeVariants: [],
-  }),
-);
+const manifestCatalogMock = vi.fn((): ModelCatalogEntry[] => []);
+const scopedCatalogMock = vi.fn(async (): Promise<ModelCatalogSnapshot> => ({
+  entries: [],
+  routeVariants: [],
+}));
+const publishedSnapshotMock =
+  vi.fn<(input: PreparedModelRuntimeInput) => PreparedModelRuntimeSnapshot | undefined>();
+const preparedSnapshotMock =
+  vi.fn<(input: PreparedModelRuntimeInput) => Promise<PreparedModelRuntimeSnapshot>>();
+const acquireSnapshotMock =
+  vi.fn<(input: PreparedModelRuntimeInput) => Promise<PreparedModelRuntimeSnapshot>>();
+const releaseSnapshotMock = vi.fn();
+const augmentCatalogMock =
+  vi.fn<(params: { snapshot: ModelCatalogSnapshot }) => Promise<ModelCatalogSnapshot>>();
 
-vi.mock("./model-catalog.js", () => ({
-  loadManifestModelCatalog: (...args: unknown[]) => manifestCatalogMock(...args),
+// mock-isolation: Keep harness discovery behind the controlled catalog fixture.
+vi.mock("./harness/model-catalog.js", () => ({
+  augmentModelCatalogWithAgentHarness: (params: { snapshot: ModelCatalogSnapshot }) =>
+    augmentCatalogMock(params),
 }));
 
-vi.mock("./prepared-model-runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./prepared-model-runtime.js")>();
+vi.mock("./model-catalog.js", () => ({ loadManifestModelCatalog: () => manifestCatalogMock() }));
+vi.mock("./prepared-model-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./prepared-model-runtime.js")>()),
+  getPreparedModelRuntimeSnapshot: (input: PreparedModelRuntimeInput) =>
+    publishedSnapshotMock(input),
+  prepareModelRuntimeSnapshot: (input: PreparedModelRuntimeInput) => preparedSnapshotMock(input),
+  acquireReadOnlyPreparedModelRuntime: async (input: PreparedModelRuntimeInput) => ({
+    snapshot: await acquireSnapshotMock(input),
+    [Symbol.asyncDispose]: releaseSnapshotMock,
+  }),
+}));
+vi.mock("./prepared-model-runtime.scoped-catalog.js", () => ({
+  prepareScopedReadOnlyModelCatalog: () => scopedCatalogMock(),
+}));
+
+function catalog(entries: ModelCatalogEntry[]): ModelCatalogSnapshot {
+  return { entries, routeVariants: entries };
+}
+
+function owner(config: OpenClawConfig, entries: ModelCatalogEntry[]): PreparedModelRuntimeSnapshot {
   return {
-    ...actual,
-    // No published lifecycle owner: force the scoped read-only builders to run.
-    prepareModelRuntimeSnapshot: vi.fn(async (input: { agentDir: string }) => {
-      throw new actual.PreparedModelRuntimeOwnerNotPublishedError(
-        `not published for test (${input.agentDir})`,
-      );
+    agentDir: "/tmp/model-catalog-passive-test",
+    inheritedAuthDir: resolveLegacyInheritedAuthDir(config),
+    activeProjectKeys: [],
+    catalogOwner: undefined,
+    config,
+    observationConfig: config,
+    isCurrent: () => true,
+    authModes: {},
+    metadataSnapshot: createPluginMetadataSnapshot({
+      config,
+      manifestRegistry: { plugins: [], diagnostics: [] },
     }),
+    allowGatewaySubagentBinding: false,
+    modelCatalog: catalog(entries),
+    configuredRuntimeModels: [],
+    findConfiguredRuntimeModel: () => undefined,
+    inlineProviderModels: [],
+    createStores: () => {
+      throw new Error("Passive capability reads must not create stores");
+    },
   };
+}
+
+function withAdmitted<T>(snapshot: PreparedModelRuntimeSnapshot, run: () => T, active = true): T {
+  return withPreparedModelRuntimePluginGenerationScope(
+    {
+      remoteCatalog: null,
+      pluginMetadataSnapshot: snapshot.metadataSnapshot,
+      inlineProviderModels: [],
+      configuredCatalogEntries: snapshot.modelCatalog.entries,
+    },
+    run,
+    () => (active ? snapshot : undefined),
+  );
+}
+
+const entry = {
+  provider: "acme",
+  id: "selected",
+  name: "Selected",
+  api: "openai-responses",
+  baseUrl: "https://provider.invalid/v1",
+} satisfies ModelCatalogEntry;
+
+async function readThinking(
+  config: OpenClawConfig,
+  options: Omit<
+    Parameters<typeof import("./prepared-model-catalog.js").loadProviderScopedThinkingCatalog>[0],
+    "config" | "provider" | "model"
+  > = {},
+) {
+  const { loadProviderScopedThinkingCatalog } = await import("./prepared-model-catalog.js");
+  return loadProviderScopedThinkingCatalog({
+    config,
+    provider: entry.provider,
+    model: entry.id,
+    ...options,
+  });
+}
+
+function readAdmitted(
+  snapshot: PreparedModelRuntimeSnapshot,
+  options: Parameters<typeof readThinking>[1] = {},
+) {
+  return withAdmitted(snapshot, () =>
+    readThinking(snapshot.config, { agentDir: snapshot.agentDir, ...options }),
+  );
+}
+
+function physicalEntry(overrides: Partial<ModelCatalogEntry> = {}): ModelCatalogEntry {
+  return { ...entry, reasoning: true, input: ["text", "image"], ...overrides };
+}
+
+function nativeEntry(overrides: Partial<ModelCatalogEntry> = {}): ModelCatalogEntry {
+  return {
+    provider: entry.provider,
+    id: entry.id,
+    name: entry.name,
+    nativeRuntime: "native-one",
+    reasoning: true,
+    ...overrides,
+  };
+}
+
+function accountConfig(apiKey: string): OpenClawConfig {
+  return { models: { providers: { acme: { baseUrl: entry.baseUrl, apiKey, models: [] } } } };
+}
+
+beforeEach(() => {
+  noteCommittedSharedAuthStoreOwnership({ location: "legacy-main" });
+  vi.clearAllMocks();
+  publishedSnapshotMock.mockReturnValue(undefined);
+  preparedSnapshotMock.mockImplementation(async (input) => {
+    const published = publishedSnapshotMock(input);
+    if (!published) {
+      throw new PreparedModelRuntimeOwnerNotPublishedError("No published test owner");
+    }
+    return published;
+  });
+  augmentCatalogMock.mockImplementation(async ({ snapshot }) => snapshot);
 });
 
-vi.mock("./prepared-model-runtime.scoped-catalog.js", () => ({
-  prepareScopedReadOnlyModelCatalog: (...args: unknown[]) => scopedStaticMock(...args),
-  prepareScopedReadOnlyLiveModelCatalog: (...args: unknown[]) => scopedLiveMock(...args),
-}));
-
-const ollamaEntry = {
-  provider: "ollama",
-  id: "minimax-m3:cloud",
-  name: "minimax-m3:cloud",
-  reasoning: true,
-};
-
-describe("loadProviderScopedThinkingCatalog", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    manifestCatalogMock.mockReturnValue([]);
-    scopedStaticMock.mockResolvedValue({ entries: [], routeVariants: [] });
-    scopedLiveMock.mockResolvedValue({ entries: [], routeVariants: [] });
+it("reuses paired completed catalogs for thinking capabilities", async () => {
+  const config = {};
+  const completedEntry = physicalEntry();
+  const completed = catalog([completedEntry]);
+  setPreparedModelFullCatalogAuth(completed, {
+    providerAuthLabels: new Map(),
+    authStore: { version: 1, profiles: {} },
+    authModes: {},
   });
-
-  it("resolves manifest-backed models without any scoped catalog build", async () => {
-    manifestCatalogMock.mockReturnValue([
-      { provider: "openai", id: "gpt-5.6-luna", reasoning: true },
-    ]);
-    const { loadProviderScopedThinkingCatalog } = await import("./prepared-model-catalog.js");
-    const catalog = await loadProviderScopedThinkingCatalog({
-      config: {},
-      provider: "openai",
-      model: "gpt-5.6-luna",
-    });
-    expect(catalog).toEqual([
-      expect.objectContaining({ provider: "openai", id: "gpt-5.6-luna", reasoning: true }),
-    ]);
-    expect(scopedStaticMock).not.toHaveBeenCalled();
-    expect(scopedLiveMock).not.toHaveBeenCalled();
+  const loadFullModelCatalog = vi.fn(async () => completed);
+  publishedSnapshotMock.mockReturnValue({
+    ...owner(config, [entry]),
+    readFullModelCatalog: () => completed,
+    loadFullModelCatalog,
   });
+  expect(await readThinking(config)).toEqual([completedEntry]);
+  expect(loadFullModelCatalog).not.toHaveBeenCalled();
+  expect(manifestCatalogMock).not.toHaveBeenCalled();
+  expect(scopedCatalogMock).not.toHaveBeenCalled();
+  expect(acquireSnapshotMock).not.toHaveBeenCalled();
+});
 
-  it("stops at the scoped static catalog when it resolves the entry", async () => {
-    scopedStaticMock.mockResolvedValue({
-      entries: [{ provider: "acme", id: "static-model", reasoning: false }],
-      routeVariants: [],
-    });
-    const { loadProviderScopedThinkingCatalog } = await import("./prepared-model-catalog.js");
-    const catalog = await loadProviderScopedThinkingCatalog({
-      config: {},
-      provider: "acme",
-      model: "static-model",
-    });
-    expect(catalog).toEqual([
-      expect.objectContaining({ provider: "acme", id: "static-model", reasoning: false }),
-    ]);
-    expect(scopedStaticMock).toHaveBeenCalledTimes(1);
-    expect(scopedStaticMock).toHaveBeenCalledWith(expect.anything(), ["acme"]);
-    expect(scopedLiveMock).not.toHaveBeenCalled();
-  });
+it("keeps ownerless native observations passive", async () => {
+  const config = {};
+  const entries = [{ ...entry, reasoning: true, nativeRuntime: "test-harness" }];
+  augmentCatalogMock.mockResolvedValue(catalog(entries));
+  expect(await readThinking(config)).toEqual(entries);
+  expect(acquireSnapshotMock).not.toHaveBeenCalled();
+  expect(releaseSnapshotMock).not.toHaveBeenCalled();
+  expect(manifestCatalogMock).not.toHaveBeenCalled();
+  expect(scopedCatalogMock).not.toHaveBeenCalled();
+});
 
-  it("runs provider-scoped live discovery for runtime-only models and keeps their thinking", async () => {
-    scopedLiveMock.mockResolvedValue({ entries: [ollamaEntry], routeVariants: [] });
-    const { loadProviderScopedThinkingCatalog } = await import("./prepared-model-catalog.js");
-    const catalog = await loadProviderScopedThinkingCatalog({
-      config: {},
-      provider: "ollama",
-      model: "minimax-m3:cloud",
-    });
-    expect(catalog).toEqual([expect.objectContaining(ollamaEntry)]);
-    // Live discovery stays scoped to the requested provider: no broad plugin fanout.
-    expect(scopedLiveMock).toHaveBeenCalledTimes(1);
-    expect(scopedLiveMock).toHaveBeenCalledWith(expect.anything(), ["ollama"]);
-    expect(scopedStaticMock).toHaveBeenCalledTimes(1);
+it.each([
+  { name: "same-route account switch", replacementKey: "fixture-account-b", native: false },
+  { name: "route-free native observation", replacementKey: "fixture-account-b", native: true },
+])("retains admitted capabilities across $name", async ({ replacementKey, native }) => {
+  const config = accountConfig("fixture-account-a");
+  const replaced: OpenClawConfig = {
+    ...accountConfig(replacementKey),
+    skills: { entries: { marker: { enabled: false } } },
+  };
+  const admittedEntry: ModelCatalogEntry = native ? nativeEntry() : physicalEntry();
+  const completed = catalog([admittedEntry]);
+  const readFullModelCatalog = vi.fn(() => completed);
+  const source = { ...owner(config, [entry]), readFullModelCatalog };
+  const admitted = capturePreparedModelRuntimeCatalog(source, source);
+  readFullModelCatalog.mockImplementation(() => {
+    throw new Error("retired owner");
   });
+  publishedSnapshotMock.mockReturnValue(
+    owner(replaced, [{ ...entry, reasoning: false, input: ["text"] }]),
+  );
+  const result = await readAdmitted(
+    admitted,
+    native
+      ? { agentRuntime: "native-one" }
+      : { requiredInputRoute: { api: entry.api, baseUrl: entry.baseUrl } },
+  );
+  expect(result).toEqual([admittedEntry]);
+  expect(preparedSnapshotMock).not.toHaveBeenCalled();
+  expect(augmentCatalogMock).not.toHaveBeenCalled();
+  expect(readFullModelCatalog).toHaveBeenCalledOnce();
+});
+
+it.each([
+  ["same-id physical route", entry.id, "openclaw", false],
+  ["native route", entry.id, "native-one", false],
+  ["published physical facts", "native-only", "openclaw", true],
+] as const)(
+  "retains native and physical capture facts: %s",
+  async (_label, nativeId, runtime, publishedSelected) => {
+    const config = {};
+    const configured: ModelCatalogEntry = publishedSelected
+      ? entry
+      : physicalEntry({ reasoning: false });
+    const discovered = physicalEntry({
+      id: publishedSelected ? entry.id : "discovered",
+      name: "Discovered",
+    });
+    const native: ModelCatalogEntry = nativeEntry({ id: nativeId, input: ["text"] });
+    let current = true;
+    const readFullModelCatalog = vi.fn(() => catalog([native, discovered]));
+    const loadNativeModelCatalog = vi.fn(async () => {
+      throw new Error("A retired owner cannot supply new native observations");
+    });
+    const source = {
+      ...owner(config, [configured]),
+      isCurrent: () => current,
+      readFullModelCatalog,
+      loadNativeModelCatalog,
+    };
+    const admitted = capturePreparedModelRuntimeCatalog(source, source);
+    current = false;
+    const result = await readAdmitted(admitted, {
+      agentRuntime: runtime,
+      ...(runtime === "openclaw"
+        ? { requiredInputRoute: { api: entry.api, baseUrl: entry.baseUrl } }
+        : {}),
+    });
+    const physical = publishedSelected ? discovered : configured;
+    expect(result).toContainEqual(runtime === "openclaw" ? physical : native);
+    expect(result).toContainEqual(discovered);
+    expect(readFullModelCatalog).toHaveBeenCalledOnce();
+    expect(loadNativeModelCatalog).not.toHaveBeenCalled();
+  },
+);
+
+it.each(["ready", "retired", "failure"] as const)(
+  "preserves admitted native observations: %s",
+  async (outcome) => {
+    const config = {};
+    const native: ModelCatalogEntry = nativeEntry();
+    let current = true;
+    const failure = new Error("native observation unavailable");
+    const loadNativeModelCatalog = vi.fn(async () => {
+      if (outcome === "retired") {
+        current = false;
+        throw new PreparedModelRuntimePublicationSupersededError("retired during observation");
+      }
+      if (outcome === "failure") {
+        throw failure;
+      }
+      return catalog([native]);
+    });
+    const admitted = {
+      ...owner(config, outcome === "retired" ? [native] : [{ ...entry, reasoning: false }]),
+      isCurrent: () => current,
+      loadNativeModelCatalog,
+    };
+    const result = readAdmitted(admitted, { agentRuntime: "native-one" });
+    if (outcome === "failure") {
+      await expect(result).rejects.toBe(failure);
+    } else {
+      await expect(result).resolves.toEqual([native]);
+    }
+    expect(loadNativeModelCatalog).toHaveBeenCalledOnce();
+    expect(preparedSnapshotMock).not.toHaveBeenCalled();
+  },
+);
+
+it.each([
+  { configured: [], before: [entry] },
+  { configured: [entry], before: undefined },
+])(
+  "keeps captured facts after an empty inventory is published ($before)",
+  async ({ configured, before }) => {
+    const config = {};
+    const readFullModelCatalog = vi
+      .fn<() => ModelCatalogSnapshot | undefined>()
+      .mockReturnValue(before ? catalog(before) : undefined);
+    const source = { ...owner(config, configured), readFullModelCatalog };
+    const first = capturePreparedModelRuntimeCatalog(source, source);
+    readFullModelCatalog.mockReturnValue(catalog([]));
+    const second = capturePreparedModelRuntimeCatalog(source, source);
+    await expect(readAdmitted(first)).resolves.toEqual(before ?? configured);
+    await expect(readAdmitted(second)).resolves.toEqual([]);
+  },
+);
+
+it.each(["missing admission", "closed lease", "other agent", "other workspace"])(
+  "cannot borrow replacement facts with %s",
+  async (mismatch) => {
+    const config = { skills: { entries: { marker: { enabled: true } } } };
+    const replaced = { skills: { entries: { marker: { enabled: false } } } };
+    const admitted = owner(config, [{ ...entry, reasoning: true }]);
+    publishedSnapshotMock.mockReturnValue(owner(replaced, [{ ...entry, reasoning: false }]));
+    const read = () =>
+      readThinking(config, {
+        agentDir: mismatch === "other agent" ? "/tmp/other-agent" : admitted.agentDir,
+        ...(mismatch === "other workspace" ? { workspaceDir: "/tmp/other-workspace" } : {}),
+      });
+    const result = await (mismatch === "missing admission"
+      ? read()
+      : withAdmitted(admitted, read, mismatch !== "closed lease"));
+    expect(result).toEqual([]);
+    expect(scopedCatalogMock).not.toHaveBeenCalled();
+  },
+);
+it("rejects published capabilities from a different route", async () => {
+  const config = {};
+  publishedSnapshotMock.mockReturnValue(owner(config, [physicalEntry()]));
+  expect(
+    await readThinking(config, {
+      requiredInputRoute: { ...entry, baseUrl: "https://custom.invalid/v1" },
+    }),
+  ).toEqual([]);
+  expect(manifestCatalogMock).not.toHaveBeenCalled();
+  expect(scopedCatalogMock).not.toHaveBeenCalled();
 });

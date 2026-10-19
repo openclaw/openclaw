@@ -6,6 +6,49 @@ import Testing
 @Suite(.serialized)
 struct DeviceAuthStoreTests {
     @Test(.stateDirectoryIsolated)
+    func `newer shared schemas preserve gateway scoped token lifecycle`() throws {
+        let deviceID = "future-schema-device"
+        for gateway in ["gateway-a", "gateway-b"] {
+            #expect(DeviceAuthStore.storeTokenPersisted(
+                deviceId: deviceID,
+                role: "operator",
+                token: gateway,
+                scopes: ["operator.read"],
+                gatewayID: gateway))
+        }
+        let databaseURL = try Self.databaseURL()
+        try Self.execute(databaseURL, """
+        CREATE TABLE schema_meta (meta_key TEXT PRIMARY KEY, role TEXT, schema_version INTEGER) STRICT;
+        INSERT INTO schema_meta VALUES ('primary', 'global', 2147483647);
+        PRAGMA user_version = 2147483647;
+        CREATE TABLE unrelated_gateway_state (value TEXT) STRICT;
+        INSERT INTO unrelated_gateway_state VALUES ('preserved');
+        """)
+
+        #expect(DeviceAuthStore.loadToken(
+            deviceId: deviceID, role: "operator", gatewayID: "gateway-a")?.token == "gateway-a")
+        #expect(DeviceAuthStore.storeTokenPersisted(
+            deviceId: deviceID,
+            role: "operator",
+            token: "rotated",
+            scopes: ["operator.read", "operator.write"],
+            gatewayID: "gateway-a"))
+        #expect(DeviceAuthStore.loadToken(
+            deviceId: deviceID, role: "operator", gatewayID: "gateway-a")?.token == "rotated")
+        #expect(DeviceAuthStore.clearGatewayTokensPersisted(deviceId: deviceID, gatewayID: "gateway-a"))
+        #expect(DeviceAuthStore.loadToken(
+            deviceId: deviceID, role: "operator", gatewayID: "gateway-a") == nil)
+        #expect(DeviceAuthStore.loadToken(
+            deviceId: deviceID, role: "operator", gatewayID: "gateway-b")?.token == "gateway-b")
+        #expect(try Self.scalarInt(databaseURL, "PRAGMA user_version") == 2_147_483_647)
+        #expect(try Self.scalarInt(
+            databaseURL,
+            "SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'") ==
+            2_147_483_647)
+        #expect(try Self.scalarText(databaseURL, "SELECT value FROM unrelated_gateway_state") == "preserved")
+    }
+
+    @Test(.stateDirectoryIsolated)
     func `store and load round trip without legacy files`() throws {
         let deviceID = "device-round-trip"
         #expect(DeviceAuthStore.storeTokenPersisted(
@@ -297,6 +340,28 @@ struct DeviceAuthStoreTests {
     }
 
     @Test(.stateDirectoryIsolated)
+    func `retiring Gateway authority clears its roles without touching sibling devices or Gateways`() {
+        let rows: [(device: String, gateway: String?, role: String)] = [
+            ("selected-device", "selected-gateway", "operator"),
+            ("selected-device", "selected-gateway", "node"),
+            ("other-device", "selected-gateway", "operator"),
+            ("selected-device", "other-gateway", "operator"),
+            ("selected-device", nil, "operator"),
+        ]
+        for row in rows {
+            #expect(DeviceAuthStore.storeTokenPersisted(
+                deviceId: row.device, role: row.role, token: "synthetic", gatewayID: row.gateway))
+        }
+        #expect(DeviceAuthStore.clearGatewayTokensPersisted(
+            deviceId: "selected-device", gatewayID: "selected-gateway"))
+        for row in rows {
+            let removed = row.device == "selected-device" && row.gateway == "selected-gateway"
+            #expect((DeviceAuthStore.loadToken(
+                deviceId: row.device, role: row.role, gatewayID: row.gateway) == nil) == removed)
+        }
+    }
+
+    @Test(.stateDirectoryIsolated)
     func `clear all removes only the selected profile identity rows`() {
         let primary = DeviceIdentityStore.loadOrCreate(profile: .primary)
         let node = DeviceIdentityStore.loadOrCreate(profile: .node)
@@ -391,11 +456,12 @@ struct DeviceAuthStoreTests {
             deviceId: "versioned-device",
             role: "node",
             token: "must-not-persist"))
+        #expect(!DeviceAuthStore.clearGatewayTokensPersisted(
+            deviceId: "versioned-device", gatewayID: "selected-gateway"))
         #expect(try Self.scalarInt(
             databaseURL,
             "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name = 'device_auth_tokens'") == 0)
     }
-
 }
 
 extension DeviceAuthStoreTests {

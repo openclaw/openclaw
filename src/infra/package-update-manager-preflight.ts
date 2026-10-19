@@ -1,0 +1,338 @@
+import fsSync from "node:fs";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
+import { UPDATE_GLOBAL_PERMISSION_REASON } from "../shared/update-outcome.js";
+import { hasErrnoCode, isErrno } from "./errno.js";
+import { formatErrorMessage } from "./errors.js";
+import { parseNpmErrorCode } from "./npm-error.js";
+import { packageActivationIdentity } from "./package-update-activation-paths.js";
+import { resolvePackageUpdateLauncherNames } from "./package-update-filesystem.js";
+import { createUpdateFailureFact } from "./update-failure-facts.js";
+import type { CommandRunner } from "./update-global-command-runner.js";
+import {
+  listActivePnpmIsolatedGlobalPackages,
+  resolvePnpmIsolatedInstallOwner,
+  type ResolvedGlobalInstallTarget,
+} from "./update-global.js";
+import {
+  resolveNpmGlobalPrefixLayoutFromGlobalRoot,
+  readPackageManagerProbeValue,
+} from "./update-npm-prefix.js";
+import type { UpdateStepResult } from "./update-step-result.js";
+
+export async function resolveCanonicalPath(filePath: string): Promise<string> {
+  return path.resolve(await fs.realpath(filePath).catch(() => filePath));
+}
+
+export async function runPnpmPreflightProbe(params: {
+  installTarget: ResolvedGlobalInstallTarget;
+  args: string[];
+  runCommand: CommandRunner;
+  timeoutMs: number;
+  env?: NodeJS.ProcessEnv;
+  name?: string;
+  cwd?: string;
+}): Promise<
+  | { result: Awaited<ReturnType<CommandRunner>>; failedStep: null }
+  | { result: null; failedStep: UpdateStepResult }
+> {
+  const startedAt = Date.now();
+  const argv = [params.installTarget.command, ...params.args];
+  const probeCwd = params.cwd ?? params.installTarget.globalRoot ?? undefined;
+  // pnpm reads project packageManager/config for every command. Keep all
+  // ownership probes in one manager-owned context before mutation.
+  const result = await params
+    .runCommand(argv, {
+      timeoutMs: params.timeoutMs,
+      env: params.env,
+      ...(probeCwd ? { cwd: probeCwd } : {}),
+    })
+    .catch((error: unknown) => ({ stdout: "", stderr: formatErrorMessage(error), code: 1 }));
+  return result.code === 0
+    ? { result, failedStep: null }
+    : {
+        result: null,
+        failedStep: {
+          name: params.name ?? "pnpm-isolated-install-preflight",
+          command: argv.join(" "),
+          cwd: probeCwd ?? process.cwd(),
+          durationMs: Date.now() - startedAt,
+          exitCode: result.code ?? 1,
+          stdoutTail: result.stdout || null,
+          stderrTail: result.stderr || `Unable to run ${argv.join(" ")}.`,
+        },
+      };
+}
+
+export async function validatePnpmIsolatedUpdate(params: {
+  installTarget: ResolvedGlobalInstallTarget;
+  packageName: string;
+  runCommand: CommandRunner;
+  timeoutMs: number;
+  env?: NodeJS.ProcessEnv;
+}): Promise<{
+  globalBinDir: string | null;
+  failedStep: UpdateStepResult | null;
+}> {
+  const owner = params.installTarget.pnpmIsolated;
+  if (!owner) {
+    return { globalBinDir: null, failedStep: null };
+  }
+  const failedStep = (
+    stderrTail: string,
+    command = `inspect ${params.installTarget.globalRoot ?? "pnpm install"}`,
+    cwd = params.installTarget.globalRoot ?? process.cwd(),
+    stdoutTail: string | null = null,
+  ): UpdateStepResult => ({
+    name: "pnpm-isolated-install-preflight",
+    command,
+    cwd,
+    durationMs: 0,
+    exitCode: 1,
+    stdoutTail,
+    stderrTail,
+  });
+  const activePackages = await listActivePnpmIsolatedGlobalPackages({
+    globalRoot: params.installTarget.globalRoot,
+    packageName: params.packageName,
+  });
+  const activePackageRoots = activePackages.map((entry) => entry.packageRoot);
+  const siblingPackages = [
+    ...new Set(
+      activePackages.flatMap((entry) =>
+        entry.packageNames.filter((name) => name !== params.packageName),
+      ),
+    ),
+  ].toSorted((a, b) => a.localeCompare(b));
+  if (siblingPackages.length > 0) {
+    return {
+      globalBinDir: null,
+      failedStep: failedStep(
+        `OpenClaw shares a pnpm ${owner.layoutVersion} global install group with ${siblingPackages.join(", ")}. Automatic update stopped before mutation; update the group manually to preserve its sibling packages.`,
+      ),
+    };
+  }
+
+  const invokingPackageRoot = params.installTarget.packageRoot;
+  const invokingInstallOwner = await resolvePnpmIsolatedInstallOwner(invokingPackageRoot);
+  const activeInstallOwners = await Promise.all(
+    activePackageRoots.map((packageRoot) => resolvePnpmIsolatedInstallOwner(packageRoot)),
+  );
+  const ownerMatchCount = invokingInstallOwner
+    ? activeInstallOwners.filter((installOwner) => installOwner === invokingInstallOwner).length
+    : 0;
+  if (!invokingPackageRoot || activePackageRoots.length !== 1 || ownerMatchCount !== 1) {
+    return {
+      globalBinDir: null,
+      failedStep: failedStep(
+        `Expected exactly one active pnpm ${owner.layoutVersion} OpenClaw install owned by the invoking project; found ${activePackageRoots.length} active installs and ${ownerMatchCount} owner matches. Automatic update stopped before mutation.`,
+      ),
+    };
+  }
+
+  const rootProbe = await runPnpmPreflightProbe({ ...params, args: ["root", "-g"] });
+  if (rootProbe.failedStep) {
+    return {
+      globalBinDir: null,
+      failedStep: rootProbe.failedStep,
+    };
+  }
+  const reportedGlobalRoot = readPackageManagerProbeValue(rootProbe.result.stdout);
+  const expectedGlobalRoot = params.installTarget.globalRoot;
+  if (
+    !reportedGlobalRoot ||
+    !expectedGlobalRoot ||
+    (await resolveCanonicalPath(reportedGlobalRoot)) !==
+      (await resolveCanonicalPath(expectedGlobalRoot))
+  ) {
+    return {
+      globalBinDir: null,
+      failedStep: failedStep(
+        `The active pnpm command owns ${reportedGlobalRoot || "an unknown global root"}, not the invoking OpenClaw install at ${expectedGlobalRoot ?? "an unknown root"}. Automatic update stopped before mutation.`,
+        `${params.installTarget.command} root -g`,
+        expectedGlobalRoot ?? process.cwd(),
+        rootProbe.result.stdout || null,
+      ),
+    };
+  }
+
+  const binProbe = await runPnpmPreflightProbe({ ...params, args: ["bin", "-g"] });
+  const globalBinDir = binProbe.result
+    ? readPackageManagerProbeValue(binProbe.result.stdout) || null
+    : null;
+  if (binProbe.failedStep || !globalBinDir) {
+    return {
+      globalBinDir: null,
+      failedStep:
+        binProbe.failedStep ??
+        failedStep(
+          "The owning pnpm command did not report its global bin directory.",
+          `${params.installTarget.command} bin -g`,
+          expectedGlobalRoot,
+        ),
+    };
+  }
+
+  // The CLI major is independent of the global layout (pnpm 12 still uses v11).
+  // Ownership is established by the active project, reported root, and bin above.
+  return {
+    globalBinDir,
+    failedStep: null,
+  };
+}
+
+async function existingDirectory(target: string): Promise<string> {
+  let directory = path.resolve(target);
+  while (true) {
+    try {
+      if ((await fs.stat(directory)).isDirectory()) {
+        return directory;
+      }
+    } catch (error) {
+      if (!hasErrnoCode(error, "ENOENT") && !hasErrnoCode(error, "ENOTDIR")) {
+        return directory;
+      }
+    }
+    const parent = path.dirname(directory);
+    if (parent === directory) {
+      return directory;
+    }
+    directory = parent;
+  }
+}
+
+async function permissionFailure(
+  step: UpdateStepResult,
+  directory: string,
+  code: string,
+  env?: NodeJS.ProcessEnv,
+): Promise<UpdateStepResult> {
+  const stat = await fs.stat(directory).catch(() => null);
+  const owner =
+    process.platform === "win32" || !stat
+      ? "owner unavailable"
+      : `owner UID ${stat.uid}${stat.uid === 0 ? " (root)" : ""}, GID ${stat.gid}`;
+  const repair =
+    process.platform !== "win32" && stat && stat.uid === process.getuid?.()
+      ? `Run \`chmod u+rwx ${quoteCliArg(directory)}\`, then rerun \`openclaw update\`.`
+      : "Run the package update as the directory's owning account, keeping the Gateway's existing state/configuration; or ask that account to grant you write access, then rerun `openclaw update`.";
+  const message = `Package update cannot write ${directory} (${code}; ${owner}). ${repair}`;
+  return {
+    ...step,
+    stderrTail: message,
+    failureFacts: [
+      createUpdateFailureFact(
+        { check: "package-install", code: UPDATE_GLOBAL_PERMISSION_REASON, message },
+        env,
+      ),
+      ...(step.failureFacts ?? []).slice(0, 4),
+    ],
+  };
+}
+
+/** Admit writable npm parents and owned publication objects before staging or validation. */
+export async function checkGlobalPackageUpdateAdmission(
+  target: ResolvedGlobalInstallTarget,
+  packageName: string,
+  env?: NodeJS.ProcessEnv,
+  stagedBinDir?: string,
+): Promise<UpdateStepResult | null> {
+  if (target.manager !== "npm" || !target.globalRoot) {
+    return null;
+  }
+  const layout = resolveNpmGlobalPrefixLayoutFromGlobalRoot(target.globalRoot, {
+    allowDirectNodeModulesRoot: target.directNodeModulesRoot === true,
+  });
+  for (const candidate of new Set([target.globalRoot, ...(layout ? [layout.binDir] : [])])) {
+    const directory = await existingDirectory(candidate);
+    try {
+      await fs.access(directory, fs.constants.W_OK | fs.constants.X_OK);
+    } catch (error) {
+      if (hasErrnoCode(error, "EACCES") || hasErrnoCode(error, "EPERM")) {
+        return await permissionFailure(
+          {
+            name: "package-permissions",
+            command: "inspect npm global directories",
+            cwd: directory,
+            durationMs: 0,
+            exitCode: 1,
+          },
+          directory,
+          hasErrnoCode(error, "EACCES") ? "EACCES" : "EPERM",
+          env,
+        );
+      }
+      // An unavailable inspection is not proof of a permission failure. The
+      // install boundary still classifies an actual denial after this read.
+    }
+  }
+  if (process.platform !== "win32" && layout && target.packageRoot) {
+    try {
+      const packageStat = fsSync.lstatSync(target.packageRoot, { throwIfNoEntry: false });
+      // Admit the source link itself; its external checkout remains operator-owned.
+      if (packageStat) {
+        packageActivationIdentity(
+          target.packageRoot,
+          packageStat.isSymbolicLink() ? "symlink" : true,
+        );
+      }
+      const entries = target.directNodeModulesRoot
+        ? []
+        : stagedBinDir === undefined
+          ? undefined
+          : await fs.readdir(stagedBinDir).catch((error: unknown) => {
+              if (hasErrnoCode(error, "ENOENT")) {
+                return [];
+              }
+              throw error;
+            });
+      for (const name of resolvePackageUpdateLauncherNames(packageName, entries)) {
+        const launcher = path.join(layout.binDir, name);
+        if (fsSync.lstatSync(launcher, { throwIfNoEntry: false })) {
+          packageActivationIdentity(launcher, "launcher");
+        }
+      }
+    } catch (error) {
+      return {
+        name: "package-publication-admission",
+        command: "inspect npm publication objects",
+        cwd: target.packageRoot,
+        durationMs: 0,
+        exitCode: 1,
+        stderrTail: formatErrorMessage(error),
+      };
+    }
+  }
+  return null;
+}
+
+/** Keep real install/staging errors actionable even when permissions change after admission. */
+export async function classifyPackageUpdatePermissionFailure(
+  step: UpdateStepResult,
+  target: ResolvedGlobalInstallTarget,
+  env?: NodeJS.ProcessEnv,
+  error?: unknown,
+): Promise<UpdateStepResult> {
+  const text = step.stderrTail ?? "";
+  const code = isErrno(error)
+    ? error.code
+    : (step.failureFacts?.find((fact) => fact.check === "npm")?.code ?? parseNpmErrorCode(text));
+  if (step.exitCode === 0 || (code !== "EACCES" && code !== "EPERM")) {
+    return step;
+  }
+  const reportedPath =
+    (isErrno(error) ? error.path : undefined) ??
+    text.match(/(?:^|\n)npm (?:ERR!|error) path (.+)/u)?.[1] ??
+    text.match(/(?:mkdir|mkdtemp|rename|unlink|open|scandir) '([^']+)'/u)?.[1];
+  const targetPath =
+    reportedPath && path.isAbsolute(reportedPath) ? reportedPath : target.globalRoot;
+  if (!targetPath) {
+    return step;
+  }
+  // Rename/unlink require the parent directory even when the package itself exists.
+  const directory = await existingDirectory(
+    reportedPath && /\b(rename|unlink)\b/u.test(text) ? path.dirname(targetPath) : targetPath,
+  );
+  return await permissionFailure(step, directory, code, env);
+}

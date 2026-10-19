@@ -1,75 +1,170 @@
+import { onCleanup, onSettled } from "solid-js";
+import { isApplePlatform } from "../../lib/keyboard-shortcut-contract.ts";
+import { listen } from "../../lib/reactive/listener.ts";
+import type { DesktopConnectionHandle } from "./desktop-client.ts";
+
 /**
  * Mobile browsers only report composed text through an input's value, so the desktop document
  * keeps a padded sentinel in the field and derives key events from how that value changed.
  */
 const MOBILE_KEYBOARD_SENTINEL = "________________";
 
-type MobileKeyboardOptions = {
-  /** Live RFB handle, or null while disconnected; absent senders mean a view-only transport. */
-  connection: () => {
-    sendBackspace?: () => void;
-    sendKeyboardEvent?: (event: KeyboardEvent) => void;
-    sendText?: (text: string) => void;
-  } | null;
-  controlling: () => boolean;
-  input: () => HTMLTextAreaElement | null | undefined;
-};
+/** Bridges the document-owned textarea to the current remote keyboard. */
+export function createDesktopMobileKeyboard(
+  connectionTarget: () => DesktopConnectionHandle | null,
+) {
+  let value = MOBILE_KEYBOARD_SENTINEL;
+  let field: HTMLTextAreaElement | undefined;
+  let modifierConnection: DesktopConnectionHandle | null = null;
+  const modifiers = new Map<string, KeyboardEvent>();
+  onCleanup(reset);
 
-/** Bridges the desktop document's hidden textarea to the remote desktop's keyboard. */
-export class DesktopMobileKeyboard {
-  /** The document view renders this so the field always holds deletable padding. */
-  value = MOBILE_KEYBOARD_SENTINEL;
+  onSettled(() => listen(window, "blur", () => modifiers.clear()));
+  onSettled(() => listen(window, "keyup", handleWindowKeyup, true));
 
-  constructor(private readonly options: MobileKeyboardOptions) {}
-
-  focus(): void {
-    const input = this.options.input();
-    input?.focus({ preventScroll: true });
-    input?.setSelectionRange(input.value.length, input.value.length);
+  function handleWindowKeyup(event: Event): void {
+    // noVNC stops canvas keyups from bubbling. Capture physical releases after focus moves,
+    // but ignore our synthetic forwarding and temporary paste releases.
+    if (
+      !(event instanceof KeyboardEvent) ||
+      !event.isTrusted ||
+      event.composedPath()[0] === field ||
+      !modifiers.has(event.code)
+    ) {
+      return;
+    }
+    const connection = currentConnection();
+    if (!connection || !modifiers.delete(event.code)) {
+      return;
+    }
+    connection.sendKeyboardEvent(event);
   }
 
-  reset(input?: HTMLTextAreaElement): void {
-    this.value = MOBILE_KEYBOARD_SENTINEL;
-    const target = input ?? this.options.input();
+  function focus(event?: MouseEvent): void {
+    const connection = currentConnection();
+    if (event && connection) {
+      reconcileModifiers(event, connection);
+    }
+    field?.focus({ preventScroll: true });
+    field?.setSelectionRange(field.value.length, field.value.length);
+  }
+
+  function reset(input?: HTMLTextAreaElement): void {
+    if (!input) {
+      modifiers.clear();
+      // A retired viewer must be releasable even if no keyboard input follows the handoff.
+      modifierConnection = null;
+    }
+    value = MOBILE_KEYBOARD_SENTINEL;
+    const target = input ?? field;
     if (target) {
       target.value = MOBILE_KEYBOARD_SENTINEL;
     }
   }
 
-  handleKeyboardEvent(event: KeyboardEvent): void {
-    const connection = this.options.connection();
-    if (!this.options.controlling() || !connection?.sendKeyboardEvent) {
+  function handleKeyboardEvent(event: KeyboardEvent): void {
+    const connection = currentConnection();
+    if (!connection) {
       return;
+    }
+    if (event.type === "keydown") {
+      reconcileModifiers(event, connection);
+    }
+    // The textarea owns local paste; forwarding its shortcut suppresses browser input.
+    if (
+      !event.isComposing &&
+      !event.altKey &&
+      (isApplePlatform() ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey) &&
+      event.key.toLowerCase() === "v"
+    ) {
+      return;
+    }
+    if (["Meta", "Control", "Shift", "Alt"].includes(event.key)) {
+      if (event.type === "keydown") {
+        modifiers.set(event.code, event);
+      } else {
+        modifiers.delete(event.code);
+      }
     }
     connection.sendKeyboardEvent(event);
     event.preventDefault();
   }
 
-  handleInput(event: InputEvent): void {
+  function handleInput(event: InputEvent): void {
     const input = event.currentTarget as HTMLTextAreaElement;
-    if (!this.options.controlling()) {
-      this.reset(input);
+    const connection = currentConnection();
+    if (!connection) {
+      reset(input);
       return;
     }
     const nextValue = input.value;
-    const connection = this.options.connection();
+    // Paste is literal text even while the user still physically holds its shortcut modifiers.
+    const pastedModifiers = event.inputType === "insertFromPaste" ? [...modifiers.values()] : [];
+    for (const modifier of pastedModifiers) {
+      connection.sendKeyboardEvent(new KeyboardEvent("keyup", modifier));
+    }
     let prefixLength = 0;
-    const comparableLength = Math.min(this.value.length, nextValue.length);
-    while (
-      prefixLength < comparableLength &&
-      this.value.charAt(prefixLength) === nextValue.charAt(prefixLength)
+    for (const character of value) {
+      if (!nextValue.startsWith(character, prefixLength)) {
+        break;
+      }
+      prefixLength += character.length;
+    }
+    // DOM offsets use UTF-16; a removed supplementary character is one key action.
+    for (
+      let remaining = Array.from(value.slice(prefixLength)).length;
+      remaining > 0;
+      remaining -= 1
     ) {
-      prefixLength += 1;
+      connection.sendBackspace();
     }
-    for (let index = this.value.length - prefixLength; index > 0; index -= 1) {
-      connection?.sendBackspace?.();
+    connection.sendText(nextValue.slice(prefixLength));
+    for (const modifier of pastedModifiers) {
+      connection.sendKeyboardEvent(modifier);
     }
-    connection?.sendText?.(nextValue.slice(prefixLength));
     // Refill once the field drifts outside the range that keeps further deletes reportable.
     if (nextValue.length < 1 || nextValue.length > MOBILE_KEYBOARD_SENTINEL.length * 2) {
-      this.reset(input);
+      reset(input);
       return;
     }
-    this.value = nextValue;
+    value = nextValue;
   }
+
+  function reconcileModifiers(
+    event: MouseEvent | KeyboardEvent,
+    connection: DesktopConnectionHandle,
+  ): void {
+    // Native popups can consume keyups. Only physical snapshots may retire those
+    // modifiers; synthetic forwarding and paste events do not describe held keys.
+    if (!event.isTrusted) {
+      return;
+    }
+    for (const [code, modifier] of modifiers) {
+      if (!event.getModifierState(modifier.key)) {
+        modifiers.delete(code);
+        connection.sendKeyboardEvent(new KeyboardEvent("keyup", modifier));
+      }
+    }
+  }
+
+  function currentConnection(): DesktopConnectionHandle | null {
+    const connection = connectionTarget();
+    if (connection !== modifierConnection) {
+      modifiers.clear();
+      modifierConnection = connection;
+    }
+    return connection;
+  }
+  return {
+    inputRef: (element: HTMLTextAreaElement) => {
+      field = element;
+      field.value = value;
+    },
+    focus,
+    reset,
+    handleKeyboardEvent,
+    handleInput,
+  };
 }
+
+export type DesktopMobileKeyboard = ReturnType<typeof createDesktopMobileKeyboard>;

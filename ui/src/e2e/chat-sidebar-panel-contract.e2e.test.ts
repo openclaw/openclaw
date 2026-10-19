@@ -1,17 +1,43 @@
 import { Buffer } from "node:buffer";
+import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import {
+  closeChatLayoutMenu,
+  openChatLayoutMenu,
+  selectChatLayoutAction,
+} from "../test-helpers/chat-layout-menu.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
+  controlUiBundledSettingsStorageKey,
+  controlUiSessionUrl,
   installMockGateway,
   type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
+import {
+  createControlUiE2eSuite,
+  holdModuleResponse,
+} from "./control-ui-e2e-suite.test-support.ts";
+import {
+  RETAINED_DESKTOP_SESSION_KEY,
+  retainedDesktopEnvironment,
+  retainedDesktopScenario,
+} from "./desktop-retention.test-support.ts";
+import {
+  createRfbRawFrame,
+  installDesktopClientFake,
+  installScriptedRfbServer,
+} from "./desktop-rfb-test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "chat sidebar cold-open invariant",
   startServerBeforeBrowser: true,
 });
+
+const HIDDEN_BOARD_SESSION_KEY = "agent:main:hidden-board-slot";
 
 const ONE_PIXEL_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nPcAAAAASUVORK5CYII=",
@@ -19,17 +45,18 @@ const ONE_PIXEL_PNG = Buffer.from(
 );
 
 type ColdOpenOutcome = {
-  outcome: "content" | "generic-empty";
+  outcome: "loading" | "content" | "generic-empty";
   emptyStateOffersAction: boolean;
 };
 
 const offeredSlotLabels = [
+  "Subagents",
+  "Processes",
   "Review",
   "Terminal",
   "Browser",
   "Files",
   "Side chat",
-  "Tasks",
   "Desktop",
   "Discussion",
 ] as const;
@@ -37,10 +64,6 @@ const offeredSlotLabels = [
 type OfferedSlotLabel = (typeof offeredSlotLabels)[number];
 
 const actionlessEmptyStateAllowlist = new Set<OfferedSlotLabel>([
-  // Review: no git checkout, nothing to diff.
-  "Review",
-  // Tasks: no background tasks, nothing to inspect.
-  "Tasks",
   // Discussion: no external URL, nothing to open.
   "Discussion",
 ]);
@@ -53,15 +76,16 @@ function coldOpenScenario(): ControlUiMockGatewayScenario {
       "chat.startup",
       "desktop.observe",
       "environments.list",
+      "environments.status",
       "session.discussion.info",
       "session.discussion.open",
       "sessions.companion.state",
       "sessions.diff",
       "sessions.files.list",
-      "tasks.list",
       "terminal.open",
     ],
     methodResponses: {
+      "sessions.processes.list": { sessionId: "main-session", processes: [], truncated: false },
       "browser.request": {
         cases: [
           { match: { method: "GET", path: "/tabs" }, response: { running: false, tabs: [] } },
@@ -78,7 +102,6 @@ function coldOpenScenario(): ControlUiMockGatewayScenario {
         root: "/tmp/plain-workspace",
         sessionKey: "main",
       },
-      "tasks.list": { tasks: [] },
       "terminal.open": {
         agentId: "main",
         confined: false,
@@ -97,8 +120,35 @@ function populatedColdOpenScenario(): ControlUiMockGatewayScenario {
   const sparse = coldOpenScenario();
   return {
     ...sparse,
+    sessions: [
+      { key: "agent:main:main", kind: "direct", label: "Main", updatedAt: 1 },
+      {
+        key: "agent:main:subagent:panel-content",
+        kind: "direct",
+        label: "Check panel content",
+        spawnedBy: "agent:main:main",
+        status: "done",
+        updatedAt: 2,
+      },
+    ],
     methodResponses: {
       ...sparse.methodResponses,
+      "sessions.processes.list": {
+        sessionId: "main-session",
+        truncated: false,
+        processes: [
+          {
+            processId: "process-1",
+            instanceId: "incarnation-1",
+            name: "Build application",
+            status: "running",
+            startedAt: 1,
+            tail: "Compiling",
+            truncated: false,
+            canStop: false,
+          },
+        ],
+      },
       "browser.request": {
         cases: [
           {
@@ -126,7 +176,9 @@ function populatedColdOpenScenario(): ControlUiMockGatewayScenario {
         ],
       },
       "environments.list": {
-        environments: [{ id: "gateway", type: "local", status: "available", desktop: true }],
+        environments: [
+          { id: "worker-desktop-1", type: "worker", status: "available", desktop: true },
+        ],
       },
       "session.discussion.info": {
         embedUrl: "https://discussion.example/embed/thread/session",
@@ -185,24 +237,6 @@ function populatedColdOpenScenario(): ControlUiMockGatewayScenario {
         root: "/tmp/checkout",
         sessionKey: "main",
       },
-      "tasks.list": {
-        tasks: [
-          {
-            agentId: "main",
-            createdAt: Date.now() - 2_000,
-            id: "task-sidebar-invariant",
-            kind: "subagent",
-            ownerKey: "main",
-            progressSummary: "Checking every offered panel",
-            runtime: "subagent",
-            startedAt: Date.now() - 1_000,
-            status: "running",
-            taskId: "task-sidebar-invariant",
-            title: "Verify cold-open behavior",
-            updatedAt: Date.now(),
-          },
-        ],
-      },
       "terminal.open": {
         agentId: "main",
         confined: false,
@@ -225,17 +259,103 @@ async function openColdSidebar(page: Page, scenario = coldOpenScenario()) {
   await waitForControlUiGatewayReady(page);
   await gateway.waitForRequest("session.discussion.info");
   await gateway.waitForRequest("sessions.companion.state");
-  await gateway.waitForRequest("sessions.files.list");
-  await page.getByRole("button", { name: "Side panel", exact: true }).first().click();
+  expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
+  await selectChatLayoutAction(page, "Side panel");
   const choices = page.locator(".side-panel-empty__type");
   await choices.first().waitFor();
+  expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
   return choices;
+}
+
+async function seedHiddenBoardSlot(page: Page) {
+  const settingsKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
+  await page.addInitScript(
+    ({ key, sessionKey }) => {
+      localStorage.setItem(
+        key,
+        JSON.stringify({
+          sessionKey,
+          sidebarSessionLayouts: {
+            [sessionKey]: {
+              columns: [
+                {
+                  id: "side-panel-column",
+                  side: "right",
+                  panels: [{ id: "dashboard", slot: "dashboard" }],
+                  activePanelId: "dashboard",
+                  height: 360,
+                  width: 480,
+                },
+              ],
+              dock: "right",
+              open: true,
+              expanded: false,
+            },
+          },
+        }),
+      );
+    },
+    { key: settingsKey, sessionKey: HIDDEN_BOARD_SESSION_KEY },
+  );
+}
+
+async function seedRetainedDesktopSlot(
+  page: Page,
+  activePanel: "workspace" | "conversation" = "workspace",
+) {
+  const settingsKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
+  await page.addInitScript(
+    ({ key, sessionKey, activePanel: seededActivePanel }) => {
+      localStorage.setItem(
+        key,
+        JSON.stringify({
+          sessionKey,
+          sidebarSessionLayouts: {
+            [sessionKey]: {
+              columns: [
+                {
+                  id: "side-panel-column",
+                  side: "right",
+                  panels: [
+                    { id: "workspace", slot: "workspace" },
+                    ...(seededActivePanel === "conversation"
+                      ? [{ id: "conversation", slot: "conversation" }]
+                      : []),
+                    { id: "desktop", slot: "desktop" },
+                  ],
+                  activePanelId: seededActivePanel,
+                  height: 360,
+                  width: 480,
+                },
+              ],
+              ...(seededActivePanel === "conversation" ? { mainPanelId: "workspace" } : {}),
+              dock: "right",
+              open: true,
+              expanded: false,
+            },
+          },
+        }),
+      );
+      localStorage.setItem(
+        "openclaw.desktopPanel",
+        JSON.stringify({ open: true, dock: "right", height: 420, width: 560 }),
+      );
+    },
+    { key: settingsKey, sessionKey: RETAINED_DESKTOP_SESSION_KEY, activePanel },
+  );
+}
+
+async function clickSidebarTab(page: Page, label: string): Promise<void> {
+  await page.locator(".side-panel__header .tabstrip-tab").filter({ hasText: label }).click();
 }
 
 async function readColdOpenOutcome(page: Page): Promise<ColdOpenOutcome> {
   const activePanel = page.locator(".side-panel__panel:not([hidden])");
   await activePanel.waitFor();
   await activePanel.locator(":scope > *").first().waitFor();
+  if ((await activePanel.locator("openclaw-panel-loading-skeleton").count()) > 0) {
+    return { outcome: "loading", emptyStateOffersAction: false };
+  }
   const emptyState = activePanel.locator("openclaw-panel-empty-state").first();
   const genericEmptyState = (await emptyState.count()) > 0;
   return {
@@ -244,11 +364,6 @@ async function readColdOpenOutcome(page: Page): Promise<ColdOpenOutcome> {
       genericEmptyState &&
       (await activePanel.locator('[slot="action"], a[href], button:not([disabled])').count()) > 0,
   };
-}
-
-async function offeredLabels(page: Page, scenario: ControlUiMockGatewayScenario) {
-  const choices = await openColdSidebar(page, scenario);
-  return choices.locator(".side-panel-type-option__label").allTextContents();
 }
 
 async function readSlotColdOpenOutcome(
@@ -260,18 +375,58 @@ async function readSlotColdOpenOutcome(
   try {
     const page = await context.newPage();
     const choices = await openColdSidebar(page, scenario);
-    await choices.filter({ hasText: label }).click();
+    expect(
+      await choices.locator(".side-panel-type-option__label").allTextContents(),
+      `${label} cold-open offered slots`,
+    ).toEqual(offeredSlotLabels);
+    const held =
+      label === "Discussion"
+        ? await holdModuleResponse(
+            page,
+            controlUiE2eBuiltModuleRequest(
+              "ui/src/pages/chat/components/session-discussion-panel.tsx",
+            ),
+          )
+        : null;
+    try {
+      await choices.filter({ hasText: label }).click();
+      if (held) {
+        await held.request;
+        expect(await readColdOpenOutcome(page)).toEqual({
+          outcome: "loading",
+          emptyStateOffersAction: false,
+        });
+      }
+    } finally {
+      held?.release();
+    }
+    if (label === "Processes") {
+      const processes = page.locator("openclaw-chat-processes-panel");
+      await processes
+        .getByText(
+          expectedOutcome === "content"
+            ? "Build application"
+            : "No background processes in this conversation.",
+          { exact: true },
+        )
+        .waitFor();
+    }
+    if (label === "Subagents") {
+      const subagents = page.locator("openclaw-chat-subagents-panel");
+      if (expectedOutcome === "content") {
+        await subagents.getByRole("button", { name: "Check panel content", exact: true }).waitFor();
+      } else {
+        await subagents.getByText("No subagents in this conversation.", { exact: true }).waitFor();
+      }
+    }
     if (expectedOutcome) {
       await expect
         .poll(() => readColdOpenOutcome(page), { message: `${label} cold-open outcome` })
         .toMatchObject({ outcome: expectedOutcome });
     } else {
-      await page.evaluate(
-        () =>
-          new Promise<void>((resolve) => {
-            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-          }),
-      );
+      await expect
+        .poll(() => readColdOpenOutcome(page), { message: `${label} finished cold-open` })
+        .not.toMatchObject({ outcome: "loading" });
     }
     return await readColdOpenOutcome(page);
   } finally {
@@ -280,17 +435,494 @@ async function readSlotColdOpenOutcome(
 }
 
 suite.define(() => {
+  it("closes a projected-empty side panel when a hidden board tab remains persisted", async () => {
+    const context = await suite.newBrowserContext({ serviceWorkers: "block" });
+    try {
+      const page = await context.newPage();
+      await seedHiddenBoardSlot(page);
+      await installMockGateway(page, {
+        ...coldOpenScenario(),
+        sessionKey: HIDDEN_BOARD_SESSION_KEY,
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, HIDDEN_BOARD_SESSION_KEY));
+      await waitForControlUiGatewayReady(page);
+
+      const panel = page.locator(".sidebar-region__right-runtime .side-panel");
+      const selector = panel.locator(".side-panel-empty--selector");
+      await selectChatLayoutAction(page, "Side panel");
+      await selector.waitFor();
+      expect(await panel.locator(".tabstrip-tab").count()).toBe(0);
+
+      await selectChatLayoutAction(page, "Minimize side panel");
+      await selector.waitFor({ state: "hidden" });
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it("refreshes retained Browser state when its sidebar tab becomes active", async () => {
+    const context = await suite.newBrowserContext({ serviceWorkers: "block" });
+    try {
+      const page = await context.newPage();
+      await page.route("**/__openclaw__/assistant-media?*", (route) =>
+        route.fulfill({ body: ONE_PIXEL_PNG, contentType: "image/png" }),
+      );
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["browser.request", "chat.metadata", "chat.startup"],
+        methodResponses: {
+          "browser.request": {
+            cases: [
+              {
+                match: { method: "GET", path: "/tabs" },
+                response: { running: true, tabs: [] },
+              },
+            ],
+          },
+        },
+      });
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await waitForControlUiGatewayReady(page);
+      await openChatSidePanelType(page, "Browser");
+      const browser = page.locator("openclaw-browser-panel");
+      await browser.locator("openclaw-panel-empty-state").waitFor();
+
+      const initialRequests = await gateway.getRequests("browser.request");
+      expect(initialRequests.map((request) => request.params)).toEqual([
+        {
+          method: "GET",
+          path: "/tabs",
+          tabScope: { sessionKey: "agent:main:main", referencedTabs: [] },
+        },
+      ]);
+
+      await openChatSidePanelType(page, "Files");
+      expect(await browser.evaluate((element) => element.isConnected)).toBe(true);
+      const hiddenRequestCount = (await gateway.getRequests("browser.request")).length;
+      await gateway.setMethodResponse("browser.request", {
+        cases: [
+          {
+            match: { method: "GET", path: "/tabs" },
+            response: {
+              running: true,
+              tabs: [
+                {
+                  targetId: "blacksmith-target",
+                  tabId: "blacksmith-tab",
+                  title: "Blacksmith",
+                  url: "https://blacksmith.sh/",
+                },
+              ],
+            },
+          },
+          {
+            match: { method: "POST", path: "/screenshot" },
+            response: {
+              path: "/proof/blacksmith.png",
+              targetId: "blacksmith-target",
+              url: "https://blacksmith.sh/",
+            },
+          },
+        ],
+      });
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          }),
+      );
+      expect((await gateway.getRequests("browser.request")).length).toBe(hiddenRequestCount);
+
+      await page
+        .locator(".side-panel__header .tabstrip-tab")
+        .filter({ hasText: "Browser" })
+        .click();
+      await expect
+        .poll(async () => {
+          const requests = await gateway.getRequests("browser.request");
+          return requests.filter((request) => {
+            const params = request.params as { method?: string; path?: string };
+            return params.method === "GET" && params.path === "/tabs";
+          }).length;
+        })
+        .toBe(2);
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("browser.request")).map((request) => request.params),
+        )
+        .toContainEqual({
+          body: { targetId: "blacksmith-tab", type: "png" },
+          method: "POST",
+          path: "/screenshot",
+          tabScope: { sessionKey: "agent:main:main" },
+        });
+
+      await browser.locator(".bp-shot").waitFor();
+      expect(await browser.locator(".bp-shot").getAttribute("src")).toMatch(
+        /^data:image\/png;base64,/,
+      );
+      expect(await browser.locator(".bp-url").inputValue()).toBe("https://blacksmith.sh/");
+      expect(await browser.locator(".bp-loading").count()).toBe(0);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it("keeps a retained Desktop dormant until its sidebar tab is active", async () => {
+    const context = await suite.newBrowserContext({ serviceWorkers: "block" });
+    try {
+      const page = await context.newPage();
+      await seedRetainedDesktopSlot(page);
+      const gateway = await installMockGateway(page, retainedDesktopScenario(coldOpenScenario()));
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, RETAINED_DESKTOP_SESSION_KEY));
+      await waitForControlUiGatewayReady(page);
+
+      const desktop = page.locator("openclaw-desktop-panel");
+      await desktop.waitFor({ state: "attached" });
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          }),
+      );
+
+      expect(await desktop.evaluate((element) => element.isConnected)).toBe(true);
+      expect(await gateway.getRequests("environments.list")).toHaveLength(0);
+      expect(await gateway.getRequests("environments.status")).toHaveLength(0);
+      expect(await gateway.getRequests("desktop.observe")).toHaveLength(0);
+
+      await installDesktopClientFake(desktop);
+      await gateway.deferNext("environments.status");
+      await clickSidebarTab(page, "Desktop");
+      const target = await gateway.waitForRequest("environments.status");
+      expect(target.params).toEqual({ environmentId: retainedDesktopEnvironment.id });
+      const loading = desktop.getByRole("status", { name: "Connecting to desktop…", exact: true });
+      await loading.getByText("Connecting to desktop…", { exact: true }).waitFor();
+      expect(await loading.count()).toBe(1);
+      expect(await desktop.locator(".skeleton").count()).toBe(0);
+      await clickSidebarTab(page, "Files");
+      await gateway.resolveDeferred("environments.status", retainedDesktopEnvironment);
+      await page.evaluate(() => Promise.resolve());
+      expect(await desktop.evaluate((element) => element.isConnected)).toBe(true);
+      expect(await gateway.getRequests("environments.status")).toHaveLength(1);
+      expect(await gateway.getRequests("desktop.observe")).toHaveLength(0);
+      expect(await desktop.getAttribute("data-connect-count")).toBeNull();
+
+      await clickSidebarTab(page, "Desktop");
+      await expect
+        .poll(async () => (await gateway.getRequests("environments.status")).length)
+        .toBe(2);
+      await expect.poll(() => desktop.getAttribute("data-connect-count")).toBe("1");
+      await loading.getByText("Connecting to desktop…", { exact: true }).waitFor();
+      expect(await loading.count()).toBe(1);
+      expect(await desktop.locator(".skeleton").count()).toBe(0);
+      expect(await gateway.getRequests("environments.list")).toHaveLength(0);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it("reuses the Desktop connection across quick Chat switches and releases it after 30 seconds", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      const artifactDir = createControlUiE2eArtifactDir("desktop-tab-retention");
+      await page.clock.install();
+      await seedRetainedDesktopSlot(page, "conversation");
+      const gateway = await installMockGateway(page, retainedDesktopScenario(coldOpenScenario()));
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, RETAINED_DESKTOP_SESSION_KEY));
+      await waitForControlUiGatewayReady(page);
+      const rfb = await installScriptedRfbServer(page);
+      await gateway.deferNext("environments.status");
+      await clickSidebarTab(page, "Desktop");
+      const desktop = page.locator("openclaw-desktop-panel");
+      await gateway.waitForRequest("environments.status");
+      await desktop.getByText("Connecting to desktop…", { exact: true }).waitFor();
+      await page.screenshot({ path: path.join(artifactDir, "unified-loading.png") });
+      await gateway.resolveDeferred("environments.status", retainedDesktopEnvironment);
+      const canvas = desktop.locator("canvas");
+      await canvas.waitFor({ state: "visible" });
+      await expect.poll(rfb.events).toEqual(["authenticated:1"]);
+      await rfb.send([createRfbRawFrame()]);
+      await expect
+        .poll(() =>
+          canvas.evaluate((element) =>
+            Array.from(
+              (element as HTMLCanvasElement).getContext("2d")!.getImageData(4, 4, 1, 1).data,
+            ),
+          ),
+        )
+        .toEqual([24, 180, 160, 255]);
+      await page.screenshot({ path: path.join(artifactDir, "connected.png") });
+      const originalCanvas = await canvas.elementHandle();
+      const inventoryCount = (await gateway.getRequests("environments.status")).length;
+      const observeCount = (await gateway.getRequests("desktop.observe")).length;
+
+      await clickSidebarTab(page, "OpenClaw");
+      await canvas.waitFor({ state: "hidden" });
+      await page.clock.fastForward(20_000);
+      expect(await rfb.events()).toEqual(["authenticated:1"]);
+      await clickSidebarTab(page, "Desktop");
+      await canvas.waitFor({ state: "visible" });
+      expect(
+        await canvas.evaluate((element, previous) => element === previous, originalCanvas),
+      ).toBe(true);
+      expect(await desktop.getByRole("status", { name: "Connecting to desktop…" }).count()).toBe(0);
+      expect(await gateway.getRequests("environments.status")).toHaveLength(inventoryCount);
+      expect(await gateway.getRequests("desktop.observe")).toHaveLength(observeCount);
+
+      // Returning cancels the old deadline; it cannot close a visible desktop later.
+      await page.clock.fastForward(30_001);
+      expect(await rfb.events()).toEqual(["authenticated:1"]);
+      expect(await canvas.isVisible()).toBe(true);
+      await clickSidebarTab(page, "OpenClaw");
+      await canvas.waitFor({ state: "hidden" });
+      await page.clock.fastForward(30_001);
+      await expect.poll(rfb.events).toEqual(["authenticated:1", "closed:1"]);
+      expect(await canvas.count()).toBe(0);
+      expect(await gateway.getRequests("desktop.observe")).toHaveLength(observeCount);
+
+      await clickSidebarTab(page, "Desktop");
+      await canvas.waitFor({ state: "visible" });
+      await expect.poll(rfb.events).toEqual(["authenticated:1", "closed:1", "authenticated:2"]);
+      expect(await gateway.getRequests("environments.status")).toHaveLength(inventoryCount + 1);
+      expect(await gateway.getRequests("desktop.observe")).toHaveLength(observeCount + 1);
+
+      await desktop.getByRole("button", { name: "Disconnect", exact: true }).click();
+      await expect.poll(rfb.events).toContain("closed:2");
+      await desktop.getByRole("button", { name: "Reconnect", exact: true }).waitFor();
+      await clickSidebarTab(page, "OpenClaw");
+      await clickSidebarTab(page, "Desktop");
+      await desktop.getByRole("button", { name: "Reconnect", exact: true }).waitFor();
+      expect(await gateway.getRequests("desktop.observe")).toHaveLength(observeCount + 1);
+      expect(await canvas.count()).toBe(0);
+
+      await desktop.getByRole("button", { name: "Reconnect", exact: true }).click();
+      await expect.poll(rfb.events).toContain("authenticated:3");
+      await page.getByRole("button", { name: "Close Desktop", exact: true }).click();
+      await expect.poll(rfb.events).toContain("closed:3");
+      expect(await canvas.count()).toBe(0);
+    });
+  });
+
+  it("preserves keyboard state across tab switches and retires an unfinished drag", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      await page.addInitScript(() => {
+        Object.defineProperty(navigator, "platform", { configurable: true, value: "MacIntel" });
+      });
+      await seedRetainedDesktopSlot(page, "conversation");
+      const gateway = await installMockGateway(page, retainedDesktopScenario(coldOpenScenario()));
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, RETAINED_DESKTOP_SESSION_KEY));
+      await waitForControlUiGatewayReady(page);
+      const rfb = await installScriptedRfbServer(page);
+      await clickSidebarTab(page, "Desktop");
+      const desktop = page.locator("openclaw-desktop-panel");
+      await expect.poll(rfb.events).toEqual(["authenticated:1"]);
+      await desktop.getByRole("button", { name: "Take control", exact: true }).click();
+      await expect.poll(rfb.events).toEqual(["authenticated:1", "authenticated:2", "closed:1"]);
+      const canvas = desktop.locator("canvas");
+      await canvas.click();
+      // macOS sends a single state-change keydown when CapsLock is enabled.
+      await canvas.dispatchEvent("keydown", { key: "CapsLock", code: "CapsLock" });
+      const capsLock = [
+        { down: true, keysym: 0xffe5 },
+        { down: false, keysym: 0xffe5 },
+      ];
+      await page.keyboard.down("Shift");
+      await page.keyboard.down("ArrowLeft");
+      const pressed = [
+        { down: true, keysym: 0xffe1 },
+        { down: true, keysym: 0xff51 },
+      ];
+      await expect.poll(rfb.keyEvents).toEqual([...capsLock, ...pressed]);
+      await clickSidebarTab(page, "OpenClaw");
+      await canvas.waitFor({ state: "hidden" });
+      const released = [
+        ...capsLock,
+        ...pressed,
+        ...pressed.map(({ keysym }) => ({ down: false, keysym })),
+      ];
+      await expect.poll(rfb.keyEvents).toEqual(released);
+      await page.keyboard.up("ArrowLeft");
+      await page.keyboard.up("Shift");
+      await clickSidebarTab(page, "Desktop");
+      await canvas.click();
+      await page.keyboard.press("x");
+      await expect
+        .poll(rfb.keyEvents)
+        .toEqual([...released, { down: true, keysym: 120 }, { down: false, keysym: 120 }]);
+      expect(await gateway.getRequests("desktop.observe")).toHaveLength(2);
+      expect(await rfb.events()).toEqual(["authenticated:1", "authenticated:2", "closed:1"]);
+
+      await page.mouse.down();
+      await page
+        .locator(".side-panel__header .tabstrip-tab")
+        .filter({ hasText: "OpenClaw" })
+        .press("Enter");
+      await expect.poll(rfb.events).toContain("closed:2");
+      expect(await canvas.count()).toBe(0);
+      await page.mouse.up();
+      await clickSidebarTab(page, "Desktop");
+      await expect.poll(rfb.events).toContain("authenticated:3");
+    });
+  });
+
+  it.each([false, true])(
+    "keeps a visible Desktop connected when another split pane takes focus (automatic: %s)",
+    async (automatic) => {
+      const context = await suite.newBrowserContext({
+        serviceWorkers: "block",
+        viewport: { width: 2200, height: 1000 },
+      });
+      try {
+        const page = await context.newPage();
+        await page.clock.install();
+        const scenario = retainedDesktopScenario(coldOpenScenario());
+        if (automatic) {
+          scenario.deferredMethods = ["desktop.observe"];
+        } else {
+          await seedRetainedDesktopSlot(page);
+        }
+        const gateway = await installMockGateway(page, scenario);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, RETAINED_DESKTOP_SESSION_KEY));
+        await waitForControlUiGatewayReady(page);
+        const rfb = await installScriptedRfbServer(page);
+        if (automatic) {
+          await gateway.waitForRequest("desktop.observe");
+          await gateway.resolveDeferred("desktop.observe");
+        } else {
+          await clickSidebarTab(page, "Desktop");
+        }
+        const desktop = page.locator("openclaw-desktop-panel").first();
+        await expect.poll(() => rfb.events()).toEqual(["authenticated:1"]);
+        await desktop.locator("canvas").waitFor({ state: "visible" });
+
+        await selectChatLayoutAction(page, "Open split view");
+        const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
+        await expect.poll(() => panes.count()).toBe(2);
+        await panes.last().locator(".agent-chat__composer-combobox textarea").click();
+        await expect
+          .poll(() =>
+            panes.last().evaluate((pane) => (pane as HTMLElement & { active: boolean }).active),
+          )
+          .toBe(true);
+        await expect
+          .poll(() =>
+            panes.first().evaluate((pane) => (pane as HTMLElement & { active: boolean }).active),
+          )
+          .toBe(false);
+        await page.evaluate(
+          () =>
+            new Promise<void>((resolve) => {
+              requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+            }),
+        );
+        expect(await desktop.locator("canvas").isVisible()).toBe(true);
+        expect(await rfb.events()).not.toContain("closed:1");
+
+        const firstCanvas = panes.first().locator("openclaw-desktop-panel canvas");
+        await panes.first().locator(".chat-pane__header").click();
+        await selectChatLayoutAction(panes.first(), "Minimize side panel");
+        await firstCanvas.waitFor({ state: "hidden" });
+        expect(await firstCanvas.count()).toBe(1);
+        expect(await rfb.events()).not.toContain("closed:1");
+        await page.clock.fastForward(30_001);
+        await expect.poll(() => rfb.events()).toContain("closed:1");
+        expect(await firstCanvas.count()).toBe(0);
+      } finally {
+        await suite.closeBrowserContext(context);
+      }
+    },
+  );
+
+  it("tears down unfinished Desktop work on presentation loss", async () => {
+    const context = await suite.newBrowserContext({ serviceWorkers: "block" });
+    try {
+      const page = await context.newPage();
+      await seedRetainedDesktopSlot(page);
+      const gateway = await installMockGateway(page, retainedDesktopScenario(coldOpenScenario()));
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, RETAINED_DESKTOP_SESSION_KEY));
+      await waitForControlUiGatewayReady(page);
+      const inventoryBeforeOpen = (await gateway.getRequests("environments.status")).length;
+      await gateway.deferNext("environments.status");
+      await clickSidebarTab(page, "Desktop");
+
+      const desktop = page.locator("openclaw-desktop-panel");
+      await gateway.waitForRequest("environments.status", { after: inventoryBeforeOpen });
+      await installDesktopClientFake(desktop);
+      await gateway.deferNext("desktop.observe");
+      const observeCount = (await gateway.getRequests("desktop.observe")).length;
+      await gateway.resolveDeferred("environments.status", retainedDesktopEnvironment);
+      await gateway.waitForRequest("desktop.observe", { after: observeCount });
+
+      await clickSidebarTab(page, "Files");
+      await gateway.resolveDeferred("desktop.observe", {
+        transport: "rfb",
+        wsPath: "/desktop/observe?token=stale",
+        expiresAtMs: 60_000,
+        control: false,
+      });
+      await page.evaluate(() => Promise.resolve());
+
+      expect(await desktop.getAttribute("data-connect-count")).toBeNull();
+      expect(await desktop.evaluate((element) => element.isConnected)).toBe(true);
+
+      const inventoryBeforeReactivation = (await gateway.getRequests("environments.status")).length;
+      await clickSidebarTab(page, "Desktop");
+      await expect
+        .poll(async () => (await gateway.getRequests("environments.status")).length)
+        .toBe(inventoryBeforeReactivation + 1);
+
+      await expect.poll(() => desktop.getAttribute("data-connect-count")).toBe("1");
+      await clickSidebarTab(page, "Files");
+
+      expect(await desktop.evaluate((element) => element.isConnected)).toBe(true);
+      expect(await desktop.getAttribute("data-disconnect-count")).toBe("1");
+
+      const inventoryBeforeSecondReactivation = (await gateway.getRequests("environments.status"))
+        .length;
+      const observeBeforeSecondReactivation = (await gateway.getRequests("desktop.observe")).length;
+      await clickSidebarTab(page, "Desktop");
+      await expect
+        .poll(async () => (await gateway.getRequests("environments.status")).length)
+        .toBe(inventoryBeforeSecondReactivation + 1);
+      await expect.poll(() => desktop.getAttribute("data-connect-count")).toBe("2");
+
+      expect(await gateway.getRequests("desktop.observe")).toHaveLength(
+        observeBeforeSecondReactivation + 1,
+      );
+      expect(await desktop.getByText("Desktop sources", { exact: true }).count()).toBe(0);
+      expect(await gateway.getRequests("environments.list")).toHaveLength(0);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("preserves the production header-action shapes for Side chat and Discussion", async () => {
     const context = await suite.newBrowserContext({ serviceWorkers: "block" });
     const page = await context.newPage();
     const choices = await openColdSidebar(page, populatedColdOpenScenario());
 
     await choices.filter({ hasText: "Side chat" }).click();
-    const contentActions = page.locator(".side-panel__action-group--content");
-    const companionMenu = contentActions.locator("wa-dropdown.chat-session-rail__menu");
-    await companionMenu.waitFor();
-    expect(await companionMenu.count()).toBe(1);
-    expect(await contentActions.locator(":scope > button").count()).toBe(0);
+    const contentActions = await openChatLayoutMenu(page);
+    const clearAction = contentActions.getByRole("button", {
+      name: "Clear side chat",
+      exact: true,
+    });
+    await clearAction.waitFor();
+    expect(await clearAction.locator('path[d^="M3 6h18M19 6v14"]').count()).toBe(1);
+    expect(await contentActions.locator("wa-dropdown").count()).toBe(0);
+    const clearTooltip = clearAction.locator("..");
+    await clearAction.hover();
+    await expect
+      .poll(() =>
+        clearTooltip
+          .locator(".tooltip-surface[popover]")
+          .evaluate((tooltip) => tooltip.matches(":popover-open")),
+      )
+      .toBe(true);
+    expect(await clearTooltip.locator(".tooltip-content").textContent()).toContain(
+      "Clear side chat",
+    );
+    await closeChatLayoutMenu(page);
 
     const tab = page.locator(".side-panel__header .tabstrip-tab[active]");
     for (const direction of ["ltr", "rtl"] as const) {
@@ -300,7 +932,6 @@ suite.define(() => {
           throw new Error("Active side-panel tab must render inside the side panel");
         }
         panel.dir = dir;
-        const tabBase = node.shadowRoot?.querySelector<HTMLElement>("[part~='base']");
         const leadingGlyph = node.querySelector<HTMLElement>(".tabstrip-tab__icon svg");
         const label = node.querySelector<HTMLElement>(".tabstrip-tab__label");
         const labelClipper = node.querySelector<HTMLElement>(".tabstrip-tab__tooltip-trigger");
@@ -308,7 +939,6 @@ suite.define(() => {
         const trailingGlyph = close?.querySelector<HTMLElement>("svg");
         if (
           !(close instanceof HTMLElement) ||
-          !tabBase ||
           !leadingGlyph ||
           !label ||
           !labelClipper ||
@@ -316,14 +946,14 @@ suite.define(() => {
         ) {
           throw new Error("Active side-panel tab must render its label and both edge glyphs");
         }
-        const tabBounds = tabBase.getBoundingClientRect();
+        const tabBounds = node.getBoundingClientRect();
         const closeBounds = close.getBoundingClientRect();
         const leadingBounds = leadingGlyph.getBoundingClientRect();
         const labelBounds = label.getBoundingClientRect();
         const labelClipperBounds = labelClipper.getBoundingClientRect();
         const trailingBounds = trailingGlyph.getBoundingClientRect();
         const rtl = dir === "rtl";
-        const tabStyle = getComputedStyle(tabBase);
+        const tabStyle = getComputedStyle(node);
         const closeStyle = getComputedStyle(close);
         return {
           leading: rtl
@@ -369,10 +999,10 @@ suite.define(() => {
       }
     });
 
-    await page.locator(".side-panel-type-menu__trigger").click();
-    await page.locator(".side-panel-type-menu__item").filter({ hasText: "Discussion" }).click();
+    await selectChatLayoutAction(page, "Show discussion");
+    await openChatLayoutMenu(page);
     const discussionAction = contentActions.locator(
-      ':scope > a.rail-header__action[target="_blank"]',
+      ':scope > [role="menu"] a.rail-header__action[target="_blank"]',
     );
     await discussionAction.waitFor();
     expect(await discussionAction.getAttribute("href")).toBe("https://discussion.example/session");
@@ -381,17 +1011,6 @@ suite.define(() => {
   });
 
   it("renders content for every offered slot with backing data", async () => {
-    const probeContext = await suite.newBrowserContext({ serviceWorkers: "block" });
-    try {
-      const offered = await offeredLabels(
-        await probeContext.newPage(),
-        populatedColdOpenScenario(),
-      );
-      expect(offered).toEqual(offeredSlotLabels);
-    } finally {
-      await suite.closeBrowserContext(probeContext);
-    }
-
     for (const label of offeredSlotLabels) {
       expect(
         await readSlotColdOpenOutcome(label, populatedColdOpenScenario(), "content"),
@@ -401,14 +1020,6 @@ suite.define(() => {
   });
 
   it("keeps generic empty states actionable or explicitly allowlisted", async () => {
-    const probeContext = await suite.newBrowserContext({ serviceWorkers: "block" });
-    try {
-      const offered = await offeredLabels(await probeContext.newPage(), coldOpenScenario());
-      expect(offered).toEqual(offeredSlotLabels);
-    } finally {
-      await suite.closeBrowserContext(probeContext);
-    }
-
     const observedActionlessEmptyStates: OfferedSlotLabel[] = [];
     for (const label of offeredSlotLabels) {
       const outcome = await readSlotColdOpenOutcome(label, coldOpenScenario());

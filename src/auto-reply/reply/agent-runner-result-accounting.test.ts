@@ -1,30 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
-import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn-admission.js";
 import type { FollowupExecutionResult } from "./followup-turn-execution.js";
+import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./reply-agent-turn-preparation.js";
 
 const mocks = vi.hoisted(() => ({
   refreshQueuedFollowupSession: vi.fn(),
+  resolveContextTokensForModel: vi.fn<() => number | undefined>(() => 200_000),
 }));
 
 vi.mock("../../agents/context.js", () => ({
-  resolveContextTokensForModel: () => 200_000,
+  resolveContextTokensForModel: () => mocks.resolveContextTokensForModel(),
 }));
 
 vi.mock("../../agents/fast-mode.js", () => ({
   resolveFastModeState: () => ({ enabled: false }),
 }));
 
-vi.mock("../../agents/live-model-switch.js", () => ({
-  consolidateLiveModelSwitchAfterRun: vi.fn(async () => {}),
-}));
-
 vi.mock("../../agents/model-selection.js", () => ({
   isCliProvider: () => false,
-}));
-
-vi.mock("../../config/sessions/session-accessor.js", () => ({
-  updateSessionEntry: vi.fn(async () => {}),
 }));
 
 vi.mock("../../globals.js", () => ({
@@ -46,7 +39,8 @@ vi.mock("../fallback-state.js", () => ({
   }),
 }));
 
-vi.mock("./agent-runner-core.js", () => ({
+vi.mock("./agent-runner-core.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agent-runner-core.js")>()),
   resolveFallbackOriginModel: () => ({
     provider: "anthropic",
     model: "claude",
@@ -62,9 +56,8 @@ vi.mock("./reply-usage-state.js", () => ({
   recordReplyUsageState: vi.fn(),
 }));
 
-vi.mock("./session-run-accounting.js", () => ({
-  incrementRunCompactionCount: vi.fn(async () => undefined),
-  persistRunSessionUsage: vi.fn(async () => undefined),
+vi.mock("./session-updates.js", () => ({
+  incrementCompactionCount: vi.fn(async () => undefined),
 }));
 
 import { accountFollowupTurn } from "./agent-runner-result-accounting.js";
@@ -112,10 +105,6 @@ function createParams(
           sessionStore.main = next;
         }
       },
-      adopt: (next: SessionEntry) => {
-        entry = next;
-        sessionStore.main = next;
-      },
     },
     sessionStore,
     sendPolicy: "allow",
@@ -148,7 +137,6 @@ function createParams(
           ],
         },
         autoCompactionCount: 0,
-        didLogHeartbeatStrip: false,
       },
     },
     runStartedAt: 1,
@@ -156,7 +144,6 @@ function createParams(
     pendingToolTasks: new Set(),
     progress: {
       drain: vi.fn(async () => {}),
-      visibleToolErrorObserved: () => false,
     },
   } as FollowupExecutionResult;
   return { turn, defaults, execution };
@@ -165,6 +152,7 @@ function createParams(
 describe("accountFollowupTurn", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.resolveContextTokensForModel.mockReturnValue(200_000);
   });
 
   it.each([

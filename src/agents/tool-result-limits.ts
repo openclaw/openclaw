@@ -1,4 +1,7 @@
 /** Automatic live tool-result caps derived from the effective model context. */
+import { AsyncLocalStorage } from "node:async_hooks";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { estimateToolResultTextChars } from "./embedded-agent-runner/tool-result-text-budget.js";
 
 const MAX_TOOL_RESULT_CONTEXT_SHARE = 0.3;
 
@@ -36,4 +39,61 @@ export function resolveLiveToolResultMaxChars(params: { contextWindowTokens: num
     params.contextWindowTokens,
     resolveAutoLiveToolResultMaxChars(params.contextWindowTokens),
   );
+}
+
+/** Fresh producer text must fit persistence/dispatch and the raw-weight context guard. */
+export type ToolResultBudget = { maxChars: number; maxContextChars: number };
+
+export function resolveToolResultContextMaxChars(contextWindowTokens: number): number {
+  return Math.max(1_024, Math.floor(Math.max(1, Math.floor(contextWindowTokens)) * 2 * 0.5));
+}
+
+export function resolveToolResultBudget(
+  contextWindowTokens?: number,
+): ToolResultBudget | undefined {
+  if (
+    contextWindowTokens === undefined ||
+    !Number.isFinite(contextWindowTokens) ||
+    contextWindowTokens <= 0
+  ) {
+    return undefined;
+  }
+  return {
+    maxChars: resolveLiveToolResultMaxChars({ contextWindowTokens }),
+    maxContextChars: resolveToolResultContextMaxChars(contextWindowTokens),
+  };
+}
+
+export function toolResultFitsBudget(text: string, budget?: ToolResultBudget): boolean {
+  if (budget === undefined) {
+    return true;
+  }
+  const chars = estimateToolResultTextChars(text);
+  return (
+    chars <= budget.maxChars &&
+    // Doubling every cost bounds the raw-weight floor without rescanning each code point.
+    (chars * 2 <= budget.maxContextChars ||
+      estimateToolResultTextChars(text, { minimumRawWeight: 2 }) <= budget.maxContextChars)
+  );
+}
+
+// The catalog's value APIs retain the complete result before transcript projection.
+const fullToolResultDelivery = resolveGlobalSingleton(
+  Symbol.for("openclaw.fullToolResultDelivery"),
+  () => new AsyncLocalStorage<boolean>(),
+);
+
+export function runWithToolResultDelivery<T>(
+  fullValue: boolean,
+  action: () => Promise<T>,
+): Promise<T> {
+  return fullToolResultDelivery.run(fullValue, action);
+}
+
+export function assertCompleteToolResult(text: string, budget?: ToolResultBudget): void {
+  if (!fullToolResultDelivery.getStore() && (!budget || !toolResultFitsBudget(text, budget))) {
+    throw new Error(
+      "The complete tool result cannot fit this caller's direct output budget. Invoke the tool through Code Mode to consume its full value, or split the review into smaller changes.",
+    );
+  }
 }

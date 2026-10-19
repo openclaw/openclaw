@@ -7,12 +7,16 @@ import {
 } from "../cron/scheduled-tool-policy.js";
 
 /** Trusted runtime context for a scheduled run with a server-stamped tool cap. */
-export type ScheduledToolPolicyContext =
+export type ScheduledToolPolicyContext = (
   | Extract<CronScheduledToolPolicy, { mode: "trusted" }>
   | (Extract<CronScheduledToolPolicy, { mode: "account" }> & {
       /** Missing legacy runtime contexts are treated as unknown and fail closed. */
       ownerOrigin?: CronScheduledToolCallerOrigin;
-    });
+    })
+) & {
+  /** Restrict-only policy for the rebuilt exec tool; absence keeps baseline exec. */
+  execTarget?: { host: "gateway"; ask?: "always" };
+};
 
 /** Separates a scheduled creator's authorization identity from its delivery route. */
 export function resolveScheduledToolCallerContext(params: {
@@ -42,28 +46,53 @@ export function resolveScheduledToolPolicyContext(params: {
   toolsAllow?: readonly string[];
   scheduledToolPolicy?: unknown;
   callerOrigin?: unknown;
+  execTarget?: unknown;
 }): ScheduledToolPolicyContext | undefined {
   if (params.toolsAllow === undefined) {
     return undefined;
   }
   const rawPolicy = params.scheduledToolPolicy;
+  const policyRecord = isRecord(rawPolicy) ? rawPolicy : undefined;
+  // Already-resolved contexts carry context-only fields (ownerOrigin,
+  // execTarget) that the strict persisted-policy normalizer rejects; rebuild
+  // the closed policy shape for both modes before normalizing.
   const policy = normalizeCronScheduledToolPolicy(
-    isRecord(rawPolicy) && rawPolicy.mode === "account"
+    policyRecord?.mode === "account"
       ? {
-          version: rawPolicy.version,
-          mode: rawPolicy.mode,
-          ownerSessionKey: rawPolicy.ownerSessionKey,
-          ownerAccountId: rawPolicy.ownerAccountId,
+          version: policyRecord.version,
+          mode: policyRecord.mode,
+          ownerSessionKey: policyRecord.ownerSessionKey,
+          ownerAccountId: policyRecord.ownerAccountId,
         }
-      : rawPolicy,
+      : policyRecord?.mode === "trusted"
+        ? { version: policyRecord.version, mode: policyRecord.mode }
+        : rawPolicy,
   );
-  if (!policy || policy.mode === "trusted") {
-    return policy;
+  if (!policy) {
+    return undefined;
+  }
+  // Accept the persisted `{version: 1, host}` shape and an already-resolved
+  // context's bare `{host}` shape; anything else keeps the baseline (no pin).
+  const rawExecTarget = params.execTarget ?? policyRecord?.execTarget;
+  const pinned =
+    isRecord(rawExecTarget) &&
+    rawExecTarget.host === "gateway" &&
+    (rawExecTarget.version === undefined || rawExecTarget.version === 1)
+      ? {
+          execTarget: {
+            host: "gateway" as const,
+            ...(rawExecTarget.ask === "always" ? { ask: "always" as const } : {}),
+          },
+        }
+      : {};
+  if (policy.mode === "trusted") {
+    return { ...policy, ...pinned };
   }
   return {
     ...policy,
     ownerOrigin: normalizeCronScheduledToolCallerOrigin(
-      params.callerOrigin ?? (isRecord(rawPolicy) ? rawPolicy.ownerOrigin : undefined),
+      params.callerOrigin ?? policyRecord?.ownerOrigin,
     ),
+    ...pinned,
   };
 }

@@ -23,7 +23,85 @@ title: "Usage tracking"
 - Control UI: the chat composer's context ring popover shows **plan usage** for subscription providers — per-window bars (5-hour, weekly, model-scoped) with reset times, the provider plan when known (for example `Max (20x)`), and extra-usage credits. Sessions billed through a plan hide per-token dollar estimates; API-billed sessions keep `Est. cost` and the cost-by-type breakdown. Claude Code CLI (`claude-cli`) setups reuse the same Anthropic subscription usage.
 - macOS menu bar: a root "Usage" section appears below Context when provider usage snapshots are available. See [Menu bar](/platforms/mac/menu-bar).
 
-`openclaw channels list` no longer prints provider usage; it points users to `openclaw status` or `openclaw models list` instead.
+Since v2026.5.7, `openclaw channels list` no longer prints provider usage; it points users to `openclaw status` or `openclaw models list` instead.
+
+`/usage cost` warns that the **Today** and **Last 30d** totals may be incomplete
+if their aggregate cache is refreshing, partial, or stale, and suggests running
+the command again later. The **Session** total is loaded separately. The CLI
+`openclaw gateway usage-cost` also reports the recorded cache state before its
+totals.
+
+The Control UI checks incomplete provider usage again after 5, 10, and 20 seconds.
+Session usage refreshes as its background projection publishes progress. Until a
+cold cache has any usage data, the page shows a loading placeholder instead of
+zero totals. Available partial totals stay visible; if a refresh fails, select
+**Refresh** to try again.
+
+Session reports have a 15-second data-read budget. If it expires, completed
+batches remain visible as a partial report, with a hint to narrow the date
+range or select a session. Partial totals are not complete billing totals.
+Disconnecting still cancels the request without publishing a response.
+
+Session reports preserve agent attribution when agents share a session store. A
+background usage refresh does not invalidate a selected report when its session
+store is unchanged.
+Retained SQLite transcripts with legacy colon-containing IDs remain included in
+usage totals and do not interrupt background refresh.
+
+Usage opens with the last 30 calendar days selected. **Today**, **7d**, **30d**,
+**90d**, **1y**, **All**, or the date inputs change the reporting range. Historical
+lineage includes retained earlier instances of a session; the date range still
+controls which activity appears in the chart. Totals and daily charts come from
+the same session report, including sessions beyond the visible list limit.
+
+A recorded zero-dollar cost is valid cost data. The average-cost hint warns
+about missing prices only when the selected report contains unpriced usage;
+filtering to sessions with known zero cost clears that warning.
+
+**Started by** groups usage by the recorded session creator. Select an identity
+to filter the full report, including its history and totals. Human profiles,
+agents, and system-created sessions remain distinct; historical sessions without
+a recorded creator appear as **Unattributed**. This attributes the whole session
+to its creator, not individual turns to participants or charges to provider API
+accounts. Current account settings are not used to guess historical attribution.
+
+Selecting chart days narrows creator totals and session counts across the full
+report. A session active on several selected days counts once. Text, creator,
+and hour filters also cover every matching session, including sessions beyond
+the visible page. The table loads 50 rows at a time; sorting and paging do not
+change chart totals. Selecting sessions narrows the charts while retaining the
+comparison table. JSON export loads the full matching report.
+
+The overview uses a rebuildable usage projection maintained after committed
+transcript changes. A refresh that overlaps agent database creation joins that
+database's preparation before writing its projection. An empty store stays absent
+until a transcript needs a rollup. Background refresh waits for 30 seconds without new usage
+or an active agent turn. After five minutes of pending work, it can start in the
+next idle gap without another quiet period. Explicit cost and overview reads
+flush and await pending updates, so a completed turn does not need to wait for
+that timer. This display batching does not delay Goal budgets or provider billing
+limits. A restart or pricing change can require background backfill;
+the page shows partial totals while it advances. Sessions without a cached
+projection remain pending without waiting for transcript statistics. Background
+backfill yields between completed transcripts after ten seconds of scanning or
+50 transcripts, whichever comes first. One large transcript or the initial
+inventory can take longer. Transcripts
+remain the source of truth. Detailed reports retain exact timestamp boundaries and the recorded
+order of floating-point cost additions.
+
+## Usage date ranges
+
+The Gateway methods `usage.cost` and `sessions.usage` interpret date ranges in
+UTC by default. In `mode: "specific"`, use a valid IANA `timeZone`, such as
+`Europe/Vienna`, to follow local calendar days and daylight saving changes.
+It takes precedence over the legacy `utcOffset` field.
+
+Without a `timeZone`, a fixed `utcOffset` must be between `UTC-12:00` and
+`UTC+14:00`, inclusive (for example, `UTC+5:30`). An invalid, nonblank offset
+returns `INVALID_REQUEST` instead of silently using UTC. Omitting both fields
+uses UTC. `usage.cost` also treats a blank offset as omitted; `sessions.usage`
+requires any supplied offset to match the UTC offset format, so omit the field
+instead of sending a blank value.
 
 ## Anthropic and OpenAI cost history
 
@@ -33,6 +111,12 @@ Subscription quota and API billing are different provider surfaces:
 - OpenAI ChatGPT/Codex OAuth continues to show plan, quota windows, and credit balance. Set `OPENAI_ADMIN_KEY` to show organization cost and completions-usage history instead; optionally set `OPENAI_PROJECT_ID` to scope it to one project. OpenClaw never sends inference credentials from `OPENAI_API_KEY`, provider config, or auth profiles to organization APIs because those keys may belong to custom endpoints.
 
 Admin credentials take precedence because they provide actual organization billing. OpenClaw does not combine these provider-reported totals with its local session estimates; the two sections intentionally answer different questions.
+
+OpenAI Admin token totals include text, audio, and images. The input breakdown
+separates uncached input, cache reads, and cache writes; both 30-minute and
+12-hour cache writes appear in the cache-write category. Audio and other
+modality breakdowns are already included in the totals and are not added again.
+See the [OpenAI Completions Usage API](https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/usage/methods/completions).
 
 ## Default usage footer mode
 
@@ -97,13 +181,18 @@ With no config the prior behavior holds (footer off until `/usage`). Use
 
 ## Custom `/usage full` footer
 
-`/usage tokens` always renders a plain `Usage: X in / Y out` line (plus cache and
-estimated-cost suffixes when available). Only `/usage full` renders the richer
-footer described below.
+`/usage tokens` renders a plain `Usage: X in / Y out` line with cache counters
+when available. Missing input or output counts stay `?`; OpenClaw does not infer
+the split from a total. When neither direction is reported, a known total appears
+as `Usage: 1.3k total`. Cache counters remain visible even when input, output, and
+total counts are unavailable. This mode never estimates cost. Only `/usage full`
+renders the richer footer described below.
 
 `/usage full` shows a built-in compact footer with model, reasoning, fast/slow,
 context window, and cost when those fields are available. No template file is
 required for the built-in footer.
+Context windows of one million tokens or more use `m` units, such as `1.0m` or
+`2.0m`; smaller windows keep `k` units, such as `200k`.
 
 `messages.usageTemplate` is only for advanced custom layouts. The value is a
 JSON file path (supports `~`) or an inline object, and it replaces the built-in
@@ -348,6 +437,9 @@ provider-neutral for CLI, app, and Control UI consumers.
   (`XIAOMI_API_KEY`); the Token Plan uses a separate key (`XIAOMI_TOKEN_PLAN_API_KEY`).
   Neither currently reports quota windows.
 - **z.ai**: API key via env/config/auth store (`ZAI_API_KEY` or `Z_AI_API_KEY`).
+  Shows provider-reported token periods, including weekly windows, and monthly
+  tool quotas. Reset countdowns accept epoch milliseconds or date strings;
+  missing or invalid resets leave the quota visible without a countdown.
 
 ## Related
 

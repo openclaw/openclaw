@@ -1,6 +1,5 @@
-// Diffs Language Pack plugin module implements plugin behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { OpenClawPluginApi } from "../api.js";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { VIEWER_ASSET_PREFIX, VIEWER_RUNTIME_PATH, getServedViewerAsset } from "./viewer-assets.js";
 
 const IMMUTABLE_ASSET_CACHE_CONTROL = "public, max-age=31536000, immutable";
@@ -16,7 +15,7 @@ export function registerDiffsLanguagePackPlugin(api: OpenClawPluginApi): void {
 
 function createDiffsLanguagePackHttpHandler() {
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
-    const parsed = parseRequestUrl(req.url);
+    const parsed = req.url ? URL.parse(req.url, "http://127.0.0.1") : null;
     if (!parsed?.pathname.startsWith(VIEWER_ASSET_PREFIX)) {
       return false;
     }
@@ -37,6 +36,7 @@ function createDiffsLanguagePackHttpHandler() {
       asset.contentType,
       parsed.pathname === VIEWER_RUNTIME_PATH ? IMMUTABLE_ASSET_CACHE_CONTROL : undefined,
     );
+    res.setHeader("content-length", String(Buffer.byteLength(asset.body)));
     if (req.method === "HEAD") {
       res.end();
     } else {
@@ -46,20 +46,12 @@ function createDiffsLanguagePackHttpHandler() {
   };
 }
 
-function parseRequestUrl(rawUrl?: string): URL | null {
-  if (!rawUrl) {
-    return null;
-  }
-  try {
-    return new URL(rawUrl, "http://127.0.0.1");
-  } catch {
-    return null;
-  }
-}
-
 function respondText(res: ServerResponse, statusCode: number, body: string): void {
   res.statusCode = statusCode;
   setSharedHeaders(res, "text/plain; charset=utf-8");
+  // Node suppresses the HEAD body but never synthesizes Content-Length; set it
+  // explicitly so error responses keep GET/HEAD header parity (RFC 9110 §8.6).
+  res.setHeader("content-length", String(Buffer.byteLength(body)));
   res.end(body);
 }
 

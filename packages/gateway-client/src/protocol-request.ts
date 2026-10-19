@@ -1,11 +1,22 @@
 import type { ErrorShape } from "@openclaw/gateway-protocol";
 
+const gatewayResponseErrors = new WeakSet<Error>();
+
+/** Distinguishes correlated Gateway responses from locally constructed transport errors. */
+export function isGatewayProtocolResponseError(
+  error: unknown,
+): error is GatewayProtocolRequestError {
+  return error instanceof Error && gatewayResponseErrors.has(error);
+}
+
 export type GatewayProtocolRequestOptions = {
   timeoutMs?: number | null;
   expectFinal?: boolean;
-  onSent?: () => void;
+  onSent?: (requestId: string) => void;
   onAccepted?: (payload: unknown) => void;
   signal?: AbortSignal;
+  /** Abort unsent/retry work while retaining a sent write's result and original deadline. */
+  retainSentResultOnAbort?: boolean;
 };
 
 export class GatewayProtocolRequestError extends Error {
@@ -14,6 +25,7 @@ export class GatewayProtocolRequestError extends Error {
   readonly details?: unknown;
   readonly retryable: boolean;
   readonly retryAfterMs?: number;
+  declare readonly responsePayload?: unknown;
 
   constructor(error: Partial<ErrorShape>) {
     super(error.message ?? "request failed");
@@ -24,6 +36,19 @@ export class GatewayProtocolRequestError extends Error {
     this.retryable = error.retryable === true;
     this.retryAfterMs = error.retryAfterMs;
   }
+}
+
+/** Preserve response metadata after custom factories without adding it to error JSON. */
+export function retainGatewayResponsePayload(
+  error: GatewayProtocolRequestError,
+  payload: unknown,
+): void {
+  gatewayResponseErrors.add(error);
+  Object.defineProperty(error, "responsePayload", {
+    value: payload,
+    enumerable: false,
+    configurable: true,
+  });
 }
 
 /** A local transport deadline, distinct from a Gateway's authoritative rejection. */

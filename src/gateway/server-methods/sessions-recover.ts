@@ -2,35 +2,73 @@ import {
   validateSessionsRecoverParams,
   type SessionsRecoverResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { recoverGatewaySession } from "../session-recovery-service.js";
+import { resolveSessionWorkerPlacementContext } from "../session-worker-placement-context.js";
 import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
-import { emitSessionArchived, emitSessionsChanged } from "./session-change-event.js";
-import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
+import { emitSessionsChanged } from "./session-change-event.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import { launchSessionRecoveryContinuation } from "./session-recovery-continuation.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 export const sessionRecoverHandlers: GatewayRequestHandlers = {
-  "sessions.recover": async ({ req, params, respond, client, context }) => {
+  "sessions.recover": async (options) => {
+    const {
+      req,
+      params,
+      respond,
+      client,
+      context,
+      hasCurrentClientAuthority,
+      sessionMutationAuthorization,
+    } = options;
     if (!assertValidParams(params, validateSessionsRecoverParams, "sessions.recover", respond)) {
       return;
     }
     const authority = createAgentRuntimeAuthorityGuard(client, context, respond);
+    const commitGuard =
+      authority.commitGuard || sessionMutationAuthorization
+        ? () => {
+            authority.commitGuard?.();
+            sessionMutationAuthorization?.assertCurrent();
+          }
+        : undefined;
     const creation = resolveOperatorSessionCreation(client);
     const recovered = await recoverGatewaySession({
       cfg: context.getRuntimeConfig(),
       key: params.key,
+      mode: params.mode,
+      sessionId: params.sessionId,
+      recoveryCycleId: params.recoveryCycleId,
       ...(params.agentId ? { agentId: params.agentId } : {}),
       ...(creation.actor ? { actor: creation.actor } : {}),
+      ...(client?.authenticatedUserProfile
+        ? { requestingOperatorProfileId: client.authenticatedUserProfile.profileId }
+        : {}),
+      ...(client?.internal?.operatorRoleActor
+        ? { operatorRoleActor: client.internal.operatorRoleActor }
+        : {}),
       authorizedPluginId: client?.internal?.pluginRuntimeOwnerId,
-      ...(authority.commitGuard ? { commitGuard: authority.commitGuard } : {}),
+      ...(commitGuard ? { commitGuard } : {}),
+      workerPlacementContext: resolveSessionWorkerPlacementContext(context),
       launchContinuation: async (continuation) =>
         await launchSessionRecoveryContinuation({
           ...continuation,
           client,
-          ...(authority.commitGuard ? { commitGuard: authority.commitGuard } : {}),
+          ...(commitGuard ? { commitGuard } : {}),
+          assertAdmittedSourceCurrent: () => {
+            authority.commitGuard?.();
+            // The input commit replaces recovery state; its old row guard ends at admission.
+            (
+              sessionMutationAuthorization?.assertAdmittedSourceCurrent ??
+              sessionMutationAuthorization?.assertCurrent
+            )?.();
+          },
           context,
+          ...(hasCurrentClientAuthority ? { hasCurrentClientAuthority } : {}),
           req,
+          sessionScope: readGatewayRequestMutationAuthority(options).sessionScope,
         }),
     }).catch((error: unknown) => authority.handleClosedError(error));
     if (!recovered) {
@@ -41,11 +79,15 @@ export const sessionRecoverHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    emitSessionArchived(
-      context,
-      recovered.sourceKey,
-      recovered.sourceKey === "global" ? recovered.agentId : undefined,
-    );
+    if (recovered.sourceKey && recovered.sourceKey !== recovered.successorKey) {
+      emitSessionsChanged(context, {
+        sessionKey: recovered.sourceKey,
+        ...(recovered.sourceKey === "global" && recovered.agentId
+          ? { agentId: recovered.agentId }
+          : {}),
+        reason: "archive",
+      });
+    }
     emitSessionsChanged(context, {
       sessionKey: recovered.successorKey,
       reason: recovered.created ? "create" : "recovery",

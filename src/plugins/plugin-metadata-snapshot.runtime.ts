@@ -5,36 +5,15 @@
  *
  * The snapshot module registers its reader here at eval time, so any process
  * that published or scoped a snapshot serves reads through the registered
- * instance. The require fallback only covers cold processes that never loaded
- * the metadata system (built code loads .js; source/jiti paths resolve .ts).
+ * instance. Only snapshot resolution cold-loads the metadata system (built code
+ * loads .js; source/jiti paths resolve .ts); current reads never start discovery.
  */
 import { createRequire } from "node:module";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-
-type CurrentSnapshotModule = Pick<
-  typeof import("./current-plugin-metadata-snapshot.js"),
-  "getCurrentPluginMetadataSnapshot"
->;
-type SnapshotLoaderModule = Pick<
-  typeof import("./plugin-metadata-snapshot.js"),
-  "resolvePluginMetadataSnapshot"
->;
-
-type SnapshotReaderSlot = {
-  getCurrentPluginMetadataSnapshot?: CurrentSnapshotModule["getCurrentPluginMetadataSnapshot"];
-  resolvePluginMetadataSnapshot?: SnapshotLoaderModule["resolvePluginMetadataSnapshot"];
-};
-
-// globalThis-keyed so a require-loaded second module instance shares the slot.
-const snapshotReaderSlot = resolveGlobalSingleton<SnapshotReaderSlot>(
-  Symbol.for("openclaw.pluginMetadataSnapshotReaders"),
-  () => ({}),
-);
-
-/** Called by the snapshot modules at eval time; last registration wins. */
-export function registerPluginMetadataSnapshotReaders(readers: SnapshotReaderSlot): void {
-  Object.assign(snapshotReaderSlot, readers);
-}
+import {
+  snapshotReaderSlot,
+  type CurrentSnapshotModule,
+  type SnapshotLoaderModule,
+} from "./plugin-metadata-snapshot-readers.js";
 
 const require = createRequire(import.meta.url);
 
@@ -61,23 +40,24 @@ function createModuleLoader(candidates: readonly string[]): () => unknown {
   };
 }
 
-const loadCurrentSnapshotModule = createModuleLoader([
-  "./current-plugin-metadata-snapshot.js",
-  "./current-plugin-metadata-snapshot.ts",
-]) as () => CurrentSnapshotModule | null;
 const loadSnapshotLoaderModule = createModuleLoader([
   "./plugin-metadata-snapshot.js",
   "./plugin-metadata-snapshot.ts",
 ]) as () => SnapshotLoaderModule | null;
 
-/** Reads the current plugin metadata snapshot, loading the snapshot graph lazily. */
+/** Reads the already-published snapshot without waking a cold metadata graph. */
 export function getCurrentPluginMetadataSnapshotRuntime(
   params: Parameters<CurrentSnapshotModule["getCurrentPluginMetadataSnapshot"]>[0],
 ): ReturnType<CurrentSnapshotModule["getCurrentPluginMetadataSnapshot"]> {
-  const reader =
-    snapshotReaderSlot.getCurrentPluginMetadataSnapshot ??
-    loadCurrentSnapshotModule()?.getCurrentPluginMetadataSnapshot;
-  return reader?.(params) ?? undefined;
+  return snapshotReaderSlot.getCurrentPluginMetadataSnapshot?.(params);
+}
+
+/** Publishes through the loaded lifecycle owner without waking a cold metadata system. */
+export function adoptCurrentPluginMetadataSnapshotIfAbsentRuntime(
+  snapshot: Parameters<CurrentSnapshotModule["adoptCurrentPluginMetadataSnapshotIfAbsent"]>[0],
+  options: Parameters<CurrentSnapshotModule["adoptCurrentPluginMetadataSnapshotIfAbsent"]>[1],
+): void {
+  snapshotReaderSlot.adoptCurrentPluginMetadataSnapshotIfAbsent?.(snapshot, options);
 }
 
 /**

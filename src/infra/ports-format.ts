@@ -1,29 +1,34 @@
-// Formats port probe results for diagnostics and CLI output.
 import net from "node:net";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
+import { splitArgsPreservingQuotes } from "../daemon/arg-split.js";
+import { parseWindowsNativeCommandLine } from "../process/windows-command-line.js";
+import { classifyOpenClawArgv } from "./gateway-process-argv.js";
 import { parseTcpListenerEndpoint } from "./ports-netstat.js";
 import type { PortListener, PortListenerKind, PortUsage } from "./ports-types.js";
 
-/** Classifies a listener as OpenClaw Gateway, SSH tunnel, known non-gateway, or unknown. */
-export function classifyPortListener(listener: PortListener, _port: number): PortListenerKind {
-  const raw = normalizeLowercaseStringOrEmpty(
-    `${listener.commandLine ?? ""} ${listener.command ?? ""}`,
-  );
-  if (raw.includes("openclaw")) {
-    return "gateway";
-  }
+export function classifyPortListener(listener: PortListener): PortListenerKind {
   const command = normalizeLowercaseStringOrEmpty(listener.command ?? "");
   const commandLine = normalizeLowercaseStringOrEmpty(listener.commandLine ?? "");
+  // The inspected command identifies the listener owner. Check it before argv,
+  // where a socat forward may name OpenClaw. Observed macOS output also uses `socat1`.
+  if (command === "socat" || command === "socat1" || command === "socat.exe") {
+    return "non_gateway";
+  }
+  const argv = listener.commandLine
+    ? process.platform === "win32"
+      ? (parseWindowsNativeCommandLine(listener.commandLine) ?? [])
+      : splitArgsPreservingQuotes(listener.commandLine, { escapeMode: "backslash-quote-only" })
+    : [listener.command ?? ""];
+  if (classifyOpenClawArgv(argv, { command: "gateway", pid: listener.pid }).kind === "openclaw") {
+    return "gateway";
+  }
   const hasSshCommand = /(?:^|[/\\])ssh(?:\.exe)?$/.test(command);
   const hasSshExecutable =
     hasSshCommand ||
     /(?:^|[\s"'])(?:(?:"[^"]*[/\\])|(?:'[^']*[/\\])|(?:\S*[/\\]))?ssh(?:\.exe)?(?:[\s"']|$)/.test(
       commandLine,
     );
-  if (hasSshCommand) {
-    return "ssh";
-  }
   if (hasSshExecutable) {
     // The probe row already proves this process owns the queried port. Exact
     // ssh executables may get their forwards from ssh_config or host aliases.
@@ -42,18 +47,14 @@ export function classifyPortListener(listener: PortListener, _port: number): Por
   return "unknown";
 }
 
-// Dual-stack listener output can include IPv4-mapped IPv6 addresses; keep them
-// in the IPv6 family so the benign loopback-pair detection stays conservative.
+// The parser folds one mapped prefix but does not validate host syntax.
+// Preserve the classification of any mapped-loopback spelling that remains.
 function classifyLoopbackAddressFamily(host: string): "ipv4" | "ipv6" | null {
   if (host === "127.0.0.1" || host === "localhost") {
     return "ipv4";
   }
-  if (host === "::1") {
+  if (host === "::1" || host === "::ffff:127.0.0.1") {
     return "ipv6";
-  }
-  if (host.startsWith("::ffff:")) {
-    const mapped = host.slice("::ffff:".length);
-    return mapped === "127.0.0.1" ? "ipv6" : null;
   }
   return null;
 }
@@ -91,22 +92,12 @@ function parseGatewayListeners(
   listeners: PortListener[],
   port: number,
 ): ParsedGatewayListener[] | null {
-  if (listeners.some((listener) => classifyPortListener(listener, port) !== "gateway")) {
+  if (listeners.some((listener) => classifyPortListener(listener) !== "gateway")) {
     return null;
   }
   return parsePortListeners(listeners, port);
 }
 
-/** Returns true for one Gateway listener bound to an expected loopback or wildcard address. */
-function isSingleExpectedGatewayListener(listeners: PortListener[], port: number): boolean {
-  if (listeners.length !== 1) {
-    return false;
-  }
-  const parsed = parseGatewayListeners(listeners, port);
-  return Boolean(parsed?.[0] && isExpectedGatewayBindAddress(parsed[0].host));
-}
-
-/** Returns true for one Gateway process represented by separate IPv4 and IPv6 loopback rows. */
 export function isDualStackLoopbackGatewayListeners(
   listeners: PortListener[],
   port: number,
@@ -115,38 +106,25 @@ export function isDualStackLoopbackGatewayListeners(
     return false;
   }
   const parsed = parseGatewayListeners(listeners, port);
-  if (!parsed) {
-    return false;
-  }
+  return parsed !== null && parsedListenersAreDualStackLoopback(parsed);
+}
+
+function parsedListenersAreDualStackLoopback(parsed: ParsedGatewayListener[]): boolean {
   const pids = new Set(parsed.map(({ pid }) => pid));
   const families = new Set(parsed.map(({ host }) => classifyLoopbackAddressFamily(host)));
   return pids.size === 1 && !families.has(null) && families.has("ipv4") && families.has("ipv6");
 }
 
 function parsedListenersOwnSpecificIpv4WithLoopback(parsed: ParsedGatewayListener[]): boolean {
-  if (new Set(parsed.map(({ pid }) => pid)).size !== 1) {
-    return false;
-  }
-  const hosts = new Set(parsed.map(({ host }) => host));
-  const specificHosts = [...hosts].filter(
-    (host) => host !== "127.0.0.1" && net.isIP(host) === 4 && !isWildcardAddress(host),
+  return (
+    parsed.every(({ pid }) => pid === parsed[0]?.pid) &&
+    parsed.some(({ host }) => host === "127.0.0.1") &&
+    parsed.some(
+      ({ host }) => host !== "127.0.0.1" && net.isIP(host) === 4 && !isWildcardAddress(host),
+    )
   );
-  return hosts.has("127.0.0.1") && specificHosts.length > 0;
 }
 
-/** Checks one Gateway PID owns both an exact IPv4 interface and canonical loopback. */
-function isSpecificIpv4WithLoopbackGatewayListeners(
-  listeners: PortListener[],
-  port: number,
-): boolean {
-  if (listeners.length !== 2) {
-    return false;
-  }
-  const parsed = parseGatewayListeners(listeners, port);
-  return Boolean(parsed && parsedListenersOwnSpecificIpv4WithLoopback(parsed));
-}
-
-/** Checks one PID owns an expected IPv4 interface and canonical loopback. */
 export function isSameProcessSpecificIpv4WithLoopbackListeners(
   listeners: PortListener[],
   port: number,
@@ -163,21 +141,25 @@ export function isSameProcessSpecificIpv4WithLoopbackListeners(
   );
 }
 
-/** Returns true when listener rows describe a benign Gateway bind pattern. */
 export function isExpectedGatewayListeners(listeners: PortListener[], port: number): boolean {
+  const parsed = parseGatewayListeners(listeners, port);
+  if (!parsed) {
+    return false;
+  }
+  if (parsed.length === 1) {
+    return Boolean(parsed[0] && isExpectedGatewayBindAddress(parsed[0].host));
+  }
   return (
-    isSingleExpectedGatewayListener(listeners, port) ||
-    isDualStackLoopbackGatewayListeners(listeners, port) ||
-    isSpecificIpv4WithLoopbackGatewayListeners(listeners, port)
+    parsedListenersAreDualStackLoopback(parsed) ||
+    (parsed.length === 2 && parsedListenersOwnSpecificIpv4WithLoopback(parsed))
   );
 }
 
-/** Builds user-facing remediation hints for processes occupying a port. */
 export function buildPortHints(listeners: PortListener[], port: number): string[] {
   if (listeners.length === 0) {
     return [];
   }
-  const kinds = new Set(listeners.map((listener) => classifyPortListener(listener, port)));
+  const kinds = new Set(listeners.map((listener) => classifyPortListener(listener)));
   const hints: string[] = [];
   const expectedGatewayListeners = isExpectedGatewayListeners(listeners, port);
   if (kinds.has("gateway") && !expectedGatewayListeners) {
@@ -201,16 +183,6 @@ export function buildPortHints(listeners: PortListener[], port: number): string[
   return hints;
 }
 
-/** Formats one listener row for CLI diagnostics. */
-function formatPortListener(listener: PortListener): string {
-  const pid = listener.pid ? `pid ${listener.pid}` : "pid ?";
-  const user = listener.user ? ` ${listener.user}` : "";
-  const command = listener.commandLine || listener.command || "unknown";
-  const address = listener.address ? ` (${listener.address})` : "";
-  return `${pid}${user}: ${command}${address}`;
-}
-
-/** Formats port diagnostics into CLI output lines. */
 export function formatPortDiagnostics(diagnostics: PortUsage): string[] {
   if (diagnostics.status === "free") {
     return [`Port ${diagnostics.port} is free.`];
@@ -218,12 +190,15 @@ export function formatPortDiagnostics(diagnostics: PortUsage): string[] {
   if (diagnostics.status === "unknown") {
     return [`Port ${diagnostics.port} availability could not be determined.`];
   }
-  const lines = [`Port ${diagnostics.port} is already in use.`];
-  for (const listener of diagnostics.listeners) {
-    lines.push(`- ${formatPortListener(listener)}`);
-  }
-  for (const hint of diagnostics.hints) {
-    lines.push(`- ${hint}`);
-  }
-  return lines;
+  return [
+    `Port ${diagnostics.port} is already in use.`,
+    ...diagnostics.listeners.map((listener) => {
+      const pid = listener.pid ? `pid ${listener.pid}` : "pid ?";
+      const user = listener.user ? ` ${listener.user}` : "";
+      const command = listener.commandLine || listener.command || "unknown";
+      const address = listener.address ? ` (${listener.address})` : "";
+      return `- ${pid}${user}: ${command}${address}`;
+    }),
+    ...diagnostics.hints.map((hint) => `- ${hint}`),
+  ];
 }

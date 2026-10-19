@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs, promisify } from "node:util";
+import { asOptionalRecord as record } from "@openclaw/normalization-core/record-coerce";
 import { createComputerTool } from "../../src/agents/tools/computer-tool.js";
 import { listNodes } from "../../src/agents/tools/nodes-utils.js";
 
@@ -64,7 +65,7 @@ if (advertisedProvider.id !== expectedProviderId) {
     `expected provider ${expectedProviderId}, but node advertised ${advertisedProvider.id}`,
   );
 }
-const tool = createComputerTool({ modelHasVision: true });
+const tool = createComputerTool();
 let callSequence = 0;
 
 async function call(action: string, fields: JsonRecord = {}): Promise<ToolResult> {
@@ -110,26 +111,21 @@ function resultText(result: ToolResult): string {
 
 function wireResult(result: ToolResult): JsonRecord {
   const details = result.details as { result?: unknown } | undefined;
-  if (details?.result && typeof details.result === "object" && !Array.isArray(details.result)) {
-    return details.result as JsonRecord;
+  const structured = record(details?.result);
+  if (structured) {
+    return structured;
   }
   for (const line of resultText(result).split("\n")) {
     try {
-      const parsed = JSON.parse(line) as unknown;
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        return parsed as JsonRecord;
+      const parsed = record(JSON.parse(line));
+      if (parsed) {
+        return parsed;
       }
     } catch {
       // Mutating actions prefix their follow-up screenshot with one JSON result line.
     }
   }
   throw new Error(`missing structured result: ${resultText(result)}`);
-}
-
-function record(value: unknown): JsonRecord | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as JsonRecord)
-    : undefined;
 }
 
 function records(value: unknown): JsonRecord[] {
@@ -175,7 +171,7 @@ function summarizeOutcome(outcome: ActionOutcome): JsonRecord {
 
 async function saveImage(name: string, result: ToolResult): Promise<string> {
   const image = result.content.find((block) => block.type === "image");
-  if (!image || image.type !== "image") {
+  if (!image) {
     throw new Error(`missing model-visible image in ${name}`);
   }
   const extension = image.mimeType === "image/jpeg" ? "jpeg" : "png";

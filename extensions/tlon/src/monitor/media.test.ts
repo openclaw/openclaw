@@ -1,19 +1,12 @@
-// Tlon tests cover media plugin behavior.
-import {
-  readRemoteMediaBuffer,
-  MAX_IMAGE_BYTES,
-  saveRemoteMedia,
-} from "openclaw/plugin-sdk/media-runtime";
+import { MAX_IMAGE_BYTES, saveRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildTlonInboundMediaPrompt, downloadMessageImages } from "./media.js";
 
 vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
   MAX_IMAGE_BYTES: 6 * 1024 * 1024,
-  readRemoteMediaBuffer: vi.fn(),
   saveRemoteMedia: vi.fn(),
 }));
 
-const readRemoteMediaBufferMock = vi.mocked(readRemoteMediaBuffer);
 const saveRemoteMediaMock = vi.mocked(saveRemoteMedia);
 
 describe("tlon monitor media", () => {
@@ -66,35 +59,42 @@ describe("tlon monitor media", () => {
     });
   });
 
-  it("stores fetched media through the shared inbound media store with the image cap", async () => {
-    saveRemoteMediaMock.mockResolvedValue({
-      id: "photo---uuid.png",
-      path: "/tmp/openclaw/media/inbound/photo---uuid.png",
-      size: "image-data".length,
-      contentType: "image/png",
-    });
+  it.each([
+    { maxBytes: undefined, expectedMaxBytes: MAX_IMAGE_BYTES },
+    { maxBytes: 1024, expectedMaxBytes: 1024 },
+    { maxBytes: MAX_IMAGE_BYTES * 2, expectedMaxBytes: MAX_IMAGE_BYTES },
+  ])(
+    "stores fetched media with the effective $expectedMaxBytes byte cap",
+    async ({ maxBytes, expectedMaxBytes }) => {
+      saveRemoteMediaMock.mockResolvedValue({
+        id: "photo---uuid.png",
+        path: "/tmp/openclaw/media/inbound/photo---uuid.png",
+        size: "image-data".length,
+        contentType: "image/png",
+      });
 
-    const result = await downloadMessageImages([
-      { block: { image: { src: "https://example.com/photo.png" } } },
-    ]);
+      const result = await downloadMessageImages(
+        [{ block: { image: { src: "https://example.com/photo.png" } } }],
+        maxBytes,
+      );
 
-    expect(readRemoteMediaBufferMock).not.toHaveBeenCalled();
-    expect(saveRemoteMediaMock).toHaveBeenCalledTimes(1);
-    expect(saveRemoteMediaMock).toHaveBeenCalledWith({
-      url: "https://example.com/photo.png",
-      maxBytes: MAX_IMAGE_BYTES,
-      responseHeaderTimeoutMs: 120_000,
-      readIdleTimeoutMs: 30_000,
-      ssrfPolicy: undefined,
-      requestInit: { method: "GET" },
-    });
-    expect(result).toEqual({
-      attachments: [
-        { path: "/tmp/openclaw/media/inbound/photo---uuid.png", contentType: "image/png" },
-      ],
-      unavailableCount: 0,
-    });
-  });
+      expect(saveRemoteMediaMock).toHaveBeenCalledTimes(1);
+      expect(saveRemoteMediaMock).toHaveBeenCalledWith({
+        url: "https://example.com/photo.png",
+        maxBytes: expectedMaxBytes,
+        responseHeaderTimeoutMs: 120_000,
+        readIdleTimeoutMs: 30_000,
+        ssrfPolicy: undefined,
+        requestInit: { method: "GET" },
+      });
+      expect(result).toEqual({
+        attachments: [
+          { path: "/tmp/openclaw/media/inbound/photo---uuid.png", contentType: "image/png" },
+        ],
+        unavailableCount: 0,
+      });
+    },
+  );
 
   it("reports an unavailable image when the fetch exceeds the image cap", async () => {
     saveRemoteMediaMock.mockRejectedValue(
@@ -108,6 +108,19 @@ describe("tlon monitor media", () => {
     ]);
 
     expect(result).toEqual({ attachments: [], unavailableCount: 1 });
-    expect(readRemoteMediaBufferMock).not.toHaveBeenCalled();
+    expect(console.error).toHaveBeenCalledWith("[tlon-media] Error downloading inbound media");
+    expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain(
+      "https://example.com/photo.png",
+    );
+  });
+
+  it("rejects non-http media without logging its contents", async () => {
+    const url = "data:image/png;base64,private-inbound-image";
+    const result = await downloadMessageImages([{ block: { image: { src: url } } }]);
+
+    expect(result).toEqual({ attachments: [], unavailableCount: 1 });
+    expect(saveRemoteMediaMock).not.toHaveBeenCalled();
+    expect(console.warn).toHaveBeenCalledWith("[tlon-media] Rejected non-http(s) media URL");
+    expect(JSON.stringify(vi.mocked(console.warn).mock.calls)).not.toContain(url);
   });
 });

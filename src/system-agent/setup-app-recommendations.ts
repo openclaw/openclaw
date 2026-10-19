@@ -1,10 +1,10 @@
-import { safeParseJson } from "@openclaw/normalization-core";
+import { extractBalancedJsonPrefix, safeParseJson } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import pLimit from "p-limit";
 import { z } from "zod";
 import { searchClawHubSkills } from "../infra/clawhub-skills.js";
-import type { InstalledAppsResult } from "../infra/installed-apps.js";
+import type { InstalledApp, InstalledAppsResult } from "../infra/installed-apps.js";
 import {
   getOfficialExternalPluginCatalogManifest,
   listOfficialExternalChannelCatalogEntries,
@@ -32,24 +32,9 @@ const CANDIDATE_SOURCE_ORDER: Record<SetupAppCandidateSource, number> = {
   "clawhub-skill": 3,
 };
 
-type SetupAppInventoryItem = {
-  label: string;
-  bundleId?: string;
-};
-
-type SetupAppCandidateSource =
-  | "official-plugin"
-  | "official-channel"
-  | "official-provider"
-  | "clawhub-skill";
-
-type SetupAppCandidate = {
-  id: string;
-  displayName: string;
-  summary: string;
-  source: SetupAppCandidateSource;
-  downloads?: number;
-};
+type SetupAppInventoryItem = Pick<InstalledApp, "label" | "bundleId">;
+type SetupAppCandidate = Omit<OnboardingRecommendationMatch["candidate"], "downloads">;
+type SetupAppCandidateSource = SetupAppCandidate["source"];
 
 type SetupAppCandidateGroup = {
   app: SetupAppInventoryItem;
@@ -63,17 +48,7 @@ export type SetupAppScanPhase =
   | { kind: "candidates"; appCount: number; sampleLabels: string[] }
   | { kind: "matching"; appCount: number };
 
-export type SetupAppRecommendationsResult =
-  | {
-      status: "ok";
-      apps: SetupAppInventoryItem[];
-      groups: SetupAppCandidateGroup[];
-      matches: SetupAppRecommendationMatch[];
-    }
-  | {
-      status: "skipped";
-      reason: "unsupported" | "no-apps" | "no-candidates" | "model-failed" | "no-matches";
-    };
+export type SetupAppRecommendationsResult = Awaited<ReturnType<typeof getSetupAppRecommendations>>;
 
 // Tolerant on purpose: models add extra keys and overlong reasons; a strict
 // schema here would turn one sloppy field into a feature-wide "model-failed".
@@ -91,14 +66,6 @@ const MatcherOutputSchema = z.object({
     }),
   ),
 });
-
-type RecommendationDeps = {
-  listPlugins?: typeof listOfficialExternalPluginCatalogEntries;
-  listChannels?: typeof listOfficialExternalChannelCatalogEntries;
-  listProviders?: typeof listOfficialExternalProviderCatalogEntries;
-  searchSkills?: typeof searchClawHubSkills;
-  complete?: (prompt: string) => Promise<{ ok: true; text: string } | { ok: false }>;
-};
 
 function compareInventory(left: SetupAppInventoryItem, right: SetupAppInventoryItem): number {
   return (
@@ -132,19 +99,6 @@ function inventoryTokens(label: string): string[] {
     .toSorted();
 }
 
-function providerSearchTokens(
-  manifest: ReturnType<typeof getOfficialExternalPluginCatalogManifest>,
-): Array<string | undefined> {
-  const tokens: Array<string | undefined> = [];
-  for (const provider of manifest?.providers ?? []) {
-    tokens.push(provider.id, provider.name);
-    for (const alias of provider.aliases ?? []) {
-      tokens.push(alias);
-    }
-  }
-  return tokens;
-}
-
 function entrySearchText(entry: OfficialExternalPluginCatalogEntry): string {
   const manifest = getOfficialExternalPluginCatalogManifest(entry);
   return [
@@ -156,7 +110,9 @@ function entrySearchText(entry: OfficialExternalPluginCatalogEntry): string {
     manifest?.plugin?.label,
     manifest?.channel?.id,
     manifest?.channel?.label,
-    ...providerSearchTokens(manifest),
+    ...(manifest?.providers ?? []).flatMap((provider) =>
+      [provider.id, provider.name].concat(provider.aliases ?? []),
+    ),
   ]
     .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
     .join(" ")
@@ -210,14 +166,12 @@ function dedupeCandidates(candidates: SetupAppCandidate[]): SetupAppCandidate[] 
   });
 }
 
-async function gatherSetupAppCandidates(params: {
-  apps: SetupAppInventoryItem[];
-  deps?: RecommendationDeps;
-}): Promise<SetupAppCandidateGroup[]> {
-  const deps = params.deps ?? {};
-  const channels = deps.listChannels?.() ?? listOfficialExternalChannelCatalogEntries();
-  const providers = deps.listProviders?.() ?? listOfficialExternalProviderCatalogEntries();
-  const allEntries = deps.listPlugins?.() ?? listOfficialExternalPluginCatalogEntries();
+async function gatherSetupAppCandidates(
+  apps: SetupAppInventoryItem[],
+): Promise<SetupAppCandidateGroup[]> {
+  const channels = listOfficialExternalChannelCatalogEntries();
+  const providers = listOfficialExternalProviderCatalogEntries();
+  const allEntries = listOfficialExternalPluginCatalogEntries();
   // Catalog entries are package manifests without a stable top-level `id`;
   // key everything by the resolved plugin id or the map collapses to one
   // undefined-keyed entry and no official candidate is ever produced.
@@ -239,12 +193,11 @@ async function gatherSetupAppCandidates(params: {
         ? ("official-provider" as const)
         : ("official-plugin" as const),
   }));
-  const searchSkills = deps.searchSkills ?? searchClawHubSkills;
   const searchLimit = pLimit(CLAWHUB_SEARCH_CONCURRENCY);
   const searchDeadline = Date.now() + CLAWHUB_SEARCH_TOTAL_BUDGET_MS;
 
-  const groups = await Promise.all(
-    normalizeInventory(params.apps).map(async (app): Promise<SetupAppCandidateGroup> => {
+  return await Promise.all(
+    apps.map(async (app): Promise<SetupAppCandidateGroup> => {
       const official = officialEntries.flatMap(({ entry, source }) => {
         if (!entryMatchesApp(entry, app.label)) {
           return [];
@@ -257,7 +210,7 @@ async function gatherSetupAppCandidates(params: {
           return [];
         }
         try {
-          const results = await searchSkills({
+          const results = await searchClawHubSkills({
             query: app.label.normalize("NFKC").trim(),
             limit: CLAWHUB_SEARCH_LIMIT,
             timeoutMs: CLAWHUB_SEARCH_TIMEOUT_MS,
@@ -282,32 +235,23 @@ async function gatherSetupAppCandidates(params: {
       return { app, candidates: dedupeCandidates([...official, ...skills]) };
     }),
   );
-  return groups.toSorted((left, right) => compareInventory(left.app, right.app));
 }
 
 // Models routinely wrap JSON in markdown fences or prose despite "JSON only"
-// instructions; parse the outermost object instead of the raw text.
+// instructions; parse the first complete object instead of the raw text.
 function parseMatcherJson(text: string): unknown {
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start === -1 || end <= start) {
-    return null;
-  }
-  return safeParseJson(text.slice(start, end + 1)) ?? null;
+  const json = extractBalancedJsonPrefix(text, { openers: ["{"] })?.json;
+  return json ? (safeParseJson(json) ?? null) : null;
 }
 
 function buildMatcherPrompt(groups: SetupAppCandidateGroup[]): string {
-  const payload = groups.map((group) => ({
-    app: group.app,
-    candidates: group.candidates,
-  }));
   return [
     "Match installed applications to genuinely related OpenClaw plugins or skills.",
     "Reject coincidental substring, brand, or name overlaps.",
     "Use tier recommended for messaging-channel integrations; otherwise choose recommended or optional by usefulness.",
     "Give a reason of at most 12 words.",
     'Return strict JSON only: {"matches":[{"appLabel":"...","candidateId":"...","tier":"recommended|optional","reason":"..."}]}.',
-    JSON.stringify(payload),
+    JSON.stringify(groups),
   ].join("\n");
 }
 
@@ -315,48 +259,40 @@ export async function getSetupAppRecommendations(params: {
   inventorySource: () => Promise<InstalledAppsResult | SetupAppInventoryItem[]>;
   runtime: RuntimeEnv;
   onPhase?: (phase: SetupAppScanPhase) => void;
-  deps?: RecommendationDeps;
-}): Promise<SetupAppRecommendationsResult> {
+}) {
   const inventory = await params.inventorySource();
   if (!Array.isArray(inventory) && inventory.status === "unsupported") {
-    return { status: "skipped", reason: "unsupported" };
+    return { status: "skipped" as const, reason: "unsupported" as const };
   }
-  const apps = normalizeInventory(
-    Array.isArray(inventory)
-      ? inventory
-      : inventory.apps.map((app) => ({ label: app.label, bundleId: app.bundleId })),
-  );
+  const apps = normalizeInventory(Array.isArray(inventory) ? inventory : inventory.apps);
   if (apps.length === 0) {
-    return { status: "skipped", reason: "no-apps" };
+    return { status: "skipped" as const, reason: "no-apps" as const };
   }
   params.onPhase?.({
     kind: "candidates",
     appCount: apps.length,
     sampleLabels: apps.slice(0, 3).map((app) => app.label),
   });
-  const groups = await gatherSetupAppCandidates({ apps, deps: params.deps });
+  const groups = await gatherSetupAppCandidates(apps);
   if (groups.every((group) => group.candidates.length === 0)) {
-    return { status: "skipped", reason: "no-candidates" };
+    return { status: "skipped" as const, reason: "no-candidates" as const };
   }
-  const complete =
-    params.deps?.complete ??
-    // Output is bounded by the resolved model's own maxTokens budget (the
-    // stream layer applies it when no explicit cap is passed), so a runaway
-    // completion cannot exceed what the model config already allows.
-    (async (prompt: string) => await completeSetupInference({ prompt, runtime: params.runtime }));
-  let completion: Awaited<ReturnType<typeof complete>>;
+  let completion: Awaited<ReturnType<typeof completeSetupInference>>;
   try {
     params.onPhase?.({ kind: "matching", appCount: apps.length });
-    completion = await complete(buildMatcherPrompt(groups));
+    completion = await completeSetupInference({
+      prompt: buildMatcherPrompt(groups),
+      runtime: params.runtime,
+    });
   } catch {
-    return { status: "skipped", reason: "model-failed" };
+    return { status: "skipped" as const, reason: "model-failed" as const };
   }
   if (!completion.ok) {
-    return { status: "skipped", reason: "model-failed" };
+    return { status: "skipped" as const, reason: "model-failed" as const };
   }
   const parsed = MatcherOutputSchema.safeParse(parseMatcherJson(completion.text));
   if (!parsed.success) {
-    return { status: "skipped", reason: "model-failed" };
+    return { status: "skipped" as const, reason: "model-failed" as const };
   }
   // Case-insensitive lookups: models normalize label/id casing in their output.
   const matches = parsed.data.matches.flatMap((match): SetupAppRecommendationMatch[] => {
@@ -371,10 +307,10 @@ export async function getSetupAppRecommendations(params: {
     return candidate ? [{ ...match, appLabel: group?.app.label ?? match.appLabel, candidate }] : [];
   });
   if (matches.length === 0) {
-    return { status: "skipped", reason: "no-matches" };
+    return { status: "skipped" as const, reason: "no-matches" as const };
   }
   return {
-    status: "ok",
+    status: "ok" as const,
     apps,
     groups,
     matches: matches.toSorted(

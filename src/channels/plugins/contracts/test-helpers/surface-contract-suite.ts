@@ -4,7 +4,7 @@
  * Checks the minimum callable shape for optional channel plugin adapter surfaces.
  */
 import { expect } from "vitest";
-import type { ChannelPlugin } from "../../types.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../types.plugin.js";
 
 /** Asserts the minimum callable shape for one declared channel plugin surface. */
 export function expectChannelSurfaceContract(params: {
@@ -115,6 +115,9 @@ export function expectChannelSurfaceContract(params: {
         threading?.resolveAutoThreadId,
         threading?.resolveReplyTransport,
         threading?.resolveFocusedBinding,
+        // Core reads this hook directly (source-reply-mirror.ts), so a channel may
+        // declare threading for target matching alone without any reply-shaping hook.
+        threading?.matchesToolContextTarget,
       ].some((value) => typeof value === "function"),
     ).toBe(true);
     return;

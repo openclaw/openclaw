@@ -1,10 +1,30 @@
-import { describe, expect, it, vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   createRealtimeVoiceAudioQueue,
-  normalizeRealtimeVoiceResponseOutcome,
   RealtimeVoiceSessionLifecycle,
+  type RealtimeVoiceBrowserSessionCreateRequest,
+  type RealtimeVoiceGatewayControl,
   type RealtimeVoiceSessionConnection,
 } from "./realtime-voice.js";
+
+it("requires command binding only for negotiated Gateway control", () => {
+  type Base = { providerConfig: Record<string, unknown> };
+  type Claim = { clientControl: { owner: "gateway" } };
+  type Legacy = Base & { gatewayControl: Pick<RealtimeVoiceGatewayControl, "bindBridge"> };
+  type Controlled = Base &
+    Claim & {
+      gatewayControl: RealtimeVoiceGatewayControl &
+        Required<Pick<RealtimeVoiceGatewayControl, "bindControl">>;
+    };
+
+  expectTypeOf<Base>().toMatchTypeOf<RealtimeVoiceBrowserSessionCreateRequest>();
+  expectTypeOf<Legacy>().toMatchTypeOf<RealtimeVoiceBrowserSessionCreateRequest>();
+  expectTypeOf<Controlled>().toMatchTypeOf<RealtimeVoiceBrowserSessionCreateRequest>();
+  expectTypeOf<Base & Claim>().not.toMatchTypeOf<RealtimeVoiceBrowserSessionCreateRequest>();
+  expectTypeOf<Legacy & Claim>().not.toMatchTypeOf<RealtimeVoiceBrowserSessionCreateRequest>();
+});
 
 function connectLifecycle(
   lifecycle: RealtimeVoiceSessionLifecycle,
@@ -13,16 +33,15 @@ function connectLifecycle(
   void lifecycle.connect(async (current) => {
     connection = current;
   });
-  if (!connection) {
-    throw new Error("expected synchronous connection ownership");
-  }
-  return connection;
+  return expectDefined(connection, "synchronous connection ownership");
 }
 
 describe("RealtimeVoiceSessionLifecycle", () => {
+  let lifecycle: RealtimeVoiceSessionLifecycle;
+  beforeEach(() => {
+    lifecycle = new RealtimeVoiceSessionLifecycle("Test");
+  });
   it("terminalizes preconnect cancellation until an explicit fresh connection", () => {
-    const lifecycle = new RealtimeVoiceSessionLifecycle("Test");
-
     expect(lifecycle.phase()).toBe("idle");
     expect(lifecycle.isReady()).toBe(false);
     expect(lifecycle.cancel()).toBe(true);
@@ -36,39 +55,22 @@ describe("RealtimeVoiceSessionLifecycle", () => {
   });
 
   it("owns retry attempts and resets them only after provider readiness", () => {
-    const lifecycle = new RealtimeVoiceSessionLifecycle("Test");
-    const first = connectLifecycle(lifecycle);
-
-    expect(lifecycle.retry(first, 2)).toMatchObject({ attempt: 1 });
-    expect(lifecycle.acceptsEvents(first)).toBe(false);
-    expect(lifecycle.retry(first, 2)).toBeUndefined();
-    const second = lifecycle.reconnect(first);
-    expect(second).toBeDefined();
-    if (!second) {
-      throw new Error("expected a retry connection");
+    let connection = connectLifecycle(lifecycle);
+    for (const attempt of [1, 2]) {
+      expect(lifecycle.retry(connection, 2)).toMatchObject({ attempt });
+      expect(lifecycle.acceptsEvents(connection)).toBe(false);
+      expect(lifecycle.retry(connection, 2)).toBeUndefined();
+      connection = expectDefined(lifecycle.reconnect(connection), "retry connection");
     }
-
-    expect(lifecycle.retry(second, 2)).toMatchObject({ attempt: 2 });
-    const third = lifecycle.reconnect(second);
-    expect(third).toBeDefined();
-    if (!third) {
-      throw new Error("expected a second retry connection");
-    }
-    expect(lifecycle.retry(third, 2)).toBe("exhausted");
-
-    expect(lifecycle.ready(third)).toBe(true);
-    expect(lifecycle.retry(third, 2)).toMatchObject({ attempt: 1 });
+    expect(lifecycle.retry(connection, 2)).toBe("exhausted");
+    expect(lifecycle.ready(connection)).toBe(true);
+    expect(lifecycle.retry(connection, 2)).toMatchObject({ attempt: 1 });
   });
 
   it("ignores stale connections and aborts explicit replacements", async () => {
-    const lifecycle = new RealtimeVoiceSessionLifecycle("Test");
     const first = connectLifecycle(lifecycle);
     lifecycle.retry(first, 1);
-    const retry = lifecycle.reconnect(first);
-    expect(retry).toBeDefined();
-    if (!retry) {
-      throw new Error("expected a retry connection");
-    }
+    const retry = expectDefined(lifecycle.reconnect(first), "retry connection");
 
     expect(lifecycle.ready(first)).toBe(false);
     expect(lifecycle.close(first, "error")).toBeUndefined();
@@ -78,8 +80,10 @@ describe("RealtimeVoiceSessionLifecycle", () => {
     expect(lifecycle.retry(retry, 1)).toMatchObject({ attempt: 1 });
     await Promise.resolve();
     const replacement = connectLifecycle(lifecycle);
-    expect(retry.signal.aborted).toBe(true);
-    expect(retry.signal.reason).toEqual(new Error("Test realtime voice connection replaced"));
+    expect(retry.signal).toMatchObject({
+      aborted: true,
+      reason: new Error("Test realtime voice connection replaced"),
+    });
     expect(lifecycle.failure(retry)).toBe(false);
     expect(lifecycle.ready(replacement)).toBe(true);
   });
@@ -106,26 +110,15 @@ describe("RealtimeVoiceSessionLifecycle", () => {
   });
 
   it("coalesces connects and lets cancellation immediately transfer ownership", async () => {
-    const lifecycle = new RealtimeVoiceSessionLifecycle("Test");
-    const firstStarted = vi.fn();
+    const setup = createDeferred();
+    const firstStarted = vi.fn((connection: RealtimeVoiceSessionConnection) => {
+      connection.signal.addEventListener("abort", () => setup.reject(connection.signal.reason), {
+        once: true,
+      });
+      return setup.promise;
+    });
     const secondStarted = vi.fn();
-    let firstConnection: RealtimeVoiceSessionConnection | undefined;
-
-    const first = lifecycle.connect(
-      (connection) =>
-        new Promise<void>((_resolve, reject) => {
-          firstConnection = connection;
-          firstStarted();
-          connection.signal.addEventListener(
-            "abort",
-            () => {
-              const reason = connection.signal.reason;
-              reject(reason instanceof Error ? reason : new Error(String(reason)));
-            },
-            { once: true },
-          );
-        }),
-    );
+    const first = lifecycle.connect(firstStarted);
     const coalesced = lifecycle.connect(async () => {
       secondStarted();
     });
@@ -136,7 +129,7 @@ describe("RealtimeVoiceSessionLifecycle", () => {
     expect(lifecycle.cancel()).toBe(true);
 
     const replacement = lifecycle.connect(async (connection) => {
-      expect(connection).not.toBe(firstConnection);
+      expect(connection).not.toBe(firstStarted.mock.calls[0]?.[0]);
       secondStarted();
     });
     await replacement;
@@ -145,80 +138,64 @@ describe("RealtimeVoiceSessionLifecycle", () => {
   });
 
   it("exposes cancellation to async setup before it can create a late transport", async () => {
-    const lifecycle = new RealtimeVoiceSessionLifecycle("Test");
-    let resolveCredentials = () => {};
-    const credentials = new Promise<void>((resolve) => {
-      resolveCredentials = resolve;
-    });
+    const credentials = createDeferred();
     const openTransport = vi.fn();
 
     const connecting = lifecycle.connect(async (connection) => {
-      await credentials;
+      await credentials.promise;
       if (!connection.signal.aborted) {
         openTransport();
       }
     });
     lifecycle.cancel();
-    resolveCredentials();
+    credentials.resolve();
     await connecting;
 
     expect(openTransport).not.toHaveBeenCalled();
   });
 
-  it("starts connect timeouts explicitly and releases timeout and abort ownership", async () => {
-    vi.useFakeTimers();
-    try {
-      const lifecycle = new RealtimeVoiceSessionLifecycle("Test");
-      const connection = connectLifecycle(lifecycle);
-      const onAbort = vi.fn();
-      const onTimeout = vi.fn();
-      const attempt = lifecycle.createConnectAttempt({
-        connection,
-        onAbort,
-        onTimeout,
-        timeoutError: () => new Error("timed out"),
-        timeoutMs: 10,
-      });
-
-      attempt.startTimeout();
-      attempt.resolve(true);
-      attempt.reject(new Error("late failure"));
-      await expect(attempt.promise).resolves.toBeUndefined();
-      await vi.advanceTimersByTimeAsync(10);
-      lifecycle.cancel();
-
-      expect(attempt.ready).toBe(true);
-      expect(attempt.settled).toBe(true);
-      expect(onTimeout).not.toHaveBeenCalled();
-      expect(onAbort).not.toHaveBeenCalled();
-
-      const timeoutLifecycle = new RealtimeVoiceSessionLifecycle("Test");
-      const timeoutConnection = connectLifecycle(timeoutLifecycle);
-      const timeoutAttempt = timeoutLifecycle.createConnectAttempt({
-        connection: timeoutConnection,
-        onAbort: vi.fn(),
-        onTimeout,
-        timeoutError: () => new Error("timed out"),
-        timeoutMs: 10,
-      });
-      const rejected = expect(timeoutAttempt.promise).rejects.toThrow("timed out");
-      await vi.advanceTimersByTimeAsync(10);
-      expect(onTimeout).not.toHaveBeenCalled();
-
-      timeoutAttempt.startTimeout();
-      timeoutAttempt.startTimeout();
-      await vi.advanceTimersByTimeAsync(10);
-      await rejected;
-
-      expect(timeoutAttempt.startupFailed).toBe(true);
-      expect(onTimeout).toHaveBeenCalledOnce();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+  it.each([true, false])(
+    "settles connect attempts and releases ownership (ready=%s)",
+    async (ready) => {
+      vi.useFakeTimers();
+      try {
+        const onAbort = vi.fn();
+        const onTimeout = vi.fn();
+        const attempt = lifecycle.createConnectAttempt({
+          connection: connectLifecycle(lifecycle),
+          onAbort,
+          onTimeout,
+          timeoutError: () => new Error("timed out"),
+          timeoutMs: 10,
+        });
+        if (ready) {
+          attempt.startTimeout();
+          attempt.resolve(true);
+          attempt.reject(new Error("late failure"));
+          await expect(attempt.promise).resolves.toBeUndefined();
+          await vi.advanceTimersByTimeAsync(10);
+          lifecycle.cancel();
+          expect(attempt).toMatchObject({ ready: true, settled: true });
+          expect(onTimeout).not.toHaveBeenCalled();
+          expect(onAbort).not.toHaveBeenCalled();
+        } else {
+          const rejected = expect(attempt.promise).rejects.toThrow("timed out");
+          await vi.advanceTimersByTimeAsync(10);
+          expect(onTimeout).not.toHaveBeenCalled();
+          attempt.startTimeout();
+          attempt.startTimeout();
+          await vi.advanceTimersByTimeAsync(10);
+          await rejected;
+          expect(attempt.startupFailed).toBe(true);
+          expect(onTimeout).toHaveBeenCalledOnce();
+        }
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("owns copied pending audio and clears it at terminal boundaries", () => {
-    const lifecycle = new RealtimeVoiceSessionLifecycle("Test");
     const backing = Buffer.alloc(2 * 1024 * 1024, 0x01);
     const view = backing.subarray(0, 512 * 1024);
 
@@ -235,72 +212,26 @@ describe("RealtimeVoiceSessionLifecycle", () => {
     lifecycle.cancel();
     expect(lifecycle.drainPendingAudio()).toEqual([]);
   });
-});
 
-describe("normalizeRealtimeVoiceResponseOutcome", () => {
-  it.each([
-    [
-      { id: "resp-complete", status: "completed" },
-      { responseId: "resp-complete", status: "completed" },
-    ],
-    [
-      { id: "resp-cancel", status: "cancelled", status_details: { reason: "client_cancelled" } },
-      { responseId: "resp-cancel", status: "cancelled", reason: "client_cancelled" },
-    ],
-    [
-      {
-        id: "resp-failed",
-        status: "failed",
-        status_details: {
-          reason: "provider_error",
-          error: { code: "rate_limit", type: "server_error", message: "slow down" },
-        },
-      },
-      {
-        responseId: "resp-failed",
-        status: "failed",
-        reason: "provider_error",
-        error: { code: "rate_limit", type: "server_error", message: "slow down" },
-        message: "Test response failed: provider_error: slow down",
-      },
-    ],
-    [
-      { status: "incomplete", status_details: { reason: "max_output_tokens" } },
-      {
-        responseId: "resp-fallback",
-        status: "incomplete",
-        reason: "max_output_tokens",
-        message: "Test response incomplete: max_output_tokens",
-      },
-    ],
-    [
-      { id: "", status: "unexpected" },
-      {
-        responseId: "resp-fallback",
-        status: "failed",
-        reason: "invalid_response_status",
-        error: { type: "invalid_response_status", message: "invalid status unexpected" },
-        message: "Test response failed: invalid status unexpected",
-      },
-    ],
-    [
-      undefined,
-      {
-        responseId: "resp-fallback",
-        status: "failed",
-        reason: "invalid_response_status",
-        error: { type: "invalid_response_status", message: "missing terminal status" },
-        message: "Test response failed: missing terminal status",
-      },
-    ],
-  ])("normalizes %#", (response, expected) => {
-    expect(
-      normalizeRealtimeVoiceResponseOutcome({
-        providerLabel: "Test",
-        response,
-        responseId: "resp-fallback",
-      }),
-    ).toEqual(expected);
+  it("keeps the freshest queued speech and warns once per overflow episode", () => {
+    const onPendingAudioOverflow = vi.fn();
+    lifecycle = new RealtimeVoiceSessionLifecycle("Test", {
+      pendingAudioOverflowPolicy: "drop-oldest",
+      onPendingAudioOverflow,
+    });
+
+    for (let index = 0; index < 322; index += 1) {
+      expect(lifecycle.enqueuePendingAudio(Buffer.from([index % 256]))).toBe(true);
+    }
+    expect(onPendingAudioOverflow).toHaveBeenCalledOnce();
+    expect(lifecycle.drainPendingAudio()).toEqual(
+      Array.from({ length: 320 }, (_, index) => Buffer.from([(index + 2) % 256])),
+    );
+
+    for (let index = 0; index < 321; index += 1) {
+      lifecycle.enqueuePendingAudio(Buffer.from([index % 256]));
+    }
+    expect(onPendingAudioOverflow).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -318,17 +249,8 @@ describe("createRealtimeVoiceAudioQueue", () => {
     expect(queue.drain()).toEqual([second, Buffer.from([0x03])]);
   });
 
-  it("drops the oldest audio and resets accounting on clear", () => {
+  it("resets audio queue accounting on clear", () => {
     const queue = createRealtimeVoiceAudioQueue("drop-oldest");
-    for (let index = 0; index < 322; index += 1) {
-      expect(queue.enqueue(Buffer.from([index & 0xff]))).toBe(true);
-    }
-
-    const drained = queue.drain();
-    expect(drained).toHaveLength(320);
-    expect(drained[0]).toEqual(Buffer.from([2]));
-    expect(drained.at(-1)).toEqual(Buffer.from([65]));
-
     expect(queue.enqueue(Buffer.alloc(1024 * 1024, 0x04))).toBe(true);
     queue.clear();
     expect(queue.enqueue(Buffer.from([0x05]))).toBe(true);

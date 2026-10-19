@@ -1,7 +1,7 @@
 // Verifies message-action target parameter mapping and legacy destination
 // rejection across target modes.
 import { describe, expect, it } from "vitest";
-import { applyTargetToParams } from "./channel-target.js";
+import { applyTargetToParams } from "./message-action-spec.js";
 
 describe("applyTargetToParams", () => {
   it.each([
@@ -60,6 +60,17 @@ describe("applyTargetToParams", () => {
   ])("throws on invalid no-target action destination for %j", ({ params, expectedMessage }) => {
     expect(() => applyTargetToParams(params)).toThrow(expectedMessage);
   });
+
+  it.each(["toString", "constructor", "__proto__"])(
+    "rejects inherited object property %s as an unknown action",
+    (action) => {
+      const args = { target: "channel:C1" };
+      expect(() => applyTargetToParams({ action, args })).toThrow(
+        `Action ${action} does not accept a target.`,
+      );
+      expect(args).toEqual({ target: "channel:C1" });
+    },
+  );
 
   it("does nothing when target is blank", () => {
     const params = {

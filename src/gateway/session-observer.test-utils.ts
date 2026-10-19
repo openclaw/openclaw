@@ -41,18 +41,29 @@ export function event(params: {
   };
 }
 
-export function modelMessage(value: Record<string, unknown>) {
+export function modelMessage(
+  value: Record<string, unknown>,
+): Awaited<ReturnType<NonNullable<SessionObserverDeps["completeModel"]>>> {
   return {
-    stopReason: "stop",
-    content: [{ type: "text", text: JSON.stringify(value) }],
+    text: JSON.stringify(value),
+    provider: "openai",
+    model: "gpt-test",
+    owner: { kind: "harness", id: "openclaw" },
   };
 }
 
-export function preparedModel() {
+export function preparedModel(): Awaited<
+  ReturnType<NonNullable<SessionObserverDeps["prepareModel"]>>
+> {
   return {
-    selection: { provider: "openai", modelId: "gpt-test", agentDir: "/tmp/agent" },
-    model: { provider: "openai", id: "gpt-test", maxTokens: 8_192 },
-    auth: { apiKey: "test-api-key", mode: "api-key" },
+    config: cfg,
+    provider: "openai",
+    model: "gpt-test",
+    authProfileId: undefined,
+    outputTextPolicy: "strict-visible",
+    thinkLevel: "off",
+    agentId: "main",
+    agentDir: "/tmp/agent",
   };
 }
 
@@ -78,13 +89,37 @@ export async function flushObserver(): Promise<void> {
   }
 }
 
+export function createObserverTimerTracker() {
+  // Install after unrelated timers: these controlled fixtures schedule only observer work.
+  const nativeSetTimeout = setTimeout;
+  const nativeClearTimeout = clearTimeout;
+  const ownedTimers = new Set<ReturnType<typeof setTimeout>>();
+  const setTimeoutFn = Object.assign((callback: () => void, delay?: number) => {
+    const timer = nativeSetTimeout(() => {
+      ownedTimers.delete(timer);
+      callback();
+    }, delay);
+    ownedTimers.add(timer);
+    return timer;
+  }, nativeSetTimeout);
+  const clearTimeoutFn: typeof clearTimeout = (timer) => {
+    if (timer && typeof timer === "object") {
+      ownedTimers.delete(timer);
+    }
+    nativeClearTimeout(timer);
+  };
+  vi.spyOn(globalThis, "setTimeout").mockImplementation(setTimeoutFn);
+  vi.spyOn(globalThis, "clearTimeout").mockImplementation(clearTimeoutFn);
+  return { ownedTimers };
+}
+
 export function createHarness(options?: {
   subscribe?: boolean;
   broadSubscribe?: boolean;
   visible?: boolean;
   completeModel?: ReturnType<typeof vi.fn>;
   prepareModel?: ReturnType<typeof vi.fn>;
-  persistDigest?: ReturnType<typeof vi.fn>;
+  persistDigest?: ReturnType<typeof vi.fn<(params: PersistDigestParams) => Promise<unknown>>>;
   readSession?: ReturnType<typeof vi.fn>;
   config?: OpenClawConfig;
   utilityModelRef?: string | null;
@@ -149,15 +184,17 @@ export function declareObserverVisibility(
   observer.setConnectionVisibility(connId, true);
 }
 
-export function startAndAddToolNotes(
+export async function startAndAddToolNotes(
   observer: ReturnType<typeof createSessionObserver>,
   params: { runId?: string; sessionKey?: string; count?: number } = {},
-): void {
+): Promise<void> {
   const runId = params.runId ?? "run-1";
   const sessionKey = params.sessionKey ?? "agent:main:session-1";
-  observer.handleEvent(event({ runId, sessionKey, stream: "lifecycle", data: { phase: "start" } }));
+  await observer.handleEventAsync(
+    event({ runId, sessionKey, stream: "lifecycle", data: { phase: "start" } }),
+  );
   for (let index = 0; index < (params.count ?? 3); index += 1) {
-    observer.handleEvent(
+    await observer.handleEventAsync(
       event({
         runId,
         sessionKey,

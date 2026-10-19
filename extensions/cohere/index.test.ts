@@ -1,18 +1,20 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
-import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  capturePluginRegistration,
+  registerSingleProviderPlugin,
+  runProviderCatalog,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import { COHERE_LIVE_MODEL_DISCOVERY } from "./provider-catalog.js";
-import { wrapCohereProviderStream } from "./stream.js";
 
 const COHERE_COMMAND_A_PLUS_MODEL_ID = "command-a-plus-05-2026";
 const COHERE_COMMAND_A_REASONING_MODEL_ID = "command-a-reasoning-08-2025";
 const COHERE_COMMAND_A_VISION_MODEL_ID = "command-a-vision-07-2025";
-const COHERE_NORTH_MINI_CODE_MODEL_ID = "north-mini-code-1-0";
 
 function buildCohereProvider() {
   return buildManifestModelProviderConfig({
@@ -51,7 +53,8 @@ function captureCoherePayload(
   };
 
   const model = requireCohereModel(settings?.modelId);
-  const wrappedStreamFn = wrapCohereProviderStream({
+  const [provider] = capturePluginRegistration(plugin).providers;
+  const wrappedStreamFn = provider?.wrapStreamFn?.({
     provider: "cohere",
     modelId: model.id,
     model,
@@ -72,105 +75,31 @@ function captureCoherePayload(
 }
 
 describe("Cohere provider plugin", () => {
-  it("registers the manifest-owned API key onboarding flow", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
-
-    expect(provider.auth.map((method) => method.wizard?.choiceId)).toEqual(["cohere-api-key"]);
-    expect(provider).toMatchObject({
-      id: "cohere",
-      envVars: ["COHERE_API_KEY"],
-    });
-    expect(provider.auth[0]).toMatchObject({
-      id: "api-key",
-      kind: "api_key",
-      wizard: { choiceId: "cohere-api-key" },
-    });
-    expect(manifest.providerAuthChoices).toEqual([
-      expect.objectContaining({
-        choiceId: "cohere-api-key",
-        optionKey: "cohereApiKey",
-        cliFlag: "--cohere-api-key",
-      }),
-    ]);
-    expect(manifest.setup.providers).toEqual([{ id: "cohere", envVars: ["COHERE_API_KEY"] }]);
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    clearLiveCatalogCacheForTests();
   });
 
-  it("exposes the static Cohere catalog", () => {
-    expect(buildCohereProvider()).toMatchObject({
-      baseUrl: "https://api.cohere.ai/compatibility/v1",
-      api: "openai-completions",
-      models: [
-        expect.objectContaining({
-          id: COHERE_COMMAND_A_PLUS_MODEL_ID,
-          reasoning: true,
-          input: ["text", "image"],
-          contextWindow: 128000,
-          maxTokens: 64000,
-          compat: expect.objectContaining({
-            supportsReasoningEffort: true,
-            supportedReasoningEfforts: ["none", "high"],
-          }),
-        }),
-        expect.objectContaining({
-          id: "command-a-03-2025",
-          compat: {
-            supportsStore: false,
-            supportsUsageInStreaming: false,
-            maxTokensField: "max_tokens",
-          },
-        }),
-        expect.objectContaining({
-          id: COHERE_COMMAND_A_REASONING_MODEL_ID,
-          reasoning: true,
-          input: ["text"],
-          contextWindow: 256000,
-          maxTokens: 32000,
-        }),
-        expect.objectContaining({
-          id: COHERE_COMMAND_A_VISION_MODEL_ID,
-          reasoning: false,
-          input: ["text", "image"],
-          contextWindow: 128000,
-          maxTokens: 8000,
-          compat: expect.objectContaining({ supportsTools: false }),
-        }),
-        expect.objectContaining({
-          id: "north-mini-code-1-0",
-          reasoning: true,
-          input: ["text", "image"],
-          contextWindow: 256000,
-          maxTokens: 64000,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          compat: {
-            supportsStore: false,
-            supportsUsageInStreaming: false,
-            supportsReasoningEffort: true,
-            supportedReasoningEfforts: ["none", "high"],
-            reasoningEffortMap: {
-              off: "none",
-              none: "none",
-              minimal: "high",
-              low: "high",
-              medium: "high",
-              high: "high",
-              xhigh: "high",
-              adaptive: "high",
-              max: "high",
-            },
-            maxTokensField: "max_tokens",
-          },
-        }),
-      ],
+  it("keeps North Mini Code text-only with Cohere's binary reasoning contract", () => {
+    const model = requireCohereModel("north-mini-code-1-0");
+    expect(model.input).toEqual(["text"]);
+    expect(model.compat?.supportedReasoningEfforts).toEqual(["none", "high"]);
+    expect(model.compat?.reasoningEffortMap).toEqual({
+      off: "none",
+      none: "none",
+      minimal: "high",
+      low: "high",
+      medium: "high",
+      high: "high",
+      xhigh: "high",
+      adaptive: "high",
+      max: "high",
     });
   });
 
-  it("normalizes Cohere live catalog rows for chat discovery", () => {
-    expect(COHERE_LIVE_MODEL_DISCOVERY.endpointUrl).toEqual({
-      url: "https://api.cohere.com/v1/models?endpoint=chat&page_size=1000",
-      requireBaseUrl: "https://api.cohere.ai/compatibility/v1",
-    });
-    expect(
-      COHERE_LIVE_MODEL_DISCOVERY.readRows?.({
+  it("discovers active chat models through the registered Cohere catalog", async () => {
+    const fetch = vi.fn(async () =>
+      Response.json({
         models: [
           {
             name: "command-fresh",
@@ -181,22 +110,22 @@ describe("Cohere provider plugin", () => {
           { name: "command-retired", is_deprecated: true, endpoints: ["chat"] },
         ],
       }),
-    ).toEqual([
-      {
-        id: "command-fresh",
-        name: "command-fresh",
-        is_deprecated: false,
-        active: true,
-        endpoints: ["chat"],
-        context_length: 256_000,
-      },
-      {
-        id: "command-retired",
-        name: "command-retired",
-        is_deprecated: true,
-        active: false,
-        endpoints: ["chat"],
-      },
+    );
+    vi.stubGlobal("fetch", fetch);
+    const provider = await registerSingleProviderPlugin(plugin);
+    const result = await runProviderCatalog({
+      provider,
+      config: {},
+      env: {},
+      resolveProviderApiKey: () => ({ apiKey: "synthetic-cohere-key" }),
+      resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+    });
+    expect(fetch).toHaveBeenCalledExactlyOnceWith(
+      "https://api.cohere.com/v1/models?endpoint=chat&page_size=1000",
+      expect.anything(),
+    );
+    expect(result && "provider" in result && result.provider.models).toEqual([
+      expect.objectContaining({ id: "command-fresh", contextWindow: 256_000 }),
     ]);
   });
 
@@ -224,23 +153,6 @@ describe("Cohere provider plugin", () => {
     expect(params.messages).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ role: "system", content: "system" })]),
     );
-  });
-
-  it("maps North Mini Code thinking levels to Cohere's supported reasoning efforts", () => {
-    const context = { messages: [] } as Context;
-
-    expect(
-      captureCoherePayload(context, {
-        modelId: COHERE_NORTH_MINI_CODE_MODEL_ID,
-        reasoning: "off",
-      }).reasoning_effort,
-    ).toBe("none");
-    expect(
-      captureCoherePayload(context, {
-        modelId: COHERE_NORTH_MINI_CODE_MODEL_ID,
-        reasoning: "high",
-      }).reasoning_effort,
-    ).toBe("high");
   });
 
   it("maps Command A+ and Command A Reasoning to Cohere's supported reasoning efforts", () => {

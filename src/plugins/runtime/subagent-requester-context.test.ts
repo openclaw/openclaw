@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   createPluginSubagentRequesterContext,
   resolvePluginSubagentCompletionRequester,
@@ -62,20 +63,17 @@ describe("plugin subagent requester context", () => {
       throw new Error("expected valid requester context");
     }
 
-    let releaseDetachedRead: (() => void) | undefined;
-    const detachedGate = new Promise<void>((resolve) => {
-      releaseDetachedRead = resolve;
-    });
+    const detachedGate = createDeferred();
     let detachedRead: Promise<PluginSubagentRequesterContext | undefined> | undefined;
     await withPluginSubagentRequesterContext(requester, async () => {
       expect(getActiveRequester()).toBe(requester);
       detachedRead = (async () => {
-        await detachedGate;
+        await detachedGate.promise;
         return getActiveRequester();
       })();
     });
 
-    releaseDetachedRead?.();
+    detachedGate.resolve();
     await expect(detachedRead).resolves.toBeUndefined();
     expect(getActiveRequester()).toBeUndefined();
   });
@@ -93,34 +91,25 @@ describe("plugin subagent requester context", () => {
       throw new Error("expected valid requester contexts");
     }
 
-    let release: (() => void) | undefined;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    let firstReady: (() => void) | undefined;
-    let secondReady: (() => void) | undefined;
-    const firstStarted = new Promise<void>((resolve) => {
-      firstReady = resolve;
-    });
-    const secondStarted = new Promise<void>((resolve) => {
-      secondReady = resolve;
-    });
+    const gate = createDeferred();
+    const firstStarted = createDeferred();
+    const secondStarted = createDeferred();
 
     const firstRun = withPluginSubagentRequesterContext(first, async () => {
       expect(getActiveRequester()).toBe(first);
-      firstReady?.();
-      await gate;
+      firstStarted.resolve();
+      await gate.promise;
       expect(getActiveRequester()).toBe(first);
     });
     const secondRun = withPluginSubagentRequesterContext(second, async () => {
       expect(getActiveRequester()).toBe(second);
-      secondReady?.();
-      await gate;
+      secondStarted.resolve();
+      await gate.promise;
       expect(getActiveRequester()).toBe(second);
     });
 
-    await Promise.all([firstStarted, secondStarted]);
-    release?.();
+    await Promise.all([firstStarted.promise, secondStarted.promise]);
+    gate.resolve();
     await Promise.all([firstRun, secondRun]);
     expect(getActiveRequester()).toBeUndefined();
   });

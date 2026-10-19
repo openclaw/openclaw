@@ -40,6 +40,7 @@ public final class OpenClawClientDatabases: @unchecked Sendable {
     let cacheQueue: DatabaseQueue
     let stateQueue: DatabaseQueue
     let outboxChangeHub = OutboxChangeHub()
+    public let watchMessages: OpenClawWatchMessageJournal
     private let legacyDirectoryURLs: [URL]
 
     public init(
@@ -53,11 +54,12 @@ public final class OpenClawClientDatabases: @unchecked Sendable {
 
         let stateURL = directoryURL.appendingPathComponent(Self.clientStateFilename, isDirectory: false)
         self.stateQueue = try Self.openStateDatabase(at: stateURL)
+        self.watchMessages = OpenClawWatchMessageJournal(queue: self.stateQueue)
         self.cacheQueue = try Self.openRepairableCacheDatabase(
             at: directoryURL.appendingPathComponent(Self.gatewayCacheFilename, isDirectory: false))
         let exactRegisteredGatewayIDs = registeredGatewayIDs.map(RegisteredGatewayIDs.init)
         self.resolvePendingGatewayRemovals(registeredGatewayIDs: exactRegisteredGatewayIDs)
-        self.importLegacyDatabases(registeredGatewayIDs: exactRegisteredGatewayIDs)
+        importLegacyDatabases(registeredGatewayIDs: exactRegisteredGatewayIDs)
     }
 
     public func store(gatewayID: String) -> OpenClawChatSQLiteTranscriptCache {
@@ -68,7 +70,7 @@ public final class OpenClawClientDatabases: @unchecked Sendable {
     /// again on foreground because old complete-protection files may have been
     /// unreadable during a locked background launch.
     public func retryLegacyImport(registeredGatewayIDs: [String]? = nil) {
-        self.importLegacyDatabases(
+        importLegacyDatabases(
             registeredGatewayIDs: registeredGatewayIDs.map(RegisteredGatewayIDs.init))
     }
 
@@ -107,12 +109,7 @@ public final class OpenClawClientDatabases: @unchecked Sendable {
     /// removed. No gateway payload is deleted until the registry owner commits.
     public func stageGatewayRemoval(gatewayID: String) throws {
         let gatewayHash = Self.gatewayIdentityHash(gatewayID)
-        let existingPhase = try stateQueue.read { db in
-            try Int.fetchOne(
-                db,
-                sql: "SELECT cleanup_phase FROM forgotten_gateways WHERE gateway_hash = ?",
-                arguments: [gatewayHash])
-        }
+        let existingPhase = try self.gatewayRemovalPhase(gatewayHash: gatewayHash)
         if existingPhase == GatewayRemovalPhase.committing.rawValue {
             try self.commitGatewayRemoval(gatewayID: gatewayID)
         } else if existingPhase == GatewayRemovalPhase.scrubbing.rawValue {
@@ -152,12 +149,7 @@ public final class OpenClawClientDatabases: @unchecked Sendable {
     /// metadata. A failed commit remains staged for startup reconciliation.
     public func commitGatewayRemoval(gatewayID: String) throws {
         let gatewayHash = Self.gatewayIdentityHash(gatewayID)
-        let existingPhase = try stateQueue.read { db in
-            try Int.fetchOne(
-                db,
-                sql: "SELECT cleanup_phase FROM forgotten_gateways WHERE gateway_hash = ?",
-                arguments: [gatewayHash])
-        }
+        let existingPhase = try self.gatewayRemovalPhase(gatewayHash: gatewayHash)
         if existingPhase == GatewayRemovalPhase.scrubbing.rawValue {
             try self.finishGatewayRemovalScrub(gatewayHash: gatewayHash)
             return
@@ -198,6 +190,12 @@ public final class OpenClawClientDatabases: @unchecked Sendable {
                 arguments: [gatewayID])
         }
         try self.cacheQueue.write { db in
+            try db.execute(
+                sql: "DELETE FROM cached_agent_sessions WHERE gateway_id = ?",
+                arguments: [gatewayID])
+            try db.execute(
+                sql: "DELETE FROM cached_session_rosters WHERE gateway_id = ?",
+                arguments: [gatewayID])
             try db.execute(sql: "DELETE FROM cached_sessions WHERE gateway_id = ?", arguments: [gatewayID])
             try db.execute(sql: "DELETE FROM cached_transcripts WHERE gateway_id = ?", arguments: [gatewayID])
         }
@@ -220,6 +218,15 @@ public final class OpenClawClientDatabases: @unchecked Sendable {
                 arguments: [gatewayHash])
         }
         try self.finishGatewayRemovalScrub(gatewayHash: gatewayHash)
+    }
+
+    private func gatewayRemovalPhase(gatewayHash: String) throws -> Int? {
+        try self.stateQueue.read { db in
+            try Int.fetchOne(
+                db,
+                sql: "SELECT cleanup_phase FROM forgotten_gateways WHERE gateway_hash = ?",
+                arguments: [gatewayHash])
+        }
     }
 
     /// Cancels an uncommitted forget when the registry owner could not remove
@@ -430,157 +437,28 @@ extension OpenClawClientDatabases {
             path: url.path,
             configuration: self.configuration(label: "OpenClaw.client-state"))
         var migrator = DatabaseMigrator()
-        migrator.registerMigration("client-state-v1") { db in
-            try db.execute(sql: """
-            CREATE TABLE forgotten_gateways(
-                gateway_hash TEXT NOT NULL PRIMARY KEY,
-                gateway_id TEXT,
-                forgotten_at REAL NOT NULL,
-                cleanup_phase INTEGER NOT NULL CHECK(cleanup_phase IN (0, 1, 2, 3)),
-                restore_finalized INTEGER NOT NULL DEFAULT 0
-                    CHECK(restore_finalized IN (0, 1)),
-                CHECK((cleanup_phase IN (1, 2) AND gateway_id IS NOT NULL) OR
-                      (cleanup_phase IN (0, 3) AND gateway_id IS NULL AND restore_finalized = 0))
-            );
-            CREATE TABLE gateway_routing_identity(
-                gateway_id TEXT NOT NULL PRIMARY KEY,
-                scope TEXT NOT NULL,
-                main_session_key TEXT NOT NULL,
-                default_agent_id TEXT NOT NULL,
-                updated_at REAL NOT NULL
-            );
-                CREATE TABLE outbox_commands(
-                    enqueue_sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-                    gateway_id TEXT NOT NULL,
-                    client_uuid TEXT NOT NULL,
-                session_key TEXT NOT NULL,
-                delivery_session_key TEXT NOT NULL,
-                routing_contract TEXT NOT NULL,
-                agent_id TEXT NOT NULL,
-                text TEXT NOT NULL,
-                thinking TEXT NOT NULL,
-                created_at REAL NOT NULL,
-                status TEXT NOT NULL CHECK(status IN (
-                    'queued', 'sending', 'awaiting_confirmation', 'failed'
-                )),
-                    retry_count INTEGER NOT NULL DEFAULT 0,
-                    last_error TEXT NOT NULL DEFAULT '',
-                    attachment_bytes INTEGER NOT NULL DEFAULT 0,
-                    UNIQUE(gateway_id, client_uuid)
-                );
-                CREATE INDEX outbox_commands_delivery_order
-                    ON outbox_commands(gateway_id, created_at, enqueue_sequence);
-            CREATE TABLE outbox_attachments(
-                gateway_id TEXT NOT NULL,
-                command_id TEXT NOT NULL,
-                position INTEGER NOT NULL,
-                type TEXT NOT NULL,
-                mime_type TEXT NOT NULL,
-                file_name TEXT NOT NULL,
-                payload BLOB NOT NULL,
-                duration_seconds REAL,
-                PRIMARY KEY(gateway_id, command_id, position),
-                FOREIGN KEY(gateway_id, command_id)
-                    REFERENCES outbox_commands(gateway_id, client_uuid)
-                    ON DELETE CASCADE
-                    ON UPDATE CASCADE
-            );
-            """)
-        }
-        // Additive branch ownership remains local client state. Older app
-        // builds ignore these fields while newer builds fail replay closed.
-        migrator.registerMigration("client-state-branch-ownership-v2") { db in
-            try db.execute(sql: """
-            ALTER TABLE outbox_commands ADD COLUMN branch_epoch INTEGER NOT NULL DEFAULT 0;
-            ALTER TABLE outbox_commands ADD COLUMN attempt_version INTEGER NOT NULL DEFAULT 1;
-            ALTER TABLE outbox_commands ADD COLUMN parked_was_accepted INTEGER NOT NULL DEFAULT 0;
-            CREATE TABLE outbox_branch_scopes(
-                gateway_id TEXT NOT NULL,
-                session_key TEXT NOT NULL,
-                agent_id TEXT NOT NULL DEFAULT '',
-                branch_epoch INTEGER NOT NULL DEFAULT 0,
-                last_active_leaf_id TEXT,
-                switch_pending_since REAL,
-                needs_reconciliation INTEGER NOT NULL DEFAULT 0,
-                PRIMARY KEY(gateway_id, session_key, agent_id)
-            );
-            """)
-        }
-        migrator.registerMigration("client-state-branch-revision-v3") { db in
-            try db.execute(sql: """
-            ALTER TABLE outbox_branch_scopes
-                ADD COLUMN branch_state_revision INTEGER NOT NULL DEFAULT 0;
-            """)
-        }
-        migrator.registerMigration("client-state-agent-id-v4") { db in
-            try db.execute(sql: "UPDATE outbox_commands SET agent_id = '' WHERE agent_id IS NULL")
-            try db.execute(sql: "UPDATE outbox_branch_scopes SET agent_id = '' WHERE agent_id IS NULL")
-        }
-        migrator.registerMigration("client-state-outbox-attempt-scope-v5") { db in
-            try db
-                .execute(
-                    sql: "ALTER TABLE outbox_commands ADD COLUMN had_unacknowledged_send INTEGER NOT NULL DEFAULT 0")
-            // Legacy rows with prior attempts may have reached the gateway before a
-            // transport failure; without this evidence a post-park retry would reuse an
-            // idempotency key the old branch may already own.
-            try db.execute(
-                sql: """
-                UPDATE outbox_commands SET had_unacknowledged_send = 1
-                WHERE retry_count > 0 OR status IN ('sending', 'awaiting_confirmation')
-                """)
-            try db.execute(sql: """
-            INSERT OR IGNORE INTO outbox_branch_scopes(
-                gateway_id, session_key, agent_id, branch_epoch, needs_reconciliation
-            )
-            SELECT gateway_id, session_key, agent_id, 0, 1 FROM outbox_commands
-            """)
-        }
-        migrator.registerMigration("client-state-outbox-attachment-rekey-v6") { db in
-            try db.execute(sql: """
-            CREATE TABLE outbox_attachments_v6(
-                gateway_id TEXT NOT NULL,
-                command_id TEXT NOT NULL,
-                position INTEGER NOT NULL,
-                type TEXT NOT NULL,
-                mime_type TEXT NOT NULL,
-                file_name TEXT NOT NULL,
-                payload BLOB NOT NULL,
-                duration_seconds REAL,
-                PRIMARY KEY(gateway_id, command_id, position),
-                FOREIGN KEY(gateway_id, command_id)
-                    REFERENCES outbox_commands(gateway_id, client_uuid)
-                    ON DELETE CASCADE
-                    ON UPDATE CASCADE
-            );
-            INSERT INTO outbox_attachments_v6(
-                gateway_id, command_id, position, type, mime_type, file_name, payload, duration_seconds
-            )
-            SELECT gateway_id, command_id, position, type, mime_type, file_name, payload, duration_seconds
-            FROM outbox_attachments;
-            DROP TABLE outbox_attachments;
-            ALTER TABLE outbox_attachments_v6 RENAME TO outbox_attachments;
-            """)
-        }
+        self.registerClientStateMigrationsV1ThroughV5(&migrator)
+        self.registerClientStateMigrationsV6ThroughV8(&migrator)
+        self.registerWatchMessageJournalMigration(&migrator)
         try migrator.migrate(queue)
         return queue
     }
 
     private static func openRepairableCacheDatabase(at url: URL) throws -> DatabaseQueue {
-        do {
+        func openCache() throws -> DatabaseQueue {
             let queue = try DatabaseQueue(
                 path: url.path,
                 configuration: self.configuration(label: "OpenClaw.gateway-cache"))
             try self.prepareCacheSchema(queue)
             return queue
+        }
+        do {
+            return try openCache()
         } catch {
             // This file contains gateway snapshots only. A format mismatch or
             // corruption is repaired by rebuilding, never by migrating rows.
             self.removeDatabaseFiles(at: url)
-            let queue = try DatabaseQueue(
-                path: url.path,
-                configuration: self.configuration(label: "OpenClaw.gateway-cache"))
-            try self.prepareCacheSchema(queue)
-            return queue
+            return try openCache()
         }
     }
 
@@ -641,7 +519,33 @@ extension OpenClawClientDatabases {
             INSERT OR REPLACE INTO cache_metadata(id, format_version)
                 VALUES (1, \(self.gatewayCacheFormatVersion));
             """)
+            try self.ensureAgentSessionCacheSchema(db)
         }
+    }
+
+    private static func ensureAgentSessionCacheSchema(_ db: Database) throws {
+        try db.execute(sql: """
+        CREATE TABLE IF NOT EXISTS cached_session_rosters(
+            gateway_id TEXT NOT NULL,
+            agent_id TEXT NOT NULL,
+            last_used_at REAL NOT NULL,
+            PRIMARY KEY(gateway_id, agent_id)
+        );
+        CREATE TABLE IF NOT EXISTS cached_agent_sessions(
+            gateway_id TEXT NOT NULL,
+            agent_id TEXT NOT NULL,
+            session_key TEXT NOT NULL,
+            position INTEGER NOT NULL,
+            updated_at REAL NOT NULL,
+            payload_json TEXT NOT NULL,
+            PRIMARY KEY(gateway_id, agent_id, session_key),
+            FOREIGN KEY(gateway_id, agent_id)
+                REFERENCES cached_session_rosters(gateway_id, agent_id)
+                ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS cached_agent_sessions_order
+            ON cached_agent_sessions(gateway_id, agent_id, position);
+        """)
     }
 }
 
@@ -678,7 +582,7 @@ extension OpenClawClientDatabases {
     }
 
     private func importLegacyDatabases(registeredGatewayIDs: RegisteredGatewayIDs?) {
-        let directories = [self.directoryURL] + self.legacyDirectoryURLs
+        let directories = [directoryURL] + self.legacyDirectoryURLs
         let legacyURLs = Set(directories.flatMap(Self.legacyDatabaseURLs(in:)))
         for legacyURL in legacyURLs.sorted(by: { $0.path < $1.path }) {
             do {
@@ -699,7 +603,7 @@ extension OpenClawClientDatabases {
                 try self.writeLegacySnapshot(ownedSnapshot)
                 // Preserve bytes for unregistered gateways rather than
                 // importing or destroying state whose ownership is unknown.
-                let forgottenGatewayHashes = try forgottenGatewayHashesForLegacyImport()
+                let forgottenGatewayHashes = try self.stateQueue.read(Self.forgottenGatewayHashesForLegacyImport)
                 let allLegacyGatewaysAccountedFor = legacyGatewayIDs.allSatisfy { gatewayID in
                     registeredGatewayIDs?.contains(gatewayID) == true ||
                         forgottenGatewayHashes.contains(Self.gatewayIdentityHash(gatewayID))
@@ -825,12 +729,7 @@ extension OpenClawClientDatabases {
 
     private func writeLegacySnapshot(_ snapshot: LegacySnapshot) throws {
         try self.stateQueue.write { db in
-            let forgottenGatewayHashes = try Set(String.fetchAll(
-                db,
-                sql: """
-                SELECT gateway_hash FROM forgotten_gateways
-                WHERE cleanup_phase IN (0, 2, 3) OR restore_finalized = 1
-                """))
+            let forgottenGatewayHashes = try Self.forgottenGatewayHashesForLegacyImport(db)
             for identity in snapshot.routingIdentities
                 where !forgottenGatewayHashes.contains(Self.gatewayIdentityHash(identity.gatewayID))
             {
@@ -889,37 +788,45 @@ extension OpenClawClientDatabases {
                     ) VALUES (?, ?, ?, 0, 1)
                     """,
                     arguments: [command.gatewayID, command.sessionKey, command.agentID])
-                for (position, attachment) in command.attachments.enumerated() {
-                    try db.execute(
-                        sql: """
-                        INSERT INTO outbox_attachments(
-                            gateway_id, command_id, position, type, mime_type,
-                            file_name, payload, duration_seconds
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        arguments: [
-                            command.gatewayID,
-                            command.id,
-                            position,
-                            attachment.type,
-                            attachment.mimeType,
-                            attachment.fileName,
-                            attachment.data,
-                            attachment.durationSeconds,
-                        ])
-                }
+                try Self.insertOutboxAttachments(
+                    command.attachments, in: db, gatewayID: command.gatewayID, commandID: command.id)
             }
         }
     }
 
-    private func forgottenGatewayHashesForLegacyImport() throws -> Set<String> {
-        try self.stateQueue.read { db in
-            try Set(String.fetchAll(
-                db,
+    private static func forgottenGatewayHashesForLegacyImport(_ db: Database) throws -> Set<String> {
+        try Set(String.fetchAll(
+            db,
+            sql: """
+            SELECT gateway_hash FROM forgotten_gateways
+            WHERE cleanup_phase IN (0, 2, 3) OR restore_finalized = 1
+            """))
+    }
+
+    static func insertOutboxAttachments(
+        _ attachments: [OpenClawChatOutboxAttachment],
+        in db: Database,
+        gatewayID: String,
+        commandID: String) throws
+    {
+        for (position, attachment) in attachments.enumerated() {
+            try db.execute(
                 sql: """
-                SELECT gateway_hash FROM forgotten_gateways
-                WHERE cleanup_phase IN (0, 2, 3) OR restore_finalized = 1
-                """))
+                INSERT INTO outbox_attachments(
+                    gateway_id, command_id, position, type, mime_type,
+                    file_name, payload, duration_seconds
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                arguments: [
+                    gatewayID,
+                    commandID,
+                    position,
+                    attachment.type,
+                    attachment.mimeType,
+                    attachment.fileName,
+                    attachment.data,
+                    attachment.durationSeconds,
+                ])
         }
     }
 }

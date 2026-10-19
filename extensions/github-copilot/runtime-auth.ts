@@ -1,4 +1,3 @@
-// GitHub Copilot source-token validation and account endpoint resolution.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { PUBLIC_GITHUB_COPILOT_DOMAIN, resolveGithubCopilotDomain } from "./domain.js";
@@ -39,10 +38,8 @@ function parseCopilotApiBaseUrl(value: unknown, domain: string): string {
   if (typeof api !== "string" || !api.trim()) {
     throw new Error("GitHub Copilot user response has an invalid endpoints.api URL");
   }
-  let url: URL;
-  try {
-    url = new URL(api);
-  } catch {
+  const url = URL.parse(api);
+  if (!url) {
     throw new Error("GitHub Copilot user response has an invalid endpoints.api URL");
   }
   const host = url.hostname.toLowerCase();
@@ -57,12 +54,6 @@ function parseCopilotApiBaseUrl(value: unknown, domain: string): string {
     throw new Error("GitHub Copilot user response has an untrusted endpoints.api URL");
   }
   return url.href.replace(/\/+$/, "");
-}
-
-async function cancelUnreadResponseBody(response: Response): Promise<void> {
-  if (!response.bodyUsed) {
-    await response.body?.cancel().catch(() => undefined);
-  }
 }
 
 export async function resolveCopilotRuntimeAuth(params: {
@@ -95,7 +86,10 @@ export async function resolveCopilotRuntimeAuth(params: {
       signal,
     });
     if (!response.ok) {
-      await cancelUnreadResponseBody(response);
+      // A capture tee must not delay the already-known authentication failure.
+      if (!response.bodyUsed) {
+        void response.body?.cancel().catch(() => undefined);
+      }
       throw new CopilotRuntimeAuthError({ reason: "http_error", status: response.status });
     }
     const baseUrl = parseCopilotApiBaseUrl(

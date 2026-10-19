@@ -1,30 +1,78 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { attachRuntimePromptMediaFacts } from "../../../media/media-facts.js";
 import type { ProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
+import type { SandboxContext } from "../../sandbox/types.js";
 import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
+import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
+import { resolveAttemptWorkspaceSandbox } from "../../workspace-sandbox.js";
+import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
+import { prepareEmbeddedSkills } from "../skill-runtime.js";
+import { buildEmbeddedForegroundPromptContext } from "./agent-end-context.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
+const { resolveSandboxContext: resolveRealSandboxContext } = await vi.importActual<
+  typeof import("../../sandbox/context.js")
+>("../../sandbox/context.js");
 const resolveProviderRuntimePluginHandle = vi.hoisted(() => vi.fn());
-const resolveSandboxContext = vi.hoisted(() => vi.fn(async () => null));
+const resolveSandboxContext = vi.hoisted(() =>
+  vi.fn<typeof resolveRealSandboxContext>(async () => null),
+);
 
 vi.mock("../../../plugins/provider-hook-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../plugins/provider-hook-runtime.js")>()),
   resolveProviderRuntimePluginHandle,
 }));
 
-vi.mock("../../sandbox.js", () => ({ resolveSandboxContext }));
+vi.mock("../../sandbox/context.js", async () => ({
+  ...(await vi.importActual<typeof import("../../sandbox/context.js")>("../../sandbox/context.js")),
+  resolveSandboxContext,
+}));
 
 import {
   installEmbeddedAttemptContextGuards,
   prepareEmbeddedAttemptSetup,
-  resolveAttemptWorkspaceSandbox,
 } from "./attempt-setup.js";
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const attemptModel = makeProviderModelFixture({
+  id: "gpt-5.4",
+  provider: "openai",
+  api: "openai-responses",
+  baseUrl: "https://api.openai.com/v1",
+  reasoning: true,
+});
+
+function sandboxContext(workspaceAccess: SandboxContext["workspaceAccess"]): SandboxContext {
+  return {
+    enabled: true,
+    backendId: "docker",
+    sessionKey: "agent:main:skill-collection-review",
+    workspaceDir: path.join(os.tmpdir(), "openclaw-sandbox-workspace"),
+    agentWorkspaceDir: path.join(os.tmpdir(), "openclaw-agent-workspace"),
+    workspaceAccess,
+    runtimeId: "sandbox-runtime",
+    runtimeLabel: "sandbox",
+    containerName: "openclaw-sandbox",
+    containerWorkdir: "/workspace",
+    docker: {
+      image: "openclaw-sandbox",
+      containerPrefix: "openclaw-sandbox",
+      workdir: "/workspace",
+      readOnlyRoot: false,
+      tmpfs: [],
+      network: "none",
+      capDrop: [],
+    },
+    tools: {},
+    browserAllowHostControl: false,
+  };
+}
 
 describe("prepareEmbeddedAttemptSetup", () => {
   beforeEach(() => {
@@ -32,25 +80,52 @@ describe("prepareEmbeddedAttemptSetup", () => {
     resolveSandboxContext.mockClear();
   });
 
-  it("prepares the default and session agent identities together", async () => {
-    const setup = await prepareEmbeddedAttemptSetup({
-      config: {
-        agents: {
-          list: [{ id: "main", default: true }, { id: "marketing" }],
+  it.each([undefined, "agent:main:policy"])(
+    "prepares a detached global workspace with policy %s",
+    async (sandboxSessionKey) => {
+      resolveSandboxContext.mockImplementationOnce(resolveRealSandboxContext);
+      const workspaceDir = tempDirs.make("openclaw-global-attempt-");
+      const foreground = {
+        agentId: "marketing",
+        sessionId: "global-attempt",
+        sessionKey: "global",
+        sandboxSessionKey,
+        workspaceDir,
+      };
+      const setup = await resolveAttemptWorkspaceSandbox({
+        ...foreground,
+        ...buildEmbeddedForegroundPromptContext(foreground, workspaceDir),
+        sessionId: "detached-review",
+        sessionKey: "agent:marketing:review",
+        config: {
+          agents: {
+            ownership: "explicit",
+            defaults: { sandbox: { mode: "off" } },
+            entries: { main: {}, marketing: {} },
+          },
         },
-      },
-      modelId: "gpt-5.4",
-      provider: "openai",
-      runId: "run-prepared-agent-identities",
-      sessionId: "session-prepared-agent-identities",
-      sessionKey: "agent:marketing:main",
-      thinkLevel: "high",
-      timeoutMs: 30_000,
-      workspaceDir: path.join(os.tmpdir(), "openclaw-attempt-setup-agent-identities"),
-    } as unknown as EmbeddedRunAttemptParams);
+      });
+      expect(setup.sessionAgentId).toBe("marketing");
+      expect(setup.sandbox).toBeNull();
+      expect(setup.effectiveWorkspace).toBe(workspaceDir);
+    },
+  );
 
-    expect(setup.defaultAgentId).toBe("main");
-    expect(setup.sessionAgentId).toBe("marketing");
+  it("does not apply an execution owner to an independent unscoped sandbox policy", async () => {
+    resolveSandboxContext.mockImplementationOnce(resolveRealSandboxContext);
+    const workspaceDir = tempDirs.make("openclaw-policy-attempt-");
+    await expect(
+      resolveAttemptWorkspaceSandbox({
+        agentId: "marketing",
+        config: {
+          agents: { ownership: "explicit", entries: { main: {}, marketing: {} } },
+        },
+        sessionId: "policy-attempt",
+        sessionKey: "agent:marketing:main",
+        sandboxSessionKey: "global",
+        workspaceDir,
+      }),
+    ).rejects.toThrow("Pass an agentId");
   });
 
   it("hydrates recent history media from the prepared session agent workspace", async () => {
@@ -65,7 +140,7 @@ describe("prepareEmbeddedAttemptSetup", () => {
       activeSession: { agent, settingsManager } as never,
       agentDir: workspaceDir,
       attempt: {
-        config: { agents: { list: [{ id: "marketing", workspace: workspaceDir }] } },
+        config: { agents: { entries: { marketing: { workspace: workspaceDir } } } },
         contextTokenBudget: 32_000,
         model: { input: ["text", "image"] },
         modelId: "gpt-5.4",
@@ -79,6 +154,9 @@ describe("prepareEmbeddedAttemptSetup", () => {
       getPrePromptMessageCount: () => 0,
       getPromptCache: () => undefined,
       getPromptCacheRetention: () => undefined,
+      getCompactionReplayEnabled: () => false,
+      getServerToolClearingEnabled: () => false,
+      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
       getSystemPrompt: () => "",
       isOpenAIResponsesApi: false,
       repairToolUseResultPairing: false,
@@ -109,6 +187,7 @@ describe("prepareEmbeddedAttemptSetup", () => {
   it("prepares one closed session permission policy", async () => {
     const root = path.join(os.tmpdir(), "openclaw-attempt-permission-root");
     const setup = await prepareEmbeddedAttemptSetup({
+      model: attemptModel,
       config: {},
       modelId: "gpt-5.4",
       permissionMode: "workspace",
@@ -124,83 +203,30 @@ describe("prepareEmbeddedAttemptSetup", () => {
     expect(setup.sessionPermissionPolicy).toEqual({ root, mode: "workspace" });
   });
 
-  it("passes the resolved skill snapshot into sandbox synchronization", async () => {
-    const skillsSnapshot = {
-      prompt: "skills",
-      skills: [{ name: "alpha" }],
-      resolvedSkills: [],
-      version: 42,
-    };
+  it("keeps collection review in the Workshop workspace with read-write sandbox access", async () => {
+    const workspaceDir = tempDirs.make("openclaw-attempt-setup-collection-review-rw-");
+    resolveSandboxContext.mockResolvedValueOnce(sandboxContext("rw"));
 
-    await prepareEmbeddedAttemptSetup({
-      config: {},
-      modelId: "gpt-5.4",
-      provider: "openai",
-      runId: "run-sandbox-skills",
-      sessionId: "session-sandbox-skills",
-      sessionKey: "agent:main:main",
-      skillsSnapshot,
-      thinkLevel: "high",
-      timeoutMs: 30_000,
-      workspaceDir: path.join(os.tmpdir(), "openclaw-attempt-setup-sandbox-skills"),
-    } as unknown as EmbeddedRunAttemptParams);
+    const setup = await resolveAttemptWorkspaceSandbox({
+      agentId: "main",
+      config: { agents: { defaults: { sandbox: { mode: "all", workspaceAccess: "rw" } } } },
+      sessionId: "session-collection-review-rw",
+      sessionKey: "agent:main:skill-collection-review",
+      workspaceDir,
+    });
 
-    expect(resolveSandboxContext).toHaveBeenCalledWith(expect.objectContaining({ skillsSnapshot }));
+    expect(setup.effectiveWorkspace).toBe(workspaceDir);
   });
 
-  it.each(["ro", "rw"] as const)(
-    "keeps collection review on the host workspace with %s sandbox access",
-    async (workspaceAccess) => {
-      const workspaceDir = path.join(os.tmpdir(), "openclaw-attempt-setup-collection-review");
-      const setup = await resolveAttemptWorkspaceSandbox({
-        agentId: "main",
-        config: { agents: { defaults: { sandbox: { mode: "all", workspaceAccess } } } },
-        sessionId: "session-collection-review",
-        sessionKey: "agent:main:skill-collection-review",
-        skillWorkshopCollectionReconcile: {},
-        workspaceDir,
-      });
-
-      expect(resolveSandboxContext).not.toHaveBeenCalled();
-      expect(setup.effectiveWorkspace).toBe(workspaceDir);
-    },
-  );
-
-  it("reuses lifecycle metadata and the provider handle from the runtime plan", async () => {
-    const metadataSnapshot = { plugins: [] } as never;
-    const workspaceDir = path.join(os.tmpdir(), "openclaw-attempt-setup-prepared");
-    const providerRuntimeHandle: ProviderRuntimePluginHandle & { prepared: true } = {
-      provider: "openai",
-      modelId: "gpt-5.4",
-      prepared: true,
-      workspaceDir,
-      plugin: {} as never,
-    };
-    const setup = await prepareEmbeddedAttemptSetup({
-      config: {},
-      modelId: "gpt-5.4",
-      provider: "openai",
-      runId: "run-prepared",
-      sessionId: "session-prepared",
-      thinkLevel: "high",
-      timeoutMs: 30_000,
-      workspaceDir,
-      preparedModelRuntime: { metadataSnapshot } as never,
-      runtimePlan: { providerRuntimeHandle } as never,
-    } as unknown as EmbeddedRunAttemptParams);
-
-    expect(setup.getCurrentAttemptPluginMetadataSnapshot()).toBe(metadataSnapshot);
-    expect(setup.getProviderRuntimeHandle()).toBe(providerRuntimeHandle);
-    expect(resolveProviderRuntimePluginHandle).not.toHaveBeenCalled();
-  });
-
-  it("resolves partial handles without trusting scoped metadata", async () => {
+  it("resolves partial handles with the exact lifecycle metadata", async () => {
     const resolvedHandle: ProviderRuntimePluginHandle = {
       provider: "openai",
       modelId: "gpt-5.4",
     };
     resolveProviderRuntimePluginHandle.mockReturnValue(resolvedHandle);
+    const metadataSnapshot = { pluginIds: ["other"] };
     const setup = await prepareEmbeddedAttemptSetup({
+      model: attemptModel,
       config: {},
       modelId: "gpt-5.4",
       provider: "openai",
@@ -210,7 +236,7 @@ describe("prepareEmbeddedAttemptSetup", () => {
       timeoutMs: 30_000,
       workspaceDir: path.join(os.tmpdir(), "openclaw-attempt-setup-partial"),
       preparedModelRuntime: {
-        metadataSnapshot: { pluginIds: ["other"] },
+        metadataSnapshot,
       } as never,
       runtimePlan: { providerRuntimeHandle: { provider: "openai" } } as never,
     } as unknown as EmbeddedRunAttemptParams);
@@ -222,6 +248,63 @@ describe("prepareEmbeddedAttemptSetup", () => {
     expect(resolveProviderRuntimePluginHandle).toHaveBeenCalledOnce();
     const call = resolveProviderRuntimePluginHandle.mock.calls[0]?.[0];
     expect(call).toMatchObject({ provider: "openai", modelId: "gpt-5.4" });
-    expect(call).not.toHaveProperty("pluginMetadataSnapshot");
+    expect(call?.pluginMetadataSnapshot).toBe(metadataSnapshot);
+  });
+});
+
+describe("prepareEmbeddedSkills", () => {
+  it.each([
+    { label: "unrestricted", toolExecutionAllow: undefined, readable: true },
+    { label: "read denied", toolExecutionAllow: ["skill_workshop"], readable: false },
+  ])("prepares readable skills with $label execution", async ({ toolExecutionAllow, readable }) => {
+    const agentWorkspace = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-skills-")),
+    );
+    const executionWorkspace = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-execution-skills-")),
+    );
+    const writeSkill = async (workspaceDir: string, name: string) => {
+      const skillDir = path.join(workspaceDir, "skills", name);
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.writeFile(
+        path.join(skillDir, "SKILL.md"),
+        `---\nname: ${name}\ndescription: ${name} description\n---\n\n# ${name}\n`,
+      );
+    };
+    await writeSkill(agentWorkspace, "agent-workspace-skill");
+    await writeSkill(executionWorkspace, "execution-workspace-skill");
+
+    try {
+      const prepared = await prepareEmbeddedSkills({
+        includeCodeModeSkills: true,
+        attempt: {
+          bootstrapWorkspaceDir: agentWorkspace,
+          config: {},
+          toolExecutionAllow,
+        } as EmbeddedRunAttemptParams,
+        effectiveWorkspace: executionWorkspace,
+        sandbox: null,
+        sessionAgentId: "main",
+      });
+      try {
+        if (readable) {
+          expect(prepared.skillsPrompt).toContain("agent-workspace-skill");
+          expect(prepared.skillsPrompt).toContain("execution-workspace-skill");
+          expect(prepared.codeModeSkills.map((skill) => skill.name)).toEqual(
+            expect.arrayContaining(["agent-workspace-skill", "execution-workspace-skill"]),
+          );
+        } else {
+          expect(prepared.skillsPrompt).toBe("");
+          expect(prepared.codeModeSkills).toEqual([]);
+          expect(prepared.skillsSnapshotForRun).toBeUndefined();
+          expect(prepared.skillUsagePaths).toBeUndefined();
+        }
+      } finally {
+        prepared.restoreSkillEnv();
+      }
+    } finally {
+      await fs.rm(agentWorkspace, { recursive: true, force: true });
+      await fs.rm(executionWorkspace, { recursive: true, force: true });
+    }
   });
 });

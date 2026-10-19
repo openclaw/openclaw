@@ -1,7 +1,12 @@
 // Comfy helper module supports test helpers behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  createCapturedPluginRegistration,
+  requireRegisteredProvider,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
 import { expect, vi } from "vitest";
+import plugin from "./index.js";
 
 type FetchGuardMock = ReturnType<typeof vi.fn>;
 
@@ -17,8 +22,17 @@ type ComfyCloudJobResponseOptions = {
   filename: string;
   outputKind: "gifs" | "images";
   promptId: string;
-  redirectLocation?: string;
 };
+
+export function registerComfyProviders() {
+  const captured = createCapturedPluginRegistration();
+  plugin.register(captured.api);
+  return {
+    image: requireRegisteredProvider(captured.imageGenerationProviders, "comfy"),
+    music: requireRegisteredProvider(captured.musicGenerationProviders, "comfy"),
+    video: requireRegisteredProvider(captured.videoGenerationProviders, "comfy"),
+  };
+}
 
 export function buildComfyConfig(config: Record<string, unknown>): OpenClawConfig {
   return {
@@ -89,7 +103,7 @@ export function mockComfyCloudJobResponses(
     );
 }
 
-function fetchGuardJson(body: unknown) {
+export function fetchGuardJson(body: unknown) {
   return fetchGuardResponse(
     new Response(JSON.stringify(body), {
       status: 200,

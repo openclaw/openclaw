@@ -1,8 +1,12 @@
+import { isDeepStrictEqual } from "node:util";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
-import { applyInputProvenanceToUserMessage, normalizeInputProvenance } from "./input-provenance.js";
+import { captureRequesterOrigin } from "../agents/requester-origin.js";
+import type { MsgContext } from "../auto-reply/templating.js";
+import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
+import { normalizeInputProvenance } from "./input-provenance.js";
 import type {
   PersistedUserTurnMessage,
   UserTurnInput,
@@ -13,24 +17,34 @@ const REPLY_PREVIEW_TEXT_MAX_CHARS = 2000;
 const REPLY_PREVIEW_SENDER_MAX_CHARS = 200;
 const STEER_TARGET_RUN_ID_MAX_CHARS = 512;
 
+export function buildRunUserTurnIdempotencyKey(runId: string): string {
+  return `${runId}:user`;
+}
+
 export function normalizePersistedSteerTargetRunId(value: unknown): string | undefined {
   const normalized = normalizeOptionalString(value);
   return normalized && normalized.length <= STEER_TARGET_RUN_ID_MAX_CHARS ? normalized : undefined;
 }
 
-function buildUserTurnSenderMeta(
-  sender: UserTurnInput["sender"],
-): Record<string, string> | undefined {
-  const senderId = normalizeOptionalString(sender?.id);
-  const senderName = normalizeOptionalString(sender?.name);
-  const senderUsername = normalizeOptionalString(sender?.username);
-  if (!senderId && !senderName && !senderUsername) {
-    return undefined;
-  }
+/** Channel source facts qualify an observation, never an authenticated Gateway profile. */
+export function buildChannelUserTurnSender(ctx: MsgContext): UserTurnInput["sender"] {
+  const id = normalizeOptionalString(ctx.SenderId);
   return {
-    ...(senderId ? { senderId } : {}),
-    ...(senderName ? { senderName } : {}),
-    ...(senderUsername ? { senderUsername } : {}),
+    id,
+    name: normalizeOptionalString(ctx.SenderName),
+    username: normalizeOptionalString(ctx.SenderUsername),
+    ...(id
+      ? {
+          identity: {
+            type: "observation",
+            id,
+            pluginId: normalizeOptionalString(ctx.Provider ?? ctx.Surface) ?? null,
+            accountId: normalizeOptionalString(ctx.AccountId) ?? null,
+            senderKind:
+              ctx.SenderIsBot === true ? "bot" : ctx.SenderIsBot === false ? "human" : "unknown",
+          },
+        }
+      : {}),
   };
 }
 
@@ -38,10 +52,21 @@ export function buildPersistedUserTurnMetadata(
   input: UserTurnInput,
   normalizedMedia: readonly unknown[],
 ): Record<string, unknown> {
+  const senderId = normalizeOptionalString(input.sender?.id);
+  const senderName = normalizeOptionalString(input.sender?.name);
+  const senderUsername = normalizeOptionalString(input.sender?.username);
+  const senderIdentity =
+    input.display !== false && (!input.provenance || input.provenance.kind === "external_user")
+      ? readTranscriptSenderIdentity(input.sender?.identity)
+      : undefined;
   const replyToId = normalizeOptionalString(input.replyToId);
   const replyPreviewText = normalizeOptionalString(input.replyToPreview?.text);
   const replyPreviewSender = normalizeOptionalString(input.replyToPreview?.senderLabel);
+  const requesterOrigin = input.requesterOrigin
+    ? captureRequesterOrigin({ requesterOrigin: input.requesterOrigin })
+    : undefined;
   return {
+    ...(requesterOrigin ? { requesterOrigin } : {}),
     // Privileged synthetic handoffs may execute owner tools but never author trusted memory.
     ...(input.senderIsOwner === undefined
       ? {}
@@ -49,7 +74,14 @@ export function buildPersistedUserTurnMetadata(
           senderIsOwner:
             input.senderIsOwner && (!input.provenance || input.provenance.kind === "external_user"),
         }),
-    ...buildUserTurnSenderMeta(input.sender),
+    ...(senderId ? { senderId } : {}),
+    ...(senderName ? { senderName } : {}),
+    ...(senderUsername ? { senderUsername } : {}),
+    ...(senderIdentity && senderIdentity.id === senderId ? { senderIdentity } : {}),
+    ...(input.workContext ? { workContext: structuredClone(input.workContext) } : {}),
+    ...(input.mentions?.length
+      ? { humanMentions: input.mentions.map((mention) => ({ ...mention })) }
+      : {}),
     ...(replyToId ? { replyToId } : {}),
     ...(replyPreviewText
       ? {
@@ -66,7 +98,7 @@ export function buildPersistedUserTurnMetadata(
           },
         }
       : {}),
-    ...(input.transport ? { transport: input.transport } : {}),
+    ...(input.transport ? { transport: structuredClone(input.transport) } : {}),
     ...(normalizedMedia.length > 0 ? { media: normalizedMedia } : {}),
     ...(input.mediaImageLayout
       ? {
@@ -82,10 +114,6 @@ export function buildPersistedUserTurnMetadata(
       : {}),
   };
 }
-
-type AgentMessageWithOpenClawMetadata = AgentMessage & {
-  __openclaw?: Record<string, unknown>;
-};
 
 export function rewritePersistedSteerTargetRunId(
   message: PersistedUserTurnMessage | undefined,
@@ -107,19 +135,44 @@ export function rewritePersistedSteerTargetRunId(
   return nextMessage;
 }
 
-/** Restores producer metadata that write hooks must not be able to forge or erase. */
-export function restorePreparedUserTurnOperationalMetaForRuntime(params: {
-  runtimeMessage: AgentMessage;
-  preparedMessage?: PersistedUserTurnMessage;
-}): AgentMessage {
+/**
+ * Runtime hooks may rewrite roles and redact display/transport fields. Restore only
+ * operational facts here; canonical admission preparation deliberately protects more.
+ */
+export function restorePreparedUserTurnOperationalMetaForRuntime<
+  TMessage extends AgentMessage,
+>(params: { runtimeMessage: TMessage; preparedMessage?: PersistedUserTurnMessage }): TMessage {
   if (!params.preparedMessage || params.runtimeMessage.role !== "user") {
     return params.runtimeMessage;
   }
   const preparedMeta = params.preparedMessage["__openclaw"];
   const senderIsOwner = preparedMeta?.senderIsOwner;
   const steerTargetRunId = normalizePersistedSteerTargetRunId(preparedMeta?.steerTargetRunId);
-  const nextMessage: AgentMessageWithOpenClawMetadata = { ...params.runtimeMessage };
+  const nextMessage: TMessage & { display?: boolean; __openclaw?: Record<string, unknown> } = {
+    ...params.runtimeMessage,
+  };
+  const provenance = normalizeInputProvenance(Reflect.get(params.preparedMessage, "provenance"));
+  if (provenance) {
+    Object.assign(nextMessage, { provenance });
+  }
+  if (params.preparedMessage.display === false) {
+    nextMessage.display = false;
+  }
   const runtimeMeta = { ...nextMessage["__openclaw"] };
+  delete runtimeMeta.chatRequestIdentity;
+  if (typeof preparedMeta?.chatRequestIdentity === "string") {
+    runtimeMeta.chatRequestIdentity = preparedMeta.chatRequestIdentity;
+  }
+  delete runtimeMeta.requesterOrigin;
+  if (preparedMeta?.requesterOrigin) {
+    runtimeMeta.requesterOrigin = captureRequesterOrigin({
+      requesterOrigin: preparedMeta.requesterOrigin,
+    });
+  }
+  delete runtimeMeta.intent;
+  if (preparedMeta?.intent) {
+    runtimeMeta.intent = preparedMeta.intent;
+  }
   delete runtimeMeta.steerTargetRunId;
   if (steerTargetRunId) {
     runtimeMeta.steerTargetRunId = steerTargetRunId;
@@ -127,11 +180,51 @@ export function restorePreparedUserTurnOperationalMetaForRuntime(params: {
   if (typeof senderIsOwner === "boolean") {
     runtimeMeta.senderIsOwner = senderIsOwner;
   }
+  const contentUnchanged = isDeepStrictEqual(
+    params.runtimeMessage.content,
+    params.preparedMessage.content,
+  );
+  // A rewritten runtime input cannot retain an alternate copy of the original words.
+  if (!contentUnchanged) {
+    delete runtimeMeta.workContext;
+  }
+  // Selections belong to the submitted bytes, not a hook's rewritten text.
+  delete runtimeMeta.humanMentions;
+  if (preparedMeta?.humanMentions !== undefined && contentUnchanged) {
+    runtimeMeta.humanMentions = preparedMeta.humanMentions;
+  }
   delete nextMessage["__openclaw"];
   if (Object.keys(runtimeMeta).length > 0) {
     nextMessage["__openclaw"] = runtimeMeta;
   }
   return nextMessage;
+}
+
+/** Snapshots producer evidence before hooks can replace or mutate the message. */
+export function applyTranscriptSenderIdentityToWrite(
+  message: AgentMessage,
+  write: () => AgentMessage | null | undefined,
+): AgentMessage | null | undefined {
+  const original = asOptionalRecord(Reflect.get(message, "__openclaw"));
+  const identity =
+    message.role === "user" ? readTranscriptSenderIdentity(original?.senderIdentity) : undefined;
+  const senderId = original?.senderId;
+  const next = write();
+  const metadata = next && asOptionalRecord(Reflect.get(next, "__openclaw"));
+  if (!metadata || !Object.hasOwn(metadata, "senderIdentity")) {
+    return next;
+  }
+  if (
+    next.role === "user" &&
+    identity &&
+    metadata.senderId === senderId &&
+    isDeepStrictEqual(readTranscriptSenderIdentity(metadata.senderIdentity), identity)
+  ) {
+    return next;
+  }
+  const redacted = { ...metadata };
+  delete redacted.senderIdentity;
+  return Object.assign({ ...next }, { __openclaw: redacted });
 }
 
 /** Applies before-message hooks while preserving user-turn transcript metadata. */
@@ -147,6 +240,19 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
     typeof originalIdempotencyKey === "string" ? originalIdempotencyKey : undefined;
   const provenance = normalizeInputProvenance(Reflect.get(message, "provenance"));
   const originalMeta = message["__openclaw"];
+  const chatRequestIdentity = originalMeta?.chatRequestIdentity;
+  const requesterOrigin = originalMeta?.requesterOrigin
+    ? captureRequesterOrigin({ requesterOrigin: originalMeta.requesterOrigin })
+    : undefined;
+  const sessionSendDelivery = structuredClone(originalMeta?.sessionSendDelivery);
+  const originalContent =
+    originalMeta?.humanMentions === undefined && originalMeta?.workContext === undefined
+      ? undefined
+      : structuredClone(message.content);
+  const workContext = structuredClone(originalMeta?.workContext);
+  const humanMentions = structuredClone(originalMeta?.humanMentions);
+  const display = message.display;
+  const intent = structuredClone(originalMeta?.intent);
   const senderIsOwner = originalMeta?.senderIsOwner;
   const replyToId = normalizeOptionalString(originalMeta?.replyToId);
   const originalReplyPreview = asOptionalRecord(originalMeta?.replyToPreview);
@@ -163,30 +269,28 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   const lateMedia = originalMeta?.lateMedia === true;
   const originalMedia = originalMeta?.media;
   const media = Array.isArray(originalMedia) ? structuredClone(originalMedia) : undefined;
-  const originalMediaImageLayout = originalMeta?.mediaImageLayout;
-  const mediaImageLayout =
-    originalMediaImageLayout === undefined ? undefined : structuredClone(originalMediaImageLayout);
+  const mediaImageLayout = structuredClone(originalMeta?.mediaImageLayout);
   // Hooks receive the original message object and may mutate nested metadata in
   // place. Snapshot transport correlation before handing them that reference.
   const originalTransportRecord = asOptionalRecord(originalTransport);
-  const transport = originalTransportRecord ? { ...originalTransportRecord } : undefined;
-  const nextMessage = params.beforeMessageWrite({
-    message,
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-  });
+  const transport = originalTransportRecord ? structuredClone(originalTransportRecord) : undefined;
+  const nextMessage = applyTranscriptSenderIdentityToWrite(message, () =>
+    params.beforeMessageWrite!({
+      message,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    }),
+  );
   if (nextMessage?.role !== "user") {
     return undefined;
   }
-  const preparedUserMessage = provenance
-    ? applyInputProvenanceToUserMessage(nextMessage, provenance)
-    : nextMessage;
-  if (preparedUserMessage.role !== "user") {
-    return undefined;
-  }
-  const nextUserMessage: PersistedUserTurnMessage = { ...preparedUserMessage };
+  const nextUserMessage: PersistedUserTurnMessage = {
+    ...nextMessage,
+    ...(provenance ? { provenance } : {}),
+  };
   const protectedMeta: Record<string, unknown> = {
     ...nextUserMessage["__openclaw"],
+    ...(typeof chatRequestIdentity === "string" ? { chatRequestIdentity } : {}),
     ...(typeof senderIsOwner === "boolean" ? { senderIsOwner } : {}),
     ...(replyToId ? { replyToId } : {}),
     ...(replyToPreview ? { replyToPreview } : {}),
@@ -194,13 +298,36 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
     ...(lateMedia ? { lateMedia: true } : {}),
     ...(media === undefined ? {} : { media }),
     ...(mediaImageLayout === undefined ? {} : { mediaImageLayout }),
+    ...(intent === undefined ? {} : { intent }),
   };
+  if (intent === undefined) {
+    delete protectedMeta.intent;
+  }
+  delete protectedMeta.requesterOrigin;
+  if (requesterOrigin) {
+    protectedMeta.requesterOrigin = requesterOrigin;
+  }
+  delete protectedMeta.sessionSendDelivery;
+  if (sessionSendDelivery !== undefined) {
+    protectedMeta.sessionSendDelivery = sessionSendDelivery;
+  }
+  // A redacting hook must not leave an alternate copy of the original text visible.
+  const contentUnchanged = isDeepStrictEqual(nextUserMessage.content, originalContent);
+  delete protectedMeta.workContext;
+  if (workContext !== undefined && contentUnchanged) {
+    protectedMeta.workContext = workContext;
+  }
+  delete protectedMeta.humanMentions;
+  if (humanMentions !== undefined && contentUnchanged) {
+    protectedMeta.humanMentions = humanMentions;
+  }
   delete protectedMeta.steerTargetRunId;
   if (steerTargetRunId) {
     protectedMeta.steerTargetRunId = steerTargetRunId;
   }
   const protectedMessage: PersistedUserTurnMessage = {
     ...nextUserMessage,
+    ...(display === false ? { display: false } : {}),
     ...(idempotencyKey ? { idempotencyKey } : {}),
   };
   delete protectedMessage["__openclaw"];

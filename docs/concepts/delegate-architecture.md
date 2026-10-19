@@ -22,7 +22,7 @@ This maps to how executive assistants work: their own credentials, mail sent "on
 
 ## Why delegates
 
-OpenClaw's default mode is a **personal assistant** - one human, one agent. Delegates extend this to organizations:
+OpenClaw's simplest mode is **one human, one agent**. Delegates extend this to organizations:
 
 | Personal mode               | Delegate mode                                  |
 | --------------------------- | ---------------------------------------------- |
@@ -173,7 +173,7 @@ Set-Mailbox -Identity "principal@[organization].org" `
 
 **Read access** (Graph API with application permissions):
 
-Register an Azure AD application with `Mail.Read` and `Calendars.Read` application permissions. **Before using the application**, scope access with an [application access policy](https://learn.microsoft.com/graph/auth-limit-mailbox-access) to restrict it to only the delegate and principal mailboxes:
+Register a Microsoft Entra ID (formerly Azure AD) application with `Mail.Read` and `Calendars.Read` application permissions. **Before using the application**, scope access with an [application access policy](https://learn.microsoft.com/graph/auth-limit-mailbox-access) to restrict it to only the delegate and principal mailboxes:
 
 ```powershell
 New-ApplicationAccessPolicy `
@@ -209,12 +209,18 @@ Route inbound messages to the delegate agent using [Multi-Agent Routing](/concep
 ```json5
 {
   agents: {
+    ownership: "explicit",
+    defaults: {
+      heartbeat: { agentId: "main" },
+      systemAgent: { agentId: "main" },
+    },
     entries: {
-      main: { default: true, workspace: "~/.openclaw/workspace" },
+      main: { workspace: "~/.openclaw/workspace" },
       delegate: {
         workspace: "~/.openclaw/workspace-delegate",
         tools: {
-          deny: ["browser", "canvas"],
+          allow: ["read", "exec", "message", "cron"],
+          deny: ["write", "edit", "apply_patch", "browser", "canvas"],
         },
       },
     },
@@ -230,22 +236,24 @@ Route inbound messages to the delegate agent using [Multi-Agent Routing](/concep
       agentId: "delegate",
       match: { channel: "discord", guildId: "123456789012345678" },
     },
-    // Everything else goes to the main personal agent
-    { agentId: "main", match: { channel: "whatsapp" } },
+    // Other traffic on these channels goes to the main personal agent.
+    { agentId: "main", match: { channel: "whatsapp", accountId: "*" } },
+    { agentId: "main", match: { channel: "discord", accountId: "*" } },
   ],
+  talk: { agentId: "main" },
 }
 ```
 
 ### 4. Add credentials to the delegate agent
 
-Copy or create auth profiles for the delegate's own `agentDir`:
+Agents read shared auth profiles without copying them. To give the delegate an
+independent provider account, sign in on the Gateway host for that agent:
 
 ```bash
-# Delegate reads from its own auth store
-~/.openclaw/agents/delegate/agent/auth-profiles.json
+openclaw models auth login --provider <providerId> --agent delegate
 ```
 
-Never share the main agent's `agentDir` with the delegate. See [Multi-Agent Routing](/concepts/multi-agent) for auth isolation details.
+The login writes the delegate's SQLite auth store at `~/.openclaw/agents/delegate/agent/openclaw-agent.sqlite`; its local profiles override the shared read-through base. Never share the main agent's `agentDir` with the delegate. See [Auth credential semantics](/auth-credential-semantics#agent-copy-portability) and [Multi-Agent Routing](/concepts/multi-agent) for auth isolation details.
 
 ## Example: organizational assistant
 
@@ -254,8 +262,13 @@ A complete delegate configuration handling email, calendar, and social media:
 ```json5
 {
   agents: {
+    ownership: "explicit",
+    defaults: {
+      heartbeat: { agentId: "main" },
+      systemAgent: { agentId: "main" },
+    },
     entries: {
-      main: { default: true, workspace: "~/.openclaw/workspace" },
+      main: { workspace: "~/.openclaw/workspace" },
       "org-assistant": {
         name: "[Organization] Assistant",
         workspace: "~/.openclaw/workspace-org",
@@ -274,15 +287,16 @@ A complete delegate configuration handling email, calendar, and social media:
       match: { channel: "signal", peer: { kind: "group", id: "[group-id]" } },
     },
     { agentId: "org-assistant", match: { channel: "whatsapp", accountId: "org" } },
-    { agentId: "main", match: { channel: "whatsapp" } },
-    { agentId: "main", match: { channel: "signal" } },
+    { agentId: "main", match: { channel: "whatsapp", accountId: "*" } },
+    { agentId: "main", match: { channel: "signal", accountId: "*" } },
   ],
+  talk: { agentId: "main" },
 }
 ```
 
 The delegate's `AGENTS.md` defines its autonomous authority - what it may do without asking, what needs approval, and what is forbidden. [Cron Jobs](/automation/cron-jobs) drive its daily schedule.
 
-If you grant `sessions_history`, it is a bounded, safety-filtered recall view, not a raw transcript dump. OpenClaw redacts credential/token-like text, truncates long content, and strips internal scaffolding (thinking-block signatures, `<relevant-memories>` scaffolding tags, tool-call XML tags such as `<tool_call>`/`<function_calls>`, and similar leaked provider control tokens) from assistant recall. Oversized rows can be replaced with `[sessions_history omitted: message too large]` instead of returning the raw content. Use `nextOffset` when present to page backward through older transcript windows.
+If you grant `sessions_history`, it is a bounded recall view. OpenClaw preserves credential-like text, truncates long content, and strips internal markup (thinking-block signatures, `<relevant-memories>` markup tags, tool-call XML tags such as `<tool_call>`/`<function_calls>`, and similar leaked provider control tokens) from assistant recall. Oversized rows can be replaced with `[sessions_history omitted: message too large]` instead of returning the raw content. Use `nextOffset` when present to page backward through older transcript windows.
 
 ## Scaling pattern
 

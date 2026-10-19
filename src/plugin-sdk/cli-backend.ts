@@ -1,27 +1,39 @@
-/**
- * Public SDK type surface for CLI backend plugins and watchdog defaults.
- */
 export type {
   CliBackendAuthEpochMode,
   CliBackendConfig,
+  CliBackendExecute,
+  CliBackendExecuteContext,
   CliBackendExecutionMode,
   CliBackendJsonlUsage,
-  CliBackendLiveSessionRequirement,
+  CliBackendLiveSessionCapability,
+  CliBackendLiveSessionCloseReason,
+  CliBackendLiveSessionHandle,
+  CliBackendMessageInjection,
   CliBackendNormalizeConfigContext,
   CliBackendNativeToolMode,
   CliBackendParseJsonlEvent,
   CliBackendParseJsonlEventContext,
+  CliBackendParseJsonlLifecycleEvent,
   CliBackendParsedJsonlEvent,
+  CliBackendParsedJsonlLifecycleEvent,
   CliBackendPlugin,
   CliBackendPreparedExecution,
+  CliBackendPromptContext,
   CliBackendPrepareExecutionContext,
   CliBackendResolveExecutionArgs,
   CliBackendResolveExecutionArgsContext,
   CliBackendSideQuestionToolMode,
   CliBackendToolAvailability,
   CliBackendToolAvailabilityEnforcement,
+  CliBackendToolPermissionRequest,
+  CliBackendToolPermissionResult,
+  CliBackendTurnInterrupt,
   CliBackendThinkingLevel,
-} from "../plugins/types.js";
+  CliBackendUserInputOption,
+  CliBackendUserInputQuestion,
+  CliBackendUserInputRequest,
+  CliBackendUserInputResult,
+} from "../plugins/cli-backend.types.js";
 export type { CliBackendRuntimeArtifactPolicy } from "../plugins/cli-backend.types.js";
 export { CliBackendAuthProfilePreparationError } from "../plugins/cli-backend-errors.js";
 export {

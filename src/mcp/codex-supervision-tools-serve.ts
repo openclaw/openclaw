@@ -5,16 +5,19 @@
  * share one implementation and one app-server client pool.
  */
 import { pathToFileURL } from "node:url";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { disposeRegisteredAgentHarnesses } from "../agents/harness/registry.js";
+import type { Server } from "@modelcontextprotocol/server";
 import type { AnyAgentTool } from "../agents/tools/common.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import { normalizePluginTargetConfig } from "../plugins/config-state.js";
-import { ensureStandalonePluginToolRegistryLoaded, resolvePluginTools } from "../plugins/tools.js";
-import { connectToolsMcpServerToStdio, createToolsMcpServer } from "./tools-stdio-server.js";
+import type { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
+import {
+  acquireStandalonePluginToolRegistry,
+  type PluginToolRegistryAcquisition,
+} from "../plugins/tools.js";
+import { createToolsMcpServer, serveRegisteredToolsMcpServer } from "./tools-stdio-server.js";
 
 const LEGACY_TOOL_NAMES = [
   "codex_endpoint_probe",
@@ -27,24 +30,22 @@ const LEGACY_TOOL_NAME_SET = new Set<string>(LEGACY_TOOL_NAMES);
 const TRUSTED_STANDALONE_MCP_OWNER_CONTEXT = { senderIsOwner: true as const };
 
 function withCodexSupervisionEnabled(config: OpenClawConfig): OpenClawConfig {
-  const next = structuredClone(normalizePluginTargetConfig(config, "codex")) as OpenClawConfig &
-    Record<string, unknown>;
-  const plugins = (next.plugins ??= {}) as Record<string, unknown>;
+  const next = normalizePluginTargetConfig(config, "codex");
+  const plugins = (next.plugins ??= {});
   plugins.enabled = true;
-  const deny = Array.isArray(plugins.deny)
-    ? plugins.deny.filter((entry) => entry !== "codex")
-    : undefined;
-  if (deny) {
-    plugins.deny = deny;
+  if (plugins.deny) {
+    plugins.deny = plugins.deny.filter((entry) => entry !== "codex");
   }
-  if (Array.isArray(plugins.allow) && !plugins.allow.includes("codex")) {
+  if (plugins.allow && !plugins.allow.includes("codex")) {
     plugins.allow = [...plugins.allow, "codex"];
   }
-  const entries = (plugins.entries ??= {}) as Record<string, unknown>;
-  const codex = (entries.codex ??= {}) as Record<string, unknown>;
+  const entries = (plugins.entries ??= {});
+  const codex = (entries.codex ??= {});
   codex.enabled = true;
-  const codexConfig = (codex.config ??= {}) as Record<string, unknown>;
-  const supervision = (codexConfig.supervision ??= {}) as Record<string, unknown>;
+  const codexConfig = (codex.config = { ...codex.config });
+  const supervision = (codexConfig.supervision = {
+    ...(codexConfig.supervision as Record<string, unknown> | undefined),
+  });
   supervision.enabled = true;
   if (process.env.OPENCLAW_CODEX_SUPERVISOR_ALLOW_RAW_TRANSCRIPTS === "1") {
     supervision.allowRawTranscripts = true;
@@ -55,7 +56,9 @@ function withCodexSupervisionEnabled(config: OpenClawConfig): OpenClawConfig {
   return next;
 }
 
-function resolveCodexSupervisionTools(config: OpenClawConfig): AnyAgentTool[] {
+async function acquireCodexSupervisionTools(
+  config: OpenClawConfig,
+): Promise<PluginToolRegistryAcquisition> {
   const context = {
     config,
     runtimeConfig: config,
@@ -65,28 +68,23 @@ function resolveCodexSupervisionTools(config: OpenClawConfig): AnyAgentTool[] {
     ...TRUSTED_STANDALONE_MCP_OWNER_CONTEXT,
   };
   const toolAllowlist = [...LEGACY_TOOL_NAMES];
-  const runtimeRegistry = ensureStandalonePluginToolRegistryLoaded({
-    context,
-    toolAllowlist,
-    env: process.env,
-  });
-  return resolvePluginTools({
+  const acquisition = await acquireStandalonePluginToolRegistry({
     context,
     toolAllowlist,
     suppressNameConflicts: true,
-    runtimeRegistry,
     env: process.env,
-  }).filter((tool) => LEGACY_TOOL_NAME_SET.has(tool.name));
+  });
+  return {
+    ...acquisition,
+    resolveTools: () =>
+      acquisition.resolveTools().filter((tool) => LEGACY_TOOL_NAME_SET.has(tool.name)),
+  };
 }
 
 function requireCompleteCodexSupervisionToolSet(tools: readonly AnyAgentTool[]): void {
   const loadedNames = new Set(tools.map((tool) => tool.name));
   const missing = LEGACY_TOOL_NAMES.filter((name) => !loadedNames.has(name));
-  if (
-    missing.length === 0 &&
-    loadedNames.size === LEGACY_TOOL_NAMES.length &&
-    tools.length === LEGACY_TOOL_NAMES.length
-  ) {
+  if (missing.length === 0 && tools.length === LEGACY_TOOL_NAMES.length) {
     return;
   }
   throw new Error(
@@ -94,27 +92,29 @@ function requireCompleteCodexSupervisionToolSet(tools: readonly AnyAgentTool[]):
   );
 }
 
-export function createCodexSupervisionToolsMcpServer(
-  params: { config?: OpenClawConfig; tools?: AnyAgentTool[] } = {},
-): Server {
-  const config = withCodexSupervisionEnabled(params.config ?? getRuntimeConfig());
-  const tools = params.tools ?? resolveCodexSupervisionTools(config);
-  requireCompleteCodexSupervisionToolSet(tools);
-  return createToolsMcpServer({ name: "openclaw-codex-supervisor", tools });
+export function createCodexSupervisionToolsMcpServer(params: {
+  tools: AnyAgentTool[];
+  sdkResourceHost?: LegacyPluginSdkResourceHost;
+}): Server {
+  requireCompleteCodexSupervisionToolSet(params.tools);
+  return createToolsMcpServer({ name: "openclaw-codex-supervisor", ...params });
 }
 
 export async function serveCodexSupervisionToolsMcp(): Promise<void> {
   routeLogsToStderr();
-  const config = withCodexSupervisionEnabled(getRuntimeConfig());
-  const tools = resolveCodexSupervisionTools(config);
-  await connectToolsMcpServerToStdio(createCodexSupervisionToolsMcpServer({ config, tools }), {
-    onShutdown: disposeRegisteredAgentHarnesses,
+  await serveRegisteredToolsMcpServer({
+    acquireRegistry: async () =>
+      acquireCodexSupervisionTools(
+        withCodexSupervisionEnabled(await captureRuntimeConfigAsyncReader()()),
+      ),
+    createServer: (tools, sdkResourceHost) =>
+      createCodexSupervisionToolsMcpServer({ tools, sdkResourceHost }),
   });
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   serveCodexSupervisionToolsMcp().catch((error: unknown) => {
     process.stderr.write(`codex-supervisor-serve: ${formatErrorMessage(error)}\n`);
-    process.exit(1);
+    process.exitCode = 1;
   });
 }

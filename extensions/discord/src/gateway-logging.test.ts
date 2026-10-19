@@ -1,6 +1,7 @@
 // Discord tests cover gateway logging plugin behavior.
 import { EventEmitter } from "node:events";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 
 // Suite runs isolate=false: a partial factory here poisons the shared module
 // cache for later files in the worker (#123025), so spread the real module.
@@ -16,12 +17,6 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
 let logVerbose: typeof import("openclaw/plugin-sdk/runtime-env").logVerbose;
 let attachDiscordGatewayLogging: typeof import("./gateway-logging.js").attachDiscordGatewayLogging;
 
-const makeRuntime = () => ({
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-});
-
 describe("attachDiscordGatewayLogging", () => {
   beforeAll(async () => {
     const { logVerbose: loadedLogVerbose } = await import("openclaw/plugin-sdk/runtime-env");
@@ -34,7 +29,7 @@ describe("attachDiscordGatewayLogging", () => {
   });
   it("logs debug events and promotes reconnect/close to info", () => {
     const emitter = new EventEmitter();
-    const runtime = makeRuntime();
+    const runtime = createRuntimeSpies();
 
     const cleanup = attachDiscordGatewayLogging({
       emitter,
@@ -65,9 +60,9 @@ describe("attachDiscordGatewayLogging", () => {
     cleanup();
   });
 
-  it("promotes warnings while keeping metrics verbose-only", () => {
+  it("promotes warnings", () => {
     const emitter = new EventEmitter();
-    const runtime = makeRuntime();
+    const runtime = createRuntimeSpies();
 
     const cleanup = attachDiscordGatewayLogging({
       emitter,
@@ -75,10 +70,9 @@ describe("attachDiscordGatewayLogging", () => {
     });
 
     emitter.emit("warning", "High latency detected: 1200ms");
-    emitter.emit("metrics", { latency: 42, errors: 1 });
 
     const logVerboseMock = vi.mocked(logVerbose);
-    expect(logVerboseMock).toHaveBeenCalledTimes(2);
+    expect(logVerboseMock).toHaveBeenCalledTimes(1);
     expect(runtime.log).toHaveBeenCalledWith(
       "warn:discord gateway warning: High latency detected: 1200ms",
     );
@@ -88,7 +82,7 @@ describe("attachDiscordGatewayLogging", () => {
 
   it("removes listeners on cleanup", () => {
     const emitter = new EventEmitter();
-    const runtime = makeRuntime();
+    const runtime = createRuntimeSpies();
 
     const cleanup = attachDiscordGatewayLogging({
       emitter,
@@ -101,7 +95,6 @@ describe("attachDiscordGatewayLogging", () => {
 
     emitter.emit("debug", "Gateway websocket closed: 1001");
     emitter.emit("warning", "High latency detected: 1200ms");
-    emitter.emit("metrics", { latency: 42 });
 
     expect(logVerboseMock).not.toHaveBeenCalled();
     expect(runtime.log).not.toHaveBeenCalled();

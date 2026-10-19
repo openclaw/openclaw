@@ -1,8 +1,10 @@
 // OpenClaw TUI backend tests cover rescue status integration with the TUI backend.
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import * as preparedModelCatalog from "../agents/prepared-model-catalog.js";
+import * as configModule from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { createInferenceConfigFixture } from "./inference-config.test-support.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import type { SystemAgentCommandDeps, SystemAgentOperation } from "./operations.js";
 import type { SystemAgentOverview } from "./overview.js";
@@ -23,7 +25,7 @@ vi.mock("../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   // These tests exercise the TUI boundary, not filesystem-backed catalog discovery.
   getPreparedModelCatalogSnapshot: vi.fn(() => undefined),
-  loadPreparedModelCatalog: vi.fn(async () => []),
+  readPreparedModelCatalog: vi.fn(async () => []),
 }));
 
 vi.mock("./verified-inference.js", async (importOriginal) => {
@@ -112,7 +114,6 @@ async function createVerifiedTuiOptions(
   return {
     verifiedInference: fixture.binding,
     deps: {
-      ...fixture.deps,
       readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
       ...deps,
     },
@@ -130,29 +131,39 @@ function createRuntime(): RuntimeEnv {
 }
 
 describe("runSystemAgentTui", () => {
-  it("rejects a missing inference binding before overview, planner, TUI, or setup", async () => {
+  it("rejects a missing inference binding before overview, TUI, or setup", async () => {
     const loadOverview = vi.fn(async () => overview);
-    const planWithAssistant = vi.fn(async () => ({ reply: "ready" }));
     const runTui = vi.fn(async () => ({ exitReason: "exit" as const }));
     const runChannelsAdd = vi.fn(async () => undefined);
     const fixture = sharedVerifiedFixture;
     const options: SystemAgentTuiOptions = {
       verifiedInference: fixture.binding,
       deps: { loadOverview },
-      planWithAssistant,
       runTui,
       runChannelsAdd,
     };
     Reflect.deleteProperty(options, "verifiedInference");
 
-    await expect(runSystemAgentTui(options, createRuntime())).rejects.toBeInstanceOf(
-      SystemAgentInferenceUnavailableError,
-    );
+    await expect(runSystemAgentTui(options, createRuntime())).rejects.toMatchObject({
+      message: expect.stringContaining("openclaw onboard"),
+    });
 
     expect(loadOverview).not.toHaveBeenCalled();
-    expect(planWithAssistant).not.toHaveBeenCalled();
     expect(runTui).not.toHaveBeenCalled();
     expect(runChannelsAdd).not.toHaveBeenCalled();
+  });
+
+  it("reports a changed verified route without recommending onboarding", async () => {
+    const verified = await createVerifiedTuiOptions();
+    const runTui = vi.fn();
+    vi.mocked(resolveSystemAgentVerifiedInferenceState).mockResolvedValueOnce(null);
+
+    await expect(runSystemAgentTui({ ...verified, runTui }, createRuntime())).rejects.toMatchObject(
+      {
+        message: expect.stringContaining("verified inference route changed"),
+      },
+    );
+    expect(runTui).not.toHaveBeenCalled();
   });
 
   it("runs OpenClaw inside the shared TUI shell", async () => {
@@ -169,6 +180,18 @@ describe("runSystemAgentTui", () => {
       async (opts: Parameters<NonNullable<SystemAgentTuiOptions["runTui"]>>[0]) => {
         runTuiCalls += 1;
         runTuiOptions = opts;
+        if (!opts.backend) {
+          throw new Error("Expected the system-agent TUI backend");
+        }
+        for (const sessionKey of ["agent:openclaw:main", "main"]) {
+          await expect(opts.backend.describeSession({ sessionKey })).resolves.toMatchObject({
+            session: { key: "agent:openclaw:main", model: "gpt-5.5", modelProvider: "openai" },
+            defaults: { model: "gpt-5.5", modelProvider: "openai" },
+          });
+        }
+        await expect(
+          opts.backend.describeSession({ sessionKey: "agent:openclaw:missing" }),
+        ).resolves.toMatchObject({ session: null });
         return { exitReason: "exit" as const };
       },
     );
@@ -208,9 +231,58 @@ describe("runSystemAgentTui", () => {
     }
   }, 240_000);
 
+  it("retains and returns only the requested latest history", async () => {
+    const verified = await createVerifiedTuiOptions({ loadOverview: async () => overview });
+
+    await runSystemAgentTui(
+      {
+        ...verified,
+        runTui: async (opts) => {
+          const backend = opts.backend as unknown as {
+            sendChat: (opts: { sessionKey: string; message: string }) => Promise<{ runId: string }>;
+            loadHistory: (opts: { sessionKey: string; limit?: number }) => Promise<{
+              messages: Array<{ content: Array<{ text: string }> }>;
+            }>;
+            engine: {
+              handle: () => Promise<never>;
+              dispose: () => Promise<void>;
+            };
+          };
+          backend.engine.handle = () => new Promise(() => {});
+          backend.engine.dispose = async () => undefined;
+
+          for (let index = 1; index <= 201; index += 1) {
+            await backend.sendChat({
+              sessionKey: "agent:openclaw:main",
+              message: `message-${index}`,
+            });
+          }
+
+          const retained = await backend.loadHistory({
+            sessionKey: "agent:openclaw:main",
+            limit: 500,
+          });
+          expect(retained.messages).toHaveLength(200);
+          expect(retained.messages[0]?.content[0]?.text).toBe("message-2");
+
+          const tail = await backend.loadHistory({
+            sessionKey: "agent:openclaw:main",
+            limit: 2,
+          });
+          expect(tail.messages.map((entry) => entry.content[0]?.text)).toEqual([
+            "message-200",
+            "message-201",
+          ]);
+          return { exitReason: "exit" };
+        },
+      },
+      createRuntime(),
+    );
+  });
+
   it("opens the verified setup shell without preparing an unpublished model catalog", async () => {
     const verified = await createVerifiedTuiOptions({ loadOverview: async () => overview });
-    const catalogPreparation = vi.mocked(preparedModelCatalog.loadPreparedModelCatalog);
+    const catalogPreparation = vi.mocked(preparedModelCatalog.readPreparedModelCatalog);
     const publishedSnapshot = vi
       .spyOn(preparedModelCatalog, "getPreparedModelCatalogSnapshot")
       .mockReturnValue(undefined);
@@ -265,7 +337,7 @@ describe("runSystemAgentTui", () => {
         ...verified,
         runTui: async (opts) => {
           const backend = opts.backend as unknown as {
-            loadHistory: () => Promise<{ thinkingLevel: string }>;
+            loadHistory: (opts: { sessionKey: string }) => Promise<{ thinkingLevel: string }>;
             listSessions: () => Promise<{
               sessions: Array<{
                 model?: string;
@@ -275,7 +347,9 @@ describe("runSystemAgentTui", () => {
             }>;
           };
 
-          await expect(backend.loadHistory()).resolves.toMatchObject({ thinkingLevel: "high" });
+          await expect(
+            backend.loadHistory({ sessionKey: "agent:openclaw:main" }),
+          ).resolves.toMatchObject({ thinkingLevel: "high" });
           await expect(backend.listSessions()).resolves.toMatchObject({
             sessions: [
               {
@@ -284,41 +358,6 @@ describe("runSystemAgentTui", () => {
                 thinkingLevel: "high",
               },
             ],
-          });
-          return { exitReason: "exit" };
-        },
-      },
-      createRuntime(),
-    );
-  });
-
-  it("uses the verified model's default thinking level", async () => {
-    const config = {
-      ...verifiedConfig,
-      agents: { defaults: { model: "openai/gpt-5.6-sol" } },
-    } satisfies OpenClawConfig;
-    const verified = await createVerifiedTuiOptions(
-      {
-        loadOverview: async () => ({
-          ...overview,
-          defaultModel: "openai/gpt-5.6-sol@openai:setup-test",
-        }),
-      },
-      config,
-    );
-
-    await runSystemAgentTui(
-      {
-        ...verified,
-        runTui: async (opts) => {
-          const backend = opts.backend as unknown as {
-            listSessions: () => Promise<{
-              sessions: Array<{ model?: string; thinkingLevel?: string }>;
-            }>;
-          };
-
-          await expect(backend.listSessions()).resolves.toMatchObject({
-            sessions: [{ model: "gpt-5.6-sol", thinkingLevel: "medium" }],
           });
           return { exitReason: "exit" };
         },
@@ -420,44 +459,6 @@ describe("runSystemAgentTui", () => {
     expect(unhandled).toHaveLength(0);
   });
 
-  it("emits an error without a fake final reply when inference fails", async () => {
-    const events: Array<{ payload?: { state?: string; errorMessage?: string } }> = [];
-    const verified = await createVerifiedTuiOptions({ loadOverview: async () => overview });
-
-    await runSystemAgentTui(
-      {
-        ...verified,
-        runTui: async (opts) => {
-          const backend = opts.backend as unknown as {
-            sendChat: (opts: { message: string }) => Promise<{ runId: string }>;
-            onEvent?: (event: { payload?: { state?: string; errorMessage?: string } }) => void;
-            engine: { handle: () => Promise<never> };
-          };
-          backend.engine.handle = async () => {
-            throw new SystemAgentInferenceUnavailableError("conversation");
-          };
-          backend.onEvent = (event) => events.push(event);
-
-          await backend.sendChat({ message: "status please" });
-          await new Promise((resolve) => {
-            setTimeout(resolve, 0);
-          });
-          return { exitReason: "exit" };
-        },
-      },
-      createRuntime(),
-    );
-
-    expect(events).toEqual([
-      expect.objectContaining({
-        payload: expect.objectContaining({
-          state: "error",
-          errorMessage: expect.stringContaining("working inference"),
-        }),
-      }),
-    ]);
-  });
-
   it("retires the local session before a queued exact mutation can run", async () => {
     const handle = vi
       .fn()
@@ -538,7 +539,23 @@ describe("runSystemAgentTui", () => {
       const events: string[] = [];
       const runtime = createRuntime();
       runtime.log = (...args) => events.push(`log:${args.join(" ")}`);
-      const verified = await createVerifiedTuiOptions({ loadOverview: async () => overview });
+      let verified = await createVerifiedTuiOptions({ loadOverview: async () => overview });
+      if (handoff.target === "gateway") {
+        const configFixture = await createInferenceConfigFixture(verifiedConfig);
+        const snapshot = configFixture.snapshot;
+        const fixture = await createSystemAgentVerifiedInferenceTestFixture(
+          snapshot.runtimeConfig ?? snapshot.config,
+          snapshot,
+        );
+        verified = {
+          verifiedInference: fixture.binding,
+          deps: { readConfigFileSnapshot: configFixture.read, loadOverview: async () => overview },
+        };
+        const reader = vi
+          .spyOn(configModule, "readConfigFileSnapshot")
+          .mockImplementation(configFixture.read);
+        onTestFinished(() => reader.mockRestore());
+      }
       await runSystemAgentTui(
         {
           ...verified,

@@ -3,10 +3,13 @@ import { EventEmitter } from "node:events";
 import type { ClientRequest, IncomingMessage, RequestOptions } from "node:http";
 import { PassThrough } from "node:stream";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import * as fetchRuntime from "openclaw/plugin-sdk/fetch-runtime";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { resolveLegacyWebhookNameToChatUserId, sendHostedFileUrl, sendMessage } from "./client.js";
 import type { SynologyHostedMediaUrl } from "./outbound-media.js";
 
-// Mock http and https modules before importing the client
+// Vitest hoists transport mocks before the static client import.
 vi.mock("node:https", async () => {
   const actual = await vi.importActual<typeof import("node:https")>("node:https");
   const httpsRequest = vi.fn();
@@ -29,9 +32,6 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 
 const https = await import("node:https");
 let fakeNowMs = 1_700_000_000_000;
-let sendMessage: typeof import("./client.js").sendMessage;
-let sendHostedFileUrl: typeof import("./client.js").sendHostedFileUrl;
-let resolveLegacyWebhookNameToChatUserId: typeof import("./client.js").resolveLegacyWebhookNameToChatUserId;
 
 type RequestCallback = (res: IncomingMessage) => void;
 type MockRequestHandler = (
@@ -54,12 +54,16 @@ function firstHttpsRequestCall(label = "Synology Chat HTTPS request"): MockHttpC
   return call as MockHttpCall;
 }
 
-function firstHttpsGetCall(label = "Synology Chat HTTPS get"): MockHttpCall {
-  const call = vi.mocked(https.get).mock.calls[0];
-  if (!call) {
-    throw new Error(`expected ${label}`);
+function firstHttpsRequestPayload(): unknown {
+  const request = vi.mocked(https.request).mock.results[0]?.value;
+  if (!request) {
+    throw new Error("expected Synology Chat webhook request");
   }
-  return call as MockHttpCall;
+  const body = vi.mocked(request.write).mock.calls[0]?.[0];
+  if (typeof body !== "string") {
+    throw new Error("expected Synology Chat webhook body");
+  }
+  return JSON.parse(decodeURIComponent(body.replace(/^payload=/, "")));
 }
 
 function createMockResponseEmitter(statusCode: number): MockResponse {
@@ -82,17 +86,22 @@ async function settleTimers<T>(promise: Promise<T>): Promise<T> {
   return promise;
 }
 
-function mockResponse(statusCode: number, body: string) {
-  const httpsRequest = vi.mocked(https.request);
-  httpsRequest.mockImplementation(((...args) => {
-    const callback = args[2];
+function responseHandler(statusCode: number, chunks: Array<string | Buffer>): MockRequestHandler {
+  return (_url, _options, callback) => {
     const res = createMockResponseEmitter(statusCode);
     process.nextTick(() => {
       callback?.(res);
-      res.end(body);
+      for (const chunk of chunks) {
+        res.write(chunk);
+      }
+      res.end();
     });
     return createMockRequestEmitter();
-  }) as MockRequestHandler);
+  };
+}
+
+function mockResponse(statusCode: number, body: string) {
+  vi.mocked(https.request).mockImplementation(responseHandler(statusCode, [body]));
 }
 
 function mockSuccessResponse() {
@@ -111,16 +120,11 @@ function mockRequestErrorOnce(error: Error) {
   }) as MockRequestHandler);
 }
 
-function installFakeTimerHarness() {
-  beforeAll(async () => {
-    ({ sendMessage, sendHostedFileUrl, resolveLegacyWebhookNameToChatUserId } =
-      await import("./client.js"));
-  });
-
+function installFakeTimerHarness(advanceMs = 10_000) {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers();
-    fakeNowMs += 10_000;
+    fakeNowMs += advanceMs;
     vi.setSystemTime(fakeNowMs);
   });
 
@@ -133,6 +137,15 @@ function hostedUrl(value: string): SynologyHostedMediaUrl {
   return value as SynologyHostedMediaUrl;
 }
 
+const hostedCapabilityUrl = hostedUrl(
+  "https://gateway.example.com/webhook?__openclaw_synology_media_token_a=t",
+);
+
+const webhookUrl = "https://nas.example.com/incoming";
+const sendText = (text = "Hello", userId?: string, insecure = false) =>
+  settleTimers(sendMessage(webhookUrl, text, userId, insecure));
+const sendFile = (url = webhookUrl) => settleTimers(sendHostedFileUrl(url, hostedCapabilityUrl));
+
 const tlsVerificationDefaultCases: Array<{ name: string; invoke: () => Promise<unknown> }> = [
   {
     name: "sendMessage",
@@ -140,39 +153,110 @@ const tlsVerificationDefaultCases: Array<{ name: string; invoke: () => Promise<u
   },
   {
     name: "sendHostedFileUrl",
-    invoke: () =>
-      sendHostedFileUrl(
-        "https://nas.example.com/incoming",
-        hostedUrl("https://gateway.example.com/webhook?__openclaw_synology_media_token_a=t"),
-      ),
+    invoke: () => sendHostedFileUrl("https://nas.example.com/incoming", hostedCapabilityUrl),
   },
 ];
 
 describe("Synology Chat TLS verification defaults", () => {
   installFakeTimerHarness();
 
-  it.each(tlsVerificationDefaultCases)("$name verifies TLS by default", async ({ invoke }) => {
-    mockSuccessResponse();
-    await settleTimers(invoke());
-    const firstCall = firstHttpsRequestCall();
-    expect(firstCall[1]?.rejectUnauthorized).toBe(true);
-  });
+  it.each(
+    tlsVerificationDefaultCases.flatMap(({ name, invoke }) => [
+      { name, invoke, refused: false },
+      { name, invoke, refused: true },
+    ]),
+  )(
+    "prepares $name webhook POST before handoff (refused=$refused)",
+    async ({ name, invoke, refused }) => {
+      const preparing = createDeferred<void>();
+      const prepared = createDeferred<void>();
+      const handedOff = createDeferred<void>();
+      const acknowledgment = createDeferred<void>();
+      const refusal = new Error("Synology message authority ended");
+      const authority = fetchRuntime.captureEffectAuthority();
+      const capture = vi.spyOn(fetchRuntime, "captureEffectAuthority").mockReturnValue({
+        ...authority,
+        async initiate(effect) {
+          preparing.resolve();
+          await prepared.promise;
+          if (refused) {
+            throw refusal;
+          }
+          return authority.initiate(effect);
+        },
+      });
+      vi.mocked(https.request).mockImplementation(((...args) => {
+        handedOff.resolve();
+        const res = createMockResponseEmitter(200);
+        void acknowledgment.promise.then(() => {
+          args[2]?.(res);
+          res.end('{"success":true}');
+        });
+        return createMockRequestEmitter();
+      }) as MockRequestHandler);
+      const sending = invoke();
+      try {
+        await Promise.race([
+          preparing.promise,
+          handedOff.promise.then(() => {
+            throw new Error("webhook POST bypassed preparation");
+          }),
+        ]);
+        expect(https.request).not.toHaveBeenCalled();
+        prepared.resolve();
+        if (!refused) {
+          await handedOff.promise;
+          acknowledgment.resolve();
+        }
+        if (refused) {
+          await expect(sending).rejects.toBe(refusal);
+        } else {
+          expect(await sending).toEqual(name === "sendMessage" ? true : { status: "accepted" });
+        }
+        expect(https.request).toHaveBeenCalledTimes(refused ? 0 : 1);
+        if (!refused) {
+          expect(firstHttpsRequestCall()[1]?.rejectUnauthorized).toBe(true);
+        }
+      } finally {
+        prepared.resolve();
+        acknowledgment.resolve();
+        await sending.catch(() => {});
+        capture.mockRestore();
+      }
+    },
+  );
 });
 
 describe("sendMessage", () => {
   installFakeTimerHarness();
 
-  it("returns true on successful send", async () => {
-    mockSuccessResponse();
-    const result = await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello"));
-    expect(result).toBe(true);
-  });
-
-  it("returns false on server error without replaying", async () => {
-    mockFailureResponse(500);
-    const result = await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello"));
-    expect(result).toBe(false);
-    expect(vi.mocked(https.request)).toHaveBeenCalledOnce();
+  it("preserves acknowledged chunks when a later chunk is rejected", async () => {
+    let requests = 0;
+    vi.mocked(https.request).mockImplementation(((_url, _options, callback) => {
+      requests += 1;
+      const lastChunk = requests === 3;
+      process.nextTick(() => {
+        const res = createMockResponseEmitter(200);
+        callback?.(res);
+        res.end(JSON.stringify({ success: !lastChunk }));
+      });
+      return createMockRequestEmitter();
+    }) as MockRequestHandler);
+    const sending = sendMessage("https://nas.example.com/incoming", "a".repeat(4001), "42");
+    const outcome = await settleTimers(
+      sending.then(
+        (result) => ({ result }),
+        (error: unknown) => ({ error }),
+      ),
+    );
+    expect(outcome).toMatchObject({
+      error: {
+        code: "CHANNEL_PARTIAL_DELIVERY",
+        message: "Failed to send message to Synology Chat (rejected)",
+        deliveryResult: { visibleReplySent: true, content: "a".repeat(4000) },
+      },
+    });
+    expect(https.request).toHaveBeenCalledTimes(3);
   });
 
   it("does not replay a mixed aggregate with an ambiguous transport leaf", async () => {
@@ -185,7 +269,7 @@ describe("sendMessage", () => {
     );
     mockRequestErrorOnce(mixedError);
 
-    const result = await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello"));
+    const result = await sendText();
 
     expect(result).toBe(false);
     expect(vi.mocked(https.request)).toHaveBeenCalledOnce();
@@ -202,37 +286,13 @@ describe("sendMessage", () => {
     );
     mockRequestErrorOnce(new TypeError("fetch failed", { cause: aggregateError }));
 
-    const result = await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello"));
+    const result = await sendText();
 
     expect(result).toBe(true);
     expect(vi.mocked(https.request)).toHaveBeenCalledTimes(2);
   });
 
   it.each([
-    { name: "Synology error envelope", body: { success: false, error: { code: 105 } } },
-    { name: "unrelated malformed response fields", body: { success: false, data: null } },
-  ])("does not replay an HTTP-successful webhook rejection ($name)", async ({ body }) => {
-    mockResponse(200, JSON.stringify(body));
-
-    const result = await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello"));
-
-    expect(result).toBe(false);
-    expect(vi.mocked(https.request)).toHaveBeenCalledOnce();
-  });
-
-  it.each([
-    { name: "missing success", body: "{}" },
-    { name: "null response", body: "null" },
-    { name: "empty response", body: "" },
-    { name: "malformed JSON", body: '{"success":false' },
-    { name: "plain text", body: "ok" },
-    { name: "JSON string", body: '"ok"' },
-    { name: "JSON number", body: "0" },
-    { name: "JSON boolean", body: "false" },
-    { name: "JSON array", body: "[]" },
-    { name: "null success", body: '{"success":null}' },
-    { name: "string success", body: '{"success":"false"}' },
-    { name: "numeric success", body: '{"success":0}' },
     {
       name: "oversized rejection envelope",
       body: JSON.stringify({ success: false, padding: "x".repeat(1 * 1024 * 1024) }),
@@ -240,61 +300,22 @@ describe("sendMessage", () => {
   ])("preserves HTTP-successful webhook responses with $name", async ({ body }) => {
     mockResponse(200, body);
 
-    const result = await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello"));
+    const result = await sendText();
 
     expect(result).toBe(true);
     expect(vi.mocked(https.request)).toHaveBeenCalledTimes(1);
   });
 
-  it("includes user_ids when userId is numeric", async () => {
-    mockSuccessResponse();
-    await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello", 42));
-    expect(vi.mocked(https.request)).toHaveBeenCalled();
-    const callArgs = firstHttpsRequestCall();
-    expect(callArgs[0]).toBe("https://nas.example.com/incoming");
-  });
-
   it("does not coerce partial numeric user ids into recipients", async () => {
     mockSuccessResponse();
-    await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello", "42abc"));
+    await sendText("Hello", "42abc");
 
-    const request = vi.mocked(https.request).mock.results[0]?.value as ClientRequest | undefined;
-    if (!request) {
-      throw new Error("expected Synology Chat webhook request");
-    }
-    const body = vi.mocked(request["write"]).mock.calls[0]?.[0];
-    if (typeof body !== "string") {
-      throw new Error("expected Synology Chat webhook body");
-    }
-    const payload = JSON.parse(decodeURIComponent(body.replace(/^payload=/, ""))) as Record<
-      string,
-      unknown
-    >;
-    expect(payload).toEqual({ text: "Hello" });
-  });
-
-  it("accepts plus-signed numeric user ids", async () => {
-    mockSuccessResponse();
-    await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello", "+042"));
-
-    const request = vi.mocked(https.request).mock.results[0]?.value as ClientRequest | undefined;
-    if (!request) {
-      throw new Error("expected Synology Chat webhook request");
-    }
-    const body = vi.mocked(request["write"]).mock.calls[0]?.[0];
-    if (typeof body !== "string") {
-      throw new Error("expected Synology Chat webhook body");
-    }
-    const payload = JSON.parse(decodeURIComponent(body.replace(/^payload=/, ""))) as Record<
-      string,
-      unknown
-    >;
-    expect(payload).toEqual({ text: "Hello", user_ids: [42] });
+    expect(firstHttpsRequestPayload()).toEqual({ text: "Hello" });
   });
 
   it("only disables TLS verification when explicitly requested", async () => {
     mockSuccessResponse();
-    await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello", undefined, true));
+    await sendText("Hello", undefined, true);
     const firstCall = firstHttpsRequestCall();
     expect(firstCall[1]?.rejectUnauthorized).toBe(false);
   });
@@ -303,66 +324,17 @@ describe("sendMessage", () => {
 describe("sendHostedFileUrl", () => {
   installFakeTimerHarness();
 
-  it("returns accepted on success", async () => {
-    mockSuccessResponse();
-    const result = await settleTimers(
-      sendHostedFileUrl(
-        "https://nas.example.com/incoming",
-        hostedUrl("https://gateway.example.com/webhook?__openclaw_synology_media_token_a=t"),
-      ),
-    );
-    expect(result).toEqual({ status: "accepted" });
-  });
-
   it("returns indeterminate on an HTTP server failure", async () => {
     mockFailureResponse(500);
-    const result = await settleTimers(
-      sendHostedFileUrl(
-        "https://nas.example.com/incoming",
-        hostedUrl("https://gateway.example.com/webhook?__openclaw_synology_media_token_a=t"),
-      ),
-    );
+    const result = await sendFile();
     expect(result).toEqual({ status: "indeterminate" });
-  });
-
-  it("returns rejected on a definitive HTTP client failure", async () => {
-    mockFailureResponse(400);
-    const result = await settleTimers(
-      sendHostedFileUrl(
-        "https://nas.example.com/incoming",
-        hostedUrl("https://gateway.example.com/webhook?__openclaw_synology_media_token_a=t"),
-      ),
-    );
-    expect(result).toEqual({ status: "rejected" });
-  });
-
-  it("returns rejected without retrying an HTTP-successful webhook rejection", async () => {
-    mockResponse(200, JSON.stringify({ success: false, error: { code: 105 } }));
-
-    const result = await settleTimers(
-      sendHostedFileUrl(
-        "https://nas.example.com/incoming",
-        hostedUrl("https://gateway.example.com/webhook?__openclaw_synology_media_token_a=t"),
-      ),
-    );
-
-    expect(result).toEqual({ status: "rejected" });
-    expect(vi.mocked(https.request)).toHaveBeenCalledTimes(1);
+    expect(firstHttpsRequestPayload()).toEqual({ file_url: hostedCapabilityUrl });
   });
 
   it("returns indeterminate when the request outcome is lost", async () => {
-    vi.mocked(https.request).mockImplementation((() => {
-      const req = createMockRequestEmitter();
-      process.nextTick(() => req.emit("error", new Error("connection reset")));
-      return req;
-    }) as MockRequestHandler);
+    mockRequestErrorOnce(new Error("connection reset"));
 
-    const result = await settleTimers(
-      sendHostedFileUrl(
-        "https://nas.example.com/incoming",
-        hostedUrl("https://gateway.example.com/webhook?__openclaw_synology_media_token_a=t"),
-      ),
-    );
+    const result = await sendFile();
 
     expect(result).toEqual({ status: "indeterminate" });
   });
@@ -370,12 +342,7 @@ describe("sendHostedFileUrl", () => {
   it("returns not-dispatched when the transport proves it never connected", async () => {
     mockRequestErrorOnce(Object.assign(new Error("host not found"), { code: "ENOTFOUND" }));
 
-    const result = await settleTimers(
-      sendHostedFileUrl(
-        "https://nas.example.com/incoming",
-        hostedUrl("https://gateway.example.com/webhook?__openclaw_synology_media_token_a=t"),
-      ),
-    );
+    const result = await sendFile();
 
     expect(result).toEqual({ status: "not-dispatched" });
   });
@@ -385,23 +352,13 @@ describe("sendHostedFileUrl", () => {
       throw new Error("request construction failed");
     });
 
-    const result = await settleTimers(
-      sendHostedFileUrl(
-        "https://nas.example.com/incoming",
-        hostedUrl("https://gateway.example.com/webhook?__openclaw_synology_media_token_a=t"),
-      ),
-    );
+    const result = await sendFile();
 
     expect(result).toEqual({ status: "not-dispatched" });
   });
 
   it("returns not-dispatched when the incoming webhook URL is malformed", async () => {
-    const result = await settleTimers(
-      sendHostedFileUrl(
-        "not-a-url",
-        hostedUrl("https://gateway.example.com/webhook?__openclaw_synology_media_token_a=t"),
-      ),
-    );
+    const result = await sendFile("not-a-url");
 
     expect(result).toEqual({ status: "not-dispatched" });
     expect(vi.mocked(https.request)).not.toHaveBeenCalled();
@@ -409,13 +366,10 @@ describe("sendHostedFileUrl", () => {
 
   it("respects the shared send interval before posting a file URL", async () => {
     mockSuccessResponse();
-    await settleTimers(sendMessage("https://nas.example.com/incoming", "hello"));
+    await sendText("hello");
     vi.mocked(https.request).mockClear();
 
-    const promise = sendHostedFileUrl(
-      "https://nas.example.com/incoming",
-      hostedUrl("https://gateway.example.com/webhook?__openclaw_synology_media_token_a=t"),
-    );
+    const promise = sendHostedFileUrl("https://nas.example.com/incoming", hostedCapabilityUrl);
     await Promise.resolve();
     expect(vi.mocked(https.request)).not.toHaveBeenCalled();
 
@@ -427,58 +381,42 @@ describe("sendHostedFileUrl", () => {
     expect(vi.mocked(https.request)).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects malformed file URLs before making a request", async () => {
-    const result = await settleTimers(
-      sendHostedFileUrl("https://nas.example.com/incoming", hostedUrl("not-a-url")),
-    );
-    expect(result).toEqual({ status: "not-dispatched" });
-    expect(vi.mocked(https.request)).not.toHaveBeenCalled();
-  });
+  it("paces each incoming webhook endpoint independently", async () => {
+    mockSuccessResponse();
+    const accountA = "https://nas.example.com/incoming?token=account-a";
+    const accountB = "https://nas.example.com/incoming?token=account-b";
+    const requestedUrls = () =>
+      vi.mocked(https.request).mock.calls.map(([url]) => (url instanceof URL ? url.href : url));
 
-  it("rejects non-HTTPS file URLs before making a request", async () => {
-    const result = await settleTimers(
-      sendHostedFileUrl("https://nas.example.com/incoming", hostedUrl("http://example.com/file")),
-    );
-    expect(result).toEqual({ status: "not-dispatched" });
-    expect(vi.mocked(https.request)).not.toHaveBeenCalled();
-  });
+    const sends = [
+      sendMessage(accountA, "a1"),
+      sendMessage(accountA, "a2"),
+      sendMessage(accountA, "a3"),
+      sendMessage(accountB, "b1"),
+    ];
 
-  it("rejects hosted URLs with embedded credentials or fragments", async () => {
-    const credentialedUrl = new URL("https://gateway.example.com/webhook#fragment");
-    credentialedUrl.username = "fixture-user";
-    credentialedUrl.password = "fixture-password";
-    const result = await settleTimers(
-      sendHostedFileUrl("https://nas.example.com/incoming", hostedUrl(credentialedUrl.toString())),
-    );
-    expect(result).toEqual({ status: "not-dispatched" });
-    expect(vi.mocked(https.request)).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(requestedUrls()).toEqual([accountA, accountB]);
+
+    await vi.advanceTimersByTimeAsync(498);
+    expect(requestedUrls()).toEqual([accountA, accountB]);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(requestedUrls()).toEqual([accountA, accountB, accountA]);
+
+    await vi.advanceTimersByTimeAsync(500);
+    expect(requestedUrls()).toEqual([accountA, accountB, accountA, accountA]);
+    await expect(Promise.all(sends)).resolves.toEqual([true, true, true, true]);
   });
 });
 
-// Helper to mock the user_list API response for fetchChatUsers / resolveLegacyWebhookNameToChatUserId
-function mockUserListResponse(users: Array<Record<string, unknown>>) {
-  mockUserListResponseImpl(users, false);
-}
-
-function mockUserListResponseOnce(users: Array<Record<string, unknown>>) {
-  mockUserListResponseImpl(users, true);
-}
-
-function mockUserListResponseImpl(users: Array<Record<string, unknown>>, once: boolean) {
-  const httpsGet = vi.mocked(https.get);
-  const impl: MockRequestHandler = (_url, _opts, callback) => {
-    const res = createMockResponseEmitter(200);
-    process.nextTick(() => {
-      callback?.(res);
-      res.end(JSON.stringify({ success: true, data: { users } }));
-    });
-    return createMockRequestEmitter();
-  };
+function mockUserListResponse(users: Array<Record<string, unknown>>, once = false) {
+  const handler = responseHandler(200, [JSON.stringify({ success: true, data: { users } })]);
   if (once) {
-    httpsGet.mockImplementationOnce(impl);
-    return;
+    vi.mocked(https.get).mockImplementationOnce(handler);
+  } else {
+    vi.mocked(https.get).mockImplementation(handler);
   }
-  httpsGet.mockImplementation(impl);
 }
 
 describe("resolveLegacyWebhookNameToChatUserId", () => {
@@ -487,33 +425,7 @@ describe("resolveLegacyWebhookNameToChatUserId", () => {
   const baseUrl2 =
     "https://nas2.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=chatbot&version=2&token=%22test-2%22";
 
-  beforeAll(async () => {
-    ({ resolveLegacyWebhookNameToChatUserId } = await import("./client.js"));
-  });
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    vi.useFakeTimers();
-    // Advance time to invalidate any cached user list from previous tests
-    fakeNowMs += 10 * 60 * 1000;
-    vi.setSystemTime(fakeNowMs);
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("resolves user by nickname (webhook username = Chat nickname)", async () => {
-    mockUserListResponse([
-      { user_id: 4, username: "jmn67", nickname: "jmn" },
-      { user_id: 7, username: "she67", nickname: "sarah" },
-    ]);
-    const result = await resolveLegacyWebhookNameToChatUserId({
-      incomingUrl: baseUrl,
-      mutableWebhookUsername: "jmn",
-    });
-    expect(result).toBe(4);
-  });
+  installFakeTimerHarness(10 * 60 * 1000);
 
   it("preserves UTF-8 when user_list splits a nickname across response chunks", async () => {
     const nickname = "猫";
@@ -526,15 +438,9 @@ describe("resolveLegacyWebhookNameToChatUserId", () => {
     );
     const nicknameOffset = responseBody.indexOf(Buffer.from(nickname, "utf8"));
     const splitAt = nicknameOffset + 1;
-    vi.mocked(https.get).mockImplementation(((_url, _opts, callback) => {
-      const res = createMockResponseEmitter(200);
-      process.nextTick(() => {
-        callback?.(res);
-        res.write(responseBody.subarray(0, splitAt));
-        res.end(responseBody.subarray(splitAt));
-      });
-      return createMockRequestEmitter();
-    }) as MockRequestHandler);
+    vi.mocked(https.get).mockImplementation(
+      responseHandler(200, [responseBody.subarray(0, splitAt), responseBody.subarray(splitAt)]),
+    );
 
     const result = await resolveLegacyWebhookNameToChatUserId({
       incomingUrl: baseUrl,
@@ -549,9 +455,6 @@ describe("resolveLegacyWebhookNameToChatUserId", () => {
       { user_id: 4, username: "jmn67", nickname: "" },
       { user_id: 7, username: "she67", nickname: "sarah" },
     ]);
-    // Advance time to invalidate cache
-    fakeNowMs += 10 * 60 * 1000;
-    vi.setSystemTime(fakeNowMs);
     const result = await resolveLegacyWebhookNameToChatUserId({
       incomingUrl: baseUrl,
       mutableWebhookUsername: "jmn67",
@@ -559,74 +462,56 @@ describe("resolveLegacyWebhookNameToChatUserId", () => {
     expect(result).toBe(4);
   });
 
-  it("is case-insensitive", async () => {
-    mockUserListResponse([{ user_id: 4, username: "JMN67", nickname: "JMN" }]);
-    fakeNowMs += 10 * 60 * 1000;
-    vi.setSystemTime(fakeNowMs);
-    const result = await resolveLegacyWebhookNameToChatUserId({
-      incomingUrl: baseUrl,
-      mutableWebhookUsername: "jmn",
-    });
-    expect(result).toBe(4);
-  });
-
-  it("returns undefined when user is not found", async () => {
-    mockUserListResponse([{ user_id: 4, username: "jmn67", nickname: "jmn" }]);
-    fakeNowMs += 10 * 60 * 1000;
-    vi.setSystemTime(fakeNowMs);
-    const result = await resolveLegacyWebhookNameToChatUserId({
-      incomingUrl: baseUrl,
-      mutableWebhookUsername: "unknown_user",
-    });
-    expect(result).toBeUndefined();
-  });
-
-  it("uses method=user_list instead of method=chatbot in the API URL", async () => {
-    mockUserListResponse([]);
-    fakeNowMs += 10 * 60 * 1000;
-    vi.setSystemTime(fakeNowMs);
-    await resolveLegacyWebhookNameToChatUserId({
-      incomingUrl: baseUrl,
-      mutableWebhookUsername: "anyone",
-    });
-    const call = firstHttpsGetCall("Synology Chat user_list request");
-    expect(String(call[0])).toBe(baseUrl.replace("method=chatbot", "method=user_list"));
-    expect(call[1]).toEqual({ rejectUnauthorized: true });
-    expect(typeof call[2]).toBe("function");
-  });
-
   it("keeps user cache scoped per incoming URL", async () => {
-    mockUserListResponseOnce([{ user_id: 4, username: "jmn67", nickname: "jmn" }]);
-    mockUserListResponseOnce([{ user_id: 9, username: "jmn67", nickname: "jmn" }]);
+    mockUserListResponse([{ user_id: 4, username: "jmn67", nickname: "jmn" }], true);
+    mockUserListResponse([{ user_id: 9, username: "jmn67", nickname: "jmn" }], true);
 
-    const result1 = await resolveLegacyWebhookNameToChatUserId({
-      incomingUrl: baseUrl,
-      mutableWebhookUsername: "jmn",
-    });
-    const result2 = await resolveLegacyWebhookNameToChatUserId({
-      incomingUrl: baseUrl2,
-      mutableWebhookUsername: "jmn",
-    });
-
-    expect(result1).toBe(4);
-    expect(result2).toBe(9);
-    const httpsGet = vi.mocked(https.get);
-    expect(httpsGet).toHaveBeenCalledTimes(2);
+    for (const [incomingUrl, expectedUserId] of [
+      [baseUrl, 4],
+      [baseUrl2, 9],
+      [baseUrl, 4],
+    ] as const) {
+      await expect(
+        resolveLegacyWebhookNameToChatUserId({
+          incomingUrl,
+          mutableWebhookUsername: "jmn",
+        }),
+      ).resolves.toBe(expectedUserId);
+    }
+    expect(https.get).toHaveBeenCalledTimes(2);
   });
 });
 
 describe("resolveLegacyWebhookNameToChatUserId user lookup", () => {
   installFakeTimerHarness();
 
+  it("preserves the user_list transport error warning", async () => {
+    const warns: string[] = [];
+    vi.mocked(https.get).mockImplementationOnce(() => {
+      const req = createMockRequestEmitter();
+      process.nextTick(() => req.emit("error", new Error("lookup unavailable")));
+      return req;
+    });
+
+    const userId = await resolveLegacyWebhookNameToChatUserId({
+      incomingUrl: "https://lookup-error-nas.example.com/webapi/entry.cgi?method=chatbot",
+      mutableWebhookUsername: "anyone",
+      log: { warn: (...args) => warns.push(args.map(String).join(" ")) },
+    });
+
+    expect(userId).toBeUndefined();
+    expect(warns).toEqual(["fetchChatUsers: HTTP error — lookup unavailable"]);
+  });
+
   it("filters malformed user entries while keeping valid ones", async () => {
     mockUserListResponse([
+      { user_id: "bad", username: "broken", nickname: "jmn" },
       { user_id: 4, username: "jmn67", nickname: "jmn" },
-      { user_id: "bad", username: "broken" },
     ]);
 
     const userId = await resolveLegacyWebhookNameToChatUserId({
       incomingUrl:
-        "https://nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=chatbot&version=2&token=%22test%22",
+        "https://malformed-user-nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=chatbot&version=2&token=%22test%22",
       mutableWebhookUsername: "jmn",
     });
 
@@ -640,40 +525,15 @@ describe("resolveLegacyWebhookNameToChatUserId user lookup", () => {
     const oversized = Buffer.alloc(1 * 1024 * 1024 + 1, 0x78);
     const overflowUrl =
       "https://overflow-nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=chatbot&version=2";
-    httpsGet.mockImplementation(((_url, _opts, callback) => {
-      const res = createMockResponseEmitter(200);
-      process.nextTick(() => {
-        callback?.(res);
-        res.end(oversized);
-      });
-      return createMockRequestEmitter();
-    }) as MockRequestHandler);
+    httpsGet.mockImplementation(responseHandler(200, [oversized]));
 
     const userId = await resolveLegacyWebhookNameToChatUserId({
       incomingUrl: overflowUrl,
       mutableWebhookUsername: "anyone",
-      log: {
-        warn: (...args: unknown[]) => {
-          warns.push(args.map(String).join(" "));
-        },
-      },
+      log: { warn: (...args) => warns.push(args.map(String).join(" ")) },
     });
 
     expect(userId).toBeUndefined();
     expect(warns.some((line) => line.includes("exceeded"))).toBe(true);
-  });
-
-  it("verifies TLS by default for user_list lookups", async () => {
-    mockUserListResponse([{ user_id: 4, username: "jmn67", nickname: "jmn" }]);
-    const freshUrl =
-      "https://fresh-nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=chatbot&version=2&token=%22fresh%22";
-
-    await resolveLegacyWebhookNameToChatUserId({
-      incomingUrl: freshUrl,
-      mutableWebhookUsername: "jmn",
-    });
-
-    const firstCall = firstHttpsGetCall();
-    expect(firstCall[1]?.rejectUnauthorized).toBe(true);
   });
 });

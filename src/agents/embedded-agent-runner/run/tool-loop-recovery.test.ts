@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { markCodeModeControlTool } from "../../code-mode-control-tools.js";
 import type { AgentTool } from "../../runtime/index.js";
+import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 
 const mocks = vi.hoisted(() => ({
   attachedLifecycles: [] as Array<{
@@ -65,10 +66,6 @@ describe("tool-loop recovery batch admission", () => {
       runId: "run-1",
       loopDetection: { enabled: true },
     });
-    if (!admission) {
-      throw new Error("Expected batch admission hook");
-    }
-
     const first = await admission({
       assistantMessage: {
         role: "assistant",
@@ -76,14 +73,7 @@ describe("tool-loop recovery batch admission", () => {
         api: "openai-responses",
         provider: "test",
         model: "test",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
+        usage: createZeroUsageFixture(),
         stopReason: "toolUse",
         timestamp: 1,
       },
@@ -102,14 +92,7 @@ describe("tool-loop recovery batch admission", () => {
         api: "openai-responses",
         provider: "test",
         model: "test",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
+        usage: createZeroUsageFixture(),
         stopReason: "toolUse",
         timestamp: 2,
       },

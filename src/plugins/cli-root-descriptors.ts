@@ -3,13 +3,11 @@ import { collectUniqueCommandDescriptors } from "../cli/program/command-descript
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginCliLoaderOptions } from "./cli-registry-loader.js";
 import { normalizePluginsConfig, resolveMemorySlotDecision } from "./config-state.js";
-import { isInstalledPluginEnabled } from "./installed-plugin-index.js";
+import { createInstalledPluginEnabledPredicate } from "./installed-plugin-index.js";
 import { validatePluginConfig } from "./loader-shared.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
-import {
-  buildPluginRuntimeLoadOptions,
-  resolvePluginRuntimeLoadContext,
-} from "./runtime/load-context.js";
+import { buildPluginRuntimeLoadOptions } from "./runtime/load-context.js";
+import { resolvePluginRuntimeLoadContext } from "./runtime/load-context.resolve.js";
 import { hasKind } from "./slots.js";
 import type { OpenClawPluginCliRootCommandDescriptor, PluginLogger } from "./types.js";
 
@@ -25,6 +23,7 @@ export async function getPluginCliCommandDescriptors(
   env?: NodeJS.ProcessEnv,
   loaderOptions?: PluginCliLoaderOptions,
 ): Promise<OpenClawPluginCliRootCommandDescriptor[]> {
+  const descriptorGroups: OpenClawPluginCliRootCommandDescriptor[][] = [];
   try {
     const context = resolvePluginRuntimeLoadContext({ config: cfg, env, logger: quietLogger });
     const snapshot = context.metadataSnapshot;
@@ -32,26 +31,35 @@ export async function getPluginCliCommandDescriptors(
       return [];
     }
     const legacyExternalPluginIds: string[] = [];
-    const descriptorGroups: OpenClawPluginCliRootCommandDescriptor[][] = [];
     const seenPluginIds = new Set<string>();
     let selectedMemoryPluginId: string | null = null;
     const memorySlot = context.config.plugins?.slots?.memory;
     const normalizedConfig = normalizePluginsConfig(context.config.plugins);
+    const sourceConfig = normalizePluginsConfig(context.activationSourceConfig.plugins);
+    const isEnabled = createInstalledPluginEnabledPredicate(
+      snapshot.index.plugins,
+      context.config,
+      context.env,
+    );
 
     for (const plugin of snapshot.plugins) {
       if (seenPluginIds.has(plugin.id)) {
         continue;
       }
       seenPluginIds.add(plugin.id);
-      if (!isInstalledPluginEnabled(snapshot.index, plugin.id, context.config)) {
+      if (!isEnabled(plugin.id)) {
         continue;
       }
       const pluginConfig = normalizedConfig.entries[normalizePluginPolicyId(plugin.id)]?.config;
       if (
         !validatePluginConfig({
+          origin: plugin.origin,
           schema: plugin.configSchema,
           cacheKey: plugin.schemaCacheKey,
           value: pluginConfig,
+          sourceValue: plugin.configContracts?.secretInputs
+            ? sourceConfig.entries[normalizePluginPolicyId(plugin.id)]?.config
+            : undefined,
         }).ok
       ) {
         continue;
@@ -85,12 +93,12 @@ export async function getPluginCliCommandDescriptors(
       );
       descriptorGroups.push(
         ...registry.cliRegistrars
-          .filter((entry) => (entry.parentPath ?? []).length === 0)
+          .filter((entry) => entry.parentPath.length === 0)
           .map((entry) => entry.descriptors),
       );
     }
     return collectUniqueCommandDescriptors(descriptorGroups);
   } catch {
-    return [];
+    return collectUniqueCommandDescriptors(descriptorGroups);
   }
 }

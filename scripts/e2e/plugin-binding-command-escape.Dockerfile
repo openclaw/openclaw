@@ -1,4 +1,4 @@
-FROM node:24-bookworm-slim@sha256:242549cd46785b480c832479a730f4f2a20865d61ea2e404fdb2a5c3d3b73ecf
+FROM node:24-trixie-slim@sha256:7f486cabe892bff8fef04c0f7da8dba84a560be3e4e2740b7a86afc57ebec315
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates git python3 \
@@ -9,6 +9,8 @@ RUN corepack enable
 WORKDIR /workspace/openclaw
 COPY . .
 
-RUN OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL=1 pnpm install --frozen-lockfile --ignore-scripts --filter openclaw
+# Source tests resolve workspace packages through aliases, outside the root
+# dependency graph. Install their isolated links along with the root tools.
+RUN OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL=1 pnpm install --frozen-lockfile --ignore-scripts
 
 CMD ["bash"]

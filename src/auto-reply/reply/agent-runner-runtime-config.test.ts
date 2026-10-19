@@ -5,7 +5,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { buildEmbeddedRunBaseParams } from "./agent-runner-run-params.js";
+import { buildEmbeddedRunExecutionParams } from "./agent-runner-utils.js";
 import type { FollowupRun } from "./queue.js";
 
 function makeRun(config: OpenClawConfig): FollowupRun["run"] {
@@ -23,6 +23,14 @@ function makeRun(config: OpenClawConfig): FollowupRun["run"] {
     ownerNumbers: ["+15550001"],
     enforceFinalTag: false,
     skipProviderRuntimeHints: true,
+    thinkingCatalog: [
+      {
+        provider: "openai",
+        id: "gpt-4.1-mini",
+        input: ["text"],
+        baseUrl: "https://api.openai.com/v1",
+      },
+    ],
     thinkLevel: "medium",
     verboseLevel: "off",
     reasoningLevel: "none",
@@ -36,8 +44,8 @@ afterEach(() => {
   clearRuntimeConfigSnapshot();
 });
 
-describe("buildEmbeddedRunBaseParams runtime config", () => {
-  it("keeps an already-resolved run config instead of reverting to a stale runtime snapshot", () => {
+describe("buildEmbeddedRunExecutionParams runtime config", () => {
+  it("keeps an already-resolved run config instead of reverting to a stale runtime snapshot", async () => {
     const staleSnapshot: OpenClawConfig = {
       models: {
         providers: {
@@ -66,27 +74,29 @@ describe("buildEmbeddedRunBaseParams runtime config", () => {
     };
     setRuntimeConfigSnapshot(staleSnapshot, staleSnapshot);
 
-    const resolved = buildEmbeddedRunBaseParams({
+    const resolved = await buildEmbeddedRunExecutionParams({
       run: makeRun(resolvedRunConfig),
       provider: "openai",
       model: "gpt-4.1-mini",
       runId: "run-1",
-      authProfile: {},
+      sessionCtx: {},
+      hasRepliedRef: undefined,
     });
 
     expect(resolved.config).toBe(resolvedRunConfig);
   });
 
-  it("carries out-of-band tool bindings into the embedded run", () => {
+  it("carries out-of-band tool bindings into the embedded run", async () => {
     const run = makeRun({});
     run.toolBindings = { browser: { kind: "tab", targetId: "target-1" } };
 
-    const resolved = buildEmbeddedRunBaseParams({
+    const resolved = await buildEmbeddedRunExecutionParams({
       run,
       provider: "openai",
       model: "gpt-4.1-mini",
       runId: "run-1",
-      authProfile: {},
+      sessionCtx: {},
+      hasRepliedRef: undefined,
     });
 
     expect(resolved.toolBindings).toEqual(run.toolBindings);

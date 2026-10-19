@@ -7,6 +7,35 @@ import type { PluginHookName } from "./types.js";
 
 export { createPluginRecord };
 
+export function createCompatChainFixture() {
+  const config = { plugins: { allow: ["telegram"] } };
+  const pluginIds = ["anthropic", "openai"];
+  const enabledConfig = {
+    plugins: {
+      allow: ["telegram"],
+      entries: {
+        anthropic: { enabled: true },
+        openai: { enabled: true },
+      },
+    },
+  };
+  return { config, pluginIds, enabledConfig };
+}
+
+export function createAutoEnabledStatusConfig(
+  entries: Record<string, unknown>,
+  rawConfigOverrides?: Record<string, unknown>,
+) {
+  const rawConfig = { plugins: {}, ...rawConfigOverrides };
+  const autoEnabledConfig = {
+    ...rawConfig,
+    plugins: {
+      entries,
+    },
+  };
+  return { rawConfig, autoEnabledConfig };
+}
+
 export function createInstalledPluginIndexSnapshot(
   plugins: Array<Record<string, unknown>>,
 ): Record<string, unknown> {
@@ -30,7 +59,9 @@ export const REMOVED_SESSION_TRANSCRIPT_FILE_API_MESSAGE =
   "references removed session/transcript file APIs; migrate to session identity, SessionTranscriptUpdate.target, and Gateway/runtime session helpers.";
 
 export function createCompatibilityNotice(
-  params: Pick<PluginCompatibilityNotice, "pluginId" | "code">,
+  params: Pick<PluginCompatibilityNotice, "pluginId"> & {
+    code: "hook-only" | "removed-session-transcript-file-api";
+  },
 ): PluginCompatibilityNotice {
   switch (params.code) {
     case "hook-only":

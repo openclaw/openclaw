@@ -1,11 +1,10 @@
-// Control UI controller manages agent skills gateway state.
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SkillStatusReport } from "../../api/types.ts";
 import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { loadSkillStatusReport } from "../../lib/skills/index.ts";
+import { loadSkillStatusReport } from "../../lib/skills/status-report.ts";
 
-type AgentSkillsState = {
+export type AgentSkillsState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
   requestGeneration: number;
@@ -17,10 +16,7 @@ type AgentSkillsState = {
 
 export async function loadAgentSkills(state: AgentSkillsState, agentId: string) {
   const client = state.client;
-  if (!client || !state.connected) {
-    return;
-  }
-  if (state.agentSkillsLoading) {
+  if (!client || !state.connected || state.agentSkillsLoading) {
     return;
   }
   const generation = state.requestGeneration;
@@ -54,17 +50,20 @@ export async function clearAgentSkillFilter(
   if (!target || !Array.isArray(target.entry.skills) || !canDispatch()) {
     return false;
   }
-  const authoredAgentId = target.path[2];
+  const targetKey = target.path[2];
+  if (typeof targetKey !== "string") {
+    return false;
+  }
   return runtimeConfig.patch({
     raw: {
       agents: {
         entries: {
-          [authoredAgentId]: { skills: null },
+          [targetKey]: { skills: null },
         },
       },
     },
-    note: "Enable all agent skills",
-    replacePaths: [`agents.entries.${authoredAgentId}.skills`],
+    note: "Reset agent skills to inherited defaults",
+    replacePaths: [`agents.entries.${targetKey}.skills`],
     canDispatch,
   });
 }

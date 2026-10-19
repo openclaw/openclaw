@@ -1,121 +1,249 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
+import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
+import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
+import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import {
   applyStagedWorkerWorkspace,
-  readActualWorkspaceManifest,
   recoverWorkerWorkspaceReconciliation,
   type WorkerWorkspaceReconciliationJournal,
 } from "./workspace-reconcile.js";
+import {
+  hasWorkerWorkspaceResultRef,
+  preparedWorkerWorkspaceResultRef,
+  workerWorkspaceResultRef,
+  workerWorkspaceResultStaging,
+} from "./workspace-result-staging.js";
+
+const workspaceWarning = vi.hoisted(() => vi.fn());
+vi.mock("../../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => {
+      const logger = actual.createSubsystemLogger(subsystem);
+      return subsystem === "gateway/worker-workspace"
+        ? { ...logger, warn: workspaceWarning }
+        : logger;
+    },
+  };
+});
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const read = (root: string, name = "result.txt") => fs.readFile(path.join(root, name));
+afterEach(() => {
+  workspaceWarning.mockReset();
+  vi.unstubAllEnvs();
+});
 
-async function manifestFor(root: string) {
-  return (await readActualWorkspaceManifest({ root, baseCommit: null })).manifest;
+async function workspace(eol = "\n", added = false) {
+  const root = tempDirs.make("publication-local-");
+  const stagingRoot = tempDirs.make("publication-staged-");
+  const baseBytes = Buffer.from(`base${eol}`);
+  const workerBytes = Buffer.from(`worker${eol}`);
+  const addedBytes = Buffer.from(`added${eol}`);
+  await fs.writeFile(path.join(root, "result.txt"), baseBytes);
+  await fs.writeFile(path.join(stagingRoot, "result.txt"), workerBytes);
+  if (added) {
+    await fs.writeFile(path.join(stagingRoot, "added.txt"), addedBytes);
+  }
+  const capture = (directory: string) =>
+    captureWorkspaceManifest({ root: directory, baseCommit: null });
+  const base = await capture(root);
+  const current = await capture(stagingRoot);
+  return {
+    root,
+    stagingRoot,
+    baseBytes,
+    workerBytes,
+    addedBytes,
+    base: base.manifest,
+    current: current.manifest,
+    baseManifestRef: base.manifestRef,
+    currentManifestRef: current.manifestRef,
+  };
 }
 
-describe("worker workspace reconciliation publication", () => {
-  it("keeps local bytes and the journal pending when accepted publication is indeterminate", async () => {
-    const local = tempDirs.make("openclaw-workspace-indeterminate-publication-");
-    const staged = tempDirs.make("openclaw-workspace-indeterminate-publication-staged-");
-    await fs.writeFile(path.join(local, "result.txt"), "base\n");
-    const base = await manifestFor(local);
-    await Promise.all([
-      fs.writeFile(path.join(staged, "result.txt"), "worker\n"),
-      fs.writeFile(path.join(staged, "added.txt"), "added\n"),
-    ]);
-    const current = await manifestFor(staged);
-    let pending: WorkerWorkspaceReconciliationJournal | undefined;
-    const abort = vi.fn(() => {
+function journalFixture(onCommit = async () => {}, onAbort = async () => {}) {
+  let pending: WorkerWorkspaceReconciliationJournal | undefined;
+  const settle = (before: () => Promise<void>) =>
+    vi.fn(async () => {
+      await before();
       pending = undefined;
     });
-    const commit = vi.fn(() => {
-      pending = undefined;
-    });
-    const journal = {
-      load: () => pending,
-      begin: (value: WorkerWorkspaceReconciliationJournal) => {
-        pending = value;
-      },
-      commit,
-      abort,
-    };
-    const publicationFailure = new AcceptedWorkspacePublicationIndeterminateError(
-      "apply",
-      new Error("apply transport lost"),
-      new Error("settlement timed out"),
-    );
+  const journal = {
+    load: async () => pending,
+    begin: async (value: WorkerWorkspaceReconciliationJournal) => {
+      pending = value;
+    },
+    commit: settle(onCommit),
+    abort: settle(onAbort),
+  };
+  return { journal, pending: () => pending };
+}
 
-    await expect(
-      applyStagedWorkerWorkspace({
-        root: local,
-        stagingRoot: staged,
-        baseManifestRef: `sha256:${"a".repeat(64)}`,
-        currentManifestRef: `sha256:${"b".repeat(64)}`,
-        base,
-        current,
-        journal,
-        publishAcceptedManifest: async () => {
+it.each([
+  ["true", "\n", "apply"],
+  ["true", "\r\n", "apply"],
+  ["input", "\n", "apply"],
+  ["input", "\r\n", "apply"],
+  ["false", "\n", "apply"],
+  ["false", "\r\n", "apply"],
+  ["false", "\n", "commit"],
+  ["false", "\n", "reject"],
+] as const)(
+  "settles %s autocrlf publication with EOL=%j and failure at %s",
+  async (autocrlf, eol, phase) => {
+    const config = [
+      ["core.autocrlf", autocrlf],
+      ["core.eol", "crlf"],
+      ["core.safecrlf", "true"],
+    ];
+    vi.stubEnv("GIT_CONFIG_COUNT", String(config.length));
+    config.forEach(([key, value], index) => {
+      vi.stubEnv(`GIT_CONFIG_KEY_${index}`, key);
+      vi.stubEnv(`GIT_CONFIG_VALUE_${index}`, value);
+    });
+    const definitive = phase === "reject";
+    const f = await workspace(eol, !definitive);
+    const publicationFailure = definitive
+      ? new Error("publication rejected")
+      : new AcceptedWorkspacePublicationIndeterminateError(
+          phase,
+          new Error(`${phase} transport lost`),
+          new Error("settlement timed out"),
+        );
+    const state = journalFixture(
+      async () => {
+        if (phase === "commit") {
           throw publicationFailure;
-        },
-      }),
-    ).rejects.toBe(publicationFailure);
+        }
+      },
+      async () => {
+        if (definitive) {
+          expect(await read(f.root)).toEqual(f.baseBytes);
+        }
+      },
+    );
+    const { journal } = state;
+    try {
+      await expect(
+        applyStagedWorkerWorkspace({
+          ...f,
+          journal,
+          acceptance: {
+            kind: "reconcile",
+            publish: async () => {
+              if (phase !== "commit") {
+                throw publicationFailure;
+              }
+            },
+          },
+        }),
+      ).rejects.toBe(publicationFailure);
+    } finally {
+      await journal.commit.mock.results[0]?.value.catch(() => undefined);
+      await journal.abort.mock.results[0]?.value;
+    }
+    if (definitive) {
+      expect(state.pending()).toBeUndefined();
+      expect(journal.abort).toHaveBeenCalledOnce();
+      await expect(read(f.root)).resolves.toEqual(f.baseBytes);
+      return;
+    }
+    expect(state.pending()).toBeDefined();
+    expect(journal.commit).toHaveBeenCalledTimes(phase === "apply" ? 0 : 1);
+    expect(journal.abort).not.toHaveBeenCalled();
+    await expect(read(f.root)).resolves.toEqual(f.workerBytes);
+    await expect(read(f.root, "added.txt")).resolves.toEqual(f.addedBytes);
+    await recoverWorkerWorkspaceReconciliation({ root: f.root, journal: state.pending()! });
+    await expect(read(f.root)).resolves.toEqual(f.baseBytes);
+    await expect(fs.access(path.join(f.root, "added.txt"))).rejects.toThrow();
+    expect(state.pending()).toBeDefined();
+  },
+);
 
-    expect(pending).toBeDefined();
-    expect(commit).not.toHaveBeenCalled();
-    expect(abort).not.toHaveBeenCalled();
-    await expect(fs.readFile(path.join(local, "result.txt"), "utf8")).resolves.toBe("worker\n");
-    await expect(fs.readFile(path.join(local, "added.txt"), "utf8")).resolves.toBe("added\n");
-
-    await recoverWorkerWorkspaceReconciliation({ root: local, journal: pending! });
-    await expect(fs.readFile(path.join(local, "result.txt"), "utf8")).resolves.toBe("base\n");
-    await expect(fs.access(path.join(local, "added.txt"))).rejects.toThrow();
-    expect(pending).toBeDefined();
-    journal.abort();
-    expect(pending).toBeUndefined();
-    expect(abort).toHaveBeenCalledOnce();
+it.each([
+  ["preserves committed results and recovery refs when scratch cleanup fails", true, false],
+  ["preserves publication failures and rollback when scratch cleanup fails", true, true],
+  ["removes disposable scratch without warning when cleanup succeeds", false, false],
+])("%s", async (_name, cleanupFails, publicationFails) => {
+  const f = await workspace();
+  const publicationError = new Error("accepted publication rejected");
+  const cleanupError = new Error("scratch removal failed");
+  const ref = workerWorkspaceResultRef("claim-staging-cleanup");
+  const hasRef = (stagedResultRef: string) =>
+    hasWorkerWorkspaceResultRef({ root: f.root, stagedResultRef });
+  const candidateRef = preparedWorkerWorkspaceResultRef(ref);
+  const record = vi.fn();
+  const commit = vi.fn(async () => {});
+  const abort = vi.fn(async () => {});
+  const prepared = await workerWorkspaceResultStaging.prepareRequestedWorkerWorkspaceResult({
+    request: {
+      localPath: f.root,
+      remoteWorkspaceDir: "/worker/workspace",
+      baseManifestRef: f.baseManifestRef,
+      journal: { load: async () => undefined, begin: async () => {}, commit, abort },
+      stagedResult: { ref, record },
+    },
+    stagingRoot: f.stagingRoot,
+    currentManifestRef: f.currentManifestRef,
+    baseManifestRaw: serializeWorkerWorkspaceManifest(f.base),
+    currentManifestRaw: serializeWorkerWorkspaceManifest(f.current),
+    publishAcceptedManifest: async () => {
+      if (publicationFails) {
+        throw publicationError;
+      }
+    },
+  });
+  const remove = fs.rm;
+  const scratch = tempDirs.make("openclaw-workspace-result-cleanup-scratch-");
+  const makeScratch = vi.spyOn(fs, "mkdtemp").mockResolvedValueOnce(scratch);
+  const removeSpy = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+    if (target === scratch) {
+      if (cleanupFails) {
+        throw cleanupError;
+      }
+    }
+    return await remove(target, options);
   });
 
-  it("rolls local bytes back immediately when accepted publication fails definitively", async () => {
-    const local = tempDirs.make("openclaw-workspace-definitive-publication-failure-");
-    const staged = tempDirs.make("openclaw-workspace-definitive-publication-failure-staged-");
-    await fs.writeFile(path.join(local, "result.txt"), "base\n");
-    const base = await manifestFor(local);
-    await fs.writeFile(path.join(staged, "result.txt"), "worker\n");
-    const current = await manifestFor(staged);
-    let pending: WorkerWorkspaceReconciliationJournal | undefined;
-    const abort = vi.fn(() => {
-      pending = undefined;
-    });
-
-    await expect(
-      applyStagedWorkerWorkspace({
-        root: local,
-        stagingRoot: staged,
-        baseManifestRef: `sha256:${"a".repeat(64)}`,
-        currentManifestRef: `sha256:${"b".repeat(64)}`,
-        base,
-        current,
-        journal: {
-          load: () => pending,
-          begin: (value) => {
-            pending = value;
-          },
-          commit: () => {
-            pending = undefined;
-          },
-          abort,
-        },
-        publishAcceptedManifest: async () => {
-          throw new Error("publication rejected");
-        },
-      }),
-    ).rejects.toThrow("publication rejected");
-
-    await expect(fs.readFile(path.join(local, "result.txt"), "utf8")).resolves.toBe("base\n");
-    expect(pending).toBeUndefined();
-    expect(abort).toHaveBeenCalledOnce();
-  });
+  try {
+    await expect(hasRef(candidateRef)).resolves.toBe(true);
+    const finalized = verifyReconciledWorkspaceFinal(
+      {
+        ...prepared,
+        manifestRef: f.currentManifestRef,
+        changed: true,
+        verifyStable: async () => {},
+      },
+      { assertActive: async () => {}, resume: async () => {} },
+    );
+    if (publicationFails) {
+      await expect(finalized).rejects.toBe(publicationError);
+      expect(abort).toHaveBeenCalledOnce();
+    } else {
+      await expect(finalized).resolves.toMatchObject({ manifestRef: f.currentManifestRef });
+      expect(commit).toHaveBeenCalledOnce();
+    }
+    await expect(read(f.root)).resolves.toEqual(publicationFails ? f.baseBytes : f.workerBytes);
+    await expect(hasRef(ref)).resolves.toBe(!publicationFails);
+    await expect(hasRef(candidateRef)).resolves.toBe(false);
+    expect(record).toHaveBeenCalledTimes(publicationFails ? 0 : 1);
+    expect(workspaceWarning.mock.calls).toEqual(
+      cleanupFails ? [["worker workspace staging cleanup failed: scratch removal failed"]] : [],
+    );
+    if (cleanupFails) {
+      await fs.access(scratch);
+    } else {
+      await expect(fs.access(scratch)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+  } finally {
+    makeScratch.mockRestore();
+    removeSpy.mockRestore();
+    await remove(scratch, { recursive: true, force: true });
+  }
 });

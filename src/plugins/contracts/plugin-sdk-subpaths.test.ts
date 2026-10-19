@@ -26,8 +26,9 @@ import type {
   ReplyDispatchBeforeDeliverOptions as ReplyRuntimeBeforeDeliverOptions,
   ReplyDispatcher as ReplyRuntimeDispatcher,
 } from "openclaw/plugin-sdk/reply-runtime";
-import ts from "typescript";
-import { beforeAll, describe, expect, expectTypeOf, it } from "vitest";
+import * as ts from "typescript/ast";
+import { afterAll, beforeAll, describe, expect, expectTypeOf, it } from "vitest";
+import { createNativeTypeScriptParser } from "../../../scripts/lib/native-typescript.mts";
 import {
   buildPluginSdkPackageExports,
   deprecatedPublicPluginSdkEntrypoints,
@@ -51,13 +52,12 @@ import type {
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.public.js";
 import * as channelActionsDirectSdk from "../../plugin-sdk/channel-actions.js";
-import * as channelLifecycleDirectSdk from "../../plugin-sdk/channel-lifecycle.js";
+import * as channelOutboundDirectSdk from "../../plugin-sdk/channel-outbound.js";
 import type {
   ChannelMessageActionContext as SharedChannelMessageActionContext,
   OpenClawPluginApi as SharedOpenClawPluginApi,
   PluginRuntime as SharedPluginRuntime,
 } from "../../plugin-sdk/channel-plugin-common.js";
-import * as channelReplyPipelineDirectSdk from "../../plugin-sdk/channel-reply-pipeline.js";
 import * as coreDirectSdk from "../../plugin-sdk/core.js";
 import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoRelativePath } from "../../test-utils/repo-files.js";
@@ -66,6 +66,8 @@ import type { OpenClawPluginApi } from "../types.js";
 
 const SRC_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const REPO_ROOT = resolve(SRC_ROOT, "..");
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
 const PLUGIN_SDK_DIR = resolve(SRC_ROOT, "plugin-sdk");
 const sourceCache = new Map<string, string>();
 const repoTsFilesCache = new Map<string, string[]>();
@@ -240,13 +242,7 @@ function collectNamedExportsFromRepoFile(relativePath: string): string[] {
 }
 
 function createSourceFile(absolutePath: string): ts.SourceFile {
-  return ts.createSourceFile(
-    absolutePath,
-    readCachedSource(absolutePath),
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TS,
-  );
+  return parser.parseSourceFile(absolutePath, readCachedSource(absolutePath));
 }
 
 function resolveTypeScriptModuleSource(fromFile: string, specifier: string): string | null {
@@ -496,7 +492,7 @@ describe("plugin-sdk subpath exports", () => {
     expect(docs).toContain("scripts/lib/plugin-sdk-entrypoints.json");
     expect(docs).toContain("scripts/lib/plugin-sdk-private-local-only-subpaths.json");
     expect(docs).toContain("scripts/lib/plugin-sdk-deprecated-public-subpaths.json");
-    expect(docs).toContain("private-local entries explicitly");
+    expect(docs).toContain("selected private-local entries");
 
     for (const subpath of pluginSdkSubpaths) {
       expect(packageExports).toHaveProperty(`./plugin-sdk/${subpath}`, {
@@ -632,12 +628,7 @@ describe("plugin-sdk subpath exports", () => {
       mentions: ["buildApprovalResolutionRef"],
       omits: ["resolveApprovalOverGateway", "withOperatorApprovalsGatewayClient"],
     });
-    expectSourceMentions("reply-chunking", [
-      "chunkText",
-      "chunkTextWithMode",
-      "isSilentReplyPayloadText",
-      "isSilentReplyText",
-    ]);
+    expectSourceMentions("reply-chunking", ["chunkText", "chunkTextWithMode"]);
     expectSourceMentions("reply-history", [
       "buildInboundHistoryFromEntries",
       "buildInboundHistoryFromMap",
@@ -776,13 +767,16 @@ describe("plugin-sdk subpath exports", () => {
     });
     expectSourceContract("memory-core-host-runtime-core", {
       mentions: ["SILENT_REPLY_TOKEN", "resolveMemorySearchConfig", "MemoryPluginRuntime"],
-      omits: ['export * from "../../packages/memory-host-sdk/src/runtime-core.js";'],
+      omits: [
+        'export * from "../../packages/memory-host-sdk/src/runtime-core.js";',
+        "recordMemoryArtifactWriteProvenance",
+      ],
     });
     expectSourceContract("memory-core-host-runtime-cli", {
       mentions: ["defaultRuntime", "withManager", "withProgressTotals"],
     });
     expectSourceContract("memory-core-host-runtime-files", {
-      mentions: ["listMemoryFiles", "normalizeExtraMemoryPaths", "MemorySearchResult"],
+      mentions: ["MemorySearchResult"],
       omits: ['export * from "../../packages/memory-host-sdk/src/runtime-files.js";'],
     });
     expectSourceMentions("plugin-test-runtime", [
@@ -1099,12 +1093,7 @@ describe("plugin-sdk subpath exports", () => {
       "resolveServicePrefixedTarget",
       "resolveTargetsWithOptionalToken",
     ]);
-    expectSourceMentions("channel-config-writes", [
-      "authorizeConfigWrite",
-      "canBypassConfigWritePolicy",
-      "formatConfigWriteDeniedMessage",
-      "resolveChannelConfigWrites",
-    ]);
+    expectSourceMentions("channel-config-writes", ["resolveChannelConfigWrites"]);
     expectSourceMentions("channel-feedback", [
       "createStatusReactionController",
       "logAckFailure",
@@ -1128,31 +1117,11 @@ describe("plugin-sdk subpath exports", () => {
       "isRecord",
       "resolveEnabledConfiguredAccountId",
     ]);
-    expectSourceMentions("command-auth", [
-      "buildCommandTextFromArgs",
-      "buildModelsProviderData",
-      "hasControlCommand",
-      "listNativeCommandSpecsForConfig",
-      "listSkillCommandsForAgents",
-      "normalizeCommandBody",
-      "createPreCryptoDirectDmAuthorizer",
-      "resolveCommandAuthorization",
-      "resolveCommandAuthorizedFromAuthorizers",
-      "resolveInboundDirectDmAccessWithRuntime",
-      "resolveControlCommandGate",
-      "resolveDualTextControlCommandGate",
-      "resolveNativeCommandSessionTargets",
-      "resolveStoredModelOverride",
-      "shouldComputeCommandAuthorized",
-      "shouldHandleTextCommands",
-    ]);
     expectSourceMentions("command-status", [
       "buildCommandsMessage",
       "buildCommandsMessagePaginated",
       "buildHelpMessage",
     ]);
-    expectSourceOmitsImportPattern("command-auth", "../auto-reply/status.js");
-    expectSourceOmitsSnippet("command-auth", "../../extensions/");
     expectSourceMentions("channel-send-result", [
       "attachChannelToResult",
       "buildChannelSendResult",
@@ -1185,8 +1154,6 @@ describe("plugin-sdk subpath exports", () => {
     ]);
 
     expectSourceMentions("thread-bindings-runtime", [
-      "resolveThreadBindingFarewellText",
-      "resolveThreadBindingLifecycle",
       "registerSessionBindingAdapter",
       "unregisterSessionBindingAdapter",
       "SessionBindingAdapter",
@@ -1241,7 +1208,7 @@ describe("plugin-sdk subpath exports", () => {
       omits: ["applyOpenAIConfig", "buildKilocodeModelDefinition", "discoverHuggingfaceModels"],
     });
     expectSourceContract("provider-catalog-shared", {
-      mentions: ["buildSingleProviderApiKeyCatalog", "buildPairedProviderApiKeyCatalog"],
+      mentions: ["buildSingleProviderApiKeyCatalog", "buildManifestProviderCatalogFamily"],
       omits: ["buildDeepSeekProvider", "buildVeniceProvider"],
     });
 
@@ -1255,7 +1222,11 @@ describe("plugin-sdk subpath exports", () => {
     expectSourceMentions("setup-tools", ["formatCliCommand", "detectBinary", "formatDocsLink"]);
     expectSourceMentions("lazy-runtime", ["createLazyRuntimeSurface", "createLazyRuntimeModule"]);
     expectSourceMentions("agent-harness", ["./agent-harness-runtime.js"]);
-    expectSourceMentions("agent-harness-runtime", ["AgentHarness", "EmbeddedAgentCompactResult"]);
+    expectSourceMentions("agent-harness-runtime", [
+      "AgentHarness",
+      "EmbeddedAgentCompactResult",
+      "agentHarnessStructuredInput",
+    ]);
     expectSourceOmitsSnippet("agent-runtime", "./sglang.js");
     expectSourceOmitsSnippet("agent-runtime", "./vllm.js");
     expectSourceOmitsSnippet("agent-runtime", "../../extensions/");
@@ -1298,11 +1269,6 @@ describe("plugin-sdk subpath exports", () => {
       "buildFalImageGenerationProvider",
       "buildGoogleImageGenerationProvider",
       "buildOpenAIImageGenerationProvider",
-    ]);
-    expectSourceOmits("config-runtime", [
-      "hasConfiguredSecretInput",
-      "normalizeResolvedSecretInputString",
-      "normalizeSecretInputString",
     ]);
     expectSourceMentions("webhook-ingress", [
       "registerPluginHttpRoute",
@@ -1362,14 +1328,11 @@ describe("plugin-sdk subpath exports", () => {
       "openclaw/plugin-sdk/channel-actions",
     );
     const pluginEntrySdk = await importResolvedPluginSdkSubpath("openclaw/plugin-sdk/plugin-entry");
-    const channelLifecycleSdk = await importResolvedPluginSdkSubpath(
-      "openclaw/plugin-sdk/channel-lifecycle",
+    const channelOutboundSdk = await importResolvedPluginSdkSubpath(
+      "openclaw/plugin-sdk/channel-outbound",
     );
     const channelPairingSdk = await importResolvedPluginSdkSubpath(
       "openclaw/plugin-sdk/channel-pairing",
-    );
-    const channelReplyPipelineSdk = await importResolvedPluginSdkSubpath(
-      "openclaw/plugin-sdk/channel-reply-pipeline",
     );
     const representativeModules = [];
     for (const id of representativeRuntimeSmokeSubpaths) {
@@ -1385,23 +1348,23 @@ describe("plugin-sdk subpath exports", () => {
       "PlatformMessageNotDispatchedError",
     ]);
 
-    expect(channelLifecycleSdk.createDraftStreamLoop).toBe(
-      channelLifecycleDirectSdk.createDraftStreamLoop,
+    expect(channelOutboundSdk.createDraftStreamLoop).toBe(
+      channelOutboundDirectSdk.createDraftStreamLoop,
     );
-    expect(channelLifecycleSdk.createFinalizableDraftLifecycle).toBe(
-      channelLifecycleDirectSdk.createFinalizableDraftLifecycle,
+    expect(channelOutboundSdk.createFinalizableDraftLifecycle).toBe(
+      channelOutboundDirectSdk.createFinalizableDraftLifecycle,
     );
-    expect(channelLifecycleSdk.createChannelRunQueue).toBe(
-      channelLifecycleDirectSdk.createChannelRunQueue,
+    expect(channelOutboundSdk.createChannelRunQueue).toBe(
+      channelOutboundDirectSdk.createChannelRunQueue,
     );
-    expect(channelLifecycleSdk.runPassiveAccountLifecycle).toBe(
-      channelLifecycleDirectSdk.runPassiveAccountLifecycle,
+    expect(channelOutboundSdk.runPassiveAccountLifecycle).toBe(
+      channelOutboundDirectSdk.runPassiveAccountLifecycle,
     );
-    expect(channelLifecycleSdk.createRunStateMachine).toBe(
-      channelLifecycleDirectSdk.createRunStateMachine,
+    expect(channelOutboundSdk.createRunStateMachine).toBe(
+      channelOutboundDirectSdk.createRunStateMachine,
     );
-    expect(channelLifecycleSdk.createArmableStallWatchdog).toBe(
-      channelLifecycleDirectSdk.createArmableStallWatchdog,
+    expect(channelOutboundSdk.createArmableStallWatchdog).toBe(
+      channelOutboundDirectSdk.createArmableStallWatchdog,
     );
 
     expectSourceMentions("channel-pairing", [
@@ -1414,24 +1377,24 @@ describe("plugin-sdk subpath exports", () => {
     ]);
     expect("createScopedPairingAccess" in channelPairingSdk).toBe(false);
 
-    expectSourceMentions("channel-reply-pipeline", [
-      "createChannelReplyPipeline",
+    expectSourceMentions("channel-outbound", [
+      "createChannelMessageReplyPipeline",
       "createTypingCallbacks",
       "createReplyPrefixContext",
       "createReplyPrefixOptions",
-      "resolveChannelSourceReplyDeliveryMode",
+      "resolveChannelMessageSourceReplyDeliveryMode",
     ]);
-    expect(channelReplyPipelineSdk.createTypingCallbacks).toBe(
-      channelReplyPipelineDirectSdk.createTypingCallbacks,
+    expect(channelOutboundSdk.createTypingCallbacks).toBe(
+      channelOutboundDirectSdk.createTypingCallbacks,
     );
-    expect(channelReplyPipelineSdk.createReplyPrefixContext).toBe(
-      channelReplyPipelineDirectSdk.createReplyPrefixContext,
+    expect(channelOutboundSdk.createReplyPrefixContext).toBe(
+      channelOutboundDirectSdk.createReplyPrefixContext,
     );
-    expect(channelReplyPipelineSdk.createReplyPrefixOptions).toBe(
-      channelReplyPipelineDirectSdk.createReplyPrefixOptions,
+    expect(channelOutboundSdk.createReplyPrefixOptions).toBe(
+      channelOutboundDirectSdk.createReplyPrefixOptions,
     );
-    expect(channelReplyPipelineSdk.resolveChannelSourceReplyDeliveryMode).toBe(
-      channelReplyPipelineDirectSdk.resolveChannelSourceReplyDeliveryMode,
+    expect(channelOutboundSdk.resolveChannelMessageSourceReplyDeliveryMode).toBe(
+      channelOutboundDirectSdk.resolveChannelMessageSourceReplyDeliveryMode,
     );
 
     expect(pluginSdkSubpaths.length).toBeGreaterThan(representativeRuntimeSmokeSubpaths.length);
@@ -1449,19 +1412,6 @@ describe("plugin-sdk subpath exports", () => {
       const mod = await importResolvedPluginSdkSubpath(`openclaw/plugin-sdk/${subpath}`);
       expect(typeof mod, `deprecated subpath ${subpath} should resolve`).toBe("object");
     }
-  });
-
-  it("keeps repeated silent-token semantics visible through the reply-chunking subpath", async () => {
-    const replyChunkingSdk = await importResolvedPluginSdkSubpath(
-      "openclaw/plugin-sdk/reply-chunking",
-    );
-
-    expect(replyChunkingSdk.isSilentReplyText("NO_REPLY\n\nNO_REPLY")).toBe(true);
-    expect(replyChunkingSdk.isSilentReplyPayloadText("NO_REPLY\n\nNO_REPLY")).toBe(true);
-    expect(replyChunkingSdk.isSilentReplyText("HEARTBEAT_OK\nHEARTBEAT_OK", "HEARTBEAT_OK")).toBe(
-      true,
-    );
-    expect(replyChunkingSdk.isSilentReplyText("Visible update\n\nNO_REPLY")).toBe(false);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

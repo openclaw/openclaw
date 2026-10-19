@@ -1,4 +1,3 @@
-// Telegram plugin module implements polling transport state behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { TelegramTransport } from "./fetch.js";
 
@@ -26,10 +25,10 @@ export class TelegramPollingTransportState {
       return undefined;
     }
     const previous = this.#telegramTransport;
-    const shouldCreateTransport = this.#transportDirty || !previous;
-    const nextTransport = shouldCreateTransport
-      ? (this.opts.createTelegramTransport?.() ?? previous)
-      : previous;
+    const nextTransport =
+      this.#transportDirty || !previous
+        ? (this.opts.createTelegramTransport?.() ?? previous)
+        : previous;
     // When the dirty flag triggered a rebuild, release the old transport's
     // dispatchers. Without this, each network stall / recoverable error
     // leaves a full pool of keep-alive sockets to api.telegram.org dangling
@@ -37,7 +36,11 @@ export class TelegramPollingTransportState {
     // hundreds of ESTABLISHED connections that choke per-IP upstream quotas.
     if (this.#transportDirty && previous && nextTransport !== previous) {
       this.opts.log("[telegram][diag] closing stale transport before rebuild");
-      this.#closeTransportAsync(previous, "stale-transport rebuild");
+      void previous.close().catch((err: unknown) => {
+        this.opts.log(
+          `[telegram][diag] failed to close transport (stale-transport rebuild): ${formatErrorMessage(err)}`,
+        );
+      });
     }
     if (this.#transportDirty && nextTransport) {
       this.opts.log("[telegram][diag] rebuilding transport for next polling cycle");
@@ -64,15 +67,5 @@ export class TelegramPollingTransportState {
         `[telegram][diag] failed to close transport during dispose: ${formatErrorMessage(err)}`,
       );
     }
-  }
-
-  // Fire-and-forget close used on the rebuild path so the polling cycle is not
-  // blocked by a slow destroy. The error path is logged but never rethrown.
-  #closeTransportAsync(transport: TelegramTransport, context: string) {
-    void transport.close().catch((err: unknown) => {
-      this.opts.log(
-        `[telegram][diag] failed to close transport (${context}): ${formatErrorMessage(err)}`,
-      );
-    });
   }
 }

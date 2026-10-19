@@ -1,4 +1,3 @@
-// Googlechat plugin module implements channel base behavior.
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { formatNormalizedAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
 import {
@@ -10,6 +9,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import {
   type GoogleChatConfigAccessorAccount,
   inspectGoogleChatAccount,
+  isGoogleChatAccountConfigured,
   listGoogleChatAccountIds,
   resolveDefaultGoogleChatAccountId,
   resolveGoogleChatConfigAccessorAccount,
@@ -72,62 +72,36 @@ const googleChatConfigAdapter = createScopedChannelConfigAdapter<
   resolveDefaultTo: (account) => account.config.defaultTo,
 });
 
-function isGoogleChatAccountConfigured(account: ResolvedGoogleChatAccount): boolean {
-  return account.tokenStatus
-    ? account.tokenStatus !== "missing"
-    : account.credentialSource !== "none";
-}
-
-type GoogleChatPluginBase = Pick<
-  ChannelPlugin<ResolvedGoogleChatAccount>,
-  | "id"
-  | "meta"
-  | "setupContract"
-  | "setupWizard"
-  | "capabilities"
-  | "streaming"
-  | "reload"
-  | "configSchema"
-  | "config"
->;
-
-export function createGoogleChatPluginBase(
-  params: {
-    configSchema?: ChannelPlugin<ResolvedGoogleChatAccount>["configSchema"];
-  } = {},
-): GoogleChatPluginBase {
-  return {
-    id: GOOGLECHAT_CHANNEL_ID,
-    meta: { ...googlechatMeta },
-    setupContract: googlechatSetupContract,
-    setupWizard: googlechatSetupWizard,
-    capabilities: {
-      chatTypes: ["direct", "group", "thread"],
-      threads: true,
-      // Inbound attachment download remains supported even though service-account
-      // authentication cannot use Google Chat's user-auth-only upload endpoint.
-      media: true,
-      nativeCommands: false,
-      blockStreaming: true,
-    },
-    streaming: {
-      blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
-    },
-    reload: { configPrefixes: ["channels.googlechat"] },
-    ...(params.configSchema ? { configSchema: params.configSchema } : {}),
-    config: {
-      ...googleChatConfigAdapter,
-      inspectAccount: adaptScopedAccountAccessor(inspectGoogleChatAccount),
-      isConfigured: isGoogleChatAccountConfigured,
-      describeAccount: (account) =>
-        describeAccountSnapshot({
-          account,
-          configured: isGoogleChatAccountConfigured(account),
-          extra: {
-            credentialSource: account.credentialSource,
-            tokenStatus: account.tokenStatus,
-          },
-        }),
-    },
-  };
-}
+export const googlechatSetupPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
+  id: GOOGLECHAT_CHANNEL_ID,
+  meta: { ...googlechatMeta },
+  setupContract: googlechatSetupContract,
+  setupWizard: googlechatSetupWizard,
+  capabilities: {
+    chatTypes: ["direct", "group", "thread"],
+    threads: true,
+    // Inbound attachment download remains supported even though service-account
+    // authentication cannot use Google Chat's user-auth-only upload endpoint.
+    media: true,
+    nativeCommands: false,
+    blockStreaming: true,
+  },
+  streaming: {
+    blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
+  },
+  reload: { configPrefixes: ["channels.googlechat"] },
+  config: {
+    ...googleChatConfigAdapter,
+    inspectAccount: adaptScopedAccountAccessor(inspectGoogleChatAccount),
+    isConfigured: isGoogleChatAccountConfigured,
+    describeAccount: (account) =>
+      describeAccountSnapshot({
+        account,
+        configured: isGoogleChatAccountConfigured(account),
+        extra: {
+          credentialSource: account.credentialSource,
+          tokenStatus: account.tokenStatus,
+        },
+      }),
+  },
+};

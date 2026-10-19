@@ -2,29 +2,50 @@ import type { ReplyPayload } from "../../auto-reply/types.js";
 import type {
   ChannelMessageUnknownSendContext,
   ChannelMessageUnknownSendReconciliationResult,
-  RenderedMessageBatchPlan,
 } from "../../channels/message/types.js";
-import type { ReplyToMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../errors.js";
 import { resolveOutboundChannelMessageAdapter } from "./channel-resolution.js";
+import type { OutboundDeliveryResult } from "./deliver-types.js";
+import type { QueuedDelivery } from "./delivery-queue-types.js";
 
-type UnknownSendQueueEntry = {
-  id: string;
-  channel: string;
-  to: string;
-  accountId?: string;
-  enqueuedAt: number;
-  retryCount: number;
-  platformSendStartedAt?: number;
-  effectiveReplyToId?: string | null;
-  renderedBatchPlan?: RenderedMessageBatchPlan;
-  replyToId?: string | null;
-  replyToMode?: ReplyToMode;
-  threadId?: string | number | null;
-  silent?: boolean;
-  session?: { agentId?: string };
-};
+export function buildReconciledSentResult(
+  entry: QueuedDelivery,
+  reconciliation: Extract<ChannelMessageUnknownSendReconciliationResult, { status: "sent" }>,
+) {
+  return {
+    channel: entry.channel,
+    messageId:
+      reconciliation.messageId ??
+      reconciliation.receipt.primaryPlatformMessageId ??
+      reconciliation.receipt.platformMessageIds[0] ??
+      "",
+    receipt: reconciliation.receipt,
+  } satisfies OutboundDeliveryResult;
+}
+
+export function needsUnknownSendReconciliation(entry: QueuedDelivery): boolean {
+  return (
+    entry.recoveryState === "send_attempt_started" || entry.recoveryState === "unknown_after_send"
+  );
+}
+
+type UnknownSendQueueEntry = Pick<
+  QueuedDelivery,
+  | "id"
+  | "channel"
+  | "to"
+  | "accountId"
+  | "enqueuedAt"
+  | "retryCount"
+  | "platformSendStartedAt"
+  | "effectiveReplyToId"
+  | "renderedBatchPlan"
+  | "reply"
+  | "threadId"
+  | "silent"
+  | "session"
+>;
 
 export function buildUnknownSendContext(params: {
   entry: UnknownSendQueueEntry;
@@ -48,8 +69,8 @@ export function buildUnknownSendContext(params: {
       : {}),
     payloads: params.payloads,
     ...(entry.renderedBatchPlan ? { renderedBatchPlan: entry.renderedBatchPlan } : {}),
-    ...(entry.replyToId !== undefined ? { replyToId: entry.replyToId } : {}),
-    ...(entry.replyToMode !== undefined ? { replyToMode: entry.replyToMode } : {}),
+    ...(entry.reply ? { replyToId: entry.reply.replyToId } : {}),
+    ...(entry.reply?.source === "implicit" ? { replyToMode: entry.reply.mode } : {}),
     ...(entry.threadId !== undefined ? { threadId: entry.threadId } : {}),
     ...(entry.silent !== undefined ? { silent: entry.silent } : {}),
   };
@@ -61,17 +82,20 @@ export async function reconcileUnknownQueuedDelivery(params: {
   payloads: readonly ReplyPayload[];
   cfg: OpenClawConfig;
   warn: (message: string) => void;
+  assertCurrent?: () => void;
 }): Promise<ChannelMessageUnknownSendReconciliationResult | null> {
-  const adapter = resolveOutboundChannelMessageAdapter({
+  const adapter = await resolveOutboundChannelMessageAdapter({
     channel: params.entry.channel,
     cfg: params.cfg,
     agentId: params.entry.session?.agentId,
     allowBootstrap: true,
+    assertCurrent: params.assertCurrent,
   });
-  if (adapter?.durableFinal?.capabilities?.reconcileUnknownSend !== true) {
-    return null;
-  }
-  const reconcileUnknownSend = adapter.durableFinal.reconcileUnknownSend;
+  params.assertCurrent?.();
+  const reconcileUnknownSend =
+    adapter?.durableFinal?.capabilities?.reconcileUnknownSend === true
+      ? adapter.durableFinal.reconcileUnknownSend
+      : undefined;
   if (!reconcileUnknownSend) {
     return null;
   }

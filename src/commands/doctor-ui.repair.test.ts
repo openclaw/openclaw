@@ -3,11 +3,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CONTROL_UI_BUILD_ID_ATTRIBUTE } from "../gateway/control-ui-root-assets.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
 const mocks = vi.hoisted(() => ({
   root: "",
+  buildId: "doctor-runtime-build",
   ensureControlUiAssetsBuilt: vi.fn(),
   note: vi.fn(),
   runCommandWithTimeout: vi.fn(),
@@ -19,6 +21,10 @@ vi.mock("../infra/openclaw-root.js", () => ({
   resolveOpenClawPackageRootSync: vi.fn(() => mocks.root),
 }));
 vi.mock("../process/exec.js", () => ({ runCommandWithTimeout: mocks.runCommandWithTimeout }));
+vi.mock("../version.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../version.js")>()),
+  resolveRuntimeServiceBuildId: () => mocks.buildId,
+}));
 vi.mock("../infra/control-ui-assets.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/control-ui-assets.js")>()),
   ensureControlUiAssetsBuilt: mocks.ensureControlUiAssetsBuilt,
@@ -38,7 +44,9 @@ function createPrompter(): DoctorPrompter {
 describe("Control UI doctor repair owner", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
-    mocks.root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-ui-repair-"));
+    mocks.root = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-ui-repair-")),
+    );
     await fs.mkdir(path.join(mocks.root, "ui"), { recursive: true });
     await fs.writeFile(path.join(mocks.root, "ui", "package.json"), "{}");
     mocks.ensureControlUiAssetsBuilt.mockImplementation(async (_runtime, opts) => {
@@ -59,19 +67,30 @@ describe("Control UI doctor repair owner", () => {
     await fs.rm(mocks.root, { recursive: true, force: true });
   });
 
-  it("uses the canonical asset owner for missing UI assets", async () => {
+  it("routes missing app-owned assets to the host without package or git commands", async () => {
+    await fs.writeFile(
+      path.join(mocks.root, "openclaw-install-owner.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        owner: "macos-app",
+        displayName: "OpenClaw.app",
+        updateHint: "Update OpenClaw.app to update this Gateway.",
+      }),
+    );
     const prompter = createPrompter();
 
     await maybeRepairUiProtocolFreshness(runtime, prompter);
 
-    expect(prompter.confirmAutoFix).toHaveBeenCalledOnce();
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Managed by OpenClaw.app. Update OpenClaw.app to update this Gateway.",
+      ),
+      "UI",
+    );
+    expect(prompter.confirmAutoFix).not.toHaveBeenCalled();
     expect(prompter.confirmAggressiveAutoFix).not.toHaveBeenCalled();
-    expect(mocks.ensureControlUiAssetsBuilt).toHaveBeenCalledWith(runtime, {
-      root: mocks.root,
-      force: false,
-      onBuildStart: expect.any(Function),
-    });
-    expect(mocks.note).toHaveBeenCalledWith("UI build complete.", "UI");
+    expect(mocks.ensureControlUiAssetsBuilt).not.toHaveBeenCalled();
+    expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
   });
 
   it("repairs an existing dashboard whose startup JavaScript is missing", async () => {
@@ -85,31 +104,53 @@ describe("Control UI doctor repair owner", () => {
     expect(prompter.confirmAutoFix).toHaveBeenCalledOnce();
     expect(mocks.ensureControlUiAssetsBuilt).toHaveBeenCalledWith(runtime, {
       root: mocks.root,
+      expectedBuildId: mocks.buildId,
       force: false,
       onBuildStart: expect.any(Function),
     });
     expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
   });
 
-  it("advises reinstalling incomplete packaged bundles without attempting a source build", async () => {
+  it.each(["incomplete", "markerless", "dev-build"])(
+    "checks packaged UI identity without rebuilding it: %s",
+    async (failure) => {
+      const indexPath = path.join(mocks.root, "dist", "control-ui", "index.html");
+      await fs.mkdir(path.dirname(indexPath), { recursive: true });
+      const buildId = failure === "dev-build" ? "dev" : null;
+      const marker = buildId
+        ? ` ${CONTROL_UI_BUILD_ID_ATTRIBUTE}="${buildId}-${"a".repeat(64)}"`
+        : "";
+      const html = `<html${marker}><script src="./assets/startup.js"></script></html>`;
+      await fs.writeFile(indexPath, html);
+      if (failure !== "incomplete") {
+        await fs.mkdir(path.join(path.dirname(indexPath), "assets"));
+        await fs.writeFile(path.join(path.dirname(indexPath), "assets/startup.js"), "// startup");
+      }
+      await fs.rm(path.join(mocks.root, "ui", "package.json"));
+
+      await maybeRepairUiProtocolFreshness(runtime, createPrompter());
+
+      if (failure === "dev-build") {
+        expect(mocks.note).not.toHaveBeenCalled();
+      } else {
+        expect(mocks.note).toHaveBeenCalledWith(
+          expect.stringContaining("Reinstall OpenClaw to restore bundled Control UI assets."),
+          expect.any(String),
+        );
+      }
+      expect(mocks.ensureControlUiAssetsBuilt).not.toHaveBeenCalled();
+      expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
+      expect(await fs.readFile(indexPath, "utf8")).toBe(html);
+    },
+  );
+
+  it("forces the canonical owner to rebuild source assets after protocol changes", async () => {
     const indexPath = path.join(mocks.root, "dist", "control-ui", "index.html");
     await fs.mkdir(path.dirname(indexPath), { recursive: true });
-    await fs.writeFile(indexPath, '<script src="./assets/startup.js"></script>');
-    await fs.rm(path.join(mocks.root, "ui", "package.json"));
-
-    await maybeRepairUiProtocolFreshness(runtime, createPrompter());
-
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("Reinstall OpenClaw to restore bundled Control UI assets."),
-      "UI",
+    await fs.writeFile(
+      indexPath,
+      `<html ${CONTROL_UI_BUILD_ID_ATTRIBUTE}="${mocks.buildId}-${"a".repeat(64)}"></html>`,
     );
-    expect(mocks.ensureControlUiAssetsBuilt).not.toHaveBeenCalled();
-  });
-
-  it("forces the canonical owner to rebuild stale existing assets", async () => {
-    const indexPath = path.join(mocks.root, "dist", "control-ui", "index.html");
-    await fs.mkdir(path.dirname(indexPath), { recursive: true });
-    await fs.writeFile(indexPath, "<html></html>");
     const prompter = createPrompter();
 
     await maybeRepairUiProtocolFreshness(runtime, prompter);
@@ -118,10 +159,13 @@ describe("Control UI doctor repair owner", () => {
     expect(prompter.confirmAggressiveAutoFix).toHaveBeenCalledOnce();
     expect(mocks.ensureControlUiAssetsBuilt).toHaveBeenCalledWith(runtime, {
       root: mocks.root,
+      expectedBuildId: mocks.buildId,
       force: true,
       onBuildStart: expect.any(Function),
     });
     expect(mocks.note).toHaveBeenCalledWith("UI rebuild complete.", "UI");
+    expect(mocks.note).toHaveBeenCalledWith(expect.stringContaining("ui:build"), "UI Freshness");
+    expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(1);
   });
 
   it("reports owner-normalized build failures instead of claiming repair success", async () => {

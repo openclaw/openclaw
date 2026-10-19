@@ -1,15 +1,50 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { validateWorkerAdmissionHandshake } from "../../packages/gateway-protocol/src/index.js";
+import { z } from "zod";
 import { WORKER_BUNDLE_PREWARM_VERSION } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { parseWorkerCapacity } from "../../packages/gateway-protocol/src/worker-capacity.js";
+import { workerProtocolObject } from "../worker/protocol-record.js";
 
 export const NODE_RUNNER_INVENTORY_UPDATE_METHOD = "node.runnerInventory.update";
-export const NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE = "node-worker-supervisor-v4";
-export const NODE_WORKER_SUPERVISOR_EXECUTION_CONTEXT_V1_PROTOCOL_FEATURE =
-  "node-worker-supervisor-v3";
-export const NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE = "node-worker-supervisor-v2";
-export const NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE = "node-worker-supervisor-v1";
+export const NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE = "node-worker-supervisor-v6";
+const RETIRED_NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURES = [
+  "node-worker-supervisor-v1",
+  "node-worker-supervisor-v2",
+  "node-worker-supervisor-v3",
+  "node-worker-supervisor-v4",
+  "node-worker-supervisor-v5",
+] as const;
 export const NODE_WORKER_BUNDLE_RETENTION_VERSION = 1;
 export const NODE_WORKER_BUNDLE_STATUS_VERSION = 1;
+export const NODE_WORKER_PORTAL_STREAM_VERSION = 1;
+export const NODE_WORKER_ENVIRONMENT_SESSION_VERSION = 1;
+export const NODE_WORKER_STATUS_WAIT_VERSION = 1;
+export const NODE_WORKER_PREPARED_WORKSPACE_VERSION = 1;
+export const NODE_WORKER_NATIVE_INFERENCE_VERSION = 1;
+export const NODE_WORKER_INFERENCE_SETUP_ERROR =
+  "Worker-local inference is not configured on this node. Add a compatible model under " +
+  "models.providers with a usable credential in the node openclaw.json, set " +
+  'nodeHost.workerRuns.isolation to "none", then restart the node host. ' +
+  "If the node runs an older OpenClaw version, update it first.";
+export const NODE_WORKER_PROMPT_CONTEXT_VERSION = 1;
+export const NODE_WORKER_HOST_DISABLED_REASON_MAX_LENGTH = 1_024;
+// Couples the lease owner with foreground tree ownership; neither rolls out alone.
+export const NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION = 1;
+
+// Supervisors predating launchToolNames admit this closed vocabulary: OpenClaw 2026.9.6
+// is the only published release that passes the worker-turn launch gate. Retire with the next dialect.
+const LEGACY_NODE_WORKER_LAUNCH_TOOL_NAMES = Object.freeze([
+  "read",
+  "write",
+  "edit",
+  "apply_patch",
+  "exec",
+  "process",
+  "browser",
+  "computer",
+  "skill_workshop",
+  "sessions_spawn",
+  "sessions_send",
+  "portal",
+]);
 
 export const NODE_RUNNER_UPDATE_REQUIRED_ISSUE = {
   code: "update-required",
@@ -18,126 +53,129 @@ export const NODE_RUNNER_UPDATE_REQUIRED_ISSUE = {
   headlessReconnectCommand: "openclaw node restart",
 } as const;
 
-export type NodeRunnerInventoryIssue = typeof NODE_RUNNER_UPDATE_REQUIRED_ISSUE;
-
-export type NodeWorkerHostDeclaration =
-  | { enabled: false }
-  | {
-      enabled: true;
-      capacity: "available" | "full";
-      bundlePrewarm?: typeof WORKER_BUNDLE_PREWARM_VERSION;
-      bundleRetention?: typeof NODE_WORKER_BUNDLE_RETENTION_VERSION;
-      bundleStatus?: typeof NODE_WORKER_BUNDLE_STATUS_VERSION;
-    };
-
-export type NodeRunnerInventoryDeclaration =
-  | { protocolFeatures: readonly [] }
-  | {
-      protocolFeatures: readonly [
-        | typeof NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE
-        | typeof NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE
-        | typeof NODE_WORKER_SUPERVISOR_EXECUTION_CONTEXT_V1_PROTOCOL_FEATURE,
-      ];
+export type NodeRunnerInventoryIssue =
+  | typeof NODE_RUNNER_UPDATE_REQUIRED_ISSUE
+  | { code: "worker-host-unavailable"; message: string };
+const CapacitySnapshot = z.transform((value, context) => {
+  const capacity = parseWorkerCapacity(value);
+  if (!capacity) {
+    context.addIssue({ code: "custom", message: "invalid worker capacity" });
+    return z.NEVER;
+  }
+  return capacity;
+});
+const LaunchToolNames = z
+  .array(z.string().min(1).max(64))
+  .max(64)
+  .refine((names) => new Set(names).size === names.length);
+const WorkerHost = z
+  .union([
+    workerProtocolObject({
+      enabled: z.literal(false),
+      reason: z
+        .string()
+        .max(NODE_WORKER_HOST_DISABLED_REASON_MAX_LENGTH)
+        .refine((value) => value.trim().length > 0)
+        .optional(),
+    }),
+    workerProtocolObject({
+      enabled: z.literal(true),
+      capacity: CapacitySnapshot,
+      bundlePrewarm: z.literal(WORKER_BUNDLE_PREWARM_VERSION).optional(),
+      bundleRetention: z.literal(NODE_WORKER_BUNDLE_RETENTION_VERSION).optional(),
+      bundleStatus: z.literal(NODE_WORKER_BUNDLE_STATUS_VERSION).optional(),
+      portalStream: z.literal(NODE_WORKER_PORTAL_STREAM_VERSION).optional(),
+      environmentSession: z.literal(NODE_WORKER_ENVIRONMENT_SESSION_VERSION).optional(),
+      statusWait: z.literal(NODE_WORKER_STATUS_WAIT_VERSION).optional(),
+      deviceFolders: z.literal(true).optional(),
+      preparedWorkspace: z.literal(NODE_WORKER_PREPARED_WORKSPACE_VERSION).optional(),
+      capturedExecPolicy: z.literal(true).optional(),
+      workspaceQuiescence: z.literal(NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION).optional(),
+      launchToolNames: LaunchToolNames.optional(),
+      idleRetention: z.literal(true).optional(),
+      nativeInference: z.literal(NODE_WORKER_NATIVE_INFERENCE_VERSION).optional(),
+      promptContext: z.literal(NODE_WORKER_PROMPT_CONTEXT_VERSION).optional(),
+    }).refine(
+      (host) =>
+        (host.bundleStatus === undefined || host.bundleRetention !== undefined) &&
+        (host.capacity.reclaimableIdle === undefined || host.idleRetention === true),
+    ),
+  ])
+  .transform((host) => {
+    // Optional undefined values are absent in the reconnect declaration.
+    for (const [key, value] of Object.entries(host)) {
+      if (value === undefined) {
+        Reflect.deleteProperty(host, key);
+      }
     }
-  | {
-      protocolFeatures: readonly [typeof NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE];
-      workerHost: NodeWorkerHostDeclaration;
-    };
+    return host;
+  });
+export type NodeWorkerCapacitySnapshot = Readonly<z.infer<typeof CapacitySnapshot>>;
+export type NodeWorkerHostDeclaration = z.infer<typeof WorkerHost>;
 
-function parseWorkerHostDeclaration(value: unknown): NodeWorkerHostDeclaration | null {
-  if (!isRecord(value) || typeof value.enabled !== "boolean") {
-    return null;
-  }
-  const keys = Object.keys(value);
-  if (!value.enabled) {
-    return keys.length === 1 && keys[0] === "enabled" ? { enabled: false } : null;
-  }
-  if (
-    keys.length < 2 ||
-    keys.length > 5 ||
-    !keys.includes("enabled") ||
-    !keys.includes("capacity") ||
-    keys.some(
-      (key) =>
-        key !== "enabled" &&
-        key !== "capacity" &&
-        key !== "bundlePrewarm" &&
-        key !== "bundleRetention" &&
-        key !== "bundleStatus",
-    ) ||
-    (value.capacity !== "available" && value.capacity !== "full") ||
-    (value.bundlePrewarm !== undefined && value.bundlePrewarm !== WORKER_BUNDLE_PREWARM_VERSION) ||
-    (value.bundleRetention !== undefined &&
-      value.bundleRetention !== NODE_WORKER_BUNDLE_RETENTION_VERSION) ||
-    (value.bundleStatus !== undefined &&
-      value.bundleStatus !== NODE_WORKER_BUNDLE_STATUS_VERSION) ||
-    (value.bundleStatus !== undefined && value.bundleRetention === undefined)
-  ) {
-    return null;
-  }
-  return {
-    enabled: true,
-    capacity: value.capacity,
-    ...(value.bundlePrewarm === WORKER_BUNDLE_PREWARM_VERSION
-      ? { bundlePrewarm: WORKER_BUNDLE_PREWARM_VERSION }
-      : {}),
-    ...(value.bundleRetention === NODE_WORKER_BUNDLE_RETENTION_VERSION
-      ? { bundleRetention: NODE_WORKER_BUNDLE_RETENTION_VERSION }
-      : {}),
-    ...(value.bundleStatus === NODE_WORKER_BUNDLE_STATUS_VERSION
-      ? { bundleStatus: NODE_WORKER_BUNDLE_STATUS_VERSION }
-      : {}),
-  };
-}
+const RunnerInventory = z.union([
+  workerProtocolObject({ protocolFeatures: z.tuple([]).readonly() }),
+  workerProtocolObject({
+    protocolFeatures: z
+      .tuple([z.enum(RETIRED_NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURES)])
+      .readonly(),
+    workerRuns: z.unknown().optional(),
+    workerHost: z.unknown().optional(),
+  })
+    .refine((value) => Object.keys(value).length <= 2)
+    // Retired payloads never become consent or launch authority; only their marker drives recovery.
+    .transform(({ protocolFeatures }) => ({ protocolFeatures })),
+  workerProtocolObject({
+    protocolFeatures: z.tuple([z.literal(NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE)]).readonly(),
+    workerHost: WorkerHost,
+  }),
+]);
+export type NodeRunnerInventoryDeclaration = z.infer<typeof RunnerInventory>;
 
 /** Parses the closed reconnect-scoped node-host runner declaration. */
 export function parseNodeRunnerInventoryDeclaration(
   value: unknown,
 ): NodeRunnerInventoryDeclaration | null {
-  if (!isRecord(value) || !Array.isArray(value.protocolFeatures)) {
-    return null;
-  }
-  const keys = Object.keys(value);
-  if (value.protocolFeatures.length === 0) {
-    return keys.length === 1 && keys.includes("protocolFeatures") ? { protocolFeatures: [] } : null;
-  }
-  if (value.protocolFeatures.length !== 1) {
-    return null;
-  }
-  const feature = value.protocolFeatures[0];
-  if (
-    feature === NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE ||
-    feature === NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE
-  ) {
-    if (
-      keys.length < 1 ||
-      keys.length > 2 ||
-      keys.some((key) => key !== "protocolFeatures" && key !== "workerRuns") ||
-      (value.workerRuns !== undefined && !validateWorkerAdmissionHandshake(value.workerRuns))
-    ) {
-      return null;
-    }
-    // v1/v2 carried the node-local package build in inventory. Keep wire
-    // validation only so shipped nodes receive the explicit update path.
-    return { protocolFeatures: [feature] };
-  }
-  if (feature === NODE_WORKER_SUPERVISOR_EXECUTION_CONTEXT_V1_PROTOCOL_FEATURE) {
-    return keys.length === 2 && parseWorkerHostDeclaration(value.workerHost)
-      ? { protocolFeatures: [feature] }
-      : null;
-  }
-  if (feature !== NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE || keys.length !== 2) {
-    return null;
-  }
-  const workerHost = parseWorkerHostDeclaration(value.workerHost);
-  return workerHost
-    ? { protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE], workerHost }
-    : null;
+  return RunnerInventory.safeParse(value).data ?? null;
 }
 
-export function formatNodeRunnerUpdateRequired(
+export function formatNodeRunnerInventoryIssue(
   nodeId: string,
   issue: NodeRunnerInventoryIssue,
 ): string {
-  return `device worker node ${nodeId} requires an update before it can host sessions; run ${issue.updateCommand}, then reconnect it (for a headless node, run ${issue.headlessReconnectCommand})`;
+  return issue.code === "worker-host-unavailable"
+    ? `device worker node ${nodeId} cannot host sessions: ${issue.message}`
+    : `device worker node ${nodeId} requires an update before it can host sessions; run ${issue.updateCommand}, then reconnect it (for a headless node, run ${issue.headlessReconnectCommand})`;
+}
+
+export function createNodeRunnerInventoryIssueError(
+  nodeId: string,
+  issue: NodeRunnerInventoryIssue,
+): Error {
+  const error = new Error(formatNodeRunnerInventoryIssue(nodeId, issue));
+  return issue.code === "update-required"
+    ? Object.assign(error, {
+        code: "node_runner_update_required",
+        name: "NodeRunnerUpdateRequiredError",
+      })
+    : error;
+}
+
+/** Worker execution requires captured policy and the current assignment prompt context. */
+export function resolveNodeWorkerExecutionIssue(
+  workerHost: NodeWorkerHostDeclaration,
+): NodeRunnerInventoryIssue | undefined {
+  return workerHost.enabled &&
+    (workerHost.capturedExecPolicy !== true ||
+      workerHost.promptContext !== NODE_WORKER_PROMPT_CONTEXT_VERSION)
+    ? NODE_RUNNER_UPDATE_REQUIRED_ISSUE
+    : undefined;
+}
+
+export function resolveNodeWorkerLaunchToolNames(
+  workerHost: NodeWorkerHostDeclaration | undefined,
+): readonly string[] {
+  return (
+    (workerHost?.enabled && workerHost.launchToolNames) || LEGACY_NODE_WORKER_LAUNCH_TOOL_NAMES
+  );
 }

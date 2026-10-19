@@ -1,15 +1,19 @@
-// Covers lazy outbound channel bootstrap, retry guards, auto-enable config, and
-// send-capable active registry short-circuiting.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
-import { migratePersistedImplicitMainRoster } from "../../config/legacy.roster.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   getActivePluginRegistry,
   resetPluginRuntimeStateForTest,
+  requireActivePluginRegistry,
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
+import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 
 const loaderMocks = vi.hoisted(() => ({
   loadPluginRegistryHandle: vi.fn(),
@@ -24,24 +28,19 @@ vi.mock("../../plugins/loader.js", () => ({
   loadPluginRegistryHandle: loaderMocks.loadPluginRegistryHandle,
 }));
 
-const { bootstrapOutboundChannelPlugin, resetOutboundChannelBootstrapStateForTests } =
-  await import("./channel-bootstrap.runtime.js");
-const { resolveChannelOutboundDirectiveOptions, resolveOutboundDurableFinalDeliverySupport } =
+vi.mock("../../plugins/plugin-metadata-state-worker.js", () => ({
+  readPluginMetadataStateRow: vi.fn(async () => undefined),
+}));
+
+const { bootstrapOutboundChannelPlugin } = await import("./channel-bootstrap.runtime.js");
+const { createChannelHandler, resolveOutboundDurableFinalDeliverySupport: checkDurable } =
   await import("./deliver-channel.js");
 const { resolveChannelTargetForDelivery, resolveOutboundSessionRouteForDelivery } =
   await import("../../cron/isolated-agent/delivery-target.runtime.js");
 
-const discordConfig = {
-  channels: {
-    discord: {},
-  },
-} satisfies OpenClawConfig;
-
-const updatedDiscordConfig = {
-  channels: {
-    discord: { enabled: true },
-  },
-} satisfies OpenClawConfig;
+const discordConfig = { channels: { discord: {} } } satisfies OpenClawConfig;
+const discordParams = { channel: "discord", cfg: discordConfig };
+const outbound = { sendText: async () => ({ messageId: "1" }) };
 
 const explicitFleetDiscordConfig = {
   agents: {
@@ -51,151 +50,72 @@ const explicitFleetDiscordConfig = {
       research: { workspace: "/tmp/openclaw-research" },
     },
   },
-  channels: {
-    discord: {},
-  },
+  ...discordConfig,
 } satisfies OpenClawConfig;
 
-function installDiscordSetupShell(): void {
-  const registry = createEmptyPluginRegistry();
-  registry.channels = [
-    {
-      pluginId: "discord",
-      plugin: { id: "discord", meta: {} },
-      source: "setup",
-    },
+const admittedOwner = {
+  cfg: explicitFleetDiscordConfig,
+  channel: "discord",
+  agentId: "ops",
+} as const;
+
+function discordRegistry(fields: object, source = "runtime") {
+  const handle = createEmptyPluginRegistry();
+  handle.channels = [
+    { pluginId: "discord", plugin: { id: "discord", meta: {}, ...fields }, source },
   ] as never;
-  setActivePluginRegistry(registry);
+  return handle;
+}
+
+function registry(plugin: unknown, pluginId: string, source = pluginId) {
+  return createTestRegistry([{ pluginId, source, plugin }]);
+}
+
+function handler(cfg: OpenClawConfig = discordConfig, agentId?: string) {
+  return createChannelHandler({ channel: "discord", cfg, to: "recipient", agentId });
+}
+
+function durable(requirements: Parameters<typeof checkDurable>[0]["requirements"]) {
+  return checkDurable({ ...discordParams, requirements });
 }
 
 describe("bootstrapOutboundChannelPlugin", () => {
+  beforeEach(() => setActivePluginRegistry(discordRegistry({}, "setup")));
   afterEach(() => {
     loaderMocks.loadPluginRegistryHandle.mockReset();
     loaderMocks.resolveDiscoverableScopedChannelPluginIds.mockClear();
-    resetOutboundChannelBootstrapStateForTests();
     resetPluginRuntimeStateForTest();
-  });
-
-  it("bootstraps when the selected channel registry has only a setup shell", () => {
-    installDiscordSetupShell();
-
-    bootstrapOutboundChannelPlugin({
-      channel: "discord",
-      cfg: discordConfig,
-    });
-
-    expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(1);
+    vi.unstubAllEnvs();
   });
 
   it("uses the admitted agent workspace during outbound preparation", async () => {
-    installDiscordSetupShell();
-    const handle = createEmptyPluginRegistry();
-    handle.channels = [
-      {
-        pluginId: "discord",
-        plugin: {
-          id: "discord",
-          meta: {},
-          outbound: {
-            extractMarkdownImages: true,
-            sendText: async () => ({ messageId: "1" }),
-          },
-        },
-        source: "runtime",
-      },
-    ] as never;
+    const handle = discordRegistry({
+      outbound: { ...outbound, extractMarkdownImages: true },
+    });
     loaderMocks.loadPluginRegistryHandle.mockReturnValue(handle);
 
-    await expect(
-      resolveChannelOutboundDirectiveOptions({
-        channel: "discord",
-        cfg: explicitFleetDiscordConfig,
-        agentId: "ops",
-      }),
-    ).resolves.toEqual({ extractMarkdownImages: true });
+    const sender = await handler(explicitFleetDiscordConfig, "ops");
+    await expect(sender.sendText("hello")).resolves.toMatchObject({ messageId: "1" });
 
     expect(loaderMocks.resolveDiscoverableScopedChannelPluginIds).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceDir: "/tmp/openclaw-ops" }),
+      expect.objectContaining({ workspaceDir: path.resolve("/tmp/openclaw-ops") }),
     );
   });
 
-  it("bootstraps outbound sends with the retained legacy owner after config load", async () => {
-    installDiscordSetupShell();
-    const migrated = migratePersistedImplicitMainRoster({
-      agents: {
-        defaults: { workspace: "/tmp/openclaw-legacy" },
-        entries: {
-          ops: { default: true },
-          research: {},
-        },
-      },
-      channels: { discord: {} },
-    }).config as OpenClawConfig;
-    const handle = createEmptyPluginRegistry();
-    handle.channels = [
-      {
-        pluginId: "discord",
-        plugin: {
-          id: "discord",
-          meta: {},
-          outbound: {
-            extractMarkdownImages: true,
-            sendText: async () => ({ messageId: "1" }),
-          },
-        },
-        source: "runtime",
-      },
-    ] as never;
-    loaderMocks.loadPluginRegistryHandle.mockReturnValue(handle);
-
-    await expect(
-      resolveChannelOutboundDirectiveOptions({
-        channel: "discord",
-        cfg: migrated,
-      }),
-    ).resolves.toEqual({ extractMarkdownImages: true });
-
-    expect(migrated.agents?.entries?.ops?.default).toBeUndefined();
-    expect(loaderMocks.resolveDiscoverableScopedChannelPluginIds).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceDir: "/tmp/openclaw-legacy" }),
-    );
-  });
-
-  it("still rejects ownerless bootstrap in an explicit multi-agent fleet", () => {
-    installDiscordSetupShell();
-
-    expect(() =>
-      bootstrapOutboundChannelPlugin({
-        channel: "discord",
-        cfg: explicitFleetDiscordConfig,
-      }),
-    ).toThrow(AgentSelectionRequiredError);
-  });
-
-  it("caches bootstrap outcomes per admitted agent", () => {
-    installDiscordSetupShell();
+  it("bootstraps ownerless fleets with global discovery instead of throwing", () => {
     loaderMocks.loadPluginRegistryHandle.mockReturnValue(createEmptyPluginRegistry());
 
-    bootstrapOutboundChannelPlugin({
-      channel: "discord",
-      cfg: explicitFleetDiscordConfig,
-      agentId: "ops",
-    });
-    bootstrapOutboundChannelPlugin({
-      channel: "discord",
-      cfg: explicitFleetDiscordConfig,
-      agentId: "research",
-    });
+    expect(() =>
+      bootstrapOutboundChannelPlugin({ channel: "discord", cfg: explicitFleetDiscordConfig }),
+    ).not.toThrow(AgentSelectionRequiredError);
 
-    expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(2);
-    expect(loaderMocks.resolveDiscoverableScopedChannelPluginIds).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ workspaceDir: "/tmp/openclaw-research" }),
+    expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(1);
+    expect(loaderMocks.resolveDiscoverableScopedChannelPluginIds).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: undefined }),
     );
   });
 
   it("carries the admitted agent runtime into cron target and session resolution", async () => {
-    installDiscordSetupShell();
     const resolveTarget = vi.fn(async () => ({
       to: "channel:ops",
       kind: "channel" as const,
@@ -210,39 +130,17 @@ describe("bootstrapOutboundChannelPlugin", () => {
       from: "discord:channel:ops",
       to: "channel:ops",
     }));
-    const handle = createEmptyPluginRegistry();
-    handle.channels = [
-      {
-        pluginId: "discord",
-        plugin: {
-          id: "discord",
-          meta: {},
-          outbound: { sendText: async () => ({ messageId: "1" }) },
-          messaging: {
-            targetResolver: { resolveTarget },
-            resolveOutboundSessionRoute,
-          },
-        },
-        source: "runtime",
-      },
-    ] as never;
+    const handle = discordRegistry({
+      outbound,
+      messaging: { targetResolver: { resolveTarget }, resolveOutboundSessionRoute },
+    });
     loaderMocks.loadPluginRegistryHandle.mockReturnValue(handle);
 
     await expect(
-      resolveChannelTargetForDelivery({
-        cfg: explicitFleetDiscordConfig,
-        channel: "discord",
-        agentId: "ops",
-        input: "ops",
-      }),
+      resolveChannelTargetForDelivery({ ...admittedOwner, input: "ops" }),
     ).resolves.toMatchObject({ ok: true, target: { to: "channel:ops" } });
     await expect(
-      resolveOutboundSessionRouteForDelivery({
-        cfg: explicitFleetDiscordConfig,
-        channel: "discord",
-        agentId: "ops",
-        target: "channel:ops",
-      }),
+      resolveOutboundSessionRouteForDelivery({ ...admittedOwner, target: "channel:ops" }),
     ).resolves.toMatchObject({ sessionKey: "agent:ops:discord:channel:ops" });
 
     expect(resolveTarget).toHaveBeenCalledTimes(1);
@@ -250,142 +148,108 @@ describe("bootstrapOutboundChannelPlugin", () => {
   });
 
   it("skips bootstrap when the selected channel entry can already send", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.channels = [
-      {
-        pluginId: "discord",
-        plugin: {
-          id: "discord",
-          meta: {},
-          outbound: { sendText: async () => ({ messageId: "1" }) },
-        },
-        source: "runtime",
-      },
-    ] as never;
-    setActivePluginRegistry(registry);
+    setActivePluginRegistry(discordRegistry({ outbound }));
 
-    bootstrapOutboundChannelPlugin({
-      channel: "discord",
-      cfg: discordConfig,
-    });
+    bootstrapOutboundChannelPlugin(discordParams);
 
     expect(loaderMocks.loadPluginRegistryHandle).not.toHaveBeenCalled();
   });
 
-  it("returns a scoped handle without replacing the process root", () => {
-    installDiscordSetupShell();
-    const root = getActivePluginRegistry();
-    const handle = createEmptyPluginRegistry();
-    handle.channels = [
-      {
-        pluginId: "discord",
-        plugin: {
-          id: "discord",
-          meta: {},
-          outbound: { sendText: async () => ({ messageId: "1" }) },
-        },
-        source: "runtime",
-      },
-    ] as never;
-    loaderMocks.loadPluginRegistryHandle.mockReturnValue(handle);
+  it("activates the scoped setup shell without borrowing a cached same-id root sender", () => {
+    const base = createChannelTestPluginBase({ id: "discord" });
+    const root = { ...base };
+    const activated = {
+      ...base,
+      outbound: { deliveryMode: "direct" as const, sendText: vi.fn() },
+    };
+    setActivePluginRegistry(registry(root, "root"));
+    const setupRegistry = registry(base, "selected", "setup");
+    const runtimeRegistry = registry(activated, "selected", "runtime");
+    const prior = registry(activated, "root", "prior");
+    loaderMocks.loadPluginRegistryHandle.mockReturnValue(prior);
+    expect(bootstrapOutboundChannelPlugin(discordParams)).toBe(prior);
+    loaderMocks.loadPluginRegistryHandle.mockClear();
+    loaderMocks.loadPluginRegistryHandle.mockReturnValue(runtimeRegistry);
 
-    expect(bootstrapOutboundChannelPlugin({ channel: "discord", cfg: discordConfig })).toBe(handle);
-    expect(bootstrapOutboundChannelPlugin({ channel: "discord", cfg: discordConfig })).toBe(handle);
-    expect(getActivePluginRegistry()).toBe(root);
-    expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(1);
-    expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledWith(
-      expect.objectContaining({ onlyPluginIds: ["discord"] }),
-    );
+    expect(
+      withPluginRuntimeRegistryScope(setupRegistry, () =>
+        bootstrapOutboundChannelPlugin(discordParams),
+      ),
+    ).toBe(runtimeRegistry);
+    expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledOnce();
+    expect(getActivePluginRegistry()?.channels[0]?.plugin).toBe(root);
   });
 
   it("resolves durable message capabilities inside the scoped handle", async () => {
-    installDiscordSetupShell();
-    const handle = createEmptyPluginRegistry();
-    handle.channels = [
-      {
-        pluginId: "discord",
-        plugin: {
-          id: "discord",
-          meta: {},
-          message: {
-            durableFinal: { capabilities: { text: true, silent: true } },
-            send: { text: async () => ({ messageId: "1" }) },
-          },
-        },
-        source: "runtime",
+    const handle = discordRegistry({
+      message: {
+        durableFinal: { capabilities: { text: true, silent: true } },
+        send: { text: async () => ({ messageId: "1" }) },
       },
-    ] as never;
+    });
     loaderMocks.loadPluginRegistryHandle.mockReturnValue(handle);
 
-    await expect(
-      resolveOutboundDurableFinalDeliverySupport({
-        channel: "discord",
-        cfg: discordConfig,
-        requirements: { text: true, silent: true },
-      }),
-    ).resolves.toEqual({ ok: true, automaticUnknownSendReconciliation: false });
-  });
-
-  it("does not retry an unusable handle in the same generation", () => {
-    installDiscordSetupShell();
-    loaderMocks.loadPluginRegistryHandle.mockReturnValue(createEmptyPluginRegistry());
-
-    expect(
-      bootstrapOutboundChannelPlugin({ channel: "discord", cfg: discordConfig }),
-    ).toBeUndefined();
-    expect(
-      bootstrapOutboundChannelPlugin({ channel: "discord", cfg: discordConfig }),
-    ).toBeUndefined();
-
-    expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not retry a thrown bootstrap in the same generation", () => {
-    installDiscordSetupShell();
-    loaderMocks.loadPluginRegistryHandle.mockImplementation(() => {
-      throw new Error("load failed");
+    await expect(durable({ text: true, silent: true })).resolves.toEqual({
+      ok: true,
+      automaticUnknownSendReconciliation: false,
     });
-
-    bootstrapOutboundChannelPlugin({ channel: "discord", cfg: discordConfig });
-    bootstrapOutboundChannelPlugin({ channel: "discord", cfg: discordConfig });
-
-    expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(1);
   });
 
-  it("bounds failed channel outcomes and refreshes misses by LRU recency", () => {
-    installDiscordSetupShell();
-    loaderMocks.loadPluginRegistryHandle.mockReturnValue(createEmptyPluginRegistry());
+  it.each(["outbound", "message"] as const)(
+    "retains the scoped %s transport and its durable capabilities through delivery",
+    async (transport) => {
+      const base = createChannelTestPluginBase({ id: "discord" });
+      const rootSend = vi.fn(async () => ({ channel: "discord", messageId: "root" }));
+      const sendRegistries: ReturnType<typeof requireActivePluginRegistry>[] = [];
+      const scopedSend = vi.fn(async () => {
+        sendRegistries.push(requireActivePluginRegistry());
+        return { channel: "discord", messageId: "scoped" };
+      });
+      const message = (send: typeof rootSend, id: string) => ({
+        send: {
+          text: async () => {
+            await send();
+            return {
+              receipt: {
+                primaryPlatformMessageId: id,
+                platformMessageIds: [id],
+                sentAt: 1,
+                parts: [{ platformMessageId: id, kind: "text" as const, index: 0 }],
+              },
+            };
+          },
+        },
+      });
+      const root = {
+        ...base,
+        outbound: { deliveryMode: "direct" as const, sendText: rootSend },
+        message: {
+          ...message(rootSend, "root"),
+          durableFinal: { capabilities: { text: true, silent: true } },
+        },
+      };
+      const scoped = {
+        ...base,
+        ...(transport === "outbound"
+          ? { outbound: { deliveryMode: "direct" as const, sendText: scopedSend } }
+          : { message: message(scopedSend, "scoped") }),
+      };
+      setActivePluginRegistry(registry(root, "root"));
+      const scopedRegistry = registry(scoped, "scoped");
 
-    for (let index = 0; index < 64; index += 1) {
-      bootstrapOutboundChannelPlugin({ channel: `channel-${index}`, cfg: discordConfig });
-    }
-    bootstrapOutboundChannelPlugin({ channel: "channel-0", cfg: discordConfig });
-    bootstrapOutboundChannelPlugin({ channel: "channel-64", cfg: discordConfig });
-    bootstrapOutboundChannelPlugin({ channel: "channel-0", cfg: discordConfig });
-
-    expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(65);
-
-    bootstrapOutboundChannelPlugin({ channel: "channel-1", cfg: discordConfig });
-
-    expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(66);
-  });
-
-  it("retries after the runtime config changes", () => {
-    installDiscordSetupShell();
-    bootstrapOutboundChannelPlugin({ channel: "discord", cfg: discordConfig });
-    bootstrapOutboundChannelPlugin({ channel: "discord", cfg: updatedDiscordConfig });
-
-    expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(2);
-  });
-
-  it("retains failed attempts when distinct runtime configs interleave", () => {
-    installDiscordSetupShell();
-    loaderMocks.loadPluginRegistryHandle.mockReturnValue(createEmptyPluginRegistry());
-
-    bootstrapOutboundChannelPlugin({ channel: "discord", cfg: discordConfig });
-    bootstrapOutboundChannelPlugin({ channel: "discord", cfg: updatedDiscordConfig });
-    bootstrapOutboundChannelPlugin({ channel: "discord", cfg: discordConfig });
-
-    expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(2);
-  });
+      const sender = await withPluginRuntimeRegistryScope(scopedRegistry, async () => {
+        await expect(durable({ silent: true })).resolves.toEqual({
+          ok: false,
+          reason: "capability_mismatch",
+          capability: "silent",
+        });
+        return await handler();
+      });
+      await expect(sender.sendText("hello")).resolves.toMatchObject({ messageId: "scoped" });
+      expect(sendRegistries).toEqual([scopedRegistry]);
+      expect(scopedSend).toHaveBeenCalledOnce();
+      expect(rootSend).not.toHaveBeenCalled();
+      expect(loaderMocks.loadPluginRegistryHandle).not.toHaveBeenCalled();
+    },
+  );
 });

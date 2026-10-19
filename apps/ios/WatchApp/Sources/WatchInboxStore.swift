@@ -1,71 +1,11 @@
 import Foundation
 import Observation
+import OpenClawKit
 import UserNotifications
 import WatchKit
 
 @MainActor @Observable final class WatchInboxStore {
     private typealias ExecApprovalOwnerKey = WatchExecApprovalIdentityKey
-
-    private struct ExecApprovalTerminalTombstone: Codable, Equatable {
-        var approvalId: String
-        var gatewayStableID: String
-        var outcome: WatchExecApprovalOutcome
-        var outcomeIsAuthoritative: Bool?
-        var recordedAt: Date
-
-        private enum CodingKeys: String, CodingKey {
-            case approvalId
-            case gatewayStableID
-            case outcome
-            case outcomeText
-            case outcomeIsAuthoritative
-            case recordedAt
-        }
-
-        init(
-            approvalId: String,
-            gatewayStableID: String,
-            outcome: WatchExecApprovalOutcome,
-            outcomeIsAuthoritative: Bool?,
-            recordedAt: Date)
-        {
-            self.approvalId = approvalId
-            self.gatewayStableID = gatewayStableID
-            self.outcome = outcome
-            self.outcomeIsAuthoritative = outcomeIsAuthoritative
-            self.recordedAt = recordedAt
-        }
-
-        init(from decoder: Decoder) throws {
-            let container = try decoder.container(keyedBy: CodingKeys.self)
-            self.approvalId = try container.decode(String.self, forKey: .approvalId)
-            self.gatewayStableID = try container.decode(String.self, forKey: .gatewayStableID)
-            self.outcome = try container.decodeIfPresent(
-                WatchExecApprovalOutcome.self,
-                forKey: .outcome) ?? Self.decodeLegacyOutcome(
-                container.decodeIfPresent(String.self, forKey: .outcomeText))
-            self.outcomeIsAuthoritative = try container.decodeIfPresent(
-                Bool.self,
-                forKey: .outcomeIsAuthoritative)
-            self.recordedAt = try container.decode(Date.self, forKey: .recordedAt)
-        }
-
-        func encode(to encoder: Encoder) throws {
-            var container = encoder.container(keyedBy: CodingKeys.self)
-            try container.encode(self.approvalId, forKey: .approvalId)
-            try container.encode(self.gatewayStableID, forKey: .gatewayStableID)
-            try container.encode(self.outcome, forKey: .outcome)
-            try container.encodeIfPresent(
-                self.outcomeIsAuthoritative,
-                forKey: .outcomeIsAuthoritative)
-            try container.encode(self.recordedAt, forKey: .recordedAt)
-        }
-
-        private static func decodeLegacyOutcome(_ text: String?) -> WatchExecApprovalOutcome {
-            text.flatMap(WatchExecApprovalOutcome.decodeLegacyLocalizedText)
-                ?? WatchExecApprovalOutcome(code: .unavailable)
-        }
-    }
 
     private enum DeferredGatewayPayload: Codable {
         case notification(message: WatchNotifyMessage, transport: String)
@@ -85,7 +25,7 @@ import WatchKit
             case let .execApprovalExpired(message):
                 message.gatewayStableID
             case let .execApprovalSnapshot(message, _):
-                if let gatewayStableID = WatchInboxStore.normalizedGatewayID(message.gatewayStableID) {
+                if let gatewayStableID = WatchGatewayID.exact(message.gatewayStableID) {
                     gatewayStableID
                 } else {
                     WatchInboxStore.onlyGatewayStableID(in: message.approvals)
@@ -143,6 +83,7 @@ import WatchKit
         var promptId: String?
         var sessionKey: String?
         var gatewayStableID: String?
+        var promptChatDeliveryContext: OpenClawWatchChatDeliveryContext?
         var kind: String?
         var details: String?
         var expiresAtMs: Int64?
@@ -178,6 +119,11 @@ import WatchKit
     private static let defaultTitle = "OpenClaw"
     private static let defaultBody = "Waiting for messages from your iPhone."
     private let defaults: UserDefaults
+    let chatDeliveryJournal: OpenClawWatchChatDeliveryStore
+    var chatDeliveryEntries: [OpenClawWatchChatDeliveryStore.Entry] = []
+    var promptChatDeliveryEntries: [OpenClawWatchChatDeliveryStore.Entry] = []
+    var chatDeliveryReloadID: UUID?
+    var chatDeliveryMaintenanceID: UUID?
 
     var title = WatchInboxStore.defaultTitle
     var body = WatchInboxStore.defaultBody
@@ -186,6 +132,7 @@ import WatchKit
     var promptId: String?
     var sessionKey: String?
     var gatewayStableID: String?
+    var promptChatDeliveryContext: OpenClawWatchChatDeliveryContext?
     var kind: String?
     var details: String?
     var expiresAtMs: Int64?
@@ -212,6 +159,11 @@ import WatchKit
     private var lastExecApprovalSnapshotSentAtMs: Int64?
     private var hasCompletedExecApprovalSnapshotRefreshInSession = false
     private var lastDeliveryKey: String?
+    // Transport completions can outlive their prompt, snapshot, or gateway owner.
+    // Keep attempt identities volatile so stale results never replace persisted state.
+    private var activeReplyAttempt: (id: UUID, commandId: String)?
+    private var activeAppSnapshotAttemptID: UUID?
+    private var activeAppCommandAttemptID: UUID?
     var voiceTurnState = WatchVoiceTurnState()
     /// WatchConnectivity does not order application-context updates against user-info
     /// transfers. Persist a bounded handoff queue so a new route's alert is not lost
@@ -238,16 +190,28 @@ import WatchKit
         self.appCommandStatus?.localizedText()
     }
 
-    func persistVoiceTurnState() {
-        self.persistState()
-    }
-
     init(
         defaults: UserDefaults = .standard,
-        requestNotificationAuthorization: Bool = true)
+        requestNotificationAuthorization: Bool = true,
+        chatDeliveryJournal: OpenClawWatchChatDeliveryStore = OpenClawWatchChatDeliveryStore())
     {
         self.defaults = defaults
+        self.chatDeliveryJournal = chatDeliveryJournal
         self.restorePersistedState()
+        self.expireVoiceTurnIfNeeded(nowMs: Self.nowMs())
+        if [self.replyStatus?.code, self.appSnapshotStatus?.code, self.appCommandStatus?.code].contains(.sending) {
+            // Attempt ownership never survives app restoration, so interrupted sends must be retryable.
+            if self.replyStatus?.code == .sending {
+                self.replyStatus?.code = .failed
+            }
+            if self.appSnapshotStatus?.code == .sending {
+                self.appSnapshotStatus?.code = .failed
+            }
+            if self.appCommandStatus?.code == .sending {
+                self.appCommandStatus?.code = .failed
+            }
+            self.persistState()
+        }
         self.pruneExecApprovalTerminalTombstones(now: Date())
         self.pruneExpiredExecApprovals(nowMs: Self.nowMs())
         if requestNotificationAuthorization {
@@ -269,10 +233,8 @@ import WatchKit
     }
 
     var activeExecApproval: WatchExecApprovalRecord? {
-        if let selectedKey = Self.execApprovalOwnerKey(
-            approvalId: self.selectedExecApprovalID ?? "",
-            gatewayStableID: self.selectedExecApprovalGatewayStableID),
-            let selected = execApprovals.first(where: { $0.id == selectedKey })
+        if let selectedKey = self.selectedExecApprovalOwnerKey,
+           let selected = execApprovals.first(where: { $0.id == selectedKey })
         {
             return selected
         }
@@ -331,23 +293,15 @@ import WatchKit
     }
 
     var gatewaySummaryText: String {
-        guard let appSnapshot else { return String(localized: "Waiting for iPhone") }
-        return appSnapshot.gatewayStatus.localizedText()
+        self.appSnapshot?.gatewayStatus.localizedText() ?? String(localized: "Waiting for iPhone")
     }
 
     var talkSummaryText: String {
-        guard let appSnapshot else { return String(localized: "Not synced") }
-        return appSnapshot.talkStatus.localizedText()
+        self.appSnapshot?.talkStatus.localizedText() ?? String(localized: "Not synced")
     }
 
     func beginExecApprovalReviewLoading() {
-        guard self.execApprovals.isEmpty else {
-            self.markExecApprovalReviewLoaded()
-            return
-        }
-        self.isExecApprovalReviewLoading = true
-        self.execApprovalReviewStatusText = String(localized: "Loading approval from iPhone…")
-        self.execApprovalReviewStatusAt = Date()
+        self.showExecApprovalReviewStatus(String(localized: "Loading approval from iPhone…"), isLoading: true)
     }
 
     func markExecApprovalReviewLoaded() {
@@ -357,12 +311,16 @@ import WatchKit
     }
 
     func markExecApprovalReviewUnavailable(_ message: String) {
+        self.showExecApprovalReviewStatus(message, isLoading: false)
+    }
+
+    private func showExecApprovalReviewStatus(_ message: @autoclosure () -> String, isLoading: Bool) {
         guard self.execApprovals.isEmpty else {
             self.markExecApprovalReviewLoaded()
             return
         }
-        self.isExecApprovalReviewLoading = false
-        self.execApprovalReviewStatusText = message
+        self.isExecApprovalReviewLoading = isLoading
+        self.execApprovalReviewStatusText = message()
         self.execApprovalReviewStatusAt = Date()
     }
 
@@ -386,12 +344,17 @@ import WatchKit
         self.promptId = message.promptId
         self.sessionKey = message.sessionKey
         self.gatewayStableID = message.gatewayStableID
+        self.promptChatDeliveryContext = message.chatDeliveryContext
+        self.promptChatDeliveryEntries = []
+        self.chatDeliveryReloadID = nil
+        self.chatDeliveryMaintenanceID = nil
         self.kind = message.kind
         self.details = message.details
         self.expiresAtMs = message.expiresAtMs
         self.risk = message.risk
         self.actions = message.actions
         self.lastDeliveryKey = deliveryKey
+        self.activeReplyAttempt = nil
         self.replyStatus = nil
         self.replyStatusAt = nil
         self.isReplySending = false
@@ -425,13 +388,9 @@ import WatchKit
         }
         let nowMs = Self.nowMs()
         self.pruneExpiredExecApprovals(nowMs: nowMs)
-        if let expiresAtMs = message.approval.expiresAtMs, expiresAtMs <= nowMs {
-            self.removeExecApprovalNotifications(approvals: [message.approval])
-            self.markExecApprovalReviewLoaded()
-            self.persistState()
-            return
-        }
-        if self.isExecApprovalPromptSupersededBySnapshot(message) {
+        if WatchDeferredPayloadOrdering.isExpired(expiresAtMs: message.approval.expiresAtMs, nowMs: nowMs)
+            || self.isExecApprovalPromptSupersededBySnapshot(message)
+        {
             self.removeExecApprovalNotifications(approvals: [message.approval])
             self.markExecApprovalReviewLoaded()
             self.persistState()
@@ -441,12 +400,9 @@ import WatchKit
             message.approval,
             transport: transport,
             sourceSentAtMs: message.sentAtMs,
-            keepSelectionIfPossible: true,
             resetResolutionAttemptID: message.resetResolutionAttemptId)
         else { return }
-        guard let approvalOwnerKey = Self.execApprovalOwnerKey(
-            approvalId: message.approval.id,
-            gatewayStableID: message.approval.gatewayStableID)
+        guard let approvalOwnerKey = message.approval.ownerKey
         else { return }
         guard let notificationIdentifier = Self.execApprovalNotificationIdentifier(for: message.approval) else {
             return
@@ -470,11 +426,7 @@ import WatchKit
                 body: message.approval.commandPreview ?? message.approval.commandText,
                 risk: message.approval.risk?.rawValue,
                 stillCurrent: {
-                    self.execApprovals.contains { record in
-                        Self.execApprovalOwnerKey(
-                            approvalId: record.approvalID,
-                            gatewayStableID: record.approval.gatewayStableID) == approvalOwnerKey
-                    }
+                    self.execApprovals.contains { $0.id == approvalOwnerKey }
                 })
         }
     }
@@ -491,10 +443,10 @@ import WatchKit
         if deferredPayload.gatewayStableID != nil {
             guard self.routeGatewayPayload(deferredPayload) else { return false }
         }
-        guard let snapshotGatewayID = Self.normalizedGatewayID(deferredPayload.gatewayStableID) else {
+        guard let snapshotGatewayID = WatchGatewayID.exact(deferredPayload.gatewayStableID) else {
             return false
         }
-        let previousSnapshotGatewayID = Self.normalizedGatewayID(
+        let previousSnapshotGatewayID = WatchGatewayID.exact(
             self.lastExecApprovalSnapshotGatewayStableID)
         let hasSameSnapshotOwner = Self.gatewayIDsMatch(snapshotGatewayID, previousSnapshotGatewayID)
         let hasCanonicalRequestCorrelation = message.requestId?.isEmpty == false
@@ -526,16 +478,9 @@ import WatchKit
         }
 
         let existingRecords = self.execApprovals
-        var existingRecordsByOwner: [ExecApprovalOwnerKey: WatchExecApprovalRecord] = [:]
-        for record in existingRecords {
-            guard let key = Self.execApprovalOwnerKey(
-                approvalId: record.approvalID,
-                gatewayStableID: record.approval.gatewayStableID)
-            else {
-                continue
-            }
-            existingRecordsByOwner[key] = record
-        }
+        let existingRecordsByOwner = Dictionary(
+            existingRecords.compactMap { record in record.approval.ownerKey.map { ($0, record) } },
+            uniquingKeysWith: { _, latest in latest })
         self.pruneExecApprovalTerminalTombstones(now: Date())
         let incomingApprovals = message.approvals.filter { approval in
             WatchApprovalID.exact(approval.id) != nil
@@ -545,16 +490,10 @@ import WatchKit
                     approvalId: approval.id,
                     gatewayStableID: approval.gatewayStableID)
         }
-        let incomingApprovalKeys = Set(incomingApprovals.compactMap { approval in
-            Self.execApprovalOwnerKey(
-                approvalId: approval.id,
-                gatewayStableID: approval.gatewayStableID)
-        })
+        let incomingApprovalKeys = Set(incomingApprovals.compactMap(\.ownerKey))
         let retainedNewerRecords = existingRecords.filter { record in
-            guard let recordKey = Self.execApprovalOwnerKey(
-                approvalId: record.approvalID,
-                gatewayStableID: record.approval.gatewayStableID),
-                recordKey.gatewayID == WatchGatewayID.key(snapshotGatewayID)
+            guard let recordKey = record.approval.ownerKey,
+                  recordKey.gatewayID == WatchGatewayID.key(snapshotGatewayID)
             else {
                 return true
             }
@@ -577,10 +516,7 @@ import WatchKit
             return false
         }
         let mergedIncomingRecords = incomingApprovals.map { approval in
-            let approvalKey = Self.execApprovalOwnerKey(
-                approvalId: approval.id,
-                gatewayStableID: approval.gatewayStableID)
-            let existingRecord = approvalKey.flatMap { existingRecordsByOwner[$0] }
+            let existingRecord = approval.ownerKey.flatMap { existingRecordsByOwner[$0] }
             guard Self.snapshotCanReplace(
                 record: existingRecord,
                 snapshotSentAtMs: message.sentAtMs)
@@ -634,10 +570,11 @@ import WatchKit
             return
         }
         let hasExistingAppSnapshot = self.appSnapshot != nil
-        let previousGatewayID = Self.normalizedGatewayID(self.appSnapshot?.gatewayStableID)
-        let nextGatewayID = Self.normalizedGatewayID(message.gatewayStableID)
+        let previousGatewayID = WatchGatewayID.exact(self.appSnapshot?.gatewayStableID)
+        let nextGatewayID = WatchGatewayID.exact(message.gatewayStableID)
+        let hasSameChatSession = self.appSnapshot?.chatSessionIdentity == message.chatSessionIdentity
         var merged = message
-        if hasExistingAppSnapshot, Self.gatewayIDsMatch(previousGatewayID, nextGatewayID) {
+        if hasSameChatSession {
             if merged.chatItems == nil {
                 merged.chatItems = self.appSnapshot?.chatItems
             }
@@ -647,34 +584,46 @@ import WatchKit
         }
         self.appSnapshot = merged
         self.appSnapshotUpdatedAt = Date()
+        self.activeAppSnapshotAttemptID = nil
         self.appSnapshotStatus = nil
+        if !hasSameChatSession {
+            self.chatDeliveryEntries = []
+            self.chatDeliveryReloadID = nil
+            self.chatDeliveryMaintenanceID = nil
+            // A reply belongs to the chat that submitted it, even when only the
+            // session changes on the same gateway. Retire it before accepting more deliveries.
+            self.voiceTurnState.cancel()
+            if hasExistingAppSnapshot {
+                self.activeAppCommandAttemptID = nil
+                self.appCommandStatus = nil
+            }
+        }
         if !hasExistingAppSnapshot || !Self.gatewayIDsMatch(previousGatewayID, nextGatewayID) {
             self.hasCompletedExecApprovalSnapshotRefreshInSession = false
             if !Self.gatewayIDsMatch(self.gatewayStableID, nextGatewayID) {
                 self.clearMessagePrompt()
             }
-            let invalidatedApprovals = self.execApprovals.compactMap { record -> WatchExecApprovalItem? in
-                guard let nextGatewayID else { return record.approval }
-                return Self.gatewayIDsMatch(record.approval.gatewayStableID, nextGatewayID)
-                    ? nil
-                    : record.approval
-            }
-            self.execApprovals.removeAll { record in
+            self.removeExecApprovals { record in
                 guard let nextGatewayID else { return true }
                 return !Self.gatewayIDsMatch(record.approval.gatewayStableID, nextGatewayID)
             }
-            self.removeExecApprovalNotifications(approvals: invalidatedApprovals)
             self.ensureValidExecApprovalSelection()
         }
         self.persistState()
     }
 
-    func markAppSnapshotRequestStarted() {
+    func markAppSnapshotRequestStarted() -> UUID {
+        let attemptID = UUID()
+        self.activeAppSnapshotAttemptID = attemptID
         self.appSnapshotStatus = WatchAppCommandStatus(command: .refresh, code: .sending)
         self.persistState()
+        return attemptID
     }
 
-    func markAppSnapshotRequestResult(_ result: WatchReplySendResult) {
+    @discardableResult
+    func markAppSnapshotRequestResult(_ result: WatchReplySendResult, attemptID: UUID) -> Bool {
+        guard self.activeAppSnapshotAttemptID == attemptID else { return false }
+        self.activeAppSnapshotAttemptID = nil
         if let errorMessage = result.errorMessage, !errorMessage.isEmpty {
             self.appSnapshotStatus = WatchAppCommandStatus(
                 command: .refresh,
@@ -688,6 +637,7 @@ import WatchKit
             self.appSnapshotStatus = nil
         }
         self.persistState()
+        return true
     }
 
     func makeAppCommand(_ command: WatchAppCommand, text: String? = nil) -> WatchAppCommandMessage {
@@ -701,37 +651,39 @@ import WatchKit
             sentAtMs: Self.nowMs())
     }
 
-    var hasGatewayTaggedAppSnapshot: Bool {
-        WatchGatewayID.exact(self.appSnapshot?.gatewayStableID) != nil
-    }
-
-    func markAppCommandSending(_ command: WatchAppCommand) {
+    func markAppCommandSending(_ command: WatchAppCommand) -> UUID {
+        let attemptID = UUID()
+        self.activeAppCommandAttemptID = attemptID
         self.appCommandStatus = WatchAppCommandStatus(command: command, code: .sending)
         self.persistState()
+        return attemptID
     }
 
     func markAppCommandBlocked(_ command: WatchAppCommand, reason: String) {
-        self.appCommandStatus = WatchAppCommandStatus(
-            command: command,
-            code: .blocked,
-            detail: reason)
+        self.activeAppCommandAttemptID = nil
+        self.appCommandStatus = WatchAppCommandStatus(command: command, code: .blocked, detail: reason)
         self.persistState()
     }
 
-    func markAppCommandResult(_ result: WatchReplySendResult, command: WatchAppCommand) {
-        if let errorMessage = result.errorMessage, !errorMessage.isEmpty {
+    @discardableResult
+    func markAppCommandResult(_ result: WatchReplySendResult, command: WatchAppCommand, attemptID: UUID) -> Bool {
+        guard self.activeAppCommandAttemptID == attemptID else { return false }
+        switch result.delivery {
+        case .notSent:
             self.appCommandStatus = WatchAppCommandStatus(
                 command: command,
                 code: .failed,
-                detail: errorMessage)
-        } else if result.deliveredImmediately {
+                detail: result.errorMessage)
+            if command == .sendChat {
+                self.voiceTurnState.cancel()
+            }
+        case .delivered:
             self.appCommandStatus = WatchAppCommandStatus(command: command, code: .sent)
-        } else if result.queuedForDelivery {
+        case .queued:
             self.appCommandStatus = WatchAppCommandStatus(command: command, code: .queued)
-        } else {
-            self.appCommandStatus = WatchAppCommandStatus(command: command, code: .sent)
         }
         self.persistState()
+        return true
     }
 }
 
@@ -745,15 +697,10 @@ extension WatchInboxStore {
             legacyText: message.outcomeText,
             decision: message.decision,
             source: message.source)
-        let terminalOutcome = self.recordExecApprovalTerminal(
+        self.finishExecApproval(
             approvalId: message.approvalId,
             gatewayStableID: message.gatewayStableID,
-            outcome: outcome) ?? outcome
-        self.removeExecApproval(id: message.approvalId, gatewayStableID: message.gatewayStableID)
-        self.markExecApprovalReviewLoaded()
-        self.lastExecApprovalOutcome = terminalOutcome
-        self.lastExecApprovalOutcomeAt = Date()
-        self.persistState()
+            outcome: outcome)
     }
 
     func consume(execApprovalExpired message: WatchExecApprovalExpiredMessage) {
@@ -770,11 +717,22 @@ extension WatchInboxStore {
         case .unavailable:
             WatchExecApprovalOutcome(code: .unavailable)
         }
-        let terminalOutcome = self.recordExecApprovalTerminal(
+        self.finishExecApproval(
             approvalId: message.approvalId,
             gatewayStableID: message.gatewayStableID,
+            outcome: outcome)
+    }
+
+    private func finishExecApproval(
+        approvalId: String,
+        gatewayStableID: String?,
+        outcome: WatchExecApprovalOutcome)
+    {
+        let terminalOutcome = self.recordExecApprovalTerminal(
+            approvalId: approvalId,
+            gatewayStableID: gatewayStableID,
             outcome: outcome) ?? outcome
-        self.removeExecApproval(id: message.approvalId, gatewayStableID: message.gatewayStableID)
+        self.removeExecApproval(id: approvalId, gatewayStableID: gatewayStableID)
         self.markExecApprovalReviewLoaded()
         self.lastExecApprovalOutcome = terminalOutcome
         self.lastExecApprovalOutcomeAt = Date()
@@ -786,7 +744,7 @@ extension WatchInboxStore {
         approvalId: String,
         gatewayStableID: String?) -> String?
     {
-        guard let key = Self.execApprovalOwnerKey(
+        guard let key = ExecApprovalOwnerKey(
             approvalId: approvalId,
             gatewayStableID: gatewayStableID)
         else {
@@ -801,7 +759,7 @@ extension WatchInboxStore {
     }
 
     func selectExecApproval(id: String, gatewayStableID: String?) {
-        guard let exactKey = Self.execApprovalOwnerKey(
+        guard let exactKey = ExecApprovalOwnerKey(
             approvalId: id,
             gatewayStableID: gatewayStableID),
             let record = self.execApprovals.first(where: { $0.id == exactKey })
@@ -817,17 +775,13 @@ extension WatchInboxStore {
         decision: WatchExecApprovalDecision) -> String?
     {
         self.pruneExpiredExecApprovals(nowMs: Self.nowMs())
-        guard let ownerKey = Self.execApprovalOwnerKey(
+        guard let ownerKey = ExecApprovalOwnerKey(
             approvalId: approvalId,
             gatewayStableID: gatewayStableID),
             !self.isExecApprovalTerminal(
                 approvalId: approvalId,
                 gatewayStableID: gatewayStableID),
-            let index = execApprovals.firstIndex(where: { record in
-                Self.execApprovalOwnerKey(
-                    approvalId: record.approvalID,
-                    gatewayStableID: record.approval.gatewayStableID) == ownerKey
-            }),
+            let index = execApprovals.firstIndex(where: { $0.id == ownerKey }),
             !self.execApprovals[index].isResolving,
             execApprovals[index].approval.allowedDecisions.contains(decision)
         else { return nil }
@@ -851,39 +805,27 @@ extension WatchInboxStore {
         decision: WatchExecApprovalDecision,
         result: WatchReplySendResult)
     {
-        guard let ownerKey = Self.execApprovalOwnerKey(
+        guard let ownerKey = ExecApprovalOwnerKey(
             approvalId: approvalId,
             gatewayStableID: gatewayStableID),
-            let index = execApprovals.firstIndex(where: { record in
-                Self.execApprovalOwnerKey(
-                    approvalId: record.approvalID,
-                    gatewayStableID: record.approval.gatewayStableID) == ownerKey
-            }),
+            let index = execApprovals.firstIndex(where: { $0.id == ownerKey }),
             let activeResolutionAttemptID = execApprovals[index].activeResolutionAttemptID,
             WatchOpaqueUTF8Key(activeResolutionAttemptID) == WatchOpaqueUTF8Key(attemptID),
             execApprovals[index].pendingDecision == decision
         else { return }
 
-        switch result.delivery {
-        case .delivered:
-            self.execApprovals[index].isResolving = true
-            self.execApprovals[index].status = WatchExecApprovalStatus(
-                code: .sent,
-                decision: decision)
-        case .queued:
-            self.execApprovals[index].isResolving = true
-            self.execApprovals[index].status = WatchExecApprovalStatus(
-                code: .queued,
-                decision: decision)
-        case .notSent:
+        if result.delivery == .notSent {
             // Only a definitive pre-dispatch failure unlocks locally. Uncertain sends stay
             // frozen until a canonical retry reset or terminal event arrives.
-            self.execApprovals[index].isResolving = false
             self.execApprovals[index].activeResolutionAttemptID = nil
-            self.execApprovals[index].status = WatchExecApprovalStatus(
-                code: .retry,
-                decision: decision)
         }
+        self.execApprovals[index].isResolving = result.delivery != .notSent
+        let code: WatchExecApprovalStatusCode = switch result.delivery {
+        case .delivered: .sent
+        case .queued: .queued
+        case .notSent: .retry
+        }
+        self.execApprovals[index].status = WatchExecApprovalStatus(code: code, decision: decision)
         self.execApprovals[index].pendingDecision = result.delivery == .notSent ? nil : decision
         self.execApprovals[index].statusAt = Date()
         self.persistState()
@@ -893,48 +835,31 @@ extension WatchInboxStore {
         _ approval: WatchExecApprovalItem,
         transport: String,
         sourceSentAtMs: Int64?,
-        keepSelectionIfPossible: Bool,
         resetResolutionAttemptID: String? = nil) -> Bool
     {
-        guard let ownerKey = Self.execApprovalOwnerKey(
-            approvalId: approval.id,
-            gatewayStableID: approval.gatewayStableID)
-        else { return false }
-        if let index = execApprovals.firstIndex(where: { record in
-            Self.execApprovalOwnerKey(
-                approvalId: record.approvalID,
-                gatewayStableID: record.approval.gatewayStableID) == ownerKey
-        }) {
-            guard Self.snapshotCanReplace(
-                record: self.execApprovals[index],
-                snapshotSentAtMs: sourceSentAtMs)
-            else { return false }
-            let resetResolvingState = if let resetResolutionAttemptID,
-                                         let activeResolutionAttemptID =
-                                         self.execApprovals[index].activeResolutionAttemptID
-            {
-                WatchOpaqueUTF8Key(resetResolutionAttemptID) == WatchOpaqueUTF8Key(activeResolutionAttemptID)
-            } else {
-                false
-            }
-            self.execApprovals[index] = self.mergedExecApprovalRecord(
-                approval: approval,
-                transport: transport,
-                sourceSentAtMs: sourceSentAtMs,
-                existingRecord: self.execApprovals[index],
-                resetResolvingState: resetResolvingState)
-        } else {
-            self.execApprovals.append(
-                self.mergedExecApprovalRecord(
-                    approval: approval,
-                    transport: transport,
-                    sourceSentAtMs: sourceSentAtMs,
-                    existingRecord: nil))
-        }
-        if !keepSelectionIfPossible || Self.execApprovalOwnerKey(
-            approvalId: self.selectedExecApprovalID ?? "",
-            gatewayStableID: self.selectedExecApprovalGatewayStableID) == nil
+        guard let ownerKey = approval.ownerKey else { return false }
+        let index = self.execApprovals.firstIndex(where: { $0.id == ownerKey })
+        let existingRecord = index.map { self.execApprovals[$0] }
+        guard Self.snapshotCanReplace(record: existingRecord, snapshotSentAtMs: sourceSentAtMs) else { return false }
+        let resetResolvingState = if let resetResolutionAttemptID,
+                                     let activeResolutionAttemptID = existingRecord?.activeResolutionAttemptID
         {
+            WatchOpaqueUTF8Key(resetResolutionAttemptID) == WatchOpaqueUTF8Key(activeResolutionAttemptID)
+        } else {
+            false
+        }
+        let record = self.mergedExecApprovalRecord(
+            approval: approval,
+            transport: transport,
+            sourceSentAtMs: sourceSentAtMs,
+            existingRecord: existingRecord,
+            resetResolvingState: resetResolvingState)
+        if let index {
+            self.execApprovals[index] = record
+        } else {
+            self.execApprovals.append(record)
+        }
+        if self.selectedExecApprovalOwnerKey == nil {
             self.selectedExecApprovalID = approval.id
             self.selectedExecApprovalGatewayStableID = approval.gatewayStableID
         }
@@ -951,21 +876,17 @@ extension WatchInboxStore {
     {
         // Preserve in-flight state across ordinary snapshot/prompt refreshes so duplicate
         // submissions stay disabled. Only the iPhone readback for the same attempt may clear it.
-        let isResolving = resetResolvingState ? false : (existingRecord?.isResolving ?? false)
-        let pendingDecision = resetResolvingState ? nil : existingRecord?.pendingDecision
-        let activeResolutionAttemptID = resetResolvingState ? nil : existingRecord?.activeResolutionAttemptID
-        let status = resetResolvingState ? nil : existingRecord?.status
-        let statusAt = resetResolvingState ? nil : existingRecord?.statusAt
+        let pendingRecord = resetResolvingState ? nil : existingRecord
         return WatchExecApprovalRecord(
             approval: approval,
             transport: transport,
             sourceSentAtMs: sourceSentAtMs ?? existingRecord?.sourceSentAtMs,
             updatedAt: Date(),
-            isResolving: isResolving,
-            pendingDecision: pendingDecision,
-            activeResolutionAttemptID: activeResolutionAttemptID,
-            status: status,
-            statusAt: statusAt)
+            isResolving: pendingRecord?.isResolving ?? false,
+            pendingDecision: pendingRecord?.pendingDecision,
+            activeResolutionAttemptID: pendingRecord?.activeResolutionAttemptID,
+            status: pendingRecord?.status,
+            statusAt: pendingRecord?.statusAt)
     }
 
     private static func snapshotCanReplace(
@@ -987,8 +908,8 @@ extension WatchInboxStore {
     private func isExecApprovalPromptSupersededBySnapshot(
         _ message: WatchExecApprovalPromptMessage) -> Bool
     {
-        let promptGatewayID = Self.normalizedGatewayID(message.approval.gatewayStableID)
-        let snapshotGatewayID = Self.normalizedGatewayID(
+        let promptGatewayID = WatchGatewayID.exact(message.approval.gatewayStableID)
+        let snapshotGatewayID = WatchGatewayID.exact(
             self.lastExecApprovalSnapshotGatewayStableID)
         guard Self.gatewayIDsMatch(promptGatewayID, snapshotGatewayID),
               let snapshotSentAtMs = lastExecApprovalSnapshotSentAtMs
@@ -996,11 +917,7 @@ extension WatchInboxStore {
             return false
         }
         let hasLiveRecord = self.execApprovals.contains { record in
-            Self.execApprovalOwnerKey(
-                approvalId: record.approvalID,
-                gatewayStableID: record.approval.gatewayStableID) == Self.execApprovalOwnerKey(
-                approvalId: message.approval.id,
-                gatewayStableID: message.approval.gatewayStableID)
+            record.approval.ownerKey == message.approval.ownerKey
         }
         guard !hasLiveRecord else { return false }
         guard let promptSentAtMs = message.sentAtMs else {
@@ -1011,21 +928,12 @@ extension WatchInboxStore {
     }
 
     private func removeExecApproval(id: String, gatewayStableID: String?) {
-        guard let exactKey = Self.execApprovalOwnerKey(
+        guard let exactKey = ExecApprovalOwnerKey(
             approvalId: id,
             gatewayStableID: gatewayStableID)
         else { return }
-        let removedApprovals = self.execApprovals.compactMap { record -> WatchExecApprovalItem? in
-            record.id == exactKey ? record.approval : nil
-        }
-        self.execApprovals.removeAll { record in
-            record.id == exactKey
-        }
-        self.removeExecApprovalNotifications(approvals: removedApprovals)
-        if Self.execApprovalOwnerKey(
-            approvalId: self.selectedExecApprovalID ?? "",
-            gatewayStableID: self.selectedExecApprovalGatewayStableID) == exactKey
-        {
+        self.removeExecApprovals { $0.id == exactKey }
+        if self.selectedExecApprovalOwnerKey == exactKey {
             self.selectedExecApprovalID = self.sortedExecApprovals.first?.approvalID
             self.selectedExecApprovalGatewayStableID = self.sortedExecApprovals.first?.approval.gatewayStableID
         }
@@ -1037,11 +945,11 @@ extension WatchInboxStore {
 
 extension WatchInboxStore {
     private func routeGatewayPayload(_ payload: DeferredGatewayPayload) -> Bool {
-        guard let incomingGatewayID = Self.normalizedGatewayID(payload.gatewayStableID) else {
+        guard let incomingGatewayID = WatchGatewayID.exact(payload.gatewayStableID) else {
             return false
         }
         guard let activeSnapshot = appSnapshot else { return true }
-        let activeGatewayID = Self.normalizedGatewayID(activeSnapshot.gatewayStableID)
+        let activeGatewayID = WatchGatewayID.exact(activeSnapshot.gatewayStableID)
         guard !Self.gatewayIDsMatch(incomingGatewayID, activeGatewayID) else { return true }
         if let payloadSentAtMs = payload.sentAtMs,
            let snapshotSentAtMs = activeSnapshot.sentAtMs,
@@ -1066,15 +974,15 @@ extension WatchInboxStore {
     }
 
     private func acceptsGatewayOwner(_ gatewayStableID: String?) -> Bool {
-        guard let incomingGatewayID = Self.normalizedGatewayID(gatewayStableID) else { return false }
+        guard let incomingGatewayID = WatchGatewayID.exact(gatewayStableID) else { return false }
         guard let activeSnapshot = appSnapshot else { return true }
-        guard let activeGatewayID = Self.normalizedGatewayID(activeSnapshot.gatewayStableID) else { return false }
+        guard let activeGatewayID = WatchGatewayID.exact(activeSnapshot.gatewayStableID) else { return false }
         return Self.gatewayIDsMatch(incomingGatewayID, activeGatewayID)
     }
 
     @discardableResult
     func replayDeferredGatewayPayloads() -> [WatchExecApprovalSnapshotMessage] {
-        guard let activeGatewayID = Self.normalizedGatewayID(appSnapshot?.gatewayStableID) else {
+        guard let activeGatewayID = WatchGatewayID.exact(appSnapshot?.gatewayStableID) else {
             let snapshotSentAtMs = self.appSnapshot?.sentAtMs
             let nowMs = Self.nowMs()
             self.deferredGatewayPayloads.removeAll { payload in
@@ -1090,7 +998,7 @@ extension WatchInboxStore {
         }
 
         let snapshotSentAtMs = self.appSnapshot?.sentAtMs
-        let approvalSnapshotGatewayID = Self.normalizedGatewayID(
+        let approvalSnapshotGatewayID = WatchGatewayID.exact(
             self.lastExecApprovalSnapshotGatewayStableID)
         let nowMs = Self.nowMs()
         var ready: [DeferredGatewayPayload] = []
@@ -1116,14 +1024,8 @@ extension WatchInboxStore {
                 }
                 if isPreexistingApprovalPayload,
                    let approval = payload.approvalPrompt,
-                   let approvalOwnerKey = Self.execApprovalOwnerKey(
-                       approvalId: approval.id,
-                       gatewayStableID: approval.gatewayStableID),
-                   !self.execApprovals.contains(where: { record in
-                       Self.execApprovalOwnerKey(
-                           approvalId: record.approvalID,
-                           gatewayStableID: record.approval.gatewayStableID) == approvalOwnerKey
-                   })
+                   let approvalOwnerKey = approval.ownerKey,
+                   !self.execApprovals.contains(where: { $0.id == approvalOwnerKey })
                 {
                     continue
                 }
@@ -1175,17 +1077,27 @@ extension WatchInboxStore {
         self.promptId = nil
         self.sessionKey = nil
         self.gatewayStableID = nil
+        self.promptChatDeliveryContext = nil
+        self.promptChatDeliveryEntries = []
+        self.chatDeliveryMaintenanceID = nil
         self.kind = nil
         self.details = nil
         self.expiresAtMs = nil
         self.risk = nil
         self.actions = []
+        self.activeReplyAttempt = nil
         self.replyStatus = nil
         self.replyStatusAt = nil
         self.isReplySending = false
 
         guard let notificationIdentifier else { return }
         self.removeLocalNotifications(identifiers: [notificationIdentifier])
+    }
+
+    private func removeExecApprovals(where shouldRemove: (WatchExecApprovalRecord) -> Bool) {
+        let removed = self.execApprovals.filter(shouldRemove).map(\.approval)
+        self.execApprovals.removeAll(where: shouldRemove)
+        self.removeExecApprovalNotifications(approvals: removed)
     }
 
     private func removeExecApprovalNotifications(approvals: [WatchExecApprovalItem]) {
@@ -1207,13 +1119,9 @@ extension WatchInboxStore {
         excluding approval: WatchExecApprovalItem) -> Bool
     {
         let identifierKey = WatchOpaqueUTF8Key(identifier)
-        let excludedKey = Self.execApprovalOwnerKey(
-            approvalId: approval.id,
-            gatewayStableID: approval.gatewayStableID)
+        let excludedKey = approval.ownerKey
         return self.execApprovals.contains { record in
-            let recordKey = Self.execApprovalOwnerKey(
-                approvalId: record.approvalID,
-                gatewayStableID: record.approval.gatewayStableID)
+            let recordKey = record.approval.ownerKey
             guard recordKey != excludedKey,
                   let candidate = Self.legacyExecApprovalNotificationIdentifier(for: record.approval)
             else { return false }
@@ -1228,10 +1136,6 @@ extension WatchInboxStore {
         center.removeDeliveredNotifications(withIdentifiers: identifiers)
     }
 
-    private nonisolated static func normalizedGatewayID(_ gatewayStableID: String?) -> String? {
-        WatchGatewayID.exact(gatewayStableID)
-    }
-
     private nonisolated static func gatewayIDsMatch(_ lhs: String?, _ rhs: String?) -> Bool {
         WatchGatewayID.key(lhs) == WatchGatewayID.key(rhs)
     }
@@ -1239,7 +1143,7 @@ extension WatchInboxStore {
     private nonisolated static func onlyGatewayStableID(in approvals: [WatchExecApprovalItem]) -> String? {
         var gatewaysByKey: [WatchGatewayID.Key: String] = [:]
         for approval in approvals {
-            guard let gatewayID = self.normalizedGatewayID(approval.gatewayStableID),
+            guard let gatewayID = WatchGatewayID.exact(approval.gatewayStableID),
                   let gatewayKey = WatchGatewayID.key(gatewayID)
             else { continue }
             gatewaysByKey[gatewayKey] = gatewayID
@@ -1260,22 +1164,14 @@ extension WatchInboxStore {
         return "watch.execApproval.\(gatewayStableID.utf8.count):\(gatewayStableID)\(approvalID)"
     }
 
-    private static func execApprovalOwnerKey(
-        approvalId: String,
-        gatewayStableID: String?) -> ExecApprovalOwnerKey?
-    {
-        guard let approvalKey = WatchApprovalID.key(approvalId),
-              let gatewayKey = WatchGatewayID.key(gatewayStableID)
-        else {
-            return nil
-        }
-        return ExecApprovalOwnerKey(
-            gatewayID: gatewayKey,
-            approvalID: approvalKey)
+    private var selectedExecApprovalOwnerKey: ExecApprovalOwnerKey? {
+        ExecApprovalOwnerKey(
+            approvalId: self.selectedExecApprovalID ?? "",
+            gatewayStableID: self.selectedExecApprovalGatewayStableID)
     }
 
     private func isExecApprovalTerminal(approvalId: String, gatewayStableID: String?) -> Bool {
-        guard let key = Self.execApprovalOwnerKey(
+        guard let key = ExecApprovalOwnerKey(
             approvalId: approvalId,
             gatewayStableID: gatewayStableID)
         else {
@@ -1296,7 +1192,7 @@ extension WatchInboxStore {
     {
         guard let exactApprovalID = WatchApprovalID.exact(approvalId),
               let exactGatewayID = WatchGatewayID.exact(gatewayStableID),
-              let key = Self.execApprovalOwnerKey(
+              let key = ExecApprovalOwnerKey(
                   approvalId: approvalId,
                   gatewayStableID: gatewayStableID)
         else {
@@ -1339,24 +1235,17 @@ extension WatchInboxStore {
     }
 
     private func pruneExpiredExecApprovals(nowMs: Int64) {
-        let expiredApprovals = self.execApprovals.compactMap { record -> WatchExecApprovalItem? in
-            guard let expiresAtMs = record.approval.expiresAtMs, expiresAtMs <= nowMs else { return nil }
-            return record.approval
-        }
-        self.execApprovals.removeAll { record in
+        self.removeExecApprovals { record in
             guard let expiresAtMs = record.approval.expiresAtMs else { return false }
             return expiresAtMs <= nowMs
         }
-        self.removeExecApprovalNotifications(approvals: expiredApprovals)
         self.ensureValidExecApprovalSelection()
         self.persistState()
     }
 
     private func ensureValidExecApprovalSelection() {
-        if let selectedKey = Self.execApprovalOwnerKey(
-            approvalId: self.selectedExecApprovalID ?? "",
-            gatewayStableID: self.selectedExecApprovalGatewayStableID),
-            self.execApprovals.contains(where: { $0.id == selectedKey })
+        if let selectedKey = self.selectedExecApprovalOwnerKey,
+           self.execApprovals.contains(where: { $0.id == selectedKey })
         {
             return
         }
@@ -1379,6 +1268,7 @@ extension WatchInboxStore {
         self.promptId = state.promptId
         self.sessionKey = state.sessionKey
         self.gatewayStableID = state.gatewayStableID
+        self.promptChatDeliveryContext = state.promptChatDeliveryContext
         self.kind = state.kind
         self.details = state.details
         self.expiresAtMs = state.expiresAtMs
@@ -1391,13 +1281,13 @@ extension WatchInboxStore {
             WatchApprovalID.exact(record.approvalID) != nil
         }
         let ownerlessApprovals = validApprovals.filter { record in
-            Self.normalizedGatewayID(record.approval.gatewayStableID) == nil
+            WatchGatewayID.exact(record.approval.gatewayStableID) == nil
         }
         let taggedApprovals = validApprovals.filter { record in
-            Self.normalizedGatewayID(record.approval.gatewayStableID) != nil
+            WatchGatewayID.exact(record.approval.gatewayStableID) != nil
         }
         let activeGatewayID = state.appSnapshot.flatMap { snapshot in
-            Self.normalizedGatewayID(snapshot.gatewayStableID)
+            WatchGatewayID.exact(snapshot.gatewayStableID)
         }
         let invalidatedApprovals: [WatchExecApprovalRecord]
         if state.appSnapshot != nil {
@@ -1429,24 +1319,15 @@ extension WatchInboxStore {
             ?? state.appCommandStatusText.flatMap(
                 WatchAppCommandStatus.decodeLegacyLocalizedText)
         self.voiceTurnState = state.voiceTurnState ?? WatchVoiceTurnState()
-        self.voiceTurnState.expireIfNeeded(nowMs: Self.nowMs())
         self.deferredGatewayPayloads = Array(
             (state.deferredGatewayPayloads ?? []).suffix(Self.maxDeferredGatewayPayloads))
         self.execApprovalTerminalTombstones = state.execApprovalTerminalTombstones ?? []
         self.pruneExecApprovalTerminalTombstones(now: Date())
-        let restoredTerminalApprovals = self.execApprovals.compactMap { record in
-            self.isExecApprovalTerminal(
-                approvalId: record.approvalID,
-                gatewayStableID: record.approval.gatewayStableID)
-                ? record.approval
-                : nil
-        }
-        self.execApprovals.removeAll { record in
+        self.removeExecApprovals { record in
             self.isExecApprovalTerminal(
                 approvalId: record.approvalID,
                 gatewayStableID: record.approval.gatewayStableID)
         }
-        self.removeExecApprovalNotifications(approvals: restoredTerminalApprovals)
 
         if state.appSnapshot != nil,
            !Self.gatewayIDsMatch(self.lastExecApprovalSnapshotGatewayStableID, activeGatewayID)
@@ -1473,7 +1354,7 @@ extension WatchInboxStore {
         })
     }
 
-    private func persistState() {
+    func persistState() {
         self.pruneExecApprovalTerminalTombstones(now: Date())
         let updatedAt = self.updatedAt ?? self.lastExecApprovalOutcomeAt ?? Date()
         let state = PersistedState(
@@ -1485,6 +1366,7 @@ extension WatchInboxStore {
             promptId: promptId,
             sessionKey: sessionKey,
             gatewayStableID: gatewayStableID,
+            promptChatDeliveryContext: promptChatDeliveryContext,
             kind: kind,
             details: details,
             expiresAtMs: expiresAtMs,
@@ -1544,54 +1426,51 @@ extension WatchInboxStore {
         }
     }
 
-    func makeReplyDraft(action: WatchPromptAction) -> WatchReplyDraft {
-        let prompt = self.promptId?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return WatchReplyDraft(
-            replyId: UUID().uuidString,
-            promptId: (prompt?.isEmpty == false) ? prompt! : "unknown",
-            actionId: action.id,
-            actionLabel: action.label,
-            sessionKey: self.sessionKey,
-            gatewayStableID: self.gatewayStableID,
-            note: nil,
-            sentAtMs: Self.nowMs())
-    }
-
-    func markReplySending(actionLabel: String) {
+    func markReplySending(actionLabel: String, commandId: String) -> UUID? {
+        guard !self.isReplySending else { return nil }
+        let attemptID = UUID()
+        self.activeReplyAttempt = (attemptID, commandId)
         self.isReplySending = true
-        self.replyStatus = WatchReplyStatus(
-            code: .sending,
-            actionLabel: actionLabel,
-            detail: nil)
+        self.replyStatus = WatchReplyStatus(code: .sending, actionLabel: actionLabel, detail: nil)
         self.replyStatusAt = Date()
         self.persistState()
+        return attemptID
     }
 
-    func markReplyResult(_ result: WatchReplySendResult, actionLabel: String) {
+    @discardableResult
+    func markReplyResult(_ result: WatchReplySendResult, actionLabel: String, attemptID: UUID) -> Bool {
+        guard self.isReplySending, self.activeReplyAttempt?.id == attemptID else { return false }
         self.isReplySending = false
-        if let errorMessage = result.errorMessage, !errorMessage.isEmpty {
-            self.replyStatus = WatchReplyStatus(
-                code: .failed,
-                actionLabel: actionLabel,
-                detail: errorMessage)
-        } else if result.deliveredImmediately {
-            self.replyStatus = WatchReplyStatus(
-                code: .sent,
-                actionLabel: actionLabel,
-                detail: nil)
-        } else if result.queuedForDelivery {
-            self.replyStatus = WatchReplyStatus(
-                code: .queued,
-                actionLabel: actionLabel,
-                detail: nil)
-        } else {
-            self.replyStatus = WatchReplyStatus(
-                code: .sent,
-                actionLabel: actionLabel,
-                detail: nil)
-        }
+        let detail = result.errorMessage.flatMap { $0.isEmpty ? nil : $0 }
+        let code: WatchDeliveryStatusCode = detail != nil ? .failed : (result.queuedForDelivery ? .queued : .sent)
+        self.replyStatus = WatchReplyStatus(code: code, actionLabel: actionLabel, detail: detail)
         self.replyStatusAt = Date()
         self.persistState()
+        return true
+    }
+
+    func canPresentChatDelivery(commandId: String?) -> Bool {
+        guard self.appCommandStatus?.code != .sending,
+              self.appCommandStatus == nil || self.appCommandStatus?.command == .sendChat
+        else { return false }
+        return self.activeAppCommandAttemptID.map {
+            $0.uuidString.utf8.elementsEqual((commandId ?? "").utf8)
+        } ?? true
+    }
+
+    func chatDeliveryPresentationEntry(
+        _ entries: [OpenClawWatchChatDeliveryStore.Entry], kind: OpenClawWatchChatDeliveryKind)
+        -> OpenClawWatchChatDeliveryStore.Entry?
+    {
+        if kind == .quickReply, self.isReplySending { return nil }
+        // A newer unsaved attempt has no row. Keep its failure; reopening has no live attempt.
+        return entries.last { entry in
+            guard entry.command.kind == kind else { return false }
+            if kind == .chat { return self.canPresentChatDelivery(commandId: entry.command.commandId) }
+            return self.activeReplyAttempt.map {
+                entry.command.commandId.utf8.elementsEqual($0.commandId.utf8)
+            } ?? true
+        }
     }
 
     private func postLocalNotification(

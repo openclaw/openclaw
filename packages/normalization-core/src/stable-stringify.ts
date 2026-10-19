@@ -5,6 +5,7 @@
  */
 
 type StableStringNormalizer = (value: string) => string;
+type StableStringWriter = (chunk: string) => void;
 
 const preserveString = (value: string) => value;
 
@@ -16,10 +17,20 @@ export function stableStringify(
   return stringifyStableValue(value, new WeakSet(), normalizeString);
 }
 
+/** Writes the same deterministic text without retaining completed container strings. */
+export function writeStableStringify(
+  value: unknown,
+  write: StableStringWriter,
+  normalizeString: StableStringNormalizer = preserveString,
+): void {
+  write(stringifyStableValue(value, new WeakSet(), normalizeString, write));
+}
+
 function stringifyStableValue(
   value: unknown,
   stack: WeakSet<object>,
   normalizeString: StableStringNormalizer,
+  write?: StableStringWriter,
 ): string {
   if (value === null || value === undefined) {
     return String(value);
@@ -42,7 +53,7 @@ function stringifyStableValue(
 
   stack.add(value);
   try {
-    return stringifyObjectValue(value, stack, normalizeString);
+    return stringifyObjectValue(value, stack, normalizeString, write);
   } finally {
     stack.delete(value);
   }
@@ -52,6 +63,7 @@ function stringifyObjectValue(
   value: object,
   stack: WeakSet<object>,
   normalizeString: StableStringNormalizer,
+  write?: StableStringWriter,
 ): string {
   if (value instanceof Error) {
     return stringifyStableValue(
@@ -62,6 +74,7 @@ function stringifyObjectValue(
       },
       stack,
       normalizeString,
+      write,
     );
   }
   if (value instanceof Uint8Array) {
@@ -72,9 +85,21 @@ function stringifyObjectValue(
       },
       stack,
       normalizeString,
+      write,
     );
   }
   if (Array.isArray(value)) {
+    if (write) {
+      write("[");
+      let separator = "";
+      for (const entry of value) {
+        write(separator);
+        write(stringifyStableValue(entry, stack, normalizeString, write));
+        separator = ",";
+      }
+      write("]");
+      return "";
+    }
     const serializedEntries: string[] = [];
     for (const entry of value) {
       serializedEntries.push(stringifyStableValue(entry, stack, normalizeString));
@@ -82,18 +107,37 @@ function stringifyObjectValue(
     return `[${serializedEntries.join(",")}]`;
   }
   const record = value as Record<string, unknown>;
-  const entries = Object.keys(record)
-    .map((key) => ({ key, normalizedKey: normalizeString(key) }))
-    .toSorted((left, right) => {
-      const normalizedOrder = compareStableStrings(left.normalizedKey, right.normalizedKey);
-      // Distinct source keys can normalize alike; preserve deterministic ordering without loss.
-      return normalizedOrder || compareStableStrings(left.key, right.key);
-    });
-  const serializedFields: string[] = [];
-  for (const { key, normalizedKey } of entries) {
-    serializedFields.push(
-      `${JSON.stringify(normalizedKey)}:${stringifyStableValue(record[key], stack, normalizeString)}`,
-    );
+  const keys = Object.keys(record);
+  const fields: Array<string | { key: string; normalizedKey: string }> =
+    normalizeString === preserveString
+      ? keys.sort() // oxlint-disable-line unicorn/no-array-sort -- keys is a private array.
+      : keys
+          .map((key) => ({ key, normalizedKey: normalizeString(key) }))
+          // oxlint-disable-next-line unicorn/no-array-sort -- map creates a private entry array.
+          .sort((left, right) => {
+            const normalizedOrder = compareStableStrings(left.normalizedKey, right.normalizedKey);
+            // Distinct source keys can normalize alike; preserve deterministic ordering without loss.
+            return normalizedOrder || compareStableStrings(left.key, right.key);
+          });
+  write?.("{");
+  const serializedFields: string[] = normalizeString === preserveString ? keys : [];
+  let separator = "";
+  let fieldIndex = 0;
+  for (const field of fields) {
+    const key = typeof field === "string" ? field : field.key;
+    const prefix = `${JSON.stringify(typeof field === "string" ? field : field.normalizedKey)}:`;
+    if (write) {
+      write(`${separator}${prefix}`);
+      write(stringifyStableValue(record[key], stack, normalizeString, write));
+      separator = ",";
+    } else {
+      serializedFields[fieldIndex++] =
+        `${prefix}${stringifyStableValue(record[key], stack, normalizeString)}`;
+    }
+  }
+  if (write) {
+    write("}");
+    return "";
   }
   return `{${serializedFields.join(",")}}`;
 }

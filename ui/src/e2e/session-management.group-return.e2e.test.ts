@@ -1,12 +1,12 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   captureUiProof,
   createSessionManagementE2eSuite,
   installMockGateway,
   openSessionMenuSubmenu,
   requireRecord,
-  sessionRow,
   sessionsListResponse,
   waitForPatch,
 } from "./session-management.test-support.ts";
@@ -19,8 +19,6 @@ async function setThemeMode(page: Page, mode: "dark" | "light"): Promise<void> {
     const root = document.documentElement;
     root.dataset.themeMode = nextMode;
     root.dataset.themeResolved = nextMode;
-    root.classList.toggle("wa-light", nextMode === "light");
-    root.classList.toggle("wa-dark", nextMode === "dark");
     root.style.colorScheme = nextMode;
   }, mode);
   await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(mode);
@@ -69,15 +67,15 @@ suite.define(() => {
       await groups.waitFor({ state: "visible" });
 
       await row.hover();
-      await row.getByRole("button", { name: "Open session menu" }).click();
+      await row.click({ button: "right" });
       await openSessionMenuSubmenu(page, "Move to group");
       await page.getByRole("menuitem", { name: "Move back to Groups" }).waitFor({
         state: "visible",
       });
       await setThemeMode(page, "light");
-      await captureUiProof(page, "sidebar-done-return-before-light.png");
+      await captureUiProof(suite, page, "sidebar-done-return-before-light.png");
       await setThemeMode(page, "dark");
-      await captureUiProof(page, "sidebar-done-return-before-dark.png");
+      await captureUiProof(suite, page, "sidebar-done-return-before-dark.png");
 
       await setThemeMode(page, "light");
       await page.reload();
@@ -99,9 +97,9 @@ suite.define(() => {
       await groups.locator('[data-session-key="agent:main:done-group"]').waitFor({
         state: "visible",
       });
-      await captureUiProof(page, "sidebar-done-return-after-light.png");
+      await captureUiProof(suite, page, "sidebar-done-return-after-light.png");
       await setThemeMode(page, "dark");
-      await captureUiProof(page, "sidebar-done-return-after-dark.png");
+      await captureUiProof(suite, page, "sidebar-done-return-after-dark.png");
     } finally {
       await context.close();
     }

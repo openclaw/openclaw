@@ -1,24 +1,30 @@
-// Chat gateway methods expose the stable registry while focused modules own large workflows.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
   validateChatInjectParams,
   validateChatToolTitlesParams,
+  type ChatInjectParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
-import { createAgentTurnService } from "../agent-turn/agent-turn-service.js";
+import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import {
+  acquireSessionActorStorage,
+  runWithSessionActorStorage,
+} from "../../config/sessions/session-actor-storage-binding.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import {
+  beginSessionEffect,
+  captureSessionTarget,
+} from "../../sessions/session-controller.lifecycle.js";
 import {
   projectChatDisplayMessage,
   resolveEffectiveChatHistoryMaxChars,
 } from "../chat-display-projection.js";
-import {
-  loadSessionEntry,
-  loadGatewaySessionEntryReadOnly,
-  resolveSessionModelRef,
-} from "../session-utils.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { findCanonicalStoreMatch } from "../session-utils-store-selection.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
+import { loadIncognitoGatewaySessionEntryReadOnly } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import {
   resolveGlobalAwareNodeChatDeliveryKeys,
@@ -26,216 +32,184 @@ import {
 } from "./chat-broadcast.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import { chatMessageGetHandlers } from "./chat-message-get-handler.js";
-import { resolveRequestedChatAgentId, validateChatSelectedAgent } from "./chat-origin-routing.js";
-import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
-import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-normalization.js";
-import { appendAssistantTranscriptMessage } from "./chat-transcript-persistence.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import { chatPredictionHandlers } from "./chat-prediction-handler.js";
+import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
+import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
-
-export {
-  augmentChatHistoryWithCanvasBlocks,
-  DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
-  dropPreSessionStartAnnouncePairs,
-  resolveEffectiveChatHistoryMaxChars,
-  sanitizeChatHistoryMessages,
-} from "../chat-display-projection.js";
-export { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
-export {
-  CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
-  replaceOversizedChatHistoryMessages,
-  reportOmittedChatHistory,
-} from "./chat-history-budget.js";
 
 export const chatHandlers: GatewayRequestHandlers = {
   ...chatHistoryHandlers,
   ...chatMessageGetHandlers,
-  "chat.toolTitles": async ({ params, respond, context }) => {
+  ...chatPredictionHandlers,
+  "chat.toolTitles": async ({ params, respond }) => {
     if (!assertValidParams(params, validateChatToolTitlesParams, "chat.toolTitles", respond)) {
       return;
     }
-    const cfg = context.getRuntimeConfig();
-    // Opt-in gate: tool titles spend utility-model tokens, so the gateway
-    // stays fully deterministic unless the operator enables them explicitly.
-    // `disabled: true` lets clients stop asking for the rest of the session.
-    if (cfg.gateway?.controlUi?.toolTitles !== true) {
-      respond(true, { titles: {}, disabled: true });
-      return;
-    }
-    const agentIdOverride = normalizeOptionalText(params.agentId);
-    const requestedAgent = resolveRequestedChatAgentId({
-      cfg,
-      requestedSessionKey: params.sessionKey,
-      agentId: agentIdOverride,
-    });
-    if (!requestedAgent.ok) {
-      respond(false, undefined, requestedAgent.error);
-      return;
-    }
-    const requestedAgentId = requestedAgent.agentId;
-    const selectedAgent = validateChatSelectedAgent({
-      cfg,
-      requestedSessionKey: params.sessionKey,
-      agentId: requestedAgentId,
-    });
-    if (!selectedAgent.ok) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selectedAgent.error));
-      return;
-    }
-    const sessionAgentId = resolveSessionAgentId({
-      sessionKey: params.sessionKey,
-      config: cfg,
-      agentId: selectedAgent.agentId,
-    });
-    // Session entry carries per-session model overrides; utility routing must
-    // derive its small-model default from the provider this session actually
-    // uses, not the agent's configured default.
-    const { cfg: sessionCfg, entry } = loadGatewaySessionEntryReadOnly(
-      params.sessionKey,
-      selectedAgent.agentId ? { agentId: selectedAgent.agentId } : undefined,
-    );
-    const sessionModel = resolveSessionModelRef(sessionCfg, entry, sessionAgentId);
-    // Title generation pulls in the simple-completion runtime; load it lazily
-    // so gateways that never enable the opt-in skip that cost.
-    const { generateToolCallTitles } = await import("../chat-tool-titles.js");
-    const titles = await generateToolCallTitles({
-      cfg: sessionCfg,
-      agentId: sessionAgentId,
-      sessionPrimaryProvider: sessionModel.provider,
-      sessionAuthProfile: entry?.authProfileOverride?.trim() || undefined,
-      items: params.items,
-    });
-    respond(true, { titles });
+    // Keep the shipped disabled response until a versioned protocol removal;
+    // older clients stop asking, while current clients read the tool call title.
+    respond(true, { titles: {}, disabled: true });
   },
-  "chat.abort": async (options) => {
-    await createAgentTurnService(options).abortTurn(options);
-  },
-  "chat.send": handleDirectExternalChatSend,
-  "chat.inject": async ({ params, respond, context }) => {
+  "chat.inject": async (options) => {
+    const { params, respond, sessionMutationCommitGuard } = options;
     if (!assertValidParams(params, validateChatInjectParams, "chat.inject", respond)) {
       return;
     }
-    const p = params as {
-      sessionKey: string;
-      agentId?: string;
-      message: string;
-      label?: string;
-    };
-
-    // Load session to find transcript file
-    const rawSessionKey = p.sessionKey;
-    const requestedAgent = resolveRequestedChatAgentId({
-      cfg: (context as { getRuntimeConfig?: () => OpenClawConfig }).getRuntimeConfig?.(),
-      requestedSessionKey: rawSessionKey,
-      agentId: p.agentId,
-    });
-    if (!requestedAgent.ok) {
-      respond(false, undefined, requestedAgent.error);
-      return;
+    if (!isIncognitoSessionKey(params.sessionKey)) {
+      return injectChat(options, params);
     }
-    const requestedAgentId = requestedAgent.agentId;
-    const sessionLoadOptions = requestedAgentId ? { agentId: requestedAgentId } : undefined;
-    const {
-      cfg,
-      storePath,
-      entry,
-      canonicalKey: sessionKey,
-    } = loadSessionEntry(rawSessionKey, sessionLoadOptions);
-    const selectedAgent = validateChatSelectedAgent({
-      cfg,
-      requestedSessionKey: rawSessionKey,
-      agentId: requestedAgentId,
-    });
-    if (!selectedAgent.ok) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selectedAgent.error));
-      return;
-    }
-    const sessionId = entry?.sessionId;
-    if (!sessionId || !storePath) {
+    const assertCurrent = () => sessionMutationCommitGuard?.();
+    const binding = await acquireSessionActorStorage(
+      { sessionKey: params.sessionKey, agentId: normalizeOptionalString(params.agentId) },
+      {
+        lifetime: { assertCurrent, assertReadable: assertCurrent },
+        authority: { assertCurrent, authorize: assertCurrent },
+      },
+    );
+    if (!binding) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "session not found"));
       return;
     }
-    const agentId = resolveSessionAgentId({
-      sessionKey,
-      config: cfg,
-      agentId: selectedAgent.agentId,
-    });
-
-    let appended: Awaited<ReturnType<typeof appendAssistantTranscriptMessage>>;
     try {
-      const admission = await beginSessionWorkAdmission({
-        scope: storePath,
-        identities: [sessionKey, sessionId],
-        assertAllowed: () => {
-          const latestEntry = loadSessionEntry(rawSessionKey, sessionLoadOptions).entry;
-          if (!latestEntry) {
-            throw new Error(`Session "${sessionKey}" was deleted while starting work. Retry.`);
-          }
-          if (latestEntry.sessionId !== sessionId) {
-            throw new Error(`Session "${sessionKey}" changed while starting work. Retry.`);
-          }
-          const archivedError = resolveSessionWorkStartError(sessionKey, latestEntry);
-          if (archivedError) {
-            throw new Error(archivedError);
-          }
-        },
-      });
-      try {
-        appended = await admission.run(
-          async () =>
-            await appendAssistantTranscriptMessage({
-              sessionKey,
-              message: p.message,
-              label: p.label,
-              sessionId,
-              storePath,
-              agentId,
-              createIfMissing: true,
-              cfg,
-            }),
-        );
-      } finally {
-        admission.release();
-      }
-    } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
-      return;
+      await runWithSessionActorStorage(binding, () => injectChat(options, params));
+    } finally {
+      await binding.actor.release();
     }
-    if (!appended.ok || !appended.messageId || !appended.message) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          `failed to write transcript: ${appended.error ?? "unknown error"}`,
-        ),
-      );
-      return;
-    }
-
-    // Broadcast to webchat for immediate UI update
-    const message = projectChatDisplayMessage(appended.message, {
-      maxChars: resolveEffectiveChatHistoryMaxChars(cfg),
-    });
-    const chatPayload = {
-      runId: `inject-${appended.messageId}`,
-      sessionKey,
-      ...(agentId ? { agentId } : {}),
-      seq: 0,
-      state: "final" as const,
-      message,
-    };
-    context.broadcast("chat", chatPayload, {
-      sessionKeys: resolveGlobalAwareNodeChatDeliveryKeys({ cfg, sessionKey, agentId }),
-    });
-    sendGlobalAwareNodeChatPayload({
-      context,
-      sessionKey,
-      agentId,
-      event: "chat",
-      payload: chatPayload,
-    });
-
-    respond(true, { ok: true, messageId: appended.messageId });
   },
 };
+
+async function injectChat(
+  { respond, context, sessionMutationCommitGuard }: GatewayRequestHandlerOptions,
+  params: ChatInjectParams,
+): Promise<void> {
+  const rawSessionKey = params.sessionKey;
+  const agentIdOverride = normalizeOptionalString(params.agentId);
+  const cfg = context.getRuntimeConfig();
+  const requestedAgent = resolveRequestedSessionAgentId(cfg, rawSessionKey, agentIdOverride);
+  if (!requestedAgent.ok) {
+    respond(false, undefined, requestedAgent.error);
+    return;
+  }
+  const sessionLoadOptions = { agentId: requestedAgent.agentId };
+  let retained: ReturnType<typeof retainPreparedSessionEntryPredicate> | undefined;
+  const {
+    agentId,
+    storePath,
+    entry,
+    canonicalKey: sessionKey,
+  } = isIncognitoSessionKey(rawSessionKey)
+    ? loadIncognitoGatewaySessionEntryReadOnly(rawSessionKey, sessionLoadOptions, cfg)
+    : await loadGatewaySessionEntryReadOnlyInWorker({
+        excludeInternalEffects: true,
+        cfg,
+        key: rawSessionKey,
+        ...sessionLoadOptions,
+        onSelected: (target) => {
+          retained?.release();
+          const selected = findCanonicalStoreMatch(target.store, target.storeKeys)?.entry;
+          if (typeof target.capturedReadSource?.databaseIdentity === "string") {
+            retained = retainPreparedSessionEntryPredicate({
+              databaseIdentity: `file:${target.capturedReadSource.databaseIdentity}`,
+              sessionKey: target.canonicalKey,
+              entry: selected,
+              matches: (_before, after) => after?.sessionId === selected?.sessionId,
+            });
+          }
+        },
+      }).catch((error: unknown) => {
+        retained?.release();
+        throw error;
+      });
+  const sessionId = entry?.sessionId;
+  if (!sessionId || !storePath) {
+    retained?.release();
+    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "session not found"));
+    return;
+  }
+
+  let appended: Awaited<ReturnType<typeof appendInjectedAssistantMessageToTranscript>>;
+  try {
+    const admission = await beginSessionEffect({
+      agentId,
+      target: captureSessionTarget({
+        storeScope: storePath,
+        sessionKey,
+        agentId,
+        incarnation: sessionId,
+      }),
+      storeWriterIdentities: [sessionKey],
+      assertAllowed: () => {
+        sessionMutationCommitGuard?.();
+        const current = retained?.readCurrent();
+        if (retained && !current) {
+          throw new Error(`Session "${sessionKey}" changed while starting work. Retry.`);
+        }
+        const latestEntry = isIncognitoSessionKey(sessionKey)
+          ? loadIncognitoGatewaySessionEntryReadOnly(rawSessionKey, sessionLoadOptions).entry
+          : (current?.entry ?? entry);
+        if (latestEntry?.sessionId !== sessionId) {
+          throw new Error(`Session "${sessionKey}" changed while starting work. Retry.`);
+        }
+        const archivedError = resolveSessionWorkStartError(sessionKey, latestEntry);
+        if (archivedError) {
+          throw new Error(archivedError);
+        }
+      },
+    });
+    try {
+      appended = await admission.run(async () => {
+        sessionMutationCommitGuard?.();
+        return await appendInjectedAssistantMessageToTranscript({
+          sessionKey,
+          message: params.message,
+          label: params.label,
+          sessionId,
+          storePath,
+          agentId,
+          config: cfg,
+        });
+      });
+    } finally {
+      admission.release();
+    }
+  } catch (err) {
+    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
+    return;
+  } finally {
+    retained?.release();
+  }
+  if (!appended.ok || !appended.messageId || !appended.message) {
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.UNAVAILABLE,
+        `failed to write transcript: ${appended.error ?? "unknown error"}`,
+      ),
+    );
+    return;
+  }
+
+  const message = projectChatDisplayMessage(appended.message, {
+    maxChars: resolveEffectiveChatHistoryMaxChars(),
+  });
+  const chatPayload = {
+    runId: `inject-${appended.messageId}`,
+    sessionKey,
+    ...(agentId ? { agentId } : {}),
+    seq: 0,
+    state: "final" as const,
+    message,
+  };
+  context.broadcast("chat", chatPayload, {
+    sessionKeys: resolveGlobalAwareNodeChatDeliveryKeys({ cfg, sessionKey, agentId }),
+  });
+  sendGlobalAwareNodeChatPayload({
+    context,
+    sessionKey,
+    agentId,
+    event: "chat",
+    payload: chatPayload,
+  });
+
+  respond(true, { ok: true, messageId: appended.messageId });
+}

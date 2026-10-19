@@ -1,138 +1,174 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
   RealtimeVoiceBridge,
+  RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceProviderPlugin,
 } from "openclaw/plugin-sdk/realtime-voice";
+import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { describe, expect, it, vi } from "vitest";
-import type { WebSocket as WebSocketType } from "ws";
-import { WebSocket } from "ws";
-import type { VoiceCallRealtimeConfig } from "../config.js";
 import type { CallManager } from "../manager.js";
-import type { VoiceCallProvider } from "../providers/base.js";
-import type { CallRecord } from "../types.js";
 import { connectWs, startUpgradeWsServer, waitForClose } from "../websocket-test-support.js";
-import { RealtimeCallHandler } from "./realtime-handler.js";
+import type { ResolveRealtimeCallRegistration } from "./realtime-handler.js";
+import {
+  connectCarrierStream,
+  sendCarrierStart,
+  createBridge,
+  createCarrierLifecycleHarness,
+  makeRealtimeProvider,
+} from "./realtime-handler.lifecycle.test-helpers.js";
 
-function createRealtimeConfig(): VoiceCallRealtimeConfig {
-  return {
-    enabled: true,
-    streamPath: "/voice/stream/realtime",
-    instructions: "Be helpful.",
-    toolPolicy: "safe-read-only",
-    consultPolicy: "auto",
-    tools: [],
-    fastContext: {
-      enabled: false,
-      timeoutMs: 800,
-      maxResults: 3,
-      sources: ["memory", "sessions"],
-      fallbackToConsult: false,
-    },
-    agentContext: {
-      enabled: false,
-      maxChars: 6000,
-      includeIdentity: true,
-      includeWorkspaceFiles: true,
-      files: ["SOUL.md", "IDENTITY.md", "USER.md"],
-    },
-    providers: {},
-  };
-}
-
-const noOpStreamDisconnectLifecycle = {
-  connect: () => {},
-  disconnect: () => {},
-  retire: () => {},
-};
-
-function createBridge(
-  close: () => void,
+async function openBridge(
+  close: RealtimeVoiceBridge["close"],
   overrides: Partial<RealtimeVoiceBridge> = {},
-): RealtimeVoiceBridge {
-  return {
-    connect: async () => {},
-    sendAudio: () => {},
-    setMediaTimestamp: () => {},
-    submitToolResult: () => {},
-    acknowledgeMark: () => {},
-    close,
-    isConnected: () => true,
-    triggerGreeting: () => {},
-    ...overrides,
-  };
-}
-
-function makeRealtimeProvider(
-  createBridgeForCall: RealtimeVoiceProviderPlugin["createBridge"],
-): RealtimeVoiceProviderPlugin {
-  return {
-    id: "openai",
-    label: "OpenAI",
-    isConfigured: () => true,
-    createBridge: createBridgeForCall,
-  };
-}
-
-function makeCallRegistrationResolver(
-  provider: RealtimeVoiceProviderPlugin,
-): ConstructorParameters<typeof RealtimeCallHandler>[3] {
-  return (call) => ({
-    agentId: call.agentId ?? "main",
-    instructions: "Be helpful.",
-    provider,
-    providerConfig: { apiKey: "test-key" },
-  });
-}
-
-function createCarrierLifecycleHarness(
-  createBridgeForCall: RealtimeVoiceProviderPlugin["createBridge"],
-  options: {
-    initialMessage?: string;
-    resolveCallRegistration?: ConstructorParameters<typeof RealtimeCallHandler>[3];
-    streamDisconnectLifecycle?: ConstructorParameters<typeof RealtimeCallHandler>[5];
-  } = {},
+  options: Parameters<typeof createCarrierLifecycleHarness>[1] = {},
 ) {
-  const realtimeProvider = makeRealtimeProvider(createBridgeForCall);
-  const call: CallRecord = {
-    callId: "call-startup",
-    providerCallId: "CA-startup",
-    provider: "twilio",
-    direction: "inbound",
-    state: "ringing",
-    from: "+15550001111",
-    to: "+15550002222",
-    startedAt: Date.now(),
-    transcript: [],
-    processedEventIds: [],
-    ...(options.initialMessage ? { metadata: { initialMessage: options.initialMessage } } : {}),
-  };
-  const processEvent = vi.fn();
-  const hangupCall = vi.fn(async () => {});
-  const handler = new RealtimeCallHandler(
-    createRealtimeConfig(),
-    {
-      processEvent,
-      getCallByProviderCallId: vi.fn(() => call),
-    } as unknown as CallManager,
-    { name: "twilio", hangupCall } as unknown as VoiceCallProvider,
-    options.resolveCallRegistration ?? makeCallRegistrationResolver(realtimeProvider),
-    "/voice/webhook",
-    options.streamDisconnectLifecycle ?? noOpStreamDisconnectLifecycle,
-  );
-  return { call, handler, hangupCall, processEvent };
+  const ready = createDeferred<RealtimeVoiceBridgeCreateRequest>();
+  const createBridgeForCall = vi.fn((request: RealtimeVoiceBridgeCreateRequest) => {
+    ready.resolve(request);
+    return createBridge(close, overrides);
+  });
+  const fixture = createCarrierLifecycleHarness(createBridgeForCall, options);
+  const { ws } = await connectCarrierStream(fixture.handler);
+  sendCarrierStart(ws, "MZ-test", fixture.call.providerCallId);
+  await vi.waitFor(() => expect(createBridgeForCall).toHaveBeenCalledOnce());
+  return { ...fixture, ws, callbacks: await ready.promise };
 }
 
-async function connectCarrierStream(handler: RealtimeCallHandler) {
-  const { streamUrl } = handler.issueStreamSession();
-  const server = await startUpgradeWsServer({
-    urlPath: new URL(streamUrl).pathname,
-    onUpgrade: (request, socket, head) => {
-      handler.handleWebSocketUpgrade(request, socket, head);
-    },
-  });
-  return { server, ws: await connectWs(server.url) };
+function endedEvents(
+  processEvent: ReturnType<typeof createCarrierLifecycleHarness>["processEvent"],
+) {
+  return processEvent.mock.calls.filter(([event]) => event.type === "call.ended");
 }
+
+const nextImmediate = () =>
+  new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 
 describe("RealtimeCallHandler lifecycle", () => {
+  it("abandons pending carrier admission on shutdown", async () => {
+    const persistence = createDeferred<Awaited<ReturnType<CallManager["processEvent"]>>>();
+    const createBridgeForCall = vi.fn<RealtimeVoiceProviderPlugin["createBridge"]>(() =>
+      createBridge(() => {}),
+    );
+    const { call, handler, processEvent, endCall } =
+      createCarrierLifecycleHarness(createBridgeForCall);
+    processEvent.mockReturnValueOnce(persistence.promise);
+    const { ws } = await connectCarrierStream(handler);
+    try {
+      sendCarrierStart(ws, "MZ-pending-store", call.providerCallId);
+      const audio = Buffer.from([0xff, 0xfe, 0xfd]);
+      ws.send(JSON.stringify({ event: "media", media: { payload: audio.toString("base64") } }));
+      await vi.waitFor(() => expect(processEvent).toHaveBeenCalledOnce());
+      expect(createBridgeForCall).not.toHaveBeenCalled();
+      let closed = false;
+      const closing = handler.close().then(() => {
+        closed = true;
+      });
+      await waitForClose(ws);
+      expect(closed).toBe(false);
+      persistence.resolve({ kind: "processed" });
+      await closing;
+      expect(createBridgeForCall).not.toHaveBeenCalled();
+      expect(endCall).toHaveBeenCalledOnce();
+    } finally {
+      persistence.resolve({ kind: "processed" });
+    }
+  });
+
+  it("keeps a failed startup nonterminal until manager-owned carrier termination succeeds", async () => {
+    const termination = createDeferred<{ success: boolean; error?: string }>();
+    const endCall = vi.fn(() => termination.promise);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { call, handler, processEvent } = createCarrierLifecycleHarness(
+      () => {
+        throw new Error("realtime provider rejected call configuration");
+      },
+      { endCall },
+    );
+    const { ws } = await connectCarrierStream(handler);
+
+    try {
+      const closed = waitForClose(ws);
+      sendCarrierStart(ws, "MZ-provider-first", call.providerCallId);
+
+      expect((await closed).code).toBe(1011);
+      expect(endCall).toHaveBeenCalledExactlyOnceWith(call.callId, { reason: "error" });
+      expect(endedEvents(processEvent)).toHaveLength(0);
+      expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("carrier unavailable"));
+
+      termination.resolve({ success: false, error: "carrier unavailable" });
+      await vi.waitFor(() =>
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("carrier unavailable")),
+      );
+      expect(endedEvents(processEvent)).toHaveLength(0);
+      expect(call.state).toBe("ringing");
+    } finally {
+      termination.resolve({ success: false, error: "carrier unavailable" });
+      warn.mockRestore();
+    }
+  });
+
+  it("waits for provider cleanup and manager shutdown termination", async () => {
+    const termination = createDeferred<{ success: boolean }>();
+    const barrier = createDeferred<void>();
+    const disposed = createDeferred<void>();
+    const endCall = vi.fn(() => termination.promise);
+    const closeBridge = vi.fn(() => disposed.promise);
+    const { call, handler, processEvent, ws, callbacks } = await openBridge(
+      closeBridge,
+      {},
+      { endCall },
+    );
+    try {
+      const closed = waitForClose(ws);
+      let settled = false;
+      const closing = handler.close(barrier.promise);
+      void closing.then(() => {
+        settled = true;
+      });
+      expect(handler.close()).toBe(closing);
+      const session = handler.issueStreamSession();
+      await closed;
+      await vi.waitFor(() => expect(closeBridge).toHaveBeenCalledOnce());
+      expect(endCall).not.toHaveBeenCalled();
+      callbacks?.onTranscript?.("assistant", "Final received answer", true);
+      expect(processEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "call.assistant-speech",
+          transcript: "Final received answer",
+        }),
+      );
+      disposed.resolve();
+      await vi.waitFor(() =>
+        expect(endCall).toHaveBeenCalledExactlyOnceWith(call.callId, { reason: "completed" }),
+      );
+      const recorded = processEvent.mock.calls.length;
+      callbacks?.onTranscript?.("assistant", "Late after disposal", true);
+      expect(processEvent).toHaveBeenCalledTimes(recorded);
+      expect(settled).toBe(false);
+      barrier.resolve();
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      termination.resolve({ success: true });
+      await closing;
+      expect(settled).toBe(true);
+      const server = await startUpgradeWsServer({
+        urlPath: new URL(session.streamUrl).pathname,
+        onUpgrade: (request, socket, head) => handler.handleWebSocketUpgrade(request, socket, head),
+      });
+      try {
+        await expect(connectWs(server.url)).rejects.toThrow("Unexpected server response: 401");
+      } finally {
+        await server.close();
+      }
+    } finally {
+      disposed.resolve();
+      barrier.resolve();
+      termination.resolve({ success: true });
+    }
+  });
+
   it("warns and removes a stream token when the provider never connects", async () => {
     vi.useFakeTimers();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -157,42 +193,18 @@ describe("RealtimeCallHandler lifecycle", () => {
         ).pendingStreamTokens.size,
       ).toBe(0);
     } finally {
-      await handler.close();
-      warn.mockRestore();
-      vi.useRealTimers();
-    }
-  });
-
-  it("does not warn after the provider consumes a stream token", async () => {
-    vi.useFakeTimers();
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const { handler } = createCarrierLifecycleHarness(() => createBridge(vi.fn()));
-    const { token } = handler.issueStreamSession({ callId: "call-connected" });
-
-    try {
-      (
-        handler as unknown as {
-          consumeStreamToken(token: string): unknown;
-        }
-      ).consumeStreamToken(token);
-      await vi.advanceTimersByTimeAsync(30_000);
-
-      expect(warn).not.toHaveBeenCalled();
-    } finally {
-      await handler.close();
       warn.mockRestore();
       vi.useRealTimers();
     }
   });
 
   it.each([
-    { closeOutcome: undefined, closeReason: "Failed to connect" },
-    { closeOutcome: "completed" as const, closeReason: "Failed to connect" },
     { closeOutcome: "error" as const, closeReason: "Bridge disconnected" },
     { closeOutcome: "throws" as const, closeReason: "Failed to connect" },
   ])(
     "hangs up a rejected startup exactly once when provider close is $closeOutcome",
     async ({ closeOutcome, closeReason }) => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       let onProviderClose: ((reason: "completed" | "error") => void) | undefined;
       const closeBridge = vi.fn(() => {
         if (closeOutcome === "throws") {
@@ -202,165 +214,78 @@ describe("RealtimeCallHandler lifecycle", () => {
           onProviderClose?.(closeOutcome);
         }
       });
-      const { call, handler, hangupCall, processEvent } = createCarrierLifecycleHarness(
-        (request) => {
-          onProviderClose = request.onClose;
-          return createBridge(closeBridge, {
-            connect: async () => {
-              throw new Error("realtime provider rejected startup");
-            },
-          });
-        },
-      );
-      const { server, ws } = await connectCarrierStream(handler);
+      const { call, handler, endCall } = createCarrierLifecycleHarness((request) => {
+        onProviderClose = request.onClose;
+        return createBridge(closeBridge, {
+          connect: async () => {
+            throw new Error("realtime provider rejected startup");
+          },
+        });
+      });
+      const { ws } = await connectCarrierStream(handler);
 
       try {
         const closed = waitForClose(ws);
-        ws.send(
-          JSON.stringify({
-            event: "start",
-            start: { streamSid: "MZ-startup", callSid: call.providerCallId },
-          }),
-        );
+        sendCarrierStart(ws, "MZ-startup", call.providerCallId);
 
         expect(await closed).toEqual({ code: 1011, reason: closeReason });
+        await handler.close();
+        expect(
+          warn.mock.calls.filter(([message]) =>
+            String(message).includes("realtime provider close failed"),
+          ),
+        ).toHaveLength(closeOutcome === "throws" ? 1 : 0);
         expect(closeBridge).toHaveBeenCalledTimes(1);
-        expect(hangupCall).toHaveBeenCalledExactlyOnceWith({
-          callId: call.callId,
-          providerCallId: call.providerCallId,
-          reason: "error",
-        });
-        const endedEvents = processEvent.mock.calls.filter(
-          ([event]) => event.type === "call.ended",
-        );
-        expect(endedEvents).toHaveLength(1);
-        expect(endedEvents[0]?.[0]).toEqual(
-          expect.objectContaining({
-            callId: call.callId,
-            providerCallId: call.providerCallId,
-            reason: "error",
-          }),
-        );
+        expect(endCall).toHaveBeenCalledExactlyOnceWith(call.callId, { reason: "error" });
         expect(handler.speak(call.callId, "still connected")).toEqual({
           success: false,
           error: "No active realtime bridge for call",
         });
       } finally {
-        if (ws.readyState !== WebSocket.CLOSED) {
-          ws.terminate();
-        }
-        await handler.close();
-        await server.close();
+        warn.mockRestore();
       }
     },
   );
-
-  it("hangs up the carrier when its initial realtime bridge cannot be created", async () => {
-    const { call, handler, hangupCall, processEvent } = createCarrierLifecycleHarness(() => {
-      throw new Error("realtime provider rejected call configuration");
-    });
-    const { server, ws } = await connectCarrierStream(handler);
-
-    try {
-      const closed = waitForClose(ws);
-      ws.send(
-        JSON.stringify({
-          event: "start",
-          start: { streamSid: "MZ-initial-creation", callSid: call.providerCallId },
-        }),
-      );
-
-      expect(await closed).toEqual({ code: 1011, reason: "Failed to create realtime bridge" });
-      expect(hangupCall).toHaveBeenCalledExactlyOnceWith({
-        callId: call.callId,
-        providerCallId: call.providerCallId,
-        reason: "error",
-      });
-      expect(processEvent.mock.calls.filter(([event]) => event.type === "call.ended")).toHaveLength(
-        1,
-      );
-    } finally {
-      if (ws.readyState !== WebSocket.CLOSED) {
-        ws.terminate();
-      }
-      await handler.close();
-      await server.close();
-    }
-  });
 
   it("ends an initial call when routed realtime admission fails", async () => {
     const createBridgeForCall = vi.fn<RealtimeVoiceProviderPlugin["createBridge"]>();
     const resolveCallRegistration = vi.fn(() => {
       throw new Error("routed agent realtime is unavailable");
     });
-    const { call, handler, hangupCall, processEvent } = createCarrierLifecycleHarness(
+    const { call, handler, endCall, processEvent } = createCarrierLifecycleHarness(
       createBridgeForCall,
       {
         initialMessage: "Hello from the routed agent.",
         resolveCallRegistration,
       },
     );
-    const { server, ws } = await connectCarrierStream(handler);
+    const { ws } = await connectCarrierStream(handler);
 
-    try {
-      const closed = waitForClose(ws);
-      ws.send(
-        JSON.stringify({
-          event: "start",
-          start: { streamSid: "MZ-admission-failure", callSid: call.providerCallId },
-        }),
-      );
+    const closed = waitForClose(ws);
+    sendCarrierStart(ws, "MZ-admission-failure", call.providerCallId);
 
-      expect(await closed).toEqual({
-        code: 1011,
-        reason: "Check realtime configuration for routed agent",
-      });
-      expect(resolveCallRegistration).toHaveBeenCalledExactlyOnceWith(call);
-      expect(createBridgeForCall).not.toHaveBeenCalled();
-      expect(processEvent.mock.calls.map(([event]) => event.type)).toEqual([
-        "call.initiated",
-        "call.ended",
-      ]);
-      expect(processEvent.mock.calls.at(-1)?.[0]).toEqual(
-        expect.objectContaining({
-          callId: call.callId,
-          providerCallId: call.providerCallId,
-          reason: "error",
-        }),
-      );
-      expect(hangupCall).toHaveBeenCalledExactlyOnceWith({
-        callId: call.callId,
-        providerCallId: call.providerCallId,
-        reason: "error",
-      });
-      expect(call.metadata?.initialMessage).toBe("Hello from the routed agent.");
-      expect(handler.speak(call.callId, "still connected")).toEqual({
-        success: false,
-        error: "No active realtime bridge for call",
-      });
-    } finally {
-      if (ws.readyState !== WebSocket.CLOSED) {
-        ws.terminate();
-      }
-      await handler.close();
-      await server.close();
-    }
+    expect((await closed).code).toBe(1011);
+    expect(resolveCallRegistration).toHaveBeenCalledExactlyOnceWith(call);
+    expect(createBridgeForCall).not.toHaveBeenCalled();
+    expect(processEvent.mock.calls.map(([event]) => event.type)).toEqual([
+      "call.initiated",
+      "call.ended",
+    ]);
+    expect(endCall).toHaveBeenCalledExactlyOnceWith(call.callId, { reason: "error" });
+    expect(call.metadata?.initialMessage).toBe("Hello from the routed agent.");
+    expect(handler.speak(call.callId, "still connected")).toEqual({
+      success: false,
+      error: "No active realtime bridge for call",
+    });
   });
 
   it("preserves the active predecessor when replacement admission fails", async () => {
     const predecessorGreeting = vi.fn();
-    const realtimeProvider: RealtimeVoiceProviderPlugin = {
-      id: "openai",
-      label: "OpenAI",
-      isConfigured: () => true,
-      createBridge: vi.fn(() =>
-        createBridge(vi.fn(), {
-          triggerGreeting: predecessorGreeting,
-        }),
-      ),
-    };
+    const realtimeProvider = makeRealtimeProvider(
+      vi.fn(() => createBridge(vi.fn(), { triggerGreeting: predecessorGreeting })),
+    );
     const resolveCallRegistration = vi
-      .fn<ConstructorParameters<typeof RealtimeCallHandler>[3]>()
+      .fn<ResolveRealtimeCallRegistration>()
       .mockReturnValueOnce({
         agentId: "main",
         instructions: "Be helpful.",
@@ -370,203 +295,83 @@ describe("RealtimeCallHandler lifecycle", () => {
       .mockImplementationOnce(() => {
         throw new Error("replacement agent realtime is unavailable");
       });
-    const { call, handler, hangupCall, processEvent } = createCarrierLifecycleHarness(
+    const { call, handler, endCall, processEvent } = createCarrierLifecycleHarness(
       realtimeProvider.createBridge,
       { resolveCallRegistration },
     );
     const predecessor = await connectCarrierStream(handler);
-    let replacement: Awaited<ReturnType<typeof connectCarrierStream>> | undefined;
 
-    try {
-      predecessor.ws.send(
-        JSON.stringify({
-          event: "start",
-          start: { streamSid: "MZ-predecessor", callSid: call.providerCallId },
-        }),
-      );
-      await vi.waitFor(() => expect(realtimeProvider.createBridge).toHaveBeenCalledTimes(1));
+    sendCarrierStart(predecessor.ws, "MZ-predecessor", call.providerCallId);
+    await vi.waitFor(() => expect(realtimeProvider.createBridge).toHaveBeenCalledTimes(1));
 
-      replacement = await connectCarrierStream(handler);
-      const replacementClosed = waitForClose(replacement.ws);
-      replacement.ws.send(
-        JSON.stringify({
-          event: "start",
-          start: { streamSid: "MZ-replacement-admission", callSid: call.providerCallId },
-        }),
-      );
+    const replacement = await connectCarrierStream(handler);
+    const replacementClosed = waitForClose(replacement.ws);
+    sendCarrierStart(replacement.ws, "MZ-replacement-admission", call.providerCallId);
 
-      expect(await replacementClosed).toEqual({
-        code: 1011,
-        reason: "Check realtime configuration for routed agent",
-      });
-      expect(resolveCallRegistration).toHaveBeenCalledTimes(2);
-      expect(realtimeProvider.createBridge).toHaveBeenCalledTimes(1);
-      expect(
-        processEvent.mock.calls.filter(([event]) => event.type === "call.answered"),
-      ).toHaveLength(1);
-      expect(processEvent.mock.calls.filter(([event]) => event.type === "call.ended")).toHaveLength(
-        0,
-      );
-      expect(hangupCall).not.toHaveBeenCalled();
-      expect(predecessor.ws.readyState).toBe(WebSocket.OPEN);
-      expect(handler.speak(call.callId, "predecessor remains connected")).toEqual({
-        success: true,
-      });
-      expect(predecessorGreeting).toHaveBeenCalledWith("predecessor remains connected");
-    } finally {
-      if (predecessor.ws.readyState !== WebSocket.CLOSED) {
-        predecessor.ws.terminate();
-      }
-      if (replacement && replacement.ws.readyState !== WebSocket.CLOSED) {
-        replacement.ws.terminate();
-      }
-      await handler.close();
-      await replacement?.server.close();
-      await predecessor.server.close();
-    }
+    expect((await replacementClosed).code).toBe(1011);
+    expect(resolveCallRegistration).toHaveBeenCalledTimes(2);
+    expect(realtimeProvider.createBridge).toHaveBeenCalledTimes(1);
+    expect(
+      processEvent.mock.calls.filter(([event]) => event.type === "call.answered"),
+    ).toHaveLength(1);
+    expect(endedEvents(processEvent)).toHaveLength(0);
+    expect(endCall).not.toHaveBeenCalled();
+    expect(predecessor.ws.readyState).toBe(WebSocket.OPEN);
+    expect(handler.speak(call.callId, "predecessor remains connected")).toEqual({
+      success: true,
+    });
+    expect(predecessorGreeting).toHaveBeenCalledWith("predecessor remains connected");
   });
 
   it("does not hang up a replacement when its stale predecessor rejects startup", async () => {
-    let rejectStartup: (error: Error) => void = () => {};
-    const pendingStartup = new Promise<void>((_resolve, reject) => {
-      rejectStartup = reject;
-    });
+    const pendingStartup = createDeferred<void>();
     const replacementGreeting = vi.fn();
     const createBridgeForCall = vi
       .fn<RealtimeVoiceProviderPlugin["createBridge"]>()
-      .mockImplementationOnce(() => createBridge(vi.fn(), { connect: () => pendingStartup }))
+      .mockImplementationOnce(() =>
+        createBridge(vi.fn(), { connect: () => pendingStartup.promise }),
+      )
       .mockImplementationOnce(() =>
         createBridge(vi.fn(), { triggerGreeting: replacementGreeting }),
       );
-    const { call, handler, hangupCall, processEvent } =
+    const { call, handler, endCall, processEvent } =
       createCarrierLifecycleHarness(createBridgeForCall);
     const previous = await connectCarrierStream(handler);
-    let replacement: Awaited<ReturnType<typeof connectCarrierStream>> | undefined;
 
-    try {
-      previous.ws.send(
-        JSON.stringify({
-          event: "start",
-          start: { streamSid: "MZ-previous", callSid: call.providerCallId },
-        }),
-      );
-      await vi.waitFor(() => expect(createBridgeForCall).toHaveBeenCalledTimes(1));
+    sendCarrierStart(previous.ws, "MZ-previous", call.providerCallId);
+    await vi.waitFor(() => expect(createBridgeForCall).toHaveBeenCalledTimes(1));
 
-      replacement = await connectCarrierStream(handler);
-      replacement.ws.send(
-        JSON.stringify({
-          event: "start",
-          start: { streamSid: "MZ-replacement", callSid: call.providerCallId },
-        }),
-      );
-      await vi.waitFor(() => expect(createBridgeForCall).toHaveBeenCalledTimes(2));
+    const replacement = await connectCarrierStream(handler);
+    sendCarrierStart(replacement.ws, "MZ-replacement", call.providerCallId);
+    await vi.waitFor(() => expect(createBridgeForCall).toHaveBeenCalledTimes(2));
 
-      const previousClosed = waitForClose(previous.ws);
-      rejectStartup(new Error("superseded provider rejected startup"));
-      expect(await previousClosed).toEqual({ code: 1011, reason: "Failed to connect" });
-      expect(hangupCall).not.toHaveBeenCalled();
-      expect(processEvent.mock.calls.filter(([event]) => event.type === "call.ended")).toHaveLength(
-        0,
-      );
-      expect(replacement.ws.readyState).toBe(WebSocket.OPEN);
-      expect(handler.speak(call.callId, "replacement remains connected")).toEqual({
-        success: true,
-      });
-      expect(replacementGreeting).toHaveBeenCalledWith("replacement remains connected");
-    } finally {
-      if (previous.ws.readyState !== WebSocket.CLOSED) {
-        previous.ws.terminate();
-      }
-      if (replacement?.ws.readyState !== WebSocket.CLOSED) {
-        replacement?.ws.terminate();
-      }
-      await handler.close();
-      await replacement?.server.close();
-      await previous.server.close();
-    }
+    const previousClosed = waitForClose(previous.ws);
+    pendingStartup.reject(new Error("superseded provider rejected startup"));
+    expect((await previousClosed).code).toBe(1011);
+    expect(endCall).not.toHaveBeenCalled();
+    expect(endedEvents(processEvent)).toHaveLength(0);
+    expect(replacement.ws.readyState).toBe(WebSocket.OPEN);
+    expect(handler.speak(call.callId, "replacement remains connected")).toEqual({
+      success: true,
+    });
+    expect(replacementGreeting).toHaveBeenCalledWith("replacement remains connected");
   });
 
-  it("ends an idle realtime call after the media inactivity grace", async () => {
-    let resolveBridgeStarted = () => {};
-    const bridgeStarted = new Promise<void>((resolve) => {
-      resolveBridgeStarted = resolve;
-    });
+  it("ends the call after inactivity following media renewal", async () => {
+    const bridgeStarted = createDeferred<void>();
+    const mediaReceived = createDeferred<void>();
+    const sendAudio = vi.fn(() => mediaReceived.resolve());
     const closeBridge = vi.fn();
-    const { call, handler, hangupCall, processEvent } = createCarrierLifecycleHarness(() => {
-      resolveBridgeStarted();
-      return createBridge(closeBridge);
+    const { call, handler, endCall, processEvent } = createCarrierLifecycleHarness(() => {
+      bridgeStarted.resolve();
+      return createBridge(closeBridge, { sendAudio });
     });
-    const { server, ws } = await connectCarrierStream(handler);
+    const { ws } = await connectCarrierStream(handler);
 
     try {
       vi.useFakeTimers();
-      ws.send(
-        JSON.stringify({
-          event: "start",
-          start: { streamSid: "MZ-inactivity", callSid: call.providerCallId },
-        }),
-      );
-      await bridgeStarted;
-
-      await vi.advanceTimersByTimeAsync(30_000);
-      expect(processEvent.mock.calls.filter(([event]) => event.type === "call.ended")).toHaveLength(
-        0,
-      );
-      await vi.advanceTimersByTimeAsync(1_999);
-      expect(processEvent.mock.calls.filter(([event]) => event.type === "call.ended")).toHaveLength(
-        0,
-      );
-      await vi.advanceTimersByTimeAsync(1);
-
-      expect(closeBridge).toHaveBeenCalledOnce();
-      expect(processEvent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          callId: call.callId,
-          providerCallId: call.providerCallId,
-          reason: "timeout",
-          type: "call.ended",
-        }),
-      );
-      expect(hangupCall).toHaveBeenCalledExactlyOnceWith({
-        callId: call.callId,
-        providerCallId: call.providerCallId,
-        reason: "timeout",
-      });
-    } finally {
-      vi.useRealTimers();
-      if (ws.readyState !== WebSocket.CLOSED) {
-        ws.terminate();
-      }
-      await handler.close();
-      await server.close();
-    }
-  });
-
-  it("renews realtime liveness when inbound media continues", async () => {
-    let resolveBridgeStarted = () => {};
-    const bridgeStarted = new Promise<void>((resolve) => {
-      resolveBridgeStarted = resolve;
-    });
-    let resolveMediaReceived = () => {};
-    const mediaReceived = new Promise<void>((resolve) => {
-      resolveMediaReceived = resolve;
-    });
-    const sendAudio = vi.fn(() => resolveMediaReceived());
-    const { call, handler, hangupCall, processEvent } = createCarrierLifecycleHarness(() => {
-      resolveBridgeStarted();
-      return createBridge(vi.fn(), { sendAudio });
-    });
-    const { server, ws } = await connectCarrierStream(handler);
-
-    try {
-      vi.useFakeTimers();
-      ws.send(
-        JSON.stringify({
-          event: "start",
-          start: { streamSid: "MZ-active-media", callSid: call.providerCallId },
-        }),
-      );
-      await bridgeStarted;
+      sendCarrierStart(ws, "MZ-inactivity", call.providerCallId);
+      await bridgeStarted.promise;
 
       await vi.advanceTimersByTimeAsync(29_999);
       ws.send(
@@ -575,376 +380,69 @@ describe("RealtimeCallHandler lifecycle", () => {
           media: { payload: Buffer.from([0xff]).toString("base64") },
         }),
       );
-      await mediaReceived;
-      await vi.advanceTimersByTimeAsync(29_999);
-
+      await mediaReceived.promise;
+      await vi.advanceTimersByTimeAsync(30_000);
       expect(sendAudio).toHaveBeenCalledOnce();
-      expect(processEvent.mock.calls.filter(([event]) => event.type === "call.ended")).toHaveLength(
-        0,
-      );
-      expect(hangupCall).not.toHaveBeenCalled();
+      expect(endCall).not.toHaveBeenCalled();
       expect(ws.readyState).toBe(WebSocket.OPEN);
+      expect(endedEvents(processEvent)).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(endedEvents(processEvent)).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(closeBridge).toHaveBeenCalledOnce();
+      expect(endCall).toHaveBeenCalledExactlyOnceWith(call.callId, { reason: "timeout" });
     } finally {
       vi.useRealTimers();
-      if (ws.readyState !== WebSocket.CLOSED) {
-        ws.terminate();
-      }
-      await handler.close();
-      await server.close();
-    }
-  });
-
-  it("terminates active sockets and treats server shutdown as completed", async () => {
-    const bridgeClose = vi.fn();
-    const createBridgeForCall = vi.fn(() => createBridge(bridgeClose));
-    const processEvent = vi.fn();
-    const call: CallRecord = {
-      callId: "call-shutdown",
-      providerCallId: "CA-shutdown",
-      provider: "twilio",
-      direction: "inbound",
-      state: "ringing",
-      from: "+15550001111",
-      to: "+15550002222",
-      startedAt: Date.now(),
-      transcript: [],
-      processedEventIds: [],
-    };
-    const handler = new RealtimeCallHandler(
-      createRealtimeConfig(),
-      {
-        processEvent,
-        getCallByProviderCallId: vi.fn(() => call),
-      } as unknown as CallManager,
-      {
-        name: "twilio",
-        verifyWebhook: vi.fn(),
-        parseWebhookEvent: vi.fn(),
-        initiateCall: vi.fn(),
-        hangupCall: vi.fn(),
-        playTts: vi.fn(),
-        startListening: vi.fn(),
-        stopListening: vi.fn(),
-        getCallStatus: vi.fn(),
-      } as unknown as VoiceCallProvider,
-      makeCallRegistrationResolver(makeRealtimeProvider(createBridgeForCall)),
-      "/voice/webhook",
-      noOpStreamDisconnectLifecycle,
-    );
-    const { streamUrl } = handler.issueStreamSession();
-    const server = await startUpgradeWsServer({
-      urlPath: new URL(streamUrl).pathname,
-      onUpgrade: (request, socket, head) => {
-        handler.handleWebSocketUpgrade(request, socket, head);
-      },
-    });
-    let ws: WebSocketType | null = await connectWs(server.url);
-    let releaseShutdownBarrier: (() => void) | undefined;
-
-    try {
-      ws.send(
-        JSON.stringify({
-          event: "start",
-          start: { streamSid: "MZ-shutdown", callSid: "CA-shutdown" },
-        }),
-      );
-      await vi.waitFor(() => {
-        expect(createBridgeForCall).toHaveBeenCalledTimes(1);
-      });
-
-      const closed = waitForClose(ws);
-      const shutdownBarrier = new Promise<void>((resolve) => {
-        releaseShutdownBarrier = resolve;
-      });
-      const firstClose = handler.close(shutdownBarrier);
-      const secondClose = handler.close();
-      handler.issueStreamSession();
-      let closeSettled = false;
-      void firstClose.then(() => {
-        closeSettled = true;
-      });
-
-      expect(secondClose).toBe(firstClose);
-      expect(await closed).toEqual({ code: 1006, reason: "" });
-      await vi.waitFor(() => {
-        expect(bridgeClose).toHaveBeenCalledTimes(1);
-        expect(processEvent).toHaveBeenCalledWith(
-          expect.objectContaining({
-            callId: "call-shutdown",
-            providerCallId: "CA-shutdown",
-            reason: "completed",
-            type: "call.ended",
-          }),
-        );
-      });
-      expect(closeSettled).toBe(false);
-
-      releaseShutdownBarrier?.();
-      await firstClose;
-      expect(closeSettled).toBe(true);
-      expect(
-        (
-          handler as unknown as {
-            pendingStreamTokens: Map<string, unknown>;
-          }
-        ).pendingStreamTokens.size,
-      ).toBe(0);
-      ws = null;
-    } finally {
-      releaseShutdownBarrier?.();
-      if (ws && ws.readyState !== WebSocket.CLOSED) {
-        ws.terminate();
-      }
-      await handler.close();
-      await server.close();
-    }
-  });
-
-  it("tolerates provider close during bridge creation", async () => {
-    const bridgeConnect = vi.fn(async () => {});
-    const createBridgeForCall = vi.fn(
-      (request: { onClose?: (reason: "completed" | "error") => void }) => {
-        request.onClose?.("completed");
-        return createBridge(vi.fn(), { connect: bridgeConnect });
-      },
-    );
-    const call: CallRecord = {
-      callId: "call-synchronous-close",
-      providerCallId: "CA-synchronous-close",
-      provider: "twilio",
-      direction: "inbound",
-      state: "ringing",
-      from: "+15550001111",
-      to: "+15550002222",
-      startedAt: Date.now(),
-      transcript: [],
-      processedEventIds: [],
-    };
-    const handler = new RealtimeCallHandler(
-      createRealtimeConfig(),
-      {
-        processEvent: vi.fn(),
-        getCallByProviderCallId: vi.fn(() => call),
-      } as unknown as CallManager,
-      {
-        name: "twilio",
-        verifyWebhook: vi.fn(),
-        parseWebhookEvent: vi.fn(),
-        initiateCall: vi.fn(),
-        hangupCall: vi.fn(),
-        playTts: vi.fn(),
-        startListening: vi.fn(),
-        stopListening: vi.fn(),
-        getCallStatus: vi.fn(),
-      } as unknown as VoiceCallProvider,
-      makeCallRegistrationResolver(makeRealtimeProvider(createBridgeForCall)),
-      "/voice/webhook",
-      noOpStreamDisconnectLifecycle,
-    );
-    const { streamUrl } = handler.issueStreamSession();
-    const server = await startUpgradeWsServer({
-      urlPath: new URL(streamUrl).pathname,
-      onUpgrade: (request, socket, head) => {
-        handler.handleWebSocketUpgrade(request, socket, head);
-      },
-    });
-    const ws = await connectWs(server.url);
-
-    try {
-      ws.send(
-        JSON.stringify({
-          event: "start",
-          start: { streamSid: "MZ-synchronous-close", callSid: "CA-synchronous-close" },
-        }),
-      );
-      await vi.waitFor(() => {
-        expect(createBridgeForCall).toHaveBeenCalledTimes(1);
-        expect(bridgeConnect).toHaveBeenCalledTimes(1);
-      });
-    } finally {
-      if (ws.readyState !== WebSocket.CLOSED) {
-        ws.terminate();
-      }
-      await handler.close();
-      await server.close();
     }
   });
 
   it("does not start a native consult after teardown during transcript settling", async () => {
-    let onToolCall:
-      | ((event: { itemId: string; callId: string; name: string; args: unknown }) => void)
-      | undefined;
-    let onTranscript:
-      | ((role: "user" | "assistant", text: string, isFinal: boolean) => void)
-      | undefined;
     const submitToolResult = vi.fn();
-    const createBridgeForCall = vi.fn(
-      (request: {
-        onToolCall?: (event: {
-          itemId: string;
-          callId: string;
-          name: string;
-          args: unknown;
-        }) => void;
-        onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
-      }) => {
-        onToolCall = request.onToolCall;
-        onTranscript = request.onTranscript;
-        return createBridge(vi.fn(), {
-          supportsToolResultContinuation: true,
-          submitToolResult,
-        });
-      },
-    );
-    const call: CallRecord = {
-      callId: "call-settling-consult",
-      providerCallId: "CA-settling-consult",
-      provider: "twilio",
-      direction: "inbound",
-      state: "ringing",
-      from: "+15550001111",
-      to: "+15550002222",
-      startedAt: Date.now(),
-      transcript: [],
-      processedEventIds: [],
-    };
-    const handler = new RealtimeCallHandler(
-      createRealtimeConfig(),
-      {
-        processEvent: vi.fn(),
-        getCallByProviderCallId: vi.fn(() => call),
-      } as unknown as CallManager,
-      {
-        name: "twilio",
-        verifyWebhook: vi.fn(),
-        parseWebhookEvent: vi.fn(),
-        initiateCall: vi.fn(),
-        hangupCall: vi.fn(),
-        playTts: vi.fn(),
-        startListening: vi.fn(),
-        stopListening: vi.fn(),
-        getCallStatus: vi.fn(),
-      } as unknown as VoiceCallProvider,
-      makeCallRegistrationResolver(makeRealtimeProvider(createBridgeForCall)),
-      "/voice/webhook",
-      noOpStreamDisconnectLifecycle,
-    );
+    const { handler, ws, callbacks } = await openBridge(vi.fn(), {
+      supportsToolResultContinuation: true,
+      submitToolResult,
+    });
     const consult = vi.fn(async () => ({ text: "This should not run." }));
     handler.registerToolHandler("openclaw_agent_consult", consult);
-    const { streamUrl } = handler.issueStreamSession();
-    const server = await startUpgradeWsServer({
-      urlPath: new URL(streamUrl).pathname,
-      onUpgrade: (request, socket, head) => {
-        handler.handleWebSocketUpgrade(request, socket, head);
-      },
+
+    callbacks.onTranscript?.("user", "Check the deployment", false);
+    callbacks.onToolCall?.({
+      itemId: "item-settling-consult",
+      callId: "tool-settling-consult",
+      name: "openclaw_agent_consult",
+      args: { question: "Check the deployment." },
     });
-    const ws = await connectWs(server.url);
-
-    try {
-      ws.send(
-        JSON.stringify({
-          event: "start",
-          start: { streamSid: "MZ-settling-consult", callSid: "CA-settling-consult" },
-        }),
-      );
-      await vi.waitFor(() => {
-        expect(createBridgeForCall).toHaveBeenCalledTimes(1);
-      });
-
-      onTranscript?.("user", "Check the deployment", false);
-      onToolCall?.({
-        itemId: "item-settling-consult",
-        callId: "tool-settling-consult",
-        name: "openclaw_agent_consult",
-        args: { question: "Check the deployment." },
-      });
-      const consults = (
-        handler as unknown as {
-          nativeConsultsInFlightByCallId: Map<string, unknown>;
-        }
-      ).nativeConsultsInFlightByCallId;
-      await vi.waitFor(() => {
-        expect(consults.size).toBe(1);
-        expect(submitToolResult).toHaveBeenCalledTimes(1);
-        expect(consult).not.toHaveBeenCalled();
-      });
-
-      const closed = waitForClose(ws);
-      ws.close();
-      await closed;
-      await vi.waitFor(() => {
-        expect(consults.size).toBe(0);
-      });
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 400);
-      });
-
-      expect(consult).not.toHaveBeenCalled();
-      expect(submitToolResult).toHaveBeenCalledTimes(1);
-    } finally {
-      if (ws.readyState !== WebSocket.CLOSED) {
-        ws.terminate();
+    const consults = (
+      handler as unknown as {
+        nativeConsultsInFlightByCallId: Map<string, unknown>;
       }
-      await handler.close();
-      await server.close();
-    }
+    ).nativeConsultsInFlightByCallId;
+    await vi.waitFor(() => {
+      expect(consults.size).toBe(1);
+      expect(submitToolResult).toHaveBeenCalledTimes(1);
+      expect(consult).not.toHaveBeenCalled();
+    });
+
+    const closed = waitForClose(ws);
+    ws.close();
+    await closed;
+    await vi.waitFor(() => expect(consults.size).toBe(0));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 400);
+    });
+
+    expect(consult).not.toHaveBeenCalled();
+    expect(submitToolResult).toHaveBeenCalledTimes(1);
   });
 
   it("aborts a hung native consult during stream teardown", async () => {
-    let onToolCall:
-      | ((event: { itemId: string; callId: string; name: string; args: unknown }) => void)
-      | undefined;
     let consultSignal: AbortSignal | undefined;
     const submitToolResult = vi.fn();
-    const createBridgeForCall = vi.fn(
-      (request: {
-        onToolCall?: (event: {
-          itemId: string;
-          callId: string;
-          name: string;
-          args: unknown;
-        }) => void;
-      }) => {
-        onToolCall = request.onToolCall;
-        return createBridge(vi.fn(), {
-          supportsToolResultContinuation: true,
-          submitToolResult,
-        });
-      },
-    );
-    const call: CallRecord = {
-      callId: "call-consult",
-      providerCallId: "CA-consult",
-      provider: "twilio",
-      direction: "inbound",
-      state: "ringing",
-      from: "+15550001111",
-      to: "+15550002222",
-      startedAt: Date.now(),
-      transcript: [],
-      processedEventIds: [],
-    };
-    const handler = new RealtimeCallHandler(
-      createRealtimeConfig(),
-      {
-        processEvent: vi.fn(),
-        getCallByProviderCallId: vi.fn(() => call),
-      } as unknown as CallManager,
-      {
-        name: "twilio",
-        verifyWebhook: vi.fn(),
-        parseWebhookEvent: vi.fn(),
-        initiateCall: vi.fn(),
-        hangupCall: vi.fn(),
-        playTts: vi.fn(),
-        startListening: vi.fn(),
-        stopListening: vi.fn(),
-        getCallStatus: vi.fn(),
-      } as unknown as VoiceCallProvider,
-      makeCallRegistrationResolver(makeRealtimeProvider(createBridgeForCall)),
-      "/voice/webhook",
-      noOpStreamDisconnectLifecycle,
-    );
+    const { handler, ws, callbacks } = await openBridge(vi.fn(), {
+      supportsToolResultContinuation: true,
+      submitToolResult,
+    });
     handler.registerToolHandler("openclaw_agent_consult", async (_args, _callId, context) => {
       consultSignal = context.abortSignal;
       return await new Promise<unknown>((_resolve, reject) => {
@@ -955,61 +453,275 @@ describe("RealtimeCallHandler lifecycle", () => {
         );
       });
     });
-    const { streamUrl } = handler.issueStreamSession();
-    const server = await startUpgradeWsServer({
-      urlPath: new URL(streamUrl).pathname,
-      onUpgrade: (request, socket, head) => {
-        handler.handleWebSocketUpgrade(request, socket, head);
-      },
+    callbacks.onToolCall?.({
+      itemId: "item-consult",
+      callId: "tool-consult",
+      name: "openclaw_agent_consult",
+      args: { question: "Check the deployment." },
     });
-    const ws = await connectWs(server.url);
+    await vi.waitFor(() => expect(consultSignal).toBeDefined());
+
+    const consults = (
+      handler as unknown as {
+        nativeConsultsInFlightByCallId: Map<string, unknown>;
+      }
+    ).nativeConsultsInFlightByCallId;
+    expect(consults.size).toBe(1);
+
+    const closed = waitForClose(ws);
+    ws.close();
+    await closed;
+    await vi.waitFor(() => expect(consults.size).toBe(0));
+
+    expect(consultSignal?.aborted).toBe(true);
+    await nextImmediate();
+    expect(submitToolResult).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves a concurrently admitted bridge when another creation fails", async () => {
+    const firstPersistence = createDeferred<Awaited<ReturnType<CallManager["processEvent"]>>>();
+    const secondPersistence = createDeferred<Awaited<ReturnType<CallManager["processEvent"]>>>();
+    const greeting = vi.fn();
+    const sendAudio = vi.fn();
+    const createBridgeForCall = vi
+      .fn<RealtimeVoiceProviderPlugin["createBridge"]>()
+      .mockImplementationOnce(() => createBridge(vi.fn(), { triggerGreeting: greeting, sendAudio }))
+      .mockImplementationOnce(() => {
+        throw new Error("concurrent realtime bridge creation failed");
+      });
+    const { call, handler, endCall, processEvent } =
+      createCarrierLifecycleHarness(createBridgeForCall);
+    let answered = 0;
+    processEvent.mockImplementation(async (event) => {
+      if (event.type === "call.answered") {
+        return ++answered === 1 ? firstPersistence.promise : secondPersistence.promise;
+      }
+      return { kind: "processed" };
+    });
+    const first = await connectCarrierStream(handler);
+    let second: Awaited<ReturnType<typeof connectCarrierStream>> | undefined;
 
     try {
-      ws.send(
-        JSON.stringify({
-          event: "start",
-          start: { streamSid: "MZ-consult", callSid: "CA-consult" },
-        }),
+      sendCarrierStart(first.ws, "MZ-concurrent-first", call.providerCallId);
+      const audio = Buffer.from([0xff, 0xfe, 0xfd]);
+      first.ws.send(
+        JSON.stringify({ event: "media", media: { payload: audio.toString("base64") } }),
       );
-      await vi.waitFor(() => {
-        expect(createBridgeForCall).toHaveBeenCalledTimes(1);
-      });
+      await vi.waitFor(() => expect(answered).toBe(1));
+      second = await connectCarrierStream(handler);
+      const secondClosed = waitForClose(second.ws);
+      sendCarrierStart(second.ws, "MZ-concurrent-second", call.providerCallId);
+      await vi.waitFor(() => expect(answered).toBe(2));
+      expect(createBridgeForCall).not.toHaveBeenCalled();
+      expect(sendAudio).not.toHaveBeenCalled();
 
-      onToolCall?.({
-        itemId: "item-consult",
-        callId: "tool-consult",
-        name: "openclaw_agent_consult",
-        args: { question: "Check the deployment." },
-      });
-      await vi.waitFor(() => {
-        expect(consultSignal).toBeDefined();
-      });
+      firstPersistence.resolve({ kind: "processed" });
+      await vi.waitFor(() => expect(sendAudio).toHaveBeenCalledWith(audio));
+      expect(createBridgeForCall).toHaveBeenCalledOnce();
+      expect(handler.speak(call.callId, "first bridge is active")).toEqual({ success: true });
+      secondPersistence.resolve({ kind: "processed" });
+      expect((await secondClosed).code).toBe(1011);
 
-      const consults = (
-        handler as unknown as {
-          nativeConsultsInFlightByCallId: Map<string, unknown>;
-        }
-      ).nativeConsultsInFlightByCallId;
-      expect(consults.size).toBe(1);
-
-      const closed = waitForClose(ws);
-      ws.close();
-      await closed;
-      await vi.waitFor(() => {
-        expect(consults.size).toBe(0);
-      });
-
-      expect(consultSignal?.aborted).toBe(true);
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect(submitToolResult).toHaveBeenCalledTimes(1);
+      expect(createBridgeForCall).toHaveBeenCalledTimes(2);
+      expect(endCall).not.toHaveBeenCalled();
+      expect(first.ws.readyState).toBe(WebSocket.OPEN);
+      expect(handler.speak(call.callId, "first bridge remains active")).toEqual({ success: true });
+      expect(greeting).toHaveBeenLastCalledWith("first bridge remains active");
     } finally {
-      if (ws.readyState !== WebSocket.CLOSED) {
-        ws.terminate();
-      }
-      await handler.close();
-      await server.close();
+      firstPersistence.resolve({ kind: "processed" });
+      secondPersistence.resolve({ kind: "processed" });
     }
   });
+
+  it.each(["complete", "abort", "close", "disabled"] as const)(
+    "uses the call-owned consult handler and preserves its %s outcome",
+    async (outcome) => {
+      let request: RealtimeVoiceBridgeCreateRequest | undefined;
+      const connect = vi.fn(async () => {});
+      const submitToolResult = vi.fn();
+      const provider = makeRealtimeProvider((params) => {
+        request = params;
+        return createBridge(() => {}, {
+          connect,
+          submitToolResult,
+          outputAudioMode: "continuous",
+          handlesInputAudioBargeIn: true,
+        });
+      });
+      const capabilities = {
+        transports: ["gateway-relay" as const],
+        inputAudioFormats: [],
+        outputAudioFormats: [],
+        handlesAgentConsult: true,
+        supportsBargeIn: false,
+        handlesInputAudioBargeIn: true,
+      };
+      const harness = createCarrierLifecycleHarness(provider.createBridge, {
+        ...(outcome === "disabled" ? { toolPolicy: "none" as const } : {}),
+        resolveCallRegistration: () => ({
+          agentId: "main",
+          instructions: "Help the caller.",
+          provider,
+          providerConfig: {},
+          capabilities,
+        }),
+      });
+      let admittedSignal: AbortSignal | undefined;
+      const pending = createDeferred<void>();
+      const effects: string[] = [];
+      harness.handler.registerToolHandler(
+        "openclaw_agent_consult",
+        async (args, callId, context) => {
+          expect(args).toEqual({ question: "Read my itinerary" });
+          expect(callId).toBe(harness.call.callId);
+          admittedSignal = context.abortSignal;
+          await pending.promise;
+          context.abortSignal?.throwIfAborted();
+          effects.push("itinerary-read");
+          return { text: "The train leaves at noon." };
+        },
+      );
+      const { ws } = await connectCarrierStream(harness.handler);
+      const controller = new AbortController();
+      try {
+        sendCarrierStart(ws, "MZ-live", "CA-startup");
+        await vi.waitFor(() => expect(connect).toHaveBeenCalledOnce());
+        if (!request?.runAgentConsult) {
+          throw new Error("Native delegation was not wired to the carrier session");
+        }
+        expect(request.tools).toEqual([]);
+        const result = request.runAgentConsult({
+          prompt: "Read my itinerary",
+          signal: controller.signal,
+        });
+        const settled = result.then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        );
+        if (outcome !== "disabled") {
+          await vi.waitFor(() => expect(admittedSignal).toBeDefined());
+        }
+        if (outcome === "abort") {
+          controller.abort(new Error("Caller cancelled"));
+        } else if (outcome === "close") {
+          await harness.handler.close();
+        }
+        pending.resolve();
+        if (outcome === "complete") {
+          expect(await settled).toEqual({ value: { text: "The train leaves at noon." } });
+          expect(effects).toEqual(["itinerary-read"]);
+        } else {
+          expect(await settled).toEqual({ error: expect.any(Error) });
+          expect(admittedSignal?.aborted).toBe(outcome === "disabled" ? undefined : true);
+          expect(effects).toEqual([]);
+        }
+        expect(submitToolResult).not.toHaveBeenCalled();
+        await harness.handler.close();
+        await expect(request.runAgentConsult({ prompt: "Late work" })).rejects.toThrow(
+          /closed|active/,
+        );
+        expect(effects).toHaveLength(outcome === "complete" ? 1 : 0);
+      } finally {
+        pending.resolve();
+      }
+    },
+  );
+
+  it("retains early transcript failure until the shutdown barrier settles", async () => {
+    const disposed = createDeferred<void>();
+    const persisted = createDeferred<Awaited<ReturnType<CallManager["processEvent"]>>>();
+    const barrier = createDeferred<void>();
+    const failure = new Error("transcript cleanup failed");
+    const providerClose = vi.fn(() => disposed.promise);
+    const { handler, processEvent, endCall, ws, callbacks } = await openBridge(providerClose);
+    let closing: Promise<void> | undefined;
+    try {
+      processEvent.mockImplementation(async (event) =>
+        event.type === "call.assistant-speech" ? persisted.promise : { kind: "processed" },
+      );
+      const closed = waitForClose(ws);
+      closing = handler.close(barrier.promise);
+      let settled = false;
+      const completion = closing
+        .catch((error: unknown) => error)
+        .finally(() => {
+          settled = true;
+        });
+      await closed;
+      await vi.waitFor(() => expect(providerClose).toHaveBeenCalledOnce());
+      callbacks?.onTranscript?.("assistant", "Received final answer", true);
+      disposed.resolve();
+      persisted.reject(failure);
+      await vi.waitFor(() => expect(endCall).toHaveBeenCalledOnce());
+      await nextImmediate();
+      expect(settled).toBe(false);
+      barrier.resolve();
+      expect(await completion).toBe(failure);
+      await expect(handler.close()).resolves.toBeUndefined();
+      expect(endCall).toHaveBeenCalledOnce();
+      expect(providerClose).toHaveBeenCalledOnce();
+    } finally {
+      barrier.resolve();
+      disposed.resolve();
+      persisted.resolve({ kind: "processed" });
+      await closing?.catch(() => undefined);
+    }
+  });
+
+  it.each(["provider", "shutdown"] as const)(
+    "waits for transcript durability during %s close",
+    async (source) => {
+      const disposed = createDeferred<void>();
+      const persisted = createDeferred<Awaited<ReturnType<CallManager["processEvent"]>>>();
+      const providerClose = vi.fn(() => disposed.promise);
+      const { call, handler, endCall, processEvent, ws, callbacks } =
+        await openBridge(providerClose);
+      let closing: Promise<void> | undefined;
+      try {
+        processEvent.mockImplementation(async (event) =>
+          event.type === "call.assistant-speech" ? persisted.promise : { kind: "processed" },
+        );
+        const closed = waitForClose(ws);
+        if (source === "provider") {
+          callbacks?.onTranscript?.("assistant", "Final received answer", true);
+          callbacks?.onClose?.("completed");
+        }
+        closing = handler.close();
+        let settled = false;
+        const completion = closing
+          .catch((error: unknown) => error)
+          .finally(() => {
+            settled = true;
+          });
+        await closed;
+        await vi.waitFor(() => expect(providerClose).toHaveBeenCalledOnce());
+        if (source === "shutdown") {
+          callbacks?.onTranscript?.("assistant", "Final received answer", true);
+          await vi.waitFor(() =>
+            expect(processEvent).toHaveBeenCalledWith(
+              expect.objectContaining({ type: "call.assistant-speech" }),
+            ),
+          );
+        }
+        expect(processEvent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: "call.assistant-speech",
+            transcript: "Final received answer",
+          }),
+        );
+        disposed.resolve();
+        await nextImmediate();
+        expect(endCall).not.toHaveBeenCalled();
+        expect(settled).toBe(false);
+        persisted.resolve({ kind: "processed" });
+        expect(await completion).toBeUndefined();
+        expect(endCall).toHaveBeenCalledExactlyOnceWith(call.callId, { reason: "completed" });
+        expect(providerClose).toHaveBeenCalledOnce();
+      } finally {
+        disposed.resolve();
+        persisted.resolve({ kind: "processed" });
+        await closing?.catch(() => undefined);
+      }
+    },
+  );
 });

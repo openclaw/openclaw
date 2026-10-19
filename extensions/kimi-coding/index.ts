@@ -1,31 +1,41 @@
-// Kimi Coding plugin entrypoint registers its OpenClaw integration.
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import {
+  createLazyRuntimeModule,
+  createLazyRuntimeSurface,
+} from "openclaw/plugin-sdk/lazy-runtime";
+import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
-import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
-import type { SecretInput } from "openclaw/plugin-sdk/secret-input";
+import {
+  findNormalizedProviderKey,
+  normalizeProviderId,
+} from "openclaw/plugin-sdk/provider-model-metadata";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { applyKimiCodeConfig, KIMI_CODING_MODEL_REF } from "./onboard.js";
+import { applyKimiCodeConfig } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildKimiCodingProvider, normalizeKimiCodingModelId } from "./provider-catalog.js";
-import { isKimiK3ModelId, resolveThinkingProfile } from "./provider-policy-api.js";
-import { KIMI_REPLAY_POLICY } from "./replay-policy.js";
-import { wrapKimiProviderStream } from "./stream.js";
+import {
+  isKimiK3ModelId,
+  KIMI_K3_THINKING_EFFORTS,
+  resolveThinkingProfile,
+} from "./provider-policy-api.js";
 
 const PLUGIN_ID = "kimi";
 const PROVIDER_ID = "kimi";
+const PROVIDER_ALIASES = ["kimi-code", "kimi-coding"];
+const loadStreamRuntime = createLazyRuntimeModule(() => import("./stream.js"));
 
-function findExplicitProviderConfig(
-  providers: Record<string, unknown> | undefined,
-  providerId: string,
-): Record<string, unknown> | undefined {
-  if (!providers) {
-    return undefined;
-  }
-  const normalizedProviderId = normalizeProviderId(providerId);
-  const match = Object.entries(providers).find(
-    ([configuredProviderId]) => normalizeProviderId(configuredProviderId) === normalizedProviderId,
+function wrapKimiProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn {
+  const loadStream = createLazyRuntimeSurface(loadStreamRuntime, (runtime) =>
+    runtime.wrapKimiProviderStream(ctx),
   );
-  return isRecord(match?.[1]) ? match[1] : undefined;
+  return async (model, context, options) => {
+    options?.signal?.throwIfAborted();
+    const stream = await loadStream();
+    options?.signal?.throwIfAborted();
+    return stream(model, context, options);
+  };
 }
+
 export default defineSingleProviderPluginEntry({
   id: PLUGIN_ID,
   name: "Kimi Provider",
@@ -34,12 +44,11 @@ export default defineSingleProviderPluginEntry({
   provider: {
     id: PROVIDER_ID,
     label: "Kimi",
-    aliases: ["kimi-code", "kimi-coding"],
+    aliases: PROVIDER_ALIASES,
     docsPath: "/providers/moonshot",
     envVars: ["KIMI_API_KEY", "KIMICODE_API_KEY"],
     manifestAuth: {
       promptMessage: "Enter Kimi API key",
-      defaultModel: KIMI_CODING_MODEL_REF,
       expectedProviders: ["kimi", "kimi-code", "kimi-coding"],
       applyConfig: applyKimiCodeConfig,
       noteMessage: [
@@ -55,14 +64,18 @@ export default defineSingleProviderPluginEntry({
         if (!apiKey) {
           return null;
         }
-        const explicitProvider = findExplicitProviderConfig(
-          ctx.config.models?.providers as Record<string, unknown> | undefined,
+        const explicitProviderKey = findNormalizedProviderKey(
+          ctx.config.models?.providers,
           PROVIDER_ID,
         );
+        const explicitProvider =
+          explicitProviderKey === undefined
+            ? undefined
+            : ctx.config.models?.providers?.[explicitProviderKey];
         const builtInProvider = buildKimiCodingProvider();
         const explicitBaseUrl = normalizeOptionalString(explicitProvider?.baseUrl) ?? "";
         const explicitHeaders = isRecord(explicitProvider?.headers)
-          ? (explicitProvider.headers as Record<string, SecretInput>)
+          ? explicitProvider.headers
           : undefined;
         return {
           provider: {
@@ -81,9 +94,31 @@ export default defineSingleProviderPluginEntry({
         };
       },
     },
-    buildReplayPolicy: () => KIMI_REPLAY_POLICY,
+    classifyFailoverReason: ({ provider, status, errorMessage }) => {
+      if (!provider || status !== 403) {
+        return undefined;
+      }
+      const providerId = normalizeProviderId(provider);
+      if (providerId !== PROVIDER_ID && !PROVIDER_ALIASES.includes(providerId)) {
+        return undefined;
+      }
+      return /\b(?:weekly(?:\s+\(7-day\))?|(?:7|seven)[ -]day)\s+(?:usage\s+)?limit\b/i.test(
+        errorMessage,
+      ) || /\bquota\s+will\s+reset\b/i.test(errorMessage)
+        ? "rate_limit"
+        : undefined;
+    },
+    buildReplayPolicy: () => ({ preserveSignatures: false }),
     normalizeResolvedModel: ({ model }) => {
       const normalizedId = normalizeKimiCodingModelId(model.id);
+      if (model.api === "openai-completions" && isKimiK3ModelId(normalizedId)) {
+        // Session setup clamps before the stream wrapper can map the selected effort.
+        return {
+          ...model,
+          id: normalizedId,
+          thinkingLevelMap: { ...KIMI_K3_THINKING_EFFORTS, ...model.thinkingLevelMap },
+        };
+      }
       return normalizedId === model.id ? undefined : { ...model, id: normalizedId };
     },
     normalizeModelId: ({ modelId }) => normalizeKimiCodingModelId(modelId),

@@ -7,10 +7,10 @@ scenario:
   coverage:
     primary:
       - agent-runtime.subagent-turns-subagents
-  objective: Verify the agent can delegate a bounded task to a subagent and fold the result back into the main thread.
+  objective: Verify the agent can delegate one task, yield until the child finishes, and report its result.
   successCriteria:
-    - Agent launches a bounded subagent task.
-    - Subagent result is acknowledged in the main flow.
+    - This requester receives an accepted child run, and that child completes successfully.
+    - The yielded requester receives the child's result, then reports the same text.
     - Final answer attributes delegated work clearly.
   docsRefs:
     - docs/tools/subagents.md
@@ -20,68 +20,77 @@ scenario:
     - extensions/qa-lab/src/report.ts
   execution:
     kind: flow
-    summary: Verify the agent can delegate a bounded task to a subagent and fold the result back into the main thread.
+    summary: Follow the accepted child to completion and verify the yielded requester reports its result.
     channel: qa-channel
     config:
-      prompt: "Delegate one bounded QA task to a subagent. Wait for the subagent to finish. Then reply with three labeled sections exactly once: Delegated task, Result, Evidence. Include the child result itself, not 'waiting'."
+      prompt: "Delegate one bounded QA task to a subagent. Once the child is accepted, use sessions_yield to wait for it to finish. Then reply in plain text, with these three labels at the start of lines: Delegated task:, Result:, Evidence:. Under Result, copy only the child's final reply exactly as delivered, not a spawn receipt or a progress update."
 
 flow:
   steps:
-    - name: delegates a bounded task and reports the result
+    - name: starts the requester
       actions:
         - call: reset
-        - try:
-            actions:
-              - set: requestCursorBefore
-                value:
-                  expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
-              - call: runAgentPrompt
-                args:
-                  - ref: env
-                  - sessionKey: agent:qa:subagent
-                    message:
-                      expr: config.prompt
-                    timeoutMs:
-                      expr: liveTurnTimeoutMs(env, 90000)
-              - call: waitForAgentHistoryReply
-                saveAs: outbound
-                args:
-                  - ref: env
-                  - agent:qa:subagent
-                  - lambda:
-                      params: [text]
-                      expr: "(() => { const lower = normalizeLowercaseStringOrEmpty(text); return lower.includes('delegated task') && lower.includes('result') && lower.includes('evidence') && !lower.includes('waiting'); })()"
-                  - expr: liveTurnTimeoutMs(env, 45000)
-                  - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
-            catchAs: handoffError
-            catch:
-              - set: handoffTasks
-                value:
-                  expr: "await runQaCli(env, ['tasks', 'list', '--json', '--runtime', 'subagent'], { timeoutMs: liveTurnTimeoutMs(env, 60000), json: true }).catch((error) => ({ error: formatErrorMessage(error) }))"
-              - throw:
-                  expr: "`subagent handoff stalled: ${formatErrorMessage(handoffError)}; outbound=${recentOutboundSummary(state, 8)} tasks=${JSON.stringify(handoffTasks)}`"
-        - assert:
-            expr: "!['failed to delegate','could not delegate','subagent unavailable'].some((needle) => normalizeLowercaseStringOrEmpty(outbound.text).includes(needle))"
-            message:
-              expr: "`subagent handoff reported failure: ${outbound.text}`"
-        # Parity gate criterion 2 (no fake progress / fake tool completion):
-        # require an actual sessions_spawn tool call. Without this, a model
-        # could produce the three labeled sections ("Delegated task", "Result",
-        # "Evidence") as free-form prose without ever delegating to a real
-        # subagent. The assertion is pinned to THIS scenario by matching the
-        # scenario-unique prompt substring "Delegate one bounded QA task"
-        # (not a broad /delegate|subagent/ regex) so the earlier
-        # subagent-fanout-synthesis scenario — which also contains "delegate"
-        # and produces its own pre-tool sessions_spawn request — cannot
-        # satisfy the assertion here. The match is also constrained to
-        # pre-tool requests (no toolOutput) because the mock only plans
-        # sessions_spawn on requests with no toolOutput; the follow-up
-        # request after the tool runs has plannedToolName unset.
-        - set: subagentDebugRequests
+        # A transport reset does not remove previous sessions or their children.
+        - set: sessionKey
           value:
-            expr: "env.mock ? [...(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`))] : []"
+            expr: "`agent:qa:handoff:${randomUUID()}`"
+        # The first parent turn can yield. Follow its accepted child, then read the resumed reply.
+        - call: startAgentRun
+          args:
+            - ref: env
+            - sessionKey:
+                ref: sessionKey
+              message:
+                expr: config.prompt
+              timeoutMs:
+                expr: liveTurnTimeoutMs(env, 90000)
+    - name: observes an accepted child run
+      actions:
+        - call: waitForCondition
+          saveAs: child
+          args:
+            - lambda:
+                async: true
+                expr: |-
+                  (async () => {
+                    const activity = await readSessionToolActivity(env, sessionKey, { allowEmpty: true });
+                    const spawn = activity.find((call) => call.toolName === 'sessions_spawn' && call.completed);
+                    if (!spawn) { return undefined; }
+                    const child = extractQaToolPayload(spawn.result);
+                    if (!spawn.successful || child?.status !== 'accepted' || !child.runId || !child.childSessionKey) {
+                      throw new Error('sessions_spawn did not return an accepted child run');
+                    }
+                    return child;
+                  })()
+            - expr: liveTurnTimeoutMs(env, 45000)
+            - 250
+    - name: observes the accepted child's terminal reply
+      actions:
+        # agent.wait retains the terminal reply even if normal cleanup retires the child.
+        - call: waitForAgentRun
+          saveAs: completion
+          args:
+            - ref: env
+            - expr: child.runId
+            - expr: liveTurnTimeoutMs(env, 90000)
         - assert:
-            expr: "!env.mock || subagentDebugRequests.some((request) => !request.toolOutput && /delegate one bounded qa task/i.test(String(request.allInputText ?? '')) && request.plannedToolName === 'sessions_spawn')"
-            message:
-              expr: "`expected sessions_spawn tool call during subagent handoff scenario, saw plannedToolNames=${JSON.stringify(subagentDebugRequests.map((request) => request.plannedToolName ?? null))}`"
-      detailsExpr: outbound.text
+            expr: |-
+              completion.runId === child.runId && completion.status === 'ok' &&
+              completion.yielded !== true && Number.isFinite(completion.endedAt) &&
+              completion.terminalReply?.disposition === 'visible' && completion.terminalReply.text.trim()
+            message: expected the accepted child to finish with a visible terminal reply
+    - name: observes the child's result in the requester's reply
+      actions:
+        # This tests yielded settlement. A result carried only in private runtime context
+        # cannot establish the delivery below; do not substitute matching public text alone.
+        - call: waitForAgentHistory
+          saveAs: reply
+          args:
+            - ref: env
+            - ref: sessionKey
+            - lambda:
+                params: [history]
+                expr: "readSubagentHandoffReply(env, sessionKey, child.childSessionKey, completion.terminalReply.text, history.messages ?? [])"
+            - expr: liveTurnTimeoutMs(env, 45000)
+            - 250
+      detailsExpr: "({ reply, childRunId: child.runId, childSessionKey: child.childSessionKey })"

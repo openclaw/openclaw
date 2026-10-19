@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements channel react action behavior.
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import { jsonResult } from "openclaw/plugin-sdk/channel-actions";
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "openclaw/plugin-sdk/media-runtime";
@@ -56,10 +55,6 @@ function readUploadFileCaptionText(args: Record<string, unknown>): string {
   );
 }
 
-function hasUploadFileBufferPayload(args: Record<string, unknown>): boolean {
-  return readStringParam(args, "buffer", { trim: false }) !== undefined;
-}
-
 function readWhatsAppActionChatJid(params: WhatsAppMessageActionParams): string | undefined {
   const explicit =
     readStringParam(params.params, "chatJid") ?? readStringParam(params.params, "to");
@@ -75,23 +70,18 @@ function readWhatsAppActionChatJid(params: WhatsAppMessageActionParams): string 
   return normalizeWhatsAppTarget(params.toolContext.currentChannelId) ?? undefined;
 }
 
-function extractBase64Payload(encoded: string): string {
-  const match = /^data:[^;]+;base64,(.*)$/is.exec(encoded.trim());
-  return match?.[1] ?? encoded;
-}
-
 function decodeUploadFileMediaPayload(params: {
-  args: Record<string, unknown>;
   encoded: string;
+  contentType?: string;
+  fileName?: string;
   maxBytes?: number;
-}):
-  | {
-      buffer: Buffer;
-      contentType?: string;
-      fileName?: string;
-    }
-  | undefined {
-  const payload = extractBase64Payload(params.encoded);
+}): {
+  buffer: Buffer;
+  contentType?: string;
+  fileName?: string;
+} {
+  const dataUrl = /^data:([^;]+);base64,(.*)$/is.exec(params.encoded.trim());
+  const payload = dataUrl?.[2] ?? params.encoded;
   if (params.maxBytes !== undefined) {
     // Enforce the budget before canonicalization and decode so hostile input cannot force an
     // oversized Buffer allocation before rejection.
@@ -102,10 +92,7 @@ function decodeUploadFileMediaPayload(params: {
       );
     }
   }
-  const contentType =
-    readStringParam(params.args, "contentType") ?? readStringParam(params.args, "mimeType");
-  const fileName =
-    readStringParam(params.args, "filename") ?? readStringParam(params.args, "fileName");
+  const contentType = params.contentType ?? dataUrl?.[1];
   const canonicalPayload = canonicalizeBase64(payload);
   if (!canonicalPayload) {
     throw new Error("WhatsApp upload-file buffer must be valid base64 or a base64 data URL.");
@@ -119,14 +106,18 @@ function decodeUploadFileMediaPayload(params: {
   return {
     buffer,
     ...(contentType ? { contentType } : {}),
-    ...(fileName ? { fileName } : {}),
+    ...(params.fileName ? { fileName: params.fileName } : {}),
   };
 }
 
 async function handleWhatsAppUploadFileAction(params: WhatsAppMessageActionParams) {
   const mediaUrl = readUploadFileMediaSource(params.params);
   const encodedPayload = readStringParam(params.params, "buffer", { trim: false });
-  if (!mediaUrl && !hasUploadFileBufferPayload(params.params)) {
+  const contentType =
+    readStringParam(params.params, "contentType") ?? readStringParam(params.params, "mimeType");
+  const fileName =
+    readStringParam(params.params, "filename") ?? readStringParam(params.params, "fileName");
+  if (!mediaUrl && encodedPayload === undefined) {
     throw new Error(
       "WhatsApp upload-file requires media, mediaUrl, filePath, path, fileUrl, or buffer.",
     );
@@ -145,8 +136,9 @@ async function handleWhatsAppUploadFileAction(params: WhatsAppMessageActionParam
   });
   const mediaPayload = encodedPayload
     ? decodeUploadFileMediaPayload({
-        args: params.params,
         encoded: encodedPayload,
+        contentType,
+        fileName,
         maxBytes: resolveWhatsAppMediaMaxBytes(account),
       })
     : undefined;
@@ -155,6 +147,8 @@ async function handleWhatsAppUploadFileAction(params: WhatsAppMessageActionParam
     cfg: params.cfg,
     ...(mediaUrl && !mediaPayload ? { mediaUrl } : {}),
     ...(mediaPayload ? { mediaPayload } : {}),
+    ...(mediaUrl && !mediaPayload && fileName ? { fileName } : {}),
+    ...(mediaUrl && !mediaPayload && contentType ? { contentType } : {}),
     mediaAccess: params.mediaAccess,
     mediaLocalRoots: params.mediaLocalRoots,
     mediaReadFile: params.mediaReadFile,

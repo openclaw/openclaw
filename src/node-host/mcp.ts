@@ -1,32 +1,39 @@
 /** Process-lifetime MCP clients owned by the headless node host. */
 import { isDeepStrictEqual } from "node:util";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { ErrorCode, type CallToolResult, type Tool } from "@modelcontextprotocol/sdk/types.js";
-import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { Client, SdkErrorCode, type Tool } from "@modelcontextprotocol/client";
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import pLimit from "p-limit";
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/schema/nodes.js";
 import {
   connectMcpClient,
   disposeMcpClient,
-  isStatefulMcpHttpSessionExpired,
+  isMcpHttpSessionExpired,
 } from "../agents/mcp-client-lifecycle.js";
+import { redactMcpDiagnosticError } from "../agents/mcp-error.js";
 import { createMcpJsonSchemaValidator } from "../agents/mcp-json-schema-validator.js";
 import { sanitizeMcpMetadataText } from "../agents/mcp-metadata.js";
 import { collectMcpPaginatedItems } from "../agents/mcp-pagination.js";
+import {
+  McpSdkCompatibilityError,
+  mcpCallToolResultSchema,
+} from "../agents/mcp-sdk-compatibility.js";
 import { isMcpToolAllowed } from "../agents/mcp-tool-filter.js";
+import {
+  normalizeMcpToolCatalog,
+  type McpToolCatalogMetadata,
+} from "../agents/mcp-tool-metadata.js";
 import { resolveMcpRequestTimeoutMs } from "../agents/mcp-transport-config.js";
 import { resolveMcpTransport } from "../agents/mcp-transport.js";
 import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
 import type { McpServerConfig } from "../config/types.mcp.js";
-import { toErrorObject } from "../infra/errors.js";
 import {
   NODE_MCP_TOOL_CALL_TIMEOUT_MS,
   NODE_MCP_TOOLS_CALL_COMMAND,
 } from "../infra/node-commands.js";
-import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { VERSION } from "../version.js";
 
 const NODE_MCP_PLUGIN_ID = "node-mcp";
@@ -44,37 +51,17 @@ const NODE_MCP_CONNECT_CONCURRENCY = 6;
 const NODE_MCP_RETRY_INITIAL_MS = 250;
 const NODE_MCP_RETRY_MAX_MS = 60_000;
 
-type NodeHostMcpClient = {
-  onclose?: () => void;
-  connect(
-    transport: Transport,
-    options: { signal: AbortSignal; timeout: number; maxTotalTimeout: number },
-  ): Promise<void>;
-  listTools(
-    params?: { cursor?: string },
-    options?: { timeout?: number; maxTotalTimeout?: number; signal?: AbortSignal },
-  ): Promise<{ tools: Tool[]; nextCursor?: string }>;
-  callTool(
-    params: { name: string; arguments?: Record<string, unknown> },
-    resultSchema?: undefined,
-    options?: { timeout?: number; signal?: AbortSignal },
-  ): Promise<CallToolResult>;
-  close(): Promise<void>;
-};
-
-type NodeHostMcpTransport = {
-  transport: Transport;
-  transportType: "stdio" | "sse" | "streamable-http";
-  connectionTimeoutMs: number;
-  requestTimeoutMs: number;
-  detachStderr?: () => void;
-};
+type NodeHostMcpTransport = Pick<
+  NonNullable<ReturnType<typeof resolveMcpTransport>>,
+  "transport" | "transportType" | "connectionTimeoutMs" | "requestTimeoutMs" | "detachStderr"
+>;
 
 type NodeHostMcpSession = NodeHostMcpTransport & {
-  client: NodeHostMcpClient;
+  client: Client;
   connected: boolean;
   toolCallTimeoutMs: number;
   abortController: AbortController;
+  toolMetadata?: McpToolCatalogMetadata;
 };
 
 type NodeHostMcpServerState = {
@@ -83,6 +70,7 @@ type NodeHostMcpServerState = {
   current?: NodeHostMcpSession;
   listedTools: Tool[];
   work: Promise<void>;
+  catalogWork: Promise<void>;
   refreshQueued: boolean;
   retryDelayMs: number;
   retryTimer?: ReturnType<typeof setTimeout>;
@@ -104,35 +92,15 @@ export class NodeHostMcpError extends Error {
   }
 }
 
-export type NodeHostMcpManager = {
-  descriptors: NodePluginToolDescriptor[];
-  callMcpTool(params: {
-    server: string;
-    tool: string;
-    arguments?: Record<string, unknown>;
-    timeoutMs?: number;
-    signal?: AbortSignal;
-  }): Promise<CallToolResult>;
-  close(): Promise<void>;
-};
+export type NodeHostMcpManager = Awaited<ReturnType<typeof startNodeHostMcpManager>>;
 
 type NodeHostMcpManagerDeps = {
-  createClient?: (serverName: string, options: { onToolsChanged: () => void }) => NodeHostMcpClient;
-  resolveTransport?: (serverName: string, config: McpServerConfig) => NodeHostMcpTransport | null;
   onDescriptorsChanged?: () => void;
-  warn?: (message: string) => void;
   signal?: AbortSignal;
 };
 
-function defaultWarn(message: string): void {
-  console.warn(message);
-}
-
 function formatMcpError(error: unknown): string {
-  return truncateUtf16Safe(
-    redactSensitiveUrlLikeString(toErrorObject(error, "MCP request failed").message),
-    NODE_MCP_ERROR_MAX_CHARS,
-  );
+  return truncateUtf16Safe(redactMcpDiagnosticError(error), NODE_MCP_ERROR_MAX_CHARS);
 }
 
 function sanitizeDescriptorFragment(raw: string, fallback: string): string {
@@ -168,13 +136,6 @@ function reserveDescriptorName(baseName: string, usedNames: Set<string>): string
   }
 }
 
-function normalizeInputSchema(value: unknown): Record<string, unknown> {
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    return value as Record<string, unknown>;
-  }
-  return { type: "object", properties: {}, additionalProperties: true };
-}
-
 /** Builds provider-safe MCP descriptors in stable server/tool order. */
 function buildNodeMcpToolDescriptors(
   listedTools: ReadonlyArray<{ serverName: string; tool: Tool }>,
@@ -197,7 +158,11 @@ function buildNodeMcpToolDescriptors(
           "MCP tool",
         NODE_MCP_DESCRIPTION_MAX_CHARS,
       ),
-      parameters: normalizeInputSchema(tool.inputSchema),
+      parameters: asOptionalRecord(tool.inputSchema) ?? {
+        type: "object",
+        properties: {},
+        additionalProperties: true,
+      },
       command: NODE_MCP_TOOLS_CALL_COMMAND,
       mcp: { server: serverName, tool: toolName },
     };
@@ -217,67 +182,25 @@ function buildNodeMcpToolDescriptors(
   return descriptors;
 }
 
-async function listAllTools(
-  client: NodeHostMcpClient,
-  timeoutMs: number,
-  shouldInclude: (toolName: string) => boolean,
-  signal?: AbortSignal,
-): Promise<Tool[]> {
-  return await collectMcpPaginatedItems({
-    label: "MCP tool listing",
-    itemLabel: "tools",
-    timeoutMs,
-    maxPages: NODE_MCP_MAX_LIST_PAGES,
-    maxItems: NODE_MCP_MAX_LISTED_TOOLS,
-    maxBytes: NODE_MCP_MAX_CATALOG_BYTES,
-    signal,
-    loadPage: async ({ cursor, requestTimeoutMs, signal: requestSignal }) => {
-      const page = await client.listTools(cursor === undefined ? undefined : { cursor }, {
-        timeout: requestTimeoutMs,
-        maxTotalTimeout: requestTimeoutMs,
-        signal: requestSignal,
-      });
-      return { items: page.tools, nextCursor: page.nextCursor, serializedValue: page };
-    },
-    mapItem: (tool) => {
-      const toolName = tool.name.trim();
-      if (!toolName || !shouldInclude(toolName)) {
-        return undefined;
-      }
-      return { ...tool, name: toolName };
-    },
-  });
-}
-
-function disposeNodeHostMcpSession(session: NodeHostMcpSession): Promise<void> {
+async function disposeNodeHostMcpSession(
+  serverName: string,
+  session: NodeHostMcpSession,
+): Promise<void> {
   session.abortController.abort(new Error("node host MCP session retired"));
-  return disposeMcpClient(session);
+  if ((await disposeMcpClient(session)) === "uncertain") {
+    console.warn(
+      `node host MCP server "${serverName}" cleanup could not be confirmed; check the server process`,
+    );
+  }
 }
 
 /** Starts process-lifetime MCP server state for the node host. */
 export async function startNodeHostMcpManager(
   servers: Record<string, McpServerConfig> | undefined,
   deps: NodeHostMcpManagerDeps = {},
-): Promise<NodeHostMcpManager> {
-  const warn = deps.warn ?? defaultWarn;
-  const createClient =
-    deps.createClient ??
-    ((_serverName, options) =>
-      new Client(
-        { name: "openclaw-node-host", version: VERSION },
-        {
-          jsonSchemaValidator: createMcpJsonSchemaValidator(),
-          listChanged: {
-            tools: {
-              autoRefresh: false,
-              debounceMs: 0,
-              onChanged: () => options.onToolsChanged(),
-            },
-          },
-        },
-      ) as NodeHostMcpClient);
-  const resolveTransport = deps.resolveTransport ?? resolveMcpTransport;
+) {
   const descriptors: NodePluginToolDescriptor[] = [];
+  const connectionAdmission = pLimit(NODE_MCP_CONNECT_CONCURRENCY);
   const lifecycleAbortController = new AbortController();
   const lifecycleSignal = deps.signal
     ? AbortSignal.any([deps.signal, lifecycleAbortController.signal])
@@ -290,6 +213,7 @@ export async function startNodeHostMcpManager(
         config,
         listedTools: [],
         work: Promise.resolve(),
+        catalogWork: Promise.resolve(),
         refreshQueued: false,
         retryDelayMs: NODE_MCP_RETRY_INITIAL_MS,
       },
@@ -307,7 +231,7 @@ export async function startNodeHostMcpManager(
     );
     const next = buildNodeMcpToolDescriptors(listedTools);
     if (next.length < listedTools.length) {
-      warn(
+      console.warn(
         `node host MCP catalog bounded: published ${next.length} of ${listedTools.length} tools`,
       );
     }
@@ -338,14 +262,17 @@ export async function startNodeHostMcpManager(
     state.work = state.work.then(task, task).catch(() => {});
   };
 
+  const enqueueCatalogWork = (
+    state: NodeHostMcpServerState,
+    task: () => Promise<void>,
+  ): Promise<void> => {
+    const work = state.catalogWork.then(task, task);
+    state.catalogWork = work.catch(() => {});
+    return work;
+  };
+
   const scheduleRetry = (state: NodeHostMcpServerState): void => {
-    if (
-      closed ||
-      lifecycleSignal.aborted ||
-      states.get(state.serverName) !== state ||
-      state.retryTimer ||
-      state.current
-    ) {
+    if (closed || lifecycleSignal.aborted || state.retryTimer || state.current) {
       return;
     }
     const delayMs = state.retryDelayMs;
@@ -357,83 +284,135 @@ export async function startNodeHostMcpManager(
     state.retryTimer.unref?.();
   };
 
-  const connectAndList = async (
+  const updateCatalog = async (
     state: NodeHostMcpServerState,
+    session: NodeHostMcpSession,
     signal: AbortSignal,
-  ): Promise<void> => {
-    let resolved: NodeHostMcpTransport | null | undefined;
-    let session: NodeHostMcpSession | undefined;
-    try {
-      resolved = resolveTransport(state.serverName, state.config);
-      if (!resolved) {
-        states.delete(state.serverName);
-        throw new Error("invalid or unsupported transport");
-      }
-      let onToolsChanged = () => {};
-      const client = createClient(state.serverName, {
-        onToolsChanged: () => onToolsChanged(),
-      });
-      const createdSession: NodeHostMcpSession = {
-        ...resolved,
-        client,
-        connected: false,
-        toolCallTimeoutMs: resolveMcpRequestTimeoutMs(state.config, NODE_MCP_TOOL_CALL_TIMEOUT_MS),
-        abortController: new AbortController(),
-      };
-      onToolsChanged = () => {
-        if (state.current === createdSession) {
-          requestRefresh(state, createdSession);
-        }
-      };
-      session = createdSession;
-      state.current = createdSession;
-      // MCP Client exposes callback properties rather than an EventTarget surface.
-      // oxlint-disable-next-line unicorn/prefer-add-event-listener
-      client.onclose = () => {
-        if (createdSession.connected && invalidateCurrent(state, createdSession)) {
-          enqueueWork(state, async () => {
-            await disposeNodeHostMcpSession(createdSession);
-            scheduleRetry(state);
-          });
-        }
-      };
-      await connectMcpClient({
-        client,
-        transport: resolved.transport,
-        timeoutMs: resolved.connectionTimeoutMs,
-        signal,
-      });
-      if (closed || signal.aborted || state.current !== session) {
-        return;
-      }
-      session.connected = true;
-      const listSignal = AbortSignal.any([signal, session.abortController.signal]);
-      const tools = await listAllTools(
-        client,
-        resolved.requestTimeoutMs,
-        (toolName) => isMcpToolAllowed(state.config.toolFilter, toolName),
-        listSignal,
-      );
-      if (closed || state.current !== session) {
-        return;
-      }
-      state.listedTools = tools;
-      state.retryDelayMs = NODE_MCP_RETRY_INITIAL_MS;
-      rebuildDescriptors();
-    } catch (error) {
-      const lostOwnership = session !== undefined && state.current !== session;
-      if (session && state.current === session) {
-        invalidateCurrent(state, session);
-        await disposeNodeHostMcpSession(session);
-      } else if (!session) {
-        resolved?.detachStderr?.();
-      }
-      if (closed || signal.aborted || lostOwnership) {
-        return;
-      }
-      throw error;
+    resetRetryDelay = false,
+  ) => {
+    const normalized = await collectMcpPaginatedItems({
+      label: "MCP tool listing",
+      itemLabel: "tools",
+      timeoutMs: session.requestTimeoutMs,
+      maxPages: NODE_MCP_MAX_LIST_PAGES,
+      maxItems: NODE_MCP_MAX_LISTED_TOOLS,
+      maxBytes: NODE_MCP_MAX_CATALOG_BYTES,
+      signal,
+      loadPage: async ({ cursor, requestTimeoutMs, signal: requestSignal }) => {
+        const page = await session.client.request(
+          { method: "tools/list", params: cursor === undefined ? undefined : { cursor } },
+          {
+            timeout: requestTimeoutMs,
+            maxTotalTimeout: requestTimeoutMs,
+            signal: requestSignal,
+          },
+        );
+        return { items: page.tools, nextCursor: page.nextCursor, serializedValue: page };
+      },
+    }).then((tools) =>
+      normalizeMcpToolCatalog(tools, createMcpJsonSchemaValidator(), (toolName) =>
+        isMcpToolAllowed(state.config.toolFilter, toolName) ? "include" : "exclude",
+      ),
+    );
+    if (closed || state.current !== session) {
+      return;
     }
+    session.toolMetadata = normalized.metadata;
+    state.listedTools = normalized.tools;
+    if (resetRetryDelay) {
+      state.retryDelayMs = NODE_MCP_RETRY_INITIAL_MS;
+    }
+    rebuildDescriptors();
   };
+
+  const connectAndList = (state: NodeHostMcpServerState, signal: AbortSignal): Promise<void> =>
+    connectionAdmission(async () => {
+      // Admission rechecks lifecycle so close can drain queued work without
+      // creating a late client or transport.
+      if (closed || signal.aborted) {
+        return;
+      }
+      let resolved: NodeHostMcpTransport | null | undefined;
+      let session: NodeHostMcpSession | undefined;
+      try {
+        resolved = resolveMcpTransport(state.serverName, state.config);
+        if (!resolved) {
+          states.delete(state.serverName);
+          throw new Error("invalid or unsupported transport");
+        }
+        let onToolsChanged = () => {};
+        const client = new Client(
+          { name: "openclaw-node-host", version: VERSION },
+          {
+            jsonSchemaValidator: createMcpJsonSchemaValidator(),
+            versionNegotiation: { mode: "legacy" },
+            listChanged: {
+              tools: {
+                autoRefresh: false,
+                debounceMs: 0,
+                onChanged: () => onToolsChanged(),
+              },
+            },
+          },
+        );
+        const createdSession: NodeHostMcpSession = {
+          ...resolved,
+          client,
+          connected: false,
+          toolCallTimeoutMs: resolveMcpRequestTimeoutMs(
+            state.config,
+            NODE_MCP_TOOL_CALL_TIMEOUT_MS,
+          ),
+          abortController: new AbortController(),
+        };
+        onToolsChanged = () => {
+          if (state.current === createdSession) {
+            requestRefresh(state, createdSession);
+          }
+        };
+        session = createdSession;
+        state.current = createdSession;
+        // MCP Client exposes callback properties rather than an EventTarget surface.
+        // oxlint-disable-next-line unicorn/prefer-add-event-listener
+        client.onclose = () => {
+          if (createdSession.connected && invalidateCurrent(state, createdSession)) {
+            enqueueWork(state, async () => {
+              await disposeNodeHostMcpSession(state.serverName, createdSession);
+              scheduleRetry(state);
+            });
+          }
+        };
+        await connectMcpClient({
+          client,
+          transport: resolved.transport,
+          timeoutMs: resolved.connectionTimeoutMs,
+          signal,
+        });
+        if (closed || signal.aborted || state.current !== session) {
+          return;
+        }
+        session.connected = true;
+        const listSignal = AbortSignal.any([signal, session.abortController.signal]);
+        await enqueueCatalogWork(state, () =>
+          updateCatalog(state, createdSession, listSignal, true),
+        );
+        // A notification received during startup queues behind the initial list.
+        // Wait for that refresh so the manager never publishes the older snapshot.
+        await state.catalogWork;
+      } catch (error) {
+        const lostOwnership = session !== undefined && state.current !== session;
+        if (session && state.current === session) {
+          invalidateCurrent(state, session);
+          await disposeNodeHostMcpSession(state.serverName, session);
+        } else if (!session) {
+          resolved?.detachStderr?.();
+        }
+        if (closed || signal.aborted || lostOwnership) {
+          return;
+        }
+        throw error;
+      }
+    });
 
   async function reconnect(state: NodeHostMcpServerState): Promise<void> {
     if (closed || state.current) {
@@ -443,7 +422,7 @@ export async function startNodeHostMcpManager(
       await connectAndList(state, lifecycleSignal);
     } catch (error) {
       if (!closed && !lifecycleSignal.aborted) {
-        warn(
+        console.warn(
           `node host MCP server "${state.serverName}" reconnect failed: ${formatMcpError(error)}`,
         );
         scheduleRetry(state);
@@ -456,26 +435,20 @@ export async function startNodeHostMcpManager(
       return;
     }
     try {
-      const tools = await listAllTools(
-        session.client,
-        session.requestTimeoutMs,
-        (toolName) => isMcpToolAllowed(state.config.toolFilter, toolName),
+      await updateCatalog(
+        state,
+        session,
         AbortSignal.any([lifecycleSignal, session.abortController.signal]),
       );
-      if (closed || state.current !== session) {
-        return;
-      }
-      state.listedTools = tools;
-      rebuildDescriptors();
     } catch (error) {
       if (closed || lifecycleSignal.aborted || state.current !== session) {
         return;
       }
-      warn(
+      console.warn(
         `node host MCP server "${state.serverName}" tool refresh failed: ${formatMcpError(error)}`,
       );
       invalidateCurrent(state, session);
-      await disposeNodeHostMcpSession(session);
+      await disposeNodeHostMcpSession(state.serverName, session);
       scheduleRetry(state);
     }
   };
@@ -491,31 +464,27 @@ export async function startNodeHostMcpManager(
       return;
     }
     state.refreshQueued = true;
-    enqueueWork(state, async () => {
+    void enqueueCatalogWork(state, async () => {
       state.refreshQueued = false;
       await refresh(state, session);
-    });
+    }).catch(() => {});
   }
 
   const tasks = Array.from(states.values(), (state) => async () => {
     if (state.config.auth === "oauth" || state.config.oauth) {
       states.delete(state.serverName);
-      warn(`node host MCP server "${state.serverName}" skipped: OAuth is not supported`);
+      console.warn(`node host MCP server "${state.serverName}" skipped: OAuth is not supported`);
       return;
     }
     try {
       await connectAndList(state, lifecycleSignal);
     } catch (error) {
       if (!lifecycleSignal.aborted) {
-        warn(`node host MCP server "${state.serverName}" failed: ${formatMcpError(error)}`);
+        console.warn(`node host MCP server "${state.serverName}" failed: ${formatMcpError(error)}`);
       }
     }
   });
-  await runTasksWithConcurrency({
-    tasks,
-    limit: NODE_MCP_CONNECT_CONCURRENCY,
-    errorMode: "continue",
-  });
+  await Promise.all(tasks.map((task) => task()));
   startupComplete = true;
   for (const state of states.values()) {
     if (!state.current) {
@@ -525,7 +494,13 @@ export async function startNodeHostMcpManager(
 
   return {
     descriptors,
-    async callMcpTool(params) {
+    async callMcpTool(params: {
+      server: string;
+      tool: string;
+      arguments?: Record<string, unknown>;
+      timeoutMs?: number;
+      signal?: AbortSignal;
+    }) {
       const state = states.get(params.server);
       const session = state?.current;
       if (!state || !session?.connected) {
@@ -546,20 +521,29 @@ export async function startNodeHostMcpManager(
       }
       const requestedTimeoutMs =
         clampPositiveTimerTimeoutMs(params.timeoutMs) ?? NODE_MCP_TOOL_CALL_TIMEOUT_MS;
+      const validateResult = session.toolMetadata?.validatorForCall(params.tool);
       try {
-        return await session.client.callTool(
-          { name: params.tool, arguments: params.arguments ?? {} },
-          undefined,
+        const result = await session.client.request(
+          {
+            method: "tools/call",
+            params: { name: params.tool, arguments: params.arguments ?? {} },
+          },
+          mcpCallToolResultSchema,
           {
             timeout: Math.min(requestedTimeoutMs, session.toolCallTimeoutMs),
             ...(params.signal ? { signal: params.signal } : {}),
           },
         );
+        validateResult?.(result);
+        return result;
       } catch (error) {
-        const sessionExpired = isStatefulMcpHttpSessionExpired(session, error);
+        if (error instanceof McpSdkCompatibilityError) {
+          throw error;
+        }
+        const sessionExpired = isMcpHttpSessionExpired(session, error);
         if (sessionExpired && invalidateCurrent(state, session)) {
           enqueueWork(state, async () => {
-            await disposeNodeHostMcpSession(session);
+            await disposeNodeHostMcpSession(state.serverName, session);
             scheduleRetry(state);
           });
         }
@@ -570,15 +554,21 @@ export async function startNodeHostMcpManager(
             { cause: error },
           );
         }
+        const cancelled = params.signal?.aborted === true;
+        const message = truncateUtf16Safe(
+          formatErrorMessage(cancelled ? params.signal?.reason : error),
+          NODE_MCP_ERROR_MAX_CHARS,
+        );
         if (
+          !cancelled &&
           error &&
           typeof error === "object" &&
           "code" in error &&
-          error.code === ErrorCode.RequestTimeout
+          error.code === SdkErrorCode.RequestTimeout
         ) {
-          throw new NodeHostMcpError("MCP_TOOL_TIMEOUT", formatMcpError(error), { cause: error });
+          throw new NodeHostMcpError("MCP_TOOL_TIMEOUT", message, { cause: error });
         }
-        throw new NodeHostMcpError("MCP_TOOL_ERROR", formatMcpError(error), { cause: error });
+        throw new NodeHostMcpError("MCP_TOOL_ERROR", message, { cause: error });
       }
     },
     async close() {
@@ -592,13 +582,16 @@ export async function startNodeHostMcpManager(
           clearTimeout(state.retryTimer);
           state.retryTimer = undefined;
         }
-        await state.work;
         const session = state.current;
         state.current = undefined;
         state.listedTools = [];
         if (session) {
-          await disposeNodeHostMcpSession(session);
+          await disposeNodeHostMcpSession(state.serverName, session);
         }
+        // Lifecycle work accepted before close may append catalog work. Drain it
+        // first, then await the latest catalog tail before releasing ownership.
+        await state.work;
+        await state.catalogWork;
       });
       await Promise.allSettled(closing);
     },

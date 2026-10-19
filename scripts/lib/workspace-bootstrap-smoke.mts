@@ -2,7 +2,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 /**
  * Template pack files that must be present in installed packages.
@@ -12,19 +12,12 @@ export const WORKSPACE_TEMPLATE_PACK_PATHS: readonly string[] = [
   "docs/reference/templates/SOUL.md",
   "docs/reference/templates/IDENTITY.md",
   "docs/reference/templates/USER.md",
-  "src/agents/templates/HEARTBEAT.md",
   "docs/reference/templates/BOOTSTRAP.md",
 ];
 
-// HEARTBEAT.md ships in the template pack for docs/doctor context but is no
-// longer seeded into new workspaces; heartbeat context lives in cron scratch.
-const REQUIRED_BOOTSTRAP_WORKSPACE_FILES = [
-  "AGENTS.md",
-  "SOUL.md",
-  "IDENTITY.md",
-  "USER.md",
-  "BOOTSTRAP.md",
-];
+const REQUIRED_BOOTSTRAP_WORKSPACE_FILES = WORKSPACE_TEMPLATE_PACK_PATHS.map((file) =>
+  basename(file),
+);
 
 const WORKSPACE_BOOTSTRAP_SMOKE_TIMEOUT_MS = 15_000;
 const SAFE_UNIX_SMOKE_PATH = "/usr/bin:/bin";
@@ -85,21 +78,17 @@ function describeExecFailure(error: unknown): string {
   if (!(error instanceof Error)) {
     return String(error);
   }
-  const execStdout = "stdout" in error ? error.stdout : undefined;
-  const execStderr = "stderr" in error ? error.stderr : undefined;
-  const stdout =
-    typeof execStdout === "string"
-      ? execStdout.trim()
-      : execStdout instanceof Uint8Array
-        ? Buffer.from(execStdout).toString("utf8").trim()
-        : "";
-  const stderr =
-    typeof execStderr === "string"
-      ? execStderr.trim()
-      : execStderr instanceof Uint8Array
-        ? Buffer.from(execStderr).toString("utf8").trim()
-        : "";
-  return [error.message, stdout, stderr].filter(Boolean).join(" | ");
+  const output = [
+    "stdout" in error ? error.stdout : undefined,
+    "stderr" in error ? error.stderr : undefined,
+  ].map((value) =>
+    typeof value === "string"
+      ? value.trim()
+      : value instanceof Uint8Array
+        ? Buffer.from(value).toString("utf8").trim()
+        : "",
+  );
+  return [error.message, ...output].filter(Boolean).join(" | ");
 }
 
 /**

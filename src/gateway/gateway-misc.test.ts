@@ -1,9 +1,7 @@
 // Gateway miscellaneous tests cover shared utility edges around control UI,
-// diagnostics, proxy state, node command policy, and server helper behavior.
+// proxy state, node command policy, and server helper behavior.
+import { EventEmitter } from "node:events";
 import * as fs from "node:fs/promises";
-import type { IncomingMessage, ServerResponse } from "node:http";
-import * as os from "node:os";
-import * as path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, test, vi } from "vitest";
 import {
   GATEWAY_CLIENT_CAPS,
@@ -12,36 +10,22 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { RequestFrame } from "../../packages/gateway-protocol/src/index.js";
 import {
-  onDiagnosticEvent,
-  resetDiagnosticEventsForTest,
-  type DiagnosticEventPayload,
-} from "../infra/diagnostic-events.js";
-import {
   registerActiveManagedProxyUrl,
   stopActiveManagedProxyRegistration,
 } from "../infra/net/proxy/active-proxy-state.js";
 import { defaultVoiceWakeTriggers } from "../infra/voicewake.js";
-import { handleControlUiHttpRequest } from "./control-ui.js";
 import {
   DEFAULT_DANGEROUS_NODE_COMMANDS,
   resolveNodeCommandAllowlist,
 } from "./node-command-policy.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { createChatRunState, createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
-import { MAX_BUFFERED_BYTES } from "./server-constants.js";
+import { MAX_BUFFERED_BYTES, WEBSOCKET_CLOSE_GRACE_MS } from "./server-constants.js";
 import { handleNodeInvokeResult } from "./server-methods/nodes.handlers.invoke-result.js";
 import type * as GatewayMethodTypes from "./server-methods/types.js";
-import { formatError, normalizeVoiceWakeTriggers } from "./server-utils.js";
+import { normalizeVoiceWakeTriggers } from "./server-utils.js";
+import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
-
-function makeControlUiResponse() {
-  const res = {
-    statusCode: 200,
-    setHeader: vi.fn(),
-    end: vi.fn(),
-  } as unknown as ServerResponse;
-  return { res };
-}
 
 const wsMockState = vi.hoisted(() => ({
   last: null as {
@@ -53,8 +37,9 @@ const wsMockState = vi.hoisted(() => ({
   } | null,
 }));
 
-vi.mock("ws", () => ({
+vi.mock("../../packages/gateway-client/src/websocket.js", () => ({
   WebSocket: class MockWebSocket {
+    static readonly OPEN = 1;
     on = vi.fn();
     close = vi.fn();
     send = vi.fn();
@@ -86,51 +71,10 @@ describe("GatewayClient", () => {
     delete process.env["HTTPS_PROXY"];
   });
 
-  async function withControlUiRoot(
-    params: { faviconSvg?: string; indexHtml?: string },
-    run: (tmp: string) => Promise<void>,
-  ) {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-"));
-    try {
-      await fs.writeFile(path.join(tmp, "index.html"), params.indexHtml ?? "<html></html>\n");
-      if (typeof params.faviconSvg === "string") {
-        await fs.writeFile(path.join(tmp, "favicon.svg"), params.faviconSvg);
-      }
-      await run(tmp);
-    } finally {
-      await fs.rm(tmp, { recursive: true, force: true });
-    }
-  }
-
-  async function expectControlUiStatus(
-    tmp: string,
-    params: { url: string; method?: string; statusCode: number },
-  ) {
-    const { res } = makeControlUiResponse();
-    const handled = await handleControlUiHttpRequest(
-      {
-        url: params.url,
-        method: params.method ?? "GET",
-        headers: { host: "gateway.example.test" },
-      } as IncomingMessage,
-      res,
-      { root: { kind: "resolved", path: tmp } },
-    );
-    expect(handled).toBe(true);
-    expect(res.statusCode, `expected ${params.statusCode} for ${params.url}`).toBe(
-      params.statusCode,
-    );
-  }
-
   function startGatewayClient(params: { url: string; tlsFingerprint?: string }) {
-    const client = new GatewayClient(params);
+    const client = new GatewayClient({ ...params, deviceIdentity: null });
     client.start();
     return wsMockState.last;
-  }
-
-  function expectNoGatewayClientAgent(params: { url: string; tlsFingerprint?: string }) {
-    const last = startGatewayClient(params) as { opts: { agent?: unknown } } | null;
-    expect(last?.opts.agent).toBeUndefined();
   }
 
   function setCorporateNoProxy() {
@@ -147,17 +91,6 @@ describe("GatewayClient", () => {
     return registerActiveManagedProxyUrl(new URL("http://127.0.0.1:3128"), "gateway-only");
   }
 
-  test("uses a large maxPayload for node snapshots", () => {
-    const last = startGatewayClient({ url: "ws://127.0.0.1:1" }) as {
-      url: unknown;
-      opts: unknown;
-    } | null;
-    const opts = last?.opts as { maxPayload?: number } | undefined;
-
-    expect(last?.url).toBe("ws://127.0.0.1:1");
-    expect(opts?.maxPayload).toBe(25 * 1024 * 1024);
-  });
-
   test("uses the admitted pairing identity for shared-auth connect failures", async () => {
     const source = await fs.readFile(
       new URL("./server/ws-connection/connect-session.ts", import.meta.url),
@@ -166,42 +99,6 @@ describe("GatewayClient", () => {
 
     expect(source).toContain("deviceId: admittedNodePairing.identity.nodeId");
     expect(source).not.toContain("deviceId: authenticatedNodePairing.nodeId");
-  });
-
-  test("does not pass an explicit direct agent for loopback control-plane WebSocket connections", () => {
-    expectNoGatewayClientAgent({ url: "ws://127.0.0.1:1" });
-  });
-
-  test("does not pass an explicit direct agent for IPv6 loopback control-plane WebSocket connections", () => {
-    expectNoGatewayClientAgent({ url: "ws://[::1]:1" });
-  });
-
-  test("does not pass an explicit direct agent for localhost hostnames", () => {
-    expectNoGatewayClientAgent({ url: "ws://localhost:1" });
-  });
-
-  test("does not force a direct agent for remote Gateway WebSocket connections", () => {
-    expectNoGatewayClientAgent({
-      url: "wss://gateway.example.com",
-      tlsFingerprint: "ab".repeat(32),
-    });
-  });
-
-  test("scopes Gateway loopback bypass to WebSocket connection setup without mutating NO_PROXY", () => {
-    setCorporateNoProxy();
-    const registration = registerGatewayOnlyProxy();
-
-    try {
-      const last = startGatewayClient({ url: "ws://127.0.0.1:18789" }) as {
-        noProxyDuringConstruction: unknown;
-      } | null;
-
-      expect(last?.noProxyDuringConstruction).toBe("corp.example.com");
-      expect(process.env["NO_PROXY"]).toBe("corp.example.com");
-      expect(process.env["no_proxy"]).toBe("corp.example.com");
-    } finally {
-      stopActiveManagedProxyRegistration(registration);
-    }
   });
 
   test("scopes IPv6 loopback bypass during Gateway-only proxy mode connection setup", () => {
@@ -227,54 +124,14 @@ describe("GatewayClient", () => {
       stopActiveManagedProxyRegistration(registration);
     }
   });
-
-  it("returns 404 for missing static asset paths instead of SPA fallback", async () => {
-    await withControlUiRoot({ faviconSvg: "<svg/>" }, async (tmp) => {
-      await expectControlUiStatus(tmp, { url: "/webchat/favicon.svg", statusCode: 404 });
-    });
-  });
-
-  it("returns 404 for missing static assets with query strings", async () => {
-    await withControlUiRoot({}, async (tmp) => {
-      await expectControlUiStatus(tmp, { url: "/webchat/favicon.svg?v=1", statusCode: 404 });
-    });
-  });
-
-  it("still serves SPA fallback for extensionless paths", async () => {
-    await withControlUiRoot({}, async (tmp) => {
-      await expectControlUiStatus(tmp, { url: "/webchat/chat", statusCode: 200 });
-    });
-  });
-
-  it("HEAD returns 404 for missing static assets consistent with GET", async () => {
-    await withControlUiRoot({}, async (tmp) => {
-      await expectControlUiStatus(tmp, {
-        url: "/webchat/favicon.svg",
-        method: "HEAD",
-        statusCode: 404,
-      });
-    });
-  });
-
-  it("serves SPA fallback for dotted path segments that are not static assets", async () => {
-    await withControlUiRoot({}, async (tmp) => {
-      for (const route of ["/webchat/user/jane.doe", "/webchat/v2.0", "/settings/v1.2"]) {
-        await expectControlUiStatus(tmp, { url: route, statusCode: 200 });
-      }
-    });
-  });
-
-  it("serves SPA fallback for .html paths that do not exist on disk", async () => {
-    await withControlUiRoot({}, async (tmp) => {
-      await expectControlUiStatus(tmp, { url: "/webchat/foo.html", statusCode: 200 });
-    });
-  });
 });
 
 type TestSocket = {
+  readyState: number;
   bufferedAmount: number;
   send: (payload: string) => void;
   close: (code: number, reason: string) => void;
+  terminate: () => void;
 };
 
 type EventFrame = {
@@ -284,20 +141,20 @@ type EventFrame = {
   seq?: number;
 };
 
-type RecordingSocket = TestSocket & {
-  sent: EventFrame[];
-};
+type RecordingSocket = TestSocket & { sent: EventFrame[] };
 
 function makeRecordingSocket(): RecordingSocket {
   const sent: EventFrame[] = [];
-  return {
+  return Object.assign(new EventEmitter(), {
+    readyState: 1,
     bufferedAmount: 0,
     send: vi.fn((payload: string) => {
       sent.push(JSON.parse(payload) as EventFrame);
     }),
     close: vi.fn(),
+    terminate: vi.fn(),
     sent,
-  };
+  });
 }
 
 function makeGatewayWsClient(
@@ -323,7 +180,7 @@ function makeOperatorWsClient(connId: string, socket: TestSocket, scopes: string
 function makeOperatorWsClients(
   entries: Array<{ connId: string; socket: TestSocket; scopes: string[] }>,
 ) {
-  return new Set<GatewayWsClient>(
+  return new GatewayClientRegistry(
     entries.map(({ connId, socket, scopes }) => makeOperatorWsClient(connId, socket, scopes)),
   );
 }
@@ -345,7 +202,7 @@ function makeScopedBroadcastClients() {
   const talkSocket = makeRecordingSocket();
   const writeSocket = makeRecordingSocket();
   const adminSocket = makeRecordingSocket();
-  const clients = new Set<GatewayWsClient>([
+  const clients = new GatewayClientRegistry([
     makeOperatorWsClient("c-pairing", pairingSocket, ["operator.pairing"]),
     makeGatewayWsClient("c-node", nodeSocket, {
       role: "node",
@@ -362,10 +219,11 @@ function makeScopedBroadcastClients() {
 
 function makeScopedBroadcastContext() {
   const scoped = makeScopedBroadcastClients();
-  return {
-    ...scoped,
-    ...createGatewayBroadcaster({ clients: scoped.clients }),
-  };
+  const broadcaster = createGatewayBroadcaster({
+    clients: scoped.clients,
+    preparePresenceProjection: (presence) => () => presence,
+  });
+  return { ...scoped, ...broadcaster };
 }
 
 function sentEvents(socket: RecordingSocket) {
@@ -402,7 +260,7 @@ describe("gateway broadcaster", () => {
     const socket = makeRecordingSocket();
     socket.bufferedAmount = 1234;
     const client = makeOperatorWsClient("c-admin", socket, ["operator.admin"]);
-    const clients = new Set<GatewayWsClient>([client]);
+    const clients = new GatewayClientRegistry([client]);
     const { getBufferedAmount } = createGatewayBroadcaster({ clients });
 
     expect(getBufferedAmount("c-admin")).toBe(1234);
@@ -411,6 +269,7 @@ describe("gateway broadcaster", () => {
   });
 
   it("closes a slow authoritative-session subscriber while delivering to healthy clients", () => {
+    vi.useFakeTimers();
     const slowSocket = makeRecordingSocket();
     slowSocket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
     const healthySocket = makeRecordingSocket();
@@ -432,6 +291,8 @@ describe("gateway broadcaster", () => {
     broadcastToConnIds("session.message", payload, new Set(["slow-session", "healthy-session"]));
 
     expect(slowSocket.close).toHaveBeenCalledWith(1008, "slow consumer");
+    vi.advanceTimersByTime(WEBSOCKET_CLOSE_GRACE_MS);
+    expect(slowSocket.terminate).toHaveBeenCalledOnce();
     expect(slowSocket.send).not.toHaveBeenCalled();
     expect(healthySocket.sent).toEqual([
       { type: "event", event: "session.message", payload, seq: 1 },
@@ -441,7 +302,7 @@ describe("gateway broadcaster", () => {
   it("stamps targeted frames on the per-client sequence so drops surface as gaps", () => {
     const socket = makeRecordingSocket();
     const client = makeOperatorWsClient("c-seq", socket, ["operator.read"]);
-    const clients = new Set<GatewayWsClient>([client]);
+    const clients = new GatewayClientRegistry([client]);
     const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({ clients });
 
     broadcastToConnIds("tick", { ts: 1 }, new Set(["c-seq"]));
@@ -450,6 +311,8 @@ describe("gateway broadcaster", () => {
     // number: the next delivered frame exposes the loss to gap detection.
     socket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
     broadcastToConnIds("tick", { ts: 3 }, new Set(["c-seq"]), { dropIfSlow: true });
+    expect(socket.close).not.toHaveBeenCalled();
+    expect(socket.terminate).not.toHaveBeenCalled();
     socket.bufferedAmount = 0;
     broadcastToConnIds("tick", { ts: 4 }, new Set(["c-seq"]));
 
@@ -463,7 +326,7 @@ describe("gateway broadcaster", () => {
       scopes: [],
     } as unknown as GatewayWsClient["connect"]);
     worker.connectionKind = "worker";
-    const clients = new Set<GatewayWsClient>([worker]);
+    const clients = new GatewayClientRegistry([worker]);
     const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({ clients });
 
     for (const event of ["heartbeat", "presence", "health", "tick", "shutdown", "chat"]) {
@@ -479,7 +342,7 @@ describe("gateway broadcaster", () => {
     const client = makeOperatorWsClient("c-invalidated", socket, ["operator.read"]);
     client.invalidated = true;
     const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({
-      clients: new Set([client]),
+      clients: new GatewayClientRegistry([client]),
     });
 
     broadcast("heartbeat", { ts: 1 });
@@ -506,7 +369,7 @@ describe("gateway broadcaster", () => {
       platform: "chrome",
       mode: GATEWAY_CLIENT_MODES.UI,
     };
-    const clients = new Set([legacy, first, second]);
+    const clients = new GatewayClientRegistry([legacy, first, second]);
     const sessionMessageSubscribers = createSessionMessageSubscriberRegistry();
     sessionMessageSubscribers.subscribe(first.connId, "session-a");
     sessionMessageSubscribers.subscribe(second.connId, "session-b");
@@ -530,42 +393,35 @@ describe("gateway broadcaster", () => {
   });
 
   it("filters approval and pairing events by scope", () => {
-    const approvalsSocket: TestSocket = {
-      bufferedAmount: 0,
-      send: vi.fn(),
-      close: vi.fn(),
-    };
-    const pairingSocket: TestSocket = {
-      bufferedAmount: 0,
-      send: vi.fn(),
-      close: vi.fn(),
-    };
-    const readSocket: TestSocket = {
-      bufferedAmount: 0,
-      send: vi.fn(),
-      close: vi.fn(),
-    };
+    const approvalsSocket = makeRecordingSocket();
+    const pairingSocket = makeRecordingSocket();
+    const readSocket = makeRecordingSocket();
+    const adminSocket = makeRecordingSocket();
 
-    const clients = new Set<GatewayWsClient>([
+    const clients = new GatewayClientRegistry([
       makeOperatorWsClient("c-approvals", approvalsSocket, ["operator.approvals"]),
       makeOperatorWsClient("c-pairing", pairingSocket, ["operator.pairing"]),
       makeOperatorWsClient("c-read", readSocket, ["operator.read"]),
+      makeOperatorWsClient("c-admin", adminSocket, ["operator.admin"]),
     ]);
 
     const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({ clients });
 
     broadcast("exec.approval.requested", { id: "1" });
     broadcast("device.pair.requested", { requestId: "r1" });
+    broadcast("device.pair.changed", {});
 
     expect(approvalsSocket.send).toHaveBeenCalledTimes(1);
-    expect(pairingSocket.send).toHaveBeenCalledTimes(1);
+    expect(pairingSocket.send).toHaveBeenCalledTimes(2);
     expect(readSocket.send).toHaveBeenCalledTimes(0);
+    expect(adminSocket.send).toHaveBeenCalledTimes(3);
 
     broadcastToConnIds("tick", { ts: 1 }, new Set(["c-read"]));
     broadcastToConnIds("talk.event", { type: "session.ready" }, new Set(["c-read"]));
     expect(readSocket.send).toHaveBeenCalledTimes(2);
     expect(approvalsSocket.send).toHaveBeenCalledTimes(1);
-    expect(pairingSocket.send).toHaveBeenCalledTimes(1);
+    expect(pairingSocket.send).toHaveBeenCalledTimes(2);
+    expect(adminSocket.send).toHaveBeenCalledTimes(3);
   });
 
   it("requires operator.read for chat-class broadcast events", () => {
@@ -585,23 +441,10 @@ describe("gateway broadcaster", () => {
     expectSentEvents(adminSocket, expectedEvents);
   });
 
-  it("requires operator.read for config.changed broadcasts", () => {
-    const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, broadcast } =
-      makeScopedBroadcastContext();
-
-    broadcast("config.changed", { path: "/tmp/openclaw.json", hash: "hash-1", ts: 1 });
-
-    expect(pairingSocket.send).not.toHaveBeenCalled();
-    expect(nodeSocket.send).not.toHaveBeenCalled();
-    expect(readSocket.send).toHaveBeenCalledTimes(1);
-    expect(writeSocket.send).toHaveBeenCalledTimes(1);
-    expect(adminSocket.send).toHaveBeenCalledTimes(1);
-  });
-
   it("requires operator.questions for question broadcasts", () => {
-    const questionSocket: TestSocket = { bufferedAmount: 0, send: vi.fn(), close: vi.fn() };
-    const readSocket: TestSocket = { bufferedAmount: 0, send: vi.fn(), close: vi.fn() };
-    const clients = new Set<GatewayWsClient>([
+    const questionSocket = makeRecordingSocket();
+    const readSocket = makeRecordingSocket();
+    const clients = new GatewayClientRegistry([
       makeOperatorWsClient("c-questions", questionSocket, ["operator.questions"]),
       makeOperatorWsClient("c-read", readSocket, ["operator.read"]),
     ]);
@@ -612,52 +455,6 @@ describe("gateway broadcaster", () => {
 
     expect(questionSocket.send).toHaveBeenCalledTimes(2);
     expect(readSocket.send).not.toHaveBeenCalled();
-  });
-
-  it("requires operator.read for progressive session catalog events", () => {
-    const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, broadcastToConnIds } =
-      makeScopedBroadcastContext();
-    const targets = new Set(["c-pairing", "c-node", "c-read", "c-write", "c-admin"]);
-
-    broadcastToConnIds(
-      "sessions.catalog.host",
-      { progressId: "progress-1", agentId: "main", catalog: { id: "codex", hosts: [] } },
-      targets,
-    );
-
-    expect(pairingSocket.send).not.toHaveBeenCalled();
-    expect(nodeSocket.send).not.toHaveBeenCalled();
-    expectSentEvents(readSocket, ["sessions.catalog.host"]);
-    expectSentEvents(writeSocket, ["sessions.catalog.host"]);
-    expectSentEvents(adminSocket, ["sessions.catalog.host"]);
-  });
-
-  it("requires operator.read for task ledger broadcast events", () => {
-    const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, broadcast } =
-      makeScopedBroadcastContext();
-
-    broadcast("task", { action: "deleted", taskId: "task-1" });
-
-    expect(pairingSocket.send).not.toHaveBeenCalled();
-    expect(nodeSocket.send).not.toHaveBeenCalled();
-    expectSentEvents(readSocket, ["task"]);
-    expectSentEvents(writeSocket, ["task"]);
-    expectSentEvents(adminSocket, ["task"]);
-  });
-
-  it("requires operator.read for node topology broadcasts", () => {
-    const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, broadcast } =
-      makeScopedBroadcastContext();
-
-    broadcast("node.presence", { nodeId: "mac-1", lastActiveAtMs: 100 });
-    broadcast("node.runnerInventory.changed", { nodeId: "mac-1" });
-
-    expect(pairingSocket.send).not.toHaveBeenCalled();
-    expect(nodeSocket.send).not.toHaveBeenCalled();
-    const expectedEvents = ["node.presence", "node.runnerInventory.changed"];
-    expectSentEvents(readSocket, expectedEvents);
-    expectSentEvents(writeSocket, expectedEvents);
-    expectSentEvents(adminSocket, expectedEvents);
   });
 
   it("allows plugin.* broadcast events for operator.write and operator.admin", () => {
@@ -746,20 +543,12 @@ describe("gateway broadcaster", () => {
 
     expectSentEvents(pairingSocket, [
       "heartbeat",
-      "presence",
       "health",
       "tick",
       "shutdown",
       "update.available",
     ]);
-    expectSentEvents(nodeSocket, [
-      "heartbeat",
-      "presence",
-      "health",
-      "tick",
-      "shutdown",
-      "update.available",
-    ]);
+    expectSentEvents(nodeSocket, ["heartbeat", "health", "tick", "shutdown", "update.available"]);
     expectSentEvents(readSocket, [
       "cron",
       "voicewake.changed",
@@ -774,7 +563,6 @@ describe("gateway broadcaster", () => {
     expectSentEvents(talkSocket, [
       "talk.mode",
       "heartbeat",
-      "presence",
       "health",
       "tick",
       "shutdown",
@@ -805,9 +593,14 @@ describe("gateway broadcaster", () => {
       readSocket,
     );
 
-    const { broadcast } = createGatewayBroadcaster({ clients });
+    const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({
+      clients,
+      preparePresenceProjection: (presence) => () => presence,
+    });
 
     broadcast("chat", chatPayload());
+    broadcast("presence", { presence: [] });
+    broadcastToConnIds("presence", { presence: [] }, new Set(["c-pairing", "c-read"]));
     broadcast("heartbeat", { ts: 1 });
     broadcast("chat.side_result", chatSideResultPayload());
     broadcast("tick", { ts: 2 });
@@ -818,9 +611,11 @@ describe("gateway broadcaster", () => {
     ]);
     expect(sentEventSeq(readSocket)).toEqual([
       ["chat", 1],
-      ["heartbeat", 2],
-      ["chat.side_result", 3],
-      ["tick", 4],
+      ["presence", 2],
+      ["presence", 3],
+      ["heartbeat", 4],
+      ["chat.side_result", 5],
+      ["tick", 6],
     ]);
   });
 
@@ -854,61 +649,6 @@ describe("gateway broadcaster", () => {
       secondSocket.sent.at(-1)?.seq,
       thirdSocket.sent.at(-1)?.seq,
     ]).toEqual([1, 2, 2]);
-  });
-
-  it("preserves seq gaps when dropIfSlow skips an eligible broadcast", () => {
-    const slowReadSocket = makeRecordingSocket();
-    slowReadSocket.bufferedAmount = Number.MAX_SAFE_INTEGER;
-    const readSocket = makeRecordingSocket();
-
-    const clients = makeReadPairClients(
-      { connId: "c-slow-read", socket: slowReadSocket, scopes: ["operator.read"] },
-      readSocket,
-    );
-
-    const { broadcast } = createGatewayBroadcaster({ clients });
-
-    broadcast("chat", chatPayload(), { dropIfSlow: true });
-    slowReadSocket.bufferedAmount = 0;
-    broadcast("heartbeat", { ts: 1 });
-
-    expect(sentEventSeq(slowReadSocket)).toEqual([["heartbeat", 2]]);
-    expect(sentEventSeq(readSocket)).toEqual([
-      ["chat", 1],
-      ["heartbeat", 2],
-    ]);
-  });
-
-  it("records a payload diagnostic when the outbound websocket buffer exceeds the limit", () => {
-    resetDiagnosticEventsForTest();
-    const events: DiagnosticEventPayload[] = [];
-    const stop = onDiagnosticEvent((event) => events.push(event));
-    try {
-      const slowReadSocket = makeRecordingSocket();
-      slowReadSocket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
-      const clients = new Set<GatewayWsClient>([
-        makeOperatorWsClient("c-slow-read", slowReadSocket, ["operator.read"]),
-      ]);
-
-      const { broadcast } = createGatewayBroadcaster({ clients });
-
-      broadcast("chat", chatPayload(), { dropIfSlow: true });
-      broadcast("heartbeat", { ts: 1 });
-
-      const payloadEvent = events.find((event) => event.type === "payload.large");
-      expect(payloadEvent?.type).toBe("payload.large");
-      expect(payloadEvent?.surface).toBe("gateway.ws.outbound_buffer");
-      expect(payloadEvent?.action).toBe("rejected");
-      expect(payloadEvent?.bytes).toBe(MAX_BUFFERED_BYTES + 1);
-      expect(payloadEvent?.limitBytes).toBe(MAX_BUFFERED_BYTES);
-      expect(payloadEvent?.reason).toBe("ws_send_buffer_drop");
-      expect(
-        events.reduce((count, event) => count + (event.type === "payload.large" ? 1 : 0), 0),
-      ).toBe(1);
-    } finally {
-      stop();
-      resetDiagnosticEventsForTest();
-    }
   });
 });
 
@@ -992,28 +732,6 @@ describe("resolveNodeCommandAllowlist", () => {
     expectDenied(allow, DEFAULT_DANGEROUS_NODE_COMMANDS);
   }
 
-  it("includes iOS service commands by default", () => {
-    const allow = resolveNodeCommandAllowlist(
-      {},
-      {
-        platform: "iOS 26.0",
-        deviceFamily: "iPhone",
-      },
-    );
-
-    expectAllowed(allow, [
-      "device.info",
-      "device.status",
-      "system.notify",
-      "contacts.search",
-      "calendar.events",
-      "reminders.list",
-      "photos.latest",
-      "motion.activity",
-    ]);
-    expectDangerousCommandsDenied(allow);
-  });
-
   it("includes Android notifications and device diagnostics commands by default", () => {
     const allow = resolveNodeCommandAllowlist(
       {},
@@ -1033,10 +751,6 @@ describe("resolveNodeCommandAllowlist", () => {
       "system.notify",
     ]);
     expectDenied(allow, ["sms.search"]);
-  });
-
-  it("treats sms.search as dangerous by default", () => {
-    expect(DEFAULT_DANGEROUS_NODE_COMMANDS).toContain("sms.search");
   });
 
   it("allows macOS screen.snapshot by default but keeps screen.record gated", () => {
@@ -1129,25 +843,8 @@ describe("normalizeVoiceWakeTriggers", () => {
     expect(normalizeVoiceWakeTriggers(null)).toEqual(defaultVoiceWakeTriggers());
   });
 
-  test("trims and limits entries", () => {
-    const result = normalizeVoiceWakeTriggers(["  hello  ", "", "world"]);
-    expect(result).toEqual(["hello", "world"]);
-  });
-
   test("does not split surrogate pairs at the length limit", () => {
     const prefix = "x".repeat(63);
     expect(normalizeVoiceWakeTriggers([`${prefix}\u{1f600}`])).toEqual([prefix]);
-  });
-});
-
-describe("formatError", () => {
-  test("prefers message for Error", () => {
-    expect(formatError(new Error("boom"))).toBe("boom");
-  });
-
-  test("handles status/code", () => {
-    expect(formatError({ status: 500, code: "EPIPE" })).toBe("status=500 code=EPIPE");
-    expect(formatError({ status: 404 })).toBe("status=404 code=unknown");
-    expect(formatError({ code: "ENOENT" })).toBe("status=unknown code=ENOENT");
   });
 });

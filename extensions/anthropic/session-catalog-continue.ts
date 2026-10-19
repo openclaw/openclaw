@@ -9,6 +9,7 @@ import {
 } from "./session-catalog-adoption.js";
 import { type CatalogRecord, listClaudeSessions } from "./session-catalog-discovery.js";
 import { importClaudeHistory } from "./session-catalog-history.js";
+import { resolveClaudeCatalogHomeDir } from "./session-catalog-home.js";
 import {
   readBoundedClaudeHistory,
   readClaudeSessionTranscript,
@@ -19,7 +20,7 @@ import {
   listBoundClaudeSessions,
   resolveClaudeCliRoutedModelId,
 } from "./session-catalog-runtime.js";
-import { currentHomeDir, gatewayClaudeScanOptions } from "./session-catalog-scan.js";
+import { gatewayClaudeScanOptions } from "./session-catalog-scan.js";
 import {
   CLAUDE_CLI_NODE_RUN_COMMAND,
   CLAUDE_SESSION_READ_COMMAND,
@@ -41,7 +42,10 @@ export async function continueClaudeSession(
   threadId: string,
   allowProcessHomeFallback?: boolean,
 ): Promise<{ sessionKey: string }> {
-  const scanOptions = gatewayClaudeScanOptions(allowProcessHomeFallback);
+  const scanOptions = {
+    ...gatewayClaudeScanOptions(allowProcessHomeFallback),
+    sessionId: threadId,
+  };
   const sourceKey = adoptedSourceKey(hostId, threadId);
   const operationKey = `${agentId}\0${sourceKey}`;
   const linkSession = async (sessionKey: string, history?: ClaudeTranscriptItem[]) =>
@@ -50,7 +54,8 @@ export async function continueClaudeSession(
       hostId,
       threadId,
       ...(history ? { history } : {}),
-      listLocalSessions: () => listClaudeSessions(currentHomeDir(), scanOptions),
+      listLocalSessions: async () =>
+        (await listClaudeSessions(resolveClaudeCatalogHomeDir(), scanOptions)).records,
       readRemote: async () =>
         (
           await readClaudeSessionTranscript({
@@ -62,21 +67,21 @@ export async function continueClaudeSession(
           })
         ).items,
     });
-  const existing = listBoundClaudeSessions(api, agentId).get(sourceKey);
+  const existing = listBoundClaudeSessions(api, agentId).get(sourceKey)?.sessionKey;
   if (existing) {
     return await linkSession(existing);
   }
   let history: ClaudeTranscriptItem[] | undefined;
   return await continueClaudeAdoption({
     sourceKey: operationKey,
-    findExisting: () => listBoundClaudeSessions(api, agentId).get(sourceKey),
+    findExisting: () => listBoundClaudeSessions(api, agentId).get(sourceKey)?.sessionKey,
     create: async () => {
       let nodeId: string | undefined;
       let record: ClaudeSessionCatalogSession | undefined;
       if (hostId === CLAUDE_LOCAL_SESSION_HOST_ID) {
-        record = (await listClaudeSessions(currentHomeDir(), scanOptions)).find(
-          (candidate) => candidate.threadId === threadId,
-        );
+        record = (
+          await listClaudeSessions(resolveClaudeCatalogHomeDir(), scanOptions)
+        ).records.find((candidate) => candidate.threadId === threadId);
         if (!record || !isResumableClaudeSource(record.source)) {
           throw new ClaudeCatalogParamsError("only local Claude Code sessions can be continued");
         }
@@ -123,11 +128,10 @@ export async function continueClaudeSession(
       });
       history = loadedHistory;
       const config = currentClaudeSessionCatalogConfig(api);
-      const adoptingAgentId = agentId;
       // Adopt onto the model this agent actually routes to the CLI backend; the
       // packaged default may not be routed or allowed in an existing config.
       const model =
-        resolveClaudeCliRoutedModelId(config, adoptingAgentId) ??
+        resolveClaudeCliRoutedModelId(config, agentId) ??
         CLAUDE_CLI_DEFAULT_MODEL_REF.slice(`${CLAUDE_CLI_BACKEND_ID}/`.length);
       const marker = {
         sourceThreadId: threadId,
@@ -136,12 +140,13 @@ export async function continueClaudeSession(
       const created = await api.runtime.agent.session.createSessionEntry({
         cfg: config,
         key: adoptedSessionKey(hostId, threadId),
-        agentId: adoptingAgentId,
+        agentId,
         recoverMatchingInitialEntry: true,
-        ...(record.name ? { label: record.name } : {}),
+        ...(record.name ? { displayName: record.name } : {}),
         ...(record.cwd ? { spawnedCwd: record.cwd } : {}),
         ...(nodeId ? { execNode: nodeId, ...(record.cwd ? { execCwd: record.cwd } : {}) } : {}),
         initialEntry: {
+          ...(record.color ? { color: record.color } : {}),
           cliBackendId: CLAUDE_CLI_BACKEND_ID,
           model,
           modelSelectionLocked: true,

@@ -20,11 +20,7 @@ import {
   installSkillFromClawHub,
   resolveClawHubSkillVerificationTarget,
 } from "../skills/lifecycle/clawhub.js";
-import {
-  createOnboardingRecommendationsStore,
-  type OnboardingRecommendationsStore,
-  type OnboardingRecommendationsRecord,
-} from "../state/onboarding-recommendations.js";
+import { createOnboardingRecommendationsStore } from "../state/onboarding-recommendations.js";
 import {
   getSetupAppRecommendations,
   type SetupAppRecommendationMatch,
@@ -35,22 +31,6 @@ import { t } from "./i18n/index.js";
 import type { WizardPrompter } from "./prompts.js";
 
 const SKIP_VALUE = "__skip__";
-
-type SetupAppRecommendationDeps = {
-  recommend?: (
-    onPhase?: (phase: SetupAppScanPhase) => void,
-  ) => Promise<SetupAppRecommendationsResult>;
-  ensurePlugin?: typeof ensureOnboardingPluginInstalled;
-  installSkill?: typeof installSkillFromClawHub;
-  isSkillInstalled?: (params: { workspaceDir: string; skillRef: string }) => Promise<boolean>;
-  resolveOfficialEntry?: (pluginId: string) => OnboardingPluginInstallEntry | undefined;
-  readStored?: () => OnboardingRecommendationsRecord | null;
-  writeOffer?: OnboardingRecommendationsStore["writeOffer"];
-  acknowledgeStored?: OnboardingRecommendationsStore["acknowledge"];
-  updatePendingStored?: OnboardingRecommendationsStore["updatePending"];
-  clearPendingStored?: OnboardingRecommendationsStore["clearPending"];
-  deferOfferToBootstrap?: () => boolean;
-};
 
 async function isClawHubSkillInstalled(params: {
   workspaceDir: string;
@@ -74,11 +54,11 @@ async function isClawHubSkillInstalled(params: {
 
 export type SetupAppRecommendationsOutcome = {
   config: OpenClawConfig;
-  commitResult: () => void;
+  commitResult: () => Promise<void>;
 };
 
 function unchangedOutcome(config: OpenClawConfig): SetupAppRecommendationsOutcome {
-  return { config, commitResult: () => undefined };
+  return { config, commitResult: async () => undefined };
 }
 
 function resolveOfficialEntry(pluginId: string): OnboardingPluginInstallEntry | undefined {
@@ -123,45 +103,36 @@ export async function setupAppRecommendations(params: {
   runtime: RuntimeEnv;
   workspaceDir: string;
   modelRouteVerified: boolean;
-  platform?: NodeJS.Platform;
-  deps?: SetupAppRecommendationDeps;
 }): Promise<SetupAppRecommendationsOutcome> {
-  const platform = params.platform ?? process.platform;
   // Product decision: default-on "magical" scan with a kill switch, not
   // consent-first. App labels/bundle ids go to the user's configured model and
   // ClawHub search; a static disclosure stays in scrollback before app names
   // leave the machine, while results repeat it. The config flag disables the step.
   if (
     params.config.wizard?.appRecommendations === false ||
-    platform !== "darwin" ||
+    process.platform !== "darwin" ||
     !params.modelRouteVerified
   ) {
     return unchangedOutcome(params.config);
   }
   const store = createOnboardingRecommendationsStore({ workspaceDir: params.workspaceDir });
-  const readStored = params.deps?.readStored ?? store.read;
-  const storedRecord = readStored();
+  const storedRecord = await store.read();
   if (typeof storedRecord?.acceptedAt === "number") {
     return unchangedOutcome(params.config);
   }
-  const clearPendingStored = params.deps?.clearPendingStored ?? store.clearPending;
   // Pending recommendations are rebuildable cache. Rescan legacy bare
   // ClawHub ids instead of installing without a publisher identity.
   const hasLegacyClawHubId = storedRecord?.matches.some(
     (match) => match.candidate.source === "clawhub-skill" && !match.candidate.id.startsWith("@"),
   );
   if (hasLegacyClawHubId && storedRecord) {
-    if (!clearPendingStored({ expected: storedRecord })) {
+    if (!(await store.clearPending({ expected: storedRecord }))) {
       return unchangedOutcome(params.config);
     }
   }
   const stored = hasLegacyClawHubId ? null : storedRecord;
-  const writeOffer = params.deps?.writeOffer ?? store.writeOffer;
-  const acknowledgeStored = params.deps?.acknowledgeStored ?? store.acknowledge;
-  const updatePendingStored = params.deps?.updatePendingStored ?? store.updatePending;
-  const deferOfferToBootstrap =
-    params.deps?.deferOfferToBootstrap ??
-    (() => existsSync(path.join(params.workspaceDir, DEFAULT_BOOTSTRAP_FILENAME)));
+  const deferOfferToBootstrap = () =>
+    existsSync(path.join(params.workspaceDir, DEFAULT_BOOTSTRAP_FILENAME));
 
   // A pending stored offer means a completed scan's app labels already left
   // the machine once; never rescan or re-query the model for it. Either the
@@ -169,16 +140,16 @@ export async function setupAppRecommendations(params: {
   let matches: SetupAppRecommendationMatch[];
   let appLabels: string[];
   let pendingRecord = stored;
-  let recordResult: (retryMatches: SetupAppRecommendationMatch[]) => void;
-  const commitStoredResult = (retryMatches: SetupAppRecommendationMatch[]) => {
+  let recordResult: (retryMatches: SetupAppRecommendationMatch[]) => Promise<void>;
+  const commitStoredResult = async (retryMatches: SetupAppRecommendationMatch[]) => {
     if (!pendingRecord) {
       throw new Error("Stored onboarding recommendations changed while setup was running.");
     }
     const expected = pendingRecord;
     const updated =
       retryMatches.length === 0
-        ? acknowledgeStored({ expected })
-        : updatePendingStored({ matches: retryMatches, expected });
+        ? await store.acknowledge({ expected })
+        : await store.updatePending({ matches: retryMatches, expected });
     if (!updated) {
       throw new Error("Stored onboarding recommendations changed while setup was running.");
     }
@@ -215,13 +186,11 @@ export async function setupAppRecommendations(params: {
     const onPhase = (phase: SetupAppScanPhase) => progress.update(scanPhaseMessage(phase));
     let result: SetupAppRecommendationsResult;
     try {
-      result = params.deps?.recommend
-        ? await params.deps.recommend(onPhase)
-        : await getSetupAppRecommendations({
-            inventorySource: async () => await scanInstalledApps({ platform }),
-            runtime: params.runtime,
-            onPhase,
-          });
+      result = await getSetupAppRecommendations({
+        inventorySource: async () => await scanInstalledApps(),
+        runtime: params.runtime,
+        onPhase,
+      });
     } catch (error) {
       progress.stop();
       params.runtime.log(
@@ -235,22 +204,22 @@ export async function setupAppRecommendations(params: {
       return unchangedOutcome(params.config);
     }
     if (deferOfferToBootstrap()) {
-      writeOffer({ inventory: result.apps, matches: result.matches, answered: false });
+      await store.writeOffer({ inventory: result.apps, matches: result.matches, answered: false });
       return unchangedOutcome(params.config);
     }
     const scanned = result;
     matches = scanned.matches;
     appLabels = scanned.apps.map((app) => app.label);
-    recordResult = (retryMatches) => {
+    recordResult = async (retryMatches) => {
       if (!pendingRecord) {
-        pendingRecord = writeOffer({
+        pendingRecord = await store.writeOffer({
           inventory: scanned.apps,
           matches: retryMatches.length > 0 ? retryMatches : scanned.matches,
           answered: retryMatches.length === 0,
         });
         return;
       }
-      commitStoredResult(retryMatches);
+      await commitStoredResult(retryMatches);
     };
   }
 
@@ -267,18 +236,16 @@ export async function setupAppRecommendations(params: {
       { value: SKIP_VALUE, label: t("common.skipForNow") },
       ...matches.map((match, index) => ({
         value: selectionValue(index),
-        label:
+        label: t(
           match.candidate.source === "clawhub-skill"
-            ? t("wizard.appRecommendations.optionThirdParty", {
-                name: match.candidate.displayName,
-                reason: match.reason,
-                app: match.appLabel,
-              })
-            : t("wizard.appRecommendations.option", {
-                name: match.candidate.displayName,
-                reason: match.reason,
-                app: match.appLabel,
-              }),
+            ? "wizard.appRecommendations.optionThirdParty"
+            : "wizard.appRecommendations.option",
+          {
+            name: match.candidate.displayName,
+            reason: match.reason,
+            app: match.appLabel,
+          },
+        ),
       })),
     ],
     // Supply-chain guard: ClawHub listing text is publisher-controlled and
@@ -291,45 +258,32 @@ export async function setupAppRecommendations(params: {
         : [],
     ),
   });
-  if (selected.includes(SKIP_VALUE)) {
-    recordResult([]);
-    return unchangedOutcome(params.config);
-  }
-
   let next = params.config;
-  const selectedMatches = uniqueSelectedMatches(matches, selected);
+  const selectedMatches = selected.includes(SKIP_VALUE)
+    ? []
+    : uniqueSelectedMatches(matches, selected);
   if (selectedMatches.length === 0) {
-    recordResult([]);
+    await recordResult([]);
     return unchangedOutcome(params.config);
   }
   // Persist the selected set before external installs. Unselected matches are
   // explicit declines; selected matches stay retryable until each install succeeds.
-  recordResult(selectedMatches);
+  await recordResult(selectedMatches);
   let pendingMatches = selectedMatches;
   const retryMatches: SetupAppRecommendationMatch[] = [];
-  const ensurePlugin = params.deps?.ensurePlugin ?? ensureOnboardingPluginInstalled;
-  const installSkill = params.deps?.installSkill ?? installSkillFromClawHub;
-  const isSkillInstalled = params.deps?.isSkillInstalled ?? isClawHubSkillInstalled;
   for (const match of selectedMatches) {
     let installed = false;
     try {
       if (match.candidate.source === "clawhub-skill") {
-        const alreadyInstalled = await isSkillInstalled({
+        const alreadyInstalled = await isClawHubSkillInstalled({
           workspaceDir: params.workspaceDir,
           skillRef: match.candidate.id,
         });
         if (!alreadyInstalled) {
-          const result = await installSkill({
+          const result = await installSkillFromClawHub({
             workspaceDir: params.workspaceDir,
             slug: match.candidate.id,
             config: next,
-            onClawHubRisk: async () =>
-              await params.prompter.confirm({
-                message: t("wizard.appRecommendations.skillTrust", {
-                  name: match.candidate.displayName,
-                }),
-                initialValue: false,
-              }),
             logger: { warn: (message) => params.runtime.error(message) },
           });
           if (!result.ok) {
@@ -337,13 +291,11 @@ export async function setupAppRecommendations(params: {
           }
         }
       } else {
-        const entry = (params.deps?.resolveOfficialEntry ?? resolveOfficialEntry)(
-          match.candidate.id,
-        );
+        const entry = resolveOfficialEntry(match.candidate.id);
         if (!entry) {
           throw new Error(t("wizard.appRecommendations.catalogEntryMissing"));
         }
-        const pluginResult = await ensurePlugin({
+        const pluginResult = await ensureOnboardingPluginInstalled({
           cfg: next,
           entry,
           prompter: params.prompter,
@@ -370,7 +322,7 @@ export async function setupAppRecommendations(params: {
       // Skill installation is already durable on disk. Checkpoint it now so a
       // later crash cannot turn an existing target into a permanent retry.
       pendingMatches = pendingMatches.filter((candidate) => candidate !== match);
-      recordResult(pendingMatches);
+      await recordResult(pendingMatches);
     }
   }
   // Official plugin config is durable only after the caller writes `next`.
@@ -380,6 +332,8 @@ export async function setupAppRecommendations(params: {
   );
   return {
     config: next,
-    commitResult: hasDeferredOfficialResult ? () => recordResult(retryMatches) : () => undefined,
+    commitResult: hasDeferredOfficialResult
+      ? () => recordResult(retryMatches)
+      : async () => undefined,
   };
 }

@@ -4,10 +4,22 @@ import { execFileSync } from "node:child_process";
 import process from "node:process";
 import { parseArgs } from "node:util";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
-import { resolveDockerReleasePolicy } from "./lib/docker-release-policy.mjs";
+import {
+  inspectDockerImageVersion,
+  resolveDockerReleasePolicy,
+} from "./lib/docker-release-policy.mjs";
 import { compareReleaseVersions } from "./lib/release-version.mjs";
+import { verifyDockerAttestations } from "./verify-docker-attestations.mjs";
 
 const IMAGETOOLS_TIMEOUT_MS = 20 * 60_000;
+// Conservative decimal client caps, not independently verified server byte thresholds.
+// https://vercel.com/docs/container-registry/limits-and-pricing (September 23, 2026).
+const VCR_BYTE_CAPS = Object.freeze({
+  layer: 2_000_000_000,
+  total: 15_000_000_000,
+  manifest: 4_000_000,
+  config: 1_000_000,
+});
 const DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/;
 const IMAGE_INDEX_MEDIA_TYPE = "application/vnd.oci.image.index.v1+json";
 const IMAGE_MANIFEST_MEDIA_TYPES = new Set([
@@ -145,6 +157,66 @@ function inspectRawManifest(imageRef, execFileSyncImpl) {
   }
 }
 
+function verifyPlatformSizeAdmission(imageRef, selection, execFileSyncImpl) {
+  const context = `VCR preflight: ${selection} ${imageRef}`;
+  const failure = (message, cause) =>
+    new Error(`${context}: ${message} No images copied.`, { cause });
+  const checkCap = (size, cap, resource) => {
+    if (size > cap) {
+      throw failure(
+        `${resource} is ${size} bytes; client cap ${cap} bytes (conservative decimal policy).`,
+      );
+    }
+  };
+  let raw;
+  try {
+    raw = String(runImagetools(["inspect", imageRef, "--raw"], execFileSyncImpl));
+  } catch (error) {
+    throw failure("Could not inspect platform manifest.", error);
+  }
+  checkCap(Buffer.byteLength(raw, "utf8"), VCR_BYTE_CAPS.manifest, "manifest body");
+  let manifest;
+  try {
+    manifest = JSON.parse(raw);
+  } catch (error) {
+    throw failure("Invalid platform manifest JSON.", error);
+  }
+  if (manifest?.schemaVersion !== 2 || !IMAGE_MANIFEST_MEDIA_TYPES.has(manifest.mediaType)) {
+    throw failure("Expected a supported image manifest.");
+  }
+  if (!Array.isArray(manifest.layers)) {
+    throw failure("layers must be an array.");
+  }
+  const descriptorSize = (descriptor, field) => {
+    if (
+      typeof descriptor?.digest !== "string" ||
+      !DIGEST_PATTERN.test(descriptor.digest) ||
+      typeof descriptor.mediaType !== "string" ||
+      descriptor.mediaType.trim().length === 0
+    ) {
+      throw failure(`${field} must have a valid sha256 digest and mediaType.`);
+    }
+    if (!Number.isSafeInteger(descriptor.size) || descriptor.size < 0) {
+      throw failure(`${field}.size must be a nonnegative safe integer byte count.`);
+    }
+    return descriptor.size;
+  };
+  const configSize = descriptorSize(manifest.config, "config");
+  checkCap(configSize, VCR_BYTE_CAPS.config, `config ${manifest.config.digest}`);
+  let total = configSize;
+  for (const [index, layer] of manifest.layers.entries()) {
+    const size = descriptorSize(layer, `layer[${index}]`);
+    checkCap(size, VCR_BYTE_CAPS.layer, `layer[${index}] ${layer.digest}`);
+    // Each admitted prefix is <= the total cap, so the next addition stays exact.
+    total += size;
+    checkCap(
+      total,
+      VCR_BYTE_CAPS.total,
+      `total (compressed layers plus config, through layer[${index}])`,
+    );
+  }
+}
+
 function inspectManifestDescriptor(imageRef, execFileSyncImpl) {
   const raw = String(
     runImagetools(["inspect", imageRef, "--format", "{{json .Manifest}}"], execFileSyncImpl),
@@ -161,67 +233,6 @@ function inspectManifestDescriptor(imageRef, execFileSyncImpl) {
     }
     throw new Error(`${imageRef} did not return a valid manifest descriptor.`, { cause: error });
   }
-}
-
-function formatCommandError(error) {
-  if (!(error instanceof Error)) {
-    return String(error);
-  }
-  const output = [error.message];
-  for (const field of ["stderr", "stdout"]) {
-    const value = error[field];
-    if (typeof value === "string") {
-      output.push(value);
-    } else if (Buffer.isBuffer(value)) {
-      output.push(value.toString("utf8"));
-    }
-  }
-  return output.join("\n");
-}
-
-function isMissingManifestError(error) {
-  return /(?:manifest unknown|no such manifest|:\s*not found(?:\s|$))/i.test(
-    formatCommandError(error),
-  );
-}
-
-function inspectImageVersion(imageRef, execFileSyncImpl, { allowMissing = false } = {}) {
-  const versions = new Map();
-  for (const [index, architecture] of ARCHITECTURES.entries()) {
-    const platform = `linux/${architecture}`;
-    let raw;
-    try {
-      raw = runImagetools(
-        ["inspect", imageRef, "--format", `{{json (index .Image "${platform}")}}`],
-        execFileSyncImpl,
-      );
-    } catch (error) {
-      if (allowMissing && index === 0 && isMissingManifestError(error)) {
-        return null;
-      }
-      throw error;
-    }
-    let version;
-    try {
-      version = JSON.parse(raw)?.config?.Labels?.["org.opencontainers.image.version"];
-    } catch (error) {
-      throw new Error(`Could not parse the ${platform} image config for ${imageRef}.`, {
-        cause: error,
-      });
-    }
-    if (typeof version !== "string" || version.trim().length === 0) {
-      throw new Error(
-        `${imageRef} does not have an org.opencontainers.image.version label for ${platform}.`,
-      );
-    }
-    versions.set(platform, version.trim());
-  }
-  const uniqueVersions = new Set(versions.values());
-  if (uniqueVersions.size !== 1) {
-    const details = [...versions].map(([platform, version]) => `${platform}=${version}`).join(", ");
-    throw new Error(`${imageRef} has inconsistent platform versions: ${details}.`);
-  }
-  return uniqueVersions.values().next().value;
 }
 
 function resolvePlatformDigests(imageRef, execFileSyncImpl, architectures) {
@@ -292,16 +303,37 @@ export function publishVercelContainerRegistryImages(params, options = {}) {
   // unknown/unknown platforms. VCR stores those indexes but does not prepare
   // them for Sandbox, so publish a clean amd64+arm64 index from the exact image
   // manifest digests and keep the architecture tags as carbon-copy manifests.
-  // Every source ref was attestation-verified by the caller as an immutable
-  // index, so a mutable release-tag rewrite cannot change these copy inputs.
+  // Verify every immutable source here because recovery callers supply digests
+  // directly; producer-side verification alone does not protect that boundary.
+  verifyDockerAttestations({
+    execFileSyncImpl,
+    imageRefs: selectedVariants.map(({ aliasKey }) => immutableSources.byAlias.get(aliasKey)),
+    log,
+    requiredPlatforms: ARCHITECTURES.map((architecture) => ({ architecture, os: "linux" })),
+  });
   const variants = selectedVariants.map(({ aliasKey, suffix }) => {
     const manifestTag = `${plan.version}${suffix}`;
     const manifestSourceRef = immutableSources.byAlias.get(aliasKey);
+    const sourceVersion = inspectDockerImageVersion(manifestSourceRef, execFileSyncImpl, {
+      timeoutMs: IMAGETOOLS_TIMEOUT_MS,
+    });
+    if (sourceVersion !== plan.version) {
+      throw new Error(
+        `${manifestSourceRef} reports version ${sourceVersion}, expected ${plan.version}.`,
+      );
+    }
     const platformDigests = resolvePlatformDigests(
       manifestSourceRef,
       execFileSyncImpl,
       ARCHITECTURES,
     );
+    for (const architecture of ARCHITECTURES) {
+      verifyPlatformSizeAdmission(
+        `${plan.sourceImage}@${platformDigests[architecture]}`,
+        `${aliasKey}/${manifestTag} linux/${architecture}`,
+        execFileSyncImpl,
+      );
+    }
     return { manifestTag, platformDigests };
   });
 
@@ -390,15 +422,18 @@ export function promoteVercelContainerRegistryAliases(params, options = {}) {
   // write so an out-of-order retry cannot partially roll a channel backward.
   for (const { manifestDigest, targetRefs } of promotions) {
     const sourceDigestRef = `${targetImage}@${manifestDigest}`;
-    const sourceVersion = inspectImageVersion(sourceDigestRef, execFileSyncImpl);
+    const sourceVersion = inspectDockerImageVersion(sourceDigestRef, execFileSyncImpl, {
+      timeoutMs: IMAGETOOLS_TIMEOUT_MS,
+    });
     if (sourceVersion !== policy.version) {
       throw new Error(
         `${sourceDigestRef} reports version ${sourceVersion}, expected ${policy.version}.`,
       );
     }
     for (const targetRef of targetRefs) {
-      const currentVersion = inspectImageVersion(targetRef, execFileSyncImpl, {
+      const currentVersion = inspectDockerImageVersion(targetRef, execFileSyncImpl, {
         allowMissing: true,
+        timeoutMs: IMAGETOOLS_TIMEOUT_MS,
       });
       if (currentVersion === null) {
         continue;

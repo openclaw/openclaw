@@ -1,5 +1,4 @@
-// Resolves channel implicit-mention policy across account, channel, and shared defaults.
-import { resolveAccountEntry } from "../routing/account-lookup.js";
+import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import type { OpenClawConfig } from "./config.js";
 import type { ChannelImplicitMentionsConfig } from "./types.channels.js";
@@ -26,26 +25,20 @@ export function resolveChannelImplicitMentions(params: {
   const channelConfig = params.cfg.channels?.[params.channel] as
     | ChannelImplicitMentionsSource
     | undefined;
-  const accountConfig = resolveAccountEntry(
+  const accountConfig = resolveChannelAccountEntry(
     channelConfig?.accounts,
     normalizeAccountId(params.accountId),
+    params.channel,
   );
   const defaults = params.cfg.channels?.defaults?.implicitMentions;
+  const resolve = (kind: keyof ResolvedChannelImplicitMentions) =>
+    accountConfig?.implicitMentions?.[kind] ??
+    channelConfig?.implicitMentions?.[kind] ??
+    defaults?.[kind] ??
+    SHIPPED_IMPLICIT_MENTION_DEFAULTS[kind];
   return {
-    replyToBot:
-      accountConfig?.implicitMentions?.replyToBot ??
-      channelConfig?.implicitMentions?.replyToBot ??
-      defaults?.replyToBot ??
-      SHIPPED_IMPLICIT_MENTION_DEFAULTS.replyToBot,
-    quotedBot:
-      accountConfig?.implicitMentions?.quotedBot ??
-      channelConfig?.implicitMentions?.quotedBot ??
-      defaults?.quotedBot ??
-      SHIPPED_IMPLICIT_MENTION_DEFAULTS.quotedBot,
-    threadParticipation:
-      accountConfig?.implicitMentions?.threadParticipation ??
-      channelConfig?.implicitMentions?.threadParticipation ??
-      defaults?.threadParticipation ??
-      SHIPPED_IMPLICIT_MENTION_DEFAULTS.threadParticipation,
+    replyToBot: resolve("replyToBot"),
+    quotedBot: resolve("quotedBot"),
+    threadParticipation: resolve("threadParticipation"),
   };
 }

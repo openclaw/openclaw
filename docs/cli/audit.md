@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "CLI reference for activity records, execution identity, and decision receipts"
 read_when:
   - You need to answer who ran an agent or tool, when it ran, and how it ended
@@ -115,21 +116,37 @@ view renders these sections:
 3. **Lineage**: parent context or an explicit absent, unknown, or unsupported
    state.
 4. **Decisions**: bounded run-admission and authoritative action-decision
-   receipts, including terminal operator approvals.
+   receipts, including terminal operator approvals and exact-bound cron lifecycle
+   rows. Independent audit events and decision facts remain available under
+   their existing retention policies; task/flow lifecycle joins are retired.
 5. **Missing evidence** and **Next steps**.
 
 Every field includes `present`, `absent`, `unknown`, or `unsupported`; the CLI
 does not infer a user from a session key, device id, display name, or shared
-credential. A direct local run currently shows authoritative `local-cli`
+credential. A direct local run shows authoritative `local-cli`
 ingress, an absent invoker, and
 `unattributed` coverage. Its admission receipt says `not-applicable` because no
 identity-aware policy or grant evaluation was proven.
+
+Cron lifecycle rows from `cron_run_receipts` appear as owner-native,
+attribution-only receipts when their keyed lifecycle metadata carries the exact
+inspected context and execution ids. They contain status and bounded record
+references, not prompts, task goals, hook payloads, paths, or raw errors. Their
+decision is `not-applicable` because lifecycle attribution does not prove
+authorization. Task and flow inspection joins are retired, but their existing storage layout is
+unchanged. No new migration deletes or copies independent audit events or
+decision facts.
+
+Treat every decision cursor as opaque: numeric and `a:`, `m:`, and `g:` values
+remain compatible. Cron pages may return `c:`. A well-formed historical `t:` or
+`f:` cursor reports `decision cursor is no longer retained; restart inspection without --cursor`.
+It does not alias a retained source or silently start another page.
 
 For Gateway runs, a resolved authenticated profile can make the invoker
 `present` and coverage `attribution-only`. Paired devices and shared credentials
 do not establish a person: without a durable profile the invoker stays absent,
 or `unknown` when authenticated user evidence promised a profile that could not
-be resolved. Session creation retains the live canonical durable profile id so
+be resolved. Session creation retains the live resolved durable profile id so
 profile linking does not orphan ownership, while run inspection consumes the
 immutable connection-time audit fact. Ordinary session provenance stores no
 display label. An optional bounded, secret-redacted label can be retained only
@@ -149,17 +166,18 @@ attribution-only.
 
 For channel ingress, `unknown` means a supported integration could not supply
 valid host-bound evidence; it never means allowed. `unsupported` is reserved
-for a named path with no authoritative Phase 0 integration. A plugin-provided
+for a named path with no authoritative ingress integration. A plugin-provided
 sender or structurally copied resolver result cannot upgrade either state.
 
-A terminal approval receipt shows `allowed` or `denied`, its stable reason
-code, enforcement state, authoritative source boundary, policy and grant
-references, context fields used, and remediation. Expired and cancelled
+A terminal approval display shows `allowed` or `denied`, its stable reason
+code, enforcement state, verified producer class, policy and grant counts,
+context fields used, and remediation. Expired and cancelled
 approvals are denied non-actions with distinct reason codes. `no-route` is an
 enforced denial only when the approval owner recorded that terminal state. A
-corrupt approval is `unknown`. The text view labels `operator_approvals` as an
-authoritative owner-native SQLite record retained for 30 days; JSON preserves
-the same source owner and record reference without lossy reformatting.
+corrupt approval is `unknown`. The text view labels a verified
+operator-approval producer as an authoritative owner-native SQLite record
+retained for 30 days. Neither text nor JSON exposes the raw source owner, record
+reference, policy reference, or grant reference.
 `enforced` requires the approval's immutable owner-local binding to match the
 selected context, execution, and run exactly. A missing, malformed, or
 mismatched binding reports `operator_approval_execution_link_missing`,
@@ -192,8 +210,31 @@ their exact tuple was recorded and the gate changed the outcome.
 Portable actions and early suppressions that have no durable delivery record
 use the generic decision-fact owner instead of duplicating delivery state.
 
-JSON output is the Gateway result without lossy reformatting. An exact result contains one
-bounded V1 context (maximum 16 KiB), up to 100 decision receipts, coverage and
+Plugin, node, and worker receipts use the same coverage vocabulary:
+
+- A registered plugin `before_tool_call` hook allow/block, node pairing or
+  capability decision, and exact worker credential/build/owner-epoch admission
+  are `enforced` gates.
+- A successful node result or completed plugin-owned run is
+  `attribution-only`; success never upgrades the earlier gate into proof of
+  authorization.
+- A plugin node policy that returns without its supplied node callback is
+  `unknown` with `node.action_callback` missing.
+- An action performed wholly inside an ACP or other external native runtime
+  without an OpenClaw pre-action callback produces an ACP-owner `unsupported`
+  receipt after admitted prompt submission, with `native.action_callback`
+  missing. It does not claim a side effect. Add an authoritative native-action
+  callback to the adapter to provide stronger evidence; transcript or task text
+  cannot repair this evidence gap.
+
+These generic receipts retain no plugin id, node id, worker environment or
+session id, credential or build hash, token, command, parameters, or raw error
+text. Owner-native approval, pairing, placement, and worker-operation rows are
+not duplicated.
+
+JSON output is the Gateway's safe-only result without lossy reformatting. An
+exact result contains one bounded V1 context (maximum 16 KiB), up to 100
+`decisionDisplays`, coverage and
 missing-evidence codes, and an optional `nextDecisionCursor`. An ambiguous run
 result instead contains at most 50 execution candidates and an optional
 `nextExecutionCursor`. Sensitive domain,
@@ -219,7 +260,7 @@ with an expiry-and-rerun next step. After cleanup it can become `unknown` if no
 separately retained activity remains; this absence does not prove that the run
 did not occur. Startup and hourly maintenance prune at most 1,024 identity
 contexts per tick and continue when collection is disabled. Queue saturation,
-worker/storage failure, cleanup failure, or abrupt process termination can lose
+storage failure, cleanup failure, shutdown timeout, or abrupt process termination can lose
 best-effort evidence but never block or abort the agent run. Normal Gateway and
 direct-local CLI shutdown flushes accepted work when its writer lifecycle
 permits.
@@ -269,8 +310,8 @@ dead letter, or reconciliation makes that outcome known.
 Plugin-local and direct-send paths that bypass those shared boundaries are not
 yet covered; absence of a row does not prove that no message existed.
 
-The audit ledger does not replace transcripts, task history, cron run history,
-or logs. It provides a small cross-run index for operator questions without
+The audit ledger does not replace session transcripts, Cron run history, or
+logs. It provides a small cross-run index for operator questions without
 copying conversation content into another store.
 
 For inbound rows, `durationMs` measures core dispatch and `resultCount` counts
@@ -303,18 +344,26 @@ openclaw gateway call audit.run.inspect \
   --params '{"executionId":"5da4c4c3-e1c9-4c95-a17d-6e5c10fd45cf","decisionLimit":50}'
 ```
 
-Its result is `{ "schemaVersion": 1, "run": ..., "identity": ..., "decisions":
-..., "coverage": ..., "nextDecisionCursor"?: ..., "nextExecutionCursor"?: ... }`.
+Its result is `{ "schemaVersion": 1, "run": ..., "identity": ...,
+"decisionDisplays": ..., "coverage": ..., "nextDecisionCursor"?: ...,
+"nextExecutionCursor"?: ... }`. The required `decisionDisplays` array is the
+only receipt presentation field. Raw owner receipts and a `decisions` key never
+cross the Gateway boundary.
 The closed request accepts exactly one of `executionId` or `runId`.
 `decisionLimit` is 1–100 and `decisionCursor` is optional. Run discovery also
 accepts `executionLimit` from 1–50 and an optional `executionCursor`. A run
 with multiple retained executions returns the typed `ambiguous` identity state
-and no identity context or decisions until the caller selects an execution id.
+and no identity context; its required `decisionDisplays` array is empty until
+the caller selects an execution id.
 For one selected context, receipt paging starts with admission, then reads
 owner-native terminal approvals, merges outbound progress and terminal records,
-and finally reads generic facts for boundaries without a native durable record.
-The merge is deterministic across restart and rejects a cursor whose exact
-owner row has expired.
+then reads generic facts and the cron lifecycle owner. The complete order is
+admission, approval, message, generic, then cron.
+The merged order stays the same across restarts. A cursor is rejected when its exact
+owner row has expired. Approval and message selectors use the opaque
+`approval-decision:` and `message-decision:` namespaces minted from the same
+owner-query snapshot; raw receipt, resolution, and event identifiers never
+become selectors.
 Approval and delivery inspection never write generic duplicates. Generic fact
 writes and projections also require the full context, execution, and run tuple
 to match the immutable execution context.
@@ -324,7 +373,7 @@ receipt comes from the authoritative first-answer-wins approval row, and a
 returned generic receipt comes from the additive immutable decision-fact
 table. All three surfaces use 30-day retention, but absence from the activity
 ledger cannot prove that an approval or action did not occur. Generic fact
-delivery is also best-effort until its bounded worker write persists the row;
+delivery is also best-effort until its bounded queue write persists the row;
 owner-native approval persistence does not use that queue.
 
 The shipped `audit.list` RPC remains unchanged for older run/tool clients. When
@@ -336,7 +385,6 @@ instead of being silently discarded.
 ## Related
 
 - [Audit history](/gateway/audit)
-- [Gateway protocol](/gateway/protocol#audit-ledger-rpc)
+- [Gateway protocol](/gateway/protocol/ledgers#audit-ledger-rpc)
 - [Sessions](/cli/sessions)
-- [Tasks](/cli/tasks)
 - [Cron jobs](/automation/cron-jobs)

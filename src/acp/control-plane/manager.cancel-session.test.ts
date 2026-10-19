@@ -1,95 +1,126 @@
-/** Tests ACP manager cancellation of active turns and idle sessions. */
-import type { AcpRuntimeEvent } from "@openclaw/acp-core/runtime/types";
-import { describe, expect, it, vi } from "vitest";
-import {
-  requireTaskByRunId,
-  withAcpManagerTaskStateDir,
-} from "../../../test/helpers/acp-manager-task-state.js";
+import { describe, expect, it } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
   AcpSessionManager,
   baseCfg,
   createRuntime,
-  expectRecordFields,
   extractStatesFromUpserts,
   hoisted,
   installAcpSessionManagerTestLifecycle,
-  mockParentedAcpSessionEntries,
-  mockCallArg,
+  installMutableAcpSessionMetaUpsert,
+  mockMutableSession,
+  readySessionMeta,
 } from "./manager.test-helpers.js";
+
+const sessionKey = "agent:codex:acp:child-1";
+const target = { cfg: baseCfg, sessionKey };
 
 describe("AcpSessionManager cancelSession", () => {
   installAcpSessionManagerTestLifecycle();
 
-  it("preempts an active turn on cancel and returns to idle state", async () => {
-    await withAcpManagerTaskStateDir(async () => {
-      const runtimeState = createRuntime();
-      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-        id: "acpx",
-        runtime: runtimeState.runtime,
-      });
-      mockParentedAcpSessionEntries({
-        childSessionKey: "agent:codex:acp:child-1",
-        parentSessionKey: "agent:main:main",
-      });
+  it("records idle cancellation failure and preserves its cause", async () => {
+    const runtime = createRuntime();
+    const state = { currentMeta: readySessionMeta() };
+    installMutableAcpSessionMetaUpsert(state);
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({ id: "acpx", runtime: runtime.runtime });
+    hoisted.readAcpSessionEntryMock.mockImplementation(() => ({
+      sessionKey,
+      storeSessionKey: sessionKey,
+      acp: state.currentMeta,
+    }));
+    const manager = new AcpSessionManager();
+    const error = new Error("Cancel transport failed");
+    runtime.cancel.mockRejectedValue(error);
+    await expect(
+      manager.cancelSession({ ...target, reason: "manual-cancel" }),
+    ).rejects.toMatchObject({
+      code: "ACP_TURN_FAILED",
+      message: error.message,
+      cause: error,
+    });
+    expect(runtime.cancel).toHaveBeenCalledOnce();
+    expect(runtime.cancel.mock.calls[0]?.[0].reason).toBe("manual-cancel");
+    expect(extractStatesFromUpserts().at(-1)).toBe("error");
+  });
 
-      let enteredRun = false;
-      runtimeState.runTurn.mockImplementation(async function* (input: { signal?: AbortSignal }) {
-        enteredRun = true;
-        await new Promise<void>((resolve) => {
+  it("cancels an active controller turn through the manager API", async () => {
+    const runtime = createRuntime();
+    const entered = createDeferred();
+    const release = createDeferred();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({ id: "acpx", runtime: runtime.runtime });
+    mockMutableSession(sessionKey, { currentMeta: readySessionMeta() });
+    runtime.runTurn.mockImplementationOnce(async function* (input) {
+      entered.resolve();
+      await Promise.race([
+        release.promise,
+        new Promise<void>((resolve) => {
           if (input.signal?.aborted) {
             resolve();
-            return;
+          } else {
+            input.signal?.addEventListener("abort", () => resolve(), { once: true });
           }
-          input.signal?.addEventListener("abort", () => resolve(), { once: true });
-        });
-        yield { type: "done" as const, stopReason: "cancel" };
-      });
-
-      const manager = new AcpSessionManager();
-      const events: AcpRuntimeEvent[] = [];
-      const runPromise = manager.runTurn({
-        provenance: "system",
-        cfg: baseCfg,
-        sessionKey: "agent:codex:acp:child-1",
-        text: "long task",
-        mode: "prompt",
-        requestId: "run-1",
-        onEvent: (event) => {
-          events.push(event);
-        },
-      });
-      await vi.waitFor(
-        () => {
-          expect(enteredRun).toBe(true);
-        },
-        { interval: 1 },
-      );
-
-      await manager.cancelSession({
-        cfg: baseCfg,
-        sessionKey: "agent:codex:acp:child-1",
-        reason: "manual-cancel",
-      });
-      await runPromise;
-
-      expect(runtimeState.cancel).toHaveBeenCalledTimes(1);
-      expectRecordFields(mockCallArg(runtimeState.cancel), {
-        reason: "manual-cancel",
-      });
-      expectRecordFields(requireTaskByRunId("run-1"), {
-        ownerKey: "agent:main:main",
-        childSessionKey: "agent:codex:acp:child-1",
-        status: "cancelled",
-      });
-      expect(events.at(-1)).toEqual({
-        type: "done",
-        status: "cancelled",
-        stopReason: "cancel",
-      });
-      const states = extractStatesFromUpserts();
-      expect(states).toContain("running");
-      expect(states).toContain("idle");
-      expect(states).not.toContain("error");
+        }),
+      ]);
+      yield { type: "done", status: "cancelled", stopReason: "cancel" };
     });
+    const manager = new AcpSessionManager();
+    const turn = manager.runTurn({
+      ...target,
+      provenance: "system",
+      requestId: "active",
+      mode: "prompt",
+      text: "active",
+    });
+    const turnResult = Promise.allSettled([turn]);
+    try {
+      await entered.promise;
+      await manager.cancelSession({ ...target, reason: "manual-cancel" });
+      expect(await turnResult).toEqual([{ status: "fulfilled", value: undefined }]);
+      expect(runtime.cancel).toHaveBeenCalledOnce();
+      expect(runtime.cancel.mock.calls[0]?.[0].reason).toBe("manual-cancel");
+    } finally {
+      release.resolve();
+      await turnResult;
+    }
+  });
+
+  it("holds new controller turns until the idle backend cancellation settles", async () => {
+    const runtime = createRuntime();
+    const entered = createDeferred();
+    const release = createDeferred();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({ id: "acpx", runtime: runtime.runtime });
+    mockMutableSession(sessionKey, { currentMeta: readySessionMeta() });
+    runtime.cancel.mockImplementationOnce(async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    const manager = new AcpSessionManager();
+    const cancellation = manager.cancelSession(target);
+    let turn: Promise<void> | undefined;
+    try {
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        cancellation,
+        "Idle cancellation settled before entering the backend.",
+      );
+      turn = manager.runTurn({
+        ...target,
+        provenance: "system",
+        requestId: "after-idle-cancel",
+        mode: "prompt",
+        text: "after idle cancel",
+      });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(runtime.runTurn).not.toHaveBeenCalled();
+      release.resolve();
+      await Promise.all([cancellation, turn]);
+      expect(runtime.cancel).toHaveBeenCalledOnce();
+      expect(runtime.runTurn).toHaveBeenCalledOnce();
+    } finally {
+      release.resolve();
+      await Promise.allSettled([cancellation, turn]);
+    }
   });
 });

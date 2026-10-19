@@ -1,3 +1,6 @@
+import path from "node:path";
+import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
+import { readExistingStateRootMode } from "../infra/private-dir-mode.js";
 import { persistBoundedClobberedConfigSnapshot } from "./io.clobber-snapshot.js";
 import type { ConfigIoContext } from "./io.context.js";
 import {
@@ -5,8 +8,11 @@ import {
   resolveConfigForRead,
   resolveConfigIncludesForRead,
 } from "./io.read-helpers.js";
+import { createConfigFileWriteGuard } from "./io.write-safety.js";
+import { resolveIsConfigReadOnly, resolveStateDir } from "./paths.js";
 import type { ConfigFileSnapshot } from "./types.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
+import { captureConfigWriteLockGuard, withConfigWriteLock } from "./write-lock.js";
 
 function findJsonRootSuffix(
   raw: string,
@@ -30,54 +36,16 @@ function findJsonRootSuffix(
   return null;
 }
 
-function warnOnConfigPermissionHardeningFailure(params: {
-  context: ConfigIoContext;
-  detail: string;
-  error: unknown;
-}): void {
-  const message = params.error instanceof Error ? params.error.message : String(params.error);
-  params.context.deps.logger.warn(
-    `Config permission hardening failed (${params.detail}): ${params.context.configPath}: ${message}`,
-  );
-}
-
-async function persistPrefixedConfigRecovery(params: {
-  context: ConfigIoContext;
-  originalRaw: string;
-  recoveredRaw: string;
-}): Promise<void> {
-  const { context } = params;
-  const observedAt = new Date().toISOString();
-  const clobberedPath = await persistBoundedClobberedConfigSnapshot({
-    deps: context.deps,
-    configPath: context.configPath,
-    raw: params.originalRaw,
-    observedAt,
-  });
-  await context.deps.fs.promises.writeFile(context.configPath, params.recoveredRaw, {
-    encoding: "utf-8",
-    mode: 0o600,
-  });
-  await context.deps.fs.promises.chmod?.(context.configPath, 0o600).catch((error: unknown) => {
-    warnOnConfigPermissionHardeningFailure({ context, detail: "prefix recovery", error });
-  });
-  context.deps.logger.warn(
-    `Config auto-stripped non-JSON prefix: ${context.configPath}` +
-      (clobberedPath ? ` (original saved as ${clobberedPath})` : ""),
-  );
-}
-
-export async function recoverConfigFromJsonRootSuffixWithContext(
+export function inspectConfigJsonRootSuffixWithContext(
   context: ConfigIoContext,
-  snapshot: ConfigFileSnapshot,
-): Promise<boolean> {
-  if (!snapshot.exists || snapshot.valid || typeof snapshot.raw !== "string") {
-    return false;
-  }
-  const suffixRecovery = findJsonRootSuffix(snapshot.raw, context.deps.json5);
+  raw: string,
+  assertRecoveryCandidate?: (config: unknown) => void,
+) {
+  const suffixRecovery = findJsonRootSuffix(raw, context.deps.json5);
   if (!suffixRecovery) {
-    return false;
+    return null;
   }
+  assertRecoveryCandidate?.(suffixRecovery.parsed);
   let resolved: unknown;
   try {
     resolved = resolveConfigIncludesForRead(
@@ -86,24 +54,95 @@ export async function recoverConfigFromJsonRootSuffixWithContext(
       context.deps,
     );
   } catch {
-    return false;
+    return null;
   }
   const resolution = resolveConfigForRead(
     resolved,
     context.deps.env,
     context.deps.lowerPrecedenceEnv,
   );
-  const validated = validateConfigObjectWithPlugins(resolution.resolvedConfigRaw, {
-    env: context.deps.env,
+  assertRecoveryCandidate?.(resolution.resolvedConfigRaw);
+  return { ...suffixRecovery, resolvedConfigRaw: resolution.resolvedConfigRaw };
+}
+
+export async function recoverConfigFromJsonRootSuffixWithContext(
+  context: ConfigIoContext,
+  snapshot: ConfigFileSnapshot,
+  assertRecoveryCandidate?: (config: unknown) => void,
+): Promise<boolean> {
+  if (resolveIsConfigReadOnly(context.deps.env)) {
+    return false;
+  }
+  if (!snapshot.exists || snapshot.valid || typeof snapshot.raw !== "string") {
+    return false;
+  }
+  const raw = snapshot.raw;
+  return withConfigWriteLock(
+    context.configPath,
+    () => recoverConfigJsonRootSuffixUnderLock(context, snapshot, raw, assertRecoveryCandidate),
+    context.deps.env,
+  );
+}
+
+async function recoverConfigJsonRootSuffixUnderLock(
+  context: ConfigIoContext,
+  snapshot: ConfigFileSnapshot,
+  raw: string,
+  assertRecoveryCandidate?: (config: unknown) => void,
+): Promise<boolean> {
+  const suffixRecovery = inspectConfigJsonRootSuffixWithContext(
+    context,
+    raw,
+    assertRecoveryCandidate,
+  );
+  if (!suffixRecovery) {
+    return false;
+  }
+  const validated = validateConfigObjectWithPlugins(suffixRecovery.resolvedConfigRaw, {
+    ...context.pathResolution,
+    pluginValidation: context.options.pluginValidation,
     sourceRaw: suffixRecovery.parsed,
   });
   if (!validated.ok) {
     return false;
   }
-  await persistPrefixedConfigRecovery({
-    context,
-    originalRaw: snapshot.raw,
-    recoveredRaw: suffixRecovery.raw,
+  const writeGuard = createConfigFileWriteGuard(
+    context.configPath,
+    context.deps.fs,
+    captureConfigWriteLockGuard(context.configPath),
+    { snapshot, includeGraph: { hashes: {}, targets: {} } },
+  );
+  writeGuard.assertBeforeMutation();
+  const clobberedPath = await persistBoundedClobberedConfigSnapshot({
+    deps: context.deps,
+    configPath: context.configPath,
+    raw,
+    observedAt: new Date().toISOString(),
   });
+  if (clobberedPath === null) {
+    context.deps.logger.warn(
+      `Config prefix recovery deferred: ${context.configPath}; original config snapshot could not be saved. Retry recovery.`,
+    );
+    return false;
+  }
+  // Recovery must publish by rename; a copy fallback can truncate the live config.
+  await replaceFileAtomic({
+    filePath: context.configPath,
+    content: suffixRecovery.raw,
+    dirMode:
+      readExistingStateRootMode(
+        path.dirname(context.configPath),
+        resolveStateDir(context.deps.env, context.deps.homedir),
+        context.deps.fs,
+      ) ?? 0o700,
+    mode: 0o600,
+    tempPrefix: path.basename(context.configPath),
+    fileSystem: writeGuard.fileSystem,
+    assertBeforeMutation: writeGuard.assertBeforeMutation,
+    onDestinationState: writeGuard.onDestinationState,
+  });
+  context.deps.logger.warn(
+    `Config auto-stripped non-JSON prefix: ${context.configPath} (original saved as ${clobberedPath})`,
+  );
   return true;
 }

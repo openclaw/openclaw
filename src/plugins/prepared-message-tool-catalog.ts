@@ -19,8 +19,8 @@ export type PreparedMessageToolCatalog = Readonly<{
   getChannel: (id: string) => PreparedMessageToolCatalogEntry | undefined;
 }>;
 
-const catalogsByRegistry = new WeakMap<PluginRegistry, Map<number, PreparedMessageToolCatalog>>();
-const latestCatalogByRegistry = new WeakMap<PluginRegistry, PreparedMessageToolCatalog>();
+// Prepared runs retain their own catalog; this cache owns only the latest generation.
+const catalogsByRegistry = new WeakMap<PluginRegistry, PreparedMessageToolCatalog>();
 
 function selectedRegistry(
   snapshot: ActivePluginChannelRegistrySnapshot,
@@ -42,34 +42,24 @@ export function settlePreparedMessageToolCatalog(
     return undefined;
   }
   const version = preparedVersion ?? snapshot?.version ?? 0;
-  let catalogs = catalogsByRegistry.get(registry);
-  const existing = catalogs?.get(version);
-  if (existing) {
+  const existing = catalogsByRegistry.get(registry);
+  if (existing?.version === version) {
     return existing;
   }
-  const channels = Object.freeze(
-    listLoadedChannelPluginsForRegistry(registry).map((plugin) =>
-      Object.freeze({
-        id: plugin.id,
-        ...(plugin.actions ? { actions: plugin.actions } : {}),
-        reconcilesUnknownSend:
-          plugin.message?.durableFinal?.capabilities?.reconcileUnknownSend === true &&
-          typeof plugin.message.durableFinal.reconcileUnknownSend === "function",
-      }),
-    ),
-  );
+  const channels = listLoadedChannelPluginsForRegistry(registry).map((plugin) => ({
+    id: plugin.id,
+    actions: plugin.actions,
+    reconcilesUnknownSend:
+      plugin.message?.durableFinal?.capabilities?.reconcileUnknownSend === true &&
+      typeof plugin.message.durableFinal.reconcileUnknownSend === "function",
+  }));
   const byId = new Map(channels.map((entry) => [entry.id, entry] as const));
-  const catalog = Object.freeze({
+  const catalog: PreparedMessageToolCatalog = {
     version,
     channels,
     getChannel: (id: string) => byId.get(id),
-  });
-  if (!catalogs) {
-    catalogs = new Map();
-    catalogsByRegistry.set(registry, catalogs);
-  }
-  catalogs.set(version, catalog);
-  latestCatalogByRegistry.set(registry, catalog);
+  };
+  catalogsByRegistry.set(registry, catalog);
   return catalog;
 }
 
@@ -80,12 +70,13 @@ export function getPreparedMessageToolCatalog(): PreparedMessageToolCatalog | un
   if (!registry) {
     return undefined;
   }
-  return catalogsByRegistry.get(registry)?.get(snapshot.version);
+  const catalog = catalogsByRegistry.get(registry);
+  return catalog?.version === snapshot.version ? catalog : undefined;
 }
 
-/** Returns the catalog settled for one exact runtime registry generation. */
+/** Returns the latest catalog settled for this runtime registry. */
 export function getPreparedMessageToolCatalogForRegistry(
   registry: PluginRegistry,
 ): PreparedMessageToolCatalog | undefined {
-  return latestCatalogByRegistry.get(registry);
+  return catalogsByRegistry.get(registry);
 }

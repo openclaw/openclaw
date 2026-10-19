@@ -1,17 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { dashboardCommand } from "../dashboard.js";
+import { createTestRuntime } from "../test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   copyToClipboard: vi.fn(),
-  ensureGatewayReadyForOperation: vi.fn(),
+  ensureDashboardGatewayReady: vi.fn(),
   inspectPortUsage: vi.fn(),
   issueDeviceBootstrapToken: vi.fn(),
-  loadGatewayTlsRuntime: vi.fn(),
   openUrl: vi.fn(),
+  openUrlPrivately: vi.fn(),
   readConfigFileSnapshot: vi.fn(),
   resolveControlUiLinks: vi.fn(),
-  resolveGatewayAuth: vi.fn(),
-  resolveGatewayAuthToken: vi.fn(),
   resolveGatewayPort: vi.fn(),
   waitForControlUiDocument: vi.fn(),
 }));
@@ -19,15 +18,6 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../../config/config.js", () => ({
   readConfigFileSnapshot: mocks.readConfigFileSnapshot,
   resolveGatewayPort: mocks.resolveGatewayPort,
-}));
-
-vi.mock("../../gateway/auth-token-resolution.js", () => {
-  const { resolveGatewayAuthToken } = mocks;
-  return { resolveGatewayAuthToken };
-});
-
-vi.mock("../../gateway/auth.js", () => ({
-  resolveGatewayAuth: mocks.resolveGatewayAuth,
 }));
 
 vi.mock("../onboard-helpers.js", () => ({
@@ -41,6 +31,11 @@ vi.mock("../../infra/clipboard.js", () => ({
   copyToClipboard: mocks.copyToClipboard,
 }));
 
+vi.mock("../../infra/browser-handoff.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/browser-handoff.js")>()),
+  openUrlPrivately: mocks.openUrlPrivately,
+}));
+
 vi.mock("../../infra/device-bootstrap.js", () => ({
   issueDeviceBootstrapToken: mocks.issueDeviceBootstrapToken,
 }));
@@ -49,12 +44,8 @@ vi.mock("../../infra/ports-inspect.js", () => ({
   inspectPortUsage: mocks.inspectPortUsage,
 }));
 
-vi.mock("../../infra/tls/gateway.js", () => ({
-  loadGatewayTlsRuntime: mocks.loadGatewayTlsRuntime,
-}));
-
 vi.mock("../gateway-readiness.js", () => ({
-  ensureGatewayReadyForOperation: mocks.ensureGatewayReadyForOperation,
+  ensureDashboardGatewayReady: mocks.ensureDashboardGatewayReady,
 }));
 
 vi.mock("../control-ui-handoff.js", async (importOriginal) => ({
@@ -65,13 +56,10 @@ vi.mock("../control-ui-handoff.js", async (importOriginal) => ({
 // Assembled so secret scanners do not read the fixture as a real credential.
 const fakeToken = ["te", "st"].join("");
 const fakePassword = ["te", "st-password"].join("");
-const authPasswordKey = ["pass", "word"].join("");
 const gatewayPasswordJsonKey = ["gateway", "Password"].join("");
 
 const runtime = {
-  error: vi.fn(),
-  exit: vi.fn(),
-  log: vi.fn(),
+  ...createTestRuntime(),
   writeJson: vi.fn(),
   writeStdout: vi.fn(),
 };
@@ -83,6 +71,7 @@ function mockReadyDashboard() {
       gateway: {
         bind: "custom",
         customBindHost: "10.0.0.5",
+        auth: { token: fakeToken },
       },
     },
   });
@@ -108,7 +97,7 @@ function mockReadyDashboard() {
     ],
     hints: [],
   });
-  mocks.ensureGatewayReadyForOperation.mockResolvedValue({
+  mocks.ensureDashboardGatewayReady.mockResolvedValue({
     ready: true,
     recovered: false,
     status: {},
@@ -119,16 +108,10 @@ describe("dashboardCommand --json", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockReadyDashboard();
-    mocks.resolveGatewayAuthToken.mockResolvedValue({
-      secretRefConfigured: false,
-      token: fakeToken,
-    });
-    mocks.resolveGatewayAuth.mockReturnValue({ mode: "token", token: fakeToken });
     mocks.issueDeviceBootstrapToken.mockResolvedValue({
       token: "browser-bootstrap",
       expiresAtMs: 123_456,
     });
-    mocks.loadGatewayTlsRuntime.mockResolvedValue({ enabled: false, required: false });
     mocks.waitForControlUiDocument.mockResolvedValue({ ready: true });
   });
 
@@ -145,7 +128,7 @@ describe("dashboardCommand --json", () => {
         port: 18789,
         tokenIncluded: true,
         browserUrl:
-          "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner",
+          "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
         browserBootstrapExpiresAtMs: 123_456,
       },
       0,
@@ -155,7 +138,6 @@ describe("dashboardCommand --json", () => {
     expect(mocks.copyToClipboard).not.toHaveBeenCalled();
     expect(mocks.inspectPortUsage).toHaveBeenCalledWith(18789);
     expect(mocks.openUrl).not.toHaveBeenCalled();
-    expect(mocks.loadGatewayTlsRuntime).not.toHaveBeenCalled();
     expect(mocks.issueDeviceBootstrapToken).toHaveBeenCalledWith({
       profile: {
         roles: ["operator"],
@@ -187,11 +169,6 @@ describe("dashboardCommand --json", () => {
       httpUrl: "https://127.0.0.1:18789/",
       wsUrl: "wss://127.0.0.1:18789",
     });
-    mocks.loadGatewayTlsRuntime.mockResolvedValue({
-      enabled: true,
-      required: true,
-      fingerprintSha256: "ab".repeat(32),
-    });
     mocks.waitForControlUiDocument.mockResolvedValue({
       ready: true,
       tlsFingerprint: "ab".repeat(32),
@@ -222,13 +199,9 @@ describe("dashboardCommand --json", () => {
       sourceConfig: {
         gateway: {
           bind: "loopback",
-          auth: { mode: "password" },
+          auth: { mode: "password", password: fakePassword },
         },
       },
-    });
-    mocks.resolveGatewayAuth.mockReturnValue({
-      mode: "password",
-      [authPasswordKey]: fakePassword,
     });
 
     await dashboardCommand(runtime, { json: true });
@@ -239,8 +212,8 @@ describe("dashboardCommand --json", () => {
     );
   });
 
-  it("prints one failure object and exits non-zero when not ready", async () => {
-    mocks.ensureGatewayReadyForOperation.mockResolvedValue({
+  it("prints JSON and actionable stderr before exiting when not ready", async () => {
+    mocks.ensureDashboardGatewayReady.mockResolvedValue({
       ready: false,
       reason: "Gateway is not running.",
       recoverable: false,
@@ -249,7 +222,7 @@ describe("dashboardCommand --json", () => {
 
     await dashboardCommand(runtime, { json: true });
 
-    expect(mocks.ensureGatewayReadyForOperation).toHaveBeenCalledWith(
+    expect(mocks.ensureDashboardGatewayReady).toHaveBeenCalledWith(
       expect.objectContaining({
         allowInstall: false,
         interactive: false,
@@ -257,18 +230,33 @@ describe("dashboardCommand --json", () => {
     );
     expect(runtime.writeJson).toHaveBeenCalledOnce();
     expect(runtime.writeJson).toHaveBeenCalledWith(
-      { ok: false, reason: "Gateway is not running." },
+      {
+        ok: false,
+        error: { type: "cli_error", message: "Gateway is not running." },
+        reason: "Gateway is not running.",
+      },
       0,
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(runtime.log).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Gateway is not running.\nRun `openclaw gateway status --deep` for details, then retry `openclaw dashboard --json`.",
+    );
     expect(mocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
   });
 
   it("keeps SecretRef-managed tokens out of the URL", async () => {
-    mocks.resolveGatewayAuthToken.mockResolvedValue({
-      secretRefConfigured: true,
-      token: fakeToken,
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      valid: true,
+      sourceConfig: {
+        gateway: {
+          bind: "custom",
+          customBindHost: "10.0.0.5",
+          auth: {
+            token: { source: "env", provider: "default", id: "MISSING_GATEWAY_TOKEN" },
+          },
+        },
+      },
     });
 
     await dashboardCommand(runtime, { json: true });
@@ -297,7 +285,11 @@ describe("dashboardCommand --json", () => {
     );
     expect(runtime.writeJson).toHaveBeenCalledOnce();
     expect(runtime.writeJson).toHaveBeenCalledWith(
-      { ok: false, reason: "Control UI assets are still preparing." },
+      {
+        ok: false,
+        error: { type: "cli_error", message: "Control UI assets are still preparing." },
+        reason: "Control UI assets are still preparing.",
+      },
       0,
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
@@ -313,7 +305,11 @@ describe("dashboardCommand --json", () => {
     await dashboardCommand(runtime, { json: true });
 
     expect(runtime.writeJson).toHaveBeenCalledWith(
-      { ok: false, reason: "Gateway TLS certificate fingerprint mismatch." },
+      {
+        ok: false,
+        error: { type: "cli_error", message: "Gateway TLS certificate fingerprint mismatch." },
+        reason: "Gateway TLS certificate fingerprint mismatch.",
+      },
       0,
     );
     expect(mocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
@@ -325,9 +321,38 @@ describe("dashboardCommand --json", () => {
     await dashboardCommand(runtime, { json: true });
 
     expect(runtime.writeJson).toHaveBeenCalledWith(
-      { ok: false, reason: "state store unavailable" },
+      {
+        ok: false,
+        error: { type: "cli_error", message: "state store unavailable" },
+        reason: "state store unavailable",
+      },
       0,
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("keeps the shared error envelope when loopback ownership cannot be verified", async () => {
+    mocks.inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [
+        { pid: 4242, commandLine: "openclaw-gateway", address: "10.0.0.5:18789" },
+        { pid: 4343, commandLine: "other-process", address: "127.0.0.1:18789" },
+      ],
+      hints: [],
+    });
+
+    await dashboardCommand(runtime, { json: true });
+
+    const reason = "Dashboard loopback listener could not be verified as the configured Gateway.";
+    expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(
+      { ok: false, error: { type: "cli_error", message: reason }, reason },
+      0,
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.waitForControlUiDocument).not.toHaveBeenCalled();
+    expect(mocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
+    expect(mocks.copyToClipboard).not.toHaveBeenCalled();
+    expect(mocks.openUrl).not.toHaveBeenCalled();
   });
 });

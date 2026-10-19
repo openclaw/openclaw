@@ -1,583 +1,429 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { gunzipSync } from "node:zlib";
+import { afterEach, expect, it, vi } from "vitest";
 import packageJson from "../../package.json" with { type: "json" };
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { collectSqliteSchemaIssues } from "../infra/sqlite-schema-contract.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
+import { SQLITE_STAGING_TOKEN_FILES } from "../infra/sqlite-staging-token.js";
+import { createUpdateRun } from "../infra/update-run-ledger.js";
 import {
-  closeOpenClawAgentDatabasesForTest,
-  OPENCLAW_AGENT_SCHEMA_VERSION,
-  openOpenClawAgentDatabase,
-} from "./openclaw-agent-db.js";
+  compatible,
+  databaseFixture,
+  supportedVersions,
+  versionRow,
+  failureRow,
+  closeDatabases,
+  execSql,
+  openRawDatabase,
+} from "./database-preflight-fixtures.test-support.js";
+import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
 import {
-  assertOpenClawDatabasesReadyForRestart,
+  assertOpenClawDatabasesReady,
   preflightOpenClawStateDatabasePath,
-  preflightOpenClawDatabaseSchemas,
 } from "./openclaw-database-preflight.js";
 import {
-  closeOpenClawStateDatabaseForTest,
-  OPENCLAW_STATE_SCHEMA_VERSION,
-  openOpenClawStateDatabase,
-} from "./openclaw-state-db.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+  snapshotPreflightSourceManifest,
+  snapshotSourceFamily,
+} from "./openclaw-database-preflight.test-support.js";
+import { repairAuditEventsSchema } from "./openclaw-state-db-audit-migration.js";
+import { openDoctorStateSchemaReadAdmission } from "./openclaw-state-db-doctor-schema.js";
+import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
+import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+afterEach(closeDatabases);
+
+function createState() {
+  const fixture = databaseFixture(tempDirs.make("openclaw-preflight-"));
+  fixture.state();
+  fixture.close();
+  return fixture;
+}
+
+it("keeps package schema support metadata aligned", () => {
+  expect(packageJson.openclaw.schemaVersions).toEqual(supportedVersions);
 });
 
-describe("OpenClaw database schema preflight", () => {
-  function snapshotSourceFamily(databasePath: string) {
-    const paths = [databasePath, `${databasePath}-wal`, `${databasePath}-shm`].filter(
-      fs.existsSync,
-    );
-    return {
-      entries: fs.readdirSync(path.dirname(databasePath)).toSorted(),
-      files: paths.map((pathname) => {
-        const stat = fs.statSync(pathname, { bigint: true });
-        return {
-          pathname,
-          bytes: fs.readFileSync(pathname),
-          birthtimeNs: stat.birthtimeNs,
-          ctimeNs: stat.ctimeNs,
-          dev: stat.dev,
-          ino: stat.ino,
-          mtimeNs: stat.mtimeNs,
-          size: stat.size,
-        };
-      }),
-    };
+it("keeps restart discovery off the caller thread and observes changed retained-deletion facts", async () => {
+  const { statePath, ready, agent: openAgent } = createState();
+  const agent = openAgent("retained");
+  closeDatabases();
+  execSql(agent.path, `PRAGMA user_version = ${supportedVersions.agent + 1};`);
+  {
+    using database = openRawDatabase(statePath);
+    database
+      .prepare(`INSERT INTO agent_deletion_journal
+        (agent_id, agent_dir, workspace_dir, sessions_dir, database_paths_json,
+          created_at, cleanup_completed, delete_files)
+        VALUES ('retained', ?, '', '', ?, 1, 1, 0)`)
+      .run(path.dirname(agent.path), JSON.stringify([agent.path]));
   }
-
-  function createExplicitStateDatabase(schemaSql = OPENCLAW_STATE_SCHEMA_SQL): string {
-    const stateDir = tempDirs.make("openclaw-explicit-state-preflight-");
-    const databasePath = path.join(stateDir, "candidate.sqlite");
-    const { DatabaseSync } = requireNodeSqlite();
-    const database = new DatabaseSync(databasePath);
+  revokeSqliteDatabaseAdmissionsForPath(statePath);
+  for (const retained of [true, false]) {
+    if (!retained) {
+      execSql(statePath, "DELETE FROM agent_deletion_journal WHERE agent_id = 'retained';");
+      revokeSqliteDatabaseAdmissionsForPath(statePath);
+    }
+    const callerSql: string[] = [];
+    const observer = observeHostDataSql((sql, database) => {
+      // Snapshot staging locks retain their native owner; payload inspection must move.
+      if (database && path.basename(database.location() ?? "") !== SQLITE_STAGING_TOKEN_FILES[0]) {
+        callerSql.push(sql);
+      }
+    });
     try {
-      database.exec(`${schemaSql}; PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};`);
+      const readiness = ready(undefined, "gateway-restart");
+      if (retained) {
+        await expect(readiness).resolves.toBeUndefined();
+      } else {
+        await expect(readiness).rejects.toMatchObject({
+          incompatibleDatabases: [
+            {
+              ...versionRow("agent", agent.path, supportedVersions.agent + 1),
+              agentId: "retained",
+            },
+          ],
+        });
+      }
+      expect(callerSql).toEqual([]);
+    } finally {
+      observer.restore();
+    }
+  }
+});
+
+function createReleasedStateDatabase() {
+  const fixture = databaseFixture(tempDirs.make("openclaw-startup-database-admission-"));
+  const { dir: stateDir, statePath } = fixture;
+  fs.mkdirSync(path.dirname(statePath), { recursive: true });
+  const archive = new URL(
+    "../../test/fixtures/sqlite/openclaw-state-v2026.7.1-2.sqlite.gz",
+    import.meta.url,
+  );
+  fs.writeFileSync(statePath, gunzipSync(fs.readFileSync(archive)));
+  fs.writeFileSync(path.join(stateDir, "openclaw.json"), "{}\n");
+  return fixture;
+}
+
+it("refuses released legacy audit state before changing any persistent artifact", async () => {
+  const { dir: stateDir, statePath, ready } = createReleasedStateDatabase();
+  const before = snapshotPreflightSourceManifest(stateDir);
+  await expect(ready()).rejects.toBeInstanceOf(OpenClawStateDatabaseSchemaMigrationRequiredError);
+  expect(snapshotPreflightSourceManifest(stateDir)).toEqual(before);
+  await expect(preflightOpenClawStateDatabasePath(statePath)).resolves.toMatchObject({
+    foundVersion: 1,
+  });
+});
+
+it("refuses a configured legacy agent database without mutating its WAL or creating stores", async () => {
+  const fixture = databaseFixture(tempDirs.make("openclaw-agent-startup-admission-"));
+  const { dir: stateDir } = fixture;
+  const agentPath = path.join(stateDir, "custom", "openclaw-agent.sqlite");
+  fixture.agent("main", agentPath);
+  closeDatabases();
+  using writer = openRawDatabase(agentPath);
+  writer.exec(
+    "PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0; PRAGMA user_version = 15; UPDATE schema_meta SET schema_version = 15;",
+  );
+  const config = { session: { store: path.join(stateDir, "custom", "sessions.json") } };
+  const before = snapshotPreflightSourceManifest(stateDir, agentPath);
+  await expect(fixture.ready(config)).rejects.toBeInstanceOf(
+    OpenClawAgentDatabaseMediaMigrationRequiredError,
+  );
+  expect(snapshotPreflightSourceManifest(stateDir, agentPath)).toEqual(before);
+});
+
+it("rejects a canonical configured agent path owned by another agent before writes", async () => {
+  const root = tempDirs.make("openclaw-configured-agent-owner-");
+  const fixture = databaseFixture(path.join(root, "active"));
+  const agentDir = path.join(root, "external", "agents", "alpha");
+  const agentPath = path.join(agentDir, "agent", "openclaw-agent.sqlite");
+  const store = path.join(agentDir, "sessions", "sessions.json");
+  fixture.state();
+  databaseFixture(path.join(root, "donor")).agent("beta", agentPath);
+  closeDatabases();
+  const before = snapshotPreflightSourceManifest(root);
+  await expect(fixture.ready({ session: { store } })).rejects.toThrow(
+    "belongs to agent beta; requested agent alpha",
+  );
+  expect(snapshotPreflightSourceManifest(root)).toEqual(before);
+});
+
+it("admits supported forward state migration after the Doctor-owned audit repair", async () => {
+  const fixture = createReleasedStateDatabase();
+  const { dir: stateDir, statePath } = fixture;
+  {
+    using database = openRawDatabase(statePath);
+    expect(repairAuditEventsSchema(database)).toBe(true);
+  }
+  const before = snapshotPreflightSourceManifest(stateDir);
+  await expect(fixture.ready()).resolves.toBeUndefined();
+  expect(snapshotPreflightSourceManifest(stateDir)).toEqual(before);
+  const migrated = fixture.state();
+  expect(migrated.db.prepare("PRAGMA user_version").get()).toEqual({
+    user_version: supportedVersions.state,
+  });
+});
+
+it.each([false, true])(
+  "recognizes deferred content and still checks its shape (damaged: %s)",
+  async (damaged) => {
+    const fixture = databaseFixture(tempDirs.make("openclaw-preflight-deferred-schema-"));
+    const { env } = fixture;
+    const statePath = fixture.state().path;
+    const run = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } }, { env });
+    closeOpenClawStateDatabaseForTest();
+    {
+      using database = openRawDatabase(statePath);
+      database.exec(
+        `PRAGMA user_version = ${supportedVersions.state - 1}; UPDATE schema_meta SET schema_version = ${supportedVersions.state - 1};`,
+      );
       database
         .prepare(
-          `INSERT INTO schema_meta (
-             meta_key, role, schema_version, agent_id, app_version, created_at, updated_at
-           ) VALUES ('primary', 'global', ?, NULL, NULL, 1, 1)`,
+          "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
         )
-        .run(OPENCLAW_STATE_SCHEMA_VERSION);
-    } finally {
-      database.close();
-    }
-    return databasePath;
-  }
-
-  it("reports an exact current schema for one explicit copied database", async () => {
-    const stateDir = tempDirs.make("openclaw-runtime-state-preflight-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const opened = openOpenClawStateDatabase({ env });
-    const databasePath = opened.path;
-    expect(
-      opened.db
-        .prepare(
-          "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'execution_identity_contexts'",
-        )
-        .get(),
-    ).toBeUndefined();
-    closeOpenClawStateDatabaseForTest();
-
-    await expect(preflightOpenClawStateDatabasePath(databasePath)).resolves.toEqual({
-      schema: "openclaw.state-schema-preflight.v1",
-      databasePath,
-      targetVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-      foundVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-      ownership: null,
-      issues: [],
-      status: "exact",
-      requiresWrite: false,
-    });
-  });
-
-  it("treats a supported persistent column definition as exact", async () => {
-    const databasePath = createExplicitStateDatabase(
-      OPENCLAW_STATE_SCHEMA_SQL.replace(
-        "  kind TEXT NOT NULL,\n  sensitivity TEXT NOT NULL,",
-        "  kind TEXT NOT NULL DEFAULT 'followup',\n  sensitivity TEXT NOT NULL,",
-      ),
-    );
-
-    await expect(preflightOpenClawStateDatabasePath(databasePath)).resolves.toEqual({
-      schema: "openclaw.state-schema-preflight.v1",
-      databasePath,
-      targetVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-      foundVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-      ownership: null,
-      status: "exact",
-      requiresWrite: false,
-      issues: [],
-    });
-  });
-
-  it("accepts a copied current schema with a future bare nullable column without touching it", async () => {
-    const sourcePath = createExplicitStateDatabase();
-    const databasePath = path.join(
-      tempDirs.make("openclaw-copied-state-preflight-"),
-      "candidate.sqlite",
-    );
-    fs.copyFileSync(sourcePath, databasePath);
-    const { DatabaseSync } = requireNodeSqlite();
-    const database = new DatabaseSync(databasePath);
-    try {
-      database.exec("ALTER TABLE worktrees ADD COLUMN future_note TEXT;");
-    } finally {
-      database.close();
-    }
-    const before = snapshotSourceFamily(databasePath);
-
-    await expect(preflightOpenClawStateDatabasePath(databasePath)).resolves.toEqual({
-      schema: "openclaw.state-schema-preflight.v1",
-      databasePath,
-      targetVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-      foundVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-      ownership: null,
-      status: "exact",
-      requiresWrite: false,
-      issues: [],
-    });
-    expect(snapshotSourceFamily(databasePath)).toEqual(before);
-  });
-
-  it("classifies a drifted canonical named index as startup-repairable", async () => {
-    const databasePath = createExplicitStateDatabase();
-    const { DatabaseSync } = requireNodeSqlite();
-    const database = new DatabaseSync(databasePath);
-    try {
-      database.exec(`
-        DROP INDEX idx_task_runs_status;
-        CREATE INDEX idx_task_runs_status ON task_runs(task_id);
-      `);
-    } finally {
-      database.close();
-    }
-
-    await expect(preflightOpenClawStateDatabasePath(databasePath)).resolves.toEqual({
-      schema: "openclaw.state-schema-preflight.v1",
-      databasePath,
-      targetVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-      foundVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-      ownership: null,
-      status: "startup-repairable",
-      requiresWrite: true,
-      issues: [
-        {
-          code: "missing-or-drifted-index",
-          message: "missing or drifted index idx_task_runs_status",
-          objectName: "idx_task_runs_status",
-        },
-      ],
-    });
-  });
-
-  it("classifies the same-version run-end cleanup column as startup-repairable without touching the source", async () => {
-    const sourcePath = createExplicitStateDatabase(
-      OPENCLAW_STATE_SCHEMA_SQL.replace(
-        "  removed_at INTEGER,\n  run_end_cleanup_json TEXT\n",
-        "  removed_at INTEGER\n",
-      ),
-    );
-    const snapshotPath = path.join(
-      tempDirs.make("openclaw-consolidated-state-preflight-"),
-      "candidate.sqlite",
-    );
-    const sqlite = requireNodeSqlite();
-    const writer = new sqlite.DatabaseSync(sourcePath);
-    try {
-      writer.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;");
-      writer
-        .prepare(
-          "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES ('preflight.probe', '{}', 1)",
-        )
-        .run();
-      await sqlite.backup(writer, snapshotPath);
-      writer
-        .prepare(
-          "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES ('preflight.after-backup', '{}', 2)",
-        )
-        .run();
-      expect(fs.existsSync(`${sourcePath}-wal`)).toBe(true);
-      expect(fs.existsSync(`${sourcePath}-shm`)).toBe(true);
-      for (const suffix of ["-wal", "-shm", "-journal"]) {
-        expect(fs.existsSync(`${snapshotPath}${suffix}`)).toBe(false);
+        .run("state.schema.contentVersion", String(supportedVersions.state), Date.now());
+      if (damaged) {
+        database.exec(
+          "ALTER TABLE worktrees DROP COLUMN run_end_cleanup_json; ALTER TABLE worktrees ADD COLUMN run_end_cleanup_json INTEGER;",
+        );
       }
-      const before = snapshotSourceFamily(sourcePath);
+    }
+    const before = snapshotSourceFamily(statePath);
+    const result = await fixture.inspect({ verifyCurrentSchemaShape: true });
+    const indeterminate = damaged
+      ? [
+          expect.objectContaining({
+            kind: "state",
+            reason: expect.stringContaining("column definitions differ for worktrees"),
+          }),
+        ]
+      : [];
+    expect(result.pendingMigrations).toBeUndefined();
+    expect(result.incompatible).toEqual([]);
+    expect(result.deferredSchemaPublications).toEqual([
+      expect.objectContaining({
+        kind: "state",
+        path: statePath,
+        foundVersion: supportedVersions.state - 1,
+        contentVersion: supportedVersions.state,
+        runId: run.runId,
+      }),
+    ]);
+    expect(result.indeterminate).toEqual(indeterminate);
+    const olderTarget = await fixture.inspect(
+      {
+        verifyCurrentSchemaShape: true,
+        supportedVersions: {
+          state: supportedVersions.state - 2,
+          agent: supportedVersions.agent,
+        },
+      },
+      "runtime",
+    );
+    expect(olderTarget.incompatible).toEqual([
+      expect.objectContaining({ foundVersion: supportedVersions.state - 1 }),
+    ]);
+    expect(olderTarget.indeterminate).toEqual(indeterminate);
+    expect(snapshotSourceFamily(statePath)).toEqual(before);
+    if (damaged) {
+      await expect(fixture.ready(undefined, "gateway-restart")).rejects.toThrow(
+        /Gateway refused restart.*column definitions differ for worktrees/su,
+      );
+    } else {
+      await expect(
+        fixture.inspect({
+          supportedVersions: {
+            state: supportedVersions.state - 1,
+            agent: supportedVersions.agent,
+          },
+        }),
+      ).resolves.toMatchObject({
+        incompatible: [expect.objectContaining({ foundVersion: supportedVersions.state })],
+      });
+      await expect(preflightOpenClawStateDatabasePath(statePath)).resolves.toMatchObject({
+        status: "exact",
+        foundVersion: supportedVersions.state - 1,
+        contentVersion: supportedVersions.state,
+        deferredPublication: expect.objectContaining({ runId: run.runId }),
+      });
+    }
+  },
+);
 
-      const result = await preflightOpenClawStateDatabasePath(snapshotPath);
-
-      expect(result).toMatchObject({
-        foundVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-        status: "startup-repairable",
-        requiresWrite: true,
-        issues: [
+it("holds an unregistered store without deletion history or creating shared state", async () => {
+  const fixture = databaseFixture(tempDirs.make("openclaw-unregistered-readiness-"));
+  const { env, statePath } = fixture;
+  const agent = fixture.agent();
+  closeDatabases();
+  fs.unlinkSync(statePath);
+  execSql(
+    agent.path,
+    "PRAGMA journal_mode = DELETE; DROP TABLE session_participants; PRAGMA user_version = 17; UPDATE schema_meta SET schema_version = 17;",
+  );
+  const options = {
+    env,
+    operation: "doctor" as const,
+    configuredAgentDatabaseTargets: [],
+    onAgentInspection: vi.fn(),
+  };
+  const before = snapshotSourceFamily(agent.path);
+  await expect(assertOpenClawDatabasesReady(options)).resolves.toBeUndefined();
+  expect(options.onAgentInspection).toHaveBeenCalledExactlyOnceWith({
+    schemaProcessCount: 0,
+    schemaInspectionCount: 0,
+    schemaSnapshotCount: 0,
+  });
+  const onAgentDatabaseDiscovery = vi.fn();
+  await expect(fixture.inspect({ ...options, onAgentDatabaseDiscovery })).resolves.toEqual(
+    compatible,
+  );
+  expect(onAgentDatabaseDiscovery).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
+      discovery: expect.objectContaining({
+        targets: [],
+        deletionJournal: {
+          status: "unavailable",
+          cause: "missing",
+          reason: "shared state database missing",
+        },
+        retainedTargets: [],
+        unverifiedTargets: [
           {
-            code: "missing-column",
-            objectName: "worktrees.run_end_cleanup_json",
+            agentId: "main",
+            path: agent.path,
+            realPath: fs.realpathSync.native(agent.path),
+            source: "disk",
           },
         ],
-      });
-      expect(snapshotSourceFamily(sourcePath)).toEqual(before);
-    } finally {
-      writer.close();
-    }
-  });
+        registryRemovals: [],
+        failures: [],
+      }),
+    }),
+  );
+  expect(snapshotSourceFamily(agent.path)).toEqual(before);
+  expect(fs.existsSync(statePath)).toBe(false);
+});
 
-  it("accepts first-use session group columns without requiring a startup write", async () => {
-    const databasePath = createExplicitStateDatabase(
-      OPENCLAW_STATE_SCHEMA_SQL.replace(
-        "  created_at INTEGER NOT NULL,\n  cwd TEXT,\n  worktree INTEGER\n",
-        "  created_at INTEGER NOT NULL\n",
+it("checks every registered owner before permitting Gateway restart", async () => {
+  const fixture = databaseFixture(tempDirs.make("openclaw-preflight-conflicting-owners-"));
+  const agentPath = fixture.agent().path;
+  const { statePath } = fixture;
+  closeDatabases();
+  {
+    using registry = openRawDatabase(statePath);
+    registry
+      .prepare(
+        "INSERT INTO agent_databases (agent_id, path, schema_version, last_seen_at, size_bytes) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run("ops", agentPath, supportedVersions.agent, 1, null);
+  }
+
+  await expect(fixture.ready(undefined, "gateway-restart")).rejects.toThrow(
+    /Gateway refused restart.*belongs to agent main; requested agent ops/s,
+  );
+});
+it("reports a failed agent registry query as indeterminate", async () => {
+  const { statePath, inspect } = createState();
+  execSql(statePath, "DROP TABLE agent_databases; CREATE TABLE agent_databases (bad TEXT) STRICT;");
+  expect(await inspect()).toEqual({
+    incompatible: [],
+    indeterminate: [
+      failureRow(
+        "state",
+        statePath,
+        expect.stringContaining("agent database registry query failed"),
       ),
-    );
-
-    await expect(preflightOpenClawStateDatabasePath(databasePath)).resolves.toMatchObject({
-      status: "exact",
-      requiresWrite: false,
-      issues: [],
-    });
+    ],
   });
+});
 
-  it("rejects an explicit preflight path with sidecars without touching it", async () => {
-    const databasePath = createExplicitStateDatabase();
-    const sqlite = requireNodeSqlite();
-    const writer = new sqlite.DatabaseSync(databasePath);
+it.runIf(process.platform !== "win32")(
+  "keeps partial configured-store inventory when one candidate lookup is denied",
+  async () => {
+    const { inspect } = createState();
+    const visibleDir = tempDirs.make("openclaw-configured-visible-");
+    const deniedDir = tempDirs.make("openclaw-configured-denied-");
+    const visiblePath = path.join(visibleDir, "newer.sqlite");
+    const deniedPath = path.join(deniedDir, "owned.sqlite");
+    const absentPath = path.join(visibleDir, "absent.sqlite");
+    for (const databasePath of [visiblePath, deniedPath]) {
+      execSql(
+        databasePath,
+        `PRAGMA user_version = ${supportedVersions.agent + (databasePath === visiblePath ? 1 : 0)};`,
+      );
+    }
+
+    fs.chmodSync(deniedDir, 0o000);
+    let result: Awaited<ReturnType<typeof inspect>>;
     try {
-      writer.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;");
-      writer
-        .prepare(
-          "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES ('preflight.live', '{}', 1)",
-        )
-        .run();
-      const before = snapshotSourceFamily(databasePath);
-
-      await expect(preflightOpenClawStateDatabasePath(databasePath)).resolves.toMatchObject({
-        foundVersion: null,
-        status: "indeterminate",
-        requiresWrite: false,
-        reason: expect.stringMatching(/consolidated snapshot.*sidecars.*online backup/iu),
+      result = await inspect({
+        configuredAgentDatabaseCandidatePaths: [visiblePath, deniedPath, absentPath],
       });
-      expect(snapshotSourceFamily(databasePath)).toEqual(before);
     } finally {
-      writer.close();
-    }
-  });
-
-  it("reports an explicit unreadable path as indeterminate", async () => {
-    const stateDir = tempDirs.make("openclaw-explicit-unreadable-preflight-");
-    const databasePath = path.join(stateDir, "not-sqlite.db");
-    fs.writeFileSync(databasePath, "not a sqlite database");
-
-    await expect(preflightOpenClawStateDatabasePath(databasePath)).resolves.toMatchObject({
-      databasePath,
-      foundVersion: null,
-      status: "indeterminate",
-      requiresWrite: false,
-      reason: expect.stringMatching(/database|file/iu),
-    });
-  });
-
-  it("reports invalid negative schema metadata as indeterminate", async () => {
-    const databasePath = createExplicitStateDatabase();
-    const { DatabaseSync } = requireNodeSqlite();
-    const database = new DatabaseSync(databasePath);
-    try {
-      database.exec("PRAGMA user_version = -1;");
-    } finally {
-      database.close();
+      fs.chmodSync(deniedDir, 0o700);
     }
 
-    await expect(preflightOpenClawStateDatabasePath(databasePath)).resolves.toMatchObject({
-      foundVersion: -1,
-      status: "indeterminate",
-      reason: expect.stringContaining("invalid schema version metadata"),
-    });
-  });
-
-  it("treats a current-v6 additive column as incompatible with the older v6 shape", () => {
-    const { DatabaseSync } = requireNodeSqlite();
-    const database = new DatabaseSync(":memory:");
-    try {
-      database.exec(OPENCLAW_STATE_SCHEMA_SQL);
-      const olderV6Schema = OPENCLAW_STATE_SCHEMA_SQL.replace(
-        "  removed_at INTEGER,\n  run_end_cleanup_json TEXT\n",
-        "  removed_at INTEGER\n",
-      );
-
-      expect(collectSqliteSchemaIssues(database, olderV6Schema)).toContainEqual(
-        expect.objectContaining({
-          code: "unexpected-column",
-          objectName: "worktrees.run_end_cleanup_json",
-        }),
-      );
-    } finally {
-      database.close();
-    }
-  });
-
-  it("keeps package schema support metadata aligned", () => {
-    expect(packageJson.openclaw.schemaVersions).toEqual({
-      state: OPENCLAW_STATE_SCHEMA_VERSION,
-      agent: OPENCLAW_AGENT_SCHEMA_VERSION,
-    });
-  });
-
-  it("accepts a supported state schema", () => {
-    const stateDir = tempDirs.make("openclaw-database-preflight-supported-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    openOpenClawStateDatabase({ env });
-    closeOpenClawStateDatabaseForTest();
-
-    expect(
-      preflightOpenClawDatabaseSchemas({
-        env,
-        verifyCurrentSchemaShape: true,
-        supportedVersions: {
-          state: OPENCLAW_STATE_SCHEMA_VERSION,
-          agent: OPENCLAW_AGENT_SCHEMA_VERSION,
-        },
-      }),
-    ).toEqual({ incompatible: [], indeterminate: [] });
-    expect(() => assertOpenClawDatabasesReadyForRestart({ env })).not.toThrow();
-  });
-
-  it("accepts an older v6 state database without the lazy setup id during restart preflight", () => {
-    const stateDir = tempDirs.make("openclaw-database-preflight-older-v6-setup-id-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const statePath = openOpenClawStateDatabase({ env }).path;
-    closeOpenClawStateDatabaseForTest();
-
-    const { DatabaseSync } = requireNodeSqlite();
-    const state = new DatabaseSync(statePath);
-    try {
-      state.exec("ALTER TABLE device_bootstrap_tokens DROP COLUMN setup_id;");
-    } finally {
-      state.close();
-    }
-    expect(() => assertOpenClawDatabasesReadyForRestart({ env })).not.toThrow();
-  });
-
-  it("reports a current but noncanonical state schema as indeterminate", () => {
-    const stateDir = tempDirs.make("openclaw-database-preflight-noncanonical-state-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const statePath = openOpenClawStateDatabase({ env }).path;
-    closeOpenClawStateDatabaseForTest();
-
-    const { DatabaseSync } = requireNodeSqlite();
-    const state = new DatabaseSync(statePath);
-    try {
-      state.exec(
-        "ALTER TABLE worktrees DROP COLUMN run_end_cleanup_json; " +
-          "ALTER TABLE worktrees ADD COLUMN run_end_cleanup_json INTEGER;",
-      );
-    } finally {
-      state.close();
-    }
-
-    expect(
-      preflightOpenClawDatabaseSchemas({
-        env,
-        verifyCurrentSchemaShape: true,
-        supportedVersions: {
-          state: OPENCLAW_STATE_SCHEMA_VERSION,
-          agent: OPENCLAW_AGENT_SCHEMA_VERSION,
-        },
-      }),
-    ).toEqual({
-      incompatible: [],
-      indeterminate: [
-        {
-          kind: "state",
-          path: statePath,
-          reason: expect.stringContaining("column definitions differ for worktrees"),
-        },
-      ],
-    });
-    expect(() => assertOpenClawDatabasesReadyForRestart({ env })).toThrow(
-      /Gateway refused restart.*column definitions differ for worktrees/u,
-    );
-  });
-
-  it("collects newer state and registered agent schemas with writer builds", () => {
-    const stateDir = tempDirs.make("openclaw-database-preflight-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const statePath = openOpenClawStateDatabase({ env }).path;
-    const agentPath = openOpenClawAgentDatabase({ agentId: "worker-1", env }).path;
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-
-    const { DatabaseSync } = requireNodeSqlite();
-    const state = new DatabaseSync(statePath);
-    try {
-      state.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};`);
-      state
-        .prepare("UPDATE schema_meta SET app_version = ? WHERE meta_key = 'primary'")
-        .run("state-writer-build");
-    } finally {
-      state.close();
-    }
-    const agent = new DatabaseSync(agentPath);
-    try {
-      agent.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + 1};`);
-      agent
-        .prepare("UPDATE schema_meta SET app_version = ? WHERE meta_key = 'primary'")
-        .run("agent-writer-build");
-    } finally {
-      agent.close();
-    }
-
-    expect(
-      preflightOpenClawDatabaseSchemas({
-        env,
-        supportedVersions: {
-          state: OPENCLAW_STATE_SCHEMA_VERSION,
-          agent: OPENCLAW_AGENT_SCHEMA_VERSION,
-        },
-      }),
-    ).toEqual({
+    expect(result).toEqual({
       incompatible: [
-        {
-          kind: "state",
-          path: statePath,
-          foundVersion: OPENCLAW_STATE_SCHEMA_VERSION + 1,
-          supportedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-          writerAppVersion: "state-writer-build",
-        },
-        {
-          kind: "agent",
-          path: agentPath,
-          agentId: "worker-1",
-          foundVersion: OPENCLAW_AGENT_SCHEMA_VERSION + 1,
-          supportedVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
-          writerAppVersion: "agent-writer-build",
-        },
+        versionRow("agent", visiblePath, supportedVersions.agent + 1, supportedVersions.agent),
       ],
-      indeterminate: [],
-    });
-  });
-
-  it("reports a current but noncanonical registered agent schema as indeterminate", () => {
-    const stateDir = tempDirs.make("openclaw-database-preflight-noncanonical-agent-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const agentPath = openOpenClawAgentDatabase({ agentId: "worker-1", env }).path;
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-
-    const { DatabaseSync } = requireNodeSqlite();
-    const agent = new DatabaseSync(agentPath);
-    try {
-      agent.exec(
-        "ALTER TABLE schema_meta ADD COLUMN unexpected TEXT CHECK (length(unexpected) > 0);",
-      );
-    } finally {
-      agent.close();
-    }
-
-    expect(
-      preflightOpenClawDatabaseSchemas({
-        env,
-        verifyCurrentSchemaShape: true,
-        supportedVersions: {
-          state: OPENCLAW_STATE_SCHEMA_VERSION,
-          agent: OPENCLAW_AGENT_SCHEMA_VERSION,
-        },
-      }),
-    ).toEqual({
-      incompatible: [],
       indeterminate: [
-        {
-          kind: "agent",
-          path: agentPath,
-          reason: expect.stringContaining("column definitions differ for schema_meta"),
-        },
+        failureRow("agent", deniedPath, expect.stringMatching(/EACCES|permission denied/iu)),
       ],
     });
-  });
+  },
+);
 
-  it("reports an existing unreadable state database as indeterminate", () => {
-    const stateDir = tempDirs.make("openclaw-database-preflight-unreadable-state-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const statePath = openOpenClawStateDatabase({ env }).path;
-    closeOpenClawStateDatabaseForTest();
-    fs.writeFileSync(statePath, "not a sqlite database");
+it("admits a dangling Workshop index only for Doctor without mutating the source", async () => {
+  const fixture = databaseFixture(tempDirs.make("openclaw-preflight-dangling-workshop-"));
+  const statePath = fixture.state().path;
+  closeOpenClawStateDatabaseForTest();
+  {
+    using database = openRawDatabase(statePath);
+    database.exec(
+      "CREATE TABLE IF NOT EXISTS skill_workshop_collection_reviews (review_id TEXT NOT NULL PRIMARY KEY, owner_agent_id TEXT NOT NULL, backup_id TEXT NOT NULL, create_time INTEGER NOT NULL, kept_names_json TEXT NOT NULL, written_names_json TEXT NOT NULL, dropped_json TEXT NOT NULL) STRICT; CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time ON skill_workshop_collection_reviews(review_id, create_time DESC);",
+    );
+    database.enableDefensive?.(false);
+    database.exec("PRAGMA writable_schema = ON;");
+    database
+      .prepare(
+        `UPDATE sqlite_schema
+            SET sql = 'CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time
+                         ON skill_workshop_collection_reviews(workspace_dir, create_time DESC, review_id DESC)'
+          WHERE type = 'index'
+            AND name = 'idx_skill_workshop_collection_reviews_workspace_time'`,
+      )
+      .run();
+    // SAFETY: PRAGMA schema_version always returns one numeric row for an open database.
+    const { schema_version } = database.prepare("PRAGMA schema_version").get() as {
+      schema_version: number;
+    };
+    database.exec(`PRAGMA writable_schema = OFF; PRAGMA schema_version = ${schema_version + 1};`);
+  }
+  const sourceDir = path.dirname(statePath);
+  const snapshot = () =>
+    fs
+      .readdirSync(sourceDir)
+      .toSorted()
+      .map((name) => [name, fs.readFileSync(path.join(sourceDir, name))]);
+  const before = snapshot();
 
-    expect(
-      preflightOpenClawDatabaseSchemas({
-        env,
-        supportedVersions: {
-          state: OPENCLAW_STATE_SCHEMA_VERSION,
-          agent: OPENCLAW_AGENT_SCHEMA_VERSION,
-        },
-      }),
-    ).toEqual({
-      incompatible: [],
-      indeterminate: [
-        { kind: "state", path: statePath, reason: expect.stringMatching(/database|file/iu) },
-      ],
-    });
-  });
+  const runtime = await fixture.inspect({ scope: "state" });
+  expect(runtime.indeterminate).toEqual([
+    expect.objectContaining({ reason: expect.stringMatching(/openclaw doctor --fix/) }),
+  ]);
+  expect(snapshot()).toEqual(before);
 
-  it("reports a failed agent registry query as indeterminate", () => {
-    const stateDir = tempDirs.make("openclaw-database-preflight-registry-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const statePath = openOpenClawStateDatabase({ env }).path;
-    closeOpenClawStateDatabaseForTest();
-    const { DatabaseSync } = requireNodeSqlite();
-    const state = new DatabaseSync(statePath);
-    try {
-      state.exec("DROP TABLE agent_databases; CREATE TABLE agent_databases (bad TEXT) STRICT;");
-    } finally {
-      state.close();
-    }
-
-    expect(
-      preflightOpenClawDatabaseSchemas({
-        env,
-        supportedVersions: {
-          state: OPENCLAW_STATE_SCHEMA_VERSION,
-          agent: OPENCLAW_AGENT_SCHEMA_VERSION,
-        },
-      }),
-    ).toEqual({
-      incompatible: [],
-      indeterminate: [
-        {
-          kind: "state",
-          path: statePath,
-          reason: expect.stringContaining("agent database registry query failed"),
-        },
-      ],
-    });
-  });
-
-  it("reports an existing unreadable registered agent database as indeterminate", () => {
-    const stateDir = tempDirs.make("openclaw-database-preflight-unreadable-agent-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const agentPath = openOpenClawAgentDatabase({ agentId: "worker-1", env }).path;
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    fs.writeFileSync(agentPath, "not a sqlite database");
-
-    expect(
-      preflightOpenClawDatabaseSchemas({
-        env,
-        supportedVersions: {
-          state: OPENCLAW_STATE_SCHEMA_VERSION,
-          agent: OPENCLAW_AGENT_SCHEMA_VERSION,
-        },
-      }),
-    ).toEqual({
-      incompatible: [],
-      indeterminate: [
-        { kind: "agent", path: agentPath, reason: expect.stringMatching(/database|file/iu) },
-      ],
-    });
-  });
+  await expect(
+    fixture.inspect({
+      scope: "state",
+      openStateSchemaReadAdmission: openDoctorStateSchemaReadAdmission,
+      supportedVersions,
+    }),
+  ).resolves.toEqual(compatible);
+  expect(snapshot()).toEqual(before);
 });

@@ -4,7 +4,7 @@ import { unsupportedSecretRefSurfacePolicy } from "./unsupported-surface-policy.
 
 type CredentialMatrixEntry = {
   id: string;
-  configFile: "openclaw.json" | "auth-profiles.json";
+  configFile: "openclaw.json" | "auth-profile-store";
   path: string;
   refPath?: string;
   when?: { type: "api_key" | "token" };
@@ -26,13 +26,16 @@ export type SecretRefCredentialMatrixDocument = {
 export function buildSecretRefCredentialMatrix(): SecretRefCredentialMatrixDocument {
   const entriesByKey = new Map<string, CredentialMatrixEntry>();
   for (const entry of getSecretTargetRegistry({ sourceTree: true })) {
+    if (!entry.includeInPlan) {
+      continue;
+    }
     const matrixEntry = Object.assign(
       { id: entry.id, configFile: entry.configFile, path: entry.pathPattern },
       entry.refPathPattern ? { refPath: entry.refPathPattern } : {},
       entry.authProfileType ? { when: { type: entry.authProfileType } } : {},
       { secretShape: entry.secretShape, optIn: true as const },
       entry.secretShape === `sibling_ref` && entry.refPathPattern
-        ? { notes: `Compatibility exception: sibling ref field remains canonical.` }
+        ? { notes: `Compatibility exception: sibling ref field remains primary.` }
         : {},
     );
     entriesByKey.set(

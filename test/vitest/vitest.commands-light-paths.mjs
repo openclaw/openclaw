@@ -47,8 +47,6 @@ const commandsLightEntries = [
     test: "src/commands/gateway-status/helpers.test.ts",
   },
   { test: "src/commands/models/auth.test.ts" },
-  { test: "src/commands/models/list.auth-index.test.ts" },
-  { test: "src/commands/models/list.list-command.forward-compat.test.ts" },
   {
     source: "src/commands/models/list.status-command.ts",
     test: "src/commands/models/list.status.test.ts",
@@ -58,11 +56,7 @@ const commandsLightEntries = [
     test: "src/commands/status-json-command.test.ts",
   },
   {
-    source: "src/commands/status-json-payload.ts",
-    test: "src/commands/status-json-payload.test.ts",
-  },
-  {
-    source: "src/commands/status-json-runtime.ts",
+    source: "src/commands/status-json-command.ts",
     test: "src/commands/status-json-runtime.test.ts",
   },
   {
@@ -91,9 +85,6 @@ const commandsLightIncludePatternByFile = new Map(
   ),
 );
 
-export const commandsLightSourceFiles = commandsLightEntries.flatMap(({ source }) =>
-  source ? [source] : [],
-);
 export const commandsLightTestFiles = commandsLightEntries.map(({ test }) => test);
 
 export function isCommandsLightTarget(file) {

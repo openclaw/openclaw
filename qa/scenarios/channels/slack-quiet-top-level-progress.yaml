@@ -1,0 +1,114 @@
+title: Slack default top-level tool turns stay quiet
+
+scenario:
+  id: slack-quiet-top-level-progress
+  surface: channels
+  coverage:
+    primary:
+      - slack.thread-routing
+    secondary:
+      - agent-runtime.streaming-replies
+  objective: Exercise default Slack progress through the real plugin with tool work before a top-level answer.
+  gatewayConfigPatch:
+    channels:
+      slack:
+        replyToMode: "off"
+        streaming: null
+        typingReaction: null
+  successCriteria:
+    - The turn consumes a successful read tool result before answering.
+    - The top-level turn sends exactly one final answer without a preview or progress message.
+    - The plugin requests an hourglass reaction on the inbound message before the final answer.
+  docsRefs:
+    - docs/channels/slack/messaging.md
+    - docs/concepts/streaming.md
+  codeRefs:
+    - extensions/slack/src/monitor/message-handler/dispatch-setup.ts
+    - extensions/slack/src/monitor/message-handler/dispatch-progress.ts
+    - extensions/qa-lab/src/crabline-transport.ts
+  execution:
+    kind: flow
+    channel: slack
+    providerMode: mock-openai
+    timeoutMs: 90000
+    retryCount: 0
+    suiteIsolation: isolated
+    isolationReason: Owns the Slack default streaming configuration and inspects its provider API recorder.
+    # Crabline 0.1.27 lacks reactions and native streaming; several API records also
+    # omit accepted, so artifact capture rejects them. Assert the add request only.
+    summary: Prove tool work, quiet top-level delivery, and the hourglass add request through the real Slack plugin. Reaction visibility/removal and threaded native streaming require separate evidence.
+    config:
+      conversationId: CQUIETPROGRESS
+      senderId: UQUIETUSER
+      marker: QA-SLACK-QUIET-TOP-LEVEL-OK
+
+flow:
+  steps:
+    - name: prepares an isolated default-config Slack tool turn
+      actions:
+        - assert:
+            expr: env.providerMode === "mock-openai" && transport.id === "crabline"
+            message: this API-boundary proof requires mock-openai and Crabline Slack
+        - assert:
+            expr: env.cfg.channels.slack.replyToMode === "off" && env.cfg.channels.slack.streaming === undefined && env.cfg.channels.slack.typingReaction === undefined
+            message: Slack streaming and typing must use their unset defaults
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForTransportReady
+          args: [{ ref: env }, 60000]
+        - call: fs.writeFile
+          args:
+            - expr: path.join(env.gateway.workspaceDir, "slack-progress-fixture.txt")
+            - "Slack progress tool read completed.\n"
+        - set: recorderPath
+          value:
+            expr: path.join(env.outputDir, "artifacts", "crabline", "slack-provider-server.jsonl")
+    - name: observes tool work and quiet top-level delivery
+      actions:
+        - set: recorderCursor
+          value:
+            expr: "(await fs.readFile(recorderPath, 'utf8')).trim().split(String.fromCharCode(10)).filter(Boolean).length"
+        - set: requestCursor
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - sendInbound:
+            conversation:
+              id: { ref: config.conversationId }
+              kind: group
+            senderId: { ref: config.senderId }
+            senderName: QA Progress Operator
+            text:
+              expr: '`Tool progress QA check. Read "slack-progress-fixture.txt" before answering. Reply exactly: ${config.marker}`'
+          saveAs: inbound
+        - waitForOutbound:
+            conversation:
+              id: { ref: config.conversationId }
+              kind: group
+            textIncludes: { ref: config.marker }
+            timeoutMs: 60000
+        - set: requests
+          value:
+            expr: "await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursor}`)"
+        - assert:
+            expr: requests.length === 2 && requests.every((request) => request.outcome === "success") && requests[0].plannedToolName === "read" && requests[0].plannedToolArgs?.path === "slack-progress-fixture.txt" && requests[0].plannedToolCallId && requests[1].toolOutputCallId === requests[0].plannedToolCallId && !requests[1].plannedToolName && !requests[1].toolOutputStructuredError && requests[1].toolOutput.includes("Slack progress tool read completed.")
+            message: the mock provider must consume the matching successful read result before answering
+        - set: events
+          value:
+            expr: "(await fs.readFile(recorderPath, 'utf8')).trim().split(String.fromCharCode(10)).filter(Boolean).map((line) => JSON.parse(line)).slice(recorderCursor).filter((event) => event.type === 'api' && event.body?.channel === config.conversationId)"
+        - set: posts
+          value:
+            expr: "events.filter((event) => event.path === '/api/chat.postMessage')"
+        - assert:
+            expr: posts.length === 1 && posts[0].accepted === true && posts[0].body.text === config.marker && !posts[0].body.thread_ts
+            message:
+              expr: "`expected exactly one accepted top-level final answer and no preview: ${JSON.stringify(posts)}`"
+        - set: adds
+          value:
+            expr: "events.filter((event) => event.path === '/api/reactions.add' && event.body.timestamp === inbound.id && event.body.name === 'hourglass_flowing_sand')"
+        - assert:
+            expr: adds.length > 0 && adds.every((event) => events.indexOf(event) < events.indexOf(posts[0]))
+            message: an hourglass add request targeting the inbound message must precede the final answer
+        - assert:
+            expr: "!events.some((event) => ['/api/chat.update', '/api/chat.startStream', '/api/chat.appendStream', '/api/chat.stopStream'].includes(event.path))"
+            message: the default top-level turn must not start or edit a progress preview
+      detailsExpr: "JSON.stringify({ verdict: 'PASS', scenario: scenario.id, driver: 'crabline', channel: 'slack', providerRequests: requests.length, correlatedReadResult: true, finalMessages: posts.length, previewMessages: 0, hourglassAddRequests: adds.length, reactionAcceptance: 'unsupported by fake', apiSequence: events.map((event) => ({ method: event.path, reaction: event.body.name, accepted: event.accepted ?? null })) })"

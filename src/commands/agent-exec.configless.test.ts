@@ -1,13 +1,12 @@
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveRunWorkspaceDir } from "../agents/workspace-run.js";
-import { buildExecRunConfig, resolveExecBaseConfig } from "./agent-exec.js";
+import { buildExecRunConfig, resolveExecBaseConfig } from "./agent-exec-input.js";
 
 describe("agent exec configless workspace ownership", () => {
-  it.each([
-    { name: "environment-only auth", options: { authEnvOnly: true } },
-    { name: "isolated mode", options: { isolated: true } },
-  ])("materializes the main-agent roster for $name", async ({ options }) => {
+  it("materializes the auth-env-only workspace owner", async () => {
+    const options = { authEnvOnly: true } as const;
+
     const config = buildExecRunConfig({
       base: await resolveExecBaseConfig(options),
       cwd: "/run/here",

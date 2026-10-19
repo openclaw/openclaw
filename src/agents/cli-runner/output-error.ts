@@ -1,7 +1,8 @@
+import type { ResolvedCliBackend } from "../cli-backends.js";
 import type { CliOutput } from "../cli-output-contracts.js";
 import { formatCliOutputError } from "../cli-output.js";
-import { classifyFailoverReason } from "../embedded-agent-helpers.js";
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
+import { classifyFailoverReason } from "../failover/classify.js";
 
 export function createCliOutputFailoverError(params: {
   output: CliOutput;
@@ -10,6 +11,7 @@ export function createCliOutputFailoverError(params: {
   runId?: string;
   sessionId?: string;
   lane?: string;
+  classifyErrorCode?: ResolvedCliBackend["classifyErrorCode"];
 }): FailoverError | undefined {
   if (!params.output.errorText) {
     return undefined;
@@ -18,18 +20,19 @@ export function createCliOutputFailoverError(params: {
     runId: params.runId,
     sessionId: params.sessionId,
   });
-  const syntheticNoResponse = params.output.terminalFailure?.reason === "synthetic_no_response";
-  const reason = syntheticNoResponse
-    ? "format"
+  const terminalFailure = params.output.terminalFailure?.reason;
+  // Record terminal facts before provider hooks can throw or reclassify them;
+  // losing a max-turn stop here could replay tools in another model attempt.
+  const reason = terminalFailure
+    ? terminalFailure === "synthetic_no_response"
+      ? "format"
+      : "unknown"
     : (classifyFailoverReason(message, { provider: params.provider }) ?? "unknown");
-  const code =
-    params.output.terminalFailure?.reason === "max_turns"
-      ? "cli_max_turns"
-      : syntheticNoResponse
-        ? "cli_synthetic_no_response"
-        : reason === "context_overflow"
-          ? "cli_context_overflow"
-          : undefined;
+  const code = terminalFailure
+    ? `cli_${terminalFailure}`
+    : reason === "context_overflow"
+      ? "cli_context_overflow"
+      : params.classifyErrorCode?.(params.output.errorText);
   return new FailoverError(message, {
     reason,
     provider: params.provider,

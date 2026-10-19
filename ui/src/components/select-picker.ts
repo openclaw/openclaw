@@ -1,87 +1,61 @@
-import { html, nothing } from "lit";
-import "./web-awesome-select.ts";
+import type { JSX } from "@solidjs/web";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
+import type { PickerOption, PickerParams } from "./select-picker-types.ts";
+import { PickerContent } from "./select-picker-view.tsx";
+import "../styles/select-picker.css";
 
-export type PickerOption = {
-  value: string;
-  label: string;
-  description?: string;
-  disabled?: boolean;
-};
+export type { PickerGroup, PickerOption, PickerParams } from "./select-picker-types.ts";
 
-export type PickerParams<Option extends PickerOption> = {
-  id?: string;
-  label: string;
-  value: string | null;
-  options: readonly Option[];
-  disabled?: boolean;
-  className?: string;
-  title?: string;
-  placement?: "top" | "bottom";
-  onOpen?: () => void;
-  onChange: (value: string) => void;
-  onChangeTarget?: (value: string, select: HTMLElement) => void;
-  renderLeading?: (option: Option) => unknown;
-};
+export type SelectPicker<Option extends PickerOption = PickerOption> = SolidBridgeElement<{
+  params: PickerParams<Option>;
+}>;
 
-export function renderPicker<Option extends PickerOption>(params: PickerParams<Option>) {
-  // Web Awesome syncs the listbox to its trigger; keep a 138px label floor so
-  // option text does not collapse to an ellipsis at phone widths, but never
-  // exceed the host container (cron/channel grids legitimately shrink below it).
-  const options =
-    params.value === null ||
-    params.value === "" ||
-    params.options.some((option) => option.value === params.value)
-      ? params.options
-      : [...params.options, { value: params.value, label: params.value } as Option];
-  const leading = (option: Option | undefined) => {
-    const content = option && params.renderLeading?.(option);
-    return content === undefined || content === null || content === nothing
-      ? nothing
-      : html`<span slot="start">${content}</span>`;
-  };
-  return html`
-    <wa-select
-      id=${params.id ?? nothing}
-      class=${`settings-select picker-select ${params.className ?? ""}`}
-      style="width:100%;min-width:min(138px,100%)"
-      title=${params.title ?? nothing}
-      placement=${params.placement ?? nothing}
-      .value=${params.value}
-      ?disabled=${params.disabled}
-      @wa-show=${() => params.onOpen?.()}
-      @change=${(event: Event) => {
-        const value = (event.currentTarget as HTMLElement & { value?: unknown }).value;
-        const option = typeof value === "string" && options.find((entry) => entry.value === value);
-        if (option && !option.disabled) {
-          if (params.onChangeTarget) {
-            params.onChangeTarget(value, event.currentTarget as HTMLElement);
-          } else {
-            params.onChange(value);
-          }
-        }
-      }}
-    >
-      <span slot="label" class="settings-control__sr-label">${params.label}</span>
-      ${leading(options.find((option) => option.value === params.value))}
-      ${options.map(
-        (option) => html`
-          <wa-option
-            class="picker-select__option"
-            value=${option.value}
-            .label=${option.label}
-            ?selected=${option.value === params.value}
-            ?disabled=${option.disabled}
-          >
-            ${leading(option)}
-            <span class="picker-select__copy">
-              <span class="picker-select__label">${option.label}</span>
-              ${option.description
-                ? html`<span class="picker-select__description">${option.description}</span>`
-                : nothing}
-            </span>
-          </wa-option>
-        `,
-      )}
-    </wa-select>
-  `;
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-select-picker": SelectPicker;
+  }
+}
+
+const PickerBridge = defineSolidBridge<{ params: PickerParams<PickerOption> }>(
+  "openclaw-select-picker",
+  (props, host) =>
+    PickerContent({
+      get params() {
+        return props.params;
+      },
+      host,
+    }),
+  {
+    properties: {
+      params: { default: { label: "", value: null, options: [], onChange() {} }, attribute: false },
+    },
+  },
+);
+
+export function Picker<Option extends PickerOption>(props: {
+  params: PickerParams<Option>;
+  class?: JSX.ClassValue;
+  style?: string;
+}): JSX.Element {
+  // SAFETY: The bridge transports params unchanged; each caller supplies its own option subtype.
+  return (PickerBridge as typeof Picker)({
+    get params() {
+      return props.params;
+    },
+    get class() {
+      return (
+        props.class ?? [
+          "settings-select picker-select",
+          {
+            "picker-select--submenu": props.params.variant === "submenu",
+            "picker-select--sheet": props.params.sheet,
+          },
+          props.params.className,
+        ]
+      );
+    },
+    get style() {
+      return props.style ?? "width:100%;min-width:min(138px,100%)";
+    },
+  });
 }

@@ -1,12 +1,20 @@
-// Provides shared JSON schema helpers for generated config metadata.
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import type { ConfigSchemaResponse as ProtocolConfigSchemaResponse } from "../../packages/gateway-protocol/src/schema/config.js";
+
+export type ConfigSchemaResponse = Omit<ProtocolConfigSchemaResponse, "schema"> & {
+  schema: Record<string, unknown>;
+};
 
 export type ConfigJsonSchemaObject = Record<string, unknown> & {
   type?: string | string[];
   title?: string;
   description?: string;
   properties?: Record<string, ConfigJsonSchemaObject>;
+  patternProperties?: Record<string, ConfigJsonSchemaObject>;
   required?: string[];
+  enum?: unknown[];
+  default?: unknown;
+  deprecated?: boolean;
   additionalProperties?: ConfigJsonSchemaObject | boolean;
   propertyNames?: ConfigJsonSchemaObject | boolean;
   items?: ConfigJsonSchemaObject | ConfigJsonSchemaObject[];
@@ -14,11 +22,6 @@ export type ConfigJsonSchemaObject = Record<string, unknown> & {
   allOf?: ConfigJsonSchemaObject[];
   oneOf?: ConfigJsonSchemaObject[];
 };
-
-/** Deep-clone schema payloads before callers mutate plugin or base schema fragments. */
-export function cloneSchema<T>(value: T): T {
-  return structuredClone(value);
-}
 
 /** Narrow unknown JSON-schema fragments to non-array objects. */
 export function asSchemaObject(value: unknown): ConfigJsonSchemaObject | null {
@@ -42,6 +45,28 @@ export function schemaHasChildren(schema: ConfigJsonSchemaObject): boolean {
     }
   }
   return Boolean(schema.items && typeof schema.items === "object");
+}
+
+/** Count wildcard substitutions for a matching hint prefix. */
+export function countMatchingHintWildcards(
+  hintParts: readonly string[],
+  targetParts: readonly string[],
+): number | undefined {
+  if (hintParts.length > targetParts.length) {
+    return undefined;
+  }
+  let wildcardCount = 0;
+  for (let index = 0; index < hintParts.length; index += 1) {
+    const hintPart = hintParts[index];
+    if (hintPart === targetParts[index]) {
+      continue;
+    }
+    if (hintPart !== "*") {
+      return undefined;
+    }
+    wildcardCount += 1;
+  }
+  return wildcardCount;
 }
 
 /** Find the most specific wildcard UI hint that matches a concrete config path. */
@@ -68,30 +93,12 @@ export function findWildcardHintMatch<T>(params: {
       continue;
     }
     const hintParts = params.splitPath(hintPath);
-    if (
-      hintParts.length > targetParts.length ||
-      (!params.includeAncestors && hintParts.length !== targetParts.length)
-    ) {
+    if (!params.includeAncestors && hintParts.length !== targetParts.length) {
       continue;
     }
 
-    let wildcardCount = 0;
-    let matches = true;
-    for (let index = 0; index < hintParts.length; index += 1) {
-      const hintPart = hintParts[index];
-      const targetPart = targetParts[index];
-      if (hintPart === targetPart) {
-        continue;
-      }
-      if (hintPart === "*") {
-        wildcardCount += 1;
-        continue;
-      }
-      matches = false;
-      break;
-    }
-
-    if (!matches) {
+    const wildcardCount = countMatchingHintWildcards(hintParts, targetParts);
+    if (wildcardCount === undefined) {
       continue;
     }
     // The deepest hint lets an explicit child override an inherited sensitive parent;

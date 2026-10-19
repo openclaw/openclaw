@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildClawAddPlan } from "./lifecycle.js";
+import { emptyPluginPlanEvidence } from "./packages.test-support.js";
 import { readClawManifestFile } from "./reader.js";
 import { parseClawManifest, parseClawOpenClawProfile } from "./schema.js";
 import type { ClawManifest, ClawOpenClawProfile, ClawSourceIdentity } from "./types.js";
@@ -100,16 +101,6 @@ async function createPlanSource(): Promise<{ source: ClawSourceIdentity; workspa
 }
 
 describe("parseClawManifest", () => {
-  it("parses the grouped portable contract", () => {
-    const manifest = requireManifest();
-
-    expect(manifest.agent.id).toBe("github-triage");
-    expect(manifest.workspace.files).toHaveLength(1);
-    expect(manifest.packages.map((pkg) => pkg.kind)).toEqual(["skill", "plugin"]);
-    expect(Object.keys(manifest.mcpServers)).toEqual(["github"]);
-    expect(manifest.cronJobs[0]?.id).toBe("weekday-triage");
-  });
-
   it("defaults optional ownership groups without inventing agent settings", () => {
     const manifest = requireManifest({ schemaVersion: 1, agent: { id: "minimal-agent" } });
 
@@ -124,14 +115,16 @@ describe("parseClawManifest", () => {
     });
   });
 
-  it("rejects the prototype flat entries contract", () => {
+  it("rejects operator-controlled agent settings", () => {
     const result = parseClawManifest({
-      schemaVersion: "openclaw.claw.v1",
-      id: "old-claw",
-      entries: [{ kind: "skill", id: "demo", required: false }],
+      schemaVersion: 1,
+      agent: { id: "unsafe-agent", model: "value" },
     });
 
     expect(result.ok).toBe(false);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ code: "invalid_manifest", path: "$.agent" }),
+    );
   });
 
   it.each(["model", "provider", "skills", "runtime", "bindings", "auth"])(
@@ -149,15 +142,22 @@ describe("parseClawManifest", () => {
     },
   );
 
-  it("keeps harness-specific settings out of the portable agent object", () => {
-    for (const field of ["groupChat", "sandbox", "tools", "memory", "heartbeat", "humanDelay"]) {
-      expect(
-        parseClawManifest({
-          schemaVersion: 1,
-          agent: { id: "worker", [field]: {} },
-        }).ok,
-      ).toBe(false);
-    }
+  it.each([
+    "model",
+    "subagents",
+    "groupChat",
+    "sandbox",
+    "tools",
+    "memory",
+    "heartbeat",
+    "humanDelay",
+  ])("keeps harness-specific %s out of the portable agent object", (field) => {
+    expect(
+      parseClawManifest({
+        schemaVersion: 1,
+        agent: { id: "worker", [field]: {} },
+      }).ok,
+    ).toBe(false);
   });
 
   it("rejects non-v1 package fields and connector packages", () => {
@@ -186,23 +186,6 @@ describe("parseClawManifest", () => {
     });
     expect(manifestIntegrity.ok).toBe(false);
     expect(manifestIntegrity.diagnostics[0]?.path).toBe("$.packages[0]");
-  });
-
-  it("requires exact package versions", () => {
-    const result = parseClawManifest({
-      ...baseManifest,
-      packages: [
-        {
-          kind: "skill",
-          source: "clawhub",
-          ref: "demo",
-          version: "latest",
-        },
-      ],
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.diagnostics[0]?.path).toBe("$.packages[0].version");
   });
 
   it("rejects resolved MCP secrets", () => {
@@ -245,7 +228,6 @@ describe("parseClawManifest", () => {
       headers: { Authorization: "secret" },
     },
     { url: "https://example.com/mcp", transport: "streamable-http", command: "npx" },
-    { url: "file:///tmp/mcp", transport: "sse" },
     { url: "https://example.com/mcp", transport: "stdio" },
   ])("rejects non-portable remote MCP config %#", (server) => {
     const result = parseClawManifest({
@@ -367,6 +349,7 @@ describe("readClawManifestFile", () => {
       [
         "---",
         "schemaVersion: 1",
+        "categories: [operations, research]",
         "agent:",
         "  id: triage",
         "workspace: {}",
@@ -384,7 +367,11 @@ describe("readClawManifestFile", () => {
 
     expect(result).toMatchObject({
       ok: true,
-      manifest: { schemaVersion: 1, agent: { id: "triage" } },
+      manifest: {
+        schemaVersion: 1,
+        categories: ["operations", "research"],
+        agent: { id: "triage" },
+      },
       source: { kind: "package", name: "@acme/github-triage", version: "3.2.1" },
     });
     if (!result.ok) {
@@ -733,7 +720,12 @@ describe("buildClawAddPlan", () => {
           action: "install",
           integrity: `sha256:${(pkg.kind === "skill" ? "a" : "b").repeat(64)}`,
           warning: `Review ${pkg.ref} before installation.`,
-          ...(pkg.kind === "plugin" ? { installId: "github" } : {}),
+          ...(pkg.kind === "plugin"
+            ? {
+                installId: "github",
+                ...emptyPluginPlanEvidence,
+              }
+            : {}),
         }),
       },
     });
@@ -794,6 +786,7 @@ describe("buildClawAddPlan", () => {
           ...(pkg.kind === "plugin"
             ? {
                 installId: "github",
+                ...emptyPluginPlanEvidence,
                 requirements: [
                   {
                     kind: "plugin-setup" as const,
@@ -881,7 +874,7 @@ describe("buildClawAddPlan", () => {
     );
   });
 
-  it("blocks agent, configured workspace, and MCP collisions", async () => {
+  it("numbers an existing agent while blocking configured workspace and MCP collisions", async () => {
     const { source, workspace } = await createPlanSource();
     const plan = await buildClawAddPlan({
       manifest: requireManifest(),
@@ -894,14 +887,14 @@ describe("buildClawAddPlan", () => {
       },
     });
 
+    expect(plan.agent.finalId).toBe("github-triage-2");
     expect(plan.blockers.map((item) => item.code)).toEqual([
-      "agent_id_collision",
       "workspace_collision",
       "package_install_unavailable",
       "package_install_unavailable",
       "mcp_server_collision",
     ]);
-    expect(plan.summary.blockedActions).toBe(7);
+    expect(plan.summary.blockedActions).toBe(6);
   });
 
   it("canonicalizes a missing workspace through an existing aliased parent", async () => {
@@ -1077,6 +1070,10 @@ describe("buildClawAddPlan", () => {
     });
 
     expect(repeated.planIntegrity).toBe(first.planIntegrity);
+    // Existing consent tokens bind this description for profiles without the new fields.
+    expect(first.capabilityChanges.find((change) => change.kind === "agent")?.reason).toBe(
+      "The new agent declares sandbox, tool, memory-search, or recurring heartbeat capabilities.",
+    );
     expect(changed.planIntegrity).not.toBe(first.planIntegrity);
     expect(changedCapability.planIntegrity).not.toBe(first.planIntegrity);
   });

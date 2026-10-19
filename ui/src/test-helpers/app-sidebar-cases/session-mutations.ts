@@ -1,21 +1,33 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ControlUiAction } from "../../../../src/plugin-sdk/control-ui.js";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
+import "../../lib/toast-host.ts";
+import { publishSidebarSessionList } from "../../components/session-data-events.ts";
+import {
+  pauseSessionPlacementRecovery,
+  readSessionPlacementRecovery,
+} from "../../lib/sessions/session-placement-recovery.ts";
 import {
   createGatewayHarness,
   createSessionState,
   createSessionsHarness,
-  deferred,
   mountSidebar,
   type SidebarLifecycleState,
   successfulSessionPatch,
   type TestSessionMenu,
 } from "../app-sidebar.ts";
+import { registerSessionPluginAction } from "../control-ui-plugin-action.ts";
 import { gatewayHelloForMethods } from "../gateway-methods.ts";
+import { settleLitElement } from "../lit-settle.ts";
 import {
   answerConfirmDialog,
   installDialogPolyfill,
   waitForConfirmDialogActions,
 } from "../modal-dialog.ts";
+import { menuItemLabels, openSubmenu, selectMenuValue } from "../session-menu.ts";
+import { sessionOwnerProfiles } from "../session-owner-menu.ts";
 import { waitForFast } from "../wait-for.ts";
 
 describe("AppSidebar session mutation feedback", () => {
@@ -29,7 +41,10 @@ describe("AppSidebar session mutation feedback", () => {
     restoreDialogPolyfill();
   });
 
-  async function mountMutationHarness(client: GatewayBrowserClient = {} as GatewayBrowserClient) {
+  async function mountMutationHarness(
+    client: GatewayBrowserClient = {} as GatewayBrowserClient,
+    directory = sessionOwnerProfiles(),
+  ) {
     const harness = createSessionsHarness("main", [
       "agent:main:main",
       "agent:main:a",
@@ -42,6 +57,15 @@ describe("AppSidebar session mutation feedback", () => {
       ...args: Parameters<GatewayBrowserClient["request"]>
     ): Promise<T> => {
       const [method, params] = args;
+      if (method === "users.list") {
+        return Promise.resolve(directory as T);
+      }
+      if (method === "sessions.describe") {
+        const { key } = params as { key: string };
+        return Promise.resolve({
+          session: harness.sessions.state.result?.sessions.find((row) => row.key === key),
+        } as T);
+      }
       if (method === "sessions.patchMany") {
         const request = params as {
           targets: Array<{ key: string; agentId?: string }>;
@@ -54,20 +78,18 @@ describe("AppSidebar session mutation feedback", () => {
         : Promise.reject(new Error(`unexpected request: ${method}`));
     };
     const gateway = createGatewayHarness(client);
-    const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
+    const { sidebar, context } = await mountSidebar(gateway.gateway, harness.sessions);
     sidebar.connected = true;
     await sidebar.updateComplete;
-    return { gateway, harness, sidebar };
+    return { gateway, harness, sidebar, context };
   }
 
   async function openSessionMenu(sidebar: SidebarLifecycleState, key: string) {
-    const button = sidebar.querySelector<HTMLButtonElement>(
-      `[data-session-key="${key}"] [data-session-menu="true"]`,
-    );
-    if (!button) {
-      throw new Error(`expected menu button for ${key}`);
+    const row = sidebar.querySelector<HTMLElement>(`[data-session-key="${key}"]`);
+    if (!row) {
+      throw new Error(`expected session row for ${key}`);
     }
-    button.click();
+    row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
     await sidebar.updateComplete;
     const menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
     if (!menu) {
@@ -84,7 +106,7 @@ describe("AppSidebar session mutation feedback", () => {
     if (!link) {
       throw new Error(`expected row link for ${key}`);
     }
-    link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, metaKey: true }));
+    link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, altKey: true }));
   }
 
   async function mountToastHost() {
@@ -94,7 +116,94 @@ describe("AppSidebar session mutation feedback", () => {
     return host;
   }
 
-  it("offers undo after archiving and restores a pinned active session", async () => {
+  async function mountSessionPluginHarness() {
+    const { harness, sidebar, context } = await mountMutationHarness();
+    const result = createSessionState("main", ["agent:main:a"]).result!;
+    const row = { ...result.sessions[0]!, label: "Ready" };
+    harness.list.mockResolvedValue({ ...result, sessions: [row] });
+    Object.assign(sidebar, { sessionsStatusFilter: "all" });
+    sidebar.sessionData.resetSessionList();
+    await sidebar.sessionData.refreshSidebarSessions("main");
+    const run = vi.fn<ControlUiAction["run"]>();
+    const { entry } = registerSessionPluginAction(context, {
+      id: "review",
+      label: "Review session",
+      placement: "session",
+      resolve: ({ session }) => ({
+        label: `Review ${session?.label}`,
+        disabled: session?.hasActiveRun === true,
+      }),
+      run,
+    });
+    sidebar.invalidate();
+    await sidebar.updateComplete;
+    const publish = (rows: GatewaySessionRow[]) => {
+      publishSidebarSessionList(sidebar.sessionData, {
+        result: { ...result, count: rows.length, sessions: rows },
+        agentId: "main",
+        loading: false,
+        error: null,
+      });
+      sidebar.sessionData.requestSessionDataUpdate();
+    };
+    return {
+      sidebar,
+      row,
+      run,
+      publish,
+      openMenu: () => openSessionMenu(sidebar, row.key),
+      actionSelector: `[value="plugin:${entry.key}"]`,
+    };
+  }
+
+  it("uses current scoped session state when invoking plugin menu actions", async () => {
+    const { sidebar, row, run, publish, openMenu, actionSelector } =
+      await mountSessionPluginHarness();
+    const toast = await mountToastHost();
+    let menu = await openMenu();
+    const current = { ...row, label: "Latest" };
+
+    // The filtered roster changes before rendering; the primary roster keeps its old row.
+    publish([current]);
+    await selectMenuValue(menu, menu.querySelector<HTMLButtonElement>(actionSelector)!.value);
+    expect(run.mock.calls.length).toBe(1);
+    expect(run.mock.calls[0]![0].sessionKey).toBe(row.key);
+    expect(run.mock.calls[0]![0].session).toEqual(current);
+    await sidebar.updateComplete;
+
+    menu = await openMenu();
+    publish([{ ...current, hasActiveRun: true }]);
+    await selectMenuValue(menu, menu.querySelector<HTMLButtonElement>(actionSelector)!.value);
+    expect(run.mock.calls.length).toBe(1);
+    await waitForFast(() => expect(toast.textContent).toContain("Reopen the session menu."));
+  });
+
+  it("does not invoke a plugin for a removed or replaced menu session", async () => {
+    const { sidebar, row, run, publish, openMenu, actionSelector } =
+      await mountSessionPluginHarness();
+    const replacement = { ...row, sessionId: "replacement-id", label: "Replacement" };
+    for (const rows of [[], [replacement]]) {
+      publish([row]);
+      await sidebar.updateComplete;
+      const toast = await mountToastHost();
+      const menu = await openMenu();
+      publish(rows);
+      await selectMenuValue(menu, menu.querySelector<HTMLButtonElement>(actionSelector)!.value);
+      expect(run.mock.calls.length).toBe(0);
+      await waitForFast(() => expect(toast.textContent).toContain("Reopen the session menu."));
+      toast.remove();
+    }
+
+    publish([row]);
+    await sidebar.updateComplete;
+    const menu = await openMenu();
+    publish([replacement]);
+    await settleLitElement(sidebar);
+    await menu.updateComplete;
+    expect(menu.querySelector(actionSelector)).toBeNull();
+  });
+
+  it("offers archive undo without altering the active session's personal pin or navigation", async () => {
     const { gateway, harness, sidebar } = await mountMutationHarness();
     const setSessionKey = vi.fn();
     (gateway.gateway as { setSessionKey: (key: string) => void }).setSessionKey = setSessionKey;
@@ -104,7 +213,7 @@ describe("AppSidebar session mutation feedback", () => {
     if (!archivedRow) {
       throw new Error("expected archive row");
     }
-    archivedRow.pinned = true;
+    sidebar.sidebarEntries = [`session:${archivedKey}`];
     harness.publishList({ result: state.result, agentId: state.agentId });
     gateway.publish({ sessionKey: archivedRow.key });
     sidebar.sessionKey = archivedRow.key;
@@ -112,11 +221,28 @@ describe("AppSidebar session mutation feedback", () => {
     const navigate = vi.fn();
     sidebar.onNavigate = navigate;
     const toast = await mountToastHost();
+    gateway.publish({ hello: gatewayHelloForMethods(["sessions.patch"], ["operator.read"]) });
     await sidebar.updateComplete;
 
-    const menu = await openSessionMenu(sidebar, archivedRow.key);
-    menu.querySelector<HTMLButtonElement>('[data-shortcut="a"]')?.click();
+    const archive = sidebar.querySelector<HTMLButtonElement>(
+      `[data-session-key="${archivedRow.key}"] [data-sidebar-session-archive]`,
+    );
+    expect(archive?.disabled).toBe(true);
+    archive!.click();
+    expect(harness.patch).not.toHaveBeenCalled();
+
+    gateway.publish({ hello: gatewayHelloForMethods(["sessions.patch"]) });
+    await sidebar.updateComplete;
+    expect(archive?.disabled).toBe(false);
+    const pendingArchive = deferred<Awaited<ReturnType<typeof harness.patch>>>();
+    harness.patch.mockReturnValueOnce(pendingArchive.promise);
+    archive!.click();
+    archive!.click();
     await vi.waitFor(() => expect(harness.patch).toHaveBeenCalledOnce());
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(`[data-session-key="${archivedRow.key}"]`)).toBeNull();
+    expect(navigate).not.toHaveBeenCalled();
+    pendingArchive.resolve(successfulSessionPatch(archivedRow.key));
     await vi.waitFor(() =>
       expect(toast.querySelector(".app-toast__message")?.textContent).toBe("Session archived"),
     );
@@ -127,7 +253,8 @@ describe("AppSidebar session mutation feedback", () => {
     );
     toast.querySelector<HTMLButtonElement>(".app-toast__action")?.click();
 
-    await vi.waitFor(() => expect(harness.patch).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() => expect(harness.refreshReplacement).toHaveBeenCalledOnce());
+    expect(harness.patch).toHaveBeenCalledTimes(2);
     expect(setSessionKey).not.toHaveBeenCalled();
     expect(harness.patch).toHaveBeenNthCalledWith(
       2,
@@ -139,61 +266,63 @@ describe("AppSidebar session mutation feedback", () => {
         deferListRefresh: true,
       },
     );
-    expect(harness.patch).toHaveBeenNthCalledWith(
-      3,
-      archivedRow.key,
-      { pinned: true },
-      { agentId: "main", deferListRefresh: true },
-    );
     expect(harness.patchMany).not.toHaveBeenCalled();
-    expect(harness.refreshReplacement).toHaveBeenCalledOnce();
+    expect(sidebar.sidebarEntries).toEqual([`session:${archivedKey}`]);
     expect(navigate).not.toHaveBeenCalled();
   });
 
   it("assigns owners from the row menu and updates the owner chip", async () => {
-    const request = vi.fn(async (method: string) => {
+    const request = vi.fn(async (method: string, params: unknown) => {
       if (method !== "sessions.assignOwner") {
         throw new Error(`unexpected method: ${method}`);
       }
+      const owner = (params as { owner: { type: "human"; id: string } }).owner;
+      const label = owner.id === "profile-ada" ? "Ada" : "Bob";
       return {
         ok: true,
         key: "agent:main:a",
         owner: {
-          actor: { type: "human", id: "profile-bob", label: "Bob" },
+          actor: { ...owner, label },
           assignedBy: { type: "human", id: "profile-ada", label: "Ada" },
           assignedAt: 10,
         },
       };
     });
-    const { gateway, harness, sidebar } = await mountMutationHarness({
-      request,
-    } as unknown as GatewayBrowserClient);
+    const { gateway, harness, sidebar } = await mountMutationHarness(
+      { request } as unknown as GatewayBrowserClient,
+      sessionOwnerProfiles("Ada", "Bob"),
+    );
     gateway.publish({
       selfUser: { id: "profile-ada", name: "Ada" },
       hello: gatewayHelloForMethods(["sessions.assignOwner"], ["operator.write"]),
     });
+    sidebar.setSessionOwnerFilter(null);
     const result = harness.sessions.state.result;
     const row = result?.sessions.find((session) => session.key === "agent:main:a");
     if (!result || !row) {
       throw new Error("expected session owner fixture");
     }
     row.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
-    result.creators = [
-      { id: "profile-ada", label: "Ada" },
-      { id: "profile-bob", label: "Bob" },
+    row.owner = { actor: row.createdActor };
+    result.owners = [
+      { type: "human", id: "profile-ada", label: "Ada" },
+      { type: "human", id: "profile-bob", label: "Bob" },
     ];
     harness.publishList({ result, agentId: "main" });
     await sidebar.updateComplete;
 
     const menu = await openSessionMenu(sidebar, row.key);
-    expect(menu.textContent).toContain("Assign to me");
-    expect(menu.textContent).toContain("Assign to…");
-    menu.querySelector("wa-dropdown")?.dispatchEvent(
-      new CustomEvent("wa-select", {
-        bubbles: true,
-        detail: { item: { value: "assign-owner:human:profile-bob" } },
-      }),
+    await waitForFast(() => expect(menu.textContent).toContain("Bob"));
+    expect(menuItemLabels(menu)).toContain("Assign to…");
+    const assignmentMenu = await openSubmenu(menu, "Assign to…");
+    await waitForFast(() =>
+      expect(
+        Array.from(assignmentMenu.querySelectorAll<HTMLElement>('[role="menuitemradio"]')).map(
+          (item) => item.querySelector(".session-menu__text")?.textContent?.trim(),
+        ),
+      ).toEqual(["Me", "Bob"]),
     );
+    await selectMenuValue(menu, "assign-owner:human:profile-bob");
 
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     expect(request).toHaveBeenCalledWith("sessions.assignOwner", {
@@ -208,13 +337,36 @@ describe("AppSidebar session mutation feedback", () => {
           ?.getAttribute("title"),
       ).toBe("Owned by Bob");
     });
+
+    const selfMenu = await openSessionMenu(sidebar, row.key);
+    await waitForFast(() => expect(menuItemLabels(selfMenu)).toContain("Assign to…"));
+    await openSubmenu(selfMenu, "Assign to…");
+    await selectMenuValue(selfMenu, "assign-owner:human:profile-ada");
+
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.assignOwner", {
+      key: row.key,
+      agentId: "main",
+      owner: { type: "human", id: "profile-ada" },
+    });
+    await waitForFast(() => {
+      expect(
+        sidebar
+          .querySelector(`[data-session-key="${row.key}"] .session-owner-chip`)
+          ?.getAttribute("title"),
+      ).toBe("Owned by Ada");
+    });
   });
 
-  it("reconciles and stops an idle active cloud worker through its session", async () => {
+  it("stops an idle active cloud worker and surfaces a failed refresh", async () => {
     const request = vi.fn(() => Promise.resolve({ ok: true }));
-    const { gateway, harness, sidebar } = await mountMutationHarness({
+    const { gateway, harness, sidebar, context } = await mountMutationHarness({
       request,
     } as unknown as GatewayBrowserClient);
+    harness.reconcileMutation.mockResolvedValueOnce({
+      status: "failed",
+      error: "Stopped session refresh unavailable",
+    });
     gateway.publish({
       hello: gatewayHelloForMethods(["sessions.reclaim"]),
     });
@@ -247,23 +399,31 @@ describe("AppSidebar session mutation feedback", () => {
     answerConfirmDialog(actions, "confirm");
 
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    expect(context.placementStartup.pause).toHaveBeenCalledExactlyOnceWith(
+      "agent:main:a",
+      "Worker stop requested. Review the initial message before retrying.",
+      { readSessionPlacementRecovery, pauseSessionPlacementRecovery },
+    );
+    expect(context.placementStartup.pause).toHaveBeenCalledBefore(request);
     expect(request).toHaveBeenCalledWith(
       "sessions.reclaim",
       { key: "agent:main:a", agentId: "main" },
-      { timeoutMs: 10 * 60_000 },
+      { timeoutMs: null },
     );
-    await waitForFast(() => expect(harness.refreshReplacement).toHaveBeenCalledWith("main"));
+    await waitForFast(() => expect(harness.reconcileMutation).toHaveBeenCalledWith("main"));
+    await waitForFast(() => {
+      const error = sidebar.querySelector("[data-sidebar-session-error]")?.textContent ?? null;
+      expect(error).toContain("Stopped session refresh unavailable");
+    });
   });
 
-  it("destroys a pending cloud worker through its session", async () => {
-    const request = vi.fn(() =>
-      Promise.resolve({ status: "unavailable", worker: { state: "destroyed" } }),
-    );
-    const { gateway, harness, sidebar } = await mountMutationHarness({
+  it("reclaims a pending cloud worker through its session", async () => {
+    const request = vi.fn(() => Promise.resolve({ ok: true }));
+    const { gateway, harness, sidebar, context } = await mountMutationHarness({
       request,
     } as unknown as GatewayBrowserClient);
     gateway.publish({
-      hello: gatewayHelloForMethods(["environments.destroy"]),
+      hello: gatewayHelloForMethods(["sessions.reclaim"]),
     });
     const state = createSessionState("main", ["agent:main:main", "agent:main:a"]);
     const row = state.result?.sessions.find((candidate) => candidate.key === "agent:main:a");
@@ -280,7 +440,6 @@ describe("AppSidebar session mutation feedback", () => {
     };
     row.hasActiveRun = true;
     harness.publishList({ result: state.result, agentId: state.agentId });
-    const toast = await mountToastHost();
     await sidebar.updateComplete;
 
     const menu = await openSessionMenu(sidebar, row.key);
@@ -288,15 +447,18 @@ describe("AppSidebar session mutation feedback", () => {
     answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
 
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
-    expect(request).toHaveBeenCalledWith("environments.destroy", {
-      environmentId: "environment-1",
-    });
-    await waitForFast(() => expect(harness.refreshReplacement).toHaveBeenCalledWith("main"));
-    await waitForFast(() =>
-      expect(toast.querySelector(".app-toast__message")?.textContent).toBe(
-        'Cloud worker for "a" is destroyed.',
-      ),
+    expect(context.placementStartup.pause).toHaveBeenCalledExactlyOnceWith(
+      "agent:main:a",
+      "Worker stop requested. Review the initial message before retrying.",
+      { readSessionPlacementRecovery, pauseSessionPlacementRecovery },
     );
+    expect(context.placementStartup.pause).toHaveBeenCalledBefore(request);
+    expect(request).toHaveBeenCalledWith(
+      "sessions.reclaim",
+      { key: "agent:main:a", agentId: "main" },
+      { timeoutMs: null },
+    );
+    await waitForFast(() => expect(harness.reconcileMutation).toHaveBeenCalledWith("main"));
   });
 
   it("shows and dismisses a fixed sidebar error when a session patch is rejected", async () => {
@@ -320,7 +482,7 @@ describe("AppSidebar session mutation feedback", () => {
     expect(error?.closest(".sidebar-recent-sessions")).toBeNull();
 
     error?.querySelector<HTMLButtonElement>('[aria-label="Dismiss error"]')?.click();
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(sidebar.querySelector("[data-sidebar-session-error]")).toBeNull();
   });
 
@@ -328,7 +490,9 @@ describe("AppSidebar session mutation feedback", () => {
     const { harness, sidebar } = await mountMutationHarness();
     harness.deleteMany.mockResolvedValueOnce({
       deleted: ["agent:main:a"],
-      errors: ["agent:main:b: permission denied"],
+      errors: [
+        { target: { key: "agent:main:b" }, error: new Error("agent:main:b: permission denied") },
+      ],
       preservedWorktrees: [],
     });
     selectSession(sidebar, "agent:main:a");
@@ -381,7 +545,7 @@ describe("AppSidebar session mutation feedback", () => {
     });
     expect(harness.patchMany).toHaveBeenCalledOnce();
     expect(harness.patch).not.toHaveBeenCalled();
-    expect(harness.refreshReplacement).toHaveBeenCalledOnce();
+    expect(harness.reconcileMutation).toHaveBeenCalledOnce();
   });
 
   it("suppresses a late rejection after a same-client reconnect", async () => {
@@ -389,7 +553,7 @@ describe("AppSidebar session mutation feedback", () => {
     const pending = deferred<ReturnType<typeof successfulSessionPatch>>();
     harness.patch.mockImplementationOnce(() => pending.promise);
     const menu = await openSessionMenu(sidebar, "agent:main:a");
-    menu.querySelector<HTMLButtonElement>('[data-shortcut="p"]')?.click();
+    menu.querySelector<HTMLButtonElement>('[data-shortcut="u"]')?.click();
     await waitForFast(() => expect(harness.patch).toHaveBeenCalledOnce());
 
     gateway.publish({ phase: "reconnecting" });
@@ -436,6 +600,19 @@ describe("AppSidebar session mutation feedback", () => {
 
   it("does not truncate a pending batch when another mutation starts", async () => {
     const { harness, sidebar } = await mountMutationHarness();
+    const toast = await mountToastHost();
+    toast.querySelector<HTMLButtonElement>(".app-toast__dismiss")?.click();
+    await toast.updateComplete;
+    harness.publishList({
+      result: createSessionState("main", [
+        "agent:main:main",
+        "agent:main:a",
+        "agent:main:b",
+        "agent:main:c",
+        "agent:main:d",
+      ]).result,
+    });
+    await sidebar.updateComplete;
     const archive = deferred<Awaited<ReturnType<typeof harness.patchMany>>>();
     harness.patchMany.mockImplementationOnce(() => archive.promise);
     selectSession(sidebar, "agent:main:a");
@@ -450,10 +627,10 @@ describe("AppSidebar session mutation feedback", () => {
     menu?.querySelector<HTMLButtonElement>('[data-shortcut="a"]')?.click();
     await waitForFast(() => expect(harness.patchMany).toHaveBeenCalledOnce());
 
-    row?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    selectSession(sidebar, "agent:main:c");
+    selectSession(sidebar, "agent:main:d");
     await sidebar.updateComplete;
-    menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
-    await menu?.updateComplete;
+    menu = await openSessionMenu(sidebar, "agent:main:d");
     menu?.querySelector<HTMLButtonElement>('[data-shortcut="u"]')?.click();
     await waitForFast(() => expect(harness.patchMany).toHaveBeenCalledTimes(2));
 
@@ -464,7 +641,14 @@ describe("AppSidebar session mutation feedback", () => {
       ],
     });
     await archive.promise;
+    await waitForFast(() =>
+      expect(toast.querySelector(".app-toast__message")?.textContent).toBe("Archived 2 sessions"),
+    );
     expect(harness.patchMany).toHaveBeenCalledTimes(2);
+    expect(harness.patchMany.mock.calls[1]?.[0].map((target) => target.key)).toEqual([
+      "agent:main:c",
+      "agent:main:d",
+    ]);
     expect(harness.patchMany.mock.calls[1]?.[1]).toEqual({ unread: true });
     expect(harness.patch).not.toHaveBeenCalled();
   });
@@ -476,10 +660,16 @@ describe("AppSidebar session mutation feedback", () => {
     } as unknown as GatewayBrowserClient);
     harness.deleteSession.mockResolvedValueOnce({
       deleted: true,
-      worktreePreserved: { id: "wt-1", branch: "feature", path: "/tmp/worktree" },
+      worktreePreserved: {
+        id: "wt-1",
+        branch: "feature",
+        path: "/tmp/worktree",
+        reason: "busy",
+      },
     });
     const menu = await openSessionMenu(sidebar, "agent:main:a");
-    menu.querySelector<HTMLButtonElement>('[data-shortcut="d"]')?.click();
+    await openSubmenu(menu, "Advanced");
+    await selectMenuValue(menu, "delete");
     answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
     await waitForFast(() => expect(harness.deleteSession).toHaveBeenCalledOnce());
 

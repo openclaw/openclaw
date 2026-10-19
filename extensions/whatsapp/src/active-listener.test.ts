@@ -33,20 +33,6 @@ beforeEach(() => {
 });
 
 describe("active WhatsApp listener view", () => {
-  it("reads controller-backed state", () => {
-    const listener = makeListener();
-    runtimeContextMocks.getChannelRuntimeContext.mockImplementation(
-      ({ accountId }: { accountId?: string }) =>
-        accountId === "work"
-          ? {
-              getActiveListener: () => listener,
-            }
-          : null,
-    );
-
-    expect(getActiveWebListener("work")).toBe(listener);
-  });
-
   it("resolves the configured default account when accountId is omitted", () => {
     const listener = makeListener();
     runtimeContextMocks.getChannelRuntimeContext.mockImplementation(

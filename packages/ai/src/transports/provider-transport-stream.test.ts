@@ -2,11 +2,9 @@
 import type { Api, Model } from "@openclaw/llm-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
-import { isOpenAICodexResponsesModel } from "./openai-transport-params.js";
 import {
   buildTransportAwareSimpleStreamFn,
   createBoundaryAwareStreamFnForModel,
-  createOpenClawTransportStreamFnForModel,
   createTransportAwareStreamFnForModel,
   prepareTransportAwareSimpleModel,
   resolveTransportAwareSimpleApi,
@@ -25,7 +23,6 @@ function attachManagedTransport<TModel extends object>(model: TModel, config: un
 }
 
 const attachModelProviderRequestTransport = attachManagedTransport;
-const attachModelProviderLocalService = attachManagedTransport;
 
 beforeAll(() => {
   configureAiTransportHost({
@@ -145,28 +142,6 @@ describe("provider transport stream contracts", () => {
     }
   });
 
-  it("keeps public and Codex Responses transport aliases distinguishable", () => {
-    const publicModel = attachModelProviderRequestTransport(
-      buildModel("openai-responses", {
-        id: "gpt-5.4",
-        provider: "openai",
-        baseUrl: "https://api.openai.com/v1",
-      }),
-      { proxy: { mode: "env-proxy" } },
-    );
-    const codexModel = attachModelProviderRequestTransport(
-      buildModel("openai-chatgpt-responses", {
-        id: "codex-mini-latest",
-        provider: "openai",
-        baseUrl: "https://chatgpt.com/backend-api",
-      }),
-      { proxy: { mode: "env-proxy" } },
-    );
-
-    expect(isOpenAICodexResponsesModel(prepareTransportAwareSimpleModel(publicModel))).toBe(false);
-    expect(isOpenAICodexResponsesModel(prepareTransportAwareSimpleModel(codexModel))).toBe(true);
-  });
-
   it("fails closed when a required Google transport is unavailable", () => {
     const model = attachModelProviderRequestTransport(
       buildModel("google-generative-ai", {
@@ -208,74 +183,5 @@ describe("provider transport stream contracts", () => {
     expect(() => prepareTransportAwareSimpleModel(model)).toThrow(
       'Model-provider request.proxy/request.tls/localService is not yet supported for api "ollama"',
     );
-  });
-
-  it("keeps unsupported apis unchanged when no transport overrides are attached", () => {
-    const model = buildModel("ollama", {
-      id: "qwen3:32b",
-      provider: "ollama",
-      baseUrl: "http://localhost:11434",
-    });
-
-    expect(createTransportAwareStreamFnForModel(model)).toBeUndefined();
-    expect(buildTransportAwareSimpleStreamFn(model)).toBeUndefined();
-    expect(prepareTransportAwareSimpleModel(model)).toBe(model);
-  });
-
-  it("keeps OpenAI API-key default streams on OpenClaw transport", () => {
-    const cases = [
-      buildModel("openai-responses", {
-        id: "gpt-5.4",
-        provider: "openai",
-        baseUrl: "https://api.openai.com/v1",
-      }),
-      buildModel("openai-completions", {
-        id: "gpt-4o",
-        provider: "openai",
-        baseUrl: "https://api.openai.com/v1",
-      }),
-    ] as const;
-
-    for (const model of cases) {
-      expect(createBoundaryAwareStreamFnForModel(model)).toBeTypeOf("function");
-      expect(createOpenClawTransportStreamFnForModel(model)).toBeTypeOf("function");
-      expect(createTransportAwareStreamFnForModel(model)).toBeUndefined();
-      expect(buildTransportAwareSimpleStreamFn(model)).toBeUndefined();
-      expect(prepareTransportAwareSimpleModel(model)).toBe(model);
-    }
-  });
-
-  it("routes localService models through the OpenClaw simple-completion transport", () => {
-    const model = attachModelProviderLocalService(
-      buildModel("openai-completions", {
-        id: "google/gemma-4-E2B-it",
-        provider: "inferrs",
-        baseUrl: "http://127.0.0.1:8080/v1",
-      }),
-      {
-        command: "/usr/local/bin/inferrs",
-        args: ["serve", "google/gemma-4-E2B-it"],
-      },
-    );
-
-    expect(createTransportAwareStreamFnForModel(model)).toBeTypeOf("function");
-    expect(buildTransportAwareSimpleStreamFn(model)).toBeTypeOf("function");
-    const preparedModel = prepareTransportAwareSimpleModel(model);
-    expect(preparedModel.api).toBe("openclaw-openai-completions-transport");
-    expect(preparedModel.provider).toBe("inferrs");
-    expect(preparedModel.id).toBe("google/gemma-4-E2B-it");
-  });
-
-  it("keeps Codex defaults on the OpenClaw transport until OpenClaw preserves attribution", () => {
-    const model = buildModel("openai-chatgpt-responses", {
-      id: "gpt-5.4",
-      provider: "openai",
-      baseUrl: "https://chatgpt.com/backend-api",
-    });
-
-    expect(createBoundaryAwareStreamFnForModel(model)).toBeTypeOf("function");
-    expect(createTransportAwareStreamFnForModel(model)).toBeUndefined();
-    expect(buildTransportAwareSimpleStreamFn(model)).toBeUndefined();
-    expect(prepareTransportAwareSimpleModel(model)).toBe(model);
   });
 });

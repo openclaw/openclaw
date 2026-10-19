@@ -1,19 +1,252 @@
 /** Coordinates plugin metadata snapshot and process memo cache lifecycle resets. */
-import { clearCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import {
+  clearCurrentPluginMetadataSnapshot,
+  isGatewayPluginMetadataSnapshotActive,
+} from "./current-plugin-metadata-state.js";
+import type {
+  PluginHostCleanupResult,
+  PluginHostRegistryRetirement,
+} from "./host-hook-cleanup.types.js";
+import {
+  getPluginCache,
+  getPluginCacheRetention,
+  getPluginMetadataSnapshotCache,
+  getProcessPluginCache,
+  resetPluginCache,
+  retirePluginCache,
+  withPluginCache,
+  type PluginCache,
+} from "./plugin-cache.js";
+import { retainPluginMetadataSnapshotReaders } from "./plugin-metadata-snapshot-readers.js";
+import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
+import { retainPluginSourceCaptureInstance } from "./plugin-source-capture-directory.js";
+import { PluginRuntimeCloseRetainedError } from "./runtime-close-error.js";
 
-const pluginMetadataProcessMemoClears = new Set<() => void>();
+const pluginMetadataProcessMemoClears = new Map<() => void, "process" | "operation">();
+type GatewayMetadataOwner = {
+  cache?: PluginCache;
+  phase: "booting" | "active" | "closing";
+  prelude?: Promise<void>;
+  closing?: Promise<PluginHostCleanupResult>;
+  retirements: Set<{
+    cache: PluginCache;
+    beforeRetire?: PluginHostRegistryRetirement;
+    promise?: Promise<PluginHostCleanupResult>;
+  }>;
+};
+const gatewayMetadata = resolveGlobalSingleton<{ owner?: GatewayMetadataOwner }>(
+  Symbol.for("openclaw.gatewayPluginMetadataOwner"),
+  () => ({}),
+);
 
-/** Registers a process-local plugin metadata memo clear hook. */
+/** The kernel owns bootstrap acquisition, published inventory, and unfinished retirement. */
+export function retainGatewayPluginMetadata(
+  scheduler: GatewayScheduler,
+  onAllGatewaysClosing?: () => Promise<void>,
+) {
+  scheduler.signal.throwIfAborted();
+  const bootstrapCache = getPluginCache();
+  if (gatewayMetadata.owner?.phase === "closing" || bootstrapCache.retirement) {
+    throw new Error(
+      "Gateway plugin metadata is shutting down; finish cleanup before starting another Gateway. If cleanup failed, resolve the failure and restart.",
+    );
+  }
+  const sourceCaptures = retainPluginSourceCaptureInstance();
+  const sourceSweep = sourceCaptures.startMaintenance(scheduler);
+  const releaseReaders = retainPluginMetadataSnapshotReaders();
+  const owner: GatewayMetadataOwner = {
+    cache: bootstrapCache,
+    phase: "booting",
+    retirements: new Set(),
+  };
+  // A process runs one Gateway; overlapping independent Gateways are best effort.
+  gatewayMetadata.owner = owner;
+  const releaseCache = (
+    cache: PluginCache | undefined,
+    beforeRetire?: PluginHostRegistryRetirement,
+  ) => {
+    if (cache) {
+      owner.retirements.add({ cache, beforeRetire });
+    }
+  };
+  const waitForRetirement = async (
+    required: readonly Promise<void | PluginHostCleanupResult>[] = [],
+  ): Promise<PluginHostCleanupResult> => {
+    // Admission closes before reloads drain; their consumers retire only in final close.
+    const deferConsumers = owner.closing === undefined;
+    const results = await Promise.allSettled([
+      ...required,
+      ...[...owner.retirements].map(async (retirement) => {
+        const pending = (retirement.promise ??= Promise.resolve().then(async () => {
+          const previous = await retirement.beforeRetire?.();
+          const { cache } = retirement;
+          const cleanup = await retirePluginCache(cache, () => {
+            // Old scopes retain their setup entries until retirement starts.
+            for (const [key, instance] of cache.setupModules) {
+              if (owner.cache?.setupModules.get(key) === instance) {
+                cache.setupModules.delete(key);
+              }
+            }
+          });
+          return {
+            cleanupCount: (previous?.cleanupCount ?? 0) + (cleanup?.cleanupCount ?? 0),
+            failures: [...(previous?.failures ?? []), ...(cleanup?.failures ?? [])],
+          };
+        }));
+        // Publication cannot await its requesting turn or borrowed generation.
+        // Keep raw retirement owned so shutdown still joins cleanup and its failures.
+        void pending.catch(() => {});
+        const observed = deferConsumers
+          ? await retirement.beforeRetire?.({ deferConsumers: true })
+          : undefined;
+        if (
+          deferConsumers &&
+          (observed?.deferredPluginIds?.length ||
+            (retirement.cache.kind === "process" && getPluginCacheRetention(retirement.cache)))
+        ) {
+          return observed;
+        }
+        const completed = await pending;
+        owner.retirements.delete(retirement);
+        return completed;
+      }),
+    ]);
+    const failures = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (failures.length) {
+      throw new AggregateError(failures, "Gateway plugin metadata cleanup failed");
+    }
+    const completed: PluginHostCleanupResult[] = results.flatMap((result) =>
+      result.status === "fulfilled" && result.value ? [result.value] : [],
+    );
+    const deferredPluginIds = completed.flatMap((result) => result.deferredPluginIds ?? []);
+    return {
+      cleanupCount: completed.reduce((count, result) => count + result.cleanupCount, 0),
+      failures: completed.flatMap((result) => result.failures),
+      ...(deferredPluginIds.length ? { deferredPluginIds } : {}),
+    };
+  };
+  const beginClose = (): void | Promise<void> => {
+    owner.phase = "closing";
+    owner.prelude ??= Promise.resolve().then(onAllGatewaysClosing);
+    void owner.prelude.catch(() => {});
+    return owner.prelude;
+  };
+  return {
+    beginClose,
+    retire: releaseCache,
+    runBootstrap<T>(run: () => T): T {
+      if (owner.phase !== "booting" || !owner.cache) {
+        throw new Error("Gateway plugin bootstrap has already finished");
+      }
+      return withPluginCache(owner.cache, run);
+    },
+    publish(
+      snapshot: PluginMetadataSnapshot | undefined,
+      changedPluginIds: ReadonlySet<string> = new Set(),
+      beforeRetire?: PluginHostRegistryRetirement,
+    ) {
+      if (owner.phase === "closing") {
+        throw new Error("Gateway plugin metadata owner is closing");
+      }
+      const previous = owner.cache;
+      // An absent snapshot does not release bootstrap facts still used by this Gateway.
+      const next = snapshot ? getPluginMetadataSnapshotCache(snapshot) : previous;
+      if (previous && next && previous !== next) {
+        // Unchanged setup instances transfer to the replacement inventory.
+        for (const [key, instance] of previous.setupModules) {
+          if (!changedPluginIds.has(instance.pluginId) && !next.setupModules.has(key)) {
+            next.setupModules.set(key, instance);
+          }
+        }
+      }
+      owner.cache = next;
+      if (owner.phase === "booting") {
+        owner.phase = "active";
+      }
+      if (previous !== next) {
+        releaseCache(previous, beforeRetire);
+      }
+    },
+    waitForRetirement,
+    close(
+      onFinal?: (retire: () => Promise<PluginHostCleanupResult>) => void | Promise<void>,
+      retireRegistry?: () => Promise<void | PluginHostCleanupResult>,
+    ): Promise<PluginHostCleanupResult> {
+      const prelude = beginClose();
+      if (owner.closing) {
+        return owner.closing;
+      }
+      let retirement: Promise<PluginHostCleanupResult> | undefined;
+      const retire = () =>
+        (retirement ??= Promise.resolve().then(async () => {
+          const previous = owner.cache;
+          owner.cache = undefined;
+          releaseCache(previous);
+          return await waitForRetirement(
+            retireRegistry ? [Promise.resolve().then(retireRegistry)] : [],
+          );
+        }));
+      owner.closing = Promise.resolve().then(async () => {
+        try {
+          await prelude;
+          // Keep the final cache bound until model publication has joined through onFinal.
+          await onFinal?.(retire);
+          const cleanup = await retire();
+          clearPluginMetadataCaches();
+          await sourceSweep;
+          await sourceCaptures.releaseAsync();
+          gatewayMetadata.owner = undefined;
+          releaseReaders();
+          return cleanup;
+        } catch (error) {
+          throw new PluginRuntimeCloseRetainedError(error);
+        }
+      });
+      return owner.closing;
+    },
+  };
+}
+
+export type GatewayPluginMetadataOwner = ReturnType<typeof retainGatewayPluginMetadata>;
+
+/** Registers a metadata clear hook with the lifetime of its facts. */
 export function registerPluginMetadataProcessMemoLifecycleClear(
   clearProcessMemo: () => void,
+  options: { owner: "process" | "operation" } = { owner: "process" },
 ): void {
-  pluginMetadataProcessMemoClears.add(clearProcessMemo);
+  pluginMetadataProcessMemoClears.set(clearProcessMemo, options.owner);
 }
 
 /** Clears plugin metadata snapshots and registered process memo caches. */
 export function clearPluginMetadataLifecycleCaches(): void {
-  clearCurrentPluginMetadataSnapshot();
-  for (const clearProcessMemo of pluginMetadataProcessMemoClears) {
-    clearProcessMemo();
+  for (const [clearMemo, owner] of pluginMetadataProcessMemoClears) {
+    if (owner === "operation") {
+      clearMemo();
+    }
   }
+  // Installs cannot retire a running inventory.
+  // Pre-publication planning remains refreshable until boot metadata is pinned.
+  if (
+    gatewayMetadata.owner &&
+    (gatewayMetadata.owner.phase !== "booting" ||
+      isGatewayPluginMetadataSnapshotActive() ||
+      getProcessPluginCache().retirement)
+  ) {
+    return;
+  }
+  clearPluginMetadataCaches();
+}
+
+function clearPluginMetadataCaches(): void {
+  clearCurrentPluginMetadataSnapshot();
+  for (const [clearProcessMemo, owner] of pluginMetadataProcessMemoClears) {
+    if (owner === "process") {
+      clearProcessMemo();
+    }
+  }
+  resetPluginCache();
 }

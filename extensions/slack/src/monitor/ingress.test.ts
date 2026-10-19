@@ -5,22 +5,26 @@ import os from "node:os";
 import path from "node:path";
 import { App, type Receiver, type ReceiverEvent } from "@slack/bolt";
 import type { WebClientOptions } from "@slack/web-api";
-import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { PluginJsonValue } from "openclaw/plugin-sdk/plugin-entry";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import type {
+  ChannelIngressMonitorLifecycle,
+  ChannelIngressQueue,
+} from "openclaw/plugin-sdk/channel-outbound";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { PluginJsonValue } from "openclaw/plugin-sdk/plugin-entry";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import {
-  peekSystemEventEntries,
-  resetSystemEventsForTest,
-} from "openclaw/plugin-sdk/system-event-runtime";
+import { peekSystemEventEntries } from "openclaw/plugin-sdk/system-event-runtime";
+import { resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { installSlackTestRuntime } from "../test-runtime.test-support.js";
 import { createSlackMonitorContext } from "./context.js";
 import { registerSlackMemberEvents } from "./events/members.js";
 import { createSlackDurableIngress, resolveSlackIngressTurnLifecycle } from "./ingress.js";
+import { claimSlackMessageDispatchReplay } from "./message-dispatch-dedupe.js";
 
 type SlackIngressQueue = NonNullable<Parameters<typeof createSlackDurableIngress>[0]["queue"]>;
 type SlackIngressPayload = Parameters<SlackIngressQueue["enqueue"]>[1];
@@ -46,6 +50,14 @@ function createSlackEnvelope(
     },
   };
 }
+
+const channelMessage = (fields: Record<string, PluginJsonValue>) => ({
+  type: "message",
+  channel: "C_TEST",
+  channel_type: "channel",
+  user: "U_TEST",
+  ...fields,
+});
 
 function createChannelIdChangedEnvelope(
   eventId: string,
@@ -112,6 +124,13 @@ function createMemberEvent(type: "member_joined_channel" | "member_left_channel"
   };
 }
 
+const authorizeTestApp = async () => ({
+  botToken: "xoxb-test",
+  botId: "B_BOT",
+  botUserId: "U_BOT",
+  teamId: "T_TEST",
+});
+
 function attachBoltMemberIngress(params: {
   queue: ChannelIngressQueue<SlackIngressPayload>;
   trackEvent: () => void;
@@ -119,6 +138,7 @@ function attachBoltMemberIngress(params: {
   usersInfoFetch?: NonNullable<WebClientOptions["fetch"]>;
   pollIntervalMs?: number;
 }) {
+  installSlackTestRuntime();
   const ingress = createSlackDurableIngress({
     accountId: "default",
     queue: params.queue,
@@ -128,12 +148,7 @@ function attachBoltMemberIngress(params: {
   const receiverHarness = createReceiverHarness();
   const app = new App({
     receiver: ingress.wrapReceiver(receiverHarness.receiver),
-    authorize: async () => ({
-      botToken: "xoxb-test",
-      botId: "B_BOT",
-      botUserId: "U_BOT",
-      teamId: "T_TEST",
-    }),
+    authorize: authorizeTestApp,
     ...(params.usersInfoFetch
       ? {
           clientOptions: {
@@ -194,12 +209,13 @@ function attachBoltMemberIngress(params: {
       ephemeral: true,
     },
     textLimit: 4000,
-    ackReactionScope: "group-mentions",
     typingReaction: "",
     mediaMaxBytes: 1,
     threadHistoryScope: "thread",
     threadInheritParent: false,
   });
+  // This Bolt retry fixture starts after policy resolution, with the explicit policy above.
+  ctx.readRuntimeContext = async () => ctx;
   registerSlackMemberEvents({ ctx, trackEvent: params.trackEvent });
   return { ingress, receive: receiverHarness.receive };
 }
@@ -211,12 +227,13 @@ function createReceiverEventWithBody(body: Record<string, unknown>): ReceiverEve
 function attachIngress(
   queue: ChannelIngressQueue<SlackIngressPayload>,
   processEvent: (event: ReceiverEvent) => Promise<void>,
+  options: { adoptionStallTimeoutMs?: number; pollIntervalMs?: number } = {},
 ) {
   const ingress = createSlackDurableIngress({
     accountId: "default",
     queue,
-    pollIntervalMs: 60_000,
-    adoptionStallTimeoutMs: 5_000,
+    pollIntervalMs: options.pollIntervalMs ?? 60_000,
+    adoptionStallTimeoutMs: options.adoptionStallTimeoutMs ?? 5_000,
   });
   const harness = createReceiverHarness();
   ingress.wrapReceiver(harness.receiver).init({ processEvent } as App);
@@ -272,10 +289,8 @@ describe("Slack durable ingress", () => {
 
   it("acknowledges a durable event before dispatch starts", async () => {
     await withQueue(async (queue) => {
-      let releaseAck = () => {};
-      const ackGate = new Promise<void>((resolve) => {
-        releaseAck = resolve;
-      });
+      const ackStarted = createDeferred<void>();
+      const ackGate = createDeferred<void>();
       const order: string[] = [];
       const processEvent = vi.fn(async (event: ReceiverEvent) => {
         order.push("dispatch");
@@ -284,42 +299,315 @@ describe("Slack durable ingress", () => {
       const { ingress, receive } = attachIngress(queue, processEvent);
       const ack = vi.fn(async () => {
         order.push("ack-start");
-        await ackGate;
+        ackStarted.resolve();
+        await ackGate.promise;
         order.push("ack-complete");
       });
       ingress.start();
 
       const receiving = receive(createReceiverEvent("Ev-ack-order", ack));
-      await vi.waitFor(() => expect(ack).toHaveBeenCalledTimes(1));
-      expect(processEvent).not.toHaveBeenCalled();
+      try {
+        await Promise.race([ackStarted.promise, receiving]);
+        expect(ack).toHaveBeenCalledTimes(1);
+        expect(processEvent).not.toHaveBeenCalled();
 
-      releaseAck();
-      await receiving;
-      await ingress.waitForIdle();
+        ackGate.resolve();
+        await receiving;
+        await ingress.waitForIdle();
 
-      expect(order).toEqual(["ack-start", "ack-complete", "dispatch"]);
-      await ingress.stop();
+        expect(order).toEqual(["ack-start", "ack-complete", "dispatch"]);
+      } finally {
+        ackGate.resolve();
+        try {
+          await receiving;
+        } finally {
+          await ingress.stop();
+        }
+      }
+    });
+  });
+
+  it("releases a waiting duplicate's channel lane while preserving its migration fence", async () => {
+    await withQueue(async (queue) => {
+      const duplicate = createDeferred<boolean>();
+      const starts: string[] = [];
+      const processEvent = vi.fn(async (receiverEvent: ReceiverEvent) => {
+        const id = (receiverEvent.body as { event_id: string }).event_id;
+        const lifecycle = resolveSlackIngressTurnLifecycle(receiverEvent.customProperties)!;
+        if (id === "Ev-duplicate") {
+          await claimSlackMessageDispatchReplay({
+            guard: {
+              claim: async () => ({ kind: "inflight", pending: duplicate.promise }),
+            } as unknown as Parameters<typeof claimSlackMessageDispatchReplay>[0]["guard"],
+            key: "logical-message",
+            onWaiting: lifecycle.onDispatchWaiting,
+          });
+          starts.push(id);
+          return;
+        }
+        starts.push(id);
+        await lifecycle.onAdopted();
+      });
+      const { ingress, receive } = attachIngress(queue, processEvent, {
+        adoptionStallTimeoutMs: 80,
+      });
+      ingress.start();
+      try {
+        await receive(createReceiverEvent("Ev-duplicate"));
+        await vi.waitFor(() => expect(processEvent).toHaveBeenCalledOnce());
+        await receive(
+          createReceiverEvent("Ev-independent", undefined, { ts: "1700000001.000100" }),
+        );
+        await vi.waitFor(() => expect(starts).toEqual(["Ev-independent"]), { timeout: 500 });
+        await receive(
+          createReceiverEventWithBody(
+            createChannelIdChangedEnvelope("Ev-migration", "C_OLD", "C_TEST"),
+          ),
+        );
+        // The original claim can outlive the pre-adoption watchdog without
+        // restarting the duplicate or letting a channel migration overtake it.
+        await new Promise((resolve) => {
+          setTimeout(resolve, 160);
+        });
+        expect(starts).toEqual(["Ev-independent"]);
+        expect(processEvent).toHaveBeenCalledTimes(2);
+        duplicate.resolve(true);
+        await ingress.waitForIdle();
+        expect(starts).toEqual(["Ev-independent", "Ev-duplicate", "Ev-migration"]);
+        expect(await queue.listPending()).toEqual([]);
+        expect(await queue.listClaims()).toEqual([]);
+      } finally {
+        duplicate.resolve(true);
+        await ingress.stop();
+      }
+    });
+  });
+
+  it("readmits a released twin before reclaiming dispatch and rearms its watchdog", async () => {
+    await withQueue(async (queue) => {
+      const owner = createDeferred<boolean>();
+      const handle = { commit: vi.fn(async () => true), release: vi.fn() };
+      const claim = vi
+        .fn()
+        .mockResolvedValueOnce({ kind: "inflight", pending: owner.promise })
+        .mockResolvedValue({ kind: "claimed", handle });
+      let attempts = 0;
+      let retrySignal: AbortSignal | undefined;
+      const starts: string[] = [];
+      const processEvent = vi.fn(async (event: ReceiverEvent) => {
+        const id = (event.body as { event_id: string }).event_id;
+        const lifecycle = resolveSlackIngressTurnLifecycle(event.customProperties)!;
+        if (id !== "Ev-released-twin") {
+          starts.push(id);
+          await lifecycle.onAdopted();
+          return;
+        }
+        attempts += 1;
+        await claimSlackMessageDispatchReplay({
+          guard: { claim } as unknown as Parameters<
+            typeof claimSlackMessageDispatchReplay
+          >[0]["guard"],
+          key: "logical-message",
+          onWaiting: lifecycle.onDispatchWaiting,
+        });
+        retrySignal = lifecycle.abortSignal;
+        // A newly admitted owner must still be covered while routing stalls.
+        await new Promise<void>((resolve) => {
+          lifecycle.abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        handle.release();
+        lifecycle.abortSignal.throwIfAborted();
+      });
+      const { ingress, receive } = attachIngress(queue, processEvent, {
+        adoptionStallTimeoutMs: 160,
+        pollIntervalMs: 10,
+      });
+      ingress.start();
+      try {
+        await receive(createReceiverEvent("Ev-released-twin"));
+        await vi.waitFor(() => expect(claim).toHaveBeenCalledOnce());
+        owner.reject(new Error("original dispatch failed"));
+        await vi.waitFor(() => expect(attempts).toBe(2), { timeout: 2_000 });
+        expect(claim).toHaveBeenCalledTimes(2);
+        await receive(createReceiverEvent("Ev-later", undefined, { ts: "1700000002.000100" }));
+        expect(starts).toEqual([]);
+        await vi.waitFor(() => expect(retrySignal?.aborted).toBe(true));
+        await vi.waitFor(async () => {
+          expect(await queue.listPending()).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ id: "Ev-released-twin", attempts: 2 }),
+            ]),
+          );
+        });
+      } finally {
+        await ingress.stop();
+      }
+    });
+  });
+
+  it("dispatches independently routed threads concurrently after session ownership is established", async () => {
+    await withQueue(async (queue) => {
+      const firstDispatchGate = createDeferred<void>();
+      const starts: string[] = [];
+      const processEvent = vi.fn(async (receiverEvent: ReceiverEvent) => {
+        const event = (receiverEvent.body as { event: { thread_ts: string } }).event;
+        const lifecycle = resolveSlackIngressTurnLifecycle(receiverEvent.customProperties);
+        await lifecycle?.onSessionRouted?.(`agent:main:slack:thread:${event.thread_ts}`);
+        starts.push(event.thread_ts);
+        if (event.thread_ts === "1700000000.000100") {
+          await firstDispatchGate.promise;
+        }
+        await lifecycle?.onAdopted();
+      });
+      const { ingress, receive } = attachIngress(queue, processEvent);
+      ingress.start();
+
+      try {
+        for (const [eventId, threadTs, ts] of [
+          ["Ev-thread-one", "1700000000.000100", "1700000000.000101"],
+          ["Ev-thread-two", "1700000000.000200", "1700000000.000201"],
+        ] as const) {
+          await receive(
+            createReceiverEvent(eventId, undefined, {
+              event: channelMessage({ thread_ts: threadTs, ts, text: "thread reply" }),
+            }),
+          );
+        }
+
+        await vi.waitFor(() => expect(starts).toHaveLength(2), { timeout: 500 });
+        expect(starts).toEqual(["1700000000.000100", "1700000000.000200"]);
+      } finally {
+        firstDispatchGate.resolve();
+        await ingress.waitForIdle();
+        await ingress.stop();
+      }
+    });
+  });
+
+  it.each<{
+    name: string;
+    firstEvent: Record<string, PluginJsonValue> & { ts: string };
+    secondEvent: Record<string, PluginJsonValue> & { ts: string };
+  }>([
+    {
+      name: "top-level channel messages",
+      firstEvent: { ts: "1700000000.000100" },
+      secondEvent: { ts: "1700000000.000200" },
+    },
+    {
+      name: "threads bound to the same configured session",
+      firstEvent: { ts: "1700000000.000101", thread_ts: "1700000000.000100" },
+      secondEvent: { ts: "1700000000.000201", thread_ts: "1700000000.000200" },
+    },
+  ])("serializes $name by their authoritative session", async ({ firstEvent, secondEvent }) => {
+    await withQueue(async (queue) => {
+      const firstDispatchGate = createDeferred<void>();
+      const starts: string[] = [];
+      const processEvent = vi.fn(async (receiverEvent: ReceiverEvent) => {
+        const event = (receiverEvent.body as { event: { ts: string } }).event;
+        const lifecycle = resolveSlackIngressTurnLifecycle(receiverEvent.customProperties);
+        await lifecycle?.onSessionRouted?.("agent:main:slack:shared-session");
+        starts.push(event.ts);
+        if (event.ts === firstEvent.ts) {
+          await firstDispatchGate.promise;
+        }
+        await lifecycle?.onAdopted();
+      });
+      const { ingress, receive } = attachIngress(queue, processEvent);
+      ingress.start();
+
+      try {
+        for (const [eventId, event] of [
+          ["Ev-shared-first", firstEvent],
+          ["Ev-shared-second", secondEvent],
+        ] as const) {
+          await receive(
+            createReceiverEvent(eventId, undefined, {
+              event: channelMessage({ text: "shared session", ...event }),
+            }),
+          );
+        }
+
+        await vi.waitFor(() => expect(processEvent).toHaveBeenCalledTimes(2), { timeout: 500 });
+        expect(starts).toEqual([firstEvent.ts]);
+        firstDispatchGate.resolve();
+        await ingress.waitForIdle();
+        expect(starts).toEqual([firstEvent.ts, secondEvent.ts]);
+      } finally {
+        firstDispatchGate.resolve();
+        await ingress.waitForIdle();
+        await ingress.stop();
+      }
+    });
+  });
+
+  it("keeps a queued same-session event alive past the adoption watchdog", async () => {
+    await withQueue(async (queue) => {
+      const firstSettlement = createDeferred<void>();
+      const starts: string[] = [];
+      const processEvent = vi.fn(async (receiverEvent: ReceiverEvent) => {
+        const eventId = (receiverEvent.body as { event_id: string }).event_id;
+        const lifecycle = resolveSlackIngressTurnLifecycle(receiverEvent.customProperties);
+        await lifecycle?.onSessionRouted?.("agent:main:slack:shared-session");
+        starts.push(eventId);
+        if (eventId === "Ev-session-watchdog-first") {
+          (lifecycle as ChannelIngressMonitorLifecycle).onAdoptionFinalizing();
+          await firstSettlement.promise;
+        }
+        await lifecycle?.onAdopted();
+      });
+      const { ingress, receive } = attachIngress(queue, processEvent, {
+        adoptionStallTimeoutMs: 80,
+      });
+      ingress.start();
+
+      try {
+        await receive(createReceiverEvent("Ev-session-watchdog-first"));
+        await receive(createReceiverEvent("Ev-session-watchdog-second"));
+        await vi.waitFor(() => expect(processEvent).toHaveBeenCalledTimes(2));
+        expect(starts).toEqual(["Ev-session-watchdog-first"]);
+
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 120);
+        });
+        await receive(createReceiverEvent("Ev-session-watchdog-third"));
+        await vi.waitFor(() => expect(processEvent).toHaveBeenCalledTimes(3));
+        expect((await queue.listClaims()).map((claim) => claim.id)).toEqual([
+          "Ev-session-watchdog-first",
+          "Ev-session-watchdog-second",
+          "Ev-session-watchdog-third",
+        ]);
+        expect(starts).toEqual(["Ev-session-watchdog-first"]);
+
+        firstSettlement.resolve();
+        await ingress.waitForIdle();
+        expect(starts).toEqual([
+          "Ev-session-watchdog-first",
+          "Ev-session-watchdog-second",
+          "Ev-session-watchdog-third",
+        ]);
+        expect(processEvent).toHaveBeenCalledTimes(3);
+        expect(await queue.listPending()).toEqual([]);
+      } finally {
+        firstSettlement.resolve();
+        await ingress.waitForIdle();
+        await ingress.stop();
+      }
     });
   });
 
   it("serializes new-channel messages behind channel-ID migration", async () => {
     await withQueue(async (queue) => {
-      let markMigrationStarted: () => void = () => {};
-      let releaseMigration: () => void = () => {};
-      const migrationStarted = new Promise<void>((resolve) => {
-        markMigrationStarted = resolve;
-      });
-      const migrationGate = new Promise<void>((resolve) => {
-        releaseMigration = resolve;
-      });
+      const migrationStarted = createDeferred<void>();
+      const migrationGate = createDeferred<void>();
       const starts: string[] = [];
       const processEvent = vi.fn(async (receiverEvent: ReceiverEvent) => {
         const event = (receiverEvent.body as { event?: { type?: string } }).event;
         const type = event?.type ?? "unknown";
         starts.push(type);
         if (type === "channel_id_changed") {
-          markMigrationStarted();
-          await migrationGate;
+          migrationStarted.resolve();
+          await migrationGate.promise;
         }
         await resolveSlackIngressTurnLifecycle(receiverEvent.customProperties)?.onAdopted();
       });
@@ -334,24 +622,103 @@ describe("Slack durable ingress", () => {
       await receive(
         createReceiverEventWithBody({
           ...createSlackEnvelope("Ev-new-channel-message"),
-          event: {
-            type: "message",
+          event: channelMessage({
             channel: "C_NEW",
-            user: "U_TEST",
             ts: "1700000000.000200",
+            thread_ts: "1700000000.000100",
             text: "after migration",
-          },
+          }),
         }),
       );
 
-      await migrationStarted;
+      await migrationStarted.promise;
       await Promise.resolve();
       expect(starts).toEqual(["channel_id_changed"]);
 
-      releaseMigration();
+      migrationGate.resolve();
       await ingress.waitForIdle();
       expect(starts).toEqual(["channel_id_changed", "message"]);
       await ingress.stop();
+    });
+  });
+
+  it.each([
+    { name: "an already routed message", deferred: false },
+    { name: "a deferred message", deferred: true },
+  ])("serializes channel-ID migration behind $name through Bolt", async ({ deferred }) => {
+    await withQueue(async (queue) => {
+      const messageStarted = createDeferred<void>();
+      const messageGate = createDeferred<void>();
+      const migrationGate = createDeferred<void>();
+      const starts: string[] = [];
+      const ingress = createSlackDurableIngress({
+        accountId: "default",
+        queue,
+        pollIntervalMs: 60_000,
+        adoptionStallTimeoutMs: 5_000,
+      });
+      const harness = createReceiverHarness();
+      const app = new App({
+        receiver: ingress.wrapReceiver(harness.receiver),
+        authorize: authorizeTestApp,
+        convoStore: false,
+        ignoreSelf: false,
+      });
+      app.event("message", async ({ context }) => {
+        const lifecycle = resolveSlackIngressTurnLifecycle(context);
+        await lifecycle?.onSessionRouted?.("agent:main:slack:thread:C_NEW");
+        starts.push("message");
+        if (deferred) {
+          lifecycle?.onDeferred();
+        }
+        messageStarted.resolve();
+        await messageGate.promise;
+        await lifecycle?.onAdopted();
+      });
+      app.event("channel_id_changed", async ({ context }) => {
+        starts.push("channel_id_changed");
+        await migrationGate.promise;
+        await resolveSlackIngressTurnLifecycle(context)?.onAdopted();
+      });
+      ingress.start();
+
+      try {
+        await harness.receive(
+          createReceiverEventWithBody({
+            ...createSlackEnvelope("Ev-routed-before-migration"),
+            event: channelMessage({
+              channel: "C_NEW",
+              ts: "1700000000.000200",
+              thread_ts: "1700000000.000100",
+              text: "before migration",
+            }),
+          }),
+        );
+        await messageStarted.promise;
+        await harness.receive(
+          createReceiverEventWithBody(
+            createChannelIdChangedEnvelope("Ev-migration-after-route", "C_OLD", "C_NEW"),
+          ),
+        );
+        await vi.waitFor(async () => {
+          expect((await queue.listClaims()).map((claim) => claim.id)).toEqual([
+            "Ev-routed-before-migration",
+            "Ev-migration-after-route",
+          ]);
+        });
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(starts).toEqual(["message"]);
+
+        messageGate.resolve();
+        await vi.waitFor(() => expect(starts).toEqual(["message", "channel_id_changed"]));
+      } finally {
+        messageGate.resolve();
+        migrationGate.resolve();
+        await ingress.waitForIdle();
+        await ingress.stop();
+      }
     });
   });
 
@@ -398,9 +765,20 @@ describe("Slack durable ingress", () => {
     });
   });
 
-  it("recovers a shipped row whose lane was derived only at drain time", async () => {
+  it.each([
+    { name: "a lane derived only at drain time", laneKey: undefined },
+    { name: "its persisted channel-only lane", laneKey: "team:T_TEST:conversation:C_TEST" },
+  ])("recovers a shipped threaded row with $name", async ({ laneKey }) => {
     await withQueue(async (queue) => {
-      const body = createSlackEnvelope("Ev-legacy-lane");
+      const body = createSlackEnvelope("Ev-legacy-lane", undefined, {
+        type: "message",
+        channel: "C_TEST",
+        channel_type: "channel",
+        user: "U_TEST",
+        ts: "1700000000.000101",
+        thread_ts: "1700000000.000100",
+        text: "persisted thread reply",
+      });
       await queue.enqueue(
         "Ev-legacy-lane",
         {
@@ -409,7 +787,7 @@ describe("Slack durable ingress", () => {
           kind: "events-api",
           body,
         },
-        { receivedAt: 1_700_000_000_000 },
+        { receivedAt: 1_700_000_000_000, ...(laneKey ? { laneKey } : {}) },
       );
       const dispatch = vi.fn(async (event: ReceiverEvent) => {
         await resolveSlackIngressTurnLifecycle(event.customProperties)?.onAdopted();
@@ -528,13 +906,10 @@ describe("Slack durable ingress", () => {
       const usersInfoFetch = vi.fn<NonNullable<WebClientOptions["fetch"]>>(async (input) => {
         const pathname = new URL(String(input)).pathname;
         if (pathname.endsWith("/conversations.info")) {
-          return new Response(
-            JSON.stringify({
-              ok: true,
-              channel: { id: "C_TEST", name: "general", is_channel: true },
-            }),
-            { headers: { "content-type": "application/json" }, status: 200 },
-          );
+          return Response.json({
+            ok: true,
+            channel: { id: "C_TEST", name: "general", is_channel: true },
+          });
         }
         if (!pathname.endsWith("/users.info")) {
           throw new Error(`unexpected Slack API request: ${pathname}`);
@@ -546,10 +921,7 @@ describe("Slack durable ingress", () => {
             status: 429,
           });
         }
-        return new Response(JSON.stringify({ ok: true, user: { id: "U_TEST", name: "alice" } }), {
-          headers: { "content-type": "application/json" },
-          status: 200,
-        });
+        return Response.json({ ok: true, user: { id: "U_TEST", name: "alice" } });
       });
       const first = attachBoltMemberIngress({ queue, trackEvent, usersInfoFetch });
       first.ingress.start();
@@ -588,85 +960,6 @@ describe("Slack durable ingress", () => {
         await first.ingress.stop();
         await restarted?.ingress.stop();
       }
-    });
-  });
-});
-
-describe("Slack relay durable ingress", () => {
-  afterEach(() => {
-    closeOpenClawStateDatabaseForTest();
-  });
-
-  const relayMessage = {
-    type: "message",
-    channel: "C_RELAY",
-    team: "T_TEST",
-    user: "U_TEST",
-    ts: "1700000001.000200",
-    text: "relayed",
-  };
-
-  it("dedupes a router redelivery by logical message identity, not delivery id", async () => {
-    await withQueue(async (queue) => {
-      const dispatched: unknown[] = [];
-      const ingress = createSlackDurableIngress({
-        accountId: "default",
-        queue,
-        pollIntervalMs: 60_000,
-        adoptionStallTimeoutMs: 5_000,
-      });
-      ingress.attachRelayDispatch(async (message) => {
-        dispatched.push(message);
-      });
-      ingress.start();
-
-      await ingress.acceptRelayEvent({ deliveryId: "delivery-1", message: relayMessage });
-      await ingress.waitForIdle();
-      // Redelivery after a lost ack carries a fresh delivery id but the same message.
-      await ingress.acceptRelayEvent({ deliveryId: "delivery-2", message: relayMessage });
-      await ingress.waitForIdle();
-
-      expect(dispatched).toHaveLength(1);
-      expect(dispatched[0]).toMatchObject({ channel: "C_RELAY", text: "relayed" });
-      await ingress.stop();
-    });
-  });
-
-  it("retries a claimed relay event until a dispatcher attaches", async () => {
-    await withQueue(async (queue) => {
-      const detached = createSlackDurableIngress({
-        accountId: "default",
-        queue,
-        pollIntervalMs: 60_000,
-        adoptionStallTimeoutMs: 5_000,
-      });
-      // Accept durably, then stop before any dispatcher exists (crash window).
-      await detached.acceptRelayEvent({ deliveryId: "delivery-3", message: relayMessage });
-      await detached.stop();
-
-      const dispatched: unknown[] = [];
-      const recovered = createSlackDurableIngress({
-        accountId: "default",
-        queue,
-        pollIntervalMs: 25,
-        adoptionStallTimeoutMs: 5_000,
-      });
-      recovered.start();
-      await recovered.waitForIdle();
-      expect(dispatched).toHaveLength(0);
-
-      recovered.attachRelayDispatch(async (message) => {
-        dispatched.push(message);
-      });
-      // First retry obeys the drain's backoff; give it room without flake.
-      await vi.waitFor(
-        async () => {
-          await recovered.waitForIdle();
-          expect(dispatched).toHaveLength(1);
-        },
-        { timeout: 15_000, interval: 250 },
-      );
-      await recovered.stop();
     });
   });
 });

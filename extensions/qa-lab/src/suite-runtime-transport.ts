@@ -1,22 +1,70 @@
-// Qa Lab plugin module implements suite runtime transport behavior.
 import { setTimeout as sleep } from "node:timers/promises";
+import type { QaBusMessage } from "openclaw/plugin-sdk/qa-channel-protocol";
+import type { QaBusState } from "./bus-state.js";
 import {
-  findFailureOutboundMessage as findTransportFailureOutboundMessage,
+  findFailureOutboundMessage,
   waitForQaTransportCondition,
   type QaTransportState,
 } from "./qa-transport.js";
 import { extractQaFailureReplyText } from "./reply-failure.js";
-import type { QaBusMessage } from "./runtime-api.js";
 
 type WaitForNoOutboundOptions = {
   sinceIndex?: number;
 };
 
-function findFailureOutboundMessage(
-  state: QaTransportState,
-  options?: { accountId?: string; sinceIndex?: number; cursorSpace?: "all" | "outbound" },
+async function waitForQaInboundCompletion(
+  state: QaBusState,
+  inbound: QaBusMessage,
+  timeoutMs = 15_000,
 ) {
-  return findTransportFailureOutboundMessage(state, options);
+  const event = state
+    .getSnapshot()
+    .events.find(
+      (candidate) =>
+        candidate.kind === "inbound-message" &&
+        candidate.accountId === inbound.accountId &&
+        candidate.message.id === inbound.id,
+    );
+  if (!event) {
+    throw new Error(`QA inbound event missing for ${inbound.id}`);
+  }
+  await waitForQaTransportCondition(
+    () => state.getAcknowledgedPollCursor(inbound.accountId) >= event.cursor || undefined,
+    timeoutMs,
+  );
+}
+
+async function waitForCompletedQaReply(
+  state: QaBusState,
+  inbound: QaBusMessage,
+  timeoutMs = 15_000,
+) {
+  await waitForQaInboundCompletion(state, inbound, timeoutMs);
+  // Snapshots are clones. Read again after the channel has drained preview edits
+  // and final delivery, rather than retaining the first streamed fragment.
+  const replies = state
+    .getSnapshot()
+    .messages.filter(
+      (message) =>
+        message.direction === "outbound" &&
+        !message.deleted &&
+        message.accountId === inbound.accountId &&
+        message.conversation.id === inbound.conversation.id &&
+        message.conversation.kind === inbound.conversation.kind &&
+        message.threadId === inbound.threadId &&
+        message.replyToId === inbound.id,
+    );
+  for (const reply of replies) {
+    const failure = extractQaFailureReplyText(reply);
+    if (failure) {
+      throw new Error(failure);
+    }
+  }
+  const reply = replies.at(-1);
+  if (!reply) {
+    throw new Error(`QA inbound ${inbound.id} completed without a retained reply`);
+  }
+  return reply;
 }
 
 async function waitForOutboundMessage(
@@ -78,7 +126,7 @@ function recentOutboundSummary(state: QaTransportState, limit = 5) {
     .getSnapshot()
     .messages.filter((message: QaBusMessage) => message.direction === "outbound")
     .slice(-limit)
-    .map((message: QaBusMessage) => `${message.conversation.id}:${message.text}`)
+    .map(({ accountId, conversation: { kind, id }, text }) => `${accountId}:${kind}:${id}:${text}`)
     .join(" | ");
 }
 
@@ -104,12 +152,7 @@ function readTransportTranscript(
 
 function formatTransportTranscript(
   state: QaTransportState,
-  params: {
-    conversationId: string;
-    threadId?: string;
-    direction?: "inbound" | "outbound";
-    limit?: number;
-  },
+  params: Parameters<typeof readTransportTranscript>[1],
 ) {
   const messages = readTransportTranscript(state, params);
   return messages
@@ -130,31 +173,19 @@ function formatTransportTranscript(
     .join("\n\n");
 }
 
-function formatConversationTranscript(
+const formatConversationTranscript: (
   state: QaTransportState,
-  params: {
-    conversationId: string;
-    threadId?: string;
-    limit?: number;
-  },
-) {
-  return formatTransportTranscript(state, params);
-}
-
-async function waitForNoTransportOutbound(
-  state: QaTransportState,
-  timeoutMs = 1_200,
-  options?: WaitForNoOutboundOptions,
-) {
-  await waitForNoOutbound(state, timeoutMs, options);
-}
+  params: Omit<Parameters<typeof readTransportTranscript>[1], "direction">,
+) => string = formatTransportTranscript;
 
 export {
   formatConversationTranscript,
   formatTransportTranscript,
   readTransportTranscript,
   recentOutboundSummary,
+  waitForCompletedQaReply,
+  waitForQaInboundCompletion,
   waitForNoOutbound,
-  waitForNoTransportOutbound,
+  waitForNoOutbound as waitForNoTransportOutbound,
   waitForOutboundMessage,
 };

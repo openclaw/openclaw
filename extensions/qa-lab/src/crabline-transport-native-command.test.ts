@@ -15,10 +15,10 @@ describe("Crabline Telegram native command arguments", () => {
       const transport = await createQaCrablineTransportAdapter({
         outputDir,
         selection: {
-          capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
+          capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
           channel: "telegram",
           channelDriver: "crabline",
-          smokeArtifactPath: "crabline-fake-provider-smoke.json",
+          providerReadinessArtifactPath: "crabline-provider-readiness.json",
         },
         state: createQaBusState(),
       });
@@ -55,7 +55,7 @@ describe("Crabline Telegram native command arguments", () => {
           })),
         });
       } finally {
-        await transport.cleanup?.();
+        await transport.cleanupAfterGatewayStop?.();
       }
     });
   });

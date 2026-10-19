@@ -1,9 +1,16 @@
 /** Tests the built-in node-host MCP invocation command. */
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
 import { handleInvoke } from "./invoke.js";
-import { testing } from "./invoke.test-support.js";
 import { NodeHostMcpError, type NodeHostMcpManager } from "./mcp.js";
+
+const MEBIBYTE = 1024 * 1024;
+type McpPayload = {
+  content: Array<{ type: string; text?: string }>;
+  structuredContent?: Record<string, unknown>;
+  isError?: boolean;
+};
 
 async function invokeMcp(manager: NodeHostMcpManager, params: unknown) {
   const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
@@ -21,7 +28,7 @@ async function invokeMcp(manager: NodeHostMcpManager, params: unknown) {
   );
   return (request.mock.calls[0]?.[1] ?? {}) as {
     ok: boolean;
-    payload?: unknown;
+    payload?: McpPayload;
     payloadJSON?: string;
     error?: { code?: string; message?: string };
   };
@@ -36,8 +43,8 @@ function managerWith(callMcpTool: NodeHostMcpManager["callMcpTool"]): NodeHostMc
 }
 
 describe("mcp.tools.call.v1", () => {
-  it("dispatches validated params and preserves text/image content", async () => {
-    const callMcpTool = vi.fn<NodeHostMcpManager["callMcpTool"]>().mockResolvedValue({
+  it("dispatches validated params and preserves raw MCP content for one final projection", async () => {
+    const payload = {
       content: [
         { type: "text", text: "pong" },
         { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
@@ -49,7 +56,10 @@ describe("mcp.tools.call.v1", () => {
         },
       ],
       structuredContent: { ok: true },
-    });
+    } satisfies Awaited<ReturnType<NodeHostMcpManager["callMcpTool"]>>;
+    const callMcpTool = vi
+      .fn<NodeHostMcpManager["callMcpTool"]>()
+      .mockResolvedValue(structuredClone(payload));
     const result = await invokeMcp(managerWith(callMcpTool), {
       server: "docs",
       tool: "search",
@@ -63,14 +73,7 @@ describe("mcp.tools.call.v1", () => {
       timeoutMs: 321,
     });
     expect(result.ok).toBe(true);
-    expect(result.payload).toEqual({
-      content: [
-        { type: "text", text: "pong" },
-        { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
-        { type: "text", text: "[Report] https://example.com/report" },
-      ],
-      structuredContent: { ok: true },
-    });
+    expect(result.payload).toEqual(payload);
   });
 
   it("returns MCP tool errors as results while thrown failures fail the invoke", async () => {
@@ -114,6 +117,20 @@ describe("mcp.tools.call.v1", () => {
     expect(unexpected.error?.message).toHaveLength(1_024);
   });
 
+  it("exposes the compatibility error when a result cannot cross the published boundary", async () => {
+    const result = await invokeMcp(
+      managerWith(async () => ({ content: [], structuredContent: ["not a v1 object"] })),
+      { server: "docs", tool: "search" },
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "MCP_SDK_RESULT_UNREPRESENTABLE",
+        message: expect.stringContaining("tools/call"),
+      },
+    });
+  });
+
   it("does not publish an MCP result after its invocation is canceled", async () => {
     const controller = new AbortController();
     let resolveTool:
@@ -154,22 +171,20 @@ describe("mcp.tools.call.v1", () => {
     const result = await invokeMcp(
       managerWith(async () => ({
         content: [
-          { type: "text", text: "a".repeat(testing.MCP_TEXT_CONTENT_MAX_BYTES) },
+          { type: "text", text: "a".repeat(MEBIBYTE) },
           { type: "text", text: "overflow" },
         ],
       })),
       { server: "docs", tool: "large" },
     );
-    const payload = result.payload as {
-      content: Array<{ type: string; text: string }>;
-    };
+    const payload = expectDefined(result.payload, "MCP result payload");
     const text = payload.content.map((block) => block.text).join("");
-    expect(Buffer.byteLength(text)).toBeLessThanOrEqual(testing.MCP_TEXT_CONTENT_MAX_BYTES);
+    expect(Buffer.byteLength(text)).toBeLessThanOrEqual(MEBIBYTE);
     expect(text).toContain("truncated: MCP text content exceeded 1 MB");
   });
 
   it("drops oversized images and structured content before node.invoke serialization", async () => {
-    const oversized = "A".repeat(testing.MCP_INVOKE_PAYLOAD_MAX_BYTES);
+    const oversized = "A".repeat(20 * MEBIBYTE);
     const result = await invokeMcp(
       managerWith(async () => ({
         content: [{ type: "image", data: oversized, mimeType: "image/png" }],
@@ -177,31 +192,43 @@ describe("mcp.tools.call.v1", () => {
       })),
       { server: "docs", tool: "large-image" },
     );
-    const payload = result.payload as {
-      content: Array<{ type: string; text?: string }>;
-      structuredContent?: Record<string, unknown>;
-    };
-    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(
-      testing.MCP_INVOKE_PAYLOAD_MAX_BYTES,
-    );
+    const payload = expectDefined(result.payload, "MCP result payload");
+    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(20 * MEBIBYTE);
     expect(payload.content).toEqual([
       { type: "text", text: "[truncated: MCP result exceeded 20 MB]" },
     ]);
     expect(payload.structuredContent).toBeUndefined();
   });
 
-  it("sends MCP payloads as structured invoke data without double JSON escaping", async () => {
-    const escaped = "\\".repeat(8 * 1024 * 1024);
+  it("preserves structured content and recovery guidance when an exact JSON mirror is oversized", async () => {
+    const structuredContent = {
+      oversized: "S".repeat(10 * MEBIBYTE),
+    };
+    const recovery = "authentication expired; run login";
     const result = await invokeMcp(
-      managerWith(async () => ({ content: [], structuredContent: { escaped } })),
-      { server: "docs", tool: "escaped" },
+      managerWith(async () => ({
+        content: [
+          { type: "text", text: JSON.stringify(structuredContent, null, 2) },
+          {
+            type: "image",
+            data: "I".repeat(10 * MEBIBYTE),
+            mimeType: "image/png",
+          },
+          { type: "text", text: recovery },
+        ],
+        structuredContent,
+        isError: true,
+      })),
+      { server: "docs", tool: "recover" },
     );
-    expect(result.payloadJSON).toBeUndefined();
-    expect(
-      (result.payload as { structuredContent: { escaped: string } }).structuredContent.escaped,
-    ).toBe(escaped);
-    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(
-      testing.MCP_INVOKE_PAYLOAD_MAX_BYTES,
-    );
+    const payload = expectDefined(result.payload, "MCP result payload");
+    expect(payload.isError).toBe(true);
+    expect(payload.structuredContent).toBeDefined();
+    expect(payload.structuredContent?.oversized).toHaveLength(structuredContent.oversized.length);
+    expect(payload.content).toEqual([
+      { type: "text", text: recovery },
+      { type: "text", text: "[truncated: MCP result exceeded 20 MB]" },
+    ]);
+    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(20 * MEBIBYTE);
   });
 });

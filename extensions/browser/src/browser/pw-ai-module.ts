@@ -1,12 +1,9 @@
 /**
- * Optional Playwright AI module loader.
- *
  * Lazily imports the Playwright-backed browser helpers while allowing routes to
  * soft-fail when the dependency is unavailable in a gateway build.
  */
-import { extractErrorCode, formatErrorMessage } from "../infra/errors.js";
+import { extractErrorCode, formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 
-/** Type of the Playwright-backed browser helper module. */
 export type PwAiModule = (typeof import("./pw-ai.js"))["pwAi"];
 
 type PwAiLoadMode = "soft" | "strict";
@@ -36,11 +33,7 @@ async function loadPwAiModule(mode: PwAiLoadMode): Promise<PwAiModule | null> {
     loadedPwAiModule = pwAi;
     return pwAi;
   } catch (err) {
-    if (mode === "soft") {
-      loadedPwAiModule = null;
-      return null;
-    }
-    if (isModuleNotFoundError(err)) {
+    if (mode === "soft" || isModuleNotFoundError(err)) {
       loadedPwAiModule = null;
       return null;
     }
@@ -53,17 +46,10 @@ export function getLoadedPwAiModule(): PwAiModule | null | undefined {
   return loadedPwAiModule;
 }
 
-/** Load the Playwright AI helper module in soft or strict mode. */
 export async function getPwAiModule(opts?: { mode?: PwAiLoadMode }): Promise<PwAiModule | null> {
   const mode: PwAiLoadMode = opts?.mode ?? "soft";
   if (mode === "soft") {
-    if (!pwAiModuleSoft) {
-      pwAiModuleSoft = loadPwAiModule("soft");
-    }
-    return await pwAiModuleSoft;
+    return await (pwAiModuleSoft ??= loadPwAiModule("soft"));
   }
-  if (!pwAiModuleStrict) {
-    pwAiModuleStrict = loadPwAiModule("strict");
-  }
-  return await pwAiModuleStrict;
+  return await (pwAiModuleStrict ??= loadPwAiModule("strict"));
 }

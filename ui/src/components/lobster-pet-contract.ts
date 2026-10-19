@@ -1,59 +1,52 @@
 import type { SessionRunStatus } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
+import type { ThemeArtwork, ThemeCritterId } from "../../../packages/gateway-protocol/src/theme.ts";
 import { fnv1aUtf16 } from "../lib/fnv1a.ts";
+import { isSessionRunStateActive } from "../lib/session-run-state.ts";
+import type { LOBSTER_PALETTE_WEIGHTS } from "./lobster-pet-palettes.ts";
 
 export type LobsterPetMode = "idle" | "busy" | "offline";
 
 export type LobsterRunOutcome = "ok" | "error" | "aborted";
 
+// Renderers own the collision surfaces; the pet only measures their individual boxes.
+export type LobsterComposerElements = {
+  root: HTMLElement;
+  composer: HTMLElement;
+  editor: HTMLTextAreaElement;
+  footer: HTMLElement;
+  controls: readonly HTMLElement[];
+  obstacles: readonly HTMLElement[];
+};
+
+export type LobsterPetProps = {
+  composerElements: (() => LobsterComposerElements | null) | undefined;
+  seed: number;
+  mode: LobsterPetMode;
+  visitsEnabled: boolean;
+  residentEnabled: boolean;
+  critters: readonly string[] | undefined;
+  critterArtwork: ThemeArtwork["critters"];
+  floorEnabled: boolean;
+  runOutcome: LobsterRunOutcome;
+  soundsEnabled: boolean;
+  gatewayVersion: string | null;
+  onVisitsDisabled: () => void;
+};
+
 export type LobsterPetPersonalityId = "sleepy" | "zoomy" | "friendly" | "showoff";
 
-export type LobsterPetPaletteId =
-  | "crimson"
-  | "blue"
-  | "gold"
-  | "lumen"
-  | "magma"
-  | "oilslick"
-  | "aurora"
-  | "nebula"
-  | "banana"
-  | "mood"
-  | "bee"
-  | "rubberduck"
-  | "watermelon"
-  | "clawtron"
-  | "selene"
-  | "geode"
-  | "ghost"
-  | "glass"
-  | "split"
-  | "sourdough"
-  | "zombie"
-  | "plush"
-  | "balloon"
-  | "cottoncandy"
-  | "cryptid"
-  | "flatpack"
-  | "tinfoil"
-  | "actual"
-  | "disco"
-  | "chimera"
-  | "pixel"
-  | "blueprint"
-  | "phosphor"
-  | "ascii"
-  | "portal"
-  | "notexture"
-  | "loading"
-  | "eclipse"
-  | "heisenbug"
-  | "invisible"
-  | "retro"
-  | "goldenretro";
+export type LobsterPetPaletteId = (typeof LOBSTER_PALETTE_WEIGHTS)[number][0]["id"];
 
 // Pass-through ledge visitors. Strangers are other lobsters; everyone else
 // is, at best, lobster-adjacent. None of them count for the Lobsterdex.
-export type LobsterPasserKind = "stranger" | "crab" | "snail" | "duck" | "jellyfish";
+export type LobsterPasserKind =
+  | "stranger"
+  | "crab"
+  | "snail"
+  | "duck"
+  | "jellyfish"
+  | ThemeCritterId
+  | (string & {});
 
 // How an arriving pet gets onto the ledge. Rolled per arrival from its own
 // seeded stream; "walk" is the classic pop-up from behind the ledge.
@@ -78,8 +71,6 @@ export type LobsterPetAccessory =
 
 export type LobsterPetAntennae = "perky" | "droopy";
 
-export type LobsterPetBuild = "round" | "squat" | "slender";
-
 export type LobsterPetClawSize = "dainty" | "regular" | "mighty";
 
 export type LobsterPetLook = {
@@ -87,12 +78,10 @@ export type LobsterPetLook = {
   scale: number;
   accessory: LobsterPetAccessory;
   antennae: LobsterPetAntennae;
-  side: "left" | "right";
   spotPct: number;
   facing: 1 | -1;
   personality: LobsterPetPersonalityId;
   blinkDelayS: number;
-  build: LobsterPetBuild;
   clawSize: LobsterPetClawSize;
   tailFan: boolean;
   // Pokemon-style shiny roll (~1 in 512): sparkles plus a saturated sheen,
@@ -159,10 +148,10 @@ export function resolveLobsterRunOutcome(
 
 export function resolveLobsterPetMode(
   connected: boolean,
-  sessions: ReadonlyArray<{ hasActiveRun?: boolean | null }> | null | undefined,
+  sessions: ReadonlyArray<{ hasActiveRun?: boolean; status?: SessionRunStatus }> | null | undefined,
 ): LobsterPetMode {
   if (!connected) {
     return "offline";
   }
-  return sessions?.some((row) => row.hasActiveRun === true) ? "busy" : "idle";
+  return sessions?.some(isSessionRunStateActive) ? "busy" : "idle";
 }

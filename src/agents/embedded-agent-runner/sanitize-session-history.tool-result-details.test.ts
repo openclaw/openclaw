@@ -4,6 +4,7 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type { ToolResultMessage, UserMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { sanitizeSessionHistory } from "./replay-history.js";
 
@@ -11,7 +12,7 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
   // Provider plugins are not part of this boundary test; the local sanitizer
   // contract should strip details before any plugin-specific behavior matters.
   resolveProviderRuntimePlugin: () => undefined,
-  sanitizeProviderReplayHistoryWithPlugin: () => undefined,
+  sanitizeProviderReplayHistoryWithPluginAsync: () => undefined,
   validateProviderReplayTurnsWithPlugin: () => undefined,
 }));
 
@@ -19,7 +20,42 @@ vi.mock("../../plugins/provider-hook-runtime.js", () => ({
   resolveProviderRuntimePlugin: () => undefined,
 }));
 
-describe("sanitizeSessionHistory toolResult details stripping", () => {
+describe("sanitizeSessionHistory", () => {
+  it("preserves multiple signed Haiku 5.5 turns after an appended context update", async () => {
+    const modelId = "claude-haiku-5-5";
+    const messages: AgentMessage[] = [makeUserMessage("first", 0)];
+    for (const [timestamp, text] of [
+      [1, "first answer"],
+      [3, "second answer"],
+    ] as const) {
+      messages.push(
+        makeAgentAssistantMessage({
+          api: "anthropic-messages",
+          provider: "anthropic",
+          model: modelId,
+          timestamp,
+          content: [
+            { type: "thinking", thinking: text, thinkingSignature: `synthetic-${timestamp}` },
+            { type: "text", text },
+          ],
+        }),
+        makeUserMessage(
+          timestamp === 1 ? "second" : "[Runtime context update] Continue.",
+          timestamp + 1,
+        ),
+      );
+    }
+    const sanitized = await sanitizeSessionHistory({
+      messages,
+      modelApi: "anthropic-messages",
+      provider: "anthropic",
+      modelId,
+      sessionManager: SessionManager.inMemory(),
+      sessionId: "haiku-signed-replay",
+    });
+    expect(sanitized).toEqual(messages);
+  });
+
   it("strips toolResult.details so untrusted payloads are not fed back to the model", async () => {
     // details can contain raw tool metadata or untrusted data; only normalized
     // tool content should be replayed to the model.
@@ -43,11 +79,7 @@ describe("sanitizeSessionHistory toolResult details stripping", () => {
         },
         timestamp: 2,
       } satisfies ToolResultMessage<{ raw: string }>,
-      {
-        role: "user",
-        content: "continue",
-        timestamp: 3,
-      } satisfies UserMessage,
+      makeUserMessage("continue", 3) satisfies UserMessage,
     ];
 
     const sanitized = await sanitizeSessionHistory({

@@ -11,7 +11,7 @@ import type {
   AuditListResult,
   AuditRunInspectParams,
   AuditRunInspectResult,
-  DecisionReceiptV1,
+  DecisionReceiptDisplayV1,
   ExecutionIdentityContextV1,
   PrincipalRefV1,
 } from "../../packages/gateway-protocol/src/index.js";
@@ -67,7 +67,7 @@ type AuditCliEvent = {
 
 function parseAuditTimestamp(value: string | undefined, flag: string): number | undefined {
   const trimmed = value?.trim();
-  if (!trimmed) {
+  if (trimmed === undefined) {
     return undefined;
   }
   if (/^\d+$/.test(trimmed)) {
@@ -83,26 +83,14 @@ function parseAuditTimestamp(value: string | undefined, flag: string): number | 
   throw new Error(`${flag} must be an ISO timestamp or Unix milliseconds.`);
 }
 
-function parseAuditLimit(value: string | undefined): number {
-  if (!value) {
-    return DEFAULT_AUDIT_LIMIT;
+function parseAuditLimit(value: string | undefined, explain = false): number {
+  if (value === undefined) {
+    return explain ? DEFAULT_AUDIT_DECISION_LIMIT : DEFAULT_AUDIT_LIMIT;
   }
+  const max = explain ? MAX_AUDIT_DECISION_LIMIT : MAX_AUDIT_LIMIT;
   const parsed = parseStrictPositiveInteger(value);
-  if (parsed === undefined || parsed > MAX_AUDIT_LIMIT) {
-    throw new Error(`--limit must be between 1 and ${MAX_AUDIT_LIMIT}.`);
-  }
-  return parsed;
-}
-
-function parseAuditDecisionLimit(value: string | undefined): number {
-  if (!value) {
-    return DEFAULT_AUDIT_DECISION_LIMIT;
-  }
-  const parsed = parseStrictPositiveInteger(value);
-  if (parsed === undefined || parsed > MAX_AUDIT_DECISION_LIMIT) {
-    throw new Error(
-      `--limit must be between 1 and ${String(MAX_AUDIT_DECISION_LIMIT)} with --explain.`,
-    );
+  if (parsed === undefined || parsed > max) {
+    throw new Error(`--limit must be between 1 and ${max}${explain ? " with --explain" : ""}.`);
   }
   return parsed;
 }
@@ -139,27 +127,17 @@ function formatAuditRows(events: readonly AuditCliEvent[]): string[] {
   return rows;
 }
 
-function isUnsupportedActivityMethodError(value: unknown): value is Error {
-  // Frozen shipped-gateway strings: pre-activity gateways answer unknown
-  // methods with "unknown method: ..." or fail closed to operator.admin. A
-  // current gateway registers audit.activity.list at operator.read, so it can
-  // never emit these for this method; matching them only triggers the legacy
-  // audit.list fallback.
+function isUnsupportedAuditMethodError(
+  value: unknown,
+  method: "audit.activity.list" | "audit.run.inspect",
+): value is Error {
+  // Older gateways reject unknown methods directly or require operator.admin.
+  // These frozen replies select the legacy list or unsupported-inspection result.
   return (
     value instanceof Error &&
     value.name === "GatewayClientRequestError" &&
     (value as Error & { gatewayCode?: unknown }).gatewayCode === "INVALID_REQUEST" &&
-    (value.message === "unknown method: audit.activity.list" ||
-      value.message === "missing scope: operator.admin")
-  );
-}
-
-function isUnsupportedRunInspectMethodError(value: unknown): value is Error {
-  return (
-    value instanceof Error &&
-    value.name === "GatewayClientRequestError" &&
-    (value as Error & { gatewayCode?: unknown }).gatewayCode === "INVALID_REQUEST" &&
-    (value.message === "unknown method: audit.run.inspect" ||
+    (value.message === `unknown method: ${method}` ||
       value.message === "missing scope: operator.admin")
   );
 }
@@ -236,7 +214,7 @@ async function queryAuditActivity(
       params,
     });
   } catch (error) {
-    if (!isUnsupportedActivityMethodError(error)) {
+    if (!isUnsupportedAuditMethodError(error, "audit.activity.list")) {
       throw formatAuditGatewayError(error);
     }
     if (hasMessageSpecificFilters(options)) {
@@ -270,7 +248,7 @@ function unsupportedRunInspection(
         },
       ],
     },
-    decisions: [],
+    decisionDisplays: [],
     coverage: { state: "unsupported", missingEvidence },
   };
 }
@@ -281,7 +259,7 @@ async function queryAuditRunInspection(
   try {
     return await callGateway<AuditRunInspectResult>({ method: "audit.run.inspect", params });
   } catch (error) {
-    if (!isUnsupportedRunInspectMethodError(error)) {
+    if (!isUnsupportedAuditMethodError(error, "audit.run.inspect")) {
       throw formatAuditGatewayError(error);
     }
     return unsupportedRunInspection(
@@ -368,36 +346,66 @@ function contextIdentityLines(context: ExecutionIdentityContextV1): string[] {
   ];
 }
 
+function contextLineageLines(context: ExecutionIdentityContextV1): string[] {
+  const lineage = context.lineage;
+  if (!lineage) {
+    return [fieldLine("Parent", "absent")];
+  }
+  return [
+    ...(
+      [
+        ["Parent context", lineage.parentContextId],
+        ["Parent execution", lineage.parentExecutionId],
+        ["Parent run", lineage.parentRunId],
+        [
+          "Parent agent",
+          lineage.parentAgentPrincipal ? principalText(lineage.parentAgentPrincipal) : undefined,
+        ],
+        ["Delegation", lineage.delegationRef],
+      ] as const
+    ).map(([label, value]) => fieldLine(label, value ? "present" : "unknown", value)),
+    fieldLine("Depth", "present", String(lineage.depth)),
+  ];
+}
+
 function unavailableIdentityLines(state: "unknown" | "unsupported"): string[] {
   return IDENTITY_FIELD_LABELS.map((label) => fieldLine(label, state));
 }
 
-function decisionLines(receipt: DecisionReceiptV1): string[] {
+function decisionLines(receipt: DecisionReceiptDisplayV1): string[] {
   const evidence =
-    receipt.action.family === "run" && receipt.action.operation === "admission"
-      ? "admission provenance only; no enforcement decision"
-      : receipt.enforcement.coverageState === "unknown" ||
-          receipt.enforcement.coverageState === "unsupported"
-        ? "evidence unavailable or corrupt; do not infer authorization"
-        : receipt.source.owner === "operator_approvals"
-          ? "authoritative owner-native SQLite record; retained 30 days"
-          : receipt.enforcement.coverageState === "enforced"
-            ? "validated immutable decision fact; retained 30 days"
-            : "attribution record only; no enforcement decision";
+    receipt.provenance.state === "unverified"
+      ? "producer display contract unverified; receipt prose omitted"
+      : receipt.provenance.producer === "run-admission"
+        ? "admission provenance only; no enforcement decision"
+        : receipt.enforcement.coverageState === "unknown" ||
+            receipt.enforcement.coverageState === "unsupported"
+          ? "evidence unavailable or corrupt; do not infer authorization"
+          : receipt.provenance.producer === "operator-approval"
+            ? "authoritative owner-native SQLite record; retained 30 days"
+            : receipt.enforcement.coverageState === "enforced"
+              ? "validated immutable decision fact; retained 30 days"
+              : "attribution record only; no enforcement decision";
+  const producer =
+    receipt.provenance.state === "verified" ? receipt.provenance.producer : "unverified";
   return [
     `  ${safe(receipt.action.family)}.${safe(receipt.action.operation)}: ${safe(receipt.decision.outcome)}`,
     `    Coverage: ${safe(receipt.enforcement.coverageState)}`,
     `    Reason: ${safe(receipt.decision.reasonCode)}`,
-    `    Source: ${safe(receipt.source.owner)} at ${safe(receipt.source.decisionBoundary)}`,
+    `    Display producer: ${safe(producer)}`,
     `    Evidence: ${evidence}`,
-    `    Policy refs: ${receipt.enforcement.policyRefs.length > 0 ? receipt.enforcement.policyRefs.map(safe).join(", ") : "none"}`,
-    `    Grant refs: ${receipt.enforcement.grantRefs.length > 0 ? receipt.enforcement.grantRefs.map(safe).join(", ") : "none"}`,
+    ...(receipt.representedSubject
+      ? [`    Recorded authority subject: ${principalText(receipt.representedSubject.principal)}`]
+      : []),
+    `    Policy refs: ${receipt.enforcement.policyCount}`,
+    `    Grant refs: ${receipt.enforcement.grantCount}`,
     `    Context used: ${receipt.enforcement.contextFieldsUsed.length > 0 ? receipt.enforcement.contextFieldsUsed.map(safe).join(", ") : "none"}`,
     ...(receipt.action.summary ? [`    Summary: ${safe(receipt.action.summary)}`] : []),
   ];
 }
 
 function formatAuditRunInspection(result: AuditRunInspectResult): string[] {
+  const decisionDisplays = result.decisionDisplays;
   const selectorText = result.run.executionId
     ? `Execution ${safe(result.run.executionId)}${result.run.runId ? ` (run ${safe(result.run.runId)})` : ""}`
     : `Run ${safe(result.run.runId)}`;
@@ -406,28 +414,7 @@ function formatAuditRunInspection(result: AuditRunInspectResult): string[] {
     "",
     "Identity",
   ];
-  if (result.identity.state === "present") {
-    const identityLines = contextIdentityLines(result.identity.context);
-    lines.push(
-      `  Context: ${safe(result.identity.context.contextId)}`,
-      `  Created: ${timestampMsToIsoString(result.identity.context.createdAt) ?? String(result.identity.context.createdAt)}`,
-      ...identityLines.slice(0, 8),
-      "",
-      "Authority",
-      ...identityLines.slice(8),
-      "",
-      "Lineage",
-      result.identity.context.lineage
-        ? fieldLine(
-            "Parent",
-            "present",
-            result.identity.context.lineage.parentRunId ??
-              result.identity.context.lineage.parentContextId ??
-              `depth ${String(result.identity.context.lineage.depth)}`,
-          )
-        : fieldLine("Parent", "absent"),
-    );
-  } else if (result.identity.state === "ambiguous") {
+  if (result.identity.state === "ambiguous") {
     lines.push(
       `  Reason: ${safe(result.identity.reasonCode)}`,
       ...result.identity.candidates.map(
@@ -442,22 +429,36 @@ function formatAuditRunInspection(result: AuditRunInspectResult): string[] {
       fieldLine("Parent", "unknown"),
     );
   } else {
+    const identity = result.identity;
+    const identityLines =
+      identity.state === "present"
+        ? contextIdentityLines(identity.context)
+        : unavailableIdentityLines(identity.state);
+    if (identity.state === "present") {
+      lines.push(
+        `  Context: ${safe(identity.context.contextId)}`,
+        `  Created: ${timestampMsToIsoString(identity.context.createdAt) ?? String(identity.context.createdAt)}`,
+      );
+    } else {
+      lines.push(`  Reason: ${safe(identity.reasonCode)}`);
+    }
     lines.push(
-      `  Reason: ${safe(result.identity.reasonCode)}`,
-      ...unavailableIdentityLines(result.identity.state).slice(0, 8),
+      ...identityLines.slice(0, 8),
       "",
       "Authority",
-      ...unavailableIdentityLines(result.identity.state).slice(8),
+      ...identityLines.slice(8),
       "",
       "Lineage",
-      fieldLine("Parent", result.identity.state),
+      ...(identity.state === "present"
+        ? contextLineageLines(identity.context)
+        : [fieldLine("Parent", identity.state)]),
     );
   }
   lines.push("", "Decisions");
-  if (result.decisions.length === 0) {
+  if (decisionDisplays.length === 0) {
     lines.push("  none [absent]");
   } else {
-    for (const receipt of result.decisions) {
+    for (const receipt of decisionDisplays) {
       lines.push(...decisionLines(receipt));
     }
   }
@@ -469,7 +470,7 @@ function formatAuditRunInspection(result: AuditRunInspectResult): string[] {
   );
   const remediation = [
     ...(result.identity.state === "present" ? [] : result.identity.remediation),
-    ...result.decisions.flatMap((decision) => decision.remediation),
+    ...decisionDisplays.flatMap((decision) => decision.remediation),
   ];
   lines.push("", "Next steps");
   lines.push(
@@ -517,7 +518,7 @@ export async function auditListCommand(
         "--explain accepts only --run or --execution, plus --limit, --cursor, and --json; remove activity-list filters.",
       );
     }
-    const decisionLimit = parseAuditDecisionLimit(options.limit);
+    const decisionLimit = parseAuditLimit(options.limit, true);
     const cursor = options.cursor;
     const numericCursor = parsePositiveAuditCursor(cursor);
     const runExecutionCursor =

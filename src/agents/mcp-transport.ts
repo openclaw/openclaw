@@ -4,22 +4,21 @@
  * This module turns normalized MCP server config into stdio, SSE, or
  * streamable-HTTP SDK transports with OpenClaw auth, redirect, and logging rules.
  */
-import {
-  SSEClientTransport,
-  type SSEClientTransportOptions,
-} from "@modelcontextprotocol/sdk/client/sse.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import type { FetchLike, Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { SSEClientTransportOptions, FetchLike, Transport } from "@modelcontextprotocol/client";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logDebug } from "../logger.js";
 import type { SessionMcpRequesterScope } from "./agent-bundle-mcp-types.js";
 import { resolveMcpAuthProfileId, withMcpAuthProfileBearer } from "./mcp-auth-profile.js";
 import {
   buildMcpHttpFetch,
+  buildMcpOAuthHttpFetch,
   withoutMcpAuthorizationHeader,
   withSameOriginMcpHttpHeaders,
 } from "./mcp-http-fetch.js";
+import {
+  OpenClawSSEClientTransport,
+  OpenClawStreamableHTTPClientTransport,
+} from "./mcp-http-transport.js";
 import { withMcpOAuthBearer } from "./mcp-oauth-fetch.js";
 import { operatorMcpOAuthIdentity, requesterMcpOAuthIdentity } from "./mcp-oauth-identity.js";
 import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
@@ -37,29 +36,21 @@ type ResolvedMcpTransport = {
 
 function attachStderrLogging(serverName: string, transport: OpenClawStdioClientTransport) {
   const stderr = transport.stderr;
-  if (!stderr || typeof stderr.on !== "function") {
+  if (!stderr) {
     return undefined;
   }
-  const onData = (chunk: Buffer | string) => {
-    const message =
-      normalizeOptionalString(typeof chunk === "string" ? chunk : String(chunk)) ?? "";
-    if (!message) {
-      return;
-    }
-    for (const line of message.split(/\r?\n/)) {
-      const trimmed = line.trim();
-      if (trimmed) {
-        logDebug(`bundle-mcp:${serverName}: ${trimmed}`);
-      }
+  let reported = false;
+  const onData = () => {
+    if (!reported) {
+      reported = true;
+      // External server output can contain message text or tool arguments.
+      logDebug(`bundle-mcp:${serverName}: stderr output omitted`);
     }
   };
+  // Keep consuming after the notice so stderr cannot block the server's shutdown.
   stderr.on("data", onData);
   return () => {
-    if (typeof stderr.off === "function") {
-      stderr.off("data", onData);
-    } else if (typeof stderr.removeListener === "function") {
-      stderr.removeListener("data", onData);
-    }
+    stderr.off("data", onData);
   };
 }
 
@@ -98,12 +89,23 @@ export function resolveMcpTransport(
     agentDir?: string;
     prepareDataDir?: string;
     requesterScope?: SessionMcpRequesterScope;
+    /** Protocol-owned headers for a single stateless request, not credential overrides. */
+    requestHeaders?: Record<string, string>;
+    /** Recheck the owning operation after asynchronous auth and before HTTP effects. */
+    beforeRequest?: () => void;
   },
 ): ResolvedMcpTransport | null {
   const resolved = resolveMcpTransportConfig(serverName, rawServer);
   if (!resolved) {
     return null;
   }
+  const metadata = {
+    description: resolved.description,
+    transportType: resolved.transportType,
+    connectionTimeoutMs: resolved.connectionTimeoutMs,
+    requestTimeoutMs: resolved.requestTimeoutMs,
+    supportsParallelToolCalls: resolved.supportsParallelToolCalls,
+  };
   if (resolved.kind === "stdio") {
     const transport = new OpenClawStdioClientTransport({
       command: resolved.command,
@@ -115,11 +117,7 @@ export function resolveMcpTransport(
     });
     return {
       transport,
-      description: resolved.description,
-      transportType: "stdio",
-      connectionTimeoutMs: resolved.connectionTimeoutMs,
-      requestTimeoutMs: resolved.requestTimeoutMs,
-      supportsParallelToolCalls: resolved.supportsParallelToolCalls,
+      ...metadata,
       detachStderr: attachStderrLogging(serverName, transport),
     };
   }
@@ -141,6 +139,8 @@ export function resolveMcpTransport(
     clientCert: resolved.clientCert,
     clientKey: resolved.clientKey,
     resourceUrl: resolved.url,
+    requestTimeoutMs: resolved.requestTimeoutMs,
+    beforeRequest: options?.beforeRequest,
   });
   const headers =
     resolved.auth === "oauth" || authProfileId
@@ -165,39 +165,50 @@ export function resolveMcpTransport(
       ? withMcpOAuthBearer({
           fetchFn: resourceFetch,
           // Protected-resource discovery lives at the resource origin and may
-          // require the same routing headers. Cross-origin auth calls stay scrubbed.
-          authFetchFn: resourceFetch,
+          // require the same routing headers. Resource requests intentionally retain
+          // redirect-body replay for MCP compatibility, while credential-bearing
+          // auth redirects use the stricter fail-closed policy.
+          authFetchFn: buildMcpOAuthHttpFetch({
+            sslVerify: resolved.sslVerify,
+            clientCert: resolved.clientCert,
+            clientKey: resolved.clientKey,
+            resourceUrl: resolved.url,
+            timeoutMs: resolved.requestTimeoutMs,
+            beforeRequest: options?.beforeRequest,
+            headers,
+          }),
           identity: oauthIdentity,
           config: resolved.oauth,
         })
       : baseFetch;
   if (resolved.transportType === "streamable-http") {
+    let requestInit: RequestInit | undefined =
+      resolved.auth === "oauth" || !headers ? undefined : { headers };
+    if (options?.requestHeaders) {
+      const requestHeaders = new Headers(requestInit?.headers);
+      for (const [name, value] of Object.entries(options.requestHeaders)) {
+        requestHeaders.set(name, value);
+      }
+      requestInit = { headers: requestHeaders };
+    }
     return {
-      transport: new StreamableHTTPClientTransport(new URL(resolved.url), {
-        requestInit: resolved.auth === "oauth" || !headers ? undefined : { headers },
+      transport: new OpenClawStreamableHTTPClientTransport(new URL(resolved.url), {
+        requestInit,
         fetch: httpFetch,
       }),
-      description: resolved.description,
-      transportType: "streamable-http",
-      connectionTimeoutMs: resolved.connectionTimeoutMs,
-      requestTimeoutMs: resolved.requestTimeoutMs,
-      supportsParallelToolCalls: resolved.supportsParallelToolCalls,
+      ...metadata,
     };
   }
   const sseHeaders: Record<string, string> = { ...headers };
   const hasHeaders = Object.keys(sseHeaders).length > 0;
   return {
-    transport: new SSEClientTransport(new URL(resolved.url), {
+    transport: new OpenClawSSEClientTransport(new URL(resolved.url), {
       requestInit: resolved.auth === "oauth" || !hasHeaders ? undefined : { headers: sseHeaders },
       fetch: httpFetch,
       eventSourceInit: {
         fetch: buildSseEventSourceFetch(resolved.auth === "oauth" ? {} : sseHeaders, httpFetch),
       },
     }),
-    description: resolved.description,
-    transportType: "sse",
-    connectionTimeoutMs: resolved.connectionTimeoutMs,
-    requestTimeoutMs: resolved.requestTimeoutMs,
-    supportsParallelToolCalls: resolved.supportsParallelToolCalls,
+    ...metadata,
   };
 }

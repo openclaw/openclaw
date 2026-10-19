@@ -2,11 +2,11 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseForTest,
   detectOpenClawStateDatabaseSchemaMigrations,
   openOpenClawStateDatabase,
-  OPENCLAW_STATE_SCHEMA_VERSION,
   repairOpenClawStateDatabaseSchema,
 } from "./openclaw-state-db.js";
 
@@ -34,6 +34,8 @@ describe("gateway restart handoff state migration", () => {
     ).sql;
     const flexibleCreateSql = strictCreateSql.replace(/\s+STRICT$/u, "");
     expect(flexibleCreateSql).not.toBe(strictCreateSql);
+    // The synthetic pre-STRICT database predates this placement index.
+    legacy.exec("DROP INDEX idx_worker_session_placements_environment;");
     legacy.exec(`
       DROP INDEX idx_gateway_restart_handoff_expiry;
       ALTER TABLE gateway_restart_handoff RENAME TO gateway_restart_handoff_strict;
@@ -86,6 +88,15 @@ describe("gateway restart handoff state migration", () => {
     legacy.close();
 
     expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([
+      { kind: "creator-namespace-v14", path: databasePath },
+      { kind: "predicate-columns-v21", path: databasePath },
+      { kind: "portable-identity-columns-v22", path: databasePath },
+      { kind: "meeting-transcript-start-time", path: databasePath },
+      { kind: "task-run-indexes-v24", path: databasePath },
+      { kind: "subagent-operator-recovery-v25", path: databasePath },
+      { kind: "session-state-head-layout-v26", path: databasePath },
+      { kind: "state-write-indexes-v27", path: databasePath },
+      { kind: "github-publication-draft-v28", path: databasePath },
       { kind: "strict-tables-v3", path: databasePath },
       { kind: "session-watch-cursor-provenance-v4", path: databasePath },
     ]);
@@ -93,6 +104,9 @@ describe("gateway restart handoff state migration", () => {
       changes: [
         "Migrated cloud worker placements to execution modes",
         "Migrated shared state session watch cursors → provenance column (0 ambient, 0 sentinels removed)",
+        "Qualified historical cron creator attribution as unknown (v14)",
+        "Replaced retained task indexes with ordered cron history indexes (v24)",
+        "Removed redundant replay and skill indexes and narrowed the lease-owner index (v27)",
         "Migrated shared state tables to SQLite STRICT typing (1)",
       ],
       warnings: [],

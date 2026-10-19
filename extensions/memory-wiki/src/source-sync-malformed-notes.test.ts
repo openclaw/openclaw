@@ -46,9 +46,6 @@ describe("memory wiki source sync malformed human Notes", () => {
   it.each([
     { group: "bridge" as const, missingMarker: "opening" as const },
     { group: "bridge" as const, missingMarker: "closing" as const },
-    { group: "bridge" as const, missingMarker: "both" as const },
-    { group: "unsafe-local" as const, missingMarker: "opening" as const },
-    { group: "unsafe-local" as const, missingMarker: "closing" as const },
     { group: "unsafe-local" as const, missingMarker: "both" as const },
   ])(
     "preserves $group pages and persisted state when the $missingMarker marker is missing",

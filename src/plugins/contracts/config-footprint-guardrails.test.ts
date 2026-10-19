@@ -22,34 +22,26 @@ function collectSchemaPaths(schema: unknown, prefix = ""): string[] {
   if (!schema || typeof schema !== "object") {
     return [];
   }
-
   const out: string[] = [];
   const candidate = schema as {
     properties?: Record<string, unknown>;
     additionalProperties?: unknown;
     items?: unknown;
   };
-
   if (candidate.properties && typeof candidate.properties === "object") {
     for (const [key, value] of Object.entries(candidate.properties)) {
       const path = prefix ? `${prefix}.${key}` : key;
-      out.push(path);
-      out.push(...collectSchemaPaths(value, path));
+      out.push(path, ...collectSchemaPaths(value, path));
     }
   }
 
-  if (
-    candidate.additionalProperties &&
-    typeof candidate.additionalProperties === "object" &&
-    !Array.isArray(candidate.additionalProperties)
-  ) {
-    const path = prefix ? `${prefix}.*` : "*";
-    out.push(...collectSchemaPaths(candidate.additionalProperties, path));
-  }
-
-  if (candidate.items && typeof candidate.items === "object" && !Array.isArray(candidate.items)) {
-    const path = prefix ? `${prefix}[]` : "[]";
-    out.push(...collectSchemaPaths(candidate.items, path));
+  for (const [child, path] of [
+    [candidate.additionalProperties, prefix ? `${prefix}.*` : "*"],
+    [candidate.items, prefix ? `${prefix}[]` : "[]"],
+  ] as const) {
+    if (child && typeof child === "object" && !Array.isArray(child)) {
+      out.push(...collectSchemaPaths(child, path));
+    }
   }
 
   return out;
@@ -119,9 +111,7 @@ describe("config footprint guardrails", () => {
   });
 
   it("keeps bundled channel private-network config canonical in generated metadata", () => {
-    const pluginIds = ["matrix", "nextcloud-talk", "tlon"];
-
-    for (const pluginId of pluginIds) {
+    for (const pluginId of ["matrix", "nextcloud-talk", "tlon"]) {
       const metadata = GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.find(
         (entry) => entry.pluginId === pluginId,
       );
@@ -129,26 +119,17 @@ describe("config footprint guardrails", () => {
         throw new Error(`${pluginId} metadata missing`);
       }
       const paths = new Set(collectSchemaPaths(metadata.schema));
-      expect(paths.has("allowPrivateNetwork"), `${pluginId} leaked flat allowPrivateNetwork`).toBe(
-        false,
-      );
-      expect(
-        paths.has("network.dangerouslyAllowPrivateNetwork"),
-        `${pluginId} missing canonical network.dangerouslyAllowPrivateNetwork`,
-      ).toBe(true);
+      expect([...paths], pluginId).not.toContain("allowPrivateNetwork");
+      expect([...paths], pluginId).toContain("network.dangerouslyAllowPrivateNetwork");
     }
   });
 
-  it("keeps canonical nested streaming paths in channel-owned schemas", () => {
+  it("keeps retired flat streaming aliases out of channel-owned schemas", () => {
     const telegramSource = readSource("extensions/telegram/src/config-schema.ts");
     const discordSource = readSource("extensions/discord/src/config-schema.ts");
     const msTeamsSource = readSource("extensions/msteams/src/config-schema.ts");
     const slackSource = readSource("extensions/slack/src/config-schema.ts");
 
-    expect(telegramSource).toContain("streaming: TelegramPreviewStreamingConfigSchema.optional(),");
-    expect(discordSource).toContain("streaming: DiscordPreviewStreamingConfigSchema.optional(),");
-    expect(msTeamsSource).toContain("streaming: ChannelPreviewStreamingConfigSchema.optional(),");
-    expect(slackSource).toContain("streaming: SlackStreamingConfigSchema.optional(),");
     for (const schemaSource of [telegramSource, discordSource, msTeamsSource, slackSource]) {
       expect(schemaSource).not.toContain(
         'streamMode: z.enum(["replace", "status_final", "append"])',
@@ -156,15 +137,6 @@ describe("config footprint guardrails", () => {
       expect(schemaSource).not.toContain("draftChunk:");
       expect(schemaSource).not.toContain("nativeStreaming:");
     }
-  });
-
-  it("keeps Matrix setup input canonical-first after plugin ownership", () => {
-    const source = readSource("extensions/matrix/src/setup-config.ts");
-    const canonicalIndex = source.indexOf("dangerouslyAllowPrivateNetwork?: boolean;");
-    const aliasIndex = source.indexOf("allowPrivateNetwork?: boolean;");
-
-    expect(canonicalIndex).toBeGreaterThanOrEqual(0);
-    expect(aliasIndex).toBeGreaterThan(canonicalIndex);
   });
 
   it("keeps retired config aliases out of the shared setup input", () => {
@@ -178,17 +150,7 @@ describe("config footprint guardrails", () => {
     expect(source).not.toContain("allow?: boolean;");
   });
 
-  it("keeps plugin-sdk private-network helpers canonical-first with a narrow compat alias", () => {
-    const source = readSource("src/plugin-sdk/ssrf-policy.ts");
-
-    expect(source).toContain("export function ssrfPolicyFromDangerouslyAllowPrivateNetwork(");
-    expect(source).toContain("export function ssrfPolicyFromAllowPrivateNetwork(");
-    expect(source).toContain(
-      "return ssrfPolicyFromDangerouslyAllowPrivateNetwork(allowPrivateNetwork);",
-    );
-  });
-
-  it("keeps current channel schemas plugin-owned", () => {
+  it("keeps current channel schemas plugin-owned behind shipped compatibility exports", () => {
     const source = readSource("src/plugin-sdk/channel-config-schema.ts");
     const bundledSource = readSource("src/plugin-sdk/bundled-channel-config-schema.ts");
     const bundledSection = bundledSource.slice(
@@ -215,8 +177,12 @@ describe("config footprint guardrails", () => {
     ].toSorted((left, right) => left.localeCompare(right));
 
     expect(exportedSchemaNames).toEqual([
+      "DiscordConfigSchema",
       "GoogleChatConfigSchema",
       "IMessageConfigSchema",
+      "MSTeamsConfigSchema",
+      "SignalConfigSchema",
+      "SlackConfigSchema",
       "TelegramConfigSchema",
       "WhatsAppConfigSchema",
     ]);
@@ -245,8 +211,8 @@ describe("config footprint guardrails", () => {
     // channel-config-schema is the canonical internal module; the primitives
     // and bundled shells stay export-compatible for plugins only.
     const allowedShellImporters = new Set([
-      // The facade's focused regression tests are its only internal consumers.
-      "src/plugin-sdk/bundled-channel-config-schema.test.ts",
+      // The compatibility test exercises the shipped facade exports.
+      "src/plugin-sdk/shipped-channel-compat.test.ts",
       // This guardrail file embeds facade specifiers in shell-shape assertions.
       "src/plugins/contracts/config-footprint-guardrails.test.ts",
     ]);

@@ -1,6 +1,7 @@
 import type {
   OpenClawPluginNodeHostCommand,
   OpenClawPluginNodeInvokePolicy,
+  ProviderPlugin,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -11,6 +12,10 @@ describe("anthropic session catalog lazy imports", () => {
   afterEach(() => {
     vi.doUnmock("./session-catalog.js");
     vi.doUnmock("./session-catalog-node-commands.js");
+    vi.doUnmock("openclaw/plugin-sdk/provider-auth");
+    vi.doUnmock("openclaw/plugin-sdk/provider-stream-shared");
+    vi.doUnmock("./stream-wrappers.js");
+    vi.doUnmock("./live-model-projection.js");
     vi.resetModules();
   });
 
@@ -59,7 +64,7 @@ describe("anthropic session catalog lazy imports", () => {
     expect(catalogImports).toBe(0);
     expect(nodeCommandImports).toBe(0);
     expect(catalogs).toHaveLength(1);
-    expect(nodeCommands).toHaveLength(3);
+    expect(nodeCommands).toHaveLength(4);
     expect(nodePolicies).toHaveLength(1);
 
     await expect(catalogs[0]?.list({ agentId: "main" })).resolves.toEqual([]);
@@ -68,5 +73,57 @@ describe("anthropic session catalog lazy imports", () => {
     await expect(nodeCommands[0]?.handle()).resolves.toBe("[]");
     expect(catalogImports).toBe(1);
     expect(nodeCommandImports).toBe(1);
+  });
+
+  it("registers callable provider hooks before loading execution runtimes", async () => {
+    vi.doMock("openclaw/plugin-sdk/provider-auth", () => {
+      throw new Error("auth execution loaded");
+    });
+    // mock-isolation: importing the real transport would defeat the cold-registration guard.
+    vi.doMock("openclaw/plugin-sdk/provider-stream-shared", () => {
+      throw new Error("stream transport loaded");
+    });
+    // mock-isolation: importing the real wrappers would defeat the cold-registration guard.
+    vi.doMock("./stream-wrappers.js", () => {
+      throw new Error("stream execution loaded");
+    });
+    // mock-isolation: importing the real catalog would defeat the cold-registration guard.
+    vi.doMock("./live-model-projection.js", () => {
+      throw new Error("live catalog loaded");
+    });
+    const { default: anthropicPlugin } = await import("./index.js");
+    const providers: ProviderPlugin[] = [];
+    anthropicPlugin.register(
+      createTestPluginApi({
+        id: "anthropic",
+        name: "Anthropic",
+        source: "test",
+        config: {},
+        runtime: createPluginRuntimeMock(),
+        registerProvider: (provider) => providers.push(provider),
+      }),
+    );
+    const provider = providers[0]!;
+    expect(provider.auth.map(({ id }) => id)).toEqual(["cli", "setup-token", "api-key"]);
+    for (const hook of [provider.wrapStreamFn, provider.wrapSimpleCompletionStreamFn]) {
+      expect(hook?.({ provider: "anthropic", modelId: "synthetic-model" })).toEqual(
+        expect.any(Function),
+      );
+    }
+    expect(
+      provider.classifyFailoverReason?.({
+        provider: "anthropic",
+        errorMessage: "",
+        code: "API_ERROR",
+      }),
+    ).toBe("server_error");
+    await expect(
+      provider.buildAuthDoctorHint!({
+        provider: "anthropic",
+        store: { version: 1, profiles: {} },
+      }),
+    ).rejects.toMatchObject({
+      cause: { message: "auth execution loaded" },
+    });
   });
 });

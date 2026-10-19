@@ -3,7 +3,8 @@ import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildExecApprovalCustomId, parseExecApprovalData } from "../approval-custom-id.js";
-import { parseCustomId, type ButtonInteraction, type ComponentData } from "../internal/discord.js";
+import { parseCustomId } from "../internal/components.base.js";
+import type { BaseComponentInteraction, ComponentData } from "../internal/discord.js";
 
 const resolveApprovalOverGatewayMock = vi.hoisted(() => vi.fn());
 
@@ -34,15 +35,31 @@ function buildConfig(
   } as OpenClawConfig;
 }
 
-function createInteraction(overrides?: Partial<ButtonInteraction>): ButtonInteraction {
+function createInteraction(
+  overrides?: Partial<BaseComponentInteraction>,
+  approvalKind: Parameters<typeof buildExecApprovalCustomId>[1] = "exec",
+  approvalId = "abc",
+): BaseComponentInteraction {
   return {
     userId: "123",
     reply: vi.fn(),
     acknowledge: vi.fn(),
+    message: { id: "message-1" },
+    fetchReply: vi.fn(async () => ({
+      components: [
+        {
+          type: 1,
+          components: (["allow-once", "allow-always", "deny"] as const).map((decision) => ({
+            type: 2,
+            custom_id: buildExecApprovalCustomId(approvalId, approvalKind, decision),
+          })),
+        },
+      ],
+    })),
     editReply: vi.fn(),
     followUp: vi.fn(),
     ...overrides,
-  } as unknown as ButtonInteraction;
+  } as unknown as BaseComponentInteraction;
 }
 
 function createApprovalResolution(params?: {
@@ -71,6 +88,8 @@ describe("discord exec approval monitor helpers", () => {
   it.each([
     ["exec", "plugin:looks-like-plugin", "allow-once"],
     ["plugin", "plain-plugin-id", "deny"],
+    ["system-agent", "change-1", "allow-once"],
+    ["system-agent", "change-2", "deny"],
   ] as const)("round-trips %s approval custom ids", (approvalKind, approvalId, action) => {
     const customId = buildExecApprovalCustomId(approvalId, approvalKind, action);
     const parsed = parseCustomId(customId);
@@ -106,26 +125,37 @@ describe("discord exec approval monitor helpers", () => {
     });
   });
 
-  it("blocks non-approvers from approving", async () => {
-    const interaction = createInteraction({ userId: "999" });
-    const button = createExecApprovalButton({
-      getApprovers: () => ["123"],
-      resolveApproval: async () => ({ ok: true, resolution: createApprovalResolution() }),
-    });
+  it.each(["exec", "plugin", "system-agent"] as const)(
+    "blocks non-approvers from approving %s clicks before resolution",
+    async (approvalKind) => {
+      const interaction = createInteraction({ userId: "999" });
+      const resolveApproval = vi.fn(
+        async () =>
+          ({
+            ok: true,
+            resolution: createApprovalResolution(),
+          }) as const,
+      );
+      const button = createExecApprovalButton({
+        getApprovers: () => ["123"],
+        resolveApproval,
+      });
 
-    await button.run(interaction, { kind: "exec", id: "abc", action: "allow-once" });
+      await button.run(interaction, { kind: approvalKind, id: "abc", action: "allow-once" });
 
-    expect(interaction["reply"]).toHaveBeenCalledWith({
-      content: "⛔ You are not authorized to approve requests.",
-      ephemeral: true,
-    });
-  });
+      expect(interaction["reply"]).toHaveBeenCalledWith({
+        content: "⛔ You are not authorized to approve requests.",
+        ephemeral: true,
+      });
+      expect(resolveApproval).not.toHaveBeenCalled();
+    },
+  );
 
-  it.each(["exec", "plugin"] as const)(
+  it.each(["exec", "plugin", "system-agent"] as const)(
     "acknowledges and resolves valid %s approval clicks",
     async (approvalKind) => {
       const editReply = vi.fn();
-      const interaction = createInteraction({ editReply });
+      const interaction = createInteraction({ editReply }, approvalKind);
       const resolveApproval = vi.fn(
         async () =>
           ({
@@ -175,7 +205,7 @@ describe("discord exec approval monitor helpers", () => {
 
   it("cleans stale controls and shows the canonical winner after losing the race", async () => {
     const editReply = vi.fn();
-    const interaction = createInteraction({ editReply });
+    const interaction = createInteraction({ editReply }, "plugin", "plain-plugin-id");
     const resolution = createApprovalResolution({
       id: "plain-plugin-id",
       applied: false,
@@ -207,12 +237,75 @@ describe("discord exec approval monitor helpers", () => {
     expect(interaction["editReply"]).toHaveBeenCalledTimes(1);
     const terminalPayload = editReply.mock.calls[0]?.[0];
     expect(JSON.stringify(terminalPayload)).toContain("Approval already resolved");
-    expect(JSON.stringify(terminalPayload)).toContain("Canonical result: **Denied**");
+    expect(JSON.stringify(terminalPayload)).toContain("Recorded result: **Denied**");
     expect(JSON.stringify(terminalPayload)).not.toContain("execapproval");
     expect(interaction["followUp"]).toHaveBeenCalledWith({
       content: "This approval was already resolved: Denied.",
       ephemeral: true,
     });
+  });
+
+  it.each(["Applied", "Not applied"])(
+    "preserves the native %s card when its controls are already gone",
+    async (outcome) => {
+      const currentMessage = { components: [{ type: 10, content: outcome }] };
+      const fetchReply = vi.fn(async () => currentMessage);
+      const editReply = vi.fn();
+      const followUp = vi.fn();
+      const interaction = createInteraction({ fetchReply, editReply, followUp });
+      const button = createExecApprovalButton({
+        getApprovers: () => ["123"],
+        resolveApproval: async () => ({ ok: true, resolution: createApprovalResolution() }),
+      });
+
+      await button.run(interaction, { kind: "system-agent", id: "abc", action: "allow-once" });
+
+      expect(fetchReply).toHaveBeenCalledOnce();
+      expect(editReply).not.toHaveBeenCalled();
+      expect(followUp).toHaveBeenCalledWith({
+        content: "Approval resolved: Allowed once.",
+        ephemeral: true,
+      });
+    },
+  );
+
+  it("preserves the card when its current controls cannot be read", async () => {
+    const editReply = vi.fn();
+    const followUp = vi.fn();
+    const interaction = createInteraction({
+      editReply,
+      followUp,
+      fetchReply: vi.fn(async () => {
+        throw new Error("message lookup failed");
+      }),
+    });
+    const button = createExecApprovalButton({
+      getApprovers: () => ["123"],
+      resolveApproval: async () => ({ ok: true, resolution: createApprovalResolution() }),
+    });
+
+    await button.run(interaction, { kind: "system-agent", id: "abc", action: "allow-once" });
+
+    expect(editReply).not.toHaveBeenCalled();
+    expect(followUp).toHaveBeenCalledWith({
+      content: "Approval resolved: Allowed once.",
+      ephemeral: true,
+    });
+  });
+
+  it("does not replace another approval's controls on the same message", async () => {
+    const editReply = vi.fn();
+    const followUp = vi.fn();
+    const interaction = createInteraction({ editReply, followUp }, "system-agent", "replacement");
+    const button = createExecApprovalButton({
+      getApprovers: () => ["123"],
+      resolveApproval: async () => ({ ok: true, resolution: createApprovalResolution() }),
+    });
+
+    await button.run(interaction, { kind: "system-agent", id: "abc", action: "allow-once" });
+
+    expect(editReply).not.toHaveBeenCalled();
+    expect(followUp).toHaveBeenCalledOnce();
   });
 
   it("shows a follow-up when gateway resolution fails", async () => {
@@ -248,7 +341,7 @@ describe("discord exec approval monitor helpers", () => {
     });
   });
 
-  it.each(["exec", "plugin"] as const)(
+  it.each(["exec", "plugin", "system-agent"] as const)(
     "routes %s button resolutions through the canonical gateway method",
     async (approvalKind) => {
       const cfg = buildConfig({ enabled: true, approvers: ["123"] });
@@ -278,20 +371,6 @@ describe("discord exec approval monitor helpers", () => {
       });
     },
   );
-
-  it("returns false when gateway resolution throws", async () => {
-    resolveApprovalOverGatewayMock.mockRejectedValue(new Error("boom"));
-    const ctx = createDiscordExecApprovalButtonContext({
-      cfg: buildConfig({ enabled: true, approvers: ["123"] }),
-      accountId: "default",
-      config: { enabled: true, approvers: ["123"] },
-    });
-
-    await expect(ctx.resolveApproval("abc", "exec", "allow-once", "123")).resolves.toEqual({
-      ok: false,
-      reason: "error",
-    });
-  });
 
   it("classifies structured approval-not-found gateway errors as stale clicks", async () => {
     const err = Object.assign(new Error("unknown or expired approval id"), {

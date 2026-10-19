@@ -1,4 +1,4 @@
-// Xai helper module supports code execution config behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isXaiToolEnabled, type XaiToolAuthContext } from "./tool-auth-shared.js";
 
 type CodeExecutionConfig = {
@@ -8,49 +8,24 @@ type CodeExecutionConfig = {
   timeoutSeconds?: number;
 };
 
-export function readCodeExecutionConfigRecord(
-  config?: CodeExecutionConfig,
-): Record<string, unknown> | undefined {
-  return config && typeof config === "object" ? (config as Record<string, unknown>) : undefined;
-}
-
-export function readPluginCodeExecutionConfig(cfg?: unknown): CodeExecutionConfig | undefined {
-  if (!cfg || typeof cfg !== "object") {
-    return undefined;
-  }
-  const entries = (cfg as Record<string, unknown>).plugins;
-  const pluginEntries =
-    entries && typeof entries === "object"
-      ? ((entries as Record<string, unknown>).entries as Record<string, unknown> | undefined)
-      : undefined;
-  if (!pluginEntries) {
-    return undefined;
-  }
-  const xaiEntry = pluginEntries.xai;
-  if (!xaiEntry || typeof xaiEntry !== "object") {
-    return undefined;
-  }
-  const config = (xaiEntry as Record<string, unknown>).config;
-  if (!config || typeof config !== "object") {
-    return undefined;
-  }
-  const codeExecution = (config as Record<string, unknown>).codeExecution;
-  if (!codeExecution || typeof codeExecution !== "object") {
-    return undefined;
-  }
-  return codeExecution as CodeExecutionConfig;
+export function readPluginCodeExecutionConfig(
+  cfg?: OpenClawConfig,
+): CodeExecutionConfig | undefined {
+  const config = cfg?.plugins?.entries?.xai?.config;
+  const value = config && typeof config === "object" ? config.codeExecution : undefined;
+  return value && typeof value === "object" ? (value as CodeExecutionConfig) : undefined;
 }
 
 export function resolveCodeExecutionEnabled(params: {
-  sourceConfig?: unknown;
-  runtimeConfig?: unknown;
+  sourceConfig?: OpenClawConfig;
+  runtimeConfig?: OpenClawConfig;
   config?: CodeExecutionConfig;
   auth?: XaiToolAuthContext;
 }): boolean {
   return isXaiToolEnabled({
-    enabled: readCodeExecutionConfigRecord(params.config)?.enabled as boolean | undefined,
-    runtimeConfig: params.runtimeConfig as never,
-    sourceConfig: params.sourceConfig as never,
+    enabled: params.config?.enabled,
+    runtimeConfig: params.runtimeConfig,
+    sourceConfig: params.sourceConfig,
     auth: params.auth,
   });
 }

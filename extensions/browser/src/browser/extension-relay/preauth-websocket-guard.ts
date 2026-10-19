@@ -1,6 +1,6 @@
 import type { IncomingMessage } from "node:http";
 import { Duplex } from "node:stream";
-import type { RawData, WebSocket, WebSocketServer } from "ws";
+import type { RawData, WebSocket, WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 
 export const MAX_WEBSOCKET_AUTH_MESSAGE_BYTES = 16 * 1024;
 // A masked 16 KiB frame needs at most 8 bytes of framing. Keep a small bounded
@@ -60,11 +60,9 @@ class PreAuthWebSocketTransport extends Duplex {
   override _destroy(error: Error | null, callback: (error?: Error | null) => void): void {
     this.rawSocket.off("data", this.onRawData);
     this.rawSocket.off("end", this.onRawEnd);
-    this.rawSocket.off("close", this.onRawClose);
-    this.rawSocket.off("error", this.onRawError);
-    if (!this.rawSocket.destroyed) {
-      this.rawSocket.destroy();
-    }
+    // A failed write can destroy this wrapper before the raw error event runs.
+    // Keep terminal listeners until raw close, even when already destroyed.
+    this.rawSocket.destroy();
     callback(error);
   }
 
@@ -82,7 +80,10 @@ class PreAuthWebSocketTransport extends Duplex {
   };
 
   private readonly onRawEnd = () => this.push(null);
-  private readonly onRawClose = () => this.destroy();
+  private readonly onRawClose = () => {
+    this.rawSocket.off("error", this.onRawError);
+    this.destroy();
+  };
   private readonly onRawError = (error: Error) => this.destroy(error);
 }
 

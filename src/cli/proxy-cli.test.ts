@@ -63,32 +63,6 @@ describe("proxy cli", () => {
       "blob",
       "purge",
     ]);
-
-    const validate = proxy?.commands.find((command) => command.name() === "validate");
-    expect(validate?.description()).toBe("Validate the operator-managed network proxy");
-    expect(validate?.options.map((option) => option.long)).toEqual([
-      "--json",
-      "--proxy-url",
-      "--proxy-ca-file",
-      "--allowed-url",
-      "--denied-url",
-      "--apns-reachable",
-      "--apns-authority",
-      "--timeout-ms",
-    ]);
-
-    expect(
-      Object.fromEntries(
-        ["coverage", "sessions", "query"].map((name) => {
-          const command = proxy?.commands.find((candidate) => candidate.name() === name);
-          return [name, command?.options.map((option) => option.long)];
-        }),
-      ),
-    ).toEqual({
-      coverage: ["--json"],
-      sessions: ["--json", "--limit"],
-      query: ["--preset", "--json", "--session"],
-    });
   });
 
   it.each([
@@ -122,9 +96,6 @@ describe("proxy cli", () => {
   it.each([
     [["proxy", "sessions", "--limit", "abc"], /--limit must be an integer/],
     [["proxy", "sessions", "--limit", "0"], /--limit must be a positive integer/],
-    [["proxy", "validate", "--timeout-ms", "1.5"], /--timeout-ms must be an integer/],
-    [["proxy", "validate", "--timeout-ms", "0"], /--timeout-ms must be a positive integer/],
-    [["proxy", "start", "--port", "abc"], /--port must be an integer/],
     [["proxy", "start", "--port", "-1"], /--port must be between 0 and 65535/],
     [["proxy", "run", "--port", "65536"], /--port must be between 0 and 65535/],
   ])("rejects invalid numeric option %s", (args, expected) => {

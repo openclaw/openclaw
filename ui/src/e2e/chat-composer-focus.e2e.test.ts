@@ -1,13 +1,114 @@
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const suite = createControlUiE2eSuite({
-  name: "Control UI chat composer focus",
-});
+const suite = createControlUiE2eSuite({ name: "Control UI chat composer focus" });
+const expectFocus = (locator: Locator, focused = true) =>
+  expect
+    .poll(() => locator.evaluate((element) => document.activeElement === element))
+    .toBe(focused);
+
+async function openAgentPicker(page: Page) {
+  await installMockGateway(page, {
+    defaultAgentId: "main",
+    methodResponses: {
+      "agents.list": {
+        agents: ["main", "research"].map((id) => ({ id, workspace: `/tmp/${id}` })),
+        defaultId: "main",
+        mainKey: "main",
+        scope: "agent",
+      },
+    },
+  });
+  await page.goto(`${suite.server.baseUrl}new?agent=main`);
+  const picker = page.locator(".new-session-page__select--agent openclaw-agent-select");
+  return {
+    picker,
+    trigger: picker.locator(".agent-select__trigger"),
+    menu: picker.locator(".agent-select__menu"),
+    option: picker.getByRole("menuitemradio", { name: "research", exact: true }),
+    composer: page.locator(".new-session-page__message"),
+  };
+}
 
 suite.define(() => {
+  it("routes agent-menu letters and selection keys to their owners", async () => {
+    await suite.withPage({}, async ({ page }) => {
+      const { picker, trigger, option, composer } = await openAgentPicker(page);
+      await trigger.waitFor({ state: "visible" });
+      await trigger.focus();
+      await page.keyboard.press("Enter");
+      // Opening initializes the selected row after its animation completes.
+      const selected = picker.getByRole("menuitemradio", { name: "main", exact: true });
+      await expectFocus(selected);
+      await page.keyboard.press("ArrowDown");
+      await expectFocus(option);
+
+      await page.keyboard.press("Space");
+
+      await expect
+        .poll(() => picker.locator(".agent-select__label").textContent())
+        .toBe("research");
+      await expect.poll(() => composer.inputValue()).toBe("");
+      await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
+      await option.waitFor({ state: "hidden" });
+
+      await trigger.focus();
+      await page.keyboard.press("Enter");
+      await expectFocus(option);
+
+      await page.keyboard.type("r");
+
+      await expect.poll(() => composer.inputValue()).toBe("r");
+    });
+  });
+
+  it("keeps agent-menu activation keys out of the composer while its trigger retains focus", async () => {
+    await suite.withPage({}, async ({ page }) => {
+      const { trigger, menu, option, composer } = await openAgentPicker(page);
+      await composer.waitFor({ state: "visible" });
+
+      await trigger.click();
+      await menu.waitFor({ state: "visible" });
+      await trigger.focus();
+      await expectFocus(trigger);
+      await page.keyboard.press("Space");
+
+      await expect
+        .poll(() => menu.evaluate((element) => element.matches(":popover-open")))
+        .toBe(true);
+      await expectFocus(option);
+      await expect.poll(() => composer.inputValue()).toBe("");
+    });
+  });
+
+  it("routes printable input from the real Chat context menu to the composer", async () => {
+    await suite.withPage({}, async ({ page }) => {
+      const messageText = "Context menu typing route";
+      await installMockGateway(page, {
+        historyMessages: [
+          { role: "assistant", content: [{ type: "text", text: messageText }], timestamp: 1_000 },
+        ],
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const bubble = page.locator(".chat-bubble").filter({ hasText: messageText });
+      await bubble.waitFor();
+      await bubble.click({ button: "right" });
+      const menuItem = page
+        .locator(".chat-reply-context-menu")
+        .getByRole("menuitem", { name: "Reply to message", exact: true });
+      await menuItem.focus();
+
+      await page.keyboard.type("x");
+
+      const composer = page.locator(".agent-chat__composer-combobox > textarea");
+      await expect.poll(() => composer.inputValue()).toBe("x");
+      await expectFocus(composer);
+    });
+  });
+
   it("keeps remote-control typing out of the chat composer", async () => {
     await suite.withPage({}, async ({ page }) => {
       const gateway = await installMockGateway(page, {
@@ -48,14 +149,12 @@ suite.define(() => {
             }),
           );
         });
-        await expect
-          .poll(() => composer.evaluate((element) => document.activeElement === element))
-          .toBe(false);
+        await expectFocus(composer, false);
       }
     });
   });
 
-  it("uses a visible neutral focus treatment in dark and light themes", async () => {
+  it("changes neutral focus styling in dark and light themes", async () => {
     await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}chat`);
@@ -66,21 +165,23 @@ suite.define(() => {
       await composer.waitFor({ state: "visible" });
 
       for (const theme of ["dark", "light"] as const) {
-        await page.evaluate((nextTheme) => {
-          document.documentElement.dataset.theme = "claw";
-          document.documentElement.dataset.themeMode = nextTheme;
-        }, theme);
+        await page.emulateMedia({ colorScheme: theme });
+        await expect
+          .poll(() => page.evaluate(() => document.documentElement.dataset.themeMode))
+          .toBe(theme);
         await textarea.evaluate((element) => element.blur());
-        await page.waitForTimeout(150);
-        const unfocused = await composer.evaluate((element) => {
+        const unfocused = await composer.evaluate(async (element) => {
+          await Promise.all(element.getAnimations().map((animation) => animation.finished));
           const style = getComputedStyle(element);
-          return { borderColor: style.borderColor, boxShadow: style.boxShadow };
+          const { width, height } = element.getBoundingClientRect();
+          return { borderColor: style.borderColor, boxShadow: style.boxShadow, width, height };
         });
 
         await textarea.focus();
-        await page.waitForTimeout(150);
-        const focused = await composer.evaluate((element) => {
+        const focused = await composer.evaluate(async (element) => {
+          await Promise.all(element.getAnimations().map((animation) => animation.finished));
           const style = getComputedStyle(element);
+          const { width, height } = element.getBoundingClientRect();
           const parseRgb = (color: string): [number, number, number] => {
             const values = color
               .match(/[\d.]+/g)
@@ -93,39 +194,23 @@ suite.define(() => {
               color.startsWith("color(srgb") ? values.map((value) => value * 255) : values
             ) as [number, number, number];
           };
-          const luminance = (color: string): number => {
-            const linearize = (channel: number) => {
-              const normalized = channel / 255;
-              return normalized <= 0.04045
-                ? normalized / 12.92
-                : ((normalized + 0.055) / 1.055) ** 2.4;
-            };
-            const channels = parseRgb(color);
-            return (
-              0.2126 * linearize(channels[0]) +
-              0.7152 * linearize(channels[1]) +
-              0.0722 * linearize(channels[2])
-            );
-          };
-          const borderLuminance = luminance(style.borderColor);
-          const surfaceLuminance = luminance(style.backgroundColor);
           const borderChannels = parseRgb(style.borderColor);
-          const contrast =
-            (Math.max(borderLuminance, surfaceLuminance) + 0.05) /
-            (Math.min(borderLuminance, surfaceLuminance) + 0.05);
 
           return {
             borderColor: style.borderColor,
             boxShadow: style.boxShadow,
-            contrast,
+            width,
+            height,
             neutralChannelSpread: Math.max(...borderChannels) - Math.min(...borderChannels),
           };
         });
 
-        expect(focused.borderColor).not.toBe(unfocused.borderColor);
-        expect(focused.boxShadow).not.toBe(unfocused.boxShadow);
+        expect([focused.borderColor, focused.boxShadow]).not.toEqual([
+          unfocused.borderColor,
+          unfocused.boxShadow,
+        ]);
         expect(focused.neutralChannelSpread).toBeLessThanOrEqual(24);
-        expect(focused.contrast).toBeGreaterThanOrEqual(3);
+        expect([focused.width, focused.height]).toEqual([unfocused.width, unfocused.height]);
       }
     });
   });

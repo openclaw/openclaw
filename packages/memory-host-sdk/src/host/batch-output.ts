@@ -1,4 +1,4 @@
-// Parses provider batch output lines into the custom-id embedding map.
+import { getBatchResponseError } from "./batch-response-error.js";
 
 const DEFAULT_BATCH_OUTPUT_RECORD_MAX_BYTES = 4 * 1024 * 1024;
 const INITIAL_BATCH_OUTPUT_RECORD_BYTES = 64 * 1024;
@@ -61,20 +61,14 @@ export async function readEmbeddingBatchJsonl<T>(
     if (recordCount > options.maxRecords) {
       throw new Error(`${options.label}: JSONL output exceeds ${options.maxRecords} records`);
     }
-    let text: string;
-    try {
-      text = decoder.decode(recordBuffer?.subarray(0, recordBytes)).trim();
-    } catch {
-      recordBytes = 0;
-      throw new Error(`${options.label}: malformed JSONL record`);
-    }
-    recordBytes = 0;
-    if (!text) {
-      return true;
-    }
     let parsed: unknown;
     try {
-      parsed = JSON.parse(text) as unknown;
+      const text = decoder.decode(recordBuffer?.subarray(0, recordBytes)).trim();
+      recordBytes = 0;
+      if (!text) {
+        return true;
+      }
+      parsed = JSON.parse(text);
     } catch {
       throw new Error(`${options.label}: malformed JSONL record`);
     }
@@ -82,10 +76,6 @@ export async function readEmbeddingBatchJsonl<T>(
       throw new Error(`${options.label}: malformed JSONL record`);
     }
     return options.onRecord(parsed as T);
-  };
-
-  const cancel = async () => {
-    await reader.cancel().catch(() => {});
   };
 
   try {
@@ -102,7 +92,8 @@ export async function readEmbeddingBatchJsonl<T>(
         }
         appendRecordPart(value.subarray(offset, index));
         if (!emitRecord()) {
-          await cancel();
+          // Release the reader without waiting for a retained capture tee.
+          void reader.cancel().catch(() => {});
           return;
         }
         offset = index + 1;
@@ -113,7 +104,7 @@ export async function readEmbeddingBatchJsonl<T>(
       emitRecord();
     }
   } catch (error) {
-    await cancel();
+    void reader.cancel().catch(() => {});
     throw error;
   } finally {
     reader.releaseLock();
@@ -160,14 +151,7 @@ export function applyEmbeddingBatchOutputLine(params: {
   const response = params.line.response;
   const statusCode = response?.status_code ?? 0;
   if (statusCode >= 400) {
-    const messageFromObject =
-      response?.body && typeof response.body === "object"
-        ? (response.body as { error?: { message?: string } }).error?.message
-        : undefined;
-    const messageFromString = typeof response?.body === "string" ? response.body : undefined;
-    params.errors.push(
-      `${customId}: ${messageFromObject || messageFromString || response?.message || "unknown error"}`,
-    );
+    params.errors.push(`${customId}: ${getBatchResponseError(response) || "unknown error"}`);
     return;
   }
 

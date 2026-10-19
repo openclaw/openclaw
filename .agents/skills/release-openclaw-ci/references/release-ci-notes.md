@@ -2,19 +2,22 @@
 
 ## What Went Wrong
 
-- Full validation was started before all provider keys were proven valid.
-- GitHub secret presence was confused with key validity.
 - Repeated `gh run view` and log fetches exhausted REST quota.
 - Parent run state was less useful than child run evidence.
 - Replacement parent runs were dispatched while an existing parent was still
   recoverable, multiplying polling, cancellation, and identity checks.
 - Live-cache failures needed structured classification: invalid key, empty provider output, timeout, or real cache regression.
 - Background watchers accumulated and made interruption recovery harder.
+- Hand-rolled watchers matched children by display title, missed them among
+  thousands of runs, parsed GitHub 502 bodies as job failures, and re-reported
+  after every restart. `pnpm frv watch` replaced them.
+- A failed-jobs rerun during a GitHub 5xx storm left 17 queued runner-less
+  duplicate jobs in the new attempt. `pnpm frv rerun --child` sends one request
+  and checks the new attempt for duplicates.
 
 ## Better Defaults
 
-- Run provider-secret preflight first. Require real `/models` or equivalent endpoint checks for release-blocking providers.
-- Keep one watcher open. Use child summaries every few minutes, not every few seconds.
+- Keep one `pnpm frv watch` open; its default one-minute polling is enough.
 - Fetch failed-job logs only after a job reaches a terminal failing state.
 - Prefer same-parent failed-job reruns when the original inputs still select the
   right work.
@@ -25,9 +28,18 @@
 - Classify one failed surface, make one fix when needed, and retry the narrowest
   failed group once. Then reassess whether to ship, explicitly waive, or block
   instead of creating another verification loop.
+- Release-check recovery uses one concrete group. The removed `release-checks`
+  aggregate handle must never be substituted with `all`.
+- Controller recovery uses `qa-parity` or `qa-live`; `qa` is reserved for a
+  deliberate direct-child manual aggregate. Filters that do not belong to the
+  selected group fail closed.
 - Preserve successful exact-tuple evidence when the documented finalization
   rules allow reuse. Narrow evidence does not become publish authorization by
   itself, and there is no standalone rerunnable finalizer today.
+- Once a release branch run records its Validation SHA, Tooling SHA, and rerun
+  group, later `main` or release-branch movement does not replace any tuple
+  member. The frozen candidate may remain behind the release branch only while
+  it is still an ancestor; release tags remain exact.
 - Leave bad secrets unset. A 401 candidate from 1Password should not overwrite GitHub.
 - Make the final release evidence note durable: parent URL, child run URLs, SHA, command proof, and gaps.
 

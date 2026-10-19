@@ -18,18 +18,20 @@ Qianfan is Baidu's MaaS platform: a unified, OpenAI-compatible API that routes r
 
 ## Install plugin
 
-Install the official plugin, then restart Gateway:
+Install the official plugin:
 
 ```bash
 openclaw plugins install @openclaw/qianfan-provider
-openclaw gateway restart
 ```
+
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 ## Getting started
 
 <Steps>
   <Step title="Create a Baidu Cloud account">
-    Sign up or log in at the [Qianfan Console](https://console.bce.baidu.com/qianfan/ais/console/apiKey) and ensure you have Qianfan API access enabled.
+    Sign up or log in at the [Qianfan Console](https://console.bce.baidu.com/qianfan/ais/console/apiKey) and enable Qianfan API access.
   </Step>
   <Step title="Generate an API key">
     Create a new application or select an existing one, then generate an API key. Baidu Cloud keys use the `bce-v3/ALTAK-...` format.
@@ -64,13 +66,16 @@ openclaw gateway restart
 
 The catalog is static; there is no live model discovery.
 
+Setup saves connection settings and aliases without copying generated catalog rows into your config.
+Explicit `models.mode: "replace"` keeps catalog seeding enabled; custom model rows stay intact.
+
 <Tip>
 You only need to override `models.providers.qianfan` when you need a custom base URL or model metadata.
 </Tip>
 
 ## Config example
 
-This example explicitly selects the current DeepSeek flagship instead of the onboarding compatibility default.
+This example explicitly selects the current DeepSeek flagship, which is also the model onboarding sets as the default.
 
 ```json5
 {
@@ -120,7 +125,7 @@ Model refs use the `qianfan/` prefix (for example `qianfan/deepseek-v4-pro`).
   </Accordion>
 
   <Accordion title="Troubleshooting">
-    - Ensure your API key starts with `bce-v3/ALTAK-` and has Qianfan API access enabled in the Baidu Cloud console.
+    - Check that your API key starts with `bce-v3/ALTAK-` and has Qianfan API access enabled in the Baidu Cloud console.
     - If models are not listed, confirm your account has the Qianfan service activated.
     - Only change the base URL if you use a custom endpoint or proxy.
 

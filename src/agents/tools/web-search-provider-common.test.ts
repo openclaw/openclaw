@@ -1,7 +1,188 @@
-// Shared web_search provider tests cover module-local cache isolation.
-import { describe, expect, it, vi } from "vitest";
+// Shared web-search tests cover HTTP error ownership and module-local cache isolation.
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { UnresolvedSecretInputError } from "../../config/types.secrets.js";
+import { redactLogRecordForTransport, redactToolPayloadText } from "../../logging/redact.js";
+import { withServer } from "../../plugin-sdk/test-helpers/http-test-server.js";
+import { withEnv } from "../../test-utils/env.js";
+import {
+  postTrustedWebToolsJson,
+  readWebSearchApiKey,
+  readWebSearchQueryAndCount,
+  throwWebSearchApiError,
+} from "./web-search-provider-common.js";
+
+const realFetch = globalThis.fetch;
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+describe("web search input boundaries", () => {
+  it("keeps configured credentials ahead of ordered environment fallbacks", () => {
+    withEnv({ TEST_SEARCH_PRIMARY: "  primary  ", TEST_SEARCH_SECONDARY: "secondary" }, () => {
+      const envVars = ["TEST_SEARCH_PRIMARY", "TEST_SEARCH_SECONDARY"];
+      expect(readWebSearchApiKey(" configured ", "test.apiKey", envVars)).toBe("configured");
+      expect(readWebSearchApiKey(undefined, "test.apiKey", envVars)).toBe("primary");
+      withEnv({ TEST_SEARCH_PRIMARY: " " }, () => {
+        expect(readWebSearchApiKey(" ", "test.apiKey", envVars)).toBe("secondary");
+      });
+    });
+  });
+
+  it.each(["env", "file", "exec"] as const)(
+    "does not hide unresolved %s references behind an ambient key",
+    (source) => {
+      withEnv({ TEST_SEARCH_PRIMARY: "ambient" }, () => {
+        expect(() =>
+          readWebSearchApiKey(
+            { source, provider: "default", id: "TEST_SEARCH_REFERENCE" },
+            "test.apiKey",
+            ["TEST_SEARCH_PRIMARY"],
+          ),
+        ).toThrow(UnresolvedSecretInputError);
+      });
+    },
+  );
+
+  it("reads a required query and keeps count fallback resolution with the caller", () => {
+    expect(readWebSearchQueryAndCount({ query: "  test  ", count: 2 }, { maxResults: 7 })).toEqual({
+      query: "test",
+      count: 2,
+    });
+    expect(readWebSearchQueryAndCount({ query: "test" }, { maxResults: 7 })).toEqual({
+      query: "test",
+      count: 7,
+    });
+    expect(readWebSearchQueryAndCount({ query: "test" })).toEqual({
+      query: "test",
+      count: undefined,
+    });
+    expect(() => readWebSearchQueryAndCount({})).toThrow("query required");
+  });
+
+  it.each([0, -1, 1.5, 11, "invalid"])(
+    "rejects invalid count %s rather than using config",
+    (count) => {
+      expect(() => readWebSearchQueryAndCount({ query: "test", count }, { maxResults: 7 })).toThrow(
+        "count must be an integer from 1 to 10.",
+      );
+    },
+  );
+});
+
+function postSearch(overrides: Partial<Parameters<typeof postTrustedWebToolsJson>[0]> = {}) {
+  return postTrustedWebToolsJson(
+    {
+      url: "https://search.example.com/search",
+      timeoutSeconds: 5,
+      apiKey: "s7Key",
+      body: { query: "test" },
+      errorLabel: "Search",
+      extraHeaders: { authorization: "Bearer synthetic-stale-key" },
+      ...overrides,
+    },
+    (response) => response.json(),
+  );
+}
+
+describe("web provider HTTP errors", () => {
+  it.each([
+    ["short body credential", "s7Key", "rejected $key", "", undefined, "rejected ***"],
+    ["short reason credential", "s7Key", "", "rejected $key", undefined, "rejected ***"],
+    ["bearer reflection", "synthetic-web-key-long", "Bearer $key", "", undefined, "***"],
+    ["truncated credential", "synthetic-web-key-long", "rejected $key", "", 15, "rejected ***"],
+    ["ordinary detail", "s7Key", "quota exceeded", "", undefined, "quota exceeded"],
+  ] as const)(
+    "redacts %s without discarding diagnostics",
+    async (_, apiKey, body, phrase, maxErrorBytes, expected) => {
+      let authorization: string | undefined;
+      await withServer(
+        (request, response) => {
+          authorization = request.headers.authorization;
+          response.writeHead(401, phrase.replace("$key", apiKey));
+          response.end(body.replace("$key", apiKey));
+        },
+        async (baseUrl) => {
+          // Only routing is injected: the guarded owner consumes a real HTTP response body.
+          vi.stubGlobal(
+            "fetch",
+            vi.fn((_input, init) => realFetch(baseUrl, init)),
+          );
+          const error = await postSearch({ apiKey, maxErrorBytes }).catch(
+            (cause: unknown) => cause,
+          );
+          expect(authorization).toBe(`Bearer ${apiKey}`);
+          expect(error).toMatchObject({
+            message: `Search API error (401): ${expected}`,
+            status: 401,
+            statusCode: 401,
+          });
+          const diagnostic = redactLogRecordForTransport({ error: String(error) });
+          expect(diagnostic).toEqual({
+            error: `ProviderHttpError: Search API error (401): ${expected}`,
+          });
+          expect(String(diagnostic.error)).not.toContain(apiKey);
+        },
+      );
+    },
+  );
+
+  it("preserves caller cancellation after error headers arrive", async () => {
+    const controller = new AbortController();
+    const reason = new Error("synthetic caller cancellation");
+    await withServer(
+      (_request, response) => {
+        response.writeHead(401);
+        response.write("partial diagnostic");
+      },
+      async (baseUrl) => {
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(async (_input, init) => {
+            const response = await realFetch(baseUrl, init);
+            controller.abort(reason);
+            return response;
+          }),
+        );
+        await expect(postSearch({ signal: controller.signal })).rejects.toBe(reason);
+      },
+    );
+  });
+
+  it("keeps successful responses and existing two-argument SDK calls usable", async () => {
+    expect(redactToolPayloadText("Bearer tokens")).toBe("Bearer tokens");
+    await withServer(
+      (_request, response) => response.end('{"answer":"Bearer tokens"}'),
+      async (baseUrl) => {
+        vi.stubGlobal(
+          "fetch",
+          vi.fn((_input, init) => realFetch(baseUrl, init)),
+        );
+        await expect(postSearch()).resolves.toEqual({ answer: "Bearer tokens" });
+      },
+    );
+    await expect(
+      throwWebSearchApiError(new Response("quota exceeded", { status: 429 }), "Search"),
+    ).rejects.toThrow("Search API error (429): quota exceeded");
+  });
+});
 
 describe("web_search shared cache", () => {
+  it("honors the reader TTL while preserving the shipped one-argument reader", async () => {
+    const { readCachedSearchPayload, writeCachedSearchPayload } =
+      await import("./web-search-provider-common.js");
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const key = "query:reader-ttl";
+    writeCachedSearchPayload(key, { text: "original" }, 900_000);
+    expect(readCachedSearchPayload(key, 0)).toBeUndefined();
+    writeCachedSearchPayload(key, { text: "disabled" }, 0);
+    clock.mockReturnValue(61_000);
+    expect(readCachedSearchPayload(key, 60_000)).toBeUndefined();
+    expect(readCachedSearchPayload(key)).toEqual({ text: "original", cached: true });
+    clock.mockReturnValue(901_001);
+    expect(readCachedSearchPayload(key)).toBeUndefined();
+  });
+
   it("keeps cache entries module-local instead of exposing them on a global symbol", async () => {
     // Cache state should die with the module instance; a global symbol would
     // leak search payloads across tests, sessions, and plugin reloads.

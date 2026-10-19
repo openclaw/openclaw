@@ -1,26 +1,19 @@
-/** Model candidate normalization and catalog selection for auth probes. */
-import { expectDefined } from "@openclaw/normalization-core";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { normalizeProviderId, parseModelRef } from "../../agents/model-selection.js";
 import { DEFAULT_PROVIDER } from "./shared.js";
 
-/** Groups configured model candidates by their requested provider identity. */
-export function buildProbeCandidateMap(modelCandidates: string[]): Map<string, string[]> {
-  const map = new Map<string, string[]>();
+export function buildProbeCandidateMap(modelCandidates: string[]): Map<string, string> {
+  const map = new Map<string, string>();
   for (const raw of modelCandidates) {
     const parsed = parseModelRef(raw ?? "", DEFAULT_PROVIDER);
-    if (!parsed) {
-      continue;
+    if (parsed && !map.has(parsed.provider)) {
+      map.set(parsed.provider, parsed.model);
     }
-    const list = map.get(parsed.provider) ?? [];
-    if (!list.includes(parsed.model)) {
-      list.push(parsed.model);
-    }
-    map.set(parsed.provider, list);
   }
   return map;
 }
 
-function catalogProbePriority(provider: string, modelId: string): number {
+function probePriority(provider: string, modelId: string): number {
   const id = modelId.trim().toLowerCase();
   if (provider !== "anthropic") {
     return 50;
@@ -49,22 +42,21 @@ function catalogProbePriority(provider: string, modelId: string): number {
 /** Selects a requested-provider candidate before falling back to its catalog rows. */
 export function selectProbeModel(params: {
   provider: string;
-  candidates: Map<string, string[]>;
-  catalog: Array<{ provider: string; id: string }>;
+  candidates: ReadonlyMap<string, string>;
+  catalog: Array<Pick<ModelCatalogEntry, "provider" | "id" | "status">>;
 }): { provider: string; model: string } | null {
   const { provider, candidates, catalog } = params;
   const direct = candidates.get(provider);
-  if (direct && direct.length > 0) {
-    return { provider, model: expectDefined(direct[0], "direct entry at 0") };
+  if (direct) {
+    return { provider, model: direct };
   }
   const fromCatalog = catalog
-    .map((entry, index) => ({ entry, index }))
-    .filter(({ entry }) => normalizeProviderId(entry.provider) === provider)
-    .toSorted((left, right) => {
-      const priority =
-        catalogProbePriority(provider, left.entry.id) -
-        catalogProbePriority(provider, right.entry.id);
-      return priority || left.index - right.index;
-    })[0]?.entry;
+    .filter(
+      (entry) =>
+        normalizeProviderId(entry.provider) === provider &&
+        entry.status !== "deprecated" &&
+        entry.status !== "disabled",
+    )
+    .toSorted((a, b) => probePriority(provider, a.id) - probePriority(provider, b.id))[0];
   return fromCatalog ? { provider, model: fromCatalog.id } : null;
 }

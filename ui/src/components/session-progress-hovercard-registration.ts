@@ -1,35 +1,40 @@
-import type { ApplicationGateway } from "../app/gateway.ts";
 import {
   hovercardBootstrapIntentActive,
   LazyHovercardBootstrap,
   type HovercardBootstrapTrigger,
 } from "./lazy-hovercard-registration.ts";
+import { sessionProgressHoverTargetFromEvent } from "./session-progress-hovercard-target.ts";
+import type { SessionProgressHovercardProvider } from "./session-progress-hovercard.runtime.tsx";
+import { installSessionTitleRegistrar } from "./session-title-target-registration.ts";
 
 const HOVERCARD_TAG = "openclaw-session-progress-hovercard-provider";
 
-type HovercardProviderElement = HTMLElement & { gateway?: ApplicationGateway | null };
-
-const bootstrap = new LazyHovercardBootstrap<HovercardProviderElement, ApplicationGateway | null>({
+const bootstrap = new LazyHovercardBootstrap<SessionProgressHovercardProvider>({
   tag: HOVERCARD_TAG,
-  load: async () =>
-    (await import("./session-progress-hovercard.runtime.ts")).SessionProgressHovercardProvider,
-  snapshot: (provider) => provider.gateway ?? null,
-  restore: (provider, gateway) => {
-    // Lit assigns .gateway before upgrade. Remove the expando so the runtime
-    // accessor can own store subscriptions after definition.
-    delete provider.gateway;
-    provider.gateway = gateway;
+  load: async () => {
+    await import("./session-progress-hovercard.runtime.tsx");
+    return customElements.get(HOVERCARD_TAG)!;
   },
 });
 
-function sessionRowFromEvent(event: Event): HTMLElement | null {
-  for (const target of event.composedPath()) {
-    if (target instanceof HTMLElement && target.dataset.sessionKey) {
-      return target;
-    }
+installSessionTitleRegistrar((target, label) => {
+  let active = true;
+  let release: (() => void) | undefined;
+  // The registrar promise lets producers finish mounting before this lookup.
+  const provider = bootstrap.providerFor(target);
+  if (provider) {
+    void bootstrap.define().then(async () => {
+      await provider.updateComplete;
+      if (active && target.isConnected && bootstrap.providerFor(target) === provider) {
+        release = provider.registerSessionTitleTarget(target, label);
+      }
+    });
   }
-  return null;
-}
+  return () => {
+    active = false;
+    release?.();
+  };
+});
 
 async function activateHovercard(event: Event, trigger: HovercardBootstrapTrigger): Promise<void> {
   if (
@@ -39,20 +44,20 @@ async function activateHovercard(event: Event, trigger: HovercardBootstrapTrigge
   ) {
     return;
   }
-  const row = sessionRowFromEvent(event);
-  if (!row || !bootstrap.providerFor(row)) {
+  const target = sessionProgressHoverTargetFromEvent(event);
+  if (!target || !bootstrap.providerFor(target)) {
     return;
   }
   await bootstrap.define();
-  const target = event.target;
+  const eventTarget = event.target;
   if (
-    !(target instanceof EventTarget) ||
-    !row.isConnected ||
-    !hovercardBootstrapIntentActive(row, trigger, true)
+    !(eventTarget instanceof EventTarget) ||
+    !target.isConnected ||
+    !hovercardBootstrapIntentActive(target, trigger, true)
   ) {
     return;
   }
-  target.dispatchEvent(
+  eventTarget.dispatchEvent(
     new Event(trigger === "pointer" ? "pointerover" : "focusin", {
       bubbles: true,
       composed: true,

@@ -1,35 +1,28 @@
 import { randomUUID } from "node:crypto";
+import { createLazyRuntimeMethodBinder } from "openclaw/plugin-sdk/lazy-runtime";
 import { verifyInstalledCuaDriverArtifacts } from "./driver-artifacts.js";
 
 type DriverClickButton = import("@trycua/cua-driver").ClickButton;
-type DriverEscalationReason = import("@trycua/cua-driver").EscalationReason;
 type CuaDriverLike = import("@trycua/cua-driver").CuaDriverLike;
 type CuaDriverSessionLike = import("@trycua/cua-driver").CuaDriverSessionLike;
 type DriverScrollDirection = import("@trycua/cua-driver").ScrollDirection;
-type CuaSessionState = import("@trycua/cua-driver").SessionStateOutput;
 type CuaDriverSdk = Pick<
   typeof import("@trycua/cua-driver"),
-  | "CaptureScope"
+  | "ActionTarget"
+  | "ClickPosition"
   | "CuaDriver"
-  | "DesktopScope"
-  | "EscalationReason"
+  | "DriverError"
+  | "InputDeliveryMode"
   | "ScrollBy"
   | "SessionPermissionMode"
   | "createTrustedSession"
 >;
 
-export type CuaToolResult = import("@trycua/cua-driver").ToolResult;
+export type CuaToolResult = import("@trycua/cua-driver").ToolResult & {
+  structuredContent?: Record<string, unknown>;
+};
 
-export const EscalationReason = {
-  AxTreePixelMismatch: 0 as DriverEscalationReason,
-  BackgroundDeliveryFailed: 1 as DriverEscalationReason,
-  ForegroundIneffective: 2 as DriverEscalationReason,
-  NoWindowTarget: 3 as DriverEscalationReason,
-  Other: 4 as DriverEscalationReason,
-} as const;
-export type EscalationReason = (typeof EscalationReason)[keyof typeof EscalationReason];
-
-// These numeric values are part of the pinned 0.19.3 SDK contract. Keeping
+// These numeric values are part of the pinned SDK contract. Keeping
 // them local avoids loading the native library while OpenClaw is only
 // registering the bundled plugin.
 export const ClickButton = {
@@ -47,59 +40,43 @@ export const ScrollDirection = {
 } as const;
 export type ScrollDirection = (typeof ScrollDirection)[keyof typeof ScrollDirection];
 
-export interface CuaDriverSession {
+export type CuaDriverSession = Pick<DirectCuaDriverSession, keyof DirectCuaDriverSession> & {
   readonly generation: string;
-  isAvailable(): boolean;
+  prepareAvailability?(): Promise<void>;
+  prepareExecution?(signal?: AbortSignal, assertAuthority?: () => void): Promise<void>;
   resetAvailabilityCache(): void;
-  callTool(
-    name: string,
-    args: Record<string, unknown>,
-    signal?: AbortSignal,
-  ): Promise<CuaToolResult>;
-  callDesktopTool(
-    name: string,
-    args: Record<string, unknown>,
-    signal?: AbortSignal,
-  ): Promise<CuaToolResult>;
-  escalateScope(reason: EscalationReason, signal?: AbortSignal): Promise<CuaSessionState>;
-  getDesktopState(signal?: AbortSignal): Promise<CuaToolResult>;
-  getScreenSize(signal?: AbortSignal): Promise<CuaToolResult>;
-  click(
-    input: { x: number; y: number; button: ClickButton; count: number },
-    signal?: AbortSignal,
-  ): Promise<CuaToolResult>;
-  drag(
-    input: { fromX: number; fromY: number; toX: number; toY: number; durationMs?: bigint },
-    signal?: AbortSignal,
-  ): Promise<CuaToolResult>;
-  moveCursor(input: { x: number; y: number }, signal?: AbortSignal): Promise<CuaToolResult>;
-  scroll(
-    input: { x: number; y: number; direction: ScrollDirection; amount: bigint },
-    signal?: AbortSignal,
-  ): Promise<CuaToolResult>;
-  typeText(text: string, signal?: AbortSignal): Promise<CuaToolResult>;
-  pressKey(
-    input: { key: string; modifiers: string[] },
-    signal?: AbortSignal,
-  ): Promise<CuaToolResult>;
-  dispose(): Promise<void>;
+};
+
+function isExpiredSessionError(sdk: CuaDriverSdk, error: unknown): boolean {
+  return (
+    sdk.DriverError.Tool.instanceOf(error) &&
+    error.inner.errorCode === "permission_denied" &&
+    error.inner.message === "Permission denied: authorization context expired"
+  );
+}
+
+function driverToolError(sdk: CuaDriverSdk, error: unknown): unknown {
+  if (!sdk.DriverError.Tool.instanceOf(error)) {
+    return error;
+  }
+  const { tool, message, errorCode } = error.inner;
+  return new Error(
+    `CUA_DRIVER_TOOL_ERROR: ${tool}: ${message}${errorCode ? ` (${errorCode})` : ""}`,
+    { cause: error },
+  );
 }
 
 function asyncOptions(signal?: AbortSignal) {
   return signal ? { signal } : undefined;
 }
 
-class DirectCuaDriverSession implements CuaDriverSession {
-  readonly generation = randomUUID();
+class DirectCuaDriverSession {
   private readonly runtime: CuaDriverLike;
-  private readonly windowSession: CuaDriverSessionLike;
-  private readonly desktopSession: CuaDriverSessionLike;
-  private readonly windowPublicSession = `openclaw-window-${randomUUID()}`;
-  private readonly desktopPublicSession = `openclaw-desktop-${randomUUID()}`;
-  private windowStartPromise: Promise<void> | undefined;
-  private desktopStartPromise: Promise<void> | undefined;
-  private windowStarted = false;
-  private desktopStarted = false;
+  private readonly session: CuaDriverSessionLike;
+  private readonly publicSession = `openclaw-${randomUUID()}`;
+  private readonly desktopTarget: import("@trycua/cua-driver").ActionTarget;
+  private startPromise: Promise<void> | undefined;
+  private started = false;
   private disposed = false;
 
   constructor(private readonly sdk: CuaDriverSdk) {
@@ -114,147 +91,138 @@ class DirectCuaDriverSession implements CuaDriverSession {
       maxIdleTtlSeconds: 300n,
     };
     // Never use CuaDriver.create(): configured creation fixes the authorization
-    // ceiling before the paired window- and desktop-scope sessions are admitted.
+    // ceiling before the lifecycle session is admitted.
     this.runtime = sdk.CuaDriver.createConfigured({
       claudeCodeCompatibility: false,
       authorization,
     });
-    const sessionOptions = {
+    this.session = sdk.createTrustedSession(this.runtime, {
       mode: unrestricted,
       ttlSeconds: authorization.maxSessionTtlSeconds,
       idleTtlSeconds: authorization.maxIdleTtlSeconds,
-    };
-    this.windowSession = sdk.createTrustedSession(this.runtime, {
-      ...sessionOptions,
-      publicSession: this.windowPublicSession,
+      publicSession: this.publicSession,
     });
-    this.desktopSession = sdk.createTrustedSession(this.runtime, {
-      ...sessionOptions,
-      publicSession: this.desktopPublicSession,
-    });
+    // CUA 0.20 moves modality from session state to each action. Keep one
+    // lifecycle/authority owner and make the desktop target explicit per call.
+    this.desktopTarget = sdk.ActionTarget.Desktop.new({ displayId: "primary" });
   }
 
-  private async ensureSessionStarted(
-    kind: "window" | "desktop",
-    signal?: AbortSignal,
-  ): Promise<void> {
+  private async ensureSessionStarted(signal?: AbortSignal): Promise<void> {
     if (this.disposed) {
       throw new Error("COMPUTER_DRIVER_UNAVAILABLE: cua-computer is stopping");
     }
-    const isWindow = kind === "window";
-    const session = isWindow ? this.windowSession : this.desktopSession;
-    const publicSession = isWindow ? this.windowPublicSession : this.desktopPublicSession;
-    const captureScope = isWindow ? this.sdk.CaptureScope.Window : this.sdk.CaptureScope.Desktop;
-    const startedKey = isWindow ? "windowStarted" : "desktopStarted";
-    const startPromiseKey = isWindow ? "windowStartPromise" : "desktopStartPromise";
-    const current = this[startPromiseKey];
-    if (!current) {
-      const start = session
-        .startSession({ session: publicSession, captureScope }, asyncOptions(signal))
+    if (!this.startPromise) {
+      const start = this.session
+        .startSession({ session: this.publicSession }, asyncOptions(signal))
         .then(() => {
-          this[startedKey] = true;
+          this.started = true;
         });
-      this[startPromiseKey] = start;
+      this.startPromise = start;
       try {
         await start;
       } catch (error) {
-        if (this[startPromiseKey] === start) {
-          this[startPromiseKey] = undefined;
+        if (this.startPromise === start) {
+          this.startPromise = undefined;
         }
         throw error;
       }
       return;
     }
-    await current;
+    await this.startPromise;
   }
 
   private async invoke<T>(
-    kind: "window" | "desktop",
     signal: AbortSignal | undefined,
     operation: () => Promise<T>,
   ): Promise<T> {
-    await this.ensureSessionStarted(kind, signal);
+    await this.ensureSessionStarted(signal);
     return await operation();
   }
 
   isAvailable(): boolean {
     return !this.disposed && this.runtime.isAvailable();
   }
-  resetAvailabilityCache(): void {}
   async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal) {
-    return await this.invoke("window", signal, () =>
-      this.windowSession.callTool(
+    return await this.invoke(signal, () =>
+      this.session.callTool(
         name,
-        JSON.stringify({ ...args, session: this.windowPublicSession }),
+        JSON.stringify({ ...args, session: this.publicSession }),
         asyncOptions(signal),
       ),
     );
   }
-  async callDesktopTool(name: string, args: Record<string, unknown>, signal?: AbortSignal) {
-    return await this.invoke("desktop", signal, () =>
-      this.desktopSession.callTool(
-        name,
-        JSON.stringify({ ...args, session: this.desktopPublicSession }),
-        asyncOptions(signal),
-      ),
+  async getCursorPosition(signal?: AbortSignal) {
+    return await this.invoke(signal, () =>
+      this.session.getCursorPosition({ session: this.publicSession }, asyncOptions(signal)),
     );
   }
-  async escalateScope(_reason: EscalationReason, signal?: AbortSignal) {
-    await this.ensureSessionStarted("desktop", signal);
-    return await this.desktopSession.getSessionState(
-      { session: this.desktopPublicSession },
-      asyncOptions(signal),
+  async getSessionState(signal?: AbortSignal) {
+    return await this.invoke(signal, () =>
+      this.session.getSessionState({ session: this.publicSession }, asyncOptions(signal)),
     );
   }
   async getDesktopState(signal?: AbortSignal) {
-    return await this.invoke("desktop", signal, () =>
-      this.desktopSession.getDesktopState({}, asyncOptions(signal)),
-    );
+    return await this.invoke(signal, () => this.session.getDesktopState({}, asyncOptions(signal)));
   }
   async getScreenSize(signal?: AbortSignal) {
-    return await this.invoke("desktop", signal, () =>
-      this.desktopSession.getScreenSize({}, asyncOptions(signal)),
-    );
+    return await this.invoke(signal, () => this.session.getScreenSize({}, asyncOptions(signal)));
   }
   async click(
     input: { x: number; y: number; button: ClickButton; count: number },
     signal?: AbortSignal,
-  ) {
-    return await this.invoke("desktop", signal, () =>
-      this.desktopSession.click(
-        { ...input, scope: this.sdk.DesktopScope.Desktop },
-        asyncOptions(signal),
-      ),
-    );
+  ): Promise<CuaToolResult> {
+    return await this.invoke(signal, async () => {
+      // Typed clicks return ActionResult and throw tool refusals; other SDK
+      // actions still use the shared ToolResult envelope.
+      try {
+        const action = await this.session.click(
+          {
+            position: this.sdk.ClickPosition.Coordinates.new({ x: input.x, y: input.y }),
+            deliveryMode: this.sdk.InputDeliveryMode.Foreground,
+            button: input.button,
+            count: input.count,
+            target: this.desktopTarget,
+          },
+          asyncOptions(signal),
+        );
+        return { text: "", images: [], isError: false, degraded: false, rawJson: "{}", action };
+      } catch (error) {
+        if (!this.sdk.DriverError.Tool.instanceOf(error)) {
+          throw error;
+        }
+        return {
+          text: error.inner.message,
+          images: [],
+          isError: true,
+          degraded: false,
+          rawJson: "{}",
+          errorCode: error.inner.errorCode,
+        };
+      }
+    });
   }
   async drag(
     input: { fromX: number; fromY: number; toX: number; toY: number; durationMs?: bigint },
     signal?: AbortSignal,
   ) {
-    return await this.invoke("desktop", signal, () =>
-      this.desktopSession.drag(
-        { ...input, scope: this.sdk.DesktopScope.Desktop },
-        asyncOptions(signal),
-      ),
+    return await this.invoke(signal, () =>
+      this.session.drag({ ...input, target: this.desktopTarget }, asyncOptions(signal)),
     );
   }
   async moveCursor(input: { x: number; y: number }, signal?: AbortSignal) {
-    return await this.invoke("desktop", signal, () =>
-      this.desktopSession.moveCursor(
-        { ...input, scope: this.sdk.DesktopScope.Desktop },
-        asyncOptions(signal),
-      ),
+    return await this.invoke(signal, () =>
+      this.session.moveCursor({ ...input, target: this.desktopTarget }, asyncOptions(signal)),
     );
   }
   async scroll(
     input: { x: number; y: number; direction: ScrollDirection; amount: bigint },
     signal?: AbortSignal,
   ) {
-    return await this.invoke("desktop", signal, () =>
-      this.desktopSession.scroll(
+    return await this.invoke(signal, () =>
+      this.session.scroll(
         {
           ...input,
-          scope: this.sdk.DesktopScope.Desktop,
+          target: this.desktopTarget,
           by: this.sdk.ScrollBy.Line,
         },
         asyncOptions(signal),
@@ -262,19 +230,13 @@ class DirectCuaDriverSession implements CuaDriverSession {
     );
   }
   async typeText(text: string, signal?: AbortSignal) {
-    return await this.invoke("desktop", signal, () =>
-      this.desktopSession.typeText(
-        { text, scope: this.sdk.DesktopScope.Desktop },
-        asyncOptions(signal),
-      ),
+    return await this.invoke(signal, () =>
+      this.session.typeText({ text, target: this.desktopTarget }, asyncOptions(signal)),
     );
   }
   async pressKey(input: { key: string; modifiers: string[] }, signal?: AbortSignal) {
-    return await this.invoke("desktop", signal, () =>
-      this.desktopSession.pressKey(
-        { ...input, scope: this.sdk.DesktopScope.Desktop },
-        asyncOptions(signal),
-      ),
+    return await this.invoke(signal, () =>
+      this.session.pressKey({ ...input, target: this.desktopTarget }, asyncOptions(signal)),
     );
   }
 
@@ -284,37 +246,28 @@ class DirectCuaDriverSession implements CuaDriverSession {
     }
     this.disposed = true;
     let failure: unknown;
-    for (const entry of [
-      {
-        session: this.windowSession,
-        publicSession: this.windowPublicSession,
-        start: this.windowStartPromise,
-        started: this.windowStarted,
-      },
-      {
-        session: this.desktopSession,
-        publicSession: this.desktopPublicSession,
-        start: this.desktopStartPromise,
-        started: this.desktopStarted,
-      },
-    ]) {
+    try {
+      await this.startPromise;
+    } catch (error) {
+      failure = error;
+    }
+    if (this.started) {
       try {
-        await entry.start;
+        await this.session.endSession({ session: this.publicSession });
       } catch (error) {
-        failure ??= error;
-      }
-      if (entry.started) {
-        try {
-          await entry.session.endSession({ session: entry.publicSession });
-        } catch (error) {
+        // Already-ended authority must not prevent native resource cleanup.
+        if (
+          !isExpiredSessionError(this.sdk, error) &&
+          !this.sdk.DriverError.Shutdown.instanceOf(error)
+        ) {
           failure ??= error;
         }
       }
-      try {
-        entry.session.close();
-      } catch (error) {
-        failure ??= error;
-      }
+    }
+    try {
+      this.session.close();
+    } catch (error) {
+      failure ??= error;
     }
     try {
       await this.runtime.shutdown();
@@ -352,23 +305,18 @@ function unavailableError(failure: unknown): Error {
   });
 }
 
-function isPromise<T>(value: T | Promise<T>): value is Promise<T> {
-  return typeof (value as Promise<T>).then === "function";
-}
-
 class LazyCuaDriverSession implements CuaDriverSession {
-  private readonly unloadedGeneration = randomUUID();
+  // Keep refs stable across lazy loading, but revoke them on session replacement.
+  generation = randomUUID();
+  private loadedSdk: CuaDriverSdk | undefined;
+  private preparePromise: Promise<void> | undefined;
   private runtime: DirectCuaDriverSession | undefined;
   private loadPromise: Promise<DirectCuaDriverSession> | undefined;
   private loadFailure: unknown;
   private hasLoadFailure = false;
   private disposed = false;
 
-  constructor(private readonly loadSdk: () => CuaDriverSdk | Promise<CuaDriverSdk>) {}
-
-  get generation(): string {
-    return this.runtime?.generation ?? this.unloadedGeneration;
-  }
+  constructor(private readonly loadSdk: () => Promise<CuaDriverSdk>) {}
 
   private resolveRuntime(): DirectCuaDriverSession | undefined {
     if (this.disposed || this.hasLoadFailure || this.loadPromise) {
@@ -377,39 +325,27 @@ class LazyCuaDriverSession implements CuaDriverSession {
     if (this.runtime) {
       return this.runtime;
     }
-    try {
-      const loadedSdk = this.loadSdk();
-      if (!isPromise(loadedSdk)) {
-        this.runtime = new DirectCuaDriverSession(loadedSdk);
+    const loadPromise = this.loadSdk()
+      .then((sdk) => {
+        this.loadedSdk = sdk;
+        this.runtime = new DirectCuaDriverSession(sdk);
         return this.runtime;
-      }
-
-      const loadPromise = loadedSdk
-        .then((sdk) => new DirectCuaDriverSession(sdk))
-        .then((runtime) => {
-          this.runtime = runtime;
-          return runtime;
-        })
-        .catch((error: unknown) => {
-          this.loadFailure = error;
-          this.hasLoadFailure = true;
-          throw error;
-        })
-        .finally(() => {
-          if (this.loadPromise === loadPromise) {
-            this.loadPromise = undefined;
-          }
-        });
-      this.loadPromise = loadPromise;
-      // Availability is synchronous, so the first probe starts the ESM import
-      // and reports unavailable until a later probe observes the loaded SDK.
-      void loadPromise.catch(() => {});
-      return this.runtime;
-    } catch (error) {
-      this.loadFailure = error;
-      this.hasLoadFailure = true;
-      return undefined;
-    }
+      })
+      .catch((error: unknown) => {
+        this.loadFailure = error;
+        this.hasLoadFailure = true;
+        throw error;
+      })
+      .finally(() => {
+        if (this.loadPromise === loadPromise) {
+          this.loadPromise = undefined;
+        }
+      });
+    this.loadPromise = loadPromise;
+    // Availability is synchronous, so the first probe starts the ESM import
+    // and reports unavailable until a later probe observes the loaded SDK.
+    void loadPromise.catch(() => {});
+    return undefined;
   }
 
   private async requireRuntime(): Promise<DirectCuaDriverSession> {
@@ -433,57 +369,75 @@ class LazyCuaDriverSession implements CuaDriverSession {
     return this.resolveRuntime()?.isAvailable() ?? false;
   }
 
+  async prepareAvailability(): Promise<void> {
+    this.resolveRuntime();
+    // Loading failure remains an unavailable capability with its original
+    // diagnostic; an optional driver must not prevent the node from starting.
+    await this.loadPromise?.catch(() => {});
+  }
+
   resetAvailabilityCache(): void {
-    if (this.runtime) {
-      this.runtime.resetAvailabilityCache();
-    } else if (!this.disposed && !this.loadPromise) {
+    if (!this.runtime && !this.disposed && !this.loadPromise) {
       this.loadFailure = undefined;
       this.hasLoadFailure = false;
     }
   }
 
-  async getDesktopState(signal?: AbortSignal) {
-    return await (await this.requireRuntime()).getDesktopState(signal);
+  async prepareExecution(signal?: AbortSignal, assertAuthority?: () => void): Promise<void> {
+    const assertActive = () => {
+      signal?.throwIfAborted();
+      assertAuthority?.();
+      if (this.disposed) {
+        throw unavailableError(new Error("cua-computer is stopping"));
+      }
+    };
+    assertActive();
+    if (!this.preparePromise) {
+      this.preparePromise = (async () => {
+        const runtime = await this.requireRuntime();
+        assertActive();
+        try {
+          // Check authority before dispatch, never replay the requested action.
+          await runtime.getSessionState(signal);
+        } catch (error) {
+          const sdk = this.loadedSdk;
+          if (!sdk || !isExpiredSessionError(sdk, error)) {
+            throw sdk ? driverToolError(sdk, error) : error;
+          }
+          assertActive();
+          try {
+            await runtime.dispose();
+          } finally {
+            // Disposal is terminal even when native cleanup reports a failure.
+            this.runtime = undefined;
+            this.generation = randomUUID();
+          }
+          assertActive();
+          this.runtime = new DirectCuaDriverSession(sdk);
+          await this.runtime.getSessionState(signal).catch((replacementError: unknown) => {
+            throw driverToolError(sdk, replacementError);
+          });
+        }
+      })().finally(() => {
+        this.preparePromise = undefined;
+      });
+    }
+    await this.preparePromise;
+    assertActive();
   }
-  async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal) {
-    return await (await this.requireRuntime()).callTool(name, args, signal);
-  }
-  async callDesktopTool(name: string, args: Record<string, unknown>, signal?: AbortSignal) {
-    return await (await this.requireRuntime()).callDesktopTool(name, args, signal);
-  }
-  async escalateScope(reason: EscalationReason, signal?: AbortSignal) {
-    return await (await this.requireRuntime()).escalateScope(reason, signal);
-  }
-  async getScreenSize(signal?: AbortSignal) {
-    return await (await this.requireRuntime()).getScreenSize(signal);
-  }
-  async click(
-    input: { x: number; y: number; button: ClickButton; count: number },
-    signal?: AbortSignal,
-  ) {
-    return await (await this.requireRuntime()).click(input, signal);
-  }
-  async drag(
-    input: { fromX: number; fromY: number; toX: number; toY: number; durationMs?: bigint },
-    signal?: AbortSignal,
-  ) {
-    return await (await this.requireRuntime()).drag(input, signal);
-  }
-  async moveCursor(input: { x: number; y: number }, signal?: AbortSignal) {
-    return await (await this.requireRuntime()).moveCursor(input, signal);
-  }
-  async scroll(
-    input: { x: number; y: number; direction: ScrollDirection; amount: bigint },
-    signal?: AbortSignal,
-  ) {
-    return await (await this.requireRuntime()).scroll(input, signal);
-  }
-  async typeText(text: string, signal?: AbortSignal) {
-    return await (await this.requireRuntime()).typeText(text, signal);
-  }
-  async pressKey(input: { key: string; modifiers: string[] }, signal?: AbortSignal) {
-    return await (await this.requireRuntime()).pressKey(input, signal);
-  }
+
+  private readonly bindRuntime = createLazyRuntimeMethodBinder(() => this.requireRuntime());
+  getDesktopState = this.bindRuntime((runtime) => runtime.getDesktopState.bind(runtime));
+  callTool = this.bindRuntime((runtime) => runtime.callTool.bind(runtime));
+  getCursorPosition = this.bindRuntime((runtime) => runtime.getCursorPosition.bind(runtime));
+  getSessionState = this.bindRuntime((runtime) => runtime.getSessionState.bind(runtime));
+  getScreenSize = this.bindRuntime((runtime) => runtime.getScreenSize.bind(runtime));
+  click = this.bindRuntime((runtime) => runtime.click.bind(runtime));
+  drag = this.bindRuntime((runtime) => runtime.drag.bind(runtime));
+  moveCursor = this.bindRuntime((runtime) => runtime.moveCursor.bind(runtime));
+  scroll = this.bindRuntime((runtime) => runtime.scroll.bind(runtime));
+  typeText = this.bindRuntime((runtime) => runtime.typeText.bind(runtime));
+  pressKey = this.bindRuntime((runtime) => runtime.pressKey.bind(runtime));
 
   async dispose(): Promise<void> {
     if (this.disposed) {
@@ -495,12 +449,14 @@ class LazyCuaDriverSession implements CuaDriverSession {
     } catch {
       // A failed load has no native resources to release.
     }
+    // Mark disposed before waiting, so expiry recovery cannot reopen authority.
+    await this.preparePromise?.catch(() => {});
     await this.runtime?.dispose();
   }
 }
 
 export function createCuaDriver(
-  options: { loadSdk?: () => CuaDriverSdk | Promise<CuaDriverSdk> } = {},
+  options: { loadSdk?: () => Promise<CuaDriverSdk> } = {},
 ): CuaDriverSession {
   return new LazyCuaDriverSession(options.loadSdk ?? loadCuaDriverSdk);
 }

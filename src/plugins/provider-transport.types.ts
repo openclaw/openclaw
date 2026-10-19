@@ -1,7 +1,12 @@
-import type { StreamFn } from "../agents/runtime/index.js";
+import type { StreamFn } from "../../packages/agent-core/src/types.js";
+import type { ProviderLocalServiceReconcileContext } from "../agents/provider-local-service-reconcile.js";
+import type { ModelCallUrgency } from "../agents/run-trigger.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
-import type { ProviderPrepareExtraParamsContext } from "./provider-runtime.types.js";
+import type {
+  ProviderNormalizeResolvedModelContext,
+  ProviderPrepareExtraParamsContext,
+} from "./provider-runtime.types.js";
 
 /**
  * Provider-owned transport creation.
@@ -10,14 +15,7 @@ import type { ProviderPrepareExtraParamsContext } from "./provider-runtime.types
  * custom StreamFn (for example a native API transport that cannot be expressed
  * as a wrapper around `streamSimple`).
  */
-export type ProviderCreateStreamFnContext = {
-  config?: OpenClawConfig;
-  agentDir?: string;
-  workspaceDir?: string;
-  provider: string;
-  modelId: string;
-  model: ProviderRuntimeModel;
-};
+export type ProviderCreateStreamFnContext = ProviderNormalizeResolvedModelContext;
 
 /**
  * Provider-owned stream wrapper hook after OpenClaw applies its generic
@@ -27,11 +25,17 @@ export type ProviderCreateStreamFnContext = {
  * through the normal `shared model runtime` stream path.
  */
 export type ProviderWrapStreamFnContext = ProviderPrepareExtraParamsContext & {
-  model?: ProviderRuntimeModel;
+  /** Per-model params only, with agent-specific model params taking precedence. */
+  modelParams?: Record<string, unknown>;
+  /** Host-classified urgency; providers may translate it into native scheduling hints. */
+  modelCallUrgency?: ModelCallUrgency;
   /** Wire-format API before simple completion projects an internal transport alias. */
   sourceApi?: ProviderRuntimeModel["api"];
   streamFn?: StreamFn;
 };
+
+/** Healthy local service boundary before the provider request is sent. */
+export type ProviderReconcileLocalServiceContext = ProviderLocalServiceReconcileContext;
 
 /**
  * Provider-owned WebSocket session policy.
@@ -59,15 +63,12 @@ export type ProviderTransportTurnState = {
  * Use this when the provider exposes native request/session metadata that must
  * be attached by both HTTP and WebSocket transports.
  */
-export type ProviderResolveTransportTurnStateContext = {
-  provider: string;
-  modelId: string;
-  model?: ProviderRuntimeModel;
-  sessionId?: string;
-  turnId: string;
-  attempt: number;
-  transport: "stream" | "websocket";
-};
+export type ProviderResolveTransportTurnStateContext =
+  ProviderResolveWebSocketSessionPolicyContext & {
+    turnId: string;
+    attempt: number;
+    transport: "stream" | "websocket";
+  };
 
 /**
  * Provider-owned WebSocket session policy input.
@@ -145,6 +146,8 @@ export type ProviderCacheTtlEligibilityContext = {
   provider: string;
   modelId: string;
   modelApi?: string;
+  baseUrl?: string;
+  supportsPromptCacheKey?: boolean;
 };
 
 /**

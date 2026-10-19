@@ -1,48 +1,64 @@
-import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
-import type { ApplicationGatewaySnapshot } from "./gateway.ts";
-import { hasOperatorAdminAccess } from "./operator-access.ts";
+import { registerListener } from "../../../src/shared/listeners.js";
+import {
+  readScopeUpgradeAvailability,
+  type ScopeUpgradeState,
+} from "./device-scope-upgrade-availability.ts";
+import type { ScopeUpgradeOwner } from "./device-scope-upgrade-owner.runtime.ts";
+import type { ApplicationGateway, ApplicationGatewaySnapshot } from "./gateway.ts";
 
-const SCOPE_UPGRADE_BANNER_DISMISSED_KEY = "openclaw.control.scopeUpgradeBannerDismissed.v1";
+type ScopeUpgradeOwnerConstructor = new (
+  initial: ApplicationGatewaySnapshot,
+  onChange: () => void,
+) => ScopeUpgradeOwner;
 
-export function hasDismissedScopeUpgradeBanner(): boolean {
-  try {
-    return globalThis.localStorage?.getItem(SCOPE_UPGRADE_BANNER_DISMISSED_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
+export type ScopeUpgradeCapability = ReturnType<typeof createScopeUpgradeCapability>;
 
-export function dismissScopeUpgradeBanner(): void {
-  try {
-    globalThis.localStorage?.setItem(SCOPE_UPGRADE_BANNER_DISMISSED_KEY, "1");
-  } catch {
-    // The current page can still collapse the banner when storage is unavailable.
-  }
-}
+/** App-lifetime state shared by every Inbox presenter and settings takeover. */
+export function createScopeUpgradeCapability(gateway: ApplicationGateway) {
+  const listeners = new Set<() => void>();
+  let snapshot = gateway.snapshot;
+  let owner: ScopeUpgradeOwner | null = null;
+  let state = readScopeUpgradeAvailability(snapshot);
 
-export type ScopeUpgradeState =
-  | { phase: "hidden" }
-  | { phase: "guidance" }
-  | { phase: "available" }
-  | { phase: "requesting" }
-  | { phase: "pending"; requestId: string }
-  | { phase: "rejected"; requestId: string; expired: boolean }
-  | { phase: "error"; message: string };
+  const publish = (next: ScopeUpgradeState) => {
+    if (JSON.stringify(state) === JSON.stringify(next)) {
+      return;
+    }
+    state = next;
+    for (const listener of listeners) {
+      listener();
+    }
+  };
+  const syncOwner = () => {
+    if (owner) {
+      publish(owner.state);
+    }
+  };
+  const syncGateway = (next: ApplicationGatewaySnapshot) => {
+    snapshot = next;
+    owner?.sync(snapshot);
+    publish(owner?.state ?? readScopeUpgradeAvailability(snapshot));
+  };
+  const stopGateway = gateway.subscribe(syncGateway);
 
-export function readScopeUpgradeAvailability(
-  snapshot: ApplicationGatewaySnapshot,
-): ScopeUpgradeState {
-  const auth = snapshot.hello?.auth;
-  if (
-    snapshot.phase !== "connected" ||
-    auth?.scopes === undefined ||
-    hasOperatorAdminAccess(auth)
-  ) {
-    return { phase: "hidden" };
-  }
-  return isGatewayMethodAdvertised(snapshot, "device.scopes.requestUpgrade") === true &&
-    isGatewayMethodAdvertised(snapshot, "device.scopes.waitUpgrade") === true &&
-    snapshot.client?.scopeUpgradeReady === true
-    ? { phase: "available" }
-    : { phase: "guidance" };
+  return {
+    get state() {
+      return state;
+    },
+    activate(Owner: ScopeUpgradeOwnerConstructor) {
+      owner ??= new Owner(snapshot, syncOwner);
+      owner.sync(snapshot);
+      publish(owner.state);
+    },
+    request: (): void => owner?.request(),
+    retry: (): void => owner?.retry(),
+    cancel: (): void => owner?.cancel(),
+    subscribe: (listener: () => void) => registerListener(listeners, listener),
+    dispose() {
+      stopGateway();
+      owner?.dispose();
+      owner = null;
+      listeners.clear();
+    },
+  };
 }

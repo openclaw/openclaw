@@ -2,210 +2,341 @@
 import type { SessionTreeEntry } from "@openclaw/agent-core";
 import { sql } from "kysely";
 import { selectResetKeptEntries } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
+import { jsonArrayElements, jsonValid } from "../../infra/database-engine/json-values.js";
+import { registerNodeSqliteDisposeCallback } from "../../infra/kysely-sync-cache-state.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
+  iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
-import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
-import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
-import { resolveSqliteTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
-import type { SessionTranscriptProjectionState } from "./session-transcript-index.js";
-
-type ResetWindowDatabase = Pick<
-  OpenClawAgentKyselyDatabase,
-  | "session_transcript_active_events"
-  | "transcript_rewrite_watermarks"
-  | "transcript_event_identities"
-  | "transcript_events"
->;
-
-type ResetWindowProjection = {
-  database: OpenClawAgentDatabase;
-  resolved: ReturnType<typeof resolveSqliteTranscriptReadScope>;
-  state: SessionTranscriptProjectionState;
-};
+import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
+import { hasUncommittedSqliteWrites } from "../../infra/sqlite-schema-facts.js";
+import {
+  iterateUnindexedActiveTranscriptNavigation,
+  iterateUnindexedTranscriptNavigation,
+} from "./session-accessor.sqlite-history-navigation.js";
+import type {
+  UnindexedActiveTranscriptNavigation,
+  UnindexedHistoryControl,
+  UnindexedTranscriptNavigation,
+} from "./session-accessor.sqlite-history-navigation.types.js";
+import {
+  getActiveTranscriptKysely,
+  getMessageRangeReaders,
+  selectMessageRows,
+  selectMessagePayload,
+  selectMessageMetadata,
+  type MessageRangeSelection,
+  parseActiveTranscriptMessageRow,
+  type CurrentTranscriptProjection,
+  type SessionTranscriptMessageEvent,
+} from "./session-accessor.sqlite-projection-read.js";
+import type { SessionTranscriptContextStats } from "./session-transcript-projection-facts.types.js";
+import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
+import {
+  transcriptEventModelNavigationSql,
+  transcriptEventNavigationSql,
+  transcriptEventResetNavigationSql,
+  transcriptPredicateSql,
+} from "./transcript-payload.js";
+import { assertTranscriptNavigationValid } from "./transcript-predicate-fields.js";
 
 type VisibleMessagePositions = {
+  boundaryActivePosition?: number;
   kept: number[];
   postStart: number;
   total: number;
 };
 
-type ResetWindowMessageEvent = {
-  event: TranscriptEvent;
-  seq: number;
-};
-
 type ResetMessageWindow = {
   boundarySeq: number;
-  generation: string | undefined;
-  indexedSeq: number;
-  keptContextEventCount: number;
+  contextPrefixEventCount: number;
   keptMessagePositions: number[];
-  keptContextSizeBytes: number;
+  contextPrefixSizeBytes: number;
   postBoundaryMessagePosition: number;
   boundaryActivePosition: number;
 };
 
 type ResetMessageWindowCacheEntry = {
+  database: CurrentTranscriptProjection["database"]["db"];
   generation: string | undefined;
   indexedSeq: number;
-  window: ResetMessageWindow | null;
-};
+} & (
+  | { window: ResetMessageWindow | null }
+  | { controls: readonly UnindexedTranscriptNavigation[] }
+);
+
+// History readers span compactions (their window closes only at a reset). The preflight
+// fuse must measure the transcript the model will actually see, which a compaction rewrites
+// too; measuring it on the history scope keeps the fuse latched after the first compaction.
+// Reset-window cursors close only at a reset, like history, but keep every retained message
+// role, like context, so context engines receive retained tool calls with their results.
+type BoundaryWindowScope = "history" | "context" | "reset";
+
+function isWindowBoundary(eventType: unknown, scope: BoundaryWindowScope): boolean {
+  return eventType === "reset" || (scope === "context" && eventType === "compaction");
+}
 
 const resetMessageWindowCache = new Map<string, ResetMessageWindowCacheEntry>();
+const resetMessageWindowOwners = new WeakSet<ResetMessageWindowCacheEntry["database"]>();
 const MAX_RESET_MESSAGE_WINDOW_CACHE = 64;
+const MAX_CACHED_UNINDEXED_CONTROLS = 4096;
 
-function getResetWindowKysely(database: OpenClawAgentDatabase) {
-  return getNodeSqliteKysely<ResetWindowDatabase>(database.db);
-}
-
-function parseMessageEventRow(row: {
-  event_json: string;
-  message_position: number | null;
-}): ResetWindowMessageEvent {
-  if (row.message_position === null) {
-    throw new Error("Active transcript message row is missing its message position");
-  }
-  return {
-    event: JSON.parse(row.event_json) as TranscriptEvent,
-    seq: row.message_position + 1,
-  };
-}
-
-function readMessageRange(
-  projection: ResetWindowProjection,
-  start: number,
-  endExclusive: number,
-): ResetWindowMessageEvent[] {
-  if (endExclusive <= start) {
-    return [];
-  }
-  const db = getResetWindowKysely(projection.database);
-  return executeSqliteQuerySync(
-    projection.database.db,
-    db
-      .selectFrom("session_transcript_active_events as active")
-      .innerJoin("transcript_events as event", (join) =>
-        join
-          .onRef("event.session_id", "=", "active.session_id")
-          .onRef("event.seq", "=", "active.event_seq"),
-      )
-      .select(["active.message_position", "event.event_json"])
-      .where("active.session_id", "=", projection.resolved.sessionId)
-      .where("active.message_position", "is not", null)
-      .where("active.message_position", ">=", start)
-      .where("active.message_position", "<", endExclusive)
-      .orderBy("active.message_position", "asc"),
-  ).rows.map(parseMessageEventRow);
-}
-
-function resetMessageWindowCacheKey(projection: ResetWindowProjection): string {
-  return `${projection.database.path}\0${projection.resolved.sessionId}`;
-}
-
-export function readTranscriptProjectionGeneration(
-  projection: ResetWindowProjection,
-): string | undefined {
-  return executeSqliteQueryTakeFirstSync(
-    projection.database.db,
-    getResetWindowKysely(projection.database)
-      .selectFrom("transcript_rewrite_watermarks")
-      .select("generation")
-      .where("session_id", "=", projection.resolved.sessionId),
-  )?.generation;
-}
+type VisibleMessageRange = MessageRangeSelection & {
+  logicalPosition: (position: number) => number;
+};
 
 function cacheResetMessageWindow(key: string, entry: ResetMessageWindowCacheEntry): void {
+  const { database } = entry;
+  if (!resetMessageWindowOwners.has(database)) {
+    registerNodeSqliteDisposeCallback(sqlPublicationAnchor(database), () => {
+      // Path-keyed windows must not retain closed handles or replaced database contents.
+      for (const [cachedKey, cached] of resetMessageWindowCache) {
+        if (cached.database === database) {
+          resetMessageWindowCache.delete(cachedKey);
+        }
+      }
+    });
+    resetMessageWindowOwners.add(database);
+  }
   resetMessageWindowCache.delete(key);
   resetMessageWindowCache.set(key, entry);
   pruneMapToMaxSize(resetMessageWindowCache, MAX_RESET_MESSAGE_WINDOW_CACHE);
 }
 
-function readLatestActiveBoundaryMetadataByType(
-  projection: ResetWindowProjection,
-  eventType: "compaction" | "reset",
-) {
-  const db = getResetWindowKysely(projection.database);
-  return executeSqliteQueryTakeFirstSync(
-    projection.database.db,
-    db
-      .selectFrom("session_transcript_active_events as active")
-      .innerJoin("transcript_event_identities as identity", (join) =>
-        join
-          .onRef("identity.session_id", "=", "active.session_id")
-          .onRef("identity.seq", "=", "active.event_seq"),
-      )
-      .select(["active.active_position", "identity.event_type", "identity.seq"])
-      .where("active.session_id", "=", projection.resolved.sessionId)
-      .where("identity.event_type", "=", eventType)
-      .orderBy("identity.seq", "desc")
-      .limit(1),
+/** Imported controls keep raw identity; resolve their active positions in each read snapshot. */
+export function readUnindexedHistoryControls(
+  projection: CurrentTranscriptProjection,
+  beforeRawSeq?: number,
+): readonly UnindexedHistoryControl[] {
+  if (!projection.hasUnindexedPrefix) {
+    return [];
+  }
+  const coveredThrough = Math.min(projection.state.indexedSeq, (beforeRawSeq ?? Infinity) - 1);
+  const snapshot = projection.unindexedHistoryControls;
+  if (snapshot && snapshot.coveredThrough >= coveredThrough) {
+    return snapshot.coveredThrough === coveredThrough
+      ? snapshot.rows
+      : snapshot.rows.filter((row) => row.event_seq <= coveredThrough);
+  }
+  const key = `${projection.database.path}\0${projection.resolved.sessionId}\0unindexed-controls`;
+  const cacheable = !hasUncommittedSqliteWrites(projection.database.db);
+  const cached = cacheable ? resetMessageWindowCache.get(key) : undefined;
+  const reusable =
+    cached?.database === projection.database.db &&
+    "controls" in cached &&
+    cached.generation === projection.generation &&
+    cached.indexedSeq <= projection.state.indexedSeq
+      ? cached
+      : undefined;
+  const controls = [...(reusable?.controls ?? [])];
+  if (!reusable || reusable.indexedSeq < coveredThrough) {
+    for (const row of iterateUnindexedTranscriptNavigation(projection, {
+      afterRawSeq: reusable?.indexedSeq,
+      maxRawSeq: coveredThrough,
+      controlsOnly: true,
+    })) {
+      const eventType = row.event.type;
+      if (eventType === "reset" || eventType === "compaction" || eventType === "custom_message") {
+        controls.push(row);
+      }
+    }
+    if (cacheable) {
+      if (controls.length <= MAX_CACHED_UNINDEXED_CONTROLS) {
+        cacheResetMessageWindow(key, {
+          database: projection.database.db,
+          generation: projection.generation,
+          indexedSeq: coveredThrough,
+          controls,
+        });
+      } else {
+        resetMessageWindowCache.delete(key);
+      }
+    }
+  }
+  const eligible = new Map(
+    controls.filter((row) => row.event_seq <= coveredThrough).map((row) => [row.event_seq, row]),
   );
+  const rows =
+    eligible.size === 0
+      ? []
+      : executeSqliteQuerySync(
+          projection.database.db,
+          getActiveTranscriptKysely(projection.database)
+            .selectFrom(
+              /* kysely-allow-raw: drive indexed lookups from the requested set, not a full active-path scan to satisfy ordering. */
+              sql<{
+                value: number;
+              }>`(SELECT CAST(value AS BIGINT) AS value FROM ${jsonArrayElements(projection.database.db, sql.val(JSON.stringify([...eligible.keys()])))})`.as(
+                "requested",
+              ),
+            )
+            .crossJoin("session_transcript_active_events as active")
+            .leftJoin("transcript_event_identities as identity", (join) =>
+              join
+                .onRef("identity.session_id", "=", "active.session_id")
+                .onRef("identity.seq", "=", "active.event_seq"),
+            )
+            .leftJoin("session_transcript_active_events as following", (join) =>
+              join
+                .onRef("following.session_id", "=", "active.session_id")
+                .on((eb) =>
+                  eb("following.active_position", "=", eb("active.active_position", "+", 1)),
+                ),
+            )
+            .select([
+              "active.event_seq",
+              "active.active_position",
+              "active.message_position",
+              "following.message_position as following_message_position",
+            ])
+            .where("active.session_id", "=", projection.resolved.sessionId)
+            .whereRef("active.event_seq", "=", "requested.value")
+            .where("identity.seq", "is", null)
+            .orderBy("active.active_position", "asc"),
+        ).rows.map((row) => Object.assign({}, eligible.get(row.event_seq)!, row));
+  projection.unindexedHistoryControls = { coveredThrough, rows };
+  return rows;
 }
 
-function readLatestActiveBoundaryMetadata(projection: ResetWindowProjection) {
-  const reset = readLatestActiveBoundaryMetadataByType(projection, "reset");
-  const compaction = readLatestActiveBoundaryMetadataByType(projection, "compaction");
-  if (!reset) {
-    return compaction;
+function readLatestActiveBoundaryMetadataByType(
+  projection: CurrentTranscriptProjection,
+  eventType: "compaction" | "reset",
+  beforeRawSeq?: number,
+) {
+  const db = getActiveTranscriptKysely(projection.database);
+  const preparedReset = projection.latestIndexedReset;
+  const indexed =
+    eventType === "reset" &&
+    preparedReset !== undefined &&
+    (!preparedReset || beforeRawSeq === undefined || preparedReset.seq < beforeRawSeq)
+      ? (preparedReset ?? undefined)
+      : executeSqliteQueryTakeFirstSync(
+          projection.database.db,
+          db
+            .selectFrom("session_transcript_active_events as active")
+            .innerJoin("transcript_event_identities as identity", (join) =>
+              join
+                .onRef("identity.session_id", "=", "active.session_id")
+                .onRef("identity.seq", "=", "active.event_seq"),
+            )
+            .select([
+              "active.active_position",
+              "identity.event_id",
+              "identity.event_type",
+              "identity.seq",
+            ])
+            .where("active.session_id", "=", projection.resolved.sessionId)
+            .where("identity.event_type", "=", eventType)
+            .$if(beforeRawSeq !== undefined, (query) =>
+              query.where("identity.seq", "<", beforeRawSeq!),
+            )
+            .orderBy("identity.seq", "desc")
+            .limit(1),
+        );
+  let unindexed: UnindexedActiveTranscriptNavigation | undefined;
+  for (const row of readUnindexedHistoryControls(projection, beforeRawSeq)) {
+    if (
+      row.event.type === eventType &&
+      (beforeRawSeq === undefined || row.event_seq < beforeRawSeq) &&
+      (!unindexed || row.event_seq > unindexed.event_seq)
+    ) {
+      unindexed = row;
+    }
   }
-  if (!compaction) {
+  return unindexed && (!indexed || unindexed.event_seq > indexed.seq)
+    ? {
+        active_position: unindexed.active_position,
+        ...(typeof unindexed.event.id === "string" ? { event_id: unindexed.event.id } : {}),
+        event_type: eventType,
+        seq: unindexed.event_seq,
+      }
+    : indexed;
+}
+
+/** Reads the latest active-path reset row without resolving its retained tail. */
+export function readLatestActiveResetBoundary(
+  projection: CurrentTranscriptProjection,
+  beforeRawSeq?: number,
+): { active_position: number; event_id?: string; seq: number } | undefined {
+  return readLatestActiveBoundaryMetadataByType(projection, "reset", beforeRawSeq);
+}
+
+function readLatestActiveBoundaryMetadata(
+  projection: CurrentTranscriptProjection,
+  scope: BoundaryWindowScope,
+  beforeRawSeq?: number,
+) {
+  const reset = readLatestActiveBoundaryMetadataByType(projection, "reset", beforeRawSeq);
+  if (scope !== "context") {
     return reset;
   }
-  return reset.seq > compaction.seq ? reset : compaction;
+  const compaction = readLatestActiveBoundaryMetadataByType(projection, "compaction", beforeRawSeq);
+  return reset && (!compaction || reset.seq > compaction.seq) ? reset : compaction;
 }
 
-function readResetBoundary(projection: ResetWindowProjection, seq: number) {
+function readBoundaryWindowFacts(
+  projection: CurrentTranscriptProjection,
+  boundary: { seq: number; active_position: number },
+  scope: BoundaryWindowScope,
+) {
   const row = executeSqliteQueryTakeFirstSync(
     projection.database.db,
-    getResetWindowKysely(projection.database)
+    getActiveTranscriptKysely(projection.database)
       .selectFrom("transcript_events")
-      .select("event_json")
+      .select([
+        transcriptEventResetNavigationSql(projection.database.db).as("event_json"),
+        /* kysely-allow-raw: window accounting needs original bytes, not summary or reset payloads. */
+        sql<number>`${transcriptEventReadBytesSql()} + 1`.as("serialized_bytes"),
+      ])
+      .select((eb) =>
+        eb
+          .selectFrom("session_transcript_active_events")
+          .select("message_position")
+          .where("session_id", "=", projection.resolved.sessionId)
+          .where("active_position", ">", boundary.active_position)
+          .where("message_position", "is not", null)
+          .orderBy("active_position", "asc")
+          .limit(1)
+          .as("post_boundary_message_position"),
+      )
       .where("session_id", "=", projection.resolved.sessionId)
-      .where("seq", "=", seq)
+      .where("seq", "=", boundary.seq)
       .limit(1),
   );
   if (!row) {
-    throw new Error("Active transcript reset boundary is missing");
+    throw new Error("Active transcript boundary is missing");
   }
   const parsed = JSON.parse(row.event_json) as { firstKeptEntryId?: unknown; type?: unknown };
-  if (parsed.type !== "reset") {
-    throw new Error("Active transcript reset boundary has invalid payload");
+  if (!isWindowBoundary(parsed.type, scope)) {
+    throw new Error("Active transcript boundary has invalid payload");
   }
-  return parsed;
+  return {
+    firstKeptEntryId: parsed.firstKeptEntryId,
+    sizeBytes: row.serialized_bytes,
+    postBoundaryMessagePosition:
+      row.post_boundary_message_position ?? projection.state.activeMessageCount,
+  };
 }
 
 function findLatestResetMessageWindow(
-  projection: ResetWindowProjection,
-  generation: string | undefined,
+  projection: CurrentTranscriptProjection,
+  scope: BoundaryWindowScope,
+  beforeRawSeq?: number,
 ): ResetMessageWindow | null {
-  const db = getResetWindowKysely(projection.database);
-  const latestBoundary = readLatestActiveBoundaryMetadata(projection);
-  if (!latestBoundary || latestBoundary.event_type !== "reset") {
+  const db = getActiveTranscriptKysely(projection.database);
+  const latestBoundary = readLatestActiveBoundaryMetadata(projection, scope, beforeRawSeq);
+  if (!latestBoundary) {
     return null;
   }
-  const reset = readResetBoundary(projection, latestBoundary.seq);
-  const postBoundaryMessagePosition =
-    executeSqliteQueryTakeFirstSync(
-      projection.database.db,
-      db
-        .selectFrom("session_transcript_active_events")
-        .select("message_position")
-        .where("session_id", "=", projection.resolved.sessionId)
-        .where("active_position", ">", latestBoundary.active_position)
-        .where("message_position", "is not", null)
-        .orderBy("active_position", "asc")
-        .limit(1),
-    )?.message_position ?? projection.state.activeMessageCount;
-  let keptMessagePositions: number[] = [];
-  let keptContextEventCount = 0;
-  let keptContextSizeBytes = 0;
-  if (typeof reset.firstKeptEntryId === "string") {
-    const firstKept = executeSqliteQueryTakeFirstSync(
+  const boundary = readBoundaryWindowFacts(projection, latestBoundary, scope);
+  const keptMessagePositions: number[] = [];
+  const includesBoundary = latestBoundary.event_type === "compaction";
+  let contextPrefixEventCount = includesBoundary ? 1 : 0;
+  let contextPrefixSizeBytes = includesBoundary ? boundary.sizeBytes : 0;
+  if (typeof boundary.firstKeptEntryId === "string") {
+    const indexedFirstKept = executeSqliteQueryTakeFirstSync(
       projection.database.db,
       db
         .selectFrom("transcript_event_identities as identity")
@@ -216,10 +347,23 @@ function findLatestResetMessageWindow(
         )
         .select("active.active_position")
         .where("identity.session_id", "=", projection.resolved.sessionId)
-        .where("identity.event_id", "=", reset.firstKeptEntryId),
+        .where("identity.event_id", "=", boundary.firstKeptEntryId)
+        .where("active.active_position", "<", latestBoundary.active_position),
     );
+    let unindexedFirstKept: UnindexedActiveTranscriptNavigation | undefined;
+    for (const row of iterateUnindexedActiveTranscriptNavigation(projection, {
+      beforeActivePosition: indexedFirstKept?.active_position ?? latestBoundary.active_position,
+      eventIds: [boundary.firstKeptEntryId],
+      first: true,
+    })) {
+      if (row.event.id === boundary.firstKeptEntryId) {
+        unindexedFirstKept = row;
+        break;
+      }
+    }
+    const firstKept = unindexedFirstKept ?? indexedFirstKept;
     if (firstKept && firstKept.active_position < latestBoundary.active_position) {
-      const candidates = executeSqliteQuerySync(
+      const candidateRows = iterateSqliteQuerySync(
         projection.database.db,
         db
           .selectFrom("session_transcript_active_events as active")
@@ -228,71 +372,96 @@ function findLatestResetMessageWindow(
               .onRef("event.session_id", "=", "active.session_id")
               .onRef("event.seq", "=", "active.event_seq"),
           )
-          .select(["active.message_position", "event.event_json"])
+          .select([
+            "active.message_position",
+            /* kysely-allow-raw: preserve JS-readable overdepth rows for existing tool-pairing validation. */
+            sql<string>`CASE WHEN ${jsonValid(projection.database.db, transcriptEventNavigationSql(projection.database.db, "event"))}
+              THEN ${transcriptEventModelNavigationSql(projection.database.db, "event")}
+              ELSE ${transcriptEventNavigationSql(projection.database.db, "event")} END`.as(
+              "event_json",
+            ),
+            /* kysely-allow-raw: raw-byte accounting stays independent of the transient projection. */
+            sql<number>`${transcriptEventReadBytesSql("event")} + 1`.as("serialized_bytes"),
+          ])
           .where("active.session_id", "=", projection.resolved.sessionId)
           .where("active.active_position", ">=", firstKept.active_position)
           .where("active.active_position", "<", latestBoundary.active_position)
           .where("active.message_position", "is not", null)
+          .$if(scope === "context" && latestBoundary.event_type !== "reset", (query) =>
+            query.where("active.context_eligible", "=", 1),
+          )
           .orderBy("active.active_position", "asc"),
-      ).rows.flatMap((row) => {
-        try {
-          return [{ ...row, event: JSON.parse(row.event_json) as SessionTreeEntry }];
-        } catch {
-          return [];
-        }
-      });
-      const keptEntries = new Set(selectResetKeptEntries(candidates.map((row) => row.event)));
-      const keptRows = candidates.filter((row) => keptEntries.has(row.event));
-      keptContextEventCount = keptRows.length;
-      keptContextSizeBytes = keptRows.reduce(
-        (total, row) => total + Buffer.byteLength(row.event_json, "utf8") + 1,
-        0,
       );
+      const candidates = [];
+      for (const row of candidateRows) {
+        try {
+          candidates.push({
+            message_position: row.message_position,
+            serialized_bytes: row.serialized_bytes,
+            event: JSON.parse(row.event_json) as SessionTreeEntry,
+          });
+        } catch {
+          continue;
+        }
+      }
+      // A compaction keeps its whole tail; a reset replays only the paired subset.
+      let keptRows = candidates;
+      if (latestBoundary.event_type === "reset") {
+        const keptEntries = new Set(selectResetKeptEntries(candidates.map((row) => row.event)));
+        keptRows = candidates.filter((row) => keptEntries.has(row.event));
+      }
+      contextPrefixEventCount += keptRows.length;
+      contextPrefixSizeBytes += keptRows.reduce((total, row) => total + row.serialized_bytes, 0);
       // History presentation exposes user/assistant rows, while fresh-thread context
       // also retains paired tool results. The fuse stats above must cover that context.
-      keptMessagePositions = keptRows.flatMap((row) => {
+      for (const row of keptRows) {
         if (row.message_position === null || row.event.type !== "message") {
-          return [];
+          continue;
         }
         const role = row.event.message.role;
-        return role === "user" || role === "assistant" ? [row.message_position] : [];
-      });
+        if (scope !== "history" || role === "user" || role === "assistant") {
+          keptMessagePositions.push(row.message_position);
+        }
+      }
     }
   }
   return {
     boundarySeq: latestBoundary.seq,
-    generation,
-    indexedSeq: projection.state.indexedSeq,
-    keptContextEventCount,
+    contextPrefixEventCount,
     keptMessagePositions,
-    keptContextSizeBytes,
-    postBoundaryMessagePosition,
+    contextPrefixSizeBytes,
+    postBoundaryMessagePosition: boundary.postBoundaryMessagePosition,
     boundaryActivePosition: latestBoundary.active_position,
   };
 }
 
-function resolveResetMessageWindow(projection: ResetWindowProjection): ResetMessageWindow | null {
-  const key = resetMessageWindowCacheKey(projection);
+export function resolveTranscriptBoundaryWindow(
+  projection: CurrentTranscriptProjection,
+  scope: BoundaryWindowScope = "history",
+  beforeRawSeq?: number,
+): ResetMessageWindow | null {
+  // Current-turn bounds and uncommitted writes need their own window.
+  if (beforeRawSeq !== undefined || hasUncommittedSqliteWrites(projection.database.db)) {
+    return findLatestResetMessageWindow(projection, scope, beforeRawSeq);
+  }
+  const key = `${projection.database.path}\0${projection.resolved.sessionId}\0${scope}`;
   const cached = resetMessageWindowCache.get(key);
-  const generation = readTranscriptProjectionGeneration(projection);
-  if (cached) {
+  const generation = projection.generation;
+  if (cached?.database === projection.database.db && "window" in cached) {
     if (cached.generation === generation && cached.indexedSeq === projection.state.indexedSeq) {
       return cached.window;
     }
     if (cached.generation === generation && cached.window) {
-      const latestBoundary = readLatestActiveBoundaryMetadata(projection);
-      if (
-        latestBoundary?.event_type === "reset" &&
-        latestBoundary.seq === cached.window.boundarySeq
-      ) {
-        const window = { ...cached.window, indexedSeq: projection.state.indexedSeq };
-        cacheResetMessageWindow(key, { generation, indexedSeq: window.indexedSeq, window });
-        return window;
+      const latestBoundary = readLatestActiveBoundaryMetadata(projection, scope);
+      if (latestBoundary?.seq === cached.window.boundarySeq) {
+        cacheResetMessageWindow(key, { ...cached, indexedSeq: projection.state.indexedSeq });
+        return cached.window;
       }
     }
   }
-  const window = findLatestResetMessageWindow(projection, generation);
+  const window = findLatestResetMessageWindow(projection, scope);
   cacheResetMessageWindow(key, {
+    database: projection.database.db,
     generation,
     indexedSeq: projection.state.indexedSeq,
     window,
@@ -301,13 +470,14 @@ function resolveResetMessageWindow(projection: ResetWindowProjection): ResetMess
 }
 
 export function resolveVisibleMessagePositions(
-  projection: ResetWindowProjection,
+  projection: CurrentTranscriptProjection,
 ): VisibleMessagePositions {
-  const window = resolveResetMessageWindow(projection);
+  const window = resolveTranscriptBoundaryWindow(projection);
   if (!window) {
     return { kept: [], postStart: 0, total: projection.state.activeMessageCount };
   }
   return {
+    boundaryActivePosition: window.boundaryActivePosition,
     kept: window.keptMessagePositions,
     postStart: window.postBoundaryMessagePosition,
     total:
@@ -316,63 +486,178 @@ export function resolveVisibleMessagePositions(
   };
 }
 
-export function readVisibleMessageRange(
-  projection: ResetWindowProjection,
+function selectVisibleMessageRanges(
+  projection: CurrentTranscriptProjection,
   start: number,
   endExclusive: number,
-): ResetWindowMessageEvent[] {
+) {
+  const ranges: VisibleMessageRange[] = [];
   if (endExclusive <= start) {
-    return [];
+    return ranges;
   }
   const visible = resolveVisibleMessagePositions(projection);
   const boundedStart = Math.min(Math.max(0, start), visible.total);
   const boundedEnd = Math.min(Math.max(boundedStart, endExclusive), visible.total);
-  if (boundedEnd <= boundedStart) {
-    return [];
-  }
   const keptEnd = Math.min(boundedEnd, visible.kept.length);
-  const keptEvents = visible.kept
-    .slice(boundedStart, keptEnd)
-    .flatMap((position) => readMessageRange(projection, position, position + 1));
-  const postVisibleStart = Math.max(boundedStart, visible.kept.length);
-  const postVisibleEnd = Math.max(postVisibleStart, boundedEnd);
-  const postEvents = readMessageRange(
-    projection,
-    visible.postStart + postVisibleStart - visible.kept.length,
-    visible.postStart + postVisibleEnd - visible.kept.length,
-  );
-  return [...keptEvents, ...postEvents];
+  // Byte-capped tails must reach their early exit without expanding every retained ID in SQLite.
+  for (let offset = boundedStart; offset < keptEnd; offset += 500) {
+    const positions = visible.kept.slice(offset, Math.min(offset + 500, keptEnd));
+    const ordinals = new Map(positions.map((position, index) => [position, offset + index]));
+    ranges.push({
+      positions,
+      logicalPosition: (position) => ordinals.get(position)!,
+    });
+  }
+  const logicalStart = Math.max(boundedStart, visible.kept.length);
+  if (boundedEnd > logicalStart) {
+    const rawStart = visible.postStart + logicalStart - visible.kept.length;
+    ranges.push({
+      start: rawStart,
+      endExclusive: rawStart + boundedEnd - logicalStart,
+      logicalPosition: (position) => logicalStart + position - rawStart,
+    });
+  }
+  return ranges;
 }
 
-/** Maps a logical visible-message range to its materialized message positions. */
-export function resolveVisibleMessagePositionRange(
-  projection: ResetWindowProjection,
+export function readVisibleMessageRange(
+  projection: CurrentTranscriptProjection,
   start: number,
   endExclusive: number,
-): number[] {
-  if (endExclusive <= start) {
-    return [];
+): SessionTranscriptMessageEvent[] {
+  return Array.from(iterateVisibleMessageRange(projection, start, endExclusive));
+}
+
+export function* iterateVisibleMessageRange(
+  projection: CurrentTranscriptProjection,
+  start: number,
+  endExclusive: number,
+): IterableIterator<SessionTranscriptMessageEvent> {
+  for (const range of selectVisibleMessageRanges(projection, start, endExclusive)) {
+    const rows =
+      "positions" in range
+        ? iterateSqliteQuerySync(
+            projection.database.db,
+            selectMessagePayload(
+              selectMessageRows(projection.database, projection.resolved.sessionId, range),
+            ),
+          )
+        : getMessageRangeReaders(projection.database).messages({
+            sessionId: projection.resolved.sessionId,
+            start: range.start,
+            endExclusive: range.endExclusive,
+          });
+    for (const row of rows) {
+      yield parseActiveTranscriptMessageRow(row);
+    }
   }
-  const visible = resolveVisibleMessagePositions(projection);
-  const boundedStart = Math.min(Math.max(0, start), visible.total);
-  const boundedEnd = Math.min(Math.max(boundedStart, endExclusive), visible.total);
-  const keptEnd = Math.min(boundedEnd, visible.kept.length);
-  const positions = visible.kept.slice(boundedStart, keptEnd);
-  const postVisibleStart = Math.max(boundedStart, visible.kept.length);
-  const postVisibleEnd = Math.max(postVisibleStart, boundedEnd);
-  for (let logical = postVisibleStart; logical < postVisibleEnd; logical += 1) {
-    positions.push(visible.postStart + logical - visible.kept.length);
+}
+
+export function hasUnindexedVisibleMessages(
+  projection: CurrentTranscriptProjection,
+  start: number,
+  endExclusive: number,
+): boolean {
+  return selectVisibleMessageRanges(projection, start, endExclusive).some(
+    (range) =>
+      executeSqliteQueryTakeFirstSync(
+        projection.database.db,
+        selectMessageRows(projection.database, projection.resolved.sessionId, range)
+          .leftJoin("transcript_event_identities as identity", (join) =>
+            join
+              .onRef("identity.session_id", "=", "active.session_id")
+              .onRef("identity.seq", "=", "active.event_seq"),
+          )
+          .select("active.event_seq")
+          .where("identity.seq", "is", null)
+          .limit(1),
+      ) !== undefined,
+  );
+}
+
+/** Classify oversized messages from navigation metadata without decoding their payloads. */
+export function hasOversizedVisibleMessages(
+  projection: CurrentTranscriptProjection,
+  start: number,
+  endExclusive: number,
+  maxBytes: number,
+  roles: readonly string[],
+): boolean {
+  const validity = transcriptPredicateSql(projection.database.db, "navigation_valid", "event");
+  const role = transcriptPredicateSql(projection.database.db, "message_role", "event");
+  return selectVisibleMessageRanges(projection, start, endExclusive).some((range) => {
+    const row = executeSqliteQueryTakeFirstSync(
+      projection.database.db,
+      selectMessageRows(projection.database, projection.resolved.sessionId, range)
+        .select(validity.as("navigation_valid"))
+        .where((eb) => eb(transcriptEventReadBytesSql("event"), ">=", maxBytes))
+        .where((eb) => eb.or([eb(role, "in", roles), eb(validity, "=", 0)]))
+        .limit(1),
+    );
+    assertTranscriptNavigationValid(row?.navigation_valid);
+    return row !== undefined;
+  });
+}
+
+/** Byte-bounded tails can stop sizing at their first excluded predecessor. */
+export function* iterateVisibleMessageMetadata(
+  projection: CurrentTranscriptProjection,
+  start: number,
+  endExclusive: number,
+  direction: "asc" | "desc" = "asc",
+): IterableIterator<{
+  event_seq: number;
+  message_position: number;
+  serialized_bytes: number;
+  logicalPosition: number;
+}> {
+  const ranges = selectVisibleMessageRanges(projection, start, endExclusive);
+  for (const range of direction === "desc" ? ranges.toReversed() : ranges) {
+    const rows =
+      "positions" in range
+        ? iterateSqliteQuerySync(
+            projection.database.db,
+            selectMessageMetadata(
+              selectMessageRows(projection.database, projection.resolved.sessionId, range)
+                .clearOrderBy()
+                .orderBy("active.message_position", direction),
+            ),
+          )
+        : getMessageRangeReaders(projection.database)[
+            direction === "desc" ? "metadataDescending" : "metadata"
+          ]({
+            sessionId: projection.resolved.sessionId,
+            start: range.start,
+            endExclusive: range.endExclusive,
+          });
+    for (const row of rows) {
+      yield {
+        event_seq: row.event_seq,
+        message_position: row.message_position,
+        serialized_bytes: row.serialized_bytes,
+        // Position-based mapping preserves logical holes if a joined row is absent.
+        logicalPosition: range.logicalPosition(row.message_position),
+      };
+    }
   }
-  return positions;
 }
 
 /** Reads logical transcript bytes, reusing cached retained-tail facts after resets. */
-export function readVisibleTranscriptStats(projection: ResetWindowProjection): {
-  eventCount: number;
-  sizeBytes: number;
-} {
-  const window = resolveResetMessageWindow(projection);
-  const db = getResetWindowKysely(projection.database);
+export function readVisibleTranscriptStats(
+  projection: CurrentTranscriptProjection,
+  freshBoundary = false,
+): SessionTranscriptContextStats {
+  if (projection.contextStats) {
+    return projection.contextStats;
+  }
+  if (projection.contextMetadata) {
+    const { eventCount, sizeBytes } = projection.contextMetadata;
+    return { eventCount, sizeBytes, boundaryActivePosition: -1 };
+  }
+  const window = freshBoundary
+    ? findLatestResetMessageWindow(projection, "context")
+    : resolveTranscriptBoundaryWindow(projection, "context");
+  const db = getActiveTranscriptKysely(projection.database);
   const base = db
     .selectFrom("session_transcript_active_events as active")
     .innerJoin("transcript_events as event", (join) =>
@@ -383,16 +668,18 @@ export function readVisibleTranscriptStats(projection: ResetWindowProjection): {
     .select((eb) => [
       eb.fn.count<number>("active.event_seq").as("event_count"),
       /* kysely-allow-raw: JSONL size includes one terminating newline per event. */
-      sql<number>`COALESCE(SUM(LENGTH(CAST(event.event_json AS BLOB))), 0)
-        + COUNT(*)`.as("size_bytes"),
+      sql<number>`CAST(COALESCE(SUM(${transcriptEventReadBytesSql("event")} ), 0)
+        + COUNT(*) AS BIGINT)`.as("size_bytes"),
     ])
-    .where("active.session_id", "=", projection.resolved.sessionId);
+    .where("active.session_id", "=", projection.resolved.sessionId)
+    .where("active.context_eligible", "=", 1);
   const row = executeSqliteQueryTakeFirstSync(
     projection.database.db,
     window ? base.where("active.active_position", ">", window.boundaryActivePosition) : base,
   );
   return {
-    eventCount: (row?.event_count ?? 0) + (window?.keptContextEventCount ?? 0),
-    sizeBytes: (row?.size_bytes ?? 0) + (window?.keptContextSizeBytes ?? 0),
+    eventCount: (row?.event_count ?? 0) + (window?.contextPrefixEventCount ?? 0),
+    sizeBytes: (row?.size_bytes ?? 0) + (window?.contextPrefixSizeBytes ?? 0),
+    boundaryActivePosition: window?.boundaryActivePosition ?? -1,
   };
 }

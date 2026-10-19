@@ -6,7 +6,7 @@ import (
 )
 
 var supportedPromptLocales = []string{
-	"zh-CN", "zh-TW", "ja-JP", "es", "pt-BR", "ko", "de", "fr", "hi", "ar", "it", "vi", "nl", "fa", "ru", "tr", "uk", "id", "pl", "th",
+	"zh-CN", "zh-TW", "ja-JP", "es", "pt-BR", "ko", "de", "fr", "hi", "ar", "it", "vi", "nl", "fa", "ru", "tr", "uk", "id", "pl", "th", "sv",
 }
 
 func TestPrettyLanguageLabelCoversEverySupportedLocale(t *testing.T) {
@@ -47,8 +47,11 @@ func TestTranslationPromptUsesSharedContractAndLocaleOverlayForEverySupportedLoc
 				"Preserve HTML/MDX tag names, attribute names, nesting, and structural attribute values exactly",
 				"Fenced text, transcript, output, and documentation examples are an exception to the preceding block rule",
 				"Preserve link-label association: translate each Markdown link label in place",
+				"Preserve every placeholder byte-for-byte and with exactly the same occurrence count as in the input",
+				"Never repeat a placeholder when expanding a comparison or clarifying a reference",
+				"Express precedence chains as an inline priority order from highest to lowest, naming each item once",
 				"Translate user-visible prose inside string-valued component attributes such as “title”, “label”, “description”, and “placeholder”",
-				"When they name the documented product, provider, protocol, integration, runtime, or plugin, also preserve ambiguous names exactly: Render, Matrix, Raft, Chutes, fal (title: Fal), Fireworks, Inferrs, Meta, Runway, Synthetic, Upstash Box, Lobster, Mantis, Tokenjuice",
+				"When they name the documented product, provider, protocol, integration, runtime, or plugin, also preserve ambiguous names exactly: Render, Matrix, Raft, Chutes, fal (title: Fal), Fireworks, Meta, Runway, Synthetic, Upstash Box, Lobster, Mantis, Tokenjuice",
 				"Translate the same words normally when the source clearly uses them as ordinary prose instead of a name",
 				"Locale rules:",
 			} {
@@ -161,6 +164,7 @@ func TestTranslationPromptAddsRepresentativeLocaleRules(t *testing.T) {
 		{locale: "fa", wants: []string{"Persian ی and ک", "right-to-left"}},
 		{locale: "ru", wants: []string{"generic noun “plugin” as “плагин”", "inflect it for Russian case and number", "Never force English “Plugin” into ordinary prose"}},
 		{locale: "uk", wants: []string{"Ukrainian terminology rather than Russian calques"}},
+		{locale: "sv", wants: []string{"Swedish", "du/din/ditt/dina", "natural compound words", "sentence-style capitalization"}},
 		{locale: "th", wants: []string{"Do not insert spaces between every Thai word"}},
 	}
 

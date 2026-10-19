@@ -1,19 +1,34 @@
-/**
- * Tests Windows spawn compatibility helpers.
- */
 import { spawnSync } from "node:child_process";
-import { link, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createPluginSdkTestHarness } from "./test-helpers.js";
-import { materializeWindowsSpawnProgram, resolveWindowsSpawnProgram } from "./windows-spawn.js";
+import {
+  materializeWindowsSpawnProgram,
+  resolveWindowsExecutablePath,
+  resolveWindowsSpawnProgram,
+  type ResolveWindowsSpawnProgramParams,
+} from "./windows-spawn.js";
 
-const { createTempDir } = createPluginSdkTestHarness({
-  cleanup: {
-    maxRetries: 8,
-    retryDelay: 8,
-  },
-});
+const { createTempDir } = createPluginSdkTestHarness({ cleanup: { maxRetries: 8, retryDelay: 8 } });
+const resolve = (command: string, options: Partial<ResolveWindowsSpawnProgramParams> = {}) =>
+  resolveWindowsSpawnProgram({
+    platform: "win32",
+    env: {},
+    execPath: process.execPath,
+    ...options,
+    command,
+  });
+
+async function createWrapper(content = "@ECHO off\r\necho wrapper\r\n", target?: [string, string]) {
+  const dir = await createTempDir("openclaw-windows-spawn-test-");
+  const wrapper = path.join(dir, "wrapper.cmd");
+  if (target) {
+    await writeFile(path.join(dir, target[0]), target[1], "utf8");
+  }
+  await writeFile(wrapper, content, "utf8");
+  return wrapper;
+}
 
 describe("resolveWindowsSpawnProgram", () => {
   it.runIf(process.platform === "win32")(
@@ -21,15 +36,10 @@ describe("resolveWindowsSpawnProgram", () => {
     async () => {
       const dir = await createTempDir("openclaw-windows-spawn-env-case-");
       const executable = path.join(dir, "mixed-env-tool.MiXeD");
-      await link(process.execPath, executable);
+      await copyFile(process.execPath, executable);
       const env = { pAtH: dir, pAtHeXt: ".MiXeD" };
 
-      const program = resolveWindowsSpawnProgram({
-        command: "mixed-env-tool",
-        platform: "win32",
-        env,
-        execPath: process.execPath,
-      });
+      const program = resolve("mixed-env-tool", { env });
       const invocation = materializeWindowsSpawnProgram(program, [
         "-e",
         'process.stdout.write("native-ok")',
@@ -43,26 +53,62 @@ describe("resolveWindowsSpawnProgram", () => {
     },
   );
 
-  it("rejects node command strings that include inline entrypoint arguments on Windows", () => {
-    expect(() =>
-      resolveWindowsSpawnProgram({
-        command: "node C:\\Users\\me\\.openclaw\\npm\\node_modules\\@openai\\codex\\bin\\codex.js",
-        platform: "win32",
-        env: {},
-        execPath: "C:\\node\\node.exe",
-      }),
-    ).toThrow("Windows spawn command must be an executable path only");
+  it.each(["node script.js", '"C:\\tools\\pnpm.cmd" exec tool'])(
+    "rejects command strings with inline arguments on Windows: %s",
+    (command) => {
+      expect(() => resolve(command)).toThrow(
+        "Windows spawn command must be an executable path only",
+      );
+    },
+  );
+
+  it("preserves an existing launcher path inside a directory with spaces on Windows", async () => {
+    const root = await realpath(await createTempDir("openclaw-windows-spawn-test-"));
+    const dir = path.join(root, "pnpm checkout");
+    await mkdir(dir);
+    const launcher = path.join(dir, "launcher.js");
+    await writeFile(launcher, "process.exit(0);\n", "utf8");
+
+    expect(materializeWindowsSpawnProgram(resolve(launcher), ["--version"])).toEqual({
+      command: process.execPath,
+      argv: [launcher, "--version"],
+      resolution: "node-entrypoint",
+      shell: undefined,
+      windowsHide: true,
+    });
   });
 
-  it("allows executable paths with spaces on Windows", () => {
-    const resolved = resolveWindowsSpawnProgram({
-      command: "C:\\Program Files\\OpenAI Codex\\codex.exe",
-      platform: "win32",
-      env: {},
-      execPath: "C:\\node\\node.exe",
-    });
+  it.each(["PATH", "relative command"] as const)(
+    "runs a %s launcher from the child cwd",
+    async (kind) => {
+      const root = await realpath(await createTempDir("openclaw-windows-child-cwd-"));
+      const cwd = path.join(root, "child");
+      const directory = "node tools";
+      const bin = path.join(cwd, directory);
+      await mkdir(bin, { recursive: true });
+      await writeFile(
+        path.join(bin, "entry.cjs"),
+        "process.stdout.write(JSON.stringify({ cwd: process.cwd(), args: process.argv.slice(2) }));\n",
+      );
+      await writeFile(path.join(bin, "tool.cmd"), '@ECHO off\r\n"%~dp0\\entry.cjs" %*\r\n');
+      const env = { PATH: directory, PATHEXT: ".CMD" };
+      const command = resolveWindowsExecutablePath(
+        kind === "PATH" ? "tool" : path.join(directory, "tool.cmd"),
+        env,
+        cwd,
+      );
+      const invocation = materializeWindowsSpawnProgram(resolve(command, { env }), [
+        "argument with spaces",
+      ]);
+      const child = spawnSync(invocation.command, invocation.argv, { cwd, encoding: "utf8" });
+      expect(child.error).toBeUndefined();
+      expect(child.status).toBe(0);
+      expect(JSON.parse(child.stdout)).toEqual({ cwd, args: ["argument with spaces"] });
+    },
+  );
 
-    expect(resolved).toEqual({
+  it("allows executable paths with spaces on Windows", () => {
+    expect(resolve("C:\\Program Files\\OpenAI Codex\\codex.exe")).toEqual({
       command: "C:\\Program Files\\OpenAI Codex\\codex.exe",
       leadingArgv: [],
       resolution: "direct",
@@ -71,32 +117,13 @@ describe("resolveWindowsSpawnProgram", () => {
   });
 
   it("fails closed by default for unresolved windows wrappers", async () => {
-    const dir = await createTempDir("openclaw-windows-spawn-test-");
-    const shimPath = path.join(dir, "wrapper.cmd");
-    await writeFile(shimPath, "@ECHO off\r\necho wrapper\r\n", "utf8");
-
-    expect(() =>
-      resolveWindowsSpawnProgram({
-        command: shimPath,
-        platform: "win32",
-        env: { PATH: dir, PATHEXT: ".CMD;.EXE;.BAT" },
-        execPath: "C:\\node\\node.exe",
-      }),
-    ).toThrow(/without shell execution/);
+    const shimPath = await createWrapper();
+    expect(() => resolve(shimPath)).toThrow(/without shell execution/);
   });
 
   it("only returns shell fallback when explicitly opted in", async () => {
-    const dir = await createTempDir("openclaw-windows-spawn-test-");
-    const shimPath = path.join(dir, "wrapper.cmd");
-    await writeFile(shimPath, "@ECHO off\r\necho wrapper\r\n", "utf8");
-
-    const resolved = resolveWindowsSpawnProgram({
-      command: shimPath,
-      platform: "win32",
-      env: { PATH: dir, PATHEXT: ".CMD;.EXE;.BAT" },
-      execPath: "C:\\node\\node.exe",
-      allowShellFallback: true,
-    });
+    const shimPath = await createWrapper();
+    const resolved = resolve(shimPath, { allowShellFallback: true });
     const invocation = materializeWindowsSpawnProgram(resolved, ["--cwd", "C:\\safe & calc.exe"]);
 
     expect(invocation).toEqual({
@@ -109,25 +136,11 @@ describe("resolveWindowsSpawnProgram", () => {
   });
 
   it("preserves custom batch-wrapper behavior instead of bypassing its target", async () => {
-    const dir = await createTempDir("openclaw-windows-spawn-test-");
-    const targetPath = path.join(dir, "tool.exe");
-    const wrapperPath = path.join(dir, "wrapper.cmd");
-    await writeFile(targetPath, "", "utf8");
-    await writeFile(
-      wrapperPath,
+    const wrapperPath = await createWrapper(
       '@ECHO off\r\nSET WRAPPER_FLAG=1\r\n"%~dp0\\tool.exe" %*\r\n',
-      "utf8",
+      ["tool.exe", ""],
     );
-
-    const resolved = resolveWindowsSpawnProgram({
-      command: wrapperPath,
-      platform: "win32",
-      env: { PATH: dir, PATHEXT: ".CMD;.EXE;.BAT" },
-      execPath: "C:\\node\\node.exe",
-      allowShellFallback: true,
-    });
-
-    expect(resolved).toEqual({
+    expect(resolve(wrapperPath, { allowShellFallback: true })).toEqual({
       command: wrapperPath,
       leadingArgv: [],
       resolution: "shell-fallback",
@@ -136,21 +149,11 @@ describe("resolveWindowsSpawnProgram", () => {
   });
 
   it("does not reinterpret a forwarded batch wrapper as a Node script", async () => {
-    const dir = await createTempDir("openclaw-windows-spawn-test-");
-    const targetPath = path.join(dir, "inner.cmd");
-    const wrapperPath = path.join(dir, "wrapper.cmd");
-    await writeFile(targetPath, "@ECHO off\r\necho inner\r\n", "utf8");
-    await writeFile(wrapperPath, '@ECHO off\r\n"%~dp0\\inner.cmd" %*\r\n', "utf8");
-
-    const resolved = resolveWindowsSpawnProgram({
-      command: wrapperPath,
-      platform: "win32",
-      env: { PATH: dir, PATHEXT: ".CMD;.EXE;.BAT" },
-      execPath: "C:\\node\\node.exe",
-      allowShellFallback: true,
-    });
-
-    expect(resolved).toEqual({
+    const wrapperPath = await createWrapper('@ECHO off\r\n"%~dp0\\inner.cmd" %*\r\n', [
+      "inner.cmd",
+      "@ECHO off\r\necho inner\r\n",
+    ]);
+    expect(resolve(wrapperPath, { allowShellFallback: true })).toEqual({
       command: wrapperPath,
       leadingArgv: [],
       resolution: "shell-fallback",

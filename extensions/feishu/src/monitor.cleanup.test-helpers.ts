@@ -1,7 +1,8 @@
-import { closeOpenClawStateDatabaseForTest } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { botNames, botOpenIds, httpServers, wsClients } from "./monitor.state.js";
+import { closeOpenClawStateDatabaseForTest } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { botOpenIds, wsClients } from "./monitor.state.js";
 
-export function cleanupFeishuMonitorStateForTests(): void {
+export async function cleanupFeishuMonitorStateForTests(): Promise<void> {
   for (const client of wsClients.values()) {
     try {
       client.close();
@@ -11,16 +12,7 @@ export function cleanupFeishuMonitorStateForTests(): void {
   }
   wsClients.clear();
 
-  for (const server of httpServers.values()) {
-    try {
-      server.closeAllConnections();
-      server.close();
-    } catch {
-      // Best-effort test cleanup.
-    }
-  }
-  httpServers.clear();
   botOpenIds.clear();
-  botNames.clear();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
 }

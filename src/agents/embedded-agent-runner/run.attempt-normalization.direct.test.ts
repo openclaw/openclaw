@@ -1,30 +1,26 @@
+import assert from "node:assert/strict";
 import { describe, expect, it, vi } from "vitest";
-import { createEmbeddedRunReplayState, type EmbeddedRunReplayState } from "./replay-state.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  createMockUsage,
+  makeEmbeddedRunnerAttempt,
+} from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import { createEmbeddedRunReplayState } from "./replay-state.js";
 import { normalizeEmbeddedRunAttempt } from "./run/attempt-normalization.js";
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
-import { createIdleTimeoutBreakerState } from "./run/idle-timeout-breaker.js";
+import { MAX_CONSECUTIVE_IDLE_TIMEOUTS_BEFORE_OUTPUT } from "./run/idle-timeout-breaker.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
-import { createUsageAccumulator } from "./usage-accumulator.js";
+import { createUsageAccumulator, toNormalizedUsage } from "./usage-accumulator.js";
 
 function makeAttempt(
   preflightRecovery?: EmbeddedRunAttemptResult["preflightRecovery"],
+  overrides: Partial<EmbeddedRunAttemptResult> = {},
 ): EmbeddedRunAttemptResult {
-  return {
-    terminal: { kind: "ok" },
-    preflightRecovery,
-    sessionIdUsed: "session-1",
-    messagesSnapshot: [],
-    assistantTexts: [],
-    toolMetas: [],
-    lastAssistant: undefined,
-    didSendViaMessagingTool: false,
-    messagingToolSentTexts: [],
-    messagingToolSentMediaUrls: [],
-    messagingToolSentTargets: [],
-    cloudCodeAssistFormatError: false,
-    replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-    itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
-  };
+  return makeEmbeddedRunnerAttempt({ sessionIdUsed: "session-1", preflightRecovery, ...overrides });
+}
+
+function withAssistant(assistant: ReturnType<typeof makeCliUsageAssistant>) {
+  return { lastAssistant: assistant as never, currentAttemptAssistant: assistant as never };
 }
 
 function makeCliUsageAssistant(stopReason: "aborted" | "error" | "stop", text = "legacy reply") {
@@ -40,38 +36,28 @@ function makeCliUsageAssistant(stopReason: "aborted" | "error" | "stop", text = 
   };
 }
 
-function makePromptState(options: { waitForPersistence?: () => Promise<void> } = {}) {
+function makePromptState(waitForPersistence = async () => {}) {
   const activePrompt = { persisted: false, internal: false };
-  const state = {
+  return {
     sessionId: "session-1",
     sessionFile: "agent:main:main",
-    sessionTarget: {
-      agentId: "main",
-      sessionId: "session-1",
-      sessionKey: "agent:main:main",
-      storePath: "/tmp/sessions.json",
-    },
     activePrompt,
     suppressNextUserMessagePersistence: false,
     adoptSessionId: vi.fn(),
-    waitForCurrentUserMessagePersistence: vi.fn(
-      options.waitForPersistence ?? (async () => undefined),
-    ),
+    waitForCurrentUserMessagePersistence: vi.fn(waitForPersistence),
+    markOwnedTranscriptRetry: vi.fn(),
     continueFromCurrentTranscript: vi.fn(),
   };
-  return state;
 }
 
 function makeNormalizationInput(
   attempt: EmbeddedRunAttemptResult,
-  sessionPromptState: ReturnType<typeof makePromptState>,
-  replayState: EmbeddedRunReplayState = createEmbeddedRunReplayState(),
+  sessionPromptState = makePromptState(),
 ): Parameters<typeof normalizeEmbeddedRunAttempt>[0] {
   return {
     runInput: {
       runParams: {
         sessionId: "session-1",
-        sessionFile: "agent:main:main",
         config: {},
       },
       laneController: { throwIfAborted: vi.fn() },
@@ -82,38 +68,108 @@ function makeNormalizationInput(
     preparedRuntime: {
       nativeModelOwned: false,
       model: { id: "gpt-5.6-luna" },
-      attemptAuthProfileStore: { profiles: {} },
-      snapshot: () => ({
-        effectiveModel: { provider: "openai", id: "gpt-5.6-luna" },
-        outerContextTokenMeta: {},
-        lastProfileId: undefined,
-      }),
+      snapshot: () => ({}),
     } as never,
-    dispatchedAttempt: { rawAttempt: attempt, cancellationRequested: false } as never,
+    dispatchedAttempt: { rawAttempt: attempt } as never,
     sessionPromptState: sessionPromptState as never,
     provider: "openai",
     modelId: "gpt-5.6-luna",
     bootstrapPromptWarningSignaturesSeen: [],
     usageAccumulator: createUsageAccumulator(),
     lastRunPromptUsage: undefined,
-    idleTimeoutBreakerState: createIdleTimeoutBreakerState(),
+    idleTimeoutBreakerState: { consecutiveIdleTimeoutsBeforeOutput: 0 },
     contextRecoveryState: createEmbeddedRunContextRecoveryState(),
-    replayState,
+    replayState: createEmbeddedRunReplayState(),
     lastRetryFailoverReason: null,
   };
 }
 
 describe("normalizeEmbeddedRunAttempt", () => {
-  it("waits for pending user-turn persistence before deriving retry suppression", async () => {
-    let releasePersistence: (() => void) | undefined;
-    const persistence = new Promise<void>((resolve) => {
-      releasePersistence = resolve;
-    });
-    const state = makePromptState({
-      waitForPersistence: async () => {
-        await persistence;
-        state.activePrompt.persisted = true;
+  it.each(["settled", "aborted"])(
+    "preserves committed accounting after an attempt is %s without replacing its request budget",
+    (retirement) => {
+      const state = createEmbeddedRunContextRecoveryState();
+      const controller = new AbortController();
+      const onBudget = vi.fn();
+      const first = state.beginAttempt(controller.signal, onBudget);
+      const budget = {
+        contextWindow: 32_768,
+        reserveTokens: 8_192,
+        fixedTokens: 100,
+        pendingTokens: 10,
+      };
+      first.onCompactionRequestBudget(budget);
+      first.onContextAccountingEvent({ kind: "compaction", tokensAfter: 400 });
+      if (retirement === "settled") {
+        first.close();
+      } else {
+        controller.abort();
+      }
+      first.onCompactionRequestBudget({ ...budget, fixedTokens: 999 });
+      // Committed accounting still settles after foreground budget publication closes.
+      first.onContextAccountingEvent({ kind: "compaction", tokensAfter: 200 });
+      expect(state.compactionRequestBudget).toBe(budget);
+      expect(onBudget.mock.calls).toEqual([[undefined], [budget]]);
+      expect(first.recordedCompactionCount).toBe(2);
+      expect(state.autoCompactionCount).toBe(2);
+      expect(state.currentContextSnapshot).toEqual({ tokens: 200 });
+
+      const next = state.beginAttempt(undefined, onBudget);
+      next.onContextAccountingEvent({ kind: "model", contextTokens: 250, successful: true });
+      expect(next.recordedCompactionCount).toBe(0);
+      expect(state.compactionRequestBudget).toBeUndefined();
+      expect(state.autoCompactionCount).toBe(2);
+      expect(state.currentContextSnapshot).toEqual({ tokens: 250 });
+    },
+  );
+
+  it("keeps the physical-attempt source when idle timeouts trip the breaker despite billed partial output", async () => {
+    const attempt = {
+      ...makeAttempt(),
+      modelAttempt: {
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        credentialSource: { kind: "profile" as const },
       },
+      terminal: { kind: "timeout" as const, phase: "prompt" as const, source: "idle" as const },
+      attemptUsage: { output: 36 },
+    };
+    const input = makeNormalizationInput(attempt);
+    let result: Awaited<ReturnType<typeof normalizeEmbeddedRunAttempt>> | undefined;
+    for (let index = 0; index < MAX_CONSECUTIVE_IDLE_TIMEOUTS_BEFORE_OUTPUT; index += 1) {
+      result = await normalizeEmbeddedRunAttempt(input);
+    }
+
+    assert(result?.action === "complete", `expected complete, got ${result?.action}`);
+    expect(result.result.meta.agentMeta?.credentialSource).toEqual({ kind: "profile" });
+  });
+
+  it("keeps attempt cost authoritative over a synthetic assistant zero-cost placeholder", async () => {
+    const assistant = {
+      ...makeCliUsageAssistant("stop"),
+      api: "openai-chatgpt-responses",
+      usage: createMockUsage(150_000, 100),
+    };
+    const attempt = makeAttempt(undefined, {
+      ...withAssistant(assistant),
+      attemptUsage: { input: 300_000, output: 200, cost: { total: 0.125 } },
+    });
+    const input = makeNormalizationInput(attempt);
+
+    await normalizeEmbeddedRunAttempt(input);
+
+    expect(toNormalizedUsage(input.usageAccumulator)).toMatchObject({
+      input: 300_000,
+      output: 200,
+    });
+    expect(toNormalizedUsage(input.usageAccumulator)?.cost).toEqual({ total: 0.125 });
+  });
+
+  it("waits for pending user-turn persistence before deriving retry suppression", async () => {
+    const persistence = createDeferred();
+    const state = makePromptState(async () => {
+      await persistence.promise;
+      state.activePrompt.persisted = true;
     });
     let settled = false;
 
@@ -129,217 +185,99 @@ describe("normalizeEmbeddedRunAttempt", () => {
     expect(settled).toBe(false);
     expect(state.suppressNextUserMessagePersistence).toBe(false);
 
-    releasePersistence?.();
+    persistence.resolve();
     const result = await resultPromise;
 
     expect(result.action).toBe("proceed");
     expect(state.suppressNextUserMessagePersistence).toBe(true);
   });
 
-  it("retries the original prompt after handled preflight truncation", async () => {
-    const state = makePromptState();
-
-    const result = await normalizeEmbeddedRunAttempt(
-      makeNormalizationInput(
-        makeAttempt({
-          route: "truncate_tool_results_only",
-          handled: true,
-          truncatedCount: 2,
-        }),
-        state,
-      ),
-    );
-
-    expect(result.action).toBe("retry");
-    if (result.action !== "retry") {
-      throw new Error(`expected retry, got ${result.action}`);
-    }
-    expect(result.retryKind).toBe("recovery");
-    expect(state.continueFromCurrentTranscript).not.toHaveBeenCalled();
-  });
-
-  it("continues from the current transcript after handled mid-turn truncation", async () => {
-    const state = makePromptState();
-
-    const result = await normalizeEmbeddedRunAttempt(
-      makeNormalizationInput(
-        makeAttempt({
-          route: "truncate_tool_results_only",
-          source: "mid-turn",
-          handled: true,
-          truncatedCount: 2,
-        }),
-        state,
-      ),
-    );
-
-    expect(result.action).toBe("retry");
-    if (result.action !== "retry") {
-      throw new Error(`expected retry, got ${result.action}`);
-    }
-    expect(result.retryKind).toBe("recovery");
-    expect(state.continueFromCurrentTranscript).toHaveBeenCalledOnce();
-  });
-
-  it("marks a successful no-op mid-turn retry as a progress continuation", async () => {
-    const state = makePromptState();
-    const attempt = makeAttempt({
-      route: "truncate_tool_results_only",
-      source: "mid-turn",
-      handled: true,
-      truncatedCount: 0,
-    });
-    attempt.toolMetas = [{ toolName: "read", isError: false }];
-
-    const input = makeNormalizationInput(attempt, state);
-    input.lastRunPromptUsage = { input: 42_000, output: 1_000, total: 43_000 };
-    const result = await normalizeEmbeddedRunAttempt(input);
-
-    expect(result.action).toBe("retry");
-    if (result.action !== "retry") {
-      throw new Error(`expected retry, got ${result.action}`);
-    }
-    expect(result.retryKind).toBe("progress_continuation");
-    expect(state.continueFromCurrentTranscript).toHaveBeenCalledOnce();
-  });
-
-  it("keeps a failed no-op mid-turn retry in the recovery budget", async () => {
-    const state = makePromptState();
-    const attempt = makeAttempt({
-      route: "truncate_tool_results_only",
-      source: "mid-turn",
-      handled: true,
-      truncatedCount: 0,
-    });
-    attempt.toolMetas = [{ toolName: "read", isError: true }];
-
-    const result = await normalizeEmbeddedRunAttempt(makeNormalizationInput(attempt, state));
-
-    expect(result.action).toBe("retry");
-    if (result.action !== "retry") {
-      throw new Error(`expected retry, got ${result.action}`);
-    }
-    expect(result.retryKind).toBe("recovery");
-  });
-
-  it("keeps replay state unsafe after a later clean attempt", async () => {
-    const state = makePromptState();
-    const dirty = await normalizeEmbeddedRunAttempt(
-      makeNormalizationInput(
+  it.each([
+    ["mid-turn truncation", 2, "recovery", 1],
+    ["no-op after a successful tool", 0, "progress_continuation", 1],
+    ["compaction with current-attempt provenance", undefined, "recovery", 0],
+  ] as const)(
+    "preserves retry accounting for %s",
+    async (_name, truncatedCount, kind, continues) => {
+      const state = makePromptState();
+      const assistant = makeCliUsageAssistant("stop");
+      const attempt = makeAttempt(
         {
-          ...makeAttempt(),
-          replayMetadata: { replaySafe: false, hadPotentialSideEffects: true },
+          route: continues ? "truncate_tool_results_only" : "compact_only",
+          handled: true,
+          ...(continues ? { source: "mid-turn" as const } : {}),
+          truncatedCount: truncatedCount ?? 0,
         },
-        state,
-      ),
-    );
-    if (dirty.action !== "proceed") {
-      throw new Error(`expected dirty attempt to proceed, got ${dirty.action}`);
-    }
-
-    const clean = await normalizeEmbeddedRunAttempt(
-      makeNormalizationInput(
-        {
-          ...makeAttempt(),
-          replayMetadata: { replaySafe: true, hadPotentialSideEffects: false },
+        continues
+          ? truncatedCount
+            ? { attemptUsage: { input: 2_000, output: 100, total: 2_100 } }
+            : { toolMetas: [{ toolName: "read", isError: false }] }
+          : { ...withAssistant(assistant), messagesSnapshot: [assistant] as never },
+      );
+      const input = makeNormalizationInput(attempt, state);
+      const priorUsage = { input: 42_000, output: 1_000, total: 43_000 };
+      input.lastRunPromptUsage = truncatedCount
+        ? {
+            ...priorUsage,
+            contextUsage: { state: "available", promptTokens: 42_000, totalTokens: 43_000 },
+          }
+        : priorUsage;
+      const result = await normalizeEmbeddedRunAttempt(input);
+      assert(result.action === "retry", `expected retry, got ${result.action}`);
+      expect(result).toMatchObject({ retryKind: kind });
+      expect(state.continueFromCurrentTranscript).toHaveBeenCalledTimes(continues);
+      if (continues) {
+        expect(state.markOwnedTranscriptRetry).toHaveBeenCalledTimes(truncatedCount ? 1 : 0);
+      }
+      expect(result.lastRunPromptUsage).toEqual(
+        truncatedCount === 0
+          ? input.lastRunPromptUsage
+          : {
+              contextUsage: { state: "unavailable" },
+            },
+      );
+      if (!truncatedCount) {
+        return;
+      }
+      const retryAttempt = makeAttempt(undefined, {
+        attemptUsage: {
+          input: 8_000,
+          output: 500,
+          total: 8_500,
+          contextUsage: { state: "available", promptTokens: 8_000, totalTokens: 8_500 },
         },
-        state,
-        dirty.replayState,
-      ),
-    );
-
-    if (clean.action !== "proceed") {
-      throw new Error(`expected clean attempt to proceed, got ${clean.action}`);
-    }
-    expect(clean.replayState).toEqual({ replayInvalid: true, hadPotentialSideEffects: true });
-  });
+      });
+      const retryInput = makeNormalizationInput(retryAttempt, state);
+      retryInput.lastRunPromptUsage = result.lastRunPromptUsage;
+      expect(await normalizeEmbeddedRunAttempt(retryInput)).toMatchObject({
+        action: "proceed",
+        lastRunPromptUsage: retryAttempt.attemptUsage,
+      });
+      expect(toNormalizedUsage(input.usageAccumulator)).toMatchObject({
+        input: 2_000,
+        output: 100,
+        total: 2_100,
+      });
+    },
+  );
 
   it("writes canonical assistant abort lifecycle metadata", async () => {
-    const state = makePromptState();
     const assistant = makeCliUsageAssistant("aborted", "");
     const setTerminalLifecycleMeta = vi.fn();
-    const attempt = makeAttempt();
-    attempt.lastAssistant = assistant as never;
-    attempt.currentAttemptAssistant = assistant as never;
-    attempt.setTerminalLifecycleMeta = setTerminalLifecycleMeta;
+    const attempt = makeAttempt(undefined, {
+      ...withAssistant(assistant),
+      setTerminalLifecycleMeta,
+    });
 
-    const result = await normalizeEmbeddedRunAttempt(makeNormalizationInput(attempt, state));
+    const result = await normalizeEmbeddedRunAttempt(makeNormalizationInput(attempt));
 
-    expect(result.action).toBe("proceed");
-    if (result.action !== "proceed") {
-      throw new Error(`expected proceed, got ${result.action}`);
-    }
+    assert(result.action === "proceed", `expected proceed, got ${result.action}`);
     result.setTerminalLifecycleMeta({ replayInvalid: false, livenessState: "blocked" });
     expect(setTerminalLifecycleMeta).toHaveBeenCalledWith({
       replayInvalid: false,
       livenessState: "blocked",
       stopReason: "aborted",
       aborted: true,
-    });
-  });
-
-  it("does not promote historical CLI usage without context provenance", async () => {
-    const state = makePromptState();
-    const legacyAssistant = makeCliUsageAssistant("error");
-    const attempt = makeAttempt();
-    attempt.messagesSnapshot = [legacyAssistant] as never;
-    attempt.lastAssistant = legacyAssistant as never;
-
-    const result = await normalizeEmbeddedRunAttempt(makeNormalizationInput(attempt, state));
-
-    expect(result.action).toBe("proceed");
-    if (result.action !== "proceed") {
-      throw new Error(`expected proceed, got ${result.action}`);
-    }
-    expect(result.lastRunPromptUsage).toEqual({ contextUsage: { state: "unavailable" } });
-  });
-
-  it("keeps the unavailable sentinel across a retry instead of reviving prior usage", async () => {
-    const state = makePromptState();
-    const legacyAssistant = makeCliUsageAssistant("stop");
-    const attempt = makeAttempt({
-      route: "compact_only",
-      handled: true,
-      truncatedCount: 0,
-    });
-    attempt.messagesSnapshot = [legacyAssistant] as never;
-    attempt.lastAssistant = legacyAssistant as never;
-    attempt.currentAttemptAssistant = legacyAssistant as never;
-    const input = makeNormalizationInput(attempt, state);
-    input.lastRunPromptUsage = { input: 42_000, output: 1_000, total: 43_000 };
-
-    const result = await normalizeEmbeddedRunAttempt(input);
-
-    expect(result.action).toBe("retry");
-    if (result.action !== "retry") {
-      throw new Error(`expected retry, got ${result.action}`);
-    }
-    expect(result.lastRunPromptUsage).toEqual({ contextUsage: { state: "unavailable" } });
-  });
-
-  it("keeps newer carried usage over an older transcript fallback", async () => {
-    const state = makePromptState();
-    const historicalAssistant = makeCliUsageAssistant("stop", "historical reply");
-    const attempt = makeAttempt({
-      route: "compact_only",
-      handled: true,
-      truncatedCount: 0,
-    });
-    attempt.messagesSnapshot = [historicalAssistant] as never;
-    attempt.lastAssistant = historicalAssistant as never;
-    const input = makeNormalizationInput(attempt, state);
-    input.lastRunPromptUsage = { input: 42_000, output: 1_000, total: 43_000 };
-
-    const result = await normalizeEmbeddedRunAttempt(input);
-
-    expect(result.action).toBe("retry");
-    if (result.action !== "retry") {
-      throw new Error(`expected retry, got ${result.action}`);
-    }
-    expect(result.lastRunPromptUsage).toEqual({
-      input: 42_000,
-      output: 1_000,
-      total: 43_000,
     });
   });
 });

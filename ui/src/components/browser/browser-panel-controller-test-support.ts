@@ -1,19 +1,25 @@
-import type { ReactiveController } from "lit";
+import type { GatewayClientRequestOptions } from "@openclaw/gateway-client";
 import { afterEach, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { BrowserInspectedNode } from "./browser-client.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import type { BrowserDashboardTarget, BrowserInspectedNode } from "./browser-client.ts";
 import {
-  BrowserPanelController,
-  type BrowserPanelControllerHost,
-} from "./browser-panel-controller.ts";
+  createBrowserPanel,
+  type BrowserPanel,
+  type BrowserPanelHost,
+} from "./browser-panel-owner.ts";
 import type { BrowserPanelView } from "./browser-panel-surface.ts";
+import type { BrowserTabTarget } from "./browser-target.ts";
 
 const BROWSER_PANEL_TEST_PAGE_TITLE = "Page";
 
 export type BrowserRequestEnvelope = {
   method: string;
   path: string;
+  target?: "host" | "node";
+  node?: string;
+  query?: Record<string, unknown>;
   body?: Record<string, unknown>;
+  tabScope?: { sessionKey: string; referencedTabs?: readonly BrowserTabTarget[] };
 };
 
 export function setupBrowserPanelTestCleanup(): void {
@@ -26,14 +32,31 @@ export function setupBrowserPanelTestCleanup(): void {
 
 export function createBrowserClient(
   handleRequest: (envelope: BrowserRequestEnvelope) => Promise<unknown>,
+  options: { screencast?: boolean; sessionScoped?: boolean } = {},
 ) {
-  const request = vi.fn(async (method: string, params?: unknown) => {
-    if (method !== "browser.request") {
-      throw new Error(`Unexpected Gateway method: ${method}`);
-    }
-    return await handleRequest(params as BrowserRequestEnvelope);
-  });
-  return { client: { request } as unknown as GatewayBrowserClient, request };
+  const request = vi.fn(
+    async (method: string, params?: unknown, _options?: GatewayClientRequestOptions) => {
+      if (method !== (options.sessionScoped ? "browser.dashboard.request" : "browser.request")) {
+        throw new Error(`Unexpected Gateway method: ${method}`);
+      }
+      const envelope = params as BrowserRequestEnvelope;
+      if (envelope.path === "/screencast" && !options.screencast) {
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "Screencast unavailable",
+          details: { code: "SCREENCAST_UNSUPPORTED", reason: "playwright" },
+        });
+      }
+      return await handleRequest(envelope);
+    },
+  );
+  return {
+    client: {
+      request,
+      gatewayUrl: "https://gateway.example.test",
+    } as unknown as GatewayBrowserClient,
+    request,
+  };
 }
 
 export function createBrowserPanelTestTab(id: string, url: string, title: string) {
@@ -49,19 +72,22 @@ export function createBrowserPanelTestMetrics(url: string, title = BROWSER_PANEL
   return { result: { cssWidth: 100, cssHeight: 100, title, url } };
 }
 
-export class TestBrowserPanelHost implements BrowserPanelControllerHost {
-  readonly controllers: ReactiveController[] = [];
-  readonly requestUpdate = vi.fn();
+export class TestBrowserPanelHost implements BrowserPanelHost {
+  readonly notify = vi.fn();
   readonly updateComplete = Promise.resolve(true);
   readonly renderRoot = document.createElement("div");
-  readonly basePath = "";
+  readonly stage = document.createElement("div");
+  readonly resourceBasePath = "";
   readonly authToken = null;
+  sessionKey = "";
+  sessionTabs: BrowserTabTarget[] = [];
+  dashboardTarget?: BrowserDashboardTarget;
   available = true;
   isConnected = true;
   open = true;
 
   constructor(public client: GatewayBrowserClient | null) {
-    const stage = document.createElement("div");
+    const stage = this.stage;
     stage.className = "bp-stage";
     vi.spyOn(stage, "getBoundingClientRect").mockReturnValue({
       x: 0,
@@ -77,15 +103,10 @@ export class TestBrowserPanelHost implements BrowserPanelControllerHost {
     this.renderRoot.append(stage);
   }
 
-  addController(controller: ReactiveController): void {
-    this.controllers.push(controller);
-  }
-
-  removeController(controller: ReactiveController): void {
-    const index = this.controllers.indexOf(controller);
-    if (index >= 0) {
-      this.controllers.splice(index, 1);
-    }
+  createPanel(): BrowserPanel {
+    const panel = createBrowserPanel(this, this.notify);
+    panel.input.elements.stage = this.stage;
+    return panel;
   }
 
   browserPanelIsOpen(): boolean {
@@ -107,8 +128,8 @@ export function createBrowserPanelTestController(
   client: GatewayBrowserClient,
   targetId: string,
   url?: string,
-): BrowserPanelController {
-  const controller = new BrowserPanelController(new TestBrowserPanelHost(client));
+): BrowserPanel {
+  const controller = new TestBrowserPanelHost(client).createPanel();
   controller.activeTargetId = targetId;
   controller.view = createView(targetId, url);
   return controller;

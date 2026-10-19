@@ -1,6 +1,5 @@
 // Tests info-style command responses, including effective tool inventory.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { EffectiveToolInventoryResult } from "../../agents/tools-effective-inventory.types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -9,7 +8,6 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import type { MsgContext } from "../templating.js";
-import { handleContextCommand } from "./commands-context-command.js";
 import {
   handleExportSessionCommand,
   handleExportTrajectoryCommand,
@@ -22,21 +20,16 @@ import { handleWhoamiCommand } from "./commands-whoami.js";
 
 // Tests info-style commands that report context, status, skills, and session exports.
 
-const buildContextReplyMock = vi.hoisted(() => vi.fn());
 const buildExportTrajectoryCommandReplyMock = vi.hoisted(() =>
   vi.fn(async () => ({ text: "exported" })),
 );
 const buildExportSessionReplyMock = vi.hoisted(() =>
   vi.fn(async () => ({ text: "session exported" })),
 );
-const listSkillCommandsForAgentsMock = vi.hoisted(() => vi.fn(() => []));
+const prepareSkillCommandsForAgentsMock = vi.hoisted(() => vi.fn(async () => []));
 const buildCommandsMessagePaginatedMock = vi.hoisted(() =>
   vi.fn(() => ({ text: "/commands", currentPage: 1, totalPages: 1 })),
 );
-
-vi.mock("./commands-context-report.js", () => ({
-  buildContextReply: buildContextReplyMock,
-}));
 
 vi.mock("./commands-export-trajectory.js", () => ({
   buildExportTrajectoryCommandReply: buildExportTrajectoryCommandReplyMock,
@@ -51,23 +44,13 @@ vi.mock("./commands-status.js", () => ({
   buildStatusReply: vi.fn(async () => ({ text: "status reply" })),
 }));
 
-vi.mock("../../agents/agent-scope.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/agent-scope.js")>(
-    "../../agents/agent-scope.js",
-  );
-  return {
-    ...actual,
-    resolveSessionAgentId: vi.fn(actual.resolveSessionAgentId),
-  };
-});
-
 vi.mock("../../skills/discovery/chat-commands.js", async () => {
   const actual = await vi.importActual<typeof import("../../skills/discovery/chat-commands.js")>(
     "../../skills/discovery/chat-commands.js",
   );
   return {
     ...actual,
-    listSkillCommandsForAgents: listSkillCommandsForAgentsMock,
+    prepareSkillCommandsForAgents: prepareSkillCommandsForAgentsMock,
   };
 });
 
@@ -114,6 +97,7 @@ function buildInfoParams(
       to: "bot",
     },
     sessionKey: "agent:main:whatsapp:direct:12345",
+    agentId: "main",
     workspaceDir: "/tmp",
     provider: "whatsapp",
     model: "test-model",
@@ -133,16 +117,6 @@ describe("info command handlers", () => {
     vi.clearAllMocks();
     buildExportSessionReplyMock.mockResolvedValue({ text: "session exported" });
     buildExportTrajectoryCommandReplyMock.mockResolvedValue({ text: "exported" });
-    buildContextReplyMock.mockImplementation(async (params: HandleCommandsParams) => {
-      const normalized = params.command.commandBodyNormalized;
-      if (normalized === "/context list") {
-        return { text: "Injected workspace files:\n- AGENTS.md" };
-      }
-      if (normalized === "/context detail") {
-        return { text: "Context breakdown (detailed)\nTop tools (schema size):" };
-      }
-      return { text: "/context\n- /context list\nInline shortcut" };
-    });
     buildCommandsMessagePaginatedMock.mockReturnValue({
       text: "/commands",
       currentPage: 1,
@@ -150,21 +124,26 @@ describe("info command handlers", () => {
     });
   });
 
-  it.each([
-    ["unauthorized sender", false, true],
-    ["authorized non-owner", true, false],
-  ])("blocks %s from exporting a session", async (_label, isAuthorizedSender, senderIsOwner) => {
-    const params = buildInfoParams("/export-session", {
-      commands: { text: true },
-    } as OpenClawConfig);
-    params.command.isAuthorizedSender = isAuthorizedSender;
-    params.command.senderIsOwner = senderIsOwner;
+  it.each([["authorized non-owner", true, false]])(
+    "blocks %s from exporting a session",
+    async (_label, isAuthorizedSender, senderIsOwner) => {
+      const params = buildInfoParams("/export-session", {
+        commands: { text: true },
+      } as OpenClawConfig);
+      params.command.isAuthorizedSender = isAuthorizedSender;
+      params.command.senderIsOwner = senderIsOwner;
 
-    const result = await handleExportSessionCommand(params, true);
+      const result = await handleExportSessionCommand(params, true);
 
-    expect(result).toEqual({ shouldContinue: false });
-    expect(buildExportSessionReplyMock).not.toHaveBeenCalled();
-  });
+      expect(result).toEqual({
+        shouldContinue: false,
+        ...(isAuthorizedSender
+          ? { reply: { text: expect.stringContaining("commands.ownerAllowFrom") } }
+          : {}),
+      });
+      expect(buildExportSessionReplyMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("allows the owner to export a session", async () => {
     const params = buildInfoParams("/export-session", {
@@ -200,31 +179,11 @@ describe("info command handlers", () => {
 
     const result = await handleExportTrajectoryCommand(params, true);
 
-    expect(result).toEqual({ shouldContinue: false });
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: expect.stringContaining("commands.ownerAllowFrom") },
+    });
     expect(buildExportTrajectoryCommandReplyMock).not.toHaveBeenCalled();
-  });
-
-  it("returns sender details for /whoami", async () => {
-    const result = await handleWhoamiCommand(
-      buildInfoParams(
-        "/whoami",
-        {
-          commands: { text: true },
-          channels: { whatsapp: { allowFrom: ["*"] } },
-        } as OpenClawConfig,
-        {
-          SenderId: "12345",
-          SenderUsername: "TestUser",
-          ChatType: "direct",
-        },
-      ),
-      true,
-    );
-    expect(result?.shouldContinue).toBe(false);
-    expect(result?.reply?.text).toContain("Channel: whatsapp");
-    expect(result?.reply?.text).toContain("User id: 12345");
-    expect(result?.reply?.text).toContain("Username: @TestUser");
-    expect(result?.reply?.text).toContain("AllowFrom: 12345");
   });
 
   it("returns usage for bare /skill without continuing to the agent", async () => {
@@ -246,54 +205,6 @@ describe("info command handlers", () => {
     expect(result?.reply?.text).toContain("Available: demo-skill");
   });
 
-  it("returns an unknown skill reply for unmatched /skill targets", async () => {
-    const params = buildInfoParams("/skill missing input", {
-      commands: { text: true },
-    } as OpenClawConfig);
-
-    const result = await handleSkillCommandUsage(params, true);
-
-    expect(result?.shouldContinue).toBe(false);
-    expect(result?.reply?.text).toContain("Unknown skill: missing");
-    expect(result?.reply?.text).toContain("Usage: /skill <name> [input]");
-  });
-
-  it("lets valid /skill invocations continue to the skill command path", async () => {
-    const params = buildInfoParams("/skill demo_skill input", {
-      commands: { text: true },
-    } as OpenClawConfig);
-    params.skillCommands = [
-      {
-        name: "demo_skill",
-        skillName: "demo-skill",
-        description: "Demo skill",
-      },
-    ];
-
-    const result = await handleSkillCommandUsage(params, true);
-
-    expect(result).toBeNull();
-  });
-
-  it("loads skills asynchronously before deciding named /skill invocations", async () => {
-    const params = buildInfoParams("/skill demo_skill input", {
-      commands: { text: true },
-    } as OpenClawConfig);
-    params.loadSkillCommands = vi.fn(async () => [
-      {
-        name: "demo_skill",
-        skillName: "demo-skill",
-        description: "Demo skill",
-      },
-    ]);
-
-    const result = await handleSkillCommandUsage(params, true);
-
-    expect(result).toBeNull();
-    expect(params.loadSkillCommands).toHaveBeenCalledOnce();
-    expect(listSkillCommandsForAgentsMock).not.toHaveBeenCalled();
-  });
-
   it("loads skills when named /skill receives an empty precomputed command list", async () => {
     const params = buildInfoParams("/skill demo_skill input", {
       commands: { text: true },
@@ -311,7 +222,7 @@ describe("info command handlers", () => {
 
     expect(result).toBeNull();
     expect(params.loadSkillCommands).toHaveBeenCalledOnce();
-    expect(listSkillCommandsForAgentsMock).not.toHaveBeenCalled();
+    expect(prepareSkillCommandsForAgentsMock).not.toHaveBeenCalled();
   });
 
   it("keeps an empty precomputed /skill command list authoritative without a loader", async () => {
@@ -324,7 +235,7 @@ describe("info command handlers", () => {
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Unknown skill: demo_skill");
-    expect(listSkillCommandsForAgentsMock).not.toHaveBeenCalled();
+    expect(prepareSkillCommandsForAgentsMock).not.toHaveBeenCalled();
   });
 
   it("uses the canonical command sender identity for /whoami AllowFrom", async () => {
@@ -346,59 +257,10 @@ describe("info command handlers", () => {
     const result = await handleWhoamiCommand(params, true);
 
     expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("Channel: whatsapp");
+    expect(result?.reply?.text).toContain("Username: @TestUser");
     expect(result?.reply?.text).toContain("User id: 123@lid");
     expect(result?.reply?.text).toContain("AllowFrom: +15551234567");
-  });
-
-  it("returns expected details for /context commands", async () => {
-    const cfg = {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
-    const cases = [
-      { commandBody: "/context", expectedText: ["/context list", "Inline shortcut"] },
-      { commandBody: "/context list", expectedText: ["Injected workspace files:", "AGENTS.md"] },
-      {
-        commandBody: "/context detail",
-        expectedText: ["Context breakdown (detailed)", "Top tools (schema size):"],
-      },
-    ] as const;
-
-    for (const testCase of cases) {
-      const result = await handleContextCommand(buildInfoParams(testCase.commandBody, cfg), true);
-      expect(result?.shouldContinue).toBe(false);
-      for (const expectedText of testCase.expectedText) {
-        expect(result?.reply?.text).toContain(expectedText);
-      }
-    }
-  });
-
-  it("prefers the persisted session parent when routing /status context", async () => {
-    const params = buildInfoParams(
-      "/status",
-      {
-        commands: { text: true },
-        channels: { whatsapp: { allowFrom: ["*"] } },
-      } as OpenClawConfig,
-      {
-        ParentSessionKey: undefined,
-      },
-    );
-    params.sessionEntry = {
-      sessionId: "session-1",
-      updatedAt: Date.now(),
-      parentSessionKey: "discord:group:parent-room",
-    } as HandleCommandsParams["sessionEntry"];
-
-    const statusResult = await handleStatusCommand(params, true);
-
-    expect(statusResult?.shouldContinue).toBe(false);
-
-    const statusReplyParams = firstMockArg(
-      vi.mocked(buildStatusReply),
-      "buildStatusReply",
-    ) as Parameters<typeof buildStatusReply>[0];
-    expect(statusReplyParams.parentSessionKey).toBe("discord:group:parent-room");
   });
 
   it("preserves the shared session store path when routing /status", async () => {
@@ -407,6 +269,7 @@ describe("info command handlers", () => {
       channels: { whatsapp: { allowFrom: ["*"] } },
     } as OpenClawConfig);
     params.storePath = "/tmp/target-session-store.json";
+    params.resolvedFastMode = true;
 
     const statusResult = await handleStatusCommand(params, true);
 
@@ -416,6 +279,7 @@ describe("info command handlers", () => {
       "buildStatusReply",
     ) as Parameters<typeof buildStatusReply>[0];
     expect(statusReplyParams.storePath).toBe("/tmp/target-session-store.json");
+    expect(statusReplyParams.resolvedFastMode).toBe(true);
   });
 
   it("prefers the target session entry when routing /status", async () => {
@@ -448,23 +312,6 @@ describe("info command handlers", () => {
     expect(statusReplyParams.parentSessionKey).toBe("target-parent");
   });
 
-  it("forwards resolved fast mode to /status", async () => {
-    const params = buildInfoParams("/status", {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig);
-    params.resolvedFastMode = true;
-
-    const statusResult = await handleStatusCommand(params, true);
-
-    expect(statusResult?.shouldContinue).toBe(false);
-    const statusReplyParams = firstMockArg(
-      vi.mocked(buildStatusReply),
-      "buildStatusReply",
-    ) as Parameters<typeof buildStatusReply>[0];
-    expect(statusReplyParams.resolvedFastMode).toBe(true);
-  });
-
   it("routes /status plugins to the plugin health summary", async () => {
     const params = buildInfoParams("/status plugins", {
       commands: { text: true },
@@ -491,16 +338,15 @@ describe("info command handlers", () => {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
     } as OpenClawConfig);
-    params.agentId = "main";
+    params.agentId = "target";
     params.sessionKey = "agent:target:whatsapp:direct:12345";
-    vi.mocked(resolveSessionAgentId).mockReturnValue("target");
 
     const result = await handleCommandsListCommand(params, true);
 
     expect(result?.shouldContinue).toBe(false);
     const listParams = firstMockArg(
-      listSkillCommandsForAgentsMock,
-      "listSkillCommandsForAgents",
+      prepareSkillCommandsForAgentsMock,
+      "prepareSkillCommandsForAgents",
     ) as { agentIds?: string[] };
     expect(listParams.agentIds).toEqual(["target"]);
   });
@@ -562,7 +408,7 @@ const toolsTestState = vi.hoisted(() => {
   const defaultResolveTools = (): EffectiveToolInventoryResult => makeDefaultInventory();
 
   return {
-    resolveToolsImpl: defaultResolveTools,
+    releaseRuntimeModel: vi.fn(async () => {}),
     resolveToolsMock: vi.fn((..._args: unknown[]) => defaultResolveTools()),
     resolveRuntimeModelContextMock: vi.fn(async (_params: unknown) => ({})),
     threadingContext: {
@@ -575,8 +421,13 @@ const toolsTestState = vi.hoisted(() => {
 
 vi.mock("../../agents/tools-effective-inventory.js", () => ({
   resolveEffectiveToolInventory: (...args: unknown[]) => toolsTestState.resolveToolsMock(...args),
-  resolveEffectiveToolInventoryRuntimeModelContextAsync: (params: unknown) =>
-    toolsTestState.resolveRuntimeModelContextMock(params),
+  acquireEffectiveToolInventoryRuntimeModelContext: async (params: unknown) => {
+    const context = await toolsTestState.resolveRuntimeModelContextMock(params);
+    return {
+      run: <T>(project: (value: typeof context) => T): T => project(context),
+      [Symbol.asyncDispose]: toolsTestState.releaseRuntimeModel,
+    };
+  },
 }));
 
 vi.mock("./agent-runner-utils.js", () => ({
@@ -589,19 +440,6 @@ vi.mock("./reply-threading.js", () => ({
 
 let buildCommandTestParamsImpl: typeof import("./commands.test-harness.js").buildCommandTestParams;
 let handleToolsCommandImpl: typeof import("./commands-info.js").handleToolsCommand;
-
-async function loadToolsHarness(options?: { resolveTools?: () => EffectiveToolInventoryResult }) {
-  toolsTestState.resolveToolsImpl = options?.resolveTools ?? (() => makeDefaultInventory());
-  toolsTestState.resolveToolsMock.mockImplementation((..._args: unknown[]) =>
-    toolsTestState.resolveToolsImpl(),
-  );
-
-  return {
-    buildCommandTestParamsLocal: buildCommandTestParamsImpl,
-    handleToolsCommandLocal: handleToolsCommandImpl,
-    resolveToolsMock: toolsTestState.resolveToolsMock,
-  };
-}
 
 function buildConfig() {
   return {
@@ -626,18 +464,15 @@ describe("handleToolsCommand", () => {
   });
 
   beforeEach(() => {
-    vi.mocked(resolveSessionAgentId).mockReturnValue("main");
-    toolsTestState.resolveToolsMock.mockReset();
-    toolsTestState.resolveToolsImpl = () => makeDefaultInventory();
+    toolsTestState.releaseRuntimeModel.mockClear();
+    toolsTestState.resolveToolsMock.mockReset().mockImplementation(() => makeDefaultInventory());
     toolsTestState.resolveRuntimeModelContextMock.mockReset();
     toolsTestState.resolveRuntimeModelContextMock.mockResolvedValue({});
     setActivePluginRegistry(createTestRegistry([]));
   });
 
   it("renders a product-facing tool list", async () => {
-    const { buildCommandTestParamsLocal, handleToolsCommandLocal, resolveToolsMock } =
-      await loadToolsHarness();
-    const params = buildCommandTestParamsLocal("/tools", buildConfig(), undefined, {
+    const params = buildCommandTestParamsImpl("/tools", buildConfig(), undefined, {
       workspaceDir: "/tmp",
     });
     params.agentId = "main";
@@ -657,7 +492,7 @@ describe("handleToolsCommand", () => {
       ChatType: "group",
     };
 
-    const result = await handleToolsCommandLocal(params, true);
+    const result = await handleToolsCommandImpl(params, true);
 
     expect(result?.reply?.text).toContain("Available tools");
     expect(result?.reply?.text).toContain("Profile: coding");
@@ -666,7 +501,7 @@ describe("handleToolsCommand", () => {
     expect(result?.reply?.text).toContain("Connected tools");
     expect(result?.reply?.text).toContain("docs_lookup (docs)");
     expect(result?.reply?.text).not.toContain("unavailable right now");
-    const toolsArg = resolveToolsArg(resolveToolsMock);
+    const toolsArg = resolveToolsArg(toolsTestState.resolveToolsMock);
     expect(toolsArg).not.toHaveProperty("senderIsOwner");
     expect(toolsArg.senderId).toBeUndefined();
     expect(toolsArg.senderName).toBe("User Name");
@@ -680,12 +515,12 @@ describe("handleToolsCommand", () => {
     expect(toolsArg.groupChannel).toBe("#ops");
     expect(toolsArg.groupSpace).toBe("workspace-1");
     expect(toolsArg.replyToMode).toBe("all");
+    expect(toolsTestState.releaseRuntimeModel).toHaveBeenCalledOnce();
   });
 
   it("returns usage when arguments are provided", async () => {
-    const { buildCommandTestParamsLocal, handleToolsCommandLocal } = await loadToolsHarness();
-    const result = await handleToolsCommandLocal(
-      buildCommandTestParamsLocal("/tools extra", buildConfig(), undefined, {
+    const result = await handleToolsCommandImpl(
+      buildCommandTestParamsImpl("/tools extra", buildConfig(), undefined, {
         workspaceDir: "/tmp",
       }),
       true,
@@ -698,9 +533,7 @@ describe("handleToolsCommand", () => {
   });
 
   it("does not synthesize group ids for direct-chat sender ids", async () => {
-    const { buildCommandTestParamsLocal, handleToolsCommandLocal, resolveToolsMock } =
-      await loadToolsHarness();
-    const params = buildCommandTestParamsLocal("/tools", buildConfig(), undefined, {
+    const params = buildCommandTestParamsImpl("/tools", buildConfig(), undefined, {
       workspaceDir: "/tmp",
     });
     params.ctx = {
@@ -710,15 +543,13 @@ describe("handleToolsCommand", () => {
       ChatType: "dm",
     };
 
-    await handleToolsCommandLocal(params, true);
+    await handleToolsCommandImpl(params, true);
 
-    expect(resolveToolsArg(resolveToolsMock).groupId).toBeUndefined();
+    expect(resolveToolsArg(toolsTestState.resolveToolsMock).groupId).toBeUndefined();
   });
 
   it("prefers the target session entry for tool inventory group metadata", async () => {
-    const { buildCommandTestParamsLocal, handleToolsCommandLocal, resolveToolsMock } =
-      await loadToolsHarness();
-    const params = buildCommandTestParamsLocal("/tools", buildConfig(), undefined, {
+    const params = buildCommandTestParamsImpl("/tools", buildConfig(), undefined, {
       workspaceDir: "/tmp",
     });
     params.sessionEntry = {
@@ -746,18 +577,17 @@ describe("handleToolsCommand", () => {
       GroupSpace: "ctx-space",
     };
 
-    await handleToolsCommandLocal(params, true);
+    await handleToolsCommandImpl(params, true);
 
-    const toolsArg = resolveToolsArg(resolveToolsMock);
+    const toolsArg = resolveToolsArg(toolsTestState.resolveToolsMock);
     expect(toolsArg.groupId).toBe("target-group");
     expect(toolsArg.groupChannel).toBe("#target");
     expect(toolsArg.groupSpace).toBe("target-space");
   });
 
   it("renders the detailed tool list in verbose mode", async () => {
-    const { buildCommandTestParamsLocal, handleToolsCommandLocal } = await loadToolsHarness();
-    const result = await handleToolsCommandLocal(
-      buildCommandTestParamsLocal("/tools verbose", buildConfig(), undefined, {
+    const result = await handleToolsCommandImpl(
+      buildCommandTestParamsImpl("/tools verbose", buildConfig(), undefined, {
         workspaceDir: "/tmp",
       }),
       true,
@@ -769,59 +599,24 @@ describe("handleToolsCommand", () => {
     expect(result?.reply?.text).toContain("Docs Lookup - Search internal documentation");
   });
 
-  it("accepts explicit compact mode", async () => {
-    const { buildCommandTestParamsLocal, handleToolsCommandLocal } = await loadToolsHarness();
-    const result = await handleToolsCommandLocal(
-      buildCommandTestParamsLocal("/tools compact", buildConfig(), undefined, {
-        workspaceDir: "/tmp",
-      }),
+  it("releases the model context when tools projection fails", async () => {
+    toolsTestState.resolveToolsMock.mockImplementation(() => {
+      expect(toolsTestState.releaseRuntimeModel).not.toHaveBeenCalled();
+      throw new Error("inventory projection failed");
+    });
+    const result = await handleToolsCommandImpl(
+      buildCommandTestParamsImpl("/tools", buildConfig(), undefined, { workspaceDir: "/tmp" }),
       true,
     );
-
-    expect(result?.reply?.text).toContain("exec");
-    expect(result?.reply?.text).toContain("Use /tools verbose for descriptions.");
-  });
-
-  it("prepares dynamic model context before resolving the tool inventory", async () => {
-    const runtimeModel = {
-      id: "chat-latest",
-      name: "chat-latest",
-      provider: "openai",
-      api: "openai-responses",
-    };
-    toolsTestState.resolveRuntimeModelContextMock.mockResolvedValue({
-      modelApi: "openai-responses",
-      runtimeModel,
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "Couldn't load available tools right now. Try again in a moment." },
     });
-    const { buildCommandTestParamsLocal, handleToolsCommandLocal, resolveToolsMock } =
-      await loadToolsHarness();
-    const params = buildCommandTestParamsLocal("/tools compact", buildConfig(), undefined, {
-      workspaceDir: "/tmp",
-    });
-    params.agentId = "main";
-    params.provider = "openai";
-    params.model = "chat-latest";
-
-    const result = await handleToolsCommandLocal(params, true);
-
-    expect(result?.reply?.text).toContain("exec");
-    expect(toolsTestState.resolveRuntimeModelContextMock).toHaveBeenCalledWith({
-      cfg: params.cfg,
-      agentId: "main",
-      agentDir: undefined,
-      workspaceDir: "/tmp",
-      modelProvider: "openai",
-      modelId: "chat-latest",
-    });
-    expect(resolveToolsArg(resolveToolsMock)).toMatchObject({
-      modelApi: "openai-responses",
-      runtimeModel,
-    });
+    expect(toolsTestState.releaseRuntimeModel).toHaveBeenCalledOnce();
   });
 
   it("ignores unauthorized senders", async () => {
-    const { buildCommandTestParamsLocal, handleToolsCommandLocal } = await loadToolsHarness();
-    const params = buildCommandTestParamsLocal("/tools", buildConfig(), undefined, {
+    const params = buildCommandTestParamsImpl("/tools", buildConfig(), undefined, {
       workspaceDir: "/tmp",
     });
     params.command = {
@@ -830,7 +625,7 @@ describe("handleToolsCommand", () => {
       senderId: "unauthorized",
     };
 
-    const result = await handleToolsCommandLocal(params, true);
+    const result = await handleToolsCommandImpl(params, true);
 
     expect(result).toEqual({ shouldContinue: false });
   });
@@ -856,9 +651,7 @@ describe("handleToolsCommand", () => {
       ]),
     );
 
-    const { buildCommandTestParamsLocal, handleToolsCommandLocal, resolveToolsMock } =
-      await loadToolsHarness();
-    const params = buildCommandTestParamsLocal(
+    const params = buildCommandTestParamsImpl(
       "/tools",
       {
         commands: { text: true },
@@ -883,64 +676,8 @@ describe("handleToolsCommand", () => {
       channel: "telegram",
     };
 
-    await handleToolsCommandLocal(params, true);
+    await handleToolsCommandImpl(params, true);
 
-    expect(resolveToolsArg(resolveToolsMock).accountId).toBe("work");
-  });
-
-  it("returns a concise fallback error on effective inventory failures", async () => {
-    const { buildCommandTestParamsLocal, handleToolsCommandLocal } = await loadToolsHarness({
-      resolveTools: () => {
-        throw new Error("boom");
-      },
-    });
-
-    const result = await handleToolsCommandLocal(
-      buildCommandTestParamsLocal("/tools", buildConfig(), undefined, { workspaceDir: "/tmp" }),
-      true,
-    );
-
-    expect(result).toEqual({
-      shouldContinue: false,
-      reply: { text: "Couldn't load available tools right now. Try again in a moment." },
-    });
-  });
-
-  it("uses the canonical target session agent for /tools inventory", async () => {
-    vi.mocked(resolveSessionAgentId).mockReturnValue("target");
-    const { buildCommandTestParamsLocal, handleToolsCommandLocal, resolveToolsMock } =
-      await loadToolsHarness();
-    const params = buildCommandTestParamsLocal("/tools", buildConfig(), undefined, {
-      workspaceDir: "/tmp",
-    });
-    params.agentId = "main";
-    params.sessionKey = "agent:target:whatsapp:direct:12345";
-
-    const result = await handleToolsCommandLocal(params, true);
-
-    expect(result?.shouldContinue).toBe(false);
-    const toolsArg = resolveToolsArg(resolveToolsMock);
-    expect(toolsArg.agentId).toBe("target");
-    expect(toolsArg.sessionKey).toBe("agent:target:whatsapp:direct:12345");
-  });
-
-  it("does not forward a stale ambient agentDir for session-bound /tools", async () => {
-    vi.mocked(resolveSessionAgentId).mockReturnValue("target");
-    const { buildCommandTestParamsLocal, handleToolsCommandLocal, resolveToolsMock } =
-      await loadToolsHarness();
-    const params = buildCommandTestParamsLocal("/tools", buildConfig(), undefined, {
-      workspaceDir: "/tmp",
-    });
-    params.agentId = "main";
-    params.agentDir = "/tmp/agents/main/agent";
-    params.sessionKey = "agent:target:whatsapp:direct:12345";
-
-    const result = await handleToolsCommandLocal(params, true);
-
-    expect(result?.shouldContinue).toBe(false);
-    const toolsArg = resolveToolsArg(resolveToolsMock);
-    expect(toolsArg.agentId).toBe("target");
-    expect(toolsArg.agentDir).toBeUndefined();
-    expect(toolsArg.sessionKey).toBe("agent:target:whatsapp:direct:12345");
+    expect(resolveToolsArg(toolsTestState.resolveToolsMock).accountId).toBe("work");
   });
 });

@@ -1,12 +1,11 @@
 import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
-// Twitch helper module supports config behavior.
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
   resolveNormalizedAccountEntry,
 } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveTwitchToken, type TwitchTokenResolution } from "./token.js";
+import { resolveTwitchToken } from "./token.js";
 import type { TwitchAccountConfig } from "./types.js";
 import { isAccountConfigured } from "./utils/twitch.js";
 
@@ -30,23 +29,9 @@ const { listAccountIds, resolveDefaultAccountId: resolveDefaultTwitchAccountId }
 
 export { resolveDefaultTwitchAccountId };
 
-type ResolvedTwitchAccountContext = {
-  accountId: string;
-  account: TwitchAccountConfig | null;
-  tokenResolution: TwitchTokenResolution;
-  configured: boolean;
-  availableAccountIds: string[];
-};
-
 /**
- * Get account config from core config
- *
- * Handles two patterns:
- * 1. Simplified single-account: base-level properties create implicit "default" account
- * 2. Multi-account: explicit accounts object
- *
- * For "default" account, base-level properties take precedence over accounts.default
- * For other accounts, only the accounts object is checked
+ * Root credentials take precedence for the implicit default account; named
+ * accounts only read their own account entry.
  */
 export function getAccountConfig(
   coreConfig: unknown,
@@ -59,11 +44,9 @@ export function getAccountConfig(
   const cfg = coreConfig as OpenClawConfig;
   const normalizedAccountId = normalizeAccountId(accountId);
   const twitch = cfg.channels?.twitch;
-  // Access accounts via unknown to handle union type (single-account vs multi-account)
   const twitchRaw = twitch as Record<string, unknown> | undefined;
   const accounts = twitchRaw?.accounts as Record<string, TwitchAccountConfig> | undefined;
 
-  // For default account, check base-level config first
   if (normalizedAccountId === DEFAULT_ACCOUNT_ID) {
     const accountFromAccounts = resolveNormalizedAccountEntry(
       accounts,
@@ -71,7 +54,6 @@ export function getAccountConfig(
       normalizeAccountId,
     );
 
-    // Base-level properties that can form an implicit default account
     const baseLevel = {
       username: typeof twitchRaw?.username === "string" ? twitchRaw.username : undefined,
       accessToken: typeof twitchRaw?.accessToken === "string" ? twitchRaw.accessToken : undefined,
@@ -93,38 +75,22 @@ export function getAccountConfig(
           : undefined,
     };
 
-    // Merge: base-level takes precedence over accounts.default
     const merged: Partial<TwitchAccountConfig> = {
       ...accountFromAccounts,
       ...baseLevel,
     } as Partial<TwitchAccountConfig>;
 
-    // Only return if we have at least username
     if (merged.username) {
       return merged as TwitchAccountConfig;
     }
 
-    // Fall through to accounts.default if no base-level username
-    if (accountFromAccounts) {
-      return accountFromAccounts;
-    }
-
-    return null;
+    return accountFromAccounts || null;
   }
 
-  // For non-default accounts, only check accounts object
-  const account = resolveNormalizedAccountEntry(accounts, normalizedAccountId, normalizeAccountId);
-  if (!account) {
-    return null;
-  }
-
-  return account;
+  return resolveNormalizedAccountEntry(accounts, normalizedAccountId, normalizeAccountId) || null;
 }
 
-export function resolveTwitchAccountContext(
-  cfg: OpenClawConfig,
-  accountId?: string | null,
-): ResolvedTwitchAccountContext {
+export function resolveTwitchAccountContext(cfg: OpenClawConfig, accountId?: string | null) {
   const resolvedAccountId = accountId?.trim()
     ? normalizeAccountId(accountId)
     : resolveDefaultTwitchAccountId(cfg);
@@ -163,19 +129,9 @@ export const twitchConfigAdapter = {
   listAccountIds,
   resolveAccount: resolveTwitchAccount,
   defaultAccountId: resolveDefaultTwitchAccountId,
+  resolveDefaultTo: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string | null }) =>
+    resolveTwitchAccountContext(cfg, accountId).account?.channel,
   isConfigured: (account: ResolvedTwitchAccount, cfg: OpenClawConfig) =>
     resolveTwitchAccountContext(cfg, account.accountId).configured,
   isEnabled: (account: ResolvedTwitchAccount | undefined) => account?.enabled !== false,
 };
-
-export function resolveTwitchSnapshotAccountId(
-  cfg: OpenClawConfig,
-  account: TwitchAccountConfig,
-): string {
-  const twitch = (cfg as Record<string, unknown>).channels as Record<string, unknown> | undefined;
-  const twitchCfg = twitch?.twitch as Record<string, unknown> | undefined;
-  const accountMap = (twitchCfg?.accounts as Record<string, unknown> | undefined) ?? {};
-  return (
-    Object.entries(accountMap).find(([, value]) => value === account)?.[0] ?? DEFAULT_ACCOUNT_ID
-  );
-}

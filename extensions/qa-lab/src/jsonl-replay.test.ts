@@ -7,7 +7,8 @@ import {
   renderJsonlReplayMarkdownReport,
   runJsonlReplay,
 } from "./jsonl-replay.js";
-import type { RuntimeId, RuntimeParityCell, RuntimeParityToolCall } from "./runtime-parity.js";
+import type { RuntimeId } from "./runtime-id.js";
+import type { RuntimeParityCell, RuntimeParityToolCall } from "./runtime-parity.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 type JsonlReplayCellRunner = NonNullable<
@@ -60,7 +61,7 @@ describe("jsonl replay", () => {
         `{"message":{"role":"user","content":"   "}}`,
         `{not-json`,
         `{"message":{"role":"assistant","content":"Ready."}}`,
-        `{"message":{"role":"user","content":[{"type":"text","text":"Plan the release"},{"type":"tool_result","content":"ignored"}]}}`,
+        `{"message":{"role":"user","content":["  Plan  ",null,0,{"type":"text","text":"the release","content":"ignored fallback"},{"type":"tool_result","text":"ignored text","content":"ignored"}]}}`,
         `{"role":"user","content":[{"type":"input_text","text":"Check the follow-up"}]}`,
       ].join("\n"),
       "utf8",
@@ -84,7 +85,7 @@ describe("jsonl replay", () => {
       expect.objectContaining({
         turn: 1,
         lineNumber: 6,
-        userText: "Plan the release",
+        userText: "Plan\nthe release",
       }),
       expect.objectContaining({
         turn: 2,

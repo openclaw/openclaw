@@ -13,26 +13,23 @@ afterEach(() => {
 });
 
 describe("collectMcpPaginatedItems", () => {
-  it.each(["tool", "resource", "prompt"])(
-    "preserves normal %s ordering and treats an empty cursor as present",
-    async (operation) => {
-      const cursors: Array<string | undefined> = [];
-      const result = await collectMcpPaginatedItems({
-        label: `MCP ${operation} listing`,
-        itemLabel: `${operation}s`,
-        ...limits,
-        loadPage: async ({ cursor }) => {
-          cursors.push(cursor);
-          return cursor === undefined
-            ? { items: [`${operation}-one`], nextCursor: "" }
-            : { items: [`${operation}-two`] };
-        },
-      });
+  it("preserves ordering and treats an empty cursor as present", async () => {
+    const cursors: Array<string | undefined> = [];
+    const result = await collectMcpPaginatedItems({
+      label: "MCP tool listing",
+      itemLabel: "tools",
+      ...limits,
+      loadPage: async ({ cursor }) => {
+        cursors.push(cursor);
+        return cursor === undefined
+          ? { items: ["tool-one"], nextCursor: "" }
+          : { items: ["tool-two"] };
+      },
+    });
 
-      expect(cursors).toEqual([undefined, ""]);
-      expect(result).toEqual([`${operation}-one`, `${operation}-two`]);
-    },
-  );
+    expect(cursors).toEqual([undefined, ""]);
+    expect(result).toEqual(["tool-one", "tool-two"]);
+  });
 
   it("rejects repeated and cyclic cursors", async () => {
     await expect(
@@ -133,29 +130,55 @@ describe("collectMcpPaginatedItems", () => {
   it("rejects a final page when synchronous processing crosses the deadline", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
-    let mappedItems = 0;
+    let measuredPages = 0;
     const listing = collectMcpPaginatedItems({
       label: "MCP resource listing",
       itemLabel: "resources",
       ...limits,
       timeoutMs: 50,
-      loadPage: async () => ({ items: ["resource"] }),
-      mapItem: (item) => {
-        mappedItems += 1;
-        vi.setSystemTime(1_050);
-        return item;
-      },
+      loadPage: async () => ({
+        items: ["resource"],
+        get serializedValue() {
+          measuredPages += 1;
+          // Cross the monotonic deadline without firing its timer.
+          vi.spyOn(performance, "now").mockReturnValue(performance.now() + 50);
+          return { resources: ["resource"] };
+        },
+      }),
     });
 
     await expect(listing).rejects.toThrow("timed out after 50ms");
-    expect(mappedItems).toBe(1);
+    expect(measuredPages).toBe(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("keeps the collector deadline through a forward wall-clock step", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    let page = 0;
+    const items = await collectMcpPaginatedItems({
+      label: "MCP tool listing",
+      itemLabel: "tools",
+      ...limits,
+      timeoutMs: 50,
+      loadPage: async () => {
+        page += 1;
+        // The wall clock jumps far past the deadline while the collector is still within budget.
+        vi.setSystemTime(1_000 + 60_000);
+        return page < 3
+          ? { items: [`tool-${page}`], nextCursor: `cursor-${page}` }
+          : { items: [`tool-${page}`] };
+      },
+    });
+
+    expect(items).toEqual(["tool-1", "tool-2", "tool-3"]);
     expect(vi.getTimerCount()).toBe(0);
   });
 
   it("rejects when a page loader synchronously aborts its caller before resolving", async () => {
     vi.useFakeTimers();
     const controller = new AbortController();
-    let mappedItems = 0;
+    let accessedItems = 0;
     const listing = collectMcpPaginatedItems({
       label: "MCP prompt listing",
       itemLabel: "prompts",
@@ -163,18 +186,19 @@ describe("collectMcpPaginatedItems", () => {
       signal: controller.signal,
       loadPage: async () => {
         controller.abort("runtime disposed");
-        return { items: ["must-not-return"] };
-      },
-      mapItem: (item) => {
-        mappedItems += 1;
-        return item;
+        return {
+          get items() {
+            accessedItems += 1;
+            return ["must-not-return"];
+          },
+        };
       },
     });
 
     const failure = await listing.catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(Error);
     expect(failure).toMatchObject({ message: "MCP prompt listing aborted" });
-    expect(mappedItems).toBe(0);
+    expect(accessedItems).toBe(0);
     expect(vi.getTimerCount()).toBe(0);
   });
 

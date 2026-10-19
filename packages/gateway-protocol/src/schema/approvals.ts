@@ -1,10 +1,10 @@
 import type { Static } from "typebox";
-// Gateway Protocol schema module defines durable cross-surface approval shapes.
 import { Type } from "typebox";
 import { APPROVAL_ID_WELL_FORMED_UNICODE_PATTERN } from "./approval-id.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 import { withSince } from "./since.js";
+import { stringLiteralUnion } from "./string-literal-union.js";
 
 export { isWellFormedApprovalId } from "./approval-id.js";
 
@@ -14,63 +14,95 @@ const ApprovalIdSchema = Type.String({
   description: "Exact full approval id encoded safely in deep-link paths.",
 });
 
-/** Approval owner used to select the safe presentation payload. */
-export const ApprovalKindSchema = Type.Union([
-  Type.Literal("exec"),
-  Type.Literal("plugin"),
-  Type.Literal("system-agent"),
+export const ApprovalKindSchema = stringLiteralUnion(["exec", "plugin", "system-agent"]);
+
+export const ApprovalDecisionSchema = stringLiteralUnion(["allow-once", "allow-always", "deny"]);
+
+export const ApprovalAllowDecisionSchema = stringLiteralUnion(["allow-once", "allow-always"]);
+
+export const ApprovalTerminalReasonSchema = stringLiteralUnion([
+  "user",
+  "timeout",
+  "malformed-verdict",
+  "no-route",
+  "run-aborted",
+  "gateway-restart",
+  "storage-corrupt",
 ]);
 
-/** Reviewer decisions accepted by the unified approval resolver. */
-export const ApprovalDecisionSchema = Type.Union([
-  Type.Literal("allow-once"),
-  Type.Literal("allow-always"),
-  Type.Literal("deny"),
-]);
-
-/** Reviewer decisions that permit an operation to proceed. */
-export const ApprovalAllowDecisionSchema = Type.Union([
-  Type.Literal("allow-once"),
-  Type.Literal("allow-always"),
-]);
-
-/** Closed reason recorded for a terminal approval transition. */
-export const ApprovalTerminalReasonSchema = Type.Union([
-  Type.Literal("user"),
-  Type.Literal("timeout"),
-  Type.Literal("malformed-verdict"),
-  Type.Literal("no-route"),
-  Type.Literal("run-aborted"),
-  Type.Literal("gateway-restart"),
-  Type.Literal("storage-corrupt"),
-]);
-
-/** Terminal reason accepted for an allowed approval. */
 export const ApprovalAllowedReasonSchema = Type.Union([Type.Literal("user")]);
 
-/** Terminal reasons accepted for a denied approval. */
-export const ApprovalDeniedReasonSchema = Type.Union([
-  Type.Literal("user"),
-  Type.Literal("malformed-verdict"),
-  Type.Literal("no-route"),
-  Type.Literal("storage-corrupt"),
+export const ApprovalDeniedReasonSchema = stringLiteralUnion([
+  "user",
+  "malformed-verdict",
+  "no-route",
+  "storage-corrupt",
 ]);
 
-/** Terminal reason accepted for an expired approval. */
 export const ApprovalExpiredReasonSchema = Type.Union([Type.Literal("timeout")]);
 
-/** Terminal reasons accepted for a cancelled approval. */
-export const ApprovalCancelledReasonSchema = Type.Union([
-  Type.Literal("run-aborted"),
-  Type.Literal("gateway-restart"),
+export const ApprovalCancelledReasonSchema = stringLiteralUnion(["run-aborted", "gateway-restart"]);
+
+export const PluginApprovalSeveritySchema = stringLiteralUnion(["info", "warning", "critical"]);
+
+/** Message/email delivery blast radius declared by the approval owner. */
+export const MessageSendApprovalScopeSchema = closedObject({
+  kind: Type.Literal("message-send"),
+  target: Type.String({ minLength: 1, maxLength: 128 }),
+  recipientCount: Type.Integer({ minimum: 1, maximum: 1_000_000 }),
+  recipients: Type.Optional(
+    Type.Array(Type.String({ minLength: 1, maxLength: 128 }), { maxItems: 5 }),
+  ),
+  audience: Type.Optional(stringLiteralUnion(["internal", "external"])),
+});
+
+/** Payment blast radius declared by the approval owner. */
+export const PaymentApprovalScopeSchema = closedObject({
+  kind: Type.Literal("payment"),
+  amount: Type.String({ minLength: 1, maxLength: 40 }),
+  currency: Type.String({ minLength: 1, maxLength: 12 }),
+  target: Type.String({ minLength: 1, maxLength: 128 }),
+});
+
+/** External publication blast radius declared by the approval owner. */
+export const ExternalPostApprovalScopeSchema = closedObject({
+  kind: Type.Literal("external-post"),
+  target: Type.String({ minLength: 1, maxLength: 128 }),
+  visibility: stringLiteralUnion(["public", "restricted"]),
+});
+
+/**
+ * What allow-always mints for an automation approval: a standing grant bound
+ * to this exact command and automation. Absent expiresInDays means the grant
+ * lives until revoked or the automation changes.
+ */
+export const StandingGrantApprovalScopeSchema = closedObject({
+  kind: Type.Literal("standing-grant"),
+  automation: Type.String({ minLength: 1, maxLength: 128 }),
+  command: Type.String({ minLength: 1, maxLength: 256 }),
+  expiresInDays: Type.Optional(Type.Integer({ minimum: 1, maximum: 3650 })),
+});
+
+/**
+ * Owner-declared blast-radius facts for a pending approval. Variants are
+ * named schemas so native protocol generators emit the discriminated union.
+ */
+export const ApprovalScopeSchema = Type.Union([
+  MessageSendApprovalScopeSchema,
+  PaymentApprovalScopeSchema,
+  ExternalPostApprovalScopeSchema,
+  StandingGrantApprovalScopeSchema,
 ]);
 
-/** Reviewer-facing severity for plugin-owned approval requests. */
-export const PluginApprovalSeveritySchema = Type.Union([
-  Type.Literal("info"),
-  Type.Literal("warning"),
-  Type.Literal("critical"),
-]);
+/** Reviewer-safe projection of a plugin-owned external verification choice. */
+export const PluginApprovalExternalResolutionSchema = closedObject({
+  label: Type.String({ minLength: 1, maxLength: 80 }),
+  decisions: Type.Array(ApprovalAllowDecisionSchema, {
+    minItems: 1,
+    maxItems: 2,
+    uniqueItems: true,
+  }),
+});
 
 const ApprovalAllowedDecisionsSchema = Type.Array(ApprovalDecisionSchema, {
   minItems: 1,
@@ -78,7 +110,7 @@ const ApprovalAllowedDecisionsSchema = Type.Array(ApprovalDecisionSchema, {
   uniqueItems: true,
   contains: Type.Literal("deny"),
   description:
-    "Available reviewer decisions. Deny is always available so malformed or unsafe input can fail closed.",
+    "Available reviewer decisions. Deny is always available so malformed or unsafe input can be rejected.",
 });
 
 const SystemAgentApprovalAllowedDecisionsSchema = Type.Tuple([
@@ -96,6 +128,7 @@ export const ExecApprovalPresentationSchema = Type.Object(
     host: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     nodeId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     agentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    scope: Type.Optional(ApprovalScopeSchema),
     allowedDecisions: ApprovalAllowedDecisionsSchema,
   },
   {
@@ -115,7 +148,9 @@ export const PluginApprovalPresentationSchema = closedObject({
   pluginId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   toolName: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   agentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+  scope: Type.Optional(ApprovalScopeSchema),
   allowedDecisions: ApprovalAllowedDecisionsSchema,
+  externalResolution: Type.Optional(PluginApprovalExternalResolutionSchema),
 });
 
 /** Reviewer-safe OpenClaw system change. Exact operation stays host-local. */
@@ -128,7 +163,6 @@ export const SystemAgentApprovalPresentationSchema = closedObject({
   allowedDecisions: SystemAgentApprovalAllowedDecisionsSchema,
 });
 
-/** Reviewer-safe presentation discriminated by the approval owner. */
 export const ApprovalPresentationSchema = Type.Union([
   ExecApprovalPresentationSchema,
   PluginApprovalPresentationSchema,
@@ -151,12 +185,7 @@ const ApprovalHistorySourceAttributionSchema = closedObject({
 
 /** Reviewer attribution recorded by the durable approval ledger. */
 const ApprovalHistoryResolverAttributionSchema = closedObject({
-  kind: Type.Union([
-    Type.Literal("device"),
-    Type.Literal("channel"),
-    Type.Literal("runtime"),
-    Type.Literal("system"),
-  ]),
+  kind: stringLiteralUnion(["device", "channel", "runtime", "system"]),
   id: Type.Optional(NonEmptyString),
 });
 
@@ -166,10 +195,11 @@ const ApprovalResolutionFields = {
   resolver: Type.Optional(ApprovalHistoryResolverAttributionSchema),
 };
 
-/** Approval that has not yet accepted a reviewer decision. */
 export const PendingApprovalSnapshotSchema = closedObject({
   ...ApprovalRecordCommonFields,
   status: Type.Literal("pending"),
+  /** Canonical raising session when projected into a session-scoped reviewer surface. */
+  sourceSessionKey: Type.Optional(NonEmptyString),
 });
 
 /** Approval whose first recorded reviewer decision allows the operation. */
@@ -223,13 +253,10 @@ export const TerminalApprovalSnapshotSchema = Type.Union([
   CancelledApprovalSnapshotSchema,
 ]);
 
-/** Lookup payload for one approval by its exact full id. */
 export const ApprovalGetParamsSchema = closedObject({ id: ApprovalRecordCommonFields.id });
 
-/** Current durable state for one authorized approval lookup. */
 export const ApprovalGetResultSchema = closedObject({ approval: ApprovalSnapshotSchema });
 
-/** Cursor-based query for the retained terminal approval ledger. */
 export const ApprovalHistoryParamsSchema = closedObject({
   cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
@@ -254,6 +281,10 @@ export const ApprovalResolveParamsSchema = closedObject({
   kind: ApprovalKindSchema,
   decision: ApprovalDecisionSchema,
   reviewer: Type.Optional(ApprovalChannelReviewerSchema),
+  // Per-grant expiry override for allow-always on automation (exec) approvals:
+  // days from resolution. Absent defers to tools.exec.grantExpiryDays; unset
+  // config keeps the grant valid until revoked. Ignored for other kinds.
+  grantExpiresInDays: Type.Optional(Type.Integer({ minimum: 1, maximum: 3650 })),
 });
 
 /** First-answer outcome plus the canonical recorded state returned to all contenders. */
@@ -312,6 +343,10 @@ export type ApprovalDecision = Static<typeof ApprovalDecisionSchema>;
 export type ApprovalAllowDecision = Static<typeof ApprovalAllowDecisionSchema>;
 export type ApprovalTerminalReason = Static<typeof ApprovalTerminalReasonSchema>;
 export type PluginApprovalSeverity = Static<typeof PluginApprovalSeveritySchema>;
+export type ApprovalScope = Static<typeof ApprovalScopeSchema>;
+export type PluginApprovalExternalResolution = Static<
+  typeof PluginApprovalExternalResolutionSchema
+>;
 export type ExecApprovalPresentation = Static<typeof ExecApprovalPresentationSchema>;
 export type PluginApprovalPresentation = Static<typeof PluginApprovalPresentationSchema>;
 export type SystemAgentApprovalPresentation = Static<typeof SystemAgentApprovalPresentationSchema>;

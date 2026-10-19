@@ -1,0 +1,216 @@
+import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveServiceManagerEnv } from "../../daemon/service-process-env.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
+import { captureManagedUpdateLeaseDatabaseIdentity } from "../../infra/update-managed-service-handoff-database.js";
+import { prepareManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
+import {
+  childLineageDigest,
+  type UpdateCommandChildGrant,
+} from "./update-command-executor-children.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
+
+export async function resolveUpdateCommandChildBinding(
+  grant: UpdateCommandChildGrant,
+  runId: string,
+  root: string,
+  onProcessIdentityWarning?: NonNullable<
+    Parameters<typeof prepareManagedHandoffLeaseStore>[0]
+  >["onProcessIdentityWarning"],
+) {
+  const slot = grant.slot;
+  if (
+    Object.hasOwn(grant, "slot") &&
+    (!isRecord(slot) ||
+      !isRecord(slot.parent) ||
+      !isRecord(slot.spawner) ||
+      typeof slot.parent.key !== "string" ||
+      typeof slot.spawner.key !== "string" ||
+      typeof slot.childKey !== "string" ||
+      (Object.hasOwn(slot, "reserver") &&
+        (!isRecord(slot.reserver) || typeof slot.reserver.key !== "string")))
+  ) {
+    throw new UpdateCommandRecoveryPendingError("Candidate occupied slot pair is malformed.");
+  }
+  const retainedFields =
+    Object.hasOwn(grant, "retainedParent") || Object.hasOwn(grant, "retainedChildKey");
+  if (
+    retainedFields &&
+    (!isRecord(grant.retainedParent) ||
+      typeof grant.retainedParent.key !== "string" ||
+      typeof grant.retainedChildKey !== "string")
+  ) {
+    throw new UpdateCommandRecoveryPendingError("Candidate retained owner pair is malformed.");
+  }
+  const original = grant.originalParent ?? grant.parent;
+  const spawner = grant.spawner ?? original;
+  const slotReserver = slot?.reserver;
+  const slotCreator = slotReserver ?? original;
+  const childPrefix = `${original.key}/.openclaw-update-child-`;
+  const childName = grant.childKey.slice(
+    grant.childKey.lastIndexOf("/.openclaw-update-child-") + "/.openclaw-update-child-".length,
+  );
+  // v2026.9.4 sent this exact private-stdin format. Pin its existing database
+  // before reading/admitting the live parent and registered receiver. Modern
+  // names cannot downgrade by stripping their lineage or supplied physical pin.
+  const legacyGrant =
+    !slot &&
+    !retainedFields &&
+    !grant.originalParent &&
+    !grant.spawner &&
+    !grant.originalChildKey &&
+    !grant.databaseIdentity &&
+    grant.childKey === `${grant.parent.key}/.openclaw-update-child-${childName}` &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(childName);
+  let databaseIdentity = legacyGrant
+    ? captureManagedUpdateLeaseDatabaseIdentity(grant.databasePath)
+    : grant.databaseIdentity;
+  const databasePath = databaseIdentity?.databasePath ?? grant.databasePath;
+  const lineageBound = Boolean(
+    grant.originalParent &&
+    grant.databaseIdentity &&
+    grant.spawner &&
+    grant.originalChildKey &&
+    grant.originalChildKey === `${spawner.key}/.openclaw-update-child-${childName}` &&
+    (!slot || slot.childKey === `${slot.spawner.key}/.openclaw-update-child-${childName}`) &&
+    (!retainedFields ||
+      grant.retainedChildKey ===
+        `${grant.retainedParent!.key}/.openclaw-update-child-${childName}`) &&
+    grant.childKey ===
+      `${grant.parent.key === original.key ? spawner.key : grant.parent.key === slot?.parent.key ? slot.spawner.key : grant.parent.key}/.openclaw-update-child-${childName}` &&
+    /^[0-9a-f-]{36}-lineage-[0-9a-f]{64}$/.test(childName) &&
+    childName.endsWith(
+      `-lineage-${childLineageDigest(original, spawner, grant.parent, grant.databaseIdentity, grant.retainedParent, slot)}`,
+    ),
+  );
+  if ((!lineageBound && !legacyGrant) || (!legacyGrant && databasePath !== grant.databasePath)) {
+    throw new UpdateCommandRecoveryPendingError(
+      "Candidate executor lineage is missing or invalid.",
+    );
+  }
+  // Lineage authenticates the original bytes before legacy pins are normalized.
+  // Bound descendants differ from self-owned, bare-UUID legacy bridges; only
+  // the initial hop from an older original or its bridge can need rounding.
+  databaseIdentity = captureManagedUpdateLeaseDatabaseIdentity(
+    databasePath,
+    databaseIdentity,
+    (spawner.key === original.key ||
+      (spawner.key.startsWith(childPrefix) &&
+        isDeepStrictEqual(spawner.helper, spawner.executor) &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(
+          spawner.key.slice(childPrefix.length),
+        ))) &&
+      original.action.kind === "update" &&
+      (original.version === 1 ||
+        (original.version === 2 && original.action.mutationProtocol === undefined)),
+  );
+  const store = await prepareManagedHandoffLeaseStore({
+    databasePath,
+    serviceManagerEnv: resolveServiceManagerEnv(),
+    existingIdentity: databaseIdentity,
+    onProcessIdentityWarning,
+  });
+  const parent =
+    grant.parent.version === 1 && grant.parent.key === resolveUpdateInstallRoot(root)
+      ? {
+          kind: "current" as const,
+          lease: store.readLegacyParent(grant.parent.key, grant.parent.executor),
+        }
+      : store.read(resolveUpdateInstallRoot(root));
+  const originalChild = store.read(grant.originalChildKey ?? grant.childKey);
+  const child = store.read(grant.childKey);
+  const slotChild = slot ? store.read(slot.childKey) : undefined;
+  const retained = retainedFields ? store.read(grant.retainedParent!.key) : undefined;
+  const retainedChild = retainedFields ? store.read(grant.retainedChildKey!) : undefined;
+  const parentIsCurrent = (lease: typeof original, version?: 2) =>
+    store.current(lease) &&
+    (version === 2
+      ? lease.version === 2 && lease.action.kind === "update"
+      : lease.action.kind === "update" && lease.version !== 3);
+  const childIsCurrent = (
+    observed: ReturnType<typeof store.read> | undefined,
+    helper: typeof spawner.executor,
+    version?: 2,
+  ): observed is Extract<ReturnType<typeof store.read>, { kind: "current" }> =>
+    observed?.kind === "current" &&
+    observed.lease.owner === runId &&
+    observed.lease.action.kind === "update" &&
+    (version === 2 ? observed.lease.version === 2 : observed.lease.version !== 3) &&
+    isDeepStrictEqual(observed.lease.helper, helper);
+  for (const read of [parent, originalChild, child, slotChild, retained, retainedChild]) {
+    if (read?.kind === "unreadable") {
+      throw new UpdateCommandRecoveryPendingError(
+        `Candidate executor lease is unreadable: ${formatErrorMessage(read.error)}`,
+        { cause: read.error },
+      );
+    }
+  }
+  if (
+    (slot &&
+      (slot.parent.key === original.key ||
+        !parentIsCurrent(slot.parent, 2) ||
+        slot.parent.owner !== original.owner ||
+        !isDeepStrictEqual(slot.parent.helper, slotCreator.executor) ||
+        !isDeepStrictEqual(slot.parent.executor, slotCreator.executor) ||
+        (slotReserver &&
+          (!parentIsCurrent(slotReserver, 2) ||
+            slotReserver.owner !== runId ||
+            !slotReserver.key.startsWith(childPrefix) ||
+            !isDeepStrictEqual(slotReserver.helper, slotReserver.executor) ||
+            (spawner.key !== slotReserver.key &&
+              !spawner.key.startsWith(`${slotReserver.key}/.openclaw-update-child-`)))) ||
+        !parentIsCurrent(slot.spawner, 2) ||
+        !isDeepStrictEqual(slot.spawner.executor, spawner.executor) ||
+        (slot.spawner.key !== slot.parent.key &&
+          (!slot.spawner.key.startsWith(`${slot.parent.key}/.openclaw-update-child-`) ||
+            slot.spawner.owner !== runId)) ||
+        !childIsCurrent(slotChild, slot.spawner.executor, 2))) ||
+    (retainedFields &&
+      (retained?.kind !== "current" ||
+        !isDeepStrictEqual(retained.lease, grant.retainedParent) ||
+        retained.lease.key === original.key ||
+        retained.lease.action.kind !== "update" ||
+        retained.lease.version === 3 ||
+        !isDeepStrictEqual(retained.lease.executor, original.executor) ||
+        !isDeepStrictEqual(retained.lease.helper, original.executor) ||
+        !childIsCurrent(retainedChild, spawner.executor))) ||
+    (!legacyGrant && databasePath !== grant.databasePath) ||
+    grant.runId !== runId ||
+    grant.root !== resolveUpdateInstallRoot(root) ||
+    parent.kind !== "current" ||
+    !parent.lease ||
+    !isDeepStrictEqual(parent.lease, grant.parent) ||
+    parent.lease.action.kind !== "update" ||
+    parent.lease.version === 3 ||
+    !parentIsCurrent(original) ||
+    !parentIsCurrent(spawner) ||
+    (spawner.key !== original.key &&
+      (!spawner.key.startsWith(childPrefix) || spawner.owner !== runId)) ||
+    (process.platform !== "win32" && process.ppid !== spawner.executor.pid) ||
+    !(grant.originalChildKey ?? grant.childKey).startsWith(
+      `${spawner.key}/.openclaw-update-child-`,
+    ) ||
+    !grant.childKey.startsWith(`${parent.lease.key}/.openclaw-update-child-`) ||
+    !childIsCurrent(originalChild, spawner.executor) ||
+    !childIsCurrent(child, spawner.executor)
+  ) {
+    throw new UpdateCommandRecoveryPendingError(
+      "Candidate executor binding does not match its parent.",
+    );
+  }
+  return {
+    original,
+    spawner,
+    databaseIdentity,
+    databasePath,
+    store,
+    parent: parent.lease,
+    originalChild: originalChild.lease,
+    child: child.lease,
+    slot,
+    slotChild: slotChild?.kind === "current" ? slotChild.lease : undefined,
+    retained: retained?.kind === "current" ? retained.lease : undefined,
+    retainedChild: retainedChild?.kind === "current" ? retainedChild.lease : undefined,
+  };
+}

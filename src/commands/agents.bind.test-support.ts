@@ -14,13 +14,13 @@ export const writeConfigFileMock: Mock<(...args: unknown[]) => Promise<unknown>>
   .fn()
   .mockResolvedValue(undefined);
 const replaceConfigFileMock: Mock<(...args: unknown[]) => Promise<unknown>> = vi.fn(
-  async (params: { nextConfig: OpenClawConfig }): Promise<ReplaceConfigFileResult> => {
-    await writeConfigFileMock(params.nextConfig);
+  async (params: { sourceConfig: OpenClawConfig }): Promise<ReplaceConfigFileResult> => {
+    await writeConfigFileMock(params.sourceConfig);
     return {
       path: "/tmp/openclaw.json",
       previousHash: null,
       snapshot: {} as never,
-      nextConfig: params.nextConfig,
+      nextConfig: params.sourceConfig,
       persistedHash: "test-config-hash",
       afterWrite: { mode: "auto" },
       followUp: { mode: "auto", requiresRestart: false },
@@ -34,10 +34,6 @@ vi.mock("../config/config.js", () => ({
   replaceConfigFile: (...args: unknown[]) => replaceConfigFileMock(...args),
 }));
 
-vi.mock("./agents.command-shared.js", () => ({
-  createQuietRuntime: <T>(runtime: T) => runtime,
-}));
-
 vi.mock("./config-validation.js", () => ({
   requireValidConfig: async (_runtime: unknown, opts?: unknown) => {
     const snapshot = (await readConfigFileSnapshotMock(opts)) as
@@ -45,7 +41,16 @@ vi.mock("./config-validation.js", () => ({
       | undefined;
     return snapshot?.sourceConfig ?? snapshot?.config ?? null;
   },
-  requireValidConfigFileSnapshot: async () => readConfigFileSnapshotMock(),
+  requireValidConfigForWrite: async () => {
+    const snapshot = (await readConfigFileSnapshotMock()) as {
+      sourceConfig?: OpenClawConfig;
+      config: OpenClawConfig;
+    };
+    return {
+      snapshot: { ...snapshot, sourceConfig: snapshot.sourceConfig ?? snapshot.config },
+      writeOptions: {},
+    };
+  },
 }));
 
 export const runtime = createTestRuntime();

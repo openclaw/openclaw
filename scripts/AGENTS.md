@@ -1,33 +1,42 @@
 # Scripts Guide
 
-This directory owns local tooling, script wrappers, and generated-artifact helper rules.
+Own local tooling, script wrappers, generated-artifact helper rules.
+
+## Ownership Map
+
+- Tests: `run-vitest.mjs`; follow [testing skill](../.agents/skills/openclaw-testing/SKILL.md) + [test-authoring skill](../.agents/skills/test-audit/SKILL.md).
+- Lint/typecheck: `run-oxlint.mjs` + `run-tsgo.mjs` own repo-local runtime behavior; use them in package scripts and CI steps.
+- Changed-file checks: `check-changed.mjs` owns execution; `changed-lanes.mjs` owns classification. Never copy path-scope rules into hooks/CI snippets.
+- PR preparation: `pr` / `pr-lib` own source acquisition, correction reviews, gate bindings. Changing them: read [PR preparation](../docs/reference/scripts/pr-preparation.md).
+- PR wrapper lifecycle: `pr` / `pr-lib` own supervision, locks, materialized dependencies. Changing/repairing them: read [PR wrapper tooling](../docs/reference/scripts/pr-tooling.md).
+- GitHub transport: `pr-lib` owns observations + protected dispatch. Changing API/Octopool behavior: read [PR GitHub transport](../docs/reference/scripts/github-transport.md).
+- Merge admission/recovery: `pr-lib` owns policy, retained outcomes, completion. Read [merge admission](../docs/reference/scripts/merge-admission.md), [merge recovery](../docs/reference/scripts/merge-recovery.md), or [prior-CI admin admission](../docs/reference/scripts/prior-ci.md) for that operation.
+- Remote proof: `crabbox-wrapper.mjs` owns source capsules; `.github/actions/prepare-testbox-shell` owns shell/cwd. Changing them: read [remote gate contracts](../docs/reference/scripts/remote-gates.md). Operating boxes: use [Crabbox skill](../.agents/skills/crabbox/SKILL.md).
+- Generated artifacts: align source generator, package script, verification command. Prefer `*:gen` / `*:check` pairs over undocumented one-offs.
 
 ## Wrapper Rules
 
-- Prefer existing wrappers over raw tool entrypoints when the repo already has a curated seam.
-- For tests, prefer `scripts/run-vitest.mjs` or the root `pnpm test ...` entrypoints over raw `vitest run` calls.
-- Never use bare `vitest ...` in automation; it starts local watch mode unless `run` or `--run` is explicit.
-- For lint/typecheck flows, prefer `scripts/run-oxlint.mjs` and `scripts/run-tsgo.mjs` when adding or editing package scripts or CI steps that should honor repo-local runtime behavior.
-- For changed-file verification, prefer `scripts/check-changed.mjs` and keep lane classification in `scripts/changed-lanes.mjs`. Use `node scripts/check-changed.mjs --dry-run [--staged|-- <files...>]` to inspect the plan before running anything expensive. Do not copy path-scope rules into new hooks or ad hoc CI snippets.
-- For one/few lint files, prefer direct `node scripts/run-oxlint.mjs --tsconfig <matching config> <files...>` over sharded `pnpm lint`; `check-changed.mjs` owns this targeting for core, extension, and script diffs.
+- macOS-only Bash scripts: `#!/bin/bash`, Bash 3.2-compatible syntax. Invoke directly or with `/bin/bash`, including fixtures. Add new entrypoints to `nativeScripts` in `test/scripts/build-and-run-mac.test.ts`.
+- Portable Bash entrypoints using heredocs/here-strings (including sourced helpers): copy the Darwin Bash 5.3+ re-exec guard from `test/scripts/build-and-run-mac.test.ts` before those operations (prevents heredoc pipe deadlocks) and add the file to `portableScripts`. stdin/sourced installers: request `/bin/bash` when replay impossible.
+- Tests: run through `scripts/run-vitest.mjs` or root `pnpm test ...`; bare `vitest ...` starts local watch mode unless `run` or `--run` explicit.
+- Lint (one/few files): direct `node scripts/run-oxlint.mjs --tsconfig <matching config> <files...>`, not sharded `pnpm lint`.
 
 ## TypeScript Syntax
 
-- Keep TypeScript implementation files under `scripts/**` erasable by Node without transformation. Do not use parameter properties, runtime enums or namespaces, import-equals, export-assignment, or other transform-required TypeScript syntax.
-- This syntax rule does not make every script a plain-Node entrypoint. Keep `tsx` for closures that intentionally depend on source runtime trees, frozen checkouts, package aliases, or tsconfig/path resolution.
-- Native Node execution is opt-in per entrypoint and import closure. Use it only when runtime imports remain Node-resolvable and do not pull broader source trees into this syntax policy.
+- `scripts/**` TypeScript implementation files: erasable by Node without transformation; `pnpm check:script-erasability` enforces it.
+- Native Node execution: opt-in per entrypoint + import closure, only when runtime imports stay Node-resolvable. Keep `tsx` for closures depending on source runtime trees, frozen checkouts, package aliases, or tsconfig/path resolution.
 
-## PR Prepare Gates
+## PR Safety
 
-- `scripts/pr` serializes review, prepare, and merge operations per PR across linked worktrees; `scripts/pr gc` skips active or indeterminate locks. Its subcommand classification table is the canonical wrapper trust boundary: a mismatched local wrapper may run only a classified `advisory` subcommand with `--dev-wrapper` or `OPENCLAW_PR_DEV_WRAPPER=1`; classified `landing` subcommands always require canonical/origin-main wrapper code. A worktree whose wrapper differs from origin/main (stale base or wrapper-editing branch) loudly substitutes the canonical checkout's wrapper when that checkout is clean and byte-identical to fetched `refs/remotes/origin/main`; it refuses only when no anchor-matching wrapper is available. A successful command return is the trusted synchronous-completion contract: every PR-state-mutating child must be joined before returning, and such work must never daemonize or explicitly escape both the operation group and lock-notification FD. Release on clean exit requires the leader's completion marker; an escaped descendant that merely holds the notify pipe then produces a loud warned release instead of retention (#124583), while all failure shapes still retain. A failed command auto-releases only while its explicit pre-side-effect validation marker remains active; failures after mutation/tool launch, interruptions, and controller loss stay locked because detached children cannot be disproved. After verifying no child tools remain, use the reported exact-OID `scripts/pr lock-recover` command. Never bypass or delete these refs manually.
-- `OPENCLAW_PR_GATES_REMOTE=testbox` runs the full-suite `pnpm test` gate on a Blacksmith Testbox through `scripts/crabbox-wrapper.mjs` (same delegation as `check:changed`); `pnpm build`/`pnpm check` stay local. The `tbx_` lease id and Actions run URL land in `.local/gates.env` (`REMOTE_GATES_*`) and `.local/prep.md`. Use it for reviewed trusted code when a loaded host makes the local 88-shard run stall-kill; contributor/fork code stays on secretless CI or sanitized AWS unless a maintainer explicitly approves credentialed execution.
+- PR operations: follow [maintainer workflow](../.agents/skills/openclaw-pr-maintainer/SKILL.md). Gate modes: [landing](../.agents/skills/openclaw-pr-maintainer/references/landing.md). Default handoff: `merge-run --auto-merge`. Pending admission ≠ successful proof/merge completion.
+- Landing subcommands require canonical/origin-main wrapper code. Never bypass wrapper trust, operation locks, exact-head review/gate bindings, live authority checks, or Octopool string rewrite protection; never select raw `gh` to get landing through.
+- Before returning: join all PR-state-mutating children. Drained self-exited failures auto-release their operation lock; interrupted/uncertain locks stay held — verify no child tools remain before reported exact-OID `scripts/pr lock-recover` command. Never delete lock refs manually.
+- Preserve transition journals, preparation evidence, outcome refs, captures. Never clear/push `refs/openclaw/pr-merge-outcomes/<PR>`, hand-edit receipts, or infer non-execution from failed command, elapsed time, absent process, or open PR.
+- Accepted/pending/uncertain writes: investigate through [native recovery](../docs/reference/scripts/merge-recovery.md). Never blindly resubmit/switch transports. Existing land authority covers investigated same-scope recovery, not gate bypasses/new scope/method.
+- Before comments/ownership-checked cleanup: confirm merge receipt. Completion comments: one attempt; reconcile uncertain comments by marker. Preserve worktrees/captures with unresolved outcome; never delete recreated branch by name.
 
-## Generated Outputs
+## Execution Gotchas
 
-- If a script writes generated artifacts, keep the source-of-truth generator, the package script, and the matching verification/check command aligned.
-- Prefer additive generator/check pairs like `*:gen` and `*:check` over one-off undocumented scripts.
-
-## Scope
-
-- Keep script-runner behavior, wrapper expectations, and generated-artifact guidance here.
-- Leave repo-global verification policy in the root `AGENTS.md`.
+- Fs-safe dependency trouble: follow [on-demand vendoring instructions](vendor-fs-safe.md); vendor contents local, registry dependencies default.
+- Trusted normal checkout missing dependencies: `pnpm install --frozen-lockfile`, retry once before diagnosing code defect.
+- Formatting: `pnpm format` defaults locally to the pinned Bun fork, with an oxfmt fallback; `OPENCLAW_FORMAT_TOOL=oxfmt` forces oxfmt. CI checks oxfmt/Bun parity. Generated-artifact gates retain oxfmt; see [caller inventory](README.md#formatting-and-lint-selection). Typechecking: repository `tsgo` lanes. Scope: `pnpm changed:lanes --json`; targeted tests/checks. Avoiding worktree reconciliation: `node scripts/run-vitest.mjs` with ready dependencies.

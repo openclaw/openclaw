@@ -1,10 +1,17 @@
 import type { ErrorShape, ResponseFrame } from "@openclaw/gateway-protocol";
 import {
+  GATEWAY_SUSPEND_IDENTITY_RETRY_AFTER_MS,
+  isGatewayRestartUnavailableError,
+  isGatewaySuspendUnavailableError,
+} from "@openclaw/gateway-protocol/restart-unavailable";
+import { isRetryableGatewayStartupUnavailableError } from "@openclaw/gateway-protocol/startup-unavailable";
+import {
   GatewayProtocolRequestError,
   GatewayProtocolRequestTimeoutError,
+  retainGatewayResponsePayload,
   type GatewayProtocolRequestOptions,
 } from "./protocol-request.js";
-import { resolveSafeTimeoutDelayMs } from "./timeouts.js";
+import { resolveFiniteTimeoutDelayMs, resolveSafeTimeoutDelayMs } from "./timeouts.js";
 
 export type GatewayProtocolRequestTiming = {
   id: string;
@@ -30,6 +37,10 @@ type GatewayPendingRequest = {
   unbounded: boolean;
   method: string;
   startedAtMs: number;
+  resend?: () => void;
+  retryStartup?: (retryAfterMs?: number) => void;
+  prepareRetry: () => boolean;
+  waitingForResume?: boolean;
 };
 
 type GatewayPendingRequestsOptions = {
@@ -45,18 +56,85 @@ type GatewayPendingRequestsOptions = {
 
 /** Owns request deadlines, correlation, settlement, and generation-scoped IDs. */
 export class GatewayPendingRequests {
-  private readonly pending = new Map<string, GatewayPendingRequest>();
-  private readonly retiredIds = new Set<string>();
-  private collisionSuffix = 0;
+  private pending = new Map<string, GatewayPendingRequest>();
+  private requestSequence = 0;
+  private bootstrapPause:
+    | {
+        timer?: ReturnType<typeof setTimeout>;
+        probe?: { pending: GatewayPendingRequest; revision: number };
+        retryAtMs: number;
+        revision: number;
+        announced: boolean;
+      }
+    | undefined;
 
   constructor(private readonly opts: GatewayPendingRequestsOptions) {}
+
+  setSuspensionPhase(phase: unknown): void {
+    if (phase === "accepting") {
+      this.resumeBootstrapRequests();
+    } else if (phase === "preparing" || phase === "draining" || phase === "prepared") {
+      this.pauseBootstrapRequests(undefined, true);
+    }
+  }
+
+  private pauseBootstrapRequests(
+    retryAfterMs = GATEWAY_SUSPEND_IDENTITY_RETRY_AFTER_MS,
+    announced = false,
+  ): void {
+    const nowMs = this.opts.nowMs();
+    const delayMs = resolveSafeTimeoutDelayMs(
+      Number.isFinite(retryAfterMs) && retryAfterMs > 0
+        ? retryAfterMs
+        : GATEWAY_SUSPEND_IDENTITY_RETRY_AFTER_MS,
+    );
+    const pause = (this.bootstrapPause ??= { retryAtMs: nowMs, revision: 0, announced });
+    pause.announced ||= announced;
+    pause.revision += 1;
+    pause.retryAtMs = Math.max(pause.retryAtMs, nowMs + delayMs);
+    clearTimeout(pause.timer);
+    pause.timer = undefined;
+    // An announced drain ends through readiness or connection retirement, not a read probe.
+    if (pause.announced) {
+      return;
+    }
+    pause.timer = setTimeout(
+      () => {
+        // A rolled-back fence may not publish readiness. An expired empty
+        // pause lets the next read probe without imposing another wait.
+        pause.timer = undefined;
+        this.drainBootstrapRequests();
+      },
+      resolveSafeTimeoutDelayMs(pause.retryAtMs - nowMs),
+    );
+    pause.timer.unref?.();
+  }
+
+  private resumeBootstrapRequests(): void {
+    clearTimeout(this.bootstrapPause?.timer);
+    this.bootstrapPause = undefined;
+    this.drainBootstrapRequests();
+  }
+
+  private drainBootstrapRequests(): void {
+    for (const pending of this.pending.values()) {
+      if (pending.waitingForResume) {
+        pending.resend?.();
+      }
+    }
+  }
 
   get hasPending(): boolean {
     return this.pending.size > 0;
   }
 
   get hasUnboundedPending(): boolean {
-    return [...this.pending.values()].some((pending) => pending.unbounded);
+    for (const pending of this.pending.values()) {
+      if (pending.unbounded) {
+        return true;
+      }
+    }
+    return false;
   }
 
   request<T>(
@@ -79,7 +157,9 @@ export class GatewayPendingRequests {
         : undefined;
     return new Promise<T>((resolve, reject) => {
       let timeout: ReturnType<typeof setTimeout> | undefined;
+      let startupRetry: ReturnType<typeof setTimeout> | undefined;
       let requestSent = false;
+      let inFlight = false;
       const pending: GatewayPendingRequest = {
         resolve: (value) => resolve(value as T),
         reject,
@@ -89,24 +169,40 @@ export class GatewayPendingRequests {
         unbounded: timeoutMs === undefined,
         method,
         startedAtMs: this.opts.nowMs(),
+        prepareRetry: () => {
+          inFlight = false;
+          requestSent = false;
+          if (options?.signal?.aborted) {
+            onAbort();
+            return false;
+          }
+          return true;
+        },
       };
       const cleanup = () => {
+        clearTimeout(startupRetry);
         if (timeout !== undefined) {
           clearTimeout(timeout);
         }
         options?.signal?.removeEventListener("abort", onAbort);
+        if (this.bootstrapPause?.probe?.pending === pending) {
+          this.bootstrapPause.probe = undefined;
+          this.drainBootstrapRequests();
+        }
       };
       const retire = (errorCode: string): boolean => {
         if (this.pending.get(id) !== pending) {
           return false;
         }
         this.pending.delete(id);
-        this.retiredIds.add(id);
         cleanup();
         this.finishTiming(id, pending, false, errorCode);
         return true;
       };
       const onAbort = () => {
+        if (options?.retainSentResultOnAbort && inFlight) {
+          return;
+        }
         if (!retire("CLIENT_ABORTED")) {
           return;
         }
@@ -138,12 +234,61 @@ export class GatewayPendingRequests {
       options?.signal?.addEventListener("abort", onAbort, { once: true });
       this.pending.set(id, pending);
       try {
-        sender.send(JSON.stringify({ type: "req", id, method, params }));
-        if (this.pending.get(id) !== pending) {
-          return;
+        const frame = JSON.stringify({ type: "req", id, method, params });
+        const send = () => {
+          if (
+            this.pending.get(id) !== pending ||
+            options?.signal?.aborted ||
+            (timeoutMs !== undefined && this.opts.nowMs() - pending.startedAtMs >= timeoutMs)
+          ) {
+            return;
+          }
+          const pause = pending.resend ? this.bootstrapPause : undefined;
+          if (pause && !pause.announced && !pause.timer && !pause.probe) {
+            pause.probe = { pending, revision: pause.revision };
+          }
+          pending.waitingForResume = Boolean(
+            pause && (pause.announced || pause.probe?.pending !== pending),
+          );
+          if (pending.waitingForResume) {
+            return;
+          }
+          try {
+            inFlight = true;
+            sender.send(frame);
+            if (this.pending.get(id) !== pending) {
+              return;
+            }
+            // A synchronous refusal can already have proved non-delivery.
+            requestSent = inFlight;
+            this.invoke("sent", () => options?.onSent?.(id));
+          } catch (error) {
+            if (retire("CLIENT_SEND_ERROR")) {
+              reject(error instanceof Error ? error : new Error(String(error)));
+            }
+          }
+        };
+        // A startup refusal proves the handler has not run, so later attempts can
+        // share pause/resume. Ordinary writes still send synchronously.
+        pending.retryStartup = (retryAfterMs) => {
+          pending.resend = send;
+          clearTimeout(startupRetry);
+          startupRetry = setTimeout(
+            send,
+            resolveFiniteTimeoutDelayMs(retryAfterMs, GATEWAY_SUSPEND_IDENTITY_RETRY_AFTER_MS),
+          );
+          startupRetry.unref?.();
+        };
+        if (
+          method === "agent.identity.get" ||
+          method === "sessions.subscribe" ||
+          method === "sessions.groups.list" ||
+          method === "question.list" ||
+          method === "sessions.list"
+        ) {
+          pending.resend = send;
         }
-        requestSent = true;
-        this.invoke("sent", () => options?.onSent?.());
+        send();
       } catch (error) {
         if (retire("CLIENT_SEND_ERROR")) {
           reject(error instanceof Error ? error : new Error(String(error)));
@@ -158,14 +303,69 @@ export class GatewayPendingRequests {
       return;
     }
     const status = (frame.payload as { status?: unknown } | undefined)?.status;
-    if (pending.expectFinal && status === "accepted") {
+    if (frame.ok && pending.expectFinal && status === "accepted") {
       if (!pending.acceptedNotified) {
         pending.acceptedNotified = true;
         this.invoke("accepted", () => pending.onAccepted?.(frame.payload));
       }
       return;
     }
+    const startupDetails = frame.error?.details;
+    const startupRefusal =
+      !frame.ok &&
+      isRetryableGatewayStartupUnavailableError(frame.error) &&
+      startupDetails !== null &&
+      typeof startupDetails === "object" &&
+      "method" in startupDetails &&
+      startupDetails.method === pending.method;
+    if (startupRefusal && !pending.acceptedNotified) {
+      if (pending.prepareRetry()) {
+        pending.retryStartup?.(frame.error?.retryAfterMs);
+        if (
+          this.bootstrapPause?.probe?.pending === pending &&
+          this.bootstrapPause.probe.revision === this.bootstrapPause.revision
+        ) {
+          // Agent-local preparation no longer needs the Gateway-wide recovery fence.
+          this.resumeBootstrapRequests();
+        }
+      }
+      return;
+    }
+    if (
+      !frame.ok &&
+      pending.resend &&
+      !pending.acceptedNotified &&
+      frame.error?.code === "UNAVAILABLE" &&
+      frame.error.retryable === true &&
+      (isGatewaySuspendUnavailableError(frame.error) ||
+        isGatewayRestartUnavailableError(frame.error))
+    ) {
+      if (!pending.prepareRetry()) {
+        return;
+      }
+      // The admission fence refused execution. Keep the original deadline and cancellation.
+      if (this.bootstrapPause?.probe?.pending === pending) {
+        this.bootstrapPause.probe = undefined;
+      }
+      this.pauseBootstrapRequests(
+        isGatewayRestartUnavailableError(frame.error)
+          ? Math.ceil(
+              Math.max(GATEWAY_SUSPEND_IDENTITY_RETRY_AFTER_MS, frame.error.retryAfterMs ?? 0) *
+                (1 + Math.random() * 0.2),
+            )
+          : frame.error.retryAfterMs,
+      );
+      pending.waitingForResume = true;
+      return;
+    }
     this.pending.delete(frame.id);
+    if (
+      frame.ok &&
+      this.bootstrapPause?.probe?.pending === pending &&
+      this.bootstrapPause.probe.revision === this.bootstrapPause.revision
+    ) {
+      this.resumeBootstrapRequests();
+    }
     pending.cleanup?.();
     if (frame.ok) {
       this.finishTiming(frame.id, pending, true);
@@ -173,36 +373,31 @@ export class GatewayPendingRequests {
       return;
     }
     this.finishTiming(frame.id, pending, false, frame.error?.code);
-    pending.reject(
+    const error =
       this.opts.createRequestError?.(frame.error ?? {}) ??
-        new GatewayProtocolRequestError(frame.error ?? {}),
-    );
+      new GatewayProtocolRequestError(frame.error ?? {});
+    retainGatewayResponsePayload(error, frame.payload);
+    pending.reject(error);
   }
 
   flush(error: Error): void {
-    for (const [id, pending] of this.pending) {
-      this.finishTiming(id, pending, false, "CLIENT_CLOSED");
+    clearTimeout(this.bootstrapPause?.timer);
+    this.bootstrapPause = undefined;
+    const retired = this.pending;
+    this.pending = new Map();
+    // Timing observers can reconnect synchronously, so detach the entire old
+    // generation and reset its sequence before running any caller-owned code.
+    this.requestSequence = 0;
+    for (const [id, pending] of retired) {
       pending.cleanup?.();
+      this.finishTiming(id, pending, false, "CLIENT_CLOSED");
       pending.reject(error);
     }
-    this.pending.clear();
-    // IDs are tombstoned only for one socket generation. Retired socket frames
-    // are fenced by GatewayProtocolClient before a replacement generation runs.
-    this.retiredIds.clear();
-    this.collisionSuffix = 0;
   }
 
   private allocateRequestId(): string {
-    const id = this.opts.createRequestId();
-    if (!this.pending.has(id) && !this.retiredIds.has(id)) {
-      return id;
-    }
-    let uniqueId: string;
-    do {
-      this.collisionSuffix += 1;
-      uniqueId = `${id}:${this.collisionSuffix}`;
-    } while (this.pending.has(uniqueId) || this.retiredIds.has(uniqueId));
-    return uniqueId;
+    this.requestSequence += 1;
+    return `${this.requestSequence}:${this.opts.createRequestId()}`;
   }
 
   private finishTiming(

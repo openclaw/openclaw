@@ -3,13 +3,34 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import {
   resolveDaemonInstallRuntimeInputs,
-  resolveDaemonNodeBinDir,
   resolveDaemonServicePathDirs,
 } from "./daemon-install-plan.shared.js";
 
 describe("resolveDaemonInstallRuntimeInputs", () => {
+  it.skipIf(process.platform === "win32")(
+    "keeps a persisted runtime pin instead of selecting system Node",
+    async () => {
+      const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "daemon-pin-")));
+      const pinned = path.join(root, "node");
+      try {
+        fs.symlinkSync(resolveTestNodeExecPath(), pinned);
+        await expect(
+          resolveDaemonInstallRuntimeInputs({
+            env: {},
+            pinnedRuntimePath: pinned,
+            runtime: "node",
+            devMode: false,
+          }),
+        ).resolves.toEqual({ devMode: false, runtime: "node", runtimePath: pinned });
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("detects src ts entrypoints when devMode is not overridden", async () => {
     const originalArgv = process.argv;
     try {
@@ -23,7 +44,7 @@ describe("resolveDaemonInstallRuntimeInputs", () => {
           resolveDaemonInstallRuntimeInputs({
             env: {},
             runtime: "node",
-            nodePath: "/custom/node",
+            runtimePath: "/custom/node",
           }),
         ).resolves.toMatchObject({ devMode: expected });
       }
@@ -31,43 +52,9 @@ describe("resolveDaemonInstallRuntimeInputs", () => {
       process.argv = originalArgv;
     }
   });
-
-  it("keeps explicit devMode and nodePath overrides", async () => {
-    await expect(
-      resolveDaemonInstallRuntimeInputs({
-        env: {},
-        runtime: "node",
-        devMode: false,
-        nodePath: "/custom/node",
-      }),
-    ).resolves.toEqual({
-      devMode: false,
-      nodePath: "/custom/node",
-    });
-  });
-});
-
-describe("resolveDaemonNodeBinDir", () => {
-  it("returns the absolute node bin directory", () => {
-    expect(resolveDaemonNodeBinDir("/custom/node/bin/node")).toEqual(["/custom/node/bin"]);
-  });
-
-  it("ignores bare executable names", () => {
-    expect(resolveDaemonNodeBinDir("node")).toBeUndefined();
-  });
 });
 
 describe("resolveDaemonServicePathDirs openclaw discovery", () => {
-  it("uses the active openclaw command directory", () => {
-    expect(
-      resolveDaemonServicePathDirs({
-        argv: ["node", "/Users/testuser/.npm-global/bin/openclaw", "gateway", "install"],
-        env: { PATH: "" },
-        platform: "darwin",
-      }),
-    ).toEqual(["/Users/testuser/.npm-global/bin"]);
-  });
-
   it.skipIf(process.platform === "win32")(
     "finds the PATH shim that resolves to the active package entrypoint",
     () => {
@@ -107,6 +94,12 @@ describe("resolveDaemonServicePathDirs openclaw discovery", () => {
         fs.mkdirSync(path.dirname(otherEntrypoint), { recursive: true });
         fs.writeFileSync(activeEntrypoint, "");
         fs.writeFileSync(otherEntrypoint, "");
+        for (const entrypoint of [activeEntrypoint, otherEntrypoint]) {
+          fs.writeFileSync(
+            path.join(path.dirname(entrypoint), "package.json"),
+            '{"name":"openclaw"}',
+          );
+        }
         fs.symlinkSync(otherEntrypoint, path.join(binDir, "openclaw"));
 
         expect(
@@ -124,10 +117,10 @@ describe("resolveDaemonServicePathDirs openclaw discovery", () => {
 });
 
 describe("resolveDaemonServicePathDirs", () => {
-  it("combines node and active openclaw command directories", () => {
+  it("combines runtime and active openclaw command directories", () => {
     expect(
       resolveDaemonServicePathDirs({
-        nodePath: "/opt/homebrew/opt/node/bin/node",
+        runtimePath: "/opt/homebrew/opt/node/bin/node",
         argv: ["node", "/Users/testuser/.npm-global/bin/openclaw", "gateway", "install"],
         env: { PATH: "" },
         platform: "darwin",

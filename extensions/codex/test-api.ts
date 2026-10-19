@@ -2,32 +2,66 @@
  * Test-only helpers for producing Codex app-server prompt snapshots and dynamic
  * tool specs without starting a live app-server.
  */
-import type {
-  AnyAgentTool,
-  EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+import {
+  isSubagentSessionKey,
+  type AnyAgentTool,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   type CodexAppServerRuntimeOptions,
+  readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
   type CodexPluginConfig,
 } from "./src/app-server/config.js";
+import { joinPresentSections } from "./src/app-server/developer-instruction-sections.js";
 import { filterCodexDynamicTools } from "./src/app-server/dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./src/app-server/dynamic-tools.js";
-import type { CodexDynamicToolSpec, JsonObject } from "./src/app-server/protocol.js";
 import {
-  buildDeveloperInstructions,
+  flattenCodexDynamicToolFunctions,
+  type CodexDynamicToolSpec,
+  type JsonObject,
+} from "./src/app-server/protocol.js";
+import { buildDeveloperInstructions } from "./src/app-server/thread-prompt.js";
+import {
   buildThreadResumeParams,
   buildThreadStartParams,
+} from "./src/app-server/thread-requests.js";
+import {
+  buildCodexParentLocalInstructions,
   buildTurnStartParams,
-} from "./src/app-server/thread-lifecycle.js";
+} from "./src/app-server/turn-params.js";
 
 export { CODEX_APP_SERVER_VERSION } from "./src/app-server/version.js";
+export { createCodexDynamicToolBridge };
+
+/** Keeps host integration tests on the plugin's test boundary without exposing runtime internals. */
+export async function createCodexSessionInitializationFixtureForTest(params: {
+  runtime: PluginRuntime;
+  workspaceDir: string;
+}) {
+  // Snapshot scripts also load this barrel outside Vitest; load its test fixture only on demand.
+  const { createCodexSessionInitializationFixture } =
+    await import("./src/app-server/session-initialization.test-support.js");
+  return await createCodexSessionInitializationFixture(params);
+}
+
+// Host finalizer fixtures opt into Vitest hooks without affecting snapshot consumers.
+export const loadCodexSettledFinalizerTestFixture = () =>
+  import("./src/app-server/settled-turn-finalizer.test-support.js");
+
+export const loadCodexNativeSubagentMonitorTestFixture = () =>
+  import("./src/app-server/native-subagent-monitor.test-support.js");
+
+export const loadCodexAbortTranscriptTestFixture = () =>
+  import("./src/app-server/transcript-abort.test-support.js");
 
 type CodexHarnessPromptSnapshot = {
   developerInstructions: string;
-  threadStartParams: ReturnType<typeof buildThreadStartParams>;
-  threadResumeParams: ReturnType<typeof buildThreadResumeParams>;
-  turnStartParams: ReturnType<typeof buildTurnStartParams>;
+  parentLocalInstructions: string | null;
+  threadStartParams: Awaited<ReturnType<typeof buildThreadStartParams>>;
+  threadResumeParams: Awaited<ReturnType<typeof buildThreadResumeParams>>;
+  turnStartParams: Awaited<ReturnType<typeof buildTurnStartParams>>;
 };
 
 /** Resolves deterministic app-server options for prompt snapshot tests. */
@@ -35,14 +69,14 @@ export function resolveCodexPromptSnapshotAppServerOptions(
   pluginConfig?: unknown,
 ): CodexAppServerRuntimeOptions {
   return resolveCodexAppServerRuntimeOptions({
-    pluginConfig,
+    pluginConfig: readCodexPluginConfig(pluginConfig),
     env: {},
     requirementsToml: null,
   });
 }
 
 /** Builds thread/resume/turn prompt payload snapshots for a Codex harness attempt. */
-export function buildCodexHarnessPromptSnapshot(params: {
+export async function buildCodexHarnessPromptSnapshot(params: {
   attempt: EmbeddedRunAttemptParams;
   cwd: string;
   threadId: string;
@@ -50,42 +84,57 @@ export function buildCodexHarnessPromptSnapshot(params: {
   appServer: CodexAppServerRuntimeOptions;
   config?: JsonObject;
   promptText?: string;
+  nativeCodeModeEnabled?: boolean;
   developerInstructionAdditions?: string;
-  turnScopedDeveloperInstructions?: string;
-}): CodexHarnessPromptSnapshot {
+  personaInstructions?: string;
+}): Promise<CodexHarnessPromptSnapshot> {
   const developerInstructions = joinPresentSections(
     buildDeveloperInstructions(params.attempt, {
       dynamicTools: params.dynamicTools,
+      nativeCodeModeEnabled: params.nativeCodeModeEnabled !== false,
+      nativeCodeModeOnlyEnabled: params.appServer.codeModeOnly,
     }),
     params.developerInstructionAdditions,
   );
   return {
     developerInstructions,
-    threadStartParams: buildThreadStartParams(params.attempt, {
+    parentLocalInstructions: buildCodexParentLocalInstructions(params.attempt, {
+      personaInstructions: params.personaInstructions,
+    }),
+    threadStartParams: await buildThreadStartParams(params.attempt, {
       cwd: params.cwd,
       dynamicTools: params.dynamicTools,
       appServer: params.appServer,
+      nativeCodeModeEnabled: params.nativeCodeModeEnabled,
+      nativeCodeModeOnlyEnabled: params.appServer.codeModeOnly,
       developerInstructions,
       config: params.config,
     }),
-    threadResumeParams: buildThreadResumeParams(params.attempt, {
+    threadResumeParams: await buildThreadResumeParams(params.attempt, {
       threadId: params.threadId,
       appServer: params.appServer,
+      nativeCodeModeEnabled: params.nativeCodeModeEnabled,
+      nativeCodeModeOnlyEnabled: params.appServer.codeModeOnly,
       developerInstructions,
       config: params.config,
     }),
-    turnStartParams: buildTurnStartParams(params.attempt, {
+    turnStartParams: await buildTurnStartParams(params.attempt, {
       threadId: params.threadId,
       cwd: params.cwd,
       appServer: params.appServer,
       promptText: params.promptText,
-      turnScopedDeveloperInstructions: params.turnScopedDeveloperInstructions,
+      parentLocalEgress: true,
+      messageToolAvailable: flattenCodexDynamicToolFunctions(params.dynamicTools).some(
+        (tool) => tool.name === "message",
+      ),
+      requireExplicitMessageTarget:
+        params.attempt.requireExplicitMessageTarget ??
+        isSubagentSessionKey(params.attempt.sessionKey),
+      sessionStatusAvailable: flattenCodexDynamicToolFunctions(params.dynamicTools).some(
+        (tool) => tool.name === "session_status",
+      ),
     }),
   };
-}
-
-function joinPresentSections(...sections: Array<string | undefined>): string {
-  return sections.filter((section): section is string => Boolean(section?.trim())).join("\n\n");
 }
 
 /** Converts harness tools into Codex dynamic-tool specs for prompt snapshot tests. */
@@ -102,3 +151,15 @@ export function createCodexDynamicToolSpecsForPromptSnapshot(params: {
     directToolNames: params.directToolNames,
   }).specs;
 }
+export { createCanonicalForkFixture as createCanonicalForkFixtureForTest } from "./src/app-server/canonical-fork.test-support.js";
+
+export {
+  CODEX_NATIVE_TOOL_REQUIREMENTS,
+  CODEX_TOOL_POLICY_SAFE_DENY_NAMES,
+} from "./native-tool-policy.js";
+export { buildCodexRuntimeThreadConfigForRun } from "./src/app-server/thread-requests.js";
+
+export const loadCodexDynamicToolBuildTestFixture = () =>
+  import("./src/app-server/dynamic-tool-build.test-support.js");
+
+export const loadCodexNativeWebSearchTestFixture = () => import("./native-web-search.test-api.js");

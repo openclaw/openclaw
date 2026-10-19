@@ -20,7 +20,7 @@ describe("Microsoft Teams QA Bot Framework server", () => {
     }
   });
 
-  it("parses encoded conversation threads and captures outbound activity", async () => {
+  it("models an ambiguous gateway timeout only for a marked message activity", async () => {
     const onOutbound = vi.fn(async () => {});
     const server = await startMSTeamsQaBotFrameworkServer({
       botToken: "bot-token",
@@ -28,9 +28,8 @@ describe("Microsoft Teams QA Bot Framework server", () => {
       onOutbound,
     });
     try {
-      const conversation = "19:qa-primary@thread.tacv2;messageid=thread-root";
-      const response = await fetch(
-        `${server.baseUrl}qa/v3/conversations/${encodeURIComponent(conversation)}/activities`,
+      const progressResponse = await fetch(
+        `${server.baseUrl}qa/v3/conversations/channel/activities`,
         {
           method: "POST",
           headers: {
@@ -38,29 +37,9 @@ describe("Microsoft Teams QA Bot Framework server", () => {
             "content-type": "application/json",
             "x-openclaw-msteams-qa-nonce": "qa-nonce",
           },
-          body: JSON.stringify({ type: "message", text: "captured" }),
+          body: JSON.stringify({ type: "typing", text: "QA-MSTEAMS-AMBIGUOUS-504" }),
         },
       );
-      expect(response.status).toBe(200);
-      expect(onOutbound).toHaveBeenCalledWith({
-        activity: { type: "message", text: "captured" },
-        activityId: expect.stringMatching(/^qa-outbound-/u),
-        conversationId: "19:qa-primary@thread.tacv2",
-        threadId: "thread-root",
-      });
-    } finally {
-      await server.close();
-    }
-  });
-
-  it("models an ambiguous gateway timeout after accepting the marked activity", async () => {
-    const onOutbound = vi.fn(async () => {});
-    const server = await startMSTeamsQaBotFrameworkServer({
-      botToken: "bot-token",
-      nonce: "qa-nonce",
-      onOutbound,
-    });
-    try {
       const response = await fetch(`${server.baseUrl}qa/v3/conversations/channel/activities`, {
         method: "POST",
         headers: {
@@ -71,8 +50,9 @@ describe("Microsoft Teams QA Bot Framework server", () => {
         body: JSON.stringify({ type: "message", text: "QA-MSTEAMS-AMBIGUOUS-504" }),
       });
 
+      expect(progressResponse.status).toBe(200);
       expect(response.status).toBe(504);
-      expect(onOutbound).toHaveBeenCalledOnce();
+      expect(onOutbound).toHaveBeenCalledTimes(2);
     } finally {
       await server.close();
     }

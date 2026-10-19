@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 const DOCS_WITH_CONFIG_PATH_EXAMPLES = [
   "docs/cli/config.md",
   "docs/tools/exec.md",
-  "docs/nodes/index.md",
+  "docs/nodes/node-exec.md",
 ];
 
 function findUnquotedBracketPathExamples(markdown: string, docPath: string): string[] {

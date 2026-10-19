@@ -1,6 +1,4 @@
 #!/usr/bin/env node
-// Verifies published plugin npm packages include built runtime entries and
-// metadata expected by OpenClaw.
 
 import { execFileSync, type ExecFileSyncOptionsWithStringEncoding } from "node:child_process";
 import fs from "node:fs";
@@ -9,10 +7,10 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import * as tar from "tar";
+import { listBuiltRuntimeEntryCandidates } from "../src/plugins/package-entrypoints.js";
 import { readPositiveIntEnv } from "./e2e/lib/env-limits.mjs";
+import { resolveNpmJsonString } from "./lib/npm-json-output.mts";
 import { sleep } from "./lib/sleep.mjs";
-
-export { readPositiveIntEnv };
 
 const DEFAULT_NPM_COMMAND_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_NPM_COMMAND_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
@@ -61,39 +59,28 @@ function normalizePackagePath(value: string) {
     .replace(/^\.\//u, "");
 }
 
-function isTypeScriptPackageEntry(entryPath: string) {
-  return [".ts", ".mts", ".cts"].includes(path.extname(entryPath).toLowerCase());
-}
-
-function listBuiltRuntimeEntryCandidates(entryPath: string) {
-  if (!isTypeScriptPackageEntry(entryPath)) {
-    return [];
-  }
-  const normalized = entryPath.replace(/\\/g, "/");
-  const withoutExtension = normalized.replace(/\.[^.]+$/u, "");
-  const normalizedRelative = normalized.replace(/^\.\//u, "");
-  const distWithoutExtension = normalizedRelative.startsWith("src/")
-    ? `./dist/${normalizedRelative.slice("src/".length).replace(/\.[^.]+$/u, "")}`
-    : `./dist/${withoutExtension.replace(/^\.\//u, "")}`;
-  const withJavaScriptExtensions = (basePath: string) => [
-    `${basePath}.js`,
-    `${basePath}.mjs`,
-    `${basePath}.cjs`,
-  ];
-  return [
-    ...new Set([
-      ...withJavaScriptExtensions(distWithoutExtension),
-      ...withJavaScriptExtensions(withoutExtension),
-    ]),
-  ].filter((candidate) => candidate !== normalized);
-}
-
 function hasPackedFile(packageFiles: Set<string>, entryPath: string) {
   return packageFiles.has(normalizePackagePath(entryPath));
 }
 
-function missingCompiledRuntimeError(packageLabel: string, entry: string, candidates: string[]) {
-  return `${packageLabel} requires compiled runtime output for TypeScript entry ${entry}: expected ${candidates.join(", ")}`;
+export function isPluginTestFixturePath(packagePath: string) {
+  if (
+    packagePath.startsWith("dist/") ||
+    packagePath.startsWith("skills/") ||
+    packagePath.startsWith("node_modules/")
+  ) {
+    return false;
+  }
+  if (
+    /(?:^|\/)(?:fixture|fixtures|mock|mocks|spec|test|tests|test-harness|test-helper|test-helpers|test-support|__fixtures__|__tests__)\//u.test(
+      packagePath,
+    )
+  ) {
+    return true;
+  }
+  return /(?:^|[.-])(?:fixture|fixtures|mock|mocks|spec|test|test-helper|test-helpers|test-harness|test-support)(?:[.-]|$)/u.test(
+    path.posix.basename(packagePath),
+  );
 }
 
 function formatPackageLabel(packageJson: Record<string, unknown>, fallbackSpec = "") {
@@ -149,6 +136,12 @@ export function collectPluginNpmPublishedRuntimeErrors(params: {
     errors.push(`${packageLabel} plugin npm package must include openclaw.plugin.json`);
     return errors;
   }
+  const testFixturePaths = [...packageFiles].filter(isPluginTestFixturePath).toSorted();
+  if (testFixturePaths.length > 0) {
+    errors.push(
+      `${packageLabel} plugin npm package must not include test or fixture files: ${testFixturePaths.join(", ")}`,
+    );
+  }
   const extensions = extensionsResult.entries;
   const runtimeExtensions = runtimeExtensionsResult.entries;
   const setupEntry = setupEntryResult.entry;
@@ -161,25 +154,21 @@ export function collectPluginNpmPublishedRuntimeErrors(params: {
     return errors;
   }
 
-  for (const [index, entry] of extensions.entries()) {
-    const runtimeEntry = runtimeExtensions[index];
-    if (runtimeEntry) {
-      if (!hasPackedFile(packageFiles, runtimeEntry)) {
-        errors.push(`${packageLabel} runtime extension entry not found: ${runtimeEntry}`);
+  const checkRuntimeEntry = (entry: string, runtimeEntry: string | undefined, label: string) => {
+    const candidates = runtimeEntry ? [] : listBuiltRuntimeEntryCandidates(entry);
+    if (candidates.length > 0) {
+      if (!candidates.some((candidate) => hasPackedFile(packageFiles, candidate))) {
+        errors.push(
+          `${packageLabel} requires compiled runtime output for TypeScript entry ${entry}: expected ${candidates.join(", ")}`,
+        );
       }
-      continue;
+    } else if (!hasPackedFile(packageFiles, runtimeEntry || entry)) {
+      errors.push(`${packageLabel} ${label} entry not found: ${runtimeEntry || entry}`);
     }
+  };
 
-    if (!isTypeScriptPackageEntry(entry)) {
-      continue;
-    }
-
-    const candidates = listBuiltRuntimeEntryCandidates(entry);
-    if (candidates.some((candidate) => hasPackedFile(packageFiles, candidate))) {
-      continue;
-    }
-
-    errors.push(missingCompiledRuntimeError(packageLabel, entry, candidates));
+  for (const [index, entry] of extensions.entries()) {
+    checkRuntimeEntry(entry, runtimeExtensions[index], "runtime extension");
   }
 
   if (runtimeSetupEntry && !setupEntry) {
@@ -190,25 +179,7 @@ export function collectPluginNpmPublishedRuntimeErrors(params: {
   }
 
   if (setupEntry) {
-    if (runtimeSetupEntry) {
-      if (!hasPackedFile(packageFiles, runtimeSetupEntry)) {
-        errors.push(`${packageLabel} runtime setup entry not found: ${runtimeSetupEntry}`);
-      }
-      return errors;
-    }
-
-    const candidates = listBuiltRuntimeEntryCandidates(setupEntry);
-    if (candidates.length > 0) {
-      if (candidates.some((candidate) => hasPackedFile(packageFiles, candidate))) {
-        return errors;
-      }
-      errors.push(missingCompiledRuntimeError(packageLabel, setupEntry, candidates));
-      return errors;
-    }
-
-    if (!hasPackedFile(packageFiles, setupEntry)) {
-      errors.push(`${packageLabel} setup entry not found: ${setupEntry}`);
-    }
+    checkRuntimeEntry(setupEntry, runtimeSetupEntry, runtimeSetupEntry ? "runtime setup" : "setup");
   }
 
   return errors;
@@ -253,9 +224,7 @@ export function runPluginNpmCommand(
   args: string[],
   params: { execFileSyncImpl?: ExecFileSyncText; env?: NodeJS.ProcessEnv } = {},
 ) {
-  const execFileSyncImpl =
-    params.execFileSyncImpl ??
-    ((file, childArgs, options) => execFileSync(file, childArgs, options));
+  const execFileSyncImpl = params.execFileSyncImpl ?? execFileSync;
   return execFileSyncImpl("npm", args, readPluginNpmCommandOptions(params.env));
 }
 
@@ -264,11 +233,14 @@ function npmPack(spec: string, destinationDir: string) {
     "pack",
     spec,
     "--ignore-scripts",
+    // Publication readback must include fresh releases; this downloads only the
+    // requested artifact and does not change the dependency-install age policy.
+    "--min-release-age=0",
     "--pack-destination",
     destinationDir,
   ]);
   const filename = resolveNpmPackFilename(output);
-  return path.isAbsolute(filename) ? filename : path.join(destinationDir, filename);
+  return path.join(destinationDir, filename);
 }
 
 export function parseNpmReadmeMetadata(raw: string) {
@@ -278,11 +250,7 @@ export function parseNpmReadmeMetadata(raw: string) {
   } catch {
     return "";
   }
-  return typeof parsed === "string" ? parsed.trim() : "";
-}
-
-function npmViewReadme(spec: string) {
-  return runPluginNpmCommand(["view", spec, "readme", "--json", "--prefer-online"]);
+  return resolveNpmJsonString(parsed);
 }
 
 async function packPublishedPackage(spec: string, destinationDir: string) {
@@ -311,7 +279,9 @@ async function verifyPublishedPackageReadme(spec: string) {
   let lastError: unknown;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      const readme = parseNpmReadmeMetadata(npmViewReadme(spec));
+      const readme = parseNpmReadmeMetadata(
+        runPluginNpmCommand(["view", spec, "readme", "--json", "--prefer-online"]),
+      );
       if (readme) {
         return readme;
       }
@@ -420,8 +390,7 @@ async function verifyPublishedPluginRuntime(spec: string) {
       readme = packedPackage.readme;
     }
     return {
-      packageName: packedPackage.packageJson.name,
-      version: packedPackage.packageJson.version,
+      packageLabel: formatPackageLabel(packedPackage.packageJson, spec),
       fileCount: packedPackage.files.length,
       readmeLength: readme.length,
     };
@@ -438,7 +407,7 @@ async function main(argv: string[]) {
   }
   const result = await verifyPublishedPluginRuntime(args.spec);
   console.log(
-    `plugin-npm-published-runtime-check: ${result.packageName}@${result.version} OK (${result.fileCount} files, ${result.readmeLength} readme chars)`,
+    `plugin-npm-published-runtime-check: ${result.packageLabel} OK (${result.fileCount} files, ${result.readmeLength} readme chars)`,
   );
 }
 

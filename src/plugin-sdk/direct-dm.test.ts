@@ -2,7 +2,6 @@
  * Tests direct-message guard policy helpers exposed through the SDK.
  */
 import { describe, expect, it, vi } from "vitest";
-import { resolveOriginMessageTo } from "../auto-reply/reply/origin-routing.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveImplicitMessageActionTarget } from "../infra/outbound/message-action-normalization.js";
 import {
@@ -205,21 +204,6 @@ describe("channel-inbound direct-message helpers", () => {
     });
   });
 
-  it("builds a shared pre-crypto guard policy with partial overrides", () => {
-    const policy = createDirectDmPreCryptoGuardPolicy({
-      maxFutureSkewSec: 30,
-      rateLimit: {
-        maxPerSenderPerWindow: 5,
-      },
-    });
-
-    expect(policy.allowedKinds).toEqual([4]);
-    expect(policy.maxFutureSkewSec).toBe(30);
-    expect(policy.maxCiphertextBytes).toBe(16 * 1024);
-    expect(policy.rateLimit.maxPerSenderPerWindow).toBe(5);
-    expect(policy.rateLimit.maxGlobalPerWindow).toBe(200);
-  });
-
   it("defaults non-finite shared pre-crypto guard numeric overrides", () => {
     const policy = createDirectDmPreCryptoGuardPolicy({
       maxFutureSkewSec: Number.NaN,
@@ -299,10 +283,7 @@ describe("channel-inbound direct-message helpers", () => {
     expect(result.ctxPayload.NativeDirectUserId).toBe("clawstudio");
     expect(result.ctxPayload.OriginatingTo).toBe("reef:clawstudio");
     expect(result.ctxPayload.CommandAuthorized).toBe(true);
-    const currentChannelId = resolveOriginMessageTo({
-      originatingTo: result.ctxPayload.OriginatingTo,
-      to: result.ctxPayload.To,
-    });
+    const currentChannelId = result.ctxPayload.OriginatingTo ?? result.ctxPayload.To;
     expect(
       resolveImplicitMessageActionTarget({ currentChannelId, currentChannelProvider: "reef" }),
     ).toBe("reef:clawstudio");

@@ -2,65 +2,57 @@
  * Shared invalid-config formatting, logging, and error helpers for config reads and mutations.
  * All terminal-facing text is sanitized here so callers can reuse the same failure surface.
  */
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import type { DedupeCache } from "../infra/dedupe.js";
-import { extractErrorCode } from "../infra/errors.js";
 import { formatConfigIssueLines } from "./issue-format.js";
+import type { ConfigFileSnapshot, ConfigValidationIssue } from "./types.js";
 
-/** Minimal validation issue shape accepted from schema and mutation validation paths. */
-type ConfigValidationIssueLike = {
-  path: string;
-  message: string;
-};
+/** Read failures do not establish that authored configuration needs repair. */
+export function isConfigReadFailure(
+  snapshot: Pick<ConfigFileSnapshot, "issues" | "readError">,
+): boolean {
+  return Boolean(
+    snapshot.readError || snapshot.issues.some((issue) => issue.errorCode === "CONFIG_READ_FAILED"),
+  );
+}
+
+export function configFailureHeading(
+  snapshot: Pick<ConfigFileSnapshot, "issues" | "readError">,
+): string {
+  return isConfigReadFailure(snapshot)
+    ? "OpenClaw config could not be read"
+    : "OpenClaw config is invalid";
+}
 
 /** Formats validation issues as terminal-safe bullet lines for config load failures. */
-export function formatInvalidConfigDetails(issues: ConfigValidationIssueLike[]): string {
+export function formatInvalidConfigDetails(issues: ConfigValidationIssue[]): string {
   return formatConfigIssueLines(issues, "-", { normalizeRoot: true }).join("\n");
 }
 
-/** Builds the one-line invalid-config prefix plus preformatted validation details. */
-function formatInvalidConfigLogMessage(configPath: string, details: string): string {
-  return `Invalid config at ${configPath}:\n${details}`;
-}
+type InvalidConfigError = Error & {
+  code: "INVALID_CONFIG";
+  details?: string;
+  recovery?: "doctor" | "manual";
+  diagnosticEmitted?: boolean;
+};
 
-/** Logs an invalid config message once per path during a load sequence. */
-function logInvalidConfigOnce(params: {
-  configPath: string;
-  details: string;
-  logger: Pick<typeof console, "error">;
-  loggedConfigPaths: DedupeCache;
-}): void {
-  if (params.loggedConfigPaths.check(params.configPath)) {
-    // Avoid repeating the same invalid config block when multiple callers observe the same path.
-    return;
-  }
-  params.logger.error(formatInvalidConfigLogMessage(params.configPath, params.details));
-}
-
-/** Creates the tagged error shape used by callers that need details after catch. */
+/** Creates a tagged error without logging; throwInvalidConfig owns diagnostic emission. */
 export function createInvalidConfigError(
   configPath: string,
   details: string,
   options: { recovery?: "doctor" | "manual" } = {},
-): Error {
-  const error = new Error(`Invalid config at ${configPath}:\n${details}`);
+): InvalidConfigError {
   // Keep metadata non-class-based so cross-module callers can inspect plain Error instances.
-  error.name = "InvalidConfigError";
-  const tagged = error as {
-    code?: "INVALID_CONFIG";
-    details?: string;
-    recovery?: "doctor" | "manual";
-  };
-  tagged.code = "INVALID_CONFIG";
-  tagged.details = details;
-  tagged.recovery = options.recovery ?? "doctor";
-  return error;
+  return Object.assign(new Error(`Invalid config at ${configPath}:\n${details}`), {
+    name: "InvalidConfigError",
+    code: "INVALID_CONFIG" as const,
+    details,
+    recovery: options.recovery ?? "doctor",
+    diagnosticEmitted: false,
+  });
 }
 
-export function isInvalidConfigError(err: unknown): err is Error & {
-  code: "INVALID_CONFIG";
-  details?: string;
-  recovery?: "doctor" | "manual";
-} {
+export function isInvalidConfigError(err: unknown): err is InvalidConfigError {
   return extractErrorCode(err) === "INVALID_CONFIG";
 }
 
@@ -68,19 +60,35 @@ export function isDoctorRecoverableInvalidConfigError(err: unknown): boolean {
   return isInvalidConfigError(err) && err.recovery !== "manual";
 }
 
+/** An unavailable read cannot establish invalid authored settings or authorize Doctor repair. */
+export function createConfigReadError(
+  snapshot: Pick<ConfigFileSnapshot, "path" | "issues">,
+  details = formatInvalidConfigDetails(snapshot.issues),
+): Error {
+  const issue: (ConfigValidationIssue & ErrorOptions) | undefined = snapshot.issues.find(
+    (candidate) => candidate.errorCode === "CONFIG_READ_FAILED",
+  );
+  return Object.assign(
+    new Error(`Config could not be read at ${snapshot.path}:\n${details}`, { cause: issue?.cause }),
+    { code: "CONFIG_READ_FAILED" },
+  );
+}
+
 /** Logs and throws the standard invalid-config error for a validation result. */
 export function throwInvalidConfig(params: {
   configPath: string;
-  issues: ConfigValidationIssueLike[];
+  issues: ConfigValidationIssue[];
   logger: Pick<typeof console, "error">;
   loggedConfigPaths: DedupeCache;
 }): never {
   const details = formatInvalidConfigDetails(params.issues);
-  logInvalidConfigOnce({
-    configPath: params.configPath,
-    details,
-    logger: params.logger,
-    loggedConfigPaths: params.loggedConfigPaths,
-  });
-  throw createInvalidConfigError(params.configPath, details);
+  const error = createInvalidConfigError(params.configPath, details);
+  // Dedupe the full diagnostic: a later invalid config at the same path may need a different repair.
+  // Record only after logging succeeds so a failed logger cannot silence a subsequent attempt.
+  if (!params.loggedConfigPaths.peek(error.message)) {
+    params.logger.error(error.message);
+  }
+  params.loggedConfigPaths.check(error.message);
+  error.diagnosticEmitted = true;
+  throw error;
 }

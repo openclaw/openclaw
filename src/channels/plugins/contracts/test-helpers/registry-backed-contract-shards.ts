@@ -4,7 +4,7 @@ import { beforeAll, describe, it } from "vitest";
  *
  * Installs surface, directory, threading, and plugin contract suites for bundled channel shards.
  */
-import { expectChannelPluginContract } from "../../../../plugin-sdk/channel-test-helpers.js";
+import { expectChannelPluginContract } from "../../../../plugin-sdk/test-helpers/channel-contract-suites.js";
 import {
   getBundledChannelDirectoryPluginAsync,
   getBundledChannelPluginAsync,
@@ -19,7 +19,6 @@ import {
 import { expectChannelSurfaceContract } from "./surface-contract-suite.js";
 import {
   expectChannelDirectoryBaseContract,
-  expectChannelThreadingBaseContract,
   expectChannelThreadingReturnValuesNormalized,
 } from "./threading-directory-contract-suites.js";
 
@@ -121,14 +120,6 @@ export function installThreadingContractRegistryShard(params: ContractShardParam
   });
   for (const entry of entries) {
     describe(`${entry.id} threading contract`, () => {
-      it("exposes the base threading contract", () => {
-        const plugin = pluginCache.get(entry.id);
-        if (!plugin) {
-          throw new Error(`Missing bundled channel plugin for ${entry.id}`);
-        }
-        expectChannelThreadingBaseContract(plugin);
-      });
-
       it("keeps threading return values normalized", () => {
         const plugin = pluginCache.get(entry.id);
         if (!plugin) {

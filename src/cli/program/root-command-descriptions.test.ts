@@ -1,15 +1,17 @@
 // Root help renders catalog placeholders while command help and completion use
 // registered Commander commands. Keep those user-facing descriptions aligned.
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cliCommandCatalog } from "../command-catalog.js";
 import { isReservedNonPluginCommandRoot } from "../command-registration-policy.js";
 import { collectShellCompletionCommandTree } from "../completion-command-tree.js";
-import { formatCliJsonFailure } from "../failure-output.js";
-import { runCliWithExitFinalization } from "../one-shot-exit.js";
-import { getCoreCliCommandNames, registerCoreCliByName } from "./command-registry-core.js";
+import { registerCoreCliByName } from "./command-registry-core.js";
 import { createProgramContext } from "./context.js";
-import { getCoreCliCommandDescriptors } from "./core-command-descriptors.js";
+import {
+  getCoreCliCommandDescriptors,
+  getCoreCliCommandNamesCore,
+} from "./core-command-descriptors.js";
 import { registerSubCliByName, registerSubCliCommands } from "./register.subclis.js";
 import { getSubCliEntriesCore } from "./subcli-descriptors.js";
 
@@ -19,6 +21,7 @@ const RESERVED_CATALOG_ROOTS = {
 } as const;
 
 const PLUGIN_CATALOG_PATHS = {
+  "browser extension": "registered and covered by the browser plugin",
   "browser extension native-host": "registered and covered by the browser plugin",
   memory: "registered and covered by the memory-core plugin",
   "memory search": "registered and covered by the memory-core plugin",
@@ -29,6 +32,8 @@ const JSON_NOT_APPLICABLE = {
   namespaces: {
     reason: "command group only; reporting subcommands declare JSON output individually",
     commands: [
+      "agents team",
+      "claws",
       "backup",
       "backup git",
       "backup sqlite",
@@ -47,10 +52,10 @@ const JSON_NOT_APPLICABLE = {
       "transcripts",
       "gateway restart-handoff",
       "gateway diagnostics",
-      "daemon",
       "system",
       "system heartbeat",
       "promos",
+      "telemetry",
       "infer",
       "infer model",
       "infer model auth",
@@ -62,6 +67,7 @@ const JSON_NOT_APPLICABLE = {
       "infer embedding",
       "approvals",
       "approvals allowlist",
+      "approvals grants",
       "exec-policy",
       "nodes",
       "nodes camera",
@@ -71,7 +77,6 @@ const JSON_NOT_APPLICABLE = {
       "users",
       "node",
       "sandbox",
-      "fleet",
       "worktrees",
       "cron",
       "dns",
@@ -95,7 +100,6 @@ const JSON_NOT_APPLICABLE = {
       "models image-fallbacks",
       "models auth",
       "models auth order",
-      "tasks flow",
       "skills workshop",
     ],
   },
@@ -133,7 +137,6 @@ const JSON_NOT_APPLICABLE = {
       "node run",
       "connect",
       "worker",
-      "fleet logs",
       "proxy start",
       "proxy run",
       "webhooks gmail run",
@@ -148,6 +151,8 @@ const JSON_NOT_APPLICABLE = {
       "uninstall",
       "backup enable",
       "backup disable",
+      "telemetry on",
+      "telemetry off",
       "config set",
       "mcp add",
       "mcp set",
@@ -157,11 +162,6 @@ const JSON_NOT_APPLICABLE = {
       "mcp unset",
       "onboard recommendations acknowledge",
       "onboard recommendations refresh",
-      "tasks notify",
-      "tasks cancel",
-      "tasks retry",
-      "tasks dismiss",
-      "tasks flow cancel",
       "models set",
       "models set-image",
       "models aliases add",
@@ -172,6 +172,7 @@ const JSON_NOT_APPLICABLE = {
       "models image-fallbacks add",
       "models image-fallbacks remove",
       "models image-fallbacks clear",
+      "models auth activate",
       "models auth logout",
       "models auth order set",
       "models auth order clear",
@@ -182,11 +183,6 @@ const JSON_NOT_APPLICABLE = {
       "skills install",
       "skills update",
       "sandbox recreate",
-      "fleet start",
-      "fleet stop",
-      "fleet restart",
-      "fleet upgrade",
-      "fleet rm",
       "dns setup",
       "proxy purge",
       "pairing approve",
@@ -216,16 +212,22 @@ const JSON_NOT_APPLICABLE = {
   },
 } as const;
 
-// Route-first parsing accepts JSON before Commander registration is reached.
-const JSON_OUTPUT_ROUTE_FIRST = new Set(["agents"]);
+// These commands own JSON output without an optional --json flag.
+const JSON_OUTPUT_WITHOUT_FLAG = new Set([
+  "agents",
+  "update admit",
+  "update migrate",
+  "update restore",
+  "update finish",
+]);
 
 async function registerAllBuiltInCommands(): Promise<Command> {
   const program = new Command().name("openclaw");
   const ctx = createProgramContext();
   const argv = ["node", "openclaw", "completion"];
 
-  for (const name of getCoreCliCommandNames()) {
-    await registerCoreCliByName(program, ctx, name, argv);
+  for (const name of getCoreCliCommandNamesCore()) {
+    await registerCoreCliByName(program, ctx, name);
   }
   for (const entry of getSubCliEntriesCore()) {
     await registerSubCliByName(program, entry.name, argv, { purpose: "completion" });
@@ -243,7 +245,7 @@ function supportsJsonOutput(path: string, command: Command): boolean {
   if (path === "config set") {
     return false;
   }
-  return hasOwnJsonOption(command) || JSON_OUTPUT_ROUTE_FIRST.has(path);
+  return hasOwnJsonOption(command) || JSON_OUTPUT_WITHOUT_FLAG.has(path);
 }
 
 function requiredCommandArgs(command: Command): string[] {
@@ -251,7 +253,7 @@ function requiredCommandArgs(command: Command): string[] {
     if (!argument.required) {
       return [];
     }
-    return argument.variadic ? ["guard-value"] : ["guard-value"];
+    return ["guard-value"];
   });
   for (const option of command.options) {
     if (!option.mandatory) {
@@ -318,12 +320,13 @@ describe("root command descriptions", () => {
       }
     }
 
+    expect(registeredCommands.has("tasks")).toBe(false);
     expect(missing, "catalog entries with no registered command or alias").toEqual([]);
     expect(mismatches, "root help vs registered command description drift").toEqual([]);
   });
 
   it("keeps startup policy catalog paths registered or explicitly reserved", async () => {
-    vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "1");
+    vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "");
     const program = await registerAllBuiltInCommands();
 
     // Private QA is a lazy source-checkout command. Its root placeholder proves
@@ -415,48 +418,38 @@ describe("root command descriptions", () => {
       "remove stale JSON N/A entries after adding output support",
     ).toEqual([]);
 
-    const staleRouteFirstSupport = [...JSON_OUTPUT_ROUTE_FIRST].filter((path) => {
+    const staleAlwaysJsonSupport = [...JSON_OUTPUT_WITHOUT_FLAG].filter((path) => {
       const command = registered.get(path);
       return !command || hasOwnJsonOption(command);
     });
     expect(
-      staleRouteFirstSupport,
-      "route-first JSON entries must exist and remain absent from Commander options",
+      staleAlwaysJsonSupport,
+      "always-JSON entries must exist and remain absent from Commander options",
     ).toEqual([]);
   });
 
-  it("routes every registered JSON command failure through the canonical envelope", async () => {
+  it("accepts declared JSON output options through the registered command parsers", async () => {
     const program = await registerAllBuiltInCommands();
     const contexts = collectShellCompletionCommandTree(program).descendants.filter((context) => {
       const path = context.pathVariants[0]?.join(" ") ?? "";
-      return supportsJsonOutput(path, context.command);
+      return supportsJsonOutput(path, context.command) && hasOwnJsonOption(context.command);
     });
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
     expect(contexts.length).toBeGreaterThan(0);
     for (const context of contexts) {
       const path = context.pathVariants[0]?.join(" ") ?? "";
       const failure = new Error(`synthetic failure for ${path}`);
-      const payloads: unknown[] = [];
       context.command.action(async () => {
         throw failure;
       });
-      const args = requiredCommandArgs(context.command);
-      if (hasOwnJsonOption(context.command)) {
-        args.push("--json");
-      }
+      const args = [
+        ...requiredCommandArgs(context.command),
+        // Conditional alternatives are not represented by Commander's mandatory options.
+        ...(path === "database port" ? ["--to", "sqlite"] : []),
+        "--json",
+      ];
 
-      await runCliWithExitFinalization({
-        runtime,
-        run: async () => {
-          await context.command.parseAsync(args, { from: "user" });
-        },
-        onError: (error) => {
-          payloads.push(formatCliJsonFailure(error));
-        },
-      });
-
-      expect(payloads, path).toEqual([formatCliJsonFailure(failure)]);
+      await expect(context.command.parseAsync(args, { from: "user" }), path).rejects.toBe(failure);
     }
   });
 });

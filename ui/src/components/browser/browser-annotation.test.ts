@@ -1,3 +1,4 @@
+import { runInNewContext } from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -18,32 +19,6 @@ function node(overrides: Partial<BrowserInspectedNode> = {}): BrowserInspectedNo
 }
 
 describe("buildBrowserAnnotationContent", () => {
-  it("describes the page, marked regions, and inspected element", () => {
-    const { modelContext, card } = buildBrowserAnnotationContent({
-      url: "https://github.com/openclaw/openclaw/pull/103853",
-      title: "feat(ui): collapse session PR chips",
-      strokes: [
-        {
-          points: [
-            { x: 0.2, y: 0.5 },
-            { x: 0.4, y: 0.7 },
-          ],
-        },
-      ],
-      element: node({ name: "Merge", role: "button" }),
-    });
-    expect(modelContext).toContain("https://github.com/openclaw/openclaw/pull/103853");
-    expect(modelContext).toContain("Marked region 1");
-    expect(modelContext).toContain("30% across / 60% down");
-    expect(modelContext).toContain('button "Merge" (role=button)');
-    expect(card).toEqual({
-      title: "feat(ui): collapse session PR chips",
-      displayUrl: "github.com",
-      markedRegionCount: 1,
-      inspectedElement: true,
-    });
-  });
-
   it("counts every non-empty stroke while limiting the rendered region list", () => {
     const strokes = [
       { points: [] },
@@ -133,41 +108,29 @@ describe("buildBrowserAnnotationContent", () => {
   it("preserves valid UTF-16 from inspected accessible names", async () => {
     const element = document.createElement("button");
     element.setAttribute("aria-label", `${"a".repeat(78)}${" ".repeat(41)}😀tail`);
-    const originalElementFromPoint = Object.getOwnPropertyDescriptor(document, "elementFromPoint");
-    Object.defineProperty(document, "elementFromPoint", {
-      configurable: true,
-      value: vi.fn(() => element),
-    });
+    const stubDocument = { elementFromPoint: () => element };
     const client = {
       request: vi.fn(async (_method: string, envelope: { body?: { fn?: string } }) => {
         const fn = envelope.body?.fn;
         if (!fn) {
           throw new Error("missing browser evaluation function");
         }
-        return { result: (0, eval)(`(${fn})`)() };
+        return { result: runInNewContext(`(${fn})()`, { document: stubDocument }) };
       }),
     };
-    try {
-      const inspected = await inspectBrowserElementAt(client as unknown as GatewayBrowserClient, {
-        targetId: "proof-tab",
-        x: 10,
-        y: 20,
-      });
-      const { modelContext } = buildBrowserAnnotationContent({
-        url: "https://example.com",
-        title: "Boundary proof",
-        strokes: [],
-        element: inspected,
-      });
-      expect(inspected?.name.charCodeAt((inspected?.name.length ?? 0) - 1)).not.toBe(0xd83d);
-      expect(modelContext).toContain(`button "${"a".repeat(78)}"`);
-    } finally {
-      if (originalElementFromPoint) {
-        Object.defineProperty(document, "elementFromPoint", originalElementFromPoint);
-      } else {
-        Reflect.deleteProperty(document, "elementFromPoint");
-      }
-    }
+    const inspected = await inspectBrowserElementAt(client as unknown as GatewayBrowserClient, {
+      targetId: "proof-tab",
+      x: 10,
+      y: 20,
+    });
+    const { modelContext } = buildBrowserAnnotationContent({
+      url: "https://example.com",
+      title: "Boundary proof",
+      strokes: [],
+      element: inspected,
+    });
+    expect(inspected?.name.charCodeAt((inspected?.name.length ?? 0) - 1)).not.toBe(0xd83d);
+    expect(modelContext).toContain(`button "${"a".repeat(78)}"`);
   });
 });
 

@@ -17,18 +17,11 @@ import type { AuthProfileIdRepairResult, AuthProfileStore } from "./types.js";
 // matching email/lastGood/current OAuth profile instead of guessing broadly.
 function getProfileSuffix(profileId: string): string {
   const idx = profileId.indexOf(":");
-  if (idx < 0) {
-    return "";
-  }
-  return profileId.slice(idx + 1);
+  return idx < 0 ? "" : profileId.slice(idx + 1);
 }
 
 function isEmailLike(value: string): boolean {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return false;
-  }
-  return trimmed.includes("@") && trimmed.includes(".");
+  return value.includes("@") && value.includes(".");
 }
 
 /** Suggests a modern OAuth profile id for a legacy provider:default profile. */
@@ -54,7 +47,8 @@ export function suggestOAuthProfileIdForLegacyDefault(params: {
   }
 
   const oauthProfiles = listProfilesForProvider(params.store, providerKey).filter(
-    (id) => params.store.profiles[id]?.type === "oauth",
+    (id) =>
+      params.store.profiles[id]?.type === "oauth" && !params.store.profiles[id]?.setup?.replacement,
   );
   if (oauthProfiles.length === 0) {
     return null;
@@ -86,11 +80,7 @@ export function suggestOAuthProfileIdForLegacyDefault(params: {
   }
 
   const emailLike = nonLegacy.filter((id) => isEmailLike(getProfileSuffix(id)));
-  if (emailLike.length === 1) {
-    return emailLike[0] ?? null;
-  }
-
-  return null;
+  return emailLike.length === 1 ? (emailLike[0] ?? null) : null;
 }
 
 /** Migrates config auth profile references away from a legacy OAuth default id. */
@@ -103,13 +93,11 @@ export function repairOAuthProfileIdMismatch(params: {
   const legacyProfileId =
     params.legacyProfileId ?? `${normalizeProviderId(params.provider)}:default`;
   const legacyCfg = params.cfg.auth?.profiles?.[legacyProfileId];
-  if (!legacyCfg) {
-    return { config: params.cfg, changes: [], migrated: false };
-  }
-  if (legacyCfg.mode !== "oauth") {
-    return { config: params.cfg, changes: [], migrated: false };
-  }
-  if (normalizeProviderId(legacyCfg.provider) !== normalizeProviderId(params.provider)) {
+  if (
+    !legacyCfg ||
+    legacyCfg.mode !== "oauth" ||
+    normalizeProviderId(legacyCfg.provider) !== normalizeProviderId(params.provider)
+  ) {
     return { config: params.cfg, changes: [], migrated: false };
   }
 
@@ -138,9 +126,7 @@ export function repairOAuthProfileIdMismatch(params: {
   });
   const { email: _legacyEmail, displayName: _legacyDisplayName, ...legacyCfgRest } = legacyCfg;
 
-  const nextProfiles = {
-    ...params.cfg.auth?.profiles,
-  } as Record<string, AuthProfileConfig>;
+  const nextProfiles: Record<string, AuthProfileConfig> = { ...params.cfg.auth?.profiles };
   delete nextProfiles[legacyProfileId];
   nextProfiles[toProfileId] = {
     ...legacyCfgRest,

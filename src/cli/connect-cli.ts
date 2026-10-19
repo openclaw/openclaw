@@ -1,20 +1,24 @@
 // One-paste node onboarding from setup codes or single-use Gateway join URLs.
+import { isUtf8 } from "node:buffer";
 import fs from "node:fs/promises";
-import { Option, type Command } from "commander";
+import { readRegularFile } from "@openclaw/fs-safe/advanced";
+import { normalizeMimeType } from "@openclaw/media-core/mime";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import type { Command } from "commander";
 import {
   buildCloudflareAccessHeaders,
   CF_ACCESS_CLIENT_ID_HEADER,
   CF_ACCESS_CLIENT_SECRET_HEADER,
   type CloudflareAccessCredentials,
 } from "../../packages/gateway-client/src/cloudflare-access.js";
-import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader, mutateConfigFileWithRetry } from "../config/config.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { normalizeHostname } from "../infra/net/hostname.js";
 import { loadNodeHostConfig, type NodeHostGatewayConfig } from "../node-host/config.js";
+import { formatGatewayCandidateUrl } from "../node-host/gateway-candidate-connection.js";
 import {
   nodeHostCloudflareAccessConfigFromEnv,
   nodeHostGatewayMatchesUrl,
@@ -22,34 +26,36 @@ import {
   resolveNodeHostCloudflareAccess,
   type NodeHostCloudflareAccessConfig,
 } from "../node-host/gateway-cloudflare-access.js";
-import { runNodeHost } from "../node-host/runner.js";
+import { loadResumableNodeHostGateway, runNodeHost } from "../node-host/runner.js";
 import { isDevicePairingJoinCode } from "../pairing/join-code.js";
 import { decodePairingSetupCode, encodePairingSetupCode } from "../pairing/setup-code.js";
 import { defaultRuntime } from "../runtime.js";
-import { formatHelpExamples } from "./help-format.js";
+import { formatCliCommand } from "./command-format.js";
+import { formatDocsHelp, formatHelpExamples } from "./help-format.js";
+import { addNodeCommandOptions } from "./node-cli/command-options.js";
 import { runNodeDaemonInstall } from "./node-cli/daemon.js";
 import { resolveNodePairGatewayPayload } from "./node-cli/gateway-options.js";
+import { quoteCliArg, quotePowerShellArg } from "./quote-cli-arg.js";
 
 type ConnectCommandOptions = {
   service?: boolean;
   ephemeral?: boolean;
+  sessionHost?: boolean;
   targetFile?: string;
   displayName?: string;
+  commands?: string[];
+  allCommands?: boolean;
 };
 
 type PairingSetupPayload = ReturnType<typeof decodePairingSetupCode>;
 
 const MAX_JOIN_PAYLOAD_BYTES = 24 * 1024;
+const MAX_TARGET_FILE_BYTES = 64 * 1024;
 const JOIN_FETCH_TIMEOUT_MS = 15_000;
 
 function parseJoinTarget(target: string): URL | null {
-  let parsed: URL;
-  try {
-    parsed = new URL(target);
-  } catch {
-    return null;
-  }
-  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+  const parsed = URL.parse(target);
+  if (!parsed || (parsed.protocol !== "https:" && parsed.protocol !== "http:")) {
     return null;
   }
   const match = /(?:^|\/)j\/([^/]+)$/u.exec(parsed.pathname);
@@ -101,7 +107,10 @@ async function fetchJoinPayload(
     });
     release = guarded.release;
     const response = guarded.response;
-    if (!response.ok || !response.headers.get("content-type")?.startsWith("application/json")) {
+    if (
+      !response.ok ||
+      normalizeMimeType(response.headers.get("content-type")) !== "application/json"
+    ) {
       await cancelUnreadResponseBody(response);
       throw new Error("Gateway join code was not found or has expired.");
     }
@@ -136,39 +145,104 @@ function selectCloudflareAccessConfig(params: {
   );
 }
 
+/** Connect only redeems one-shot targets; a saved pairing resumes through `openclaw node`. */
+function formatMissingTargetError(
+  opts: ConnectCommandOptions,
+  savedGateway: NodeHostGatewayConfig | undefined,
+): string {
+  const missing = "Connect target is required.";
+  // Provider-managed ephemeral nodes always replay their own setup code.
+  if (opts.ephemeral) {
+    return missing;
+  }
+  // Only the fixed prefix is formatted: quoted user values may contain --profile text.
+  const command = (fixed: string, ...args: string[]) =>
+    [formatCliCommand(fixed), ...args].join(" ");
+  const quote = process.platform === "win32" ? quotePowerShellArg : quoteCliArg;
+  const sessionHostFlags = opts.sessionHost ? ["--session-host"] : [];
+  const hostFlags = [
+    ...(opts.displayName !== undefined ? ["--display-name", quote(opts.displayName)] : []),
+    ...(opts.commands ? ["--commands", quote(opts.commands.join(","))] : []),
+    ...(opts.allCommands ? ["--all-commands"] : []),
+  ];
+  const pair = `mint a join URL on the Gateway host with ${command("openclaw devices join-code")}, then run: ${command("openclaw connect <join-url>", ...(opts.service ? ["--service"] : []), ...sessionHostFlags, ...hostFlags)}`;
+  if (!savedGateway) {
+    return `${missing} To pair this machine, ${pair}`;
+  }
+  // Mirror the post-pairing steps of `connect --service [--session-host]`.
+  const reconnect = opts.service
+    ? [
+        ...(opts.sessionHost
+          ? [command("openclaw config set nodeHost.workerRuns.enabled true")]
+          : []),
+        command("openclaw node install --force", ...hostFlags),
+      ].join(", then ")
+    : command("openclaw node run", ...sessionHostFlags, ...hostFlags);
+  // Device tokens are not bound to an endpoint, so a failed switch to another Gateway can
+  // leave the old token beside the new endpoint; the reconnect hint stays conditional.
+  return [
+    `${missing} Join URLs and setup codes are single-use.`,
+    `If this machine is still paired with ${formatGatewayCandidateUrl(savedGateway)}, reconnect with the saved pairing: ${reconnect}`,
+    `Otherwise, ${pair}`,
+  ].join("\n");
+}
+
 async function resolveConnectTarget(
   target: string | undefined,
   targetFile: string | undefined,
-): Promise<string> {
+): Promise<string | undefined> {
   if (target && targetFile) {
     throw new Error("Provide the connect target or --target-file, not both.");
   }
   if (target) {
     return target;
   }
-  const path = targetFile?.trim();
-  if (!path) {
-    throw new Error("Connect target is required.");
+  const filePath = readNonBlankString(targetFile);
+  if (!filePath) {
+    return undefined;
   }
+  let buffer: Buffer;
   try {
-    const value = (await fs.readFile(path, "utf8")).trim();
-    if (!value) {
-      throw new Error("Connect target file is empty.");
-    }
-    return value;
-  } finally {
-    await fs.rm(path, { force: true });
+    // The original fs.readFile behavior followed symlinks in the target path.
+    // Resolve intentional links before the regular-file safety check so
+    // symlinked secret-mount or one-shot target files keep working.
+    const resolvedFilePath = await fs.realpath(filePath);
+    ({ buffer } = await readRegularFile({
+      filePath: resolvedFilePath,
+      maxBytes: MAX_TARGET_FILE_BYTES,
+    }));
+  } catch (error) {
+    const cause = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Could not read --target-file ${filePath} (max ${MAX_TARGET_FILE_BYTES} bytes): ${cause}`,
+      { cause: error },
+    );
   }
+  if (!isUtf8(buffer)) {
+    throw new Error("Connect target file must be valid UTF-8.");
+  }
+  const value = buffer.toString("utf8").trim();
+  if (!value) {
+    throw new Error("Connect target file is empty.");
+  }
+  await fs.rm(filePath, { force: true });
+  return value;
 }
 
 async function runConnectCommand(
   target: string | undefined,
   opts: ConnectCommandOptions,
 ): Promise<void> {
+  if (opts.ephemeral && opts.sessionHost) {
+    throw new Error("--ephemeral cannot be combined with --session-host.");
+  }
   if (opts.ephemeral && opts.service) {
     throw new Error("--ephemeral cannot be combined with --service.");
   }
   const resolvedTarget = await resolveConnectTarget(target, opts.targetFile);
+  if (!resolvedTarget) {
+    throw new Error(formatMissingTargetError(opts, await loadResumableNodeHostGateway()));
+  }
   const joinTarget = parseJoinTarget(resolvedTarget);
   const saved = await loadNodeHostConfig();
   const initialCloudflareAccess = joinTarget
@@ -183,7 +257,7 @@ async function runConnectCommand(
   }
   const joinCredentials = await resolveNodeHostCloudflareAccess({
     value: initialCloudflareAccess,
-    config: getRuntimeConfig(),
+    config: await captureRuntimeConfigAsyncReader()(),
     env: process.env,
   });
   const payload = joinTarget
@@ -202,6 +276,7 @@ async function runConnectCommand(
       : index === 0;
     return boundToAccessOrigin && cloudflareAccess ? { ...candidate, cloudflareAccess } : candidate;
   });
+  const forceWorkerRuns = opts.ephemeral === true || (opts.sessionHost === true && !opts.service);
   const nodeRunOptions = {
     gatewayHost: pair.host,
     gatewayPort: pair.port,
@@ -216,8 +291,11 @@ async function runConnectCommand(
     // Environment-managed nodes reuse their persisted device token when a provider
     // replays setup after the one-shot bootstrap credential has been consumed.
     preferGatewayBootstrapToken: opts.ephemeral !== true,
-    ...(opts.ephemeral === true ? { forceWorkerRuns: true } : {}),
+    ...(forceWorkerRuns ? { forceWorkerRuns: true } : {}),
+    ...(opts.ephemeral === true ? { ephemeral: true } : {}),
     displayName: opts.displayName,
+    commands: opts.commands,
+    allCommands: opts.allCommands,
   };
 
   if (!opts.service) {
@@ -228,17 +306,41 @@ async function runConnectCommand(
   // The first hello stores durable device auth and the winning endpoint before
   // installation, so the service never persists the one-shot bootstrap bearer.
   await runNodeHost({ ...nodeRunOptions, stopAfterFirstConnect: true });
-  await runNodeDaemonInstall({ displayName: opts.displayName, force: true });
+  if (opts.sessionHost) {
+    await mutateConfigFileWithRetry({
+      writeOptions: {
+        auditOrigin: "cli",
+        explicitSetPaths: [["nodeHost", "workerRuns", "enabled"]],
+      },
+      mutate: (draft) => {
+        draft.nodeHost = {
+          ...draft.nodeHost,
+          workerRuns: { ...draft.nodeHost?.workerRuns, enabled: true },
+        };
+      },
+    });
+  }
+  await runNodeDaemonInstall({
+    displayName: opts.displayName,
+    commands: opts.commands,
+    allCommands: opts.allCommands,
+    force: true,
+  });
 }
 
 export function registerConnectCli(program: Command): void {
-  program
-    .command("connect")
-    .description("Connect this machine to an OpenClaw Gateway as a node")
+  addNodeCommandOptions(
+    program.command("connect").description("Connect this machine to an OpenClaw Gateway as a node"),
+  )
     .argument("[target]", "oc-pair URL, setup code, or HTTPS Gateway join URL")
     .option("--service", "Install and run the node host as an OS service", false)
     .option("--ephemeral", "Run as an environment-managed disposable session host", false)
-    .addOption(new Option("--target-file <path>").hideHelp())
+    .option(
+      "--session-host",
+      "Host worker sessions (process-scoped unless installed as a service)",
+      false,
+    )
+    .option("--target-file <path>", "Read the connect target from a private file and remove it")
     .option("--display-name <name>", "Override the node display name")
     .addHelpText(
       "after",
@@ -249,7 +351,11 @@ export function registerConnectCli(program: Command): void {
             "openclaw connect https://gateway.example/j/<code> --service",
             "Install the node host service.",
           ],
-        ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/connect", "docs.openclaw.ai/cli/connect")}\n`,
+          [
+            "openclaw connect https://gateway.example/j/<code> --service --session-host",
+            "Install a worker-session host service.",
+          ],
+        ])}\n${formatDocsHelp("/cli/connect")}`,
     )
     .action(async (target: string | undefined, opts: ConnectCommandOptions) => {
       try {

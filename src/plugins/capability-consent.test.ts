@@ -1,0 +1,623 @@
+import fs from "node:fs";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import type {
+  PluginAcceptedDeclaredSurface,
+  PluginInstallRecord,
+} from "../config/types.plugins.js";
+import { resolvePluginArtifactDeclaredSurface } from "./capability-artifact.js";
+import { createManagedPluginArtifactConsentHandler } from "./capability-consent.js";
+import {
+  buildPluginCapabilitySummary,
+  computeDeclaredSurfaceHash,
+  diffDeclaredSurfaceWidening,
+  mergePluginDeclaredSurfaces,
+  resolveAcceptedSurfaceCurrent,
+  resolvePluginInstallRecordIntegrity,
+} from "./capability-summary.js";
+import { resolveInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
+import { loadInstalledPluginIndexWithDiscovery } from "./installed-plugin-index.js";
+import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
+
+const tempDirs: string[] = [];
+
+afterEach(() => {
+  cleanupTrackedTempDirs(tempDirs);
+});
+
+function createArtifactFixture(files: Record<string, object | string>): string {
+  const rootDir = makeTrackedTempDir("openclaw-plugin-capability-consent", tempDirs);
+  for (const [relativePath, contents] of Object.entries(files)) {
+    const filePath = path.join(rootDir, relativePath);
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, typeof contents === "string" ? contents : JSON.stringify(contents));
+  }
+  return rootDir;
+}
+
+function createDeclaredSurface(
+  overrides: Partial<PluginAcceptedDeclaredSurface> = {},
+): PluginAcceptedDeclaredSurface {
+  return {
+    channels: [],
+    providers: [],
+    tools: [],
+    contracts: [],
+    hooks: [],
+    mcpServers: [],
+    cliCommands: [],
+    cliBackends: [],
+    skills: [],
+    dangerousConfigFlags: [],
+    ...overrides,
+  };
+}
+
+describe("plugin capability consent", () => {
+  it.each([
+    { recordOfficialCapabilities: false, accepted: false },
+    { recordOfficialCapabilities: true, accepted: false },
+    { recordOfficialCapabilities: true, accepted: true },
+  ])(
+    "records official capability acceptance only after requested review ($recordOfficialCapabilities/$accepted)",
+    async ({ recordOfficialCapabilities, accepted }) => {
+      const artifactDir = createArtifactFixture({
+        "package.json": {
+          name: "@openclaw/codex",
+          openclaw: { extensions: ["./index.js"] },
+        },
+        "index.js": "export {};",
+        "openclaw.plugin.json": {
+          id: "codex",
+          contracts: { tools: ["fixture.tool"] },
+          configSchema: { type: "object" },
+        },
+      });
+      const reviewed: string[] = [];
+      const consent = createManagedPluginArtifactConsentHandler({
+        config: {},
+        source: "npm",
+        spec: "@openclaw/codex@1.0.0",
+        recordOfficialCapabilities,
+        onCapabilityConsent: async (review) => {
+          reviewed.push(review.pluginId);
+          return accepted ? { reviewToken: review.reviewToken } : undefined;
+        },
+      });
+      const record: PluginInstallRecord = {
+        source: "npm",
+        spec: "@openclaw/codex@1.0.0",
+        integrity: "sha512-fixture",
+      };
+      const preparation = consent.onBeforePluginArtifactCommit({
+        pluginId: "codex",
+        mode: "install",
+        stagedArtifactDir: artifactDir,
+        sourceRecord: record,
+      });
+      if (recordOfficialCapabilities && !accepted) {
+        await expect(preparation).rejects.toMatchObject({
+          capabilityConsent: { pluginId: "codex" },
+        });
+      } else {
+        await preparation;
+        const prepared = consent.applyAcceptedSurface("codex", record);
+        if (recordOfficialCapabilities) {
+          expect(prepared).toMatchObject({
+            acceptedSurface: { tools: ["fixture.tool"] },
+            acceptedSurfaceAt: expect.any(String),
+            acceptedSurfaceIntegrity: "sha512-fixture",
+          });
+          expect(prepared.acceptedSurfaceHash).toMatch(/^[a-f0-9]{64}$/u);
+        } else {
+          expect(prepared).not.toHaveProperty("acceptedSurface");
+        }
+      }
+      expect(reviewed).toEqual(recordOfficialCapabilities ? ["codex"] : []);
+    },
+  );
+
+  it.each([
+    { label: "native package entries", explicitPath: false, staged: false },
+    { label: "a configured file override", explicitPath: true, staged: false },
+    {
+      label: "a configured file override mapped into an update stage",
+      explicitPath: true,
+      staged: true,
+    },
+    {
+      label: "a configured file override after the previous payload was removed",
+      explicitPath: true,
+      staged: true,
+      missingPrevious: true,
+    },
+    {
+      label: "a configured file symlink with its original manifest root",
+      explicitPath: true,
+      alias: true,
+      staged: false,
+    },
+    {
+      label: "a configured file symlink mapped into an update stage",
+      explicitPath: true,
+      alias: true,
+      staged: true,
+    },
+    {
+      label: "an unmanaged configured descendant outside the package entry set",
+      explicitPath: true,
+      unmanaged: true,
+      staged: false,
+    },
+  ])(
+    "matches runtime discovery for $label",
+    ({ explicitPath, staged, alias = false, unmanaged = false, missingPrevious = false }) => {
+      const rootDir = createArtifactFixture({
+        "package.json": {
+          name: "multi-plugin-package",
+          openclaw: { extensions: ["./index.js", "./plugins/child/child.js"] },
+        },
+        "openclaw.plugin.json": {
+          id: "root",
+          channels: ["chat"],
+          contracts: { tools: ["read"] },
+          configSchema: { type: "object" },
+        },
+        "index.js": "export {};",
+        "plugins/child/openclaw.plugin.json": {
+          id: "child",
+          contracts: { tools: ["write", "read"] },
+          skills: ["child-skill"],
+          configSchema: { type: "object" },
+        },
+        "plugins/child/child.js": "export {};",
+        "plugins/openclaw.plugin.json": {
+          id: "ignored-ancestor",
+          contracts: { tools: ["unreachable-tool"] },
+          configSchema: { type: "object" },
+        },
+        "extra/extra.js": "export {};",
+        "extra/openclaw.plugin.json": {
+          id: "unmanaged-extra",
+          contracts: { tools: ["unmanaged-tool"] },
+          configSchema: { type: "object" },
+        },
+      });
+      const artifactDir = staged ? createArtifactFixture({}) : rootDir;
+      if (staged) {
+        fs.cpSync(rootDir, artifactDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(artifactDir, "plugins/child/openclaw.plugin.json"),
+          JSON.stringify({
+            id: "child",
+            contracts: { tools: ["staged-write", "read"] },
+            skills: ["child-skill"],
+            configSchema: { type: "object" },
+          }),
+        );
+      }
+      if (alias) {
+        for (const dir of new Set([rootDir, artifactDir])) {
+          fs.symlinkSync("plugins/child/child.js", path.join(dir, "alias.js"));
+        }
+      }
+      const configuredEntry = unmanaged
+        ? "extra/extra.js"
+        : alias
+          ? "alias.js"
+          : "plugins/child/child.js";
+      const config = {
+        plugins: {
+          load: { paths: explicitPath ? [path.join(rootDir, configuredEntry)] : [] },
+        },
+      };
+      if (missingPrevious) {
+        fs.rmSync(rootDir, { recursive: true, force: true });
+      }
+      const runtimePaths = explicitPath ? [path.join(artifactDir, configuredEntry)] : [];
+      const env = {
+        HOME: artifactDir,
+        OPENCLAW_STATE_DIR: path.join(artifactDir, "state"),
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS: "1",
+      };
+      const runtime = loadInstalledPluginIndexWithDiscovery({
+        config: { plugins: { load: { paths: runtimePaths } } },
+        env,
+        installRecords: { root: { source: "path", installPath: artifactDir } },
+      });
+      const ownedIds = new Set(
+        runtime.index.plugins
+          .filter((plugin) => resolveInstalledPluginIndexInstallOwner(plugin) === "root")
+          .map((plugin) => plugin.pluginId),
+      );
+      const runtimeDeclared = mergePluginDeclaredSurfaces(
+        runtime.manifestRegistry.plugins
+          .filter((manifest) => ownedIds.has(manifest.id))
+          .map(
+            (manifest) =>
+              buildPluginCapabilitySummary({ manifest, origin: manifest.origin }).declared,
+          ),
+      );
+      const includesChildManifest = explicitPath && !alias && !unmanaged;
+      const expectedTools = includesChildManifest
+        ? ["read", staged ? "staged-write" : "write"]
+        : ["read"];
+      const expected = createDeclaredSurface({
+        channels: ["chat"],
+        tools: expectedTools,
+        contracts: expectedTools.map((tool) => `tools: ${tool}`),
+        skills: includesChildManifest ? ["child-skill"] : [],
+      });
+
+      expect(
+        runtime.index.diagnostics.filter((diagnostic) => diagnostic.level === "error"),
+      ).toEqual([]);
+      expect(runtimeDeclared).toEqual(expected);
+      expect(
+        resolvePluginArtifactDeclaredSurface(artifactDir, env, {
+          config,
+          ...(staged ? { currentArtifactDir: rootDir } : {}),
+        }),
+      ).toEqual(expected);
+    },
+  );
+
+  it("reviews native package extensions before a competing bundle manifest, like runtime discovery", () => {
+    const rootDir = createArtifactFixture({
+      "package.json": { openclaw: { extensions: ["./index.js"] } },
+      "index.js": "export {};",
+      "openclaw.plugin.json": {
+        id: "native",
+        contracts: { gatewayMethodDispatch: ["dangerous.gateway"] },
+        configSchema: { type: "object" },
+      },
+      ".claude-plugin/plugin.json": { name: "bundle", skills: ["./misleading-safe-skill"] },
+    });
+
+    expect(resolvePluginArtifactDeclaredSurface(rootDir)).toEqual(
+      createDeclaredSurface({ contracts: ["gatewayMethodDispatch: dangerous.gateway"] }),
+    );
+  });
+
+  it("reviews a competing bundle before native fallback when the package declares no extensions", () => {
+    const rootDir = createArtifactFixture({
+      "openclaw.plugin.json": {
+        id: "native",
+        contracts: { gatewayMethodDispatch: ["native.gateway"] },
+        configSchema: { type: "object" },
+      },
+      ".claude-plugin/plugin.json": { name: "bundle", skills: ["./bundle-skills"] },
+    });
+
+    expect(resolvePluginArtifactDeclaredSurface(rootDir)).toEqual(
+      createDeclaredSurface({ skills: ["./bundle-skills"] }),
+    );
+  });
+
+  it("rejects package extension entries that escape the installed artifact", () => {
+    const rootDir = createArtifactFixture({
+      "package.json": { openclaw: { extensions: ["../outside/index.js"] } },
+      "openclaw.plugin.json": { id: "root", configSchema: { type: "object" } },
+    });
+
+    expect(() => resolvePluginArtifactDeclaredSurface(rootDir)).toThrow();
+  });
+
+  it.each<{
+    label: string;
+    previous: Partial<PluginAcceptedDeclaredSurface>;
+    next: Partial<PluginAcceptedDeclaredSurface>;
+    widened: Partial<PluginAcceptedDeclaredSurface>;
+  }>([
+    {
+      label: "an added capability in an existing group",
+      previous: { tools: ["read"] },
+      next: { tools: ["write", "read"] },
+      widened: { tools: ["write"] },
+    },
+    {
+      label: "a removed capability",
+      previous: { tools: ["read", "write"] },
+      next: { tools: ["read"] },
+      widened: {},
+    },
+  ])("identifies widening for $label", ({ previous, next, widened }) => {
+    expect(
+      diffDeclaredSurfaceWidening(createDeclaredSurface(previous), createDeclaredSurface(next)),
+    ).toEqual({ widened, hasWidening: Object.keys(widened).length > 0 });
+  });
+
+  it.each<{
+    label: string;
+    record: Partial<PluginInstallRecord>;
+    declared: Partial<PluginAcceptedDeclaredSurface>;
+    current: boolean;
+  }>([
+    {
+      label: "missing acceptance",
+      record: { acceptedSurface: undefined },
+      declared: { tools: ["read"] },
+      current: false,
+    },
+    {
+      label: "missing acceptance hash",
+      record: { acceptedSurfaceHash: undefined },
+      declared: { tools: ["read"] },
+      current: false,
+    },
+    {
+      label: "a forged acceptance hash",
+      record: { acceptedSurfaceHash: "0".repeat(64) },
+      declared: { tools: ["read"] },
+      current: false,
+    },
+    {
+      label: "a changed accepted snapshot",
+      record: { acceptedSurface: createDeclaredSurface({ tools: ["write"] }) },
+      declared: { tools: ["read"] },
+      current: false,
+    },
+    {
+      label: "a changed installed artifact",
+      record: { integrity: "sha512-new", acceptedSurfaceIntegrity: "sha512-old" },
+      declared: { tools: ["read"] },
+      current: false,
+    },
+    {
+      label: "an accepted artifact anchor that disappeared",
+      record: { acceptedSurfaceIntegrity: "sha512-old" },
+      declared: { tools: ["read"] },
+      current: false,
+    },
+    {
+      label: "matching declared surface without an available artifact digest",
+      record: {},
+      declared: { tools: ["read"] },
+      current: true,
+    },
+  ])("recognizes current acceptance for $label", ({ record, declared, current }) => {
+    const surface = createDeclaredSurface(declared);
+    const installRecord: PluginInstallRecord = {
+      source: "npm",
+      acceptedSurface: surface,
+      acceptedSurfaceHash: computeDeclaredSurfaceHash(surface),
+      ...record,
+    };
+
+    expect(resolveAcceptedSurfaceCurrent(installRecord, surface)).toBe(current);
+  });
+
+  it("redacts source credentials before a capability review reaches a prompt or pending inspection", async () => {
+    const url = new URL("https://example.invalid/plugins/demo.git");
+    url.username = "fixture-user";
+    url.password = "fixture-password";
+    url.searchParams.set("token", "fixture-token");
+    const record: PluginInstallRecord = { source: "git", spec: `git:${url.href}` };
+
+    let reviewSpec: string | undefined;
+    const consent = createManagedPluginArtifactConsentHandler({
+      config: {},
+      source: record.source,
+      spec: record.spec,
+      onCapabilityConsent: async (review) => {
+        reviewSpec = review.source?.spec;
+        return { reviewToken: review.reviewToken };
+      },
+    });
+    await consent.onBeforePluginArtifactCommit({
+      pluginId: "plugin",
+      mode: "install",
+      stagedArtifactDir: createArtifactFixture({
+        "index.js": "export {};",
+        "openclaw.plugin.json": { id: "plugin", configSchema: { type: "object" } },
+      }),
+    });
+
+    expect(reviewSpec).toBe("git:https://***:***@example.invalid/plugins/demo.git?token=***");
+    expect(record.spec).toBe(`git:${url.href}`);
+  });
+
+  it("selects the canonical installed artifact integrity in precedence order", () => {
+    expect(
+      resolvePluginInstallRecordIntegrity({
+        integrity: "primary",
+        npmIntegrity: "npm",
+        clawpackSha256: "clawpack",
+        gitCommit: "commit",
+      }),
+    ).toEqual({ integrity: "primary", integrityKind: "ssri" });
+    expect(
+      resolvePluginInstallRecordIntegrity({ npmIntegrity: "npm", gitCommit: "commit" }),
+    ).toEqual({
+      integrity: "npm",
+      integrityKind: "ssri",
+    });
+    expect(resolvePluginInstallRecordIntegrity({ clawpackSha256: "clawpack" })).toEqual({
+      integrity: "clawpack",
+      integrityKind: "sha256",
+    });
+    expect(resolvePluginInstallRecordIntegrity({ gitCommit: "commit" })).toEqual({
+      integrity: "commit",
+      integrityKind: "git-commit",
+    });
+    expect(resolvePluginInstallRecordIntegrity({})).toBeUndefined();
+  });
+
+  it.each(["missing", "invalid"])(
+    "requires fresh review to repair a %s previous artifact",
+    async (condition) => {
+      const files = {
+        "package.json": { openclaw: { extensions: ["./index.js"] } },
+        "index.js": "export {};",
+        "openclaw.plugin.json": {
+          id: "plugin",
+          contracts: { tools: ["repair-tool"] },
+          configSchema: { type: "object" },
+        },
+      };
+      const previousDir = createArtifactFixture(files);
+      const stagedDir = createArtifactFixture(files);
+      const acceptedSurface = resolvePluginArtifactDeclaredSurface(previousDir);
+      const previousRecord = {
+        source: "npm" as const,
+        installPath: previousDir,
+        integrity: "sha512-previous",
+        acceptedSurface,
+        acceptedSurfaceHash: computeDeclaredSurfaceHash(acceptedSurface),
+        acceptedSurfaceIntegrity: "sha512-previous",
+      };
+      if (condition === "missing") {
+        fs.rmSync(previousDir, { recursive: true });
+      } else {
+        fs.writeFileSync(path.join(previousDir, "openclaw.plugin.json"), "{");
+      }
+      const params = {
+        config: {},
+        source: "npm" as const,
+        previousRecords: { plugin: previousRecord },
+      };
+      const artifact = {
+        pluginId: "plugin",
+        stagedArtifactDir: stagedDir,
+        mode: "update" as const,
+      };
+      await expect(
+        createManagedPluginArtifactConsentHandler(params).onBeforePluginArtifactCommit(artifact),
+      ).rejects.toMatchObject({ capabilityConsent: { pluginId: "plugin" } });
+      const reviewed: string[][] = [];
+      const consent = createManagedPluginArtifactConsentHandler({
+        ...params,
+        onCapabilityConsent: async (review) => {
+          reviewed.push(review.declared.tools);
+          return { reviewToken: review.reviewToken };
+        },
+      });
+      await consent.onBeforePluginArtifactCommit(artifact);
+      expect(reviewed).toEqual([["repair-tool"]]);
+      const repairedRecord: PluginInstallRecord = { source: "npm" };
+      expect(consent.applyAcceptedSurface("plugin", repairedRecord).acceptedSurface).toEqual(
+        acceptedSurface,
+      );
+    },
+  );
+
+  it("requires Claw-owner review even when an update has current plugin acceptance", async () => {
+    const rootDir = createArtifactFixture({
+      "package.json": { openclaw: { extensions: ["./index.js"] } },
+      "index.js": "export {};",
+      "openclaw.plugin.json": {
+        id: "plugin",
+        contracts: { tools: ["read"] },
+        configSchema: { type: "object" },
+      },
+    });
+    const acceptedSurface = resolvePluginArtifactDeclaredSurface(rootDir);
+    const previousRecords = {
+      plugin: {
+        source: "npm" as const,
+        installPath: rootDir,
+        integrity: "sha512-current",
+        acceptedSurface,
+        acceptedSurfaceHash: computeDeclaredSurfaceHash(acceptedSurface),
+        acceptedSurfaceIntegrity: "sha512-current",
+      },
+    };
+    const artifact = { pluginId: "plugin", stagedArtifactDir: rootDir, mode: "update" as const };
+
+    await expect(
+      createManagedPluginArtifactConsentHandler({
+        config: {},
+        source: "npm",
+        previousRecords,
+        requireCapabilityConsent: true,
+      }).onBeforePluginArtifactCommit(artifact),
+    ).rejects.toMatchObject({ capabilityConsent: { pluginId: "plugin" } });
+
+    const reviewed: string[] = [];
+    await createManagedPluginArtifactConsentHandler({
+      config: {},
+      source: "npm",
+      previousRecords,
+      requireCapabilityConsent: true,
+      onCapabilityConsent: async (review) => {
+        reviewed.push(review.reviewToken);
+        return { reviewToken: review.reviewToken };
+      },
+    }).onBeforePluginArtifactCommit(artifact);
+    expect(reviewed).toEqual([computeDeclaredSurfaceHash(acceptedSurface)]);
+  });
+
+  it("does not apply the official-plugin exemption to a Claw-managed install", async () => {
+    const rootDir = createArtifactFixture({
+      "package.json": {
+        name: "@openclaw/acpx",
+        openclaw: { extensions: ["./index.js"] },
+      },
+      "index.js": "export {};",
+      "openclaw.plugin.json": {
+        id: "acpx",
+        contracts: { tools: ["acpx.run"] },
+        configSchema: { type: "object" },
+      },
+    });
+    const sourceRecord: PluginInstallRecord = {
+      source: "clawhub",
+      spec: "clawhub:@openclaw/acpx",
+      clawhubPackage: "@openclaw/acpx",
+      clawhubUrl: "https://clawhub.ai",
+      clawhubChannel: "official",
+    };
+    const artifact = {
+      pluginId: "acpx",
+      stagedArtifactDir: rootDir,
+      sourceRecord,
+      mode: "install" as const,
+    };
+    const params = {
+      config: {},
+      source: "clawhub" as const,
+      spec: sourceRecord.spec,
+    };
+
+    await createManagedPluginArtifactConsentHandler(params).onBeforePluginArtifactCommit(artifact);
+    await expect(
+      createManagedPluginArtifactConsentHandler({
+        ...params,
+        requireCapabilityConsent: true,
+      }).onBeforePluginArtifactCommit(artifact),
+    ).rejects.toMatchObject({ capabilityConsent: { pluginId: "acpx" } });
+
+    const reviewed: string[][] = [];
+    await createManagedPluginArtifactConsentHandler({
+      ...params,
+      requireCapabilityConsent: true,
+      onCapabilityConsent: async (review) => {
+        reviewed.push(review.declared.tools);
+        return { reviewToken: review.reviewToken };
+      },
+    }).onBeforePluginArtifactCommit(artifact);
+    expect(reviewed).toEqual([["acpx.run"]]);
+  });
+
+  it("rejects reinstall without capability consent even when the plugin is disabled", async () => {
+    const rootDir = createArtifactFixture({
+      "package.json": { openclaw: { extensions: ["./index.js"] } },
+      "index.js": "export {};",
+      "openclaw.plugin.json": { id: "plugin", configSchema: { type: "object" } },
+    });
+    const consent = createManagedPluginArtifactConsentHandler({
+      config: { plugins: { entries: { plugin: { enabled: false } } } },
+      source: "npm",
+      previousRecords: { plugin: { source: "npm", installPath: rootDir } },
+    });
+
+    await expect(
+      consent.onBeforePluginArtifactCommit({
+        pluginId: "plugin",
+        stagedArtifactDir: rootDir,
+        mode: "update",
+      }),
+    ).rejects.toMatchObject({ capabilityConsent: { pluginId: "plugin" } });
+  });
+});
