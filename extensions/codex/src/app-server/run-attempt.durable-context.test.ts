@@ -142,10 +142,7 @@ it("does not replay covered history on the same thread after local message-tool 
   const messageTool = createRuntimeDynamicTool("message");
   messageTool.parameters = {
     type: "object",
-    properties: {
-      action: { type: "string" },
-      message: { type: "string" },
-    },
+    properties: { action: { type: "string" }, message: { type: "string" } },
     additionalProperties: true,
   };
   messageTool.execute = vi.fn(async () => ({
@@ -186,12 +183,8 @@ it("does not replay covered history on the same thread after local message-tool 
     closeHostCapabilities();
 
     vi.setSystemTime(Date.now() + 1_000);
-    await append({
-      role: "user",
-      content: "The old inventory contains cobalt widgets.",
-      timestamp: Date.now(),
-    });
-    await append(assistantMessage("The cobalt inventory is recorded.", Date.now()));
+    await append({ role: "user", content: "old user: cobalt", timestamp: Date.now() });
+    await append(assistantMessage("old assistant: cobalt", Date.now()));
     vi.setSystemTime(Date.now() + 1_000);
     params.runId = "run-2";
     params.prompt = "Send the inventory summary.";
@@ -204,8 +197,8 @@ it("does not replay covered history on the same thread after local message-tool 
     expect(turns()).toBe(2);
     const terminalRequest = harness.requests.findLast((item) => item.method === "turn/start");
     expect(terminalRequest?.params).toMatchObject({ threadId });
-    expect(JSON.stringify(terminalRequest?.params)).toContain("The old inventory contains cobalt");
-    expect(JSON.stringify(terminalRequest?.params)).toContain("The cobalt inventory is recorded.");
+    expect(JSON.stringify(terminalRequest?.params)).toContain("old user: cobalt");
+    expect(JSON.stringify(terminalRequest?.params)).toContain("old assistant: cobalt");
     const response = await harness.handleServerRequest({
       id: "local-source-reply",
       method: "item/tool/call",
@@ -240,11 +233,7 @@ it("does not replay covered history on the same thread after local message-tool 
     closeHostCapabilities();
 
     vi.setSystemTime(Date.now() + 1_000);
-    await append({
-      role: "user",
-      content: "Correction: the new inventory contains amber widgets.",
-      timestamp: Date.now(),
-    });
+    await append({ role: "user", content: "new user: amber", timestamp: Date.now() });
     vi.setSystemTime(Date.now() + 1_000);
     params.runId = "run-3";
     params.prompt = "Use the corrected inventory.";
@@ -258,10 +247,10 @@ it("does not replay covered history on the same thread after local message-tool 
     const nextRequest = harness.requests.findLast((item) => item.method === "turn/start");
     expect(nextRequest?.params).toMatchObject({ threadId });
     const nextInput = JSON.stringify(nextRequest?.params);
-    expect(nextInput).toContain("Correction: the new inventory contains amber widgets.");
+    expect(nextInput).toContain("new user: amber");
     expect(nextInput).toContain("Use the corrected inventory.");
-    expect(nextInput).not.toContain("The old inventory contains cobalt widgets.");
-    expect(nextInput).not.toContain("The cobalt inventory is recorded.");
+    expect(nextInput).not.toContain("old user: cobalt");
+    expect(nextInput).not.toContain("old assistant: cobalt");
     expect(threads()).toBe(1);
   } finally {
     closeHostCapabilities();

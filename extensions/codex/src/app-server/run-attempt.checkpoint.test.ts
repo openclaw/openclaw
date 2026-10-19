@@ -6,6 +6,7 @@ import { itemNotification, rawItemCompleted, turnCompleted } from "./protocol.te
 import * as attemptActiveTurn from "./run-attempt-active-turn.js";
 import {
   createParams,
+  createTestParams,
   createStartedThreadHarness,
   runCodexAppServerAttempt,
   setupRunAttemptTestHooks,
@@ -33,13 +34,9 @@ function commandExecution(id: string, aggregatedOutput: string) {
   };
 }
 
-async function checkpointParams(name: string) {
-  const params = createParams(path.join(tempDir, `${name}.jsonl`), path.join(tempDir, "workspace"));
-  await attachSqliteSessionTarget(
-    params,
-    path.join(tempDir, `${name}-sessions.json`),
-    `${name}-session`,
-  );
+async function checkpointParams() {
+  const params = createTestParams();
+  await attachSqliteSessionTarget(params, path.join(tempDir, "sessions.sqlite"), params.sessionId);
   return params;
 }
 
@@ -74,7 +71,7 @@ async function startCheckpointAttempt(params: ReturnType<typeof createParams>) {
 
 describe("runCodexAppServerAttempt", () => {
   it("persists completed commentary and final once when native item IDs change after streaming", async () => {
-    const params = await checkpointParams("identity-drift");
+    const params = await checkpointParams();
     const { harness, run, completed } = await startCheckpointAttempt(params);
     // Captured from pinned rust-v0.154.0: deltas retain the started ID,
     // item/completed has a new ID, and the terminal summary repeats that new ID.
@@ -104,19 +101,15 @@ describe("runCodexAppServerAttempt", () => {
       [{ type: "text", text: "Checking the workspace." }],
       [{ type: "text", text: "The work is complete." }],
     ]);
-    expect(messages).not.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          __openclaw: expect.objectContaining({
-            mirrorIdentity: expect.stringContaining("preview"),
-          }),
-        }),
-      ]),
+    expect(messages).not.toContainEqual(
+      expect.objectContaining({
+        __openclaw: expect.objectContaining({ mirrorIdentity: expect.stringContaining("preview") }),
+      }),
     );
   });
 
   it("checkpoints the complete native response, not the earlier execution preview", async () => {
-    const params = await checkpointParams("output");
+    const params = await checkpointParams();
     // Prepare the history reader before the attempt budget starts.
     await readCodexMirroredSessionHistoryMessages(params);
     const { harness, run, raw, completed } = await startCheckpointAttempt(params);
@@ -173,7 +166,7 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("checkpoints raw patch output and network provenance without persisting commentary", async () => {
-    const params = await checkpointParams("checkpoint");
+    const params = await checkpointParams();
     params.config = {
       ...params.config,
       ui: { prefs: { chatPersistCommentary: false } },
@@ -222,11 +215,9 @@ describe("runCodexAppServerAttempt", () => {
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
     const finalMessages = await readTranscriptMessagesByIdentity(params);
-    for (const message of checkpoint) {
-      expect(
-        finalMessages.filter((candidate) => candidate.idempotencyKey === message.idempotencyKey),
-      ).toEqual([message]);
-    }
+    expect(new Set(finalMessages.map((message) => message.idempotencyKey)).size).toBe(
+      checkpoint.length,
+    );
     expect(finalMessages).toEqual(checkpoint);
   });
 });
