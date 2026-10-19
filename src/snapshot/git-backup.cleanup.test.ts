@@ -72,6 +72,8 @@ describe("Git backup scratch cleanup", () => {
     { operation: "verify", failure: true, cleanup: "remove", workspace: "verify" },
     { operation: "restore", failure: false, cleanup: "remove", workspace: "restore" },
     { operation: "restore", failure: true, cleanup: "remove", workspace: "restore" },
+    { operation: "restore", failure: false, cleanup: "remove", workspace: "codec" },
+    { operation: "restore", failure: true, cleanup: "remove", workspace: "codec" },
   ] as const)(
     "reports $operation $workspace cleanup $cleanup failures without replacing its primary outcome (failure=$failure)",
     async ({ operation, failure, cleanup, workspace }) => {
@@ -83,11 +85,12 @@ describe("Git backup scratch cleanup", () => {
         code: "EACCES",
       });
       const retained = new Set<string>();
-      const prefix = `openclaw-git-${workspace}-`;
+      const prefix = workspace === "codec" ? ".git-backup-restore-" : `openclaw-git-${workspace}-`;
       const rename = fsSync.renameSync;
       const rm = fs.rm;
       const rmdir = fs.rmdir;
       const writeFile = fs.writeFile;
+      const open = fs.open;
       const nativeConfig = getFsSafeNativeConfig();
       configureFsSafeNative({ mode: "off" });
       try {
@@ -115,6 +118,10 @@ describe("Git backup scratch cleanup", () => {
               }
             });
             vi.spyOn(fs, "rm").mockImplementation(async (...args) => {
+              if (workspace === "codec" && path.basename(String(args[0])).startsWith(prefix)) {
+                retained.add(String(args[0]));
+                throw removal;
+              }
               if (retained.has(String(args[0]))) {
                 throw removal;
               }
@@ -137,12 +144,23 @@ describe("Git backup scratch cleanup", () => {
               if (
                 failure &&
                 operation !== "create" &&
+                workspace !== "codec" &&
                 typeof args[0] === "string" &&
                 args[0].includes(`${path.sep}openclaw-git-restore-`)
               ) {
                 throw primary;
               }
               return await writeFile(...args);
+            });
+            vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+              if (
+                failure &&
+                workspace === "codec" &&
+                String(args[0]).includes(`${path.sep}.git-backup-restore-`)
+              ) {
+                throw primary;
+              }
+              return await open(...args);
             });
             try {
               const running =
@@ -167,12 +185,25 @@ describe("Git backup scratch cleanup", () => {
                   /Warning: Git backup temporary files may remain under .*; cleanup failed:/u,
                 ),
               );
-              expect(warning).toHaveBeenCalledWith(
-                expect.stringContaining(cleanup === "rename" ? "indeterminate" : "EACCES"),
-              );
+              if (workspace !== "codec") {
+                expect(warning).toHaveBeenCalledWith(
+                  expect.stringContaining(cleanup === "rename" ? "indeterminate" : "EACCES"),
+                );
+              }
               expect(retained.size).toBeGreaterThan(0);
               for (const retainedPath of retained) {
                 expect((await fs.lstat(retainedPath)).isDirectory()).toBe(true);
+                if (workspace === "codec") {
+                  expect(warning).toHaveBeenCalledWith(expect.stringContaining(retainedPath));
+                }
+              }
+              if (workspace === "codec") {
+                const targetPath = path.join(root, "restored.sqlite");
+                if (failure) {
+                  await expect(fs.lstat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+                } else {
+                  expect((await fs.lstat(targetPath)).isFile()).toBe(true);
+                }
               }
             } finally {
               vi.restoreAllMocks();
