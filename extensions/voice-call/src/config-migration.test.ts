@@ -42,8 +42,7 @@ describe("voice-call config migration", () => {
       },
     };
     const before = structuredClone(config);
-    const [migrate] = registerConfigMigration.mock.calls[0];
-    const migration = migrate(config);
+    const migration = registerConfigMigration.mock.calls[0]?.[0](config);
 
     expect(config).toEqual(before);
     expect(migration?.config).toEqual({
