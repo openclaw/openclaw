@@ -9,11 +9,22 @@ import {
   installMockGateway,
   newChatPage,
 } from "./chat-flow.test-support.ts";
+import { polledCount, twoFrames } from "./chat-presentation.test-support.ts";
 import { chooseSidebarMenuOption, closeSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+const sessionA = "agent:main:session-a";
+const sessionB = "agent:main:session-b";
 
-async function navigateAwayAndBack(page: Page, sessionA: string, sessionB: string): Promise<void> {
+function readPane(element: Element) {
+  const pane = element as HTMLElement & {
+    sessionKey?: string;
+    state?: { chatError?: string | null };
+  };
+  return { sessionKey: pane.sessionKey, chatError: pane.state?.chatError };
+}
+
+async function navigateAwayAndBack(page: Page): Promise<void> {
   for (const sessionKey of [sessionB, sessionA]) {
     await page
       .locator(
@@ -21,80 +32,70 @@ async function navigateAwayAndBack(page: Page, sessionA: string, sessionB: strin
       )
       .click();
     await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionKey));
-    await expect
-      .poll(() =>
-        page
-          .locator(".chat-pane-cache__pane--visible")
-          .evaluate((pane) => (pane as HTMLElement & { sessionKey?: string }).sessionKey),
-      )
-      .toBe(sessionKey);
+    const pane = page.locator(".chat-pane-cache__pane--visible");
+    await expect.poll(() => pane.evaluate(readPane)).toMatchObject({ sessionKey });
   }
 }
 
-function sessionPair(
-  sessionA: string,
-  sessionB: string,
-  extras: Partial<GatewaySessionRow>[] = [],
+function sessionPair(extras: Partial<GatewaySessionRow>[] = []) {
+  return [sessionA, sessionB].map((key, index) => {
+    const row: GatewaySessionRow = {
+      key,
+      kind: "direct",
+      label: `Session ${index ? "B" : "A"}`,
+      updatedAt: 2 - index,
+    };
+    return Object.assign(row, extras[index]);
+  });
+}
+
+function installHeader(
+  page: Page,
+  rows: GatewaySessionRow[],
+  methods: string[],
+  options: Parameters<typeof installMockGateway>[1] = {},
 ) {
-  return [sessionA, sessionB].map((key, index) =>
-    Object.assign(
-      {
-        key,
-        kind: "direct" as const,
-        label: `Session ${index ? "B" : "A"}`,
-        updatedAt: 2 - index,
-      },
-      extras[index],
-    ),
-  );
+  return installMockGateway(page, {
+    historyMessages: [{ role: "assistant", content: "Session outcome proof." }],
+    sessionKey: rows[0]!.key,
+    featureMethods: ["chat.startup", ...methods],
+    methodResponses: { "sessions.list": chatSessionListResponse(rows) },
+    ...options,
+  });
 }
 
 async function expectRetiredError(page: Page, message: string) {
-  await expect.poll(() => page.getByText(message).count()).toBe(0);
-  await expect
-    .poll(() =>
-      page
-        .locator(".chat-pane-cache__pane--visible")
-        .evaluate(
-          (pane) =>
-            (pane as HTMLElement & { state?: { chatError?: string | null } }).state?.chatError,
-        ),
-    )
-    .not.toBe(message);
+  await polledCount(page.getByText(message)).toBe(0);
+  const pane = page.locator(".chat-pane-cache__pane--visible");
+  await expect.poll(() => pane.evaluate(readPane)).not.toMatchObject({ chatError: message });
 }
 
-async function installPlacementGateway(page: Page, sessionA: string, sessionB: string) {
-  return installMockGateway(page, {
-    featureMethods: ["chat.startup", "sessions.reclaim"],
-    historyMessages: [{ role: "assistant", content: "Placement outcome proof." }],
-    methodResponses: {
-      "sessions.list": chatSessionListResponse(
-        sessionPair(sessionA, sessionB, [
-          {
-            placement: {
-              state: "active",
-              generation: 1,
-              createdAtMs: 1,
-              updatedAtMs: 1,
-              stateChangedAtMs: 1,
-              environmentId: "worker:one",
-              activeOwnerEpoch: 1,
-              workerBundleHash: "a".repeat(64),
-              workspaceBaseManifestRef: "base-manifest",
-              remoteWorkspaceDir: "/workspace/session-a",
-            },
-          },
-        ]),
-      ),
-    },
-    sessionKey: sessionA,
-  });
+async function installPlacementGateway(page: Page) {
+  return installHeader(
+    page,
+    sessionPair([
+      {
+        placement: {
+          state: "active",
+          generation: 1,
+          createdAtMs: 1,
+          updatedAtMs: 1,
+          stateChangedAtMs: 1,
+          environmentId: "worker:one",
+          activeOwnerEpoch: 1,
+          workerBundleHash: "a".repeat(64),
+          workspaceBaseManifestRef: "base-manifest",
+          remoteWorkspaceDir: "/workspace/session-a",
+        },
+      },
+    ]),
+    ["sessions.reclaim"],
+  );
 }
 
 async function startPlacementReclaim(
   page: Page,
   gateway: Awaited<ReturnType<typeof installMockGateway>>,
-  sessionA: string,
 ): Promise<void> {
   await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionA));
   await gateway.deferNext("sessions.reclaim");
@@ -132,13 +133,12 @@ suite.define(() => {
             : "Cloud worker cleanup is still pending.",
         },
       } satisfies GatewaySessionRow;
-      const gateway = await installMockGateway(page, {
-        featureMethods: ["chat.startup", "sessions.reclaim", "sessions.dispatch"],
-        historyMessages: [{ role: "assistant", content: "Worker recovery proof." }],
-        methodResponses: { "sessions.list": chatSessionListResponse([session]) },
-        sessionInfo: session,
-        sessionKey,
-      });
+      const gateway = await installHeader(
+        page,
+        [session],
+        ["sessions.reclaim", "sessions.dispatch"],
+        { sessionInfo: session },
+      );
 
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await page.getByRole("button", { name: "Runs on worker", exact: true }).click();
@@ -161,22 +161,22 @@ suite.define(() => {
       await sidebarRow.hover();
       await sidebarRow.click({ button: "right" });
       const sidebarMenu = page.locator("openclaw-session-menu");
-      await sidebarMenu
-        .getByRole("menuitem", { name: restartable ? "Restore session" : "Archive session" })
-        .waitFor();
-      await expect
-        .poll(() => sidebarMenu.getByRole("menuitem", { name: "Stop cloud worker…" }).count())
-        .toBe(restartable ? 0 : 1);
+      const checkMenu = async () => {
+        await sidebarMenu
+          .getByRole("menuitem", {
+            name: restartable ? "Restore session" : "Archive session",
+          })
+          .waitFor();
+        const stop = sidebarMenu.getByRole("menuitem", { name: "Stop cloud worker…" });
+        await polledCount(stop).toBe(restartable ? 0 : 1);
+        return stop;
+      };
+      await checkMenu();
 
       await page.goto(`${suite.server.baseUrl}sessions?status=all`);
       const sessionsRow = page.locator(".session-data-row").filter({ hasText: session.label });
       await sessionsRow.click({ button: "right" });
-      const sessionsMenu = page.locator("openclaw-session-menu");
-      await sessionsMenu
-        .getByRole("menuitem", { name: restartable ? "Restore session" : "Archive session" })
-        .waitFor();
-      const stopWorker = sessionsMenu.getByRole("menuitem", { name: "Stop cloud worker…" });
-      await expect.poll(() => stopWorker.count()).toBe(restartable ? 0 : 1);
+      const stopWorker = await checkMenu();
       if (!restartable) {
         await gateway.deferNext("sessions.reclaim");
         await stopWorker.click();
@@ -189,74 +189,52 @@ suite.define(() => {
     },
   );
 
-  it("does not resurrect a reveal failure after navigating away", async () => {
-    const page = await newChatPage(suite);
-    const sessionA = "agent:main:session-a";
-    const sessionB = "agent:main:session-b";
-    const gateway = await installMockGateway(page, {
-      featureMethods: ["chat.startup", "sessions.files.reveal"],
-      historyMessages: [{ role: "assistant", content: "Session outcome proof." }],
-      methodResponses: {
-        "sessions.list": chatSessionListResponse(
-          sessionPair(sessionA, sessionB, [
-            { spawnedCwd: "/workspace/session-a" },
-            { spawnedCwd: "/workspace/session-b" },
-          ]),
-        ),
-      },
-      sessionKey: sessionA,
-    });
-
-    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionA));
-    await gateway.deferNext("sessions.files.reveal");
-    await page.getByRole("button", { name: "Workspace actions for session-a" }).click();
-    await page.getByRole("menuitem", { name: "Open in file manager" }).click();
-    await gateway.waitForRequest("sessions.files.reveal");
-
-    await navigateAwayAndBack(page, sessionA, sessionB);
-    await gateway.resolveDeferred("sessions.files.reveal", {
-      ok: false,
-      error: "Stale reveal failure must stay retired.",
-    });
-    await page.evaluate(
-      () =>
-        new Promise<void>((resolve) => {
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-        }),
-    );
-    await expectRetiredError(page, "Stale reveal failure must stay retired.");
-  });
-
-  it("does not resurrect a placement reclaim failure after navigating away", async () => {
-    const page = await newChatPage(suite);
-    const sessionA = "agent:main:placement-a";
-    const sessionB = "agent:main:placement-b";
-    const gateway = await installPlacementGateway(page, sessionA, sessionB);
-
-    await startPlacementReclaim(page, gateway, sessionA);
-
-    await navigateAwayAndBack(page, sessionA, sessionB);
-    const message = "Stale placement failure must stay retired.";
-    await gateway.rejectDeferred("sessions.reclaim", { code: "INVALID_REQUEST", message });
-    await expectRetiredError(page, message);
-  });
+  it.each(["reveal", "placement"] as const)(
+    "does not resurrect a %s failure after navigating away",
+    async (action) => {
+      const page = await newChatPage(suite);
+      const reveal = action === "reveal";
+      const gateway = reveal
+        ? await installHeader(
+            page,
+            sessionPair([
+              { spawnedCwd: "/workspace/session-a" },
+              { spawnedCwd: "/workspace/session-b" },
+            ]),
+            ["sessions.files.reveal"],
+          )
+        : await installPlacementGateway(page);
+      if (reveal) {
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionA));
+        await gateway.deferNext("sessions.files.reveal");
+        await page.getByRole("button", { name: "Workspace actions for session-a" }).click();
+        await page.getByRole("menuitem", { name: "Open in file manager" }).click();
+        await gateway.waitForRequest("sessions.files.reveal");
+      } else {
+        await startPlacementReclaim(page, gateway);
+      }
+      await navigateAwayAndBack(page);
+      const message = `Stale ${action} failure must stay retired.`;
+      if (reveal) {
+        await gateway.resolveDeferred("sessions.files.reveal", { ok: false, error: message });
+        await twoFrames(page);
+      } else {
+        await gateway.rejectDeferred("sessions.reclaim", { code: "INVALID_REQUEST", message });
+      }
+      await expectRetiredError(page, message);
+    },
+  );
 
   it("keeps a current placement reclaim failure visible and retryable", async () => {
     const page = await newChatPage(suite);
-    const sessionA = "agent:main:placement-current";
-    const sessionB = "agent:main:placement-other";
-    const gateway = await installPlacementGateway(page, sessionA, sessionB);
+    const gateway = await installPlacementGateway(page);
 
-    await startPlacementReclaim(page, gateway, sessionA);
+    await startPlacementReclaim(page, gateway);
     const message = "Current placement failure stays actionable.";
     await gateway.rejectDeferred("sessions.reclaim", { code: "INVALID_REQUEST", message });
 
     const visiblePane = page.locator(".chat-pane-cache__pane--visible");
-    await expect
-      .poll(() =>
-        visiblePane.evaluate((pane) => (pane as HTMLElement & { sessionKey?: string }).sessionKey),
-      )
-      .toBe(sessionA);
+    await expect.poll(() => visiblePane.evaluate(readPane)).toMatchObject({ sessionKey: sessionA });
     await visiblePane.getByRole("alert").getByText(message, { exact: true }).waitFor();
 
     await page.getByRole("button", { name: "Runs on Cloud" }).click();
@@ -265,30 +243,23 @@ suite.define(() => {
 
   it("does not resurrect a sharing failure after navigating away", async () => {
     const page = await newChatPage(suite);
-    const sessionA = "agent:main:sharing-a";
-    const sessionB = "agent:main:sharing-b";
-    const gateway = await installMockGateway(page, {
-      allowedSessionVisibilities: ["shared", "draft"],
-      featureMethods: ["chat.startup", "session.visibility.set"],
-      historyMessages: [{ role: "assistant", content: "Sharing outcome proof." }],
-      methodResponses: {
-        "sessions.list": chatSessionListResponse(
-          sessionPair(sessionA, sessionB, [
-            {
-              sessionId: "sharing-session-a",
-              sharingRole: "owner",
-              visibility: "draft",
-            },
-            {
-              sessionId: "sharing-session-b",
-              sharingRole: "owner",
-              visibility: "shared",
-            },
-          ]),
-        ),
-      },
-      sessionKey: sessionA,
-    });
+    const gateway = await installHeader(
+      page,
+      sessionPair([
+        {
+          sessionId: "sharing-session-a",
+          sharingRole: "owner",
+          visibility: "draft",
+        },
+        {
+          sessionId: "sharing-session-b",
+          sharingRole: "owner",
+          visibility: "shared",
+        },
+      ]),
+      ["session.visibility.set"],
+      { allowedSessionVisibilities: ["shared", "draft"] },
+    );
 
     await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionA));
     await gateway.deferNext("session.visibility.set");
@@ -296,7 +267,7 @@ suite.define(() => {
     await page.getByText("Publish draft", { exact: true }).click();
     await gateway.waitForRequest("session.visibility.set");
 
-    await navigateAwayAndBack(page, sessionA, sessionB);
+    await navigateAwayAndBack(page);
     const message = "Stale sharing failure must stay retired.";
     await gateway.rejectDeferred("session.visibility.set", {
       code: "INVALID_REQUEST",

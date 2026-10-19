@@ -2,9 +2,11 @@ import { expect, it } from "vitest";
 import {
   createChatFlowE2eSuite,
   installMockGateway,
+  newChatPage,
   waitForChatScrollIdle,
   waitForRequests,
 } from "./chat-flow.test-support.ts";
+import { layoutBox, twoFrames } from "./chat-presentation.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 type AnchorFrames = { frame: number; positions: Array<number | null>; readerDelta: number };
@@ -39,7 +41,7 @@ suite.define(() => {
       activeTouch = false,
       momentum = false,
     }) => {
-      const context = await suite.newBrowserContext({
+      const page = await newChatPage(suite, {
         locale: "en-US",
         serviceWorkers: "block",
         hasTouch: activeTouch,
@@ -51,7 +53,6 @@ suite.define(() => {
           : {}),
         viewport: { height: 900, width: 1280 },
       });
-      const page = await context.newPage();
       const message = (seq: number) => ({
         __openclaw: { ...(persisted ? { id: `prepend-${seq}` } : {}), seq },
         role:
@@ -70,187 +71,160 @@ suite.define(() => {
       );
       const loadedCount = recent.length + older.length;
       const totalMessages = loadedCount + (more ? 10 : 0);
+      const history = (messages: typeof recent, hasMore: boolean, nextOffset: number) => ({
+        messages,
+        hasMore,
+        nextOffset,
+        totalMessages,
+        sessionId: "prepend-session",
+      });
       const gateway = await installMockGateway(page, {
         sessionKey: "agent:main:main",
         sessions: [{ key: "agent:main:main", sessionId: "prepend-session" }],
         methodResponses: {
-          "chat.startup": {
-            messages: recent,
-            hasMore: true,
-            nextOffset: 800,
-            totalMessages,
-            sessionId: "prepend-session",
-          },
-          "chat.history": {
-            messages: older,
-            hasMore: more,
-            nextOffset: loadedCount,
-            totalMessages,
-            sessionId: "prepend-session",
-          },
+          "chat.startup": history(recent, true, 800),
+          "chat.history": history(older, more, loadedCount),
         },
       });
-      try {
-        await page.goto(`${suite.server.baseUrl}chat`);
-        const pane = page.locator(".chat-pane-cache__pane--active");
-        const thread = pane.locator(".chat-thread");
-        await thread.getByText(/^Transcript entry 1800\./).waitFor();
-        await waitForChatScrollIdle(page);
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const pane = page.locator(".chat-pane-cache__pane--active");
+      const thread = pane.locator(".chat-thread");
+      await thread.getByText(/^Transcript entry 1800\./).waitFor();
+      await waitForChatScrollIdle(page);
+      await gateway.deferNext("chat.history");
+      await thread.hover();
+      await page.mouse.wheel(0, -1_000_000);
+      await waitForRequests(gateway, "chat.history", 1);
+      if (manual) {
+        // Failed auto-loading exposes retry without another upward gesture.
+        await gateway.rejectDeferred("chat.history", {
+          message: "History temporarily unavailable",
+        });
+        const showEarlier = thread.getByRole("button", { name: "Show earlier", exact: true });
+        await expect.poll(() => showEarlier.isEnabled()).toBe(true);
         await gateway.deferNext("chat.history");
+        await showEarlier.click();
+        await waitForRequests(gateway, "chat.history", 2);
+      }
+      await waitForChatScrollIdle(page);
+      const anchor = thread.locator(".chat-bubble").filter({ hasText: "Transcript entry 1001." });
+      await anchor.waitFor();
+      const before = await layoutBox(anchor);
+      await page.evaluate(
+        (messageKey) => {
+          const frames: AnchorFrames = { frame: 0, positions: [], readerDelta: 0 };
+          (window as AnchorWindow).prependFrames = frames;
+          const sample = () => {
+            const bubble = document.querySelector<HTMLElement>(
+              `.chat-pane-cache__pane--active .chat-bubble[data-message-id="${CSS.escape(messageKey!)}"]`,
+            );
+            frames.positions.push(
+              bubble ? bubble.getBoundingClientRect().top + frames.readerDelta : null,
+            );
+            frames.frame = requestAnimationFrame(sample);
+          };
+          sample();
+        },
+        await anchor.getAttribute("data-message-id"),
+      );
+      const scrollTop = () => thread.evaluate((element) => element.scrollTop);
+      const heldOffset = await scrollTop();
+      if (activeTouch) {
+        if (momentum) {
+          // Model browsers that release momentum through idle, not scrollend.
+          await thread.evaluate((element) =>
+            element.addEventListener("scrollend", (event) => event.stopImmediatePropagation(), {
+              capture: true,
+            }),
+          );
+        }
+        await thread.evaluate((element) => {
+          const contact = new Touch({ identifier: 1, target: element });
+          element.dispatchEvent(
+            new TouchEvent("touchstart", {
+              touches: [contact],
+              targetTouches: [contact],
+              changedTouches: [contact],
+              bubbles: true,
+            }),
+          );
+        });
+        if (momentum) {
+          await thread.evaluate((element) => {
+            (window as AnchorWindow).prependFrames.readerDelta += 20;
+            element.scrollTop += 20;
+            element.dispatchEvent(new Event("scroll"));
+          });
+        }
+      }
+      await gateway.resolveDeferred("chat.history");
+      await expect
+        .poll(() =>
+          pane.evaluate(
+            (element) =>
+              (element as HTMLElement & { state: { chatMessages: unknown[] } }).state.chatMessages
+                .length,
+          ),
+        )
+        .toBe(loadedCount);
+      if (activeTouch) {
+        await twoFrames(page); // Let the projection commit before checking touch deferral.
+        expect(
+          await scrollTop(),
+          "a history prepend must not write the scroll offset during an active touch",
+        ).toBe(heldOffset + (momentum ? 20 : 0));
+        await thread.evaluate((element, withMomentum) => {
+          const move = () => {
+            (window as AnchorWindow).prependFrames.readerDelta += 10;
+            element.scrollTop += 10;
+            element.dispatchEvent(new Event("scroll"));
+          };
+          // One task prevents RPC latency from turning this fling into an idle touch.
+          if (withMomentum) {
+            move();
+          }
+          element.dispatchEvent(
+            new TouchEvent("touchend", {
+              changedTouches: [new Touch({ identifier: 1, target: element })],
+              bubbles: true,
+            }),
+          );
+          if (withMomentum) {
+            move();
+          }
+          // Deliberately omit scrollend: the offset observer must release history.
+        }, momentum);
+      }
+      await waitForChatScrollIdle(page);
+      // Require the fetched page to reach the viewport, not just pane state.
+      await expect.poll(scrollTop).toBeGreaterThan(heldOffset + (momentum ? 40 : 0) + 100);
+      const frames = await page.evaluate(() => {
+        const probe = (window as AnchorWindow).prependFrames;
+        cancelAnimationFrame(probe.frame);
+        return probe.positions;
+      });
+      const after = await layoutBox(anchor);
+      expect(
+        Math.abs(after.y + (momentum ? 40 : 0) - before.y),
+        "loading older history must not move the message being read",
+      ).toBeLessThanOrEqual(2);
+      expect(frames.length).toBeGreaterThan(1);
+      expect(
+        frames.every((top) => top !== null && Math.abs(top - before.y) <= 2),
+        "the message must stay anchored at every animation frame, not just after settling",
+      ).toBe(true);
+      if (!more && !onlyGroup) {
         await thread.hover();
         await page.mouse.wheel(0, -1_000_000);
-        await waitForRequests(gateway, "chat.history", 1);
-        if (manual) {
-          // A failed automatic load exposes the explicit retry control without
-          // another upward gesture consuming history before the reader clicks.
-          await gateway.rejectDeferred("chat.history", {
-            message: "History temporarily unavailable",
-          });
-          const showEarlier = thread.getByRole("button", { name: "Show earlier", exact: true });
-          await expect.poll(() => showEarlier.isEnabled()).toBe(true);
-          await gateway.deferNext("chat.history");
-          await showEarlier.click();
-          await waitForRequests(gateway, "chat.history", 2);
-        }
         await waitForChatScrollIdle(page);
-        const anchor = thread.locator(".chat-bubble").filter({ hasText: "Transcript entry 1001." });
-        await anchor.waitFor();
-        const before = await anchor.boundingBox();
-        expect(before).not.toBeNull();
-        await page.evaluate(
-          (messageKey) => {
-            const frames: AnchorFrames = { frame: 0, positions: [], readerDelta: 0 };
-            (window as AnchorWindow).prependFrames = frames;
-            const sample = () => {
-              const bubble = [
-                ...document.querySelectorAll<HTMLElement>(
-                  ".chat-pane-cache__pane--active .chat-bubble[data-message-id]",
-                ),
-              ].find((element) => element.dataset.messageId === messageKey);
-              frames.positions.push(
-                bubble ? bubble.getBoundingClientRect().top + frames.readerDelta : null,
-              );
-              frames.frame = requestAnimationFrame(sample);
-            };
-            sample();
-          },
-          await anchor.getAttribute("data-message-id"),
-        );
-        const heldOffset = await thread.evaluate((element) => element.scrollTop);
-        if (activeTouch) {
-          if (momentum) {
-            // Chromium emits scrollend itself; suppress delivery to model
-            // browsers that only provide the offset observer's idle callback.
-            await thread.evaluate((element) =>
-              element.addEventListener("scrollend", (event) => event.stopImmediatePropagation(), {
-                capture: true,
-              }),
-            );
-          }
-          await thread.evaluate((element) => {
-            const contact = new Touch({ identifier: 1, target: element });
-            element.dispatchEvent(
-              new TouchEvent("touchstart", {
-                touches: [contact],
-                targetTouches: [contact],
-                changedTouches: [contact],
-                bubbles: true,
-              }),
-            );
-          });
-          if (momentum) {
-            await thread.evaluate((element) => {
-              (window as AnchorWindow).prependFrames.readerDelta += 20;
-              element.scrollTop += 20;
-              element.dispatchEvent(new Event("scroll"));
-            });
-          }
-        }
-        await gateway.resolveDeferred("chat.history");
-        await expect
-          .poll(() =>
-            pane.evaluate(
-              (element) =>
-                (element as HTMLElement & { state: { chatMessages: unknown[] } }).state.chatMessages
-                  .length,
-            ),
-          )
-          .toBe(loadedCount);
-        if (activeTouch) {
-          // Let the real projection commit before checking that compensation
-          // respects the dependency's active-touch deferral.
-          await page.evaluate(
-            () =>
-              new Promise<void>((resolve) => {
-                requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-              }),
-          );
-          expect(
-            await thread.evaluate((element) => element.scrollTop),
-            "a history prepend must not write the scroll offset during an active touch",
-          ).toBe(heldOffset + (momentum ? 20 : 0));
-          await thread.evaluate((element, withMomentum) => {
-            const move = () => {
-              (window as AnchorWindow).prependFrames.readerDelta += 10;
-              element.scrollTop += 10;
-              element.dispatchEvent(new Event("scroll"));
-            };
-            // Keep the last contact movement, release, and initial momentum in
-            // one browser task; RPC latency must not turn this fling into an idle touch.
-            if (withMomentum) {
-              move();
-            }
-            element.dispatchEvent(
-              new TouchEvent("touchend", {
-                changedTouches: [new Touch({ identifier: 1, target: element })],
-                bubbles: true,
-              }),
-            );
-            if (withMomentum) {
-              move();
-            }
-            // Deliberately omit scrollend: the offset observer must release history.
-          }, momentum);
-        }
-        await waitForChatScrollIdle(page);
-        // State can contain the fetched page while the rendered projection is
-        // still held. Require its added extent to reach the native viewport.
-        await expect
-          .poll(() => thread.evaluate((element) => element.scrollTop))
-          .toBeGreaterThan(heldOffset + (momentum ? 40 : 0) + 100);
-        const frames = await page.evaluate(() => {
-          const probe = (window as AnchorWindow).prependFrames;
-          cancelAnimationFrame(probe.frame);
-          return probe.positions;
-        });
-        const after = await anchor.boundingBox();
-        expect(after, "the message being read must remain rendered").not.toBeNull();
-        expect(
-          Math.abs(after!.y + (momentum ? 40 : 0) - before!.y),
-          "loading older history must not move the message being read",
-        ).toBeLessThanOrEqual(2);
-        expect(frames.length).toBeGreaterThan(1);
-        expect(
-          frames.every((top) => top !== null && Math.abs(top - before!.y) <= 2),
-          "the message must stay anchored at every animation frame, not just after settling",
-        ).toBe(true);
-        if (!more && !onlyGroup) {
-          await thread.hover();
-          await page.mouse.wheel(0, -1_000_000);
-          await waitForChatScrollIdle(page);
-          const first = thread.getByText(/^Transcript entry 1\./);
-          await first.waitFor();
-          const firstBox = await first.boundingBox();
-          const viewport = await thread.boundingBox();
-          expect(firstBox).not.toBeNull();
-          expect(viewport).not.toBeNull();
-          expect(firstBox!.y).toBeGreaterThanOrEqual(viewport!.y - 2);
-          expect(firstBox!.y).toBeLessThan(viewport!.y + viewport!.height);
-          await pane.locator(".chat-history-sentinel").waitFor({ state: "detached" });
-          expect((await gateway.getRequests("chat.history")).length).toBe(manual ? 2 : 1);
-        }
-      } finally {
-        await suite.closeBrowserContext(context);
+        const first = thread.getByText(/^Transcript entry 1\./);
+        await first.waitFor();
+        const firstBox = await layoutBox(first);
+        const viewport = await layoutBox(thread);
+        expect(firstBox.y).toBeGreaterThanOrEqual(viewport.y - 2);
+        expect(firstBox.y).toBeLessThan(viewport.y + viewport.height);
+        await pane.locator(".chat-history-sentinel").waitFor({ state: "detached" });
+        expect((await gateway.getRequests("chat.history")).length).toBe(manual ? 2 : 1);
       }
     },
   );

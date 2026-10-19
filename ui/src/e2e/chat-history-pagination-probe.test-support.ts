@@ -59,6 +59,10 @@ export async function installHistoryPaginationProbe(
         markers: 0,
         lateChanges: 0,
       };
+      const { marks } = sample;
+      const stamp = (key: keyof typeof marks) => () => {
+        marks[key] = performance.now();
+      };
       let finish: () => void;
       const done = new Promise<void>((resolve) => {
         finish = resolve;
@@ -76,9 +80,9 @@ export async function installHistoryPaginationProbe(
       const mutations = new MutationObserver((records) => {
         if (
           records.some(
-            (record) =>
-              record.type !== "attributes" ||
-              (record.target as Element).getAttribute(record.attributeName!) !== record.oldValue,
+            ({ type, target, attributeName, oldValue }) =>
+              type !== "attributes" ||
+              (target as Element).getAttribute(attributeName!) !== oldValue,
           )
         ) {
           changed();
@@ -119,18 +123,11 @@ export async function installHistoryPaginationProbe(
           params?.sessionKey === sessionKey &&
           (params.offset ?? 0) > 0;
         if (selected) {
-          sample.marks.request ??= performance.now();
+          marks.request ??= performance.now();
         }
         const promise = originalRequest<T>(...args);
         if (selected) {
-          void promise.then(
-            () => {
-              sample.marks.response = performance.now();
-            },
-            () => {
-              sample.marks.requestFailed = performance.now();
-            },
-          );
+          void promise.then(stamp("response"), stamp("requestFailed"));
         }
         return promise;
       };
@@ -138,16 +135,14 @@ export async function installHistoryPaginationProbe(
       pane.render = function (...args) {
         const result = originalRender.apply(this, args);
         // Sample publication when the pane consumes the history, then fence its DOM commit.
-        if (pane.state.chatMessages.length >= count && sample.marks.published === undefined) {
-          sample.marks.published = performance.now();
-          void pane.updateComplete.then(() => {
-            sample.marks.paneUpdateComplete = performance.now();
-          });
+        if (pane.state.chatMessages.length >= count && marks.published === undefined) {
+          marks.published = performance.now();
+          void pane.updateComplete.then(stamp("paneUpdateComplete"));
         }
         return result;
       };
       const wheel = () => {
-        sample.marks.wheel ??= performance.now();
+        marks.wheel ??= performance.now();
       };
       thread.addEventListener("wheel", wheel, { capture: true, once: true });
       let frame = 0;
@@ -161,7 +156,7 @@ export async function installHistoryPaginationProbe(
             observed.add(row);
             resize.observe(row);
           }
-          if (sample.marks.published === undefined) {
+          if (marks.published === undefined) {
             initialIndexes.set(row.dataset.virtualRowKey!, Number(row.dataset.index));
           }
         }
@@ -176,12 +171,8 @@ export async function installHistoryPaginationProbe(
           return index !== undefined && Number(row.dataset.index) > index;
         });
         // The pane can publish all data while deliberately retaining the old row model during scrolling.
-        if (
-          sample.marks.paneUpdateComplete !== undefined &&
-          admitted &&
-          sample.marks.committed === undefined
-        ) {
-          sample.marks.committed = now;
+        if (marks.paneUpdateComplete !== undefined && admitted && marks.committed === undefined) {
+          marks.committed = now;
           changed();
         }
         const position = `${offset}:${rows.map((row) => `${row.dataset.virtualRowKey}:${row.dataset.index}`).join(",")}`;
@@ -189,11 +180,11 @@ export async function installHistoryPaginationProbe(
           prior = position;
           changed();
         }
-        if (sample.marks.committed !== undefined && !pane.loadingOlder && !confirmed) {
+        if (marks.committed !== undefined && !pane.loadingOlder && !confirmed) {
           stableFrames += 1;
           if (stableFrames >= 2 && now - lastActivity >= 50) {
-            sample.marks.settled = Math.max(sample.marks.committed, lastActivity);
-            sample.marks.quietConfirmed = now;
+            marks.settled = Math.max(marks.committed, lastActivity);
+            marks.quietConfirmed = now;
             sample.rows = rows.length;
             sample.markers = thread.querySelectorAll(".chat-position-rail__marker").length;
             confirmed = true;
@@ -205,7 +196,7 @@ export async function installHistoryPaginationProbe(
       frame = requestAnimationFrame(tick);
       window.historyPaginationProbe = {
         begin: () => {
-          sample.marks.position ??= performance.now();
+          marks.position ??= performance.now();
         },
         done,
         result: () => {

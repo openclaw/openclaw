@@ -9,6 +9,7 @@ import { resolveChatSnapshotKey } from "../pages/chat/session-snapshot-key.ts";
 import {
   createChatFlowE2eSuite,
   installMockGateway,
+  newChatPage,
   requireRecord,
   waitForChatScrollIdle,
   waitForRequests,
@@ -33,12 +34,12 @@ function historyMessage(seq: number, text: string) {
 
 suite.define(() => {
   it("discards stale transcript geometry before restored history bootstrap", async () => {
-    const context = await suite.newBrowserContext({
+    const page = await newChatPage(suite, {
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 600, width: 520 },
     });
-    const page = await context.newPage();
+    const pane = page.locator(".chat-pane-cache__pane--active");
     const recentMessages = Array.from({ length: 16 }, (_, index) =>
       historyMessage(
         index + 3,
@@ -66,143 +67,120 @@ suite.define(() => {
       sessions: [sessionInfo],
     });
 
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await page.getByText("Restored message 18:", { exact: false }).waitFor({ timeout: 10_000 });
-      const rowKeys = await page.locator(".chat-virtual-row").evaluateAll((rows) =>
-        rows.flatMap((row) => {
-          const key = (row as HTMLElement).dataset.virtualRowKey;
-          return key ? [key] : [];
-        }),
-      );
-      expect(rowKeys.length).toBeGreaterThan(0);
-      const snapshotHost = await page
-        .locator(".chat-pane-cache__pane--active")
-        .evaluate((element) => {
-          const { state } = element as HTMLElement & { state: ChatPageHost };
-          if (!state.client?.recoveryScopeReady || !state.client.recoveryScope) {
-            throw new Error("Expected the authenticated snapshot owner");
-          }
-          return {
-            settings: { gatewayUrl: state.settings.gatewayUrl },
-            client: { recoveryScopeReady: true, recoveryScope: state.client.recoveryScope },
-            agentsList: state.agentsList,
-            hello: state.hello,
-            assistantAgentId: state.assistantAgentId,
-          };
-        });
-      const snapshotKey = resolveChatSnapshotKey(snapshotHost, { sessionKey: "agent:main:main" });
-      await expect
-        .poll(
-          () =>
-            page.evaluate(
-              async ({
-                databaseName,
-                keys,
-                storeName,
-                snapshotKey: storedKey,
-                sessionId: expectedSessionId,
-              }) => {
-                const database = await new Promise<IDBDatabase>((resolve, reject) => {
-                  const request = indexedDB.open(databaseName);
+    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.getByText("Restored message 18:", { exact: false }).waitFor({ timeout: 10_000 });
+    const rowKeys = await page
+      .locator(".chat-virtual-row")
+      .evaluateAll((rows) => rows.flatMap((row) => row.getAttribute("data-virtual-row-key") || []));
+    expect(rowKeys.length).toBeGreaterThan(0);
+    const snapshotHost = await pane.evaluate((element) => {
+      const { state } = element as HTMLElement & { state: ChatPageHost };
+      if (!state.client?.recoveryScopeReady || !state.client.recoveryScope) {
+        throw new Error("Expected the authenticated snapshot owner");
+      }
+      return {
+        settings: { gatewayUrl: state.settings.gatewayUrl },
+        client: { recoveryScopeReady: true, recoveryScope: state.client.recoveryScope },
+        agentsList: state.agentsList,
+        hello: state.hello,
+        assistantAgentId: state.assistantAgentId,
+      };
+    });
+    const snapshotKey = resolveChatSnapshotKey(snapshotHost, { sessionKey: "agent:main:main" });
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            async ({ databaseName, keys, storeName, key, id }) => {
+              const read = <T>(request: IDBRequest<T>) =>
+                new Promise<T>((resolve, reject) => {
                   request.addEventListener("success", () => resolve(request.result));
-                  request.addEventListener("error", () =>
-                    reject(new Error(request.error?.message ?? "snapshot database open failed")),
-                  );
+                  request.addEventListener("error", () => reject(request.error));
                 });
-                const transaction = database.transaction(storeName, "readwrite");
-                const store = transaction.objectStore(storeName);
-                const record = await new Promise<unknown>((resolve, reject) => {
-                  const request = store.get(storedKey);
-                  request.addEventListener("success", () => resolve(request.result));
-                  request.addEventListener("error", () =>
-                    reject(new Error(request.error?.message ?? "snapshot record read failed")),
-                  );
-                });
-                if (!record || typeof record !== "object") {
-                  database.close();
-                  return false;
-                }
-                if (
-                  !("sessionKey" in record) ||
-                  record.sessionKey !== storedKey ||
-                  !("sessionId" in record) ||
-                  record.sessionId !== expectedSessionId
-                ) {
-                  database.close();
-                  throw new Error("Snapshot record does not belong to the expected conversation");
-                }
-                (record as Record<string, unknown>).rowHeights = new Map(
-                  keys.map((key) => [key, 1_000]),
-                );
-                store.put(record);
-                await new Promise<void>((resolve, reject) => {
-                  transaction.addEventListener("complete", () => resolve());
-                  transaction.addEventListener("error", () =>
-                    reject(new Error(transaction.error?.message ?? "snapshot write failed")),
-                  );
-                  transaction.addEventListener("abort", () =>
-                    reject(new Error(transaction.error?.message ?? "snapshot write aborted")),
-                  );
-                });
+              const database = await read(indexedDB.open(databaseName));
+              const transaction = database.transaction(storeName, "readwrite");
+              const store = transaction.objectStore(storeName);
+              const record = await read<unknown>(store.get(key));
+              if (!record || typeof record !== "object") {
                 database.close();
-                return true;
-              },
-              {
-                databaseName: CHAT_SNAPSHOT_DB_NAME,
-                keys: rowKeys,
-                storeName: CHAT_SNAPSHOT_STORE_NAME,
-                snapshotKey,
-                sessionId,
-              },
-            ),
-          { timeout: 10_000 },
-        )
-        .toBe(true);
+                return false;
+              }
+              if (
+                !("sessionKey" in record) ||
+                record.sessionKey !== key ||
+                !("sessionId" in record) ||
+                record.sessionId !== id
+              ) {
+                database.close();
+                throw new Error("Snapshot record does not belong to the expected conversation");
+              }
+              (record as Record<string, unknown>).rowHeights = new Map(
+                keys.map((rowKey) => [rowKey, 1_000]),
+              );
+              store.put(record);
+              await new Promise<void>((resolve, reject) => {
+                transaction.addEventListener("complete", () => resolve());
+                transaction.addEventListener("error", () =>
+                  reject(new Error(transaction.error?.message ?? "snapshot write failed")),
+                );
+                transaction.addEventListener("abort", () =>
+                  reject(new Error(transaction.error?.message ?? "snapshot write aborted")),
+                );
+              });
+              database.close();
+              return true;
+            },
+            {
+              databaseName: CHAT_SNAPSHOT_DB_NAME,
+              keys: rowKeys,
+              storeName: CHAT_SNAPSHOT_STORE_NAME,
+              key: snapshotKey,
+              id: sessionId,
+            },
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(true);
 
-      await gateway.setMethodResponse("chat.startup", startup(compactRecentMessages, true));
-      await gateway.setMethodResponse("chat.history", {
-        cases: [
-          {
-            match: { offset: compactRecentMessages.length, sessionKey: "agent:main:main" },
-            response: { hasMore: false, messages: olderMessages, sessionId, totalMessages },
-          },
-        ],
-      });
-      const historyRequestsBeforeReload = (await gateway.getRequests("chat.history")).length;
-      await page.setViewportSize({ height: 2_400, width: 1_400 });
-      await page.reload();
+    await gateway.setMethodResponse("chat.startup", startup(compactRecentMessages, true));
+    await gateway.setMethodResponse("chat.history", {
+      cases: [
+        {
+          match: { offset: compactRecentMessages.length, sessionKey: "agent:main:main" },
+          response: { hasMore: false, messages: olderMessages, sessionId, totalMessages },
+        },
+      ],
+    });
+    const historyRequestsBeforeReload = (await gateway.getRequests("chat.history")).length;
+    await page.setViewportSize({ height: 2_400, width: 1_400 });
+    await page.reload();
 
-      const requests = await waitForRequests(
-        gateway,
-        "chat.history",
-        historyRequestsBeforeReload + 1,
-      );
-      expect(requireRecord(requests.at(-1)?.params)).toMatchObject({
-        offset: compactRecentMessages.length,
-        sessionKey: "agent:main:main",
-      });
-      await expect
-        .poll(() =>
-          page.locator(".chat-pane-cache__pane--active").evaluate((element) => {
-            const pane = element as HTMLElement & { state?: { chatMessages?: unknown[] } };
-            return pane.state?.chatMessages?.length ?? 0;
-          }),
-        )
-        .toBe(totalMessages);
-      await waitForChatScrollIdle(page);
-      await page.getByText("Older 1", { exact: true }).waitFor();
-      await page.getByText("Restored message 3", { exact: true }).waitFor();
-      await expect
-        .poll(() =>
-          page.locator(".chat-pane-cache__pane--active .chat-thread").evaluate((element) => {
-            const thread = element as HTMLElement;
-            return thread.scrollHeight - thread.clientHeight;
-          }),
-        )
-        .toBeLessThanOrEqual(1);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+    const requests = await waitForRequests(
+      gateway,
+      "chat.history",
+      historyRequestsBeforeReload + 1,
+    );
+    expect(requireRecord(requests.at(-1)?.params)).toMatchObject({
+      offset: compactRecentMessages.length,
+      sessionKey: "agent:main:main",
+    });
+    await expect
+      .poll(() =>
+        pane.evaluate((element) => {
+          const host = element as HTMLElement & { state?: { chatMessages?: unknown[] } };
+          return host.state?.chatMessages?.length ?? 0;
+        }),
+      )
+      .toBe(totalMessages);
+    await waitForChatScrollIdle(page);
+    await page.getByText("Older 1", { exact: true }).waitFor();
+    await page.getByText("Restored message 3", { exact: true }).waitFor();
+    await expect
+      .poll(() =>
+        pane
+          .locator(".chat-thread")
+          .evaluate((element) => element.scrollHeight - element.clientHeight),
+      )
+      .toBeLessThanOrEqual(1);
   }, 120_000);
 });

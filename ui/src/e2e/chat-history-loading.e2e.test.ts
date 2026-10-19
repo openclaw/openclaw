@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { newChatPage } from "./chat-flow.test-support.ts";
 import { expectHistoryBoundaryState } from "./chat-history-boundary.test-support.ts";
 import { expectTranscriptLayoutCommitted } from "./claude-sessions.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -7,6 +8,7 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({
   name: "Chat history loading",
   startServerBeforeBrowser: true,
+  trackBrowserContexts: true,
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
@@ -61,12 +63,7 @@ suite.define(() => {
   it.each(["cold", "warm"])(
     "fills once on %s reload, then pages to the beginning on upward input",
     async (temperature) => {
-      const context = await suite.newBrowserContext({
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { width: 1280, height: 900 },
-      });
-      const page = await context.newPage();
+      const page = await newChatPage(suite);
       const historyMessage = (seq: number, role: "assistant" | "user", text: string) => ({
         __openclaw: { seq },
         content: [{ type: role === "assistant" ? "output_text" : "input_text", text }],
@@ -115,57 +112,53 @@ suite.define(() => {
           (request) => (request.params as { offset?: number } | undefined)?.offset,
         );
 
-      try {
-        await page.goto(`${suite.server.baseUrl}chat`);
-        const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
-        const thread = pane.locator(".chat-thread");
-        await page.getByText("Recent answer", { exact: true }).waitFor();
-        if (temperature === "warm") {
-          await gateway.waitForRequest("chat.history");
-          await gateway.resolveDeferred("chat.history");
-          await expectHistoryBoundaryState(pane, false);
-          await expectTranscriptLayoutCommitted(thread);
-          await page.reload();
-          await page.getByText("Recent answer", { exact: true }).waitFor();
-        }
-        await expectTranscriptLayoutCommitted(thread);
-        await expect.poll(offsets).toEqual([2]);
-        await expectHistoryBoundaryState(pane, true);
-        const underfilled = () =>
-          thread.evaluate((element) => element.scrollHeight <= element.clientHeight);
-        expect(await underfilled()).toBe(true);
-
-        await gateway.deferNext("chat.history", { offset: 6 });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
+      const thread = pane.locator(".chat-thread");
+      await page.getByText("Recent answer", { exact: true }).waitFor();
+      if (temperature === "warm") {
+        await gateway.waitForRequest("chat.history");
         await gateway.resolveDeferred("chat.history");
         await expectHistoryBoundaryState(pane, false);
         await expectTranscriptLayoutCommitted(thread);
-        expect((await gateway.getRequests("chat.history")).length).toBe(1);
-        expect(await underfilled()).toBe(true);
+        await page.reload();
+        await page.getByText("Recent answer", { exact: true }).waitFor();
+      }
+      await expectTranscriptLayoutCommitted(thread);
+      await expect.poll(offsets).toEqual([2]);
+      await expectHistoryBoundaryState(pane, true);
+      const underfilled = () =>
+        thread.evaluate((element) => element.scrollHeight <= element.clientHeight);
+      expect(await underfilled()).toBe(true);
 
-        await thread.hover();
-        await page.mouse.wheel(0, -100);
-        await expect.poll(offsets).toEqual([2, 6]);
-        await expectHistoryBoundaryState(pane, true);
-        expect(await underfilled()).toBe(true);
+      await gateway.deferNext("chat.history", { offset: 6 });
+      await gateway.resolveDeferred("chat.history");
+      await expectHistoryBoundaryState(pane, false);
+      await expectTranscriptLayoutCommitted(thread);
+      expect((await gateway.getRequests("chat.history")).length).toBe(1);
+      expect(await underfilled()).toBe(true);
 
-        await gateway.resolveDeferred("chat.history");
-        await expect
-          .poll(() => thread.evaluate((element) => element.scrollHeight > element.clientHeight))
-          .toBe(true);
-        await expect
-          .poll(() => pane.locator('.chat-history-boundary__action[aria-busy="true"]').count())
-          .toBe(0);
-        await pane.locator(".chat-history-sentinel").waitFor({ state: "detached" });
-        // Exhausting history also stops reader prefetch.
-        await expect
-          .poll(() => gateway.getRequests("chat.history").then((requests) => requests.length))
-          .toBe(2);
-        expect(await offsets()).toEqual([2, 6]);
-        for (const request of await gateway.getRequests("chat.history")) {
-          expect(request.params).toMatchObject({ limit: 1000, maxBytes: 2 * 1024 * 1024 });
-        }
-      } finally {
-        await suite.closeBrowserContext(context);
+      await thread.hover();
+      await page.mouse.wheel(0, -100);
+      await expect.poll(offsets).toEqual([2, 6]);
+      await expectHistoryBoundaryState(pane, true);
+      expect(await underfilled()).toBe(true);
+
+      await gateway.resolveDeferred("chat.history");
+      await expect
+        .poll(() => thread.evaluate((element) => element.scrollHeight > element.clientHeight))
+        .toBe(true);
+      await expect
+        .poll(() => pane.locator('.chat-history-boundary__action[aria-busy="true"]').count())
+        .toBe(0);
+      await pane.locator(".chat-history-sentinel").waitFor({ state: "detached" });
+      // Exhausting history also stops reader prefetch.
+      await expect
+        .poll(() => gateway.getRequests("chat.history").then((requests) => requests.length))
+        .toBe(2);
+      expect(await offsets()).toEqual([2, 6]);
+      for (const request of await gateway.getRequests("chat.history")) {
+        expect(request.params).toMatchObject({ limit: 1000, maxBytes: 2 * 1024 * 1024 });
       }
     },
   );
