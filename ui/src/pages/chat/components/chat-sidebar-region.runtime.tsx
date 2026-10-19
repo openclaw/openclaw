@@ -1,5 +1,4 @@
 import "../../../styles/chat/side-panel.css";
-import "./chat-files-panel.tsx";
 import { Portal } from "@solidjs/web";
 import { For, Show, createSignal, onCleanup, onSettled, untrack } from "solid-js";
 import { registryFor } from "../../../components/overlay-registry.ts";
