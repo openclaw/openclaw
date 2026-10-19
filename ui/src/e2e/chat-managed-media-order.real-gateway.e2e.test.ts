@@ -272,6 +272,17 @@ async function renderedOrder(bubble: Locator) {
     );
 }
 
+async function assertRenderedOrder(bubble: Locator) {
+  let order: string[] = [];
+  await expect
+    .poll(async () => {
+      order = await renderedOrder(bubble);
+      return order;
+    })
+    .toEqual(expectedOrder);
+  return order;
+}
+
 async function recordImageDecodeFailure(bubble: Locator) {
   const images = await bubble.locator("img.chat-message-image").evaluateAll(async (elements) =>
     Promise.all(
@@ -462,8 +473,8 @@ suite.define(() => {
                 // Capture before the order assertion so an unfixed run retains the actual flattening.
                 // Running this unchanged scenario on the repaired build yields the comparable After.
                 await capture(page, bubble, "01-live");
-                liveOrder = await renderedOrder(bubble);
-                expect(liveOrder).toEqual(expectedOrder);
+                // History reconciliation can replace decoded images across the screenshot await.
+                liveOrder = await assertRenderedOrder(bubble);
               } catch (error) {
                 try {
                   const diagnostic = await liveNodes.evaluate((before, expectedIntro) => {
@@ -586,8 +597,7 @@ suite.define(() => {
               await bubble.getByText(closing, { exact: true }).waitFor();
               await assertDecoded();
               await capture(page, bubble, "02-reloaded");
-              const reloadedOrder = await renderedOrder(bubble);
-              expect(reloadedOrder).toEqual(expectedOrder);
+              const reloadedOrder = await assertRenderedOrder(bubble);
               expect(await page.locator(".chat-group.assistant .chat-bubble").count()).toBe(1);
               expect(sends).toEqual([prompt]);
               expect(provider.requests.filter((model) => model === "echo")).toHaveLength(1);
