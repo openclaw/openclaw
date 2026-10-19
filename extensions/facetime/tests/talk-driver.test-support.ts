@@ -3,6 +3,7 @@ import type {
   RealtimeVoiceTool,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { expect, vi } from "vitest";
+import type { startFaceTimeAudioPump } from "../src/audio-pump.js";
 
 type SessionParams = Required<
   Pick<RealtimeVoiceBridgeCallbacks, "onEvent" | "onReady" | "onError" | "onClose" | "onToolCall">
@@ -13,25 +14,19 @@ type SessionParams = Required<
     tools?: RealtimeVoiceTool[];
   };
 
-const mocks = vi.hoisted(() => ({
-  buildCancelResult: vi.fn((message: string) => ({ status: "cancelled", message })),
+export const mocks = vi.hoisted(() => ({
   bridge: {
     bridge: { supportsToolResultContinuation: false, supportsToolResultSuppression: true },
-    acknowledgeMark: vi.fn(),
     close: vi.fn(),
     connect: vi.fn<() => Promise<void>>(),
     sendAudio: vi.fn(),
-    sendUserMessage: vi.fn(),
-    handleBargeIn: vi.fn(),
     setMediaTimestamp: vi.fn(),
     submitToolResult: vi.fn(),
     triggerGreeting: vi.fn(),
   },
   createSession: vi.fn(),
   consult: vi.fn(),
-  getSessionEntry: vi.fn<() => { sessionId: string } | undefined>(() => ({
-    sessionId: "facetime-consult-session",
-  })),
+  onFailure: vi.fn(async () => true),
   resolveAgentContext: vi.fn(),
   resolveDefaultAgentId: vi.fn((config: { agents?: { entries?: Record<string, unknown> } }) => {
     const agentIds = Object.keys(config.agents?.entries ?? {});
@@ -52,62 +47,33 @@ const mocks = vi.hoisted(() => ({
     suspendMedia: vi.fn(async () => {}),
     stop: vi.fn(async () => {}),
   },
-  pumpParams: undefined as
-    | undefined
-    | {
-        onError(error: Error): void | Promise<void>;
-        onInputAudio(audio: Buffer): void;
-        onPlaybackDrained(event: { generation: number; playedFrames: number }): void;
-      },
+  pumpParams: undefined as Required<Parameters<typeof startFaceTimeAudioPump>[0]> | undefined,
   sessionParams: undefined as SessionParams | undefined,
 }));
 
 // mock-isolation: The driver fixture owns synthetic Talk sessions, consult callbacks, and observations; no host runtime is started.
-vi.mock("openclaw/plugin-sdk/realtime-voice", () => ({
-  REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES: ["safe-read-only", "owner", "none"],
-  isRealtimeVoiceAgentConsultToolPolicy: (value: unknown) =>
-    value === "safe-read-only" || value === "owner" || value === "none",
-  buildRealtimeVoiceAgentConsultPolicyInstructions: vi.fn(
-    ({ consultPolicy }: { consultPolicy?: string }) => `Consult behavior: ${consultPolicy}.`,
-  ),
-  buildRealtimeVoiceAgentCancelProviderResult: mocks.buildCancelResult,
-  buildRealtimeVoiceAgentConsultWorkingResponse: vi.fn(() => ({ status: "working" })),
+vi.mock("openclaw/plugin-sdk/realtime-voice", async () => ({
+  ...(await import("../../../src/talk/agent-consult-tool.js")),
+  ...(await import("../../../src/talk/agent-run-control-shared.js")),
+  ...(await import("../../../src/talk/session-log-runtime.js")),
   consultRealtimeVoiceAgent: mocks.consult,
   createRealtimeVoiceBridgeSession: mocks.createSession,
   getRealtimeVoiceProvider: vi.fn((providerId: string) => ({ id: providerId })),
   createTalkSessionController: vi.fn(() => {
     const recentEvents: unknown[] = [];
-    const remember = (event: unknown) => {
-      recentEvents.push(event);
-      return event;
-    };
     return {
       outputAudioActive: false,
       recentEvents,
-      emit: vi.fn(remember),
+      emit: vi.fn((event: unknown) => recentEvents.push(event)),
       ensureTurn: vi.fn(() => ({ turnId: "turn-1" })),
       startOutputAudio: vi.fn(() => ({ event: undefined })),
       finishOutputAudio: vi.fn(),
       endTurn: vi.fn(() => ({ ok: false })),
     };
   }),
-  REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME: "openclaw_agent_consult",
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ: "pcm16-24khz",
   recordTalkObservabilityEvent: vi.fn(),
-  recordRealtimeVoiceTranscript: vi.fn((transcript, role, text, maxEntries = 40) => {
-    const entry = { at: new Date().toISOString(), role, text };
-    transcript.push(entry);
-    transcript.splice(0, Math.max(0, transcript.length - maxEntries));
-    return entry;
-  }),
   resolveConfiguredRealtimeVoiceProviderAsync: mocks.resolveProvider,
-  resolveRealtimeVoiceAgentConsultTools: vi.fn(
-    (policy: string, customTools: Array<{ name: string }> = []) => [
-      ...(policy === "none" ? [] : [{ name: "openclaw_agent_consult" }]),
-      ...customTools,
-    ],
-  ),
-  resolveRealtimeVoiceAgentConsultToolsAllow: vi.fn(() => []),
 }));
 
 vi.mock("openclaw/plugin-sdk/realtime-bootstrap-context", () => ({
@@ -125,33 +91,34 @@ vi.mock("../src/audio-pump.js", () => ({
   }),
 }));
 
-import { resolveFaceTimeConfig } from "../src/config.js";
+import { resolveFaceTimeConfig, type FaceTimeConfig } from "../src/config.js";
 import { startFaceTimeTalkDriver } from "../src/talk-driver.js";
 
-export function startParams(overrides: Record<string, unknown> = {}) {
+export function startParams({
+  realtime,
+  ...overrides
+}: Partial<Parameters<typeof startFaceTimeTalkDriver>[0]> & {
+  realtime?: Partial<FaceTimeConfig["realtime"]>;
+} = {}) {
   return {
-    config: resolveFaceTimeConfig({ ownerHandles: ["caller@example.com"] }),
-    fullConfig: {} as never,
-    runtime: {
-      agent: {
-        session: {
-          resolveStorePath: vi.fn(() => "/store"),
-          getSessionEntry: mocks.getSessionEntry,
-        },
-      },
-    } as never,
+    config: resolveFaceTimeConfig({ ownerHandles: ["caller@example.com"], realtime }),
+    fullConfig: {},
+    runtime: { agent: {} } as never,
     logger: console,
     callUUID: "call-1",
     senderId: "caller@example.com",
     senderIsOwner: true as const,
     captureBinary: "/capture",
     onHangupRequested: mocks.hangupRequested,
+    onFailure: mocks.onFailure,
     ...overrides,
   };
 }
 
-export async function startReadyFaceTimeTalkDriver(params = startParams()) {
-  const driver = await startFaceTimeTalkDriver(params);
+export async function startReadyFaceTimeTalkDriver(
+  overrides: Parameters<typeof startParams>[0] = {},
+) {
+  const driver = await startFaceTimeTalkDriver(startParams(overrides));
   const ready = driver.readyForAudio();
   await vi.waitFor(() => expect(mocks.createSession).toHaveBeenCalledOnce());
   mocks.sessionParams?.onReady();
@@ -161,7 +128,8 @@ export async function startReadyFaceTimeTalkDriver(params = startParams()) {
 
 export function resetTalkDriverMocks() {
   vi.clearAllMocks();
-  mocks.getSessionEntry.mockReturnValue({ sessionId: "facetime-consult-session" });
+  mocks.consult.mockReset().mockImplementation(() => new Promise(() => {}));
+  mocks.onFailure.mockReset().mockResolvedValue(true);
   mocks.resolveAgentContext.mockResolvedValue("Agent context: shared voice agent context.");
   mocks.bridge.connect.mockResolvedValue();
   mocks.pump.suppressionReady.mockResolvedValue();
@@ -177,5 +145,3 @@ export function resetTalkDriverMocks() {
     return mocks.bridge;
   });
 }
-
-export { mocks };

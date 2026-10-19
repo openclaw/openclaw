@@ -7,7 +7,7 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { RealtimeVoicePlaybackItem } from "openclaw/plugin-sdk/realtime-voice";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { buildOpenAIRealtimeVoiceProvider } from "../../openai/api.js";
 import { resolveFaceTimeConfig, type FaceTimeConfig } from "../src/config.js";
 import { startFaceTimeTalkDriver, type FaceTimeTalkDriver } from "../src/talk-driver.js";
@@ -31,16 +31,8 @@ vi.mock("node:child_process", async (importOriginal) => {
   const unexpectedProcess = () => {
     throw new Error("Native processes are forbidden in FaceTime provider tests");
   };
-  return {
-    ...actual,
-    spawn: unexpectedProcess,
-    spawnSync: unexpectedProcess,
-    exec: unexpectedProcess,
-    execSync: unexpectedProcess,
-    execFile: unexpectedProcess,
-    execFileSync: unexpectedProcess,
-    fork: unexpectedProcess,
-  };
+  const methods = "spawn spawnSync exec execSync execFile execFileSync fork".split(" ");
+  return { ...actual, ...Object.fromEntries(methods.map((name) => [name, unexpectedProcess])) };
 });
 vi.mock("openclaw/plugin-sdk/realtime-bootstrap-context", () => ({
   resolveRealtimeVoiceAgentContextInstructions: async () =>
@@ -51,28 +43,25 @@ const providerMocks = await vi.hoisted(async () => {
   const { createOpenAIRealtimeMockState } =
     await import("../../openai/realtime-voice-test-support.js");
   const state = createOpenAIRealtimeMockState();
-  type MockSocket = InstanceType<typeof state.FakeWebSocket>;
-  let onSocket: (socket: MockSocket) => void = () => {};
-  class FaceTimeSocket extends state.FakeWebSocket {
-    constructor(...args: unknown[]) {
-      super(...args);
-      onSocket(this);
-    }
-  }
+  const onSocket = vi.fn<(socket: InstanceType<typeof state.FakeWebSocket>) => void>();
   return {
-    ...state,
-    FakeWebSocket: FaceTimeSocket,
-    setSocketListener(listener: (socket: MockSocket) => void) {
-      onSocket = listener;
+    FakeWebSocket: class extends state.FakeWebSocket {
+      constructor(...args: unknown[]) {
+        super(...args);
+        onSocket(this);
+      }
     },
+    onSocket,
+    authConfigured: state.isProviderAuthProfileConfiguredMock,
+    resolveKey: state.resolveProviderAuthProfileApiKeyMock,
   };
 });
 vi.mock("ws", () => ({ default: providerMocks.FakeWebSocket }));
 vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>()),
-  isProviderAuthProfileConfigured: providerMocks.isProviderAuthProfileConfiguredMock,
-  isProviderAuthProfileConfiguredAsync: providerMocks.isProviderAuthProfileConfiguredMock,
-  resolveProviderAuthProfileApiKey: providerMocks.resolveProviderAuthProfileApiKeyMock,
+  isProviderAuthProfileConfigured: providerMocks.authConfigured,
+  isProviderAuthProfileConfiguredAsync: providerMocks.authConfigured,
+  resolveProviderAuthProfileApiKey: providerMocks.resolveKey,
 }));
 vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-http")>()),
@@ -97,38 +86,24 @@ function sentEvents(socket: Socket): Record<string, unknown>[] {
   return socket.sent.map((payload) => JSON.parse(payload) as Record<string, unknown>);
 }
 
-function providerFixture() {
-  const registry = createEmptyPluginRegistry();
-  registry.realtimeVoiceProviders.push({
-    pluginId: "openai",
-    source: "test",
-    provider: buildOpenAIRealtimeVoiceProvider({ logger: { warn: vi.fn(), debug: vi.fn() } }),
-  });
-  setActivePluginRegistry(registry);
-}
-
-function startParams(
+async function startConnectedDriver(
   realtime: Partial<FaceTimeConfig["realtime"]>,
   overrides: Partial<Parameters<typeof startFaceTimeTalkDriver>[0]> = {},
 ) {
-  return {
+  const socketCreated = createDeferred<Socket>();
+  providerMocks.onSocket.mockImplementationOnce(socketCreated.resolve);
+  const driver = await startFaceTimeTalkDriver({
     config: resolveFaceTimeConfig({ ownerHandles: ["caller@example.test"], realtime }),
     fullConfig: {},
     runtime: createPluginRuntimeMock(),
     logger: { warn: vi.fn(), debug: vi.fn(), info: vi.fn(), error: vi.fn() },
     callUUID: "call-1",
     senderId: "caller@example.test",
-    senderIsOwner: true as const,
+    senderIsOwner: true,
     captureBinary: "/forbidden-capture",
     onHangupRequested: vi.fn(async () => {}),
     ...overrides,
-  };
-}
-
-async function startConnectedDriver(params: Parameters<typeof startFaceTimeTalkDriver>[0]) {
-  const socketCreated = createDeferred<Socket>();
-  providerMocks.setSocketListener(socketCreated.resolve);
-  const driver = await startFaceTimeTalkDriver(params);
+  });
   activeDrivers.add(driver);
   const ready = driver.readyForAudio();
   const socket = await Promise.race([socketCreated.promise, ready.then(() => undefined)]);
@@ -142,123 +117,124 @@ async function startConnectedDriver(params: Parameters<typeof startFaceTimeTalkD
   return { driver, socket };
 }
 
-describe("FaceTime realtime provider boundary", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    providerMocks.FakeWebSocket.instances = [];
-    providerMocks.isProviderAuthProfileConfiguredMock.mockReset().mockReturnValue(false);
-    providerMocks.resolveProviderAuthProfileApiKeyMock.mockReset().mockResolvedValue(undefined);
-    audio.playedAudioFrames.mockReturnValue(0);
-    audio.queuedAudioFrames.mockReturnValue(0);
-    audio.getPlaybackState.mockReturnValue([]);
-    audio.clearOutputAudio.mockImplementation(() => audio.getPlaybackState.mockReturnValue([]));
-    vi.stubEnv("OPENAI_API_KEY", "");
-    providerFixture();
+beforeEach(() => {
+  vi.clearAllMocks();
+  providerMocks.FakeWebSocket.instances = [];
+  providerMocks.authConfigured.mockReset().mockReturnValue(false);
+  providerMocks.resolveKey.mockReset().mockResolvedValue(undefined);
+  audio.playedAudioFrames.mockReturnValue(0);
+  audio.queuedAudioFrames.mockReturnValue(0);
+  audio.getPlaybackState.mockReturnValue([]);
+  audio.clearOutputAudio.mockImplementation(() => audio.getPlaybackState.mockReturnValue([]));
+  vi.stubEnv("OPENAI_API_KEY", "");
+  const registry = createEmptyPluginRegistry();
+  registry.realtimeVoiceProviders.push({
+    pluginId: "openai",
+    source: "test",
+    provider: buildOpenAIRealtimeVoiceProvider({ logger: { warn: vi.fn(), debug: vi.fn() } }),
   });
+  setActivePluginRegistry(registry);
+});
 
-  afterEach(async () => {
-    await Promise.all([...activeDrivers].map((driver) => driver.close()));
-    activeDrivers.clear();
-    providerMocks.setSocketListener(() => {});
-    resetPluginRuntimeStateForTest();
-    audio.playedAudioFrames.mockReturnValue(0);
-    audio.queuedAudioFrames.mockReturnValue(0);
-    vi.unstubAllEnvs();
-  });
+afterEach(async () => {
+  await Promise.all([...activeDrivers].map((driver) => driver.close()));
+  activeDrivers.clear();
+  providerMocks.onSocket.mockReset();
+  resetPluginRuntimeStateForTest();
+  vi.unstubAllEnvs();
+});
 
-  it("connects using the selected agent's API-key profile", async () => {
-    const agentDir = "/synthetic/agents/voice-owner";
-    const fullConfig: OpenClawConfig = {
-      agents: { entries: { main: {}, "voice-owner": { agentDir } } },
-    };
-    providerMocks.isProviderAuthProfileConfiguredMock.mockImplementation(
-      (params: { agentDir?: string }) => params.agentDir === agentDir,
-    );
-    providerMocks.resolveProviderAuthProfileApiKeyMock.mockImplementation(
-      async (params: { cfg?: OpenClawConfig; agentDir?: string }) => {
-        if (params.cfg !== fullConfig || params.agentDir !== agentDir) {
-          throw new Error("No API-key profile for the selected agent");
-        }
-        return "test-api-key-agent-profile";
-      },
-    );
-
-    const { driver, socket } = await startConnectedDriver(
-      startParams({ provider: "openai", sessionKey: "agent:voice-owner:main" }, { fullConfig }),
-    );
-
-    expect(driver.realtimeActive()).toBe(true);
-    expect(sentEvents(socket).find((event) => event.type === "session.update")).toMatchObject({
-      session: {
-        instructions: expect.stringContaining("Agent context: shared voice agent context."),
-      },
-    });
-    expect(providerMocks.resolveProviderAuthProfileApiKeyMock).toHaveBeenCalledWith(
-      expect.objectContaining({ cfg: fullConfig, agentDir }),
-    );
-  });
-
-  it.each([
-    // name, interrupt, playedMs, completed, audioMs, playedItemMs, truncatedMs
-    ["disabled", false, 500, false, [1_000], [500], []],
-    ["early echo guard", true, 100, false, [1_000], [100], []],
-    ["completed but still audible", true, 500, true, [1_000], [500], [500]],
-    ["multiple audio items", true, 500, false, [200, 800], [200, 300], [200, 300]],
-  ] satisfies [string, boolean, number, boolean, number[], number[], number[]][])(
-    "preserves provider interruption policy: %s",
-    async (_name, interrupt, playedMs, completed, audioMs, playedItemMs, truncatedMs) => {
-      const { driver, socket } = await startConnectedDriver(
-        startParams({
-          provider: "openai",
-          providers: {
-            openai: { apiKey: "test-api-key-inline", interruptResponseOnInputAudio: interrupt },
-          },
-        }),
-      );
-      expect(sentEvents(socket).find((event) => event.type === "session.update")).toMatchObject({
-        session: { audio: { input: { turn_detection: { interrupt_response: interrupt } } } },
-      });
-      emit(socket, { type: "response.created", response: { id: "response-1" } });
-      for (const [index, durationMs] of audioMs.entries()) {
-        const pcm = Buffer.alloc(durationMs * 48);
-        emit(socket, {
-          type: "response.output_audio.delta",
-          item_id: `item-${index + 1}`,
-          delta: pcm.toString("base64"),
-        });
-        expect(audio.writeOutputAudio).toHaveBeenNthCalledWith(index + 1, pcm, {
-          itemId: `item-${index + 1}`,
-        });
+it("connects using the selected agent's API-key profile", async () => {
+  const agentDir = "/synthetic/agents/voice-owner";
+  const fullConfig: OpenClawConfig = {
+    agents: { entries: { main: {}, "voice-owner": { agentDir } } },
+  };
+  providerMocks.authConfigured.mockImplementation(
+    (params: { agentDir?: string }) => params.agentDir === agentDir,
+  );
+  providerMocks.resolveKey.mockImplementation(
+    async (params: { cfg?: OpenClawConfig; agentDir?: string }) => {
+      if (params.cfg !== fullConfig || params.agentDir !== agentDir) {
+        throw new Error("No API-key profile for the selected agent");
       }
-      audio.getPlaybackState.mockReturnValue(
-        playedItemMs.map((audioEndMs, index) => ({ itemId: `item-${index + 1}`, audioEndMs })),
-      );
-      audio.queuedAudioFrames.mockReturnValue((1_000 - playedMs) * 24);
-      audio.playedAudioFrames.mockReturnValue(playedMs * 24);
-      if (completed) {
-        emit(socket, {
-          type: "response.done",
-          response: { id: "response-1", status: "completed" },
-        });
-        expect(audio.finishOutputAudio).toHaveBeenCalled();
-      }
-
-      emit(socket, { type: "input_audio_buffer.speech_started" });
-
-      expect(audio.clearOutputAudio).toHaveBeenCalledTimes(truncatedMs.length ? 1 : 0);
-      const truncations = sentEvents(socket).filter(
-        (event) => event.type === "conversation.item.truncate",
-      );
-      expect(truncations).toEqual(
-        truncatedMs.map((audioEndMs, index) => ({
-          type: "conversation.item.truncate",
-          item_id: `item-${index + 1}`,
-          content_index: 0,
-          audio_end_ms: audioEndMs,
-        })),
-      );
-      expect(sentEvents(socket).some((event) => event.type === "response.cancel")).toBe(false);
-      expect(driver.realtimeActive()).toBe(true);
+      return "test-api-key-agent-profile";
     },
   );
+
+  const { driver, socket } = await startConnectedDriver(
+    { provider: "openai", sessionKey: "agent:voice-owner:main" },
+    { fullConfig },
+  );
+
+  expect(driver.realtimeActive()).toBe(true);
+  expect(sentEvents(socket).find((event) => event.type === "session.update")).toMatchObject({
+    session: {
+      instructions: expect.stringContaining("Agent context: shared voice agent context."),
+    },
+  });
+  expect(providerMocks.resolveKey).toHaveBeenCalledWith(
+    expect.objectContaining({ cfg: fullConfig, agentDir }),
+  );
 });
+
+it.each([
+  // name, interrupt, playedMs, completed, audioMs, playedItemMs, truncatedMs
+  ["disabled", false, 500, false, [1_000], [500], []],
+  ["early echo guard", true, 100, false, [1_000], [100], []],
+  ["completed but still audible", true, 500, true, [1_000], [500], [500]],
+  ["multiple audio items", true, 500, false, [200, 800], [200, 300], [200, 300]],
+] satisfies [string, boolean, number, boolean, number[], number[], number[]][])(
+  "preserves provider interruption policy: %s",
+  async (_name, interrupt, playedMs, completed, audioMs, playedItemMs, truncatedMs) => {
+    const { driver, socket } = await startConnectedDriver({
+      provider: "openai",
+      providers: {
+        openai: { apiKey: "test-api-key-inline", interruptResponseOnInputAudio: interrupt },
+      },
+    });
+    expect(sentEvents(socket).find((event) => event.type === "session.update")).toMatchObject({
+      session: { audio: { input: { turn_detection: { interrupt_response: interrupt } } } },
+    });
+    emit(socket, { type: "response.created", response: { id: "response-1" } });
+    for (const [index, durationMs] of audioMs.entries()) {
+      const pcm = Buffer.alloc(durationMs * 48);
+      emit(socket, {
+        type: "response.output_audio.delta",
+        item_id: `item-${index + 1}`,
+        delta: pcm.toString("base64"),
+      });
+      expect(audio.writeOutputAudio).toHaveBeenNthCalledWith(index + 1, pcm, {
+        itemId: `item-${index + 1}`,
+      });
+    }
+    audio.getPlaybackState.mockReturnValue(
+      playedItemMs.map((audioEndMs, index) => ({ itemId: `item-${index + 1}`, audioEndMs })),
+    );
+    audio.queuedAudioFrames.mockReturnValue((1_000 - playedMs) * 24);
+    audio.playedAudioFrames.mockReturnValue(playedMs * 24);
+    if (completed) {
+      emit(socket, {
+        type: "response.done",
+        response: { id: "response-1", status: "completed" },
+      });
+      expect(audio.finishOutputAudio).toHaveBeenCalled();
+    }
+
+    emit(socket, { type: "input_audio_buffer.speech_started" });
+
+    expect(audio.clearOutputAudio).toHaveBeenCalledTimes(truncatedMs.length ? 1 : 0);
+    const truncations = sentEvents(socket).filter(
+      (event) => event.type === "conversation.item.truncate",
+    );
+    expect(truncations).toEqual(
+      truncatedMs.map((audioEndMs, index) => ({
+        type: "conversation.item.truncate",
+        item_id: `item-${index + 1}`,
+        content_index: 0,
+        audio_end_ms: audioEndMs,
+      })),
+    );
+    expect(sentEvents(socket).some((event) => event.type === "response.cancel")).toBe(false);
+    expect(driver.realtimeActive()).toBe(true);
+  },
+);
