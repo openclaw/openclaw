@@ -759,10 +759,8 @@ suite.define(() => {
       const viewRequest = await gateway.waitForRequest("desktop.observe");
       expectObservation(viewRequest.params);
       await panel.getByRole("status", { name: "Connecting to desktop…" }).waitFor();
-      await button(panel, "Desktop actions").click();
-      await panel.getByRole("menuitem", { name: "Browser", exact: true }).waitFor();
-      await panel.getByRole("menuitem", { name: "Terminal", exact: true }).waitFor();
-      await page.keyboard.press("Escape");
+      await button(panel, "Browser").waitFor();
+      await button(panel, "Terminal").waitFor();
       expect(await text(panel, "View only").count()).toBe(0);
       expect(await panel.getByText(/Controlling/).count()).toBe(0);
 
