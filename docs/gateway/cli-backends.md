@@ -215,9 +215,11 @@ executable over its structured stdio protocol. Claude Code owns its existing loc
 subscription. OpenClaw uses a non-secret route marker. It never reads, persists,
 refreshes, or forwards native tokens, or sends synthesized Anthropic API
 requests. Compatible agent turns share one warm Claude Code subprocess.
-A changed model, system prompt, or tool policy starts a
+A changed model, system prompt, or configured tool surface starts a
 new subprocess. Persisted Claude session IDs still provide
 conversation continuity when the Gateway or subprocess restarts.
+Per-turn owner-only and completion requester restrictions gate bridged tool calls
+without removing their definitions from the session's MCP catalog.
 
 For local plugin-managed turns, prompt-build hook context stays private: Claude
 receives it as a native hook attachment, while OpenClaw history preserves the original user message. The
