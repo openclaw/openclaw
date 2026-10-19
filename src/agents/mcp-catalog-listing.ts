@@ -1,5 +1,4 @@
-import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { ListToolsResultSchema, type Tool } from "@modelcontextprotocol/sdk/types.js";
+import type { Client, Tool } from "@modelcontextprotocol/client";
 import { collectMcpPaginatedItems } from "./mcp-pagination.js";
 
 export const MCP_CATALOG_LIST_LIMITS = {
@@ -29,7 +28,6 @@ export async function listAllMcpTools(
       try {
         const page = await client.request(
           { method: "tools/list", params: cursor === undefined ? undefined : { cursor } },
-          ListToolsResultSchema,
           {
             timeout: requestTimeoutMs,
             maxTotalTimeout: requestTimeoutMs,

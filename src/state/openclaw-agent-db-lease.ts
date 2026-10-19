@@ -350,6 +350,7 @@ export function recordOpenClawAgentDatabaseAdmission(
       }
     },
     { env: params.env },
+    { singleStatement: true },
   );
 }
 

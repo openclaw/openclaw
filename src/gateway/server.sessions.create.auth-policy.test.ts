@@ -9,7 +9,7 @@ import {
 } from "../config/runtime-write-application.js";
 import { loadSessionEntry, loadTranscriptEventsSync } from "../config/sessions/session-accessor.js";
 import { initializeGlobalHookRunner } from "../plugins/hook-runner-global.js";
-import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
+import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import {
@@ -124,7 +124,10 @@ it("retains committed initial turns through fencing and denies their final write
   const sockets: Awaited<ReturnType<typeof gateway.openWs>>[] = [];
   const requests: Promise<unknown>[] = [];
   const waitForRelease = (scenario: (typeof cases)[number]) =>
-    getSessionWorkAdmissionRelease({ scope: scenario.scope.storePath, identities: [scenario.key] });
+    captureSessionControllerSettlement({
+      scope: scenario.scope.storePath,
+      identities: [scenario.key],
+    });
   try {
     await gateway.server.startupSettled;
     for (const scenario of cases) {

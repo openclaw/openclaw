@@ -1,4 +1,4 @@
-import { assert, beforeEach, expect, it, vi } from "vitest";
+import { assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { SqliteTranscriptMutationConflictError } from "../config/sessions/session-mutation-conflict-error.js";
 import { WorkerNodeLostError } from "../worker/worker-node-loss.js";
 import {
@@ -9,9 +9,14 @@ import { createCliOutputFailoverError } from "./cli-runner/output-error.js";
 import {
   FailoverError,
   findCliTerminalStopError,
+  findCliTimeoutError,
   resolveModelFallbackError,
 } from "./failover-error.js";
-import { AgentHarnessPreflightError, recordAgentHarnessPreflightOwner } from "./harness/errors.js";
+import {
+  AgentHarnessPreflightError,
+  recordAgentHarnessPreflightOwner,
+  SessionControllerAdmissionRequiredError,
+} from "./harness/errors.js";
 import {
   type ModelFallbackStepHandler,
   runFallbackAttempt,
@@ -91,6 +96,7 @@ it.each([
       }),
     false,
   ],
+  ["missing controller admission", () => new SessionControllerAdmissionRequiredError(), false],
   [
     "superseded publication",
     () => new PreparedModelRuntimePublicationSupersededError("publication failed"),
@@ -263,16 +269,35 @@ it.each(["throw", "reject"] as const)(
   },
 );
 
-it("preserves depth-first error, cause, then aggregate order through cycles", () => {
-  const first = maxTurns(),
-    second = maxTurns(),
-    third = maxTurns();
-  const wrapper = { error: { cause: first }, cause: second, errors: [third] };
-  expect(findCliTerminalStopError(wrapper)).toBe(first);
-  const cycle = { error: undefined as unknown, cause: wrapper, errors: [third] };
-  cycle.error = cycle;
-  expect(findCliTerminalStopError(cycle)).toBe(first);
-  expect(findCliTerminalStopError({ cause: null, errors: [null, { error: third }] })).toBe(third);
+describe.each([
+  { name: "max turns", find: findCliTerminalStopError, make: maxTurns },
+  {
+    name: "CLI timeout",
+    find: findCliTimeoutError,
+    make: () =>
+      new FailoverError("timeout", {
+        reason: "timeout",
+        cliTimeout: {
+          mode: "overall",
+          timeoutSeconds: 1,
+          observedActivity: true,
+          activeToolCount: 0,
+          backgroundTaskCount: 0,
+        },
+      }),
+  },
+])("$name finder", ({ find, make }) => {
+  it("preserves depth-first error, cause, then aggregate order through cycles", () => {
+    const first = make();
+    const second = make();
+    const third = make();
+    const wrapper = { error: { cause: first }, cause: second, errors: [third] };
+    expect(find(wrapper)).toBe(first);
+    const cycle = { error: undefined as unknown, cause: wrapper, errors: [third] };
+    cycle.error = cycle;
+    expect(find(cycle)).toBe(first);
+    expect(find({ cause: null, errors: [null, { error: third }] })).toBe(third);
+  });
 });
 
 it.each([false, true])(

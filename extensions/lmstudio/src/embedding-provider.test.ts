@@ -1,4 +1,7 @@
 // LM Studio embedding provider tests cover preload context-length precedence.
+// Memory-core owns fallback selection and strips the primary endpoint and
+// credentials. The memory adapter passes `fallback: "none"` to this private
+// factory, so do not test fallback activation by bypassing the adapter.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { lmstudioMemoryEmbeddingProviderAdapter } from "../memory-embedding-adapter.js";

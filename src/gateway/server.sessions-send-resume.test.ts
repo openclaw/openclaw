@@ -27,6 +27,8 @@ import {
 import { publishSystemEventStoreConfig } from "../config/sessions/session-store-path.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { requestRpcSourceCancellation } from "../sessions/session-controller.rpc-sources.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { refusePendingInputCommit } from "./pending-input-commit.test-support.js";
@@ -302,11 +304,11 @@ it.for([
     }
     if (scenario.abortSuccessor) {
       const entry = expectDefined(
-        kernel.gatewayRequestContext.chatAbortControllers.get(proof.runId),
+        rpcSourceTesting.get(proof.runId),
         "preparing successor abort controller",
       );
-      entry.abortStopReason = "rpc";
-      entry.controller.abort();
+      entry.adapter.abortStopReason = "rpc";
+      expect(requestRpcSourceCancellation(entry)).toBe(true);
     }
     release.resolve();
     const result = await sending;

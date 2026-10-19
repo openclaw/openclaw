@@ -25,6 +25,7 @@ import {
   summarizeSidebarSessionAttention,
   type SidebarSessionAttention,
 } from "./app-sidebar-session-types.ts";
+import { SidebarProjectionMemo } from "./sidebar-projection-memo.ts";
 
 type SessionAttentionResolver = (
   row: Partial<GatewaySessionRow> & { key: string },
@@ -45,19 +46,21 @@ export function createSessionAttention(
   const hello = createMemo(() => gateway.read().snapshot.hello);
   const agentsList = createMemo(() => agents.read().agentsList);
   const prompts = projectSource(questions, {
-    read: (state) => listQuestionPrompts(state),
+    read: (state) => state.revision,
     subscribe: (state, notify) => state.subscribe(notify),
     equality: "revision",
   });
   const [ready, setReady] = createSignal(false);
   const [clock, setClock] = createSignal(0);
   const presentationClock = createParkedProjection(clock, presented);
+  let resolverMemo = new SidebarProjectionMemo<SessionAttentionResolver>();
   let agentStatusExpiryTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
   let agentStatusExpiryAt = Infinity;
   let snoozeWakeTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
   let snoozeWakeAt: number | null = null;
   const invalidateDeadline = () => {
     if (host.isConnected) {
+      resolverMemo = new SidebarProjectionMemo<SessionAttentionResolver>();
       setClock((revision) => revision + 1);
     }
   };
@@ -100,7 +103,6 @@ export function createSessionAttention(
   function resolveSessionAgentStatus(
     row: Pick<GatewaySessionRow, "agentStatus">,
   ): SessionAgentStatus | undefined {
-    presentationClock();
     const status = activeSessionAgentStatus(row);
     if (status && host.isConnected && status.expiresAt < agentStatusExpiryAt) {
       globalThis.clearTimeout(agentStatusExpiryTimer);
@@ -137,61 +139,78 @@ export function createSessionAttention(
     }
   }
 
+  function readResolver(): SessionAttentionResolver {
+    return resolverMemo.read(
+      () => [
+        questions.revision,
+        context.overlays.snapshot.approvalQueue,
+        context.gateway.snapshot.hello,
+        context.agents.state.agentsList,
+      ],
+      () => {
+        const identity = {
+          hello: context.gateway.snapshot.hello,
+          agentsList: context.agents.state.agentsList,
+        };
+        const requests = [
+          ...listQuestionPrompts(questions)
+            .filter((prompt) => prompt.status === "pending")
+            .map((prompt) => ({
+              sessionKey: prompt.sessionKey,
+              agentId: prompt.agentId,
+              kind: "question" as const,
+              id: prompt.id,
+              preview: attentionPreview(prompt.questions[0]?.question ?? ""),
+              count: prompt.questions.length,
+              createdAtMs: prompt.createdAtMs,
+            })),
+          ...context.overlays.snapshot.approvalQueue.map((approval) => ({
+            sessionKey: approval.request.sessionKey,
+            agentId: approval.request.agentId,
+            kind: "approval" as const,
+            id: approval.id,
+            preview:
+              approval.kind === "exec"
+                ? compactApprovalCommand(approval.request.command)
+                : attentionPreview(approval.pluginTitle ?? approval.request.command),
+            count: 1,
+            createdAtMs: approval.createdAtMs,
+          })),
+        ];
+        return (row) => {
+          const knownAttention = summarizeSidebarSessionAttention(
+            requests
+              .filter((request) =>
+                uiConversationMatches(
+                  identity,
+                  row.key,
+                  request.sessionKey,
+                  request.agentId,
+                  row.agentId,
+                ),
+              )
+              .map((request) => ({ kind: request.kind, requests: [request] })),
+          );
+          if (knownAttention.kind !== "none") {
+            return knownAttention;
+          }
+          resolveSessionAgentStatus(row);
+          return sessionRowAttention(row);
+        };
+      },
+    );
+  }
+
   const resolve = createParkedProjection<SessionAttentionResolver>(() => {
     presentationClock();
-    const identity = {
-      hello: hello(),
-      agentsList: agentsList(),
-    };
-    const requests = [
-      ...prompts
-        .read()
-        .filter((prompt) => prompt.status === "pending")
-        .map((prompt) => ({
-          sessionKey: prompt.sessionKey,
-          agentId: prompt.agentId,
-          kind: "question" as const,
-          id: prompt.id,
-          preview: attentionPreview(prompt.questions[0]?.question ?? ""),
-          count: prompt.questions.length,
-          createdAtMs: prompt.createdAtMs,
-        })),
-      ...overlays.read().approvalQueue.map((approval) => ({
-        sessionKey: approval.request.sessionKey,
-        agentId: approval.request.agentId,
-        kind: "approval" as const,
-        id: approval.id,
-        preview:
-          approval.kind === "exec"
-            ? compactApprovalCommand(approval.request.command)
-            : attentionPreview(approval.pluginTitle ?? approval.request.command),
-        count: 1,
-        createdAtMs: approval.createdAtMs,
-      })),
-    ];
-    return (row) => {
-      const knownAttention = summarizeSidebarSessionAttention(
-        requests
-          .filter((request) =>
-            uiConversationMatches(
-              identity,
-              row.key,
-              request.sessionKey,
-              request.agentId,
-              row.agentId,
-            ),
-          )
-          .map((request) => ({ kind: request.kind, requests: [request] })),
-      );
-      if (knownAttention.kind !== "none") {
-        return knownAttention;
-      }
-      resolveSessionAgentStatus(row);
-      return sessionRowAttention(row);
-    };
+    hello();
+    agentsList();
+    prompts.read();
+    overlays.read();
+    return readResolver();
   }, presented);
 
-  return { resolve, resolveSessionAgentStatus, scheduleSessionSnoozeWake };
+  return { resolve, readResolver, resolveSessionAgentStatus, scheduleSessionSnoozeWake };
 }
 
 function attentionPreview(text: string): string {

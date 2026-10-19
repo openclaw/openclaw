@@ -35,7 +35,7 @@ import {
   runWithGatewayIndependentRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
-import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../../../sessions/session-controller.lifecycle.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import { buildAgentRunTerminalOutcome } from "../../agent-run-terminal-outcome.js";
@@ -518,13 +518,13 @@ describe("subagent orphan recovery — faithful restart path", () => {
           return unlock;
         });
       const pending = testing.sweepOnceForTests();
-      let admission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+      let admission: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
       try {
         await entered.promise;
         if (owner === "run") {
           registerAgentRunContext("fresh-execution", { sessionKey: childSessionKey, sessionId });
         } else {
-          admission = await beginSessionWorkAdmission({
+          admission = await beginSessionEffect({
             scope: storePath,
             identities: [childSessionKey, sessionId],
             assertAllowed: () => {},
@@ -593,6 +593,12 @@ describe("subagent orphan recovery — faithful restart path", () => {
       });
       if (owner === "original") {
         await prepareSubagentRecoveryFixture(entry, { stateDir: fixture.stateDir });
+      } else if (owner !== "unclassified") {
+        await writeSession({
+          sessionKey: entry.requesterSessionKey,
+          defaultSessionId: "recovery-requester-session",
+          lifecycleRevision: "recovery-requester-revision",
+        });
       }
       await addSubagentRunForTests(entry);
       if (owner === "original" || owner === "unclassified") {
@@ -607,12 +613,12 @@ describe("subagent orphan recovery — faithful restart path", () => {
       }
       const announce = vi.mocked(runSubagentAnnounceFlow);
       const cleanupBrowser = vi.mocked(cleanupBrowserSessionsForLifecycleEnd);
-      let admission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+      let admission: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
       try {
         if (owner === "run") {
           registerAgentRunContext("fresh-execution", { sessionKey: childSessionKey, sessionId });
         } else if (owner === "admission") {
-          admission = await beginSessionWorkAdmission({
+          admission = await beginSessionEffect({
             scope: storePath,
             identities: [childSessionKey, sessionId],
             assertAllowed: () => {},

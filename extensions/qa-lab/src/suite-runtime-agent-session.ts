@@ -17,6 +17,7 @@ import {
   extractGatewayMessageText,
 } from "./gateway-log-sentinel.js";
 import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
+import { findSubagentHandoffReply } from "./subagent-handoff-reply.js";
 import type { QaSkillStatusEntry, QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 import { projectQaToolActivity, readQaNestedToolActivity } from "./tool-activity.js";
 
@@ -472,6 +473,19 @@ async function readSessionToolActivity(
   return projectQaToolActivity(selectedEvents);
 }
 
+async function readSubagentHandoffReply(
+  env: Parameters<typeof readQaSessionTranscriptEvents>[0],
+  requesterSessionKey: string,
+  childSessionKey: string,
+  childReply: string,
+  visibleMessages: readonly unknown[],
+) {
+  return findSubagentHandoffReply(visibleMessages, childSessionKey, childReply, async () => {
+    const { events } = await readQaSessionTranscriptEvents(env, requesterSessionKey);
+    return events;
+  });
+}
+
 async function readSessionTranscriptSummary(
   env: Pick<QaSuiteRuntimeEnv, "gateway">,
   sessionKey: string,
@@ -523,6 +537,7 @@ export {
   readRawQaSessionStore,
   readSessionTranscriptSummary,
   readSessionToolActivity,
+  readSubagentHandoffReply,
   readSkillStatus,
   seedQaSessionEntries,
   seedQaSessionTranscript,

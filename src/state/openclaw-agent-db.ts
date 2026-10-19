@@ -14,7 +14,6 @@ import {
   sqlPublicationAnchor,
   type EngineConnection,
 } from "../infra/sql-connection.js";
-import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { readSqliteDatabaseIntegrityVerification } from "../infra/sqlite-database-admission.js";
 import { quarantineOrphanedSqliteSidecars } from "../infra/sqlite-files.js";
 import {
@@ -333,7 +332,7 @@ function* openOpenClawAgentDatabaseSteps(
     // Trusted borrowers may enable them only when both the runtime and permissions allow it.
     const db = openNodeSqliteDatabase(
       repairAdmission?.expectedIdentity ? resolveExistingSqliteFileUri(pathname) : pathname,
-      { allowExtension },
+      { allowExtension, timeout: engineInput ? undefined : OPENCLAW_SQLITE_BUSY_TIMEOUT_MS },
     );
     openedDb = db;
     let selected: EngineConnection = db;
@@ -388,7 +387,6 @@ function* openOpenClawAgentDatabaseSteps(
         isValidatedReopen = true;
         reusedSchema = true;
       } else {
-        setSqliteBusyTimeout(db, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
         reusedSchema = adoptOpenClawAgentDatabaseSchema(
           validationDatabase,
           reuseAdmittedIntegrity,

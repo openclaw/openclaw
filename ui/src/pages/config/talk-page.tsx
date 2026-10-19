@@ -3,7 +3,7 @@
 // config form draft so the embedded schema editor below stays in sync.
 import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
 import type { JSX } from "@solidjs/web";
-import { createSignal, onCleanup, untrack } from "solid-js";
+import { createSignal, onCleanup } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
@@ -312,8 +312,7 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
 
   function syncCatalog(connection: CatalogConnection) {
     const { gatewayUrl, client, connected, voiceWake } = connection;
-    // Connection events inspect pending intent without subscribing the caller.
-    const intent = untrack(modelDefaultResetIntent);
+    const intent = modelDefaultResetIntent();
     if (intent && intent.gatewayUrl !== gatewayUrl) {
       setModelDefaultResetIntent(null);
     }
@@ -361,7 +360,7 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
 
   function acknowledgeModelDefaultReset(connection: CatalogConnection) {
     // An async catalog receipt acknowledges the current intent once.
-    const intent = untrack(modelDefaultResetIntent);
+    const intent = modelDefaultResetIntent();
     const configRevision = lastCatalogConfigRevision;
     // Without a public revision token, a ready catalog cannot prove the reset
     // was applied; retain provider-default metadata until an authoritative ack.

@@ -53,10 +53,11 @@ export function SearchPage() {
   const [model, setModel] = createSignal("");
   const [setupProvider, setSetupProvider] = createSignal("");
   // The localized default seeds an editable draft; locale changes must not replace user input.
-  const [query, setQuery] = createSignal(untrack(() => t("searchPage.queryDefault")));
+  const initialQuery = untrack(() => t("searchPage.queryDefault"));
+  const [query, setQuery] = createSignal(initialQuery);
   let selectedAgent = "";
   // Capture the initial receipt before the Gateway binding admits its first load.
-  let configRevision = untrack(() => searchConfigRevision(context.runtimeConfig.state));
+  let configRevision = searchConfigRevision(context.runtimeConfig.state);
   let loadingActive = false;
   let testingActive = false;
   let queryInput: HTMLInputElement | undefined;

@@ -10,13 +10,16 @@ import {
 } from "solid-js";
 import { acquireNativeOverlaySurface } from "../lib/native-overlay-occlusion.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { createOverlayAnchor } from "./overlay-anchor.ts";
-import { createOverlay, findOverlayParent } from "./overlay-lifecycle.ts";
+import { createAnchoredOverlay } from "../lib/reactive/overlay-anchor.ts";
+import { projectOwner } from "../lib/reactive/projection.ts";
+import type { OverlayPlacement } from "./overlay-anchor.ts";
+import { createOverlay } from "./overlay-lifecycle.ts";
 import type { OverlayNativeAdapter } from "./overlay-types.ts";
 import { revealInScrollRegion } from "./scroll-state.ts";
 import type { PickerOption, PickerParams, PickerGroup } from "./select-picker-types.ts";
 import { Icon } from "./solid/icon.tsx";
 import { useMenuMachine } from "./solid/menu-machine.ts";
+import { useOverlayControl } from "./solid/overlay-control.ts";
 import "./solid/overlay.css";
 
 type Section<Option> = { group?: PickerGroup; options: Option[]; expanded: boolean };
@@ -44,28 +47,43 @@ export function PickerContent<Option extends PickerOption>(props: {
   let input: HTMLInputElement | undefined;
   let back: HTMLButtonElement | undefined;
   const optionElements = new Map<string, HTMLDivElement>();
-  let anchor: ReturnType<typeof createOverlayAnchor> | undefined;
+  const groupButtons = new Set<HTMLButtonElement>();
+  const groupButtonRef = () => {
+    let button!: HTMLButtonElement;
+    onSettled(() => {
+      groupButtons.add(button);
+      return () => groupButtons.delete(button);
+    });
+    return (element: HTMLButtonElement) => (button = element);
+  };
+  const focusElements = () => [
+    trigger,
+    ...(back ? [back] : []),
+    ...(input ? [input] : []),
+    list,
+    ...groupButtons,
+    ...optionElements.values(),
+  ];
+  onSettled(() => {
+    props.params.focusRef?.({ trigger, elements: focusElements });
+  });
   let sheetScroll: { root: Element; top: number } | undefined;
   let hoverTimer: ReturnType<typeof setTimeout> | undefined;
   let hoverOpened = false;
-  const [opened, setOpened] = createSignal(false);
   const [searching, setSearching] = createSignal(false);
   const [query, setQuery] = createSignal("");
   const [keyboard, setKeyboard] = createSignal(false);
   const [collapsed, setCollapsed] = createSignal(new Set<string>());
   const direction = () => (getComputedStyle(props.host).direction === "rtl" ? "rtl" : "ltr");
-  const updateAnchor = (
+  const resolvePlacement = (
     placement: PickerParams<Option>["placement"],
     variant: PickerParams<Option>["variant"],
-  ) =>
-    anchor?.update(
-      trigger,
-      variant === "submenu"
-        ? direction() === "rtl"
-          ? "left-start"
-          : "right-start"
-        : `${placement ?? "bottom"}-start`,
-    );
+  ): OverlayPlacement =>
+    variant === "submenu"
+      ? direction() === "rtl"
+        ? "left-start"
+        : "right-start"
+      : `${placement ?? "bottom"}-start`;
   const options = createMemo((): readonly Option[] => {
     const { value, options: configuredOptions } = props.params;
     if (
@@ -121,9 +139,10 @@ export function PickerContent<Option extends PickerOption>(props: {
   );
   const visible = createMemo(() => new Set(rows().map((option) => option.value)));
   const optionId = (value: string) => `${id}:${value}`;
+  // Native presentation mode belongs to this mounted overlay lifetime.
+  const initialSheet = untrack(() => props.params.sheet);
   const overlay = createOverlay(id, undefined, {
-    // Native presentation mode belongs to this mounted overlay lifetime.
-    native: untrack(() => props.params.sheet) ? sheetAdapter : undefined,
+    native: initialSheet ? sheetAdapter : undefined,
     exclusiveGroup: "menu",
     isValid: () => !props.params.disabled,
     acquireOcclusion: acquireNativeOverlaySurface,
@@ -148,11 +167,26 @@ export function PickerContent<Option extends PickerOption>(props: {
       return false;
     },
   });
+  const opened = projectOwner(overlay, (owner) => owner.open, Object.is).read;
+  const control = useOverlayControl(overlay, undefined, {
+    get disabled() {
+      return props.params.disabled;
+    },
+  });
+  const anchor = createAnchoredOverlay(
+    overlay,
+    () => trigger,
+    () => {
+      const { placement, variant } = props.params;
+      return { placement: () => resolvePlacement(placement, variant) };
+    },
+    { anchored: !initialSheet, paused: () => !overlay.open },
+  );
   onSettled(() => overlay.bindSurface(surface));
   // The menu refreshes direction on accepted open; closed pickers need no style read.
   const menuDirection: typeof direction = () => (overlay.open ? direction() : "ltr");
   const menu = useMenuMachine(overlay, menuDirection, commit, undefined, {
-    ids: { content: contentId, trigger: () => untrack(triggerId) },
+    ids: { content: contentId, trigger: triggerId },
     surface: "listbox",
     focus: "retain",
     items: rows,
@@ -189,7 +223,9 @@ export function PickerContent<Option extends PickerOption>(props: {
       if (!props.host.isConnected) {
         return;
       }
-      updateAnchor(props.params.placement, props.params.variant);
+      if (!initialSheet) {
+        anchor.update(trigger, resolvePlacement(props.params.placement, props.params.variant));
+      }
       if (!overlay.request(true, focus ? (last ? "last" : "first") : "none")) {
         return;
       }
@@ -288,24 +324,7 @@ export function PickerContent<Option extends PickerOption>(props: {
   }
   onCleanup(() => {
     clearTimeout(hoverTimer);
-    overlay.dispose();
   });
-  createEffect(
-    () => props.params.disabled,
-    (disabled) => {
-      if (disabled) {
-        overlay.request(false);
-      }
-    },
-  );
-  createEffect(
-    () => [props.params.placement, props.params.variant] as const,
-    ([placement, variant]) => {
-      if (overlay.open) {
-        updateAnchor(placement, variant);
-      }
-    },
-  );
   createEffect(
     () => [opened(), active(), query(), rows()] as const,
     ([isOpen, highlighted]) => {
@@ -318,36 +337,32 @@ export function PickerContent<Option extends PickerOption>(props: {
       }
     },
   );
-  onSettled(() => {
-    overlay.bindTrigger(trigger);
-    overlay.setParent(findOverlayParent(trigger));
-    if (!props.params.sheet) {
-      anchor = createOverlayAnchor(surface);
-    }
-    const stop = overlay.subscribe((next) => {
-      setOpened(next);
-      if (next) {
-        props.params.onOpen?.();
-        const root = surface.offsetParent;
-        if (props.params.sheet && root) {
-          sheetScroll = { root, top: root.scrollTop };
-          root.scrollTop = 0;
-        }
-      } else {
-        setQuery("");
-        setSearching(false);
-        // Disabled overlays can retire repeatedly as unrelated DOM content changes.
-        setCollapsed((current) => (current.size ? new Set<string>() : current));
-        hoverOpened = false;
-        if (sheetScroll) {
-          sheetScroll.root.scrollTop = sheetScroll.top;
-          sheetScroll = undefined;
-        }
+  function onOpenChange(next: boolean) {
+    if (next) {
+      props.params.onOpen?.();
+      const root = surface.offsetParent;
+      if (props.params.sheet && root) {
+        sheetScroll = { root, top: root.scrollTop };
+        root.scrollTop = 0;
       }
-    });
+    } else {
+      setQuery("");
+      setSearching(false);
+      // Disabled overlays can retire repeatedly as unrelated DOM content changes.
+      setCollapsed((current) => (current.size ? new Set<string>() : current));
+      hoverOpened = false;
+      if (sheetScroll) {
+        sheetScroll.root.scrollTop = sheetScroll.top;
+        sheetScroll = undefined;
+      }
+    }
+  }
+  onSettled(() => {
+    const disconnectAnchor = anchor.connect();
+    const stop = control.connect(() => {}, onOpenChange);
     return () => {
       stop();
-      anchor?.dispose();
+      disconnectAnchor();
     };
   });
   const Leading = (row: { option?: Option }) => {
@@ -359,17 +374,18 @@ export function PickerContent<Option extends PickerOption>(props: {
     );
   };
   const OptionRow = (row: { option: () => Option; grouped: boolean }) => {
+    const itemRef = menu.itemRef();
     // The parent For keys each mounted row by value.
-    const value = untrack(() => row.option().value);
+    const initialValue = untrack(() => row.option().value);
     let element: HTMLDivElement;
     onCleanup(() => {
-      if (optionElements.get(value) === element) {
-        optionElements.delete(value);
+      if (optionElements.get(initialValue) === element) {
+        optionElements.delete(initialValue);
       }
     });
     return (
       <div
-        ref={(node) => optionElements.set(value, (element = node))}
+        ref={[itemRef, (node) => optionElements.set(initialValue, (element = node))]}
         {...menu.item(
           row.option().value,
           row.option().disabled || !visible().has(row.option().value),
@@ -555,6 +571,7 @@ export function PickerContent<Option extends PickerOption>(props: {
                 {(group) => (
                   <div class="picker-select__group" role="group" aria-label={group().label}>
                     <button
+                      ref={groupButtonRef()}
                       class="picker-select__group-toggle"
                       type="button"
                       tabindex={opened() ? 0 : -1}

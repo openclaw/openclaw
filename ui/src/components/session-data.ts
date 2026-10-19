@@ -147,10 +147,10 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
       subscribeSessionDataGatewayEvents(gateway, this),
       subscribeSidebarAgentSessionCaches(agents, this, this.requestSessionDataUpdate),
       agentSelection.subscribe(() => this.synchronizeSessionScope()),
-      subscribeSessionCatalogBrowserEvents(
-        this.handleCatalogSessionContinued as EventListener,
-        this.handleSessionCatalogPageActivation,
-      ),
+      subscribeSessionCatalogBrowserEvents((event) => {
+        const { detail } = event as CustomEvent<CatalogSessionContinuedDetail>;
+        applySessionCatalogContinuation(this, detail);
+      }, this.handleSessionCatalogPageActivation),
     );
     this.synchronizeSessionScope();
     return () => stops.forEach((stop) => stop());
@@ -242,8 +242,10 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
       this.inputs.sidebarAgentsMode === "roster" && this.sessionLineageVisible && this.context
         ? rosterActivityStore(this.context)
         : undefined;
+    roster?.setInvolvingMe(this.inputs.sidebarSessionOwnerFilter().involvingMe);
     if (roster !== this.roster) {
       this.stopRoster?.();
+      this.roster?.setInvolvingMe(false);
       this.roster = roster;
       this.stopRoster = roster?.subscribe(this.requestSessionDataUpdate);
       this.updateSessions(this.context.sessions);
@@ -263,7 +265,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
     return [
       this.inputs.navigationVisible,
       this.inputs.navigationView,
-      this.inputs.contextualSidebar,
+      Boolean(this.inputs.contextualSidebar),
       this.inputs.sidebarAgentsMode,
       this.inputs.connected,
       this.filteredSessionScope,
@@ -301,6 +303,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
     this.stopSources = undefined;
     this.stopRoster?.();
     this.stopRoster = undefined;
+    this.roster?.setInvolvingMe(false);
     this.roster = undefined;
     // A provider replacement releases the view while retaining its sidebar owner.
     if (retainOwner) {
@@ -403,12 +406,6 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
   }
 
   handleSessionCatalogHostEvent = applySessionCatalogHostEventToData.bind(null, this);
-
-  private readonly handleCatalogSessionContinued = (
-    event: CustomEvent<CatalogSessionContinuedDetail>,
-  ) => {
-    applySessionCatalogContinuation(this, event.detail);
-  };
 
   private readonly handleSessionCatalogPageActivation = () => scheduleSessionCatalogRefresh(this);
 
@@ -747,8 +744,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
     if (gateway.snapshot.phase !== "connected" || !client) {
       return null;
     }
-    publishSidebarSessionError(this, null, "action");
-    this.requestSessionDataUpdate();
+    this.dismissSessionMutationError();
     return {
       epoch: this.sessionMutationEpoch,
       context,

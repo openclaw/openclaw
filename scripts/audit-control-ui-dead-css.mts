@@ -6,7 +6,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import postcss, { type Rule } from "postcss";
-import selectorParser, { type ClassName, type Selector } from "postcss-selector-parser";
+import selectorParser, { type ClassName, type Root as SelectorRoot } from "postcss-selector-parser";
 import * as ts from "typescript/unstable/ast";
 import { groupBy } from "./lib/group-by.mts";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
@@ -425,7 +425,7 @@ function isExternallyProducedClass(className: string): boolean {
   );
 }
 
-function selectorClasses(selector: Selector): ClassName[] {
+function selectorClasses(selector: SelectorRoot): ClassName[] {
   const classes: ClassName[] = [];
   selector.walkClasses((classNode) => {
     classes.push(classNode);
@@ -433,7 +433,7 @@ function selectorClasses(selector: Selector): ClassName[] {
   return classes;
 }
 
-function selectorTargetsPart(selector: Selector): boolean {
+function selectorTargetsPart(selector: SelectorRoot): boolean {
   let targetsPart = false;
   selector.walkPseudos((pseudo) => {
     if (pseudo.value === "::part") {
@@ -465,8 +465,8 @@ function auditStylesheet(
   const root = postcss.parse(css, { from: filePath });
   const findings: DeadClassFinding[] = [];
   root.walkRules((rule) => {
-    const parsed = selectorParser().astSync(rule.selector);
-    for (const selector of parsed.nodes) {
+    for (const selectorText of rule.selectors) {
+      const selector = selectorParser().astSync(selectorText);
       const classes = selectorClasses(selector);
       // Element selectors (including html/body/:root) never become class
       // candidates. ::part selectors target component-owned shadow DOM.

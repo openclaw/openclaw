@@ -578,12 +578,22 @@ describe("SQLite integrity child", () => {
         `import fs from 'node:fs';
         import { createRequire } from 'node:module';
         const sqlite = createRequire(import.meta.url)('node:sqlite');
+        const timeout = { initial: undefined, sql: [] };
         sqlite.DatabaseSync = new Proxy(sqlite.DatabaseSync, {
           construct(target, args) {
             if (${failOpen} && args[0] === ${JSON.stringify(source)}) {
               throw Object.assign(new Error('synthetic native open failure'), { code: 'SQLITE_CANTOPEN', errcode: 14 });
             }
-            return Reflect.construct(target, args);
+            const database = Reflect.construct(target, args);
+            if (args[0] === ${JSON.stringify(source)}) {
+              timeout.initial = database.prepare('PRAGMA busy_timeout').get().timeout;
+              const exec = database.exec.bind(database);
+              database.exec = (sql) => {
+                if (/PRAGMA busy_timeout/iu.test(sql)) timeout.sql.push(sql);
+                return exec(sql);
+              };
+            }
+            return database;
           },
         });
         const close = sqlite.DatabaseSync.prototype.close;
@@ -600,7 +610,7 @@ describe("SQLite integrity child", () => {
             fs.appendFileSync(${JSON.stringify(phases)}, JSON.stringify(message.phase) + '\\n');
             if (${failClosingPhase} && message.phase === 'closing') throw new Error('synthetic diagnostic send failure');
           }
-          if ('ok' in message) fs.writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify(message));
+          if ('ok' in message) fs.writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify({ ...message, timeout }));
           return send(message, ...args);
         };
         await import(${JSON.stringify(entry.href)});`,
@@ -629,6 +639,7 @@ describe("SQLite integrity child", () => {
       ).toEqual(failOpen ? ["opening"] : ["opening", "checking", "closing"]);
       const result = JSON.parse(fs.readFileSync(resultPath, "utf8"));
       expect(result).toMatchObject({ ok: false, error: expectedError });
+      expect(result.timeout).toEqual(failOpen ? { sql: [] } : { initial: 250, sql: [] });
       if (failOpen) {
         expect(fs.existsSync(closed)).toBe(false);
         expect(result).not.toHaveProperty("checkElapsedMs");

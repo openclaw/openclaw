@@ -6,11 +6,11 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import { createChatSendLateFollowupDisposition } from "../../gateway/server-methods/chat-send-late-followup.js";
 import type { WorkerSessionPlacementRecord } from "../../gateway/worker-environments/placement-record.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
+import { createReplyOperation } from "../../sessions/session-controller.operation.js";
 import { enqueueGoalContinuation, isGoalContinuationCurrent } from "./goal-continuation.js";
 import { enqueueFollowupRun, getFollowupQueueDepth } from "./queue/enqueue.js";
 import type { FollowupRun } from "./queue/types.js";
-import { createReplyOperation } from "./reply-run-registry.operation.js";
-import { testing } from "./reply-run-registry.test-support.js";
 
 const children = vi.hoisted(() => vi.fn(async () => [] as unknown[]));
 // mock-isolation: Child custody is supplied without restoring the process registry.
@@ -71,6 +71,7 @@ const normal: EmbeddedAgentRunResult = {
   meta: { durationMs: 0, stopReason: "end_turn" },
   payloads: [{ text: "More work remains." }],
 };
+const operations = new Set<ReplyOperation>();
 function entry(): SessionEntry {
   return {
     sessionId: identity.sessionId,
@@ -97,6 +98,7 @@ function fixture() {
     resetTriggered: false,
     upstreamAbortSignal: controller.signal,
   });
+  operations.add(operation);
   const base: FollowupRun = {
     prompt: "Initial user request",
     enqueuedAt: 1000,
@@ -137,9 +139,16 @@ beforeEach(() => {
   vi.mocked(getFollowupQueueDepth).mockReturnValue(0);
   vi.mocked(readSessionEntryReadOnlyInWorker).mockResolvedValue(entry());
 });
-afterEach(() => {
-  testing.resetReplyRunRegistry();
-  vi.useRealTimers();
+afterEach(async () => {
+  try {
+    for (const operation of operations) {
+      operation.complete();
+    }
+    await Promise.all([...operations].map((operation) => operation.ownerSettlement));
+  } finally {
+    operations.clear();
+    vi.useRealTimers();
+  }
 });
 
 describe("Goal continuation eligibility", () => {

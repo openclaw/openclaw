@@ -97,6 +97,10 @@ export type DiagnosticWorkerRetainedData = {
 
 export type DiagnosticMemoryUsage = {
   rssBytes: number;
+  /** Linux RssAnon: resident anonymous pages, including managed heaps and buffers. */
+  anonymousRssBytes?: number;
+  /** Linux VmSwap: swapped anonymous private pages, excluding shared-memory swap. */
+  anonymousSwapBytes?: number;
   heapTotalBytes: number;
   heapUsedBytes: number;
   externalBytes: number;

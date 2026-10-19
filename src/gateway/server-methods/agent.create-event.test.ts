@@ -11,6 +11,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
@@ -155,7 +156,6 @@ describe("agent handler session create events", () => {
       }
       const broadcastToConnIds = vi.fn();
       const respond = vi.fn();
-      const chatAbortControllers = new Map();
       let execution: Promise<unknown> | undefined;
 
       await expectDefined(agentHandlers.agent, "agentHandlers.agent test invariant").call(
@@ -172,7 +172,6 @@ describe("agent handler session create events", () => {
             dedupe: new Map(),
             deps: {} as never,
             logGateway: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() } as never,
-            chatAbortControllers,
             addChatRun: vi.fn(),
             registerToolEventRecipient: vi.fn(),
             getRuntimeConfig: configMocks.getRuntimeConfig,
@@ -200,7 +199,7 @@ describe("agent handler session create events", () => {
         expect(agentIngressMocks.agentCommandFromIngress).not.toHaveBeenCalled();
         expect(preparedRuntimeMocks.releaseDispatch).toHaveBeenCalledOnce();
         expect(preparedRuntimeMocks.releaseSelected).not.toHaveBeenCalled();
-        expect(chatAbortControllers.size).toBe(0);
+        expect(rpcSourceTesting.has(runId)).toBe(false);
         return;
       }
       expect(responseCall?.[0], JSON.stringify(responseCall)).toBe(true);

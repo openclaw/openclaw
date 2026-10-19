@@ -171,7 +171,6 @@ export async function settleAgentFallbackCycle(params: {
       cycle.modelPatch.captureFailure(embeddedError ?? terminalError);
     }
     emitSettledLifecycleError(terminalError, terminalMetadata);
-    turn.replyOperation?.retainFailureUntilComplete();
     turn.replyOperation?.fail("run_failed", terminalError);
   } else {
     if (privateFinalTerminalReply) {

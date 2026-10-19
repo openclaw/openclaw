@@ -191,14 +191,19 @@ openclaw-chat-details-progress {
   border-radius: 0;
   background: transparent;
 }
+.chat-details__row,
+.chat-details .chat-subagent-activity__row,
+.chat-details__process,
+.chat-details__more {
+  width: calc(100% + 16px);
+  margin-inline: -8px;
+  padding: 6px 8px;
+}
 .chat-details__row {
   display: flex;
   align-items: center;
   gap: 9px;
   min-height: 36px;
-  width: calc(100% + 16px);
-  margin-inline: -8px;
-  padding: 6px 8px;
   border: 0;
   border-radius: 8px;
   background: transparent;
@@ -239,6 +244,32 @@ openclaw-chat-details-progress {
   align-items: start;
   gap: 8px;
   margin-top: 4px;
+}
+.chat-details__change-summary {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: end;
+  align-items: center;
+  gap: 3px 7px;
+  color: var(--muted);
+}
+.chat-details__change-summary > span {
+  white-space: nowrap;
+}
+.chat-details__change-files,
+.chat-details__change-status {
+  color: var(--muted);
+}
+.chat-details__change-lines {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.chat-details__change-lines--add {
+  color: var(--ok);
+}
+.chat-details__change-lines--del {
+  color: var(--danger);
 }
 .chat-details__meta-actions > button,
 .chat-details__participants > summary {
@@ -325,7 +356,6 @@ openclaw-chat-details-progress {
   row-gap: 1px;
   align-items: center;
   min-height: 30px;
-  padding: 4px 0;
 }
 .chat-details .chat-subagent-activity__row > .chat-details__agent-avatar {
   grid-row: 1 / span 2;
@@ -463,9 +493,7 @@ openclaw-chat-details-progress {
   column-gap: 8px;
   row-gap: 1px;
   align-items: center;
-  width: 100%;
   min-height: 30px;
-  padding: 4px 0;
   border: 0;
   border-radius: var(--radius-sm);
   background: none;
@@ -525,8 +553,6 @@ button.chat-details__process:is(:hover, :focus-visible) {
 }
 .chat-details__more {
   display: block;
-  width: 100%;
-  padding: 4px 0;
   border: 0;
   border-radius: var(--radius-sm);
   background: none;
@@ -615,8 +641,17 @@ button.chat-details__process:is(:hover, :focus-visible) {
 .chat-details__changes .chat-details__caption {
   padding-inline-end: 92px;
 }
+.chat-details__changes--summary .chat-details__caption {
+  min-height: 56px;
+  padding-inline-end: 185px;
+}
 .chat-details__all-changes {
   position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: end;
+  gap: 4px;
+  max-width: calc(100% - 100px);
   inset-block-start: 10px;
   inset-inline-end: 4px;
   min-height: 28px;

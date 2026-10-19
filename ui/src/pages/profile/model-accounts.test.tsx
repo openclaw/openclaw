@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type {
   UserModelAccount,
@@ -169,7 +170,8 @@ async function mountAccounts(
     },
   } as unknown as ApplicationContext;
   const provider = createSolidApplicationContextProvider(context);
-  const view = mountSolid(() => <ModelAccounts identityId="profile-1" profileId="profile-1" />, {
+  const [profileId, setProfileId] = createSignal("profile-1");
+  const view = mountSolid(() => <ModelAccounts identityId="profile-1" profileId={profileId()} />, {
     wrapper: provider.wrapper,
   });
   const accounts = view.container;
@@ -179,6 +181,7 @@ async function mountAccounts(
   return {
     accounts,
     unmount: view.unmount,
+    setProfileId,
     request,
     async start(providerId = "openai") {
       button(accounts, ".profile-auth-add-account").click();
@@ -373,27 +376,38 @@ it("loads retained accounts one page at a time without dropping earlier choices"
   });
 });
 
-it("discards an inventory reply from the previous connection", async () => {
-  const harness = await mountAccounts(async () => {
-    throw new Error("Unexpected account mutation");
-  });
-  const old = createDeferred<UsersListModelAccountsResult>();
-  harness.request.mockImplementationOnce(async () => old.promise);
-  button(harness.accounts, ".profile-auth-accounts-refresh").click();
-  harness.emit("reconnecting");
-  harness.emit("connected");
-  old.resolve({
-    profileId: "profile-1",
-    accounts: [connectedAccount],
-    links: connectedResult.links,
-  });
-  await vi.advanceTimersByTimeAsync(0);
-  flush();
-  expect(harness.accounts.textContent).not.toContain(connectedAccount.label);
-  await waitForSolid(() =>
-    expect(button(harness.accounts, ".profile-auth-add-account").disabled).toBe(false),
-  );
-});
+it.each(["connection", "profile"] as const)(
+  "discards an inventory reply from the previous %s",
+  async (scope) => {
+    const harness = await mountAccounts(async () => {
+      throw new Error("Unexpected account mutation");
+    });
+    const old = createDeferred<UsersListModelAccountsResult>();
+    harness.request.mockImplementationOnce(async () => old.promise);
+    button(harness.accounts, ".profile-auth-accounts-refresh").click();
+    if (scope === "connection") {
+      harness.emit("reconnecting");
+      harness.emit("connected");
+    } else {
+      harness.setProfileId("profile-2");
+      flush();
+    }
+    expect(harness.request).toHaveBeenLastCalledWith("users.listModelAccounts", {
+      profileId: scope === "connection" ? "profile-1" : "profile-2",
+    });
+    old.resolve({
+      profileId: "profile-1",
+      accounts: [connectedAccount],
+      links: connectedResult.links,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
+    expect(harness.accounts.textContent).not.toContain(connectedAccount.label);
+    await waitForSolid(() =>
+      expect(button(harness.accounts, ".profile-auth-add-account").disabled).toBe(false),
+    );
+  },
+);
 
 it("lets an admin link and unlink an existing model account", async () => {
   const harness = await mountAccounts(

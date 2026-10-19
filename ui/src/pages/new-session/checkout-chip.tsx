@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, onCleanup, untrack } from "solid-js";
+import { createMemo, createSignal, For, onCleanup } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -141,10 +141,8 @@ function WorktreeFields(props: {
                 <For each={suggestions()} keyed={(branch) => branch.name}>
                   {(branch, index) => {
                     let button: HTMLButtonElement;
-                    // The For key fixes this identity for the row's entire lifetime.
-                    const name = untrack(() => branch().name);
                     onCleanup(() => {
-                      suggestionRefs.delete(name);
+                      suggestionRefs.delete(branch().name);
                       if (activeSuggestion === button) {
                         clearActiveSuggestion();
                       }
@@ -162,7 +160,7 @@ function WorktreeFields(props: {
                         ref={[
                           (node) => {
                             button = node;
-                            suggestionRefs.set(name, node);
+                            suggestionRefs.set(branch().name, node);
                           },
                           nativeListener("click", () => {
                             props.params.onBaseRefInput(branch().name);

@@ -11,10 +11,7 @@ import { isDeliverySuspended } from "../registry/subagent-delivery-state.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { mutateSubagentRuns } from "../registry/subagent-registry-persistence.js";
 import { bindSubagentRunRuntimeKey } from "../registry/subagent-run-generation.js";
-import {
-  blockSubagentCompletionDelivery,
-  mutateRequesterCompletionBatch,
-} from "./subagent-completion-admission.store.js";
+import { blockSubagentCompletionDelivery } from "./subagent-completion-admission.store.js";
 import {
   currentCompletionRun,
   armRequesterWake,
@@ -22,7 +19,9 @@ import {
   records,
   requesterWakeDriver,
   admitCompletionFixtureDatabase,
+  readCompletionSystemEvents,
   seedSubagentCompletionDelivery,
+  settleRequesterCompletionBatch,
 } from "./subagent-completion-admission.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -82,12 +81,9 @@ describe("requester receipts after completion expiry", () => {
   }
 
   function settle(input: ReturnType<typeof records>, delivered: boolean) {
-    return mutateRequesterCompletionBatch({
+    return settleRequesterCompletionBatch({
       entries: [input.subagent],
-      operation: {
-        kind: "settle",
-        outcome: { delivered, path: "direct", error: delivered ? undefined : "requester failed" },
-      },
+      outcome: { delivered, path: "direct", error: delivered ? undefined : "requester failed" },
       assertCurrent: () => {},
       databaseOptions: { database },
     });
@@ -141,21 +137,51 @@ describe("requester receipts after completion expiry", () => {
         expect(stored?.requesterSettleWake).toBeUndefined();
         expect(stored?.completion?.resultText).toBe(resultText);
       } finally {
-        driver.controller.clearScheduledResumeTimers();
+        driver.controller.clearRuntimeState();
       }
     },
   );
 
-  it.each([
-    { reason: "expiry" as const, delivered: false },
-    { reason: "permanent_failure" as const, delivered: true },
-  ])(
-    "does not recover $reason without an eligible successful receipt",
-    async ({ reason, delivered }) => {
-      const input = await suspend({ reason });
-      await settle(input, delivered);
-      database = await reopenCompletionFixtureOwners();
-      expect(isDeliverySuspended(subagentRuns.get(input.subagent.runId)!)).toBe(true);
+  it("does not recover permanent_failure from a successful receipt", async () => {
+    const input = await suspend({ reason: "permanent_failure" });
+    await settle(input, true);
+    database = await reopenCompletionFixtureOwners();
+    expect(isDeliverySuspended(subagentRuns.get(input.subagent.runId)!)).toBe(true);
+  });
+
+  it.each([undefined, "parent"] as const)(
+    "fails the expired delivery when its requester wake ends undelivered (target=%s)",
+    async (completionTarget) => {
+      const input = await suspend({ completionTarget });
+      const before = structuredClone(input.subagent);
+      const notices = readCompletionSystemEvents(database);
+      expect(notices).toHaveLength(1);
+      const driver = requesterWakeDriver([input]);
+      driver.wake.mockImplementation(async (params) => {
+        await params.completeBatch([input.subagent], 1, {
+          delivered: false,
+          path: "none",
+          error: "requester turn failed",
+        });
+        return false;
+      });
+      try {
+        await driver.run();
+        database = await reopenCompletionFixtureOwners();
+        const stored = subagentRuns.get(input.subagent.runId);
+        expect(stored?.delivery).toMatchObject({
+          status: "failed",
+          disposition: "permanent_failure",
+          lastError: "requester turn failed",
+        });
+        expect(stored?.delivery?.payload).toEqual(before.delivery?.payload);
+        expect(stored?.completion).toEqual(before.completion);
+        expect(stored?.suppressCompletionDelivery).toBe(true);
+        expect(stored?.requesterSettleWake).toBeUndefined();
+        expect(readCompletionSystemEvents(database)).toEqual(notices);
+      } finally {
+        driver.controller.clearRuntimeState();
+      }
     },
   );
 
@@ -165,6 +191,7 @@ describe("requester receipts after completion expiry", () => {
     "host incarnation",
     "delivery generation",
     "registry write",
+    "failed settlement write",
   ] as const)(
     "preserves the suspended delivery and wake when %s rejects the receipt",
     async (cut) => {
@@ -181,26 +208,27 @@ describe("requester receipts after completion expiry", () => {
       } else if (cut === "delivery generation") {
         changed.delivery!.generation = 2;
       }
-      if (cut !== "host incarnation" && cut !== "registry write") {
+      const rejectWrite = cut === "registry write" || cut === "failed settlement write";
+      if (cut !== "host incarnation" && !rejectWrite) {
         await mutateSubagentRuns(
           [changed.runId],
           () => ({ value: undefined, postimages: new Map([[changed.runId, changed]]) }),
           { runs: subagentRuns },
         );
       }
-      if (cut === "registry write") {
+      if (rejectWrite) {
         database.db.exec(
           "CREATE TRIGGER reject_ack AFTER UPDATE ON subagent_runs BEGIN SELECT RAISE(ABORT, 'ack write cut'); END",
         );
       }
       try {
-        await expect(settle(input, true)).rejects.toThrow(
-          cut === "registry write" ? "ack write cut" : /(owner|cohort) changed before mutation/,
+        await expect(settle(input, cut !== "failed settlement write")).rejects.toThrow(
+          rejectWrite ? "ack write cut" : /(owner|cohort) changed before mutation/,
         );
         expect(isDeliverySuspended(input.subagent)).toBe(true);
         expect(currentCompletionRun(input).requesterSettleWake).toBeDefined();
       } finally {
-        if (cut === "registry write") {
+        if (rejectWrite) {
           database.db.exec("DROP TRIGGER reject_ack");
         }
       }

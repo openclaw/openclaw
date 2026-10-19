@@ -52,6 +52,7 @@ export class HovercardOwner {
   private connected = false;
   private stopGateway?: () => void;
   private stopConfig?: () => void;
+  private stopListeners?: () => void;
 
   constructor(
     private readonly host: LinkReaderHovercardProvider,
@@ -317,7 +318,20 @@ export class HovercardOwner {
 
   connect(): void {
     this.connected = true;
-    window.addEventListener(LINK_READER_METADATA_UPDATED_EVENT, this.handleMetadataUpdate);
+    const stopListeners = [
+      listen(window, LINK_READER_METADATA_UPDATED_EVENT, (event) => {
+        if (event instanceof CustomEvent) {
+          this.handleMetadataUpdate(event);
+        }
+      }),
+      listen(this.host, "pointerover", this.handlePointerOver),
+      listen(this.host, "pointerout", this.handlePointerOut),
+      listen(this.host, "focusin", this.handleFocusIn),
+      listen(this.host, "focusout", this.handleFocusOut),
+      listen(this.host, "keydown", this.hovercard.handleTriggerKeyDown),
+      listen(this.host, "click", this.handleClick),
+    ];
+    this.stopListeners = () => stopListeners.forEach((stop) => stop());
     this.host.style.display = "contents";
     this.inlineObserver.observe(this.host, {
       childList: true,
@@ -325,18 +339,14 @@ export class HovercardOwner {
       attributes: true,
       attributeFilter: ["href"],
     });
-    this.host.addEventListener("pointerover", this.handlePointerOver);
-    this.host.addEventListener("pointerout", this.handlePointerOut);
-    this.host.addEventListener("focusin", this.handleFocusIn);
-    this.host.addEventListener("focusout", this.handleFocusOut);
-    this.host.addEventListener("keydown", this.hovercard.handleTriggerKeyDown);
-    this.host.addEventListener("click", this.handleClick);
     this.stopI18n ??= i18n.subscribe(() => this.update());
     this.watchPageContext();
     // Restore focus intent after the bridge finishes adopting its caller's nodes.
     queueMicrotask(() => {
-      const focused = this.connected ? this.host.querySelector<HTMLAnchorElement>("a:focus") : null;
-      if (focused && this.ownsAnchor(focused)) {
+      const root = this.host.getRootNode();
+      const focused =
+        root instanceof ShadowRoot ? root.activeElement : this.host.ownerDocument.activeElement;
+      if (this.connected && focused instanceof HTMLAnchorElement && this.ownsAnchor(focused)) {
         this.activateFocusedAnchor(focused);
       }
     });
@@ -344,13 +354,8 @@ export class HovercardOwner {
 
   disconnect(): void {
     this.connected = false;
-    window.removeEventListener(LINK_READER_METADATA_UPDATED_EVENT, this.handleMetadataUpdate);
-    this.host.removeEventListener("pointerover", this.handlePointerOver);
-    this.host.removeEventListener("pointerout", this.handlePointerOut);
-    this.host.removeEventListener("focusin", this.handleFocusIn);
-    this.host.removeEventListener("focusout", this.handleFocusOut);
-    this.host.removeEventListener("keydown", this.hovercard.handleTriggerKeyDown);
-    this.host.removeEventListener("click", this.handleClick);
+    this.stopListeners?.();
+    this.stopListeners = undefined;
     this.inlineObserver.disconnect();
     this.stopI18n?.();
     this.stopI18n = null;

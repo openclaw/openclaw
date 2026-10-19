@@ -5,8 +5,27 @@
  */
 import crypto from "node:crypto";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createAnthropicPayloadLogger } from "./anthropic-payload-log.js";
+import * as queuedFileWriter from "./queued-file-writer.js";
+
+const capturedLines: string[] = [];
+
+beforeEach(() => {
+  capturedLines.length = 0;
+  vi.spyOn(queuedFileWriter, "getQueuedFileWriter").mockImplementation(() => ({
+    filePath: "memory",
+    write: (line) => capturedLines.push(line),
+    flush: async () => undefined,
+  }));
+  vi.stubEnv("OPENCLAW_ANTHROPIC_PAYLOAD_LOG", "1");
+  vi.stubEnv("OPENCLAW_ANTHROPIC_PAYLOAD_LOG_FILE", undefined);
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 
 describe("createAnthropicPayloadLogger", () => {
   const bareAnthropicKey = "sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWx"; // pragma: allowlist secret
@@ -16,15 +35,9 @@ describe("createAnthropicPayloadLogger", () => {
   it.each(["dashboard", "subagent", "internal-session-effects"])(
     "does not record Incognito %s payloads or raw errors when logging is enabled",
     (surface) => {
-      const lines: string[] = [];
+      const lines = capturedLines;
       const logger = createAnthropicPayloadLogger({
-        env: { OPENCLAW_ANTHROPIC_PAYLOAD_LOG: "1" },
         sessionKey: `agent:main:${surface}:incognito-private`,
-        writer: {
-          filePath: "memory",
-          write: (line) => lines.push(line),
-          flush: async () => undefined,
-        },
       });
       logger?.recordUsage([], new Error("synthetic private provider error"));
       expect(lines).toEqual([]);
@@ -33,15 +46,8 @@ describe("createAnthropicPayloadLogger", () => {
   );
 
   it("sanitizes credential fields and image base64 payload data before writing logs", async () => {
-    const lines: string[] = [];
-    const logger = createAnthropicPayloadLogger({
-      env: { OPENCLAW_ANTHROPIC_PAYLOAD_LOG: "1" },
-      writer: {
-        filePath: "memory",
-        write: (line) => lines.push(line),
-        flush: async () => undefined,
-      },
-    });
+    const lines = capturedLines;
+    const logger = createAnthropicPayloadLogger({});
     expect(typeof logger?.wrapStreamFn).toBe("function");
 
     const payload = {
@@ -105,15 +111,8 @@ describe("createAnthropicPayloadLogger", () => {
   });
 
   it("sanitizes usage and error fields before writing logs", () => {
-    const lines: string[] = [];
-    const logger = createAnthropicPayloadLogger({
-      env: { OPENCLAW_ANTHROPIC_PAYLOAD_LOG: "1" },
-      writer: {
-        filePath: "memory",
-        write: (line) => lines.push(line),
-        flush: async () => undefined,
-      },
-    });
+    const lines = capturedLines;
+    const logger = createAnthropicPayloadLogger({});
 
     logger?.recordUsage(
       [

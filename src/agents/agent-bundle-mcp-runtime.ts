@@ -1,10 +1,4 @@
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import {
-  ListToolsResultSchema,
-  type CallToolResult,
-  type Tool,
-} from "@modelcontextprotocol/sdk/types.js";
+import { Client, type Transport, type Tool } from "@modelcontextprotocol/client";
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
@@ -45,6 +39,16 @@ import { isMcpMethodNotFoundError, redactMcpDiagnosticError } from "./mcp-error.
 import { createMcpJsonSchemaValidator } from "./mcp-json-schema-validator.js";
 import { buildMcpClientCapabilities, summarizeServerCapabilities } from "./mcp-metadata.js";
 import { collectMcpPaginatedItems } from "./mcp-pagination.js";
+import {
+  mcpCallToolResultSchema,
+  mcpGetPromptResultSchema,
+  mcpListResourceTemplatesResultSchema,
+  mcpListToolsResultSchema,
+  toLegacyMcpCallToolResult,
+  toLegacyMcpGetPromptResult,
+  toLegacyMcpListResourceTemplatesResult,
+  toLegacyMcpListToolsResult,
+} from "./mcp-sdk-compatibility.js";
 import {
   connectWithMcpStartupBackoff,
   McpStartupBackoffError,
@@ -548,8 +552,14 @@ function createServerMcpRuntime(
             const requestOptions = { timeout, maxTotalTimeout: timeout, signal: requestSignal };
             const page =
               kind === "resources"
-                ? await session.client.listResources(requestParams, requestOptions)
-                : await session.client.listPrompts(requestParams, requestOptions);
+                ? await session.client.request(
+                    { method: "resources/list", params: requestParams },
+                    requestOptions,
+                  )
+                : await session.client.request(
+                    { method: "prompts/list", params: requestParams },
+                    requestOptions,
+                  );
             const items = page[kind] as unknown[];
             return { items, nextCursor: page.nextCursor, serializedValue: page };
           },
@@ -586,12 +596,9 @@ function createServerMcpRuntime(
       failIfDisposed();
 
       let session = currentSession;
-      if (session && !session.retiring && !session.connected && !session.connectPromise) {
+      if (session && !session.connected && !session.connectPromise) {
         // A closed SDK client cannot reconnect cleanly on the same transport.
         await retireSessionIfCurrent(session);
-        session = undefined;
-      }
-      if (session?.retiring) {
         session = undefined;
       }
       const reusedSession = Boolean(session);
@@ -604,6 +611,7 @@ function createServerMcpRuntime(
           },
           {
             capabilities: buildMcpClientCapabilities(mcpAppsEnabled),
+            versionNegotiation: { mode: "legacy" },
             jsonSchemaValidator: schemaValidator,
             listChanged: {
               tools: {
@@ -788,9 +796,7 @@ function createServerMcpRuntime(
         : undefined;
       return nextCatalog;
     } finally {
-      if (catalogInFlight === inFlight) {
-        catalogInFlight = undefined;
-      }
+      catalogInFlight = undefined;
     }
   };
 
@@ -874,7 +880,7 @@ function createServerMcpRuntime(
           return;
         }
         released = true;
-        activeLeases = Math.max(0, activeLeases - 1);
+        activeLeases -= 1;
         // Release is not use: refreshing lastUsedAt here defeats the idle-sweep TTL.
       };
     },
@@ -896,17 +902,20 @@ function createServerMcpRuntime(
     async callTool(requestedServer, toolName, input, options) {
       const session = await getActiveSession(requestedServer);
       const validateResult = session.toolMetadata?.validatorForCall(toolName);
-      const result = (await runGuardedMcpRequest(session, (signal, holdForHumanInput) => {
+      const result = await runGuardedMcpRequest(session, (signal, holdForHumanInput) => {
         options?.assertCurrent?.();
         const call = () =>
           withGuardedFetchRequestAuthority(options?.assertCurrent, () =>
-            session.client.callTool(
+            session.client.request(
               {
-                name: toolName,
-                arguments: isRecord(input) ? input : {},
-                ...(options?._meta ? { _meta: options._meta } : {}),
+                method: "tools/call",
+                params: {
+                  name: toolName,
+                  arguments: isRecord(input) ? input : {},
+                  ...(options?._meta ? { _meta: options._meta } : {}),
+                },
               },
-              undefined,
+              mcpCallToolResultSchema,
               {
                 // The local deadline owns active work; the SDK bounds the total
                 // call, including one shared allowance for pending human input.
@@ -920,17 +929,19 @@ function createServerMcpRuntime(
         return session.withElicitation
           ? session.withElicitation(signal, call, holdForHumanInput)
           : call();
-      })) as CallToolResult;
+      });
       validateResult?.(result);
-      return result;
+      return toLegacyMcpCallToolResult(result);
     },
     async listTools(requestedServer, requestParams) {
       const session = await getActiveSession(requestedServer);
-      return await runGuardedMcpRequest(session, (signal) =>
-        session.client.request(
-          { method: "tools/list", params: requestParams },
-          ListToolsResultSchema,
-          { timeout: session.requestTimeoutMs, signal },
+      return toLegacyMcpListToolsResult(
+        await runGuardedMcpRequest(session, (signal) =>
+          session.client.request(
+            { method: "tools/list", params: requestParams },
+            mcpListToolsResultSchema,
+            { timeout: session.requestTimeoutMs, signal },
+          ),
         ),
       );
     },
@@ -947,8 +958,11 @@ function createServerMcpRuntime(
       return await runGuardedMcpRequest(
         session,
         (signal) =>
-          session.client.readResource(
-            { uri, ...(options?._meta ? { _meta: options._meta } : {}) },
+          session.client.request(
+            {
+              method: "resources/read",
+              params: { uri, ...(options?._meta ? { _meta: options._meta } : {}) },
+            },
             { timeout: session.requestTimeoutMs, signal },
           ),
         options,
@@ -956,11 +970,17 @@ function createServerMcpRuntime(
     },
     async listResourceTemplates(requestedServer, requestParams) {
       const session = await getActiveSession(requestedServer);
-      return await runGuardedMcpRequest(session, (signal) =>
-        session.client.listResourceTemplates(requestParams, {
-          timeout: session.requestTimeoutMs,
-          signal,
-        }),
+      return toLegacyMcpListResourceTemplatesResult(
+        await runGuardedMcpRequest(session, (signal) =>
+          session.client.request(
+            { method: "resources/templates/list", params: requestParams },
+            mcpListResourceTemplatesResultSchema,
+            {
+              timeout: session.requestTimeoutMs,
+              signal,
+            },
+          ),
+        ),
       );
     },
     async listPrompts(requestedServer) {
@@ -971,10 +991,13 @@ function createServerMcpRuntime(
     },
     async getPrompt(requestedServer, name, args) {
       const session = await getActiveSession(requestedServer);
-      return await runGuardedMcpRequest(session, (signal) =>
-        session.client.getPrompt(
-          { name, ...(args ? { arguments: args } : {}) },
-          { timeout: session.requestTimeoutMs, signal },
+      return toLegacyMcpGetPromptResult(
+        await runGuardedMcpRequest(session, (signal) =>
+          session.client.request(
+            { method: "prompts/get", params: { name, ...(args ? { arguments: args } : {}) } },
+            mcpGetPromptResultSchema,
+            { timeout: session.requestTimeoutMs, signal },
+          ),
         ),
       );
     },

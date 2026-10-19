@@ -9,6 +9,9 @@ import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { beginRestartRecoveryTerminalDelivery } from "../../config/sessions/restart-recovery-receipt.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { bindSessionControllerSourceTurnId } from "../../sessions/session-controller.js";
+import { getSessionControllerEntryForOperation } from "../../sessions/session-controller.state.js";
+import { testing } from "../../sessions/session-controller.test-support.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -17,19 +20,18 @@ import {
   attachSteerBackend,
   createSteerParams,
 } from "./agent-runner-steer-adoption.test-support.js";
-import { createQueueTestRun, clearFollowupQueueForTest } from "./queue.test-helpers.js";
+import { createQueueTestRun } from "./queue.test-helpers.js";
+import { clearSessionQueues } from "./queue/cleanup.js";
 import { getExistingFollowupQueue } from "./queue/state.js";
 import type { FollowupRun } from "./queue/types.js";
 import type { ReplyOperationRunState } from "./reply-operation-run-state.js";
-import { replyRunRegistry } from "./reply-run-registry.registry.js";
 import { createTestReplyOperation } from "./reply-run-registry.test-helpers.js";
-import { testing } from "./reply-run-registry.test-support.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 import * as steeringDelivery from "./steering-delivery-preparation.js";
 
 afterEach(() => {
-  testing.resetReplyRunRegistry();
+  testing.resetSessionControllerForTest();
   vi.restoreAllMocks();
 });
 
@@ -82,14 +84,12 @@ it("adopts active steering through prepared policy without caller-thread SQL", a
     });
     const resultState: ReplyOperationRunState = {};
     const followup = vi.fn(async () => {});
-    const releaseAdmissionTicket = vi.fn();
     const calls = observeMainThreadSql();
     try {
       await expect(
         runActiveReplySteer(
           createSteerParams(key, run, operation, {
             opts: { runId: "incoming-steer" },
-            releaseAdmissionTicket,
             replyOperationRunState: resultState,
             runFollowup: followup,
           }),
@@ -98,11 +98,10 @@ it("adopts active steering through prepared policy without caller-thread SQL", a
       expect(delivered).toEqual([run.prompt]);
       expect(resultState.admission).toEqual({ status: "accepted", mode: "steer" });
       expect(followup).not.toHaveBeenCalled();
-      expect(releaseAdmissionTicket).toHaveBeenCalledOnce();
       calls.expectIdle();
     } finally {
       calls.restore();
-      clearFollowupQueueForTest(key);
+      clearSessionQueues([key], getSessionControllerEntryForOperation(operation).target);
       operation.complete();
     }
   });
@@ -144,7 +143,7 @@ it.for(
         config: { session: { store: storePath }, agents: { entries: { main: {} } } },
       });
       const { operation, fingerprint } = await prepareOperation(run);
-      replyRunRegistry.bindSourceTurnId(operation, sourceTurnId);
+      bindSessionControllerSourceTurnId(operation, sourceTurnId);
       const native = createNativeSessionBindingAuthority(
         [
           {
@@ -199,6 +198,7 @@ it.for(
             agentId: queued.run.agentId,
             sessionId: queued.run.sessionId,
             sessionKey: key,
+            mailboxClaim: queued.controllerInput?.claim,
             kind: "queued_followup",
             resetTriggered: false,
           });
@@ -266,7 +266,8 @@ it.for(
         });
         expect([...retained]).toEqual(steered ? [] : [run]);
         if (!steered) {
-          expect(run.steerPending).toBeUndefined();
+          expect(run.controllerInput).toMatchObject({ phase: "waiting" });
+          expect(run.controllerInput?.injection).toBeUndefined();
           operation.complete();
           expect(await withinTest(followupDelivered.promise, signal)).toBe(run);
           expect(followup).toHaveBeenCalledOnce();
@@ -274,7 +275,7 @@ it.for(
       } finally {
         resume.resolve();
         await settlement;
-        clearFollowupQueueForTest(key);
+        clearSessionQueues([key], getSessionControllerEntryForOperation(operation).target);
         operation.complete();
         await Promise.allSettled(pendingFollowups);
       }

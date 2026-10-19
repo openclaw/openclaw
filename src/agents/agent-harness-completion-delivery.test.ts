@@ -36,6 +36,11 @@ import {
 } from "../infra/agent-run-registry.js";
 import { deliverAgentHarnessCompletion } from "../plugin-sdk/agent-harness-completion.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
+import {
+  claimSessionControllerTask,
+  releaseSessionControllerClaim,
+} from "../sessions/session-controller.mailbox.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -667,52 +672,77 @@ describe("review3 custody ownership", () => {
 describe("review3 Gateway admission custody", () => {
   it.each([
     "held",
+    "claimed-preparation",
     "aborted",
     "foreign-physical",
     "released",
-    "expired",
+    "cleanup-requested",
     "retired-generation",
     "closed-resolver",
     "throwing-resolver",
   ])("uses the real %s pre-execution registration", (kind) =>
     withCompletion(async ({ entry, request }) => {
-      const chatAbortControllers: GatewayRequestContext["chatAbortControllers"] = new Map();
-      const registration = registerChatAbortController({
-        chatAbortControllers,
-        runId: announceId,
-        sessionId: kind === "foreign-physical" ? "physical-2" : entry.sessionId,
-        sessionKey,
-        agentId: "main",
-        timeoutMs: 60_000,
-        kind: "agent",
-        ...(kind === "retired-generation" ? { lifecycleGeneration: "old-gateway" } : {}),
-        ...(kind === "expired" ? { expiresAtMs: Date.now() - 1 } : {}),
-      });
-      const context = { chatAbortControllers } as GatewayRequestContext;
+      const context = {} as GatewayRequestContext;
+      let resolverOpen = true;
+      const scope = {
+        context,
+        resolveGatewayContext: () => {
+          if (!resolverOpen && kind === "throwing-resolver") {
+            throw new Error("Gateway instance unavailable for agent");
+          }
+          return resolverOpen ? context : undefined;
+        },
+        isWebchatConnect: () => false,
+      };
+      const registration = withPluginRuntimeGatewayRequestScope(scope, () =>
+        registerChatAbortController({
+          target: captureSessionTarget({
+            storeScope: request.storePath,
+            sessionKey,
+            incarnation: kind === "foreign-physical" ? "physical-2" : entry.sessionId,
+            agentId: "main",
+          }),
+          runId: announceId,
+          sessionId: kind === "foreign-physical" ? "physical-2" : entry.sessionId,
+          sessionKey,
+          agentId: "main",
+          timeoutMs: 60_000,
+          kind: "agent",
+          ...(kind === "retired-generation" ? { lifecycleGeneration: "old-gateway" } : {}),
+        }),
+      );
+      let releaseClaim: (() => void) | undefined;
       try {
         expect(registration.registered).toBe(true);
-        expect(registration.entry?.executionStarted).toBe(false);
+        if (!registration.entry) {
+          throw new Error("expected registered source");
+        }
+        expect(registration.markExecutionStarted()).toBe(false);
+        if (kind === "claimed-preparation" || kind === "cleanup-requested") {
+          const claim = await claimSessionControllerTask(registration.entry.input, () => {});
+          releaseClaim = () => releaseSessionControllerClaim(claim);
+          if (kind === "cleanup-requested") {
+            registration.cleanup();
+          }
+        }
         if (kind === "aborted") {
           registration.controller.abort();
         }
         if (kind === "released") {
           registration.cleanup();
         }
-        const result = await withPluginRuntimeGatewayRequestScope(
-          {
-            context,
-            resolveGatewayContext: () => {
-              if (kind === "throwing-resolver") {
-                throw new Error("Gateway instance unavailable for agent");
-              }
-              return kind === "closed-resolver" ? undefined : context;
-            },
-            isWebchatConnect: () => false,
-          },
-          () => reconcileHarnessCompletionDelivery(request),
+        resolverOpen = kind !== "closed-resolver" && kind !== "throwing-resolver";
+        const result = await withPluginRuntimeGatewayRequestScope(scope, () =>
+          reconcileHarnessCompletionDelivery(request),
         );
-        expect(result).toBe(kind === "held" ? "pending" : "blocked");
+        expect(result).toBe(
+          kind === "held" || kind === "claimed-preparation" || kind === "cleanup-requested"
+            ? "pending"
+            : "blocked",
+        );
       } finally {
+        releaseClaim?.();
+        await registration.entry?.input.claim?.settlement.promise;
         registration.cleanup();
       }
     }),

@@ -201,9 +201,6 @@ it("pauses offscreen session indicators and resumes them when their rows scroll 
       },
     });
     await settleRoster(sidebar);
-    if (patch.hasActiveRun !== false) {
-      await probe.delivered;
-    }
   };
   await updateRows({ status: "queued" });
   await waitForSolid(() => expect(offscreen(ring(first))).toBe(true));

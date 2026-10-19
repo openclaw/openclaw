@@ -2,6 +2,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import {
   readSqliteBusyTimeout,
   runWithSqliteBusyTimeout,
@@ -21,8 +22,8 @@ describe("runWithSqliteBusyTimeout", () => {
     vi.restoreAllMocks();
   });
 
-  it("restores the previous timeout after success and failure", () => {
-    database = new DatabaseSync(":memory:");
+  it("adopts an omitted constructor timeout and restores it after success and failure", () => {
+    database = openNodeSqliteDatabase(":memory:");
     database.exec("PRAGMA busy_timeout = 5000");
 
     expect(
@@ -36,6 +37,27 @@ describe("runWithSqliteBusyTimeout", () => {
       }),
     ).toThrow("operation failed");
     expect(database.prepare("PRAGMA busy_timeout").get()).toEqual({ timeout: 5000 });
+  });
+
+  it.each([
+    [-1, 0],
+    [0, 0],
+    [37, 37],
+  ])("retains explicit constructor timeout %s as %s without SQL", (timeout, expected) => {
+    database = openNodeSqliteDatabase(":memory:", { timeout });
+    const prepare = vi.spyOn(database, "prepare");
+    const exec = vi.spyOn(database, "exec");
+    expect(readSqliteBusyTimeout(database)).toBe(expected);
+    setSqliteBusyTimeout(database, expected);
+    expect(prepare).not.toHaveBeenCalled();
+    expect(exec).not.toHaveBeenCalled();
+    prepare.mockRestore();
+    exec.mockRestore();
+    expect(database.prepare("PRAGMA busy_timeout").get()).toEqual({ timeout: expected });
+    runWithSqliteBusyTimeout(database, 25, () => {
+      expect(database!.prepare("PRAGMA busy_timeout").get()).toEqual({ timeout: 25 });
+    });
+    expect(database.prepare("PRAGMA busy_timeout").get()).toEqual({ timeout: expected });
   });
 
   it("restores timeout and lock reporting before the admitted operation finishes", () => {
@@ -58,15 +80,25 @@ describe("runWithSqliteBusyTimeout", () => {
     expect(exec.mock.calls).toEqual([["PRAGMA busy_timeout = 25"], ["PRAGMA busy_timeout = 5000"]]);
   });
 
-  it("discards the connection policy when the native connection closes and reopens", () => {
-    database = new DatabaseSync(":memory:");
-    setSqliteBusyTimeout(database, 37);
-    database.close();
-    database.open();
-    expect(readSqliteBusyTimeout(database)).toBe(0);
-    runWithSqliteBusyTimeout(database, 25, () => undefined);
-    expect(database.prepare("PRAGMA busy_timeout").get()).toEqual({ timeout: 0 });
-  });
+  it.each([undefined, { timeout: 19 }, { timeout: 37, open: false }])(
+    "discards changed policy across close/reopen with constructor options %j",
+    (options) => {
+      database = options
+        ? openNodeSqliteDatabase(":memory:", options)
+        : new DatabaseSync(":memory:");
+      if (!database.isOpen) {
+        database.open();
+      }
+      const timeout = options?.timeout ?? 0;
+      expect(readSqliteBusyTimeout(database)).toBe(timeout);
+      setSqliteBusyTimeout(database, 73);
+      database.close();
+      database.open();
+      expect(readSqliteBusyTimeout(database)).toBe(timeout);
+      runWithSqliteBusyTimeout(database, 25, () => undefined);
+      expect(database.prepare("PRAGMA busy_timeout").get()).toEqual({ timeout });
+    },
+  );
 
   it.each([-1])("rejects invalid timeout %s", (timeout) => {
     database = new DatabaseSync(":memory:");

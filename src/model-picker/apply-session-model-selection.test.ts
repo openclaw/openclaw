@@ -4,7 +4,7 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/pr
 import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { loadProviderScopedThinkingCatalog } from "../agents/model-catalog.runtime.js";
-import { FOLLOWUP_QUEUES, getFollowupQueue } from "../auto-reply/reply/queue/state.js";
+import { clearFollowupQueue, getFollowupQueue } from "../auto-reply/reply/queue/state.js";
 import {
   loadSessionEntryReadOnly,
   replaceSessionEntry,
@@ -229,7 +229,7 @@ describe("applySessionModelSelection", () => {
           }),
         );
       } finally {
-        FOLLOWUP_QUEUES.delete(params.sessionKey);
+        clearFollowupQueue(params.sessionKey);
       }
     },
   );

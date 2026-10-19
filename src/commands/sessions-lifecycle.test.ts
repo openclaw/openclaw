@@ -326,6 +326,42 @@ describe("sessions lifecycle commands", () => {
     );
   });
 
+  it.each([false, true])(
+    "escapes lifecycle display values without changing JSON (%s)",
+    async (json) => {
+      const key = "agent:work:notes\u001b[2J\nnext";
+      const archived = "/gateway/notes\u001b]2;changed\u0007\rnext";
+      mocks.callGateway
+        .mockResolvedValueOnce(described(key, "session-1", { agentId: "work" }))
+        .mockResolvedValueOnce(deleted(key, { archived: [archived] }));
+
+      await run("delete", { keys: [key], yes: true, json });
+
+      expect(mocks.callGateway).toHaveBeenLastCalledWith(
+        "sessions.delete",
+        expect.any(Object),
+        { key, expectedSessionId: "session-1", deleteTranscript: true },
+        expect.any(Object),
+      );
+      if (json) {
+        expectJson({
+          ok: true,
+          operation: "delete",
+          dryRun: false,
+          results: [{ key, ok: true, status: "deleted", archived: [archived] }],
+        });
+        return;
+      }
+      const output = vi.mocked(runtime.log).mock.calls.flat().join("\n");
+      expect(output).toContain("Deleted session agent:work:notes\\nnext.");
+      expect(output).toContain("Archived transcript: /gateway/notes\\rnext");
+      for (const control of ["\u0007", "\u001b", "\r"]) {
+        expect(output).not.toContain(control);
+      }
+      expect(output).not.toContain("\nnext");
+    },
+  );
+
   it("does not guess an owner when the Gateway omits its optional agent field", async () => {
     mocks.callGateway
       .mockResolvedValueOnce(described("unknown", "session-1"))

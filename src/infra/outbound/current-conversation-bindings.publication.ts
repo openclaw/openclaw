@@ -25,6 +25,7 @@ import {
   observeSqliteWorkerCommittedFacts,
   type SqliteWorkerAdmissionFactory,
 } from "../sqlite-worker-operation-admission.js";
+import { observeSqliteWorkerAdmissionFinish } from "../sqlite-worker-operation-settlement.js";
 import type { SessionBindingRecord } from "./session-binding.types.js";
 
 type CurrentConversationBindingPublication = {
@@ -267,28 +268,23 @@ export function withCurrentConversationBindingPublication(
       }
     });
     let finished = false;
-    const finish = owner.admission.finish.bind(owner.admission);
-    owner.admission.finish = () => {
-      try {
-        finish();
-      } finally {
-        if (!finished) {
-          finished = true;
-          unsubscribe();
-          notifyListeners(state.facts, {
-            kind: "settled",
-            identity: identity(),
-            operation,
-            outcome:
-              !unknown && owner.admission.settlement?.kind === "completed"
-                ? published
-                  ? "published"
-                  : "unchanged"
-                : "unknown",
-          });
-        }
+    observeSqliteWorkerAdmissionFinish(owner.admission, () => {
+      if (!finished) {
+        finished = true;
+        unsubscribe();
+        notifyListeners(state.facts, {
+          kind: "settled",
+          identity: identity(),
+          operation,
+          outcome:
+            !unknown && owner.admission.settlement?.kind === "completed"
+              ? published
+                ? "published"
+                : "unchanged"
+              : "unknown",
+        });
       }
-    };
+    });
     observeSqliteWorkerCommittedFacts(owner.admission, ({ facts }) => {
       assertPublicationCurrent();
       if (isRecord(facts) && facts.kind === "unknown" && facts.identity === identity()) {

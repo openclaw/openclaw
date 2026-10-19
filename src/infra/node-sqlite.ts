@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
-import { getEnvironmentData, isMainThread, setEnvironmentData } from "node:worker_threads";
+import { getEnvironmentData, setEnvironmentData } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   ensureSqliteLibrarySelected,
@@ -13,6 +13,7 @@ import {
 import { formatErrorMessage } from "./errors.js";
 import { registerNodeSqliteDisposeCallback } from "./kysely-sync-cache-state.js";
 import { compareValidSemver } from "./semver.js";
+import { rememberSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import {
   bindSqliteDatabaseAdmission,
   prepareSqliteDatabaseAdmission,
@@ -175,9 +176,9 @@ function assertSafeSqliteRuntime(sqlite: typeof import("node:sqlite")): SqliteIt
   if (validatedSqliteModule?.sqlite === sqlite) {
     return validatedSqliteModule.iteratorBehavior;
   }
-  const inherited = isMainThread
-    ? undefined
-    : parseSqliteNativeRuntimeAdmission(getEnvironmentData(SQLITE_NATIVE_RUNTIME_ADMISSION_KEY));
+  const inherited = parseSqliteNativeRuntimeAdmission(
+    getEnvironmentData(SQLITE_NATIVE_RUNTIME_ADMISSION_KEY),
+  );
   // Worker isolates share the selected native library; another process must probe its own load.
   if (inherited) {
     assertSqliteWalResetSafeVersion(inherited.version, process.versions.node);
@@ -291,6 +292,9 @@ export function openNodeSqliteDatabase(
     },
     options?.readOnly !== true,
   );
+  if (database.isOpen && options?.timeout !== undefined) {
+    rememberSqliteBusyTimeout(database, Math.max(0, options.timeout));
+  }
   if (!getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources) {
     registerNodeSqliteDisposeCallback(database, () => {
       bunSqliteNativeCleanupPending = true;

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   clearBundledDiscoveryModeMemo,
   prepareBundledDiscoveryMode,
@@ -15,6 +16,7 @@ import { readPluginMetadataStateRow } from "./plugin-metadata-state-worker.js";
 
 const reads = vi.hoisted(() => ({
   snapshot: vi.fn<() => object | undefined>(),
+  snapshotAsync: vi.fn<() => Promise<object | undefined>>(),
   mode: vi.fn<() => unknown>(),
   metadata: vi.fn(),
 }));
@@ -22,6 +24,7 @@ const reads = vi.hoisted(() => ({
 vi.mock("../state/openclaw-state-db-readonly.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/openclaw-state-db-readonly.js")>()),
   getActiveOpenClawStateDatabaseReadSnapshot: reads.snapshot,
+  getActiveOpenClawStateDatabaseReadSnapshotAsync: reads.snapshotAsync,
   isArtifactPreservingStateRead: () => true,
   executeExistingOpenClawStateRead: reads.metadata,
   withArtifactPreservingStateReads: <T>(read: () => T): T => read(),
@@ -33,6 +36,7 @@ const env = { OPENCLAW_STATE_DIR: "/synthetic/plugin-admission" };
 beforeEach(() => {
   vi.resetAllMocks();
   reads.snapshot.mockReturnValue({});
+  reads.snapshotAsync.mockImplementation(async () => reads.snapshot());
   reads.mode.mockReturnValue("allowlist");
   reads.metadata.mockResolvedValue({
     ok: true,
@@ -118,6 +122,25 @@ it.each(readers)(
     });
   },
 );
+
+it("waits for pending snapshot bytes without synchronously acquiring them", async () => {
+  const snapshot = createDeferredCore<object>();
+  reads.snapshotAsync.mockReturnValue(snapshot.promise);
+  reads.snapshot.mockImplementation(() => {
+    throw new Error("Pending snapshot bytes must be prepared asynchronously");
+  });
+  await withPluginCache(createPluginCache(), async () => {
+    const preparing = prepareBundledDiscoveryMode(env);
+    try {
+      expect(reads.snapshot).not.toHaveBeenCalled();
+      expect(reads.metadata).not.toHaveBeenCalled();
+    } finally {
+      snapshot.resolve({});
+      await preparing;
+    }
+    expect(reads.metadata).toHaveBeenCalledOnce();
+  });
+});
 
 it("prepares snapshot policy asynchronously and reuses it for synchronous derivation", async () => {
   await withPluginCache(createPluginCache(), async () => {

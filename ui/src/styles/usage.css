@@ -287,7 +287,10 @@
   border-top: 1px solid var(--border);
 }
 
-.usage-header-metrics .usage-pin-btn {
+.usage-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin-left: auto;
 }
 
@@ -490,6 +493,10 @@
 .usage-query-actions {
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+.usage-query-count {
+  margin-left: auto;
 }
 
 .usage-filter-row {
@@ -857,8 +864,10 @@
   grid-column: 1 / -1;
 }
 
+/* Fixed width: identity names arrive with the data and must not move the controls beside it. */
 .usage-creator-filter {
-  max-width: min(100%, 260px);
+  width: 260px;
+  max-width: 100%;
 }
 
 .usage-creators {
@@ -1961,8 +1970,16 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
+  /* A fixed grid: placeholder and loaded values take the same rows. */
   .usage-header-metrics {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 12px 20px;
+  }
+
+  .usage-header-actions {
+    grid-column: 1 / -1;
+    margin-left: 0;
   }
 }
 
@@ -1971,10 +1988,6 @@
   .session-summary-grid,
   .usage-loading-grid {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .usage-header-metrics .usage-pin-btn {
-    margin-left: 0;
   }
 }
 

@@ -141,6 +141,7 @@ export async function add(
         createdActor: opts?.createdActor,
         inferenceBinding: opts?.inferenceBinding,
         sourceConversation: opts?.sourceConversation,
+        operatorSource: opts?.operatorSource,
         skillLibrarySelections: opts?.skillLibrarySelections,
         scheduledToolPolicy: opts?.scheduledToolPolicy,
         toolsAllowProvenance: opts?.toolsAllowProvenance,

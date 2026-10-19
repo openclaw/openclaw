@@ -39,3 +39,48 @@ it.each([false, true])("preserves allocation failures when cleanup fails=%s", as
     expect(transport.close).toHaveBeenCalledOnce();
   }
 });
+
+it.each([false, true])(
+  "retires each launch context after its last directory (close failure=%s)",
+  async (closeFails) => {
+    const sessions: Array<{ run: typeof transport.run; close: typeof transport.close }> = [];
+    factory.mockImplementation((captured: SqliteSnapshotStagingLaunch) => {
+      const session = {
+        run: vi.fn<(...args: unknown[]) => Promise<string>>(async () => "/fixture/snapshot"),
+        close: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
+        isRetired: () => false,
+        compatible: (other: SqliteSnapshotStagingLaunch) =>
+          captured.env.FIXTURE === other.env.FIXTURE,
+      };
+      sessions.push(session);
+      return session;
+    });
+    const report = await runtime.allocate("/fixture", false, launch, 1);
+    const inspection = await runtime.allocate(
+      "/fixture",
+      false,
+      { ...launch, env: { FIXTURE: "inspection" } },
+      2,
+    );
+    const sibling = await runtime.allocate("/fixture", false, launch, 3);
+    expect(factory).toHaveBeenCalledTimes(2);
+
+    await report.retire();
+    expect(sessions[0]!.close).not.toHaveBeenCalled();
+    await inspection.retire();
+    expect(sessions[1]!.close).toHaveBeenCalledOnce();
+    expect(sessions[0]!.close).not.toHaveBeenCalled();
+    await expect(runtime.close()).rejects.toThrow("still has retained directories");
+
+    if (closeFails) {
+      const failure = new Error("native close failed");
+      sessions[0]!.close.mockRejectedValueOnce(failure);
+      await expect(sibling.retire()).rejects.toBe(failure);
+    }
+    await sibling.retire();
+    // A close retry must not replay native directory retirement.
+    expect(sessions[0]!.run).toHaveBeenCalledTimes(4);
+    expect(sessions[0]!.close).toHaveBeenCalledTimes(closeFails ? 2 : 1);
+    await runtime.close();
+  },
+);

@@ -760,6 +760,57 @@ describe("tui session actions", () => {
     });
   });
 
+  const createRunMessageHarness = () => {
+    const describeSession = vi.fn().mockResolvedValue(description(session("session-main")));
+    const h = createHarness({
+      backend: { describeSession },
+      state: { activeChatRunId: "run-1", currentSessionId: "session-main" },
+    });
+    const events = h.events({
+      refreshSessionInfo: h.refreshSessionInfo,
+      applySessionEventRow: h.applySessionEventRow,
+    });
+    const message = (updatedAt: number, row?: Record<string, unknown>) =>
+      events.handleSessionMessageEvent({
+        sessionKey: mainSession.key,
+        sessionId: "session-main",
+        updatedAt,
+        message: { role: "toolResult", content: [] },
+        ...(row ? { session: session("session-main", { updatedAt, ...row }) } : {}),
+      });
+    return { describeSession, state: h.state, events, message };
+  };
+
+  it("applies session rows from run messages without describing the session", async () => {
+    const { describeSession, state, events, message } = createRunMessageHarness();
+    try {
+      for (let toolCall = 1; toolCall <= 10; toolCall += 1) {
+        message(100 + toolCall, { totalTokens: toolCall * 100, contextTokens: 120000 });
+      }
+      await flushImmediate();
+
+      expect(describeSession).not.toHaveBeenCalled();
+      expect(state.sessionInfo).toMatchObject({ totalTokens: 1000, contextTokens: 120000 });
+    } finally {
+      events.dispose();
+    }
+  });
+
+  it.each([
+    { name: "carries no row", row: undefined },
+    { name: "carries a row the session picker hides", row: { archived: true } },
+  ])("describes the session once when a run message $name", async ({ row }) => {
+    const { describeSession, events, message } = createRunMessageHarness();
+    try {
+      message(200, row);
+      await vi.waitFor(() => expect(describeSession).toHaveBeenCalledOnce());
+      await flushImmediate();
+      expect(describeSession).toHaveBeenCalledOnce();
+    } finally {
+      events.dispose();
+    }
+  });
+
   it.each([
     { snapshot: "stale", included: false, scrollback: false, userSeq: 3, replySeq: 4 },
     { snapshot: "includes live user", included: true, scrollback: false, userSeq: 1, replySeq: 2 },

@@ -4,8 +4,8 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { InMemoryTransport } from "@modelcontextprotocol/client";
+import { McpServer } from "@modelcontextprotocol/server";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -535,6 +535,9 @@ it("runs on the prepared plugin registry without another registration", async ()
   expect(registrations).toEqual(["discovery"]);
 });
 
+// This suite owns LiteLLM first-request capability proof. Authored models must
+// have capabilities that differ from the bundled defaults in both merge and
+// replace modes, or the cases cannot show which source won.
 describe("agent command static capabilities", () => {
   const cases = [
     { inventory: "empty", contextTokens: 1_000_000, thinking: "medium" },

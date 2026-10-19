@@ -14,6 +14,7 @@ import { createGitHubPublicationRuntime } from "./github-publication-runtime.js"
 import type { NodeWorkerSupervisorTransport } from "./node-registry-private.js";
 import { measureGatewayCloseStep, measureGatewayRestartTrace } from "./restart-trace.js";
 import { emitSessionsChanged } from "./server-methods/session-change-event.js";
+import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
 import type { WorkerPlacementSessionWorkCancellation } from "./server-worker-placement-cancel.js";
 import {
   createGatewayWorkerPlacementChangePublisher,
@@ -52,12 +53,14 @@ import type { WorkerDevicePlacementRequirementResolver } from "./worker-environm
 import { createWorkerPlacementDispatchService } from "./worker-environments/placement-dispatch.js";
 import { createWorkerPlacementIdleSweep } from "./worker-environments/placement-idle-sweep.js";
 import { createWorkerPlacementRunnerAvailabilityReader } from "./worker-environments/placement-projector.js";
-import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
+import type {
+  WorkerSessionPlacementIdentity,
+  WorkerSessionPlacementRecord,
+} from "./worker-environments/placement-record.js";
 import { createPlacementSessionRetirement } from "./worker-environments/placement-session-retirement.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { createRepositoryWorkspaceMutationService } from "./worker-environments/repository-workspace-mutation.js";
 import type { WorkerEnvironmentService } from "./worker-environments/service.js";
-import type { WorkerSessionWorkspace } from "./worker-environments/session-workspace.js";
 import { createWorkerPlacementRedispatch } from "./worker-environments/worker-placement-redispatch.js";
 import type { WorkerTurnPartialIdentity } from "./worker-environments/worker-turn-failure.js";
 import { createWorkerSessionTurnPlacementProvider } from "./worker-environments/worker-turn-launcher.js";
@@ -162,27 +165,16 @@ export function createGatewayWorkerPlacementRuntime(
     persistAbandonedPartial: params.persistAbandonedPartial,
     revokeSessionAuthority: params.revokeSessionAuthority,
   });
-  const resolveWorkspace = async ({
-    sessionId,
-    sessionKey,
-    agentId,
-  }: {
-    sessionId: string;
-    sessionKey: string;
-    agentId: string;
-  }): Promise<WorkerSessionWorkspace> => {
+  const resolveWorkspace = async (identity: WorkerSessionPlacementIdentity) => {
     const sessionRuntime = await loadWorkerPlacementSessionRuntimeModule();
     using resolved = await resolveWorkerPlacementSessionTarget({
       sessionRuntime,
       config: getRuntimeConfig(),
-      sessionId,
-      sessionKey,
-      agentId,
-      errorMessage: `Session ${sessionKey} dispatch requires a session-owned workspace`,
+      ...identity,
+      errorMessage: `Session ${identity.sessionKey} dispatch requires a session-owned workspace`,
     });
-    const { workspace, assertCurrent } = resolved;
-    assertCurrent(getRuntimeConfig());
-    return workspace;
+    resolved.assertCurrent(getRuntimeConfig());
+    return resolved.workspace;
   };
   const resolveDevicePlacementRequirement: WorkerDevicePlacementRequirementResolver = async (
     identity,
@@ -397,6 +389,7 @@ export function createGatewayWorkerPlacementRuntime(
     persistAbandonedPartial: params.persistAbandonedPartial,
   });
   const startRuntime = async (hooks: {
+    startupTrace?: GatewayStartupTrace;
     isClosePreludeStarted: () => boolean;
     registerSidecar: (sidecar: WorkerPlacementSidecar) => void;
     unregisterSidecar: (sidecar: WorkerPlacementSidecar) => void;
@@ -433,7 +426,14 @@ export function createGatewayWorkerPlacementRuntime(
     let reconciliationPhase: string | undefined;
     const reconcilePhase = (name: string, run: () => Promise<void>) => {
       reconciliationPhase = name;
-      return measureGatewayRestartTrace(`worker-placement.${name}`, run).finally(() => {
+      const measured = name.startsWith("startup.")
+        ? measureStartup(
+            hooks.startupTrace,
+            `sidecars.worker-environments.${name.slice("startup.".length)}`,
+            run,
+          )
+        : measureGatewayRestartTrace(`worker-placement.${name}`, run);
+      return measured.finally(() => {
         reconciliationPhase = undefined;
       });
     };
@@ -448,7 +448,7 @@ export function createGatewayWorkerPlacementRuntime(
     const trackOperation = (
       key: "reconcile" | "disk-space" | "auto-suspend",
       current: Promise<void>,
-      failureMessage: string,
+      failureMessage?: string,
     ): Promise<void> => {
       operations.set(key, current);
       const clearCurrent = () => {
@@ -457,7 +457,9 @@ export function createGatewayWorkerPlacementRuntime(
         }
       };
       void current.then(clearCurrent, (error: unknown) => {
-        params.warn(`${failureMessage}: ${formatErrorMessage(error)}`);
+        if (failureMessage) {
+          params.warn(`${failureMessage}: ${formatErrorMessage(error)}`);
+        }
         clearCurrent();
       });
       return current;
@@ -619,7 +621,11 @@ export function createGatewayWorkerPlacementRuntime(
       return null;
     };
     try {
-      await githubPublicationReady;
+      await measureStartup(
+        hooks.startupTrace,
+        "sidecars.worker-environments.github-ready",
+        () => githubPublicationReady,
+      );
       // Track startup reconciliation in the placement slot so a concurrent
       // close prelude drains it before uninstalling guards and stopping environments.
       for (const reconcile of [
@@ -638,15 +644,7 @@ export function createGatewayWorkerPlacementRuntime(
           }
         },
       ]) {
-        const current = reconcile();
-        operations.set("reconcile", current);
-        try {
-          await current;
-        } finally {
-          if (operations.get("reconcile") === current) {
-            operations.delete("reconcile");
-          }
-        }
+        await trackOperation("reconcile", reconcile());
         if (isStopping() || hooks.isClosePreludeStarted()) {
           return await stopBeforeReady();
         }
