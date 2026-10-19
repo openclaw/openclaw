@@ -162,10 +162,8 @@ function createDeepgramRealtimeTranscriptionSession(
     (left && right ? `${left} ${right}` : left || right).replace(/\s+/g, " ").trim();
 
   const clearFinalizeFallback = () => {
-    if (finalizeFallbackTimer) {
-      clearTimeout(finalizeFallbackTimer);
-      finalizeFallbackTimer = undefined;
-    }
+    clearTimeout(finalizeFallbackTimer);
+    finalizeFallbackTimer = undefined;
   };
 
   const clearTurn = () => {
