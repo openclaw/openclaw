@@ -10,33 +10,32 @@ import {
   importPluginStateEntriesForDoctorForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor-migrations";
-import { stateMigrations } from "./doctor-contract-api.js";
 import type { MatrixStoredCredentialRecord } from "./src/matrix/credentials-state.js";
 
-export function createContext(env?: NodeJS.ProcessEnv): PluginDoctorStateMigrationContext {
+export function createContext(
+  env?: NodeJS.ProcessEnv,
+  inheritStoreEnv = true,
+): PluginDoctorStateMigrationContext {
   return {
     getPluginStateCapacity: () => getPluginStateCapacityForTests("matrix", env),
     importPluginStateEntries: (options, entries) =>
       importPluginStateEntriesForDoctorForTests("matrix", options, entries),
     openPluginStateKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
-      createPluginStateKeyedStoreForTests<T>("matrix", { ...options, env: options.env ?? env }),
+      createPluginStateKeyedStoreForTests<T>("matrix", {
+        ...options,
+        env: options.env ?? (inheritStoreEnv ? env : undefined),
+      }),
   };
 }
 
 export function createMigrationParams(stateDir: string, inheritStoreEnv = true) {
-  const env = { OPENCLAW_STATE_DIR: stateDir };
+  const env: NodeJS.ProcessEnv = { OPENCLAW_STATE_DIR: stateDir };
   return {
     config: {} as OpenClawConfig,
     env,
     stateDir,
     oauthDir: path.join(stateDir, "oauth"),
-    context: {
-      ...createContext(env),
-      ...(!inheritStoreEnv && {
-        openPluginStateKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
-          createPluginStateKeyedStoreForTests<T>("matrix", options),
-      }),
-    },
+    context: createContext(env, inheritStoreEnv),
   };
 }
 
@@ -97,12 +96,24 @@ export function createLegacyDatabase(databasePath: string) {
   return db;
 }
 
-export function migrationById(id: string) {
+export async function migrationById(id: string) {
+  const { stateMigrations } = await import("./doctor-contract-api.js");
   const migration = stateMigrations.find((entry) => entry.id === id);
   if (!migration) {
     throw new Error(`missing migration ${id}`);
   }
   return migration;
+}
+
+export function dedupeMigrationResult(roots: string[], imported: number, total = imported) {
+  return {
+    changes: [
+      `Migrated Matrix inbound dedupe markers to the claimable dedupe store (${imported} of ${total} entries)`,
+      ...roots.map((root) => `Retired Matrix inbound dedupe rows for ${root}`),
+      `Recorded Matrix inbound dedupe migration completion (${roots.length} SQLite roots scanned)`,
+    ],
+    warnings: [],
+  };
 }
 
 export function writeSqliteDedupeSource(
@@ -127,18 +138,21 @@ export function writeSqliteDedupeSource(
   return databasePath;
 }
 
+export function syncCachePayload(nextBatch: string, cleanShutdown = true) {
+  return {
+    version: 1,
+    savedSync: {
+      nextBatch,
+      accountData: [],
+      roomsData: { join: {}, invite: {}, leave: {}, knock: {} },
+    },
+    cleanShutdown,
+  };
+}
+
 export function writeLegacySyncCache(storageRootDir: string, nextBatch: string): void {
-  fs.mkdirSync(storageRootDir, { recursive: true });
-  fs.writeFileSync(
+  writeSource(
     path.join(storageRootDir, "bot-storage.json"),
-    JSON.stringify({
-      version: 1,
-      savedSync: {
-        nextBatch,
-        accountData: [],
-        roomsData: { join: {}, invite: {}, leave: {}, knock: {} },
-      },
-      cleanShutdown: true,
-    }),
+    JSON.stringify(syncCachePayload(nextBatch)),
   );
 }

@@ -7,6 +7,7 @@ import {
   migrationById,
   accountStorageRoot,
   createMigrationParams as migrationParams,
+  dedupeMigrationResult,
   writeLegacySyncCache,
   writeSqliteDedupeSource,
 } from "./doctor-contract-api.test-support.js";
@@ -56,15 +57,6 @@ function trackVisitedDirectories(): string[] {
   return visitedDirs;
 }
 
-function expectRootNotVisited(visitedDirs: string[], storageRootDir: string): void {
-  const root = path.resolve(storageRootDir);
-  expect(
-    visitedDirs.some(
-      (visitedDir) => visitedDir === root || visitedDir.startsWith(`${root}${path.sep}`),
-    ),
-  ).toBe(false);
-}
-
 describe("matrix doctor archive scan boundaries", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -78,93 +70,79 @@ describe("matrix doctor archive scan boundaries", () => {
     resetPluginStateStoreForTests();
   });
 
-  it("keeps archive-like account IDs active while excluding token-root archives", async () => {
-    const stateDir = tempDirs.make("openclaw-matrix-doctor-");
-    const { activeRoots, excludedRoots } = createStateRoots(stateDir);
-    for (const [index, storageRootDir] of [...activeRoots, ...excludedRoots].entries()) {
-      writeLegacySyncCache(storageRootDir, `legacy-token-${index}`);
-    }
-
-    const visitedDirs = trackVisitedDirectories();
-
-    const migration = migrationById("matrix-sync-cache-json-to-plugin-state");
-    await expect(migration.detectLegacyState(createMigrationParams(stateDir))).resolves.toEqual({
-      preview: activeRoots.map(
-        (storageRootDir) => `Matrix sync cache JSON can migrate to SQLite: ${storageRootDir}`,
-      ),
-    });
-    const result = await migration.migrateLegacyState(createMigrationParams(stateDir));
-
-    expect(result.warnings).toEqual([]);
-    expect(result.changes).toHaveLength(activeRoots.length * 2);
-    for (const [index, storageRootDir] of activeRoots.entries()) {
-      const store = await SqliteBackedMatrixSyncStore.create(storageRootDir);
-      await expect(store.getSavedSyncToken()).resolves.toBe(`legacy-token-${index}`);
-      expect(fs.existsSync(path.join(storageRootDir, "bot-storage.json"))).toBe(false);
-      expect(fs.existsSync(path.join(storageRootDir, "bot-storage.json.migrated"))).toBe(true);
-    }
-    for (const storageRootDir of excludedRoots) {
-      expect(fs.existsSync(path.join(storageRootDir, "bot-storage.json"))).toBe(true);
-      expectRootNotVisited(visitedDirs, storageRootDir);
-    }
-  });
-
-  it("imports dedupe state for archive-like account IDs without opening token archives", async () => {
-    const stateDir = tempDirs.make("openclaw-matrix-doctor-");
-    const { activeRoots, excludedRoots } = createStateRoots(stateDir);
-    const now = Date.now();
-    for (const [index, storageRootDir] of activeRoots.entries()) {
-      writeSqliteDedupeSource(
-        storageRootDir,
-        index === 0 ? "sync-cache-backup" : "legacy",
-        `$active-${index}`,
-        now - 60_000,
+  it.each(["sync-cache", "inbound-dedupe"] as const)(
+    "migrates %s for archive-like account IDs without opening archives",
+    async (kind) => {
+      const stateDir = tempDirs.make("openclaw-matrix-doctor-");
+      const { activeRoots, excludedRoots } = createStateRoots(stateDir);
+      const now = Date.now();
+      const accounts = ["sync-cache-backup", "legacy"];
+      const sentinel = "archived SQLite sentinel must not be opened";
+      const filename = kind === "sync-cache" ? "bot-storage.json" : "inbound-dedupe.json";
+      if (kind === "sync-cache") {
+        [...activeRoots, ...excludedRoots].forEach((root, i) =>
+          writeLegacySyncCache(root, `legacy-token-${i}`),
+        );
+      } else {
+        activeRoots.forEach((root, i) =>
+          writeSqliteDedupeSource(
+            root,
+            i === 0 ? "sync-cache-backup" : "legacy",
+            `$active-${i}`,
+            now - 60_000,
+          ),
+        );
+        for (const root of excludedRoots) {
+          fs.mkdirSync(path.join(root, "state"), { recursive: true });
+          fs.writeFileSync(path.join(root, "state", "openclaw.sqlite"), sentinel);
+          fs.writeFileSync(path.join(root, filename), "{}");
+        }
+      }
+      const visitedDirs = trackVisitedDirectories();
+      const migration = await migrationById(
+        kind === "sync-cache"
+          ? "matrix-sync-cache-json-to-plugin-state"
+          : "matrix-inbound-dedupe-to-claimable-dedupe",
       );
-    }
-    for (const storageRootDir of excludedRoots) {
-      fs.mkdirSync(path.join(storageRootDir, "state"), { recursive: true });
-      fs.writeFileSync(
-        path.join(storageRootDir, "state", "openclaw.sqlite"),
-        "archived SQLite sentinel must not be opened",
-      );
-      fs.writeFileSync(
-        path.join(storageRootDir, "inbound-dedupe.json"),
-        JSON.stringify({
-          version: 1,
-          entries: [{ key: "!room:example.org|$archived", ts: now - 60_000 }],
-        }),
-      );
-    }
-
-    const visitedDirs = trackVisitedDirectories();
-
-    const result = await migrationById(
-      "matrix-inbound-dedupe-to-claimable-dedupe",
-    ).migrateLegacyState(createMigrationParams(stateDir));
-
-    expect(result.warnings).toEqual([]);
-    expect(result.changes).toEqual([
-      "Migrated Matrix inbound dedupe markers to the claimable dedupe store (2 of 2 entries)",
-      ...activeRoots.map(
-        (storageRootDir) => `Retired Matrix inbound dedupe rows for ${storageRootDir}`,
-      ),
-      "Recorded Matrix inbound dedupe migration completion (2 SQLite roots scanned)",
-    ]);
-    for (const [index, accountId] of ["sync-cache-backup", "legacy"].entries()) {
-      const deduper = createMatrixInboundEventDeduper({
-        auth: { accountId },
-        env: { OPENCLAW_STATE_DIR: stateDir },
-      });
-      await expect(
-        deduper.claim({ roomId: "!room:example.org", eventId: `$active-${index}` }),
-      ).resolves.toEqual({ kind: "duplicate" });
-    }
-    for (const storageRootDir of excludedRoots) {
-      expect(fs.existsSync(path.join(storageRootDir, "inbound-dedupe.json"))).toBe(true);
-      expect(fs.readFileSync(path.join(storageRootDir, "state", "openclaw.sqlite"), "utf8")).toBe(
-        "archived SQLite sentinel must not be opened",
-      );
-      expectRootNotVisited(visitedDirs, storageRootDir);
-    }
-  });
+      const params = createMigrationParams(stateDir);
+      if (kind === "sync-cache") {
+        await expect(migration.detectLegacyState(params)).resolves.toEqual({
+          preview: activeRoots.map(
+            (root) => `Matrix sync cache JSON can migrate to SQLite: ${root}`,
+          ),
+        });
+      }
+      const result = await migration.migrateLegacyState(params);
+      expect(result.warnings).toEqual([]);
+      if (kind === "sync-cache") {
+        expect(result.changes).toHaveLength(activeRoots.length * 2);
+        for (const [i, root] of activeRoots.entries()) {
+          const store = await SqliteBackedMatrixSyncStore.create(root);
+          await expect(store.getSavedSyncToken()).resolves.toBe(`legacy-token-${i}`);
+          expect(fs.existsSync(path.join(root, filename))).toBe(false);
+          expect(fs.existsSync(path.join(root, `${filename}.migrated`))).toBe(true);
+        }
+      } else {
+        expect(result.changes).toEqual(dedupeMigrationResult(activeRoots, 2).changes);
+        for (const [i, accountId] of accounts.entries()) {
+          const deduper = createMatrixInboundEventDeduper({ auth: { accountId }, env: params.env });
+          await expect(
+            deduper.claim({ roomId: "!room:example.org", eventId: `$active-${i}` }),
+          ).resolves.toEqual({ kind: "duplicate" });
+        }
+      }
+      for (const root of excludedRoots) {
+        expect(fs.existsSync(path.join(root, filename))).toBe(true);
+        if (kind === "inbound-dedupe") {
+          expect(fs.readFileSync(path.join(root, "state", "openclaw.sqlite"), "utf8")).toBe(
+            sentinel,
+          );
+        }
+        const resolved = path.resolve(root);
+        expect(
+          visitedDirs.some((dir) => dir === resolved || dir.startsWith(`${resolved}${path.sep}`)),
+        ).toBe(false);
+      }
+    },
+  );
 });

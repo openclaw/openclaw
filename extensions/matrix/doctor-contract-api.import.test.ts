@@ -1,15 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
-import type {
-  OpenAsyncKeyedStoreOptions,
-  OpenKeyedStoreOptions,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
-import {
-  createPluginStateKeyedStoreForTests,
-  createPluginStateKeyedStoreV2ForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { createPluginStateKeyedStoreV2ForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import {
+  accountStorageRoot,
+  createContext,
+  createMigrationParams,
+  migrationById,
+  syncCachePayload,
+} from "./doctor-contract-api.test-support.js";
 import {
   openMatrixSyncCacheStoreOptions,
   writeMatrixSyncCacheStateToStore,
@@ -22,54 +23,34 @@ import {
 import { getMatrixRuntime } from "./src/runtime.js";
 import { useAutoCleanupTempDirTracker } from "./test-support.js";
 
-// Exercise real empty-state operations without materializing client runtimes.
-vi.mock("matrix-js-sdk/lib/matrix.js", () => {
-  throw new Error("Matrix SDK loaded by a Doctor migration");
+const failImport = vi.hoisted(() => (name: string): never => {
+  throw new Error(`${name} loaded by a Doctor migration`);
 });
-vi.mock("fake-indexeddb", () => {
-  throw new Error("IndexedDB runtime loaded by a Doctor migration");
-});
-vi.mock("openclaw/plugin-sdk/doctor-repair-runtime", () => {
-  throw new Error("Schema repair runtime loaded without an account database");
-});
-vi.mock("./src/matrix/client/storage.js", () => {
-  throw new Error("Client storage loaded by an absent-state Doctor migration");
-});
-vi.mock("./src/account-selection.js", () => {
-  throw new Error("Account topology loaded without legacy credential sources");
-});
+vi.mock("matrix-js-sdk/lib/matrix.js", () => failImport("Matrix SDK"));
+vi.mock("fake-indexeddb", () => failImport("IndexedDB"));
+vi.mock("openclaw/plugin-sdk/doctor-repair-runtime", () => failImport("Schema repair"));
+vi.mock("./src/matrix/client/storage.js", () => failImport("Client storage"));
+vi.mock("./src/account-selection.js", () => failImport("Account topology"));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function accountRoot(stateDir: string, token = "0123456789abcdef") {
-  return path.join(stateDir, "matrix", "accounts", "ops", "matrix.example.org__bot", token);
-}
-
-function migrationParams(stateDir: string, openPluginStateKeyedStore: OpenStore) {
-  return {
-    config: {},
-    env: { HOME: stateDir, OPENCLAW_STATE_DIR: stateDir },
-    stateDir,
-    oauthDir: path.join(stateDir, "oauth"),
-    context: { openPluginStateKeyedStore },
+let stateDir: string;
+let params: ReturnType<typeof createMigrationParams>;
+beforeEach(() => {
+  stateDir = tempDirs.make("matrix-doctor-import-");
+  params = createMigrationParams(stateDir);
+  params.env = { ...params.env, HOME: stateDir };
+  params.context = {
+    openPluginStateKeyedStore: vi.fn(() => {
+      throw new Error("absent or retired state must not open a store");
+    }),
   };
-}
+});
 
-type OpenStore = <T>(
-  options: OpenKeyedStoreOptions,
-) => ReturnType<typeof createPluginStateKeyedStoreForTests<T>>;
-
-async function migrationById(id: string) {
-  const { stateMigrations } = await import("./doctor-contract-api.js");
-  const migration = stateMigrations.find((entry) => entry.id === id);
-  if (!migration) {
-    throw new Error(`Missing migration: ${id}`);
-  }
-  return migration;
+function accountRoot(token = "0123456789abcdef") {
+  return accountStorageRoot(stateDir, "ops", token);
 }
 
 it("refuses retired JSON state without changing it or inspecting token-root archives", async () => {
-  const stateDir = tempDirs.make("matrix-retired-state-");
   const filenames = [
     "thread-bindings.json",
     "startup-verification.json",
@@ -80,23 +61,17 @@ it("refuses retired JSON state without changing it or inspecting token-root arch
     "inbound-dedupe.json",
   ];
   const matrixRoot = path.join(stateDir, "matrix");
-  const sources = [
-    matrixRoot,
-    path.join(matrixRoot, "accounts", "default"),
-    accountRoot(stateDir),
-  ].flatMap((root) => filenames.map((filename) => path.join(root, filename)));
+  const sources = [matrixRoot, path.join(matrixRoot, "accounts", "default"), accountRoot()].flatMap(
+    (root) => filenames.map((filename) => path.join(root, filename)),
+  );
   const archives = filenames.map((filename) =>
-    path.join(accountRoot(stateDir, "sync-cache-backup"), filename),
+    path.join(accountRoot("sync-cache-backup"), filename),
   );
   for (const file of [...sources, ...archives]) {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, '{"retained":true}\n');
   }
   const migration = await migrationById("matrix-account-sqlite-schema");
-  const openPluginStateKeyedStore = vi.fn(() => {
-    throw new Error("retired state must not open a store");
-  });
-  const params = migrationParams(stateDir, openPluginStateKeyedStore);
   for (const run of [migration.detectLegacyState, migration.migrateLegacyState]) {
     const result = run(params);
     await expect(result).rejects.toThrow("Install OpenClaw 2026.9.5");
@@ -107,18 +82,13 @@ it("refuses retired JSON state without changing it or inspecting token-root arch
       await expect(result).rejects.not.toThrow(archive);
     }
   }
-  expect(openPluginStateKeyedStore).not.toHaveBeenCalled();
+  expect(params.context.openPluginStateKeyedStore).not.toHaveBeenCalled();
   for (const file of [...sources, ...archives]) {
     expect(fs.readFileSync(file, "utf8")).toBe('{"retained":true}\n');
   }
 });
 
 it("completes absent legacy-state checks without loading client runtimes", async () => {
-  const stateDir = tempDirs.make("openclaw-matrix-doctor-import-");
-  const openPluginStateKeyedStore = vi.fn(() => {
-    throw new Error("absent legacy sources must not open a state store");
-  });
-  const params = migrationParams(stateDir, openPluginStateKeyedStore);
   for (const id of [
     "matrix-account-sqlite-schema",
     "matrix-crypto-unsafe-state",
@@ -141,14 +111,13 @@ it("completes absent legacy-state checks without loading client runtimes", async
   fs.writeFileSync(path.join(credentialsDir, "unrelated.json"), "{}");
   fs.mkdirSync(path.join(credentialsDir, "credentials-ops.json"));
   await expect(credentials.detectLegacyState(params)).resolves.toBeNull();
-  expect(openPluginStateKeyedStore).not.toHaveBeenCalled();
+  expect(params.context.openPluginStateKeyedStore).not.toHaveBeenCalled();
 });
 
 it.each([true, false])(
   "inspects populated canonical state through the Doctor context without initializing Matrix (guard present: %s)",
   async (guardPresent) => {
-    const stateDir = tempDirs.make("matrix-doctor-canonical-");
-    const root = accountRoot(stateDir);
+    const root = accountRoot();
     const generation = "0123456789abcdef0123456789abcdef";
     const marker = path.join(root, "crypto-idb-snapshot.json.owner.poisoned");
     const stateRuntime = {
@@ -162,22 +131,13 @@ it.each([true, false])(
       stateRuntime,
     });
     await sealMatrixIdbSnapshotOwnerGeneration(root, generation, stateRuntime);
-    const openPluginStateKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
-      createPluginStateKeyedStoreForTests<T>("matrix", options);
+    const { openPluginStateKeyedStore } = createContext();
     const snapshotStore = openPluginStateKeyedStore(openMatrixIdbSnapshotStoreOptions(root));
     const syncStore = openPluginStateKeyedStore(openMatrixSyncCacheStoreOptions(root));
     await writeMatrixSyncCacheStateToStore({
       storageRootDir: root,
       store: syncStore,
-      payload: {
-        version: 1,
-        cleanShutdown: false,
-        savedSync: {
-          nextBatch: "retained-cursor",
-          accountData: [],
-          roomsData: { join: {}, invite: {}, leave: {}, knock: {} },
-        },
-      },
+      payload: syncCachePayload("retained-cursor", false),
     });
     if (guardPresent) {
       fs.writeFileSync(marker, `${generation}\n`);
@@ -186,23 +146,20 @@ it.each([true, false])(
     const syncBefore = await syncStore.entries();
     expect(() => getMatrixRuntime()).toThrow("Matrix runtime not initialized");
     const migration = await migrationById("matrix-crypto-unsafe-state");
-    const params = migrationParams(stateDir, openPluginStateKeyedStore);
+    params.context = { openPluginStateKeyedStore };
     try {
       const detected = await migration.detectLegacyState(params);
       const migrated = await migration.migrateLegacyState(params);
-      if (guardPresent) {
-        expect(detected).toBeNull();
-        expect(migrated).toEqual({ changes: [], warnings: [] });
-      } else {
-        expect(detected?.preview).toEqual([expect.stringContaining(root)]);
-        expect(migrated).toEqual({ changes: [], warnings: [expect.stringContaining(root)] });
-      }
+      expect(detected).toEqual(guardPresent ? null : { preview: [expect.stringContaining(root)] });
+      expect(migrated).toEqual({
+        changes: [],
+        warnings: guardPresent ? [] : [expect.stringContaining(root)],
+      });
       expect(await snapshotStore.entries()).toEqual(snapshotBefore);
       expect(await syncStore.entries()).toEqual(syncBefore);
-      expect(fs.existsSync(marker)).toBe(guardPresent);
-      if (guardPresent) {
-        expect(fs.readFileSync(marker, "utf8")).toBe(`${generation}\n`);
-      }
+      expect(fs.existsSync(marker) ? fs.readFileSync(marker, "utf8") : null).toBe(
+        guardPresent ? `${generation}\n` : null,
+      );
       expect(() => getMatrixRuntime()).toThrow("Matrix runtime not initialized");
     } finally {
       await closeOpenClawStateDatabaseAsync();
