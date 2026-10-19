@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as gatewayWork from "../process/gateway-work-admission.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { withAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
 import {
   createGatewaySchedulerClock,
@@ -65,28 +66,48 @@ afterEach(async () => {
   gatewayWork.resetGatewayWorkAdmission();
 });
 
-it("runs retention while another agent is still preparing its database", async () => {
-  await withAgentDatabaseStartupAdmission(async (admission) => {
-    const preparation = createDeferredCore();
-    admission.track(preparation.promise);
-    startCronMaintenance(scheduler, () => "/synthetic/cron/jobs.json");
-    const tick = clock.advanceBy(5_000);
-    try {
-      expect(mocks.history).toHaveBeenCalledOnce();
-      await tick;
-      expect(mocks.registry).toHaveBeenCalledOnce();
-      expect(mocks.warn).not.toHaveBeenCalled();
-      expect(mocks.error).not.toHaveBeenCalled();
-      expect(scheduler.nextWakeAtMs).toBeNull();
-      await clock.advanceBy(60_000);
-      expect(mocks.history).toHaveBeenCalledOnce();
-      expect(mocks.registry).toHaveBeenCalledOnce();
-    } finally {
-      preparation.resolve();
-      await tick;
-    }
-  });
-});
+it.each([
+  { pending: false, notification: "none" },
+  { pending: true, notification: "none" },
+  { pending: true, notification: "agent" },
+  { pending: true, notification: "history" },
+])(
+  "runs healthy retention independently, pending=$pending, notification=$notification",
+  async ({ pending, notification }) => {
+    await withAgentDatabaseStartupAdmission(async (admission) => {
+      const preparation = createDeferredCore();
+      startCronMaintenance(scheduler, () => "/synthetic/cron/jobs.json");
+      // Preparation discovered after scheduling must not hold healthy retention either.
+      if (pending) {
+        admission.track(preparation.promise);
+      }
+      runInDetachedAsyncContext(() => {
+        if (notification === "agent") {
+          sessionChanges.emit({ all: true, scope: { agentId: "ready-agent", topology: true } });
+        } else if (notification === "history") {
+          mocks.historyChanged?.("/synthetic/state.sqlite");
+        }
+      });
+      const tick = clock.advanceBy(5_000);
+      try {
+        expect(mocks.history).toHaveBeenCalledOnce();
+        await tick;
+        expect(mocks.history).toHaveBeenCalledOnce();
+        expect(mocks.registry).toHaveBeenCalledOnce();
+        expect(mocks.warn).not.toHaveBeenCalled();
+        expect(mocks.error).not.toHaveBeenCalled();
+        expect(scheduler.nextWakeAtMs).toBeNull();
+        await clock.advanceBy(60_000);
+        expect(mocks.history).toHaveBeenCalledOnce();
+        expect(mocks.registry).toHaveBeenCalledOnce();
+        expect(mocks.info).not.toHaveBeenCalled();
+      } finally {
+        preparation.resolve();
+        await tick;
+      }
+    });
+  },
+);
 
 it("sleeps until the retained session deadline when history is empty", async () => {
   mocks.registry.mockResolvedValueOnce({ nextSweepAtMs: 70_000 });
