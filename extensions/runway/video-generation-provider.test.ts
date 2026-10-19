@@ -56,6 +56,18 @@ function mockSuccessfulTask(
   fetchWithTimeoutMock.mockResolvedValueOnce(video);
 }
 
+function expectCreate(body: unknown, endpoint = "text_to_video") {
+  expect(postJsonRequestMock).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ url: `https://api.dev.runwayml.com/v1/${endpoint}`, body }),
+  );
+}
+
+function providerConfig(
+  apiKey: string | { source: "file"; provider: string; id: string },
+): OpenClawConfig {
+  return { models: { providers: { runway: { baseUrl: "", models: [], apiKey } } } };
+}
+
 describe("runway video generation provider", () => {
   it("rejects a duration that rounds to zero before submission", async () => {
     await expect(generateVideo({ durationSeconds: 0.4 })).rejects.toThrow(
@@ -107,23 +119,18 @@ describe("runway video generation provider", () => {
     });
   });
 
-  it("submits a text-to-video task, polls it, and downloads the output", async () => {
+  it("defaults a fractional duration, submits and polls a text task, and downloads it", async () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
     try {
       mockSuccessfulTask();
-      const result = await generateVideo({ durationSeconds: 4, aspectRatio: "16:9" });
+      const result = await generateVideo({ durationSeconds: 4.5, aspectRatio: "16:9" });
 
-      expect(postJsonRequestMock).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          url: "https://api.dev.runwayml.com/v1/text_to_video",
-          body: {
-            model: "gen4.5",
-            promptText: "a tiny lobster DJ under neon lights",
-            ratio: "1280:720",
-            duration: 4,
-          },
-        }),
-      );
+      expectCreate({
+        model: "gen4.5",
+        promptText: "a tiny lobster DJ under neon lights",
+        ratio: "1280:720",
+        duration: 5,
+      });
       expect(fetchWithTimeoutMock).toHaveBeenNthCalledWith(
         1,
         "https://api.dev.runwayml.com/v1/tasks/task-1",
@@ -153,25 +160,8 @@ describe("runway video generation provider", () => {
   });
 
   it("authenticates video generation with a resolved file SecretRef provider overlay", async () => {
-    const sourceConfig: OpenClawConfig = {
-      models: {
-        providers: {
-          runway: {
-            baseUrl: "",
-            models: [],
-            apiKey: { source: "file", provider: "x", id: "/runway" },
-          },
-        },
-      },
-    };
-    setRuntimeConfigSnapshot(
-      {
-        models: {
-          providers: { runway: { baseUrl: "", models: [], apiKey: "runway-resolved-test-key" } },
-        },
-      },
-      sourceConfig,
-    );
+    const sourceConfig = providerConfig({ source: "file", provider: "x", id: "/runway" });
+    setRuntimeConfigSnapshot(providerConfig("runway-resolved-test-key"), sourceConfig);
     const providerAuth = await import("openclaw/plugin-sdk/provider-auth-runtime");
     const realAuth = await vi.importActual<
       typeof import("openclaw/plugin-sdk/provider-auth-runtime")
@@ -205,15 +195,6 @@ describe("runway video generation provider", () => {
     ).rejects.toThrow("Runway generated video download exceeds 1 bytes");
   });
 
-  it("does not round malformed duration values into create requests", async () => {
-    mockSuccessfulTask();
-    await generateVideo({ durationSeconds: 4.5, aspectRatio: "16:9" });
-
-    expect(postJsonRequestMock).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ body: expect.objectContaining({ duration: 5 }) }),
-    );
-  });
-
   it("accepts local image buffers by converting them into data URIs", async () => {
     mockSuccessfulTask();
     await generateVideo({
@@ -224,15 +205,13 @@ describe("runway video generation provider", () => {
       durationSeconds: 6,
     });
 
-    expect(postJsonRequestMock).toHaveBeenCalledExactlyOnceWith(
+    expectCreate(
       expect.objectContaining({
-        url: "https://api.dev.runwayml.com/v1/image_to_video",
-        body: expect.objectContaining({
-          promptImage: "data:image/png;base64,cG5nLWJ5dGVz",
-          ratio: "960:960",
-          duration: 6,
-        }),
+        promptImage: "data:image/png;base64,cG5nLWJ5dGVz",
+        ratio: "960:960",
+        duration: 6,
       }),
+      "image_to_video",
     );
   });
 
@@ -256,24 +235,18 @@ describe("runway video generation provider", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it("rejects status responses missing a task status", async () => {
-    mockTaskResponse({ id: "task-1", output: ["https://example.com/out.mp4"] });
-
-    await expect(generateVideo()).rejects.toThrow(
-      "Runway video status response missing task status",
-    );
-  });
-
-  it("rejects malformed completed output URLs", async () => {
-    mockTaskResponse({
-      id: "task-1",
-      status: "SUCCEEDED",
-      output: "https://example.com/out.mp4",
-    });
-
-    await expect(generateVideo()).rejects.toThrow(
-      "Runway video generation completed with malformed output URLs",
-    );
+  it.each([
+    {
+      payload: { id: "task-1", output: ["https://example.com/out.mp4"] },
+      error: "Runway video status response missing task status",
+    },
+    {
+      payload: { id: "task-1", status: "SUCCEEDED", output: "https://example.com/out.mp4" },
+      error: "Runway video generation completed with malformed output URLs",
+    },
+  ])("rejects invalid task response: $error", async ({ payload, error }) => {
+    mockTaskResponse(payload);
+    await expect(generateVideo()).rejects.toThrow(error);
   });
 });
 
