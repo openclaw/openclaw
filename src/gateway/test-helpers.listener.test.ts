@@ -14,6 +14,7 @@ import { startGatewayServerHarness } from "./server.e2e-ws-harness.js";
 import type { GatewayServer } from "./server.js";
 import { reserveGatewayTestListener, startClaimedGateway } from "./test-helpers.listener.js";
 
+const offsets = [0, 1, 2, 3, 4];
 const observed = vi.hoisted(() => ({
   server: vi.fn<(claim: TestPortClaim) => Promise<GatewayServer>>(),
   adopted: vi.fn<(listener: Server | undefined) => void>(),
@@ -88,9 +89,7 @@ async function listen(server: TcpServer, port: number): Promise<void> {
 
 async function closeListener(server: TcpServer | undefined): Promise<void> {
   if (server?.listening) {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
+    await server[Symbol.asyncDispose]();
   }
 }
 
@@ -105,13 +104,10 @@ it("prevents an unclaimed listener from stealing the Gateway startup socket", as
   const entered = createDeferred<TestPortClaim>();
   const proceed = createDeferred();
   const competitor = createServer();
-  let selected: TestPortClaim | undefined;
   let reclaimed: TestPortClaim | undefined;
-  let starting: ReturnType<typeof startGatewayServerHarness> | undefined;
   observed.adopted.mockClear();
   observed.server.mockImplementation((claim) =>
     startClaimedGateway(claim, async () => {
-      selected = claim;
       entered.resolve(claim);
       await proceed.promise;
       // The real reservation dispatcher hands its bound socket to this transport seam.
@@ -120,10 +116,10 @@ it("prevents an unclaimed listener from stealing the Gateway startup socket", as
     }),
   );
 
+  const starting = startGatewayServerHarness();
+  void starting.catch(() => {});
   await runQaGatewayFixture(
     async () => {
-      starting = startGatewayServerHarness();
-      void starting.catch(() => {});
       const claim = await Promise.race([
         entered.promise,
         starting.then(() => {
@@ -138,17 +134,16 @@ it("prevents an unclaimed listener from stealing the Gateway startup socket", as
       expect(harness.port).toBe(claim.port);
 
       await harness.close();
-      reclaimed = await acquireTestPortBlock({ port: claim.port, offsets: [0, 1, 2, 3, 4] });
+      reclaimed = await acquireTestPortBlock({ port: claim.port, offsets });
     },
     () => proceed.resolve(),
-    () =>
-      starting?.then(
-        (harness) => harness.close(),
-        () => {},
-      ),
+    async () => {
+      const harness = await starting.catch(() => undefined);
+      await harness?.close();
+    },
     () => closeListener(competitor),
     () => closeListener(observed.adopted.mock.lastCall?.[0]),
-    () => selected?.release(),
+    () => observed.server.mock.lastCall?.[0].release(),
     () => reclaimed?.release(),
     () => env.restore(),
     () => observed.server.mockReset(),
@@ -158,10 +153,7 @@ it("prevents an unclaimed listener from stealing the Gateway startup socket", as
 
 it("releases a settled Gateway claim while its port still has a listener", async () => {
   const competitor = createServer();
-  const { claim } = await reserveTestPortListener({
-    offsets: [0, 1, 2, 3, 4],
-    createListener: () => competitor,
-  });
+  const { claim } = await reserveTestPortListener({ offsets, createListener: () => competitor });
   const entered = createDeferred();
   const proceed = createDeferred();
   let reclaimed: TestPortClaim | undefined;
@@ -177,15 +169,13 @@ it("releases a settled Gateway claim while its port still has a listener", async
       closing = server.close();
       await entered.promise;
       await expect(
-        acquireTestPortBlock({ port: claim.port, offsets: [0, 1, 2, 3, 4] }).then(async (early) => {
-          await early.release();
-        }),
+        acquireTestPortBlock({ port: claim.port, offsets }).then((early) => early.release()),
       ).rejects.toMatchObject({ code: "EADDRINUSE" });
       proceed.resolve();
       await closing;
       // Keep the unrelated listener bound throughout claim release; reopening a
       // closed port would let another test or an outbound socket take it first.
-      reclaimed = await acquireTestPortBlock({ port: claim.port, offsets: [0, 1, 2, 3, 4] });
+      reclaimed = await acquireTestPortBlock({ port: claim.port, offsets });
       expect(competitor.address()).toMatchObject({ address: "127.0.0.1", port: claim.port });
     },
     () => proceed.resolve(),

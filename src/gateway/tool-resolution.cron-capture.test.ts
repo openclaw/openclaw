@@ -38,11 +38,13 @@ const makeTool = (name: string, execute: AnyAgentTool["execute"]): AnyAgentTool 
   parameters: { type: "object" },
   execute,
 });
-const findTool = <T extends { name: string }>(tools: readonly T[], name: string): T =>
-  expectDefined(
+function findTool<T extends { name: string }>(tools: readonly T[], name: string): T {
+  return expectDefined(
     tools.find((tool) => tool.name === name),
-    `expected ${name} tool`,
+    name,
   );
+}
+const emptyResult = async () => ({ content: [], details: {} });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -62,15 +64,12 @@ it("keeps cached standalone plugin tools fenced by their original live grant", a
   const effect = vi.fn();
   vi.spyOn(pluginTools, "resolveOpenClawPluginToolsForOptionsAsync").mockImplementation(
     async ({ options }) => {
-      const assertCurrent = expectDefined(
-        options?.assertInvocationCurrent,
-        "standalone grant guard",
-      );
+      const assertCurrent = expectDefined(options?.assertInvocationCurrent, "grant guard");
       return [
         makeTool("probe", async () => {
           assertCurrent();
           effect();
-          return { content: [], details: {} };
+          return emptyResult();
         }),
       ];
     },
@@ -93,23 +92,14 @@ it("keeps cached standalone plugin tools fenced by their original live grant", a
   expect(effect).toHaveBeenCalledOnce();
 });
 
-it.each<
-  [
-    label: string,
-    nativeExec: boolean,
-    toolsAllow?: string[],
-    unreadableSchema?: boolean,
-    nativeRestriction?: "allow" | "deny",
-  ]
->([
-  ["inherited native", true],
-  ["finite native", true, ["exec"]],
-  ["schema-filtered MCP", false, undefined, true],
-  ["native denied", true, undefined, false, "deny"],
-  ["native excluded", true, undefined, false, "allow"],
-])(
+it.each(["inherited", "finite", "schema-filtered", "denied", "excluded"] as const)(
   "persists the %s creator authority",
-  async (_label, nativeExec, toolsAllow, unreadableSchema, nativeRestriction) => {
+  async (scenario) => {
+    const unreadableSchema = scenario === "schema-filtered";
+    const nativeExec = !unreadableSchema;
+    const toolsAllow = scenario === "finite" ? ["exec"] : undefined;
+    const nativeRestriction =
+      scenario === "denied" ? "deny" : scenario === "excluded" ? "allow" : undefined;
     const root = tempDirs.make("openclaw-cli-cron-capture-");
     const storePath = path.join(root, "cron", "jobs.json");
     const cfg: OpenClawConfig = {
@@ -134,22 +124,15 @@ it.each<
       stateDir: root,
       profiles: [
         {
-          profileId: "openai:creator-fixture",
-          credential: {
-            type: "api_key",
-            provider: "openai",
-            key: "synthetic-creator-inference-key",
-          },
+          profileId: "openai:fixture",
+          credential: { type: "api_key", provider: "openai", key: "synthetic-key" },
         },
       ],
     });
     setRuntimeConfigSnapshot(cfg);
     if (unreadableSchema) {
       // Plugin admission accepts this schema object; MCP cannot serialize it.
-      const tool = makeTool(
-        "unreadable_plugin",
-        vi.fn(async () => ({ content: [], details: {} })),
-      );
+      const tool = makeTool("unreadable_plugin", vi.fn(emptyResult));
       Object.defineProperty(tool.parameters, "properties", {
         enumerable: true,
         get: () => {
@@ -172,7 +155,6 @@ it.each<
     const context = createDirectChatContext({
       cron,
       cronStorePath: storePath,
-      getRuntimeConfig: () => cfg,
       getGatewayMethodRegistry: () => createRequestGatewayMethodRegistry(),
       validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
     });
