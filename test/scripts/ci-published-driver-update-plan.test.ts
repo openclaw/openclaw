@@ -19,11 +19,11 @@ import {
 } from "./ci-workflow.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const updateJob = () =>
-  readWorkflow(".github/workflows/ci-published-driver-update.yml").jobs.update;
-const updateStep = (name: string) => requiredWorkflowStep(updateJob().steps, name);
-const actionStep = (job: ReturnType<typeof updateJob>, action: string) =>
-  job.steps.find((step: WorkflowStep) =>
+const updateWorkflow = readWorkflow(".github/workflows/ci-published-driver-update.yml");
+const updateJob = updateWorkflow.jobs.update;
+const updateStep = (name: string) => requiredWorkflowStep(updateJob.steps, name);
+const actionStep = (action: string) =>
+  updateJob.steps.find((step: WorkflowStep) =>
     action.endsWith("@") ? step.uses?.startsWith(action) : step.uses === action,
   );
 const baseContext = {
@@ -131,9 +131,7 @@ it.each([
 );
 
 it("keeps candidate execution in the caller revision and cache scope", () => {
-  const workflow = readWorkflow(".github/workflows/ci-published-driver-update.yml");
-  const job = workflow.jobs.update;
-  const checkout = actionStep(job, "actions/checkout@");
+  const checkout = actionStep("actions/checkout@");
   const revision = "a".repeat(40);
   expect(
     evaluateWorkflowExpression(checkout.with.ref, {
@@ -142,10 +140,10 @@ it("keeps candidate execution in the caller revision and cache scope", () => {
       targetRef: "b".repeat(40),
     }),
   ).toBe(revision);
-  expect(workflow.on.workflow_call.inputs.target_sha).toBeUndefined();
-  expect(workflow.permissions).toEqual({ contents: "read" });
+  expect(updateWorkflow.on.workflow_call.inputs.target_sha).toBeUndefined();
+  expect(updateWorkflow.permissions).toEqual({ contents: "read" });
   expect(checkout.with["persist-credentials"]).toBe(false);
-  expect(actionStep(job, "./.github/actions/setup-node-env").with["cache-mode"]).toBe("off");
+  expect(actionStep("./.github/actions/setup-node-env").with["cache-mode"]).toBe("off");
 });
 
 it("consumes only the candidate artifact produced by this run", () => {
@@ -153,26 +151,20 @@ it("consumes only the candidate artifact produced by this run", () => {
   const caller = workflow.jobs["published-driver-update"];
   const producer = workflow.jobs["build-artifacts"];
   expect(caller.needs).toContain("build-artifacts");
-  for (const [input, output] of [
-    ["candidate_artifact_id", "published_driver_artifact_id"],
-    ["candidate_sha256", "published_driver_sha256"],
-  ] as const) {
-    expect(caller.with[input]).toBe(`\${{ needs.build-artifacts.outputs.${output} }}`);
-  }
-  expect(producer.outputs.published_driver_artifact_id).toBe(
-    "${{ steps.published_driver_package_upload.outputs.artifact-id }}",
-  );
-  expect(producer.outputs.published_driver_sha256).toBe(
-    "${{ steps.published_driver_package.outputs.sha256 }}",
-  );
-  const consumer = updateJob();
-  const download = actionStep(consumer, "actions/download-artifact@");
+  expect(caller.with).toMatchObject({
+    candidate_artifact_id: "${{ needs.build-artifacts.outputs.published_driver_artifact_id }}",
+    candidate_sha256: "${{ needs.build-artifacts.outputs.published_driver_sha256 }}",
+  });
+  expect(producer.outputs).toMatchObject({
+    published_driver_artifact_id:
+      "${{ steps.published_driver_package_upload.outputs.artifact-id }}",
+    published_driver_sha256: "${{ steps.published_driver_package.outputs.sha256 }}",
+  });
+  const download = actionStep("actions/download-artifact@");
   expect(download.with["artifact-ids"]).toBe("${{ inputs.candidate_artifact_id }}");
   expect(download.with["run-id"]).toBeUndefined();
   expect(download.with["github-token"]).toBeUndefined();
-  expect(actionStep(consumer, "./.github/actions/setup-node-env").with["install-deps"]).toBe(
-    "false",
-  );
+  expect(actionStep("./.github/actions/setup-node-env").with["install-deps"]).toBe("false");
 });
 
 it.each([
@@ -196,7 +188,6 @@ it.each([
       "printf '%s\\n' update > .artifacts/published-driver-update/phase.txt",
       `exit ${commandExit}`,
     ]);
-    const job = updateJob();
     const step = updateStep("Update published driver to candidate");
     const result = f.run(step.run, {
       CELL_DEADLINE_EPOCH_SECONDS: expired ? "999" : "1525",
@@ -205,7 +196,7 @@ it.each([
       GITHUB_STEP_SUMMARY: f.file("summary.md"),
     });
     expect(result.status, `${result.stdout}${result.stderr}`).toBe(expectedExit);
-    expect(job["timeout-minutes"]).toBeUndefined();
+    expect(updateJob["timeout-minutes"]).toBeUndefined();
     if (checksumMismatch) {
       expect(result.stdout).toContain(`expected=${expectedSha256} actual=${actualSha256}`);
       expect(result.stdout).toContain("::error title=Candidate checksum mismatch::");
@@ -233,11 +224,10 @@ it.each([
   ["schedule", false, { hit: "true" }],
   ["push", false, { repository: "contributor/openclaw" }],
 ] as const)("cache authorization: %s / allowed=%s / %j", (eventName, allowed, overrides) => {
-  const job = updateJob();
   const prepare = updateStep("Prepare main published driver seed");
-  const save = actionStep(job, "actions/cache/save@");
-  const restore = actionStep(job, "actions/cache/restore@");
-  const driver = job.steps.find((step: WorkflowStep) => step.id === "driver");
+  const save = actionStep("actions/cache/save@");
+  const restore = actionStep("actions/cache/restore@");
+  const driver = updateJob.steps.find((step: WorkflowStep) => step.id === "driver");
   const context = {
     ...baseContext,
     eventName,
@@ -282,17 +272,13 @@ it.each([0, 42])(
     const script = "scripts/e2e/published-driver-update-docker.sh";
     f.file(script, readFileSync(script, "utf8"));
     f.file("candidate.tgz", candidatePackage);
-    f.file("existing-image", "openclaw-published-driver-update-e2e\n");
-    // Exercise the wrapper's volume ownership; the shared container owner has
-    // its own tests. No helper in this fixture can fall through to host Docker.
+    // Only the wrapper is real; unexpected host Docker calls fail closed below.
     f.file(
       "scripts/lib/docker-e2e-image.sh",
       String.raw`
-# The real helper sources the package helper; the cell script relies on that.
-source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 docker_e2e_resolve_image() { printf '%s\n' "$1"; }
 docker_e2e_build_or_reuse() {
-  [ "$(cat "$IMAGE_STATE")" = "$1" ] || return 91
+  [ "$1" = openclaw-published-driver-update-e2e ] || return 91
   printf 'image reuse\n' >> "$DOCKER_LOG"
 }
 docker_e2e_docker_cmd() {
@@ -303,11 +289,6 @@ docker_e2e_docker_cmd() {
     *) return 92 ;;
   esac
 }
-`,
-    );
-    f.file(
-      "scripts/lib/docker-e2e-package.sh",
-      String.raw`
 docker_e2e_prepare_package_tgz() { printf '%s\n' "$2"; }
 docker_e2e_cleanup_package_tgz() { :; }
 docker_e2e_package_mount_args() { DOCKER_E2E_PACKAGE_ARGS=(-v "$1:/tmp/openclaw-current.tgz:ro"); }
@@ -328,7 +309,6 @@ docker_e2e_run_with_harness() {
       CELL_SCRIPT: f.file(script),
       CANDIDATE: f.file("candidate.tgz"),
       ARTIFACTS: f.file("artifacts"),
-      IMAGE_STATE: f.file("existing-image"),
       DOCKER_LOG: f.file("docker.log"),
       RUN_ARGS: f.file("run-args"),
       CONTAINER_EXIT: String(commandExit),

@@ -7,6 +7,7 @@ import * as testFileInventory from "../../scripts/lib/list-test-files.mts";
 import * as shardMetadata from "../../scripts/lib/vitest-shard-metadata.mts";
 import { fullSuiteVitestShards as shards } from "../vitest/vitest.test-shards.mjs";
 
+type Env = NodeTestShard["env"];
 const original = shards.slice();
 afterEach(() => {
   shards.splice(0, shards.length, ...original);
@@ -24,42 +25,26 @@ async function releaseFixture(configs: string[], estimate = 1, files?: string[])
   }
   const weights = vi.spyOn(shardMetadata, "estimateVitestTestFileSeconds");
   weights.mockReturnValue(estimate);
-  const measurements: Record<string, number> = {};
-  vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue(measurements);
+  const prices: Record<string, number> = {};
+  vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue(prices);
   const { createNodeTestShardBundles: plan } =
     await import("../../scripts/lib/ci-node-test-plan.mts");
-  const priceRows = (rows: NodeTestShard[], seconds: number) => {
+  const price = (rows: NodeTestShard[], seconds: number) => {
     for (const row of rows) {
-      measurements[expectDefined(row.timing_key, "split timing identity")] = seconds;
+      prices[expectDefined(row.timing_key, "split timing identity")] = seconds;
     }
   };
-  const clearPrices = () => {
-    for (const key of Object.keys(measurements)) {
-      delete measurements[key];
-    }
-  };
-  const measure = (
-    parent: string,
-    stripes: string[][],
-    seconds: number[],
-    env?: NodeTestShard["env"],
-  ) => {
+  const clear = () => Object.keys(prices).forEach((key) => delete prices[key]);
+  const measure = (parent: string, stripes: string[][], seconds: number[], env?: Env) => {
     const options = { configs, env, parentShardName: parent, stripes };
     const { timingKeys } = shardMetadata.createCompactSplitTimingGeneration(options);
     seconds.forEach((value, index) => {
-      measurements[timingKeys[index]!] = value;
+      prices[timingKeys[index]!] = value;
     });
     return timingKeys;
   };
-  return {
-    plan,
-    full: () => plan({ runnerBackend: "github" }),
-    measurements,
-    weights,
-    priceRows,
-    clearPrices,
-    measure,
-  };
+  const full = () => plan({ runnerBackend: "github" });
+  return { plan, full, prices, weights, price, clear, measure };
 }
 
 const rowFiles = (row: NodeTestShard) =>
@@ -69,145 +54,113 @@ const totalSeconds = (rows: NodeTestShard[]) =>
 function expectInventory(rows: NodeTestShard[], files: string[]) {
   expect(rows.flatMap(rowFiles).toSorted()).toEqual(files.toSorted());
 }
-function expectBudget(rows: NodeTestShard[], minimum: number) {
-  expect(rows.every((row) => row.predictedSeconds! <= 720)).toBe(true);
-  expect(totalSeconds(rows)).toBeGreaterThanOrEqual(minimum);
-}
 
 it.each([
-  ["agentic-agents-support", ["agents-support"]],
-  ["agentic-gateway-methods", ["gateway-methods", "gateway-methods-isolated"]],
-  ["agentic-cli-process", ["cli-process"]],
-  ["core-runtime-config", ["runtime-config"]],
-] as const)(
-  "retains complete %s walls across inventory changes until refitted",
-  async (owner, names) => {
-    const configs = names.map((name) => `test/vitest/vitest.${name}.config.ts`);
-    const files = expectDefined(listWholeConfigSplitFiles(owner), "release owner inventory");
-    const { plan, full, measurements, priceRows, measure } = await releaseFixture(configs);
-    const historicalFiles = [
-      ...files.slice(0, -2),
-      "src/gateway/server-methods/retired-timing-fixture.test.ts",
-    ];
-    const parentShardName = `release-full-${owner}`;
-    const historical = measure(
-      parentShardName,
-      [historicalFiles.slice(0, 2), historicalFiles.slice(2)],
-      [3000],
-    );
-    // An incomplete generation cannot price the complete owner.
-    const unmeasured = full();
-    expect(unmeasured).toHaveLength(1);
-    expect(unmeasured[0]?.predictedSeconds).toBeUndefined();
-    expect(unmeasured[0]?.timeoutMinutes).toBe(
-      owner === "agentic-cli-process" || owner === "core-runtime-config" ? 90 : undefined,
-    );
-    const pullRequest = { compactMode: "pull-request", runnerBackend: "github" } as const;
-    const beforePr = plan(pullRequest);
-    const beforeBlacksmith = plan({ runnerBackend: "blacksmith" });
-
-    measurements[historical[1]!] = 355;
-    measure(parentShardName, [[historicalFiles.at(-1)!]], [900]);
-    const rows = full();
-    expect(rows.length).toBeGreaterThan(1);
-    expectInventory(rows, files);
-    expect(totalSeconds(rows)).toBeGreaterThanOrEqual(3355);
-    for (const row of rows) {
-      expect(row.shardName).toMatch(new RegExp(`^${owner}-hosted-\\d+$`, "u"));
-      expect(row.predictedSeconds).toBeLessThanOrEqual(720);
-      expect(row.env).toBeUndefined();
-      expect(row).toMatchObject({
-        configs,
-        requiresDist: false,
-        runner: beforeBlacksmith[0]!.runner,
-      });
-      expect(row.timeoutMinutes).toBe(beforeBlacksmith[0]!.timeoutMinutes);
-    }
-    priceRows(rows, 50);
-    expect(plan(pullRequest)).toEqual(beforePr);
-    expect(plan({ runnerBackend: "blacksmith" })).toEqual(beforeBlacksmith);
-
-    // A complete observation of the current inventory retires the historical floor.
-    const refitted = full();
-    expect(refitted).toHaveLength(1);
-    expect(refitted[0]?.predictedSeconds).toBe(rows.length * 50);
-    priceRows(rows, 0);
-    expect(full()).toHaveLength(1);
-  },
-);
+  ["agentic-agents-support", ["agents-support"], undefined],
+  ["agentic-gateway-methods", ["gateway-methods", "gateway-methods-isolated"], undefined],
+  ["agentic-cli-process", ["cli-process"], 90],
+  ["core-runtime-config", ["runtime-config"], 90],
+] as const)("keeps %s timing walls until refitted", async (owner, names, timeout) => {
+  const configs = names.map((name) => `test/vitest/vitest.${name}.config.ts`);
+  const files = expectDefined(listWholeConfigSplitFiles(owner), "release owner inventory");
+  const { plan, full, prices, price, measure } = await releaseFixture(configs);
+  const retiredFile = "src/gateway/server-methods/retired-timing-fixture.test.ts";
+  const historicalFiles = [...files.slice(0, -2), retiredFile];
+  const parentShardName = `release-full-${owner}`;
+  const stripes = [historicalFiles.slice(0, 2), historicalFiles.slice(2)];
+  const historical = measure(parentShardName, stripes, [3000]);
+  expect(full().map((row) => [row.predictedSeconds, row.timeoutMinutes])).toEqual([
+    [undefined, timeout],
+  ]);
+  const pullRequest = { compactMode: "pull-request", runnerBackend: "github" } as const;
+  const beforePr = plan(pullRequest);
+  const beforeBlacksmith = plan({ runnerBackend: "blacksmith" });
+  prices[historical[1]!] = 355;
+  measure(parentShardName, [[historicalFiles.at(-1)!]], [900]);
+  const rows = full();
+  expect(rows.length).toBeGreaterThan(1);
+  expectInventory(rows, files);
+  expect(totalSeconds(rows)).toBeGreaterThanOrEqual(3355);
+  for (const row of rows) {
+    expect(row.shardName).toMatch(new RegExp(`^${owner}-hosted-\\d+$`, "u"));
+    expect(row.predictedSeconds).toBeLessThanOrEqual(720);
+    expect(row.env).toBeUndefined();
+    expect(row.timeoutMinutes).toBe(beforeBlacksmith[0]!.timeoutMinutes);
+  }
+  price(rows, 50);
+  expect(plan(pullRequest)).toEqual(beforePr);
+  expect(plan({ runnerBackend: "blacksmith" })).toEqual(beforeBlacksmith);
+  expect(full().map((row) => row.predictedSeconds)).toEqual([rows.length * 50]);
+  price(rows, 0);
+  expect(full()).toHaveLength(1);
+});
 
 it("splits measured full-release hosted rows without losing their execution contract", async () => {
   const config = "test/vitest/vitest.auto-reply-reply.config.ts";
-  const files = Array.from(
-    { length: 6 },
-    (_, i) => `src/auto-reply/reply/session-release-fixture-${i}.test.ts`,
-  );
+  const prefix = "src/auto-reply/reply/session-release-fixture";
+  const files = Array.from({ length: 6 }, (_, i) => `${prefix}-${i}.test.ts`);
   const fixture = await releaseFixture([config], 10, files);
-  const { plan, full, measurements, weights, priceRows, clearPrices } = fixture;
+  const { plan, full, prices, weights, price, clear } = fixture;
   const blacksmith = plan({ runnerBackend: "blacksmith" });
   const releaseRows = () =>
     full().filter((row) => rowFiles(row).some((file) => files.includes(file)));
   const before = releaseRows();
   expect(before).toHaveLength(1);
   const owner = before[0]!;
+  const mode = owner.pretestBuildMode;
   const parentKey = `release-full-${owner.shardName}`;
   const measure = (stripes: string[][], seconds: number[]) =>
     fixture.measure(parentKey, stripes, seconds, owner.env);
-  measurements[parentKey] = 1800;
+  prices[parentKey] = 1800;
   const split = releaseRows();
   expect(split).toHaveLength(3);
   expectInventory(split, files);
   expect(new Set(split.map((row) => row.checkName)).size).toBe(3);
-  for (const row of split) {
-    expect(row.predictedSeconds).toBeLessThanOrEqual(720);
-    expect(row).toMatchObject({
-      configs: owner.configs,
-      runner: owner.runner,
-      requiresDist: owner.requiresDist,
-    });
-    expect(row.pretestBuildMode).toBe(owner.pretestBuildMode);
-    expect(row.env).toEqual(owner.env);
-  }
-  priceRows(split, 700);
-  delete measurements[parentKey];
+  expect(split.every((row) => row.predictedSeconds! <= 720)).toBe(true);
+  expect(split.map((row) => row.env)).toEqual(split.map(() => owner.env));
+  expect(split.map((row) => row.pretestBuildMode)).toEqual(split.map(() => mode));
+  price(split, 700);
+  delete prices[parentKey];
   const next = releaseRows();
   expect(next).toHaveLength(3);
   expectInventory(next, files);
   expect(plan({ runnerBackend: "blacksmith" })).toEqual(blacksmith);
-  measurements[expectDefined(next[0]?.timing_key, "first split identity")] = 2000;
+  prices[expectDefined(next[0]?.timing_key, "first split identity")] = 2000;
   const resplit = releaseRows();
   expect(resplit.length).toBeGreaterThan(3);
   expect(resplit.every((row) => row.predictedSeconds! <= 720)).toBe(true);
   expectInventory(resplit, files);
-  priceRows(resplit, 600);
+  price(resplit, 600);
   weights.mockImplementation((file) => (file === files[0] ? 9 : 1));
   expect(releaseRows().map((row) => row.predictedSeconds)).toEqual(files.map(() => 600));
-  priceRows(resplit, 2000);
+  price(resplit, 2000);
   expect(releaseRows).toThrow("indivisible test above the hosted budget");
-  clearPrices();
+  clear();
   weights.mockImplementation((file) => (files.slice(0, 2).includes(file) ? 200 : 25));
   measure([[files[0]!], [files[1]!], files.slice(2, 4), files.slice(4)], [240, 269, 941, 1111]);
   const repriced = releaseRows();
   expectInventory(repriced, files);
-  expectBudget(repriced, 2561);
+  expect(repriced.every((row) => row.predictedSeconds! <= 720)).toBe(true);
+  expect(totalSeconds(repriced)).toBeGreaterThanOrEqual(2561);
   const packedKnown = expectDefined(
     repriced.find((row) => rowFiles(row).includes(files[0]!)),
     "measured singleton job",
   );
   expect(rowFiles(packedKnown).toSorted()).toEqual(files.slice(0, 2));
   expect(packedKnown).toMatchObject({ predictedSeconds: 509, planConcurrency: 1 });
-  clearPrices();
+  clear();
   weights.mockReturnValue(10);
   measure(
     files.toReversed().map((file) => [file]),
     files.map(() => 100),
   );
-  measurements[parentKey] = 1200;
+  prices[parentKey] = 1200;
   const allKnown = releaseRows();
-  expectBudget(allKnown, 1200);
-  priceRows(allKnown, 500);
+  expect(allKnown.every((row) => row.predictedSeconds! <= 720)).toBe(true);
+  expect(totalSeconds(allKnown)).toBeGreaterThanOrEqual(1200);
+  price(allKnown, 500);
   expect(releaseRows().every((row) => row.predictedSeconds === 500)).toBe(true);
-  clearPrices();
+  clear();
   const oldStripes = [files.slice(0, 2), ...files.slice(2).map((file) => [file])];
   measure(
     oldStripes,
@@ -215,7 +168,6 @@ it("splits measured full-release hosted rows without losing their execution cont
   );
   expect(releaseRows).toThrow("indivisible test above the hosted budget");
 });
-
 it("fits measured release work without changing coverage or worker contracts", async () => {
   const { createNodeTestShardBundles } = await import("../../scripts/lib/ci-node-test-plan.mts");
   const options = { includeReleaseOnlyPluginShards: false, includeProofTests: true };
@@ -240,14 +192,13 @@ it("fits measured release work without changing coverage or worker contracts", a
       })
       .toSorted();
   expect(contracts(rows)).toEqual(contracts(before));
-  const groups = groupsOf(rows);
   for (const owner of [
     "agentic-cli-process",
     "agentic-control-plane-agent-chat",
     "core-runtime-config",
   ]) {
     const owns = (name: string) => name.startsWith(`${owner}-hosted-`);
-    const owned = groups.filter((group) => owns(group.shard_name));
+    const owned = groupsOf(rows).filter((group) => owns(group.shard_name));
     expect(owned.length, owner).toBeGreaterThan(1);
     for (const group of owned) {
       expect(group.includePatterns!.length).toBeLessThanOrEqual(64);

@@ -100,26 +100,18 @@ describe("scripts/ci-run-timings.mjs", () => {
       name: "preflight",
       conclusion: "success",
       status: "completed",
-      started_at: "2026-06-01T13:25:16Z",
-      completed_at: "2026-06-01T13:26:16Z",
+      started_at: timestamp("13:25:16"),
+      completed_at: timestamp("13:26:16"),
     };
     const graphqlJob = {
       databaseId: 102,
-      name: "ci-timings-summary",
-      conclusion: "failure",
-      status: "completed",
-      startedAt: "2026-06-01T13:27:00Z",
-      completedAt: "2026-06-01T13:28:00Z",
+      ...timingJob("ci-timings-summary", "13:27:00", "13:28:00", "failure"),
     };
     expect(collectRunJobsFromPages([{ jobs: [restJob] }, { jobs: [graphqlJob] }])).toEqual([
       {
         ...defaults,
         databaseId: 101,
-        name: "preflight",
-        conclusion: "success",
-        status: "completed",
-        startedAt: "2026-06-01T13:25:16Z",
-        completedAt: "2026-06-01T13:26:16Z",
+        ...timingJob("preflight", "13:25:16", "13:26:16"),
       },
       { ...defaults, ...graphqlJob },
     ]);

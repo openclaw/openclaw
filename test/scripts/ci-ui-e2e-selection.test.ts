@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, expect, it } from "vitest";
 import { resolveShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
 import {
   createUiTestShardGroups,
@@ -24,6 +24,7 @@ const unknown = "ui/src/e2e/new-unmapped-flow.e2e.test.ts";
 const staleBuild = "ui/src/e2e/control-ui-stale-build-reload.e2e.test.ts";
 const teamScale = "ui/src/e2e/team-scale-cold-load.e2e.test.ts";
 const route = "ui/src/pages/cron/route.ts";
+const { mocked, real } = CI_MANIFEST_FIXTURE_TARGETS;
 
 function runManifest(options: Omit<Parameters<typeof runCiManifestFixture>[0], "bundledPlanner">) {
   return runCiManifestFixture({
@@ -62,64 +63,54 @@ for (const [file, source] of Object.entries(fixtureFiles)) {
 const select = (changed: Parameters<typeof resolveUiE2ePrTestSelection>[0], forceFull = false) =>
   resolveUiE2ePrTestSelection(changed, { cwd, forceFull });
 
-describe("Control UI PR owner selection", () => {
-  it("does not turn a neighboring unit-test edit into a browser source-owner change", () => {
-    expect(resolvePolicyTestTargets(["ui/src/pages/cron/cron-page.test.ts"])).not.toContain(cron);
-    expect(resolvePolicyTestTargets([route])).toContain(cron);
-  });
-  it("follows a direct dynamic route dependency while deferring transitive composition and unknown tests", () => {
-    const selected = select(["ui/src/lib/cron/view.ts"]);
-    expect(selected.mode).toBe("owners");
-    expectIncludes(selected.files, [cron, ...UI_E2E_SMOKE_TEST_FILES]);
-    expectExcludes(selected.files, [appearance, unknown]);
-    expect(selected.reasons[cron]).toContain(`direct route/component dependency: ${route}`);
-    const transitive = select(["ui/src/lib/cron/labels.ts"]);
-    expect(transitive.files.toSorted()).toEqual([...UI_E2E_SMOKE_TEST_FILES].toSorted());
-  });
+it("does not turn a neighboring unit-test edit into a browser source-owner change", () => {
+  expect(resolvePolicyTestTargets(["ui/src/pages/cron/cron-page.test.ts"])).not.toContain(cron);
+});
+it.each([
+  ["ui/src/lib/cron/view.ts", `direct route/component dependency: ${route}`, cron],
+  [unknown, "edited test", unknown],
+  ["ui/src/test-helpers/cron-fixture.ts", "test or fixture import dependency", cron],
+  [route, "explicit source-owner watch", cron],
+])("selects %s by %s", (changed, reason, target) => {
+  const selected = select([changed]);
+  expect(selected.mode).toBe("owners");
+  expectIncludes(selected.files, [target, ...UI_E2E_SMOKE_TEST_FILES]);
+  expectExcludes(
+    selected.files,
+    [appearance, unknown].filter((file) => file !== target),
+  );
+  expect(selected.reasons[target]).toContain(reason);
+});
 
-  it.each([
-    [unknown, "edited test", unknown],
-    ["ui/src/test-helpers/cron-fixture.ts", "test or fixture import dependency", cron],
-    [route, "explicit source-owner watch", cron],
-  ])("selects %s by %s", (changed, reason, target) => {
-    const selected = select([changed]);
-    expect(selected.files).toContain(target);
-    expect(selected.reasons[target]).toContain(reason);
-  });
+const fullInventory = expect.arrayContaining([cron, appearance, unknown]);
+const smokeInventory = [...UI_E2E_SMOKE_TEST_FILES].toSorted();
+it.each([
+  [null, false, "full", fullInventory],
+  [[], false, "full", fullInventory],
+  [["ui/src/app/bootstrap.ts"], false, "full", fullInventory],
+  [[cron], true, "full", fullInventory],
+  [["ui/src/unmapped-runtime.ts"], false, "owners", smokeInventory],
+  [["ui/src/lib/cron/labels.ts"], false, "owners", smokeInventory],
+] as const)("selects %j / force=%s as %s", (changed, forceFull, mode, files) => {
+  const selected = select(changed, forceFull);
+  expect({ ...selected, files: selected.files.toSorted() }).toMatchObject({ mode, files });
+});
 
-  it.each([
-    [null, false],
-    [[], false],
-    [["ui/src/app/bootstrap.ts"], false],
-    [[cron], true],
-  ] as const)("selects full inventory: %j / force=%s", (changed, forceFull) => {
-    const selected = select(changed, forceFull);
-    expect(selected.mode).toBe("full");
-    expectIncludes(selected.files, [cron, appearance, unknown]);
+it("retains formerly release-only and real-Gateway files in full periodic groups", () => {
+  const selection = resolveUiE2ePrTestSelection(null);
+  expect(selection.files).toContain("ui/src/e2e/native-embed-settings.e2e.test.ts");
+  expect(selection.files).toContain("ui/src/e2e/board-fixture.e2e.test.ts");
+  const groups = createUiTestShardGroups({
+    includeReleaseOnlyTests: false,
+    includePrExemptRuntimeTests: false,
+    includeReleaseOnlyE2eTests: true,
+    uiE2eFiles: selection.files,
   });
-
-  it("keeps an unmapped source change on the smoke cohort", () => {
-    const selected = select(["ui/src/unmapped-runtime.ts"]);
-    expect(selected.mode).toBe("owners");
-    expect(selected.files.toSorted()).toEqual([...UI_E2E_SMOKE_TEST_FILES].toSorted());
-  });
-
-  it("retains formerly release-only and real-Gateway files in full periodic groups", () => {
-    const selection = resolveUiE2ePrTestSelection(null);
-    expect(selection.files).toContain("ui/src/e2e/native-embed-settings.e2e.test.ts");
-    expect(selection.files).toContain("ui/src/e2e/board-fixture.e2e.test.ts");
-    const groups = createUiTestShardGroups({
-      includeReleaseOnlyTests: false,
-      includePrExemptRuntimeTests: false,
-      includeReleaseOnlyE2eTests: true,
-      uiE2eFiles: selection.files,
-    });
-    expect(groups.e2e.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual(
-      [...new Set([...selection.files, ...uiE2eRealGatewayTestFiles])]
-        .filter((file) => file !== staleBuild && file !== teamScale)
-        .toSorted(),
-    );
-  });
+  expect(groups.e2e.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual(
+    [...new Set([...selection.files, ...uiE2eRealGatewayTestFiles])]
+      .filter((file) => file !== staleBuild && file !== teamScale)
+      .toSorted(),
+  );
 });
 
 it.each([
@@ -127,32 +118,29 @@ it.each([
   { event: "pull_request", edited: true, selected: true },
   { event: "schedule", edited: false, selected: false },
   { event: "workflow_dispatch", edited: false, selected: true },
-] as const)(
-  "selects stale-build recovery: $event / edited=$edited",
-  ({ event, edited, selected }) => {
-    const result = runManifest({
-      eventName: event,
-      changedPaths: edited ? [staleBuild] : ["ui/src/app/stale-chunk-reload.ts"],
-      selectedTestTargets: [staleBuild, cron],
-      targetFiles: [staleBuild, cron],
-      uiTestGroupsSource: `export { createUiTestShardGroups } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-node-test-plan.mts")).href)};`,
-      uiE2eSelectorSource: `
+] as const)("stale-build: $event / $edited", ({ event, edited, selected }) => {
+  const result = runManifest({
+    eventName: event,
+    changedPaths: edited ? [staleBuild] : ["ui/src/app/stale-chunk-reload.ts"],
+    selectedTestTargets: [staleBuild, cron],
+    targetFiles: [staleBuild, cron],
+    uiTestGroupsSource: `export { createUiTestShardGroups } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-node-test-plan.mts")).href)};`,
+    uiE2eSelectorSource: `
         export const resolveUiE2ePrTestSelection = () => ({
           mode: 'owners', files: ${JSON.stringify([staleBuild, cron])},
           reasons: {${JSON.stringify(staleBuild)}: ['fixture stale-build owner'], ${JSON.stringify(cron)}: ['fixture source owner']},
         });`,
-      scopeEnv: {
-        OPENCLAW_CI_WORKFLOW_REVISION: "a".repeat(40),
-        ...(event === "schedule" ? { OPENCLAW_CI_VALIDATION_TIER: "main" } : {}),
-      },
-    });
-    const files = selectedFiles(result);
-    expect(files).toContain(cron);
-    expect(files.includes(staleBuild)).toBe(selected);
-    expect(result.summary).toContain(`Selected files: ${selected ? 2 : 1}`);
-    expect(result.summary.includes("fixture stale-build owner")).toBe(selected);
-  },
-);
+    scopeEnv: {
+      OPENCLAW_CI_WORKFLOW_REVISION: "a".repeat(40),
+      ...(event === "schedule" ? { OPENCLAW_CI_VALIDATION_TIER: "main" } : {}),
+    },
+  });
+  const files = selectedFiles(result);
+  expect(files).toContain(cron);
+  expect(files.includes(staleBuild)).toBe(selected);
+  expect(result.summary).toContain(`Selected files: ${selected ? 2 : 1}`);
+  expect(result.summary.includes("fixture stale-build owner")).toBe(selected);
+});
 
 it.each([
   { event: "pull_request", kill: "", full: false, count: 0 },
@@ -168,35 +156,28 @@ it.each([
     { length: count },
     (_, index) => `ui/src/e2e/fixture-${index + 1}.e2e.test.ts`,
   );
-  const expected = full ? CI_MANIFEST_FIXTURE_TARGETS.mocked : selection;
+  const expected = full ? mocked : selection;
   const result = runManifest({
     eventName: event,
     releaseGate: event === "workflow_dispatch",
     changedPaths: [route],
-    selectedTestTargets: [...CI_MANIFEST_FIXTURE_TARGETS.mocked],
+    selectedTestTargets: [...mocked],
     uiE2eSelectorSource: `
       export const resolveUiE2ePrTestSelection = (_paths, {forceFull}) => {
-        const files = forceFull ? ${JSON.stringify(CI_MANIFEST_FIXTURE_TARGETS.mocked)} : ${JSON.stringify(selection)};
+        const files = forceFull ? ${JSON.stringify(mocked)} : ${JSON.stringify(selection)};
         return {mode: forceFull ? 'full' : 'owners', files, reasons: Object.fromEntries(files.map(file => [file, ['fixture owner']]))};
       };`,
-    scopeEnv: {
-      OPENCLAW_CI_UI_E2E_FULL: kill,
-    },
+    scopeEnv: { OPENCLAW_CI_UI_E2E_FULL: kill },
   });
-  const files = selectedFiles(result).filter(
-    (file) => !CI_MANIFEST_FIXTURE_TARGETS.real.includes(file),
-  );
+  const files = selectedFiles(result).filter((file) => !real.includes(file));
   expect(files).toEqual(expected);
-  const rows = JSON.parse(result.outputs.ui_e2e_matrix!) as {
-    include: { task: string }[];
-  };
+  const rows = JSON.parse(result.outputs.ui_e2e_matrix!) as { include: { task: string }[] };
   expect(rows.include.filter((row) => row.task === "control-ui")).toHaveLength(
     full ? 8 : Math.min(8, Math.ceil(count / 30)),
   );
-  const published = result.summary;
-  expect(published).toContain(`Mode: ${full ? "full" : "owners"}`);
+  expect(result.summary).toContain(`Mode: ${full ? "full" : "owners"}`);
   if (expected.length > 0) {
-    expect(published).toContain("fixture owner");
+    expect(result.summary).toContain("fixture owner");
   }
-  expect(published).toContain(`Selected files: ${expected.length}`);
+  expect(result.summary).toContain(`Selected files: ${expected.length}`);
 });

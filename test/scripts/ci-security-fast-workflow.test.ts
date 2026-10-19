@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join, resolve } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it } from "vitest";
@@ -11,15 +11,11 @@ import {
   readWorkflowOutputs as readGitHubEnvironment,
   requiredWorkflowStep,
   readWorkflow,
+  writeExecutable,
+  type WorkflowStep as BaseStep,
 } from "./ci-workflow.test-support.js";
 
-type WorkflowStep = {
-  env?: Record<string, string>;
-  if?: string;
-  name?: string;
-  run?: string;
-  with?: Record<string, unknown>;
-};
+type WorkflowStep = Omit<BaseStep, "env"> & { env?: NodeJS.ProcessEnv };
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const scannerPath = "scripts/detect-private-keys.mts";
@@ -35,18 +31,8 @@ const neuteredScanner = "process.exit(0);\n";
 
 const securitySteps: WorkflowStep[] = readWorkflow(".github/workflows/ci.yml").jobs["security-fast"]
   .steps;
-function securityStep(name: string): WorkflowStep {
-  return requiredWorkflowStep(securitySteps, name);
-}
-
-function securityStepIndex(name: string): number {
-  return securitySteps.indexOf(securityStep(name));
-}
-
-function writeExecutable(filePath: string, source: string): void {
-  writeFileSync(filePath, source, "utf8");
-  chmodSync(filePath, 0o755);
-}
+const securityStep = (name: string) => requiredWorkflowStep(securitySteps, name);
+const securityStepIndex = (name: string) => securitySteps.indexOf(securityStep(name));
 
 function runGit(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, {
@@ -67,6 +53,14 @@ function runStep(step: WorkflowStep, cwd: string, env: NodeJS.ProcessEnv) {
   });
 }
 
+function writeTree(root: string, files: Record<string, string | Buffer>) {
+  for (const [file, contents] of Object.entries(files)) {
+    const destination = join(root, file);
+    mkdirSync(join(destination, ".."), { recursive: true });
+    writeFileSync(destination, contents);
+  }
+}
+
 function createFixture() {
   const root = tempDirs.make("openclaw-security-fast-");
   const repo = join(root, "repo");
@@ -76,13 +70,7 @@ function createFixture() {
   for (const dir of [join(repo, ".github"), join(repo, "scripts"), bin, runnerTemp]) {
     mkdirSync(dir, { recursive: true });
   }
-  const write = (files: Record<string, string | Buffer>) => {
-    for (const [file, contents] of Object.entries(files)) {
-      const destination = join(repo, file);
-      mkdirSync(join(destination, ".."), { recursive: true });
-      writeFileSync(destination, contents);
-    }
-  };
+  const write = (files: Record<string, string | Buffer>) => writeTree(repo, files);
   const git = (...args: string[]) => runGit(repo, ...args);
   const commit = (message: string) => {
     git("add", ".");
@@ -99,8 +87,7 @@ function createFixture() {
   write({ ".github/zizmor.yml": "rules:\n  trusted-base: {}\n", [scannerPath]: realScanner });
   const baseSha = commit("base policy");
 
-  // The candidate poisons every input it could: policy, hook config, and the
-  // scanner itself, while adding a key the neutered scanner would let through.
+  // Poison every candidate-controlled input; only the trusted scanner catches the key.
   write({
     ".github/zizmor.yml": "rules:\n  candidate-poison: {}\n",
     ".pre-commit-config.yaml": "repos:\n  - repo: https://example.invalid/poison.git\n",
@@ -117,37 +104,30 @@ function createFixture() {
   const realGit = execFileSync("sh", ["-c", "command -v git"], {
     encoding: "utf8",
   }).trim();
-  writeExecutable(
-    join(bin, "git"),
-    `#!/bin/sh
-skip_value=0
-command=
-for arg in "$@"; do
-  if [ "$skip_value" = 1 ]; then
-    skip_value=0
-    continue
-  fi
-  case "$arg" in
-    -c|-C|--config-env|--exec-path|--git-dir|--namespace|--work-tree)
-      skip_value=1
-      ;;
-    -*)
-      ;;
-    *)
-      command="$arg"
-      break
-      ;;
-  esac
-done
-case "$command" in
-  clone|fetch|ls-remote)
-    echo "network Git is forbidden in security-fast" >&2
-    exit 97
-    ;;
-esac
-exec "$OPENCLAW_TEST_REAL_GIT" "$@"
+  writeExecutable(join(bin, "git"), [
+    `#!${process.execPath}`,
+    String.raw`
+const { spawnSync } = require("node:child_process");
+const args = process.argv.slice(2);
+const valuedOptions = new Set(["-c", "-C", "--config-env", "--exec-path", "--git-dir", "--namespace", "--work-tree"]);
+for (let i = 0; i < args.length; i++) {
+  if (valuedOptions.has(args[i])) {
+    i++;
+    continue;
+  }
+  if (args[i].startsWith("-")) {
+    continue;
+  }
+  if (["clone", "fetch", "ls-remote"].includes(args[i])) {
+    console.error("network Git is forbidden in security-fast");
+    process.exit(97);
+  }
+  break;
+}
+const result = spawnSync(process.env.OPENCLAW_TEST_REAL_GIT, args, { stdio: "inherit" });
+process.exit(result.status ?? 1);
 `,
-  );
+  ]);
 
   const environment = {
     GITHUB_ENV: githubEnv,
@@ -250,18 +230,12 @@ it.each([0, 1, 2, 130])(
   "warns without blocking CI or pre-commit for audit exit %s, retaining the strict daily audit",
   (auditExit) => {
     const repo = tempDirs.make("openclaw-audit-ci-");
-    mkdirSync(join(repo, "scripts", "pre-commit"), { recursive: true });
-    mkdirSync(join(repo, ".ci-harness", "scripts"), { recursive: true });
-    writeFileSync(
-      join(repo, "scripts", "pre-commit", "pnpm-audit-prod.mjs"),
-      `console.log("audit report"); process.exit(${auditExit});\n`,
-    );
-    for (const directory of [".ci-harness/scripts", "scripts"]) {
-      writeFileSync(
-        join(repo, directory, "ci-production-audit.mjs"),
-        readFileSync("scripts/ci-production-audit.mjs"),
-      );
-    }
+    const auditSource = readFileSync("scripts/ci-production-audit.mjs");
+    writeTree(repo, {
+      "scripts/pre-commit/pnpm-audit-prod.mjs": `console.log("audit report"); process.exit(${auditExit});\n`,
+      "scripts/ci-production-audit.mjs": auditSource,
+      ".ci-harness/scripts/ci-production-audit.mjs": auditSource,
+    });
     expect(securityStep("Checkout trusted CI harness").with?.["sparse-checkout"]).toContain(
       "scripts/ci-production-audit.mjs",
     );
@@ -272,8 +246,7 @@ it.each([0, 1, 2, 130])(
     const hook = hooks.repos
       .flatMap((entry) => entry.hooks)
       .find((candidate) => candidate.id === "pnpm-audit-prod");
-    expect(hook).toBeDefined();
-    expect(hook?.verbose).toBe(true);
+    expect(hook).toMatchObject({ verbose: true });
     for (const step of [audit, { run: hook!.entry }]) {
       const result = runStep(step, repo, { GITHUB_EVENT_NAME: "", GITHUB_EVENT_PATH: "" });
       expect(result.status, result.stderr).toBe(0);
@@ -289,9 +262,7 @@ it.each([0, 1, 2, 130])(
         ]);
       }
     }
-    const scheduled = parse(readFileSync(".github/workflows/dependency-audit.yml", "utf8")) as {
-      jobs: { audit: { steps: WorkflowStep[] } };
-    };
+    const scheduled = readWorkflow(".github/workflows/dependency-audit.yml");
     const strictStep = requiredWorkflowStep(
       scheduled.jobs.audit.steps,
       "Audit production dependencies",
@@ -320,8 +291,7 @@ it("generates the exact local-only scanner contract from trusted policy", () => 
   expect(install.run).toContain("pre-commit==4.6.2 zizmor==1.30.1");
   expect(install.run).not.toContain("pre-commit-hooks");
   expect(prepare.run).not.toMatch(/origin\/|BASE_REF|PRE_COMMIT_CONFIG_PATH:-/u);
-  // The first-party key scan runs before any package install can fail or
-  // execute third-party code, and never through pre-commit.
+  // Scan with trusted code before third-party installation.
   expect(detect.run).toBe('node "$PRIVATE_KEY_SCANNER_PATH"');
   expect(securityStepIndex("Setup Node.js")).toBeLessThan(securityStepIndex(detect.name!));
   expect(securityStepIndex(detect.name!)).toBeLessThan(securityStepIndex(install.name!));
@@ -330,13 +300,11 @@ it("generates the exact local-only scanner contract from trusted policy", () => 
   const fixture = createFixture();
   const prepared = fixture.prepare("pull_request");
   expect(prepared.result.status, `${prepared.result.stdout}${prepared.result.stderr}`).toBe(0);
-  const configPath = prepared.githubEnvironment.PRE_COMMIT_CONFIG_PATH;
-  if (!configPath) {
-    throw new Error("scanner config path was not published");
-  }
-  const config = parse(readFileSync(configPath, "utf8")) as {
-    repos: Array<{ hooks: Array<Record<string, unknown>>; repo: string }>;
-  };
+  const configPath = expectDefined(
+    prepared.githubEnvironment.PRE_COMMIT_CONFIG_PATH,
+    "scanner config path was not published",
+  );
+  const config = parse(readFileSync(configPath, "utf8"));
   const expectedHook = {
     id: "zizmor",
     name: "zizmor",
@@ -370,40 +338,34 @@ it("generates the exact local-only scanner contract from trusted policy", () => 
   ]);
 });
 
-it("fails closed for a missing exact-base policy and trusts the harness otherwise", () => {
-  const missing = createFixture();
-  const rejected = missing.prepare("pull_request", missing.missingPolicySha);
+it.each(["policy", "scanner"] as const)("fails closed for a missing exact-base %s", (missing) => {
+  const fixture = createFixture();
+  let base = fixture.missingPolicySha;
+  if (missing === "scanner") {
+    fixture.write({ ".github/zizmor.yml": "rules:\n  trusted-base: {}\n" });
+    fixture.git("rm", "-q", "--cached", scannerPath);
+    // Do not re-add the poisoned, now untracked scanner.
+    fixture.git("add", ".github/zizmor.yml");
+    fixture.git("commit", "-m", "base without scanner");
+    base = fixture.git("rev-parse", "HEAD");
+  }
+  const rejected = fixture.prepare("pull_request", base);
   expect(rejected.result.status).not.toBe(0);
   expect(`${rejected.result.stdout}${rejected.result.stderr}`).toContain(
-    "trusted zizmor policy unavailable",
+    `trusted ${missing === "scanner" ? "private-key scanner" : "zizmor policy"} unavailable`,
   );
   expect(rejected.githubEnvironment).toEqual({});
-
-  for (const eventName of ["push", "workflow_dispatch"] as const) {
-    const fixture = createFixture();
-    const prepared = fixture.prepare(eventName);
-    expect(prepared.result.status, `${prepared.result.stdout}${prepared.result.stderr}`).toBe(0);
-    expect(fixture.read("zizmor.yml")).toBe("rules:\n  trusted-harness: {}\n");
-    expect(readFileSync(join(fixture.runnerTemp, "detect-private-keys.mts"))).toEqual(
-      fixture.realScanner,
-    );
+  if (missing === "scanner") {
+    expect(existsSync(join(fixture.runnerTemp, "detect-private-keys.mts"))).toBe(false);
   }
 });
 
-it("fails closed when the exact base has no scanner instead of running the candidate copy", () => {
+it.each(["push", "workflow_dispatch"] as const)("trusts the harness for %s", (eventName) => {
   const fixture = createFixture();
-  // A base with the policy but not the scanner: the bootstrap gap a
-  // candidate could otherwise exploit with a neutered scanner.
-  fixture.write({ ".github/zizmor.yml": "rules:\n  trusted-base: {}\n" });
-  fixture.git("rm", "-q", "--cached", scannerPath);
-  // Only commit the policy: the poisoned scanner must remain untracked here.
-  fixture.git("add", ".github/zizmor.yml");
-  fixture.git("commit", "-m", "base without scanner");
-  const rejected = fixture.prepare("pull_request", fixture.git("rev-parse", "HEAD"));
-  expect(rejected.result.status).not.toBe(0);
-  expect(`${rejected.result.stdout}${rejected.result.stderr}`).toContain(
-    "trusted private-key scanner unavailable",
+  const prepared = fixture.prepare(eventName);
+  expect(prepared.result.status, `${prepared.result.stdout}${prepared.result.stderr}`).toBe(0);
+  expect(fixture.read("zizmor.yml")).toBe("rules:\n  trusted-harness: {}\n");
+  expect(readFileSync(join(fixture.runnerTemp, "detect-private-keys.mts"))).toEqual(
+    fixture.realScanner,
   );
-  expect(rejected.githubEnvironment).toEqual({});
-  expect(existsSync(join(fixture.runnerTemp, "detect-private-keys.mts"))).toBe(false);
 });
