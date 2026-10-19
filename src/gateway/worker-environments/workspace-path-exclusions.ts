@@ -16,10 +16,13 @@ const DERIVED_WORKSPACE_DIRECTORY_NAMES = [
 // These producers own exact checkout-relative roots, not every .cache or .artifacts path.
 const DERIVED_WORKSPACE_ROOT_PATHS = [
   ".cache/vitest",
+  ".cache/bun-transpiler",
   ".cache/openclaw/bun",
   ".cache/ms-playwright",
   ".local/share/pnpm/store",
   ".artifacts/vitest-workers",
+  ".artifacts/vitest-worker-cache",
+  ".artifacts/vitest-shard-timings.json",
 ] as const;
 const RUNTIME_WORKSPACE_ROOT_PATHS = [".artifacts/dist-artifacts.lock"] as const;
 
@@ -76,16 +79,40 @@ function isDerivedWorkspacePath(relativePath, retainedInput = false) {
       DERIVED_WORKSPACE_FILE_NAMES.includes(segment) ||
       DERIVED_WORKSPACE_FILE_SUFFIXES.some((suffix) => segment.endsWith(suffix)),
   );
+}
+function projectWorkspaceEntries(entries, isRetainedInput) {
+  const nonemptyDirectories = new Set();
+  const retainedParents = new Set();
+  const parent = (entryPath) => entryPath.slice(0, Math.max(0, entryPath.lastIndexOf("/")));
+  for (const entry of entries) nonemptyDirectories.add(parent(entry.path));
+  const eligible = [];
+  // Children precede parents in this reverse walk of the sorted inventory.
+  // Prune ancestry created only by excluded contents, but retain original empty directories.
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (
+      isDerivedWorkspacePath(entry.path, isRetainedInput(entry.path)) ||
+      (entry.type === "directory" && nonemptyDirectories.has(entry.path) && !retainedParents.has(entry.path))
+    ) continue;
+    eligible.push(entry);
+    retainedParents.add(parent(entry.path));
+  }
+  return eligible.toReversed();
 }`;
 
 export const {
   isDerivedWorkspacePath,
   isRuntimeOwnedWorkspacePath,
+  projectWorkspaceEntries,
 }: {
   isDerivedWorkspacePath: (relativePath: string, retainedInput?: boolean) => boolean;
   isRuntimeOwnedWorkspacePath: (relativePath: string) => boolean;
+  projectWorkspaceEntries: <T extends { path: string; type: string }>(
+    entries: readonly T[],
+    isRetainedInput: (relativePath: string) => boolean,
+  ) => T[];
 } = compileFunction(
-  `${WORKSPACE_PATH_EXCLUSIONS_JS}\nreturn { isDerivedWorkspacePath, isRuntimeOwnedWorkspacePath };`,
+  `${WORKSPACE_PATH_EXCLUSIONS_JS}\nreturn { isDerivedWorkspacePath, isRuntimeOwnedWorkspacePath, projectWorkspaceEntries };`,
 )();
 
 export const DERIVED_WORKSPACE_RSYNC_EXCLUDES = [

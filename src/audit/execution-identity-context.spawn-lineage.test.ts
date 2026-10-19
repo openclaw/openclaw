@@ -89,6 +89,11 @@ describe("execution identity child lineage", () => {
         ...facts("child-run", {
           ingress: { kind: "subagent", boundary: "sessions_spawn.subagent", state: "present" },
           invoker: { state: "present", kind: "agent", rawPrincipalRef: "parent-agent" },
+          representedSubject: {
+            state: "present",
+            kind: "person",
+            rawPrincipalRef: "selected-person",
+          },
           applicableGrants: [{ rawGrantRef: "tool:sessions_spawn", state: "present" }],
           assurance: [
             {
@@ -115,6 +120,15 @@ describe("execution identity child lineage", () => {
     );
 
     expect(context.coverageState).toBe("attribution-only");
+    expect(context.invoker.principal?.kind).toBe("agent");
+    expect(context.representedSubject).toEqual({
+      state: "present",
+      principal: {
+        kind: "person",
+        domainRef: context.trustDomain.domainRef,
+        principalRef: expect.stringMatching(/^hmac-sha256:v1:/u),
+      },
+    });
     expect(context.lineage).toMatchObject({
       parentContextId: "parent-context",
       parentExecutionId: "parent-execution",
@@ -127,7 +141,7 @@ describe("execution identity child lineage", () => {
     expect(context.assurance).toHaveLength(1);
     expect(context.missingEvidence).toEqual([]);
     expect(JSON.stringify(context)).not.toMatch(
-      /private-requester|private-controller|local-policy-secret|target-policy-secret|native-spawn-proof|tool:sessions_spawn/,
+      /selected-person|private-requester|private-controller|local-policy-secret|target-policy-secret|native-spawn-proof|tool:sessions_spawn/,
     );
   });
 

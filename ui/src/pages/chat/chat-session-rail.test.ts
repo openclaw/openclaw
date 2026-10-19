@@ -255,6 +255,7 @@ describe("ChatSessionRailElement", () => {
     document.body.replaceChildren();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
   async function mount(overrides: Partial<ChatSessionRailElement> = {}) {
@@ -269,6 +270,58 @@ describe("ChatSessionRailElement", () => {
     await element.updateComplete;
     return element;
   }
+
+  it("consumes only the latest visible focus intent and retires it on disconnect", async () => {
+    vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+    const initial = vi.fn(() => true);
+    const current = vi.fn(() => true);
+    const element = await mount({ presented: true, focusRequest: initial });
+    element.focusRequest = current;
+    await element.updateComplete;
+    await vi.advanceTimersByTimeAsync(20);
+    expect(initial).not.toHaveBeenCalled();
+    expect(current).toHaveBeenCalledOnce();
+    expect(document.activeElement).toBe(element.querySelector("textarea"));
+
+    const hidden = vi.fn(() => true);
+    element.presented = false;
+    element.focusRequest = hidden;
+    await element.updateComplete;
+    await vi.advanceTimersByTimeAsync(20);
+    expect(hidden).not.toHaveBeenCalled();
+
+    const retired = vi.fn(() => true);
+    element.presented = true;
+    element.focusRequest = retired;
+    await element.updateComplete;
+    element.remove();
+    await vi.advanceTimersByTimeAsync(20);
+    expect(retired).not.toHaveBeenCalled();
+  });
+
+  it("follows changed turns while preserving a manually scrolled draft edit", async () => {
+    vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+    const element = await mount({ presented: true });
+    const thread = element.querySelector<HTMLElement>(".chat-session-rail__thread")!;
+    Object.defineProperty(thread, "scrollHeight", { configurable: true, value: 200 });
+    await vi.advanceTimersByTimeAsync(20);
+    expect(thread.scrollTop).toBe(200);
+
+    thread.scrollTop = 60;
+    element.companion = { ...element.companion, draft: "A local draft" };
+    await element.updateComplete;
+    await vi.advanceTimersByTimeAsync(20);
+    expect(thread.scrollTop).toBe(60);
+
+    element.companion = {
+      ...element.companion,
+      turns: [{ question: "What changed?", status: "answered", answer: "A completed turn", ts: 1 }],
+    };
+    await element.updateComplete;
+    Object.defineProperty(thread, "scrollHeight", { configurable: true, value: 500 });
+    await vi.advanceTimersByTimeAsync(20);
+    expect(thread.scrollTop).toBe(500);
+  });
 
   it.each([
     { phrases: [], expected: "" },

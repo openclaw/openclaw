@@ -53,7 +53,7 @@ import {
 } from "./sessions-helpers.js";
 
 const SessionsListToolSchema = Type.Object({
-  user: requesterProfileSchema(),
+  user: requesterProfileSchema({ defaultToTurnOwner: true }),
   kinds: Type.Optional(Type.Array(stringEnum(SESSION_LIST_KINDS))),
   limit: SessionsListParamsSchema.properties.limit,
   offset: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),

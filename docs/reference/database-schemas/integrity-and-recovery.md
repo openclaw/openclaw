@@ -603,6 +603,17 @@ agent restoration owner revalidates the selected configured paths before
 releasing their holds; normal migrations then prepare them for Gateway startup.
 Repeating Doctor after successful restoration does not restore or back up these stores again.
 
+Reserved system agents (`openclaw` and `crestodian`) cannot be deleted, so journal
+reconstruction no longer creates deletion-recovery holds for them. `doctor --fix`
+reconciles existing reserved holds, including the quarantine receipts left by
+2026.10.5, only when the canonical store's path and internal agent identity match,
+its integrity is healthy, and no deletion row remains. It first preserves verified
+full backups of the agent store and shared recovery records, releases only that
+hold, and lets normal migrations advance the store. Other holds retain their
+existing restoration rules. Until repair succeeds, startup degrades an unmigrated
+held store with a warning naming `openclaw doctor --fix` instead of failing the
+whole Gateway.
+
 This policy accepts the small risk of resurrecting data from a lost pending
 deletion when the entire journal disappeared. A missing-table observation is
 not proof that no journal ever existed. Present-but-incomplete journals,

@@ -302,7 +302,7 @@ async function startMcpLoopbackServer(
                   messageActionTurnCapability: boundClientGrant?.messageActionTurnCapability,
                   // Only a run-bound CLI grant carries a verified turn sender's audience.
                   memoryAudience: boundClientGrant?.memoryAudience,
-                  cfg,
+                  cfg: boundClientGrant?.toolPolicyConfig ?? cfg,
                   signal: requestAbort.signal,
                   authProfileStore: boundClientGrant?.toolAuth?.store,
                   authProfileStoreAgentDir: boundClientGrant?.toolAuth?.agentDir || undefined,
@@ -428,6 +428,7 @@ async function startMcpLoopbackServer(
                     mintCronRequesterGrant: boundClientGrant.mintCronRequesterGrant,
                     agentId: scopedTools.agentId,
                     sessionKey: requestContext.sessionKey,
+                    requesterOrigin: requestContext.requesterOrigin,
                     turnSourceChannel: requestContext.messageProvider,
                     turnSourceLocal:
                       !requestContext.messageProvider &&

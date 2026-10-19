@@ -2,6 +2,7 @@ import type { SessionsDiffResult } from "../../../packages/gateway-protocol/src/
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { createGatewayConnectionLifecycle } from "./gateway-connection-lifecycle.ts";
+import { listen } from "./reactive/listener.ts";
 
 type Summary = { fileCount: number; additions: number; deletions: number; truncated: boolean };
 type Snapshot = { summary: Summary | null; stale: boolean; unavailable: boolean };
@@ -161,7 +162,7 @@ export function createSessionDiffSummary(document: Document, isConnected = () =>
     }
     schedule();
   }
-  document.addEventListener("visibilitychange", schedule);
+  const stopVisibility = listen(document, "visibilitychange", schedule);
   return {
     get snapshot(): Snapshot {
       return current;
@@ -193,7 +194,7 @@ export function createSessionDiffSummary(document: Document, isConnected = () =>
       clearTimer();
       unsubscribe?.();
       lifecycle?.dispose();
-      document.removeEventListener("visibilitychange", schedule);
+      stopVisibility();
       entries.clear();
       listeners.clear();
     },

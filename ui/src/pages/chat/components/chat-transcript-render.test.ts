@@ -123,8 +123,10 @@ describe("chat transcript rendering", () => {
             expect(image?.getAttribute("src")).toBe(avatar);
             expect(image?.getAttribute("alt")).toBe(props.assistantName);
             image?.dispatchEvent(new Event("load"));
+            flush();
             expect(slot?.classList.contains("is-fallback")).toBe(false);
             image?.dispatchEvent(new Event("error"));
+            flush();
             expect(slot?.classList.contains("is-fallback")).toBe(true);
             expect(slot?.querySelector("[data-avatar]")?.getAttribute("data-avatar")).toBe("🦉");
           } else {
