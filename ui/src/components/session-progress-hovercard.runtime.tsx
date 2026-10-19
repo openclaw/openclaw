@@ -234,7 +234,6 @@ function createSessionProgressHovercard(
     if (
       session?.sessionKey !== sessionKey ||
       !artifactKey ||
-      !session ||
       !target ||
       sessionHovercardMenuOpen(host) ||
       !hovercard.held
