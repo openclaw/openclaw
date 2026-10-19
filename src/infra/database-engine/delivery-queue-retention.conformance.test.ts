@@ -1,10 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import {
-  loadDeliveryQueueEntryInDatabase,
-  loadNextDeliveryQueueTombstoneExpiry,
-} from "../delivery-queue-sqlite-bound.js";
+import { loadDeliveryQueueEntryInDatabase } from "../delivery-queue-sqlite-bound.js";
 import {
   prepareDeliveryQueueTerminalEntry,
   pruneExpiredDeliveryQueueTombstonesInDatabase,
@@ -53,26 +50,20 @@ const contracts: Array<{
           );
         }
       });
-      expect(loadNextDeliveryQueueTombstoneExpiry(database.db)).toEqual({
-        enqueuedAt: NOW - 100,
-        maxAgeMs: 105,
-      });
+      pruneExpiredDeliveryQueueTombstonesInDatabase(database);
       vi.mocked(Date.now).mockReturnValue(NOW + 6);
       pruneExpiredDeliveryQueueTombstonesInDatabase(database);
       expect(loadDeliveryQueueEntryInDatabase(database, QUEUE, "bounded-sooner")).toBeNull();
       expect(loadDeliveryQueueEntryInDatabase(database, QUEUE, "ordinary")).not.toBeNull();
-      expect(loadNextDeliveryQueueTombstoneExpiry(database.db)).toEqual({
-        enqueuedAt: NOW - ORDINARY_AGE + 10,
-        maxAgeMs: ORDINARY_AGE,
-      });
+      vi.mocked(Date.now).mockReturnValue(NOW + 10);
+      pruneExpiredDeliveryQueueTombstonesInDatabase(database);
+      expect(loadDeliveryQueueEntryInDatabase(database, QUEUE, "ordinary")).not.toBeNull();
       vi.mocked(Date.now).mockReturnValue(NOW + 11);
       pruneExpiredDeliveryQueueTombstonesInDatabase(database);
       expect(loadDeliveryQueueEntryInDatabase(database, QUEUE, "ordinary")).toBeNull();
       expect(loadDeliveryQueueEntryInDatabase(database, QUEUE, "bounded-huge")).not.toBeNull();
-      expect(loadNextDeliveryQueueTombstoneExpiry(database.db)).toEqual({
-        enqueuedAt: NOW,
-        maxAgeMs: Number.MAX_SAFE_INTEGER,
-      });
+      pruneExpiredDeliveryQueueTombstonesInDatabase(database);
+      expect(loadDeliveryQueueEntryInDatabase(database, QUEUE, "bounded-huge")).not.toBeNull();
     },
   },
   {

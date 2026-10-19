@@ -1059,7 +1059,6 @@ src/infra/openclaw-exec-env.ts
 src/infra/openclaw-process-census.ts
 src/infra/openclaw-root.fs.runtime.ts
 src/infra/openclaw-root.ts
-src/infra/outbound/delivery-queue-namespaces.ts
 src/infra/owned-directory-observation.ts
 src/infra/package-json.ts
 src/infra/package-update-activation-custody.ts

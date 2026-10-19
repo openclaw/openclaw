@@ -37,7 +37,7 @@ export const oldestDeliveryQueueMediaStageAdmission: SqliteDatabaseAdmissionKey<
   read: (value) => (value === null || typeof value === "number" ? value : undefined),
 };
 
-export type DeliveryQueueTombstoneExpiry = { enqueuedAt: number; maxAgeMs: number } | null;
+type DeliveryQueueTombstoneExpiry = { enqueuedAt: number; maxAgeMs: number } | null;
 
 export const nextDeliveryQueueTombstoneExpiryAdmission: SqliteDatabaseAdmissionKey<
   DeliveryQueueTombstoneExpiry | undefined

@@ -4,8 +4,6 @@ import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.
 import { chunkItems } from "../utils/chunk-items.js";
 import {
   failedDeliveryQueueHealthAdmission,
-  isDeliveryQueueTombstonePruneDue,
-  nextDeliveryQueueTombstoneExpiryAdmission,
   oldestDeliveryQueueMediaStageAdmission,
 } from "./delivery-queue-cache.js";
 import {
@@ -13,7 +11,6 @@ import {
   deliveryQueueEntriesQuery,
   inflateDeliveryQueueRows,
   loadDeliveryQueueEntryInDatabase,
-  loadNextDeliveryQueueTombstoneExpiry,
   pruneDeliveryQueueTombstoneAges,
   pruneDeliveryQueueTombstones,
   terminalizeBoundDeliveryQueueEntry,
@@ -32,15 +29,9 @@ import {
 } from "./delivery-queue-sqlite.types.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME } from "./outbound/delivery-queue-namespaces.js";
-import {
-  getSqliteDatabaseAdmission,
-  publishSqliteDatabaseAdmission,
-} from "./sqlite-database-admission.js";
+import { publishSqliteDatabaseAdmission } from "./sqlite-database-admission.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "./sqlite-number.js";
-import {
-  runSqliteImmediateTransactionSync,
-  runSqliteSingleStatementSync,
-} from "./sqlite-transaction.js";
+import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 
 export type DeliveryQueueStoredStatus = DeliveryQueueDatabase["delivery_queue_entries"]["status"];
 
@@ -432,18 +423,7 @@ export function countPendingDeliveryQueueEntriesInDatabase(
 export function pruneExpiredDeliveryQueueTombstonesInDatabase(
   database: OpenClawStateDatabase,
 ): void {
-  let expiry = getSqliteDatabaseAdmission(database.db, nextDeliveryQueueTombstoneExpiryAdmission);
-  if (expiry === undefined) {
-    expiry = loadNextDeliveryQueueTombstoneExpiry(database.db);
-    publishSqliteDatabaseAdmission(database.db, nextDeliveryQueueTombstoneExpiryAdmission, expiry);
-  }
-  const now = Date.now();
-  if (!isDeliveryQueueTombstonePruneDue(expiry, now)) {
-    return;
-  }
-  runSqliteSingleStatementSync(database.db, () =>
-    pruneDeliveryQueueTombstoneAges(database.db, now),
-  );
+  pruneDeliveryQueueTombstoneAges(database.db, Date.now());
 }
 
 export type TerminalizePendingDeliveryQueueEntryParams = {

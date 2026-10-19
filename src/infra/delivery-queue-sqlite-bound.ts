@@ -4,9 +4,8 @@ import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-
 import {
   emptyOutboundDeliveryQueueAdmission,
   failedDeliveryQueueHealthAdmission,
+  isDeliveryQueueTombstonePruneDue,
   nextDeliveryQueueTombstoneExpiryAdmission,
-  oldestDeliveryQueueMediaStageAdmission,
-  type DeliveryQueueTombstoneExpiry,
 } from "./delivery-queue-cache.js";
 import { deriveDeliveryQueueRetentionColumns } from "./delivery-queue-retention-columns.js";
 import type { DeliveryQueueEntryState } from "./delivery-queue-sqlite.types.js";
@@ -17,7 +16,6 @@ import {
   prepareSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
-import { DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME } from "./outbound/delivery-queue-namespaces.js";
 // Database-bound delivery queue serialization and mutations used by shared transactions.
 import type { EngineConnection } from "./sql-connection.js";
 import {
@@ -25,6 +23,7 @@ import {
   publishSqliteDatabaseAdmission,
 } from "./sqlite-database-admission.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "./sqlite-number.js";
+import { runSqliteSingleStatementSync } from "./sqlite-transaction.js";
 
 type QueueStatus = "pending" | "failed" | "completed";
 export type DeliveryQueueReadMode = "pending" | "unfinished" | "all";
@@ -140,73 +139,77 @@ export function pruneDeliveryQueueTombstones(
   return (result.numAffectedRows ?? 0n) > 0n || ordinaryPruned;
 }
 
-export function loadNextDeliveryQueueTombstoneExpiry(
-  db: EngineConnection,
-): DeliveryQueueTombstoneExpiry {
-  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(db);
-  const ordinary = queueDb
-    .selectFrom("delivery_queue_entries")
-    .select("enqueued_at")
-    .select((eb) => eb.val(COMPLETED_TOMBSTONE_RETENTION_MS).as("max_age_ms"))
-    .where("status", "=", "completed")
-    .where((eb) =>
-      eb.or([
-        eb("recovery_state", "is", null),
-        eb("recovery_state", "not in", ["completed_permanent", "completed_bounded"]),
-      ]),
-    );
-  const [row] = executeSqliteQuerySync(
-    db,
-    queueDb
-      .selectFrom(
-        boundedDeliveryReceipts(db)
-          .clearSelect()
-          .select(["enqueued_at", "retention_max_age_ms as max_age_ms"])
-          .where("retention_max_age_ms", "is not", null)
-          .$narrowType<{ max_age_ms: NotNull }>()
-          .unionAll(ordinary)
-          .as("receipts"),
-      )
-      .selectAll()
-      .orderBy((eb) => eb("enqueued_at", "+", eb.ref("max_age_ms")))
-      .limit(1),
-  ).rows;
-  // Keep the operands separate: a valid retention age plus its timestamp can
-  // exceed JavaScript's safe-integer range. Expiry uses the DELETE's subtraction.
-  return row
-    ? { enqueuedAt: sqliteNumber(row.enqueued_at), maxAgeMs: sqliteNumber(row.max_age_ms) }
-    : null;
-}
-
-/** Cheap maintenance cleanup: age predicates only, with no window sort. */
+/** Cheap maintenance cleanup: learn the next age deadline, then skip quiet passes. */
 export function pruneDeliveryQueueTombstoneAges(db: EngineConnection, now: number): void {
-  const result = executeSqliteQuerySync(
-    db,
-    getNodeSqliteKysely<DeliveryQueueDatabase>(db)
-      .deleteFrom("delivery_queue_entries")
+  let expiry = getSqliteDatabaseAdmission(db, nextDeliveryQueueTombstoneExpiryAdmission);
+  if (expiry === undefined) {
+    const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(db);
+    const ordinary = queueDb
+      .selectFrom("delivery_queue_entries")
+      .select("enqueued_at")
+      .select((eb) => eb.val(COMPLETED_TOMBSTONE_RETENTION_MS).as("max_age_ms"))
+      .where("status", "=", "completed")
       .where((eb) =>
         eb.or([
-          eb.and([
-            eb("status", "in", ["completed", "failed"]),
-            eb("recovery_state", "=", "completed_bounded"),
-            eb("retention_id_prefix", "is not", null),
-            eb("enqueued_at", "<", eb(eb.val(now), "-", eb.ref("retention_max_age_ms"))),
-          ]),
-          eb.and([
-            eb("status", "=", "completed"),
-            eb("enqueued_at", "<", now - COMPLETED_TOMBSTONE_RETENTION_MS),
-            eb.or([
-              eb("recovery_state", "is", null),
-              eb("recovery_state", "not in", ["completed_permanent", "completed_bounded"]),
+          eb("recovery_state", "is", null),
+          eb("recovery_state", "not in", ["completed_permanent", "completed_bounded"]),
+        ]),
+      );
+    const [row] = executeSqliteQuerySync(
+      db,
+      queueDb
+        .selectFrom(
+          boundedDeliveryReceipts(db)
+            .clearSelect()
+            .select(["enqueued_at", "retention_max_age_ms as max_age_ms"])
+            .where("retention_max_age_ms", "is not", null)
+            .$narrowType<{ max_age_ms: NotNull }>()
+            .unionAll(ordinary)
+            .as("receipts"),
+        )
+        .selectAll()
+        .orderBy((eb) => eb("enqueued_at", "+", eb.ref("max_age_ms")))
+        .limit(1),
+    ).rows;
+    // Keep the operands separate: their sum can exceed JavaScript's safe-integer
+    // range. Expiry uses the same subtraction as the DELETE predicate.
+    expiry = row
+      ? { enqueuedAt: sqliteNumber(row.enqueued_at), maxAgeMs: sqliteNumber(row.max_age_ms) }
+      : null;
+    publishSqliteDatabaseAdmission(db, nextDeliveryQueueTombstoneExpiryAdmission, expiry);
+  }
+  if (!isDeliveryQueueTombstonePruneDue(expiry, now)) {
+    return;
+  }
+  runSqliteSingleStatementSync(db, () => {
+    const result = executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<DeliveryQueueDatabase>(db)
+        .deleteFrom("delivery_queue_entries")
+        .where((eb) =>
+          eb.or([
+            eb.and([
+              eb("status", "in", ["completed", "failed"]),
+              eb("recovery_state", "=", "completed_bounded"),
+              eb("retention_id_prefix", "is not", null),
+              eb("enqueued_at", "<", eb(eb.val(now), "-", eb.ref("retention_max_age_ms"))),
+            ]),
+            eb.and([
+              eb("status", "=", "completed"),
+              eb("enqueued_at", "<", now - COMPLETED_TOMBSTONE_RETENTION_MS),
+              eb.or([
+                eb("recovery_state", "is", null),
+                eb("recovery_state", "not in", ["completed_permanent", "completed_bounded"]),
+              ]),
             ]),
           ]),
-        ]),
-      ),
-  );
-  publishSqliteDatabaseAdmission(db, nextDeliveryQueueTombstoneExpiryAdmission, undefined);
-  if ((result.numAffectedRows ?? 0n) > 0n) {
-    publishSqliteDatabaseAdmission(db, failedDeliveryQueueHealthAdmission, undefined);
-  }
+        ),
+    );
+    publishSqliteDatabaseAdmission(db, nextDeliveryQueueTombstoneExpiryAdmission, undefined);
+    if ((result.numAffectedRows ?? 0n) > 0n) {
+      publishSqliteDatabaseAdmission(db, failedDeliveryQueueHealthAdmission, undefined);
+    }
+  });
 }
 
 /** CAS-compacts one exact row, or deletes it when no fence is authored. */
@@ -434,19 +437,6 @@ export function upsertBoundDeliveryQueueEntryInDatabase(
         nextDeliveryQueueTombstoneExpiryAdmission,
         undefined,
       );
-    }
-    if (bound.row.queue_name === DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME) {
-      const oldest = getSqliteDatabaseAdmission(
-        database.db,
-        oldestDeliveryQueueMediaStageAdmission,
-      );
-      if (oldest !== undefined) {
-        publishSqliteDatabaseAdmission(
-          database.db,
-          oldestDeliveryQueueMediaStageAdmission,
-          oldest === null ? bound.row.enqueued_at : Math.min(oldest, bound.row.enqueued_at),
-        );
-      }
     }
   }
   return changed;

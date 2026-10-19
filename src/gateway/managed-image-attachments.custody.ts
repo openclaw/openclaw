@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../config/state-dir.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../infra/sqlite-worker-contract.js";
 import { getMediaDir } from "../media/store.js";
 import { captureChannelReadScope } from "../shared/channel-read-authority.js";
@@ -125,7 +126,7 @@ async function hasUnmigratedManagedImageMetadata(stateDir: string): Promise<bool
     const names = await fs.readdir(path.join(stateDir, "media", "outgoing", "records"));
     return names.some((name) => name.endsWith(".json") || name.includes(".json.doctor-importing-"));
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ENOENT";
+    return !hasErrnoCode(error, "ENOENT");
   }
 }
 

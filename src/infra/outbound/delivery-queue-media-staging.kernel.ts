@@ -3,6 +3,7 @@ import { asNullableRecord, isStringArray } from "@openclaw/normalization-core/re
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
+import { oldestDeliveryQueueMediaStageAdmission } from "../delivery-queue-cache.js";
 import {
   expireStagingAndLoadDeliveryQueueEntriesInDatabase,
   upsertDeliveryQueueEntryInDatabase,
@@ -10,6 +11,10 @@ import {
 import type { DeliveryQueueEntryState } from "../delivery-queue-sqlite.types.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../kysely-sync.js";
 import { generateSecureUuid } from "../secure-random.js";
+import {
+  getSqliteDatabaseAdmission,
+  publishSqliteDatabaseAdmission,
+} from "../sqlite-database-admission.js";
 import {
   DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
   OUTBOUND_EXECUTABLE_QUEUE_NAMES,
@@ -54,6 +59,14 @@ export function createDeliveryQueueMediaRetentionInDatabase(
   );
   if (!inserted) {
     throw new Error(`Delivery queue media stage already exists: ${id}`);
+  }
+  const oldest = getSqliteDatabaseAdmission(database.db, oldestDeliveryQueueMediaStageAdmission);
+  if (oldest !== undefined) {
+    publishSqliteDatabaseAdmission(
+      database.db,
+      oldestDeliveryQueueMediaStageAdmission,
+      oldest === null ? enqueuedAt : Math.min(oldest, enqueuedAt),
+    );
   }
   return id;
 }
