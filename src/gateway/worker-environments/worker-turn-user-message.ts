@@ -11,9 +11,11 @@ import { SessionTranscriptMessageCommittedError } from "../../agents/sessions/se
 import { withSessionManagerWrite } from "../../agents/sessions/session-manager-write-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import { withoutSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { readSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
 import type { prepareWorkerTurnMedia } from "./worker-turn-media.js";
 import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
@@ -180,13 +182,35 @@ export async function readWorkerTurnInputContext(params: WorkerTurnInputParams) 
     provider: modelRef.provider,
     model: modelRef.model,
   });
-  const manager = userMessageAlreadyPersisted
+  let manager = userMessageAlreadyPersisted
     ? await SessionManager.openModelContextAsync(transcriptTarget, {
         admission,
         signal: turn.abortSignal,
       })
     : await SessionManager.openAsync(transcriptTarget, undefined, undefined, turn.abortSignal);
   assertCurrent();
+  let baseLeafId = admission?.entryId ?? manager.getLeafId();
+  if (admission) {
+    const current = await withoutSessionTranscriptReadFence(() =>
+      SessionManager.openModelContextAsync(transcriptTarget, { signal: turn.abortSignal }),
+    );
+    assertCurrent();
+    const branch = current.getBranch();
+    const admittedIndex = branch.findIndex((entry) => entry.id === admission.entryId);
+    const suffix = branch.slice(admittedIndex + 1);
+    // A fallback continues its own committed work. Foreign appends keep the admission fence.
+    if (
+      admittedIndex >= 0 &&
+      suffix.length > 0 &&
+      suffix.every(
+        (entry) =>
+          entry.type === "message" && readSessionTranscriptRunId(entry.message) === turn.runId,
+      )
+    ) {
+      manager = current;
+      baseLeafId = current.getLeafId();
+    }
+  }
   const contextMessages = manager.buildSessionContext().messages;
   const leaf = manager.getLeafEntry();
   const history =
@@ -200,6 +224,6 @@ export async function readWorkerTurnInputContext(params: WorkerTurnInputParams) 
     manager,
     history,
     userMessageAlreadyPersisted,
-    baseLeafId: admission?.entryId ?? manager.getLeafId(),
+    baseLeafId,
   };
 }
