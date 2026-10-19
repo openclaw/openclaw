@@ -21,19 +21,7 @@ import { DashboardsPage } from "./dashboards-page.tsx";
 import { page as dashboardRoute } from "./route.ts";
 import type { DashboardsRouteData } from "./view.tsx";
 
-type DashboardsPageElement = HTMLElement;
-
-function result(sessionRow: GatewaySessionRow): SessionsListResult {
-  return {
-    ts: 1,
-    path: "(multiple)",
-    count: 1,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions: [sessionRow],
-  };
-}
-
-function results(sessionRows: GatewaySessionRow[]): SessionsListResult {
+function result(...sessionRows: GatewaySessionRow[]): SessionsListResult {
   return {
     ts: 1,
     path: "(multiple)",
@@ -43,25 +31,38 @@ function results(sessionRows: GatewaySessionRow[]): SessionsListResult {
   };
 }
 
-function row(key: string, displayName: string): GatewaySessionRow {
-  return {
-    key,
-    kind: "direct",
-    boardFace: "dashboard",
-    displayName,
-    updatedAt: 1,
-  };
+function row(
+  key: string,
+  displayName: string,
+  extras: Partial<GatewaySessionRow> = {},
+): GatewaySessionRow {
+  return { key, kind: "direct", boardFace: "dashboard", displayName, updatedAt: 1, ...extras };
 }
 
-function routeData(sessionRow: GatewaySessionRow): DashboardsRouteData {
+function routeData(...rows: GatewaySessionRow[]): DashboardsRouteData {
   return {
-    result: result(sessionRow),
+    result: result(...rows),
     error: null,
     basePath: "",
     fallbackAgentId: "main",
     mainKey: "main",
     globalScope: false,
   };
+}
+
+function snapshot(
+  listResult: SessionsListResult | null,
+  agentId: string | null = null,
+  error: string | null = null,
+): SessionListSnapshot {
+  return { result: listResult, agentId, loading: false, error };
+}
+
+function changeValue(control: HTMLInputElement | HTMLSelectElement, value: string) {
+  control.value = value;
+  control.dispatchEvent(
+    new Event(control instanceof HTMLInputElement ? "input" : "change", { bubbles: true }),
+  );
 }
 
 function createDashboardClient() {
@@ -95,7 +96,7 @@ function controlPreviewFrames(): () => void {
   };
 }
 
-async function settleDashboardPreviews(element: DashboardsPageElement, runFrame: () => void) {
+async function settleDashboardPreviews(element: HTMLElement, runFrame: () => void) {
   flush();
   runFrame();
   flush();
@@ -117,9 +118,7 @@ async function settleDashboardPreviews(element: DashboardsPageElement, runFrame:
 }
 
 describe("DashboardsPage", () => {
-  beforeEach(async () => {
-    await i18n.setLocale("en");
-  });
+  beforeEach(() => i18n.setLocale("en"));
 
   afterEach(() => {
     cleanupSolid();
@@ -134,8 +133,8 @@ describe("DashboardsPage", () => {
     const snapshots = new Map<string, SessionListSnapshot>();
     const queryKey = (options: SessionListOptions) => options.agentId ?? "all";
     const allResult = result(row("agent:main:before", "Before"));
-    snapshots.set("all", { result: allResult, agentId: null, loading: false, error: null });
-    snapshots.set("writer", { result: null, agentId: null, loading: false, error: null });
+    snapshots.set("all", snapshot(allResult));
+    snapshots.set("writer", snapshot(null));
     const refreshList = vi.fn(async () => undefined);
     const subscribeList = vi.fn(
       (query: SessionListOptions, listener: (snapshot: SessionListSnapshot) => void) => {
@@ -185,44 +184,29 @@ describe("DashboardsPage", () => {
     const element = mounted.container;
     flush();
 
-    expect(subscribeList).toHaveBeenCalledWith(
-      {
-        limit: SIDEBAR_SESSION_ROSTER_LIMIT,
-        rowMode: "dashboard",
-        source: "dashboard",
-        excludeDock: true,
-        hasBoard: true,
-        archivedFilter: "all",
-      },
-      expect.any(Function),
-    );
-    expect(refreshList).not.toHaveBeenCalled();
-    const retiredListener = listListeners.get("all")!;
-
-    selectionState.scopeId = "writer";
-    selectionListeners.forEach((listener) => listener());
-    await waitForSolid(() => expect(refreshList).toHaveBeenCalledTimes(1));
-    expect(refreshList).toHaveBeenCalledWith({
+    const expectedQuery = {
       limit: SIDEBAR_SESSION_ROSTER_LIMIT,
       rowMode: "dashboard",
       source: "dashboard",
       excludeDock: true,
       hasBoard: true,
       archivedFilter: "all",
-      agentId: "writer",
-    });
+    };
+    expect(subscribeList).toHaveBeenCalledWith(expectedQuery, expect.any(Function));
+    expect(refreshList).not.toHaveBeenCalled();
+    const retiredListener = listListeners.get("all")!;
+
+    selectionState.scopeId = "writer";
+    selectionListeners.forEach((listener) => listener());
+    await waitForSolid(() => expect(refreshList).toHaveBeenCalledTimes(1));
+    expect(refreshList).toHaveBeenCalledWith({ ...expectedQuery, agentId: "writer" });
     expect(element.textContent).toContain("Before");
 
-    const publishWriter = (snapshot: SessionListSnapshot) => {
-      snapshots.set("writer", snapshot);
-      listListeners.get("writer")?.(snapshot);
+    const publishWriter = (next: SessionListSnapshot) => {
+      snapshots.set("writer", next);
+      listListeners.get("writer")?.(next);
     };
-    publishWriter({
-      result: null,
-      agentId: "writer",
-      loading: false,
-      error: "Writer initial load failed",
-    });
+    publishWriter(snapshot(null, "writer", "Writer initial load failed"));
     flush();
     expect(element.querySelector('[role="alert"]')?.textContent).toContain(
       "Writer initial load failed",
@@ -230,12 +214,8 @@ describe("DashboardsPage", () => {
     expect(element.querySelector('[aria-busy="true"]')).toBeNull();
     expect(refreshList).toHaveBeenCalledTimes(1);
 
-    publishWriter({
-      result: result(row("agent:writer:current", "Writer dashboard")),
-      agentId: "writer",
-      loading: false,
-      error: null,
-    });
+    const writerRow = row("agent:writer:current", "Writer dashboard");
+    publishWriter(snapshot(result(writerRow), "writer"));
     await waitForSolid(() => expect(element.textContent).toContain("Writer dashboard"));
     setSeed(undefined);
     flush();
@@ -245,44 +225,26 @@ describe("DashboardsPage", () => {
     expect(element.textContent).toContain("Writer dashboard");
     expect(element.textContent).not.toContain("Stale route");
     await settleDashboardPreviews(element, runFrame);
-    retiredListener({
-      result: result(row("agent:main:retired", "Retired")),
-      agentId: null,
-      loading: false,
-      error: "Retired scope refresh failed",
-    });
+    retiredListener(
+      snapshot(result(row("agent:main:retired", "Retired")), null, "Retired scope refresh failed"),
+    );
     flush();
     expect(element.textContent).not.toContain("Retired");
 
     const writerListener = listListeners.get("writer")!;
-    publishWriter({
-      result: result(row("agent:writer:current", "Writer dashboard")),
-      agentId: "writer",
-      loading: false,
-      error: "Writer refresh failed",
-    });
+    publishWriter(snapshot(result({ ...writerRow }), "writer", "Writer refresh failed"));
     flush();
     expect(element.textContent).toContain("Writer dashboard");
     expect(element.querySelector('[role="alert"]')?.textContent).toContain("Writer refresh failed");
     expect(element.querySelector('[role="alert"] button')).toBeNull();
-    publishWriter({
-      result: result(row("agent:writer:current", "Recovered dashboard")),
-      agentId: "writer",
-      loading: false,
-      error: null,
-    });
+    publishWriter(snapshot(result(row("agent:writer:current", "Recovered dashboard")), "writer"));
     flush();
     await settleDashboardPreviews(element, runFrame);
     expect(element.textContent).toContain("Recovered dashboard");
     expect(element.querySelector('[role="alert"]')).toBeNull();
 
     mounted.unmount();
-    writerListener({
-      result: null,
-      agentId: "writer",
-      loading: false,
-      error: "Detached refresh failed",
-    });
+    writerListener(snapshot(null, "writer", "Detached refresh failed"));
     flush();
     expect(element.textContent).not.toContain("Detached refresh failed");
   });
@@ -291,18 +253,13 @@ describe("DashboardsPage", () => {
     "retains every dashboard page across row events and retires late pages (retired: %s)",
     async (retired) => {
       const runFrame = controlPreviewFrames();
-      const firstRow = {
-        ...row("agent:main:new", "New dashboard"),
-        sessionId: "new",
-        hasBoard: true,
-      };
-      const secondRow = {
-        ...row("agent:main:old", "Old dashboard"),
+      const firstRow = row("agent:main:new", "New dashboard", { sessionId: "new", hasBoard: true });
+      const secondRow = row("agent:main:old", "Old dashboard", {
         sessionId: "old",
         hasBoard: true,
-      };
+      });
       const page = (rows: GatewaySessionRow[], offset: number, hasMore: boolean) => ({
-        ...results(rows),
+        ...result(...rows),
         totalCount: 2,
         offset,
         limitApplied: 1,
@@ -321,7 +278,7 @@ describe("DashboardsPage", () => {
         }
         if (method === "sessions.list") {
           if (!Reflect.get(params ?? {}, "hasBoard")) {
-            return results([]);
+            return result();
           }
           requests.push(params);
           return Reflect.get(params ?? {}, "offset")
@@ -376,8 +333,7 @@ describe("DashboardsPage", () => {
         expect(requests).toHaveLength(2);
         expect(sessions.listSnapshot(dashboardSessionListQuery()).result?.sessions).toHaveLength(2);
         const search = element.querySelector<HTMLInputElement>('input[type="search"]')!;
-        search.value = "old";
-        search.dispatchEvent(new Event("input", { bubbles: true }));
+        changeValue(search, "old");
         flush();
         expect(element.querySelectorAll("[data-dashboard-session]")).toHaveLength(1);
         expect(element.textContent).toContain("Old dashboard");
@@ -390,30 +346,20 @@ describe("DashboardsPage", () => {
   );
 
   it("renders the route host and filters by search and author and sorts cards by title", async () => {
-    const data: DashboardsRouteData = {
-      result: results([
-        {
-          ...row("agent:main:dashboard:zulu", "Zulu monitor"),
-          updatedAt: 30,
-          createdActor: { type: "human", id: "peter", label: "Peter" },
-        },
-        {
-          ...row("agent:main:dashboard:alpha", "Alpha signals"),
-          updatedAt: 10,
-          createdActor: { type: "human", id: "mira", label: "Mira" },
-        },
-        {
-          ...row("agent:main:dashboard:bravo", "Bravo health"),
-          updatedAt: 20,
-          createdActor: { type: "human", id: "peter", label: "Peter" },
-        },
-      ]),
-      error: null,
-      basePath: "",
-      fallbackAgentId: "main",
-      mainKey: "main",
-      globalScope: false,
-    };
+    const data = routeData(
+      row("agent:main:dashboard:zulu", "Zulu monitor", {
+        updatedAt: 30,
+        createdActor: { type: "human", id: "peter", label: "Peter" },
+      }),
+      row("agent:main:dashboard:alpha", "Alpha signals", {
+        updatedAt: 10,
+        createdActor: { type: "human", id: "mira", label: "Mira" },
+      }),
+      row("agent:main:dashboard:bravo", "Bravo health", {
+        updatedAt: 20,
+        createdActor: { type: "human", id: "peter", label: "Peter" },
+      }),
+    );
     const context = {
       gateway: createApplicationGateway().gateway,
       agentSelection: { state: { scopeId: null }, subscribe: () => () => {} },
@@ -434,33 +380,25 @@ describe("DashboardsPage", () => {
     expect(element.querySelectorAll("[data-dashboard-session]")).toHaveLength(3);
     expect(element.querySelector(".dashboard-preview")?.hasAttribute("inert")).toBe(true);
 
-    const search = element.querySelector<HTMLInputElement>('input[type="search"]');
+    const search = element.querySelector<HTMLInputElement>('input[type="search"]')!;
     expect(search).not.toBeNull();
-    if (!search) {
-      return;
-    }
-    search.value = "signals";
-    search.dispatchEvent(new Event("input", { bubbles: true }));
+    changeValue(search, "signals");
     flush();
     expect(element.querySelectorAll("[data-dashboard-session]")).toHaveLength(1);
     expect(element.textContent).toContain("Alpha signals");
 
-    search.value = "";
-    search.dispatchEvent(new Event("input", { bubbles: true }));
+    changeValue(search, "");
     flush();
     const selects = element.querySelectorAll<HTMLSelectElement>("select");
     const authorSelect = selects.item(0);
     const sortSelect = selects.item(1);
-    authorSelect.value = "mira";
-    authorSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    changeValue(authorSelect, "mira");
     flush();
     expect(element.querySelectorAll("[data-dashboard-session]")).toHaveLength(1);
     expect(element.textContent).toContain("By Mira");
 
-    authorSelect.value = "";
-    authorSelect.dispatchEvent(new Event("change", { bubbles: true }));
-    sortSelect.value = "title";
-    sortSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    changeValue(authorSelect, "");
+    changeValue(sortSelect, "title");
     flush();
     expect(
       Array.from(element.querySelectorAll(".dashboard-card__heading h2"), (heading) =>
