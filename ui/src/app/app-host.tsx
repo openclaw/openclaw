@@ -44,6 +44,7 @@ import { ShellNavigationOwner, type ShellNavigationHost } from "./app-shell-navi
 import { ShellPresentation } from "./app-shell-presentation.ts";
 import "./app-shell-locale-recovery.ts";
 import { createShellViewCallbacks } from "./app-shell-view-callbacks.ts";
+import { readShellView } from "./app-shell-view-state.ts";
 import { ApplicationShell, type ShellViewHost } from "./app-shell-view.tsx";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext } from "./context.ts";
@@ -59,7 +60,9 @@ import {
   EXEC_APPROVAL_ELEMENT,
   createLazyCustomElementRequests,
   LINK_READER_PANEL_ELEMENT,
+  MACOS_TITLEBAR_ELEMENT,
   type OptionalCustomElement,
+  SIDEBAR_ATTENTION_ELEMENT,
   TERMINAL_PANEL_ELEMENT,
 } from "./lazy-custom-element.ts";
 import { createLazyRenderer } from "./lazy-renderer.ts";
@@ -421,6 +424,7 @@ export class ShellOwner
   }
 
   private resetShellState() {
+    this.resetConnectionFeedback();
     this.outboxStoreRuntime?.invalidate();
     this.navDrawerOpen = false;
     this.desktopNavigationExpanded = false;
@@ -586,6 +590,29 @@ export class ShellOwner
 
   override afterCommit(): void {
     this.commitPresentation();
+    if (this.context && this.runtime) {
+      const state = readShellView(this);
+      this.syncConnectionFeedback(state.gatewayStatus.kind);
+      this.mobileGatewayStatus = state.mobileGatewayStatus;
+      this.lazyCustomElements.requestWhileActive(
+        this.onboardingMemoryImportElement,
+        state.memoryImportActive,
+      );
+      if (state.nativeWebChrome && !state.onboarding) {
+        this.lazyCustomElements.preload(MACOS_TITLEBAR_ELEMENT, { reportError: true });
+      }
+      if (!state.nativeEmbed && (state.onboarding || state.floatingAttentionVisible)) {
+        this.lazyCustomElements.preload(SIDEBAR_ATTENTION_ELEMENT, { reportError: true });
+      }
+      if (!state.settingsTakeover && !state.nativeEmbed) {
+        Object.assign(this.navigationSidebar, state.sidebarProperties, {
+          gatewayStatus: state.gatewayStatus,
+          connectionRecovery: this.connectionRecovery,
+          connectionFlagVisible: this.connectionFlagVisible,
+          connectionFlagAllowed: state.navCollapsed && !state.mobileNavLayout,
+        });
+      }
+    }
     this.syncDocumentTitle();
     // Theme and breakpoint owners sync their changes; route/runtime changes
     // can change whether the committed shell uses the chat background.

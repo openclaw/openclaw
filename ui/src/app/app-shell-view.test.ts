@@ -2,7 +2,7 @@
 
 import { createRouter, definePage } from "@openclaw/uirouter";
 import { render } from "@solidjs/testing-library";
-import { createComponent, createRoot, flush } from "solid-js";
+import { createComponent, createRoot, flush, onSettled } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { ControlUiHost, ControlUiReplacement } from "../../../src/plugin-sdk/control-ui.js";
 import { GatewayBrowserClient } from "../api/gateway.ts";
@@ -32,14 +32,16 @@ async function mountShell() {
   owner.routeState = { routeId: "chat" };
   document.body.append(owner.element);
   const view = render(
-    () =>
-      createComponent(ApplicationProvider, {
+    () => {
+      onSettled(() => owner.mountPresentation());
+      return createComponent(ApplicationProvider, {
         host: owner.element,
         value: runtime.context,
         get children() {
           return createComponent(ApplicationShell, { host: owner });
         },
-      }),
+      });
+    },
     {
       container: owner.element,
     },
