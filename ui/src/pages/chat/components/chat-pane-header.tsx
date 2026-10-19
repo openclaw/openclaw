@@ -108,6 +108,7 @@ export type ChatPaneHeaderProps = ChatPaneLayoutMenuProps & {
   copiedAction: ChatPaneHeaderAction | null;
   renameDisabledReason?: string;
   runningSubagentCount?: number;
+  onOpenSubagents?: (focus?: boolean) => void;
   detailsControl?: PaneDetailsProps;
   onOpenDetails?: (source: HTMLElement) => void;
   conversationVisible?: boolean;
@@ -613,10 +614,7 @@ export function ChatPaneHeader(props: ChatPaneHeaderProps) {
           </Show>
           <div class="chat-pane__actions">
             <Show when={!props.narrow}>
-              <RunningSubagents
-                count={props.runningSubagentCount}
-                onOpen={props.detailsControl?.chat?.onOpenSubagents}
-              />
+              <RunningSubagents count={props.runningSubagentCount} onOpen={props.onOpenSubagents} />
             </Show>
             <Show when={props.runAction}>{(action) => <PaneSubagentStop {...action()} />}</Show>
             <Show when={props.sharingControl}>
@@ -636,10 +634,7 @@ export function ChatPaneHeader(props: ChatPaneHeaderProps) {
           </div>
         </div>
         <Show when={props.narrow}>
-          <RunningSubagents
-            count={props.runningSubagentCount}
-            onOpen={props.detailsControl?.chat?.onOpenSubagents}
-          />
+          <RunningSubagents count={props.runningSubagentCount} onOpen={props.onOpenSubagents} />
         </Show>
       </div>
       <Show when={incognito()}>

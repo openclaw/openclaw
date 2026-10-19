@@ -122,6 +122,58 @@ suite.define(() => {
     },
   );
 
+  it.each([
+    { key: "agent:main:acp:coder", mixed: false },
+    { key: "agent:main:acp:coder", mixed: true },
+    { key: "agent:main:worker:unknown", mixed: false },
+  ])("keeps unlisted child counts static for $key (mixed: $mixed)", async ({ key, mixed }) => {
+    await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
+      const now = Date.now();
+      const parent = {
+        key: "agent:main:unlisted-parent",
+        sessionId: "unlisted-parent",
+        kind: "direct",
+        label: "Review delegated work",
+        updatedAt: now,
+        hasActiveSubagentRun: true,
+      } satisfies GatewaySessionRow;
+      const child = {
+        key,
+        sessionId: "unlisted-child",
+        kind: "direct",
+        label: "External worker",
+        parentSessionKey: parent.key,
+        spawnedBy: parent.key,
+        updatedAt: now,
+        status: "running",
+        hasActiveRun: true,
+        activeRunIds: ["external-run"],
+      } satisfies GatewaySessionRow;
+      const listed = {
+        ...child,
+        key: "agent:main:subagent:listed",
+        sessionId: "listed-child",
+        classification: "subagent",
+        label: "Listed worker",
+      } satisfies GatewaySessionRow;
+      await installMockGateway(page, {
+        sessionKey: parent.key,
+        communityInvite: false,
+        sessions: [parent, child, ...(mixed ? [listed] : [])],
+        historyMessages: [{ role: "assistant", content: "Delegated work is underway." }],
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, parent.key));
+      const pane = page.locator(".chat-pane-cache__pane--active");
+      await pane.getByText("Delegated work is underway.", { exact: true }).waitFor();
+      const status = pane.locator(".chat-pane__subagents-running");
+      await status.waitFor();
+      expect(await status.textContent()).toContain(mixed ? "2 running" : "1 running");
+      expect(await status.evaluate((node) => node.tagName)).toBe("SPAN");
+      await status.click();
+      expect(await pane.locator("openclaw-chat-subagents-panel").isVisible()).toBe(false);
+    });
+  });
+
   it("keeps new batches collapsed until Subagents is opened manually without duplicate wait status", async () => {
     await suite.withPage(
       {
