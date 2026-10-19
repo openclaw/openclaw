@@ -2,6 +2,7 @@ import type {
   ProviderCatalogContext,
   ProviderPrepareDynamicModelContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { discoverLlamaServerProvider, prepareLlamaServerDynamicModel } from "./provider.js";
 
@@ -17,11 +18,11 @@ vi.mock("./auth.js", async (importOriginal) => ({
   resolveLlamaServerRuntimeApiKey: runtimeApiKeyMock,
 }));
 
-function model() {
+function model(name = "org/model:Q4") {
   return {
     config: {
       id: "org/model:Q4",
-      name: "org/model:Q4",
+      name,
       reasoning: false,
       input: ["text" as const],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -35,28 +36,35 @@ function model() {
   };
 }
 
-function success() {
+function success(name?: string) {
   return {
     kind: "success" as const,
     endpoint: {
       origin: "http://127.0.0.1:8080",
       inferenceBaseUrl: "http://127.0.0.1:8080/v1",
     },
-    models: [model()],
+    models: [model(name)],
   };
 }
 
-function catalogContext(): ProviderCatalogContext {
+function catalogContext(provider?: Partial<ModelProviderConfig>): ProviderCatalogContext {
+  const config: ProviderCatalogContext["config"] = {};
+  if (provider) {
+    const configured = { baseUrl: "http://localhost:8080/v1", models: [], ...provider };
+    config.models = { providers: { "llama-cpp": configured } };
+  }
   return {
-    config: {},
+    config,
     env: {},
     resolveProviderApiKey: vi.fn(() => ({ apiKey: undefined })),
-    resolveProviderAuth: vi.fn(() => ({
-      apiKey: undefined,
-      mode: "none" as const,
-      source: "none" as const,
-    })),
+    resolveProviderAuth: vi.fn(
+      () => ({ apiKey: undefined, mode: "none", source: "none" }) as const,
+    ),
   };
+}
+
+function expectDiscovery(params: Record<string, unknown>) {
+  expect(discoverMock).toHaveBeenCalledWith(expect.objectContaining(params));
 }
 
 function dynamicContext(
@@ -78,8 +86,7 @@ function dynamicContext(
 describe("llama-server provider discovery", () => {
   beforeEach(() => {
     discoverMock.mockReset();
-    runtimeApiKeyMock.mockReset();
-    runtimeApiKeyMock.mockResolvedValue(undefined);
+    runtimeApiKeyMock.mockReset().mockResolvedValue(undefined);
   });
 
   describe("live catalog outcomes", () => {
@@ -100,21 +107,13 @@ describe("llama-server provider discovery", () => {
         },
         outcomes: [{ provider: "llama-cpp", profileId: "llama-cpp:default", status: "ready" }],
       });
-      expect(discoverMock).toHaveBeenCalledWith(expect.objectContaining({ apiKey: "profile-key" }));
+      expectDiscovery({ apiKey: "profile-key" });
     });
 
     it("prefers configured Authorization over ambient API-key discovery auth", async () => {
       discoverMock.mockResolvedValue(success());
-      const ctx = catalogContext();
-      ctx.config.models = {
-        providers: {
-          "llama-cpp": {
-            baseUrl: "http://localhost:8080/v1",
-            headers: { Authorization: "Bearer proxy-key" },
-            models: [],
-          },
-        },
-      };
+      const headers = { Authorization: "Bearer proxy-key" };
+      const ctx = catalogContext({ headers });
       ctx.resolveProviderApiKey = vi.fn(() => ({
         apiKey: "LLAMA_SERVER_API_KEY",
         discoveryApiKey: "ambient-key",
@@ -124,12 +123,7 @@ describe("llama-server provider discovery", () => {
       const result = await discoverLlamaServerProvider(ctx);
       expect(result?.outcomes).toEqual([{ provider: "llama-cpp", status: "ready" }]);
 
-      expect(discoverMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          apiKey: undefined,
-          headers: { Authorization: "Bearer proxy-key" },
-        }),
-      );
+      expectDiscovery({ apiKey: undefined, headers });
     });
 
     it.each([
@@ -139,22 +133,8 @@ describe("llama-server provider discovery", () => {
     ])(
       "reports $failure as $status instead of publishing empty discovery",
       async ({ failure, status }) => {
-        discoverMock.mockResolvedValue({
-          ...failure,
-          endpoint: {
-            origin: "http://localhost:8080",
-            inferenceBaseUrl: "http://localhost:8080/v1",
-          },
-        });
-        const ctx = catalogContext();
-        ctx.config.models = {
-          providers: {
-            "llama-cpp": {
-              baseUrl: "http://localhost:8080/v1",
-              models: [model().config],
-            },
-          },
-        };
+        discoverMock.mockResolvedValue({ ...failure, endpoint: success().endpoint });
+        const ctx = catalogContext({ models: [model().config] });
 
         await expect(discoverLlamaServerProvider(ctx)).resolves.toEqual({
           providers: {},
@@ -169,57 +149,36 @@ describe("llama-server provider discovery", () => {
       },
     );
 
-    it.each(["custom-local"])("keeps unconfigured probes quiet with marker %s", async (apiKey) => {
+    it("keeps unconfigured probes quiet with a custom-local marker", async () => {
       discoverMock.mockResolvedValue({ kind: "unreachable", error: new Error("offline") });
       const ctx = catalogContext();
-      ctx.resolveProviderApiKey = () => ({ apiKey });
+      ctx.resolveProviderApiKey = () => ({ apiKey: "custom-local" });
       await expect(discoverLlamaServerProvider(ctx)).resolves.toBeNull();
     });
   });
 
   it("keeps requested models and API keys isolated by agent runtime and auth profile", async () => {
-    const first = success();
-    const second = {
-      ...success(),
-      models: [
-        {
-          ...model(),
-          config: { ...model().config, name: "second scope" },
-        },
-      ],
-    };
-    discoverMock.mockResolvedValueOnce(first).mockResolvedValueOnce(second);
+    discoverMock.mockResolvedValueOnce(success()).mockResolvedValueOnce(success("second scope"));
     runtimeApiKeyMock
       .mockResolvedValueOnce("first-profile-key")
       .mockResolvedValueOnce("second-profile-key");
-    const firstCtx = dynamicContext({
-      agentRuntimeId: "runtime-one",
-      authProfileId: "profile-one",
-    });
-    const secondCtx = dynamicContext({
-      agentRuntimeId: "runtime-two",
-      authProfileId: "profile-two",
-    });
+    const firstModel = await prepareLlamaServerDynamicModel(
+      dynamicContext({ agentRuntimeId: "runtime-one", authProfileId: "profile-one" }),
+    );
+    const secondModel = await prepareLlamaServerDynamicModel(
+      dynamicContext({ agentRuntimeId: "runtime-two", authProfileId: "profile-two" }),
+    );
 
-    const firstModel = await prepareLlamaServerDynamicModel(firstCtx);
-    const secondModel = await prepareLlamaServerDynamicModel(secondCtx);
-
-    expect(runtimeApiKeyMock).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ profileId: "profile-one" }),
-    );
-    expect(runtimeApiKeyMock).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ profileId: "profile-two" }),
-    );
-    expect(discoverMock).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ apiKey: "first-profile-key" }),
-    );
-    expect(discoverMock).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ apiKey: "second-profile-key" }),
-    );
+    for (const [index, profileId, apiKey] of [
+      [1, "profile-one", "first-profile-key"],
+      [2, "profile-two", "second-profile-key"],
+    ] as const) {
+      expect(runtimeApiKeyMock).toHaveBeenNthCalledWith(
+        index,
+        expect.objectContaining({ profileId }),
+      );
+      expect(discoverMock).toHaveBeenNthCalledWith(index, expect.objectContaining({ apiKey }));
+    }
     expect(firstModel?.name).toBe("org/model:Q4");
     expect(secondModel?.name).toBe("second scope");
   });
@@ -235,22 +194,15 @@ describe("llama-server provider discovery", () => {
       }),
     );
 
-    expect(discoverMock).toHaveBeenCalledWith(
-      expect.objectContaining({ apiKey: undefined, headers }),
-    );
+    expectDiscovery({ apiKey: undefined, headers });
   });
 
-  it.each([
-    {
-      label: "the server is unavailable",
-      discovery: {
-        kind: "unreachable" as const,
-        endpoint: { origin: "http://localhost:8080", inferenceBaseUrl: "http://localhost:8080/v1" },
-        error: new Error("offline"),
-      },
-    },
-  ])("returns no stale model when $label", async ({ discovery }) => {
-    discoverMock.mockResolvedValueOnce(success()).mockResolvedValueOnce(discovery);
+  it("returns no stale model when the server is unavailable", async () => {
+    discoverMock.mockResolvedValueOnce(success()).mockResolvedValueOnce({
+      kind: "unreachable",
+      endpoint: success().endpoint,
+      error: new Error("offline"),
+    });
     const ctx = dynamicContext({
       agentRuntimeId: "failed-refresh-runtime",
     });
