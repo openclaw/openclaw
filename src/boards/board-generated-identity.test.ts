@@ -30,11 +30,7 @@ function identityWidget(
 }
 
 function generatedIdentity(key: string, fallbackName: string) {
-  return {
-    source: "show_widget" as const,
-    key: key.repeat(64),
-    fallbackName,
-  };
+  return { source: "show_widget" as const, key: key.repeat(64), fallbackName };
 }
 
 afterEach(closeBoardDatabases);

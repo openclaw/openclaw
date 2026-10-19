@@ -28,6 +28,7 @@ import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { BoardValidationError } from "./board-layout.js";
 import {
   boardFixture,
+  boardClient,
   closeBoardDatabases,
   htmlWidget,
   mcpContent,
@@ -50,10 +51,43 @@ function fixture() {
   });
   return {
     ...seeded,
-    store,
+    ...boardClient(store, seeded.target),
     putHtml: (name: string, html = `<p>${name}</p>`) =>
       store.putWidget(htmlWidget(seeded.sessionKey, name, html)),
   };
+}
+
+function observeChanges(sessionKey: string) {
+  const changes: SessionRowChange[] = [];
+  const unsubscribe = sessionChanges.subscribe((change) => {
+    if ("sessionKey" in change && change.sessionKey === sessionKey) {
+      changes.push(change);
+    }
+  });
+  return { changes, unsubscribe };
+}
+
+function interceptSnapshotRead(
+  afterRead: (
+    snapshot: Awaited<
+      ReturnType<
+        ReturnType<typeof historyReaders.createSessionHistoryWorkerReaders>["readBoardSnapshot"]
+      >
+    >,
+  ) => void | Promise<void>,
+) {
+  const create = historyReaders.createSessionHistoryWorkerReaders;
+  return vi.spyOn(historyReaders, "createSessionHistoryWorkerReaders").mockImplementation((run) => {
+    const readers = create(run);
+    return {
+      ...readers,
+      async readBoardSnapshot(input) {
+        const snapshot = await readers.readBoardSnapshot(input);
+        await afterRead(snapshot);
+        return snapshot;
+      },
+    };
+  });
 }
 
 async function holdWriter(options: Parameters<typeof runOpenClawAgentWorkerWrite>[0]) {
@@ -127,11 +161,7 @@ it.each([false, true])(
         { sessionId: "replacement-session", updatedAt: 2 },
       );
     const pending = store.putWidget(
-      {
-        ...target,
-        name: "app",
-        content: mcpContent(),
-      },
+      { ...target, name: "app", content: mcpContent() },
       {
         assertCurrent,
         resolveMcpAppInteraction: async () => {
@@ -149,7 +179,7 @@ it.each([false, true])(
 );
 
 it("executes Board mutations off the host and publishes each committed change once", async () => {
-  const { database, store, target } = fixture();
+  const { database, store, target, document } = fixture();
   const changes: Array<{ change: SessionRowChange; inTransaction: boolean; revision: number }> = [];
   const unsubscribe = sessionChanges.subscribe((change) => {
     if ("sessionKey" in change && change.sessionKey === target.sessionKey) {
@@ -198,7 +228,7 @@ it("executes Board mutations off the host and publishes each committed change on
       await store.grant(target, "status", "granted", 1, put.widgets[0]?.instanceId),
     ).toMatchObject({ revision: 3, widgets: [{ revision: 1, grantState: "granted" }] });
     expectPublication(3);
-    expect(await store.useWidgetDocument(target, "status", (document) => document)).toMatchObject({
+    expect(await document("status")).toMatchObject({
       html: "<p>committed</p>",
       grantState: "granted",
     });
@@ -243,18 +273,15 @@ it("preserves untouched widget rows while persisting later layout changes", asyn
 it.each([false, true])(
   "retains queued Board input and rejects revoked authority (revoked: %s)",
   async (revoke) => {
-    const { database, options, store, target } = fixture();
+    const { database, options, store, target, document, snapshot } = fixture();
     const { release, held } = await holdWriter(options);
-    const changes: SessionRowChange[] = [];
-    const unsubscribe = sessionChanges.subscribe((change) => {
-      if ("sessionKey" in change && change.sessionKey === target.sessionKey) {
-        changes.push(change);
-      }
-    });
+    const { changes, unsubscribe } = observeChanges(target.sessionKey);
     let current = true;
-    const params: BoardWidgetMaterializedPutParams = {
-      ...htmlWidget(target.sessionKey, "captured", "<p>captured</p>"),
-    };
+    const params: BoardWidgetMaterializedPutParams = htmlWidget(
+      target.sessionKey,
+      "captured",
+      "<p>captured</p>",
+    );
     const pending = store.putWidget(params, {
       assertCurrent() {
         if (!current) {
@@ -272,16 +299,14 @@ it.each([false, true])(
       await held;
       if (revoke) {
         await expect(pending).rejects.toThrow("Board request retired while queued");
-        expect(await store.getSnapshot(target)).toMatchObject({ revision: 0, widgets: [] });
+        expect(await snapshot()).toMatchObject({ revision: 0, widgets: [] });
         expect(changes).toEqual([]);
       } else {
         await expect(pending).resolves.toMatchObject({
           resolvedWidgetName: "captured",
           widgets: [{ name: "captured", revision: 1 }],
         });
-        expect(
-          await store.useWidgetDocument(target, "captured", (document) => document),
-        ).toMatchObject({ html: "<p>captured</p>" });
+        expect(await document("captured")).toMatchObject({ html: "<p>captured</p>" });
         expect(changes).toEqual([{ sessionKey: target.sessionKey, storePath: database.path }]);
       }
     } finally {
@@ -294,12 +319,7 @@ it.each([false, true])(
 
 it("preserves committed Boards and admits followers after publication cleanup is refused", async () => {
   const { database, store, target, putHtml: put } = fixture();
-  const changes: SessionRowChange[] = [];
-  const unsubscribe = sessionChanges.subscribe((change) => {
-    if ("sessionKey" in change && change.sessionKey === target.sessionKey) {
-      changes.push(change);
-    }
-  });
+  const { changes, unsubscribe } = observeChanges(target.sessionKey);
   let refuseCleanup = false;
   let refusals = 0;
   const interception = probe.admission(admission, (request, grant, admit) => {
@@ -353,11 +373,7 @@ it.each(["snapshot", "metadata", "mcp"] as const)(
   async (operation) => {
     const { options, store, target } = fixture();
     const put = (toolCallId: string) =>
-      store.putWidget({
-        ...target,
-        name: "app",
-        content: mcpContent({ toolCallId }, false),
-      });
+      store.putWidget({ ...target, name: "app", content: mcpContent({ toolCallId }, false) });
     await put("initial");
     const { release, held } = await holdWriter(options);
     const written = put("updated");
@@ -384,23 +400,18 @@ it.each(["snapshot", "metadata", "mcp"] as const)(
 );
 
 it("reads Board snapshots and documents without a write-capable publication", async () => {
-  const { store, target, putHtml } = fixture();
+  const { store, target, putHtml, document } = fixture();
   const put = await putHtml("status", "read-only");
-  const publication = vi
+  using publication = vi
     .spyOn(workerStore, "openOpenClawAgentSqliteWorkerStore")
     .mockImplementation(() => {
       throw new Error("Board read acquired a write-capable publication");
     });
-  try {
-    expect(await store.getSnapshotWithHtmlViewMetadata(target)).toMatchObject({
-      snapshot: { revision: put.revision, widgets: [{ name: "status" }] },
-    });
-    expect(await store.useWidgetDocument(target, "status", (document) => document)).toMatchObject({
-      html: "read-only",
-    });
-  } finally {
-    publication.mockRestore();
-  }
+  expect(await store.getSnapshotWithHtmlViewMetadata(target)).toMatchObject({
+    snapshot: { revision: put.revision, widgets: [{ name: "status" }] },
+  });
+  expect(await document("status")).toMatchObject({ html: "read-only" });
+  publication.mockRestore();
 });
 
 it("refuses Board disclosure when its target changes during a read", async () => {
@@ -419,35 +430,19 @@ it("refuses Board disclosure when its target changes during a read", async () =>
     }),
     env: options.env,
   });
-  const create = historyReaders.createSessionHistoryWorkerReaders;
-  const interception = vi
-    .spyOn(historyReaders, "createSessionHistoryWorkerReaders")
-    .mockImplementation((run) => {
-      const readers = create(run);
-      return {
-        ...readers,
-        async readBoardSnapshot(input) {
-          const snapshot = await readers.readBoardSnapshot(input);
-          sessionKey = "agent:main:replacement";
-          return snapshot;
-        },
-      };
-    });
+  using interception = interceptSnapshotRead(() => {
+    sessionKey = "agent:main:replacement";
+  });
   const consume = vi.fn();
-  try {
-    await expect(reader.useSnapshot(target, consume)).rejects.toThrow(
-      "board session changed; retry",
-    );
-    expect(consume).not.toHaveBeenCalled();
-  } finally {
-    interception.mockRestore();
-  }
+  await expect(reader.useSnapshot(target, consume)).rejects.toThrow("board session changed; retry");
+  expect(consume).not.toHaveBeenCalled();
+  interception.mockRestore();
 });
 
 it.each(["snapshot", "document"] as const)(
   "retains Board validation errors without waiting on writer-dependent retirement (%s)",
   async (operation) => {
-    const { database, options, store, target, putHtml } = fixture();
+    const { database, options, target, putHtml, document, snapshot } = fixture();
     await putHtml("status", "private");
     database.db
       .prepare("UPDATE board_widgets SET manifest = ? WHERE session_key = ? AND name = 'status'")
@@ -459,10 +454,7 @@ it.each(["snapshot", "document"] as const)(
       historyRetiring.resolve();
       return Promise.race([writerSettled.promise, releaseHistory.promise]);
     });
-    const read =
-      operation === "snapshot"
-        ? store.getSnapshot(target)
-        : store.useWidgetDocument(target, "status", (document) => document);
+    const read = operation === "snapshot" ? snapshot() : document("status");
     const outcome = read.catch((error: unknown) => error);
     const following = runOpenClawAgentWorkerWrite(options, async () => {
       writerSettled.resolve();
@@ -560,14 +552,10 @@ it.each(["mutation", "snapshot", "document"] as const)(
               document && "html" in document ? document.html : undefined,
             );
     let settled = false;
-    void pending.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      },
-    );
+    const settledCallback = () => {
+      settled = true;
+    };
+    void pending.then(settledCallback, settledCallback);
     try {
       mixedEnv.OpenClaw_State_Dir = laterRoot;
       await setImmediate();
@@ -605,34 +593,20 @@ it("rejects a Board read through an alias when its physical database closes", as
   expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();
   expect(getOpenClawAgentDatabaseIfOpen(aliasOptions)).toBeUndefined();
 
-  const create = historyReaders.createSessionHistoryWorkerReaders;
   let readCompleted = false;
-  const interception = vi
-    .spyOn(historyReaders, "createSessionHistoryWorkerReaders")
-    .mockImplementation((run) => {
-      const readers = create(run);
-      return {
-        ...readers,
-        async readBoardSnapshot(input) {
-          const snapshot = await readers.readBoardSnapshot(input);
-          expect(snapshot?.snapshot.widgets).toEqual([
-            expect.objectContaining({ name: "status", revision: 1 }),
-          ]);
-          readCompleted = true;
-          // Keep the completed read retained until its physical owner has closed.
-          await closeOpenClawAgentDatabaseByPathAsync(physicalPath);
-          return snapshot;
-        },
-      };
-    });
+  using interception = interceptSnapshotRead(async (snapshot) => {
+    expect(snapshot?.snapshot.widgets).toEqual([
+      expect.objectContaining({ name: "status", revision: 1 }),
+    ]);
+    readCompleted = true;
+    // Keep the completed read retained until its physical owner has closed.
+    await closeOpenClawAgentDatabaseByPathAsync(physicalPath);
+  });
   const consume = vi.fn();
-  try {
-    await expect(reader.useSnapshot(target, consume)).rejects.toThrow(
-      "Session history database read was revoked",
-    );
-    expect(readCompleted).toBe(true);
-    expect(consume).not.toHaveBeenCalled();
-  } finally {
-    interception.mockRestore();
-  }
+  await expect(reader.useSnapshot(target, consume)).rejects.toThrow(
+    "Session history database read was revoked",
+  );
+  expect(readCompleted).toBe(true);
+  expect(consume).not.toHaveBeenCalled();
+  interception.mockRestore();
 });

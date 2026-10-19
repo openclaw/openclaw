@@ -63,17 +63,13 @@ beforeEach(() => {
 });
 
 function fixture() {
-  const { env, sessionKey, database } = boardFixture(
+  const { storeOptions, sessionKey, database } = boardFixture(
     tempDirs.make("board-publication-outcome-"),
     "agent:main:original",
   );
   const store = new SqliteBoardStore({
-    resolveSession: (target) => ({
-      agentId: "main",
-      path: database.path,
-      sessionKey: target.sessionKey,
-    }),
-    env,
+    ...storeOptions,
+    resolveSession: (target) => ({ agentId: "main", path: database.path, ...target }),
   });
   const params = htmlWidget(sessionKey, "status", "<p>committed</p>");
   const change = { sessionKey, storePath: database.path };
@@ -87,7 +83,14 @@ function fixture() {
   return { store, params, change, expectPublication };
 }
 
-async function receiveExecutedFailure(retire: boolean) {
+async function failureOutcome(kind: boolean | "cleanup") {
+  if (kind === "cleanup") {
+    return ["Native cleanup failed", "Later cleanup failed"].reduce<Error>(
+      (error, message) => withSqliteWorkerCleanupFailure(error, new Error(message)),
+      new SqliteWorkerError("Native Board outcome is unknown", "outcome-unknown"),
+    );
+  }
+  const retire = kind;
   const rejected = createDeferredCore<unknown>();
   const events: string[] = [];
   const custody = new SqliteWorkerSlotCustody();
@@ -128,9 +131,7 @@ async function receiveExecutedFailure(retire: boolean) {
       error: {
         name: "SqliteWorkerError",
         code: "outcome-unknown",
-        message: retire
-          ? "Native settlement failed"
-          : "Result serialization failed after execution",
+        message: "Execution failed",
       },
     },
     {
@@ -149,35 +150,33 @@ async function receiveExecutedFailure(retire: boolean) {
       dispatch: () => events.push("dispatch"),
     },
   );
-  return { error: await rejected.promise, events };
+  const error = await rejected.promise;
+  if (retire) {
+    expect(isSqliteWorkerError(error, "outcome-unknown")).toBe(true);
+  }
+  expect(error).toMatchObject({ name: "SqliteWorkerError", code: "outcome-unknown" });
+  expect(events).toEqual(
+    retire
+      ? ["retired", "settled:unknown", "rejected"]
+      : ["settled:completed", "rejected", "dispatch"],
+  );
+  return error;
 }
 
 it.each([
-  { name: "retired settlement", retire: true },
-  { name: "non-retiring result serialization", retire: false },
-])(
-  "invalidates the original Board after the real receiver settles $name failure",
-  async ({ retire }) => {
-    const { store, params, change, expectPublication } = fixture();
-    // Native settlement failure retires; a later serialization failure need not.
-    const received = await receiveExecutedFailure(retire);
-    if (retire) {
-      expect(isSqliteWorkerError(received.error, "outcome-unknown")).toBe(true);
-    }
-    expect(received.error).toMatchObject({ name: "SqliteWorkerError", code: "outcome-unknown" });
-    expect(received.events).toEqual(
-      retire
-        ? ["retired", "settled:unknown", "rejected"]
-        : ["settled:completed", "rejected", "dispatch"],
-    );
-    boundary.execute.mockImplementation(async () => {
-      params.sessionKey = "agent:main:replacement";
-      throw received.error;
-    });
-    await expect(store.putWidget(params)).rejects.toBe(received.error);
-    expectPublication([change]);
-  },
-);
+  ["retired settlement", true],
+  ["non-retiring result serialization", false],
+  ["nested cleanup aggregate", "cleanup"],
+] as const)("invalidates the original Board without replay after %s failure", async (_, kind) => {
+  const { store, params, change, expectPublication } = fixture();
+  const error = await failureOutcome(kind);
+  boundary.execute.mockImplementation(async () => {
+    params.sessionKey = "agent:main:replacement";
+    throw error;
+  });
+  await expect(store.putWidget(params)).rejects.toBe(error);
+  expectPublication([change]);
+});
 
 it("relays a committed Board outcome after revocation without failing on client cleanup", async () => {
   const { store, params, change, expectPublication } = fixture();
@@ -204,21 +203,6 @@ it("relays a committed Board outcome after revocation without failing on client 
       }),
     }),
   ).resolves.toBe(committed);
-  expectPublication([change]);
-});
-
-it("invalidates the original Board target for a nested cleanup aggregate without replay", async () => {
-  const { store, params, change, expectPublication } = fixture();
-  const original = new SqliteWorkerError("Native Board outcome is unknown", "outcome-unknown");
-  const failure = withSqliteWorkerCleanupFailure(
-    withSqliteWorkerCleanupFailure(original, new Error("Native cleanup failed")),
-    new Error("Later cleanup failed"),
-  );
-  boundary.execute.mockImplementation(async () => {
-    params.sessionKey = "agent:main:replacement";
-    throw failure;
-  });
-  await expect(store.putWidget(params)).rejects.toBe(failure);
   expectPublication([change]);
 });
 

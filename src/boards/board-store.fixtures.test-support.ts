@@ -9,7 +9,31 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
+import type { BoardStore, BoardSessionTarget } from "./board-store.js";
+import { createTestBoardStore } from "./board-store.test-support.js";
 import { SqliteBoardStore } from "./sqlite-board-store.js";
+
+export function testBoard(sessionKey = "agent:main:board") {
+  return boardClient(createTestBoardStore(), { sessionKey });
+}
+
+export function boardClient(store: BoardStore, target: BoardSessionTarget) {
+  return {
+    store,
+    snapshot: () => store.getSnapshot(target),
+    document: (name: string) => store.useWidgetDocument(target, name, (value) => value),
+    app: () => store.readWidgetMcpApp(target, "app"),
+    ops: (...ops: Parameters<BoardStore["applyOps"]>[1]) => store.applyOps(target, ops),
+    put: (params: Omit<BoardWidgetMaterializedPutParams, "sessionKey">) =>
+      store.putWidget({ ...target, ...params }),
+    grant: (
+      name: string,
+      revision: number,
+      instanceId?: string,
+      decision: "granted" | "rejected" = "granted",
+    ) => store.grant(target, name, decision, revision, instanceId),
+  };
+}
 
 export async function closeBoardDatabases() {
   await closeOpenClawAgentDatabasesAsync();
@@ -34,7 +58,7 @@ export function boardFixture(stateDir: string, sessionKey = "agent:main:board", 
     storeOptions,
     target: { sessionKey },
     sessionKey,
-    store: new SqliteBoardStore(storeOptions),
+    ...boardClient(new SqliteBoardStore(storeOptions), { sessionKey }),
   };
 }
 
