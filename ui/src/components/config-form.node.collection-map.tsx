@@ -214,8 +214,6 @@ export function ConfigMapField(props: MapProps): JSX.Element {
           onCommit={({ key, value }) =>
             Boolean(
               key &&
-              !Object.hasOwn(props.params.value, key) &&
-              !props.params.reservedKeys.has(key) &&
               props.params.onPatch(props.params.path, {
                 ...props.params.value,
                 [key]: value,

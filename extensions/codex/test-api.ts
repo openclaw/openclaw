@@ -163,3 +163,5 @@ export const loadCodexDynamicToolBuildTestFixture = () =>
   import("./src/app-server/dynamic-tool-build.test-support.js");
 
 export const loadCodexNativeWebSearchTestFixture = () => import("./native-web-search.test-api.js");
+
+export const loadCodexAccountUsageTestFixture = () => import("./src/account-usage.test-support.js");

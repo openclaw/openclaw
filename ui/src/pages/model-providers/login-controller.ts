@@ -42,8 +42,8 @@ type LoginOptions = {
 };
 
 export function createModelProviderLogin(options: LoginOptions) {
-  const listeners = new Set<() => void>();
-  const notify = () => listeners.forEach((listener) => listener());
+  let publish: (() => void) | undefined;
+  const notify = () => publish?.();
   const [query, setQuery] = createSignal("");
   const [providerSelection, setProvider] = createSignal("");
   let currentPicker:
@@ -102,18 +102,10 @@ export function createModelProviderLogin(options: LoginOptions) {
     },
   });
   const view = projectSource(null, {
-    read: () => ({
-      picker: currentPicker,
-      mutationActive,
-      refreshWarning,
-      message,
-      loginMode,
-      completionModel,
-      startingChat,
-    }),
+    read: () => null,
     subscribe: (_, listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
+      publish = listener;
+      return () => (publish = undefined);
     },
     equality: "revision",
   });
@@ -362,7 +354,7 @@ export function createModelProviderLogin(options: LoginOptions) {
     }
   }
   onCleanup(() => {
-    listeners.clear();
+    publish = undefined;
     generation += 1;
     startChatRequest?.abort();
     inventoryRequest?.abort();

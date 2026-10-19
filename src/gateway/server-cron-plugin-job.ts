@@ -9,10 +9,10 @@ export function toPluginCronJob(job: CronJob): PluginHookGatewayCronJob {
     name: job.name,
     description: job.description,
     enabled: job.enabled,
-    schedule: job.schedule ? structuredClone(job.schedule) : undefined,
+    schedule: structuredClone(job.schedule),
     sessionTarget: job.sessionTarget,
     wakeMode: job.wakeMode,
-    payload: job.payload ? structuredClone(job.payload) : undefined,
+    payload: structuredClone(job.payload),
     state: {
       nextRunAtMs: job.state.nextRunAtMs,
       runningAtMs: job.state.runningAtMs,

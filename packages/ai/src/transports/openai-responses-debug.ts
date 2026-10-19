@@ -386,6 +386,9 @@ export function summarizeOpenAITransportError(error: unknown, signal?: AbortSign
       case "OPENCLAW_SESSION_WATCHDOG":
         abortReason = "session_watchdog";
         break;
+      case "degenerate_output":
+        abortReason = "degenerate_output";
+        break;
       case "OPENCLAW_RESTART_ABORT":
       case "ERR_STALE_GATEWAY_LIFECYCLE":
         abortReason = "restart";

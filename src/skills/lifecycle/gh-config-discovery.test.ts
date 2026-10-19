@@ -51,9 +51,7 @@ describe("detectGhConfigDirMismatch", () => {
       kind: "mismatch",
       effectiveConfigDir: "/var/lib/openclaw/agent/.config/gh",
       alternateConfigDir: "/home/alice/.config/gh",
-      alternateHostsFile: "/home/alice/.config/gh/hosts.yml",
       alternateHomeHint: "/home/alice",
-      suggestedEnvValue: "/home/alice/.config/gh",
     });
   });
 
@@ -68,9 +66,7 @@ describe("detectGhConfigDirMismatch", () => {
       kind: "mismatch",
       effectiveConfigDir: "/var/lib/openclaw/agent/.config/gh",
       alternateConfigDir: "/home/ops/.config/gh",
-      alternateHostsFile: "/home/ops/.config/gh/hosts.yml",
       alternateHomeHint: "/home/ops",
-      suggestedEnvValue: "/home/ops/.config/gh",
     });
   });
 
@@ -134,9 +130,7 @@ describe("formatGhConfigDirMismatchHint", () => {
     const mismatch: GhConfigDirMismatch = {
       effectiveConfigDir: "/agent/home/.config/gh",
       alternateConfigDir: "/root/.config/gh",
-      alternateHostsFile: "/root/.config/gh/hosts.yml",
       alternateHomeHint: "/root",
-      suggestedEnvValue: "/root/.config/gh",
     };
     expect(formatGhConfigDirMismatchHint(mismatch)).toEqual([
       "GitHub CLI auth was found at a different HOME than the one this OpenClaw process uses.",

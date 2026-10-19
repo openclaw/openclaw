@@ -182,7 +182,7 @@ describe("update-cli", () => {
 
       await updateCommand({ dryRun: true });
       if (command !== "gateway") {
-        expect(getLogOutput()).toContain("Restart the Gateway you launched manually");
+        expect(getLogOutput()).toContain("Stop the Gateway through its owner");
       }
 
       expect(serviceReadCommand).toHaveBeenCalledTimes(2);

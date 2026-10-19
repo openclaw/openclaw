@@ -506,9 +506,7 @@ export class DiscordVoiceManager {
       }
       return result;
     } finally {
-      if (this.joinTasks.get(guildId) === joinCompletion.promise) {
-        this.joinTasks.delete(guildId);
-      }
+      this.joinTasks.delete(guildId);
       joinCompletion.resolve();
     }
   }

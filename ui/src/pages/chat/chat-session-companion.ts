@@ -148,17 +148,17 @@ export class ChatSessionCompanionThreads {
   private readonly hydrationTokens = new Map<string, symbol>();
   private readonly submissionTokens = new Map<string, Deferred>();
 
-  private readonly listeners = new Set<() => void>();
+  private publish?: () => void;
 
   subscribe(listener: () => void): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
+    this.publish = listener;
+    return () => {
+      this.publish = undefined;
+    };
   }
 
   private readonly notify = () => {
-    for (const listener of this.listeners) {
-      listener();
-    }
+    this.publish?.();
   };
 
   view(sessionKey: string, agentId?: string | null): ChatSessionCompanionThread {

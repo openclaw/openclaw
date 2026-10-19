@@ -2,9 +2,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { installPluginWithHookFallback } from "../cli/plugins-install-hook-fallback.js";
+import { runPluginInstallCommand } from "../cli/plugins-install-command.js";
 import { readConfigFileSnapshot } from "../config/config.js";
-import { loadConfigForInstall } from "../plugins/install-config.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -97,15 +96,11 @@ describe.each([
         await writeHook(path.join(sourceDir, "hooks", "unlisted-nested"), "unlisted-nested");
       }
 
-      const snapshot = await loadConfigForInstall({
-        rawSpec: sourceDir,
+      await runPluginInstallCommand({
+        raw: sourceDir,
+        opts: { force: true, acceptCapabilities: true, link },
+        allowInstallPolicyWarningPrompt: false,
       });
-      const installResult = await installPluginWithHookFallback({
-        request: { source: "local", path: sourceDir, mode: "install", link },
-        snapshot,
-        safetyOverrides: { config: snapshot.config },
-      });
-      expect(installResult).toEqual({ ok: true });
 
       const installed = await readConfigFileSnapshot();
       expect(installed.valid).toBe(true);
