@@ -40,6 +40,7 @@ import {
 } from "./update-command-lifecycle.test-support.js";
 import * as plugins from "./update-command-plugins.js";
 import * as sourceRuntime from "./update-command-runtime.js";
+import type { PreManagedServiceStop } from "./update-command-service-maintenance.js";
 import * as servicePlan from "./update-command-service-plan.js";
 import { updateRepairCommand } from "./update-repair-command.js";
 
@@ -125,14 +126,19 @@ vi.mock("./update-command-service-maintenance.js", async (original) => {
         native.elapsedMs += GATEWAY_SERVICE_STOP_TIMEOUT_MS;
         native.events.push("stop-verified");
       }
-      const before = {
+      const before: PreManagedServiceStop = {
         stopped: native.stopped,
         inspected: true,
         runtimeInspected: true,
         running: !native.stopped,
         offline: native.stopped,
         serviceEnv: { ...process.env },
-        serviceUpdateVerdict: { kind: "owned", root: native.root, refreshDefinition: false },
+        serviceUpdateVerdict: {
+          kind: "owned",
+          root: native.root,
+          fingerprint: "fixture-service",
+          refreshDefinition: false,
+        },
       };
       if (native.stopped) {
         params.onStopped?.(before);
@@ -142,7 +148,8 @@ vi.mock("./update-command-service-maintenance.js", async (original) => {
     revalidateManagedGatewayServiceAfterUpdate: async () => ({ kind: "owned", root: native.root }),
   };
 });
-vi.mock("../../daemon/service.js", () => ({
+vi.mock("../../daemon/service.js", async (original) => ({
+  ...(await original<typeof import("../../daemon/service.js")>()),
   resolveGatewayService: () => ({
     readCommand: async () => null,
     readRuntime: async () => ({ status: "stopped", missingUnit: true }),

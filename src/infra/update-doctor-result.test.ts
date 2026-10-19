@@ -113,7 +113,7 @@ describe("post-install doctor result IPC", () => {
       "Warning detail omitted because it exceeds the display limit.",
     ]);
     const [bounded] = normalizeUpdatePostInstallDoctorWarnings([`${"w".repeat(498)}. More text.`]);
-    expect(bounded.length).toBeLessThanOrEqual(500);
+    expect(bounded).toBe("Warning detail omitted because it exceeds the display limit.");
   });
 
   it.each(

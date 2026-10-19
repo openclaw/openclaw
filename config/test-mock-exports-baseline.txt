@@ -4109,7 +4109,6 @@
 ["src/cli/update-cli/update-command-executor-settlement.test.ts","./update-command-identity-warning.js","202263a9498a96c73f3f424d006638699e2775e04ba3322a1504b64bac3ed52c",1]
 ["src/cli/update-cli/update-command-failure-recovery.test.ts","./update-command-convergence.js","1ee673d515d39c88cba4c522ce810e898e5999e05df0b565c54cf0d43869bacd",1]
 ["src/cli/update-cli/update-command-finalize-refusal.test.ts","../../daemon/service-operation-lock.js","d2ae846be403ef623d76369d1460d88b2b55986edb22e988cd173bc39450755f",1]
-["src/cli/update-cli/update-command-finalize-refusal.test.ts","../../daemon/service.js","ae50b8a24fff5cd80bc2ff24e82af2ddeae7d9450bb02d55d00865a59f4f85d1",1]
 ["src/cli/update-cli/update-command-finalize-refusal.test.ts","../../infra/update-candidate-state.sizes.js","5c2412a3e0fc4f48761eb276fd7f5d6ea91d23847234d1b051bd4a98b5d65807",1]
 ["src/cli/update-cli/update-command-finalize-refusal.test.ts","./update-command-config-snapshot.js","b92e88b6b565b83f257d5ad81147f4c610ede11b56bb63070bb3836e3323c0f1",1]
 ["src/cli/update-cli/update-command-finalize-refusal.test.ts","./update-command-failure-recovery.js","6d80098b4d92cb4c4b1ab4eef4ccde91cc2a87d7adda77578ff343d9ad04c4cf",1]
