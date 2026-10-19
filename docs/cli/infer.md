@@ -291,6 +291,10 @@ openclaw infer embedding create --text "customer support ticket: delayed shipmen
 openclaw infer embedding providers --agent <id> --json
 ```
 
+`--model` takes `<provider/model>`. When you also pass `--provider`, it must match
+that prefix; model ids that contain a slash keep the provider prefix, for example
+`--model deepinfra/Qwen/Qwen3-Embedding-8B`.
+
 Without `--json`, `embedding create` shows the provider and model, followed by
 each input, its dimension count, and a preview of the first eight vector values.
 Longer vectors end with `...`; use `--json` to retrieve complete vectors.

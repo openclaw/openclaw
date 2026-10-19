@@ -239,7 +239,7 @@ it.each([
         inputProvenance: {
           kind: "inter_session",
           sourceTool,
-          sourceChannel: "internal",
+          sourceChannel: sourceTool === "sessions_send" ? "webchat" : "internal",
           sourceSessionKey: "agent:main:subagent:child",
         },
       },

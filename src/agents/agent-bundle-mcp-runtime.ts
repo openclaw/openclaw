@@ -20,7 +20,7 @@ import type {
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
 import { readMcpAppIcons, readMcpAppSettingsCapability } from "./mcp-app-extension-metadata.js";
-import { listAllMcpTools, MCP_CATALOG_LIST_LIMITS } from "./mcp-catalog-listing.js";
+import { listAllMcpTools, listMcpServerItems } from "./mcp-catalog-listing.js";
 import { bindMcpClientElicitation, MCP_ELICITATION_TIMEOUT_MS } from "./mcp-client-elicitation.js";
 import {
   connectMcpClient,
@@ -38,7 +38,6 @@ import {
 import { isMcpMethodNotFoundError, redactMcpDiagnosticError } from "./mcp-error.js";
 import { createMcpJsonSchemaValidator } from "./mcp-json-schema-validator.js";
 import { buildMcpClientCapabilities, summarizeServerCapabilities } from "./mcp-metadata.js";
-import { collectMcpPaginatedItems } from "./mcp-pagination.js";
 import {
   mcpCallToolResultSchema,
   mcpGetPromptResultSchema,
@@ -51,6 +50,7 @@ import {
 } from "./mcp-sdk-compatibility.js";
 import {
   connectWithMcpStartupBackoff,
+  getMcpStartupBackoff,
   McpStartupBackoffError,
   resetMcpStartupBackoff,
 } from "./mcp-startup-backoff.js";
@@ -536,35 +536,13 @@ function createServerMcpRuntime(
   ) => runGuardedServerRequest(session, () => requests.run(session, request), options);
   const collectServerItems = (session: BundleMcpSession, kind: "prompts" | "resources") => {
     const callerSignal = getSessionMcpRequestSignal();
-    return collectMcpPaginatedItems({
-      label: `MCP ${kind === "resources" ? "resource" : "prompt"} listing`,
-      itemLabel: kind,
+    return listMcpServerItems(kind, {
+      client: session.client,
       timeoutMs: session.requestTimeoutMs,
-      ...MCP_CATALOG_LIST_LIMITS,
       signal: callerSignal
         ? AbortSignal.any([lifecycleAbortController.signal, callerSignal])
         : lifecycleAbortController.signal,
-      loadPage: ({ cursor, requestTimeoutMs: timeout, signal }) =>
-        requests.run(
-          session,
-          async (requestSignal) => {
-            const requestParams = cursor === undefined ? undefined : { cursor };
-            const requestOptions = { timeout, maxTotalTimeout: timeout, signal: requestSignal };
-            const page =
-              kind === "resources"
-                ? await session.client.request(
-                    { method: "resources/list", params: requestParams },
-                    requestOptions,
-                  )
-                : await session.client.request(
-                    { method: "prompts/list", params: requestParams },
-                    requestOptions,
-                  );
-            const items = page[kind] as unknown[];
-            return { items, nextCursor: page.nextCursor, serializedValue: page };
-          },
-          signal,
-        ),
+      runRequest: (request, signal) => requests.run(session, request, signal),
     });
   };
 
@@ -802,10 +780,28 @@ function createServerMcpRuntime(
 
   const getCatalog = async (): Promise<McpToolCatalog> => {
     failIfDisposed();
+    // Shared startup failures cannot suppress listing on this session's live connection.
+    if (!catalog && !currentSession?.connected) {
+      const backoff = getMcpStartupBackoff(
+        startupKey,
+        lifecycleAbortController.signal,
+        BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS,
+      );
+      if (backoff) {
+        catalog = projectBundleMcpCatalogFailure(lastListedCatalog, {
+          serverName,
+          safeServerName: params.safeServerNamesByServer?.get(serverName) ?? serverName,
+          launchSummary: serverName,
+          message: backoff.message,
+        });
+        startupRetryAfterMs = backoff.retryAfterMs;
+        catalogRetryAfterMs = backoff.retryAfterMs;
+      }
+    }
     if (catalog && !catalogRetryIsDue()) {
       return catalog;
     }
-    if (!catalog || !lastListedCatalog) {
+    if (!catalog) {
       const retryExitedProcess = currentSession?.transportType === "stdio";
       const loadedCatalog = await loadCatalog();
       // Recover a previously healthy process once; HTTP list failures retain their diagnostic.

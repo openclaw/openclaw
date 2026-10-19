@@ -66,6 +66,7 @@ const realGatewayFiles = [
   "model-api-keys.real-gateway",
   "model-catalog-partial-refresh.real-gateway",
   "model-picker-search.real-gateway",
+  "peer-followup-restart.real-gateway",
   "profile-page.real-gateway",
   "provider-browser-login.real-gateway",
   "quota-reset-status.real-gateway",
@@ -524,6 +525,13 @@ describe("Control UI E2E resource ownership", () => {
         },
         {
           file: mcpFile,
+          project: "ui-e2e-serial-standalone",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
+          file: "ui/src/e2e/peer-followup-restart.real-gateway.e2e.test.ts",
           project: "ui-e2e-serial-standalone",
           phase: 1,
           workers: 1,

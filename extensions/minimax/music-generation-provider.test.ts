@@ -241,10 +241,10 @@ describe("minimax music generation provider", () => {
 
   it("downloads tracks when url output is returned in data.audio", async () => {
     mockMusicGenerationResponse({
-      task_id: "task-url",
+      task_id: " task-url ",
       lyrics: "our city wakes",
       data: {
-        audio: "https://example.com/url-audio.mp3",
+        audio: " https://example.com/url-audio.mp3 ",
       },
       base_resp: { status_code: 0 },
     });

@@ -8,7 +8,7 @@ import "../../../styles/chat/composer.css";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import "./chat-comment-pins.tsx";
 import { CommentPreviewChip, CommentPreviewRow } from "./chat-comment-preview.tsx";
-import { removeChatSelectionPopup, showChatAnnotationEditor } from "./chat-selection-popup.ts";
+import { removeChatSelectionPopup, showChatAnnotationEditor } from "./chat-selection-popup.tsx";
 
 const longSelection = "Selected passage with enough words to exceed a compact preview. ".repeat(8);
 const longComment =

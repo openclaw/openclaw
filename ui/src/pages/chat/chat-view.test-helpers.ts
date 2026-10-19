@@ -16,6 +16,7 @@ import { flush } from "../../test-helpers/solid-settle.ts";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { ChatView, type ChatProps } from "./chat-view.tsx";
+import { registerMessageActionElements } from "./components/chat-message-action-elements.ts";
 import {
   prepareChatMessageRender,
   resolveMessageActionDetails,
@@ -521,4 +522,21 @@ export function createReplyPane(paneId: string, draft: string, quote: string) {
       resetChatViewState(paneId, container);
     },
   };
+}
+
+export function appendMessageActionFixture(
+  group: HTMLElement,
+  messageKey: string,
+  onCopy?: () => void,
+) {
+  const element = document.createElement("div");
+  element.dataset.messageActionsFor = messageKey;
+  const copy = onCopy ? document.createElement("button") : undefined;
+  if (copy) {
+    copy.className = "chat-copy-btn";
+    copy.addEventListener("click", () => onCopy?.());
+    element.append(copy);
+  }
+  group.append(element);
+  onTestFinished(registerMessageActionElements(element, () => messageKey, { copy }));
 }
