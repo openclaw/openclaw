@@ -75,6 +75,35 @@ const localOptions = {
   skipHealth: true,
 } satisfies OnboardOptions;
 
+function runLocal(
+  opts: Partial<OnboardOptions> = {},
+  baseConfig: OpenClawConfig = {},
+  sourceConfigBeforeMigrations = baseConfig,
+) {
+  return runNonInteractiveLocalSetup({
+    opts: { ...localOptions, ...opts },
+    runtime,
+    baseConfig,
+    sourceConfigBeforeMigrations,
+  });
+}
+
+function runSetup(opts: OnboardOptions) {
+  return runNonInteractiveSetup({ ...localOptions, ...opts }, runtime);
+}
+
+function expectWorkspace(agentId: string, workspace: string) {
+  expect(mocks.ensureWorkspaceAndSessions).toHaveBeenCalledWith(
+    workspace,
+    runtime,
+    expect.objectContaining({ agentId }),
+  );
+  expect(JSON.parse(String(vi.mocked(runtime.log).mock.calls.at(-1)?.[0]))).toMatchObject({
+    ok: true,
+    workspace,
+  });
+}
+
 describe("runNonInteractiveLocalSetup default-agent ownership", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -105,83 +134,53 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
   });
 
   it.each([
-    {
-      label: "default state",
-      customState: false,
-      workspaceOverride: undefined,
-      blankOptions: false,
-    },
-    {
-      label: "workspace override",
-      customState: true,
-      workspaceOverride: "explicit",
-      blankOptions: false,
-    },
-    {
-      label: "blank workspace override",
-      customState: true,
-      workspaceOverride: "blank",
-      blankOptions: false,
-    },
-    {
-      label: "blank CLI and config",
-      customState: true,
-      workspaceOverride: undefined,
-      blankOptions: true,
-    },
-  ] as const)("provisions and records the workspace with $label", async (testCase) => {
-    await withTempHome(
-      async (home) => {
-        const expectedWorkspace =
-          testCase.workspaceOverride === "explicit"
-            ? path.join(home, "explicit-workspace")
-            : testCase.customState
-              ? path.join(home, "scratch-state", "workspace")
-              : "/tmp/default-workspace";
-        await runNonInteractiveLocalSetup({
-          opts: {
-            ...localOptions,
-            ...(testCase.blankOptions ? { workspace: "   " } : {}),
-            json: true,
-          },
-          runtime,
-          baseConfig: {
-            agents: {
-              entries: { ops: {} },
-              ...(testCase.blankOptions ? { defaults: { workspace: "\t" } } : {}),
-            },
-          },
-          sourceConfigBeforeMigrations: {},
-        });
-
-        expect(mocks.ensureWorkspaceAndSessions).toHaveBeenCalledWith(
-          expectedWorkspace,
-          runtime,
-          expect.objectContaining({ agentId: "ops" }),
-        );
-        expect(mocks.commitConfig.mock.calls[0]?.[0].nextConfig.agents.defaults.workspace).toBe(
-          expectedWorkspace,
-        );
-        expect(JSON.parse(String(vi.mocked(runtime.log).mock.calls.at(-1)?.[0]))).toMatchObject({
-          ok: true,
-          workspace: expectedWorkspace,
-        });
-      },
-      {
-        env: {
-          OPENCLAW_HOME: (home) => home,
-          OPENCLAW_STATE_DIR: (home) =>
-            path.join(home, testCase.customState ? "scratch-state" : ".openclaw"),
-          OPENCLAW_WORKSPACE_DIR: (home) =>
-            testCase.workspaceOverride === "explicit"
+    ["default state", false, undefined, false],
+    ["workspace override", true, "explicit", false],
+    ["blank workspace override", true, "blank", false],
+    ["blank CLI and config", true, undefined, true],
+  ] as const)(
+    "provisions and records the workspace with %s",
+    async (_, customState, workspaceOverride, blankOptions) => {
+      await withTempHome(
+        async (home) => {
+          const expectedWorkspace =
+            workspaceOverride === "explicit"
               ? path.join(home, "explicit-workspace")
-              : testCase.workspaceOverride === "blank"
-                ? "   "
-                : undefined,
+              : customState
+                ? path.join(home, "scratch-state", "workspace")
+                : "/tmp/default-workspace";
+          await runLocal(
+            { ...(blankOptions ? { workspace: "   " } : {}), json: true },
+            {
+              agents: {
+                entries: { ops: {} },
+                ...(blankOptions ? { defaults: { workspace: "\t" } } : {}),
+              },
+            },
+            {},
+          );
+
+          expectWorkspace("ops", expectedWorkspace);
+          expect(mocks.commitConfig.mock.calls[0]?.[0].nextConfig.agents.defaults.workspace).toBe(
+            expectedWorkspace,
+          );
         },
-      },
-    );
-  });
+        {
+          env: {
+            OPENCLAW_HOME: (home) => home,
+            OPENCLAW_STATE_DIR: (home) =>
+              path.join(home, customState ? "scratch-state" : ".openclaw"),
+            OPENCLAW_WORKSPACE_DIR: (home) =>
+              workspaceOverride === "explicit"
+                ? path.join(home, "explicit-workspace")
+                : workspaceOverride === "blank"
+                  ? "   "
+                  : undefined,
+          },
+        },
+      );
+    },
+  );
 
   it.each([
     { saved: undefined, requested: undefined, expected: "npm" },
@@ -197,12 +196,7 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
           agents: { entries: { ops: {} } },
           skills: { install: { nodeManager: saved, preferBrew: false } },
         };
-        await runNonInteractiveLocalSetup({
-          opts: { ...localOptions, skipSkills: false, nodeManager: requested },
-          runtime,
-          baseConfig,
-          sourceConfigBeforeMigrations: baseConfig,
-        });
+        await runLocal({ skipSkills: false, nodeManager: requested }, baseConfig);
 
         expect(mocks.commitConfig.mock.calls[0]?.[0].nextConfig.skills.install).toEqual({
           nodeManager: expected,
@@ -219,12 +213,7 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
         agents: { entries: { ops: {} } },
         skills: { install: { nodeManager: "yarn", preferBrew: false } },
       };
-      await runNonInteractiveLocalSetup({
-        opts: { ...localOptions, nodeManager: "npm" },
-        runtime,
-        baseConfig,
-        sourceConfigBeforeMigrations: baseConfig,
-      });
+      await runLocal({ nodeManager: "npm" }, baseConfig);
 
       expect(mocks.commitConfig.mock.calls[0]?.[0].nextConfig.skills).toBe(baseConfig.skills);
       expect(baseConfig.skills?.install).toEqual({ nodeManager: "yarn", preferBrew: false });
@@ -245,16 +234,10 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
         ],
       });
 
-      await runNonInteractiveLocalSetup({
-        opts: {
-          ...localOptions,
-          openaiApiKey: "openai-test-key",
-          anthropicApiKey: "anthropic-test-key",
-          json,
-        },
-        runtime,
-        baseConfig: {},
-        sourceConfigBeforeMigrations: {},
+      await runLocal({
+        openaiApiKey: "openai-test-key",
+        anthropicApiKey: "anthropic-test-key",
+        json,
       });
 
       expect(runtime.error).toHaveBeenCalledWith(
@@ -262,24 +245,18 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
       );
       expect(runtime.exit).toHaveBeenCalledWith(1);
       if (json) {
+        const message = [
+          "Multiple API key flags were provided for non-interactive setup.",
+          "Use a single provider flag or pass --auth-choice explicitly.",
+          "Flags: --openai-api-key, --anthropic-api-key",
+        ].join("\n");
         expect(runtime.log).toHaveBeenCalledWith(
           JSON.stringify(
             {
               ok: false,
-              error: {
-                type: "cli_error",
-                message: [
-                  "Multiple API key flags were provided for non-interactive setup.",
-                  "Use a single provider flag or pass --auth-choice explicitly.",
-                  "Flags: --openai-api-key, --anthropic-api-key",
-                ].join("\n"),
-              },
+              error: { type: "cli_error", message },
               phase: "options",
-              message: [
-                "Multiple API key flags were provided for non-interactive setup.",
-                "Use a single provider flag or pass --auth-choice explicitly.",
-                "Flags: --openai-api-key, --anthropic-api-key",
-              ].join("\n"),
+              message,
             },
             null,
             2,
@@ -361,16 +338,12 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
           }),
         );
 
-        await runNonInteractiveSetup(
-          {
-            ...localOptions,
-            ...(agentName ? { agentName } : {}),
-            json: true,
-            workspace,
-            authChoice: "demo-api-key",
-          },
-          runtime,
-        );
+        await runSetup({
+          ...(agentName ? { agentName } : {}),
+          json: true,
+          workspace,
+          authChoice: "demo-api-key",
+        });
 
         expect(mocks.applyAuthChoice).toHaveBeenCalledWith(
           expect.objectContaining({
@@ -396,21 +369,13 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
             workspace: expectedWorkspace,
           }),
         );
-        expect(mocks.ensureWorkspaceAndSessions).toHaveBeenCalledWith(
-          expectedWorkspace,
-          runtime,
-          expect.objectContaining({ agentId }),
-        );
+        expectWorkspace(agentId, expectedWorkspace);
         expect(mocks.commitConfig.mock.invocationCallOrder[0]).toBeGreaterThan(
           mocks.ensureOnboardingAgent.mock.invocationCallOrder[0]!,
         );
         expect(mocks.ensureWorkspaceAndSessions.mock.calls.map(([dir]) => dir)).not.toContain(
           `${workspace}/main`,
         );
-        expect(JSON.parse(String(vi.mocked(runtime.log).mock.calls.at(-1)?.[0]))).toMatchObject({
-          ok: true,
-          workspace: expectedWorkspace,
-        });
         if (legacyState) {
           expect(runtime.error).toHaveBeenCalledWith(
             expect.stringContaining("existing agents keep their current workspace"),
@@ -500,18 +465,14 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
         });
         mocks.commitConfig.mockImplementationOnce(commitNonInteractiveOnboardConfig);
 
-        const outcome = await runNonInteractiveSetup(
-          {
-            ...localOptions,
-            agentName: "robby",
-            workspace,
-            authChoice: "demo-api-key",
-            skipBootstrap: true,
-            installDaemon: false,
-            json: true,
-          },
-          runtime,
-        ).then(
+        const outcome = await runSetup({
+          agentName: "robby",
+          workspace,
+          authChoice: "demo-api-key",
+          skipBootstrap: true,
+          installDaemon: false,
+          json: true,
+        }).then(
           () => undefined,
           (error: unknown) => error,
         );
@@ -543,16 +504,7 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
   it("rejects invalid gateway options before provider auth or first-agent creation", async () => {
     mocks.applyGatewayConfig.mockReturnValue(null);
 
-    await runNonInteractiveLocalSetup({
-      opts: {
-        ...localOptions,
-        authChoice: "demo-api-key",
-        gatewayBind: "custom",
-      },
-      runtime,
-      baseConfig: {},
-      sourceConfigBeforeMigrations: {},
-    });
+    await runLocal({ authChoice: "demo-api-key", gatewayBind: "custom" });
 
     expect(mocks.applyGatewayConfig).toHaveBeenCalledOnce();
     expect(mocks.applyAuthChoice).not.toHaveBeenCalled();
@@ -565,15 +517,7 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
     mocks.ensureWorkspaceAndSessions.mockRejectedValueOnce(new Error("workspace is unwritable"));
 
     await expect(
-      runNonInteractiveLocalSetup({
-        opts: {
-          ...localOptions,
-          authChoice: "skip",
-        },
-        runtime,
-        baseConfig: { agents: { entries: { ops: {} } } },
-        sourceConfigBeforeMigrations: { agents: { entries: { ops: {} } } },
-      }),
+      runLocal({ authChoice: "skip" }, { agents: { entries: { ops: {} } } }),
     ).rejects.toThrow("workspace is unwritable");
 
     expect(mocks.commitConfig).not.toHaveBeenCalled();
@@ -627,17 +571,13 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
           }),
         );
 
-        await runNonInteractiveSetup(
-          {
-            ...localOptions,
-            agentName: "robby",
-            workspace: globalWorkspace,
-            authChoice: "demo-api-key",
-            installDaemon: false,
-            json: true,
-          },
-          runtime,
-        );
+        await runSetup({
+          agentName: "robby",
+          workspace: globalWorkspace,
+          authChoice: "demo-api-key",
+          installDaemon: false,
+          json: true,
+        });
 
         expect(mocks.applyAuthChoice).toHaveBeenCalledWith(
           expect.objectContaining({
@@ -654,15 +594,7 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
             }),
           }),
         );
-        expect(mocks.ensureWorkspaceAndSessions).toHaveBeenCalledWith(
-          workspaceDir,
-          runtime,
-          expect.objectContaining({ agentId }),
-        );
-        expect(JSON.parse(String(vi.mocked(runtime.log).mock.calls.at(-1)?.[0]))).toMatchObject({
-          ok: true,
-          workspace: workspaceDir,
-        });
+        expectWorkspace(agentId, workspaceDir);
         if (include) {
           expect(
             JSON.parse(await fs.readFile(path.join(configDir, "roster.json"), "utf8")),
@@ -685,7 +617,7 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
       mocks.ensureOnboardingAgent.mockImplementationOnce(ensureOnboardingAgent);
       mocks.commitConfig.mockImplementationOnce(commitNonInteractiveOnboardConfig);
 
-      await runNonInteractiveSetup({ ...localOptions, workspace, team: true, json: true }, runtime);
+      await runSetup({ workspace, team: true, json: true });
 
       const after = await readConfigFileSnapshot();
       expect(after.valid).toBe(true);
