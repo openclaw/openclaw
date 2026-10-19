@@ -85,7 +85,9 @@ describe("creation-owned follow-up input", () => {
     const [current, setCurrent] = createSignal<CreationComposer | undefined>(composer);
     let inputTop = 200;
     let registeredCount = () => 0;
-    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function () {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: HTMLElement,
+    ) {
       return this.classList.contains("agent-chat__input")
         ? DOMRect.fromRect({ y: inputTop, height: 100 })
         : DOMRect.fromRect({ height: 1000 });
