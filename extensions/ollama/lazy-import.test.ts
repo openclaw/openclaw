@@ -1,13 +1,5 @@
-import type { EmbeddingProviderAdapter } from "openclaw/plugin-sdk/embedding-providers";
-import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
-import type {
-  AnyAgentTool,
-  OpenClawPluginNodeHostCommand,
-  ProviderPlugin,
-} from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
-import type { WebSearchProviderPlugin } from "openclaw/plugin-sdk/provider-web-search-contract";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createModelProviderConfig } from "../test-support/model-provider-config.test-support.js";
 
@@ -29,6 +21,12 @@ describe("ollama lazy imports", () => {
 
   it("loads optional runtime owners only on first use", async () => {
     const imports = { memory: 0, node: 0, setup: 0, stream: 0, web: 0, wsl: 0 };
+    function mockRuntime<T>(owner: keyof typeof imports, moduleId: string, load: () => T) {
+      vi.doMock(moduleId, () => {
+        imports[owner] += 1;
+        return load();
+      });
+    }
     let streamParams: Record<string, unknown> | undefined;
     let wslChecks = 0;
 
@@ -39,123 +37,85 @@ describe("ollama lazy imports", () => {
         return false;
       },
     }));
-    vi.doMock("./src/memory-embedding-adapter.js", () => {
-      imports.memory += 1;
-      return {
-        ollamaMemoryEmbeddingProviderAdapter: {
-          id: "ollama",
-          defaultModel: "nomic-embed-text",
-          transport: "remote",
-          authProviderId: "ollama",
-          create: async () => ({ provider: null }),
+    mockRuntime("memory", "./src/memory-embedding-adapter.js", () => ({
+      ollamaMemoryEmbeddingProviderAdapter: {
+        create: async () => ({ provider: null }),
+      },
+    }));
+    mockRuntime("node", "./src/node-inference.js", () => ({
+      createOllamaNodeHostCommands: () => [
+        {
+          command: "ollama.models",
+          cap: "local-inference",
+          handle: async () => JSON.stringify({ provider: "ollama", models: [] }),
         },
-      };
-    });
-    vi.doMock("./src/node-inference.js", () => {
-      imports.node += 1;
-      return {
-        createOllamaNodeHostCommands: () => [
-          {
-            command: "ollama.models",
-            cap: "local-inference",
-            handle: async () => JSON.stringify({ provider: "ollama", models: [] }),
-          },
-        ],
-        createOllamaNodeInferenceTool: () => ({
-          name: "node_inference",
-          label: "Node Inference",
-          description: "test",
-          parameters: { type: "object" },
-          execute: async () => ({ content: [] }),
+      ],
+      createOllamaNodeInferenceTool: () => ({
+        execute: async () => ({ content: [] }),
+      }),
+    }));
+    mockRuntime("setup", "./src/setup.runtime.js", () => ({
+      promptAndConfigureOllama: async () => ({ config: {} }),
+    }));
+    mockRuntime("stream", "./src/stream.runtime.js", () => ({
+      createConfiguredOllamaStreamFn: (params: Record<string, unknown>) => {
+        streamParams = params;
+        return async () => ({ transport: "ollama" });
+      },
+    }));
+    mockRuntime("web", "./src/web-search-provider.runtime.js", () => ({
+      createOllamaWebSearchProvider: () => ({
+        createTool: () => ({
+          execute: async ({ query }: { query: string }) => ({ query, results: [] }),
         }),
-      };
-    });
-    vi.doMock("./src/setup.runtime.js", () => {
-      imports.setup += 1;
-      return {
-        promptAndConfigureOllama: async () => ({ config: {} }),
-      };
-    });
-    vi.doMock("./src/stream.runtime.js", () => {
-      imports.stream += 1;
-      return {
-        createConfiguredOllamaStreamFn: (params: Record<string, unknown>) => {
-          streamParams = params;
-          return async () => ({ transport: "ollama" });
-        },
-      };
-    });
-    vi.doMock("./src/web-search-provider.runtime.js", () => {
-      imports.web += 1;
-      return {
-        createOllamaWebSearchProvider: () => ({
-          id: "ollama",
-          label: "Ollama Web Search",
-          runSetup: async ({ config }: { config: unknown }) => config,
-          createTool: () => ({
-            description: "test",
-            parameters: { type: "object" },
-            execute: async ({ query }: { query: string }) => ({ query, results: [] }),
-          }),
-        }),
-      };
-    });
-    vi.doMock("./src/wsl2-crash-loop-check.js", () => {
-      imports.wsl += 1;
-      return { checkWsl2CrashLoopRisk: async () => {} };
-    });
+      }),
+    }));
+    mockRuntime("wsl", "./src/wsl2-crash-loop-check.js", () => ({
+      checkWsl2CrashLoopRisk: async () => {},
+    }));
 
     const { default: ollamaPlugin } = await import("./index.js");
-    let embeddingAdapter: EmbeddingProviderAdapter | undefined;
-    let mediaProvider: MediaUnderstandingProvider | undefined;
-    const nodeCommands: OpenClawPluginNodeHostCommand[] = [];
-    const providers: ProviderPlugin[] = [];
-    let nodeInferenceTool: AnyAgentTool | undefined;
-    let webSearchProvider: WebSearchProviderPlugin | undefined;
     const runtime = createPluginRuntimeMock();
-    ollamaPlugin.register(
-      createTestPluginApi({
-        id: "ollama",
-        runtime,
-        registerEmbeddingProvider: (adapter) => {
-          embeddingAdapter = adapter;
-        },
-        registerMediaUnderstandingProvider: (provider) => {
-          mediaProvider = provider;
-        },
-        registerNodeHostCommand: (command) => nodeCommands.push(command),
-        registerTool: (tool) => {
-          if (
-            typeof tool !== "function" &&
-            !("contextVersion" in tool) &&
-            tool.name === "node_inference"
-          ) {
-            nodeInferenceTool = tool;
-          }
-        },
-        registerProvider: (provider) => providers.push(provider),
-        registerWebSearchProvider: (provider) => {
-          webSearchProvider = provider;
-        },
-      }),
-    );
+    const api = createTestPluginApi({ id: "ollama", runtime });
+    const embedding = vi.spyOn(api, "registerEmbeddingProvider");
+    const media = vi.spyOn(api, "registerMediaUnderstandingProvider");
+    const commands = vi.spyOn(api, "registerNodeHostCommand");
+    const tools = vi.spyOn(api, "registerTool");
+    const providers = vi.spyOn(api, "registerProvider");
+    const webSearch = vi.spyOn(api, "registerWebSearchProvider");
+    ollamaPlugin.register(api);
     await vi.waitFor(() => expect(wslChecks).toBe(1));
+    const nodeInferenceTool = tools.mock.calls[0]?.[0];
+    if (
+      !nodeInferenceTool ||
+      typeof nodeInferenceTool === "function" ||
+      "contextVersion" in nodeInferenceTool
+    ) {
+      throw new Error("Expected the registered node inference tool");
+    }
+    expect(nodeInferenceTool.name).toBe("node_inference");
 
     expect(imports).toEqual({ memory: 0, node: 0, setup: 0, stream: 0, web: 0, wsl: 0 });
-    expect(mediaProvider).toMatchObject({ id: "ollama", capabilities: ["image"] });
+    expect(media.mock.calls[0]?.[0]).toMatchObject({ id: "ollama", capabilities: ["image"] });
 
-    await expect(embeddingAdapter?.create({} as never)).resolves.toEqual({ provider: null });
-    await expect(nodeCommands[0]?.handle()).resolves.toBe(
+    await expect(embedding.mock.calls[0]?.[0].create({} as never)).resolves.toEqual({
+      provider: null,
+    });
+    await expect(commands.mock.calls[0]?.[0].handle()).resolves.toBe(
       JSON.stringify({ provider: "ollama", models: [] }),
     );
     await expect(nodeInferenceTool?.execute("call-1", {}, undefined)).resolves.toEqual({
       content: [],
     });
     await expect(
-      webSearchProvider?.createTool({ config: {} } as never)?.execute({ query: "openclaw" }),
+      webSearch.mock.calls[0]?.[0]
+        .createTool({ config: {} } as never)
+        ?.execute({ query: "openclaw" }),
     ).resolves.toEqual({ query: "openclaw", results: [] });
 
-    const localProvider = providers.find((provider) => provider.id === "ollama");
+    const localProvider = providers.mock.calls
+      .map(([provider]) => provider)
+      .find(({ id }) => id === "ollama");
     await expect(
       localProvider?.auth[0]?.run({ config: {}, prompter: {} } as never),
     ).resolves.toMatchObject({ configPatch: {} });

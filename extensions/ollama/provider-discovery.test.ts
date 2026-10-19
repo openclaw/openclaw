@@ -102,25 +102,31 @@ describe("Ollama provider", () => {
     return fetchMock;
   };
 
-  it("should preserve explicit ollama baseUrl and api on implicit provider injection", async () => {
-    const fetchMock = stubTagsFetch();
-
-    const provider = await runOllamaCatalog({
-      provider: {
-        baseUrl: "http://192.168.20.14:11434/v1",
-        api: "openai-completions",
-        models: [],
-      },
-      env: { OLLAMA_API_KEY: "test-key" },
-    });
-
-    expect(countFetchCallUrls(fetchMock, "/api/tags")).toBe(1);
-
-    expect(provider).toMatchObject({
-      baseUrl: "http://192.168.20.14:11434/v1",
-      api: "openai-completions",
-    });
-  });
+  it.each([
+    { baseUrl: "http://192.168.20.14:11434/v1", apiKey: undefined },
+    { baseUrl: "http://remote-ollama:11434/v1", apiKey: "config-ollama-key" },
+  ])(
+    "preserves OpenAI-compatible routing and configured auth at $baseUrl",
+    async ({ baseUrl, apiKey }) => {
+      const fetchMock = stubTagsFetch();
+      const provider = await runOllamaCatalog({
+        provider: {
+          baseUrl,
+          api: "openai-completions",
+          apiKey,
+          models: apiKey ? [createConfiguredModel()] : [],
+        },
+        env: apiKey ? liveEnv : { OLLAMA_API_KEY: "test-key" },
+      });
+      expect(provider).toMatchObject({ baseUrl, api: "openai-completions" });
+      if (apiKey) {
+        expect(provider?.apiKey).toBe(apiKey);
+        expect(tagsAuthorization(fetchMock)).toEqual([`Bearer ${apiKey}`]);
+      } else {
+        expect(countFetchCallUrls(fetchMock, "/api/tags")).toBe(1);
+      }
+    },
+  );
 
   it("auto-registers ollama provider when models are discovered locally", async () => {
     const fetchMock = stubTagsFetch(["deepseek-r1:latest", "llama3.3:latest"], { model_info: {} });
@@ -180,30 +186,5 @@ describe("Ollama provider", () => {
       expect(fetchMock).not.toHaveBeenCalled();
       expect(provider?.models).toHaveLength(1);
     }
-  });
-
-  it("should preserve explicit apiKey from configured remote providers", async () => {
-    const fetchMock = stubTagsFetch();
-
-    const provider = await runOllamaCatalog({
-      provider: {
-        baseUrl: "http://remote-ollama:11434/v1",
-        api: "openai-completions",
-        models: [
-          createModel("configured-remote-model", "Configured Remote Model", {
-            contextWindow: 8_192,
-          }),
-        ],
-        apiKey: "config-ollama-key", // pragma: allowlist secret
-      },
-      env: liveEnv,
-    });
-
-    expect(provider).toMatchObject({
-      apiKey: "config-ollama-key",
-      baseUrl: "http://remote-ollama:11434/v1",
-      api: "openai-completions",
-    });
-    expect(tagsAuthorization(fetchMock)).toEqual(["Bearer config-ollama-key"]);
   });
 });
