@@ -1,30 +1,13 @@
 import { expect, it } from "vitest";
 import { redactSensitiveText } from "./redact.js";
 
-// Regression coverage for the shared redactor on long text (GHSA-pm9j-g39c-3x2v):
-// 1. whole-text masking — every default rule family masks its synthetic sample when the
-//    sample straddles a former 16,384-character slice boundary (and 32,768 / 65,536),
-// 2. controls — the same sample stays masked away from any boundary,
-// 3. no-throw — multi-megabyte values must not overflow the regex backtrack stack,
-// 4. timing — the adversarial run shapes must not stall the event loop,
-// 5. scaling — doubling the input must not explode the worst rule's time.
-// All values are synthetic and match no real vendor credential.
-
-const FILLER_START = "x";
-const FILLER_END = "y";
-
-/**
- * Places `secret` so it straddles `offset`: the secret starts half its length before the
- * offset, surrounded by the sentence halves and filler out to `total` characters.
- */
+// GHSA-pm9j-g39c-3x2v: synthetic credentials straddle former slice boundaries.
 function placeAt(secret: string, sentence: string, offset: number, total: number): string {
-  const [before, after] = sentence.split("@@SECRET@@");
-  const leading = before ?? "";
-  const trailing = after ?? "";
+  const [leading = "", trailing = ""] = sentence.split("@@SECRET@@");
   const secretStart = Math.max(leading.length + 2, offset - Math.floor(secret.length / 2));
-  const prefixFiller = FILLER_START.repeat(secretStart - leading.length - 1);
+  const prefixFiller = "x".repeat(secretStart - leading.length - 1);
   const consumed = secretStart + secret.length + trailing.length;
-  const suffixFiller = FILLER_END.repeat(Math.max(0, total - consumed - 1));
+  const suffixFiller = "y".repeat(Math.max(0, total - consumed - 1));
   return `${prefixFiller} ${leading}${secret}${trailing}${suffixFiller ? ` ${suffixFiller}` : ""}`;
 }
 
@@ -37,17 +20,16 @@ function expectMaskedAt(secret: string, sentence: string, offset: number, total:
 }
 
 const hexRepeat = (count: number, chars = "0123456789abcdef"): string =>
-  chars
-    .slice(0, 16)
-    .repeat(Math.ceil(count / 16))
-    .slice(0, count);
+  chars.repeat(Math.ceil(count / 16)).slice(0, count);
 
 const lowerRepeat = (char: string, count: number): string => char.repeat(count);
+const shortTokenSamples =
+  "gsk_|pplx-|fal_| fc-|sk_live_|pypi-|dop_v1_| am_| sk_|tvly-|exa_|syt_|mem0_|brv_|hsk-|AKID|LTAI|hf_|r8_"
+    .split("|")
+    .map((prefix): readonly [string, string] => [prefix, `${prefix}abcdefghij12345`]);
 
-// One entry per default rule family. The sentence carries @@SECRET@@ where the value sits;
-// entries without a template use the secret alone.
+// Each row exercises a default rule family, with an optional sentence template.
 const RULE_FAMILY_SAMPLES: readonly (readonly [string, string, string?])[] = [
-  // Assignment / structured field families.
   ["env assignment", "API_KEY=example0value0tests"],
   ["escaped env assignment", "API_KEY=\\'escvalue12345'"],
   ["json secret field", '"password": "plainsecretvalue123"'],
@@ -63,7 +45,6 @@ const RULE_FAMILY_SAMPLES: readonly (readonly [string, string, string?])[] = [
       ["PxRfiCYEXAMPLEKEY0a", '"'].join(""),
   ],
   ["pem block", "-----BEGIN PRIVATE KEY-----\nMIIB\n-----END PRIVATE KEY-----"],
-  // Authorization / header families.
   ["authorization bearer", "Authorization: Bearer abcdefghij0123456789"],
   ["authorization basic", "Authorization: Basic dXNlcjpwYXNzd29yZDE"],
   ["authorization bot", "Authorization: Bot abcdefghij012345678"],
@@ -76,10 +57,8 @@ const RULE_FAMILY_SAMPLES: readonly (readonly [string, string, string?])[] = [
   ["gateway colon header", "X-OpenClaw-Token: plainopaquevalue123"],
   ["gateway equals header", "X-OpenClaw-Token=plainopaquevalue123"],
   ["standalone bearer", "Bearer abcdefghij0123456789"],
-  // URL / connection-string families.
   ["url userinfo", ["https", "://user:secretpass@example.com/x"].join("")],
   ["connection string", ["postgres", "://u:secretpass@db.example.com/x"].join("")],
-  // Form / config assignment families.
   ["form first pair", "password=abcsecretdef&nextkey=1"],
   ["standalone quoted", 'password="quotedsecretvalue"'],
   ["standalone unquoted", "password=plainsecretvalue12"],
@@ -90,7 +69,7 @@ const RULE_FAMILY_SAMPLES: readonly (readonly [string, string, string?])[] = [
   ["config prefixed", "db-password: cfgprefixedsecret"],
   ["config namespaced", "smtp.password: cfgnssecret1234"],
   ["bare pass", "pass: opaquepassvalue123", "TODO\n@@SECRET@@\nrest of line"],
-  // Vendor token families (synthetic values).
+  ...shortTokenSamples,
   ["openai sk", "sk-abcdef0123456789"],
   ["github ghp", "ghp_abcdefghij1234567890"],
   ["github gho", "gho_abcdefghij1234567890"],
@@ -123,21 +102,14 @@ const RULE_FAMILY_SAMPLES: readonly (readonly [string, string, string?])[] = [
     `https://discord.com/api/webhooks/123456789012345678/${lowerRepeat("a", 60)}`,
   ],
   ["discord token", `discord ${lowerRepeat("a", 24)}.bbbbbb.${lowerRepeat("c", 27)}`],
-  ["grogq gsk", "gsk_abcdefghij12345"],
   ["google aiza", ["AIzaSyA123456", "7890abcdefghij"].join("")],
   ["google ya29", ["ya", "29"].join("") + ".a0123456789"],
   ["google refresh", "1//0a0123456789"],
   ["jwt", "eyJabcdefghij.1234567890.abcdefghij"],
-  ["perplexity", "pplx-abcdefghij12345"],
-  ["fal", "fal_abcdefghij12345"],
-  ["fireworks fc", " fc-abcdefghij12345"],
   ["browserbase", "bb_live_abcdefghij12"],
   ["fuzz gAAAA", "gAAAAabcdefghij0123456789"],
-  ["stripe live", "sk_live_abcdefghij12345"],
   ["sendgrid", "SG.abcdefghij1234567.abcdefghij1234567"],
   ["npm", "npm_abcdefghij12345678"],
-  ["pypi", "pypi-abcdefghij12345"],
-  ["digitalocean", "dop_v1_abcdefghij12345"],
   ["digitalpulse ct", `dp.ct.${lowerRepeat("j", 42)}`],
   ["digitalpulse st", `dp.st.${lowerRepeat("k", 42)}`],
   ["docker pat", "dckr_pat_abcdefghij0123456789abcdefghij"],
@@ -155,26 +127,14 @@ const RULE_FAMILY_SAMPLES: readonly (readonly [string, string, string?])[] = [
   ["apify", "apify_api_abcdefghij1234567890"],
   ["flyv1", `FlyV1 fm123_${"J".repeat(100)}`],
   ["fio", `fio-u-${"K".repeat(40)}`],
-  ["alibaba am", " am_abcdefghij12345"],
-  ["alibaba sk", " sk_abcdefghij12345"],
-  ["tvly", "tvly-abcdefghij12345"],
-  ["exa", "exa_abcdefghij12345"],
-  ["syt", "syt_abcdefghij12345"],
   ["retaindb", "retaindb_abcdefghij12"],
-  ["mem0", "mem0_abcdefghij12345"],
-  ["brv", "brv_abcdefghij12345"],
   ["xai", `xai-${"L".repeat(30)}`],
   ["fireworks fw dash", " fw-abcdefghij01234567890123456789"],
   ["fireworks fw score", " fw_abcdefghij01234567890123456789"],
   ["fireworks fpk", " fpk_abcdefghij01234567890123456789"],
-  ["hsk", "hsk-abcdefghij12345"],
   ["aws akia", "AKIAABCDEFGHIJKLMNOP"],
   ["aws asia", "ASIAABCDEFGHIJKLMNOP"],
-  ["aws akid", "AKIDabcdefghij12345"],
-  ["aliyun ltai", "LTAIabcdefghij12345"],
-  ["huggingface", "hf_abcdefghij12345"],
   ["api org", "api_org_abcdefghijklmnopqrst"],
-  ["r8", "r8_abcdefghij12345"],
   ["atlassian atatt", "ATATTabcdefghij1234567890=12345678"],
   ["atlassian atctt", "ATCTT3xFfGabcdefghij123=12345678"],
   ["atlassian atbb", "ATBBabcdefghij012345"],
@@ -193,10 +153,6 @@ it("masks every rule family across former slice boundaries and at the control of
     expectMaskedAt(secret, template, 1_000, 40_000);
   }
 }, 240_000);
-
-it("keeps the boundary coverage table broad", () => {
-  expect(RULE_FAMILY_SAMPLES.length).toBeGreaterThan(90);
-});
 
 it("returns multi-megabyte values without throwing", () => {
   expect(() =>
