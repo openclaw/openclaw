@@ -5,13 +5,12 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import type { DesktopClient } from "./desktop-client.ts";
-import {
-  createConnectionHandle,
-  createPanel,
-  mountPanel,
-  unmountPanel,
-  updatePanel,
-} from "./desktop-panel.test-support.ts";
+import * as panels from "./desktop-panel.test-support.ts";
+
+function toggle(panel: ReturnType<typeof panels.createPanel>, open: boolean) {
+  const detail = open ? { open, environmentId: "gateway" } : { open };
+  panel.handleToggleRequest(new CustomEvent("openclaw:desktop-toggle", { detail }));
+}
 
 async function setup(mode: "mirror" | "pending" | "denied" = "mirror", docked = false) {
   const frames = new Map<number, FrameRequestCallback>();
@@ -53,14 +52,14 @@ async function setup(mode: "mirror" | "pending" | "denied" = "mirror", docked = 
         ? { environments: [environment] }
         : { transport: "rfb", wsPath: "/desktop/observe?token=fixture", control: false },
   );
-  const connection = createConnectionHandle();
+  const connection = panels.createConnectionHandle();
   const connect = vi.fn(async (options: Parameters<DesktopClient["connect"]>[0]) => {
     options.target.append(document.createElement("canvas"));
     options.onConnect?.();
     return connection;
   });
-  const panel = createPanel();
-  updatePanel(panel, {
+  const panel = panels.createPanel();
+  panels.updatePanel(panel, {
     client: { request, addEventListener: () => () => {} } as unknown as GatewayBrowserClient,
     available: true,
     embedded: !docked,
@@ -68,13 +67,9 @@ async function setup(mode: "mirror" | "pending" | "denied" = "mirror", docked = 
     requestedSource: "gateway",
     desktopClientFactory: () => ({ connect }),
   });
-  await mountPanel(panel);
+  await panels.mountPanel(panel);
   if (docked) {
-    panel.handleToggleRequest(
-      new CustomEvent("openclaw:desktop-toggle", {
-        detail: { open: true, environmentId: "gateway" },
-      }),
-    );
+    toggle(panel, true);
   }
   await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
   await panel.updateComplete;
@@ -91,6 +86,7 @@ async function setup(mode: "mirror" | "pending" | "denied" = "mirror", docked = 
     frames,
     button,
     canvas,
+    alert: () => panel.querySelector('[role="alert"]'),
     disconnect: connection.disconnect,
     callbacks: connect.mock.calls[0]![0],
     state: () => ({
@@ -122,8 +118,7 @@ afterEach(() => {
 
 it("accepts a native close before the Solid panel mounts", () => {
   const panel = document.createElement("openclaw-desktop-panel");
-  const event = new CustomEvent("openclaw:desktop-toggle", { detail: { open: false } });
-  expect(() => panel.handleToggleRequest(event)).not.toThrow();
+  expect(() => toggle(panel, false)).not.toThrow();
 });
 
 it("mirrors dock without reconnecting or changing control; browser close preserves the viewer", async () => {
@@ -132,7 +127,6 @@ it("mirrors dock without reconnecting or changing control; browser close preserv
   f.button().click();
   // The native request must retain the click's user activation.
   expect(f.requestWindow).toHaveBeenCalledOnce();
-  await f.panel.updateComplete;
   await waitForSolid(() => expect(f.state()).toMatchObject({ pressed: "true" }));
   f.tick(0);
   f.tick(40);
@@ -143,8 +137,7 @@ it("mirrors dock without reconnecting or changing control; browser close preserv
   expect(f.request.mock.calls.filter(([method]) => method === "desktop.observe")).toHaveLength(1);
   expect([f.connect.mock.calls.length, f.disconnect.mock.calls.length]).toEqual([1, 0]);
   f.popup.dispatchEvent(new Event("pagehide"));
-  await f.panel.updateComplete;
-  expect(f.state()).toMatchObject({ pressed: "false" });
+  await waitForSolid(() => expect(f.state()).toMatchObject({ pressed: "false" }));
   expect([f.frames.size, f.canvas(), f.disconnect.mock.calls.length]).toEqual([0, null, 0]);
 });
 
@@ -186,7 +179,7 @@ it("mirrors the published opener palette only while PiP is open", async () => {
     await f.panel.updateComplete;
     await f.open();
     check(dark);
-    await unmountPanel(f.panel);
+    await panels.unmountPanel(f.panel);
     await change(light, dark);
     expect(f.connect).toHaveBeenCalledOnce();
   } finally {
@@ -203,11 +196,7 @@ it("mirrors the published opener palette only while PiP is open", async () => {
 it("reports denial without disrupting the connection and permits a retry", async () => {
   const f = await setup("denied");
   f.button().click();
-  await waitForSolid(() =>
-    expect(f.panel.querySelector('[role="alert"]')?.textContent).toContain(
-      "Check browser permissions",
-    ),
-  );
+  await waitForSolid(() => expect(f.alert()?.textContent).toContain("Check browser permissions"));
   expect(f.button().disabled).toBe(false);
   f.button().click();
   expect([f.requestWindow.mock.calls.length, f.disconnect.mock.calls.length]).toEqual([2, 0]);
@@ -217,24 +206,25 @@ type Fixture = Awaited<ReturnType<typeof setup>>;
 it.each<[string, (fixture: Fixture) => void | Promise<void>]>([
   ["browser close", (f) => f.popup.close()],
   ["disconnect", (f) => f.callbacks.onDisconnect?.({ clean: false })],
-  ["source switch", (f) => updatePanel(f.panel, { requestedSource: "another-machine" })],
-  ["session switch", (f) => updatePanel(f.panel, { sessionKey: "agent:main:another-session" })],
+  ["source switch", (f) => panels.updatePanel(f.panel, { requestedSource: "another-machine" })],
+  [
+    "session switch",
+    (f) => panels.updatePanel(f.panel, { sessionKey: "agent:main:another-session" }),
+  ],
   [
     "hidden",
     async (f) => {
-      updatePanel(f.panel, { presented: false });
-      await f.panel.updateComplete;
-      expect(f.state()).toMatchObject({ busy: "true" });
+      panels.updatePanel(f.panel, { presented: false });
+      await waitForSolid(() => expect(f.state()).toMatchObject({ busy: "true" }));
     },
   ],
-  ["unmount", (f) => unmountPanel(f.panel)],
+  ["unmount", (f) => panels.unmountPanel(f.panel)],
 ])("closes late PiP completions after %s", async (reason, invalidate) => {
   const f = await setup("pending");
   f.button().click();
   f.button().click();
   expect(f.requestWindow).toHaveBeenCalledOnce();
-  await f.panel.updateComplete;
-  expect(f.state()).toMatchObject({ busy: "true" });
+  await waitForSolid(() => expect(f.state()).toMatchObject({ busy: "true" }));
   await invalidate(f);
   await f.panel.updateComplete;
   f.resolve();
@@ -244,7 +234,7 @@ it.each<[string, (fixture: Fixture) => void | Promise<void>]>([
   expect(f.canvas()).toBeNull();
   if (reason === "browser close") {
     await waitForSolid(() => expect(f.state()).toEqual({ busy: "false", pressed: "false" }));
-    expect(f.panel.querySelector('[role="alert"]')).toBeNull();
+    expect(f.alert()).toBeNull();
     expect(f.disconnect).not.toHaveBeenCalled();
   }
 });
