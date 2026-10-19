@@ -543,6 +543,8 @@ export async function buildPreparedCompactionRuntime(
         messageToolHints,
         sandboxInfo,
         tools: promptTools,
+        // Compaction summarizes history, not MCP calls; do not reinject uncapped remote guidance.
+        mcpServerInstructions: [],
         contextFiles,
         bootstrapTruncationNotice,
         activeProjectKeys,

@@ -1,6 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { mcpTool } from "./code-mode.test-support.js";
+import { truncateToolResultMessage } from "./embedded-agent-runner/tool-result-truncation.js";
+import { resolveAutoLiveToolResultMaxChars } from "./tool-result-limits.js";
 import {
   MCP_SERVER_INSTRUCTIONS_TOO_LARGE,
   mcpServerInstructionsDescribeMarker,
@@ -23,7 +25,14 @@ const researchGuidance = [
 ].join("\n");
 const calcGuidance = "CALC_GUIDANCE: confirm before paid runs.";
 
-function setup(options: { researchGuidance?: string } = {}) {
+function setup(
+  options: {
+    researchGuidance?: string;
+    modelContextWindowTokens?: number;
+    researchDescription?: string;
+    researchParameters?: Parameters<typeof mcpTool>[0]["parameters"];
+  } = {},
+) {
   const catalogRef = createToolSearchCatalogRef();
   const guidance = options.researchGuidance ?? researchGuidance;
   registerHeadlessToolSearchCatalog({
@@ -33,7 +42,8 @@ function setup(options: { researchGuidance?: string } = {}) {
         name: "research__search",
         serverName: "research",
         toolName: "search",
-        description: "Search court decisions by topic.",
+        description: options.researchDescription ?? "Search court decisions by topic.",
+        parameters: options.researchParameters,
         serverInstructions: guidance,
       }),
       mcpTool({
@@ -58,7 +68,11 @@ function setup(options: { researchGuidance?: string } = {}) {
       }),
     ],
   });
-  const tools = createToolSearchTools({ catalogRef, config: { tools: { toolSearch: true } } });
+  const tools = createToolSearchTools({
+    catalogRef,
+    config: { tools: { toolSearch: true } },
+    modelContextWindowTokens: options.modelContextWindowTokens,
+  });
   const tool = (name: string) =>
     expectDefined(
       tools.find((candidate) => candidate.name === name),
@@ -112,6 +126,148 @@ describe("Tool Search MCP server instructions", () => {
       args: {},
     });
     expect(modelText(dispatched)).not.toContain("mcpServerInstructions");
+  });
+
+  it.each([
+    { label: "16k ASCII", context: 64_000, body: "x".repeat(18_000), whole: false },
+    { label: "unknown context", context: undefined, body: "x".repeat(18_000), whole: false },
+    { label: "weighted CJK", context: 64_000, body: "界".repeat(5_000), whole: false },
+    { label: "32k ASCII", context: 128_000, body: "x".repeat(18_000), whole: true },
+  ])(
+    "keeps whole guidance or an accurate marker through the live guard: $label",
+    async ({ context, body, whole }) => {
+      const tail = "REQUIRE_HUMAN_CONFIRMATION_BEFORE_WRITING";
+      const guidance = "SERVER_GUIDANCE " + body + " " + tail;
+      const { tool } = setup({ researchGuidance: guidance, modelContextWindowTokens: context });
+      const results = [
+        await tool(TOOL_SEARCH_RAW_TOOL_NAME).execute("guard-search", {
+          query: "research__search",
+          limit: 1,
+        }),
+        await tool(TOOL_SEARCH_RAW_TOOL_NAME).execute("guard-batch", {
+          queries: [{ query: "research__search", limit: 1 }],
+        }),
+        await tool(TOOL_DESCRIBE_RAW_TOOL_NAME).execute("guard-describe", {
+          id: "research__search",
+        }),
+      ];
+      for (const [index, result] of results.entries()) {
+        const message = {
+          role: "toolResult" as const,
+          toolCallId: "guard",
+          toolName: "tool_search",
+          content: result.content,
+          isError: false,
+          timestamp: 1,
+        };
+        const guarded = truncateToolResultMessage(
+          message,
+          resolveAutoLiveToolResultMaxChars(context ?? Number.NaN),
+        );
+        // The real persistence guard must not cut text admitted by the discovery producer.
+        expect(guarded).toBe(message);
+        const text = modelText(guarded);
+        expect(text.includes(tail)).toBe(whole && index !== 1);
+        if (!whole) {
+          expect(text).toContain(JSON.stringify(MCP_SERVER_INSTRUCTIONS_TOO_LARGE));
+          expect(text).not.toContain("returns the whole text");
+          expect(text).not.toContain("SERVER_GUIDANCE");
+        } else if (index === 1) {
+          expect(text).toContain(
+            JSON.stringify(mcpServerInstructionsDescribeMarker("mcp:research:research__search")),
+          );
+        }
+      }
+    },
+  );
+
+  it("reserves both separately wrapped blocks for single-search guidance", async () => {
+    const guidance = "OVERHEAD_GUIDANCE " + "x".repeat(15_000) + " OVERHEAD_TAIL";
+    const { tool } = setup({ researchGuidance: guidance, modelContextWindowTokens: 64_000 });
+    const result = await tool(TOOL_SEARCH_RAW_TOOL_NAME).execute("overhead", {
+      query: "court decisions",
+      limit: 4,
+    });
+    const message = {
+      role: "toolResult" as const,
+      toolCallId: "overhead",
+      toolName: "tool_search",
+      content: result.content,
+      isError: false,
+      timestamp: 1,
+    };
+    expect(truncateToolResultMessage(message, 16_000)).toBe(message);
+    expect(modelText(result)).not.toContain("OVERHEAD_GUIDANCE");
+    const described = await tool(TOOL_DESCRIBE_RAW_TOOL_NAME).execute("overhead-describe", {
+      id: "research__search",
+    });
+    expect(described.details).toMatchObject({ mcpServerInstructions: { research: guidance } });
+    expect(modelText(described)).toContain("OVERHEAD_TAIL");
+  });
+
+  it.each(["search", "describe"] as const)(
+    "preserves an omission notice through the live guard when %s metadata fills the budget",
+    async (surface) => {
+      const { tool } = setup({
+        researchDescription: surface === "search" ? "metadata ".repeat(3_000) : undefined,
+        researchParameters: {
+          type: "object",
+          properties: { query: { type: "string", description: "schema ".repeat(4_000) } },
+        },
+        modelContextWindowTokens: 64_000,
+      });
+      const result = await tool(
+        surface === "search" ? TOOL_SEARCH_RAW_TOOL_NAME : TOOL_DESCRIBE_RAW_TOOL_NAME,
+      ).execute(
+        "oversized-metadata",
+        surface === "search" ? { query: "research__search", limit: 1 } : { id: "research__search" },
+      );
+      const guarded = truncateToolResultMessage(
+        {
+          role: "toolResult",
+          toolCallId: "oversized-metadata",
+          toolName: surface,
+          content: result.content,
+          isError: false,
+          timestamp: 1,
+        },
+        16_000,
+      );
+      expect(modelText(guarded)).toContain("MCP server instructions were omitted");
+      expect(modelText(guarded)).toContain("EXTERNAL_UNTRUSTED_CONTENT");
+      expect(modelText(guarded)).not.toContain("RESEARCH_GUIDANCE");
+      if (surface === "search") {
+        expect(Array.isArray(result.details)).toBe(true);
+      } else {
+        expect(result.details).toMatchObject({ id: "mcp:research:research__search" });
+      }
+    },
+  );
+
+  it("does not rule out every discovery response because one schema cannot carry guidance", async () => {
+    const guidance = "SCHEMA_GUIDANCE " + "x".repeat(10_000) + " SCHEMA_TAIL";
+    const { tool } = setup({
+      researchGuidance: guidance,
+      modelContextWindowTokens: 64_000,
+      researchParameters: {
+        type: "object",
+        properties: { query: { type: "string", description: "s".repeat(10_000) } },
+      },
+    });
+    const batch = await tool(TOOL_SEARCH_RAW_TOOL_NAME).execute("large-schema-batch", {
+      queries: [{ query: "research__search", limit: 1 }],
+    });
+    expect(modelText(batch)).not.toContain("including tool_describe");
+    expect(modelText(batch)).not.toContain("SCHEMA_GUIDANCE");
+    const single = await tool(TOOL_SEARCH_RAW_TOOL_NAME).execute("large-schema-single", {
+      query: "research__search",
+      limit: 1,
+    });
+    expect(modelText(single)).toContain("SCHEMA_TAIL");
+    const smallSchema = await tool(TOOL_DESCRIBE_RAW_TOOL_NAME).execute("small-schema", {
+      id: "research__fetch",
+    });
+    expect(modelText(smallSchema)).toContain("SCHEMA_TAIL");
   });
 
   it("adds no guidance block when no returned server publishes guidance", async () => {

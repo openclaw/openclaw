@@ -44,7 +44,7 @@ export function buildConfiguredAgentSystemPrompt(params: ConfiguredAgentSystemPr
   if (tools) {
     renderParams.toolNames = tools.map((tool) => tool.name);
     renderParams.messageTool = tools.find((tool) => tool.name.trim().toLowerCase() === "message");
-    renderParams.mcpServerInstructions = collectMcpServerInstructions(tools);
+    renderParams.mcpServerInstructions ??= collectMcpServerInstructions(tools);
   }
   if (!config) {
     return buildAgentSystemPrompt(renderParams);

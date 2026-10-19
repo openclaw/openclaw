@@ -89,6 +89,7 @@ export type ToolSearchToolContext = {
   abortSignal?: AbortSignal;
   executeTool?: ToolSearchCatalogToolExecutor;
   forceRestartSafeTools?: boolean;
+  modelContextWindowTokens?: number;
   /** Set when the run executes only these tools; swarm globals gate on `sessions_spawn`. */
   toolExecutionAllow?: readonly string[];
   codeModeSkills?: Readonly<AgentToolSurfacePresentation["skills"]>;

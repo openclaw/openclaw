@@ -618,7 +618,7 @@ describe.each(["interactive", "headless"])("Code Mode %s MCP discovery", (mode) 
       expect(declaration.split("LEDGER_TAIL").length - 1).toBe(1);
       expect(declaration).toContain(" *   14. Nested rule.");
       expect(declaration).toContain(
-        " * LEDGER_TAIL: confirm before paid calls. * / stays inside the comment\n */\ndeclare namespace MCP.ledger {",
+        " * LEDGER_TAIL: confirm before paid calls. * / stays inside the comment\n */",
       );
     }
     expect(value.notesFile).not.toContain("Server instructions");
@@ -735,6 +735,31 @@ it("bounds MCP discovery and wraps remote metadata before any tool executes", as
   for (const target of targets) {
     expect(target.execute).not.toHaveBeenCalled();
   }
+});
+
+it("keeps MCP signatures discoverable when output truncates oversized server guidance", async () => {
+  const target = mcpTool({
+    name: "ledger__listInvoices",
+    serverName: "ledger",
+    toolName: "listInvoices",
+    serverInstructions: "LEDGER_GUIDANCE " + "x".repeat(70_000) + " LEDGER_TAIL",
+  });
+  const result = await harness([target]).run("text((await MCP.ledger.$api()).header);");
+  expect(resultDetails(result)).toMatchObject({
+    status: "completed",
+    output: [
+      expect.objectContaining({
+        truncated: true,
+        prefix: expect.stringContaining("function listInvoices("),
+      }),
+    ],
+  });
+  const visible = result.content
+    .filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join("\n");
+  expect(visible).toContain("function listInvoices(");
+  expect(visible).not.toContain("LEDGER_TAIL");
 });
 
 it("supports root MCP API and multiple server declarations", async () => {

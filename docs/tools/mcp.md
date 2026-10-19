@@ -113,13 +113,17 @@ When a server's `initialize` result includes `instructions`, OpenClaw passes tha
 guidance to embedded agents whole, after removing prompt-injection phrases,
 OpenClaw prompt markers, and model special tokens. It applies only while the
 server still backs a tool the agent can call. Where it appears depends on how
-the agent sees the server's tools:
+the agent sees the server's tools during ordinary embedded turns:
 
 - Direct tools: a labeled `MCP Server Instructions` section in the system prompt.
 - [Tool Search](/tools/tool-search#mcp-server-instructions): the discovery
   results that return the server's tools, never the system prompt.
 - [Code Mode](/tools/code-mode/output): the server's `$api` header and
   `mcp/<server>.d.ts` declaration, plus `catalog.search` output.
+
+Compaction prompts omit server instructions on every tool surface: they summarize
+history rather than execute MCP calls. Ordinary turns and discovery retain the
+guidance as described above.
 
 ## Interactive apps and plugin extensions
 

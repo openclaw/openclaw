@@ -69,7 +69,7 @@ function renderServerInstructions(instructions: string | undefined): string[] {
   // confirmation) binds as much as the first line.
   return [
     "/**",
-    " * Server instructions from the MCP initialize result; they apply only to this namespace.",
+    " * Server instructions from the MCP initialize result; they apply only to the preceding namespace.",
     " *",
     ...instructions
       .split(/\r?\n/u)
@@ -272,7 +272,6 @@ function renderMcpServerHeader(server: McpApiServerDoc, tools: readonly McpApiTo
     "interface McpPromptsListResult { prompts: unknown[]; nextCursor?: string }",
     "interface McpPromptsGetResult { messages: unknown[]; description?: string }",
     "",
-    ...renderServerInstructions(server.instructions),
     `declare namespace MCP.${server.identifier} {`,
     "  /** Return this TypeScript-style API header. */",
     "  function $api(toolName?: string, options?: { schema?: boolean }): Promise<McpApiHeader>;",
@@ -300,7 +299,8 @@ function renderMcpServerHeader(server: McpApiServerDoc, tools: readonly McpApiTo
     }
     lines.push("  }");
   }
-  lines.push("}");
+  // Keep the callable contract discoverable even when output clips long remote guidance.
+  lines.push("}", ...renderServerInstructions(server.instructions));
   return lines.join("\n");
 }
 

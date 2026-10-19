@@ -327,14 +327,20 @@ instead, wrapped as untrusted content like the rest of the response:
 Instructions are never truncated. Candidates and schemas keep priority, so
 server text cannot evict a callable entry. A batch keeps its 4,000-character
 total: guidance shares only the room the fitted candidates leave. Any response
-also stays within its protected-content bound. A server whose whole text does
+also fits its protected-content bound and the effective model's weighted live
+tool-result and context budgets, including both separately wrapped text blocks
+for a single search. A server whose whole text does
 not fit gets a marker instead of a partial text. The marker names the
-`tool_describe` id that returns the whole text, or, when the text is too long
-even for `tool_describe`, says no Tool Search response can carry it.
+`tool_describe` id that returns the whole text when that tool's schema and
+guidance fit together. Otherwise it only says the whole guidance is unavailable
+in this response; another search or a smaller schema may still carry it.
 
 When a batch has no room even for a server's marker, the server is left out of
 `mcpServerInstructions` and the batch reports `truncated: true`; `tool_describe`
-on one of that server's candidates returns its whole text or that marker.
+on one of that server's candidates returns its whole text or that marker. If a
+single search or description has no room even for guidance markers, a separate
+short notice reports the omission while oversized catalog metadata is truncated.
+The single-search candidate array keeps its programmatic shape.
 
 ### Directory mode
 

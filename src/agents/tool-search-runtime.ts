@@ -31,7 +31,12 @@ import {
   isTrustedToolExecutionPreflightError,
   protectNetworkToolExecutionError,
 } from "./tool-result-error.js";
-import { runWithToolResultDelivery } from "./tool-result-limits.js";
+import {
+  DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
+  resolveToolResultBudget,
+  runWithToolResultDelivery,
+  toolResultFitsBudget,
+} from "./tool-result-limits.js";
 import {
   compactToolSearchCatalogEntry,
   prepareToolSearchCatalogExecutionTool,
@@ -39,10 +44,7 @@ import {
   resolveCatalog,
   visibleCatalogEntries,
 } from "./tool-search-catalog.js";
-import {
-  renderToolSearchControlText,
-  serializeToolSearchControlResult,
-} from "./tool-search-control-result.js";
+import { renderToolSearchControlContent } from "./tool-search-control-result.js";
 import { getToolSearchLexicalIndex } from "./tool-search-index.js";
 import { scoreLexical, tokenizeQuery } from "./tool-search-ranking.js";
 import {
@@ -75,9 +77,9 @@ type ToolSearchExactCallOptions = Pick<
 /** Untrusted MCP initialize guidance attached to one discovery response, keyed by server. */
 export type ToolSearchMcpServerInstructions = Record<string, string>;
 
-/** Marks server text that no Tool Search response, including tool_describe, can carry whole. */
+/** No whole-guidance fallback is established for this response and selected schema. */
 export const MCP_SERVER_INSTRUCTIONS_TOO_LARGE =
-  "[omitted: longer than a Tool Search response can carry, including tool_describe]";
+  "[omitted to fit this response; whole guidance is unavailable here]";
 
 /** Marks server text that did not fit this response but fits tool_describe on `id`. */
 export function mcpServerInstructionsDescribeMarker(id: string): string {
@@ -345,8 +347,8 @@ export class ToolSearchRuntime {
    * Server guidance for one discovery response that returns these catalog ids.
    * Deferred MCP tools keep initialize instructions out of the system prompt, so
    * the response that names a server carries its whole text once, after the
-   * callable entries. Text is never cut: when the protected response bound, or
-   * `maxChars` for the whole rendered response, leaves no room, a server gets a
+   * callable entries. Text is never cut: when the protected or live/context budget,
+   * or `maxChars` for the whole rendered response, leaves no room, a server gets a
    * marker instead (pointing to tool_describe only when that response can carry
    * the text), and a server whose marker does not fit either is omitted and
    * reported through `omitted`. Every server gets a marker before any gets its
@@ -355,7 +357,7 @@ export class ToolSearchRuntime {
   mcpServerInstructionsFor = (
     payload: object,
     ids: readonly string[],
-    options: { parentToolCallId?: string; maxChars?: number } = {},
+    options: { parentToolCallId?: string; maxChars?: number; separateBlock?: boolean } = {},
   ): { instructions?: ToolSearchMcpServerInstructions; omitted: boolean } => {
     const guidance = this.collectMcpServerGuidance(ids);
     if (guidance.length === 0) {
@@ -364,14 +366,12 @@ export class ToolSearchRuntime {
     const networkContent = this.hasNetworkContent(options.parentToolCallId);
     const instructions: ToolSearchMcpServerInstructions = {};
     const fits = () => {
-      const rendered = renderToolSearchControlText(
-        serializeToolSearchControlResult({ ...payload, mcpServerInstructions: instructions }),
+      const rendered = renderToolSearchControlContent(
+        options.separateBlock ? payload : { ...payload, mcpServerInstructions: instructions },
         networkContent,
+        options.separateBlock ? { mcpServerInstructions: instructions } : undefined,
       );
-      return (
-        !rendered.truncated &&
-        (options.maxChars === undefined || rendered.text.length <= options.maxChars)
-      );
+      return this.guidanceFits(rendered, options.maxChars);
     };
     for (const { server, text } of guidance) {
       instructions[server] = text;
@@ -422,13 +422,33 @@ export class ToolSearchRuntime {
   /** Whether tool_describe on this entry would carry its server's whole text. */
   private describeCarries({ server, text, entry }: McpServerGuidance): boolean {
     // Describing a remote entry always marks the response as network content.
-    return !renderToolSearchControlText(
-      serializeToolSearchControlResult({
-        ...describeEntry(entry),
-        mcpServerInstructions: { [server]: text },
-      }),
-      true,
-    ).truncated;
+    return this.guidanceFits(
+      renderToolSearchControlContent(
+        {
+          ...describeEntry(entry),
+          mcpServerInstructions: { [server]: text },
+        },
+        true,
+      ),
+    );
+  }
+
+  private guidanceFits(
+    rendered: Array<{ text: string; truncated: boolean }>,
+    maxChars?: number,
+  ): boolean {
+    // Include every wrapper and both single-search blocks, using the same weighted
+    // live/context limits as the session guard, not just the raw protected bound.
+    const text = rendered.map((block) => block.text).join("");
+    const budget = resolveToolResultBudget(this.ctx.modelContextWindowTokens) ?? {
+      maxChars: DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
+      maxContextChars: Infinity,
+    };
+    return (
+      rendered.every((block) => !block.truncated) &&
+      (maxChars === undefined || text.length <= maxChars) &&
+      toolResultFitsBudget(text, budget)
+    );
   }
 
   observeNetworkContent(parentToolCallId: string): void {
@@ -679,26 +699,16 @@ export function formatToolSearchControlResult<T>(
     compact?: boolean;
     images?: Extract<AgentToolResult<unknown>["content"][number], { type: "image" }>[];
     mcpServerInstructions?: ToolSearchMcpServerInstructions;
+    mcpServerInstructionsOmitted?: boolean;
   } = {},
 ): AgentToolResult<T> {
-  const serialized = serializeToolSearchControlResult(payload, options.compact);
   const networkContent = runtime?.hasNetworkContent(options.parentToolCallId) ?? false;
-  const { text } = renderToolSearchControlText(serialized, networkContent);
-  const result = textResult(text, payload);
+  const rendered = renderToolSearchControlContent(payload, networkContent, options);
+  const result = textResult(rendered[0]!.text, payload);
+  result.content.push(...rendered.slice(1).map(({ text }) => ({ type: "text" as const, text })));
   if (networkContent) {
     // The control tool has no static source; finalization reads this per-call fact.
     attachInternalToolResultContentSource(result, "network");
-  }
-  if (options.mcpServerInstructions) {
-    // Guidance follows as its own block, wrapped like the payload, so the payload keeps its shape.
-    const guidance = serializeToolSearchControlResult(
-      { mcpServerInstructions: options.mcpServerInstructions },
-      options.compact,
-    );
-    result.content.push({
-      type: "text",
-      text: renderToolSearchControlText(guidance, networkContent).text,
-    });
   }
   if (options.images?.length) {
     result.content.push(...options.images);

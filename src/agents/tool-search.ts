@@ -323,15 +323,17 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
             limit: request.search.limit,
             parentToolCallId: toolCallId,
           });
-          // Measured with the list as one response, so both blocks stay within the protected bound.
-          const { instructions: mcpServerInstructions } = runtime.mcpServerInstructionsFor(
-            { results },
+          // Reserve the actual list and separately wrapped guidance against the live cap.
+          const { instructions: mcpServerInstructions, omitted } = runtime.mcpServerInstructionsFor(
+            results,
             results.map((candidate) => candidate.id),
-            { parentToolCallId: toolCallId },
+            { parentToolCallId: toolCallId, separateBlock: true },
           );
           return formatToolSearchControlResult(results, runtime, {
             parentToolCallId: toolCallId,
-            mcpServerInstructions,
+            // A notice must not push any admitted whole guidance over budget.
+            mcpServerInstructions: omitted ? undefined : mcpServerInstructions,
+            mcpServerInstructionsOmitted: omitted,
           });
         }
         const results = await Promise.all(
@@ -357,15 +359,17 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
         const description = await runtime.describe(readToolSearchId(args), {
           parentToolCallId: toolCallId,
         });
-        const { instructions: mcpServerInstructions } = runtime.mcpServerInstructionsFor(
+        const { instructions: mcpServerInstructions, omitted } = runtime.mcpServerInstructionsFor(
           description,
           [description.id],
           { parentToolCallId: toolCallId },
         );
         return formatToolSearchControlResult(
-          mcpServerInstructions ? { ...description, mcpServerInstructions } : description,
+          !omitted && mcpServerInstructions
+            ? { ...description, mcpServerInstructions }
+            : description,
           runtime,
-          { parentToolCallId: toolCallId },
+          { parentToolCallId: toolCallId, mcpServerInstructionsOmitted: omitted },
         );
       },
     },
