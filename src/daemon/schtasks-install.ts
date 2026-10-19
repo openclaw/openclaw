@@ -3,7 +3,7 @@ import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { DOMParser } from "linkedom";
-import { hasErrnoCode } from "../infra/errno.js";
+import { ignoreMissingPath } from "../infra/errno.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
 import { WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS } from "../infra/windows-powershell-spawn.js";
 import { resolveGatewayServiceDescription } from "./constants.js";
@@ -602,11 +602,7 @@ export async function uninstallScheduledTask({
     `${scriptPath}.task.xml.bak`,
     `${launcherPath}.bak`,
   ])) {
-    await fs.unlink(backupPath).catch((error: unknown) => {
-      if (!hasErrnoCode(error, "ENOENT")) {
-        throw error;
-      }
-    });
+    await fs.unlink(backupPath).catch(ignoreMissingPath);
   }
   try {
     await fs.unlink(scriptPath);
