@@ -360,6 +360,17 @@ describe("resolveRequesterToolPolicies", () => {
     });
   });
 
+  it("lets a session-event web_search entry pass only while current policy allows it", () => {
+    const runtimeToolAllowlist = ["read", "web_search"];
+    expect(resolveWebSearchToolPolicy({ runtimeToolAllowlist }).allowed).toBe(true);
+    expect(
+      resolveWebSearchToolPolicy({
+        runtimeToolAllowlist,
+        config: { tools: { deny: ["web_search"] } },
+      }).allowed,
+    ).toBe(false);
+  });
+
   it("does not re-resolve group sender policy for a verified child", async () => {
     const parentSessionKey = "agent:main:telegram:group:dev";
     const childSessionKey = "agent:main:subagent:group-child";

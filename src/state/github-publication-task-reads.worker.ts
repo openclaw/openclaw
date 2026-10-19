@@ -3,7 +3,7 @@ import type { EngineConnection } from "../infra/sql-connection.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 
-export type TaskPublicationSession = {
+type TaskPublicationSession = {
   agentId: string;
   sessionKey: string;
   sessionId: string;

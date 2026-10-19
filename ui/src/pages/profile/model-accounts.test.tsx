@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type {
   UserModelAccount,
@@ -20,6 +19,7 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { openPicker, choosePickerValue } from "../../test-helpers/select-picker.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import type { ModelAccountsTargetSource } from "./model-accounts-state.ts";
 import { ModelAccounts } from "./model-accounts.tsx";
 
 const connectedResult: UsersAuthConnectStatusResult = {
@@ -152,16 +152,12 @@ async function mountAccounts(
     hello: { auth: { role: "operator", scopes } },
     selfUser: { id: "profile-1", name: "Ada" },
   } as ApplicationGatewaySnapshot;
-  const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
+  const listeners = new Set<() => void>();
   const eventListeners = new Set<(event: GatewayEventFrame) => void>();
   const context = {
     gateway: {
       get snapshot() {
         return snapshot;
-      },
-      subscribe(listener: (next: ApplicationGatewaySnapshot) => void) {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
       },
       subscribeEvents(listener: (event: GatewayEventFrame) => void) {
         eventListeners.add(listener);
@@ -170,8 +166,15 @@ async function mountAccounts(
     },
   } as unknown as ApplicationContext;
   const provider = createSolidApplicationContextProvider(context);
-  const [profileId, setProfileId] = createSignal("profile-1");
-  const view = mountSolid(() => <ModelAccounts identityId="profile-1" profileId={profileId()} />, {
+  let profileId = "profile-1";
+  const target: ModelAccountsTargetSource = {
+    read: () => ({ gateway: snapshot, identityId: "profile-1", profileId }),
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+  const view = mountSolid(() => <ModelAccounts target={target} />, {
     wrapper: provider.wrapper,
   });
   const accounts = view.container;
@@ -181,7 +184,12 @@ async function mountAccounts(
   return {
     accounts,
     unmount: view.unmount,
-    setProfileId,
+    setProfileId(value: string) {
+      profileId = value;
+      for (const listener of listeners) {
+        listener();
+      }
+    },
     request,
     async start(providerId = "openai") {
       button(accounts, ".profile-auth-add-account").click();
@@ -215,7 +223,7 @@ async function mountAccounts(
           : {}),
       };
       for (const listener of listeners) {
-        listener(snapshot);
+        listener();
       }
     },
     emitEvent(event: GatewayEventFrame) {
@@ -226,7 +234,7 @@ async function mountAccounts(
     emitSnapshot(next: Partial<ApplicationGatewaySnapshot>) {
       snapshot = { ...snapshot, ...next };
       for (const listener of listeners) {
-        listener(snapshot);
+        listener();
       }
     },
   };
@@ -390,7 +398,6 @@ it.each(["connection", "profile"] as const)(
       harness.emit("connected");
     } else {
       harness.setProfileId("profile-2");
-      flush();
     }
     expect(harness.request).toHaveBeenLastCalledWith("users.listModelAccounts", {
       profileId: scope === "connection" ? "profile-1" : "profile-2",
