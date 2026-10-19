@@ -2,12 +2,28 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { installTestLinkReader } from "../test-helpers/link-reader.ts";
 import { installTitleTooltips } from "./tooltip-title.ts";
 
+const title = "Edit configuration as text";
+function element<K extends keyof HTMLElementTagNameMap>(
+  tag: K,
+  props: Partial<HTMLElementTagNameMap[K]>,
+  ...children: (Node | string)[]
+) {
+  const node = Object.assign(document.createElement(tag), props);
+  node.append(...children);
+  return node;
+}
+const nextFrame = () =>
+  new Promise<void>((resolve) => {
+    requestAnimationFrame(() => resolve());
+  });
+
 // Accessible names and opacity require real layout; keep the canonical browser-only gate.
 describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
   "title tooltip accessible names",
   () => {
     let page: (typeof import("vitest/browser"))["page"];
     let dispose: () => void;
+    const named = (name: string) => page.getByRole("button", { name, exact: true });
 
     beforeEach(async () => {
       ({ page } = await import("vitest/browser"));
@@ -27,15 +43,12 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
     ] as const)(
       "preserves a text-labelled button after %s enhancement during a %s opacity transition",
       async (input, target) => {
-        const container = document.createElement("div");
-        const button = document.createElement("button");
-        button.textContent = "Edit";
-        button.title = "Edit configuration as text";
+        const button = element("button", { title }, "Edit");
+        const container = element("div", {}, button);
         const animated = target === "button" ? button : container;
         animated.style.opacity = "0";
-        container.append(button);
         document.body.append(container);
-        const namedButton = page.getByRole("button", { name: "Edit", exact: true });
+        const namedButton = named("Edit");
         expect(namedButton.elements()).toEqual([button]);
         expect(button.checkVisibility({ checkOpacity: true })).toBe(false);
 
@@ -46,9 +59,7 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
         }
         expect(button.title).toBe("");
         animated.style.opacity = "1";
-        await new Promise<void>((resolve) => {
-          requestAnimationFrame(() => resolve());
-        });
+        await nextFrame();
         expect(button.checkVisibility({ checkOpacity: true })).toBe(true);
         expect(namedButton.elements()).toEqual([button]);
         await namedButton.click();
@@ -62,22 +73,15 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
     ] as const)(
       "judges a repeated title against text faded by %s",
       async (_case, fadedPart, expectedOpen) => {
-        const parts = {
-          container: document.createElement("div"),
-          button: document.createElement("button"),
-          label: document.createElement("span"),
-        };
-        parts.label.textContent = "Active";
-        parts.button.title = "Active";
-        parts.button.append(parts.label);
-        parts.container.append(parts.button);
-        document.body.append(parts.container);
+        const label = element("span", {}, "Active");
+        const button = element("button", { title: "Active" }, label);
+        const container = element("div", {}, button);
+        const parts = { container, button, label };
+        document.body.append(container);
         parts[fadedPart].style.opacity = "0";
 
         parts.button.focus();
-        await new Promise<void>((resolve) => {
-          requestAnimationFrame(() => resolve());
-        });
+        await nextFrame();
         expect(document.querySelector("openclaw-tooltip")?.hasAttribute("open") ?? false).toBe(
           expectedOpen,
         );
@@ -85,40 +89,27 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
     );
 
     it("releases an injected name when an existing text node becomes the label", async () => {
-      const button = document.createElement("button");
       const label = document.createTextNode("");
-      button.title = "Edit configuration as text";
-      button.append(label);
+      const button = element("button", { title }, label);
       document.body.append(button);
       await page.elementLocator(button).hover();
-      expect(
-        page.getByRole("button", { name: "Edit configuration as text", exact: true }).elements(),
-      ).toEqual([button]);
+      expect(named(title).elements()).toEqual([button]);
 
       label.data = "Edit";
-      await expect
-        .poll(() => page.getByRole("button", { name: "Edit", exact: true }).elements())
-        .toEqual([button]);
+      await expect.poll(() => named("Edit").elements()).toEqual([button]);
     });
 
     it.each(["label", "nested subtree"] as const)(
       "updates the active name when aria-hidden changes on the %s",
       async (target) => {
-        const button = document.createElement("button");
-        const label = document.createElement("span");
-        const wrapper = document.createElement("span");
-        button.title = "Edit configuration as text";
-        label.textContent = "Edit";
-        wrapper.append(label);
-        button.append(wrapper);
+        const label = element("span", {}, "Edit");
+        const wrapper = element("span", {}, label);
+        const button = element("button", { title }, wrapper);
         const hidden = target === "label" ? label : wrapper;
         hidden.setAttribute("aria-hidden", "true");
         document.body.append(button);
-        const titleNamedButton = page.getByRole("button", {
-          name: "Edit configuration as text",
-          exact: true,
-        });
-        const textNamedButton = page.getByRole("button", { name: "Edit", exact: true });
+        const titleNamedButton = named(title);
+        const textNamedButton = named("Edit");
         await titleNamedButton.hover();
         expect(button.title).toBe("");
         expect(titleNamedButton.elements()).toEqual([button]);
@@ -133,7 +124,7 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
 
         await page.elementLocator(button).unhover();
         button.blur();
-        expect(button.title).toBe("Edit configuration as text");
+        expect(button.title).toBe(title);
         expect(button.hasAttribute("aria-label")).toBe(false);
         expect(titleNamedButton.elements()).toEqual([button]);
       },
@@ -142,10 +133,8 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
     it.each(["hidden", "display", "visibility", "aria-hidden"] as const)(
       "preserves title naming when the only text is %s",
       async (hidden) => {
-        const button = document.createElement("button");
-        const label = document.createElement("span");
-        button.title = "Edit configuration";
-        label.textContent = "Decorative text";
+        const label = element("span", {}, "Decorative text");
+        const button = element("button", { title: "Edit configuration" }, label);
         if (hidden === "hidden") {
           label.hidden = true;
         }
@@ -158,9 +147,8 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
         if (hidden === "aria-hidden") {
           label.setAttribute("aria-hidden", "true");
         }
-        button.append(label);
         document.body.append(button);
-        const namedButton = page.getByRole("button", { name: "Edit configuration", exact: true });
+        const namedButton = named("Edit configuration");
         expect(namedButton.elements()).toEqual([button]);
         await page.elementLocator(button).hover();
         expect(namedButton.elements()).toEqual([button]);
@@ -175,10 +163,12 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
       const provider = installTestLinkReader(
         document.createElement("openclaw-link-reader-hovercard-provider"),
       );
-      const link = document.createElement("a");
-      link.href = "https://github.com/openclaw/openclaw/pull/99816";
-      link.title = "Issue details";
-      link.innerHTML = '<svg aria-hidden="true" width="20" height="20"></svg>';
+      const href = "https://github.com/openclaw/openclaw/pull/99816";
+      const link = element("a", {
+        href,
+        title: "Issue details",
+        innerHTML: '<svg aria-hidden="true" width="20" height="20"></svg>',
+      });
       provider.append(link);
       document.body.append(provider);
       const namedLink = page.getByRole("link", { name: "Issue details", exact: true });
@@ -193,21 +183,18 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
       expect(link.title).toBe("Issue details");
       expect(link.hasAttribute("aria-label")).toBe(false);
       expect(namedLink.elements()).toEqual([link]);
-      expect(link.href).toBe("https://github.com/openclaw/openclaw/pull/99816");
+      expect(link.href).toBe(href);
     });
 
     it("preserves an explicit name supplied while the tooltip owns a temporary name", async () => {
-      const button = document.createElement("button");
-      button.title = "Edit configuration as text";
+      const button = element("button", { title });
       document.body.append(button);
       await page.elementLocator(button).hover();
       button.setAttribute("aria-label", "Open editor");
       button.title = "Updated hint";
       await expect.poll(() => button.title).toBe("");
       await page.elementLocator(button).unhover();
-      expect(page.getByRole("button", { name: "Open editor", exact: true }).elements()).toEqual([
-        button,
-      ]);
+      expect(named("Open editor").elements()).toEqual([button]);
       expect(button.title).toBe("Updated hint");
     });
   },
