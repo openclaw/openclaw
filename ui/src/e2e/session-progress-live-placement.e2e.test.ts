@@ -519,7 +519,7 @@ suite.define(() => {
       active: false,
     },
   ])(
-    "hides $name progress locally without clearing the saved card",
+    "keeps $name saved Details after hiding progress locally",
     async ({ name, colorScheme, width, status, active }) => {
       const sessionKey = "agent:main:progress-dismiss";
       const updatedAt = Date.now() - (active ? 60_000 : 22 * 60 * 60_000);
@@ -616,7 +616,10 @@ suite.define(() => {
               .toBe(true);
           }
           await card.getByRole("menuitem", { name: "Hide this card", exact: true }).click();
-          await expect.poll(() => card.count()).toBe(0);
+          await expect.poll(() => card.count()).toBe(1);
+          expect(await card.textContent()).toContain(
+            plan?.[0]?.step ?? "The workspace review is waiting for a decision.",
+          );
           await captureProof(page, "hide-" + name + "-after.png");
           expect(await gateway.getRequests("progressCard.put")).toHaveLength(0);
 
@@ -625,7 +628,7 @@ suite.define(() => {
             await gateway.setMethodResponse("progressCard.get", { card: latestCard });
             await gateway.emitGatewayEvent("progressCard.changed", { sessionKey, revision: 4 });
             await gateway.waitForRequest("progressCard.get", { after: 1 });
-            await expect.poll(() => card.count()).toBe(0);
+            await expect.poll(() => card.count()).toBe(1);
             const peer = await page.context().newPage();
             try {
               const peerGateway = await installMockGateway(peer, {
@@ -642,14 +645,14 @@ suite.define(() => {
                 .poll(() => peer.locator('[data-progress-card-placement="details"]').isVisible())
                 .toBe(true);
               expect(await peerGateway.getRequests("progressCard.put")).toHaveLength(0);
-              expect(await card.count()).toBe(0);
+              expect(await card.count()).toBe(1);
             } finally {
               await peer.close();
             }
           }
 
           await page.getByRole("textbox", { name: "Chat composer", exact: true }).fill("draft");
-          expect(await card.count()).toBe(0);
+          expect(await card.count()).toBe(1);
           await page.reload();
           await openChatDetails(page);
           await expect.poll(() => card.isVisible()).toBe(true);
@@ -662,7 +665,7 @@ suite.define(() => {
           await captureProof(page, "hide-" + name + "-collapsed-before.png");
           await card.getByRole("button", { name: "Task progress options" }).press("Enter");
           await card.getByRole("menuitem", { name: "Hide this card", exact: true }).press("Enter");
-          await expect.poll(() => card.count()).toBe(0);
+          await expect.poll(() => card.count()).toBe(1);
           expect(await gateway.getRequests("progressCard.put")).toHaveLength(0);
           await page.reload();
           await openChatDetails(page);
@@ -724,7 +727,7 @@ suite.define(() => {
     );
   });
 
-  it("lets a restricted viewer hide progress locally without a write grant", async () => {
+  it("keeps saved Details when a restricted viewer hides progress locally", async () => {
     const sessionKey = "agent:main:progress-viewer";
     await suite.withPage(
       {
@@ -766,7 +769,8 @@ suite.define(() => {
         expect(await card.locator('[data-value="clear"]').count()).toBe(0);
         await card.getByRole("button", { name: "Task progress options" }).click();
         await card.getByRole("menuitem", { name: "Hide this card", exact: true }).click();
-        await expect.poll(() => card.count()).toBe(0);
+        await expect.poll(() => card.count()).toBe(1);
+        expect(await card.textContent()).toContain("Completed work");
         expect(await gateway.getRequests("progressCard.put")).toHaveLength(0);
         await page.reload();
         await openChatDetails(page);

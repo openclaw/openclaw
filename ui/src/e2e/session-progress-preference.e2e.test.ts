@@ -13,12 +13,12 @@ import {
 } from "./chat-flow.test-support.ts";
 import { settingsRow } from "./config-composer-fixtures.test-support.ts";
 import { expectNoRequests, requestCount } from "./session-management.compact.test-support.ts";
-import { expectCount, expectText, expectVisible } from "./sidebar-assertions.test-support.ts";
+import { expectText, expectVisible } from "./sidebar-assertions.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
-  it("hides and restores Details progress across tabs and reloads without clearing it", async () => {
+  it("keeps saved Details current while the chat progress preference is disabled", async () => {
     const sessionKey = "agent:main:progress-preference";
     await suite.withPage(
       { colorScheme: "dark", locale: "en-US", viewport: { width: 1280, height: 900 } },
@@ -67,19 +67,31 @@ suite.define(() => {
         await showRow.click();
         await expect.poll(enabled).toBe(false);
         await expect.poll(() => collapseRow.getByRole("switch").isDisabled()).toBe(true);
-        await expectCount(card, 0);
+        await expect.poll(() => card.isVisible()).toBe(true);
 
         const reads = await requestCount(gateway, "progressCard.get");
         const progressed = "The task progressed while the card was hidden.";
         const updatedCard = { ...cardData, revision: 2, markdown: progressed };
         await gateway.setMethodResponse("progressCard.get", { card: updatedCard });
         await gateway.emitGatewayEvent("progressCard.changed", { sessionKey, revision: 2 });
-        expect(await requestCount(gateway, "progressCard.get")).toBe(reads);
+        await expect
+          .poll(async () => (await gateway.getRequests("progressCard.get")).length)
+          .toBeGreaterThan(reads);
+        await expect
+          .poll(() => card.textContent())
+          .toContain("The task progressed while the card was hidden.");
+        // Reload resets the page-owned request log; check this phase before navigating.
+        expect(await gateway.getRequests("progressCard.put")).toHaveLength(0);
+        expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
+        expect(await settingsGateway.getRequests("config.patch")).toHaveLength(0);
         await page.reload();
         await page.locator(".agent-chat__composer-combobox textarea").waitFor({ state: "visible" });
-        expect(await card.count()).toBe(0);
-        // The page-owned mock request log restarts on reload.
-        await expectNoRequests(gateway, "progressCard.get");
+        await gateway.waitForRequest("progressCard.get");
+        await openChatDetails(page);
+        await expect.poll(() => card.isVisible()).toBe(true);
+        await expect
+          .poll(() => card.textContent())
+          .toContain("The task progressed while the card was hidden.");
         await settingsPage.reload();
         await waitForControlUiSettingsTakeover(settingsPage);
         await expect.poll(enabled).toBe(false);
