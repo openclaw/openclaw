@@ -11,6 +11,7 @@ import { generateVideo, type GenerateVideoParams } from "./runtime.js";
 import type {
   GeneratedVideoAsset,
   VideoGenerationProvider,
+  VideoGenerationProviderCapabilities,
   VideoGenerationRequest,
 } from "./types.js";
 
@@ -241,97 +242,90 @@ describe("video-generation runtime", () => {
     });
   });
 
-  it("lets selected-model capabilities clear inherited providerOptions before fallback", async () => {
-    const requests = useFallbackProvider(
-      rejectingProvider("openrouter", {
-        defaultModel: "google/veo-3.1",
-        capabilities: {
-          providerOptions: { seed: "number" },
-        },
-        resolveModelCapabilities: async () => ({
-          providerOptions: {},
+  it.each<{
+    name: string;
+    base: VideoGenerationProviderCapabilities;
+    live?: VideoGenerationProviderCapabilities;
+    fallback: VideoGenerationProviderCapabilities;
+    request: Partial<GenerateVideoParams>;
+    expected: Partial<VideoGenerationRequest>;
+    error: RegExp;
+    explicit?: boolean;
+  }>([
+    {
+      name: "cleared model options",
+      base: { providerOptions: { seed: "number" } },
+      live: { providerOptions: {} },
+      fallback: { providerOptions: { seed: "number" } },
+      request: { providerOptions: { seed: 42 } },
+      expected: { providerOptions: { seed: 42 } },
+      error: /does not accept providerOptions/,
+      explicit: true,
+    },
+    {
+      name: "unsupported reference audio",
+      base: {},
+      fallback: { maxInputAudios: 1 },
+      request: {
+        inputAudios: [{ url: "https://example.com/reference-audio.mp3", role: "reference_audio" }],
+      },
+      expected: {
+        inputAudios: [{ url: "https://example.com/reference-audio.mp3", role: "reference_audio" }],
+      },
+      error: /does not support reference audio inputs/,
+    },
+    {
+      name: "lower live image limit",
+      base: { imageToVideo: { enabled: true, maxInputImages: 4 } },
+      live: { imageToVideo: { enabled: true, maxInputImages: 1 } },
+      fallback: { imageToVideo: { enabled: true, maxInputImages: 2 } },
+      request: {
+        inputImages: [
+          { url: "https://example.com/first.png" },
+          { url: "https://example.com/second.png" },
+        ],
+      },
+      expected: {
+        inputImages: [
+          { url: "https://example.com/first.png" },
+          { url: "https://example.com/second.png" },
+        ],
+      },
+      error: /supports at most 1 reference image\(s\), 2 requested/,
+    },
+    {
+      name: "hard duration cap",
+      base: { generate: { maxDurationSeconds: 4 } },
+      fallback: { generate: { maxDurationSeconds: 8 } },
+      request: { durationSeconds: 6 },
+      expected: { durationSeconds: 6 },
+      error: /supports at most 4s per video, 6s requested/,
+    },
+  ])(
+    "falls back for $name",
+    async ({ base, live, fallback, request, expected, error, explicit }) => {
+      const requests = useFallbackProvider(
+        rejectingProvider("primary", {
+          defaultModel: "video",
+          capabilities: base,
+          isConfigured: () => true,
+          ...(live ? { resolveModelCapabilities: async () => live } : {}),
         }),
-        isConfigured: () => true,
-      }),
-      {
-        id: "byteplus",
-        defaultModel: "seedance-1-0-pro-250528",
-        capabilities: {
-          providerOptions: { seed: "number" },
-        },
-        isConfigured: () => true,
-      },
-    );
-    const result = await runGenerateVideo({
-      cfg: videoConfig({
-        primary: "openrouter/google/veo-3.1",
-        fallbacks: ["byteplus/seedance-1-0-pro-250528"],
-      }),
-      providerOptions: { seed: 42 },
-    });
-    expect(result.provider).toBe("byteplus");
-    expect(requests[0]?.providerOptions).toEqual({ seed: 42 });
-    expectSkipped(result, "openrouter", /does not accept providerOptions/);
-  });
-
-  it("skips providers that cannot satisfy reference audio inputs and falls back", async () => {
-    const requests = useFallbackProvider(
-      rejectingProvider("openai", {
-        defaultModel: "sora-2",
-        isConfigured: () => true,
-      }),
-      {
-        id: "byteplus",
-        defaultModel: "seedance-1-0-pro-250528",
-        capabilities: { maxInputAudios: 1 },
-        isConfigured: () => true,
-      },
-    );
-    const result = await runGenerateVideo({
-      cfg: videoConfig({ primary: "openai/sora-2" }),
-      inputAudios: [{ url: "https://example.com/reference-audio.mp3", role: "reference_audio" }],
-    });
-    expect(result.provider).toBe("byteplus");
-    expect(requests[0]?.inputAudios).toEqual([
-      { url: "https://example.com/reference-audio.mp3", role: "reference_audio" },
-    ]);
-    expectSkipped(result, "openai", /does not support reference audio inputs/);
-  });
-
-  it("skips providers whose live model capabilities lower image input limits", async () => {
-    const requests = useFallbackProvider(
-      rejectingProvider("openrouter", {
-        defaultModel: "minimax/hailuo-2.3",
-        capabilities: {
-          imageToVideo: { enabled: true, maxInputImages: 4 },
-        },
-        isConfigured: () => true,
-        resolveModelCapabilities: async () => ({
-          imageToVideo: { enabled: true, maxInputImages: 1 },
+        { id: "fallback", defaultModel: "video", capabilities: fallback, isConfigured: () => true },
+      );
+      const result = await runGenerateVideo({
+        cfg: videoConfig({
+          primary: "primary/video",
+          ...(explicit ? { fallbacks: ["fallback/video"] } : {}),
         }),
-      }),
-      {
-        id: "runway",
-        defaultModel: "gen4.5",
-        capabilities: {
-          imageToVideo: { enabled: true, maxInputImages: 2 },
-        },
-        isConfigured: () => true,
-      },
-    );
-    const result = await runGenerateVideo({
-      cfg: videoConfig({ primary: "openrouter/minimax/hailuo-2.3" }),
-      prompt: "animate two references",
-      inputImages: [
-        { url: "https://example.com/first.png" },
-        { url: "https://example.com/second.png" },
-      ],
-    });
-    expect(result.provider).toBe("runway");
-    expect(requests).toHaveLength(1);
-    expect(requests[0]?.inputImages).toHaveLength(2);
-    expectSkipped(result, "openrouter", /supports at most 1 reference image\(s\), 2 requested/);
-  });
+        ...request,
+      });
+      expect(result.provider).toBe("fallback");
+      expect(requests).toHaveLength(1);
+      expect(requests[0]).toMatchObject(expected);
+      expectSkipped(result, "primary", error);
+    },
+  );
 
   it("falls back when the primary model catalog rejects the requested mode", async () => {
     const requests = useCapturingProvider({ ...wanProvider, isConfigured: () => true });
@@ -428,29 +422,6 @@ describe("video-generation runtime", () => {
       inputVideos: [{ url: "https://example.com/reference.mp4" }],
       inputAudios: [{ url: "https://example.com/reference.mp3" }],
     });
-  });
-
-  it("skips providers whose hard duration cap is below the request and falls back", async () => {
-    const requests = useFallbackProvider(
-      rejectingProvider("openai", {
-        defaultModel: "sora-2",
-        capabilities: { generate: { maxDurationSeconds: 4 } },
-        isConfigured: () => true,
-      }),
-      {
-        id: "runway",
-        defaultModel: "gen4.5",
-        capabilities: { generate: { maxDurationSeconds: 8 } },
-        isConfigured: () => true,
-      },
-    );
-    const result = await runGenerateVideo({
-      cfg: videoConfig({ primary: "openai/sora-2" }),
-      durationSeconds: 6,
-    });
-    expect(result.provider).toBe("runway");
-    expect(requests[0]?.durationSeconds).toBe(6);
-    expectSkipped(result, "openai", /supports at most 4s per video, 6s requested/);
   });
 
   it("rejects provider results that contain undeliverable assets", async () => {

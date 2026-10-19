@@ -3,7 +3,7 @@ import fs from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { acquirePluginRegistryForInspection, loadPluginRegistryHandle } from "../plugins/loader.js";
 import {
@@ -21,6 +21,14 @@ import { generateVideo, type GenerateVideoParams } from "./runtime.js";
 import type { VideoGenerationRequest } from "./types.js";
 
 const videoBytes = Buffer.from("synthetic video bytes 42");
+const cleanups: Array<() => void | Promise<void>> = [];
+const unblocks: Array<() => void> = [];
+const pending: Promise<unknown>[] = [];
+
+async function drainOperations() {
+  unblocks.forEach((unblock) => unblock());
+  await Promise.all(pending.splice(0));
+}
 
 function createNativeVideoFixture(
   id = "native-video-owner",
@@ -42,9 +50,10 @@ function createNativeVideoFixture(
     disposals: number;
     requests: VideoGenerationRequest[];
   }> = [];
+  const state = { connections, lookupStarted, lookupResume, started, resume };
   Object.defineProperty(globalThis, key, {
     configurable: true,
-    value: { connections, lookupStarted, lookupResume, started, resume, videoBytes, deliveryUrl },
+    value: { ...state, videoBytes, deliveryUrl },
   });
   const plugin = writePlugin({
     dir,
@@ -105,54 +114,56 @@ module.exports = {
       configSchema: { type: "object", additionalProperties: false, properties: {} },
     }),
   );
-  const config: OpenClawConfig = {
-    plugins: { allow: [id], load: { paths: [plugin.file] }, slots: { memory: "none" } },
-  };
-  const params: GenerateVideoParams = {
-    cfg: config,
-    prompt: "synthetic native video resource proof",
-    modelOverride: `${id}-alias/fixture-model`,
-    autoProviderFallback: false,
-    timeoutMs: 12_345,
-    providerOptions: { seed: 42 },
-  };
-  return {
-    plugin,
-    connections,
-    lookupStarted,
-    lookupResume,
-    started,
-    resume,
-    config,
-    params,
-    run: () => generateVideo(params),
-    withEnvironment: (run: () => Promise<void>) =>
-      withEnvAsync(
-        {
-          OPENCLAW_HOME: dir,
-          OPENCLAW_STATE_DIR: dir,
-          OPENCLAW_CONFIG_PATH: path.join(dir, "config.json"),
-        },
-        run,
-      ),
-    cleanup() {
-      lookupResume.resolve();
-      resume.resolve();
-      for (const { database } of connections) {
-        if (database.isOpen) {
-          database.close();
-        }
+  unblocks.push(() => {
+    lookupResume.resolve();
+    resume.resolve();
+  });
+  cleanups.push(() => {
+    for (const { database } of connections) {
+      if (database.isOpen) {
+        database.close();
       }
-      Reflect.deleteProperty(globalThis, key);
+    }
+    Reflect.deleteProperty(globalThis, key);
+  });
+  return { plugin, dir, ...state };
+}
+
+function configFor(plugins: Array<ReturnType<typeof writePlugin>>): OpenClawConfig {
+  return {
+    plugins: {
+      allow: plugins.map((plugin) => plugin.id),
+      load: { paths: plugins.map((plugin) => plugin.file) },
+      slots: { memory: "none" },
     },
   };
 }
 
+async function withEnvironment(dir: string, run: () => Promise<void>) {
+  await withEnvAsync(
+    {
+      OPENCLAW_HOME: dir,
+      OPENCLAW_STATE_DIR: dir,
+      OPENCLAW_CONFIG_PATH: path.join(dir, "config.json"),
+    },
+    async () => {
+      useNoBundledPlugins();
+      try {
+        await run();
+      } finally {
+        await drainOperations();
+      }
+    },
+  );
+}
+
 function settle<T>(operation: Promise<T>) {
-  return operation.then(
+  const outcome = operation.then(
     (value) => ({ value, error: undefined }),
     (error: unknown) => ({ value: undefined, error }),
   );
+  pending.push(outcome);
+  return outcome;
 }
 
 async function waitForProviderStart(started: Promise<void>, operation: Promise<unknown>) {
@@ -164,190 +175,136 @@ async function waitForProviderStart(started: Promise<void>, operation: Promise<u
   ]);
 }
 
-afterEach(() => {
+afterEach(async () => {
+  await drainOperations();
+  for (const cleanup of cleanups.splice(0).toReversed()) {
+    await cleanup();
+  }
+  unblocks.length = 0;
   clearPluginMetadataLifecycleCaches();
   resetPluginLoaderTestStateForTest();
 });
 afterAll(cleanupPluginLoaderFixturesForTest);
 
-describe("video generation registration resources", () => {
-  it.each(["buffer", "url", "reject"] as const)(
-    "releases cold video resources after %s settlement",
-    async (mode) => {
-      const server =
-        mode === "url"
-          ? createServer((_request, response) => {
-              response.writeHead(200, { "content-type": "video/mp4" });
-              response.end(videoBytes);
-            })
-          : undefined;
-      let deliveryUrl: string | undefined;
-      if (server) {
-        server.listen(0, "127.0.0.1");
-        await once(server, "listening");
-        const address = server.address();
-        if (!address || typeof address === "string") {
-          throw new Error("Expected fixture TCP address");
+it.each([
+  ["cold buffer", "buffer", "cold", "none"],
+  ["cold URL", "url", "cold", "none"],
+  ["cold rejection", "reject", "cold", "none"],
+  ["managed host", "buffer", "managed", "none"],
+  ["raw host", "buffer", "raw", "none"],
+  ["override selection", "buffer", "cold", "override"],
+  ["fallback selection", "buffer", "cold", "fallback"],
+] as const)(
+  "retains and releases video resources for %s",
+  async (_name, mode, owner, selection) => {
+    let deliveryUrl: string | undefined;
+    if (mode === "url") {
+      const server = createServer((_request, response) => {
+        response.writeHead(200, { "content-type": "video/mp4" });
+        response.end(videoBytes);
+      });
+      server.listen(0, "127.0.0.1");
+      await once(server, "listening");
+      cleanups.push(async () => {
+        const closed = once(server, "close");
+        server.close();
+        server.closeAllConnections();
+        await closed;
+      });
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Expected fixture TCP address");
+      }
+      deliveryUrl = `http://127.0.0.1:${address.port}/generated.mp4`;
+    }
+    const first =
+      selection === "none" ? undefined : createNativeVideoFixture("first-video-owner", "reject");
+    const fixture = createNativeVideoFixture(
+      first ? "second-video-owner" : "native-video-owner",
+      mode,
+      owner === "managed",
+      deliveryUrl,
+    );
+    first?.resume.resolve();
+    const cfg = configFor(first ? [first.plugin, fixture.plugin] : [fixture.plugin]);
+    if (first) {
+      const video = {
+        primary: "first-video-owner/fixture-model",
+        fallbacks: ["second-video-owner-alias/fixture-model"],
+      };
+      cfg.agents = { defaults: { mediaModels: { video } } };
+    }
+    const params: GenerateVideoParams = {
+      cfg,
+      prompt: "synthetic native video resource proof",
+      autoProviderFallback: false,
+      modelOverride:
+        selection === "fallback" ? undefined : `${fixture.plugin.id}-alias/fixture-model`,
+      timeoutMs: 12_345,
+      providerOptions: { seed: 42 },
+    };
+    await withEnvironment(fixture.dir, async () => {
+      const inspection =
+        owner === "managed" ? await acquirePluginRegistryForInspection({ config: cfg }) : undefined;
+      cleanups.push(async () => {
+        await inspection?.release();
+      });
+      const registry =
+        inspection?.registry ??
+        (owner === "raw" ? loadPluginRegistryHandle({ config: cfg }) : undefined);
+      const run = () => generateVideo(params);
+      const outcome = settle(registry ? withPluginRuntimeRegistryScope(registry, run) : run());
+      await waitForProviderStart(
+        owner === "managed" ? fixture.lookupStarted.promise : fixture.started.promise,
+        outcome,
+      );
+      expect(fixture.connections).toHaveLength(1);
+      const connection = fixture.connections[0]!;
+      expect(connection).toMatchObject({ database: { isOpen: true }, disposals: 0 });
+      await inspection?.release();
+      expect(connection.database.isOpen).toBe(true);
+      fixture.lookupResume.resolve();
+      await waitForProviderStart(fixture.started.promise, outcome);
+      expect(connection.database.isOpen).toBe(true);
+      if (first) {
+        expect(first.connections).toHaveLength(1);
+        expect(first.connections[0]!.requests).toHaveLength(selection === "override" ? 0 : 1);
+        expect(first.connections[0]!.database.isOpen).toBe(true);
+      }
+      fixture.resume.resolve();
+      const result = await outcome;
+      if (mode === "reject") {
+        expect(String(result.error)).toContain("native video generation failed");
+      } else {
+        expect(result.error).toBeUndefined();
+        if (mode === "url") {
+          expect(result.value?.videos[0]).toMatchObject({ url: deliveryUrl, buffer: undefined });
+        } else {
+          expect(result.value?.videos[0]?.buffer).toEqual(videoBytes);
         }
-        deliveryUrl = `http://127.0.0.1:${address.port}/generated.mp4`;
-      }
-      const fixture = createNativeVideoFixture("native-video-owner", mode, false, deliveryUrl);
-      try {
-        await fixture.withEnvironment(async () => {
-          useNoBundledPlugins();
-          const outcome = settle(fixture.run());
-          try {
-            await waitForProviderStart(fixture.started.promise, outcome);
-            expect(fixture.connections).toHaveLength(1);
-            const connection = fixture.connections[0]!;
-            expect(connection.database.isOpen).toBe(true);
-            expect(connection.disposals).toBe(0);
-            fixture.resume.resolve();
-            const result = await outcome;
-            if (mode === "reject") {
-              expect(String(result.error)).toContain("native video generation failed");
-            } else {
-              expect(result.error).toBeUndefined();
-              if (mode === "url") {
-                expect(result.value?.videos[0]?.url).toBe(deliveryUrl);
-                expect(result.value?.videos[0]?.buffer).toBeUndefined();
-              } else {
-                expect(result.value?.videos[0]?.buffer).toEqual(videoBytes);
-              }
-              expect(result.value?.metadata).toEqual({ nativeValue: 42 });
-            }
-            expect(connection.requests[0]).toMatchObject({
-              provider: "native-video-owner-alias",
-              timeoutMs: 12_345,
-              providerOptions: fixture.params.providerOptions,
-            });
-            expect(connection.database.isOpen).toBe(false);
-            expect(connection.disposals).toBe(1);
-            if (mode === "url") {
-              const response = await fetch(deliveryUrl!);
-              expect(response.status).toBe(200);
-              expect(Buffer.from(await response.arrayBuffer())).toEqual(videoBytes);
-            }
-          } finally {
-            fixture.lookupResume.resolve();
-            fixture.resume.resolve();
-            await outcome;
-          }
-        });
-      } finally {
-        fixture.cleanup();
-        if (server) {
-          const closed = once(server, "close");
-          server.close();
-          server.closeAllConnections();
-          await closed;
+        expect(result.value?.metadata).toEqual({ nativeValue: 42 });
+        if (first) {
+          expect(result.value?.provider).toBe("second-video-owner-alias");
+          expect(result.value?.attempts).toHaveLength(selection === "override" ? 0 : 1);
         }
       }
-    },
-  );
-
-  it.each(["managed", "raw"] as const)(
-    "preserves the %s host owner through video generation",
-    async (owner) => {
-      const fixture = createNativeVideoFixture("native-video-owner", "buffer", owner === "managed");
-      try {
-        await fixture.withEnvironment(async () => {
-          useNoBundledPlugins();
-          const inspection =
-            owner === "managed"
-              ? await acquirePluginRegistryForInspection({ config: fixture.config })
-              : undefined;
-          const registry =
-            inspection?.registry ?? loadPluginRegistryHandle({ config: fixture.config });
-          const outcome = settle(withPluginRuntimeRegistryScope(registry, fixture.run));
-          try {
-            await waitForProviderStart(
-              owner === "managed" ? fixture.lookupStarted.promise : fixture.started.promise,
-              outcome,
-            );
-            expect(fixture.connections).toHaveLength(1);
-            await inspection?.release();
-            expect(fixture.connections[0]!.database.isOpen).toBe(true);
-            fixture.lookupResume.resolve();
-            await waitForProviderStart(fixture.started.promise, outcome);
-            expect(fixture.connections[0]!.database.isOpen).toBe(true);
-            fixture.resume.resolve();
-            const result = await outcome;
-            expect(result.error).toBeUndefined();
-            expect(result.value?.videos[0]?.buffer).toEqual(videoBytes);
-            expect(result.value?.metadata).toEqual({ nativeValue: 42 });
-            expect(fixture.connections[0]!.database.isOpen).toBe(owner === "raw");
-            expect(fixture.connections[0]!.disposals).toBe(owner === "raw" ? 0 : 1);
-          } finally {
-            fixture.lookupResume.resolve();
-            fixture.resume.resolve();
-            await outcome;
-            await inspection?.release();
-          }
-        });
-      } finally {
-        fixture.cleanup();
+      expect(connection.requests[0]).toMatchObject({
+        provider: first ? "second-video-owner-alias" : "native-video-owner-alias",
+        timeoutMs: 12_345,
+        providerOptions: { seed: 42 },
+      });
+      expect(connection).toMatchObject({
+        database: { isOpen: owner === "raw" },
+        disposals: owner === "raw" ? 0 : 1,
+      });
+      if (first) {
+        expect(first.connections[0]).toMatchObject({ database: { isOpen: false }, disposals: 1 });
       }
-    },
-  );
-
-  it.each(["override", "fallback"] as const)(
-    "retains both eligible registrations for %s selection",
-    async (selection) => {
-      const first = createNativeVideoFixture("first-video-owner", "reject");
-      const second = createNativeVideoFixture("second-video-owner");
-      first.resume.resolve();
-      try {
-        await second.withEnvironment(async () => {
-          useNoBundledPlugins();
-          const outcome = settle(
-            generateVideo({
-              ...second.params,
-              cfg: {
-                agents: {
-                  defaults: {
-                    mediaModels: {
-                      video: {
-                        primary: "first-video-owner/fixture-model",
-                        fallbacks: ["second-video-owner-alias/fixture-model"],
-                      },
-                    },
-                  },
-                },
-                plugins: {
-                  allow: [first.plugin.id, second.plugin.id],
-                  load: { paths: [first.plugin.file, second.plugin.file] },
-                  slots: { memory: "none" },
-                },
-              },
-              modelOverride: selection === "override" ? second.params.modelOverride : undefined,
-            }),
-          );
-          try {
-            await waitForProviderStart(second.started.promise, outcome);
-            expect(first.connections).toHaveLength(1);
-            expect(second.connections).toHaveLength(1);
-            expect(first.connections[0]!.requests).toHaveLength(selection === "override" ? 0 : 1);
-            expect(first.connections[0]!.database.isOpen).toBe(true);
-            second.resume.resolve();
-            const result = await outcome;
-            expect(result.error).toBeUndefined();
-            expect(result.value?.provider).toBe("second-video-owner-alias");
-            expect(result.value?.videos[0]?.buffer).toEqual(videoBytes);
-            expect(result.value?.attempts).toHaveLength(selection === "override" ? 0 : 1);
-            for (const connection of [...first.connections, ...second.connections]) {
-              expect(connection.database.isOpen).toBe(false);
-              expect(connection.disposals).toBe(1);
-            }
-          } finally {
-            second.resume.resolve();
-            await outcome;
-          }
-        });
-      } finally {
-        first.cleanup();
-        second.cleanup();
+      if (mode === "url") {
+        const response = await fetch(deliveryUrl!);
+        expect(response.status).toBe(200);
+        expect(Buffer.from(await response.arrayBuffer())).toEqual(videoBytes);
       }
-    },
-  );
-});
+    });
+  },
+);
