@@ -294,30 +294,32 @@ describe.runIf(browserMode)("chat file editor", () => {
       expect(input.value).toBe("");
       await userEvent.fill(input, "雪");
       expect(counter()).toBe("1/3");
+      const focusTarget = control === "input" ? input : button(panel, control);
       if (control === "input") {
         await userEvent.keyboard("{Enter}");
         expect(counter()).toBe("2/3");
         await userEvent.keyboard("{Shift>}{Enter}{/Shift}");
         expect(counter()).toBe("1/3");
       } else {
-        const navigation = button(panel, control);
-        await userEvent.click(navigation);
-        expect(document.activeElement).toBe(navigation);
+        await userEvent.click(focusTarget);
+        expect(document.activeElement).toBe(focusTarget);
         expect(counter()).toBe(control === "Previous match" ? "3/3" : "2/3");
         await userEvent.keyboard("{Enter}");
         expect(counter()).toBe(control === "Previous match" ? "2/3" : "3/3");
         await userEvent.keyboard(" ");
         expect(counter()).toBe("1/3");
-        await userEvent.hover(editorOf(panel));
-        await userEvent.hover(navigation);
-        const tooltip = navigation.closest("openclaw-tooltip")!;
-        await expect.poll(() => tooltip.hasAttribute("open")).toBe(true);
-        // Escape dismisses the active tooltip before the surrounding find controls.
-        await userEvent.keyboard("{Escape}");
-        await expect.poll(() => tooltip.hasAttribute("open")).toBe(false);
-        await expect.element(input).toBeVisible();
-        expect(document.activeElement).toBe(navigation);
       }
+      // Close replaces Search under the pointer while the new input receives focus.
+      const tooltipTrigger = control === "input" ? button(panel, "Close") : focusTarget;
+      await userEvent.hover(editorOf(panel));
+      await userEvent.hover(tooltipTrigger);
+      const tooltip = tooltipTrigger.closest("openclaw-tooltip")!;
+      await expect.poll(() => tooltip.hasAttribute("open")).toBe(true);
+      // Escape dismisses the active tooltip before the surrounding find controls.
+      await userEvent.keyboard("{Escape}");
+      await expect.poll(() => tooltip.hasAttribute("open")).toBe(false);
+      await expect.element(input).toBeVisible();
+      expect(document.activeElement).toBe(focusTarget);
       await userEvent.keyboard("{Escape}");
       await expect.poll(() => panel.querySelector('input[type="search"]')).toBeNull();
       expect(document.activeElement).toBe(searchToggle());
