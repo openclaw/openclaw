@@ -690,6 +690,9 @@ function launch(name: string) {
       loopDelayMaxMs: sample.loopDelayMaxMs,
       mainThreadCpuMs: sample.mainThreadCpuMs,
     };
+    if (reconnectWaves && row.elapsedMs < row.intervalMs) {
+      return;
+    }
     eluSamples.push(row);
     consecutiveLowSamples =
       performance.now() - sample.intervalMs >= loadStartedAt && sample.elu < 0.8

@@ -300,6 +300,7 @@ Keep each side's state and ports separate, including during device pairing.
 `result.json` retains every measured connection attempt, wall-clock start,
 socket-open/challenge timing, connect RPC timing, connection ID, negotiated
 extensions, presence row count, errors, list timings, and main-thread samples.
+Warm reconnect samples exclude intervals that begin before measurement starts.
 Connect RPC latency ends at hello and excludes the subsequent `users.self` read.
 Verbose compact Gateway logs in `gateway-reconnect.log` retain existing auth,
 device, profile, registration, hello, and send phase timings; correlate them with
