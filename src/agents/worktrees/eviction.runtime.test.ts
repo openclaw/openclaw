@@ -7,10 +7,10 @@ import * as workerContext from "../../infra/git-worker-context.js";
 import {
   classifyWorktreeEvictions,
   prepareWorktreeEvictionRepositories,
-  purgeWorktreeCheckout,
+  purgeWorktreeCheckout as purgeCheckout,
 } from "./eviction.runtime.js";
 import { gitIdentity, initializeGitFixture } from "./git-fixture.test-support.js";
-import { listGitWorktrees, requireGit, runGit } from "./git.js";
+import { listGitWorktrees, requireGit as git, runGit } from "./git.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -19,7 +19,7 @@ afterEach(() => {
 });
 
 async function commitFixture(repo: string, message: string, allowEmpty = false) {
-  await requireGit(repo, [
+  await git(repo, [
     ...gitIdentity,
     "-c",
     "commit.gpgSign=false",
@@ -29,12 +29,16 @@ async function commitFixture(repo: string, message: string, allowEmpty = false) 
     message,
   ]);
 }
-const init = (cwd: string, repo: string) =>
-  requireGit(cwd, ["init", "--template=", "-b", "main", repo]);
+const init = (cwd: string, repo: string, ...options: string[]) =>
+  git(cwd, ["init", "--template=", "-b", "main", ...options, repo]);
 const read = (directory: string, filename: string) =>
   fs.readFile(path.join(directory, filename), "utf8");
 const linkDirectory = (target: string, link: string) =>
   fs.symlink(target, link, process.platform === "win32" ? "junction" : "dir");
+async function relocateGit(repo: string, gitDir: string, linked: string) {
+  await git(repo, ["init", "--separate-git-dir", gitDir]);
+  await git(repo, ["worktree", "repair", linked]);
+}
 
 async function createEvictionCheckouts(root: string, count: number) {
   const repoRoot = path.join(root, "source");
@@ -47,7 +51,7 @@ async function createEvictionCheckouts(root: string, count: number) {
     repoRoot,
   }));
   for (const record of records) {
-    await requireGit(repoRoot, ["worktree", "add", "--detach", record.path, "HEAD"]);
+    await git(repoRoot, ["worktree", "add", "--detach", record.path, "HEAD"]);
     await fs.writeFile(path.join(record.path, "unsaved.txt"), `${record.id}\n`);
   }
   return { repoRoot, records };
@@ -59,7 +63,7 @@ it("purges a fleet checkout with a constant Git process budget despite ambient r
   const unrelated = await createEvictionCheckouts(path.join(root, "unrelated"), 1);
   const victim = records[0]!;
   const unrelatedCheckout = unrelated.records[0]!;
-  const unrelatedHead = await requireGit(unrelated.repoRoot, ["rev-parse", "HEAD"]);
+  const unrelatedHead = await git(unrelated.repoRoot, ["rev-parse", "HEAD"]);
   const unrelatedInventory = await listGitWorktrees(unrelated.repoRoot);
   vi.stubEnv("GIT_DIR", path.join(unrelated.repoRoot, ".git"));
   vi.stubEnv("GIT_COMMON_DIR", path.join(unrelated.repoRoot, ".git"));
@@ -69,7 +73,7 @@ it("purges a fleet checkout with a constant Git process budget despite ambient r
   const buffered = vi.spyOn(gitExec, "executeGitCommandBuffered");
   vi.spyOn(workerContext, "requestGitWorkerEffect").mockResolvedValue(undefined);
 
-  await purgeWorktreeCheckout(victim, records);
+  await purgeCheckout(victim, records);
 
   expect(
     text.mock.calls.length + bytes.mock.calls.length + buffered.mock.calls.length,
@@ -83,7 +87,7 @@ it("purges a fleet checkout with a constant Git process budget despite ambient r
     expect(await read(record.path, "unsaved.txt")).toBe(`${record.id}\n`);
   }
   expect(await listGitWorktrees(unrelated.repoRoot)).toEqual(unrelatedInventory);
-  expect(await requireGit(unrelated.repoRoot, ["rev-parse", "HEAD"])).toBe(unrelatedHead);
+  expect(await git(unrelated.repoRoot, ["rev-parse", "HEAD"])).toBe(unrelatedHead);
 });
 
 it("defers an expired metadata census before admitting or deleting the checkout", async () => {
@@ -103,9 +107,7 @@ it("defers an expired metadata census before admitting or deleting the checkout"
     });
   const effects = vi.spyOn(workerContext, "requestGitWorkerEffect").mockResolvedValue(undefined);
 
-  await expect(purgeWorktreeCheckout(victim, records)).rejects.toThrow(
-    /inspection exceeded.*budget/,
-  );
+  await expect(purgeCheckout(victim, records)).rejects.toThrow(/inspection exceeded.*budget/);
 
   expect(effects.mock.calls.some(([effect]) => effect.type === "worktree.eviction-admit")).toBe(
     false,
@@ -140,7 +142,7 @@ it("refuses a purge target redirected through its parent during admission", asyn
     return undefined;
   });
 
-  await expect(purgeWorktreeCheckout(record, [record])).rejects.toThrow("purge target changed");
+  await expect(purgeCheckout(record, [record])).rejects.toThrow("purge target changed");
 
   expect(redirected).toBe(true);
   expect(await read(source, "source-owned.txt")).toBe("source bytes\n");
@@ -151,35 +153,31 @@ it("refuses a purge target redirected through its parent during admission", asyn
 it("recognizes a multi-commit squash, invalidates changed heads, and purges only the claimed checkout", async () => {
   const root = tempDirs.make("openclaw-eviction-");
   const repoRoot = await initializeGitFixture(root, "repo", "base", "base\n");
-  const merged = { id: "merged", path: path.join(root, "merged"), repoRoot, branch: "merged" };
-  const squashed = {
-    id: "squashed",
-    path: path.join(root, "squashed"),
-    repoRoot,
-    branch: "squashed",
-  };
+  const merged = { id: "merged", path: path.join(root, "merged"), repoRoot };
+  const squashed = { id: "squashed", path: path.join(root, "squashed"), repoRoot };
   const classify = async (records: Array<typeof squashed>) => {
     const [repository] = await prepareWorktreeEvictionRepositories([repoRoot]);
     return classifyWorktreeEvictions(
       records.map((record) => ({
         ...record,
+        branch: record.id,
         head: repository!.heads[path.resolve(record.path)],
         defaultHead: repository!.defaultHead,
       })),
     );
   };
   for (const item of [merged, squashed]) {
-    await requireGit(repoRoot, ["worktree", "add", "-b", item.branch, item.path]);
+    await git(repoRoot, ["worktree", "add", "-b", item.id, item.path]);
   }
   for (const filename of ["one", "two"]) {
     await fs.writeFile(path.join(squashed.path, filename), `${filename}\n`);
-    await requireGit(squashed.path, ["add", "."]);
-    await requireGit(squashed.path, ["commit", "-m", filename]);
+    await git(squashed.path, ["add", "."]);
+    await git(squashed.path, ["commit", "-m", filename]);
   }
-  await requireGit(repoRoot, ["merge", "--squash", squashed.branch]);
-  await requireGit(repoRoot, ["commit", "-m", "landed squash"]);
+  await git(repoRoot, ["merge", "--squash", squashed.id]);
+  await git(repoRoot, ["commit", "-m", "landed squash"]);
   expect(
-    (await requireGit(repoRoot, ["cherry", "main", squashed.branch]))
+    (await git(repoRoot, ["cherry", "main", squashed.id]))
       .split("\n")
       .every((line) => line.startsWith("+")),
   ).toBe(true);
@@ -198,38 +196,35 @@ it("recognizes a multi-commit squash, invalidates changed heads, and purges only
     vi.unstubAllEnvs();
   }
   await fs.writeFile(path.join(squashed.path, "new-work"), "unlanded\n");
-  await requireGit(squashed.path, ["add", "."]);
-  await requireGit(squashed.path, ["commit", "-m", "new work"]);
+  await git(squashed.path, ["add", "."]);
+  await git(squashed.path, ["commit", "-m", "new work"]);
   expect(await classify([squashed])).toEqual([{ id: "squashed", reason: "idle-age" }]);
 
-  await requireGit(repoRoot, ["remote", "add", "origin", "https://example.invalid/repo.git"]);
+  await git(repoRoot, ["remote", "add", "origin", "https://example.invalid/repo.git"]);
   expect(await classify([merged])).toEqual([{ id: "merged", reason: "idle-age" }]);
-  await requireGit(repoRoot, ["update-ref", "refs/remotes/origin/main", "main"]);
-  await requireGit(repoRoot, [
-    "symbolic-ref",
-    "refs/remotes/origin/HEAD",
-    "refs/remotes/origin/main",
-  ]);
+  const originMain = "refs/remotes/origin/main";
+  await git(repoRoot, ["update-ref", originMain, "main"]);
+  await git(repoRoot, ["symbolic-ref", "refs/remotes/origin/HEAD", originMain]);
   expect(await classify([merged])).toEqual([{ id: "merged", reason: "merged" }]);
 
   await fs.mkdir(path.join(squashed.path, "nested", ".git"), { recursive: true });
   await fs.writeFile(path.join(squashed.path, "unsaved"), "dirty data\n");
-  await requireGit(repoRoot, ["worktree", "lock", "--reason", "old owner", squashed.path]);
-  const branchHead = await requireGit(repoRoot, ["rev-parse", squashed.branch]);
+  await git(repoRoot, ["worktree", "lock", "--reason", "old owner", squashed.path]);
+  const branchHead = await git(repoRoot, ["rev-parse", squashed.id]);
   const authority = vi
     .spyOn(workerContext, "requestGitWorkerEffect")
     .mockRejectedValueOnce(new Error("claim lost"));
-  await expect(purgeWorktreeCheckout(squashed, [merged, squashed])).rejects.toThrow("claim lost");
+  await expect(purgeCheckout(squashed, [merged, squashed])).rejects.toThrow("claim lost");
   expect(await read(squashed.path, "unsaved")).toBe("dirty data\n");
   authority.mockResolvedValue(undefined);
-  await purgeWorktreeCheckout(squashed, [merged, squashed]);
+  await purgeCheckout(squashed, [merged, squashed]);
   await expect(fs.stat(squashed.path)).rejects.toMatchObject({ code: "ENOENT" });
-  expect(await requireGit(repoRoot, ["rev-parse", squashed.branch])).toBe(branchHead);
+  expect(await git(repoRoot, ["rev-parse", squashed.id])).toBe(branchHead);
   expect(await read(merged.path, "base")).toBe("base\n");
   expect((await runGit(repoRoot, ["status", "--porcelain"])).stdout).toBe("");
-  await expect(
-    purgeWorktreeCheckout({ id: "source", repoRoot, path: repoRoot }, [merged]),
-  ).rejects.toThrow("source repository");
+  await expect(purgeCheckout({ id: "source", repoRoot, path: repoRoot }, [merged])).rejects.toThrow(
+    "source repository",
+  );
 });
 
 it.each([
@@ -247,13 +242,10 @@ it.each([
   }
   const outer = { id: "outer", path: path.join(root, "outer"), repoRoot };
   const external = { id: "external", path: path.join(root, "external"), repoRoot: source };
-  const unknown = {
-    id: "unknown",
-    path: path.join(root, "unknown"),
-    repoRoot: path.join(root, "missing-source"),
-  };
-  await requireGit(repoRoot, ["worktree", "add", "-b", "outer", outer.path]);
-  await requireGit(source, ["worktree", "add", "-b", "external", external.path]);
+  const missingSource = path.join(root, "missing-source");
+  const unknown = { id: "unknown", path: path.join(root, "unknown"), repoRoot: missingSource };
+  await git(repoRoot, ["worktree", "add", "-b", "outer", outer.path]);
+  await git(source, ["worktree", "add", "-b", "external", external.path]);
   await fs.writeFile(path.join(outer.path, "preserved.txt"), "outer data\n");
   let relocated = false;
   let sourcePrivateDirectory: string | undefined;
@@ -268,13 +260,13 @@ it.each([
       if (target === "source private metadata") {
         const originalSource = path.join(root, "original-source");
         await fs.rename(source, originalSource);
-        await requireGit(originalSource, ["worktree", "repair", external.path]);
-        await requireGit(repoRoot, ["worktree", "add", "-b", "replacement-source", source]);
+        await git(originalSource, ["worktree", "repair", external.path]);
+        await git(repoRoot, ["worktree", "add", "-b", "replacement-source", source]);
         await fs.writeFile(path.join(source, "staged-source.txt"), "staged source bytes\n");
-        await requireGit(source, ["add", "staged-source.txt"]);
-        const privateDirectory = await requireGit(source, ["rev-parse", "--absolute-git-dir"]);
+        await git(source, ["add", "staged-source.txt"]);
+        const privateDirectory = await git(source, ["rev-parse", "--absolute-git-dir"]);
         const commonDirectory = await fs.realpath(
-          path.resolve(source, await requireGit(source, ["rev-parse", "--git-common-dir"])),
+          path.resolve(source, await git(source, ["rev-parse", "--git-common-dir"])),
         );
         sourcePrivateDirectory = path.join(outer.path, "source-private-git");
         await fs.rename(privateDirectory, sourcePrivateDirectory);
@@ -283,12 +275,8 @@ it.each([
         sourcePrivateHead = await fs.readFile(path.join(sourcePrivateDirectory, "HEAD"));
         sourcePrivateIndex = await fs.readFile(path.join(sourcePrivateDirectory, "index"));
       } else {
-        await requireGit(source, [
-          "init",
-          "--separate-git-dir",
-          path.join(target === "metadata" ? outer.path : root, "relocated-git"),
-        ]);
-        await requireGit(source, ["worktree", "repair", external.path]);
+        const gitDir = path.join(target === "metadata" ? outer.path : root, "relocated-git");
+        await relocateGit(source, gitDir, external.path);
       }
       if (target === "source behind a symlink") {
         await fs.writeFile(path.join(source, "source-data.txt"), "source data\n");
@@ -299,12 +287,12 @@ it.each([
     }
     return undefined;
   });
-  await expect(purgeWorktreeCheckout(outer, [outer, external, unknown])).rejects.toThrow(
+  await expect(purgeCheckout(outer, [outer, external, unknown])).rejects.toThrow(
     `repository dependency: ${external.id}`,
   );
   expect(relocated).toBe(true);
   expect(await read(outer.path, "preserved.txt")).toBe("outer data\n");
-  expect(await requireGit(external.path, ["rev-parse", "--verify", "HEAD"])).toBeTruthy();
+  expect(await git(external.path, ["rev-parse", "--verify", "HEAD"])).toBeTruthy();
   if (target === "source behind a symlink") {
     expect(await read(source, "source-data.txt")).toBe("source data\n");
   }
@@ -313,7 +301,7 @@ it.each([
     expect(await fs.readFile(path.join(sourcePrivateDirectory, "index"))).toEqual(
       sourcePrivateIndex,
     );
-    expect(await requireGit(source, ["rev-parse", "--verify", "HEAD"])).toBeTruthy();
+    expect(await git(source, ["rev-parse", "--verify", "HEAD"])).toBeTruthy();
   }
 });
 
@@ -325,14 +313,9 @@ it.each(["available", "renamed", "replaced"] as const)(
     const record = { id: "owned", path: path.join(root, "owned"), repoRoot };
     await init(root, repoRoot);
     await commitFixture(repoRoot, "source objects", true);
-    const head = await requireGit(repoRoot, ["rev-parse", "HEAD"]);
-    await requireGit(repoRoot, ["worktree", "add", "-b", "owned", record.path]);
-    await requireGit(repoRoot, [
-      "init",
-      "--separate-git-dir",
-      path.join(record.path, "source-git"),
-    ]);
-    await requireGit(repoRoot, ["worktree", "repair", record.path]);
+    const head = await git(repoRoot, ["rev-parse", "HEAD"]);
+    await git(repoRoot, ["worktree", "add", "-b", "owned", record.path]);
+    await relocateGit(repoRoot, path.join(record.path, "source-git"), record.path);
     await fs.writeFile(path.join(record.path, "unsaved.txt"), "owned checkout bytes\n");
     if (sourceState !== "available") {
       await fs.rename(repoRoot, path.join(root, "renamed-source"));
@@ -340,17 +323,17 @@ it.each(["available", "renamed", "replaced"] as const)(
     if (sourceState === "replaced") {
       await init(root, repoRoot);
       await commitFixture(repoRoot, "unrelated replacement source", true);
-      expect(await requireGit(repoRoot, ["rev-parse", "HEAD"])).not.toBe(head);
+      expect(await git(repoRoot, ["rev-parse", "HEAD"])).not.toBe(head);
     }
     vi.spyOn(workerContext, "requestGitWorkerEffect").mockResolvedValue(undefined);
-    await expect(purgeWorktreeCheckout(record, [record])).rejects.toThrow(
+    await expect(purgeCheckout(record, [record])).rejects.toThrow(
       sourceState === "available"
         ? /source Git metadata|primary repository/
         : /source Git metadata/,
     );
     expect(await read(record.path, "unsaved.txt")).toBe("owned checkout bytes\n");
-    expect(await requireGit(record.path, ["rev-parse", "refs/heads/main"])).toBe(head);
-    await expect(requireGit(record.path, ["cat-file", "-e", `${head}^{commit}`])).resolves.toBe("");
+    expect(await git(record.path, ["rev-parse", "refs/heads/main"])).toBe(head);
+    await expect(git(record.path, ["cat-file", "-e", `${head}^{commit}`])).resolves.toBe("");
   },
 );
 
@@ -365,52 +348,49 @@ it.each(["recorded source", "linked checkout source"] as const)(
     const contents = "source object bytes stored only inside the eviction candidate\n";
     await init(root, donor);
     await fs.writeFile(path.join(donor, filename), contents);
-    await requireGit(donor, ["add", filename]);
+    await git(donor, ["add", filename]);
     await commitFixture(donor, "borrowed source objects");
-    const commit = await requireGit(donor, ["rev-parse", "HEAD"]);
-    const blob = await requireGit(donor, ["rev-parse", `HEAD:${filename}`]);
+    const commit = await git(donor, ["rev-parse", "HEAD"]);
+    const blob = await git(donor, ["rev-parse", `HEAD:${filename}`]);
     await fs.writeFile(
       path.join(repoRoot, ".git", "objects", "info", "alternates"),
       `${"# padding\n".repeat(120_000)}${path.join(donor, ".git", "objects")}\n`,
     );
-    await requireGit(repoRoot, ["update-ref", "refs/heads/borrowed", commit]);
+    await git(repoRoot, ["update-ref", "refs/heads/borrowed", commit]);
     let actualSource = repoRoot;
     if (sourceKind === "linked checkout source") {
       actualSource = path.join(root, "relocated-source");
       await fs.rename(repoRoot, actualSource);
-      await requireGit(actualSource, ["worktree", "repair", victim.path]);
+      await git(actualSource, ["worktree", "repair", victim.path]);
       await createEvictionCheckouts(root, 0);
     }
     for (const repository of [actualSource, victim.path]) {
-      expect(await requireGit(repository, ["cat-file", "-e", `${commit}^{commit}`])).toBe("");
-      expect(await requireGit(repository, ["cat-file", "blob", blob])).toBe(contents.trim());
+      expect(await git(repository, ["cat-file", "-e", `${commit}^{commit}`])).toBe("");
+      expect(await git(repository, ["cat-file", "blob", blob])).toBe(contents.trim());
     }
     vi.spyOn(workerContext, "requestGitWorkerEffect").mockResolvedValue(undefined);
 
-    await expect(purgeWorktreeCheckout(victim, records)).rejects.toThrow(
+    await expect(purgeCheckout(victim, records)).rejects.toThrow(
       /source Git object dependencies are incomplete/,
     );
 
     expect(await read(victim.path, "unsaved.txt")).toBe(`${victim.id}\n`);
     expect(await read(donor, filename)).toBe(contents);
     for (const repository of [actualSource, victim.path]) {
-      expect(await requireGit(repository, ["cat-file", "-e", `${commit}^{commit}`])).toBe("");
-      expect(await requireGit(repository, ["cat-file", "blob", blob])).toBe(contents.trim());
+      expect(await git(repository, ["cat-file", "-e", `${commit}^{commit}`])).toBe("");
+      expect(await git(repository, ["cat-file", "blob", blob])).toBe(contents.trim());
     }
   },
 );
 
 it("keeps an idle standalone replacement purgeable when no shared source metadata resolves", async () => {
   const root = tempDirs.make("openclaw-eviction-unresolved-own-metadata-");
-  const record = {
-    id: "owned",
-    path: path.join(root, "owned"),
-    repoRoot: path.join(root, "missing-source"),
-  };
+  const repoRoot = path.join(root, "missing-source");
+  const record = { id: "owned", path: path.join(root, "owned"), repoRoot };
   await init(root, record.path);
   await fs.writeFile(path.join(record.path, "unsaved.txt"), "eligible idle bytes\n");
   vi.spyOn(workerContext, "requestGitWorkerEffect").mockResolvedValue(undefined);
-  await purgeWorktreeCheckout(record, [record]);
+  await purgeCheckout(record, [record]);
   await expect(fs.stat(record.path)).rejects.toMatchObject({ code: "ENOENT" });
 });
 
@@ -423,21 +403,13 @@ it.each([true, false])(
     const record = { id: "owned", repoRoot: source, path: path.join(root, "owned") };
     const relocatedSource = path.join(record.path, "relocated-source");
     const contents = "synthetic primary checkout bytes\n";
-    await requireGit(root, [
-      "init",
-      "--template=",
-      "-b",
-      "main",
-      "--separate-git-dir",
-      metadata,
-      source,
-    ]);
+    await init(root, source, "--separate-git-dir", metadata);
     await fs.writeFile(path.join(source, "source-owned.txt"), contents);
-    await requireGit(source, ["add", "source-owned.txt"]);
+    await git(source, ["add", "source-owned.txt"]);
     await commitFixture(source, "synthetic source");
-    const head = await requireGit(source, ["rev-parse", "HEAD"]);
+    const head = await git(source, ["rev-parse", "HEAD"]);
     if (registered) {
-      await requireGit(source, ["worktree", "add", "--detach", record.path, "HEAD"]);
+      await git(source, ["worktree", "add", "--detach", record.path, "HEAD"]);
     } else {
       await fs.mkdir(record.path);
       await fs.writeFile(path.join(record.path, "source-owned.txt"), contents);
@@ -452,13 +424,13 @@ it.each([true, false])(
       return undefined;
     });
 
-    await expect(purgeWorktreeCheckout(record, [record])).rejects.toThrow(/source repository/);
+    await expect(purgeCheckout(record, [record])).rejects.toThrow(/source repository/);
 
     expect(relocated).toBe(true);
     expect(await fs.realpath(source)).toBe(relocatedSource);
     expect(await read(source, "source-owned.txt")).toBe(contents);
     expect(await read(record.path, "source-owned.txt")).toBe(contents);
-    expect(await requireGit(source, ["rev-parse", "--verify", "HEAD"])).toBe(head);
+    expect(await git(source, ["rev-parse", "--verify", "HEAD"])).toBe(head);
     expect((await listGitWorktrees(source)).some((entry) => entry.path === record.path)).toBe(
       registered,
     );

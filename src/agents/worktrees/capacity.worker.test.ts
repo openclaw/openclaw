@@ -41,16 +41,13 @@ function atWorkerCommit(beforeCommit: () => void, preserveAuthority = true) {
 async function expectOffThread(run: () => Promise<void>, checkDisk = false) {
   const sql = observeHostDataSql();
   const disk = checkDisk ? vi.spyOn(fs, "statfsSync") : undefined;
-  try {
-    await run();
-    expect(sql.queries).toEqual([]);
-    if (disk) {
-      expect(disk).not.toHaveBeenCalled();
-    }
-  } finally {
-    disk?.mockRestore();
-    sql.restore();
+  await run();
+  expect(sql.queries).toEqual([]);
+  if (disk) {
+    expect(disk).not.toHaveBeenCalled();
   }
+  disk?.mockRestore();
+  sql.restore();
 }
 
 function fixture() {
@@ -83,7 +80,7 @@ it("releases off-thread disk debt after caller and schema admission end", async 
       },
       leaseContext,
       async (lease) => {
-        const retained = await withSchema({ path: f.database.path }, async () => {
+        const ended = await withSchema({ path: f.database.path }, async () => {
           const context = captureOpenClawStateWorkerContext({ env: f.env });
           const capacity = createWorktreeDiskAdmission({
             env: f.env,
@@ -98,10 +95,8 @@ it("releases off-thread disk debt after caller and schema admission end", async 
         });
         expect(f.debts()).toHaveLength(1);
         caller.abort(new Error("caller cancelled"));
-        expect(() => retained.context.admission.assertCurrent()).toThrow(
-          "schema admission has ended",
-        );
-        await expectOffThread(() => retained.capacity.release());
+        expect(() => ended.context.admission.assertCurrent()).toThrow("schema admission has ended");
+        await expectOffThread(() => ended.capacity.release());
         expect(f.debts()).toEqual([]);
       },
     );

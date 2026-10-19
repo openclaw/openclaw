@@ -123,15 +123,14 @@ it("retains disk debt until native settlement after lease loss", async ({ signal
     );
     // Losing/replacing the operation lease cannot retire debt held by unfinished native work.
     runOpenClawStateWriteTransaction(
-      ({ db }) => {
+      ({ db }) =>
         executeSqliteQuerySync(
           db,
           getNodeSqliteKysely<Pick<DB, "state_leases">>(db)
             .deleteFrom("state_leases")
             .where("scope", "=", "core:managed-worktrees:mutation")
             .where("lease_key", "=", "held-removal"),
-        );
-      },
+        ),
       { env },
     );
     await (await withinTest(worker.promise, signal)).terminate();
@@ -167,32 +166,27 @@ it("retries failed reservation cleanup before admitting later disk writes", asyn
 });
 
 it("keeps allocation renewal off the parent thread and fences the body on heartbeat loss", async () => {
-  const spawned = new Promise<Worker>((resolve) => {
-    heartbeatWorkers.onCreate = vi.fn(resolve);
-  });
+  const spawned = createDeferred<Worker>();
+  heartbeatWorkers.onCreate = vi.fn(spawned.resolve);
   // Advance the parent's renewal interval without changing the worker's wall clock.
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
   await expect(
     allocate(async (guard) => {
       expect(heartbeatWorkers.onCreate).toHaveBeenCalledOnce();
-      const worker = await spawned;
+      const worker = await spawned.promise;
       const sql = observeHostDataSql();
-      try {
-        expect(() => guard.commitGuard?.()).not.toThrow();
-        expect(() => guard.rollbackGuard()).not.toThrow();
-        expect(guard.signal?.aborted).toBe(false);
-        await vi.advanceTimersByTimeAsync(20_000);
-        expect(sql.queries.filter((query) => /update\s+"?state_leases"?/i.test(query))).toEqual([]);
-
-        await worker.terminate();
-        const lost = expect.objectContaining({ code: "OPENCLAW_STATE_LEASE_LOST" });
-        expect(() => guard.commitGuard?.()).toThrowError(lost);
-        expect(() => guard.rollbackGuard()).toThrowError(lost);
-        await expect(reserve(guard, 0)).rejects.toThrowError(lost);
-        expect(guard.signal).toMatchObject({ aborted: true, reason: lost });
-      } finally {
-        sql.restore();
-      }
+      expect(() => guard.commitGuard?.()).not.toThrow();
+      expect(() => guard.rollbackGuard()).not.toThrow();
+      expect(guard.signal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(sql.queries.filter((query) => /update\s+"?state_leases"?/i.test(query))).toEqual([]);
+      await worker.terminate();
+      const lost = expect.objectContaining({ code: "OPENCLAW_STATE_LEASE_LOST" });
+      expect(() => guard.commitGuard?.()).toThrowError(lost);
+      expect(() => guard.rollbackGuard()).toThrowError(lost);
+      await expect(reserve(guard, 0)).rejects.toThrowError(lost);
+      expect(guard.signal).toMatchObject({ aborted: true, reason: lost });
+      sql.restore();
     }),
   ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
 });

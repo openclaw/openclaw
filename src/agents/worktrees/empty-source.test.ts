@@ -9,12 +9,12 @@ import {
 import { gitNullConfigPath } from "../../infra/git-exec.js";
 import * as commandExec from "../../process/exec.js";
 import * as stateLease from "../../state/openclaw-state-lease.js";
-import { withWorktreeAllocationLease } from "./allocation.js";
+import { withWorktreeAllocationLease as withAllocation } from "./allocation.js";
 import { requireGit, runGit } from "./git.js";
 import { updateRegistryWorktree } from "./registry.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
 import { ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
-import { retireExpiredManagedWorktreeSnapshot } from "./snapshot-host.js";
+import { retireExpiredManagedWorktreeSnapshot as retireSnapshot } from "./snapshot-host.js";
 import { useWorktreeStateRoots } from "./state-fixture.test-support.js";
 
 const identity = {
@@ -30,8 +30,8 @@ describe("empty managed workspaces", () => {
   let env: NodeJS.ProcessEnv;
   let service: ManagedWorktreeService;
 
-  const create = (name: string) =>
-    service.createEmpty({ name, ownerKind: "session", ownerId: `agent:main:${name}` });
+  const create = (name: string, target = service) =>
+    target.createEmpty({ name, ownerKind: "session", ownerId: `agent:main:${name}` });
   const read = (directory: string, name: string) => fs.readFile(path.join(directory, name), "utf8");
   const sourceEntries = () =>
     fs.readdir(path.join(env.OPENCLAW_STATE_DIR!, "worktree-sources", "empty"));
@@ -52,10 +52,7 @@ describe("empty managed workspaces", () => {
 
   it("concurrently reuses a workspace without operator Git config", async () => {
     const config = path.join(root, "operator.gitconfig");
-    await fs.writeFile(
-      config,
-      "[init]\n\ttemplateDir = /missing/template\n[commit]\n\tgpgSign = true\n",
-    );
+    await fs.writeFile(config, "[init]\ntemplateDir=/missing/template\n[commit]\ngpgSign=true\n");
     const bootstrapEnv = {
       ...env,
       GIT_CONFIG_GLOBAL: config,
@@ -65,11 +62,7 @@ describe("empty managed workspaces", () => {
     };
     const records = await Promise.all(
       Array.from({ length: 3 }, () =>
-        new ManagedWorktreeService({ env: bootstrapEnv }).createEmpty({
-          ownerKind: "session",
-          ownerId: "agent:main:same-session",
-          name: "same-session",
-        }),
+        create("same-session", new ManagedWorktreeService({ env: bootstrapEnv })),
       ),
     );
     expect(new Set(records.map((record) => record.id)).size).toBe(1);
@@ -151,12 +144,12 @@ describe("empty managed workspaces", () => {
 
   it("cleans bootstrap state on authority loss after Git init", async () => {
     const revoked = new Error("session creation no longer owns this request");
-    let current = true;
+    const authority = new AbortController();
     const execute = commandExec.runCommandWithTimeout;
     vi.spyOn(commandExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
       const result = await execute(argv, options);
       if (argv.includes("update-ref")) {
-        current = false;
+        authority.abort(revoked);
       }
       return result;
     });
@@ -164,11 +157,7 @@ describe("empty managed workspaces", () => {
       service.createEmpty({
         ownerKind: "session",
         ownerId: "agent:main:revoked",
-        commitGuard: () => {
-          if (!current) {
-            throw revoked;
-          }
-        },
+        commitGuard: () => authority.signal.throwIfAborted(),
       }),
     ).rejects.toBe(revoked);
     expect(await sourceEntries()).toEqual([]);
@@ -178,17 +167,12 @@ describe("empty managed workspaces", () => {
     const created = await create("retained");
     await fs.writeFile(path.join(created.path, "draft.txt"), "Restorable work\n");
     await service.remove({ id: created.id, reason: "archive" });
-    const removedAt = getRegistryWorktree(env, created.id)!.removedAt!;
-    expect(
-      await withWorktreeAllocationLease({ env }, (guard) =>
-        retireExpiredManagedWorktreeSnapshot({
-          env,
-          id: created.id,
-          expiresBefore: removedAt,
-          guard,
-        }),
+    const expiresBefore = getRegistryWorktree(env, created.id)!.removedAt!;
+    await expect(
+      withAllocation({ env }, (guard) =>
+        retireSnapshot({ env, id: created.id, expiresBefore, guard }),
       ),
-    ).toBe(false);
+    ).resolves.toBe(false);
     expect((await service.gc()).snapshotsPruned).toBe(0);
     expect(fsSync.existsSync(created.repoRoot)).toBe(true);
     const restored = await service.restore({ id: created.id });

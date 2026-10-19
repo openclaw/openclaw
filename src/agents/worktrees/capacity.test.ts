@@ -43,24 +43,14 @@ describe("worktree Git size estimates", () => {
     await git(clone, "fetch", "origin");
     const commit = await git(clone, "rev-parse", "origin/main");
     vi.stubEnv("GIT_NO_LAZY_FETCH", "1");
-    const missing = (
-      await git(
-        clone,
-        "rev-list",
-        "--objects",
-        "--missing=print",
-        "--no-object-names",
-        "--max-count=1",
-        commit,
-      )
-    )
+    const missing = (await git(clone, "rev-list", "--objects", "--missing=print", commit))
       .split("\n")
       .filter((line) => line.startsWith("?"))
       .map((line) => line.slice(1));
     expect(missing).toHaveLength(2);
     // The production executor inherits this guard, so old objectsize cannot hydrate the fixture.
     await expectMissing(clone, [missing[0]!]);
-    return { root, source, origin, clone, commit, missing };
+    return { clone, commit, missing };
   }
 
   it("hydrates a partial-clone default before advancing the local branch", async () => {
@@ -216,14 +206,10 @@ describe("worktree Git size estimates", () => {
       });
       const controller = new AbortController();
       const revoked = new Error("hydration authority revoked");
-      let current = true;
+      const authority = new AbortController();
       const pending = estimateWorktreeGitBytes(clone, commit, {
         signal: controller.signal,
-        assertCurrent: () => {
-          if (!current) {
-            throw revoked;
-          }
-        },
+        assertCurrent: () => authority.signal.throwIfAborted(),
       });
       try {
         await Promise.race([
@@ -234,11 +220,7 @@ describe("worktree Git size estimates", () => {
         ]);
         await expectMissing(clone, missing);
         const rejected = expect(pending).rejects.toThrow(revoked.message);
-        if (action === "cancel") {
-          controller.abort(revoked);
-        } else {
-          current = false;
-        }
+        (action === "cancel" ? controller : authority).abort(revoked);
         release.resolve();
         await rejected;
         await expectMissing(clone, missing);
