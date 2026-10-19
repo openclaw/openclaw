@@ -404,12 +404,13 @@ it.each([
   },
 );
 
-it("mounts the presentation for the Settings agent and retires it on reconnect", async () => {
-  const { element, settingsViews, setPhase, settingsAgentSelection } = createPage({
+it("mounts the presentation for the Settings agent and keeps it through a same-client reconnect", async () => {
+  const page = createPage({
     agents: [{ id: "main" }, { id: "research" }],
     selectedAgentId: "research",
     routeData: memoryTabRoute("overview"),
   });
+  const { element, settingsViews, setPhase, settingsAgentSelection } = page;
   await waitForSolid(() => expect(settingsViews.at(-1)?.snapshot.agentId).toBe("research"));
   const first = settingsViews.at(-1)!;
   expect(element.querySelectorAll("openclaw-agent-select")).toHaveLength(0);
@@ -420,10 +421,18 @@ it("mounts the presentation for the Settings agent and retires it on reconnect",
   settingsAgentSelection.setScope(null);
   flush();
   expect(settingsViews.at(-1)).toBe(current);
+  const epoch = current.snapshot.connectionEpoch;
   setPhase("disconnected");
+  flush();
+  expect(current.snapshot.connected).toBe(false);
   setPhase("connected");
+  await waitForSolid(() => expect(current.snapshot.connected).toBe(true));
+  expect(current.snapshot.connectionEpoch).toBeGreaterThan(epoch);
+  expect(current.context.signal.aborted).toBe(false);
+  expect(settingsViews.at(-1)).toBe(current);
+  page.replaceClient();
   expect(current.context.signal.aborted).toBe(true);
-  await waitForSolid(() => expect(settingsViews.at(-1)?.snapshot.connected).toBe(true));
+  await waitForSolid(() => expect(settingsViews.at(-1)).not.toBe(current));
 });
 
 it("passes a replaced pinned engine to a new presentation", async () => {
@@ -477,8 +486,6 @@ it("honors a fresh explicit Memory navigation after the sidebar changed the same
 });
 
 it.each([
-  { tab: "overview", change: "plugin publication" },
-  { tab: "overview", change: "boot" },
   { tab: "overview", change: "client" },
   { tab: "memories", change: "method catalog" },
   { tab: "memories", change: "agent" },
@@ -499,8 +506,6 @@ it.each([
       expect(old.props.advertisedMethods).toContain("memory.search");
       const result = old.request("settings.test");
       const invalidate = {
-        "plugin publication": () => fixture.publishPluginGeneration(1),
-        boot: () => fixture.setBootId("memory-boot-b"),
         "method catalog": () => fixture.setMethods(["agents.workspace.get"]),
         agent: () => fixture.settingsAgentSelection.set("research"),
         client: () => fixture.replaceClient(),
@@ -515,15 +520,43 @@ it.each([
       pending.resolve("obsolete");
       await expect(result).rejects.toThrow();
       await waitForSolid(() => expect(settingsViews.at(-1)!.context).not.toBe(old));
-      if (change === "plugin publication") {
-        const current = settingsViews.at(-1)!.context;
-        fixture.publishPluginGeneration(1);
-        flush();
-        expect(settingsViews.at(-1)!.context).toBe(current);
-      }
     } finally {
       pending.resolve("done");
       element.remove();
+    }
+  },
+);
+
+it.each(["plugin publication", "boot"] as const)(
+  "keeps the view after %s but rejects replies to earlier requests",
+  async (change) => {
+    const pending = deferred<unknown>();
+    const settingsRequest = vi
+      .fn<(method: string) => Promise<unknown>>()
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValue("current");
+    const fixture = createPage({
+      routeData: memoryTabRoute("memories"),
+      methods: ["memory.search", "agents.workspace.get"],
+      settingsRequest,
+    });
+    const { settingsViews } = fixture;
+    try {
+      await waitForSolid(() => expect(settingsViews.length).toBeGreaterThan(0));
+      const view = settingsViews.at(-1)!;
+      const result = view.context.request("settings.test");
+      if (change === "plugin publication") {
+        fixture.publishPluginGeneration(1);
+      } else {
+        fixture.setBootId("memory-boot-b");
+      }
+      pending.resolve("obsolete");
+      await expect(result).rejects.toThrow("connection changed");
+      expect(view.context.signal.aborted).toBe(false);
+      expect(settingsViews.at(-1)).toBe(view);
+      await expect(view.context.request("settings.test")).resolves.toBe("current");
+    } finally {
+      pending.resolve("done");
     }
   },
 );

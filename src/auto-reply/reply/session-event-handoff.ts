@@ -26,6 +26,7 @@ import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-wo
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import { isCurrentSessionControllerOperation } from "../../sessions/session-controller.identity.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { ReplyPayload } from "../../shared/reply-payload.types.js";
 import { readAgentDeletionJournalStatusInWorker } from "../../state/agent-deletion-journal.read.js";
@@ -185,6 +186,7 @@ export function enqueueSessionEventForHost(
     throw new Error("Session event was not enqueued: an identical occurrence is already pending");
   }
   const eventText = occurrences.map((event) => event.text).join("\n");
+  const occurrenceId = occurrence.id;
   const ownership = claimSystemEventTurn(
     resolveSystemEventQueueKey(sessionKey, agentId),
     occurrences,
@@ -209,6 +211,7 @@ export function enqueueSessionEventForHost(
   // The live re-admission attempt; receipt.cancel forwards to it once it exists.
   let readmittedReceipt: SessionEventReceipt | undefined;
   let operation: ReplyOperation | undefined;
+  let inputRecorder: UserTurnTranscriptRecorder | undefined;
   let delivered = false;
   let deliveryAttempted = false;
   let deliveryAmbiguous = false;
@@ -300,7 +303,13 @@ export function enqueueSessionEventForHost(
       return;
     }
     settlement = "settling";
-    const complete = () => {
+    const complete = async () => {
+      try {
+        inputRecorder?.finishPendingInput?.(signal.aborted ? "cancelled" : "interrupted");
+        await inputRecorder?.waitForPendingInputSettlement?.();
+      } catch (error) {
+        failure ??= error instanceof Error ? error : String(error);
+      }
       settlement = "finished";
       // Submitting custody ends at the first acceptance; a pre-acceptance re-admission
       // carries the still-live assertion so revoked ingress rejects the retry.
@@ -409,7 +418,7 @@ export function enqueueSessionEventForHost(
     if (operation?.ownerSettlement) {
       void operation.ownerSettlement.then(complete, complete);
     } else {
-      complete();
+      void complete();
     }
   };
   const onAbort = () => {
@@ -553,6 +562,15 @@ export function enqueueSessionEventForHost(
             operation = owned;
           },
           internalEventExecution: {
+            prepareInput: async (recorder) => {
+              inputRecorder = recorder;
+              if (
+                !recorder.stageApproved ||
+                !(await recorder.stageApproved({ runId: occurrenceId, assertCurrent }))
+              ) {
+                throw new Error("Session event input was not durably admitted");
+              }
+            },
             execRequestOwners,
             deliver: options.deliver === false || target.deliver === false ? false : undefined,
             assertCurrent: assertEffectCurrent,

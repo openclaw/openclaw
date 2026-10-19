@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import type { ThemeBranding, ThemeMascot } from "../../../packages/gateway-protocol/src/theme.ts";
 import { normalizeBasePath } from "../app-route-paths.ts";
 import { canReloadControlUiDocument } from "../app/document-reload-guard.ts";
@@ -376,7 +376,25 @@ function LoginGateContent(
   host: LoginGateElement,
 ): SolidJSX.Element {
   host.style.display = "contents";
-  const [refreshState, setRefreshState] = createSignal<RefreshState>("idle");
+  const refreshIdentity = createMemo(
+    () =>
+      [
+        props.model.lastError,
+        props.model.lastErrorCode,
+        props.model.lastErrorAuthReason,
+        props.model.gatewayUrl,
+        props.model.resourceBasePath,
+        props.model.secret,
+        props.model.connected,
+        Boolean(props.model.reconnectPending),
+      ] as const,
+    { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
+  );
+  // A committed identity change retires feedback; unrelated renders preserve a pending attempt.
+  const [refreshState, setRefreshState] = createSignal<RefreshState>((): RefreshState => {
+    refreshIdentity();
+    return "idle";
+  });
   const [now, setNow] = createSignal(Date.now());
   useVisiblePoll(1_000, () => setNow(Date.now()), {
     enabled: () =>
@@ -385,15 +403,20 @@ function LoginGateContent(
       (props.model.reconnectAt ?? 0) > now(),
     immediate: true,
   });
-  let refreshAttempt: { props: LoginGateProps } | undefined;
+  type RefreshAttempt = {
+    props: LoginGateProps;
+    identity: ReturnType<typeof refreshIdentity>;
+  };
+  let refreshAttempt: RefreshAttempt | undefined;
   const cancelRefresh = () => {
     refreshAttempt = undefined;
     setRefreshState("idle");
   };
-  const ownsRefresh = (attempt: { props: LoginGateProps }) => {
+  const ownsRefresh = (attempt: RefreshAttempt) => {
     const current = host.props;
     return (
       refreshAttempt === attempt &&
+      refreshIdentity() === attempt.identity &&
       host.isConnected &&
       current !== undefined &&
       !current.connected &&
@@ -411,17 +434,12 @@ function LoginGateContent(
     );
   };
   const feedback = createMemo(() => resolveLoginFailureFeedback(props.model));
-  createEffect(
-    () => props.model,
-    () => {
-      if (refreshAttempt && !ownsRefresh(refreshAttempt)) {
-        cancelRefresh();
-      }
-    },
-  );
   onCleanup(cancelRefresh);
   onCleanup(listen(host, "login-gate-disconnect", cancelRefresh));
   const refreshPage = async () => {
+    if (refreshAttempt && !ownsRefresh(refreshAttempt)) {
+      refreshAttempt = undefined;
+    }
     const current = host.props;
     if (
       !current ||
@@ -434,7 +452,7 @@ function LoginGateContent(
     ) {
       return;
     }
-    const attempt = { props: current };
+    const attempt = { props: current, identity: refreshIdentity() };
     refreshAttempt = attempt;
     setRefreshState("pending");
     try {

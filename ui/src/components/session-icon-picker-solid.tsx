@@ -16,7 +16,7 @@ import { SessionIconGraphic } from "./session-icon-glyph-solid.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { Kbd, ShortcutText } from "./solid/kbd.tsx";
 
-export type AppearancePickerFocus = (target: "grid" | "custom", roving?: boolean) => void;
+export type AppearancePickerFocus = (target: "first" | "grid" | "custom", roving?: boolean) => void;
 
 export type AppearancePickerProps = {
   ref?: (handle: AppearancePickerFocus) => void;
@@ -41,11 +41,18 @@ export type AppearancePickerProps = {
 
 export function AppearancePicker(props: AppearancePickerProps) {
   const choices = new Map<string | null, HTMLButtonElement>();
+  const colors = new Map<string | null, HTMLButtonElement>();
   let custom: HTMLButtonElement | undefined;
   let input: HTMLTextAreaElement | undefined;
   onSettled(() => {
     props.ref?.((target, roving) =>
       onSettled(() => {
+        if (target === "first") {
+          [...colors.values(), ...choices.values()]
+            .find((button) => button.isConnected && !button.disabled)
+            ?.focus();
+          return;
+        }
         if (target === "grid" && roving) {
           for (const button of choices.values()) {
             button.tabIndex = button === custom ? 0 : -1;
@@ -110,7 +117,10 @@ export function AppearancePicker(props: AppearancePickerProps) {
                 aria-pressed={selected() ? "true" : "false"}
                 disabled={props.colorDisabled}
                 title={props.colorDisabledReason ?? label()}
-                ref={nativeListener("click", (event) => props.onSelectColor(event, color))}
+                ref={[
+                  (element) => colors.set(color, element),
+                  nativeListener("click", (event) => props.onSelectColor(event, color)),
+                ]}
               >
                 <span
                   class={[
@@ -344,6 +354,7 @@ export function useSessionMenuAppearance(
   };
   return {
     prepare,
+    focusFirst: () => focus?.("first"),
     showIconGrid,
     render: () => (
       <AppearancePicker
