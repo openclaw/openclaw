@@ -1,9 +1,7 @@
-// Googlechat tests cover monitor webhook plugin behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { FixedWindowRateLimiter } from "openclaw/plugin-sdk/webhook-ingress";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebhookTarget } from "./monitor-types.js";
-import type { GoogleChatEvent } from "./types.js";
 
 const readJsonWebhookBodyOrReject = vi.hoisted(() => vi.fn());
 const runDetachedWebhookWork = vi.hoisted(() => vi.fn((run: () => Promise<void>) => run()));
@@ -32,23 +30,19 @@ vi.mock("./auth.js", () => ({
   verifyGoogleChatRequest,
 }));
 
-type ProcessEventFn = (event: GoogleChatEvent, target: WebhookTarget) => Promise<void>;
 let createGoogleChatWebhookRequestHandler: typeof import("./monitor-webhook.js").createGoogleChatWebhookRequestHandler;
 let warnAppPrincipalMisconfiguration: typeof import("./monitor-webhook.js").warnAppPrincipalMisconfiguration;
 
 function createRequest(options?: {
   authorization?: string;
-  headers?: Record<string, string>;
   remoteAddress?: string;
-  url?: string;
 }): IncomingMessage {
   return {
     method: "POST",
-    url: options?.url ?? "/googlechat",
+    url: "/googlechat",
     headers: {
       authorization: options?.authorization ?? "",
       "content-type": "application/json",
-      ...options?.headers,
     },
     socket: { remoteAddress: options?.remoteAddress ?? "203.0.113.10" },
   } as IncomingMessage;
@@ -70,14 +64,34 @@ function createResponse() {
   return res;
 }
 
-function createTarget(accountId = "default", appPrincipal = "chat-app") {
+function createTarget(accountId = "default") {
   return {
-    account: { accountId, config: { appPrincipal } },
+    account: { accountId, config: { appPrincipal: "chat-app" } },
     runtime: { error: vi.fn(), log: vi.fn() },
     statusSink: vi.fn(),
     audienceType: "app-url",
     audience: "https://example.com/googlechat",
   };
+}
+
+function mockBody(value: unknown) {
+  readJsonWebhookBodyOrReject.mockResolvedValue({ ok: true, value });
+}
+
+function createHandler(
+  overrides: Partial<Parameters<typeof createGoogleChatWebhookRequestHandler>[0]> = {},
+) {
+  return createGoogleChatWebhookRequestHandler({
+    webhookTargets: new Map(),
+    webhookRateLimiter: {
+      isRateLimited: vi.fn(() => false),
+      size: vi.fn(() => 0),
+      clear: vi.fn(),
+    },
+    webhookInFlightLimiter: {} as never,
+    processEvent: vi.fn(async () => {}),
+    ...overrides,
+  });
 }
 
 function installSimplePipeline(targets: Array<Record<string, unknown>>) {
@@ -106,24 +120,10 @@ function installSimplePipeline(targets: Array<Record<string, unknown>>) {
   );
 }
 
-async function runWebhookHandler(options?: {
-  processEvent?: ProcessEventFn;
-  authorization?: string;
-  webhookRateLimiter?: FixedWindowRateLimiter;
-}) {
-  const processEvent: ProcessEventFn =
-    options?.processEvent ?? (vi.fn(async () => {}) as ProcessEventFn);
-  const handler = createGoogleChatWebhookRequestHandler({
-    webhookTargets: new Map(),
-    webhookRateLimiter: options?.webhookRateLimiter ?? {
-      isRateLimited: vi.fn(() => false),
-      size: vi.fn(() => 0),
-      clear: vi.fn(),
-    },
-    webhookInFlightLimiter: {} as never,
-    processEvent,
-  });
-  const req = createRequest({ authorization: options?.authorization });
+async function runWebhookHandler(authorization?: string) {
+  const processEvent = vi.fn(async () => {});
+  const handler = createHandler({ processEvent });
+  const req = createRequest({ authorization });
   const res = createResponse();
   await expect(handler(req, res)).resolves.toBe(true);
   return { processEvent, res };
@@ -157,13 +157,7 @@ describe("googlechat monitor webhook", () => {
     vi.resetModules();
   });
 
-  it.each([
-    {
-      name: "unknown when a trusted proxy omits client headers",
-      request: { remoteAddress: "10.0.0.1" },
-      rateLimitKey: "/googlechat:unknown",
-    },
-  ])("uses $name in the fixed-window rate-limit bucket", async ({ request, rateLimitKey }) => {
+  it("uses unknown in the rate-limit bucket when a trusted proxy omits client headers", async () => {
     const rateLimiter: FixedWindowRateLimiter = {
       isRateLimited: vi.fn(() => false),
       size: vi.fn(() => 0),
@@ -174,15 +168,8 @@ describe("googlechat monitor webhook", () => {
         "/googlechat",
         [
           {
-            account: {
-              accountId: "default",
-              config: { appPrincipal: "chat-app" },
-            },
-            config: {
-              gateway: {
-                trustedProxies: ["10.0.0.0/24"],
-              },
-            },
+            account: createTarget().account,
+            config: { gateway: { trustedProxies: ["10.0.0.0/24"] } },
             runtime: {},
             core: {} as never,
             path: "/googlechat",
@@ -193,13 +180,13 @@ describe("googlechat monitor webhook", () => {
     ]);
     const webhookInFlightLimiter = {} as never;
     const processEvent = vi.fn(async () => {});
-    const handler = createGoogleChatWebhookRequestHandler({
+    const handler = createHandler({
       webhookTargets,
       webhookRateLimiter: rateLimiter,
       webhookInFlightLimiter,
       processEvent,
     });
-    const req = createRequest(request);
+    const req = createRequest({ remoteAddress: "10.0.0.1" });
     const res = createResponse();
     withResolvedWebhookRequestPipeline.mockResolvedValue(true);
 
@@ -212,7 +199,7 @@ describe("googlechat monitor webhook", () => {
       allowMethods: ["POST"],
       requireJsonContentType: true,
       rateLimiter,
-      rateLimitKey,
+      rateLimitKey: "/googlechat:unknown",
       inFlightLimiter: webhookInFlightLimiter,
       handle: expect.any(Function),
     });
@@ -222,24 +209,21 @@ describe("googlechat monitor webhook", () => {
     const target = createTarget();
     ingressReceive.mockResolvedValue({ kind: "ignored" });
     installSimplePipeline([target]);
-    readJsonWebhookBodyOrReject.mockResolvedValue({
-      ok: true,
-      value: {
-        commonEventObject: {
-          hostApp: "CHAT",
-          parameters: {
-            openclaw_action: "approval",
-            token: "token-1",
-          },
+    mockBody({
+      commonEventObject: {
+        hostApp: "CHAT",
+        parameters: {
+          openclaw_action: "approval",
+          token: "token-1",
         },
-        authorizationEventObject: { systemIdToken: "addon-token" },
-        chat: {
-          eventTime: "2026-03-22T00:00:00.000Z",
-          user: { name: "users/123" },
-          buttonClickedPayload: {
-            space: { name: "spaces/AAA" },
-            message: { name: "spaces/AAA/messages/1" },
-          },
+      },
+      authorizationEventObject: { systemIdToken: "addon-token" },
+      chat: {
+        eventTime: "2026-03-22T00:00:00.000Z",
+        user: { name: "users/123" },
+        buttonClickedPayload: {
+          space: { name: "spaces/AAA" },
+          message: { name: "spaces/AAA/messages/1" },
         },
       },
     });
@@ -288,7 +272,7 @@ describe("googlechat monitor webhook", () => {
       space: { name: "spaces/AAA" },
       message: { name: "spaces/AAA/messages/durable", text: "hello" },
     };
-    readJsonWebhookBodyOrReject.mockResolvedValue({ ok: true, value: raw });
+    mockBody(raw);
     resolveWebhookTargetWithAuthOrReject.mockResolvedValue(target);
     verifyGoogleChatRequest.mockResolvedValue({ ok: true });
     let releaseAdmission: (result: { kind: "durable" }) => void = () => {};
@@ -298,16 +282,7 @@ describe("googlechat monitor webhook", () => {
           releaseAdmission = resolve;
         }),
     );
-    const handler = createGoogleChatWebhookRequestHandler({
-      webhookTargets: new Map(),
-      webhookRateLimiter: {
-        isRateLimited: vi.fn(() => false),
-        size: vi.fn(() => 0),
-        clear: vi.fn(),
-      },
-      webhookInFlightLimiter: {} as never,
-      processEvent: vi.fn(async () => {}),
-    });
+    const handler = createHandler();
     const res = createResponse();
     const handling = handler(createRequest({ authorization: "Bearer valid" }), res);
 
@@ -323,19 +298,16 @@ describe("googlechat monitor webhook", () => {
   it("returns 503 instead of acknowledging when durable admission fails", async () => {
     const target = createTarget();
     installSimplePipeline([target]);
-    readJsonWebhookBodyOrReject.mockResolvedValue({
-      ok: true,
-      value: {
-        type: "MESSAGE",
-        space: { name: "spaces/AAA" },
-        message: { name: "spaces/AAA/messages/failed", text: "hello" },
-      },
+    mockBody({
+      type: "MESSAGE",
+      space: { name: "spaces/AAA" },
+      message: { name: "spaces/AAA/messages/failed", text: "hello" },
     });
     resolveWebhookTargetWithAuthOrReject.mockResolvedValue(target);
     verifyGoogleChatRequest.mockResolvedValue({ ok: true });
     ingressReceive.mockRejectedValue(new Error("sqlite busy"));
 
-    const { processEvent, res } = await runWebhookHandler({ authorization: "Bearer valid" });
+    const { processEvent, res } = await runWebhookHandler("Bearer valid");
 
     expect(res.statusCode).toBe(503);
     expect(res.headers["x-openclaw-delivery-accepted"]).toBeUndefined();
@@ -346,13 +318,10 @@ describe("googlechat monitor webhook", () => {
   it("returns 400 for a permanently invalid message identity", async () => {
     const target = createTarget();
     installSimplePipeline([target]);
-    readJsonWebhookBodyOrReject.mockResolvedValue({
-      ok: true,
-      value: {
-        type: "MESSAGE",
-        space: { name: "spaces/AAA" },
-        message: { text: "missing resource name" },
-      },
+    mockBody({
+      type: "MESSAGE",
+      space: { name: "spaces/AAA" },
+      message: { text: "missing resource name" },
     });
     resolveWebhookTargetWithAuthOrReject.mockResolvedValue(target);
     verifyGoogleChatRequest.mockResolvedValue({ ok: true });
@@ -361,7 +330,7 @@ describe("googlechat monitor webhook", () => {
       message: "Google Chat MESSAGE event is missing message.name.",
     });
 
-    const { processEvent, res } = await runWebhookHandler({ authorization: "Bearer valid" });
+    const { processEvent, res } = await runWebhookHandler("Bearer valid");
 
     expect(res.statusCode).toBe(400);
     expect(res.body).toBe("invalid payload");
@@ -397,59 +366,15 @@ describe("googlechat monitor webhook", () => {
     expect(res.statusCode).toBe(401);
   });
 
-  it("does not log failed candidate targets when another target verifies", async () => {
-    const targetA = createTarget("acct-a", "chat-app-a");
-    const targetB = createTarget("acct-b", "chat-app-b");
-    installSimplePipeline([targetA, targetB]);
-    readJsonWebhookBodyOrReject.mockResolvedValue({
-      ok: true,
-      value: {
-        commonEventObject: { hostApp: "CHAT" },
-        authorizationEventObject: { systemIdToken: "shared-path-token" },
-        chat: {
-          eventTime: "2026-03-22T00:00:00.000Z",
-          user: { name: "users/123" },
-          messagePayload: {
-            space: { name: "spaces/BBB" },
-            message: { name: "spaces/BBB/messages/1", text: "hi" },
-          },
-        },
-      },
-    });
-    verifyGoogleChatRequest
-      .mockResolvedValueOnce({ ok: false, reason: "unexpected add-on principal: 111" })
-      .mockResolvedValueOnce({ ok: true });
-    const { processEvent, res } = await runWebhookHandler();
-
-    expect(targetA.runtime.log).not.toHaveBeenCalled();
-    expect(targetB.runtime.log).not.toHaveBeenCalled();
-    expect(ingressReceive).toHaveBeenCalledWith(
-      expect.objectContaining({
-        chat: expect.objectContaining({
-          messagePayload: expect.objectContaining({
-            message: { name: "spaces/BBB/messages/1", text: "hi" },
-          }),
-        }),
-      }),
-    );
-    expect(processEvent).not.toHaveBeenCalled();
-    expect(res.statusCode).toBe(200);
-    expect(res.headers["Content-Type"]).toBe("application/json");
-    expect(res.body).toBe("{}");
-  });
-
   it("rejects missing add-on bearer tokens before dispatch", async () => {
     const target = createTarget();
     installSimplePipeline([target]);
-    readJsonWebhookBodyOrReject.mockResolvedValue({
-      ok: true,
-      value: {
-        commonEventObject: { hostApp: "CHAT" },
-        chat: {
-          messagePayload: {
-            space: { name: "spaces/AAA" },
-            message: { name: "spaces/AAA/messages/1", text: "hello" },
-          },
+    mockBody({
+      commonEventObject: { hostApp: "CHAT" },
+      chat: {
+        messagePayload: {
+          space: { name: "spaces/AAA" },
+          message: { name: "spaces/AAA/messages/1", text: "hello" },
         },
       },
     });

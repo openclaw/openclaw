@@ -1,6 +1,6 @@
-// Googlechat tests cover monitor access plugin behavior.
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ResolvedGoogleChatAccount } from "./accounts.js";
 
 const createChannelPairingController = vi.hoisted(() => vi.fn());
 const isDangerousNameMatchingEnabled = vi.hoisted(() => vi.fn());
@@ -69,14 +69,15 @@ function allowInboundGroupTraffic() {
   });
 }
 
+function account(config: ResolvedGoogleChatAccount["config"]) {
+  return { accountId: "default", config } as ResolvedGoogleChatAccount;
+}
+
 async function applyInboundAccessPolicy(
   overrides: Partial<Parameters<typeof applyGoogleChatInboundAccessPolicy>[0]>,
 ) {
   return applyGoogleChatInboundAccessPolicy({
-    account: {
-      accountId: "default",
-      config: {},
-    } as never,
+    account: account({}),
     config: baseAccessConfig as never,
     core: createCore() as never,
     space: { name: "spaces/AAA", displayName: "Team Room" } as never,
@@ -90,6 +91,7 @@ async function applyInboundAccessPolicy(
 }
 
 describe("googlechat inbound access policy", () => {
+  beforeEach(primeCommonDefaults);
   beforeAll(async () => {
     ({ applyGoogleChatInboundAccessPolicy } = await import("./monitor-access.js"));
   });
@@ -125,7 +127,6 @@ describe("googlechat inbound access policy", () => {
       ok: false,
     },
   ])("$name", async ({ allowNameMatching, allowFrom, senderId, ok }) => {
-    primeCommonDefaults();
     isDangerousNameMatchingEnabled.mockReturnValue(allowNameMatching);
     createChannelPairingController.mockReturnValue({
       readAllowFromStore: vi.fn(async () => []),
@@ -134,13 +135,7 @@ describe("googlechat inbound access policy", () => {
 
     const result = await applyInboundAccessPolicy({
       isGroup: false,
-      account: {
-        accountId: "default",
-        config: {
-          dmPolicy: "allowlist",
-          allowFrom,
-        },
-      } as never,
+      account: account({ dmPolicy: "allowlist", allowFrom }),
       senderId,
       senderEmail: "Jane@Example.com",
     });
@@ -148,7 +143,6 @@ describe("googlechat inbound access policy", () => {
   });
 
   it("issues a pairing challenge for unauthorized DMs in pairing mode", async () => {
-    primeCommonDefaults();
     const now = new Date("2026-05-09T06:35:00.000Z").getTime();
     const issueChallenge = vi.fn(async ({ onCreated, sendPairingReply }) => {
       onCreated?.();
@@ -162,29 +156,20 @@ describe("googlechat inbound access policy", () => {
 
     const statusSink = vi.fn();
     const logVerbose = vi.fn();
-    const account = {
-      accountId: "default",
-      config: {
-        dmPolicy: "pairing",
-      },
-    };
+    const pairingAccount = account({ dmPolicy: "pairing" });
 
     vi.useFakeTimers();
     vi.setSystemTime(now);
     try {
       await expect(
-        applyGoogleChatInboundAccessPolicy({
-          account: account as never,
+        applyInboundAccessPolicy({
+          account: pairingAccount,
           config: {
             channels: { googlechat: {} },
           } as never,
-          core: createCore() as never,
           space: { name: "spaces/AAA", displayName: "DM" } as never,
-          message: { annotations: [] } as never,
           isGroup: false,
           senderId: "users/abc",
-          senderName: "Alice",
-          senderEmail: "alice@example.com",
           rawBody: "hello",
           contextBinding: {
             agentId: "main",
@@ -198,7 +183,7 @@ describe("googlechat inbound access policy", () => {
 
       expect(issueChallenge).toHaveBeenCalledTimes(1);
       expect(sendGoogleChatMessage).toHaveBeenCalledWith({
-        account,
+        account: pairingAccount,
         space: "spaces/AAA",
         text: "pairing text",
       });
@@ -211,26 +196,22 @@ describe("googlechat inbound access policy", () => {
   });
 
   it("allows group traffic when sender and mention gates pass", async () => {
-    primeCommonDefaults();
     allowInboundGroupTraffic();
     const core = createCore();
     core.channel.commands.shouldComputeCommandAuthorized.mockReturnValue(true);
     core.channel.commands.resolveCommandAuthorizedFromAuthorizers.mockReturnValue(true);
 
     const result = await applyInboundAccessPolicy({
-      account: {
-        accountId: "default",
-        config: {
-          botUser: "users/app-bot",
-          groups: {
-            "spaces/AAA": {
-              users: ["users/alice"],
-              requireMention: true,
-              systemPrompt: " group prompt ",
-            },
+      account: account({
+        botUser: "users/app-bot",
+        groups: {
+          "spaces/AAA": {
+            users: ["users/alice"],
+            requireMention: true,
+            systemPrompt: " group prompt ",
           },
         },
-      } as never,
+      }),
       core: core as never,
       message: {
         annotations: [
@@ -255,24 +236,16 @@ describe("googlechat inbound access policy", () => {
   });
 
   it("preserves allowlist group policy when a routed space has no sender allowlist", async () => {
-    primeCommonDefaults();
     allowInboundGroupTraffic();
     const logVerbose = vi.fn();
 
     await expect(
       applyInboundAccessPolicy({
-        account: {
-          accountId: "default",
-          config: {
-            dmPolicy: "allowlist",
-            allowFrom: ["users/alice"],
-            groups: {
-              "spaces/AAA": {
-                enabled: true,
-              },
-            },
-          },
-        } as never,
+        account: account({
+          dmPolicy: "allowlist",
+          allowFrom: ["users/alice"],
+          groups: { "spaces/AAA": { enabled: true } },
+        }),
         logVerbose,
       }),
     ).resolves.toEqual({ ok: false });
@@ -283,7 +256,6 @@ describe("googlechat inbound access policy", () => {
   });
 
   it("keeps configured space users sender-scoped when group policy is open", async () => {
-    primeCommonDefaults();
     resolveAllowlistProviderRuntimeGroupPolicy.mockReturnValue({
       groupPolicy: "open",
       providerMissingFallbackApplied: false,
@@ -293,18 +265,10 @@ describe("googlechat inbound access policy", () => {
 
     await expect(
       applyInboundAccessPolicy({
-        account: {
-          accountId: "default",
-          config: {
-            groupPolicy: "open",
-            groups: {
-              "spaces/AAA": {
-                users: ["users/bob"],
-                requireMention: false,
-              },
-            },
-          },
-        } as never,
+        account: account({
+          groupPolicy: "open",
+          groups: { "spaces/AAA": { users: ["users/bob"], requireMention: false } },
+        }),
         logVerbose,
       }),
     ).resolves.toEqual({ ok: false });
@@ -313,7 +277,6 @@ describe("googlechat inbound access policy", () => {
   });
 
   it("drops unauthorized group control commands", async () => {
-    primeCommonDefaults();
     allowInboundGroupTraffic();
     resolveAllowlistProviderRuntimeGroupPolicy.mockReturnValue({
       groupPolicy: "open",
@@ -327,16 +290,7 @@ describe("googlechat inbound access policy", () => {
     await expect(
       applyInboundAccessPolicy({
         core: core as never,
-        account: {
-          accountId: "default",
-          config: {
-            groups: {
-              "spaces/AAA": {
-                requireMention: false,
-              },
-            },
-          },
-        } as never,
+        account: account({ groups: { "spaces/AAA": { requireMention: false } } }),
         rawBody: "/admin",
         logVerbose,
       }),
@@ -346,25 +300,20 @@ describe("googlechat inbound access policy", () => {
   });
 
   it("does not match group policy by mutable space displayName when the stable id differs", async () => {
-    primeCommonDefaults();
     allowInboundGroupTraffic();
     const logVerbose = vi.fn();
 
     await expect(
       applyInboundAccessPolicy({
-        account: {
-          accountId: "default",
-          config: {
-            groups: {
-              "Finance Ops": {
-                users: ["users/alice"],
-                requireMention: true,
-                systemPrompt: "finance-only prompt",
-              },
+        account: account({
+          groups: {
+            "Finance Ops": {
+              users: ["users/alice"],
+              requireMention: true,
+              systemPrompt: "finance-only prompt",
             },
           },
-        } as never,
-        core: createCore() as never,
+        }),
         space: { name: "spaces/BBB", displayName: "Finance Ops" } as never,
         message: {
           annotations: [
@@ -388,7 +337,6 @@ describe("googlechat inbound access policy", () => {
   });
 
   it("fails closed instead of falling back to wildcard when a deprecated room key matches", async () => {
-    primeCommonDefaults();
     resolveAllowlistProviderRuntimeGroupPolicy.mockReturnValue({
       groupPolicy: "open",
       providerMissingFallbackApplied: false,
@@ -398,22 +346,13 @@ describe("googlechat inbound access policy", () => {
 
     await expect(
       applyInboundAccessPolicy({
-        account: {
-          accountId: "default",
-          config: {
-            groupPolicy: "open",
-            groups: {
-              "*": {
-                users: ["users/alice"],
-              },
-              "Finance Ops": {
-                enabled: false,
-                users: ["users/bob"],
-              },
-            },
+        account: account({
+          groupPolicy: "open",
+          groups: {
+            "*": { users: ["users/alice"] },
+            "Finance Ops": { enabled: false, users: ["users/bob"] },
           },
-        } as never,
-        core: createCore() as never,
+        }),
         space: { name: "spaces/BBB", displayName: "Finance Ops" } as never,
         rawBody: "show quarter close status",
         logVerbose,

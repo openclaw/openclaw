@@ -1,4 +1,3 @@
-// Google Chat tests cover monitor lifecycle status publication.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   clearRuntimeConfigSnapshot,
@@ -61,6 +60,22 @@ const configuredAccount = {
   },
 };
 
+function start(
+  accountConfig: typeof configuredAccount.config & {
+    typingIndicator?: "none";
+  } = configuredAccount.config,
+  overrides: Partial<Parameters<typeof startGoogleChatMonitor>[0]> = {},
+) {
+  return startGoogleChatMonitor({
+    account: { ...configuredAccount, config: accountConfig },
+    config: {},
+    runtime: {},
+    abortSignal: new AbortController().signal,
+    webhookPath: "/googlechat",
+    ...overrides,
+  } as never);
+}
+
 describe("Google Chat monitor lifecycle", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -74,15 +89,10 @@ describe("Google Chat monitor lifecycle", () => {
   it("follows runtime config reloads without replacing the webhook target", async () => {
     const startup = { messages: { visibleReplies: "message_tool" as const } };
     setRuntimeConfigSnapshot(startup);
-    const stop = await startGoogleChatMonitor({
-      account: {
-        ...configuredAccount,
-        config: { ...configuredAccount.config, typingIndicator: "none" },
-      },
-      config: startup,
-      runtime: {},
-      abortSignal: new AbortController().signal,
-    } as never);
+    const stop = await start(
+      { ...configuredAccount.config, typingIndicator: "none" },
+      { config: startup },
+    );
     try {
       const target = mocks.registerTarget.mock.calls[0]![0];
       const { dispatch } = mocks.ingressFactory.mock.calls[0]![0];
@@ -115,14 +125,7 @@ describe("Google Chat monitor lifecycle", () => {
     const config = { audienceType: "app-url", audience: "https://chat.example.test/googlechat" };
     const statusSink = vi.fn();
 
-    const stop = await startGoogleChatMonitor({
-      account: { ...configuredAccount, config },
-      config: {},
-      runtime: {},
-      abortSignal: new AbortController().signal,
-      webhookPath: "/googlechat",
-      statusSink,
-    } as never);
+    const stop = await start(config, { statusSink });
 
     expect(mocks.registerTarget).toHaveBeenCalledOnce();
     expect(mocks.registerTarget).toHaveBeenCalledWith(expect.objectContaining(config));
@@ -153,14 +156,7 @@ describe("Google Chat monitor lifecycle", () => {
     const statusSink = vi.fn();
     const runtime = { error: vi.fn() };
 
-    const stop = await startGoogleChatMonitor({
-      account: { ...configuredAccount, config },
-      config: {},
-      runtime,
-      abortSignal: new AbortController().signal,
-      webhookPath: "/googlechat",
-      statusSink,
-    } as never);
+    const stop = await start(config, { runtime, statusSink });
 
     expect(mocks.ingressStart).not.toHaveBeenCalled();
     expect(mocks.registerTarget).not.toHaveBeenCalled();
@@ -185,16 +181,9 @@ describe("Google Chat monitor lifecycle", () => {
       throw new Error("Google Chat route conflict");
     });
 
-    await expect(
-      startGoogleChatMonitor({
-        account: configuredAccount,
-        config: {},
-        runtime: {},
-        abortSignal: new AbortController().signal,
-        webhookPath: "/googlechat",
-        statusSink,
-      } as never),
-    ).rejects.toThrow("Google Chat route conflict");
+    await expect(start(configuredAccount.config, { statusSink })).rejects.toThrow(
+      "Google Chat route conflict",
+    );
 
     expect(mocks.ingressStart).toHaveBeenCalledOnce();
     expect(mocks.ingressStop).toHaveBeenCalledOnce();

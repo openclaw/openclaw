@@ -38,16 +38,8 @@ vi.mock("openclaw/plugin-sdk/routing", async (importOriginal) => ({
   resolveAgentRoute: inboundMocks.resolveAgentRoute,
 }));
 
-vi.mock("./api.js", () => ({
-  deleteGoogleChatMessage: apiMocks.deleteGoogleChatMessage,
-  downloadGoogleChatMedia: apiMocks.downloadGoogleChatMedia,
-  sendGoogleChatMessage: apiMocks.sendGoogleChatMessage,
-  updateGoogleChatMessage: apiMocks.updateGoogleChatMessage,
-}));
-
-vi.mock("./monitor-access.js", () => ({
-  applyGoogleChatInboundAccessPolicy: accessMocks.applyGoogleChatInboundAccessPolicy,
-}));
+vi.mock("./api.js", () => apiMocks);
+vi.mock("./monitor-access.js", () => accessMocks);
 
 vi.mock("./monitor-routing.js", () => ({
   registerGoogleChatWebhookTarget: vi.fn(),
