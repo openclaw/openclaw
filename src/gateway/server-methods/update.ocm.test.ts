@@ -350,7 +350,7 @@ it.each([true, false])(
   },
 );
 
-it.each(["authority", "browser-authority", "scope", "git-target"])(
+it.each(["authority", "browser-authority", "scope", "git-target", "package-target"])(
   "refuses an invalid %s before submitting to OCM",
   async (refusal) => {
     await withManager(async ({ capability, job }) => {
@@ -372,12 +372,15 @@ it.each(["authority", "browser-authority", "scope", "git-target"])(
       if (refusal === "scope") {
         capability.envName = "another-env";
       }
+      const respond = vi.fn();
       const start = () =>
         invokeUpdateRun(
           refusal === "git-target"
             ? { target: { kind: "git", upstreamRef: "origin/main", upstreamSha: "a".repeat(40) } }
-            : {},
-          undefined,
+            : refusal === "package-target"
+              ? { target: { kind: "package", version: "2026.9.5" } }
+              : {},
+          respond,
           undefined,
           {},
           {
@@ -390,8 +393,16 @@ it.each(["authority", "browser-authority", "scope", "git-target"])(
                 : undefined,
           },
         );
-      if (refusal === "git-target") {
+      if (refusal === "git-target" || refusal === "package-target") {
         await start();
+        expect(respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            code: "INVALID_REQUEST",
+            message: "This OCM version does not support an explicit update target.",
+          }),
+        );
       } else if (refusal === "browser-authority") {
         await expect(start()).rejects.toThrow("Gateway requester authority changed");
       } else {
