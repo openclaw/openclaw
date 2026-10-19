@@ -2,6 +2,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
+import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
@@ -16,6 +17,7 @@ import {
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import type { ChatState } from "../pages/chat/chat-state-contract.ts";
+import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
 import { pairControlUiPage } from "../test-helpers/control-ui-browser-pairing.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
@@ -482,40 +484,6 @@ suite.define(() => {
                   )
                   .toEqual([true, true]);
               };
-              await assertDecoded();
-              // The terminal session recap arrives independently of final text and image decode.
-              // It adds height beside the bubble, so admit it before freezing live ancestry.
-              await page
-                .locator(".chat-group.assistant")
-                .filter({ hasText: intro })
-                .locator(".chat-turn-recap")
-                .waitFor({ state: "visible" });
-              const diagnostic = await observeManagedMediaCapture(page, bubble, intro, "live");
-              let liveOrder: string[];
-              try {
-                // Capture before the order assertion so an unfixed run retains the actual flattening.
-                // Running this unchanged scenario on the repaired build yields the comparable After.
-                await capture(page, bubble, "01-live", diagnostic);
-                // History reconciliation can replace decoded images across the screenshot await.
-                liveOrder = await assertRenderedOrder(bubble);
-              } catch (error) {
-                try {
-                  await diagnostic.report();
-                } catch (captureError) {
-                  console.error(
-                    "[control-ui-e2e] managed image order diagnostics failed",
-                    captureError instanceof Error ? captureError.name : "UnknownError",
-                  );
-                }
-                throw error;
-              } finally {
-                await diagnostic.stop();
-              }
-              expect(await bubble.textContent()).not.toContain("MEDIA:");
-              expect(sends).toEqual([prompt]);
-              expect(provider.requests.filter((model) => model === "echo")).toHaveLength(1);
-              expect(provider.failures).toEqual([]);
-
               // Read persisted history through its real owner, never pre-seed ordered content.
               const history = asOptionalRecord(
                 JSON.parse(
@@ -565,6 +533,104 @@ suite.define(() => {
               expect(new Set(artifactIds).size).toBe(2);
               expect(JSON.stringify(assistants)).not.toContain("MEDIA:");
               expect(JSON.stringify(assistants)).not.toContain(instance.stateDir);
+
+              const assistantId = readSessionMessageIdentity(assistants[0])?.id ?? null;
+              const sessionId =
+                asOptionalRecord(history?.sessionInfo)?.sessionId ?? history?.sessionId;
+              const cursor = history?.deltaCursor;
+              expect(assistantId).toBeTypeOf("string");
+              expect(sessionId).toBeTypeOf("string");
+              expect(cursor).toBeTypeOf("string");
+              // Live previews may decode before history adopts their canonical sources.
+              await expect
+                .poll(async () => {
+                  const adopted = await page
+                    .locator(".chat-pane-cache__pane--active")
+                    .evaluate((element, expectedAssistantId) => {
+                      const state = (element as HTMLElement & { state: ChatPageHost }).state;
+                      const message = state.chatMessages.find((value) => {
+                        if (!value || typeof value !== "object" || !("__openclaw" in value)) {
+                          return false;
+                        }
+                        const identity = value["__openclaw"];
+                        return (
+                          identity &&
+                          typeof identity === "object" &&
+                          "id" in identity &&
+                          identity.id === expectedAssistantId
+                        );
+                      });
+                      return {
+                        sessionKey: state.sessionKey,
+                        sessionId: state.currentSessionId,
+                        loading: state.chatLoading,
+                        cursor: state.chatHistoryCursor,
+                        message,
+                        rendered: Array.from(
+                          element.querySelectorAll(".chat-group.assistant .chat-bubble"),
+                        ).some(
+                          (renderedBubble) =>
+                            renderedBubble.getAttribute("data-entry-id") === expectedAssistantId,
+                        ),
+                      };
+                    }, assistantId);
+                  const adoptedContent = asOptionalRecord(adopted.message)?.content;
+                  return {
+                    sessionKey: adopted.sessionKey,
+                    sessionId: adopted.sessionId,
+                    loading: adopted.loading,
+                    cursor: adopted.cursor?.cursor,
+                    cursorSessionId: adopted.cursor?.sessionId,
+                    rendered: adopted.rendered,
+                    images: Array.isArray(adoptedContent)
+                      ? adoptedContent
+                          .map(asOptionalRecord)
+                          .filter((block) => block?.type === "image")
+                      : [],
+                  };
+                })
+                .toEqual({
+                  sessionKey,
+                  sessionId,
+                  loading: false,
+                  cursor,
+                  cursorSessionId: sessionId,
+                  rendered: true,
+                  images,
+                });
+              await assertDecoded();
+              // The terminal session recap arrives independently of final text and image decode.
+              // It adds height beside the bubble, so admit it before freezing live ancestry.
+              await page
+                .locator(".chat-group.assistant")
+                .filter({ hasText: intro })
+                .locator(".chat-turn-recap")
+                .waitFor({ state: "visible" });
+              const diagnostic = await observeManagedMediaCapture(page, bubble, intro, "live");
+              let liveOrder: string[];
+              try {
+                // Capture before the order assertion so an unfixed run retains the actual flattening.
+                // Running this unchanged scenario on the repaired build yields the comparable After.
+                await capture(page, bubble, "01-live", diagnostic);
+                // History reconciliation can replace decoded images across the screenshot await.
+                liveOrder = await assertRenderedOrder(bubble);
+              } catch (error) {
+                try {
+                  await diagnostic.report();
+                } catch (captureError) {
+                  console.error(
+                    "[control-ui-e2e] managed image order diagnostics failed",
+                    captureError instanceof Error ? captureError.name : "UnknownError",
+                  );
+                }
+                throw error;
+              } finally {
+                await diagnostic.stop();
+              }
+              expect(await bubble.textContent()).not.toContain("MEDIA:");
+              expect(sends).toEqual([prompt]);
+              expect(provider.requests.filter((model) => model === "echo")).toHaveLength(1);
+              expect(provider.failures).toEqual([]);
 
               await page.reload();
               await waitForControlUiGatewayReady(page);
