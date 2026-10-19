@@ -200,6 +200,8 @@ export function fixture(params: {
   devices?: { kind: string; label: string; deviceId: string }[];
   /** Adds a microphone permission query and runs this inside its await. */
   onPermissionQuery?: () => void;
+  /** State the microphone permission query reports; defaults to granted. */
+  microphonePermission?: "granted" | "denied" | "prompt";
 }) {
   const window =
     params.window ??
@@ -227,12 +229,12 @@ export function fixture(params: {
       throw new Error("audio capture passed ownership");
     },
     navigator: {
-      ...(params.onPermissionQuery
+      ...(params.onPermissionQuery || params.microphonePermission
         ? {
             permissions: {
               query: async () => {
                 params.onPermissionQuery?.();
-                return { state: "granted" };
+                return { state: params.microphonePermission ?? "granted" };
               },
             },
           }

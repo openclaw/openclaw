@@ -2,19 +2,68 @@ import type { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime
 
 // Slack updates the channel header shortly after a Join click; until then the new call cannot be proven.
 export const SLACK_HUDDLE_JOIN_SETTLE_MS = 30_000;
+// Slack's link prompt can briefly read idle while it loads the huddle state.
+const SLACK_HUDDLE_IDLE_PROMPT_SETTLE_MS = 3_000;
 
 export const slackHuddleStatusPrelude: Parameters<
   typeof MeetingPlatformAdapter.createPageScripts
 >[0]["statusPrelude"] = {
+  // Slack renders the huddle preview and in-call controls into an unnamed about:blank window opened
+  // from this tab. Only the handle window.open returns reaches it, so every status pass keeps the hook
+  // in place before any click that may open the window. Membership stays proven by this tab's header.
+  setupSource: `if (typeof window.open === "function" && !window.open.__openclawSlackHuddleCallWindow) {
+    const open = window.open;
+    const tracked = function (...args) {
+      const opened = open.apply(this, args);
+      if (opened && String(args[0] ?? "") === "about:blank") window.__openclawSlackHuddleCallWindow = opened;
+      return opened;
+    };
+    tracked.__openclawSlackHuddleCallWindow = true;
+    window.open = tracked;
+  }
+  const slackHuddleCallDocument = () => {
+    try {
+      const opened = window.__openclawSlackHuddleCallWindow;
+      // Slack points the window at its huddle's channel; a window for any other huddle is never used.
+      // A window that navigated cross-origin throws here and is ignored.
+      return opened && !opened.closed && expectedIdentity &&
+        meetingIdentity(opened.location.href) === expectedIdentity ? opened.document : undefined;
+    } catch {
+      return undefined;
+    }
+  };`,
+  controlDocumentsSource: "[slackHuddleCallDocument(), document].filter(Boolean)",
   controlLookupSource: `const findTextButton = (root, pattern) => [...(root?.querySelectorAll("button") || [])]
     .find((button) => !button.disabled && pattern.test(text(button)));
-  const unavailable = (node) => !node || node.disabled || node.getAttribute?.("aria-disabled") === "true";`,
-  lifecycleSource: `const continueInBrowser = undefined;
+  const unavailable = (node) => !node || node.disabled || node.getAttribute?.("aria-disabled") === "true";
+  // The huddle window's preview button is labeled "Join" only by aria-label; the in-tab preview says "Join Huddle".
+  const joinLabel = /^join(?: huddle)?$/i;
+  const joinText = (node) => text(node) || node?.getAttribute?.("aria-label") || "";`,
+  lifecycleSource: `// Slack's desktop-app launcher links to the web client; follow it only to the requested huddle.
+  const continueInBrowser = [...document.querySelectorAll(selectors.continueInBrowser.join(","))]
+    .find((link) => expectedIdentity && meetingIdentity(link.getAttribute?.("href") || "") === expectedIdentity);
+  if (canMutateSession && continueInBrowser) {
+    continueInBrowser.click();
+    notes.push("Continued from Slack's desktop-app page to the web client.");
+    await waitForUi();
+  }
   const preview = firstRaw(selectors.preview);
-  const join = first(selectors.join) || findTextButton(preview, /^join huddle$/i);
+  const join = first(selectors.join) || findTextButton(preview, joinLabel);
+  const linkJoinPrompt = firstRaw(selectors.linkJoinPrompt);
+  const linkJoin = firstWithin(linkJoinPrompt, selectors.linkJoin);
+  const linkHuddleIdle = /no one is in the huddle/i.test(text(linkJoinPrompt));
+  // Slack can draw the link prompt before it loads the huddle's state, so an idle reading counts only
+  // once that same prompt has stayed idle across passes for a few seconds.
+  const idlePrompt = window.__openclawSlackHuddleIdlePrompt;
+  const idlePromptSince = linkHuddleIdle && idlePrompt?.prompt === linkJoinPrompt ? idlePrompt.since : Date.now();
+  if (canMutateSession) {
+    if (linkHuddleIdle) window.__openclawSlackHuddleIdlePrompt = { prompt: linkJoinPrompt, since: idlePromptSince };
+    else delete window.__openclawSlackHuddleIdlePrompt;
+  }
+  const linkHuddleIdleSettled = linkHuddleIdle && Date.now() - idlePromptSince >= ${SLACK_HUDDLE_IDLE_PROMPT_SETTLE_MS};
   const leave = first(selectors.leave);
   const inCallControl = leave || firstRaw(selectors.inCall);
-  const huddleSurfaces = selectors.huddleSurfaces.flatMap((selector) => [...document.querySelectorAll(selector)])
+  const huddleSurfaces = controlQueryAll(selectors.huddleSurfaces)
     .filter((node) => node.isConnected !== false && !node.hidden && node.getAttribute?.("hidden") === null &&
       node.getAttribute?.("aria-hidden") !== "true" && node.getClientRects?.().length !== 0);
   const huddleText = huddleSurfaces.map(text).join(" ");
@@ -91,15 +140,22 @@ export const slackHuddleStatusPrelude: Parameters<
     delete window.__openclawSlackHuddle;
   }
   const currentMicrophone = () => preview ? first(selectors.previewMicrophone) : first(selectors.microphone);
+  // Read below, after the marker is written; until then a disabled preview microphone counts as on.
+  let microphonePermissionState;
+  const previewMicrophoneDisabled = () =>
+    Boolean(preview) && currentMicrophone()?.getAttribute?.("aria-disabled") === "true";
   const readMicrophone = () => {
     const current = currentMicrophone();
+    // Slack disables the preview microphone while Chrome withholds microphone access; only then is a
+    // disabled switch that reads on unable to send audio.
+    if (previewMicrophoneDisabled() && microphonePermissionState && microphonePermissionState !== "granted") return "off";
     return toggleState(current, "microphone") || (!preview && (
       firstWithin(current, selectors.mutedIcon) ? "off" :
       firstWithin(current, selectors.unmutedIcon) ? "on" : undefined
     ));
   };
   let microphoneState = identityVerified ? readMicrophone() : undefined;
-  const camera = document.querySelector('button[role="switch"][aria-label="Camera"]');
+  const camera = firstRaw(['button[role="switch"][aria-label="Camera"]']);
   let cameraState = identityVerified ? (toggleState(camera, "camera") || (!camera ? "off" : undefined)) : undefined;
   const { isVirtualAudioDevice, selectedMicrophoneLabel } = meetingAudioInput;
   let audioInputRouted;
@@ -113,8 +169,7 @@ export const slackHuddleStatusPrelude: Parameters<
   const hostname = location.hostname.toLowerCase();
   const loginPage = (hostname === "slack.com" || /^[a-z0-9-]+\\.slack\\.com$/.test(hostname)) &&
     /^\\/(?:signin|workspace-signin|get-started|check-login|ssb\\/signin)(?:\\/|$)/i.test(location.pathname);
-  let microphonePermissionState;
-  if (allowMicrophone && navigator.permissions?.query) {
+  if ((allowMicrophone || previewMicrophoneDisabled()) && navigator.permissions?.query) {
     try { microphonePermissionState = (await navigator.permissions.query({ name: "microphone" })).state; }
     catch { /* Unsupported permission queries leave permission state unknown. */ }
   }
@@ -130,15 +185,16 @@ export const slackHuddleStatusPrelude: Parameters<
     manualAction = manualActionFor("slack-confirmation-required", "Complete the Slack confirmation, then retry: " + text(confirmation));
   } else if (!inCall && lobbyWaiting) {
     manualAction = manualActionFor("slack-admission-required", "Request to join this huddle in Slack and wait for admission, then retry status.");
-  } else if (!inCall && join && /^start huddle$/i.test(text(join))) {
+  } else if (!inCall && ((join && /^start huddle$/i.test(text(join))) || (!preview && linkHuddleIdleSettled))) {
     manualAction = manualActionFor("slack-huddle-not-active", "No one is in this huddle yet. Start the huddle in Slack, then ask again.");
-  } else if ((allowMicrophone && (microphonePermissionState === "denied" || microphonePermissionState === "prompt")) ||
-    (!inCall && /allow (?:slack (?:to )?)?(?:access to |use (?:your )?)?(?:the |your )?microphone|microphone permission/i.test(huddleText))) {
+  // Observe-only joins never request the microphone, so Slack's permission banner cannot block them.
+  } else if (allowMicrophone && ((microphonePermissionState === "denied" || microphonePermissionState === "prompt") ||
+    (!inCall && /allow (?:slack (?:to )?)?(?:access to |use (?:your )?)?(?:the |your )?microphone|microphone permission/i.test(huddleText)))) {
     manualAction = manualActionFor("slack-permission-required", "Allow Slack microphone permission in the OpenClaw Chrome profile, then retry.");
   }
   // Toggle state can change during awaits (a person may mute or unmute), so each toggle re-reads the
   // live control right before clicking and only clicks when the live state differs from the target.
-  const currentCamera = () => document.querySelector('button[role="switch"][aria-label="Camera"]');
+  const currentCamera = () => firstRaw(['button[role="switch"][aria-label="Camera"]']);
   const setMicrophone = async (desired) => {
     const control = currentMicrophone();
     const live = readMicrophone();
@@ -170,7 +226,7 @@ export const slackHuddleStatusPrelude: Parameters<
     const audioSettings = first(selectors.deviceSettings);
     if (!unavailable(audioSettings) && act(audioSettings)) {
       await waitForUi();
-      const choice = selectors.audioDeviceOptions.flatMap((selector) => [...document.querySelectorAll(selector)])
+      const choice = controlQueryAll(selectors.audioDeviceOptions)
         .find((node) => isVirtualAudioDevice(text(node)) && !unavailable(node));
       const target = choice ? clickable(choice) : undefined;
       if (target && act(target)) {
@@ -180,7 +236,7 @@ export const slackHuddleStatusPrelude: Parameters<
       audioInputRouted = Boolean(audioInputDeviceLabel);
     }
   }
-  if (canMutateSession && identityVerified && !manualAction && (inCall || (autoJoin && join && /^join huddle$/i.test(text(join))))) {
+  if (canMutateSession && identityVerified && !manualAction && (inCall || (autoJoin && join && joinLabel.test(joinText(join))))) {
     // Always join muted: the Join transition itself can switch Slack's input. Unmute only in the call,
     // once membership is proven and Slack reports the virtual input, so a physical microphone never goes live.
     refreshAudioInput();
@@ -206,7 +262,7 @@ export const slackHuddleStatusPrelude: Parameters<
   }
   let clickedJoin = false;
   if (canMutateSession && identityVerified && autoJoin && !inCall && !manualAction && !authorityLost &&
-      !unavailable(join) && /^join huddle$/i.test(text(join))) {
+      !unavailable(join) && joinLabel.test(joinText(join))) {
     // Last-moment gate: earlier camera and microphone reads predate awaited work.
     if (!authorityHolds()) {
       authorityLost = true;
@@ -220,6 +276,18 @@ export const slackHuddleStatusPrelude: Parameters<
       join.click();
       clickedJoin = true;
       notes.push("Clicked Join Huddle for an active Slack huddle.");
+    }
+  }
+  // The link prompt only opens Slack's huddle window; the next pass joins muted from its preview.
+  if (canMutateSession && identityVerified && autoJoin && !inCall && !inCallControl && !preview && !manualAction &&
+      !authorityLost && !linkHuddleIdle && !unavailable(linkJoin) && joinLabel.test(text(linkJoin))) {
+    if (meetingIdentity(location.href) === expectedIdentity && markerOwned() &&
+        firstRaw(selectors.linkJoinPrompt) === linkJoinPrompt && !firstRaw(selectors.inCall) &&
+        !firstRaw(selectors.confirmation) && !firstRaw(selectors.multiDevice)) {
+      linkJoin.click();
+      notes.push("Opened Slack's huddle window from the huddle link prompt.");
+    } else {
+      authorityLost = true;
     }
   }
   // Everything reported after this point (captions, audio, metadata) reflects the huddle at return time.

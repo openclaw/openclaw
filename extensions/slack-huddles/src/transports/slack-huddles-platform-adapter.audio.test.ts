@@ -194,6 +194,21 @@ it("does not mute or route playback when membership ends during device enumerati
   expect(result.meetingTitle).toBeUndefined();
 });
 
+it.each([
+  { selected: "BlackHole 2ch", routed: true },
+  { selected: "OpenClaw Meeting Audio (Preferred)", routed: true },
+  { selected: "Built-in Microphone (Preferred)", routed: false },
+  { selected: "OpenClaw Meeting Audio (Virtual)", routed: false },
+])("routes Slack's selected $selected input: $routed", async ({ selected, routed }) => {
+  const { document } = inCall(undefined, true);
+  document.body.append(new PageNode("div", { id: "microphone-info" }, selected));
+  const result = await fixture({ document, joined: true }).status({
+    mode: "agent",
+    readOnly: true,
+  });
+  expect(result.audioInputRouted).toBe(routed);
+});
+
 it("does not mistake an available virtual microphone for Slack's selected input", async () => {
   const { document } = inCall(undefined, true);
   document.body.append(

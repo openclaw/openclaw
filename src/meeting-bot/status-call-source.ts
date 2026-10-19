@@ -594,7 +594,8 @@ ${withLiveOwnership("  }\n")}${
     if (!captionsFinalized && canMutateSession && inCall && !captionState.observerInstalled) {
       captionState.observerInstalled = true;
       captionState.observer = new MutationObserver(scrapeCaptions);
-      captionState.observer.observe(document.body, {
+      // Captions may render in a call window listed by the platform's control documents.
+      captionState.observer.observe((firstRaw(selectors.captionContent)?.ownerDocument || document).body, {
         childList: true,
         subtree: true,
         characterData: true,

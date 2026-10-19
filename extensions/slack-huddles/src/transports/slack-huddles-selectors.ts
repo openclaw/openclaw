@@ -1,7 +1,19 @@
-// Slack web-client hooks verified 2026-09-26. Text and aria fallbacks assume English.
+// Slack web-client hooks verified 2026-09-26; the desktop-app launcher, link prompt, and huddle
+// window verified 2026-10-19. Text and aria fallbacks assume English.
 export const SLACK_HUDDLE_SELECTORS = {
-  preview: ['[data-qa="huddle_join_preview_modal"]'],
-  join: ['[data-qa="huddle_join_preview_modal_go"]'],
+  continueInBrowser: ['a[data-qa="ssb_redirect_open_in_browser"]'],
+  // A huddle link opens this prompt; its Join opens Slack's huddle window, which holds the preview.
+  linkJoinPrompt: ['[data-qa="huddle_from_link_speed_bump_modal_default"]'],
+  linkJoin: ['[data-qa="huddle_from_link_speed_bump_modal_default_go"]'],
+  // The huddle window's preview has no hooked container; its Join button marks the preview surface.
+  preview: [
+    '[data-qa="huddle_join_preview_modal"]',
+    '[data-qa="huddle_invite_window_with_preview_content_join_button"]',
+  ],
+  join: [
+    '[data-qa="huddle_join_preview_modal_go"]',
+    '[data-qa="huddle_invite_window_with_preview_content_join_button"]',
+  ],
   confirmation: ['[data-qa="huddle_join_modal"]', '[data-qa="huddle_in_thread_speed_bump_modal"]'],
   multiDevice: [
     '[data-qa="huddle_multi_device_modal_switch_device"]',
