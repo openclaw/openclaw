@@ -1,5 +1,5 @@
-import assert from "node:assert/strict";
 import { ComponentType, MessageFlags, StickerFormatType } from "discord-api-types/v10";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { ChannelType, DiscordError, type Client } from "../internal/discord.js";
 import { getCachedThreadStarter, setCachedThreadStarter } from "./threading.cache.js";
@@ -41,9 +41,8 @@ function createDiscordError(status: number): DiscordError {
   return new DiscordError(new Response(null, { status }), {});
 }
 
-function requireCachedThreadStarter(value: ReturnType<typeof getCachedThreadStarter>) {
-  assert(value?.kind === "hit", "expected cached Discord thread starter");
-  return value.starter;
+function cacheStarter(key: string, text: string, now: number) {
+  setCachedThreadStarter(key, { kind: "hit", starter: { text, author: "Alice" } }, now);
 }
 
 async function resolveStarter(
@@ -96,11 +95,7 @@ describe("resolveDiscordThreadStarter", () => {
 
   it("invalidates cached thread starters after a clock rollback", () => {
     const key = `expired-thread-${++threadIdIndex}`;
-    setCachedThreadStarter(
-      key,
-      { kind: "hit", starter: { text: "stale", author: "Alice" } },
-      1_000_000,
-    );
+    cacheStarter(key, "stale", 1_000_000);
 
     expect(getCachedThreadStarter(key, 999_999)).toBeUndefined();
   });
@@ -108,29 +103,24 @@ describe("resolveDiscordThreadStarter", () => {
   it("retains recently used thread starters when the 500-entry cache reaches capacity", () => {
     const prefix = `lru-thread-${++threadIdIndex}-`;
     for (let index = 0; index < 500; index += 1) {
-      setCachedThreadStarter(
-        `${prefix}${index}`,
-        { kind: "hit", starter: { text: `starter-${index}`, author: "Alice" } },
-        1_000_000,
-      );
+      cacheStarter(`${prefix}${index}`, `starter-${index}`, 1_000_000);
     }
 
-    expect(requireCachedThreadStarter(getCachedThreadStarter(`${prefix}0`, 1_000_001)).text).toBe(
-      "starter-0",
-    );
-    setCachedThreadStarter(
-      `${prefix}500`,
-      { kind: "hit", starter: { text: "new starter", author: "Alice" } },
-      1_000_002,
-    );
+    expect(getCachedThreadStarter(`${prefix}0`, 1_000_001)).toMatchObject({
+      kind: "hit",
+      starter: { text: "starter-0" },
+    });
+    cacheStarter(`${prefix}500`, "new starter", 1_000_002);
 
-    expect(requireCachedThreadStarter(getCachedThreadStarter(`${prefix}0`, 1_000_003)).text).toBe(
-      "starter-0",
-    );
+    expect(getCachedThreadStarter(`${prefix}0`, 1_000_003)).toMatchObject({
+      kind: "hit",
+      starter: { text: "starter-0" },
+    });
     expect(getCachedThreadStarter(`${prefix}1`, 1_000_003)).toBeUndefined();
-    expect(requireCachedThreadStarter(getCachedThreadStarter(`${prefix}500`, 1_000_003)).text).toBe(
-      "new starter",
-    );
+    expect(getCachedThreadStarter(`${prefix}500`, 1_000_003)).toMatchObject({
+      kind: "hit",
+      starter: { text: "new starter" },
+    });
   });
 
   it("negative-caches an inaccessible starter for 30 seconds", async () => {
@@ -154,18 +144,15 @@ describe("resolveDiscordThreadStarter", () => {
   });
 
   it("coalesces concurrent starter lookups for the same account and thread", async () => {
-    let releaseGet!: (message: ThreadStarterRestMessage | null) => void;
-    const response = new Promise<ThreadStarterRestMessage | null>((resolve) => {
-      releaseGet = resolve;
-    });
-    const get = vi.fn(() => response);
+    const response = createDeferred<ThreadStarterRestMessage | null>();
+    const get = vi.fn(() => response.promise);
     const params = starterLookup(get);
 
     const first = resolveDiscordThreadStarter(params);
     const second = resolveDiscordThreadStarter(params);
     expect(get).toHaveBeenCalledOnce();
 
-    releaseGet(null);
+    response.resolve(null);
     await expect(Promise.all([first, second])).resolves.toEqual([null, null]);
     expect(get).toHaveBeenCalledOnce();
   });

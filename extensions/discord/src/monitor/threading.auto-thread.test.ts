@@ -93,29 +93,20 @@ describe("maybeCreateDiscordAutoThread", () => {
     expect(postMock).not.toHaveBeenCalled();
   });
 
-  it("reuses an existing message thread before skipping bot-authored messages", async () => {
-    getMock.mockResolvedValueOnce({ thread: { id: "existing-thread" } });
-    const result = await maybeCreateDiscordAutoThread(
-      createBaseParams({
-        message: createMockMessage({ author: { bot: true } }),
-      }),
-    );
+  it.each(["existing-thread", undefined])(
+    "handles bot-authored messages with thread %s",
+    async (threadId) => {
+      getMock.mockResolvedValueOnce(threadId ? { thread: { id: threadId } } : {});
+      const result = await maybeCreateDiscordAutoThread(
+        createBaseParams({
+          message: createMockMessage({ author: { bot: true } }),
+        }),
+      );
 
-    expect(result).toBe("existing-thread");
-    expect(postMock).not.toHaveBeenCalled();
-  });
-
-  it("skips creating new auto-threads for bot-authored messages", async () => {
-    getMock.mockResolvedValueOnce({});
-    const result = await maybeCreateDiscordAutoThread(
-      createBaseParams({
-        message: createMockMessage({ author: { bot: true } }),
-      }),
-    );
-
-    expect(result).toBeUndefined();
-    expect(postMock).not.toHaveBeenCalled();
-  });
+      expect(result).toBe(threadId);
+      expect(postMock).not.toHaveBeenCalled();
+    },
+  );
   it("uses configured autoArchiveDuration", async () => {
     mockThreadCreation();
     await maybeCreateDiscordAutoThread(
@@ -172,13 +163,7 @@ describe("maybeCreateDiscordAutoThread", () => {
 
     const cfg = {
       ...generatedParams().cfg,
-      channels: {
-        modelByChannel: {
-          discord: {
-            thread1: "openai/gpt-4.1-mini",
-          },
-        },
-      },
+      channels: { modelByChannel: { discord: { thread1: "openai/gpt-4.1-mini" } } },
     } satisfies OpenClawConfig;
     await maybeCreateDiscordAutoThread(generatedParams({ cfg }));
 
