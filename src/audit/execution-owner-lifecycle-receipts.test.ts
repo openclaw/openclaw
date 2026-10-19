@@ -116,6 +116,10 @@ function createCronDatabase(retainedBinding = true) {
   return { path: pathname };
 }
 
+function openCronDatabase() {
+  return openOpenClawStateDatabase(createCronDatabase()).db;
+}
+
 function executionContext(contextId = "context-1"): ExecutionIdentityContextV1 {
   return {
     schemaVersion: 1,
@@ -172,7 +176,7 @@ describe("owner-native execution lifecycle receipts", () => {
     }
   });
 
-  it("reads an unbound released cron receipt without allocating opt-in storage", async () => {
+  it("reads an unbound released cron receipt without allocating opt-in storage", () => {
     const options = createCronDatabase(false);
     const current = openOpenClawStateDatabase(options).db;
     expect(tableExists(current, "execution_owner_lifecycle_bindings")).toBe(false);
@@ -181,9 +185,6 @@ describe("owner-native execution lifecycle receipts", () => {
     const unboundSchema = { cronRunReceipts: true, executionOwnerLifecycleBindings: false };
     expect(page(current, unboundSchema).entries).toEqual([]);
     expect(tableExists(current, "execution_owner_lifecycle_bindings")).toBe(false);
-
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
   });
 
   it("preserves released cron binding metadata and its terminal receipt on reopen", async () => {
@@ -221,24 +222,21 @@ describe("owner-native execution lifecycle receipts", () => {
   });
 
   it("uses stable cron cursors and rejects a mismatched exact execution", async () => {
-    const options = createCronDatabase();
-    const db = openOpenClawStateDatabase(options).db;
+    const db = openCronDatabase();
     db.prepare("UPDATE cron_run_receipts SET status = 'ok', finished_at_ms = 70").run();
     addCron(db, "cron-2", 60, "skipped", 70);
     db.exec("UPDATE cron_run_receipts SET rowid = 100 WHERE receipt_id = 'cron-1'");
     bindCron(db, "cron-2", "execution-other");
-    const context = executionContext();
-
-    const first = present(db, undefined, context);
+    const first = present(db);
     expect(first.nextDecisionCursor).toBe("a:0:0");
-    const cronPage = present(db, first.nextDecisionCursor, context);
+    const cronPage = present(db, first.nextDecisionCursor);
     expect(cronPage.decisions[0]?.source.owner).toBe("cron_run_receipts");
     expect(cronPage.decisionDisplays[0]).toMatchObject({
       decision: { outcome: "not-applicable", reasonCode: "cron_run_ok" },
       provenance: { state: "verified", producer: "cron-lifecycle" },
     });
     expect(cronPage.nextDecisionCursor).toBe("c:60:1");
-    const mismatchPage = present(db, cronPage.nextDecisionCursor, context);
+    const mismatchPage = present(db, cronPage.nextDecisionCursor);
     expect(mismatchPage.decisions[0]).toMatchObject({
       decision: { outcome: "unknown", reasonCode: "cron_run_execution_link_mismatch" },
       missingEvidence: ["decision.execution_link"],
@@ -248,38 +246,26 @@ describe("owner-native execution lifecycle receipts", () => {
       /cron-1|private|cron_run_receipts/,
     );
 
-    expect(present(db, "1", context).decisions[0]?.source.owner).toBe("cron_run_receipts");
+    expect(present(db, "1").decisions[0]?.source.owner).toBe("cron_run_receipts");
   });
 
-  it("rejects a nonzero cron cursor after its exact owner anchor is deleted", () => {
-    const options = createCronDatabase();
-    const db = openOpenClawStateDatabase(options).db;
+  it.each(["deleted", "other-context"] as const)("rejects the %s owner cursor", (invalid) => {
+    const db = openCronDatabase();
     addSuccessor(db);
     const firstPage = present(db, "c:0:0");
     expect(firstPage.nextDecisionCursor).toMatch(/^c:[1-9]\d*:[1-9]\d*$/);
 
-    deleteAnchor(db);
-
-    expect(() => present(db, firstPage.nextDecisionCursor)).toThrow(
+    if (invalid === "deleted") {
+      deleteAnchor(db);
+    }
+    const context = invalid === "other-context" ? executionContext("context-other") : undefined;
+    expect(() => present(db, firstPage.nextDecisionCursor, context)).toThrow(
       "decision cursor is no longer retained; restart inspection without --cursor",
     );
   });
 
-  it("rejects a nonzero owner cursor when its retained anchor belongs to another context", async () => {
-    const options = createCronDatabase();
-    const db = openOpenClawStateDatabase(options).db;
-    addSuccessor(db);
-    const firstPage = present(db, "c:0:0");
-    expect(firstPage.nextDecisionCursor).toMatch(/^c:[1-9]\d*:[1-9]\d*$/);
-
-    expect(() =>
-      present(db, firstPage.nextDecisionCursor, executionContext("context-other")),
-    ).toThrow("decision cursor is no longer retained; restart inspection without --cursor");
-  });
-
   it("rejects a reused owner cursor whose binding belongs to another execution", async () => {
-    const options = createCronDatabase();
-    const db = openOpenClawStateDatabase(options).db;
+    const db = openCronDatabase();
     db.prepare("DELETE FROM cron_run_receipts WHERE receipt_id = 'cron-1'").run();
     addCron(db, "cron-2", 63);
     addCron(db, "cron-1");
@@ -297,8 +283,7 @@ describe("owner-native execution lifecycle receipts", () => {
   });
 
   it("projects every cron terminal state without rederiving lifecycle precedence", async () => {
-    const options = createCronDatabase();
-    const db = openOpenClawStateDatabase(options).db;
+    const db = openCronDatabase();
 
     for (const status of ["ok", "error", "skipped", "interrupted", "superseded"]) {
       db.prepare(

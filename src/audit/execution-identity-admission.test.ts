@@ -10,9 +10,6 @@ import {
 } from "./execution-identity-admission.js";
 import { captureExecutionIdentityAdmissionEnvelope as captureEnvelope } from "./execution-identity.test-support.js";
 
-const ADMISSION_MAX_BYTES = 16 * 1024;
-const ADMISSION_MAX_ITEMS = 16;
-
 function defineObjectPrototypeProperty(key: string, descriptor: PropertyDescriptor): void {
   // oxlint-disable-next-line no-extend-native -- Exercise hostile prototype pollution at the admission boundary.
   Object.defineProperty(Object.prototype, key, descriptor);
@@ -74,34 +71,31 @@ function expectInvalidFacts(
 
 describe("execution identity admission envelope", () => {
   it("captures a deterministic, deeply frozen, redacted envelope with fixed identity", () => {
+    const evidence = [
+      ["runtime-binding", "z"],
+      ["local-process", "a"],
+    ] as const;
+    const representedSubject = {
+      state: "present" as const,
+      kind: "person" as const,
+      rawPrincipalRef: "selected-person",
+    };
     const envelope = captureEnvelope(
       facts({
         invoker: {
           ...presentInvoker(),
           displayLabel: "Operator OPENAI_API_KEY=sk-1234567890abcdef",
         },
-        representedSubject: {
-          state: "present",
-          kind: "person",
-          rawPrincipalRef: "selected-person",
-        },
-        applicableGrants: [
-          { rawGrantRef: "é", state: "present" },
-          { rawGrantRef: "z", state: "present" },
-          { rawGrantRef: "é", state: "present" },
-        ],
-        assurance: [
-          {
-            kind: "runtime-binding",
-            rawEvidenceRef: "z",
-            strength: "boundary-verified",
-          },
-          {
-            kind: "local-process",
-            rawEvidenceRef: "a",
-            strength: "boundary-verified",
-          },
-        ],
+        representedSubject,
+        applicableGrants: ["é", "z", "é"].map((rawGrantRef) => ({
+          rawGrantRef,
+          state: "present" as const,
+        })),
+        assurance: evidence.map(([kind, rawEvidenceRef]) => ({
+          kind,
+          rawEvidenceRef,
+          strength: "boundary-verified" as const,
+        })),
       }),
       {
         contextId: "context-1",
@@ -124,24 +118,15 @@ describe("execution identity admission envelope", () => {
       { rawGrantRef: "z", state: "present" },
       { rawGrantRef: "é", state: "present" },
     ]);
-    expect(envelope.invoker?.state).toBe("present");
-    if (envelope.invoker?.state !== "present") {
-      throw new Error("expected present invoker");
-    }
-    expect(envelope.invoker.displayLabel).not.toContain("sk-1234567890abcdef");
+    expect(envelope.invoker).toMatchObject({ state: "present", displayLabel: expect.any(String) });
+    expect(JSON.stringify(envelope.invoker)).not.toContain("sk-1234567890abcdef");
     expect(Object.isFrozen(envelope)).toBe(true);
     expect(Object.isFrozen(envelope.ingress)).toBe(true);
-    expect(envelope.representedSubject).toEqual({
-      state: "present",
-      kind: "person",
-      rawPrincipalRef: "selected-person",
-    });
+    expect(envelope.representedSubject).toEqual(representedSubject);
     expect(Object.isFrozen(envelope.representedSubject)).toBe(true);
     expect(Object.isFrozen(envelope.assurance)).toBe(true);
     expect(parseEnvelope(structuredClone(envelope))).toEqual({ kind: "capture", envelope });
-    expect(Buffer.byteLength(JSON.stringify(envelope), "utf8")).toBeLessThanOrEqual(
-      ADMISSION_MAX_BYTES,
-    );
+    expect(Buffer.byteLength(JSON.stringify(envelope), "utf8")).toBeLessThanOrEqual(16 * 1024);
   });
 
   it("rejects inherited required run id before allocation and enqueue", () => {
@@ -216,29 +201,23 @@ describe("execution identity admission envelope", () => {
       },
     };
     Object.defineProperty(accessorEnvelope, "invoker", accessor);
-    const symbolEnvelope = { ...envelope, [Symbol("private")]: "raw-symbol-secret" };
-    const customPrototypeEnvelope = Object.assign(Object.create({ inherited: true }), envelope);
-    const undefinedEnvelope = {
-      ...envelope,
-      invoker: { state: "unknown", displayLabel: undefined },
-    };
-    const proxyEnvelope = new Proxy({ ...envelope }, {});
-    const customPrototypeFacts = Object.assign(Object.create({ inherited: true }), facts());
     const accessorFacts = facts();
     Object.defineProperty(accessorFacts, "invoker", accessor);
 
     for (const invalid of [
       accessorEnvelope,
-      symbolEnvelope,
-      customPrototypeEnvelope,
-      undefinedEnvelope,
-      proxyEnvelope,
+      { ...envelope, [Symbol("private")]: "raw-symbol-secret" },
+      Object.assign(Object.create({ inherited: true }), envelope),
+      { ...envelope, invoker: { state: "unknown", displayLabel: undefined } },
+      new Proxy({ ...envelope }, {}),
     ]) {
       expect(() => parseEnvelope(invalid)).toThrow(
         "execution identity admission data must be clone-safe plain data",
       );
     }
-    expect(() => captureEnvelope(customPrototypeFacts)).toThrow("expected admission envelope");
+    expect(() =>
+      captureEnvelope(Object.assign(Object.create({ inherited: true }), facts())),
+    ).toThrow("expected admission envelope");
     expect(() => captureEnvelope(accessorFacts)).toThrow("expected admission envelope");
     expect(accessorReads).toBe(0);
   });
@@ -268,7 +247,7 @@ describe("execution identity admission envelope", () => {
   it("rejects invalid owned facts, excess items, and oversized encoded envelopes", () => {
     expectInvalidFacts({ runId: "" });
     expectInvalidFacts({
-      applicableGrants: Array.from({ length: ADMISSION_MAX_ITEMS + 1 }, (_, index) => ({
+      applicableGrants: Array.from({ length: 16 + 1 }, (_, index) => ({
         rawGrantRef: `grant-${String(index)}`,
         state: "present" as const,
       })),

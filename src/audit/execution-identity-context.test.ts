@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
@@ -28,6 +28,10 @@ import {
 
 const RETENTION_MS = 30 * 24 * 60 * 60_000;
 
+let store: ReturnType<typeof createStore>;
+beforeEach(() => {
+  store = createStore();
+});
 afterEach(restartDatabase);
 
 async function restartDatabase() {
@@ -70,52 +74,30 @@ function facts(
 function createStore() {
   const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-identity-") } };
   const open = () => openOpenClawStateDatabase(options);
+  const writeOptions = () => ({ ...options, database: open() });
   return {
     options,
     open,
-    prepare(
+    prepare: (
       runId: string,
       admission: Parameters<typeof prepareContext>[1] = {},
       overrides: Partial<ExecutionIdentityAdmissionFacts> = {},
-    ) {
-      return prepareContext(facts(runId, overrides), {
-        ...options,
-        ...admission,
-      });
-    },
-    inspect(selector: Parameters<typeof inspectRun>[0], now?: number) {
-      return inspectRun(selector, { ...options, now });
-    },
-    process(work: Parameters<typeof processAdmission>[0], now?: number) {
-      return processAdmission(work, {
-        ...options,
-        database: open(),
-        now,
-      });
-    },
-    prune(now?: number) {
-      return pruneContexts({
-        database: { ...options, database: open() },
-        now,
-      });
-    },
+    ) => prepareContext(facts(runId, overrides), { ...options, ...admission }),
+    inspect: (selector: Parameters<typeof inspectRun>[0], now?: number) =>
+      inspectRun(selector, { ...options, now }),
+    process: (work: Parameters<typeof processAdmission>[0], now?: number) =>
+      processAdmission(work, { ...writeOptions(), now }),
+    prune: (now?: number) => pruneContexts({ database: writeOptions(), now }),
   };
 }
 
 describe("execution identity context storage", () => {
   it("replays one byte-identical canonical context idempotently across restart", async () => {
-    const database = createStore();
     const envelope = captureEnvelope(facts("run-1"), identity("1", 100, "runtime-secret-1"));
-    const first = persistEnvelope(envelope, {
-      ...database.options,
-      now: 100,
-    });
+    const first = persistEnvelope(envelope, { ...store.options, now: 100 });
 
     await restartDatabase();
-    const second = persistEnvelope(structuredClone(envelope), {
-      ...database.options,
-      now: 999,
-    });
+    const second = persistEnvelope(structuredClone(envelope), { ...store.options, now: 999 });
 
     expect(second).toEqual(first);
     expect(first.coverageState).toBe("unattributed");
@@ -125,58 +107,47 @@ describe("execution identity context storage", () => {
     expect(JSON.stringify(first)).not.toContain("runtime-secret-1");
 
     await restartDatabase();
-    const afterRestart = await database.inspect({ executionId: "execution-1" }, 999);
+    const afterRestart = await store.inspect({ executionId: "execution-1" }, 999);
     expect(afterRestart.identity).toEqual({ state: "present", context: first });
   });
 
-  it("keeps explicit unknown invoker evidence distinct from omission across restart", async () => {
-    const database = createStore();
-    const unknown = database.prepare("run-unknown", identity("unknown", 100, "runtime-unknown"), {
-      invoker: { state: "unknown" },
-    });
-    const absent = database.prepare("run-absent", identity("absent", 101, "runtime-absent"));
-
-    expect(unknown).toMatchObject({
-      invoker: { state: "unknown" },
-      coverageState: "unknown",
-      missingEvidence: ["invoker.principal"],
-    });
-    expect(unknown.invoker).not.toHaveProperty("principal");
-    expect(absent).toMatchObject({
-      invoker: { state: "absent" },
-      coverageState: "unattributed",
-      missingEvidence: ["invoker.principal"],
-    });
-
+  it.each([
+    ["unknown", "unknown", 100],
+    ["absent", "unattributed", 101],
+  ] as const)("preserves %s invoker evidence across restart", async (state, coverageState, now) => {
+    const context = store.prepare(
+      `run-${state}`,
+      identity(state, now, `runtime-${state}`),
+      state === "unknown" ? { invoker: { state } } : {},
+    );
+    const missingEvidence = ["invoker.principal"];
+    expect(context).toMatchObject({ invoker: { state }, coverageState, missingEvidence });
+    if (state === "unknown") {
+      expect(context.invoker).not.toHaveProperty("principal");
+    }
     await restartDatabase();
-    const unknownAfterRestart = await database.inspect({ executionId: "execution-unknown" }, 101);
-    expect(unknownAfterRestart.identity).toEqual({ state: "present", context: unknown });
-    expect(unknownAfterRestart.coverage).toEqual({
-      state: "unknown",
-      missingEvidence: ["invoker.principal"],
-    });
-    expect(unknownAfterRestart.decisions).toEqual([
-      expect.objectContaining({
-        enforcement: expect.objectContaining({ coverageState: "unknown" }),
-        missingEvidence: ["invoker.principal"],
-      }),
-    ]);
-    expect((await database.inspect({ executionId: "execution-absent" }, 101)).identity).toEqual({
-      state: "present",
-      context: absent,
-    });
+    const result = await store.inspect({ executionId: `execution-${state}` }, 101);
+    expect(result.identity).toEqual({ state: "present", context });
+    if (state === "unknown") {
+      expect(result.coverage).toEqual({ state: "unknown", missingEvidence });
+      expect(result.decisions).toEqual([
+        expect.objectContaining({
+          enforcement: expect.objectContaining({ coverageState: "unknown" }),
+          missingEvidence,
+        }),
+      ]);
+    }
   });
 
   it("keeps distinct turns sharing one run correlation exactly inspectable", async () => {
-    const database = createStore();
-    database.prepare("session-run", identity("first", 100));
-    database.prepare("session-run", identity("second", 101));
-    await recordDeniedApprovalForRun("session-run", database.options, "shared-run-approval", {
+    store.prepare("session-run", identity("first", 100));
+    store.prepare("session-run", identity("second", 101));
+    await recordDeniedApprovalForRun("session-run", store.options, "shared-run-approval", {
       contextId: "context-first",
       executionId: "execution-first",
     });
 
-    const discovery = await database.inspect({ runId: "session-run" }, 300);
+    const discovery = await store.inspect({ runId: "session-run" }, 300);
     expect(discovery).toMatchObject({
       run: { runId: "session-run", status: "known" },
       identity: {
@@ -194,14 +165,14 @@ describe("execution identity context storage", () => {
       [1, "execution-second", undefined],
     ] as const) {
       expect(
-        await database.inspect({ runId: "session-run", executionOffset, executionLimit: 1 }, 300),
+        await store.inspect({ runId: "session-run", executionOffset, executionLimit: 1 }, 300),
       ).toMatchObject({
         identity: { state: "ambiguous", candidates: [{ executionId }] },
         ...(nextExecutionCursor ? { nextExecutionCursor } : {}),
       });
     }
-    const firstInspection = await database.inspect({ executionId: "execution-first" }, 300);
-    const secondInspection = await database.inspect({ executionId: "execution-second" }, 300);
+    const firstInspection = await store.inspect({ executionId: "execution-first" }, 300);
+    const secondInspection = await store.inspect({ executionId: "execution-second" }, 300);
     expect(firstInspection).toMatchObject({
       identity: { state: "present", context: { contextId: "context-first" } },
       coverage: { state: "enforced" },
@@ -223,8 +194,8 @@ describe("execution identity context storage", () => {
         },
       ],
     });
-    database.prepare("session-run", identity("third", 102));
-    const nextPage = await database.inspect(
+    store.prepare("session-run", identity("third", 102));
+    const nextPage = await store.inspect(
       { runId: "session-run", executionOffset: 2, executionLimit: 1 },
       300,
     );
@@ -236,20 +207,15 @@ describe("execution identity context storage", () => {
   });
 
   it("confirms durable retries without manufacturing lost evidence", async () => {
-    const database = createStore();
     const envelope = captureEnvelope(
       facts("run-recovery"),
       identity("recovery", 100, "runtime-original"),
     );
-    const original = database.process({ kind: "capture", envelope }, 100);
-    const token = createExecutionIdentityAdmissionToken("run-recovery", {
-      now: 100,
-      contextId: "context-recovery",
-      executionId: "execution-recovery",
-    });
+    const original = store.process({ kind: "capture", envelope }, 100);
+    const token = createExecutionIdentityAdmissionToken("run-recovery", identity("recovery", 100));
 
     await restartDatabase();
-    expect(database.process({ kind: "retry-reference", token })).toEqual(original);
+    expect(store.process({ kind: "retry-reference", token })).toEqual(original);
 
     const missingDatabase = createStore();
     expect(() => missingDatabase.process({ kind: "retry-reference", token })).toThrow(
@@ -262,51 +228,31 @@ describe("execution identity context storage", () => {
     });
   });
 
-  it("projects authoritative local CLI and system ingress without conflating them", async () => {
-    const database = createStore();
-    database.prepare("run-local");
-    database.prepare(
-      "run-system",
-      {},
-      {
-        ingress: { kind: "system", boundary: "gateway.boot", state: "present" },
-      },
-    );
-
-    expect((await database.inspect({ runId: "run-local" })).identity).toMatchObject({
+  it.each([
+    ["local-cli", "agent-command.local"],
+    ["system", "gateway.boot"],
+  ] as const)("projects authoritative %s ingress", async (kind, boundary) => {
+    const ingress = { kind, boundary, state: "present" as const };
+    store.prepare("run", {}, kind === "system" ? { ingress } : {});
+    expect((await store.inspect({ runId: "run" })).identity).toMatchObject({
       state: "present",
-      context: {
-        ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
-      },
-    });
-    expect((await database.inspect({ runId: "run-system" })).identity).toMatchObject({
-      state: "present",
-      context: {
-        ingress: { kind: "system", boundary: "gateway.boot", state: "present" },
-      },
+      context: { ingress },
     });
   });
 
   it("keeps maintenance read-only until the first identity capture", () => {
-    const database = createStore();
-    const opened = database.open();
-    expect(
-      opened.db
-        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
-        .get("execution_identity_contexts"),
-    ).toBeUndefined();
-
-    expect(database.prune()).toBe(0);
-    expect(
-      opened.db
-        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
-        .get("execution_identity_contexts"),
-    ).toBeUndefined();
+    const table = () =>
+      store
+        .open()
+        .db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+        .get("execution_identity_contexts");
+    expect(table()).toBeUndefined();
+    expect(store.prune()).toBe(0);
+    expect(table()).toBeUndefined();
   });
 
   it("records attribution only when an invoker fact is actually present", () => {
-    const database = createStore();
-    const context = database.prepare(
+    const context = store.prepare(
       "run-attributed",
       { runtimeInstanceId: "private-runtime" },
       {
@@ -351,22 +297,20 @@ describe("execution identity context storage", () => {
   });
 
   it("keeps bounded retention maintenance available while collection is disabled", () => {
-    const database = createStore();
-    database.prepare("run-before-disable", { now: 0, runtimeInstanceId: "runtime-1" });
+    store.prepare("run-before-disable", { now: 0, runtimeInstanceId: "runtime-1" });
     expect(
       enqueueExecutionIdentityContextAtAdmission(facts("run-disabled"), { enabled: false }),
     ).toBeUndefined();
 
-    expect(database.prune(RETENTION_MS + 1)).toBe(1);
+    expect(store.prune(RETENTION_MS + 1)).toBe(1);
     expect(
-      database.open().db.prepare("SELECT COUNT(*) AS count FROM execution_identity_contexts").get(),
+      store.open().db.prepare("SELECT COUNT(*) AS count FROM execution_identity_contexts").get(),
     ).toEqual({ count: 0 });
   });
 
   it("rolls back the worker write when insert-time retention cleanup fails", () => {
-    const database = createStore();
-    database.prepare("run-expired", { now: 0, runtimeInstanceId: "runtime-1" });
-    database.open().db.exec(`
+    store.prepare("run-expired", { now: 0, runtimeInstanceId: "runtime-1" });
+    store.open().db.exec(`
       CREATE TRIGGER reject_identity_cleanup
       BEFORE DELETE ON execution_identity_contexts
       BEGIN
@@ -375,7 +319,7 @@ describe("execution identity context storage", () => {
     `);
 
     expect(() =>
-      database.prepare("run-still-admitted", {
+      store.prepare("run-still-admitted", {
         now: RETENTION_MS + 1,
         runtimeInstanceId: "runtime-1",
       }),
@@ -383,8 +327,7 @@ describe("execution identity context storage", () => {
   });
 
   it("enforces the row cap across independent database connections", () => {
-    const database = createStore();
-    const path = database.open().path;
+    const path = store.open().path;
     closeOpenClawStateDatabaseForTest();
     const first = openIndependentStateDatabase(path);
     const second = openIndependentStateDatabase(path);
@@ -411,9 +354,8 @@ describe("execution identity context storage", () => {
   });
 
   it("prunes oldest overflow across timestamp ties within the remaining expiry budget", () => {
-    const database = createStore();
     const add = (id: string, now: number, limits?: { maxRows: number; pruneBatchRows: number }) =>
-      database.prepare(`run-${id}`, {
+      store.prepare(`run-${id}`, {
         now,
         contextId: id,
         runtimeInstanceId: "runtime-1",
@@ -425,7 +367,7 @@ describe("execution identity context storage", () => {
       add(id, RETENTION_MS - 100);
     }
     const retained = () =>
-      database
+      store
         .open()
         .db.prepare(
           "SELECT context_id FROM execution_identity_contexts ORDER BY created_at, context_id",
@@ -441,22 +383,19 @@ describe("execution identity context storage", () => {
   });
 
   it("inspects through a read-only connection while another writer holds the database", async () => {
-    const database = createStore();
-    database.prepare("held-lock-inspection", identity("held-lock-inspection", 100));
-    const path = database.open().path;
+    store.prepare("locked", identity("locked", 100));
+    const path = store.open().path;
     await restartDatabase();
     const lockDatabase = openNodeSqliteDatabase(path);
     lockDatabase.exec("BEGIN IMMEDIATE");
     try {
-      expect(
-        await database.inspect({ executionId: "execution-held-lock-inspection" }, 100),
-      ).toMatchObject({
+      expect(await store.inspect({ executionId: "execution-locked" }, 100)).toMatchObject({
         identity: {
           state: "present",
           context: {
-            contextId: "context-held-lock-inspection",
-            executionId: "execution-held-lock-inspection",
-            runId: "held-lock-inspection",
+            contextId: "context-locked",
+            executionId: "execution-locked",
+            runId: "locked",
           },
         },
       });
@@ -466,54 +405,42 @@ describe("execution identity context storage", () => {
     }
   });
 
-  it("returns typed corrupt, unknown, and unsupported projections", async () => {
-    const corruptDatabase = createStore();
-    prepareContext(facts("run-corrupt"), {
-      ...corruptDatabase.options,
-      runtimeInstanceId: "runtime-1",
-    });
-    corruptDatabase
-      .open()
-      .db.prepare("UPDATE execution_identity_contexts SET context_json = ? WHERE run_id = ?")
-      .run("{", "run-corrupt");
-    expect(await corruptDatabase.inspect({ runId: "run-corrupt" })).toMatchObject({
-      run: { status: "known" },
-      identity: { state: "unknown", reasonCode: "identity_context_corrupt" },
-      coverage: { state: "unknown" },
-    });
-
-    const unknownDatabase = createStore();
-    expect(await unknownDatabase.inspect({ runId: "never-seen" })).toMatchObject({
-      run: { status: "unknown" },
+  it.each([
+    ["corrupt", "known", "identity_context_corrupt", undefined],
+    ["missing", "unknown", "run_not_found", "verify_run_id"],
+    ["legacy", "known", "identity_context_unavailable", "record_new_identity_context"],
+  ] as const)("returns a typed projection for %s", async (runId, status, reasonCode, code) => {
+    if (runId === "corrupt") {
+      store.prepare(runId, { runtimeInstanceId: "runtime-1" });
+      store
+        .open()
+        .db.prepare("UPDATE execution_identity_contexts SET context_json = ? WHERE run_id = ?")
+        .run("{", runId);
+    } else if (runId === "legacy") {
+      recordAuditEventInDatabase(
+        {
+          sourceId: "legacy-run:1",
+          sourceSequence: 1,
+          occurredAt: Date.now(),
+          kind: "agent_run",
+          action: "agent.run.started",
+          status: "started",
+          actorType: "agent",
+          actorId: "main",
+          agentId: "main",
+          runId,
+        },
+        { ...store.options, database: store.open() },
+      );
+    }
+    expect(await store.inspect({ runId })).toMatchObject({
+      run: { status },
       identity: {
-        state: "unknown",
-        reasonCode: "run_not_found",
-        remediation: [expect.objectContaining({ code: "verify_run_id" })],
+        state: runId === "legacy" ? "unsupported" : "unknown",
+        reasonCode,
+        ...(code ? { remediation: [expect.objectContaining({ code })] } : {}),
       },
-    });
-
-    recordAuditEventInDatabase(
-      {
-        sourceId: "legacy-run:1",
-        sourceSequence: 1,
-        occurredAt: Date.now(),
-        kind: "agent_run",
-        action: "agent.run.started",
-        status: "started",
-        actorType: "agent",
-        actorId: "main",
-        agentId: "main",
-        runId: "legacy-run",
-      },
-      { ...unknownDatabase.options, database: unknownDatabase.open() },
-    );
-    expect(await unknownDatabase.inspect({ runId: "legacy-run" })).toMatchObject({
-      run: { status: "known" },
-      identity: {
-        state: "unsupported",
-        reasonCode: "identity_context_unavailable",
-        remediation: [expect.objectContaining({ code: "record_new_identity_context" })],
-      },
+      ...(runId === "corrupt" ? { coverage: { state: "unknown" } } : {}),
     });
   });
 });

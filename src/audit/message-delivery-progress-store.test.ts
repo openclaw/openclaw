@@ -71,9 +71,9 @@ function progressInput(
   } as OutboundMessageProgressInput;
 }
 
-function terminalInput(overrides: Partial<Pick<OutboundMessageProgressInput, "occurredAt">> = {}) {
+function terminalInput(occurredAt = Date.now()) {
   return {
-    ...progressInput("message.outbound.queued"),
+    ...progressInput("message.outbound.queued", { occurredAt }),
     sourceId: "queue:payload:0",
     sourceSequence: 3,
     action: "message.outbound.finished" as const,
@@ -82,13 +82,14 @@ function terminalInput(overrides: Partial<Pick<OutboundMessageProgressInput, "oc
     durationMs: 3,
     resultCount: 1,
     messageId: "raw-platform-message",
-    ...overrides,
   };
 }
 
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-});
+function outcomes(page: ReturnType<typeof pageOutboundMessageAuditEventsForRunInDatabase>) {
+  return page.entries.map((entry) => entry.event.outcome);
+}
+
+afterEach(closeOpenClawStateDatabaseForTest);
 
 describe("outbound message progress companion", () => {
   it("stays absent through startup, reads, and terminal-only writes at the current schema", () => {
@@ -178,24 +179,17 @@ describe("outbound message progress companion", () => {
     }
 
     const page = database.readPage({ now: occurredAt, offset: 510, limit: 4 });
-    expect(page.entries.map((entry) => entry.event.outcome)).toEqual([
-      "queued",
-      "platform_started",
-      "queued",
-      "platform_started",
-    ]);
+    expect(outcomes(page)).toEqual(["queued", "platform_started", "queued", "platform_started"]);
     expect(page.nextCursor).toBeDefined();
     expect(
-      database
-        .readPage({ now: occurredAt, after: page.nextCursor, limit: 2 })
-        .entries.map((entry) => entry.event.outcome),
+      outcomes(database.readPage({ now: occurredAt, after: page.nextCursor, limit: 2 })),
     ).toEqual(["queued", "platform_started"]);
   });
 
   it("rejects a cursor whose owner row was pruned while preserving the other owner", () => {
     const database = createStore();
     const occurredAt = Date.now();
-    database.recordTerminal(terminalInput({ occurredAt }));
+    database.recordTerminal(terminalInput(occurredAt));
     database.recordProgress(progressInput("message.outbound.queued", { occurredAt }));
     const first = database.readPage({ now: occurredAt, limit: 2 });
     const progress = first.entries.find((entry) => entry.event.outcome === "queued");
@@ -209,9 +203,7 @@ describe("outbound message progress companion", () => {
     expect(() => database.readPage({ now: occurredAt, after: progressCursor, limit: 1 })).toThrow(
       "cursor is no longer retained",
     );
-    expect(
-      database.readPage({ now: occurredAt, limit: 10 }).entries.map((entry) => entry.event.outcome),
-    ).toEqual(["sent"]);
+    expect(outcomes(database.readPage({ now: occurredAt, limit: 10 }))).toEqual(["sent"]);
   });
 
   it("bounds expired progress maintenance while preserving retained terminal rows", () => {
@@ -220,7 +212,7 @@ describe("outbound message progress companion", () => {
     const { db } = database.open();
     db.exec("DELETE FROM outbound_message_progress");
     const now = Date.now();
-    database.recordTerminal(terminalInput({ occurredAt: now }));
+    database.recordTerminal(terminalInput(now));
     const expiredAt = now - 31 * 24 * 60 * 60_000;
     db.prepare(
       `WITH RECURSIVE numbers(n) AS (
