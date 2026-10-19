@@ -4,11 +4,12 @@ import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { createOpenAIResponsesAssistantOutput } from "./openai-responses-replay-internal.js";
 import {
   assignTransportErrorDetails,
-  createModelStreamCooperativeScheduler,
+  iterateModelStream,
   notifyProviderHttpMetadata,
   notifyProviderHttpResponse,
   parseTerminalToolCallArguments as parseArguments,
   withProviderAcceptanceObserver,
+  withProviderResponseHook,
 } from "./transport-stream-shared.js";
 
 const REPAIR = { repairStringLiterals: true } as const;
@@ -199,6 +200,43 @@ it("preserves the lifecycle failure when cancellation throws synchronously", asy
   ).rejects.toBe(callbackError);
   expect(cancelStream).toHaveBeenCalledOnce();
 });
+it("lets the event loop run during simultaneous stream starts without reordering events", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const events = Array.from({ length: 80 }, () => [] as string[]);
+  let starts = 0;
+  let startsBeforeTimer = -1;
+  setTimeout(() => {
+    startsBeforeTimer = starts;
+  }, 0);
+  const streams = events.map(async (received) => {
+    const controller = new AbortController();
+    const source = withProviderResponseHook({
+      stream: (async function* () {
+        yield "first";
+        yield "last";
+      })(),
+      signal: controller.signal,
+      abort: (error) => controller.abort(error),
+      onReady() {
+        starts++;
+        received.push("start");
+      },
+    });
+    for await (const event of iterateModelStream(source, controller.signal)) {
+      received.push(event);
+    }
+  });
+  try {
+    await vi.runAllTimersAsync();
+    await Promise.all(streams);
+    expect(startsBeforeTimer).toBeGreaterThan(0);
+    expect(startsBeforeTimer).toBeLessThan(80);
+    expect(events).toEqual(Array.from({ length: 80 }, () => ["start", "first", "last"]));
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 describe("model stream cooperative scheduler", { concurrent: false }, () => {
   let now = 0;
 
@@ -217,39 +255,23 @@ describe("model stream cooperative scheduler", { concurrent: false }, () => {
     }
   });
 
-  it("starts a fresh event and elapsed-time budget after a delayed yield", async () => {
-    const scheduler = createModelStreamCooperativeScheduler();
-
-    async function checkEvent(deliveredAt?: number) {
-      let settled = false;
-      const event = scheduler.afterEvent().then(() => {
-        settled = true;
-      });
-      // Check before awaiting so an unexpected yield fails without a timer timeout.
-      expect(vi.getTimerCount()).toBe(deliveredAt === undefined ? 0 : 1);
-      if (deliveredAt !== undefined) {
-        await Promise.resolve();
-        expect(settled).toBe(false);
-        now = deliveredAt;
-        await vi.runOnlyPendingTimersAsync();
-      }
-      await event;
-      expect(settled).toBe(true);
-      expect(vi.getTimerCount()).toBe(0);
-    }
-
-    for (const deliveredAt of [25, 50]) {
-      for (let index = 0; index < 63; index += 1) {
-        await checkEvent();
-      }
-      await checkEvent(deliveredAt);
-    }
-
-    now = 61;
-    await checkEvent();
-    now = 62;
-    await checkEvent(87);
-    await checkEvent();
+  it("starts a fresh elapsed-time budget after a delayed yield", async () => {
+    const stream = iterateModelStream(["first", "second", "third"]);
+    await expect(stream.next()).resolves.toEqual({ done: false, value: "first" });
+    now = 6;
+    const second = stream.next();
+    let delivered = false;
+    void second.then(() => {
+      delivered = true;
+    });
+    await Promise.resolve();
+    expect(delivered).toBe(false);
+    now = 25;
+    await vi.runOnlyPendingTimersAsync();
+    await expect(second).resolves.toEqual({ done: false, value: "second" });
+    // Waiting for the loop must not consume the newly available work budget.
+    await expect(stream.next()).resolves.toEqual({ done: false, value: "third" });
+    await stream.return(undefined);
   });
 
   it.each(["before event", "during yield"] as const)(
@@ -257,22 +279,22 @@ describe("model stream cooperative scheduler", { concurrent: false }, () => {
     async (phase) => {
       const controller = new AbortController();
       const reason = Object.assign(new Error("Stream canceled"), { code: "TEST_CANCELED" });
-      const scheduler = createModelStreamCooperativeScheduler(controller.signal);
+      const stream = iterateModelStream(["first", "second"], controller.signal);
       if (phase === "before event") {
         controller.abort(reason);
       } else {
-        now = 12;
+        await stream.next();
+        now = 6;
       }
-      const event = scheduler.afterEvent();
+      const event = stream.next();
       const rejected = expect(event).rejects.toBe(reason);
       if (phase === "during yield") {
-        expect(vi.getTimerCount()).toBe(1);
+        await Promise.resolve();
         controller.abort(reason);
         now = 37;
         await vi.runOnlyPendingTimersAsync();
       }
       await rejected;
-      expect(vi.getTimerCount()).toBe(0);
     },
   );
 });

@@ -381,7 +381,8 @@ announcements and utility requests receive one short acknowledgement and are
 counted separately. A fixed 10-second post-readiness delay allows retained-run
 startup recovery to settle before setup. One concurrent round
 warms the Gateway before five measured rounds. `--port`, `--mock-port`,
-`--chunks`, `--clients`, `--runs`, and `--rounds` adjust the workload.
+`--chunks`, `--chunk-interval-ms` (default 10), `--clients`, `--runs`, and
+`--rounds` adjust the workload.
 Warmup and each measured round drain until no model streams remain and all
 subscriber events have been quiet for one second, with a 15-second timeout.
 
@@ -416,6 +417,13 @@ change events; the model fixture serves the recaps without external inference.
 `--list-interval-ms 1000` adds concurrent compact `sessions.list` polling, one
 request at a time per client, and reports successful latency samples and
 p50/p95/p99. Invalid or failed list responses reject the run.
+Add `--poll-seed <seed>` to randomize each client's initial poll phase across the
+list interval and jitter subsequent intervals uniformly from 0.5 to 1.5 times
+that interval. The deterministic sequence is independent per client and round;
+use the same seed on both sides of a pair. Polls remain sequential per client,
+so a slow response delays its next poll. The report retains initial phases and
+all request timestamps for seeded runs. Without this flag, polling retains its
+original synchronized start and fixed interval.
 Add `--diagnostics` identically on both sides to capture per-round Gateway and
 replay-controller event-loop delay (20 ms sampling), GC pause totals, and bounded
 internal operation aggregates without starting CPU or heap profiling. List
@@ -425,6 +433,46 @@ pair, sort all `sessionsList.requests` by duration to identify its pooled p99.
 These records contain timing and identity only, never RPC payloads. Gateway
 metrics cover its main isolate, not worker isolates. Capture adds overhead, so
 compare equally instrumented pairs and keep earlier uncaptured runs distinct.
+
+To isolate a stream-start burst, use `--stream-start-diagnostics`. It captures
+main-isolate diagnostics from immediately before turn admission until every
+primary mock request has arrived, then separately for the first 500 ms after
+the mock releases those responses together. Stopping admission capture and
+starting release capture adds two private IPC round trips before release on
+both revisions. Each new capture waits 25 ms and then samples the owned child's
+CPU counter as a checkpoint, priming the 20 ms loop-delay timer before admission
+or release. Capture timestamps include this priming interval. A delayed stop can extend the window; use the reported capture
+timestamps and duration. These captures can run alongside whole-round
+`--diagnostics` without CPU sampling. `streamStart.phases` records controller
+epoch timestamps for admission, first/last classified primary request, cohort
+release, first primary SSE write, and completion of all turns. Request/write
+timestamps are observed by the mock, not by the Gateway's SSE consumer.
+
+Add `--cpu-profile` for attribution runs. The private IPC profiler samples only
+the Gateway main isolate from before admission through release plus 500 ms,
+writing `stream-start-<round>.cpuprofile` and its diagnostics sidecars. The result
+includes the 40 hottest functions by sampled self time; raw samples remain for
+windowed or caller analysis. Sampling and profile serialization add overhead,
+so omit this flag for acceptance timing. `--active-work-diagnostics` enables the
+real diagnostics Prometheus plugin and scrapes its endpoint while all primary
+responses remain held. Each round must report exactly `--runs` running sessions
+and zero queued sessions before release; this scrape is included in admission
+timing. For example, run on each authorized 16-core measurement half:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
+  --state-dir /path/to/team-shape --clients 8 --exact-clients 1 \
+  --runs 80 --rounds 5 --chunks 500 --chunk-interval-ms 10 \
+  --list-interval-ms 2000 --poll-seed stream-start-1 \
+  --diagnostics --stream-start-diagnostics --active-work-diagnostics
+```
+
+Compare release-window event-loop max/p99 and pooled list p95 across concurrent
+pairs, swapping CPU halves and changing the shared poll seed between pairs.
+Use list request timestamps to identify polls overlapping release; whole-round
+latency alone can hide a burst. Existing completion, concurrency, event-order,
+and fanout checks still apply. This fixture uses synthetic model streams;
+provider latency and external tool execution are outside this comparison.
 
 `eventBytes` measures the exact received, uncompressed JSON frame bytes,
 including the event envelope, before parsing. `sessionEventSizes` splits session
