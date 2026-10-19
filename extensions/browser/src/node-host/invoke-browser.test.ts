@@ -92,6 +92,7 @@ vi.mock("openclaw/plugin-sdk/media-mime", async (importOriginal) => ({
   detectMime: vi.fn(async () => "image/png"),
 }));
 
+// mock-isolation: keep native tab closure and CDP I/O inside the owned fixture.
 vi.mock("../browser/cdp.helpers.js", () => ({
   closeTrackedCdpTarget: cdp.closeTrackedCdpTarget,
   redactCdpUrl: cdp.redactCdpUrl,
@@ -101,23 +102,28 @@ vi.mock("../browser/cdp-reachability-policy.js", () => ({
   resolveCdpControlPolicy: vi.fn(() => undefined),
 }));
 
+// mock-isolation: use fixture profiles without reading operator browser configuration.
 vi.mock("../browser/config.js", () => ({
   resolveBrowserConfig: browserConfig.resolveBrowserConfig,
   resolveProfile: browserConfig.resolveProfile,
 }));
 
+// mock-isolation: stage synthetic uploads without touching the host upload store.
 vi.mock("../browser-proxy-upload.js", () => uploads);
 
+// mock-isolation: capture proxy dispatch without starting browser routes.
 vi.mock("../browser/routes/dispatcher.js", () => ({
   createBrowserRouteDispatcher: routes.createBrowserRouteDispatcher,
 }));
 
+// mock-isolation: exercise startup ownership without launching the browser service.
 vi.mock("../control-service.js", () => ({
   createBrowserControlContext: control.createBrowserControlContext,
   getBrowserControlState: control.getBrowserControlState,
   startBrowserControlServiceFromConfig: control.startBrowserControlServiceFromConfig,
 }));
 
+// mock-isolation: keep pending browser work controlled by this startup fixture.
 vi.mock("../browser-control-state.js", () => ({
   hasBrowserControlWork: control.hasBrowserControlWork,
 }));
@@ -274,8 +280,8 @@ describe("runBrowserProxyCommand", () => {
       body: { ref: "e12", paths: ["/tmp/openclaw/uploads/.proxy-upload-1/0/report.txt"] },
       directory: "/tmp/openclaw/uploads/.proxy-upload-1",
     };
-    uploadMocks.stageBrowserProxyUploadRequest.mockResolvedValueOnce(staged);
-    dispatcherMocks.dispatch.mockResolvedValueOnce({ status: 200, body: { ok: true } });
+    uploads.stageBrowserProxyUploadRequest.mockResolvedValueOnce(staged);
+    routes.dispatch.mockResolvedValueOnce({ status: 200, body: { ok: true } });
 
     await expect(
       runBrowserProxyCommand(
@@ -289,17 +295,15 @@ describe("runBrowserProxyCommand", () => {
       ),
     ).resolves.toBe(JSON.stringify({ result: { ok: true } }));
 
-    expect(uploadMocks.stageBrowserProxyUploadRequest).toHaveBeenCalledWith({
+    expect(uploads.stageBrowserProxyUploadRequest).toHaveBeenCalledWith({
       method: "POST",
       path: "/hooks/file-chooser",
       body: { ref: "e12" },
       upload,
       signal: expect.any(AbortSignal),
     });
-    expect(firstBrowserDispatchRequest(dispatcherMocks.dispatch.mock.calls).body).toEqual(
-      staged.body,
-    );
-    expect(uploadMocks.discardStagedBrowserProxyUpload).not.toHaveBeenCalled();
+    expect(firstBrowserDispatchRequest(routes.dispatch.mock.calls).body).toEqual(staged.body);
+    expect(uploads.discardStagedBrowserProxyUpload).not.toHaveBeenCalled();
   });
 
   it("discards staged copies when the route rejects the upload", async () => {

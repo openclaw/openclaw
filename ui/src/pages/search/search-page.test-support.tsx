@@ -41,6 +41,7 @@ export function searchStatus(
         id,
         pluginId: id,
         label,
+        hint: label,
         configured: true,
         installed: true,
         available: true,

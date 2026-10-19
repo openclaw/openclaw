@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
@@ -32,10 +33,10 @@ afterEach(() => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function mockCatalog(model: ReturnType<typeof fixture.catalogModel>) {
-  fetchGuard.mockResolvedValue({
+  fetchGuard.mockImplementation(async () => ({
     response: Response.json({ baseUrl: fixture.baseUrl, models: [model] }),
     release: async () => {},
-  });
+  }));
 }
 
 it.each([true, false])(
@@ -114,6 +115,7 @@ it("routes a discovered organization model through the registered native transpo
     modelId: model.id,
     provider: "radius",
   });
+  assert(streamFn, "expected the registered native transport");
   streamFetch.mockResolvedValue(
     new Response(
       fixture.sse([

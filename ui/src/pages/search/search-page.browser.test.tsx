@@ -6,6 +6,7 @@ import type { ModelCatalogResult } from "../../api/types.ts";
 import { i18n } from "../../i18n/lib/translate.ts";
 import { REDACTED_SENTINEL } from "../../lib/config-form-utils.ts";
 import { createInitialConfigState } from "../../lib/config/config-state-model.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import {
   atPath,
   editInput,
@@ -39,12 +40,10 @@ async function mount(
     ],
   });
   const fixture = await mountSearch({
-    hello: {
-      auth: {
-        role: "operator",
-        scopes: options.admin === false ? ["operator.read"] : ["operator.admin"],
-      },
-    },
+    hello: gatewayHelloForMethods(
+      [],
+      options.admin === false ? ["operator.read"] : ["operator.admin"],
+    ),
     waitReady: options.waitReady,
     waitForRefresh: true,
     respond: (method) => {

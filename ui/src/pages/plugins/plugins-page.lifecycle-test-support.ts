@@ -13,7 +13,8 @@ import {
 } from "./plugins-page.test-support.ts";
 
 export function queryWithin(root: ParentNode) {
-  return <T extends Element = Element>(selector: string) => root.querySelector<T>(selector);
+  return <T extends Element = Element>(selector: string): T | null =>
+    root.querySelector<T>(selector);
 }
 
 function createFixture<Context extends ApplicationContext>(
@@ -21,10 +22,11 @@ function createFixture<Context extends ApplicationContext>(
   makeContext: (gateway: ReturnType<typeof createGateway>["gateway"]) => Context,
 ) {
   const { client, request } = createClient(async (method, params) => {
-    if (!Object.hasOwn(handlers, method)) {
+    const handler = Object.hasOwn(handlers, method) ? handlers[method] : undefined;
+    if (!handler) {
       throw new Error(`Unexpected request: ${method}`);
     }
-    return handlers[method](params);
+    return handler(params);
   });
   const harness = createGateway(client);
   const context = makeContext(harness.gateway);

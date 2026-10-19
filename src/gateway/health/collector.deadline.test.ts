@@ -92,6 +92,7 @@ beforeAll(async () => {
   vi.doMock("../../config/sessions/paths.js", () => ({
     resolveSessionStorePathCore: () => sessionStorePath,
   }));
+  // mock-isolation: control worker-read completion independently of the health deadline clock.
   vi.doMock("../../config/sessions/session-entry-read-runtime.js", () => ({
     withSessionStoreReaderInWorker: createSessionStoreSummaryReaderStub(readSummary),
   }));

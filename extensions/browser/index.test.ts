@@ -231,6 +231,7 @@ it("describes and freezes only effective tab-bound actions when evaluation is di
     toolBindings: { browser: tabBinding },
   });
   const { action, kind, request, ...properties } = toolProperties(tool);
+  assert(action && kind && request, "expected action, kind, and request schemas");
 
   expect(action.enum).toEqual(
     "act close console requests errors text emulate dialog download focus navigate pdf screenshot snapshot tabs upload waitfordownload".split(
@@ -262,14 +263,15 @@ it("omits unsupported actions for a host-bound existing-session profile", () => 
     toolBindings: { browser: { ...tabBinding, profile: "user" } },
   });
   const properties = toolProperties(tool);
+  assert(properties.action && properties.kind, "expected action and kind schemas");
   for (const action of "pdf download waitfordownload requests errors text emulate".split(" ")) {
     expect(properties.action.enum).not.toContain(action);
   }
   expect(properties).toMatchObject({
     action: { enum: expect.arrayContaining(["snapshot", "screenshot"]) },
-    actions: { description: undefined },
-    stopOnError: { description: undefined },
   });
+  expect(properties.actions?.description).toBeUndefined();
+  expect(properties.stopOnError?.description).toBeUndefined();
   expect(properties.kind.enum).not.toContain("batch");
 });
 

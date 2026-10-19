@@ -46,7 +46,7 @@ const dispatchDefaults = {
 } satisfies Parameters<typeof resolveSkillDispatchTools>[0];
 const dispatch = (
   params: Partial<Parameters<typeof resolveSkillDispatchTools>[0]> = {},
-  deps = dependencies,
+  deps: SkillToolDispatchDependencies = dependencies,
 ) => resolveSkillDispatchTools({ ...dispatchDefaults, ...params }, deps);
 const toolNames = (tools: Awaited<ReturnType<typeof dispatch>>) => tools.map((tool) => tool.name);
 const lastArgs = () => createOpenClawToolsAsyncMock.mock.calls.at(-1)?.[0];

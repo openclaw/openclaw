@@ -251,6 +251,11 @@ it("serves dirty summaries without display joins and clean repeats without SQL",
   let health: ReturnType<typeof buildHealthAgentSummaries> | undefined;
   try {
     await settleProjection(projection);
+    writeSession("main", first, 25, storePath);
+    expect(projection.dirtyRowCount).toBeGreaterThan(0);
+    const dirtyStatus = await readStatusSessionStores(cfg, [{ id: "main" }], 10, { projection });
+    expect(dirtyStatus.byAgent[0]?.recent[0]?.entry.updatedAt).toBe(25);
+    await settleProjection(projection);
     held = projection.withSelectionPreparation(() => release.promise);
     sessionChanges.emit({ all: true, scope: "catalog" });
     writeSession("main", first, 30, storePath);

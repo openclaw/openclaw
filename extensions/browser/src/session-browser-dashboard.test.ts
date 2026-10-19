@@ -19,6 +19,7 @@ vi.mock("./browser-dashboard-definition.js", async (original) => ({
   ...(await original<typeof import("./browser-dashboard-definition.js")>()),
   readBrowserDashboardDefinition: mocked.definition,
 }));
+// mock-isolation: model dashboard ownership without connecting to a host browser.
 vi.mock("./browser-control-state.js", () => ({
   getBrowserControlState: () => mocked.state,
   createBrowserControlContext: () => ({

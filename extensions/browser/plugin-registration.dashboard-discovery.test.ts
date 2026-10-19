@@ -4,7 +4,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
   OpenClawPluginGatewayEvents,
   OpenClawPluginApi,
-  OpenClawPluginServiceContext,
+  OpenClawPluginServiceContextV2,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type {
   OpenKeyedStoreOptions,
@@ -14,11 +14,14 @@ import {
   createPluginStateKeyedStoreForTests,
   openOpenClawStateDatabase,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import {
+  createTestPluginApi,
+  createTestPluginServiceScheduler,
+} from "openclaw/plugin-sdk/plugin-test-api";
 import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { registerBrowserPlugin } from "./plugin-registration.js";
 import { getBrowserStateRuntime, setBrowserStateRuntime } from "./src/browser-runtime-state.js";
 import { resolveBrowserConfig } from "./src/browser/config.js";
@@ -135,7 +138,10 @@ async function registerDiscovery(stateDir: string) {
   const sessionEnd = hooks.mock.calls.find(([name]) => name === "session_end")?.[1];
   assert(service?.stop && sessionEnd, "Browser discovery lifecycle was not registered");
   const subscribe = vi.fn<OpenClawPluginGatewayEvents["onSessionsChanged"]>(() => vi.fn());
-  const context: OpenClawPluginServiceContext = {
+  const scheduler = createTestPluginServiceScheduler();
+  onTestFinished(() => scheduler.stop());
+  const context: OpenClawPluginServiceContextV2 = {
+    scheduler,
     config: {},
     stateDir,
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
