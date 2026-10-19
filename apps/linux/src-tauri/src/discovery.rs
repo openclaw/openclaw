@@ -520,57 +520,46 @@ mod tests {
     }
 
     #[test]
-    fn plaintext_dashboard_url_uses_validated_resolved_ipv4_address() {
-        let service = ServiceInfo::new(
-            GATEWAY_SERVICE_TYPE,
-            "plaintext IPv4 (OpenClaw)",
-            "plaintext-ipv4.local.",
-            "192.168.1.9",
-            18789,
-            &[("gatewayDirectReachable", "1")][..],
-        )
-        .expect("service should be valid")
-        .as_resolved_service();
-        let discovery = GatewayDiscovery::default();
-        apply_event(
-            &discovery.gateways,
-            ServiceEvent::ServiceResolved(Box::new(service)),
-        );
+    fn plaintext_dashboard_urls_use_validated_resolved_addresses() {
+        for (name, host, address, expected) in [
+            (
+                "plaintext IPv4 (OpenClaw)",
+                "plaintext-ipv4.local",
+                "192.168.1.9",
+                "http://192.168.1.9:18789/",
+            ),
+            (
+                "plaintext IPv6 (OpenClaw)",
+                "plaintext-ipv6.local",
+                "fd00::7",
+                "http://[fd00::7]:18789/",
+            ),
+        ] {
+            let service = ServiceInfo::new(
+                GATEWAY_SERVICE_TYPE,
+                name,
+                &format!("{host}."),
+                address,
+                18789,
+                &[("gatewayDirectReachable", "1")][..],
+            )
+            .expect("service should be valid")
+            .as_resolved_service();
+            let discovery = GatewayDiscovery::default();
+            apply_event(
+                &discovery.gateways,
+                ServiceEvent::ServiceResolved(Box::new(service)),
+            );
 
-        assert_eq!(
-            discovery
-                .dashboard_url("plaintext-ipv4.local", 18789, false)
-                .expect("plaintext dashboard URL")
-                .as_str(),
-            "http://192.168.1.9:18789/"
-        );
-    }
-
-    #[test]
-    fn plaintext_dashboard_url_brackets_validated_resolved_ipv6_address() {
-        let service = ServiceInfo::new(
-            GATEWAY_SERVICE_TYPE,
-            "plaintext IPv6 (OpenClaw)",
-            "plaintext-ipv6.local.",
-            "fd00::7",
-            18789,
-            &[("gatewayDirectReachable", "1")][..],
-        )
-        .expect("service should be valid")
-        .as_resolved_service();
-        let discovery = GatewayDiscovery::default();
-        apply_event(
-            &discovery.gateways,
-            ServiceEvent::ServiceResolved(Box::new(service)),
-        );
-
-        assert_eq!(
-            discovery
-                .dashboard_url("plaintext-ipv6.local", 18789, false)
-                .expect("plaintext IPv6 dashboard URL")
-                .as_str(),
-            "http://[fd00::7]:18789/"
-        );
+            assert_eq!(
+                discovery
+                    .dashboard_url(host, 18789, false)
+                    .expect("plaintext dashboard URL")
+                    .as_str(),
+                expected,
+                "{host} -> {address}"
+            );
+        }
     }
 
     #[test]
@@ -603,55 +592,43 @@ mod tests {
     }
 
     #[test]
-    fn rejects_public_plaintext_resolved_address() {
-        let service = ServiceInfo::new(
-            GATEWAY_SERVICE_TYPE,
-            "public plaintext (OpenClaw)",
-            "public-plaintext.local.",
-            "198.51.100.7",
-            18789,
-            &[("gatewayDirectReachable", "1")][..],
-        )
-        .expect("service should be valid")
-        .as_resolved_service();
-        let discovery = GatewayDiscovery::default();
-        apply_event(
-            &discovery.gateways,
-            ServiceEvent::ServiceResolved(Box::new(service)),
-        );
+    fn plaintext_dashboard_urls_reject_public_hosts_or_addresses() {
+        for (name, host, address) in [
+            (
+                "public plaintext (OpenClaw)",
+                "public-plaintext.local",
+                "198.51.100.7",
+            ),
+            (
+                "public hostname (OpenClaw)",
+                "dashboard.example.com",
+                "192.168.1.9",
+            ),
+        ] {
+            let service = ServiceInfo::new(
+                GATEWAY_SERVICE_TYPE,
+                name,
+                &format!("{host}."),
+                address,
+                18789,
+                &[("gatewayDirectReachable", "1")][..],
+            )
+            .expect("service should be valid")
+            .as_resolved_service();
+            let discovery = GatewayDiscovery::default();
+            apply_event(
+                &discovery.gateways,
+                ServiceEvent::ServiceResolved(Box::new(service)),
+            );
 
-        assert_eq!(
-            discovery
-                .dashboard_url("public-plaintext.local", 18789, false)
-                .expect_err("public plaintext should not connect"),
-            "The discovered gateway does not have a safe resolved address."
-        );
-    }
-
-    #[test]
-    fn rejects_public_plaintext_hostname_even_with_private_resolution() {
-        let service = ServiceInfo::new(
-            GATEWAY_SERVICE_TYPE,
-            "public hostname (OpenClaw)",
-            "dashboard.example.com.",
-            "192.168.1.9",
-            18789,
-            &[("gatewayDirectReachable", "1")][..],
-        )
-        .expect("service should be valid")
-        .as_resolved_service();
-        let discovery = GatewayDiscovery::default();
-        apply_event(
-            &discovery.gateways,
-            ServiceEvent::ServiceResolved(Box::new(service)),
-        );
-
-        assert_eq!(
-            discovery
-                .dashboard_url("dashboard.example.com", 18789, false)
-                .expect_err("public plaintext hostname should not connect"),
-            "The discovered gateway does not have a safe resolved address."
-        );
+            assert_eq!(
+                discovery
+                    .dashboard_url(host, 18789, false)
+                    .expect_err("public plaintext should not connect"),
+                "The discovered gateway does not have a safe resolved address.",
+                "{host} -> {address}"
+            );
+        }
     }
 
     #[test]
