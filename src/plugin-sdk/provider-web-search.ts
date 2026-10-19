@@ -27,6 +27,8 @@ export {
   parseWebSearchTimeFilters,
   readCachedSearchPayload,
   readConfiguredSecretString,
+  readWebSearchApiKey,
+  readWebSearchQueryAndCount,
   resolveSearchCacheTtlMs,
   resolveSearchCount,
   resolveSearchTimeoutSeconds,

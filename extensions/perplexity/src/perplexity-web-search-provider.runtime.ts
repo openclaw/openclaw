@@ -6,7 +6,6 @@ import {
   buildSearchCacheKey,
   DEFAULT_SEARCH_COUNT,
   isoToPerplexityDate,
-  MAX_SEARCH_COUNT,
   normalizeFreshness,
   parseWebSearchTimeFilters,
   readCachedSearchPayload,
@@ -15,6 +14,7 @@ import {
   readProviderEnvValue,
   readStringArrayParam,
   readStringParam,
+  readWebSearchQueryAndCount,
   resolveSearchCacheTtlMs,
   resolveSearchCount,
   resolveSearchTimeoutSeconds,
@@ -251,14 +251,7 @@ export async function executePerplexitySearch(
     };
   }
 
-  const query = readStringParam(args, "query", { required: true });
-  const count =
-    readPositiveIntegerParam(args, "count", {
-      max: MAX_SEARCH_COUNT,
-      message: `count must be an integer from 1 to ${MAX_SEARCH_COUNT}.`,
-    }) ??
-    searchConfig?.maxResults ??
-    undefined;
+  const { query, count } = readWebSearchQueryAndCount(args, searchConfig);
   const rawFreshness = readStringParam(args, "freshness");
   const freshness = rawFreshness ? normalizeFreshness(rawFreshness, "perplexity") : undefined;
   if (rawFreshness && !freshness) {
