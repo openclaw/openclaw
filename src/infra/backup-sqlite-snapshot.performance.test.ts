@@ -47,7 +47,8 @@ describe.skipIf(process.platform === "win32")("backup SQLite discovery performan
       openOpenClawStateDatabase({ env: state.env });
       closeOpenClawStateDatabase();
 
-      const worktree = state.statePath("worktrees", "repository", "active");
+      const worktreeRelative = "worktrees/repository/active";
+      const worktree = state.statePath(worktreeRelative);
       const sourceDirectories = Array.from({ length: 12 }, (_, index) =>
         path.join(worktree, "packages", `package-${index}`, "src"),
       );
@@ -76,13 +77,13 @@ describe.skipIf(process.platform === "win32")("backup SQLite discovery performan
             pluginId: "nested-owner",
             disposition: "include",
             scope: "state",
-            relativePath: "worktrees/repository/active/plugin-state",
+            relativePath: `${worktreeRelative}/plugin-state`,
           },
         ],
         pluginRoots: [],
       });
-      const measurePrivacyMarkerProbes = async (label: string) => {
-        return countProbes(
+      const measurePrivacyMarkerProbes = (label: string) =>
+        countProbes(
           (target) => path.basename(target) === PRIVACY_MARKER,
           async () => {
             const tempDir = state.path(`snapshots-${label}`);
@@ -90,17 +91,13 @@ describe.skipIf(process.platform === "win32")("backup SQLite discovery performan
             return createBackupSqliteSnapshotPlan({ resources, tempDir, legacyAuditSnapshots: [] });
           },
         );
-      };
 
       const baseline = await measurePrivacyMarkerProbes("baseline");
       const durableFile = path.join(sourceDirectories[0]!, "uncommitted.ts");
       await Promise.all(
-        sourceDirectories.flatMap((directory, directoryIndex) =>
+        sourceDirectories.flatMap((directory) =>
           Array.from({ length: 40 }, (_, fileIndex) =>
-            fs.writeFile(
-              path.join(directory, `generated-${fileIndex}.ts`),
-              `export const value = ${directoryIndex * 40 + fileIndex};\n`,
-            ),
+            fs.writeFile(path.join(directory, `generated-${fileIndex}.ts`), "export {};\n"),
           ),
         ),
       );
@@ -122,11 +119,8 @@ describe.skipIf(process.platform === "win32")("backup SQLite discovery performan
       );
       expect(fileProbes).toBe(1);
       const entries = await listArchiveEntries(archive.archivePath);
-      expect(
-        entries.some((entry) =>
-          entry.endsWith("/worktrees/repository/active/packages/package-0/src/uncommitted.ts"),
-        ),
-      ).toBe(true);
+      const archivedDirtyFile = `/${worktreeRelative}/packages/package-0/src/uncommitted.ts`;
+      expect(entries.some((entry) => entry.endsWith(archivedDirtyFile))).toBe(true);
     });
   });
 });

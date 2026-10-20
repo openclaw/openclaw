@@ -6,6 +6,7 @@ import { resolveActivatedPluginBackupInventory } from "../plugins/manifest-backu
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { expectDatabaseRows } from "./backup-create-family.test-support.js";
 import {
   createBackupSqliteSnapshotPlan,
   discoverBackupDatabasePaths,
@@ -47,10 +48,9 @@ it("captures every retained account and token database under a disabled plugin's
         for (const [index, file] of files.entries()) {
           const snapshot = snapshotPath(file);
           expect(snapshot).toBeDefined();
-          using database = openNodeSqliteDatabase(snapshot!, { readOnly: true });
-          expect(database.prepare("SELECT value FROM retained").get()?.value).toBe(
-            `payload-${index}`,
-          );
+          expectDatabaseRows(snapshot!, "SELECT value FROM retained", [
+            { value: `payload-${index}` },
+          ]);
         }
       };
       for (const [index, file] of files.entries()) {
@@ -69,14 +69,10 @@ it("captures every retained account and token database under a disabled plugin's
         ...input,
         plugins: resolvePluginMetadataSnapshot(input),
       });
-      expect(
-        files.every((file) =>
-          roots.some((root) => file === root || file.startsWith(`${root}${path.sep}`)),
-        ),
-      ).toBe(true);
-      expect(
-        roots.some((root) => unrelated === root || unrelated.startsWith(`${root}${path.sep}`)),
-      ).toBe(false);
+      const covered = (file: string) =>
+        roots.some((root) => file === root || file.startsWith(`${root}${path.sep}`));
+      expect(files.every(covered)).toBe(true);
+      expect(covered(unrelated)).toBe(false);
       const inspection = await discoverUpdateStateSchemaInspectionInProcess({
         ...input,
         stagingRoot: state.path("inspection"),

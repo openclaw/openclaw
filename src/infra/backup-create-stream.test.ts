@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { buffer } from "node:stream/consumers";
+import { setImmediate } from "node:timers/promises";
 import { gunzipSync } from "node:zlib";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -25,8 +26,13 @@ vi.mock("node:fs", async (importOriginal) => {
   };
 });
 
+afterEach(() => vi.useRealTimers());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const archivePathFor = (prefix: string) => path.join(tempDirs.make(prefix), "partial.tar.gz");
+const retry = (
+  controller: AbortController,
+  options: Parameters<typeof writeTarArchiveWithRetry>[0],
+) => withCommandProcessScope(() => writeTarArchiveWithRetry(options), controller.signal);
 function writeStream(
   archivePath: string,
   createArchiveStream: Parameters<typeof writeArchiveStreamToFile>[0]["createArchiveStream"],
@@ -44,24 +50,16 @@ it("cancels an EOF retry backoff without starting another archive", async () => 
     .fn()
     .mockRejectedValueOnce(Object.assign(new Error("Synthetic live-write race"), { code: "EOF" }))
     .mockResolvedValue("complete");
-  const writing = withCommandProcessScope(
-    () =>
-      writeTarArchiveWithRetry({
-        tempArchivePath: "synthetic-partial.tar.gz",
-        runTar,
-        log: () => controller.abort(),
-      }),
-    controller.signal,
-  );
+  const writing = retry(controller, {
+    tempArchivePath: "synthetic-partial.tar.gz",
+    runTar,
+    log: () => controller.abort(),
+  });
   const observed = writing.catch((error: unknown) => error);
-  try {
-    await vi.advanceTimersByTimeAsync(10_001);
-    await expect(writing).rejects.toMatchObject({ name: "AbortError" });
-    expect(runTar).toHaveBeenCalledTimes(1);
-  } finally {
-    await observed;
-    vi.useRealTimers();
-  }
+  await vi.advanceTimersByTimeAsync(10_001);
+  await expect(writing).rejects.toMatchObject({ name: "AbortError" });
+  expect(runTar).toHaveBeenCalledTimes(1);
+  await observed;
 });
 
 it("retains bounded progress through cancellation, retry, and CLI error formatting", async () => {
@@ -83,18 +81,13 @@ it("retains bounded progress through cancellation, retry, and CLI error formatti
       },
     }),
   );
-  const writing = withCommandProcessScope(
-    () => writeTarArchiveWithRetry({ tempArchivePath: archivePath, runTar }),
-    controller.signal,
-  );
+  const writing = retry(controller, { tempArchivePath: archivePath, runTar });
   const observed = writing.catch((error: unknown) => error);
   try {
     source.write("partial archive");
     await read;
     controller.abort(reason);
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await setImmediate();
     expect(source.destroyed).toBe(true);
     const error = await observed;
     const message = `Backup archive write failed: The operation was aborted (phase=output, entry=${JSON.stringify(entrySuffix)}, rawBytes=16, outputBytes=15) (after 1 attempt)`;
@@ -115,32 +108,55 @@ it("retains bounded progress through cancellation, retry, and CLI error formatti
   }
 });
 
-it("preserves a shared abort reason and its numeric code before the output opens", async () => {
-  const archivePath = archivePathFor("backup-sync-cancel-");
-  const controller = new AbortController();
-  const reason = Object.freeze(new DOMException("Owner stopped backup", "AbortError"));
-  const writing = writeStream(
-    archivePath,
-    (report, signal) => {
-      report({ phase: "traversal", entryPath: "/source/workspace" });
-      controller.abort(reason);
-      signal.throwIfAborted();
-      throw new Error("Expected cancellation");
-    },
-    controller,
-  );
-  const error: unknown = await writing.catch((caught: unknown) => caught);
-  expect(error).not.toBe(reason);
-  expect(error).toMatchObject({
-    name: "AbortError",
-    code: 20,
-    cause: reason,
-    message:
-      'Owner stopped backup (phase=traversal, entry="/source/workspace", rawBytes=0, outputBytes=0)',
-  });
-  expect(reason).toMatchObject({ message: "Owner stopped backup", code: 20 });
-  await expect(fs.lstat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
-});
+it.each(["abort", "producer failure"] as const)(
+  "joins output closure and preserves %s before a producer returns",
+  async (mode) => {
+    const archivePath = archivePathFor("backup-sync-failure-");
+    const controller = new AbortController();
+    const reason =
+      mode === "abort"
+        ? Object.freeze(new DOMException("Owner stopped backup", "AbortError"))
+        : Object.assign(new Error("Producer failed before returning a stream"), { code: "EACCES" });
+    const previousOutputs = outputs.length;
+    const writing = writeStream(
+      archivePath,
+      (report, signal) => {
+        if (mode === "abort") {
+          report({ phase: "traversal", entryPath: "/source/workspace" });
+          controller.abort(reason);
+          signal.throwIfAborted();
+          throw new Error("Expected cancellation");
+        }
+        controller.abort();
+        throw reason;
+      },
+      controller,
+    );
+    const output = outputs[previousOutputs]!;
+    try {
+      if (mode === "abort") {
+        const error: unknown = await writing.catch((caught: unknown) => caught);
+        expect(error).not.toBe(reason);
+        expect(error).toMatchObject({
+          name: "AbortError",
+          code: 20,
+          cause: reason,
+          message:
+            'Owner stopped backup (phase=traversal, entry="/source/workspace", rawBytes=0, outputBytes=0)',
+        });
+        expect(reason).toMatchObject({ message: "Owner stopped backup", code: 20 });
+      } else {
+        await expect(writing).rejects.toBe(reason);
+      }
+      expect(output.closed).toBe(true);
+      await expect(fs.lstat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      if (!output.closed) {
+        await once(output, "close");
+      }
+    }
+  },
+);
 
 it("preserves an existing archive when exclusive creation is refused", async () => {
   const archivePath = archivePathFor("backup-existing-");
@@ -149,33 +165,6 @@ it("preserves an existing archive when exclusive creation is refused", async () 
   source.end("new archive");
   await expect(writeStream(archivePath, () => source)).rejects.toMatchObject({ code: "EEXIST" });
   await expect(fs.readFile(archivePath, "utf8")).resolves.toBe("existing archive");
-});
-
-it("joins a pending output open before cleaning up a synchronous producer failure", async () => {
-  const archivePath = archivePathFor("backup-producer-failed-");
-  const previousOutputs = outputs.length;
-  const controller = new AbortController();
-  const failure = Object.assign(new Error("Producer failed before returning a stream"), {
-    code: "EACCES",
-  });
-  const writing = writeStream(
-    archivePath,
-    () => {
-      controller.abort();
-      throw failure;
-    },
-    controller,
-  );
-  const output = outputs[previousOutputs]!;
-  try {
-    await expect(writing).rejects.toBe(failure);
-    expect(output.closed).toBe(true);
-    await expect(fs.lstat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
-  } finally {
-    if (!output.closed) {
-      await once(output, "close");
-    }
-  }
 });
 
 it.each([511, 1024, 1025, 8193])(
