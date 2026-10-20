@@ -49,7 +49,6 @@ it.each([
   mountSolid(MessageGroupView, { group, options: groupOptions }, container);
 
   const chip = query(`a.markdown-session-link[data-session-key="${key}"]`)!;
-  expect(chip).not.toBeNull();
   expect(chip.textContent).toBe(chipText);
   expect(chip.querySelector(":scope > .session-label")?.textContent).toBe(chipText);
   expect(chip.classList.contains("markdown-session-link--titled")).toBe(titled);
@@ -93,7 +92,6 @@ it("routes forwarded cron runs with primary and keyboard activation, preserving 
   mountSolid(ChatThread, { props, transcript }, container);
   await waitForSolid(() => expect(query(".chat-reply-attribution a")).not.toBeNull());
   const link = container.querySelector<HTMLAnchorElement>(".chat-reply-attribution a")!;
-  expect(link).not.toBeNull();
   expect(link.getAttribute("href")).toBe("/control/automations?job=daily&run=first");
   link.focus();
   expect(document.activeElement).toBe(link);

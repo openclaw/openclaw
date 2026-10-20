@@ -102,13 +102,9 @@ it.each([false, true])(
     expect(menu?.getAttribute("aria-label")).toBe("Publication account");
     expect(query('select, [role="dialog"][popover]')).toBeNull();
     const choices = [...menu!.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')];
-    expect(
-      choices.map((item) =>
-        ["value", "role", "aria-checked"].map((name) => item.getAttribute(name)),
-      ),
-    ).toEqual([
-      ["shared", "menuitemradio", "true"],
-      ["personal", "menuitemradio", "false"],
+    expect(choices.map((item) => [item.value, item.getAttribute("aria-checked")])).toEqual([
+      ["shared", "true"],
+      ["personal", "false"],
     ]);
     expect(choices[0]?.textContent).toContain("@agent-bot");
     expect(choices[1]?.textContent).toContain(sameLogin ? "@agent-bot" : "@alice-tools");

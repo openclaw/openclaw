@@ -526,8 +526,7 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
       const cards = [
         ...container.querySelectorAll<HTMLElement>(".chat-assistant-attachment-card--blocked"),
       ];
-      const fileHeight = file.getBoundingClientRect().height;
-      expect(fileHeight).toBe(74);
+      expect(file.getBoundingClientRect().height).toBe(74);
       const gallery = query(container, ".chat-message-images");
       const slots = () => [...gallery.children].map(rectangle);
       const before = slots();
@@ -572,8 +571,7 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
         expect(card.getBoundingClientRect().width).toBe(before[index]!.width);
         expectContentSizedError(card);
         expect(before[index]!.height).toBeCloseTo(card.getBoundingClientRect().height, 1);
-        // Measure the card outline independently of its sibling secondary menu.
-        // Menu hit targets are exercised separately above; restore them immediately.
+        // Exclude sibling menu hit targets while measuring the card outline.
         const menu = card.parentElement!.querySelector<HTMLElement>(".chat-image-actions");
         const menuPointerEvents = menu?.style.pointerEvents;
         if (menu) {
@@ -581,8 +579,7 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
         }
         const cardCorners = cornerInsets(card);
         const rect = card.getBoundingClientRect();
-        // Compare both outlines at the same subpixel coordinates so browser hit
-        // testing cannot round two equivalent corners onto different pixels.
+        // Compare at identical subpixel coordinates to avoid hit-test rounding differences.
         const fileParent = file.parentNode!;
         const fileNext = file.nextSibling;
         document.body.append(file);

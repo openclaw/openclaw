@@ -117,7 +117,6 @@ it.each([
     await document.fonts.ready;
     const bubbles = host.querySelectorAll<HTMLElement>(".chat-bubble");
     const content = contentOf(bubbles[0]!);
-    expect(content).not.toBeNull();
     const toggle = toggleOf(bubbles[0]!);
     await expect.poll(() => toggle.hidden).toBe(false);
     const lineHeight = Number.parseFloat(getComputedStyle(query(".chat-text", content)).lineHeight);
@@ -142,7 +141,6 @@ it.each([
       expect(short.scrollHeight - short.clientHeight).toBeLessThanOrEqual(1);
     }
     const link = query<HTMLAnchorElement>(".chat-reply-attribution a");
-    expect(link).not.toBeNull();
     expect(getComputedStyle(link)).toMatchObject({
       backgroundColor: "rgba(0, 0, 0, 0)",
       borderTopWidth: "0px",

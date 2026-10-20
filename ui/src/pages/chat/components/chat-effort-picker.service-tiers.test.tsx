@@ -63,8 +63,7 @@ it("keeps Ultrafast selectable while showing and clearing a provider downgrade",
   const observation = { requestedTier: "ultrafast", responseTier: "priority" };
   openPicker();
   const ultrafast = show("ultrafast", observation);
-  expect(ultrafast.disabled).toBe(false);
-  expect(ultrafast.getAttribute("aria-checked")).toBe("true");
+  expect([ultrafast.disabled, ultrafast.getAttribute("aria-checked")]).toEqual([false, "true"]);
   expect(summary().title).toContain("Ultrafast requested, currently served as priority");
 
   show("ultrafast", { requestedTier: "ultrafast" });
@@ -114,8 +113,7 @@ it("keeps an uncommitted reasoning preview when other picker props refresh", () 
   expect(slider.getAttribute("aria-valuetext")).toBe("Ultra");
   view.update(options(true));
   expect(host.querySelector("[data-chat-thinking-slider]")).toBe(slider);
-  expect(slider.value).toBe("2");
-  expect(slider.getAttribute("aria-valuetext")).toBe("Ultra");
+  expect([slider.value, slider.getAttribute("aria-valuetext")]).toEqual(["2", "Ultra"]);
   expect(onThinkingSelect).not.toHaveBeenCalled();
   slider.dispatchEvent(new Event("change", { bubbles: true }));
   expect(onThinkingSelect).toHaveBeenCalledExactlyOnceWith("ultra", "reasoning-preview");
