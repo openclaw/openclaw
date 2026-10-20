@@ -8,15 +8,16 @@ const identity = {
   conversationId: "thread-1",
   messageId: "message-1",
 };
+const message = (messageId: string) => ({ ...identity, accountId: undefined, messageId });
 
 describe("outbound message identity registry", () => {
   beforeEach(() => {
     outboundMessageIdentities.clear();
     vi.restoreAllMocks();
+    vi.spyOn(Date, "now").mockReturnValue(1_000);
   });
 
   it("scopes identities by channel and account", () => {
-    vi.spyOn(Date, "now").mockReturnValue(1_000);
     recordOutboundMessageIdentity({
       ...identity,
       channel: "Discord",
@@ -57,34 +58,16 @@ describe("outbound message identity registry", () => {
   });
 
   it("evicts the oldest identity when the registry reaches its entry bound", () => {
-    vi.spyOn(Date, "now").mockReturnValue(1_000);
     for (let index = 0; index <= 10_000; index += 1) {
-      recordOutboundMessageIdentity({
-        ...identity,
-        accountId: undefined,
-        messageId: `message-${index}`,
-      });
+      recordOutboundMessageIdentity(message(`message-${index}`));
     }
 
     expect(outboundMessageIdentities.size).toBe(10_000);
-    expect(
-      isRecentOutboundMessageIdentity({
-        ...identity,
-        accountId: undefined,
-        messageId: "message-0",
-      }),
-    ).toBe(false);
-    expect(
-      isRecentOutboundMessageIdentity({
-        ...identity,
-        accountId: undefined,
-        messageId: "message-10000",
-      }),
-    ).toBe(true);
+    expect(isRecentOutboundMessageIdentity(message("message-0"))).toBe(false);
+    expect(isRecentOutboundMessageIdentity(message("message-10000"))).toBe(true);
   });
 
   it("matches a transport-defined outbound source identity", () => {
-    vi.spyOn(Date, "now").mockReturnValue(1_000);
     const source = { ...identity, messageId: undefined, sourceId: "webhook-1" };
     recordOutboundMessageIdentity(source);
 

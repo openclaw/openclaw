@@ -12,16 +12,20 @@ import { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } from "./ingress-retry-policy.js";
 
 async function recordAttempts(
   queue: ChannelIngressQueue<{ privatePayload: string }>,
-  id: string,
-  count: number,
-  lastError?: string,
+  name: string,
+  count = DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
+  withError = true,
 ) {
+  const id = `${name}-private-id`;
   for (let attempt = 0; attempt < count; attempt += 1) {
     const claim = await queue.claim(id, { ownerId: "private-owner" });
     if (!claim) {
       throw new Error(`Expected ${id} claim ${attempt + 1}`);
     }
-    await queue.release(claim, { lastError, releasedAt: 1_000 + attempt });
+    await queue.release(claim, {
+      lastError: withError ? `${name}-private-error` : undefined,
+      releasedAt: 1_000 + attempt,
+    });
   }
 }
 
@@ -71,17 +75,12 @@ describe("channel ingress queue health", () => {
           }
         };
         await enqueue("retry", 100);
-        await recordAttempts(
-          queue,
-          "retry-private-id",
-          DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-          "retry-private-error",
-        );
+        await recordAttempts(queue, "retry");
         await enqueue("retry-follower", 200, "retry");
         await enqueue("ordinary", 300);
-        await recordAttempts(queue, "ordinary-private-id", 1, "ordinary-private-error");
+        await recordAttempts(queue, "ordinary", 1);
         await enqueue("no-error", 400);
-        await recordAttempts(queue, "no-error-private-id", DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS);
+        await recordAttempts(queue, "no-error", undefined, false);
 
         clock = now - INGRESS_CLAIM_LEASE_MS;
         await enqueue("stale", 500);
@@ -91,12 +90,7 @@ describe("channel ingress queue health", () => {
         await enqueue("fresh", 700);
         await claim("fresh");
         await enqueue("null-pressured", 800, null);
-        await recordAttempts(
-          queue,
-          "null-pressured-private-id",
-          DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-          "null-pressured-private-error",
-        );
+        await recordAttempts(queue, "null-pressured");
         await enqueue("null-unrelated", 900, null);
         clock = now - INGRESS_CLAIM_LEASE_MS;
         await enqueue("null-stale", 1_000, null);

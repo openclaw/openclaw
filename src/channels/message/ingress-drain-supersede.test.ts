@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { createChannelIngressDrain } from "./ingress-drain.js";
 import {
   createTestIngressQueue,
@@ -93,10 +94,7 @@ describe("channel ingress drain supersede", () => {
       const queue = createTestIngressQueue(stateDir);
       await queue.enqueue("released", { text: "released" }, { laneKey: "shared" });
       await queue.enqueue("owner", { text: "owner" }, { laneKey: "shared" });
-      let releaseOwner!: () => void;
-      const ownerGate = new Promise<void>((resolve) => {
-        releaseOwner = resolve;
-      });
+      const ownerGate = createDeferredCore();
       const signals = new Map<string, AbortSignal>();
       const drain = createChannelIngressDrain<Payload>({
         queue,
@@ -108,7 +106,7 @@ describe("channel ingress drain supersede", () => {
           if (event.id === "released") {
             return { kind: "deferred" };
           }
-          await ownerGate;
+          await ownerGate.promise;
           await lifecycle.onAdopted();
           return { kind: "completed" };
         },
@@ -126,7 +124,7 @@ describe("channel ingress drain supersede", () => {
       expect((await queue.listPending({ limit: "all" })).map((event) => event.id)).toEqual([
         "abort",
       ]);
-      releaseOwner();
+      ownerGate.resolve();
       await drain.waitForIdle();
       drain.dispose();
     });

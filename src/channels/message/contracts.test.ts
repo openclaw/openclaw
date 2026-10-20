@@ -40,55 +40,37 @@ describe("durable final capability contracts", () => {
   });
 
   it("runs proofs from channel message adapter declarations", async () => {
-    const text = vi.fn();
-    const media = vi.fn();
-
+    const proofs = { text: vi.fn(), media: vi.fn() };
     const results = await verifyChannelMessageAdapterCapabilityProofs({
       adapterName: "demo",
       adapter: { durableFinal: { capabilities: { text: true, media: true } } },
-      proofs: { text, media },
+      proofs,
     });
-    expectProofs(results, { text, media }, durableFinalDeliveryCapabilities.length);
+    expectProofs(results, proofs, durableFinalDeliveryCapabilities.length);
   });
 
   it("runs live preview finalizer proofs from channel message adapter declarations", async () => {
-    const finalEdit = vi.fn();
-    const normalFallback = vi.fn();
-
+    const proofs = { finalEdit: vi.fn(), normalFallback: vi.fn() };
     const results = await verifyChannelMessageLiveFinalizerProofs({
       adapterName: "demo",
-      adapter: {
-        live: {
-          finalizer: {
-            capabilities: { finalEdit: true, normalFallback: true },
-          },
-        },
-      },
-      proofs: { finalEdit, normalFallback },
+      adapter: { live: { finalizer: { capabilities: { finalEdit: true, normalFallback: true } } } },
+      proofs,
     });
-    expectProofs(results, { finalEdit, normalFallback }, 5);
+    expectProofs(results, proofs, 5);
   });
 
   it("runs live capability proofs from channel message adapter declarations", async () => {
-    const draftPreview = vi.fn();
-    const previewFinalization = vi.fn();
-
+    const proofs = { draftPreview: vi.fn(), previewFinalization: vi.fn() };
     const results = await verifyChannelMessageLiveCapabilityAdapterProofs({
       adapterName: "demo",
-      adapter: {
-        live: {
-          capabilities: { draftPreview: true, previewFinalization: true },
-        },
-      },
-      proofs: { draftPreview, previewFinalization },
+      adapter: { live: { capabilities: { draftPreview: true, previewFinalization: true } } },
+      proofs,
     });
-    expectProofs(results, { draftPreview, previewFinalization }, 5);
+    expectProofs(results, proofs, 5);
   });
 
   it("runs receive ack policy proofs from channel message adapter declarations", async () => {
-    const afterReceiveRecord = vi.fn();
-    const afterAgentDispatch = vi.fn();
-
+    const proofs = { after_receive_record: vi.fn(), after_agent_dispatch: vi.fn() };
     const results = await verifyChannelMessageReceiveAckPolicyAdapterProofs({
       adapterName: "demo",
       adapter: {
@@ -97,16 +79,8 @@ describe("durable final capability contracts", () => {
           supportedAckPolicies: ["after_receive_record", "after_agent_dispatch"],
         },
       },
-      proofs: {
-        after_receive_record: afterReceiveRecord,
-        after_agent_dispatch: afterAgentDispatch,
-      },
+      proofs,
     });
-    expectProofs(
-      results,
-      { after_receive_record: afterReceiveRecord, after_agent_dispatch: afterAgentDispatch },
-      4,
-      "policy",
-    );
+    expectProofs(results, proofs, 4, "policy");
   });
 });
