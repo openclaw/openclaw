@@ -6,15 +6,9 @@ import { isStateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createOnlineReadOnlyBackup } from "./sqlite-readonly-location.js";
-import { readUpdateRunDriver } from "./update-run-driver.js";
+import { interruptedRunFixture } from "./update-run-fixture.test-support.js";
 import type { InterruptedUpdateGatewayObservation } from "./update-run-interruption-health.js";
 import { reconcileInterruptedUpdateRuns } from "./update-run-interruption.js";
-import {
-  createUpdateRun,
-  getUpdateRunAsync,
-  recordUpdateRunPhase,
-  recordUpdateRunStep,
-} from "./update-run-ledger.js";
 
 const health = vi.hoisted(() => ({
   observe: vi.fn<() => Promise<InterruptedUpdateGatewayObservation>>(),
@@ -35,29 +29,9 @@ it.each([false, true])(
   "retains its selected database through health observation (replace=%s)",
   async (replace) => {
     const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("interrupted-update-source-") } };
-    const driver = readUpdateRunDriver();
-    if (!driver) {
-      throw new Error("The fixture requires its native process identity");
-    }
-    const run = createUpdateRun(
-      {
-        trigger: "cli",
-        origin: {
-          driver: { ...driver, startIdentity: driver.startIdentity === "0" ? "1" : "0" },
-        },
-      },
-      options,
-    );
     const candidate = { version: "2026.9.4", buildId: "source-custody-candidate" };
-    for (const step of [
-      { step: "finalize:installed-candidate", detail: JSON.stringify(candidate) },
-      { step: "restarting" },
-      { step: "post-update verification" },
-    ]) {
-      recordUpdateRunStep(run.runId, { ...step, status: "completed" }, options);
-    }
-    recordUpdateRunPhase(run.runId, "verifying", {}, options);
-    const before = await getUpdateRunAsync(run.runId, options);
+    const run = interruptedRunFixture(options, candidate, true);
+    const before = await run.readAsync();
     const entered = createDeferredCore();
     const release = createDeferredCore();
     health.observe.mockImplementation(async () => {
@@ -116,9 +90,9 @@ it.each([false, true])(
       expect(
         "error" in outcome && isStateDatabaseReadAdmissionInvalidatedError(outcome.error),
       ).toBe(true);
-      expect(await getUpdateRunAsync(run.runId, options)).toEqual(before);
+      expect(await run.readAsync()).toEqual(before);
     } else {
-      expect(outcome).toMatchObject({ value: [{ runId: run.runId, status: "succeeded" }] });
+      expect(outcome).toMatchObject({ value: [{ runId: run.id, status: "succeeded" }] });
     }
   },
 );

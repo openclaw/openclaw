@@ -15,15 +15,14 @@ afterEach(() => closeOpenClawStateDatabaseForTest());
 // v2026.9.4 update-run-schema.ts:18 and gateway/server-methods/update-report.ts:111.
 // That reader drops exitCode from ledger rows and joins the sentinel by exact name.
 const releasedSteps = z
-  .array(
-    z.object({
-      step: z.string().max(1024),
-      status: z.enum(["pending", "in_progress", "completed", "failed", "skipped"]),
-      startedAtMs: z.number().int().nonnegative().optional(),
-      endedAtMs: z.number().int().nonnegative().optional(),
-      detail: z.string().max(1024).optional(),
-    }),
-  )
+  .object({
+    step: z.string().max(1024),
+    status: z.enum(["pending", "in_progress", "completed", "failed", "skipped"]),
+    startedAtMs: z.number().int().nonnegative().optional(),
+    endedAtMs: z.number().int().nonnegative().optional(),
+    detail: z.string().max(1024).optional(),
+  })
+  .array()
   .max(128);
 
 it.each([
@@ -72,11 +71,9 @@ it.each([
   };
   const sentinel = buildUpdateRestartSentinelPayload({ result, meta: {} });
   expect(sentinel.stats?.steps?.map((entry) => entry.name)).toEqual([releasedName]);
-  const failed = decoded.filter((entry) => entry.status === "failed");
-  const measured = sentinel.stats?.steps?.filter((entry) => !entry.advisory);
-  expect(
-    failed.map((entry) => measured?.find((item) => item.name === entry.step)?.log?.exitCode),
-  ).toEqual([0]);
+  expect(sentinel.stats?.steps?.filter((entry) => !entry.advisory)).toMatchObject([
+    { name: releasedName, log: { exitCode: 0 } },
+  ]);
   const report = await prepareUpdateFailureReport(
     { attemptId: run.runId, result, recordedRun: recorded },
     options,

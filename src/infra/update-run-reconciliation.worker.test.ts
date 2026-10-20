@@ -12,6 +12,7 @@ import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-s
 import { holdForeignWriter } from "./sqlite-worker-shared-state-admission.test-support.js";
 import { createRetainedUpdateRecovery } from "./update-retained-recovery.test-support.js";
 import { readUpdateRunDriver } from "./update-run-driver.js";
+import { deadDriverFixture } from "./update-run-fixture.test-support.js";
 import {
   adoptUpdateRun,
   createUpdateRun,
@@ -75,14 +76,11 @@ async function expiredLegacyRun() {
 
 async function deadDriverRun() {
   const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("update-dead-driver-") } };
-  const driver = readUpdateRunDriver();
-  if (!driver) {
-    throw new Error("The fixture requires process start identity");
-  }
+  const { driver, dead } = deadDriverFixture();
   const run = createUpdateRun(
     {
       trigger: "cli",
-      origin: { driver: { ...driver, startIdentity: String(Number(driver.startIdentity) + 1) } },
+      origin: { driver: dead },
     },
     options,
   );
