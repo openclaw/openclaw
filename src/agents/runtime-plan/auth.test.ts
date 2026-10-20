@@ -1,5 +1,3 @@
-// Runtime plan auth tests cover provider/auth-profile selection and plugin
-// alias loading behavior for the auth portion of the plan.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const pluginRegistryMocks = vi.hoisted(() => {
@@ -41,6 +39,7 @@ vi.mock("../../plugins/plugin-metadata-snapshot.js", () => ({
 }));
 
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
+import { codexHarness, platformRoute, subscriptionRoute } from "./auth-fixtures.test-support.js";
 import { buildAgentRuntimeAuthPlan } from "./auth.js";
 
 describe("buildAgentRuntimeAuthPlan", () => {
@@ -101,14 +100,7 @@ describe("buildAgentRuntimeAuthPlan", () => {
       authProfileMode: "token",
       sessionAuthProfileId: "openai:work",
       sessionAuthProfileSource: "user",
-      modelRoute: {
-        provider: "openai",
-        modelId: "gpt-5.5",
-        api: "openai-chatgpt-responses",
-        baseUrl: "https://chatgpt.com/backend-api/codex",
-        authRequirement: "subscription",
-        requestTransportOverrides: "none",
-      },
+      modelRoute: subscriptionRoute,
       config: {},
     });
 
@@ -133,17 +125,9 @@ describe("buildAgentRuntimeAuthPlan", () => {
       sessionAuthProfileId: "openai:work",
       sessionAuthProfileSource: "auto",
       sessionAuthProfileCandidateIds: ["openai:work"],
-      modelRoute: {
-        provider: "openai",
-        modelId: "gpt-5.5",
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-        authRequirement: "api-key",
-        requestTransportOverrides: "none",
-      },
+      modelRoute: platformRoute,
       config: {},
-      harnessId: "codex",
-      harnessRuntime: "codex",
+      ...codexHarness,
       allowHarnessAuthProfileForwarding: false,
     });
 
