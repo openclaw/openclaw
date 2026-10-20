@@ -66,65 +66,60 @@ describe("Gateway crash-loop recovery adapter", () => {
     expect(lifecycle.record).toHaveBeenCalledOnce();
   });
 
-  it("cancels an active breaker read and refuses another read after close", async () => {
+  it.each([
+    { phase: "inspection", close: false },
+    { phase: "recording", close: false },
+    { phase: "inspection", close: true },
+  ])("invalidates suspended $phase recovery (close=$close)", async ({ phase, close }) => {
     const controller = new AbortController();
-    lifecycle.inspect.mockImplementationOnce(async (_env, _now, signal) => {
-      if (!signal) {
-        throw new Error("Breaker inspection requires its lifecycle signal");
-      }
-      await waitForAbortSignal(signal);
-      return cleared;
-    });
-
-    const recovery = recover(controller.signal);
+    const pending = createDeferred();
+    const entered = createDeferred();
     const closed = new Error("Gateway close prelude");
-    const rejected = expect(recovery).rejects.toBe(closed);
-    controller.abort(closed);
-    await rejected;
-
-    await expect(recover(controller.signal)).rejects.toBe(closed);
-    expect(lifecycle.inspect).toHaveBeenCalledOnce();
-    expect(lifecycle.record).not.toHaveBeenCalled();
-    expect(onRecovered).not.toHaveBeenCalled();
-  });
-
-  it.each(["inspection", "recording"] as const)(
-    "does not recover a boot replaced during breaker %s",
-    async (phase) => {
-      const controller = new AbortController();
-      const pending = createDeferred();
-      const entered = createDeferred();
-      const pause = async <T>(result: T) => {
+    const pause = async <T>(result: T) => {
+      entered.resolve();
+      await pending.promise;
+      return result;
+    };
+    if (phase === "inspection") {
+      lifecycle.inspect.mockImplementationOnce(async (_env, _now, signal) => {
+        if (!close) {
+          return pause(cleared);
+        }
+        if (!signal) {
+          throw new Error("Breaker inspection requires its lifecycle signal");
+        }
         entered.resolve();
-        await pending.promise;
-        return result;
-      };
-      if (phase === "inspection") {
-        lifecycle.inspect.mockImplementationOnce(() => pause(cleared));
-      } else {
-        lifecycle.record.mockImplementationOnce(() => pause("old-recovered-boot"));
-      }
-
-      const recovery = recover(controller.signal);
-      await awaitGateBeforeSettlement(
-        entered.promise,
-        recovery,
-        `Recovery settled before the ${phase} boundary`,
-      );
+        await waitForAbortSignal(signal);
+        return cleared;
+      });
+    } else {
+      lifecycle.record.mockImplementationOnce(() => pause("old-recovered-boot"));
+    }
+    const recovery = recover(controller.signal);
+    await awaitGateBeforeSettlement(
+      entered.promise,
+      recovery,
+      `Recovery settled before the ${phase} boundary`,
+    );
+    if (close) {
+      const rejected = expect(recovery).rejects.toBe(closed);
+      controller.abort(closed);
+      await rejected;
+      await expect(recover(controller.signal)).rejects.toBe(closed);
+      expect(lifecycle.inspect).toHaveBeenCalledOnce();
+    } else {
       activeBootId = "next-boot-id";
       pending.resolve();
-
       await expect(recovery).rejects.toThrow("replaced boot");
-      expect(lifecycle.record).toHaveBeenCalledTimes(phase === "inspection" ? 0 : 1);
-      if (phase === "recording") {
-        expect(lifecycle.record.mock.calls[0]?.[3]).toThrow("replaced boot");
-        const closed = new Error("Gateway close prelude");
-        controller.abort(closed);
-        expect(lifecycle.record.mock.calls[0]?.[3]).toThrow(closed);
-      }
-      expect(onRecovered).not.toHaveBeenCalled();
-    },
-  );
+    }
+    expect(lifecycle.record).toHaveBeenCalledTimes(phase === "inspection" ? 0 : 1);
+    if (phase === "recording") {
+      expect(lifecycle.record.mock.calls[0]?.[3]).toThrow("replaced boot");
+      controller.abort(closed);
+      expect(lifecycle.record.mock.calls[0]?.[3]).toThrow(closed);
+    }
+    expect(onRecovered).not.toHaveBeenCalled();
+  });
 
   it("adopts the committed boot identity when close overtakes its reply", async () => {
     const controller = new AbortController();

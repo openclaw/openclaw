@@ -30,13 +30,14 @@ const run = (...args: string[]) =>
     argv: ["gateway", "restart-handoff", ...args, "--json"],
   });
 const protocol = { protocol: "openclaw.gateway.restart-handoff", protocolVersion: 1 };
-function expectError(reason: string, exitCode: number) {
+function expectJson(fields: Record<string, unknown>) {
   expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledWith({
     ...protocol,
-    ok: false,
-    status: "error",
-    reason,
+    ...fields,
   });
+}
+function expectError(reason: string, exitCode: number) {
+  expectJson({ ok: false, status: "error", reason });
   expect(mocks.defaultRuntime.exit).toHaveBeenCalledWith(exitCode);
 }
 
@@ -59,11 +60,7 @@ describe("gateway restart-handoff commands", () => {
   it("reports protocol version 1 capabilities", async () => {
     await run("capabilities");
 
-    expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledWith({
-      ok: true,
-      ...protocol,
-      operations: ["consume"],
-    });
+    expectJson({ ok: true, operations: ["consume"] });
   });
 
   it("forwards a validated expected PID and wraps the consume result", async () => {
@@ -71,12 +68,7 @@ describe("gateway restart-handoff commands", () => {
     await run("consume", "--expected-pid", "4242");
 
     expect(mocks.consumeGatewayRestartHandoffSync).toHaveBeenCalledWith({ expectedPid: 4242 });
-    expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledWith({
-      ok: true,
-      ...protocol,
-      status: "none",
-      reason: "missing",
-    });
+    expectJson({ ok: true, status: "none", reason: "missing" });
   });
 
   it.each([

@@ -27,6 +27,7 @@ describe("ensureDevGatewayConfig integration", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     resetConfigRuntimeState();
     vi.unstubAllEnvs();
     await fs.rm(root, { recursive: true, force: true });
@@ -52,7 +53,7 @@ describe("ensureDevGatewayConfig integration", () => {
     const resolvedDevWorkspace = path.join(await fs.realpath(root), path.basename(devWorkspace));
     const realOpen = fs.open.bind(fs);
     let injected = false;
-    const openSpy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
       const handle = await realOpen(...args);
       const rawPath = nodeFilePath(args[0]);
       const exclusiveCreate =
@@ -74,19 +75,16 @@ describe("ensureDevGatewayConfig integration", () => {
       return handle;
     });
 
-    try {
-      await expect(
-        withEnvAsync({ FS_SAFE_NATIVE_MODE: "off" }, () => ensureDevGatewayConfig({})),
-      ).rejects.toMatchObject({ cause: { code: "ENOSPC" } });
-      expect(injected).toBe(true);
-      await expect(fs.access(configPath)).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(fs.access(path.join(devWorkspace, "AGENTS.md"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-      expect(await fs.readdir(devWorkspace)).toEqual([]);
-    } finally {
-      openSpy.mockRestore();
-    }
+    await expect(
+      withEnvAsync({ FS_SAFE_NATIVE_MODE: "off" }, () => ensureDevGatewayConfig({})),
+    ).rejects.toMatchObject({ cause: { code: "ENOSPC" } });
+    expect(injected).toBe(true);
+    await expect(fs.access(configPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.access(path.join(devWorkspace, "AGENTS.md"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(await fs.readdir(devWorkspace)).toEqual([]);
+    vi.mocked(fs.open).mockRestore();
 
     await ensureDevGatewayConfig({});
     const agents = await fs.readFile(path.join(devWorkspace, "AGENTS.md"), "utf8");
