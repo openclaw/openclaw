@@ -80,7 +80,7 @@ function createController(
   });
 }
 
-async function createTrackedClaim(
+async function createStoredClaim(
   fields: Partial<InternalSessionEntry> = {},
   params: Partial<ClaimControllerParams> = {},
 ) {
@@ -93,14 +93,12 @@ async function createTrackedClaim(
   let entry: InternalSessionEntry = {
     sessionId: "session",
     updatedAt: 1,
-    restartRecoveryDeliveryRunId: "recovery-run",
     ...fields,
   };
   const sessionId = entry.sessionId;
   await replaceSessionEntry(scope, entry);
   const controller = createController({
     ...scope,
-    admissionRunId: "recovery-run",
     getEntry: () => entry,
     getSessionId: () => sessionId,
     setEntry: (next) => {
@@ -117,6 +115,27 @@ async function createTrackedClaim(
   };
 }
 
+function createTrackedClaim(
+  fields: Partial<InternalSessionEntry> = {},
+  params: Partial<ClaimControllerParams> = {},
+) {
+  return createStoredClaim(
+    { restartRecoveryDeliveryRunId: "recovery-run", ...fields },
+    { admissionRunId: "recovery-run", ...params },
+  );
+}
+function createRecorder(
+  scope: { agentId?: string; storePath: string; sessionKey: string },
+  entry: InternalSessionEntry,
+  message: Parameters<typeof createUserTurnTranscriptRecorder>[0]["message"],
+) {
+  return createUserTurnTranscriptRecorder({
+    message,
+    target: { ...scope, sessionId: entry.sessionId, sessionEntry: entry },
+    updateMode: "none",
+  });
+}
+
 async function createAcknowledgedClaim() {
   const sourceTurnId = "acknowledged-source";
   const fixture = await createTrackedClaim(
@@ -130,15 +149,11 @@ async function createAcknowledgedClaim() {
   );
   const entry = fixture.current();
   const transcriptScope = { ...fixture.scope, sessionId: entry.sessionId };
-  const recorder = createUserTurnTranscriptRecorder({
-    message: {
-      role: "user",
-      content: "Synthetic acknowledged input",
-      timestamp: 1,
-      idempotencyKey: `${sourceTurnId}:user`,
-    },
-    target: { ...transcriptScope, sessionEntry: entry },
-    updateMode: "none",
+  const recorder = createRecorder(fixture.scope, entry, {
+    role: "user",
+    content: "Synthetic acknowledged input",
+    timestamp: 1,
+    idempotencyKey: `${sourceTurnId}:user`,
   });
   await recorder.persistApproved();
   expect(recorder.hasPersisted()).toBe(true);
@@ -152,41 +167,25 @@ describe("createReplyRestartRecoveryClaimController", () => {
   it.each(["absent", "persisted"] as const)(
     "leaves source-less lifecycle admission to its existing writer when the recorder is %s",
     async (mode) => {
-      const scope = {
-        agentId: "main",
-        storePath: path.join(tempDirs.make("openclaw-source-less-lifecycle-"), "sessions.json"),
-        sessionKey: "agent:main:main",
-      };
-      const entry: InternalSessionEntry = { sessionId: "source-less-session", updatedAt: 1 };
-      await replaceSessionEntry(scope, entry);
+      await using fixture = await createStoredClaim(
+        { sessionId: "source-less-session" },
+        { admissionRunId: "source-less-run", setEntry: () => {} },
+      );
+      const { scope, controller } = fixture;
       const recorder =
         mode === "persisted"
-          ? createUserTurnTranscriptRecorder({
-              message: { role: "user", content: "continue", timestamp: 1 },
-              target: { ...scope, sessionId: entry.sessionId, sessionEntry: entry },
-              updateMode: "none",
+          ? createRecorder(scope, fixture.current(), {
+              role: "user",
+              content: "continue",
+              timestamp: 1,
             })
           : undefined;
       await recorder?.persistApproved();
-      const before = loadSessionEntry(scope);
-      const write = vi.spyOn(sessionAccessor, "updateSessionEntry");
-      try {
-        await using controller = createController({
-          ...scope,
-          admissionRunId: "source-less-run",
-          lifecycleGeneration: getAgentEventLifecycleGeneration(),
-          getEntry: () => entry,
-          getSessionId: () => entry.sessionId,
-          isRestartAbort: () => false,
-          resolveDeliveryContext: () => undefined,
-          setEntry: () => {},
-        });
-        await expect(controller.admitUserTurn(recorder)).resolves.toBe("admitted");
-        expect(write).not.toHaveBeenCalled();
-        expect(loadSessionEntry(scope)).toEqual(before);
-      } finally {
-        write.mockRestore();
-      }
+      const before = fixture.read();
+      using write = vi.spyOn(sessionAccessor, "updateSessionEntry");
+      await expect(controller.admitUserTurn(recorder)).resolves.toBe("admitted");
+      expect(write).not.toHaveBeenCalled();
+      expect(loadSessionEntry(scope)).toEqual(before);
     },
   );
 
@@ -209,33 +208,25 @@ describe("createReplyRestartRecoveryClaimController", () => {
         const lifecycleGeneration = getAgentEventLifecycleGeneration();
         const executionRunId = "source-less-execution";
         let restartAborted = false;
-        let entry: InternalSessionEntry = {
-          sessionId: "source-less-session",
-          updatedAt: 1,
-          ...metadata,
-        };
+        await using fixture = await createStoredClaim(
+          { sessionId: "source-less-session", ...metadata },
+          {
+            ...scope,
+            admissionRunId: "source-less-run",
+            executionRunId,
+            lifecycleGeneration,
+            isRestartAbort: () => restartAborted,
+          },
+        );
+        const entry = fixture.current();
+        const { controller } = fixture;
         const expectedRuns =
           owner === "main" ? [{ runId: executionRunId, lifecycleGeneration }] : undefined;
-        await replaceSessionEntry(scope, entry);
-        const recorder = createUserTurnTranscriptRecorder({
-          message: { role: "user", content: "continue the task", timestamp: 1 },
-          target: { ...scope, sessionId: entry.sessionId, sessionEntry: entry },
-          updateMode: "none",
+        const recorder = createRecorder(scope, entry, {
+          role: "user",
+          content: "continue the task",
+          timestamp: 1,
         });
-        await using controller = createController({
-          ...scope,
-          admissionRunId: "source-less-run",
-          executionRunId,
-          lifecycleGeneration,
-          getEntry: () => entry,
-          getSessionId: () => entry.sessionId,
-          isRestartAbort: () => restartAborted,
-          resolveDeliveryContext: () => undefined,
-          setEntry: (next) => {
-            entry = next;
-          },
-        });
-
         await expect(controller.admitUserTurn(recorder)).resolves.toBe("admitted");
         expect(recorder.hasPersisted()).toBe(true);
         expect(loadSessionEntry(scope)).toMatchObject({
@@ -317,10 +308,11 @@ describe("createReplyRestartRecoveryClaimController", () => {
         () => context,
       );
       const sourceTurnId = "placement-source";
-      const recorder = createUserTurnTranscriptRecorder({
-        message: { role: "user", content: "continue", timestamp: 1, idempotencyKey: sourceTurnId },
-        target: { ...scope, sessionId: entry.sessionId, sessionEntry: entry },
-        updateMode: "none",
+      const recorder = createRecorder(scope, entry, {
+        role: "user",
+        content: "continue",
+        timestamp: 1,
+        idempotencyKey: sourceTurnId,
       });
       await expect(
         recorder.stageApproved?.({ runId: "placement-run", assertCurrent: () => {} }),
@@ -691,7 +683,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
       );
       const adopt = actor.adoptRun.bind(actor);
       const patch = entryPatch.patchSessionEntryInWorker;
-      const spy =
+      using spy =
         stage === "admission"
           ? vi.spyOn(actor, "adoptRun").mockImplementationOnce((...args) => {
               replace();
@@ -701,41 +693,35 @@ describe("createReplyRestartRecoveryClaimController", () => {
               replace();
               return patch(params);
             });
-      try {
-        const outcome = await (
-          stage === "cleanup"
-            ? fixture.controller.clear()
-            : fixture.controller.admitUserTurn(fixture.recorder)
-        ).catch((error: unknown) => error);
-        if (change === "metadata") {
-          expect(outcome).toBe(stage === "cleanup" ? undefined : "admitted");
-          expect(fixture.current().model).toBe("concurrent-model");
-        } else if (stage === "admission") {
-          expect(isRestartRecoveryClaimChangedError(outcome)).toBe(true);
-        } else {
-          expect(outcome).toBeUndefined();
-        }
-        expect(spy).toHaveBeenCalled();
-        const persisted = fixture.read();
-        expect(persisted?.status).toBeUndefined();
-        expect(persisted?.restartRecoveryDeliveryRunId).toBe(
-          stage === "cleanup" && change === "metadata" ? undefined : "recovery-run",
-        );
-        expect(persisted?.restartRecoveryDeliverySourceRunId).toBe(
-          change === "source-claim"
-            ? "concurrent-source"
-            : stage === "cleanup"
-              ? undefined
-              : fixture.sourceTurnId,
-        );
-        expect(persisted?.restartRecoveryDeliveryRequestFingerprint).toBe(
-          stage === "admission" && change === "source-claim"
-            ? "acknowledged-fingerprint"
-            : undefined,
-        );
-      } finally {
-        spy.mockRestore();
+      const outcome = await (
+        stage === "cleanup"
+          ? fixture.controller.clear()
+          : fixture.controller.admitUserTurn(fixture.recorder)
+      ).catch((error: unknown) => error);
+      if (change === "metadata") {
+        expect(outcome).toBe(stage === "cleanup" ? undefined : "admitted");
+        expect(fixture.current().model).toBe("concurrent-model");
+      } else if (stage === "admission") {
+        expect(isRestartRecoveryClaimChangedError(outcome)).toBe(true);
+      } else {
+        expect(outcome).toBeUndefined();
       }
+      expect(spy).toHaveBeenCalled();
+      const persisted = fixture.read();
+      expect(persisted?.status).toBeUndefined();
+      expect(persisted?.restartRecoveryDeliveryRunId).toBe(
+        stage === "cleanup" && change === "metadata" ? undefined : "recovery-run",
+      );
+      expect(persisted?.restartRecoveryDeliverySourceRunId).toBe(
+        change === "source-claim"
+          ? "concurrent-source"
+          : stage === "cleanup"
+            ? undefined
+            : fixture.sourceTurnId,
+      );
+      expect(persisted?.restartRecoveryDeliveryRequestFingerprint).toBe(
+        stage === "admission" && change === "source-claim" ? "acknowledged-fingerprint" : undefined,
+      );
     },
   );
 
@@ -831,24 +817,20 @@ describe("createReplyRestartRecoveryClaimController", () => {
       };
       const patch = entryPatch.patchSessionEntryInWorker;
       let storedSuccessor: InternalSessionEntry | undefined;
-      const spy = vi.spyOn(entryPatch, "patchSessionEntryInWorker").mockImplementation((params) => {
+      using spy = vi.spyOn(entryPatch, "patchSessionEntryInWorker").mockImplementation((params) => {
         // The released synchronous writer can replace the row after host admission.
         replaceSessionEntrySync(fixture.scope, successor);
         storedSuccessor = structuredClone(fixture.read());
         return patch(params);
       });
-      try {
-        await fixture.controller.clear();
-        expect(spy).toHaveBeenCalledOnce();
-        expect(fixture.current()).toEqual(original);
-        expect(storedSuccessor).toMatchObject({
-          sessionId: successor.sessionId,
-          lifecycleRevision: successor.lifecycleRevision,
-        });
-        expect(fixture.read()).toEqual(storedSuccessor);
-      } finally {
-        spy.mockRestore();
-      }
+      await fixture.controller.clear();
+      expect(spy).toHaveBeenCalledOnce();
+      expect(fixture.current()).toEqual(original);
+      expect(storedSuccessor).toMatchObject({
+        sessionId: successor.sessionId,
+        lifecycleRevision: successor.lifecycleRevision,
+      });
+      expect(fixture.read()).toEqual(storedSuccessor);
     },
   );
 

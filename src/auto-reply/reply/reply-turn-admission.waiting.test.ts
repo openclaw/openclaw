@@ -256,11 +256,7 @@ describe("reply turn admission", () => {
         `agent:main:telegram:topic:stale-${kind}`,
         `stale-${kind}-session`,
       );
-      active.attachBackend({
-        kind: "embedded",
-        cancel,
-        isStreaming: () => true,
-      });
+      active.attachBackend({ kind: "embedded", cancel, isStreaming: () => true });
       active.setPhase("running");
       vi.setSystemTime(startedAt + RUN_STALE_TAKEOVER_MS + 1);
 
