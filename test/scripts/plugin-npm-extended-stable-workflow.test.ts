@@ -350,38 +350,20 @@ describe("plugin npm extended-stable workflow", () => {
   });
 
   it.each([
-    { publishTag: "latest", toolingTrusted: true, candidateMoved: false },
-    { publishTag: "beta", toolingTrusted: true, candidateMoved: false },
-    { publishTag: "extended-stable", toolingTrusted: true, candidateMoved: false },
-    { publishTag: "extended-stable", toolingTrusted: true, candidateMoved: true },
-    {
-      publishTag: "extended-stable",
-      toolingTrusted: true,
-      candidateMoved: false,
-      mainVersion: "2026.9.1",
-      expectedFailure: "only the trailing completed month",
-    },
-    {
-      publishTag: "extended-stable",
-      toolingTrusted: true,
-      candidateMoved: false,
-      mainApiUnavailable: true,
-      expectedFailure: "fixture main API unavailable",
-    },
-    {
-      publishTag: "extended-stable",
-      toolingTrusted: true,
-      candidateMoved: false,
-      mainVersion: "invalid",
-      expectedFailure: "Protected main package version",
-    },
-    { publishTag: "latest", toolingTrusted: false, candidateMoved: false },
+    { publishTag: "latest" },
+    { publishTag: "beta" },
+    { publishTag: "extended-stable" },
+    { publishTag: "extended-stable", candidateMoved: true },
+    { mainVersion: "2026.9.1", expectedFailure: "only the trailing completed month" },
+    { mainApiUnavailable: true, expectedFailure: "fixture main API unavailable" },
+    { mainVersion: "invalid", expectedFailure: "Protected main package version" },
+    { publishTag: "latest", toolingTrusted: false },
   ])(
     "publishes sealed bytes only with current authority: $publishTag / trusted $toolingTrusted / moved $candidateMoved / main $mainVersion / unavailable $mainApiUnavailable",
     ({
-      publishTag,
-      toolingTrusted,
-      candidateMoved,
+      publishTag = "extended-stable",
+      toolingTrusted = true,
+      candidateMoved = false,
       mainVersion = "2026.8.1",
       mainApiUnavailable = false,
       expectedFailure,
@@ -772,36 +754,16 @@ ${policy}`,
   });
 
   it.each([
-    { ref: "refs/heads/main", preflight: false, oidc: false, admitted: false },
-    {
-      ref: "refs/heads/release/2026.9.1",
-      preflight: false,
-      oidc: false,
-      admitted: false,
-    },
-    {
-      ref: "refs/heads/tideclaw/alpha/2026-09-25-1200Z",
-      preflight: false,
-      oidc: false,
-      admitted: false,
-    },
-    {
-      ref: "refs/tags/release-publish/bbbbbbbbbbbb-123",
-      preflight: false,
-      oidc: false,
-      admitted: true,
-    },
-    { ref: "refs/heads/main", preflight: true, oidc: false, admitted: true },
-    { ref: "refs/heads/main", preflight: true, oidc: true, admitted: false },
-    {
-      ref: "refs/tags/release-publish/bbbbbbbbbbbb-123",
-      preflight: true,
-      oidc: true,
-      admitted: true,
-    },
-  ])(
-    "enforces npm-publish tag admission before planning: $ref/$preflight/$oidc",
-    ({ ref, preflight, oidc, admitted }) => {
+    ["refs/heads/main", false, false, false],
+    ["refs/heads/release/2026.9.1", false, false, false],
+    ["refs/heads/tideclaw/alpha/2026-09-25-1200Z", false, false, false],
+    ["refs/tags/release-publish/bbbbbbbbbbbb-123", false, false, true],
+    ["refs/heads/main", true, false, true],
+    ["refs/heads/main", true, true, false],
+    ["refs/tags/release-publish/bbbbbbbbbbbb-123", true, true, true],
+  ] as const)(
+    "enforces npm-publish tag admission before planning: %s/%s/%s",
+    (ref, preflight, oidc, admitted) => {
       const guard = step(
         workflow().jobs?.preview_plugins_npm,
         "Validate ref is on a trusted publish branch",

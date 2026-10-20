@@ -61,6 +61,21 @@ function step(jobValue: Job, name: string): Step {
   return value ?? {};
 }
 
+function expectArtifactBinding(value: string) {
+  for (const fragment of [
+    "clawhub-bootstrap-artifact.mjs download",
+    '--artifact-size "${ARTIFACT_SIZE}"',
+    '--run-attempt "${ARTIFACT_RUN_ATTEMPT}"',
+    '--consumer-run-attempt "${GITHUB_RUN_ATTEMPT}"',
+    '--producer-job-name "Pack immutable ClawHub bootstrap artifacts"',
+    "--clawhub-toolchain-integrity",
+    "--clawhub-toolchain-sha256",
+    "--clawhub-toolchain-version",
+  ]) {
+    expect(value).toContain(fragment);
+  }
+}
+
 describe("Plugin ClawHub New workflow", () => {
   it("isolates validation runs while serializing publication of the same target", () => {
     expect(workflow.concurrency).toEqual({
@@ -258,14 +273,7 @@ describe("Plugin ClawHub New workflow", () => {
     expect(validate["timeout-minutes"]).toBe(45);
     const binding =
       step(validate, "Download and verify immutable ClawHub bootstrap artifact").run ?? "";
-    expect(binding).toContain("clawhub-bootstrap-artifact.mjs download");
-    expect(binding).toContain('--artifact-size "${ARTIFACT_SIZE}"');
-    expect(binding).toContain('--run-attempt "${ARTIFACT_RUN_ATTEMPT}"');
-    expect(binding).toContain('--consumer-run-attempt "${GITHUB_RUN_ATTEMPT}"');
-    expect(binding).toContain('--producer-job-name "Pack immutable ClawHub bootstrap artifacts"');
-    expect(binding).toContain("--clawhub-toolchain-integrity");
-    expect(binding).toContain("--clawhub-toolchain-sha256");
-    expect(binding).toContain("--clawhub-toolchain-version");
+    expectArtifactBinding(binding);
     expect(step(validate, "Validate packed ClawHub package identities").run).toContain(
       "--validate-packed",
     );
@@ -304,14 +312,7 @@ describe("Plugin ClawHub New workflow", () => {
 
     const binding =
       step(publish, "Download and verify immutable ClawHub bootstrap artifact").run ?? "";
-    expect(binding).toContain("clawhub-bootstrap-artifact.mjs download");
-    expect(binding).toContain('--artifact-size "${ARTIFACT_SIZE}"');
-    expect(binding).toContain('--run-attempt "${ARTIFACT_RUN_ATTEMPT}"');
-    expect(binding).toContain('--consumer-run-attempt "${GITHUB_RUN_ATTEMPT}"');
-    expect(binding).toContain('--producer-job-name "Pack immutable ClawHub bootstrap artifacts"');
-    expect(binding).toContain("--clawhub-toolchain-integrity");
-    expect(binding).toContain("--clawhub-toolchain-sha256");
-    expect(binding).toContain("--clawhub-toolchain-version");
+    expectArtifactBinding(binding);
     expect(binding).toContain('--workflow-head-branch "${WORKFLOW_HEAD_BRANCH}"');
     expect(binding).toContain('--workflow-ref "${WORKFLOW_REF}"');
   });
@@ -319,21 +320,15 @@ describe("Plugin ClawHub New workflow", () => {
   it("rehashes and validates tgz identity before exposing the token", () => {
     const publish = job("publish_bootstrap_plugins");
     const names = (publish.steps ?? []).map((entry) => entry.name);
-    expect(names.indexOf("Rehash immutable ClawHub bootstrap artifacts")).toBeLessThan(
-      names.indexOf("Write ClawHub token config"),
-    );
-    expect(
-      names.indexOf("Validate packed ClawHub package identities before credentials"),
-    ).toBeLessThan(names.indexOf("Write ClawHub token config"));
-    expect(names.indexOf("Materialize locked ClawHub CLI")).toBeLessThan(
-      names.indexOf("Write ClawHub token config"),
-    );
-    expect(
-      names.indexOf("Reconfirm configure-only registry bytes before credentials"),
-    ).toBeLessThan(names.indexOf("Write ClawHub token config"));
-    expect(names.indexOf("Reconfirm release tag before credentials")).toBeLessThan(
-      names.indexOf("Write ClawHub token config"),
-    );
+    for (const prerequisite of [
+      "Rehash immutable ClawHub bootstrap artifacts",
+      "Validate packed ClawHub package identities before credentials",
+      "Materialize locked ClawHub CLI",
+      "Reconfirm configure-only registry bytes before credentials",
+      "Reconfirm release tag before credentials",
+    ]) {
+      expect(names.indexOf(prerequisite)).toBeLessThan(names.indexOf("Write ClawHub token config"));
+    }
     expect(step(publish, "Rehash immutable ClawHub bootstrap artifacts").run).toContain(
       ".release-harness/scripts/lib/clawhub-bootstrap-artifact.mjs verify",
     );
