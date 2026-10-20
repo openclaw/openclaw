@@ -107,14 +107,16 @@ function observerFixture(
   const broadcast = vi.fn();
   const persisted = vi.fn<NonNullable<SessionObserverDeps["persistDigest"]>>(async () => true);
   let now = 1_000;
-  const cfg = { session: { store: useDefaultStore ? undefined : database.path } };
+  vi.spyOn(Date, "now").mockImplementation(() => now);
+  const cfg = {
+    session: { store: useDefaultStore ? undefined : database.path },
+    agents: { defaults: { utilityModel: "" } },
+  };
   const observer = createSessionObserver({
     getConfig: () => cfg,
-    now: () => now,
     subscribers,
     broadcastToConnIds: broadcast,
     ...(persistDigests ? {} : { persistDigest: persisted }),
-    resolveUtilityModelRef: () => undefined,
     prepareModel: async () => preparedModel(),
     completeModel: async () => modelMessage({ headline: "Completed observation", health: "done" }),
   });
@@ -391,7 +393,7 @@ it("does not write a dormant predecessor digest into a replacement store", async
 
 it("joins the worker-backed persistence of a legacy event adapter", async () => {
   await withObserver(async ({ observer, peer }) => {
-    observer.handleEvent(preambleEvent("Legacy admission"));
+    expect(observer.handleEvent(preambleEvent("Legacy admission"))).toBeUndefined();
     const disposal = observer.disposeAsync();
     const afterClose = preambleEvent("Rejected after close");
     observer.handleEvent(afterClose);
@@ -431,15 +433,15 @@ it("lets the publisher finish its nested write before persisting the background 
       config: {
         session: { store: options.path },
         gateway: { controlUi: { sessionObserver: true } },
+        agents: { defaults: { utilityModel: "" } },
       },
-      utilityModelRef: null,
       persistDigest,
     });
     let successor: Promise<void> | undefined;
     let disposal: Promise<void> | undefined;
     try {
       await runOpenClawAgentWriteAdmission(options, async () => {
-        harness.observer.handleEvent(preambleEvent("Reviewing"));
+        await harness.observer.handleEventAsync(preambleEvent("Reviewing"));
         expect(persistDigest).toHaveBeenCalledOnce();
         expect(digestEntered).toBe(false);
         await runOpenClawAgentWorkerWrite(options, async () => {
@@ -475,7 +477,9 @@ it.for(["model", "failed model", "synthesized terminal"] as const)(
       const config: OpenClawConfig = {
         session: { store: state.path("original.sqlite") },
         gateway: { controlUi: { sessionObserver: true } },
-        agents: { defaults: { utilityModel: "openai/gpt-test" } },
+        agents: {
+          defaults: { utilityModel: kind === "synthesized terminal" ? "" : "openai/gpt-test" },
+        },
       };
       const replacementStore = state.path("replacement.sqlite");
       let changeSourceOnRead = false;
@@ -518,7 +522,6 @@ it.for(["model", "failed model", "synthesized terminal"] as const)(
       try {
         harness = createHarness({
           config,
-          utilityModelRef: kind === "synthesized terminal" ? null : "openai/gpt-test",
           readSession: vi.fn(() => ({ ...initialEntry, lifecycleRevision: "owned" })),
           prepareModel: vi.fn(async () => preparedModel()),
           completeModel: vi.fn(async () => {

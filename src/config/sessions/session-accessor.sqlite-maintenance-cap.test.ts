@@ -51,7 +51,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-function createCapBatchStore(protectedOnly = false) {
+function createCapBatchStore(protectedOnly = false, afterPlan?: () => void | Promise<void>) {
   const fixture = createSessionMaintenanceKickStore({
     storePath: path.join(tempDirs.make("session-maintenance-cap-"), "agent.sqlite"),
     key: sessionKey,
@@ -85,6 +85,7 @@ function createCapBatchStore(protectedOnly = false) {
     const result = await run(params);
     if (result.kind === "maintenance-plan") {
       plans.push(result.value);
+      await afterPlan?.();
     }
     return result;
   });
@@ -137,16 +138,21 @@ it.for(["automatic", "inline", "protected"] as const)(
 it.for(["victim", "remaining"] as const)(
   "releases the cap writer between batches and honors new protection (%s)",
   async (protection, { signal }) => {
-    const { request, storePath, keys, plans } = createCapBatchStore();
-    const protectedKey = keys[64]!;
     let protectedKeys: string[] = [];
+    let releases = 0;
+    let foreground: Promise<unknown> | undefined;
+    const { request, storePath, keys, plans } = createCapBatchStore(false, async () => {
+      if (++releases === 1) {
+        protectedKeys = protection === "remaining" ? [sessionKey, ...keys.slice(64)] : [keys[64]!];
+        await withinTest(foreground!, signal);
+      }
+    });
+    const protectedKey = keys[64]!;
     const unregister = registerSessionMaintenancePreserveKeysProvider(async () => ({
       capture: () => protectedKeys,
       dispose() {},
     }));
     let commits = 0;
-    let releases = 0;
-    let foreground: Promise<unknown> | undefined;
     let foregroundCompleted = false;
     observeSessionMaintenancePlanningWorker({
       afterExecute(result) {
@@ -159,13 +165,6 @@ it.for(["victim", "remaining"] as const)(
           ).then(() => {
             foregroundCompleted = true;
           });
-        }
-      },
-      async afterRelease() {
-        if (++releases === 1) {
-          protectedKeys =
-            protection === "remaining" ? [sessionKey, ...keys.slice(64)] : [protectedKey];
-          await withinTest(foreground!, signal);
         }
       },
       beforeExecute() {
@@ -205,16 +204,13 @@ it.for(["victim", "remaining"] as const)(
 it("keeps the first cap receipt and stops later batches when maintenance authority retires", async ({
   signal,
 }) => {
-  const { database, request, storePath, keys, plans } = createCapBatchStore();
   const retired = createDeferred();
   let releases = 0;
-  observeSessionMaintenancePlanningWorker({
-    afterRelease() {
-      if (++releases === 1) {
-        markGatewayRestartDraining();
-        retired.resolve();
-      }
-    },
+  const { database, request, storePath, keys, plans } = createCapBatchStore(false, () => {
+    if (++releases === 1) {
+      markGatewayRestartDraining();
+      retired.resolve();
+    }
   });
   kickSessionEntryMaintenanceAfterWrite(request);
   await withinTest(retired.promise, signal);

@@ -8,10 +8,7 @@ import {
   type ResolvedCodexPluginPolicy,
   type ResolvedCodexPluginsPolicy,
 } from "./config.js";
-import {
-  ensureCodexPluginActivation,
-  type CodexPluginActivationResult,
-} from "./plugin-activation.js";
+import { ensureCodexPluginActivation } from "./plugin-activation.js";
 import { buildCodexAppApprovalOverrides } from "./plugin-app-approval-overrides.js";
 import {
   readCodexPluginInventory,
@@ -179,7 +176,8 @@ export async function buildCodexPluginThreadConfig(
     });
   }
   const activationDiagnostics: CodexPluginThreadConfigDiagnostic[] = [];
-  const activationResults: CodexPluginActivationResult[] = [];
+  const activationResults = new Map<string, boolean>();
+  let postInstallRefreshRequired = false;
   for (const record of inventory.records) {
     if (!record.activationRequired) {
       continue;
@@ -190,7 +188,8 @@ export async function buildCodexPluginThreadConfig(
       deferAppInventoryRefresh: true,
       targetAppIds: record.ownedAppIds,
     });
-    activationResults.push(activation);
+    activationResults.set(record.policy.configKey, activation.ok);
+    postInstallRefreshRequired ||= activation.ok && activation.installAttempted;
     if (!activation.ok) {
       activationDiagnostics.push({
         code: "plugin_activation_failed",
@@ -199,9 +198,6 @@ export async function buildCodexPluginThreadConfig(
       });
     }
   }
-  const postInstallRefreshRequired = activationResults.some(
-    (activation) => activation.ok && activation.installAttempted,
-  );
   // Activation can become unnecessary or fail before it refreshes apps. Rebuild the
   // deferred missing snapshot so unrelated active plugin apps are not silently erased.
   const deferredMissingRefreshRequired =
@@ -279,10 +275,8 @@ export async function buildCodexPluginThreadConfig(
     if (!record.policy.enabled) {
       continue;
     }
-    const activation = activationResults.find(
-      (item) => item.identity.configKey === record.policy.configKey,
-    );
-    if (activation?.ok === false || (record.activationRequired && !activation?.ok)) {
+    const activationSucceeded = activationResults.get(record.policy.configKey);
+    if (activationSucceeded === false || (record.activationRequired && !activationSucceeded)) {
       continue;
     }
     if (record.appOwnership !== "proven") {

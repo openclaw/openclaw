@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ChatGoalDraftMode } from "../../lib/chat/chat-types.ts";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
-import { resetChatViewState } from "./chat-view-state.ts";
+import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import {
   disposeChatView,
   renderChatInto as renderNativeChatInto,

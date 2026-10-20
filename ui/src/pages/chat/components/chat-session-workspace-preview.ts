@@ -217,6 +217,7 @@ function updatePreviewContent(
       content.kind === "file" &&
       previous.content === content.content &&
       previous.edit?.hash === content.edit?.hash &&
+      previous.draftKey === content.draftKey &&
       previous.path === content.path &&
       previous.root === content.root &&
       previous.mimeType === content.mimeType

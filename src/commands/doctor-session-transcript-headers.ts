@@ -214,7 +214,21 @@ export async function noteSessionTranscriptHeaderHealth(params: {
           databaseOptions,
           {
             operationLabel: "doctor.session-transcript-headers",
-            repairAdmission: { integrityCheck: params.integrityCheck ?? "quick" },
+            repairAdmission: {
+              integrityCheck: params.integrityCheck ?? "quick",
+              integrityTables: [
+                "transcript_events",
+                "transcript_rewrite_watermarks",
+                "session_windows",
+                "session_transcript_index_state",
+                "session_transcript_active_events",
+                "session_transcript_fts_rows",
+                "session_transcript_fts",
+                "transcript_event_identities",
+                "session_reactions",
+                "session_nodes",
+              ],
+            },
           },
         );
         repaired += 1;

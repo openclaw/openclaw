@@ -33,10 +33,12 @@ vi.mock("../state/schema-migration-backup-scope.js", async (importOriginal) => (
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const declaredTables = ["schema_meta", "small"];
+let fixture: ReturnType<typeof createFixture>;
 afterEach(() => vi.restoreAllMocks());
 
 beforeEach(() => {
   vi.mocked(resolveSchemaMigrationBackupTables).mockReset().mockReturnValue(declaredTables);
+  fixture = createFixture();
 });
 
 function seedDatabase(databasePath: string) {
@@ -84,10 +86,9 @@ function listBackups(databasePath: string) {
 }
 
 async function backup(
-  fixture: ReturnType<typeof createFixture>,
+  versionMigrationsOnly = true,
   pendingPaths = [fixture.agent],
   databasePaths = pendingPaths,
-  versionMigrationsOnly = true,
 ) {
   const maintenance = createOpenClawDatabaseMaintenanceScope({
     schemaMaintenance: true,
@@ -164,57 +165,54 @@ function expectRegisteredContent(env: NodeJS.ProcessEnv) {
   const manifests = listSessionSqliteMigrationManifestPaths(env);
   expect(manifests).toHaveLength(1);
   const manifest = readSessionSqliteMigrationManifest(manifests[0]!)!;
-  for (const target of manifest.targets) {
-    for (const move of target.completedMoves) {
-      const bytes = fs.readFileSync(move.archivePath);
-      const stat = fs.lstatSync(move.archivePath, { bigint: true });
-      expect(move.artifact?.identity).toEqual({
-        dev: String(stat.dev),
-        ino: String(stat.ino),
-        mtimeNs: String(stat.mtimeNs),
-        size: bytes.length,
-        sha256: createHash("sha256").update(bytes).digest("hex"),
-      });
-    }
+  for (const move of manifest.targets.flatMap((target) => target.completedMoves)) {
+    const bytes = fs.readFileSync(move.archivePath);
+    const stat = fs.lstatSync(move.archivePath, { bigint: true });
+    expect(move.artifact?.identity).toEqual({
+      dev: String(stat.dev),
+      ino: String(stat.ino),
+      mtimeNs: String(stat.mtimeNs),
+      size: bytes.length,
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+    });
   }
 }
 
 describe("Doctor table-scoped migration backup selection", () => {
-  it.each([false, true])(
-    "registers newly published backups without rereading their payloads (scoped=%s)",
-    async (scoped) => {
-      const fixture = createFixture();
+  it.each([
+    [false, false],
+    [true, false],
+    [false, true],
+    [true, true],
+  ])(
+    "registers backups with publication caching (scoped=%s, retained=%s)",
+    async (scoped, retained) => {
       const originals = [fixture.agent, fixture.shared].map((file) => fs.readFileSync(file));
+      if (retained) {
+        await backup(scoped);
+        for (const manifest of listSessionSqliteMigrationManifestPaths(fixture.env)) {
+          fs.unlinkSync(manifest);
+        }
+      }
       const reads = observeRegistration();
-      const result = await backup(fixture, [fixture.agent], [fixture.agent], scoped);
+      const result = await backup(scoped);
       expect(result.warnings).toEqual([]);
       expect(reads.size).toBe(2);
-      expect([...reads.values()]).toEqual([0, 0]);
       expectRegisteredContent(fixture.env);
       expect([fixture.agent, fixture.shared].map((file) => fs.readFileSync(file))).toEqual(
         originals,
       );
-    },
-  );
-
-  it.each([false, true])(
-    "freshly hashes retained backups when their registration is missing (scoped=%s)",
-    async (scoped) => {
-      const fixture = createFixture();
-      await backup(fixture, [fixture.agent], [fixture.agent], scoped);
-      for (const manifest of listSessionSqliteMigrationManifestPaths(fixture.env)) {
-        fs.unlinkSync(manifest);
+      if (!scoped && !retained) {
+        expect(result.versionMigrations).toBeUndefined();
+        expectFullBackup(fixture.agent);
+        expectFullBackup(fixture.shared);
       }
-      const reads = observeRegistration();
-      expect((await backup(fixture, [fixture.agent], [fixture.agent], scoped)).warnings).toEqual(
-        [],
-      );
-      expect(reads.size).toBe(2);
-      for (const [archive, bytes] of reads) {
-        expect(bytes).toBe(fs.statSync(archive).size);
+      if (retained) {
+        for (const [archive, bytes] of reads) {
+          expect(bytes).toBe(fs.statSync(archive).size);
+        }
+        await backup(scoped);
       }
-      expectRegisteredContent(fixture.env);
-      await backup(fixture, [fixture.agent], [fixture.agent], scoped);
       expect([...reads.values()]).toEqual([0, 0]);
     },
   );
@@ -222,7 +220,6 @@ describe("Doctor table-scoped migration backup selection", () => {
   it.each(["same-size edit", "replacement", "hard link", "symlink"] as const)(
     "does not reuse stale publication content after a %s before registration",
     async (change) => {
-      const fixture = createFixture();
       let changedArchive = "";
       const reads = observeRegistration((inventory) => {
         changedArchive = inventory.find(
@@ -247,7 +244,7 @@ describe("Doctor table-scoped migration backup selection", () => {
           fs.symlinkSync(`${changedArchive}.original`, changedArchive);
         }
       });
-      const result = await backup(fixture, [fixture.agent], [fixture.agent], false);
+      const result = await backup(false);
       if (change === "hard link" || change === "symlink") {
         expect(result.warnings).toHaveLength(1);
         expect(result.warnings[0]).toContain("not an unaliased regular file");
@@ -261,17 +258,8 @@ describe("Doctor table-scoped migration backup selection", () => {
     },
   );
 
-  it("keeps the complete Doctor repair run on full images even for declared versions", async () => {
-    const fixture = createFixture();
-    const result = await backup(fixture, [fixture.agent], [fixture.agent], false);
-    expect(result.versionMigrations).toBeUndefined();
-    expectFullBackup(fixture.agent);
-    expectFullBackup(fixture.shared);
-  });
-
   it("restores a failed scoped migration through Doctor without overwriting unrelated writes", async () => {
-    const fixture = createFixture();
-    const result = await backup(fixture);
+    const result = await backup();
     expect(result.warnings).toEqual([]);
     const archives = listBackups(fixture.agent);
     expect(archives).toHaveLength(1);
@@ -282,17 +270,15 @@ describe("Doctor table-scoped migration backup selection", () => {
     );
     expectFullBackup(fixture.shared);
     const recovery = inspectSessionSqliteRecovery({ cfg: {}, env: fixture.env });
-    expect(recovery.artifacts).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          path: archive,
-          outcome: "protected",
-          reason: "incomplete-recovery-operation",
-        }),
-      ]),
+    expect(recovery.artifacts).toContainEqual(
+      expect.objectContaining({
+        path: archive,
+        outcome: "protected",
+        reason: "incomplete-recovery-operation",
+      }),
     );
 
-    expect(() => {
+    {
       using migrated = new DatabaseSync(fixture.agent);
       migrated.exec(`
         PRAGMA user_version = 27;
@@ -300,8 +286,7 @@ describe("Doctor table-scoped migration backup selection", () => {
         UPDATE small SET value = 'after migration';
         UPDATE retained SET value = 'written after backup';
       `);
-      throw new Error("synthetic migration failure after writes");
-    }).toThrow("synthetic migration failure after writes");
+    }
     await restoreDoctorMigrationBackup({
       sourcePath: fixture.agent,
       backupPath: archive,
@@ -319,41 +304,50 @@ describe("Doctor table-scoped migration backup selection", () => {
   });
 
   it("reuses the original scoped image after one database has already migrated", async () => {
-    const fixture = createFixture();
     const secondAgent = path.join(path.dirname(fixture.agent), "second.sqlite");
     seedDatabase(secondAgent);
     const inventory = [fixture.agent, secondAgent];
-    await backup(fixture, inventory);
+    await backup(true, inventory);
     const original = listBackups(fixture.agent)[0]!;
     const originalBytes = fs.readFileSync(original);
     {
       using migrated = new DatabaseSync(fixture.agent);
       migrated.exec("PRAGMA user_version = 27; UPDATE small SET value = 'partially migrated'");
     }
-    await backup(fixture, [secondAgent], inventory);
+    await backup(true, [secondAgent], inventory);
     expect(listBackups(fixture.agent)).toEqual([original]);
     expect(fs.readFileSync(original)).toEqual(originalBytes);
     using live = new DatabaseSync(fixture.agent, { readOnly: true });
     expect(live.prepare("SELECT value FROM small").get()?.value).toBe("partially migrated");
   });
 
-  it("uses full images for the whole group when a pending migration is undeclared", async () => {
-    const fixture = createFixture();
-    const secondAgent = path.join(path.dirname(fixture.agent), "second.sqlite");
-    seedDatabase(secondAgent);
-    // Preserve a declared first target to catch a producer that retains a partial scope map.
-    vi.mocked(resolveSchemaMigrationBackupTables)
-      .mockReturnValueOnce(declaredTables)
-      .mockReturnValueOnce(undefined);
-    await backup(fixture, [fixture.agent, secondAgent]);
-    for (const database of [fixture.agent, secondAgent, fixture.shared]) {
-      expectFullBackup(database);
-    }
-  });
+  it.each(["undeclared", "virtual"])(
+    "uses full images for the whole group with a %s table scope",
+    async (kind) => {
+      const secondAgent = path.join(path.dirname(fixture.agent), "second.sqlite");
+      seedDatabase(secondAgent);
+      if (kind === "undeclared") {
+        // Keep the declared first target to detect a partial scope map.
+        vi.mocked(resolveSchemaMigrationBackupTables)
+          .mockReturnValueOnce(declaredTables)
+          .mockReturnValueOnce(undefined);
+      } else {
+        using virtual = new DatabaseSync(secondAgent);
+        virtual.exec(`
+        DROP TABLE small;
+        CREATE VIRTUAL TABLE small USING fts5(value);
+        INSERT INTO small VALUES ('searchable history');
+      `);
+      }
+      await backup(true, [fixture.agent, secondAgent]);
+      for (const database of [fixture.agent, secondAgent, fixture.shared]) {
+        expectFullBackup(database);
+      }
+    },
+  );
 
   it("does not reuse a scoped schema archive for a subsequent full-only repair", async () => {
-    const fixture = createFixture();
-    await backup(fixture);
+    await backup();
     const earlierBackups = [fixture.agent, fixture.shared].flatMap(listBackups);
     expect(earlierBackups.some((archive) => archive.endsWith(".scoped.bak"))).toBe(true);
     await withDoctorSqliteMaintenanceLock({
@@ -372,45 +366,21 @@ describe("Doctor table-scoped migration backup selection", () => {
     expectFullBackup(fixture.shared, earlierBackups);
   });
 
-  it("does not reuse a scoped archive when the pending migration has no declaration", async () => {
-    const fixture = createFixture();
-    await backup(fixture);
-    const earlierBackups = [fixture.agent, fixture.shared].flatMap(listBackups);
-    vi.mocked(resolveSchemaMigrationBackupTables).mockReturnValue(undefined);
-    await backup(fixture);
-    expectFullBackup(fixture.agent, earlierBackups);
-    expectFullBackup(fixture.shared, earlierBackups);
-  });
-
   it.each([
+    "undeclared",
     "OPENCLAW_UPDATE_IN_PROGRESS",
     "OPENCLAW_UPDATE_POST_CORE_CONVERGENCE",
     "OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE",
-  ])("preserves full images for the shipped updater marker %s", async (marker) => {
-    const fixture = createFixture();
-    await backup(fixture);
+  ])("replaces scoped images with full images for %s", async (marker) => {
+    await backup();
     const earlierBackups = [fixture.agent, fixture.shared].flatMap(listBackups);
-    fixture.env[marker] = "1";
-    await backup(fixture);
+    if (marker === "undeclared") {
+      vi.mocked(resolveSchemaMigrationBackupTables).mockReturnValue(undefined);
+    } else {
+      fixture.env[marker] = "1";
+    }
+    await backup();
     expectFullBackup(fixture.agent, earlierBackups);
     expectFullBackup(fixture.shared, earlierBackups);
-  });
-
-  it("falls back for the whole group when a declared table is virtual", async () => {
-    const fixture = createFixture();
-    const secondAgent = path.join(path.dirname(fixture.agent), "second.sqlite");
-    seedDatabase(secondAgent);
-    {
-      using virtual = new DatabaseSync(secondAgent);
-      virtual.exec(`
-        DROP TABLE small;
-        CREATE VIRTUAL TABLE small USING fts5(value);
-        INSERT INTO small VALUES ('searchable history');
-      `);
-    }
-    await backup(fixture, [fixture.agent, secondAgent]);
-    for (const database of [fixture.agent, secondAgent, fixture.shared]) {
-      expectFullBackup(database);
-    }
   });
 });

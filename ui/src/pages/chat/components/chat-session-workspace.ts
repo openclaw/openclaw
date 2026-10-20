@@ -34,8 +34,8 @@ import {
   trackSessionCheckoutSidebar,
 } from "./chat-session-workspace-state.ts";
 import type {
+  SessionWorkspaceFilter,
   SessionWorkspaceHost,
-  SessionWorkspaceProps,
   SessionWorkspaceState,
 } from "./chat-session-workspace-types.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
@@ -44,10 +44,14 @@ import { hasUniformLineEndings } from "./chat-sidebar-file-view.tsx";
 registerFilePreviewEnglish();
 
 export { retireSessionWorkspaceCheckout } from "./chat-session-workspace-state.ts";
-export type {
-  SessionWorkspaceHost,
-  SessionWorkspaceProps,
-} from "./chat-session-workspace-types.ts";
+export type { SessionWorkspaceHost } from "./chat-session-workspace-types.ts";
+
+type SessionWorkspaceView = ReturnType<typeof createSessionWorkspaceProps>;
+export type SessionWorkspaceProps = Omit<
+  SessionWorkspaceView,
+  "connectionEpoch" | "onDownloadFile" | "onOpenDiff"
+> &
+  Partial<Pick<SessionWorkspaceView, "connectionEpoch" | "onDownloadFile" | "onOpenDiff">>;
 
 function formatMarkdownCodeSpan(value: string): string {
   // Markdown finds block boundaries before inline spans, so filenames must
@@ -285,6 +289,7 @@ function openFile(
                   {
                     agentId,
                     expectedHash,
+                    ...(result.source ? { expectedSource: result.source } : {}),
                   },
                 );
                 const hash = saved?.file.hash;
@@ -308,6 +313,14 @@ function openFile(
                   typeof error.details === "object"
                     ? (error.details as { type?: unknown })
                     : null;
+                if (
+                  details?.type === "session_file_source_changed" &&
+                  viewingSession &&
+                  isCurrentSessionWorkspace(state, workspace)
+                ) {
+                  // Reopened browser rows must use the current root, without replacing this draft.
+                  loadSessionWorkspace(state, workspace, true);
+                }
                 if (details?.type === "session_file_conflict") {
                   return {
                     ok: false as const,
@@ -325,6 +338,14 @@ function openFile(
               const latest = await state.sessions.getFile(result.sessionKey, requestPath, {
                 agentId,
               });
+              // A hash-conflict recovery still belongs to the file source that was opened.
+              if (
+                latest?.source?.workspaceId !== result.source?.workspaceId ||
+                latest?.source?.root !== result.source?.root ||
+                latest?.source?.fileRoot !== result.source?.fileRoot
+              ) {
+                return null;
+              }
               const latestFile = latest?.file;
               if (
                 !latestFile ||
@@ -361,6 +382,9 @@ function openFile(
           result.sessionKey,
           result.root ?? "",
           filePath,
+          ...(result.source
+            ? [result.source.workspaceId, result.source.root ?? "", result.source.fileRoot ?? ""]
+            : []),
         ].join("\u0000"),
         draftContext: {
           sessionKey: result.sessionKey,
@@ -502,7 +526,7 @@ export function createSessionWorkspaceProps(
     expanded?: boolean;
     presented?: boolean;
   },
-): SessionWorkspaceProps {
+) {
   state.sessionWorkspaceDraftScope = options?.draftScope;
   state.sessionWorkspaceDraftContext = options?.draftContext;
   const workspace = getSessionWorkspace(state);
@@ -536,7 +560,7 @@ export function createSessionWorkspaceProps(
     browserPath: workspace.browserPath,
     browserSearch: workspace.browserSearch,
     connectionEpoch: state.connectionEpoch,
-    onDownloadFile: (path, origin, signal) =>
+    onDownloadFile: (path: string, origin: "session" | "workspace", signal: AbortSignal) =>
       downloadSessionFile(
         state,
         {
@@ -547,18 +571,22 @@ export function createSessionWorkspaceProps(
         },
         signal,
       ),
-    onSetFilter: (filter) => {
+    onSetFilter: (filter: SessionWorkspaceFilter) => {
       workspace.filter = filter;
       sessionWorkspaceForHost(state).publish();
     },
-    onBrowsePath: (path) => {
+    onRetry: () => {
+      clearWorkspaceTimer(workspace);
+      loadSessionWorkspace(state, workspace, true);
+    },
+    onBrowsePath: (path: string) => {
       clearWorkspaceTimer(workspace);
       workspace.browserPath = path;
       workspace.browserSearch = "";
       loadSessionWorkspace(state, workspace, true);
       sessionWorkspaceForHost(state).publish();
     },
-    onOpenFile: (path, origin) => {
+    onOpenFile: (path: string, origin: "session" | "workspace") => {
       // Session paths are cwd-relative; browser rows are workspace-root-relative.
       // Keep the origin explicit so a nested cwd cannot shadow the selected browser file.
       const opts =
@@ -567,7 +595,7 @@ export function createSessionWorkspaceProps(
           : {};
       openFile(state, workspace, path, opts);
     },
-    onSearch: (search) => {
+    onSearch: (search: string) => {
       workspace.browserSearch = search;
       sessionWorkspaceForHost(state).publish();
       clearWorkspaceTimer(workspace);
@@ -576,7 +604,7 @@ export function createSessionWorkspaceProps(
         loadSessionWorkspace(state, workspace, true);
       }, 160);
     },
-    onOpenArtifact: (artifactId) => openArtifact(state, workspace, artifactId),
+    onOpenArtifact: (artifactId: string) => openArtifact(state, workspace, artifactId),
     onOpenDiff: diffContent ? () => state.handleOpenSidebar(diffContent) : undefined,
   };
 }

@@ -11,7 +11,7 @@ import {
   subscribeSidebarBootRetirement,
 } from "../../pages/chat/session-snapshot-prewarm.ts";
 import { listen } from "../reactive/listener.ts";
-import type { SessionGateway, SessionState } from "./session-capability.ts";
+import type { SessionGateway, SessionState } from "./session-types.ts";
 
 export function createSessionBootSnapshot(
   gateway: SessionGateway,
@@ -90,20 +90,19 @@ export function createSessionBootSnapshot(
           host.readState().result === null
         ) {
           host.publish({ ...host.readState(), ...roster, resultCached: true });
-          // Let the restored sidebar commit before routing mounts the conversation pane.
+          // A new task alone can precede paint. Cross a frame before mounting the pane;
+          // the timeout releases routing in background tabs where rAF is suspended.
           await new Promise<void>((release) => {
-            const channel = new MessageChannel();
-            channel.port1.addEventListener(
-              "message",
-              () => {
-                channel.port1.close();
-                channel.port2.close();
-                release();
-              },
-              { once: true },
-            );
-            channel.port1.start();
-            channel.port2.postMessage(null);
+            const timeout = setTimeout(() => {
+              if (frame !== undefined) {
+                cancelAnimationFrame(frame);
+              }
+              release();
+            }, 100);
+            const frame = globalThis.requestAnimationFrame?.(() => {
+              clearTimeout(timeout);
+              setTimeout(release, 0);
+            });
           });
         }
       })

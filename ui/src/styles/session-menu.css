@@ -1,7 +1,5 @@
 .session-menu > .oc-menu {
-  padding: var(--menu-padding);
   border: 1px solid var(--overlay-border);
-  border-radius: var(--menu-radius);
   background: var(--bg-elevated);
   box-shadow: var(--overlay-shadow);
   min-width: 224px;

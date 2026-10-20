@@ -33,7 +33,8 @@ import {
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import { runWithRetainedGatewayRootWork } from "../process/gateway-work-admission.js";
-import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
+import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import {
@@ -175,7 +176,24 @@ beforeEach(async () => {
   releaseModel = createDeferred();
   runEmbeddedAgent.mockImplementation(async (params) => {
     modelStarted.resolve();
-    await releaseModel.promise;
+    const signal = params.abortSignal;
+    let onAbort: (() => void) | undefined;
+    const aborted = new Promise<void>((resolve) => {
+      onAbort = resolve;
+      if (signal?.aborted) {
+        resolve();
+      } else {
+        signal?.addEventListener("abort", onAbort, { once: true });
+      }
+    });
+    try {
+      await Promise.race([releaseModel.promise, aborted]);
+    } finally {
+      if (onAbort) {
+        signal?.removeEventListener("abort", onAbort);
+      }
+    }
+    signal?.throwIfAborted();
     return {
       payloads: [{ text: answer }],
       meta: {
@@ -197,7 +215,6 @@ beforeEach(async () => {
     broadcastToConnIds: broadcast,
     sessionEventSubscribers: { getAll: () => new Set([connectionId]) },
     sessionMessageSubscribers: { get: () => new Set([connectionId]) },
-    chatAbortControllers: context.chatAbortControllers,
   });
   unsubscribe = onInternalSessionTranscriptUpdate((update) => {
     if ((update.target?.sessionId ?? update.sessionId) !== sessionId) {
@@ -324,12 +341,15 @@ async function rpc(method: string, params: Record<string, unknown>) {
   return expectDefined(asOptionalRecord(result), "Gateway RPC result");
 }
 async function waitForDispatchEnd() {
-  await getSessionWorkAdmissionRelease({ scope: storePath, identities: [canonicalKey, sessionId] });
-  // Admission release does not join the producer's remaining terminal writes.
+  await captureSessionControllerSettlement({
+    scope: storePath,
+    identities: [canonicalKey, sessionId],
+  });
+  // Controller settlement does not join the producer's remaining terminal writes.
   // Settle them before the next parity cell revokes its source or replaces its row.
   await requestExecution.waitForCompletion();
   await lifecycleWrites.drain();
-  expect(context.chatAbortControllers.size).toBe(0);
+  expect(rpcSourceTesting.size).toBe(0);
 }
 async function drainPublications() {
   await Promise.all(publications);
@@ -392,7 +412,7 @@ async function startHeldConsult() {
   const ack = await consult("Keep this task running until released.", "held-task");
   await Promise.race([
     modelStarted.promise,
-    getSessionWorkAdmissionRelease({ scope: storePath, identities: [canonicalKey, sessionId] }),
+    captureSessionControllerSettlement({ scope: storePath, identities: [canonicalKey, sessionId] }),
   ]);
   const run = expectDefined(runEmbeddedAgent.mock.calls[0]?.[0], "held model invocation");
   const abortSignal = expectDefined(run.abortSignal, "admitted model cancellation signal");
@@ -537,6 +557,9 @@ it("keeps read-only Talk operator consult scaffolding out of chat and later cont
     assistantMessage(modelReply),
   ];
   runEmbeddedAgent.mockImplementation(async (params) => {
+    const recorder = expectDefined(params.userTurnTranscriptRecorder, "consult input recorder");
+    await recorder.persistApproved();
+    expect(recorder.hasPersisted()).toBe(true);
     await params.onAgentEvent?.({
       stream: "lifecycle",
       data: { phase: "start" },
@@ -560,7 +583,7 @@ it("keeps read-only Talk operator consult scaffolding out of chat and later cont
   expect(ack.idempotencyKey).toBe(ack.runId);
   await Promise.race([
     modelStarted.promise,
-    getSessionWorkAdmissionRelease({ scope: storePath, identities: [sessionKey, sessionId] }),
+    captureSessionControllerSettlement({ scope: storePath, identities: [sessionKey, sessionId] }),
   ]);
   expect(context.logGateway.error).not.toHaveBeenCalled();
   expect(runEmbeddedAgent).toHaveBeenCalledOnce();

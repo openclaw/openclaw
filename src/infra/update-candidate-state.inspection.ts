@@ -164,11 +164,11 @@ export function parseUpdateStateInspectionWorker<T>(
   if (result.code !== 0 || result.termination !== "exit" || result.outputLimitExceeded) {
     const signal = result.signal ? `, signal ${result.signal}` : "";
     const failure = result.inspection.failure(
-      result.stderr ||
-        (result.outputLimitExceeded ? "Worker output exceeded its capture limit" : result.stdout),
-      `${result.termination}${signal}`,
+      result.stderr || (result.outputLimitExceeded ? "" : result.stdout),
+      `${result.outputLimitExceeded ? "output-limit" : result.termination}${signal}`,
     );
-    const code = result.stderr.split(/\r?\n/u).find(isPublicUpdateFailureCode);
+    const code =
+      !result.outputLimitExceeded && result.stderr.split(/\r?\n/u).find(isPublicUpdateFailureCode);
     throw code ? Object.assign(failure, { code }) : failure;
   }
   try {

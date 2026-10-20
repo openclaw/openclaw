@@ -233,8 +233,14 @@ function trackSchemaChanges(
     const iterator = phase !== "bind" && !snapshot && !owner.capturing ? {} : undefined;
     const newSnapshot = snapshot && snapshot !== owner.snapshot && !owner.capturing;
     if (newSnapshot) {
-      if (!owner.transactionCatalogBound && database.isTransaction && owner.transactionRead) {
-        invalidate(owner);
+      if (
+        database.isTransaction &&
+        (owner.transactionRead || owner.transactionCatalogBound) &&
+        owner.processRevision !== getSqliteDatabaseSchemaRevision(database)
+      ) {
+        if (!owner.transactionCatalogBound) {
+          invalidate(owner);
+        }
         owner.transactionalFacts = true;
       } else {
         // The pin marker precedes its first native step. Adopt committed facts now;
@@ -255,12 +261,13 @@ function trackSchemaChanges(
     }
     const wasTransaction = database.isTransaction;
     if (
-      writable &&
+      (writable || owner.processRevision === undefined) &&
       !wasTransaction &&
       (control?.kind === "BEGIN" || control?.kind === "SAVEPOINT")
     ) {
-      // Discover the physical admission before SQLite holds a transaction lock.
-      getSqliteDatabaseSchemaRevision(database);
+      // Capture the physical revision before this batch can pin a native snapshot.
+      const processRevision = getSqliteDatabaseSchemaRevision(database);
+      owner.processRevision ??= processRevision;
     }
     const openingMutationRevision =
       !wasTransaction && control?.kind === "BEGIN" && control.single
@@ -296,15 +303,9 @@ function trackSchemaChanges(
     if (dataChange || mutation.temporaryTableSchemaChange || control?.kind === "ROLLBACK") {
       owner.mutationRevision += 1;
     }
-    if (
-      phase !== "bind" &&
-      wasTransaction &&
-      !control &&
-      owner.readDepth === 0 &&
-      !owner.transactionCatalogBound
-    ) {
-      // SQLite has no public txn_state API here. A raw read might have established a
-      // historical snapshot; only a local catalog capture can qualify it afterward.
+    if (phase !== "bind" && wasTransaction && !control && !owner.transactionCatalogBound) {
+      // Constants and connection PRAGMAs do not pin MAIN. Qualify this transaction's
+      // native catalog if a sibling publishes DDL, even for managed reads.
       owner.transactionRead = true;
     }
     const changesReadScope = schemaChange || dataChange || control !== undefined;
@@ -330,14 +331,7 @@ function trackSchemaChanges(
     }
     return {
       stepped: () => {
-        if (
-          database.isTransaction &&
-          !control &&
-          !owner.transactionRead &&
-          !owner.transactionCatalogBound &&
-          owner.facts &&
-          owner.processRevision === getSqliteDatabaseSchemaRevision(database)
-        ) {
+        if (snapshot && owner.facts && database.isTransaction) {
           owner.transactionCatalogBound = true;
         }
       },
@@ -632,11 +626,13 @@ export function trackSqliteSchema(
     };
     owners.set(database, owner);
     trackSchemaChanges(database, owner, native, writable);
+    // Read the generation first so a concurrent publication cannot certify an older catalog.
+    const processRevision = getSqliteDatabaseSchemaRevision(database, { existingOnly: true });
     const retained = getSqliteDatabaseAdmission(database, schemaAdmission, { existingOnly: true });
     if (retained) {
       owner.admitted = true;
       owner.facts = { ...retained, revision: owner.revision };
-      owner.processRevision = getSqliteDatabaseSchemaRevision(database);
+      owner.processRevision = processRevision;
     }
   }
 }
@@ -701,8 +697,12 @@ export function getAdmittedSqliteSchemaFacts(
     return undefined;
   }
   const snapshot = getSqlitePinnedReadSnapshot(database);
+  // A bound catalog that predates a sibling's DDL is historical once its facts are
+  // invalidated: recapturing it must neither borrow nor publish shared facts.
   const unknownSnapshot =
-    (database.isTransaction && owner.transactionRead && !owner.transactionCatalogBound) ||
+    (database.isTransaction &&
+      (owner.transactionRead || owner.transactionCatalogBound) &&
+      owner.processRevision !== getSqliteDatabaseSchemaRevision(database)) ||
     owner.unmanagedSnapshots.size > 0;
   const scopeChanged = observeSchemaLifetime(database, owner, snapshot);
   if (!owner.facts) {

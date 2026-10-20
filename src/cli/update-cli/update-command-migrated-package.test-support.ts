@@ -7,10 +7,17 @@ import * as nodeSqlite from "../../infra/node-sqlite.js";
 import { createRetainedPackageSwap } from "../../infra/package-update-swap.test-support.js";
 import { resolveSqliteDatabaseFilePath } from "../../infra/sqlite-database-admission.js";
 import { createUpdateRun, finishUpdateRun } from "../../infra/update-run-ledger.js";
-import * as childCommands from "../../process/exec.js";
+import * as childCommands from "../../process/exec-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { expectNoCalls } from "../daemon-cli/lifecycle-assertions.test-support.js";
+import {
+  finishParams,
+  processResult,
+  updateResult,
+  updateStep,
+} from "./update-command-maintenance-fixtures.test-support.js";
 import type { MigratedUpdateFinalizationInput } from "./update-command-migrated-types.js";
 import { continueMigratedUpdateInFreshProcess } from "./update-command-migrated.js";
 import { readMigratedUpdateRunRow } from "./update-command-migrated.test-support.js";
@@ -30,7 +37,20 @@ export type MigratedPackageFinalizationCase = {
   handback?: boolean;
   completion?: "success" | "failure";
   recovered?: boolean;
+  diagnostics?: "truncated" | "interrupted" | "incomplete";
 };
+
+export function observeMigratedStateOpens(databasePath: string, opened: string[]) {
+  const location = nodeSqlite.resolveNodeSqliteLocation(databasePath);
+  const open = nodeSqlite.openNodeSqliteDatabase;
+  return vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
+    // Keep SQLite's Windows filename normalization distinct from file URLs.
+    if (nodeSqlite.resolveNodeSqliteLocation(resolveSqliteDatabaseFilePath(args[0])) === location) {
+      opened.push(args[0]);
+    }
+    return open(...args);
+  });
+}
 
 export async function expectMigratedPackageFinalization(
   base: string,
@@ -43,6 +63,7 @@ export async function expectMigratedPackageFinalization(
     handback = false,
     completion,
     recovered = false,
+    diagnostics,
   }: MigratedPackageFinalizationCase,
 ) {
   const exitCode = status === "error" ? 1 : 0;
@@ -66,11 +87,27 @@ export async function expectMigratedPackageFinalization(
   const rollback = vi.spyOn(transaction, "rollback");
   vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
   const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+  const stderrChunks: Buffer[] = [];
+  if (diagnostics) {
+    vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+      stderrChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      return false;
+    });
+  }
+  const progress = Buffer.from("finalizing 🦊\n");
+  const cancellation = Buffer.from("finalizer interrupted\n");
+  const padding = diagnostics === "truncated" ? "x".repeat(1024 * 1024) : "";
+  const incomplete = Buffer.from([0xf0, 0x9f]);
+  const expectedProgress = Buffer.concat([
+    progress,
+    Buffer.from(padding),
+    ...(diagnostics === "incomplete" ? [incomplete] : []),
+  ]);
+  let observedProgress = Buffer.alloc(0);
   const onResult = vi.fn();
   if (recovered) {
     windowsRecovery.complete.mockImplementationOnce(async () => {
-      expect(stdout).not.toHaveBeenCalled();
-      expect(onResult).not.toHaveBeenCalled();
+      expectNoCalls(stdout, onResult);
     });
   }
   let stdoutAtCompletion: number | undefined;
@@ -92,26 +129,48 @@ export async function expectMigratedPackageFinalization(
     });
   }
   // Keep the real parent and package owner; model only the completed candidate's JSON reply.
-  vi.spyOn(childCommands, "runUtf8CommandWithTimeout").mockImplementation(
+  vi.spyOn(childCommands, "runUtf8CommandBuffersWithTimeout").mockImplementation(
     async (_argv, options) => {
       if (typeof options === "number" || typeof options.input !== "string") {
         throw new Error("Expected serialized finalization input");
       }
       const input: MigratedUpdateFinalizationInput = JSON.parse(options.input);
       expect(input.params).not.toHaveProperty("databaseBackup");
+      if (diagnostics) {
+        // Fixed process I/O: a split UTF-8 progress line, followed by bytes the
+        // runner drains after observation stops during cancellation.
+        expect(options.onOutputChunk?.(progress.subarray(0, 12), "stderr")).toBeUndefined();
+        expect(options.onOutputChunk?.(progress.subarray(12), "stderr")).toBeUndefined();
+        if (padding) {
+          options.onOutputChunk?.(Buffer.from(padding), "stderr");
+        }
+        if (diagnostics === "incomplete") {
+          options.onOutputChunk?.(incomplete, "stderr");
+        }
+        observedProgress = Buffer.concat(stderrChunks);
+        const captured = Buffer.concat([expectedProgress, cancellation]);
+        const tail = captured.subarray(-1024 * 1024);
+        // A cancelled candidate publishes neither a terminal row nor a result artifact.
+        return {
+          ...processResult({ code: 124, killed: true, termination: "timeout" }),
+          stdout: Buffer.alloc(0),
+          stderr: tail,
+          windowsEncoding: null,
+          stderrTruncatedBytes: captured.byteLength - tail.byteLength,
+          cleanup: "cooperative",
+        };
+      }
       const result = {
         ...input.params.result,
         status,
         reason,
         runId: run.runId,
-        ...(recovered
-          ? { recovery: { serviceRestartSafe: true, version: "2.0.0", service: "healthy" } }
-          : {}),
+        recovery: recovered
+          ? { serviceRestartSafe: true, version: "2.0.0", service: "healthy" }
+          : undefined,
         steps: pending
           ? [
-              {
-                name: "gateway verification",
-                command: "gateway verification",
+              updateStep("gateway verification", {
                 cwd: packageRoot,
                 durationMs: 90_000,
                 exitCode: 0,
@@ -121,7 +180,7 @@ export async function expectMigratedPackageFinalization(
                   message:
                     "Gateway is still starting after 90000ms; left running with readiness unverified.",
                 },
-              },
+              }),
             ]
           : [],
       };
@@ -141,19 +200,7 @@ export async function expectMigratedPackageFinalization(
         migrated.close();
         const controlPath = path.join(base, "observer-control.sqlite");
         new DatabaseSync(controlPath).close();
-        const migratedStateLocation = nodeSqlite.resolveNodeSqliteLocation(databasePath);
-        const open = nodeSqlite.openNodeSqliteDatabase;
-        const observedOpen = vi
-          .spyOn(nodeSqlite, "openNodeSqliteDatabase")
-          .mockImplementation((...args) => {
-            const openedPath = nodeSqlite.resolveNodeSqliteLocation(
-              resolveSqliteDatabaseFilePath(args[0]),
-            );
-            if (openedPath === migratedStateLocation) {
-              oldRuntimeOpens.push(args[0]);
-            }
-            return open(...args);
-          });
+        const observedOpen = observeMigratedStateOpens(databasePath, oldRuntimeOpens);
         // Exercise the observer with the native SQLite filename URI without
         // reopening the migrated state database in the old runtime.
         const controlUri = nodeSqlite.resolveExistingSqliteFileUri(controlPath);
@@ -169,12 +216,10 @@ export async function expectMigratedPackageFinalization(
         JSON.stringify({ result, exitCode, terminalRunId: run.runId, candidateStartAttempted }),
       );
       return {
-        stdout: "candidate finalization result\n",
-        stderr: "",
-        code: 0,
-        signal: null,
-        killed: false,
-        termination: "exit",
+        ...processResult(),
+        stdout: Buffer.from("candidate finalization result\n"),
+        stderr: Buffer.alloc(0),
+        windowsEncoding: null,
         cleanup: "normal",
       };
     },
@@ -182,17 +227,10 @@ export async function expectMigratedPackageFinalization(
 
   const continueUpdate = () =>
     continueMigratedUpdateInFreshProcess(
-      {
-        mutationStarted: true,
-        result: { status: "ok", mode: "npm", root: packageRoot, steps: [], durationMs: 1 },
+      finishParams({
+        result: updateResult({ root: packageRoot }),
         root: packageRoot,
-        installKindChanged: false,
         configSnapshot,
-        requestedChannel: null,
-        storedChannel: "stable",
-        channel: "stable",
-        downgradeRisk: false,
-        shouldRestart: true,
         opts: { json: true, run },
         preManagedServiceStop: {
           stopped: true,
@@ -200,42 +238,47 @@ export async function expectMigratedPackageFinalization(
           runtimeInspected: true,
           running: true,
           serviceEnv: env,
-          ...(windows ? { windowsTaskAutoStartRecovery: windowsRecovery } : {}),
+          windowsTaskAutoStartRecovery: windows ? windowsRecovery : undefined,
         },
         packageTransaction: transaction,
-        ...(backup
+        databaseBackup: backup
           ? {
-              databaseBackup: {
-                directory: path.join(transaction.backupRoot, "databases"),
-                databases: [],
-                missingPaths: [],
-                sourcePaths: [],
-                sourceGenerations: {},
-                warnings: [],
-              },
+              directory: path.join(transaction.backupRoot, "databases"),
+              databases: [],
+              missingPaths: [],
+              sourcePaths: [],
+              sourceGenerations: {},
+              warnings: [],
             }
-          : {}),
-        controlPlaneUpdateSentinelMeta: null,
-        preUpdatePluginInstallRecords: {},
-        startedAt: Date.now(),
+          : undefined,
         packageUpdateNodeRunner: process.execPath,
         updateStepTimeoutMs: 90_000,
-      },
+      }),
       [],
     );
   let continuedResult: Awaited<ReturnType<typeof continueUpdate>> | undefined;
-  const operation = withUpdateCommandTerminalResult(
-    async (registerRun) => {
-      registerRun(run);
-      continuedResult = await continueUpdate();
-      if (continuedResult.preparedFailure) {
-        throw continuedResult.preparedFailure;
-      }
-      return continuedResult;
-    },
-    { json: true, onResult },
-  );
+  const operation = diagnostics
+    ? continueUpdate()
+    : withUpdateCommandTerminalResult(
+        async (registerRun) => {
+          registerRun(run);
+          continuedResult = await continueUpdate();
+          if (continuedResult.preparedFailure) {
+            throw continuedResult.preparedFailure;
+          }
+          return continuedResult;
+        },
+        { json: true, onResult },
+      );
   const settled = await operation.catch((error: unknown) => error);
+  if (diagnostics) {
+    expect(observedProgress).toEqual(expectedProgress);
+    expect(Buffer.concat(stderrChunks)).toEqual(Buffer.concat([expectedProgress, cancellation]));
+    expect(settled).toBeInstanceOf(Error);
+    expectNoCalls(stdout, onResult, complete, rollback);
+    await expect(fs.access(transaction.backupRoot)).resolves.toBeUndefined();
+    return;
+  }
   if (completion) {
     expect.soft(stdoutAtCompletion).toBe(0);
     expect.soft(observedAtCompletion).toBe(0);
@@ -246,9 +289,7 @@ export async function expectMigratedPackageFinalization(
     if (completion === "failure") {
       expect.soft(settled).toBeInstanceOf(UpdateCommandPendingRecoveryFailure);
       expect.soft(settled).toMatchObject({
-        cause: expect.objectContaining({
-          result: expect.objectContaining({ reason: "package-backup-retention-failed" }),
-        }),
+        cause: { result: { reason: "package-backup-retention-failed" } },
       });
       expect.soft(stdout).not.toHaveBeenCalled();
       expect(onResult).not.toHaveBeenCalled();
@@ -269,14 +310,12 @@ export async function expectMigratedPackageFinalization(
   const outcome = continuedResult!;
   expect(outcome).toMatchObject({
     exitCode,
-    result: { status },
+    result: { status, reason },
   });
-  expect(outcome.result.reason).toBe(reason);
   expect(outcome.candidateStartAttempted).toBe(candidateStartAttempted);
   expect(outcome.databaseRollbackAvailable).toBe(handback ? true : undefined);
   if (handback) {
-    expect(stdout).not.toHaveBeenCalled();
-    expect(onResult).not.toHaveBeenCalled();
+    expectNoCalls(stdout, onResult);
   } else {
     expect(stdout).toHaveBeenCalledExactlyOnceWith("candidate finalization result\n");
     expect(onResult).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ status }));

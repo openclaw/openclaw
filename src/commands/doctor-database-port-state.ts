@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
+import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveDatabaseEngineInput } from "../infra/database-engine/config.js";
 import { withDatabaseEngineSelection } from "../infra/database-engine/context.js";
@@ -37,7 +38,7 @@ export async function withDatabasePortStateOwner<T>(
       databasePortRecovery: recovery,
       databasePortMaintenance: true,
       runLocal: ({ env, assertCurrent, signal }) => {
-        Object.assign(ctx, { env, assertCurrent, signal });
+        Object.assign(ctx, { env, stateDir: resolveStateDir(env), assertCurrent, signal });
         return run();
       },
     }),

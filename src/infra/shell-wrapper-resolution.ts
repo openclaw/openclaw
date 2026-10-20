@@ -148,12 +148,10 @@ function resolveShellWrapperPayload(
   return { ...candidate, wrapper, payload, baseExecutable };
 }
 
-/** Return true when an executable token names a supported shell wrapper. */
 export function isShellWrapperExecutable(token: string): boolean {
   return SHELL_WRAPPER_CANONICAL.has(normalizeExecutableToken(token));
 }
 
-/** Return true when argv resolves to a shell wrapper invocation. */
 export function isShellWrapperInvocation(argv: string[]): boolean {
   const candidate = resolveShellWrapperCandidate(argv);
   return candidate ? isShellWrapperExecutable(candidate.token0) : false;

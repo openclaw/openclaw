@@ -387,9 +387,6 @@ async function readOutboundDeliveries(
   if (!reply) {
     return [];
   }
-  if (!reply.ok || reply.type !== "deliveryQueue.outbound") {
-    throw new Error("Unexpected outbound queue read result");
-  }
   return reply.entries.map(({ queueName, entry }) => projectOutboundDelivery(queueName, entry));
 }
 

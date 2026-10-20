@@ -50,6 +50,30 @@ async function writeCmdScript(env: Record<string, string | undefined>) {
 }
 
 describe("Windows Startup launcher", () => {
+  it.each(["cmd", "bat"])("launches an installed .%s wrapper through cmd.exe", async (ext) => {
+    await withWindowsEnv("openclaw-win-wrapper-", async ({ env, tmpDir }) => {
+      const wrapper = path.join(tmpDir, `openclaw wrapper.${ext}`);
+      spawn.mockImplementation((command: string) => {
+        if (/\.(?:cmd|bat)$/iu.test(command)) {
+          throw Object.assign(new Error("spawn EINVAL"), { code: "EINVAL" });
+        }
+        return createSpawnChild(childUnref);
+      });
+      await expect(
+        launchFallbackTaskScript(env, {
+          programArguments: [wrapper, "node", "run", "--display-name", "Headless node"],
+          environment: { OPENCLAW_SERVICE_KIND: "node" },
+        }),
+      ).resolves.toBeUndefined();
+      expect(spawn).toHaveBeenCalledWith(
+        getWindowsCmdExePath(),
+        ["/d", "/s", "/c", `""${wrapper}" "node" "run" "--display-name" "Headless node""`],
+        expect.objectContaining({ windowsVerbatimArguments: true, shell: false }),
+      );
+      expect(childUnref).toHaveBeenCalledOnce();
+    });
+  });
+
   it("rejects asynchronous cmd spawn failure without detaching", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       await writeCmdScript(env);

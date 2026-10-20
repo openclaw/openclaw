@@ -4,11 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { createProcessSupervisor } from "./supervisor.js";
-import {
-  createStubChildAdapter,
-  createWriteStdoutArgv,
-  type StubChildAdapter,
-} from "./supervisor.test-support.js";
+import { createStubChildAdapter, type StubChildAdapter } from "./supervisor.test-support.js";
 import type { SpawnInput } from "./types.js";
 
 const { child, pty } = vi.hoisted(() => ({ child: vi.fn(), pty: vi.fn() }));
@@ -84,7 +80,7 @@ describe("process supervisor", () => {
   it("passes private secret input and exact environment to the child adapter", async () => {
     const adapter = prepare();
     const secretInput = { fd: 3, createData: () => Buffer.from("secret") };
-    const run = await spawn({ argv: createWriteStdoutArgv("ok"), exactEnv: true, secretInput });
+    const run = await spawn({ exactEnv: true, secretInput });
     expect(child).toHaveBeenCalledWith(expect.objectContaining({ exactEnv: true, secretInput }));
     adapter.settle(0);
     await run.wait();

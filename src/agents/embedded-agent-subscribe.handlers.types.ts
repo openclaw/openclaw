@@ -19,7 +19,6 @@ import type {
 } from "./embedded-agent-subscribe.types.js";
 import type { AgentMessage } from "./runtime/index.js";
 import type { AgentSessionEvent } from "./sessions/index.js";
-import type { NormalizedUsage } from "./usage.js";
 export type {
   CompletedAssistantAnswer,
   EmbeddedAgentSubscribeState,
@@ -46,7 +45,6 @@ export type AssistantStreamData = {
   itemId?: string;
 };
 
-/** Handler context bundling params, mutable state, emitters, and helper hooks. */
 export type EmbeddedAgentSubscribeContext = {
   params: SubscribeEmbeddedAgentSessionParams;
   state: EmbeddedAgentSubscribeState;
@@ -103,10 +101,7 @@ export type EmbeddedAgentSubscribeContext = {
   captureModelEvent: (evt: AgentSessionEvent) => void;
   incrementCompactionCount: () => void;
   noteCompactionTokensAfter: (value: unknown) => void;
-  getUsageTotals: () => NormalizedUsage | undefined;
-  getLastAssistantUsage: () => NormalizedUsage | undefined;
   getCompactionCount: () => number;
-  getLastCompactionTokensAfter: () => number | undefined;
   emitAssistantStreamData: (
     data: AssistantStreamData,
     options?: { emitPartialReply?: boolean; finalMessage?: boolean },

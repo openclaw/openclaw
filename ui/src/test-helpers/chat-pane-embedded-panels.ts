@@ -73,7 +73,6 @@ export async function renderPanelFixture(
   await Promise.all(
     [...mount.querySelectorAll("openclaw-chat-detail-panel")].map((panel) => panel.updateComplete),
   );
-  await mount.querySelector("openclaw-panel-loading-skeleton")?.updateComplete;
 }
 
 export function sidebarPanelFixtureParams(
@@ -98,6 +97,7 @@ export function sidebarPanelFixtureParams(
     desktopRefreshOnPresentation: false,
     desktopAvailable: false,
     desktopSource: null,
+    desktopRuntimeConfig: null,
     desktopFocusHref: "",
     onDesktopFocusTargetChange: vi.fn(),
     dashboard: null,

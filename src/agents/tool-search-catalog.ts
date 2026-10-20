@@ -1,7 +1,8 @@
 import { getPublishedRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 import { stableStringify } from "@openclaw/normalization-core";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { generateSecureHex } from "../infra/secure-random.js";
-import { getPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tool-metadata.js";
+import { classifyAgentToolSource } from "../plugins/tool-metadata.js";
 import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import {
@@ -11,8 +12,8 @@ import {
 } from "./agent-tools.before-tool-call.js";
 import { getBeforeToolCallDiagnosticOptions } from "./before-tool-call-metadata.js";
 import { disposeCodeModeResults } from "./code-mode-results.js";
-import { isCoreCodingSurfaceToolName } from "./core-tool-factory-descriptors.js";
 import type { ToolDefinition } from "./sessions/index.js";
+import { isCoreCodingSurfaceToolName } from "./tool-catalog.js";
 import { compactToolInputHint, compactToolOutputHint } from "./tool-schema-hints.js";
 import { disposeToolSearchSchedule } from "./tool-search-scheduling.js";
 import {
@@ -40,6 +41,45 @@ const catalogMetadata = new WeakMap<
   ToolSearchCatalogSession,
   { toolExecutionAllow?: readonly string[] }
 >();
+const MAX_SEARCH_MCP_INSTRUCTIONS_CHARS = 512;
+const MAX_TOOL_SEARCH_DESCRIBE_TEXT_CHARS = 20_000;
+export const INCOMPLETE_INSTRUCTIONS_HINT =
+  "Call tool_describe before use to load the complete server instructions.";
+const UNRETRIEVABLE_INSTRUCTIONS_HINT =
+  "Server instructions exceed the tool_describe response limit; only the visible excerpt can be returned.";
+
+function compactMcpInstructions(instructions: string | undefined): string | undefined {
+  if (!instructions || instructions.length <= MAX_SEARCH_MCP_INSTRUCTIONS_CHARS) {
+    return instructions;
+  }
+  return `${truncateUtf16Safe(instructions, MAX_SEARCH_MCP_INSTRUCTIONS_CHARS - 3)}...`;
+}
+
+export function describeToolSearchCatalogEntry(entry: ToolSearchCatalogEntry) {
+  const { mcp, ...descriptor } = compactToolSearchCatalogEntry(entry, {
+    fullInstructions: true,
+  });
+  return {
+    ...descriptor,
+    parameters: entry.parameters ?? {},
+    ...(entry.outputSchema ? { outputSchema: entry.outputSchema } : {}),
+    ...(mcp ? { mcp } : {}),
+  };
+}
+
+function instructionsHintForEntry(entry: ToolSearchCatalogEntry): string | undefined {
+  const instructions = entry.mcp?.instructions;
+  if (!instructions || instructions.length <= MAX_SEARCH_MCP_INSTRUCTIONS_CHARS) {
+    return undefined;
+  }
+  if (instructions.length > MAX_TOOL_SEARCH_DESCRIBE_TEXT_CHARS) {
+    return UNRETRIEVABLE_INSTRUCTIONS_HINT;
+  }
+  return JSON.stringify(describeToolSearchCatalogEntry(entry), null, 2).length <=
+    MAX_TOOL_SEARCH_DESCRIBE_TEXT_CHARS
+    ? INCOMPLETE_INSTRUCTIONS_HINT
+    : UNRETRIEVABLE_INSTRUCTIONS_HINT;
+}
 
 // Registered entries are immutable snapshots, so reuse compares live descriptors. Registration
 // keeps entries id-sorted and unique, so equal catalogs match position by position.
@@ -108,23 +148,6 @@ function rebindCatalogExecutors(
     : undefined;
 }
 
-function classifyTool(tool: CatalogTool): {
-  source: CatalogSource;
-  sourceName?: string;
-  mcp?: PluginToolMcpMeta;
-} {
-  const meta = getPluginToolMeta(tool as AnyAgentTool);
-  const pluginId = meta?.pluginId?.trim();
-  const mcp = meta?.mcp;
-  if (mcp) {
-    return { source: "mcp", sourceName: mcp.safeServerName || pluginId || "mcp", mcp };
-  }
-  if (pluginId === "bundle-mcp") {
-    return { source: "mcp", sourceName: pluginId };
-  }
-  return { source: "openclaw", sourceName: pluginId || "core" };
-}
-
 export function prepareToolSearchCatalogExecutionTool(
   entry: ToolSearchCatalogEntry,
   options: { prepareInput?: boolean; validateInput?: boolean },
@@ -155,7 +178,7 @@ function toCatalogEntry(
   sourceOverride?: CatalogSource,
   hookContext?: HookContext,
 ): ToolSearchCatalogEntry {
-  const classified = classifyTool(tool);
+  const classified = classifyAgentToolSource(tool);
   const source = sourceOverride ?? classified.source;
   const sourceName = sourceOverride === "client" ? "client" : classified.sourceName;
   // SAFETY: source classification excludes client callbacks from the native hook wrapper.
@@ -194,7 +217,7 @@ export function isDirectVisibleCatalogTool(
   tool: AnyAgentTool,
   directToolNames: ReadonlySet<string>,
 ): boolean {
-  const classified = classifyTool(tool);
+  const classified = classifyAgentToolSource(tool);
   return (
     classified.source === "openclaw" &&
     (directToolNames.has(tool.name) ||
@@ -412,9 +435,16 @@ export function visibleCatalogEntries(
   );
 }
 
-export function compactToolSearchCatalogEntry(entry: ToolSearchCatalogEntry) {
+export function compactToolSearchCatalogEntry(
+  entry: ToolSearchCatalogEntry,
+  options: { fullInstructions?: boolean } = {},
+) {
   const output =
     entry.source === "openclaw" ? compactToolOutputHint(entry.outputSchema) : undefined;
+  const fullInstructions = entry.mcp?.instructions;
+  const instructions = options.fullInstructions
+    ? fullInstructions
+    : compactMcpInstructions(fullInstructions);
   // Node provenance is namespace-only metadata; generic Tool Search keeps its
   // existing MCP result shape outside Code Mode.
   const mcp = entry.mcp
@@ -423,8 +453,10 @@ export function compactToolSearchCatalogEntry(entry: ToolSearchCatalogEntry) {
         safeServerName: entry.mcp.safeServerName,
         toolName: entry.mcp.toolName,
         operation: entry.mcp.operation,
+        ...(instructions ? { instructions } : {}),
       }
     : undefined;
+  const instructionsHint = options.fullInstructions ? undefined : instructionsHintForEntry(entry);
   return {
     id: entry.id,
     source: entry.source,
@@ -434,6 +466,7 @@ export function compactToolSearchCatalogEntry(entry: ToolSearchCatalogEntry) {
     label: entry.label,
     description: entry.description,
     input: entry.source === "openclaw" ? compactToolInputHint(entry.parameters) : "unknown",
+    ...(instructionsHint ? { instructionsHint } : {}),
     ...(output ? { output } : {}),
   };
 }

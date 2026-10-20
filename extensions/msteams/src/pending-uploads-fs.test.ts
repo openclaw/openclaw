@@ -18,18 +18,26 @@ import {
 import { setMSTeamsRuntime } from "./runtime.js";
 import { msteamsRuntimeStub } from "./test-support/runtime.js";
 
-// Track temp dirs created by each test so afterEach can clean them up.
-const createdTempDirs: string[] = [];
+let stateDir: string;
+let env: NodeJS.ProcessEnv;
 
-async function makeTempStateDir(): Promise<string> {
-  const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-pending-"));
-  createdTempDirs.push(dir);
-  return dir;
-}
+beforeEach(async () => {
+  resetPluginStateStoreForTests();
+  setMSTeamsRuntime(msteamsRuntimeStub);
+  stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-pending-"));
+  env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+});
 
-function makeEnv(stateDir: string): NodeJS.ProcessEnv {
-  return { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-}
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
+  try {
+    await fs.promises.rm(stateDir, { recursive: true, force: true });
+  } finally {
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+  }
+});
 
 function storeUpload(
   upload: Pick<Parameters<typeof storePendingUploadFs>[0], "id"> &
@@ -43,47 +51,7 @@ function storeUpload(
   });
 }
 
-async function requirePendingUpload(id: string) {
-  const upload = await getPendingUploadFs(id);
-  if (!upload) {
-    throw new Error(`expected pending upload ${id}`);
-  }
-  return upload;
-}
-
-async function cleanupTempDirs(): Promise<void> {
-  await closeOpenClawStateDatabaseAsync();
-  while (createdTempDirs.length > 0) {
-    const dir = createdTempDirs.pop();
-    if (!dir) {
-      continue;
-    }
-    try {
-      await fs.promises.rm(dir, { recursive: true, force: true });
-    } catch {
-      // tmp dir may already be gone
-    }
-  }
-}
-
 describe("msteams pending uploads (fs-backed)", () => {
-  let stateDir: string;
-  let env: NodeJS.ProcessEnv;
-
-  beforeEach(async () => {
-    resetPluginStateStoreForTests();
-    setMSTeamsRuntime(msteamsRuntimeStub);
-    stateDir = await makeTempStateDir();
-    env = makeEnv(stateDir);
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-  });
-
-  afterEach(async () => {
-    await cleanupTempDirs();
-    vi.useRealTimers();
-    vi.unstubAllEnvs();
-  });
-
   it("returns undefined for missing and undefined ids", async () => {
     expect(await getPendingUploadFs(undefined)).toBeUndefined();
     expect(await getPendingUploadFs("does-not-exist")).toBeUndefined();
@@ -147,50 +115,29 @@ describe("msteams pending uploads (fs-backed)", () => {
 });
 
 describe("prepareFileConsentActivityFs end-to-end", () => {
-  beforeEach(() => {
-    resetPluginStateStoreForTests();
-    setMSTeamsRuntime(msteamsRuntimeStub);
-  });
-
   it("writes the pending upload to the fs store with the same id as the card", async () => {
-    const stateDir = await makeTempStateDir();
-    // Redirect state dir via env so the helper's FS writes land under our tmp
-    const originalEnv = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = stateDir;
+    const result = await prepareFileConsentActivityFs({
+      media: {
+        buffer: Buffer.from("cli file"),
+        filename: "cli.bin",
+        contentType: "application/octet-stream",
+      },
+      conversationId: "19:victim@thread.v2",
+      description: "Sent via CLI",
+    });
 
-    try {
-      const result = await prepareFileConsentActivityFs({
-        media: {
-          buffer: Buffer.from("cli file"),
-          filename: "cli.bin",
-          contentType: "application/octet-stream",
-        },
-        conversationId: "19:victim@thread.v2",
-        description: "Sent via CLI",
-      });
+    expect(result.uploadId).toMatch(/[0-9a-f-]/);
+    const attachments = result.activity.attachments as Array<Record<string, unknown>>;
+    expect(attachments).toHaveLength(1);
+    const content = attachments[0]?.content as { acceptContext: { uploadId: string } };
+    expect(content.acceptContext.uploadId).toBe(result.uploadId);
 
-      expect(result.uploadId).toMatch(/[0-9a-f-]/);
-      const attachments = result.activity.attachments as Array<Record<string, unknown>>;
-      expect(attachments).toHaveLength(1);
-      const content = attachments[0]?.content as { acceptContext: { uploadId: string } };
-      expect(content.acceptContext.uploadId).toBe(result.uploadId);
-
-      // Reader in (simulated) other process finds the entry under the same key
-      const loaded = await requirePendingUpload(result.uploadId);
-      expect(loaded.filename).toBe("cli.bin");
-      expect(loaded.contentType).toBe("application/octet-stream");
-      expect(loaded.conversationId).toBe("19:victim@thread.v2");
-      expect(loaded.buffer.toString("utf8")).toBe("cli file");
-    } finally {
-      try {
-        await cleanupTempDirs();
-      } finally {
-        if (originalEnv === undefined) {
-          delete process.env.OPENCLAW_STATE_DIR;
-        } else {
-          process.env.OPENCLAW_STATE_DIR = originalEnv;
-        }
-      }
-    }
+    const loaded = await getPendingUploadFs(result.uploadId);
+    expect(loaded).toMatchObject({
+      filename: "cli.bin",
+      contentType: "application/octet-stream",
+      conversationId: "19:victim@thread.v2",
+    });
+    expect(loaded?.buffer.toString("utf8")).toBe("cli file");
   });
 });

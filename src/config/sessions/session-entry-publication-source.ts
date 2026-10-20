@@ -48,6 +48,7 @@ export function captureSessionEntryPublicationSource(
   if (isPostgresSqlConnection(database)) {
     const admission = getPostgresPhysicalFacts(database);
     if (!admission) {
+      source.admission = null;
       return source;
     }
     const { engine, namespace, storeId, admissionId } = admission;
@@ -84,6 +85,9 @@ function matchesAdmission(
   current: PostgresPhysicalFacts | undefined,
 ): boolean {
   const captured = source.admission;
+  if (captured === null) {
+    return false;
+  }
   return captured
     ? current?.namespace === captured.namespace &&
         current.storeId === captured.storeId &&

@@ -23,6 +23,7 @@ import {
 import {
   readSessionActorParticipantPostimage,
   readSessionActorProjectionReceiptFromCells,
+  sessionActorReplicaCellsForPath,
   scopedWriteToken,
   scopedWriteTokens,
 } from "./session-actor-replica-receipts.js";
@@ -395,9 +396,11 @@ function touch(cell: ReplicaCell): void {
   }
 }
 
-export function readSessionActorProjectionReceipt(
-  params: Pick<SessionTranscriptProjectionReceipt, "path" | "sessionId"> & { sessionKey?: string },
-): SessionTranscriptProjectionReceipt | undefined {
+export function readSessionActorProjectionReceipt(params: {
+  path: string;
+  sessionId: string;
+  sessionKey?: string;
+}): SessionTranscriptProjectionReceipt | undefined {
   return readSessionActorProjectionReceiptFromCells(pool.cells.values(), touch, params);
 }
 
@@ -470,13 +473,9 @@ function readCurrentEntryCellForPath(
   admitted?: DatabasePathIdentity,
 ) {
   ensureReplicaSubscription();
-  for (const { target } of pool.cells.values()) {
+  for (const { target } of sessionActorReplicaCellsForPath(pool.cells.values(), params.path)) {
     const { database, sessionKey } = target;
-    if (
-      database.kind === "file" &&
-      database.nativeLocation === params.path &&
-      sessionKey === params.sessionKey
-    ) {
+    if (database.kind === "file" && sessionKey === params.sessionKey) {
       return readCurrentEntryCell({ database, sessionKey }, admitted);
     }
   }

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
@@ -290,7 +290,7 @@ it("applies pruning to stale cron-run descendant rows", async () => {
 
 it("preserves active cron rows until their admission releases", async () => {
   const { scope, read } = await cronCase("active-run");
-  const admission = await beginSessionWorkAdmission({
+  const admission = await beginSessionEffect({
     scope: scope.storePath,
     identities: [scope.sessionId],
     assertAllowed: () => {},

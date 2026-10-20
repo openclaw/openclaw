@@ -1,6 +1,5 @@
 import type {
   createTerminalDefaultColorQueryResponder,
-  CreateGhosttyTerminalOptions,
   GhosttyTerminalController,
 } from "@openclaw/libterminal/browser";
 import { parseCatalogSessionKey, type CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
@@ -28,6 +27,7 @@ export type TerminalPanelSessionTab = TerminalPanelTab &
 export type TerminalRouteTarget = { sessionId: string } | { catalog: CatalogSessionKey } | null;
 
 export type TerminalInputs = {
+  gatewayConnected: boolean;
   client: TerminalGatewayClient | null;
   agentId: string | null;
   sessionKey: string | null;
@@ -41,11 +41,6 @@ export type TerminalInputs = {
   tabsInHeader: boolean;
   page: boolean;
   routeTarget: TerminalRouteTarget;
-  createTerminalController: (
-    options: CreateGhosttyTerminalOptions,
-    shouldFocusOnOpen?: () => boolean,
-  ) => Promise<GhosttyTerminalController>;
-  catalogReadyTimeoutMs: number;
 };
 
 export type TerminalOperation = {
@@ -80,7 +75,10 @@ export type TerminalPanelAction =
 
 export type TerminalPanelOpenAction = Extract<TerminalPanelAction, { kind: "catalog" | "open" }>;
 
-export type TerminalPanelError = { text: string; retryAction?: TerminalPanelOpenAction };
+export type TerminalPanelError = {
+  text: string;
+  retryAction?: TerminalPanelOpenAction | { kind: "resume" };
+};
 
 export type TerminalPanelSessionState = {
   tabs: TerminalPanelSessionTab[];

@@ -122,6 +122,7 @@ async function focusGitHubLink() {
   ) as LinkReaderHovercardProvider;
   provider.readers = [TEST_LINK_READER];
   provider.client = {
+    connected: true,
     request: vi.fn().mockResolvedValue(testLinkPreview({ url: githubUrl, title: previewTitle })),
   } as unknown as GatewayBrowserClient;
   const anchor = appendLink(githubUrl, {}, provider);

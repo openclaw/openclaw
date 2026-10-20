@@ -12,11 +12,6 @@ import {
   isSqliteLockError,
   sqlitePrimaryResultCode,
 } from "../infra/sqlite-error-diagnostics.js";
-import { readSqliteFileGeneration } from "../infra/sqlite-file-generation-worker.js";
-import {
-  sameSqliteFileGeneration,
-  type SqliteFileGeneration,
-} from "../infra/sqlite-file-generation.js";
 import {
   createSqliteLifecycleAggregateError,
   throwSqliteLifecycleErrors,
@@ -161,6 +156,21 @@ export function registerOpenClawStateDatabaseLifecycleListener(
     }
   }
   return () => databaseLifecycleListeners.delete(listener);
+}
+
+/** Invalidate path-scoped projections on non-open database lifecycle events. */
+export function registerOpenClawStatePathCacheInvalidation<Key, Value extends { path: string }>(
+  cache: Map<Key, Value>,
+): () => void {
+  return registerOpenClawStateDatabaseLifecycleListener((event) => {
+    if (event.kind !== "opened") {
+      for (const [key, value] of cache) {
+        if (value.path === (event.identity?.canonicalPath ?? event.path)) {
+          cache.delete(key);
+        }
+      }
+    }
+  });
 }
 
 function retainStateDatabaseClose(database: StateDatabaseHandle): void {
@@ -371,12 +381,8 @@ function closeStaleCachedOpenClawStateDatabase(database: OpenClawStateDatabase):
 }
 
 /** Latch integrity refusals so later opens fail without rescanning. */
-export function recordOpenClawStateDatabaseOpenFailure(
-  pathname: string,
-  error: Error,
-  generation?: SqliteFileGeneration,
-): boolean {
-  return terminalOpenLatch.record(resolveDatabasePath({ path: pathname }), error, generation);
+export function recordOpenClawStateDatabaseOpenFailure(pathname: string, error: Error): void {
+  terminalOpenLatch.record(resolveDatabasePath({ path: pathname }), error);
 }
 
 /** Clear a terminal open failure after doctor rewrites the database file. */
@@ -397,19 +403,8 @@ export async function getOpenClawStateDatabaseTerminalFailureAsync(
   signal?: AbortSignal,
 ): Promise<Error | undefined> {
   context.admission.assertCurrent();
-  const failure = await terminalOpenLatch.getAsync(
-    context.admission.databasePath,
-    async (pathname, generation) => {
-      signal?.throwIfAborted();
-      context.admission.assertCurrent();
-      const current = await readSqliteFileGeneration(pathname, signal);
-      signal?.throwIfAborted();
-      context.admission.assertCurrent();
-      return sameSqliteFileGeneration(generation, current);
-    },
-  );
-  context.admission.assertCurrent();
-  return failure;
+  signal?.throwIfAborted();
+  return terminalOpenLatch.get(context.admission.databasePath);
 }
 
 /** Reject shared-state access after a process-local terminal failure. */

@@ -2,6 +2,11 @@ import type { SessionsListParams } from "../../../packages/gateway-protocol/src/
 import { addSubagentRunForTests } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
+import {
+  captureRpcTargetForTest,
+  createActiveRpcSourceForTest,
+} from "./rpc-source-fixtures.test-support.js";
 import {
   identifiedClient,
   listSessions,
@@ -56,12 +61,15 @@ export function addReadSubagent(
   });
 }
 
-export function activateReadSession(
-  context: ReturnType<typeof requestContext>,
+export async function activateReadSession(
+  _context: ReturnType<typeof requestContext>,
   runId: string,
   agentId: string,
   sessionKey: string,
   sessionId: string,
 ) {
-  context.chatAbortControllers.set(runId, { agentId, sessionKey, sessionId } as never);
+  const target = { agentId, sessionKey, sessionId };
+  const storeScope = captureRpcTargetForTest(target).storeScope;
+  const source = await createActiveRpcSourceForTest({}, { ...target, storeScope, runId });
+  rpcSourceTesting.set(runId, source);
 }

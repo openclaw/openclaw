@@ -1,3 +1,4 @@
+import type { SessionApprovalEvent } from "../../../../packages/gateway-protocol/src/index.js";
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -51,6 +52,7 @@ type ChatHistoryPaneRequests = {
   historyVersion: number;
   branchVersion: number;
   subscriptionGeneration: number;
+  pendingApprovalReplay?: { generation: number; events: Map<string, SessionApprovalEvent> };
   subscriptionReady?: Promise<boolean>;
   subscriptionError?: string;
   subscriptionRetry?: AbortController;
@@ -70,6 +72,7 @@ type ChatHistoryPaneRequests = {
 };
 
 export type InitialChatSnapshotHydration = {
+  titlePending?: boolean;
   sessionKey: string;
   connected: boolean;
   promise: Promise<void>;
@@ -79,7 +82,7 @@ export type InitialChatSnapshotHydration = {
 };
 
 const chatHistoryPaneRequests = new WeakMap<object, ChatHistoryPaneRequests>();
-// Start at history publication so slow network time never spends the cache grace period.
+// Bound the initial data read so an unavailable cache cannot stall history requests.
 const INITIAL_CHAT_SNAPSHOT_WAIT_MS = 2_000;
 
 export function chatHistoryRequests(owner: object): ChatHistoryPaneRequests {

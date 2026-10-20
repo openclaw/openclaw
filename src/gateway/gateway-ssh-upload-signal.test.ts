@@ -98,7 +98,8 @@ it.runIf(process.platform !== "win32")(
         // rather than failing earlier from a broken pipe.
         `      cat > ${shellEscape(archive)}`,
         "      ulimit -c 0",
-        `      exec ${shellEscape(process.execPath)} -e 'process.abort()'`,
+        // Signal the transport itself, without starting another runtime on the failure path.
+        '      kill -ABRT "$$"',
         "    fi",
         "    ;;",
         "esac",

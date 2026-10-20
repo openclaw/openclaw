@@ -300,12 +300,16 @@ it.each([
     await waitForCronPage(() => expect(directoryCalls).toBe(2));
 
     save.resolve({ id: "saved-1" });
-    await waitForCronPage(() => expect(retiredState.cronCreateOpen).toBe(false));
-
+    if (rotation === "scope") {
+      await waitForCronPage(() => expect(retiredState.cronCreateOpen).toBe(false));
+    }
     freshDirectory.resolve(directoryResult(conversationTarget("-100fresh")));
     await waitForTargets(page, ["-100fresh"]);
     expect(directoryCalls).toBe(2);
     expect(page.deliveryDirectory.error).toBeNull();
+    // Transport retirement fences the save's draft changes as well as discovery;
+    // a scope change leaves its old state private while the accepted save settles.
+    expect(retiredState.cronCreateOpen).toBe(rotation === "reconnect");
   },
 );
 

@@ -9,7 +9,7 @@ read_when:
 title: "Database schemas"
 ---
 
-OpenClaw stores control-plane state in the shared state database and agent data in one database per agent. SQLite is the default; agent stores also support the [experimental PostgreSQL engine](/reference/database-engines). SQLite schema migrations run forward when a database opens. Doctor supports owner-supplied forward migrations for PostgreSQL state and agent schemas, including agent schema 27 to 28, with exact predecessor backups. Older OpenClaw builds refuse databases written by a newer schema.
+OpenClaw stores control-plane state in the shared state database and agent data in one database per agent. SQLite is the default; agent stores also support the [PostgreSQL engine](/reference/database-engines). SQLite schema migrations run forward when a database opens. Doctor supports owner-supplied forward migrations for PostgreSQL state and agent schemas, including agent schema 27 to 28, with exact predecessor backups. Older OpenClaw builds refuse databases written by a newer schema.
 
 For runtime contributors, start with
 [database access in workers](/reference/database-schemas/worker-access): execution
@@ -23,7 +23,12 @@ fragments, and keeps engine schema versions in lockstep. See
 [shared-state schema generation](/reference/database-schemas/storage-changes#shared-state-postgresql-schema-generation)
 for catalog equivalence and the portable v22 identity columns.
 
-The Gateway process is the single owner of every OpenClaw database and its state.
+The Gateway process owns shared and agent databases and their state. Local client
+private identities, token caches, and native socket secrets have a separate owner
+at `<resolved-client-root>/client/credentials.sqlite`, even with a PostgreSQL or
+remote Gateway. The active native app routes authenticated requests to bounded local operations;
+app-absent clients acquire exclusive local custody for each operation. See
+[local client credentials](/reference/database-schemas/versioning#local-client-credentials).
 Its workers and native handles share that ownership. Committed write receipts
 invalidate in-process row caches before their next use; a cache without complete
 writer coverage must use a direct read instead. Runtime reads do not probe foreign
@@ -99,10 +104,11 @@ outside the transaction can refresh those facts through the existing owner.
 Native SQLite initialization reads the loaded library's version and extension
 capability in one query before admitting real state databases. Auth-profile
 readers install their lock-wait timeout at connection open.
-On first Gateway startup, a version-zero database containing only recognized
-native bootstrap tables is completed before runtime history is read. This uses
-the existing schema owner and preserves the native rows; it does not repair
-historical installations during ordinary startup.
+Before Gateway runtime history is read, the schema owner migrates a captured
+canonical database containing only recognized native bootstrap tables. It copies
+the credentials into the local store before retiring their shared tables.
+Independent native sources remain unchanged; ordinary startup does not repair
+historical installations without migration custody.
 Quarantine decision readers and writers set their existing lock-wait timeout at connection
 open. The quarantine store's format and each target's decision are loaded once
 per physical store. Record and clear operations publish the committed decision
@@ -198,6 +204,12 @@ The shared-state reader pool keeps its first worker warm for the normal handle
 idle timeout. Surplus readers retire after 30 seconds idle and restart on demand.
 Retirement uses the pool's existing task and native-resource settlement so an
 active read or retained lease is not interrupted.
+
+If a shared-state writer worker is lost, its logical leases retire even while
+idle. Retirement joins dispatched commands but does not wait for external
+callback bodies, allowing agent lease cleanup to reach its existing recovery
+path. An uncertain write remains `outcome-unknown`; recovery never replays it or
+claims that it rolled back.
 
 Durable usage refreshes publish rollups in bounded transactions instead of one
 writer request per transcript. A batch flushes after 50 transcripts, 1 MiB of
@@ -307,7 +319,7 @@ process's published facts without repeating validation.
 
 Progress-card writes reuse the transaction's admitted table facts. The schema owner creates the lazy table only when it is absent and publishes the committed facts for every handle and worker. A rolled-back installation remains absent until the next normal installation transaction. Stored cards, revision tombstones, schema versions, and upgrade or downgrade behavior are unchanged.
 
-The agent-database execution owner retains up to four idle physical-agent executors in least-recently-used order. Borrowing an executor refreshes its independent 30-minute idle timeout; a fifth idle executor evicts the least recently used one. Configuration changes to the agent roster or storage paths leave existing executors to expire normally. Already-admitted work retains its original physical store; new requests resolve the current configuration. Explicit database closure and Gateway shutdown still revoke and drain the existing lifecycle resources. This changes no schema, stored bytes, or update behavior.
+The agent-database execution owner retains up to four idle physical-agent executors in least-recently-used order. Borrowing an executor refreshes its independent idle timeout (30 minutes in the Gateway, 30 seconds in CLI processes so Doctor maintenance is not left waiting on an idle lease); a fifth idle executor evicts the least recently used one. Configuration changes to the agent roster or storage paths leave existing executors to expire normally. Already-admitted work retains its original physical store; new requests resolve the current configuration. Explicit database closure and Gateway shutdown still revoke and drain the existing lifecycle resources. This changes no schema, stored bytes, or update behavior.
 
 Creating an agent database at an admitted absent path revokes the previous file's
 retained validation before worker preparation. A recreated file cannot borrow that
@@ -465,7 +477,7 @@ reader job. Open the page that matches your task and stay there.
 
 | Page                                                                                           | Read it when                                                                                             |
 | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| [Database engines (experimental)](/reference/database-engines)                                 | Selecting PostgreSQL, understanding SQLite anchors, or observing statements and worker requests.         |
+| [Database engines](/reference/database-engines)                                                | Selecting PostgreSQL, understanding SQLite anchors, or observing statements and worker requests.         |
 | [Database layout](/reference/database-schemas/layout)                                          | The two database roles, their on-disk paths, and the tables behind individual features.                  |
 | [Versioning contract](/reference/database-schemas/versioning)                                  | How schema versions are recorded, when a bump is required, and how updaters cross one.                   |
 | [Per-person and companion storage](/reference/database-schemas/personal-data)                  | Personal GitHub connections, personal model accounts, and Apple companion delivery journals.             |

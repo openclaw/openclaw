@@ -12,6 +12,11 @@ import {
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/channel-plugin-common";
 import {
+  buildChannelOutboundSessionRoute,
+  stripChannelTargetPrefix,
+  type ChannelOutboundSessionRouteParams,
+} from "openclaw/plugin-sdk/core";
+import {
   buildPassiveChannelStatusSummary,
   buildTrafficStatusSummary,
 } from "openclaw/plugin-sdk/extension-shared";
@@ -31,7 +36,6 @@ import {
 } from "./gateway.js";
 import { normalizePubkey } from "./nostr-key-utils.js";
 import type { ProfilePublishResult } from "./nostr-profile.js";
-import { resolveNostrOutboundSessionRoute } from "./session-route.js";
 import { nostrSetupContract, nostrSetupWizard } from "./setup-surface.js";
 import {
   listNostrAccountIds,
@@ -63,6 +67,30 @@ function inferNostrTargetChatType(target: string): "direct" | undefined {
   } catch {
     return undefined;
   }
+}
+
+function resolveNostrOutboundSessionRoute(params: ChannelOutboundSessionRouteParams) {
+  const rawTarget = stripChannelTargetPrefix(params.target, "nostr");
+  let target: string;
+  try {
+    target = normalizePubkey(rawTarget);
+  } catch {
+    return null;
+  }
+  return buildChannelOutboundSessionRoute({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    channel: "nostr",
+    accountId: params.accountId,
+    recipientSessionExact: true,
+    peer: {
+      kind: "direct",
+      id: target,
+    },
+    chatType: "direct",
+    from: `nostr:${target}`,
+    to: `nostr:${target}`,
+  });
 }
 
 const resolveNostrDmPolicy = createScopedDmSecurityResolver<ResolvedNostrAccount>({

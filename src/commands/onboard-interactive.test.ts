@@ -3,6 +3,7 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getRegisteredAgentHarness } from "../agents/harness/registry.js";
+import * as configModule from "../config/config.js";
 import { createConfigFileSnapshot } from "../config/io.snapshot-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -111,9 +112,8 @@ describe("runConversationalOnboarding", () => {
     };
     metadata = createSystemAgentPluginMetadataTestSnapshot(config);
     const fixture = await metadata.run(() => createSystemAgentVerifiedInferenceTestFixture(config));
-    // Keep the handoff's actual registry lookup and artifact validation; the binding
-    // factory's validator override is only for constructing synthetic probe evidence.
-    const { validateAgentHarnessRuntimeArtifact: _fixtureValidator, ...ownerDeps } = fixture.deps;
+    // The handoff must use the actual registered harness and artifact validator.
+    fixture.harnessMock.mockRestore();
     mocks.readConfigFileSnapshot.mockImplementation(async () =>
       createConfigFileSnapshot({
         path: path.join(home.home, "openclaw.json"),
@@ -128,12 +128,10 @@ describe("runConversationalOnboarding", () => {
         legacyIssues: [],
       }),
     );
-    const fingerprintPluginRuntimeArtifact = vi.fn(ownerDeps.fingerprintPluginRuntimeArtifact);
-    const deps = {
-      ...ownerDeps,
-      fingerprintPluginRuntimeArtifact,
-      readConfigFileSnapshot: mocks.readConfigFileSnapshot,
-    };
+    const fingerprintPluginRuntimeArtifact = fixture.fingerprintPluginRuntimeArtifact;
+    vi.spyOn(configModule, "readConfigFileSnapshot").mockImplementation(
+      mocks.readConfigFileSnapshot,
+    );
     let artifactCurrent = true;
     const registry = createEmptyPluginRegistry();
     registry.agentHarnesses.push({
@@ -167,7 +165,7 @@ describe("runConversationalOnboarding", () => {
     >("../system-agent/system-agent.js");
     mocks.runSystemAgent.mockImplementation((opts, runtime) =>
       runSystemAgent(
-        { ...opts, deps, input: terminal, output: terminal, runInteractiveTui: launchConversation },
+        { ...opts, input: terminal, output: terminal, runInteractiveTui: launchConversation },
         runtime,
       ),
     );
@@ -176,7 +174,7 @@ describe("runConversationalOnboarding", () => {
       registry,
       launchConversation,
       currentConfig: () => config,
-      resolveCurrentRoute: () => resolveSystemAgentVerifiedInferenceRoute(fixture.binding, deps),
+      resolveCurrentRoute: () => resolveSystemAgentVerifiedInferenceRoute(fixture.binding),
       invalidate: (
         kind:
           | "configured route"

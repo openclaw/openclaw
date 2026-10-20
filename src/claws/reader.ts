@@ -530,7 +530,6 @@ export async function readClawManifestFile(
     ...(hasMarkdownBody ? { clawMarkdownBody: manifestResult.body } : {}),
     ...(snapshot.packageBootstrap ? { packageBootstrap: snapshot.packageBootstrap } : {}),
     ...(profile.profile ? { openClawProfile: profile.profile } : {}),
-    ...(profile.legacyProfile ? { legacyOpenClawProfile: profile.legacyProfile } : {}),
     source,
     snapshot: {
       manifest: snapshot.manifest,

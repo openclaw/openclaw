@@ -10,7 +10,9 @@ import "../../styles/claws-catalog.css";
 import type { ClawsCatalogViewProps } from "./claws-catalog-view-props.ts";
 import { ClawsDetailView } from "./claws-detail-view.tsx";
 
-function CatalogList(props: ClawsCatalogViewProps) {
+function CatalogList(
+  props: ClawsCatalogViewProps & { onSearchRef: (element: HTMLInputElement) => void },
+) {
   return (
     <>
       <label class="claws-catalog__search">
@@ -18,6 +20,7 @@ function CatalogList(props: ClawsCatalogViewProps) {
           <Icon name="search" />
         </span>
         <input
+          ref={props.onSearchRef}
           type="search"
           data-claws-search
           autofocus
@@ -50,11 +53,12 @@ function CatalogList(props: ClawsCatalogViewProps) {
                 <Show when={entry().summary}>
                   <p>{entry().summary}</p>
                 </Show>
-                <span class="claws-catalog__meta">{t("clawsCatalog.publisher")}</span>
+                <span class="claws-catalog__meta">{`@${entry().ownerHandle}`}</span>
               </div>
               <button
                 type="button"
                 class="btn btn--sm"
+                aria-label={t("clawsCatalog.addNamed", { name: entry().displayName })}
                 disabled={!entry().latestVersion}
                 onClick={() => props.onSelect(entry())}
               >
@@ -69,6 +73,7 @@ function CatalogList(props: ClawsCatalogViewProps) {
 }
 
 export function ClawsCatalogView(props: ClawsCatalogViewProps) {
+  let searchInput!: HTMLInputElement;
   return (
     <Show
       when={props.selected}
@@ -123,6 +128,7 @@ export function ClawsCatalogView(props: ClawsCatalogViewProps) {
           </SettingsPage>
         ) : (
           <openclaw-modal-dialog
+            prop:initialFocus={() => searchInput}
             label={t("clawsCatalog.title")}
             style={{ "--openclaw-modal-width": "min(720px, calc(100vw - 24px))" }}
             onModal-cancel={(event: Event) => {
@@ -148,7 +154,12 @@ export function ClawsCatalogView(props: ClawsCatalogViewProps) {
                 </button>
               </header>
               <div class="claws-catalog__body">
-                <CatalogList {...props} />
+                <CatalogList
+                  {...props}
+                  onSearchRef={(element) => {
+                    searchInput = element;
+                  }}
+                />
               </div>
             </section>
           </openclaw-modal-dialog>

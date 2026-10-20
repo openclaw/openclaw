@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -226,10 +227,6 @@ describe("node-host invocation cancellation", () => {
       let observed: Promise<void> | undefined;
       let retiring: Promise<void> | undefined;
       let closed = false;
-      const tick = () =>
-        new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
       try {
         await vi.waitFor(() => expect(held.signal).toBeDefined());
         held.signal?.addEventListener(
@@ -248,11 +245,11 @@ describe("node-host invocation cancellation", () => {
           expect(closing).toBe(retiring);
         }
         await entered.promise;
-        await tick();
+        await setImmediate();
         expect(closed).toBe(false);
         for (const cleanup of cleanups) {
           cleanup.resolve();
-          await tick();
+          await setImmediate();
           if (cleanups.at(-1) !== cleanup) {
             expect(closed).toBe(false);
           }
@@ -309,19 +306,17 @@ describe("node-host invocation cancellation", () => {
 
   it("aborts MCP startup before waiting while supervisor retirement runs independently", async () => {
     let startupSignal: AbortSignal | undefined;
-    let resolveStartup!: (manager: Awaited<ReturnType<typeof mocks.startMcp>>) => void;
+    const startup = createDeferred<Awaited<ReturnType<typeof mocks.startMcp>>>();
     mocks.startMcp.mockImplementationOnce(async (_servers, deps) => {
       startupSignal = deps?.signal;
-      return await new Promise((resolve) => {
-        resolveStartup = resolve;
-      });
+      return await startup.promise;
     });
     const runtime = await startRuntime();
 
     const closing = runtime.close();
     expect(startupSignal?.aborted).toBe(true);
     await vi.waitFor(() => expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce());
-    resolveStartup({
+    startup.resolve({
       descriptors: [],
       callMcpTool: vi.fn(),
       close: mocks.closeMcp,

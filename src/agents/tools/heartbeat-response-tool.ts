@@ -1,6 +1,4 @@
 /**
- * Heartbeat response tool.
- *
  * Auto-reply heartbeat turns use this tool to accept the agent's outcome,
  * notification decision, and next-check metadata exactly once per turn.
  */
@@ -77,9 +75,7 @@ export function resolveHeartbeatResponseTool(options?: {
     : null;
 }
 
-export function createHeartbeatResponseTool(
-  options: { acceptsResponses?: boolean } = {},
-): AnyAgentTool {
+function createHeartbeatResponseTool(options: { acceptsResponses?: boolean } = {}): AnyAgentTool {
   let recorded = false;
   return {
     label: "Heartbeat",
@@ -93,7 +89,10 @@ export function createHeartbeatResponseTool(
     parameters: HeartbeatResponseToolSchema,
     execute: async (_toolCallId, args) => {
       if (options.acceptsResponses === false) {
-        throw new ToolInputError("heartbeat_respond is only accepted during a heartbeat run");
+        // Offered for tool-list stability; preserve the run's configured reply mode.
+        throw new ToolInputError(
+          "heartbeat_respond is not accepted in this run; follow the configured reply instructions instead",
+        );
       }
       if (!isRecord(args)) {
         throw new ToolInputError("Heartbeat response arguments required");

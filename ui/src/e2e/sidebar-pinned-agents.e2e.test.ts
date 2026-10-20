@@ -134,9 +134,12 @@ suite.define(() => {
           await row.waitFor({ state: "visible" });
           expect(await row.getAttribute("title")).toBeNull();
           expect(await header.locator("a").count()).toBe(1);
-          expect(
-            await header.locator(".sidebar-agent-roster__avatar .session-glyph__ring").count(),
-          ).toBe(1);
+          // Agent metadata renders before the separate session-activity query can settle.
+          await expect
+            .poll(() =>
+              header.locator(".sidebar-agent-roster__avatar .session-glyph__ring").count(),
+            )
+            .toBe(1);
           expect(await sidebar.locator("[data-agent-collapse]").count()).toBe(0);
           expect(
             await sidebar
@@ -225,17 +228,14 @@ suite.define(() => {
           expect(
             await pinned.locator(".sidebar-pinned-agent__avatar .session-glyph__ring").count(),
           ).toBe(1);
-          const pinnedMenu = pinned.getByRole("button", { name: "Options for Harbor" });
-          await pinnedMenu.hover();
+          await link.hover();
+          expect(await pinned.getByRole("button").count()).toBe(0);
           expect(
-            await pinnedMenu.evaluate((element) => getComputedStyle(element).backgroundColor),
-          ).toBe("rgba(0, 0, 0, 0)");
-          if (width !== 390) {
-            expect(await pinnedMenu.evaluate((element) => getComputedStyle(element).color)).toBe(
-              await link.evaluate((element) => getComputedStyle(element).color),
-            );
-          }
-          await captureSidebarUiProof(suite, page, `pinned-action-${width}-hover.png`);
+            await sidebar
+              .locator(".sidebar-pinned-agents")
+              .evaluate((element) => getComputedStyle(element).borderBottomStyle),
+          ).toBe("none");
+          await captureSidebarUiProof(suite, page, `pinned-gallery-${width}-hover.png`);
           const card = pinned.locator(".tooltip-surface[popover]:popover-open");
           const content = pinned.locator(".sidebar-pinned-agent__card");
           for (const state of ["hover", "focus"] as const) {
@@ -247,8 +247,10 @@ suite.define(() => {
               await link.hover();
             } else {
               await page.mouse.move(-1, -1);
-              await pinned.getByRole("button", { name: "Options for Harbor" }).focus();
+              // Tooltips open for keyboard focus, so reach the link by tabbing.
+              await link.focus();
               await page.keyboard.press("Shift+Tab");
+              await page.keyboard.press("Tab");
               expect(await link.evaluate((element) => element === document.activeElement)).toBe(
                 true,
               );
@@ -266,18 +268,14 @@ suite.define(() => {
             await expect.poll(() => card.count()).toBe(0);
             expect(await sidebar.isVisible()).toBe(true);
           }
-          await pinnedMenu.press("ArrowDown");
-          expect(
-            await sidebar.getByRole("menuitem", { name: "Settings", exact: true }).count(),
-          ).toBe(1);
-          await sidebar.getByRole("menuitem", { name: "Unpin", exact: true }).click();
-          await row.waitFor({ state: "visible" });
-          expect(await sidebar.locator("[data-pinned-agent]").count()).toBe(0);
-          await header.getByRole("button", { name: "Options for Harbor" }).press("ArrowDown");
+          await sidebar
+            .locator('[data-agent-group="research"]')
+            .getByRole("button", { name: "Options for Research and competitive intelligence" })
+            .press("ArrowDown");
           await sidebar.getByRole("menuitem", { name: "Settings", exact: true }).click();
           await waitForControlUiRoute(page, {
             routeId: "agents",
-            pathname: "/settings/agents/main",
+            pathname: "/settings/agents/research",
           });
         },
       );

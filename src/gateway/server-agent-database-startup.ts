@@ -144,7 +144,7 @@ export function activateGatewayAgentDatabaseStartup(params: {
         assertCurrent();
         const beforeConfig = params.getConfig();
         assertAgentDatabaseConfiguration(beforeConfig, agentId, paths, env);
-        // ACP-only stores need database/session preparation, not native auth/model publication.
+        // Non-roster stores (ACP-only or reserved) need no native auth/model publication.
         if (!listAgentIds(beforeConfig).includes(agentId)) {
           return;
         }

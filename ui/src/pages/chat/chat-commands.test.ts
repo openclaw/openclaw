@@ -256,6 +256,35 @@ describe("refreshSlashCommands", () => {
   });
 });
 
+describe("local command loading", () => {
+  it("renders English help on the first local command", async () => {
+    const host = makeChatHost({
+      requestHandlers: {},
+      // This command-only harness never commits a transcript DOM.
+      renderLifecycle: { afterCommit: () => () => {} },
+    });
+
+    await expect(dispatchChatSlashCommand(host, "help", "")).resolves.toBe("completed");
+
+    expect(host.chatMessages.at(-1)).toMatchObject({
+      role: "system",
+      content: expect.stringContaining("**Available Commands**"),
+    });
+    expect(host.request).not.toHaveBeenCalled();
+  });
+
+  it("does not run a command after its Gateway changes while loading", async () => {
+    const host = makeChatHost({ requestHandlers: {} });
+    const pending = dispatchChatSlashCommand(host, "model", "example/model");
+    host.connectionEpoch += 1;
+
+    await expect(pending).resolves.toBe("failed");
+
+    expect(host.request).not.toHaveBeenCalled();
+    expect(host.chatMessages).toEqual([]);
+  });
+});
+
 describe("conversation reset confirmation", () => {
   it.each(["owner", "viewer"] as const)(
     "authorizes /stop with narrow scope for a %s session",

@@ -370,6 +370,8 @@ describe("update candidate canary", () => {
       "Duplicate plugin registration",
     ],
     ["malformed plugin inventory", { plugins: [{ status: "error" }] }, false, "invalid inventory"],
+    ["array plugin inventory", [], false, "invalid inventory"],
+    ["primitive plugin inventory", "invalid", false, "invalid inventory"],
   ] as const)(
     "handles %s before proving core readiness",
     async (_label, inventory, proceeds, failureMessage) => {
@@ -557,11 +559,8 @@ describe("update candidate canary", () => {
       gateway: { bind: "loopback" },
       mcp: { apps: { enabled: false } },
     });
-    expect(result.listenerIsolation).toEqual({
-      gateway: { host: "127.0.0.1", port: expect.any(Number) },
-      mcpAppSandbox: "disabled",
-    });
-    expect(candidateConfig.gateway).toMatchObject({ port: result.listenerIsolation?.gateway.port });
+    expect(candidateConfig.gateway).toMatchObject({ port: expect.any(Number) });
+    expect(candidateConfig.gateway).not.toMatchObject({ port: original.gateway.port });
     expect(original.mcp.apps).toEqual({ enabled: true, sandboxPort: 18790 });
     expect(original.cron.enabled).toBe(true);
     const gatewayPid = [...children.keys()].at(-1)!;
@@ -711,10 +710,18 @@ describe("update candidate canary", () => {
       expect(result).toMatchObject({ status: "error", phase: failure });
       if (failure === "readiness") {
         expect(canaryOutcomeStep(result.steps)).toMatchObject({
-          exitCode: 1,
-          failureFacts: [{ check: "readyz", message: expect.stringContaining("stalled") }],
+          exitCode: null,
+          termination: "timeout",
+          failureFacts: [
+            {
+              check: "startupz",
+              code: "candidate-startup-failed",
+              message: "readiness timeout",
+            },
+          ],
         });
         expect(canaryOutcomeStep(result.steps)?.advisory).toBeUndefined();
+        expect(canaryOutcomeStep(result.steps)?.stderrTail).toContain("stalled");
       }
       expect(result.steps.some((step) => step.exitCode !== 0)).toBe(true);
       expect(result.logTail.length).toBeLessThanOrEqual(40);

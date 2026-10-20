@@ -122,8 +122,7 @@ export function createWorkerProviderLifecycle(
     if (record.state !== "bootstrapping" || !record.leaseId || !record.sshEndpoint) {
       throw serviceError("invalid_state", "Worker bootstrap requires a provisioned SSH lease");
     }
-    const leaseId = record.leaseId;
-    const sshEndpoint = record.sshEndpoint;
+    const { leaseId, sshEndpoint } = record;
     let receipt: WorkerAdmissionHandshake;
     try {
       receipt = await callBootstrap(installation, (signal) =>
@@ -159,6 +158,7 @@ export function createWorkerProviderLifecycle(
   const finishProvision = async (
     initialRecord: WorkerEnvironmentRecord,
     provider: WorkerProvider,
+    workSignal: AbortSignal,
     preparedInstallation?: WorkerInstallationArtifact,
     cancellation?: ReturnType<typeof createWorkerProvisionCancellation>,
     nodeRuntimeIdentity?: WorkerNodeRuntimeIdentity,
@@ -213,7 +213,7 @@ export function createWorkerProviderLifecycle(
       enrollmentOperation = nodeProvisioning.createEnrollmentOperation(
         record,
         provider,
-        cancellation?.signal,
+        workSignal,
         preparedInstallation,
         nodeRuntimeIdentity,
         beforeProvision,
@@ -241,7 +241,7 @@ export function createWorkerProviderLifecycle(
           namespace: options.projectNamespace,
           getConfig: options.getConfig,
           requireCurrent: requireProjectOwner,
-          signal: cancellation?.signal,
+          signal: workSignal,
         });
       }
       const assertCurrent = () => {
@@ -275,7 +275,7 @@ export function createWorkerProviderLifecycle(
               nodeRuntimeIdentity,
             }
           : {}),
-        ...(cancellation ? { signal: cancellation.signal } : {}),
+        signal: workSignal,
         ...(projectOperation ? { project: projectOperation.project } : {}),
       } satisfies NonNullable<Parameters<WorkerProvider["provision"]>[2]> & {
         assertCurrent: () => void;
@@ -339,6 +339,7 @@ export function createWorkerProviderLifecycle(
       if (WorkerProviderError.isCleanupComplete(error)) {
         return await finishConfirmedProvisionCleanup(record, error);
       }
+      options.ownerSignal.throwIfAborted();
       const detail = boundedError(error);
       const permanent =
         error instanceof WorkerProviderError ||
@@ -401,6 +402,7 @@ export function createWorkerProviderLifecycle(
         record,
         lease,
         provider,
+        workSignal,
         patch,
         enrollmentOperation?.installation ?? preparedInstallation,
         cancellation,
@@ -416,12 +418,11 @@ export function createWorkerProviderLifecycle(
       try {
         // A persisted provisioning row can represent an allocation whose response was lost.
         // Replay the idempotent provider operation before packaging can terminalize that lease.
-        installation = await options.prepareInstallation(
-          installFor(bootstrapping),
-          cancellation?.signal,
-        );
+        installation = await options.prepareInstallation(installFor(bootstrapping), workSignal);
         cancellation?.assertActive();
       } catch (error) {
+        await cancellation?.settleStopIntent();
+        options.ownerSignal.throwIfAborted();
         return await failBootstrap(bootstrapping, lease.leaseId, provider, error);
       }
     }
@@ -435,10 +436,14 @@ export function createWorkerProviderLifecycle(
     retainProviderSettlement?: (settled: Promise<void>) => void,
     beforeProvision?: () => void,
   ) => {
+    const workSignal = signal
+      ? AbortSignal.any([options.ownerSignal, signal])
+      : options.ownerSignal;
     const pending = await expirePrepared(record);
     if (pending.destroyRequestedAtMs !== null) {
       return finishDestroy(pending, provider);
     }
+    // Shutdown cancels this attempt; only request cancellation records destroy intent.
     const cancellation = signal
       ? createWorkerProvisionCancellation(store, record, signal)
       : undefined;
@@ -450,7 +455,7 @@ export function createWorkerProviderLifecycle(
       const preparedNode = await nodeProvisioning.prepare(
         record,
         provider,
-        signal,
+        workSignal,
         beforeProvision,
       );
       let installation: WorkerInstallationArtifact | undefined = preparedNode?.installation;
@@ -464,9 +469,10 @@ export function createWorkerProviderLifecycle(
         try {
           // Fresh requests package before allocation. Once provisioning is durable, provider replay
           // must happen first because the previous response may have been lost after allocation.
-          installation = await options.prepareInstallation(installFor(record), signal);
+          installation = await options.prepareInstallation(installFor(record), workSignal);
         } catch (error) {
           cancellation?.assertActive();
+          options.ownerSignal.throwIfAborted();
           const detail = boundedError(error);
           await move(record, "failed", { lastError: detail });
           throw serviceError(
@@ -480,6 +486,7 @@ export function createWorkerProviderLifecycle(
       return await finishProvision(
         pending,
         provider,
+        workSignal,
         installation,
         cancellation,
         preparedNode?.identity,

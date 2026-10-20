@@ -77,9 +77,10 @@ async function sharingSession(sessionKey: string, manager = preparedClient("owne
 
 const withState = createSharingState(() => setRuntimeConfigSnapshot({}));
 
-it("lists sharing evidence independently of placement display failures", () =>
+it("lists sharing evidence and adds members independently of placement display failures", () =>
   withState(async () => {
     const sessionKey = "agent:main:sharing-display-failure";
+    const member = ensureProfileForEmail("sharing-display-member@example.test");
     seedSync(sessionKey);
     addSessionMember(
       { agentId: "main", sessionKey },
@@ -106,6 +107,12 @@ it("lists sharing evidence independently of placement display failures", () =>
       for (const method of ["session.members.listEvidence", "session.members.list"] as const) {
         expect(await call(method, { sessionKey }, requestContext)).toEqual(expected);
       }
+      expect(
+        await call("session.members.add", { sessionKey, identityId: member.id }, requestContext),
+      ).toEqual([[true, { ok: true, sessionKey, identityId: member.id }, undefined]]);
+      expect((await readSessionMembersInWorker({ agentId: "main", sessionKey })).members).toEqual(
+        expect.arrayContaining([expect.objectContaining({ identityId: member.id })]),
+      );
     } finally {
       projection.dispose();
     }
@@ -147,7 +154,10 @@ it("limits creators to the current combined-store scope across configuration cha
         requestContext,
       );
       expect(listed[0]?.[1]).toMatchObject({ identities: expected });
-      expect(getSessionRowProjection(requestContext)!.selectEntries()).toHaveLength(2);
+      const projection = getSessionRowProjection(requestContext)!;
+      // Sharing prepares metadata only; this inventory assertion needs full row facts.
+      await projection.ensureMaterialized();
+      expect(projection.selectEntries()).toHaveLength(2);
     }
   }));
 
@@ -511,16 +521,16 @@ it.each(["session.members.list", "session.members.add"] as const)(
       });
       const client = identifiedClient(owner.id);
       const { requestContext, projection } = await sharingSession(sessionKey, client);
-      const preparation =
-        method === "session.members.list" ? "prepareSelection" : "ensureMaterialized";
-      const prepare = projection[preparation].bind(projection);
+      const prepare = projection.prepareSelection.bind(projection);
       const ready = createDeferredCore();
       const release = createDeferredCore();
-      const read = vi.spyOn(projection, preparation).mockImplementationOnce(async () => {
-        await prepare();
-        ready.resolve();
-        await release.promise;
-      });
+      const read = vi
+        .spyOn(projection, "prepareSelection")
+        .mockImplementationOnce(async (...args) => {
+          await prepare(...args);
+          ready.resolve();
+          await release.promise;
+        });
       const respond = vi.fn();
       const pending = sessionSharingHandlers[method]!({
         params: {

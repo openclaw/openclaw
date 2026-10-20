@@ -1,6 +1,6 @@
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { resolveCronJobConfigRevision } from "./config-revision.js";
 import type {
   CronJobScratchState,
@@ -95,7 +95,7 @@ export function readCronScratchSnapshotInDatabase(
   db: EngineConnection,
   command: CronScratchReadCommand,
 ): CronScratchSnapshot | undefined {
-  return runSqliteDeferredTransactionSync(db, () => {
+  return runSqliteReadSnapshotSync(db, () => {
     if (command.selector.kind === "heartbeat") {
       return readHeartbeatMonitorScratchFromDatabase(
         db,

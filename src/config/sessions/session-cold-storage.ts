@@ -4,7 +4,7 @@ import { iterateProjectedAgentRunSessionKeys } from "../../infra/agent-run-proje
 import { buildProjectedAgentRunIndex } from "../../infra/agent-run-registry.js";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { collectActiveSessionWorkAdmissions } from "../../sessions/session-lifecycle-admission.js";
+import { collectSessionControllerTargets } from "../../sessions/session-controller.lifecycle.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../../shared/store-writer-queue.js";
 import { retainOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -305,7 +305,9 @@ async function archiveSessionColdBatch(
       const input: SessionColdPreparationWorkerData["input"] = {
         databaseOptions: workerDatabaseOptions(options.databaseOptions),
         admissionIdentities: [
-          ...(collectActiveSessionWorkAdmissions().get(options.ownerStorePath) ?? []),
+          ...(collectSessionControllerTargets(undefined, options.ownerStorePath).get(
+            options.ownerStorePath,
+          ) ?? []),
         ],
         liveSessionKeys: [...iterateProjectedAgentRunSessionKeys(buildProjectedAgentRunIndex())],
         cooledSessionIds: [...cooled],
@@ -363,7 +365,10 @@ async function archiveSessionColdBatch(
               },
               () => {
                 assertCurrent();
-                const admissions = collectActiveSessionWorkAdmissions().get(options.ownerStorePath);
+                const admissions = collectSessionControllerTargets(
+                  undefined,
+                  options.ownerStorePath,
+                ).get(options.ownerStorePath);
                 if (
                   [
                     ...(admissions ?? []),

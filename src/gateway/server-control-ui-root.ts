@@ -43,6 +43,7 @@ export type ControlUiRootState =
 type ReadyRoot = Extract<ControlUiRootState, { path: string; kind: "bundled" | "resolved" }>;
 type RootFiles = {
   controller: AbortController;
+  cacheEnabled: boolean;
   pending: Map<string, Promise<ControlUiRootAsset | null>>;
   cached: LruCache<{ asset: ControlUiRootAsset; bytes: number }>;
 };
@@ -71,6 +72,7 @@ function rootFiles(runtime: FileRuntime, root: ControlUiRootState): RootFiles {
   if (!files) {
     files = {
       controller: new AbortController(),
+      cacheEnabled: true,
       pending: new Map(),
       cached: new LruCache(MAX_PREPARED_ENTRIES, {
         maxBytes: MAX_PREPARED_BYTES,
@@ -154,7 +156,12 @@ export function readControlUiRootAsset(
       [asset.br, asset.gzip] = await Promise.all([sidecar(".br"), sidecar(".gz")]);
     }
     owner.controller.signal.throwIfAborted();
-    if (root.kind === "bundled" && !(asset.br instanceof Error) && !(asset.gzip instanceof Error)) {
+    if (
+      root.kind === "bundled" &&
+      owner.cacheEnabled &&
+      !(asset.br instanceof Error) &&
+      !(asset.gzip instanceof Error)
+    ) {
       const bytes =
         (file.body?.byteLength ?? 0) +
         (asset.br?.body?.byteLength ?? 0) +
@@ -340,6 +347,11 @@ export function createGatewayControlUiRootLifecycle(
         return;
       }
       enabled = nextEnabled;
+      // Admitted HTTP reads may finish; only enabled roots cache their results.
+      // Stop still joins every outstanding read.
+      const files = rootFiles(fileRuntime(), state);
+      files.cacheEnabled = enabled;
+      files.cached.clear();
       if (enabled) {
         if (state.kind === "failed") {
           Object.assign(state, { kind: "preparing" });

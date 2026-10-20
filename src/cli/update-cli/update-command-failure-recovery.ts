@@ -98,9 +98,15 @@ export async function verifyUpdateFailureRecovery(params: {
   let restartAttempted = false;
   try {
     await withCommandProcessScope(async () => {
-      // Package rollback restores files even on a headless install. Its original
-      // service observation cannot become a request to wait for a new Gateway.
-      if (params.serviceUpdateVerdict?.kind === "absent") {
+      const untouched =
+        ["managed-service-preflight", "gateway-stop-unverified"].includes(result.reason ?? "") &&
+        !params.serviceStopped &&
+        !params.preManagedServiceStop?.stopped &&
+        !params.gatewayStartAttempted &&
+        !params.definitionRecovery?.backup &&
+        !params.definitionRecovery?.unverified;
+      // An untouched refusal or absent service has no restart to recover.
+      if (untouched || params.serviceUpdateVerdict?.kind === "absent") {
         result.steps.push({
           name: "gateway recovery observation",
           command: "gateway verification",
@@ -108,7 +114,9 @@ export async function verifyUpdateFailureRecovery(params: {
           durationMs: 0,
           exitCode: 0,
           diagnostics: [
-            "Gateway readiness was not checked: no Gateway service or listener was present before maintenance.",
+            untouched
+              ? `No recovery needed; ${params.preManagedServiceStop?.running ? "still serving" : "installation unchanged at"} ${result.before?.version ?? recorded?.before.version ?? "the previous version"}. No service was stopped or started.`
+              : "Gateway readiness was not checked: no Gateway service or listener was present before maintenance.",
           ],
         });
         return;

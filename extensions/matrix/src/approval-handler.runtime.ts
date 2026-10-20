@@ -74,19 +74,8 @@ type ReactionTargetRef = Parameters<typeof unregisterMatrixApprovalReactionTarge
 const MATRIX_APPROVAL_DELIVERY_ATTEMPTS = 3;
 const MATRIX_APPROVAL_DELIVERY_RETRY_DELAY_MS = 250;
 
-type MatrixApprovalHandlerDeps = {
-  nowMs?: () => number;
-  sendMessage?: typeof sendMessageMatrix;
-  sendSingleTextMessage?: typeof sendSingleTextMessageMatrix;
-  reactMessage?: typeof reactMatrixMessage;
-  editMessage?: typeof editMatrixMessage;
-  deleteMessage?: typeof deleteMatrixMessage;
-  repairDirectRooms?: typeof repairMatrixDirectRooms;
-};
-
 type MatrixApprovalHandlerContext = {
   client: MatrixClient;
-  deps?: MatrixApprovalHandlerDeps;
 };
 
 function resolveHandlerContext(params: ChannelApprovalCapabilityHandlerContext) {
@@ -358,10 +347,8 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
       let roomId = target.id;
       if (target.kind === "user") {
         const accountConfig = resolveMatrixAccountConfig({ cfg, accountId: resolved.accountId });
-        const repairDirectRooms =
-          resolved.context.deps?.repairDirectRooms ?? repairMatrixDirectRooms;
         const repaired = await retryMatrixApprovalDelivery(() =>
-          repairDirectRooms({
+          repairMatrixDirectRooms({
             client: resolved.context.client,
             remoteUserId: target.id,
             encrypted: accountConfig.encryption === true,
@@ -382,9 +369,6 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
       if (!resolved) {
         return null;
       }
-      const sendSingleTextMessage =
-        resolved.context.deps?.sendSingleTextMessage ?? sendSingleTextMessageMatrix;
-      const reactMessage = resolved.context.deps?.reactMessage ?? reactMatrixMessage;
       const sendOptions = {
         ...resolved.clientOptions,
         threadId: preparedTarget.threadId,
@@ -393,16 +377,15 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
       let result;
       try {
         result = await retryMatrixApprovalDelivery(
-          () => sendSingleTextMessage(preparedTarget.to, pendingPayload.text, sendOptions),
+          () => sendSingleTextMessageMatrix(preparedTarget.to, pendingPayload.text, sendOptions),
           { shouldRetry: (error) => !isSingleMatrixMessageLimitError(error) },
         );
       } catch (error) {
         if (!isSingleMatrixMessageLimitError(error)) {
           throw error;
         }
-        const sendMessage = resolved.context.deps?.sendMessage ?? sendMessageMatrix;
         result = await retryMatrixApprovalDelivery(() =>
-          sendMessage(preparedTarget.to, pendingPayload.text, sendOptions),
+          sendMessageMatrix(preparedTarget.to, pendingPayload.text, sendOptions),
         );
       }
       const receiptMessageIds = listMessageReceiptPlatformIds(result.receipt);
@@ -426,7 +409,7 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
       await Promise.allSettled(
         listMatrixApprovalReactionBindings(pendingPayload.allowedDecisions).map(
           async ({ emoji }) => {
-            await reactMessage(result.roomId, reactionEventId, emoji, resolved.clientOptions);
+            await reactMatrixMessage(result.roomId, reactionEventId, emoji, resolved.clientOptions);
           },
         ),
       );
@@ -441,8 +424,6 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
       if (!resolved) {
         return;
       }
-      const editMessage = resolved.context.deps?.editMessage ?? editMatrixMessage;
-      const deleteMessage = resolved.context.deps?.deleteMessage ?? deleteMatrixMessage;
       const [primaryMessageId, ...staleMessageIds] = normalizeUniqueStringEntries(
         entry.platformMessageIds,
       );
@@ -450,9 +431,9 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
         return;
       }
       await Promise.allSettled([
-        editMessage(entry.roomId, primaryMessageId, payload, resolved.clientOptions),
+        editMatrixMessage(entry.roomId, primaryMessageId, payload, resolved.clientOptions),
         ...staleMessageIds.map(async (messageId) => {
-          await deleteMessage(entry.roomId, messageId, {
+          await deleteMatrixMessage(entry.roomId, messageId, {
             ...resolved.clientOptions,
             reason: "approval resolved",
           });
@@ -464,10 +445,9 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
       if (!resolved) {
         return;
       }
-      const deleteMessage = resolved.context.deps?.deleteMessage ?? deleteMatrixMessage;
       await Promise.allSettled(
         normalizeUniqueStringEntries(entry.platformMessageIds).map(async (messageId) => {
-          await deleteMessage(entry.roomId, messageId, {
+          await deleteMatrixMessage(entry.roomId, messageId, {
             ...resolved.clientOptions,
             reason: phase === "expired" ? "approval expired" : "approval resolved",
           });

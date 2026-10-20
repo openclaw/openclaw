@@ -490,13 +490,7 @@ it("keeps an image steer pending across nonterminal retry and compaction events"
   const wait = f.wait("", { images: [image] });
   f.emit({ type: "agent_end", messages: [], willRetry: true });
   await vi.advanceTimersByTimeAsync(0);
-  f.emit({
-    type: "auto_retry_start",
-    attempt: 1,
-    maxAttempts: 3,
-    delayMs: 1_000,
-    errorMessage: "retryable failure",
-  });
+  f.emit({ type: "auto_retry_start" });
   f.emit({ type: "compaction_start", reason: "threshold" });
   await vi.advanceTimersByTimeAsync(0);
   expect(f.queue).toEqual([target]);

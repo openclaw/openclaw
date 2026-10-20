@@ -1,4 +1,8 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
@@ -6,6 +10,92 @@ import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-su
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it("retries a failed post-run listing without hiding a rejected retry", async () => {
+    const proofRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const proof = proofRoot
+      ? createControlUiE2eArtifactDir("files-list-recovery", proofRoot)
+      : undefined;
+    const viewport = { width: 1280, height: 900 };
+    const context = await suite.newBrowserContext({
+      ...createControlUiE2eContextOptions(),
+      viewport,
+      ...(proof ? { recordVideo: { dir: proof, size: viewport } } : {}),
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.files.list": {
+          sessionKey: "main",
+          root: "/workspace",
+          files: [{ kind: "modified", name: "checklist.md", path: "checklist.md", size: 42 }],
+        },
+        "artifacts.list": { artifacts: [] },
+      },
+    });
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await openChatSidePanelType(page, "Files");
+      const rail = page.locator(".chat-workspace-rail");
+      await rail.getByText("checklist.md", { exact: true }).waitFor();
+      await gateway.deferNext("sessions.files.list");
+      await gateway.emitChatFinal({ runId: "files-revision", text: "Checklist updated." });
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.files.list")).length)
+        .toBe(2);
+      await gateway.rejectDeferred("sessions.files.list", {
+        code: "UNAVAILABLE",
+        message: "Session workspace changed during file read",
+      });
+      const error = rail.getByText("Session workspace changed during file read", { exact: true });
+      await error.waitFor();
+      await page.getByRole("button", { name: "Close Files" }).click();
+      await rail.waitFor({ state: "detached" });
+      await openChatSidePanelType(page, "Files");
+      await error.waitFor();
+      expect(await gateway.getRequests("sessions.files.list")).toHaveLength(2);
+      const retry = rail.getByRole("button", { name: "Retry", exact: true });
+      await retry.waitFor();
+      if (proof) {
+        const frame = await takeControlUiScreenshotFrame(page, rail, [error, retry], {
+          animations: "disabled",
+        });
+        await writeFile(path.join(proof, "retry.png"), frame.png);
+      }
+      await gateway.deferNext("sessions.files.list");
+      await retry.click();
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.files.list")).length)
+        .toBe(3);
+      await gateway.rejectDeferred("sessions.files.list", {
+        code: "FORBIDDEN",
+        message: "Session files are unavailable",
+      });
+      const denied = rail.getByRole("alert");
+      await expect.poll(() => denied.textContent()).toBe("Session files are unavailable");
+      expect(await rail.locator(".chat-workspace-rail__file-name").count()).toBe(0);
+      expect(await gateway.getRequests("sessions.files.list")).toHaveLength(3);
+      await retry.click();
+      await rail.getByText("checklist.md", { exact: true }).waitFor();
+      const requests = await gateway.getRequests("sessions.files.list");
+      expect(requests).toHaveLength(4);
+      expect(requests[2]?.params).toEqual(requests[1]?.params);
+      expect(requests[3]?.params).toEqual(requests[1]?.params);
+      expect(await denied.count()).toBe(0);
+      expect(await retry.count()).toBe(0);
+      if (proof) {
+        const frame = await takeControlUiScreenshotFrame(
+          page,
+          rail,
+          [rail.getByText("checklist.md", { exact: true })],
+          { animations: "disabled" },
+        );
+        await writeFile(path.join(proof, "recovered.png"), frame.png);
+      }
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("starts the workspace files panel collapsed and toggles it open", async () => {
     const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();

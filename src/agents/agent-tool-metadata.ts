@@ -10,8 +10,13 @@ import {
 import { copyChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import { copyCodeModeControlToolIdentity } from "./code-mode-control-tools.js";
 import { copyCronScheduledToolProjection } from "./exec-tool-target-pinning.js";
-import { copyInternalToolExecutionPreparer } from "./runtime/internal-hooks.js";
+import {
+  attachInternalToolExecutionPreparer,
+  copyInternalToolExecutionPreparer,
+  getInternalToolExecutionPreparer,
+} from "./runtime/internal-hooks.js";
 import { resolveCoreToolExecutionLocation } from "./tool-catalog.js";
+import { copyAgentToolReplaySafety } from "./tool-replay-safety.js";
 import { copyToolTerminalPresentation } from "./tool-terminal-presentation.js";
 
 export type AgentToolActionDescriptor = Readonly<{
@@ -108,6 +113,7 @@ export function copyBeforeToolCallWrapperMetadata(
     ToolActionMetadata.set(target, state);
   }
   copyAgentToolAvailability(source, target);
+  copyAgentToolReplaySafety(source, target);
 }
 
 /** Bind the broad family at final assembly from private, process-stable owner metadata. */
@@ -137,4 +143,26 @@ export function copyAgentToolMetadata<T extends AnyAgentTool>(
   copyCronScheduledToolProjection(source, target);
   copyInternalToolExecutionPreparer(source, target);
   return target;
+}
+
+export function wrapAgentToolExecutionContext<T extends AnyAgentTool>(
+  tool: T,
+  execute: T["execute"],
+  run: <R>(operation: () => Promise<R>) => Promise<R>,
+  rewrap: ToolExecutionWrapper,
+): T {
+  const wrapped = copyAgentToolMetadata(tool, { ...tool, execute }, rewrap);
+  const sourcePreparer = getInternalToolExecutionPreparer(tool);
+  if (sourcePreparer) {
+    attachInternalToolExecutionPreparer(wrapped, async (params) => {
+      const prepared = await run(() => sourcePreparer(params));
+      return prepared.kind === "ready"
+        ? {
+            ...prepared,
+            execute: (start) => run(() => prepared.execute(start)),
+          }
+        : prepared;
+    });
+  }
+  return wrapped;
 }

@@ -49,9 +49,34 @@ export type PreparedSessionPrState = {
   connIds: Set<string>;
   target: ControlUiSessionPrTarget;
   cacheLifetime: AbortController;
+  sourceIdentity?: string;
   snapshot?: ControlUiSessionPullRequestSnapshot;
+  branchSnapshot?: ControlUiSessionPullRequestSnapshot;
   prepared?: boolean;
 };
+
+/** Retain only branch facts across audience/mode changes on the same physical source. */
+export function retainControlUiSessionPrBranchSnapshot(
+  state: PreparedSessionPrState,
+  previous: PreparedSessionPrState | undefined,
+) {
+  if (
+    !previous?.target.branchIdentity ||
+    previous.target.branchIdentity !== state.target.branchIdentity ||
+    previous.target.taskReceipts?.ownerProfileId !== state.target.taskReceipts?.ownerProfileId
+  ) {
+    return;
+  }
+  state.sourceIdentity ??= previous.sourceIdentity;
+  if (
+    state.sourceIdentity === previous.sourceIdentity &&
+    previous.branchSnapshot &&
+    state.branchSnapshot !== previous.branchSnapshot
+  ) {
+    state.branchSnapshot = previous.branchSnapshot;
+    state.snapshot = undefined;
+  }
+}
 
 /** Background readers publish into the subscription owner's existing cells and concurrency. */
 export function createControlUiSessionPrPreparedRead<State extends PreparedSessionPrState>(deps: {
@@ -63,13 +88,14 @@ export function createControlUiSessionPrPreparedRead<State extends PreparedSessi
   ) => Promise<T>;
   load: LoadSessionPullRequests;
   keyStates: Map<string, State>;
-  stateForTarget: (sessionKey: string, target: ControlUiSessionPrTarget) => State;
+  stateForTarget: (target: ControlUiSessionPrTarget) => State;
   getSessionRowProjection?: () => SessionRowProjection | undefined;
 }) {
   const { scope, limit, withSource, load, keyStates, stateForTarget } = deps;
   const spawnBroker = getSpawnBroker();
   const preparing = new Map<State, Promise<void>>();
-  const publishSnapshot = (state: State, snapshot: ControlUiSessionPullRequestSnapshot) => {
+  const preparedTargets = new Map<string, string>();
+  const writeSnapshot = (state: State, snapshot: ControlUiSessionPullRequestSnapshot) => {
     const changed = JSON.stringify(state.snapshot) !== JSON.stringify(snapshot);
     state.snapshot = snapshot;
     if (changed && state.prepared) {
@@ -80,12 +106,36 @@ export function createControlUiSessionPrPreparedRead<State extends PreparedSessi
     }
   };
 
+  const publishBranchSnapshot = (
+    target: ControlUiSessionPrTarget,
+    snapshot: ControlUiSessionPullRequestSnapshot,
+  ) => {
+    if (!target.branchIdentity || target.taskReceiptsOnly) {
+      return;
+    }
+    const state = keyStates.get(target.identity);
+    if (state) {
+      state.branchSnapshot = snapshot;
+    }
+    const branchState = keyStates.get(target.branchIdentity);
+    if (branchState) {
+      writeSnapshot(branchState, snapshot);
+    }
+  };
+  const publishSnapshot = (state: State, snapshot: ControlUiSessionPullRequestSnapshot) => {
+    writeSnapshot(state, snapshot);
+    // Branch-only loaders (including injected ones) need no separate projection callback.
+    if (!snapshot.taskPullRequests) {
+      publishBranchSnapshot(state.target, snapshot);
+    }
+  };
+
   const read = (
     target: ControlUiSessionPrTarget,
     assertCurrent: () => void,
     projection?: ControlUiSessionPrReadContext["projection"],
   ): Promise<ControlUiSessionPullRequestSnapshot> => {
-    const state = keyStates.get(target.params.sessionKey);
+    const state = keyStates.get(target.identity);
     const previous = state?.snapshot;
     const assertActive = () => {
       if (scope.isClosing) {
@@ -99,7 +149,7 @@ export function createControlUiSessionPrPreparedRead<State extends PreparedSessi
       if (
         projection !== "publication" &&
         state?.prepared &&
-        keyStates.get(target.params.sessionKey) === state &&
+        keyStates.get(target.identity) === state &&
         state.snapshot === previous &&
         state.target.identity === target.identity
       ) {
@@ -121,6 +171,10 @@ export function createControlUiSessionPrPreparedRead<State extends PreparedSessi
               target,
               sourceIdentity,
               projection,
+              onBranchRead: (branch) => {
+                assertReadCurrent();
+                publishBranchSnapshot(target, pushedSnapshot(branch));
+              },
               assertCurrent: assertReadCurrent,
             });
             assertReadCurrent();
@@ -140,9 +194,32 @@ export function createControlUiSessionPrPreparedRead<State extends PreparedSessi
     if (scope.isClosing) {
       return undefined;
     }
-    const state = stateForTarget(target.params.sessionKey, target);
+    const session = JSON.stringify([target.params.agentId, target.params.sessionKey]);
+    const previousIdentity = preparedTargets.get(session);
+    if (previousIdentity && previousIdentity !== target.identity) {
+      const previous = keyStates.get(previousIdentity);
+      if (previous) {
+        previous.prepared = false;
+        if (previous.connIds.size === 0) {
+          previous.cacheLifetime.abort(null);
+          keyStates.delete(previousIdentity);
+        }
+      }
+    }
+    preparedTargets.set(session, target.identity);
+    const state = stateForTarget(target);
     const preparedTarget = state.target;
     state.prepared = true;
+    // Bootstrap a cold service cell from an active viewer's branch-only publication.
+    // Later viewer refreshes update this cell directly; audience/task fields never cross.
+    if (!state.snapshot) {
+      for (const candidate of keyStates.values()) {
+        if (candidate.target.branchIdentity === target.identity && candidate.branchSnapshot) {
+          state.snapshot = candidate.branchSnapshot;
+          break;
+        }
+      }
+    }
     if (target.source === null) {
       state.snapshot ??= { pullRequests: [], rateLimited: false, status: "ready" };
     }
@@ -158,7 +235,7 @@ export function createControlUiSessionPrPreparedRead<State extends PreparedSessi
         runWithSpawnBroker(spawnBroker, () =>
           scope.track(async () => {
             const current = await limit(async () => {
-              if (scope.isClosing || keyStates.get(preparedTarget.params.sessionKey) !== state) {
+              if (scope.isClosing || keyStates.get(preparedTarget.identity) !== state) {
                 return undefined;
               }
               return await prepareControlUiSessionPrServiceTarget(
@@ -172,7 +249,7 @@ export function createControlUiSessionPrPreparedRead<State extends PreparedSessi
             const assertCurrent = () => {
               if (
                 scope.isClosing ||
-                keyStates.get(preparedTarget.params.sessionKey) !== state ||
+                keyStates.get(preparedTarget.identity) !== state ||
                 current.identity !== preparedTarget.identity
               ) {
                 throw new Error("Prepared session pull-request target changed");
@@ -201,10 +278,11 @@ export function createControlUiSessionPrPreparedRead<State extends PreparedSessi
     }
     const affected =
       "sessionKey" in change
-        ? ([[change.sessionKey, keyStates.get(change.sessionKey)]] as const)
+        ? [...keyStates].filter(([, state]) => state.target.params.sessionKey === change.sessionKey)
         : keyStates;
     const invalidated: Array<ControlUiSessionPrTarget["params"]> = [];
     for (const [key, state] of affected) {
+      state.branchSnapshot = undefined;
       if (state?.prepared) {
         state.snapshot = undefined;
         if (state.connIds.size === 0) {
@@ -225,6 +303,7 @@ export function createControlUiSessionPrPreparedRead<State extends PreparedSessi
     read,
     readPrepared,
     publishSnapshot,
+    publishBranchSnapshot,
     settle: () => Promise.allSettled(preparing.values()),
     stop: unsubscribeFacts,
   };

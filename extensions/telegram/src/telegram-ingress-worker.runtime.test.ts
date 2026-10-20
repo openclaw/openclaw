@@ -1,6 +1,7 @@
 // Telegram tests cover ingress worker runtime behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as telegramTransport from "./fetch.js";
 import type {
   TelegramIngressWorkerCommand,
   TelegramIngressWorkerMessage,
@@ -72,6 +73,11 @@ function createRuntime(
     const responseIndex = Math.min(calls.length - 1, responses.length - 1);
     return expectDefined(responses[responseIndex], `Telegram response ${responseIndex}`);
   };
+  vi.spyOn(telegramTransport, "resolveTelegramTransport").mockReturnValue({
+    fetch: fetchImpl,
+    sourceFetch: fetchImpl,
+    close: async () => {},
+  });
   const done = runTelegramIngressWorkerRuntime({
     options: {
       token: "test-auth-token",
@@ -81,10 +87,6 @@ function createRuntime(
       timeoutSeconds: options.timeoutSeconds ?? 1,
     },
     port,
-    deps: {
-      fetch: fetchImpl,
-      closeTransport: async () => {},
-    },
   });
   return { calls, pollBodies, messages, done };
 }
@@ -94,6 +96,7 @@ async function flushRuntime(): Promise<void> {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -229,6 +232,11 @@ describe("telegram ingress worker durable-before-offset", () => {
       }
       return jsonResponse(200, { ok: true, result: [] });
     };
+    vi.spyOn(telegramTransport, "resolveTelegramTransport").mockReturnValue({
+      fetch: fetchImpl,
+      sourceFetch: fetchImpl,
+      close: async () => {},
+    });
     const done = runTelegramIngressWorkerRuntime({
       options: {
         token: "test-auth-token",
@@ -238,10 +246,6 @@ describe("telegram ingress worker durable-before-offset", () => {
         timeoutSeconds: 1,
       },
       port,
-      deps: {
-        fetch: fetchImpl,
-        closeTransport: async () => {},
-      },
     });
 
     await flushRuntime();

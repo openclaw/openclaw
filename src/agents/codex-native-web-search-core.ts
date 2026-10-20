@@ -43,9 +43,7 @@ export async function hasAvailableCodexAuth(params: {
   if (
     Object.values(params.config?.auth?.profiles ?? {}).some(
       (profile) =>
-        isRecord(profile) &&
-        profile.provider === "openai" &&
-        (profile.mode === "oauth" || profile.mode === "token"),
+        profile.provider === "openai" && (profile.mode === "oauth" || profile.mode === "token"),
     )
   ) {
     return true;
@@ -63,7 +61,7 @@ export async function hasAvailableCodexAuth(params: {
         return true;
       }
     } catch {
-      // Fall back to config-based detection below.
+      // Availability probing is advisory; execution still requires credential admission.
     }
   }
   return false;
@@ -103,10 +101,7 @@ export function resolveCodexNativeSearchActivation(
             : undefined;
 
   return {
-    globalWebSearchEnabled,
     codexNativeEnabled: codexConfig.enabled,
-    codexMode: codexConfig.mode,
-    nativeEligible,
     state: inactiveReason ? ("managed_only" as const) : ("native_active" as const),
     ...(inactiveReason ? { inactiveReason } : {}),
   };

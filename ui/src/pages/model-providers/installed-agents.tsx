@@ -55,8 +55,8 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
   const gatewayState = projectGateway(context.gateway);
   const config = projectRuntimeConfig(context.runtimeConfig);
   const overlays = projectOwner(context.overlays, (source) => source.snapshot);
-  const listeners = new Set<() => void>();
-  const notify = () => listeners.forEach((listener) => listener());
+  let publish: (() => void) | undefined;
+  const notify = () => publish?.();
   let installed: InstalledAgent[] | null = null;
   let listClient: GatewayBrowserClient | null | undefined;
   let listEpoch = -1;
@@ -121,8 +121,8 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
       enablement,
     }),
     subscribe: (_, listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
+      publish = listener;
+      return () => (publish = undefined);
     },
     equality: "revision",
   });
@@ -186,6 +186,9 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
   }
 
   function available(): boolean {
+    if (!options.gateway.connected && installed !== null) {
+      return true;
+    }
     return canCallGatewayMethod(
       gatewayState.read().snapshot,
       INSTALLED_AGENTS_METHOD,
@@ -514,7 +517,7 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
     return <InstalledAgents />;
   }
   onCleanup(() => {
-    listeners.clear();
+    publish = undefined;
     enablement = null;
     listClient = undefined;
   });

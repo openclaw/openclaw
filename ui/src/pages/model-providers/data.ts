@@ -420,7 +420,8 @@ export function resolveDefaultModelPresentation(
   configured: DefaultsDraft,
   draft: DefaultsDraft | null,
 ): { defaults: DefaultsDraft; configuredModels: ModelPickerEntry[] } {
-  if (catalog.retired || catalog.modelSelectionPolicy?.restricted) {
+  // The page retires drafts on identity/access loss, not on catalog invalidation.
+  if ((catalog.retired && !draft) || catalog.modelSelectionPolicy?.restricted) {
     return {
       defaults: {
         ...configured,
@@ -475,7 +476,20 @@ function buildSelectableDefaultModels(
     if (profile) {
       const match = (models ?? []).find((model) => modelCatalogRef(model) === modelRef);
       if (match) {
-        selectable.push({ ...match, selectionRef: ref });
+        // The agent-scoped catalog does not establish readiness or speed tiers for
+        // a saved account pin. Keep model metadata, not another account's evidence.
+        const {
+          available: _available,
+          unavailableReason: _reason,
+          unavailableUntil: _until,
+          supportsFastMode: _fastMode,
+          supportsServiceTierRecovery: _recovery,
+          serviceTiers: _tiers,
+          serviceTierObservation: _observation,
+          runtimeChoices: _runtimes,
+          ...unscoped
+        } = match;
+        selectable.push({ ...unscoped, selectionRef: ref });
         continue;
       }
     }

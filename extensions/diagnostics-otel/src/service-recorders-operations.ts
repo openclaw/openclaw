@@ -11,7 +11,7 @@ import type {
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { assignOptionalNumberAttrs } from "./service-attributes.js";
 import {
-  normalizeOtelContentValue,
+  assignOtelContentAttr,
   normalizeOtelErrorMessage,
 } from "./service-content-normalization.js";
 import type { DiagnosticsRecorderRuntime } from "./service-recorder-runtime.js";
@@ -62,6 +62,12 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
       const attrs = { "openclaw.gateway.ws.event": evt.event };
       runtime.gatewayWsEventsCounter.add(evt.count, attrs);
       runtime.gatewayWsEventBytesCounter.add(evt.bytes, attrs);
+      if (evt.wireBytes !== undefined) {
+        runtime.gatewayWsEventWireBytesCounter.add(evt.wireBytes, attrs);
+      }
+      for (const [le, count] of Object.entries(evt.frameBytes ?? {})) {
+        runtime.gatewayWsEventFrameBytesCounter.add(count, { ...attrs, le });
+      }
       if (evt.presenceMode) {
         const presenceAttrs = { "openclaw.gateway.ws.mode": evt.presenceMode };
         runtime.gatewayWsPresenceFramesCounter.add(evt.count, presenceAttrs);
@@ -382,17 +388,9 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
       if (redactedError) {
         spanAttrs["openclaw.error"] = redactedError;
       }
-      const inputValue = runtime.captureContent
-        ? normalizeOtelContentValue(privateData.messageContent?.userPrompt)
-        : undefined;
-      if (inputValue) {
-        spanAttrs["input.value"] = inputValue;
-      }
-      const outputValue = runtime.captureContent
-        ? normalizeOtelContentValue(privateData.messageContent?.finalResponse)
-        : undefined;
-      if (outputValue) {
-        spanAttrs["output.value"] = outputValue;
+      if (runtime.captureContent) {
+        assignOtelContentAttr(spanAttrs, "input.value", privateData.messageContent?.userPrompt);
+        assignOtelContentAttr(spanAttrs, "output.value", privateData.messageContent?.finalResponse);
       }
       const trustedTrace = runtime.trustedTraceContext(evt, metadata);
       const trackedSpan = trustedTrace?.spanId

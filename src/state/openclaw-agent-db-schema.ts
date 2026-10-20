@@ -58,7 +58,6 @@ import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   TRANSCRIPT_FTS_ROW_SCHEMA_VERSION,
   type OpenClawAgentDatabaseOptions,
-  type OpenClawAgentDatabase,
 } from "./openclaw-agent-db-contract.js";
 import * as maintenanceAuthority from "./openclaw-agent-db-lease.js";
 import { migrateOpenClawAgentSchema } from "./openclaw-agent-db-legacy-schema.js";
@@ -96,10 +95,6 @@ import {
 } from "./openclaw-agent-db-session-migrations.js";
 import { migrateSessionNodesAndWindows } from "./openclaw-agent-db-session-nodes-migration.js";
 import {
-  hasRevokedOpenClawAgentDatabaseValidation,
-  type OpenClawAgentDatabaseValidation,
-} from "./openclaw-agent-db-validation-cache.js";
-import {
   isPersistentOpenClawAgentDatabasePath,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.paths.js";
@@ -132,23 +127,6 @@ import { resolveSchemaMigrationIntegrityTables } from "./schema-migration-integr
 
 const agentDbLog = createSubsystemLogger("state/agent-db");
 
-export function resolveAgentDatabaseIntegrityGateReason(
-  database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
-  proof: {
-    validation?: OpenClawAgentDatabaseValidation;
-    integrityRevoked: boolean;
-    reuseIntegrity: boolean;
-  },
-): SqliteIntegrityDiagnostics["integrityGateReason"] {
-  if (proof.integrityRevoked) {
-    return "stale-lease-full";
-  }
-  if (hasRevokedOpenClawAgentDatabaseValidation(database.path, proof.validation)) {
-    return "revoked";
-  }
-  return proof.reuseIntegrity ? "no-proof" : "lease-class";
-}
-
 function migrateMemoryChunkMetadataSchema(db: DatabaseSync): void {
   ensureMemoryRecallMetadataSchema(db);
   ensureMemoryChunkProvenance(db);
@@ -163,6 +141,7 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
   reuseRuntimeIntegrity = false,
   admittedSchema = false,
   integrityCheck?: "quick" | "full",
+  integrityTables?: readonly string[],
 ): SqliteIntegrityOperation<boolean> {
   if (reuseRuntimeIntegrity && admittedSchema) {
     if (diagnostics) {
@@ -222,7 +201,10 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
         validateUnchanged: validateSchema,
         diagnostics,
         reuseIntegrity,
-        integrity: integrityCheck ? integrity : undefined,
+        // Current-schema callbacks do not repeat historical migration table coverage.
+        integrity: integrityCheck
+          ? { ...integrity, tables: integrityTables ?? integrity.tables }
+          : undefined,
       },
     );
     if (rebuiltIndexes.length > 0) {

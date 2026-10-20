@@ -1,11 +1,12 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
+import { createCronRegressionState } from "../../test/helpers/cron/service-regression-fixtures.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { makeCronJob } from "./delivery.test-helpers.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import { start } from "./service/ops-lifecycle.js";
 import { status } from "./service/ops-read.js";
-import { createCronServiceState, type CronServiceDeps } from "./service/state.js";
+import type { CronServiceDeps } from "./service/state.js";
 import { onTimer, runMissedJobs } from "./service/timer.test-support.js";
 import { loadCronStore, saveCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
@@ -17,14 +18,9 @@ const { logger: noopLogger, makeStorePath } = setupCronServiceSuite({
 });
 
 function makeState(storePath: string, overrides: Partial<CronServiceDeps>) {
-  return createCronServiceState({
-    scheduler: createTestGatewayScheduler(),
+  return createCronRegressionState({
     storePath,
-    cronEnabled: true,
     log: noopLogger,
-    nowMs: () => Date.now(),
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     ...overrides,
   });
@@ -32,26 +28,18 @@ function makeState(storePath: string, overrides: Partial<CronServiceDeps>) {
 
 describe("CronService startup catch-up repair scoping", () => {
   function createJob(id: string, nextRunAtMs: number, schedule: CronJob["schedule"]): CronJob {
-    return {
+    return makeCronJob({
       id,
-      name: `job-${id}`,
-      enabled: true,
-      createdAtMs: nextRunAtMs - 60_000,
-      updatedAtMs: nextRunAtMs - 60_000,
       schedule,
       sessionTarget: "main",
-      wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: `tick-${id}` },
       state: { nextRunAtMs },
-    };
+    });
   }
   const createHourlyCronJob = (id: string, next: number) =>
     createJob(id, next, { kind: "cron", expr: "0 * * * *", tz: "UTC" });
   const createDailyCronJob = (id: string, next: number) =>
     createJob(id, next, { kind: "cron", expr: "0 9 * * *", tz: "UTC" });
-  const createDateBoundaryEveryJob = (id: string, next: number) =>
-    createJob(id, next, { kind: "every", everyMs: MAX_DATE_TIMESTAMP_MS, anchorMs: 0 });
-
   it("persists skipped recurring slots before the first tick even with an empty startup plan", async () => {
     const store = await makeStorePath();
     const now = Date.now();
@@ -60,8 +48,7 @@ describe("CronService startup catch-up repair scoping", () => {
     const daily = createDailyCronJob("missed-daily", dueAt);
     daily.state.lastRunAtMs = Date.parse("2025-12-12T09:00:00.000Z");
     const every: CronJob = {
-      ...createHourlyCronJob("missed-every", dueAt),
-      schedule: { kind: "every", everyMs: 60_000, anchorMs: dueAt },
+      ...createJob("missed-every", dueAt, { kind: "every", everyMs: 60_000, anchorMs: dueAt }),
       sessionTarget: "isolated",
       payload: { kind: "agentTurn", message: "interval reminder" },
     };
@@ -74,14 +61,14 @@ describe("CronService startup catch-up repair scoping", () => {
     ];
     await saveCronStore(store.storePath, { version: 1, jobs });
     const before = await loadCronStore(store.storePath);
-    const enqueueSystemEvent = vi.fn();
-    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
     const state = makeState(store.storePath, {
       cronConfig: { skipMissedJobs: true },
       nowMs: () => now,
-      enqueueSystemEvent,
-      runIsolatedAgentJob,
     });
+    const expectNoExecution = () => {
+      expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(state.deps.runIsolatedAgentJob).not.toHaveBeenCalled();
+    };
 
     await runMissedJobs(state, { deferAgentWork: true });
 
@@ -97,13 +84,11 @@ describe("CronService startup catch-up repair scoping", () => {
     }
     expect(persisted.jobs.find((job) => job.id === daily.id)?.state.nextRunAtMs).toBe(tomorrow);
     expect(persisted.jobs.find((job) => job.id === every.id)?.state.nextRunAtMs).toBe(now + 60_000);
-    expect(enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+    expectNoExecution();
 
     // An empty startup plan must still commit, since ticks reload durable schedules.
     await onTimer(state);
-    expect(enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+    expectNoExecution();
   });
 
   it("keeps the overflow daily-cron catch-up deferral across a second restart", async () => {
@@ -115,19 +100,14 @@ describe("CronService startup catch-up repair scoping", () => {
     await saveCronStore(store.storePath, {
       version: 1,
       jobs: [
-        createHourlyCronJob("hourly-0", Date.parse("2025-12-13T03:00:00.000Z")),
-        createHourlyCronJob("hourly-1", Date.parse("2025-12-13T04:00:00.000Z")),
-        createHourlyCronJob("hourly-2", Date.parse("2025-12-13T05:00:00.000Z")),
-        createHourlyCronJob("hourly-3", Date.parse("2025-12-13T06:00:00.000Z")),
-        createHourlyCronJob("hourly-4", Date.parse("2025-12-13T07:00:00.000Z")),
+        ...Array.from({ length: 5 }, (_, i) =>
+          createHourlyCronJob(`hourly-${i}`, startNow - (14 - i) * 3_600_000),
+        ),
         createDailyCronJob("daily-overflow", Date.parse("2025-12-13T09:00:00.000Z")),
       ],
     });
 
-    const createState = () =>
-      makeState(store.storePath, {
-        nowMs: () => now,
-      });
+    const createState = () => makeState(store.storePath, { nowMs: () => now });
     const state = createState();
 
     await start(state);
@@ -160,7 +140,6 @@ describe("CronService startup catch-up repair scoping", () => {
     expect(completed?.state.startupCatchupAtMs).toBeUndefined();
 
     restartedState.stopped = true;
-    await store.cleanup();
   });
 
   it("disables startup catch-up deferrals that exceed the Date range", async () => {
@@ -168,11 +147,13 @@ describe("CronService startup catch-up repair scoping", () => {
     const now = MAX_DATE_TIMESTAMP_MS - 2_000;
     await saveCronStore(store.storePath, {
       version: 1,
-      jobs: [
-        createDateBoundaryEveryJob("date-limit-0", now - 60_000),
-        createDateBoundaryEveryJob("date-limit-1", now - 50_000),
-        createDateBoundaryEveryJob("date-limit-2", now - 40_000),
-      ],
+      jobs: [60_000, 50_000, 40_000].map((offset, i) =>
+        createJob(`date-limit-${i}`, now - offset, {
+          kind: "every",
+          everyMs: MAX_DATE_TIMESTAMP_MS,
+          anchorMs: 0,
+        }),
+      ),
     });
     const order: string[] = [];
     const deferredAutoDisableReasons = new Set([
@@ -184,12 +165,11 @@ describe("CronService startup catch-up repair scoping", () => {
         if (!order.includes("persist")) {
           const rows = openOpenClawStateDatabase()
             .db.prepare(
-              "SELECT job_id AS jobId, state_json AS stateJson FROM cron_jobs WHERE store_key = ? AND job_id IN (?, ?) ORDER BY job_id",
+              "SELECT state_json AS stateJson FROM cron_jobs WHERE store_key = ? AND job_id IN (?, ?) ORDER BY job_id",
             )
-            .all(cronStoreKey(store.storePath), "date-limit-1", "date-limit-2") as Array<{
-            jobId: string;
+            .all(cronStoreKey(store.storePath), "date-limit-1", "date-limit-2") as {
             stateJson: string;
-          }>;
+          }[];
           expect(rows).toHaveLength(2);
           for (const row of rows) {
             expect(JSON.parse(row.stateJson)).toMatchObject({
@@ -203,12 +183,12 @@ describe("CronService startup catch-up repair scoping", () => {
     });
     const requestHeartbeat = vi.fn(
       (request: { source?: string; intent?: string; reason?: string }) => {
-        if (
-          order.at(-1) === "notify" &&
-          request.source === "notifications-event" &&
-          request.intent === "immediate" &&
-          request.reason === "wake"
-        ) {
+        if (order.at(-1) === "notify") {
+          expect(request).toMatchObject({
+            source: "notifications-event",
+            intent: "immediate",
+            reason: "wake",
+          });
           order.push("heartbeat");
         }
       },
@@ -220,35 +200,26 @@ describe("CronService startup catch-up repair scoping", () => {
       maxMissedJobsPerRestart: 1,
       missedJobStaggerMs: 5_000,
     });
-    try {
-      await runMissedJobs(state);
+    await runMissedJobs(state);
 
-      const deferred = (state.store?.jobs ?? []).filter((job) => job.id !== "date-limit-0");
-      expect(deferred).toHaveLength(2);
-      for (const job of deferred) {
-        expect(job.enabled).toBe(false);
-        expect(job.state.nextRunAtMs).toBeUndefined();
-        expect(job.state.startupCatchupAtMs).toBeUndefined();
-        expect(job.state.autoDisabled).toEqual({
-          reason: "schedule-errors",
-          atMs: now,
-          consecutiveErrors: 1,
-        });
-      }
-      expect(order).toEqual(["persist", "notify", "heartbeat", "notify", "heartbeat"]);
-      expect((await loadCronStore(store.storePath)).jobs).toEqual(
-        expect.arrayContaining(
-          deferred.map((job) =>
-            expect.objectContaining({
-              id: job.id,
-              enabled: false,
-              state: expect.objectContaining({ autoDisabled: job.state.autoDisabled }),
-            }),
-          ),
-        ),
-      );
-    } finally {
-      await store.cleanup();
+    const deferred = (state.store?.jobs ?? []).filter((job) => job.id !== "date-limit-0");
+    expect(deferred).toHaveLength(2);
+    for (const job of deferred) {
+      expect(job.enabled).toBe(false);
+      expect(job.state.nextRunAtMs).toBeUndefined();
+      expect(job.state.startupCatchupAtMs).toBeUndefined();
+      expect(job.state.autoDisabled).toEqual({
+        reason: "schedule-errors",
+        atMs: now,
+        consecutiveErrors: 1,
+      });
+    }
+    expect(order).toEqual(["persist", "notify", "heartbeat", "notify", "heartbeat"]);
+    const persisted = (await loadCronStore(store.storePath)).jobs;
+    for (const job of deferred) {
+      const saved = persisted.find(({ id }) => id === job.id);
+      expect(saved?.enabled).toBe(false);
+      expect(saved?.state.autoDisabled).toEqual(job.state.autoDisabled);
     }
   });
 });

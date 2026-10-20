@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withUpdateCandidateIoBudget } from "./update-candidate-io.js";
+import { captureUpdateCandidateDeadline } from "./update-candidate-state.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -54,6 +55,45 @@ it("checks completion against the absolute allowance before its timer runs", asy
   clock.mockReturnValue(now + 340_000);
   exit.resolve();
   await rejected;
+});
+
+it("expires the active snapshot after a completed inspection with a moving clock", async () => {
+  let now = Date.now();
+  const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+  const expireDeadline = captureUpdateCandidateDeadline();
+  const directory = tempDirs.make("openclaw-io-active-deadline-");
+  await withUpdateCandidateIoBudget({ directory, bytes: 0 }, async () => undefined);
+  clock.mockImplementation(() => now++);
+
+  const exit = createDeferred();
+  let workerSignal: AbortSignal | undefined;
+  let settled = false;
+  const operation = withUpdateCandidateIoBudget(
+    { directory, bytes: 0, operation: "snapshot" },
+    (signal) => {
+      workerSignal = signal;
+      return exit.promise;
+    },
+  )
+    .then(
+      () => undefined,
+      (error: unknown) => error,
+    )
+    .finally(() => {
+      settled = true;
+    });
+  try {
+    clock.mockReturnValue(now + 400_000);
+    expireDeadline();
+    expect(workerSignal?.reason).toMatchObject({
+      message: expect.stringMatching(/snapshot exceeded its.*Check storage performance/),
+    });
+    expect(settled).toBe(false);
+  } finally {
+    exit.resolve();
+    await operation;
+  }
+  expect(await operation).toBe(workerSignal?.reason);
 });
 
 it("drains accepted work after caller cancellation", async () => {

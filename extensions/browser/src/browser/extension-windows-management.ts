@@ -9,14 +9,12 @@ import {
 
 /** No unverified transport output is ever projected as registration state. */
 export class WindowsManagementTransportError extends Error {
-  readonly outcome: "unknown" | "not-started";
   constructor(started: boolean) {
     super(
       started
         ? "Windows setup outcome is unknown. Inspect the same local context before retrying; no fallback was attempted."
         : "Windows bootstrap management is unavailable. Install a compatible helper; no fallback was attempted.",
     );
-    this.outcome = started ? "unknown" : "not-started";
   }
 }
 export async function runWindowsManagement(

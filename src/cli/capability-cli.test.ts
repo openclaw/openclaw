@@ -9,6 +9,8 @@ import type { inspectLocalAudioSelection } from "../media-understanding/local-au
 import { registerEmbeddingCapabilityCliTests } from "./capability-cli.embedding.test-support.js";
 import { registerCapabilityCli } from "./capability-cli.js";
 import {
+  invalidModelRunOptionCases,
+  preparedModel,
   runCap,
   runCapability,
   runCapabilityWithParentAgent,
@@ -25,24 +27,6 @@ function primeOpenAiAuthProfile(mode: "api-key" | "token" = "api-key"): void {
     source: mode === "token" ? "profile:openai:token" : "profile:openai:qa",
     mode,
   });
-}
-
-function preparedModel(provider = "openai", modelId = "gpt-5.4", chatGpt = false) {
-  return {
-    async [Symbol.asyncDispose]() {
-      mocks.releaseSimpleCompletion();
-    },
-    selection: { provider, modelId, agentDir: "/tmp/agent" },
-    model: {
-      provider,
-      id: modelId,
-      maxTokens: 128,
-      ...(chatGpt ? { api: "openai-chatgpt-responses" } : {}),
-    },
-    auth: chatGpt
-      ? { apiKey: "codex-app-server", source: "codex-app-server", mode: "token" }
-      : { apiKey: "sk-test", source: "env:TEST_API_KEY", mode: "api-key" },
-  };
 }
 
 type LocalAudioSelection = Awaited<ReturnType<typeof inspectLocalAudioSelection>>;
@@ -93,7 +77,9 @@ const mocks = vi.hoisted(() => ({
     typeof import("../agents/prepared-model-catalog.js").readPreparedModelCatalog
   >(async () => [{ id: "gpt-5.4", provider: "openai", name: "GPT-5.4" }]),
   releaseSimpleCompletion: vi.fn(),
-  acquireSimpleCompletionModelForAgent: vi.fn(async () => preparedModel()),
+  acquireSimpleCompletionModelForAgent: vi.fn(async () =>
+    preparedModel({ release: mocks.releaseSimpleCompletion }),
+  ),
   completeWithPreparedSimpleCompletionModel: vi.fn(async () => ({
     content: [{ type: "text", text: "local reply" }],
   })),
@@ -450,6 +436,11 @@ vi.mock("../web-fetch/runtime.js", () => ({
   resolveWebFetchDefinition: vi.fn(),
 }));
 
+// mock-isolation: CLI routing uses fixture fetch results without the network, cache, and secret-owner runtime.
+vi.mock("../agents/tools/web-fetch.js", () => ({
+  createWebFetchTool: vi.fn(),
+}));
+
 describe("capability cli", () => {
   it.each([
     {
@@ -641,7 +632,7 @@ describe("capability cli", () => {
 
   function primeChatGptModel(provider: string, modelId: string) {
     mocks.acquireSimpleCompletionModelForAgent.mockResolvedValueOnce(
-      preparedModel(provider, modelId, true),
+      preparedModel({ provider, modelId, chatGpt: true, release: mocks.releaseSimpleCompletion }),
     );
   }
 
@@ -1002,21 +993,17 @@ describe("capability cli", () => {
     expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { args: ["--prompt", "\n\t"], error: "--prompt cannot be empty or whitespace-only." },
-    {
-      args: ["--model", "not-a-provider/"],
-      error: "Model overrides must use the form <provider/model>.",
+  it.each(invalidModelRunOptionCases)(
+    "rejects invalid model run options $args before dispatch",
+    async ({ args, error }) => {
+      await expect(runModelProbe(...args)).rejects.toThrow("exit 1");
+      expectRuntimeErrorContains(error);
+      expect(mocks.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+      expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
+      expect(mocks.callGateway).not.toHaveBeenCalled();
+      expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
     },
-    { args: ["--thinking", "turbo-mode"], error: "Invalid thinking level." },
-  ])("rejects invalid model run options $args before dispatch", async ({ args, error }) => {
-    await expect(runModelProbe(...args)).rejects.toThrow("exit 1");
-    expectRuntimeErrorContains(error);
-    expect(mocks.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
-    expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
-    expect(mocks.callGateway).not.toHaveBeenCalled();
-    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
-  });
+  );
 
   it("runs gateway model probes in fresh raw sessions without chat-agent prompt policy or tools", async () => {
     mocks.callGateway.mockResolvedValueOnce({
@@ -1811,7 +1798,7 @@ describe("capability cli", () => {
     {
       name: "root provider",
       config: { tts: { providers: { openai: { voice: "coral" } } } },
-      args: ["--provider", "OpenAI", "--model", "openai/gpt-4o-mini-tts", "--voice", "alloy"],
+      args: ["--provider", " OpenAI ", "--model", " openai/gpt-4o-mini-tts ", "--voice", "alloy"],
       expectedOverrides: {
         provider: "openai",
         providerOverrides: { openai: { modelId: "gpt-4o-mini-tts", voiceId: "alloy" } },
@@ -2242,6 +2229,74 @@ describe("capability cli", () => {
       }),
     );
   });
+
+  it.each([
+    { format: undefined, provider: undefined },
+    { format: "text", provider: "firecrawl" },
+  ])("fetches through the default tool with $format output", async ({ format, provider }) => {
+    const config = { tools: { web: { fetch: { maxChars: 1200 } } } };
+    const resolvedConfig = { ...config, resolved: true };
+    mocks.loadConfig.mockReturnValue(config);
+    mocks.resolveCommandConfigWithSecrets.mockResolvedValueOnce({
+      resolvedConfig,
+      effectiveConfig: resolvedConfig,
+      diagnostics: [],
+    });
+    const result = {
+      title: "Example Domain",
+      text: "Example content",
+      externalContent: { untrusted: true, source: "web_fetch", wrapped: true, provider },
+    };
+    const execute = vi.fn(async () => ({ content: [], details: result }));
+    const { createWebFetchTool } = await import("../agents/tools/web-fetch.js");
+    vi.mocked(createWebFetchTool).mockReturnValueOnce({ execute } as never);
+
+    await runCap(
+      "infer",
+      "web",
+      "fetch",
+      "--url",
+      "https://example.com",
+      ...(format ? ["--format", format] : []),
+      "--json",
+    );
+
+    expect(createWebFetchTool).toHaveBeenCalledWith({ config: resolvedConfig });
+    expect(execute).toHaveBeenCalledExactlyOnceWith("infer-web-fetch", {
+      url: "https://example.com",
+      extractMode: format,
+    });
+    expect(firstJsonOutput()).toEqual({
+      ok: true,
+      capability: "web.fetch",
+      transport: "local",
+      provider: provider ?? "direct",
+      attempts: [],
+      outputs: [{ result }],
+    });
+  });
+
+  it.each([undefined, "firecrawl"])(
+    "rejects disabled web fetch with provider %s",
+    async (provider) => {
+      mocks.loadConfig.mockReturnValue({ tools: { web: { fetch: { enabled: false } } } });
+
+      await expect(
+        runCap(
+          "infer",
+          "web",
+          "fetch",
+          "--url",
+          "https://example.com",
+          ...(provider ? ["--provider", provider] : []),
+          "--json",
+        ),
+      ).rejects.toThrow("exit 1");
+
+      expect(runtimeErrorMessages().join("\n")).toContain("tools.web.fetch.enabled");
+      expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     {

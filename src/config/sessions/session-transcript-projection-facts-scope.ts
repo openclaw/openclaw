@@ -18,9 +18,9 @@ function readCurrentReceipt(database: { db: EngineConnection; path: string }, se
   const receipt = projectionReceipts.getStore();
   if (
     !receipt ||
-    receipt.path !== database.path ||
     receipt.sessionId !== sessionId ||
     hasUncommittedSqliteWrites(database.db) ||
+    // The scoped token binds the admitted physical store and its committed revision.
     readSqliteDatabaseScopedWriteToken(database.db, receipt.writeScopes) !== receipt.writeToken
   ) {
     return undefined;

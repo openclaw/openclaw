@@ -581,10 +581,21 @@ it.each(["request", "response"] as const)(
   },
 );
 
+it("handles a request abort after the response closes until the request closes", async () => {
+  const { req, res } = await openStream();
+  res.emit("close");
+  expect(fixture.onUpdate).toBeUndefined();
+  await expect(emitErrorOnNextTick(req, new Error("aborted"))).resolves.toBeUndefined();
+  req.emit("close");
+  expect(req.listenerCount("error")).toBe(0);
+  expect(res.listenerCount("error")).toBe(0);
+});
+
 it("cleans up SSE resources when the initial retry frame closes the stream", async () => {
   const { req, res } = await openStream({ closeOnRetry: true, expectSubscribed: false });
   expect(res.writes.join("")).toContain("retry: 1000\n\n");
   expect(fixture.onUpdate).toBeUndefined();
+  req.emit("close");
   expect(req.listenerCount("error")).toBe(0);
   expect(res.listenerCount("error")).toBe(0);
 });

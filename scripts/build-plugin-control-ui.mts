@@ -8,6 +8,7 @@ import {
 import { controlUiSource, normalizeManifestControlUi } from "../src/plugins/manifest-control-ui.js";
 import { copyBundledPluginMetadata } from "./copy-bundled-plugin-metadata.mts";
 import { collectSourceCheckoutPluginBuildEntries } from "./lib/bundled-plugin-build-entries.mjs";
+import { withDistArtifactOwnership } from "./lib/dist-artifact-ownership.mts";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
@@ -57,14 +58,14 @@ async function buildBundledPluginControlUi(
 async function prepareBundledSettingsControlUi(repoRoot: string): Promise<void> {
   const selected: string[] = [];
   for (const entry of collectSourceCheckoutPluginBuildEntries({ cwd: repoRoot })) {
-    if (entry.isolated || !isRecord(entry.packageJson) || !controlUiSource(entry.packageJson)) {
+    if (!isRecord(entry.packageJson) || !controlUiSource(entry.packageJson)) {
       continue;
     }
     const rootDir = path.join(repoRoot, "extensions", entry.id);
     const manifest = JSON.parse(
       await fs.readFile(path.join(rootDir, "openclaw.plugin.json"), "utf8"),
     );
-    const declaration = normalizeManifestControlUi(manifest.controlUi);
+    const declaration = normalizeManifestControlUi(manifest.controlUi, manifest.channels);
     if (!declaration.ok) {
       throw new Error(`Invalid Control UI declaration for ${entry.id}: ${declaration.error}`);
     }
@@ -86,7 +87,8 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     throw new Error("Pass the plugin package directory to build its Control UI assets.");
   }
   if (packageDir === "--prepare-settings") {
-    await prepareBundledSettingsControlUi(path.resolve(process.argv[3] ?? "."));
+    const repoRoot = path.resolve(process.argv[3] ?? ".");
+    await withDistArtifactOwnership(repoRoot, () => prepareBundledSettingsControlUi(repoRoot));
   } else {
     await buildBundledPluginControlUi(packageDir, { copy: process.argv.includes("--copy") });
   }

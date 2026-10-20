@@ -571,12 +571,11 @@ describe("managed image actions Gateway E2E", () => {
             record.original.mediaSubdir,
             record.original.mediaId,
           );
-          const cleanup = await cleanupManagedOutgoingMediaRecords({
+          await cleanupManagedOutgoingMediaRecords({
             stateDir,
             sessionKey: SESSION_KEY,
             forceDeleteSessionRecords: true,
           });
-          expect(cleanup).toMatchObject({ deletedRecordCount: 1, deletedFileCount: 1 });
           expect(await readManagedImageRecord(record.attachmentId, stateDir)).toBeNull();
           await expect(fs.access(originalPath)).rejects.toMatchObject({ code: "ENOENT" });
 

@@ -14,7 +14,7 @@ type IndexedClient = {
 export class GatewayClientRegistry extends Set<GatewayWsClient> {
   readonly #byConnectionId = new Map<string, IndexedClient>();
   readonly #unscopedSessionEventConnIds = new Set<string>();
-  readonly #subscribers = new Set<() => void>();
+  onChange?: () => void;
   #nextOrder = 0;
   readonly #onRemove?: (client: GatewayWsClient) => void;
   readonly #activeRequests = new Map<GatewayWsClient, number>();
@@ -65,7 +65,7 @@ export class GatewayClientRegistry extends Set<GatewayWsClient> {
         this.#unscopedSessionEventConnIds.add(client.connId);
       }
       super.add(client);
-      this.#publish();
+      this.onChange?.();
     }
     return this;
   }
@@ -79,7 +79,7 @@ export class GatewayClientRegistry extends Set<GatewayWsClient> {
       this.#byConnectionId.delete(client.connId);
       this.#unscopedSessionEventConnIds.delete(client.connId);
     }
-    this.#publish();
+    this.onChange?.();
     return true;
   }
 
@@ -93,18 +93,7 @@ export class GatewayClientRegistry extends Set<GatewayWsClient> {
     super.clear();
     this.#byConnectionId.clear();
     this.#unscopedSessionEventConnIds.clear();
-    this.#publish();
-  }
-
-  subscribe(listener: () => void): () => void {
-    this.#subscribers.add(listener);
-    return () => this.#subscribers.delete(listener);
-  }
-
-  #publish(): void {
-    for (const listener of this.#subscribers) {
-      listener();
-    }
+    this.onChange?.();
   }
 
   getByConnectionId(connId: string): GatewayWsClient | undefined {

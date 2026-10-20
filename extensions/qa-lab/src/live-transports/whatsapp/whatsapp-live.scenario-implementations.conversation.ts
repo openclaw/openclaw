@@ -17,7 +17,6 @@ import { createWhatsAppMessageScenario } from "./whatsapp-live.scenario-builders
 
 function createWhatsAppQuoteReplyScenario(target: "dm" | "group") {
   return createWhatsAppMessageScenario({
-    posture: "user-path",
     configOverrides: { replyToMode: "all" },
     ...(target === "group" ? { requiresGroupJid: true } : {}),
     marker: `WHATSAPP_QA_REPLY_TO_${target.toUpperCase()}`,
@@ -38,13 +37,11 @@ function createWhatsAppQuoteReplyScenario(target: "dm" | "group") {
 
 export const whatsappConversationScenarios = {
   whatsappQaCanaryScenario: createWhatsAppMessageScenario({
-    posture: "user-path",
     marker: "WHATSAPP_QA_ECHO",
     buildRun: (token) => ({ input: `Reply with only this exact marker: ${token}` }),
   }),
 
   whatsappQaMentionGatingScenario: {
-    posture: "user-path",
     requiresGroupJid: true,
     buildRun: () => {
       const quietToken = `WHATSAPP_QA_GROUP_QUIET_${randomUUID().slice(0, 8).toUpperCase()}`;
@@ -63,7 +60,6 @@ export const whatsappConversationScenarios = {
   },
 
   whatsappQaGroupPendingHistoryContextScenario: {
-    posture: "user-path",
     configOverrides: {
       groupHistoryLimit: 50,
       groupPolicy: "open",
@@ -95,7 +91,6 @@ export const whatsappConversationScenarios = {
   },
 
   whatsappQaBroadcastGroupFanoutScenario: createWhatsAppMessageScenario({
-    posture: "user-path",
     configOverrides: {
       broadcast: {
         agents: ["main", "qa-second"],
@@ -130,7 +125,6 @@ export const whatsappConversationScenarios = {
   }),
 
   whatsappQaGroupActivationAlwaysScenario: {
-    posture: "user-path",
     configOverrides: {
       groupPolicy: "open",
     },
@@ -210,7 +204,6 @@ export const whatsappConversationScenarios = {
   },
 
   whatsappQaGroupReplyToBotTriggersScenario: {
-    posture: "user-path",
     configOverrides: {
       groupPolicy: "open",
     },
@@ -254,7 +247,6 @@ export const whatsappConversationScenarios = {
   },
 
   whatsappQaTopLevelReplyShapeScenario: createWhatsAppMessageScenario({
-    posture: "user-path",
     configOverrides: {
       replyToMode: "off",
     },
@@ -276,7 +268,6 @@ export const whatsappConversationScenarios = {
   whatsappQaGroupReplyToMessageScenario: createWhatsAppQuoteReplyScenario("group"),
 
   whatsappQaReplyToModeBatchedScenario: {
-    posture: "user-path",
     configOverrides: {
       inboundDebounceMs: 2_000,
       replyToMode: "batched",

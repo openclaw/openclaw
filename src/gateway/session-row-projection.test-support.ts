@@ -316,6 +316,7 @@ export function createSessionRowProjectionFixture(params: {
     get sharingRevision() {
       return revisionToken;
     },
+    physicalPaths: (locator) => [locator],
     state: {
       get revision() {
         return revisionToken;

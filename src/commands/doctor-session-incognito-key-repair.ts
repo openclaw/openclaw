@@ -126,7 +126,19 @@ export async function repairReservedIncognitoSessionKeys(params: {
         databaseOptions,
         {
           operationLabel: "doctor.rename-reserved-incognito-session-keys",
-          repairAdmission: { integrityCheck: params.integrityCheck ?? "quick" },
+          repairAdmission: {
+            integrityCheck: params.integrityCheck ?? "quick",
+            integrityTables: [
+              "session_windows",
+              "session_nodes",
+              "session_entry_snapshots",
+              "conversation_deliveries",
+              "session_members",
+              "board_tabs",
+              "board_widgets",
+              "heartbeat_outcomes",
+            ],
+          },
         },
       );
       rewriteDoctorSessionEntries({

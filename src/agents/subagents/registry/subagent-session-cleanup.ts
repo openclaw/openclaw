@@ -7,6 +7,7 @@ import {
   getGatewayContextLifetime,
   withPluginRuntimeGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
+import { runWithSessionControllerCleanup } from "../../../sessions/session-controller.owner-context.js";
 import { createLazyRuntimeModule } from "../../../shared/lazy-runtime.js";
 import type { SpawnSubagentMode } from "../spawn/subagent-spawn.types.js";
 import { resolveSubagentChildAgentId } from "./subagent-child-owner-match.js";
@@ -125,9 +126,12 @@ export async function deleteSubagentSessionForCleanup(params: {
       });
     };
     // Provisional cleanup already carries its admitted Gateway in the request scope.
-    await (params.gatewayBinding
-      ? withPluginRuntimeGatewayContextResolver(params.gatewayBinding.resolveGatewayContext, run)
-      : run());
+    // Cleanup retains its captured Gateway and child authority, not the parent's cancelled turn.
+    await runWithSessionControllerCleanup(() =>
+      params.gatewayBinding
+        ? withPluginRuntimeGatewayContextResolver(params.gatewayBinding.resolveGatewayContext, run)
+        : run(),
+    );
     return "deleted";
   } catch (error) {
     if (isSessionLifecycleChangedGatewayError(error)) {

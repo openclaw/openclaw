@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSnapshot } from "../../api/types.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import {
   CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
   createGatewayHarness,
@@ -12,6 +14,45 @@ import {
 import { createRuntimeConfigCapability } from "./runtime-config-capability.ts";
 
 describe("config gateway operations", () => {
+  it.each(["config.get", "config.schema"] as const)(
+    "retires an in-flight %s when read access is revoked on the same client",
+    async (method) => {
+      const pending = deferred<unknown>();
+      const response =
+        method === "config.get"
+          ? { config: { endpoint: "restricted" }, hash: "restricted", valid: true, issues: [] }
+          : { schema: { type: "object" }, uiHints: {}, version: "restricted" };
+      const request = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue(response);
+      const client = createTestGatewayClient(request);
+      const { gateway, publish } = createGatewayHarness(client);
+      const runtimeConfig = createRuntimeConfigCapability(gateway);
+      const refresh = () =>
+        method === "config.get" ? runtimeConfig.refresh() : runtimeConfig.refreshSchema();
+      try {
+        const loading = refresh();
+        expect(request).toHaveBeenCalledWith(method, {});
+        publish(true, client, gatewayHelloForMethods([method], ["operator.sessions.read"]));
+        publish(true, client);
+        pending.resolve(response);
+        await loading;
+        expect(runtimeConfig.state.configSnapshot).toBeNull();
+        expect(runtimeConfig.state.configSchema).toBeNull();
+        expect(runtimeConfig.state.configForm).toBeNull();
+        expect(runtimeConfig.state.configLoading).toBe(false);
+        expect(runtimeConfig.state.configSchemaLoading).toBe(false);
+
+        await refresh();
+        expect(
+          method === "config.get"
+            ? runtimeConfig.state.configSnapshot?.hash
+            : runtimeConfig.state.configSchemaVersion,
+        ).toBe("restricted");
+      } finally {
+        runtimeConfig.dispose();
+      }
+    },
+  );
+
   it("config.apply adopts the canonical receipt before saving an in-flight edit", async () => {
     const method = "config.apply";
     vi.useFakeTimers();

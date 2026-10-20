@@ -331,7 +331,7 @@ describe("dispatchSmsInboundEvent", () => {
 
     expect(originalLifecycle.onDeferred).toHaveBeenCalledOnce();
     expect(unlinkIfExistsMock).not.toHaveBeenCalled();
-    wrappedLifecycle?.onAbandoned?.();
+    await wrappedLifecycle?.onAbandoned?.();
     await vi.waitFor(() => expect(originalLifecycle.onAbandoned).toHaveBeenCalledOnce());
     expect(unlinkIfExistsMock).toHaveBeenCalledOnce();
     expect(unlinkIfExistsMock).toHaveBeenCalledWith("/tmp/mms-1.jpg");

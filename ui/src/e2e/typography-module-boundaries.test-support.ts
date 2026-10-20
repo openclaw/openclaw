@@ -34,12 +34,12 @@ export function defineTypographyModuleBoundaryTests(
           await trigger.focus();
           await popupModule.request;
           expect(popupModule.requests()).toBe(1);
-          const popupId = await trigger.evaluate((element) => {
-            const tooltip = [...document.querySelectorAll("openclaw-tooltip")].find(
-              (host) => host.anchor === element,
-            );
-            return tooltip?.shadowRoot?.querySelector(".tooltip-surface[popover]")?.id;
-          });
+          const popupId = await trigger.evaluate(
+            (element) =>
+              element
+                .closest("openclaw-tooltip")
+                ?.shadowRoot?.querySelector(".tooltip-surface[popover]")?.id,
+          );
           expect(popupId).toBeTruthy();
           const popup = page.locator(`#${popupId}`);
           expect(await popup.isVisible()).toBe(false);

@@ -4,8 +4,12 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import type { SessionMembershipFacts } from "../config/sessions/session-membership-facts.types.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createSessionMembershipProjection } from "./session-membership-projection.js";
 
 const { readFacts } = vi.hoisted(() => ({ readFacts: vi.fn() }));
@@ -278,6 +282,60 @@ it("shares physical membership across logical aliases and publishes each group m
   expect(readFacts).toHaveBeenCalledTimes(1);
   expect(projection.membership(target.storePath, sessionKey)).toBeUndefined();
   expect(projection.membership(alias.storePath, sessionKey)).toEqual(["bob"]);
+});
+
+it("accepts committed alias membership only for the admitted physical store", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const { readOpenClawAgentDatabaseIdentity } =
+      await import("../state/openclaw-agent-db-identity.js");
+    const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+    const other = openOpenClawAgentDatabase({
+      agentId: "main",
+      path: state.statePath("other.sqlite"),
+      env: state.env,
+    });
+    const identity = readOpenClawAgentDatabaseIdentity(database);
+    const otherIdentity = readOpenClawAgentDatabaseIdentity(other);
+    const aliasDirectory = state.path("membership-alias");
+    fs.symlinkSync(
+      path.dirname(database.path),
+      aliasDirectory,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    const alias = path.join(aliasDirectory, path.basename(database.path));
+    const scope = { agentId: "main", sessionKey, storePath: alias };
+    const entry = { sessionId: "shared-session", category: "work", updatedAt: 1 };
+    replaceSessionEntrySync(scope, entry);
+    readFacts
+      .mockResolvedValueOnce({ ...snapshot(identity.identity, []), birthtime: identity.birthtime })
+      .mockResolvedValueOnce({
+        ...snapshot(otherIdentity.identity, []),
+        birthtime: otherIdentity.birthtime,
+      });
+    using projection = membershipProjection([
+      { agentId: "main", storePath: database.path, ...identity },
+    ]);
+    // A stale locator binding cannot install another physical store's publication.
+    using otherProjection = membershipProjection([
+      { agentId: "main", storePath: database.path, ...otherIdentity },
+    ]);
+    await projection.prepare();
+    await otherProjection.prepare();
+    const stop = sessionChanges.subscribeFacts((change) => {
+      projection.invalidate(change);
+      otherProjection.invalidate(change);
+    });
+    try {
+      replaceSessionEntrySync(scope, { ...entry, category: "personal", updatedAt: 2 });
+      expect([...projection.groupTargets().keys()]).toEqual(["personal"]);
+      expect([...otherProjection.groupTargets().keys()]).toEqual(["work"]);
+      expect(projection.needsPreparation).toBe(false);
+      expect(otherProjection.needsPreparation).toBe(false);
+      expect(readFacts).toHaveBeenCalledTimes(2);
+    } finally {
+      stop();
+    }
+  });
 });
 
 it.each(["key", "store"] as const)(

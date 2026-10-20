@@ -340,6 +340,7 @@ describe("chat media resource lifecycle", () => {
       const options = { sessionKey: "first-session", connectionEpoch: 1, resolveArtifactDownload };
       const { container, rerender } = createImagePane(() => [{ artifactId }], options);
       rerender();
+      await vi.advanceTimersByTimeAsync(0);
       options.sessionKey = "second-session";
       rerender();
       await vi.advanceTimersByTimeAsync(0);

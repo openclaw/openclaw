@@ -20,10 +20,13 @@ import { readMemoryDatabaseRevision } from "./manager-db-kernel.js";
 import {
   memoryEmbeddingCacheBatches,
   memoryPublicationBatches,
+  memoryPublicationGroup,
   memoryPublicationInline,
+  releaseMemoryPublication,
 } from "./manager-publication-transfer.js";
 import {
   bindSqliteWorkerBackend,
+  createSqliteWorkerBackend,
   openExistingSqliteWorkerBackend,
 } from "./manager-publication.worker.js";
 import { readMemoryShadowIdentity } from "./manager-shadow-task.js";
@@ -84,10 +87,7 @@ function publicationInput(owner: MemoryIndexDatabase) {
     fileIdentity: readMemoryShadowIdentity(filename),
     pragmas: {
       busy_timeout: readPragma("busy_timeout"),
-      synchronous: readPragma("synchronous"),
       foreign_keys: readPragma("foreign_keys"),
-      journal_size_limit: readPragma("journal_size_limit"),
-      checkpoint_fullfsync: readPragma("checkpoint_fullfsync"),
     },
   };
 }
@@ -176,6 +176,29 @@ function replacement(text = "Violetmarker transfer text"): MemorySourceIndexRepl
 describe("bounded memory publication transfer", () => {
   afterEach(() => vi.restoreAllMocks());
 
+  it("configures a fresh shadow once and retains only transaction restoration settings", async () => {
+    const databasePath = path.join(tempDirs.make("memory-publication-policy-"), "shadow.sqlite");
+    const observed = observeHostDataSql();
+    try {
+      const backend = await createSqliteWorkerBackend({ allowExtension: false }, { databasePath });
+      backends.push(backend);
+      expect(backend.execute({ type: "connection.inspect", input: undefined })).toEqual({
+        fileIdentity: readMemoryShadowIdentity(databasePath),
+        pragmas: { busy_timeout: 5000, foreign_keys: expect.any(Number) },
+      });
+      expect(
+        observed.queries.filter((sql) => /^PRAGMA journal_size_limit\s*=/i.test(sql)),
+      ).toHaveLength(1);
+      expect(
+        observed.queries.filter((sql) =>
+          /^PRAGMA (synchronous|journal_size_limit|checkpoint_fullfsync)\s*;?$/i.test(sql),
+        ),
+      ).toEqual([]);
+    } finally {
+      observed.restore();
+    }
+  });
+
   it("avoids unused connection work for scalar publications", () => {
     const filename = path.join(tempDirs.make("memory-publication-input-"), "index.sqlite");
     const db = new DatabaseSync(filename);
@@ -204,10 +227,7 @@ describe("bounded memory publication transfer", () => {
         fileIdentity: readMemoryShadowIdentity(filename),
         pragmas: {
           busy_timeout: expect.any(Number),
-          synchronous: expect.any(Number),
           foreign_keys: expect.any(Number),
-          journal_size_limit: expect.any(Number),
-          checkpoint_fullfsync: expect.any(Number),
         },
       });
       scalar.close();
@@ -420,7 +440,7 @@ describe("bounded memory publication transfer", () => {
         sourceIdentity: readMemoryShadowIdentity(sourcePath),
         metaKey: "test-meta",
         expectedRevision: readMemoryDatabaseRevision(owner.db),
-        sourceHasVectors: false,
+        sourceSchema: shadow.searchSchema,
         vectorIndexComplete: false,
         extensionPath: owner.vector.extensionPath,
       },
@@ -652,57 +672,65 @@ describe("bounded memory publication transfer", () => {
     );
   });
 
-  it("publishes planned removals and keeps unchanged session rows searchable", async () => {
-    const owner = await createOwner();
-    ensureMemorySessionTombstones(fixtureWriter(owner));
-    const [template] = replacement().chunks;
-    assert.ok(template);
-    const turn = (line: number) => ({
-      ...template,
-      startLine: line,
-      endLine: line,
-      text: `turn ${line} Violetmarker`,
-      hash: `turn-${line}`,
-    });
-    const session = (
-      hash: string,
-      chunks: ReturnType<typeof turn>[],
-      retained: ReturnType<typeof turn>[] = [],
-    ): Extract<MemorySourceIndexReplacement, { source: "sessions" }> => ({
-      ...replacement(),
-      source: "sessions",
-      agentId: "main",
-      sessionId: "delta-session",
-      entry: { path: "sessions/main/delta.jsonl", hash, mtimeMs: 1, size: 1 },
-      embeddings: chunks.map(() => []),
-      chunks,
-      retained,
-    });
-    const rows = () =>
-      queryRows(
+  it.each(["sessions", "memory"] as const)(
+    "publishes planned removals and keeps unchanged %s rows searchable",
+    async (source) => {
+      const owner = await createOwner();
+      ensureMemorySessionTombstones(fixtureWriter(owner));
+      const [template] = replacement().chunks;
+      assert.ok(template);
+      const turn = (line: number) => ({
+        ...template,
+        startLine: line,
+        endLine: line,
+        text: `turn ${line} Violetmarker`,
+        hash: `turn-${line}`,
+      });
+      const session = (
+        hash: string,
+        chunks: ReturnType<typeof turn>[],
+        retained: ReturnType<typeof turn>[] = [],
+      ): MemorySourceIndexReplacement => ({
+        ...replacement(),
+        ...(source === "sessions"
+          ? { source, agentId: "main", sessionId: "delta-session" }
+          : { source }),
+        entry: {
+          path: source === "sessions" ? "sessions/main/delta.jsonl" : "memory/delta.md",
+          hash,
+          mtimeMs: 1,
+          size: 1,
+        },
+        embeddings: chunks.map(() => []),
+        chunks,
+        retained,
+      });
+      const rows = () =>
+        queryRows(
+          owner.db,
+          "SELECT chunk_rowid, start_line, text FROM memory_index_chunks ORDER BY start_line",
+        );
+
+      await publish(owner, session("v1", [turn(1), turn(2)]));
+      const [first] = rows();
+      const delta = session("v2", [turn(3)], [turn(1)]);
+      delta.removedIds = [memoryChunkRowId(source, delta.entry.path, turn(2), delta.model)];
+      await expect(publish(owner, delta)).resolves.toBe(true);
+      expect(rows()).toEqual([
+        first,
+        expect.objectContaining({ start_line: 3, text: "turn 3 Violetmarker" }),
+      ]);
+      expect(
+        owner.db.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_fts").get(),
+      ).toEqual({ count: 2 });
+
+      expectRows(
         owner.db,
-        "SELECT chunk_rowid, start_line, text FROM memory_index_chunks ORDER BY start_line",
+        "SELECT start_line FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH 'Violetmarker' ORDER BY start_line",
+        [{ start_line: 1 }, { start_line: 3 }],
       );
-
-    await publish(owner, session("v1", [turn(1), turn(2)]));
-    const [first] = rows();
-    const delta = session("v2", [turn(3)], [turn(1)]);
-    delta.removedIds = [memoryChunkRowId("sessions", delta.entry.path, turn(2), delta.model)];
-    await expect(publish(owner, delta)).resolves.toBe(true);
-    expect(rows()).toEqual([
-      first,
-      expect.objectContaining({ start_line: 3, text: "turn 3 Violetmarker" }),
-    ]);
-    expect(owner.db.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_fts").get()).toEqual(
-      { count: 2 },
-    );
-
-    expectRows(
-      owner.db,
-      "SELECT start_line FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH 'Violetmarker' ORDER BY start_line",
-      [{ start_line: 1 }, { start_line: 3 }],
-    );
-  });
+    },
+  );
 
   it.each([8, 4 * 1024 * 1024 + 1])(
     "roundtrips %i-coordinate cache vectors with tombstone and capacity limits",
@@ -825,5 +853,21 @@ describe("bounded memory publication transfer", () => {
       (_, index) => numericCases[index % numericCases.length]![1],
     );
     expect(rows).toEqual(input.chunks.map((row) => ({ chunk: row, embedding: expectedVector })));
+  });
+
+  it("reuses printed fragments per prepared chunks array until it is released", () => {
+    const first = replacement();
+    const printed = memoryPublicationInline(first)?.fragments;
+    expect(printed).toBeDefined();
+    expect(memoryPublicationInline({ ...first })?.fragments).toBe(printed);
+    const other = replacement("second source text");
+    const group = memoryPublicationGroup([first, other])!;
+    const again = memoryPublicationGroup([first, other])!;
+    expect(group[0]?.fragments).toBe(printed);
+    again.forEach((source, index) => expect(source.fragments).toBe(group[index]?.fragments));
+    releaseMemoryPublication(first);
+    const released = memoryPublicationInline(first)?.fragments;
+    expect(released).not.toBe(printed);
+    expect(released).toEqual(printed);
   });
 });

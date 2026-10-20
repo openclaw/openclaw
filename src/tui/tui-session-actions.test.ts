@@ -230,10 +230,7 @@ describe("tui session actions", () => {
       context: { agentNames },
     });
 
-    await expect(refreshAgents()).resolves.toEqual({
-      ok: false,
-      error: "gateway unavailable",
-    });
+    await expect(refreshAgents()).resolves.toBe(false);
     expect(state.agents).toBe(cachedAgents);
     expect(state).toMatchObject({
       agentDefaultId: "cached",
@@ -342,7 +339,7 @@ describe("tui session actions", () => {
       }),
     });
 
-    await expect(refreshAgents()).resolves.toEqual({ ok: true, value: undefined });
+    await expect(refreshAgents()).resolves.toBe(true);
     expect(state).toMatchObject({
       agentDefaultId: "team-lead",
       sessionMainKey: "primary",
@@ -452,7 +449,7 @@ describe("tui session actions", () => {
       });
       sendPendingUser(state, "pending-run", "stale prompt");
 
-      await expect(refreshAgents()).resolves.toEqual({ ok: true, value: undefined });
+      await expect(refreshAgents()).resolves.toBe(true);
 
       expect(state).toMatchObject({
         currentAgentId: "ops",
@@ -506,7 +503,7 @@ describe("tui session actions", () => {
     sendPendingUser(state, "pending-run", "current prompt");
     const previousProjection = state.sessionProjection;
 
-    await expect(refreshAgents()).resolves.toEqual({ ok: true, value: undefined });
+    await expect(refreshAgents()).resolves.toBe(true);
 
     expect(state).toMatchObject({
       currentAgentId: "research",
@@ -758,6 +755,57 @@ describe("tui session actions", () => {
       modelProvider: "openai",
       contextTokens: 272000,
     });
+  });
+
+  const createRunMessageHarness = () => {
+    const describeSession = vi.fn().mockResolvedValue(description(session("session-main")));
+    const h = createHarness({
+      backend: { describeSession },
+      state: { activeChatRunId: "run-1", currentSessionId: "session-main" },
+    });
+    const events = h.events({
+      refreshSessionInfo: h.refreshSessionInfo,
+      applySessionEventRow: h.applySessionEventRow,
+    });
+    const message = (updatedAt: number, row?: Record<string, unknown>) =>
+      events.handleSessionMessageEvent({
+        sessionKey: mainSession.key,
+        sessionId: "session-main",
+        updatedAt,
+        message: { role: "toolResult", content: [] },
+        ...(row ? { session: session("session-main", { updatedAt, ...row }) } : {}),
+      });
+    return { describeSession, state: h.state, events, message };
+  };
+
+  it("applies session rows from run messages without describing the session", async () => {
+    const { describeSession, state, events, message } = createRunMessageHarness();
+    try {
+      for (let toolCall = 1; toolCall <= 10; toolCall += 1) {
+        message(100 + toolCall, { totalTokens: toolCall * 100, contextTokens: 120000 });
+      }
+      await flushImmediate();
+
+      expect(describeSession).not.toHaveBeenCalled();
+      expect(state.sessionInfo).toMatchObject({ totalTokens: 1000, contextTokens: 120000 });
+    } finally {
+      events.dispose();
+    }
+  });
+
+  it.each([
+    { name: "carries no row", row: undefined },
+    { name: "carries a row the session picker hides", row: { archived: true } },
+  ])("describes the session once when a run message $name", async ({ row }) => {
+    const { describeSession, events, message } = createRunMessageHarness();
+    try {
+      message(200, row);
+      await vi.waitFor(() => expect(describeSession).toHaveBeenCalledOnce());
+      await flushImmediate();
+      expect(describeSession).toHaveBeenCalledOnce();
+    } finally {
+      events.dispose();
+    }
   });
 
   it.each([
@@ -1113,7 +1161,11 @@ describe("tui session actions", () => {
         );
 
         expect(state.activeChatRunId).toBe(preservesOld ? previousRunId : null);
-        expect(setActivityStatus).toHaveBeenLastCalledWith(preservesOld ? "running" : "idle");
+        if (preservesOld) {
+          expect(setActivityStatus).toHaveBeenLastCalledWith("running");
+        } else {
+          expect(setActivityStatus).toHaveBeenLastCalledWith("idle", "completed");
+        }
         vi.advanceTimersByTime(101);
         expect(addPendingSystem).toHaveBeenCalledTimes(preservesOld ? 1 : 0);
         if (sameSession && !preservesOld) {

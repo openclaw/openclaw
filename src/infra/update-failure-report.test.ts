@@ -894,8 +894,8 @@ describe("update failure report", () => {
       },
     ],
   ])(
-    "returns a created URL without replaying unknown finalization when it %s",
-    async (failure, fail) => {
+    "returns a created URL without retrying refused or unknown finalization when it %s",
+    async (_failure, fail) => {
       const { submit } = await prepareFailedReport("attempt-created-finalize-failure");
       const issueUrl = "https://github.com/openclaw/openclaw/issues/123";
       const createIssue = mockCreatedIssue(issueUrl);
@@ -913,15 +913,9 @@ describe("update failure report", () => {
 
       expect(first).toMatchObject({ status: "created", url: issueUrl });
       expect(createIssue).toHaveBeenCalledOnce();
-      if (failure === "throws") {
-        expect(second).toMatchObject({ status: "pending" });
-        expect(finalizeReceipt).toHaveBeenCalledOnce();
-        expect(await fs.readFile(first.savedReportPath, "utf8")).not.toBe("");
-      } else {
-        expect(second).toMatchObject({ status: "duplicate", url: issueUrl });
-        expect(finalizeReceipt).toHaveBeenCalledTimes(2);
-        await expect(fs.stat(first.savedReportPath)).rejects.toMatchObject({ code: "ENOENT" });
-      }
+      expect(second).toMatchObject({ status: "pending" });
+      expect(finalizeReceipt).toHaveBeenCalledOnce();
+      expect(await fs.readFile(first.savedReportPath, "utf8")).not.toBe("");
     },
   );
 

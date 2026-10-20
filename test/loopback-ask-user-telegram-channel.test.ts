@@ -198,6 +198,7 @@ it("publishes the prompt through Bot API and completes after the answer", async 
             timeoutMs: 60_000,
             abortSignal: new AbortController().signal,
             messageProvider: "telegram",
+            senderId: "1",
             currentChannelId: "1",
             agentAccountId: "default",
             senderIsOwner: true,
@@ -239,6 +240,7 @@ it("publishes the prompt through Bot API and completes after the answer", async 
               text: "Staging",
               caller: {
                 messageProvider: "telegram",
+                senderId: "1",
                 senderIsOwner: true,
                 toolsAllow: ["ask_user"],
                 disableTools: false,

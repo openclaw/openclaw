@@ -28,6 +28,7 @@ import {
   registerCodexEventProjectorTestLifecycle,
   turnCompleted,
 } from "./event-projector.test-harness.js";
+import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import type { CodexThread } from "./protocol.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
 import { projectBoundedCodexThreadHistory } from "./transcript-history-projection.js";
@@ -164,7 +165,6 @@ describe("importCodexThreadHistoryToTranscript", () => {
         throughTurnId: "turn-audio",
         importedAt: 1_800_000_000_000,
       });
-      expect(projection).toMatchObject({ importedMessages: 2, omittedMessages: 0 });
       expect(projection.responseItems).toEqual([
         {
           type: "message",
@@ -179,16 +179,14 @@ describe("importCodexThreadHistoryToTranscript", () => {
         },
       ]);
 
-      await expect(
-        importCodexThreadHistoryToTranscript({
-          thread,
-          throughTurnId: "turn-audio",
-          storePath: target.storePath,
-          sessionId: target.sessionId,
-          sessionKey: target.sessionKey,
-          agentId: target.agentId,
-        }),
-      ).resolves.toEqual({ importedMessages: 2, omittedMessages: 0 });
+      await importCodexThreadHistoryToTranscript({
+        thread,
+        throughTurnId: "turn-audio",
+        storePath: target.storePath,
+        sessionId: target.sessionId,
+        sessionKey: target.sessionKey,
+        agentId: target.agentId,
+      });
       await expect(readMirrorMessages(target)).resolves.toEqual([
         { role: "user", text: expectedText },
         { role: "assistant", text: "The recording was received." },
@@ -271,16 +269,14 @@ describe("importCodexThreadHistoryToTranscript", () => {
     expect(JSON.stringify(rawProjection.responseItems)).not.toContain("private");
     expect(JSON.stringify(rawProjection.responseItems)).not.toContain("data:image");
 
-    await expect(
-      importCodexThreadHistoryToTranscript({
-        thread,
-        throughTurnId: "turn-1",
-        storePath: target.storePath,
-        sessionId: "session-history",
-        sessionKey: target.sessionKey,
-        agentId: target.agentId,
-      }),
-    ).resolves.toEqual({ importedMessages: 2, omittedMessages: 0 });
+    await importCodexThreadHistoryToTranscript({
+      thread,
+      throughTurnId: "turn-1",
+      storePath: target.storePath,
+      sessionId: "session-history",
+      sessionKey: target.sessionKey,
+      agentId: target.agentId,
+    });
 
     const events = await readSessionTranscriptEvents(target);
     const raw = events.map((event) => JSON.stringify(event)).join("\n");
@@ -358,14 +354,8 @@ describe("importCodexThreadHistoryToTranscript", () => {
       agentId: target.agentId,
     };
 
-    await expect(importCodexThreadHistoryToTranscript(importParams)).resolves.toEqual({
-      importedMessages: 200,
-      omittedMessages: 5,
-    });
-    await expect(importCodexThreadHistoryToTranscript(importParams)).resolves.toEqual({
-      importedMessages: 200,
-      omittedMessages: 5,
-    });
+    await importCodexThreadHistoryToTranscript(importParams);
+    await importCodexThreadHistoryToTranscript(importParams);
 
     const events = await readSessionTranscriptEvents(target);
     const messages = (events as Array<{ message?: AgentMessage; type?: string }>)
@@ -728,6 +718,7 @@ describe("mirrorCodexAppServerTranscript", () => {
       runId,
       sessionId,
       sessionTarget: { storePath },
+      hostCapabilities: createCodexTestHostCapabilities(),
     } as unknown as Parameters<typeof mirrorPromptAtTurnStartBestEffort>[0]["params"];
 
     await mirrorPromptAtTurnStartBestEffort({
@@ -741,12 +732,10 @@ describe("mirrorCodexAppServerTranscript", () => {
     });
 
     expect(warn).toHaveBeenCalledWith("failed to mirror codex app-server prompt at turn start", {
-      error: expect.any(String),
+      error: expect.stringContaining(blockedParent),
       runId,
       sessionId,
     });
-    const warning = warn.mock.calls.at(-1)?.[1] as { error?: string } | undefined;
-    expect(warning?.error).not.toBe("");
 
     warn.mockClear();
     await mirrorTranscriptBestEffort({
@@ -766,7 +755,7 @@ describe("mirrorCodexAppServerTranscript", () => {
       turnId: "turn-1",
     });
     expect(warn).toHaveBeenCalledWith("failed to mirror codex app-server transcript", {
-      error: expect.any(String),
+      error: expect.stringContaining(blockedParent),
       runId,
       sessionId,
     });

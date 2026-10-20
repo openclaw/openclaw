@@ -29,6 +29,8 @@ const webCapabilities = [
   "tool-events",
   "chat-only-assistant-text",
   "hello-health-on-demand",
+  "health-summary",
+  "hello-presence-self",
   "session-scoped-events",
   "presence-deltas",
   "session-row-deltas",
@@ -142,7 +144,12 @@ test("keeps multi-client presence compact through heartbeat, activity, and watch
         const result = await connectReq(ws, {
           client: { ...CONTROL_UI_CLIENT, instanceId: `presence-browser-${index}` },
           caps: capable ? webCapabilities : [],
-          deviceIdentityPath: path.join(identityDir, `browser-${index}.sqlite`),
+          deviceIdentityPath: path.join(
+            identityDir,
+            `browser-${index}`,
+            "client",
+            "credentials.sqlite",
+          ),
           browserOrigin: origin,
           prePairDevice: true,
         });

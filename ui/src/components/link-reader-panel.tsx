@@ -1,17 +1,18 @@
 import { insert } from "@solidjs/web";
-import { createEffect, createMemo, For, Repeat, onCleanup, onSettled, untrack } from "solid-js";
+import { createMemo, For, Repeat, onCleanup, onSettled } from "solid-js";
+import { projectCallbackOwner } from "../lib/reactive/callback-owner.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
-import { projectOwner } from "../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
+import { createTabFocus } from "../lib/tabs.ts";
 import { DockResizer } from "./dock-layout-solid.tsx";
 import { LinkReaderContent } from "./link-reader-content.tsx";
+import type { LinkReaderPanelProps } from "./link-reader-panel-lifecycle.ts";
 import {
   LINK_READER_TAB_LIMIT,
   createLinkReaderPanel,
   type LinkReaderPanelOwner,
-  type LinkReaderPanelProps,
 } from "./link-reader-panel-owner.ts";
 import {
   linkReaderViewStyles,
@@ -84,7 +85,8 @@ function PanelContent(props: {
     <>
       {!target() ? (
         <p class="lr-status">{t("linkReader.urlPlaceholder")}</p>
-      ) : !props.available || props.tab.view.status === "error" ? (
+      ) : props.tab.view.status !== "ready" &&
+        (!props.available || props.tab.view.status === "error") ? (
         <div class="lr-status" role="alert">
           <h2>{t("linkReader.unavailableTitle")}</h2>
           <p>
@@ -98,7 +100,7 @@ function PanelContent(props: {
             class="lr-retry"
             type="button"
             disabled={!props.available}
-            onClick={props.refresh}
+            onClick={() => props.refresh()}
           >
             {t("linkReader.retry")}
           </button>
@@ -154,11 +156,23 @@ function PanelView(
   props: LinkReaderPanelProps,
   host: SolidBridgeElement<LinkReaderPanelProps, Methods>,
 ) {
-  const owner = createLinkReaderPanel(host, host);
-  const projection = projectOwner(owner, (current) => current);
-  const view = projection.read;
+  const tabFocus = createTabFocus();
   let address: HTMLInputElement | undefined;
   const content = new Map<string, HTMLElement>();
+  const { owner, view: projection } = projectCallbackOwner(
+    (notify) =>
+      createLinkReaderPanel(
+        host,
+        onSettled,
+        (activeId) => ({
+          address,
+          content: content.get(activeId ?? ""),
+        }),
+        notify,
+      ),
+    (current) => current,
+  );
+  const view = projection.read;
   owners.set(host, owner);
   // The panel owns this action while the sidebar hosts its DOM.
   const hostedActions = document.createElement("span");
@@ -172,28 +186,31 @@ function PanelView(
       get: () => hostedActions,
     },
   });
-  createEffect(
-    () => {
-      projection.revision();
-      return {
-        client: props.client,
-        available: props.available,
-        agentId: props.agentId,
-        readers: props.readers,
-        suppressed: props.suppressed,
-        embedded: props.embedded,
-        presented: props.presented,
-        tabsInHeader: props.tabsInHeader,
-        sessionKey: props.sessionKey,
-        onClose: props.onClose,
-      };
-    },
-    (_current, previous) => owner.sync(previous),
-  );
+  const bridgePrototype = Object.getPrototypeOf(host);
+  Object.defineProperty(host, "updateComplete", {
+    configurable: true,
+    get: () =>
+      Promise.resolve(Reflect.get(bridgePrototype, "updateComplete", host)).then(() =>
+        host.isConnected ? owner.updateComplete : false,
+      ),
+  });
   onSettled(() => {
-    owner.dockLayout.connect();
-    owner.resume();
-    return () => owner.dispose();
+    let disposed = false;
+    const connect = () => {
+      if (!disposed && host.isConnected) {
+        owner.connect();
+      }
+    };
+    // Direct Solid hosts settle before their parent inserts them.
+    if (host.isConnected) {
+      connect();
+    } else {
+      queueMicrotask(connect);
+    }
+    return () => {
+      disposed = true;
+      owner.dispose();
+    };
   });
   // One window listener follows this mounted owner; embedded panels never claim it.
   onSettled(() =>
@@ -203,13 +220,11 @@ function PanelView(
       }
     }),
   );
-  createEffect(
-    () => projection.revision(),
-    () => owner.afterRender(address, content.get(owner.state.activeId ?? "")),
-  );
   onCleanup(() => {
     hostedActions.remove();
-    owners.delete(host);
+    if (owners.get(host) === owner) {
+      owners.delete(host);
+    }
   });
   const tab = () => view().activeTab();
   const target = () => view().target();
@@ -274,6 +289,7 @@ function PanelView(
             <header class="rail-header bp-header lr-tab-header">
               <openclaw-panel-tab-strip style={{ display: "contents" }}>
                 <PanelTabStrip
+                  focusOwner={tabFocus}
                   tabs={tabStripTabs()}
                   activeId={view().state.activeId}
                   ariaControls="link-reader-tab-panel"
@@ -331,6 +347,7 @@ function PanelView(
             <button
               class="rail-header__action bp-icon lr-go"
               type="submit"
+              disabled={!props.available || !props.client}
               title={t("linkReader.openUrl")}
               aria-label={t("linkReader.openUrl")}
             >
@@ -378,12 +395,12 @@ function PanelView(
           >
             <For each={[...view().state.tabs]} keyed={(item) => item.id}>
               {(item) => {
-                // The keyed row keeps this id for its mounted lifetime.
-                const id = untrack(() => item().id);
+                let id = "";
                 onCleanup(() => content.delete(id));
                 return (
                   <div
                     ref={(element) => {
+                      id = item().id;
                       content.set(id, element);
                     }}
                     class="lr-content"
@@ -412,6 +429,7 @@ export const LinkReaderPanel = defineSolidBridge<LinkReaderPanelProps, Methods>(
   "openclaw-link-reader-panel",
   PanelView,
   {
+    propertyChanged: (host) => owners.get(host)?.inputsChanged(),
     properties: {
       client: { default: null, attribute: false },
       available: { default: false },

@@ -166,90 +166,41 @@ function runPluginSummary(params: {
 
 describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
   it.each([
+    { fullReleaseValidation: false, expectedPolicy: "bun-all", requiresBun: true },
+    { fullReleaseValidation: true, expectedPolicy: "dual-all", requiresBun: true },
     {
-      name: "ordinary plugin validation",
       fullReleaseValidation: false,
-      memory: true,
-      vitestArgs: [],
+      runtimePolicy: " node ",
+      expectedPolicy: "node",
       requiresBun: false,
     },
     {
-      name: "full release memory and database-worker groups",
       fullReleaseValidation: true,
-      memory: true,
-      vitestArgs: [],
-      requiresBun: true,
-    },
-
-    {
-      name: "full release with an explicit report",
-      fullReleaseValidation: true,
-      memory: true,
-      vitestArgs: ["--reporter=json", "--outputFile=report.json"],
+      runtimePolicy: "node",
+      expectedPolicy: "node",
       requiresBun: false,
     },
     {
-      name: "ordinary complete Bun trial with unqualified groups and report arguments",
       fullReleaseValidation: false,
-      memory: false,
-      vitestArgs: ["--reporter=json", "--outputFile=report.json"],
-      runtimePolicy: " bun-all ",
-      expectedPolicy: "bun-all",
-      requiresBun: true,
-    },
-    {
-      name: "full release complete dual trial with unqualified groups",
-      fullReleaseValidation: true,
-      memory: false,
-      vitestArgs: [],
       runtimePolicy: "dual-all",
       expectedPolicy: "dual-all",
       requiresBun: true,
     },
     {
-      name: "ordinary defaults despite an inherited compatibility policy",
-      fullReleaseValidation: false,
-      memory: true,
-      vitestArgs: [],
-      runtimePolicy: "bun-compatible",
-      requiresBun: false,
+      fullReleaseValidation: true,
+      runtimePolicy: "bun-all",
+      expectedPolicy: "bun-all",
+      requiresBun: true,
     },
   ])(
-    "selects runtime setup for $name",
-    async ({
-      fullReleaseValidation,
-      memory,
-      vitestArgs,
-      runtimePolicy,
-      expectedPolicy,
-      requiresBun,
-    }) => {
-      const planGroups = [
-        {
-          config: "test/vitest/vitest.extension-database-workers.config.ts",
-          roots: ["extensions/memory-lancedb/index.test.ts"],
-        },
-        ...(memory
-          ? [
-              {
-                config: "test/vitest/vitest.extension-memory.config.ts",
-                roots: ["extensions/memory-lancedb"],
-              },
-            ]
-          : []),
-      ];
-
+    "selects $expectedPolicy for release=$fullReleaseValidation with override=$runtimePolicy",
+    async ({ fullReleaseValidation, runtimePolicy, expectedPolicy, requiresBun }) => {
       expect(
         await resolvePluginPrereleaseExtensionRuntime({
-          planGroups,
           fullReleaseValidation,
-          vitestArgs,
           env: { OPENCLAW_CI_TEST_RUNTIME_POLICY: runtimePolicy },
         }),
-      ).toEqual({
-        test_runtime_policy: expectedPolicy ?? (requiresBun ? "dual" : "node"),
-        requires_bun: requiresBun,
-      });
+      ).toEqual({ test_runtime_policy: expectedPolicy, requires_bun: requiresBun });
     },
   );
 
@@ -435,14 +386,14 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(dockerSuite.secrets).toBeUndefined();
   });
 
-  it("rejects an invalid extension batch trial before planning plugin work", () => {
+  it("rejects an invalid extension batch override before planning plugin work", () => {
     const { result, output } = runPluginManifest("independent", "workflow_dispatch", "bun");
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("test_runtime_policy must be bun-all or dual-all");
+    expect(result.stderr).toContain("test_runtime_policy must be node, bun-all, or dual-all");
     expect(output).toBe("");
   });
 
-  it.each(["", "node", "dual", "bun-all", "dual-all"])(
+  it.each(["", "node", "bun-all", "dual-all"])(
     "keeps the extension deadline proportional to the %s runtime policy",
     (runtimePolicy) => {
       const workflow = readPluginPrereleaseWorkflow();
@@ -474,37 +425,40 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       name: "missing Bun setup",
       returnedRuntime: { test_runtime_policy: "dual-all", requires_bun: false },
     },
-  ])("rejects an explicit trial with a frozen target's $name", ({ returnedRuntime }) => {
-    const targetRoot = tempDirs.make("openclaw-plugin-runtime-target-");
-    const scriptsRoot = join(targetRoot, "scripts", "lib");
-    mkdirSync(scriptsRoot, { recursive: true });
-    symlinkSync(join(process.cwd(), "node_modules"), join(targetRoot, "node_modules"), "dir");
-    writeFileSync(
-      join(scriptsRoot, "plugin-prerelease-test-plan.mjs"),
-      `export const assertPluginPrereleaseTestPlanComplete = () => ({ staticChecks: [], dockerLanes: [] });
+  ])(
+    "rejects an unsupported explicit override with a frozen target's $name",
+    ({ returnedRuntime }) => {
+      const targetRoot = tempDirs.make("openclaw-plugin-runtime-target-");
+      const scriptsRoot = join(targetRoot, "scripts", "lib");
+      mkdirSync(scriptsRoot, { recursive: true });
+      symlinkSync(join(process.cwd(), "node_modules"), join(targetRoot, "node_modules"), "dir");
+      writeFileSync(
+        join(scriptsRoot, "plugin-prerelease-test-plan.mjs"),
+        `export const assertPluginPrereleaseTestPlanComplete = () => ({ staticChecks: [], dockerLanes: [] });
 ${returnedRuntime ? `export const resolvePluginPrereleaseExtensionRuntime = () => (${JSON.stringify(returnedRuntime)});` : ""}`,
-    );
-    writeFileSync(
-      join(scriptsRoot, "extension-test-plan.mjs"),
-      `export const DEFAULT_EXTENSION_TEST_SHARD_COUNT = 1;
+      );
+      writeFileSync(
+        join(scriptsRoot, "extension-test-plan.mjs"),
+        `export const DEFAULT_EXTENSION_TEST_SHARD_COUNT = 1;
 export const createExtensionTestShards = () => [{
   index: 0, checkName: "extensions-fixture", extensionIds: ["fixture"],
   planGroups: [{ config: "fixture.config.ts", roots: ["extensions/fixture"] }],
 }];`,
-    );
+      );
 
-    const { result, output } = runPluginManifest(
-      "independent",
-      "workflow_dispatch",
-      "dual-all",
-      targetRoot,
-    );
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(
-      "Target ref does not support requested test_runtime_policy: dual-all",
-    );
-    expect(output).toBe("");
-  });
+      const { result, output } = runPluginManifest(
+        "independent",
+        "workflow_dispatch",
+        "dual-all",
+        targetRoot,
+      );
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        "Target ref does not support requested test_runtime_policy: dual-all",
+      );
+      expect(output).toBe("");
+    },
+  );
 
   it("requires a complete immutable candidate for the plugin candidate phase", () => {
     const selectedSha = "a".repeat(40);
@@ -581,8 +535,10 @@ export const createExtensionTestShards = () => [{
 
     const hourly = runPluginManifest("independent", "schedule");
     const release = runPluginManifest("independent");
+    const forcedNode = runPluginManifest("independent", "workflow_dispatch", "node");
     expect(hourly.result.status, hourly.result.stderr).toBe(0);
     expect(release.result.status, release.result.stderr).toBe(0);
+    expect(forcedNode.result.status, forcedNode.result.stderr).toBe(0);
     const outputs = (output: string) =>
       Object.fromEntries(
         output
@@ -599,6 +555,25 @@ export const createExtensionTestShards = () => [{
     expect(ownership(selected.plugin_prerelease_extension_matrix)).toEqual(
       ownership(outputs(release.output).plugin_prerelease_extension_matrix),
     );
+    for (const [run, policy] of [
+      [release, "dual-all"],
+      [forcedNode, "node"],
+    ] as const) {
+      const matrix = outputs(run.output).plugin_prerelease_extension_matrix;
+      expect(ownership(matrix)).toEqual(ownership(selected.plugin_prerelease_extension_matrix));
+      const rows = JSON.parse(expectDefined(matrix, "extension matrix")).include as {
+        task: string;
+        test_runtime_policy: string;
+        requires_bun: boolean;
+      }[];
+      expect(
+        rows.every((row) =>
+          row.task === "extensions-batch"
+            ? row.test_runtime_policy === policy && row.requires_bun === (policy !== "node")
+            : row.test_runtime_policy === "node" && !row.requires_bun,
+        ),
+      ).toBe(true);
+    }
     const rows: {
       task: string;
       extensions_csv: string;
@@ -610,7 +585,11 @@ export const createExtensionTestShards = () => [{
       expectDefined(selected.plugin_prerelease_extension_matrix, "hourly extension matrix"),
     ).include;
     expect(
-      rows.every((row) => !row.requires_bun && (row.test_runtime_policy ?? "node") === "node"),
+      rows.every((row) =>
+        row.task === "extensions-batch"
+          ? row.requires_bun && row.test_runtime_policy === "bun-all"
+          : !row.requires_bun && row.test_runtime_policy === "node",
+      ),
     ).toBe(true);
     const extensionIds = new Set(rows.flatMap((row) => row.extensions_csv.split(",")));
     for (const id of ["device-pair", "active-memory", "talk-voice"]) {

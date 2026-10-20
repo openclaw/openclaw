@@ -36,7 +36,6 @@ import {
   closeWireServer,
   connectWireClient,
   createPairedNodeWorkerHost,
-  createWireWorkspaceSettlementWaiter,
   startPairedNodeWorkerGateway,
   wireMessageText,
   type PairedNodeWorkerHost,
@@ -122,7 +121,6 @@ it.skipIf(process.platform === "win32")(
   async (context) => {
     const { signal } = context;
     const gatewayOwner = createQaGatewayChild();
-    const settlement = createWireWorkspaceSettlementWaiter();
     const requests: string[] = [];
     const providerErrors: unknown[] = [];
     const observationFailure = createDeferred<never>();
@@ -142,7 +140,7 @@ it.skipIf(process.platform === "win32")(
       async ({ createTempDir }) => {
         const root = await realpath(createTempDir("required-native-same-session-"));
         const identity = loadOrCreateDeviceIdentity({
-          path: path.join(root, "node-identity.sqlite"),
+          env: { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "node-state") },
         });
         await mkdir(path.join(root, "node-state", "node-host"), { recursive: true, mode: 0o700 });
         const remoteAgentWorkspace = path.join(root, "remote-agent-workspace");
@@ -273,7 +271,6 @@ it.skipIf(process.platform === "win32")(
           role: "operator",
           identity: null,
           onEvent: (event) => {
-            settlement.onEvent(event);
             if (event.event === "sessions.changed") {
               try {
                 onChanged?.(event.payload as Changed);
@@ -374,6 +371,7 @@ it.skipIf(process.platform === "win32")(
             const continueResume = createDeferred();
             const changedClear = createDeferred();
             const bEntered = createDeferred();
+            const bWorkspaceSettled = createDeferred();
             barriers.push(continueQuiesce, continueResume);
             let aClaim: string | undefined;
             let aRun: string | undefined;
@@ -388,7 +386,19 @@ it.skipIf(process.platform === "win32")(
               const placement = event.session?.placement;
               if (event.phase === "error" || event.reason === "chat.dispatch-error") {
                 // Queued follow-up execution IDs are not known until native HTTP entry.
-                throw new Error(`${creation} ${timing} run failed before settlement`);
+                throw new Error(
+                  `${creation} ${timing} run failed before settlement: ${JSON.stringify({
+                    phase: event.phase,
+                    reason: event.reason,
+                  })}\n${gateway.logs().slice(-12_000)}`,
+                );
+              }
+              if (bRun && placement?.state === "active" && !placement.workspaceResultReconciling) {
+                // A delayed snapshot from A cannot prove that B released its workspace.
+                const current = readSettlement(gateway, key);
+                if (!current.pending && current.placement?.turn_claim_id === null) {
+                  bWorkspaceSettled.resolve();
+                }
               }
               if (
                 !placement?.workspaceResultReconciling &&
@@ -516,7 +526,7 @@ it.skipIf(process.platform === "win32")(
             await checkpoint(bEntered.promise);
             // Wait on the adopted execution claim, not chat.send's queue-cancellation ID.
             expect(await wait(bRun!)).toMatchObject({ status: "ok" });
-            await settlement.wait(operator, key, signal);
+            await checkpoint(bWorkspaceSettled.promise);
             const final = readSettlement(gateway, key);
             expect(final.pending).toBeUndefined();
             expect(final.placement).toMatchObject({

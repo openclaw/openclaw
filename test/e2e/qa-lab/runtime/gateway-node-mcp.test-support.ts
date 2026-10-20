@@ -507,7 +507,7 @@ export function flattenEffectiveTools(result: ToolsEffectiveResult): EffectiveTo
   return (result.groups ?? []).flatMap((group) => group.tools ?? []);
 }
 
-export function createMcpServers(params: {
+function createMcpServers(params: {
   placement: "session" | "node";
   fixture: HttpFixture;
   stdioEnv: Record<string, string>;

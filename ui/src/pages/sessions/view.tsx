@@ -169,7 +169,7 @@ function SortHeader(
     extraClass?: string;
   },
 ) {
-  const active = createMemo(() => props.sortColumn === props.column);
+  const active = () => props.sortColumn === props.column;
   return (
     <th
       class={props.extraClass ?? ""}
@@ -208,7 +208,7 @@ function SessionsTable(props: SessionsProps) {
       return diff * sortDirection;
     });
   });
-  const totalRows = createMemo(() => sorted().length);
+  const totalRows = () => sorted().length;
   const totalPages = createMemo(() => Math.max(1, Math.ceil(totalRows() / props.pageSize)));
   const page = createMemo(() => Math.min(props.page, totalPages() - 1));
   const groups = createMemo(() =>
@@ -228,14 +228,12 @@ function SessionsTable(props: SessionsProps) {
     () => paginated().filter((row) => props.selectedKeys.has(row.key)).length,
   );
   const allSelected = () => selectedOnPage() === paginated().length;
-  const emptyBecauseFiltered = createMemo(
-    () =>
-      rawRows().length === 0 &&
-      (normalizeLowercaseStringOrEmpty(props.searchQuery).length > 0 ||
-        parseStrictPositiveInteger(props.activeMinutes) !== undefined ||
-        !props.includeGlobal),
-  );
-  const emptyStateMessage = createMemo(() =>
+  const emptyBecauseFiltered = () =>
+    rawRows().length === 0 &&
+    (normalizeLowercaseStringOrEmpty(props.searchQuery).length > 0 ||
+      parseStrictPositiveInteger(props.activeMinutes) !== undefined ||
+      !props.includeGlobal);
+  const emptyStateMessage = () =>
     t(
       emptyBecauseFiltered()
         ? "sessionsView.noSessionsMatchFilters"
@@ -244,8 +242,7 @@ function SessionsTable(props: SessionsProps) {
           : props.statusFilter === "active"
             ? "sessionsView.noActiveSessions"
             : "sessionsView.noSessions",
-    ),
-  );
+    );
 
   const paginatedKeys = createMemo(() =>
     groups() ? new Set(paginated().map((row) => row.key)) : null,

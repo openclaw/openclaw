@@ -7,6 +7,7 @@ import {
   Worker,
   type MessagePort,
 } from "node:worker_threads";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { assertEngineStoreExecutionAllowed } from "../database-engine/admission-scope.js";
 import { observeDatabaseOperation } from "../database-engine/observation.js";
 import {
@@ -75,9 +76,7 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
     const lockTimeoutMs = options?.lockTimeoutMs ?? POSTGRES_LOCK_TIMEOUT_MS;
     const statementTimeoutMs = options?.statementTimeoutMs ?? POSTGRES_STATEMENT_TIMEOUT_MS;
     this.reuseKey = options?.reuse
-      ? createHash("sha256")
-          .update(JSON.stringify([url, schema, storeId, lockTimeoutMs, statementTimeoutMs]))
-          .digest("hex")
+      ? sha256Hex(JSON.stringify([url, schema, storeId, lockTimeoutMs, statementTimeoutMs]))
       : undefined;
     const idle = this.reuseKey ? takeIdlePostgresBridge(this.reuseKey) : undefined;
     if (idle) {
@@ -249,11 +248,9 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
     this.isTransaction = result.inTransaction;
     this.readOnlyTransaction =
       this.isTransaction && (readOnly || /^\s*BEGIN\b[^;]*\bREAD\s+ONLY\b/i.test(sql));
-    if (/^\s*(?:COMMIT|ROLLBACK)\s*;?\s*$/i.test(sql)) {
-      if (/^\s*COMMIT\b/i.test(sql) && result.command !== "COMMIT") {
-        this.finishWrite();
-        throw new Error("PostgreSQL transaction rolled back instead of committing");
-      }
+    if (/^\s*COMMIT\s*;?\s*$/i.test(sql) && result.command !== "COMMIT") {
+      this.finishWrite();
+      throw new Error("PostgreSQL transaction rolled back instead of committing");
     }
     const mutation =
       result.mutation === "unscoped" || hintedMutation === "unscoped"

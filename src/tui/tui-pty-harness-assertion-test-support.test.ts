@@ -35,6 +35,31 @@ const hasHistoricalExpected = (raw: string, dimensions = TERMINAL) =>
   oracle.hasHistoricalSynchronizedFrameRow(raw, MARKERS, EXPECTED, dimensions);
 
 describe("hasSynchronizedFrameRow", () => {
+  it("accepts only exact program-status records without authenticating visible output", () => {
+    const osc = (body: string) => `\x1b]7501;${body}\x1b\\`;
+    for (const body of [
+      "?",
+      "state=clear",
+      "state=idle:app=openclaw",
+      "state=working:app=openclaw",
+      "state=done:app=openclaw",
+      "state=error:app=openclaw",
+    ]) {
+      expect(parse(osc(body))).toEqual([]);
+      expect(hasExpected(osc(body) + frame(EXPECTED) + osc(body))).toBe(true);
+      expect(hasExpected(EXPECTED + osc(body) + frame(""))).toBe(false);
+    }
+    for (const invalid of [
+      osc("state=unknown:app=openclaw"),
+      osc("state=done:app=other"),
+      osc("state=clear:app=openclaw"),
+      osc("state=done:app=openclaw:extra=1"),
+      "\x1b]7501;state=done:app=openclaw\x07",
+      "\x1b]7502;state=done:app=openclaw\x1b\\",
+    ]) {
+      expect(() => parse(invalid + frame(EXPECTED))).toThrow();
+    }
+  });
   it("accepts only the exact cell-size query outside frames without authenticating output", () => {
     const query = "\x1b[16t";
     expect(parse(query)).toEqual([]);

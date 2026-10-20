@@ -1,14 +1,21 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_RESTART_UNAVAILABLE_REASON } from "../../../packages/gateway-protocol/src/restart-unavailable.js";
+import { renderStorageFailureSummary } from "../../agents/failover/assistant-request-failure-copy.js";
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
 import { isSessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
+import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
+import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { isGatewayRestartDrainError } from "../../process/gateway-work-admission.js";
 import { errorShapeFromError } from "../error-shape.js";
 import { formatForLog } from "../ws-log.js";
 import { ACTIVE_LEAF_CHANGED_ERROR_REASON } from "./chat-send-active-leaf.js";
 import { SESSION_SETTINGS_CHANGED_ERROR_REASON } from "./chat-send-session-settings.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
+
+export function resolveChatSendStorageErrorMessage(error: unknown): string | undefined {
+  return renderStorageFailureSummary(classifyGatewayStorageFailure(error));
+}
 
 export function respondChatSessionRoutingChanged(respond: GatewayRequestHandlerOptions["respond"]) {
   respond(
@@ -23,6 +30,7 @@ export function respondChatSessionRoutingChanged(respond: GatewayRequestHandlerO
 export function respondChatSendAdmissionError(
   error: unknown,
   respond: GatewayRequestHandlerOptions["respond"],
+  onStorageError?: (message: string) => void,
 ): void {
   if (isAgentRunRestartAbortReason(error) || isGatewayRestartDrainError(error)) {
     return respond(
@@ -76,9 +84,15 @@ export function respondChatSendAdmissionError(
       }),
     );
   }
-  respond(
-    false,
-    undefined,
-    errorShapeFromError(ErrorCodes.INVALID_REQUEST, error, { message: formatForLog(error) }),
+  const storageMessage = resolveChatSendStorageErrorMessage(error);
+  const failure = errorShapeFromError(
+    storageMessage ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
+    error,
+    { message: storageMessage ?? formatForLog(error) },
   );
+  respond(false, undefined, failure);
+  // Other admission failures retain the RPC-only contract, including unclassified refusals.
+  if (storageMessage !== undefined || hasSqliteWorkerOutcomeUnknown(error)) {
+    onStorageError?.(failure.message);
+  }
 }

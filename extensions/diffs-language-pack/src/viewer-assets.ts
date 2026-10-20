@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
-import { fileURLToPath } from "node:url";
 
 export const VIEWER_ASSET_PREFIX = "/plugins/diffs-language-pack/assets/";
 const VIEWER_LOADER_PATH = `${VIEWER_ASSET_PREFIX}viewer.js`;
@@ -17,7 +16,6 @@ type ServedViewerAsset = {
 };
 
 type RuntimeAssetCache = {
-  mtimeMs: number;
   runtimeBody: Buffer;
   loaderBody: string;
 };
@@ -28,14 +26,12 @@ function isMissingFileError(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error && error.code === "ENOENT";
 }
 
-async function resolveViewerRuntimeFileUrl(): Promise<URL> {
+async function readViewerRuntime(): Promise<Buffer> {
   let missingFileError: NodeJS.ErrnoException | null = null;
 
   for (const relativePath of VIEWER_RUNTIME_CANDIDATE_RELATIVE_PATHS) {
-    const candidateUrl = new URL(relativePath, import.meta.url);
     try {
-      await fs.stat(fileURLToPath(candidateUrl));
-      return candidateUrl;
+      return await fs.readFile(new URL(relativePath, import.meta.url));
     } catch (error) {
       if (isMissingFileError(error)) {
         missingFileError = error;
@@ -65,17 +61,13 @@ export async function getServedViewerAsset(pathname: string): Promise<ServedView
 }
 
 async function loadViewerAssets(): Promise<RuntimeAssetCache> {
-  const runtimeUrl = await resolveViewerRuntimeFileUrl();
-  const runtimePath = fileURLToPath(runtimeUrl);
-  const runtimeStat = await fs.stat(runtimePath);
-  if (runtimeAssetCache && runtimeAssetCache.mtimeMs === runtimeStat.mtimeMs) {
+  if (runtimeAssetCache) {
     return runtimeAssetCache;
   }
 
-  const runtimeBody = await fs.readFile(runtimePath);
+  const runtimeBody = await readViewerRuntime();
   const hash = crypto.createHash("sha1").update(runtimeBody).digest("hex").slice(0, 12);
   runtimeAssetCache = {
-    mtimeMs: runtimeStat.mtimeMs,
     runtimeBody,
     loaderBody: `import "${VIEWER_RUNTIME_RELATIVE_IMPORT_PATH}?v=${hash}";\n`,
   };

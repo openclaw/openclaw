@@ -98,7 +98,7 @@ function prepareConfigCompatibility(
       configIdentities.push(options.config);
     }
   }
-  return { compatiblePolicyHashes, compatibleConfigFingerprints, configIdentities };
+  return { compatibleConfigFingerprints, configIdentities };
 }
 
 function prepareCurrentPluginMetadataSnapshotPublication(
@@ -114,8 +114,11 @@ function prepareCurrentPluginMetadataSnapshotPublication(
       policyHash,
       workspaceDir: options.workspaceDir ?? snapshot.workspaceDir,
     });
-  const { compatiblePolicyHashes, compatibleConfigFingerprints, configIdentities } =
-    prepareConfigCompatibility(snapshot, options, fingerprint);
+  const { compatibleConfigFingerprints, configIdentities } = prepareConfigCompatibility(
+    snapshot,
+    options,
+    fingerprint,
+  );
   const configFingerprint = fingerprint(options.config, snapshot.policyHash);
   const defaultDiscoveryConfigFingerprint = fingerprint({}, snapshot.policyHash);
   const defaultDiscoveryCompatible =
@@ -135,7 +138,6 @@ function prepareCurrentPluginMetadataSnapshotPublication(
     setCurrentPluginMetadataSnapshotState(
       snapshot,
       configFingerprint,
-      compatiblePolicyHashes,
       compatibleConfigFingerprints,
       owner === "gateway" || defaultDiscoveryCompatible
         ? snapshot.owners.modelIdNormalizationPolicies
@@ -248,13 +250,12 @@ export function createPluginMetadataSnapshotFrame(
       policyHash,
       workspaceDir,
     });
-  const { compatiblePolicyHashes, compatibleConfigFingerprints, configIdentities } =
-    prepareConfigCompatibility(
-      snapshot,
-      options,
-      fingerprint,
-      options.trustConfigIdentity === true,
-    );
+  const { compatibleConfigFingerprints, configIdentities } = prepareConfigCompatibility(
+    snapshot,
+    options,
+    fingerprint,
+    options.trustConfigIdentity === true,
+  );
   const configFingerprint = options.config
     ? fingerprint(options.config, snapshot.policyHash)
     : snapshot.configFingerprint;
@@ -269,7 +270,6 @@ export function createPluginMetadataSnapshotFrame(
         metadata: cache.metadata,
         configFingerprint,
         envFingerprint: resolvePluginMetadataEnvFingerprint(options.env),
-        compatiblePolicyHashes,
         compatibleConfigFingerprints,
         hasConfigIdentity: (config) => capturedConfigIdentities.has(config),
         immutableRuntimeGeneration: options.trustConfigIdentity === true,
@@ -352,11 +352,6 @@ function resolveCompatiblePluginMetadataSnapshot(
     params.config && !canReuseCachedConfig
       ? resolveInstalledPluginIndexPolicyHash(params.config, params.env)
       : undefined;
-  if (requestedPolicyHash && snapshot.policyHash !== requestedPolicyHash) {
-    if (!candidate.compatiblePolicyHashes?.includes(requestedPolicyHash)) {
-      return undefined;
-    }
-  }
   if (params.config && !canReuseCachedConfig) {
     const requestedConfigFingerprint = resolvePluginControlPlaneFingerprint({
       config: params.config,
@@ -464,9 +459,8 @@ export function getCurrentPluginMetadataSnapshot(
   return compatible === NEEDS_PREPARED_POLICY ? undefined : compatible;
 }
 
-// Light bridges (plugin-metadata-snapshot.runtime.ts) serve reads through this
-// instance whenever the metadata system is loaded; the require fallback only
-// covers cold processes.
+// Register before callers can publish a snapshot; current-only light bridge
+// reads consume this owner without loading a cold metadata graph.
 registerPluginMetadataSnapshotReaders({
   adoptCurrentPluginMetadataSnapshotIfAbsent,
   getCurrentPluginMetadataSnapshot,

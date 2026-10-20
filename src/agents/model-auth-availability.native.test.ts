@@ -15,6 +15,7 @@ import {
   platformRoute,
   subscriptionRoute,
   routeResolverFactory,
+  mockRouteResolverFactory,
 } from "./model-auth-availability.test-support.js";
 import { resolveApiKeyForProviderCore } from "./model-auth-provider.js";
 
@@ -26,6 +27,7 @@ vi.mock("./auth-profiles/oauth.js", async (importActual) => ({
 afterEach(() => profileMocks.resolveApiKeyForProfile.mockReset());
 
 function resolver(mode?: "api_key" | "oauth" | "token", cfg: OpenClawConfig = {}, complete = true) {
+  mockRouteResolverFactory(routeResolverFactory(dualRoutes));
   return createModelAuthAvailabilityResolver({
     cfg,
     env: {},
@@ -33,7 +35,6 @@ function resolver(mode?: "api_key" | "oauth" | "token", cfg: OpenClawConfig = {}
     syntheticAuthProviderRefs: ["codex"],
     preparedRuntimeAuthModes: mode ? { codex: { source: "native", mode } } : {},
     preparedSyntheticAuthComplete: complete,
-    routeResolverFactory: routeResolverFactory(dualRoutes),
   });
 }
 

@@ -20,11 +20,12 @@ import {
   loadGatewayDiagnostics,
 } from "../../lib/gateway-diagnostics.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../../lib/keyboard-shortcut-contract.ts";
+import { createPageRequest } from "../../lib/page-request.ts";
 import { formatEventPayload } from "../../lib/presenter.ts";
 import { projectGateway, projectGatewayEventLog } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { listen } from "../../lib/reactive/listener.ts";
+import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { requestDebugOverlayToggle } from "./debug-overlay-contract.ts";
 import { CommandLaneRows } from "./lane-table.tsx";
 import "../../styles/debug-data.css";
@@ -124,85 +125,66 @@ export function DebugPage() {
     callResult: null,
     callError: null,
   };
-  let fullFlight: AbortController | undefined;
-  let liveFlight: AbortController | undefined;
   let callEpoch = 0;
   let agent = context.settingsAgentSelection.state.selectedId;
   let client = context.gateway.snapshot.client;
   let needsRefresh = true;
   let disposed = false;
-  let timer: ReturnType<typeof setInterval> | undefined;
+  const polling = useVisiblePoll(3000, () => void loadLiveDiagnostics());
+  const diagnostics = createPageRequest(publish, {
+    task: ([source, selectedAgent]: Parameters<typeof loadGatewayDiagnostics>, { signal }) =>
+      loadGatewayDiagnostics(source, selectedAgent, signal),
+    onComplete: (data) => {
+      state.data = data;
+      state.diagnosticsError = state.liveError = null;
+    },
+    onError: (error) => {
+      state.diagnosticsError = formatUiError(error);
+    },
+  });
+  // Poll admission stays quiet; only a completed live read publishes.
+  const live = createPageRequest(() => {}, {
+    task: async (source: Parameters<typeof loadCommandLaneDiagnostics>[0], { signal }) => {
+      const [heartbeat, lanes] = await Promise.all([
+        source.request("last-heartbeat", {}, { signal }),
+        loadCommandLaneDiagnostics(source, signal),
+      ]);
+      return { heartbeat, ...lanes };
+    },
+    onComplete: (data) => {
+      state.data = { ...state.data, ...data };
+      state.liveError = null;
+      publish();
+    },
+    onError: (error) => {
+      state.liveError = formatUiError(error);
+      publish();
+    },
+  });
 
   function invalidate() {
-    fullFlight?.abort();
-    liveFlight?.abort();
-    fullFlight = liveFlight = undefined;
+    diagnostics.cancel();
+    live.cancel();
     needsRefresh = true;
     callEpoch += 1;
   }
 
   async function loadDiagnostics() {
     const scope = lifecycle.capture();
-    if (!scope || fullFlight) {
+    if (!scope || diagnostics.pending) {
       return;
     }
-    liveFlight?.abort();
-    liveFlight = undefined;
-    const controller = new AbortController();
-    fullFlight = controller;
+    live.cancel();
     needsRefresh = false;
-    const selectedAgent = context.settingsAgentSelection.state.selectedId;
-    publish();
-    try {
-      const data = await loadGatewayDiagnostics(scope.client, selectedAgent, controller.signal);
-      if (
-        !disposed &&
-        !controller.signal.aborted &&
-        lifecycle.isCurrent(scope) &&
-        selectedAgent === context.settingsAgentSelection.state.selectedId
-      ) {
-        state.data = data;
-        state.diagnosticsError = state.liveError = null;
-      }
-    } catch (error) {
-      if (!disposed && !controller.signal.aborted && lifecycle.isCurrent(scope)) {
-        state.diagnosticsError = formatUiError(error);
-      }
-    } finally {
-      if (fullFlight === controller) {
-        fullFlight = undefined;
-        publish();
-      }
-    }
+    await diagnostics.run([scope.client, context.settingsAgentSelection.state.selectedId]);
   }
 
   async function loadLiveDiagnostics() {
     const scope = lifecycle.capture();
-    if (!scope || fullFlight || liveFlight || document.visibilityState === "hidden") {
+    if (!scope || diagnostics.pending || live.pending || document.visibilityState === "hidden") {
       return;
     }
-    const controller = new AbortController();
-    liveFlight = controller;
-    try {
-      const [heartbeat, lanes] = await Promise.all([
-        scope.client.request("last-heartbeat", {}, { signal: controller.signal }),
-        loadCommandLaneDiagnostics(scope.client, controller.signal),
-      ]);
-      if (!disposed && !controller.signal.aborted && lifecycle.isCurrent(scope)) {
-        state.data = { ...state.data, heartbeat, ...lanes };
-        state.liveError = null;
-        publish();
-      }
-    } catch (error) {
-      if (!disposed && !controller.signal.aborted && lifecycle.isCurrent(scope)) {
-        state.liveError = formatUiError(error);
-        publish();
-      }
-    } finally {
-      if (liveFlight === controller) {
-        liveFlight = undefined;
-      }
-    }
+    await live.run(scope.client);
   }
 
   // Every connection transition aborts diagnostics and retires RPC results before reconnect.
@@ -234,28 +216,17 @@ export function DebugPage() {
     publish();
   });
   function syncPolling() {
-    if (!lifecycle.capture() || document.visibilityState === "hidden") {
-      clearInterval(timer);
-      timer = undefined;
-    } else if (timer === undefined) {
-      timer = setInterval(() => void loadLiveDiagnostics(), 3000);
+    if (lifecycle.capture()) {
+      polling.start();
+    } else {
+      polling.stop();
     }
   }
-  const visibilityChanged = () => {
-    const wasStopped = timer === undefined;
-    syncPolling();
-    if (wasStopped && timer !== undefined) {
-      void loadLiveDiagnostics();
-    }
-  };
-  const stopVisibility = listen(document, "visibilitychange", visibilityChanged);
   syncPolling();
   void loadDiagnostics();
   onCleanup(() => {
     disposed = true;
     invalidate();
-    clearInterval(timer);
-    stopVisibility();
     stopSelection();
     stopGateway();
     lifecycle.dispose();
@@ -300,11 +271,11 @@ export function DebugPage() {
             <button
               class="btn"
               disabled={
-                gateway.read().snapshot.phase !== "connected" || (revision(), Boolean(fullFlight))
+                gateway.read().snapshot.phase !== "connected" || (revision(), diagnostics.pending)
               }
               onClick={() => void loadDiagnostics()}
             >
-              {gateway.read().snapshot.phase === "connected" && (revision(), Boolean(fullFlight))
+              {gateway.read().snapshot.phase === "connected" && (revision(), diagnostics.pending)
                 ? t("common.refreshing")
                 : t("common.refresh")}
             </button>

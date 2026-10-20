@@ -138,14 +138,6 @@ type BooleanSettingKey = {
 }[keyof UiPreferences] &
   keyof PersistedUiSettings;
 
-function isViteDevPage(): boolean {
-  if (typeof document === "undefined") {
-    return false;
-  }
-  // Vite injects this development script outside the application's rendered DOM.
-  return Boolean(document.querySelector('script[src*="/@vite/client"]'));
-}
-
 function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const basePath = resolveControlUiPaths(location.pathname)[0];
@@ -154,7 +146,7 @@ function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
   if (devGateway) {
     return { pageUrl, effectiveUrl: devGateway.gatewayUrl };
   }
-  if (isRemoteControlUiIngress() || !isViteDevPage()) {
+  if (isRemoteControlUiIngress() || globalThis.OPENCLAW_UI_DEV_SERVER !== true) {
     return { pageUrl, effectiveUrl: pageUrl };
   }
   // location.hostname already carries brackets for IPv6 literals; wrapping

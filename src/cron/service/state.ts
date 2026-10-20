@@ -2,6 +2,7 @@ import type { AdmittedRunContext } from "../../agents/admitted-run-context.js";
 import type { ExecutionIdentityAdmissionFacts } from "../../audit/execution-identity-admission.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply-skip-reason.js";
+import type { SessionEntryCurrentCheck } from "../../config/sessions/session-entry-current.types.js";
 import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import type { CronConfig } from "../../config/types.cron.js";
 import type { GatewayScheduler, GatewaySchedulerScope } from "../../infra/gateway-scheduler.js";
@@ -14,6 +15,7 @@ import type { CronCompletionDeliveryFence } from "../delivery-attempt-fence.js";
 import { toPublicCronJob } from "../public-job.js";
 import type { CronRuntimeAuthority } from "../runtime-authority.js";
 import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
+import type { CronStreamExecApproval, CronStreamExecPolicy } from "../stream-exec-authority.js";
 import type { QuarantinedCronConfigJob } from "../types-shared.js";
 import type {
   CronCompletionStatus,
@@ -103,6 +105,8 @@ export type CronSystemEventEnqueueResult =
 export type DeferredCronNotifications = CronNotificationIntent[];
 
 export type CronServiceDeps = {
+  /** Shares the Gateway's state-directory selection across admission checks. */
+  env?: NodeJS.ProcessEnv;
   nowMs?: () => number;
   scheduler: GatewayScheduler;
   log: Logger;
@@ -281,7 +285,8 @@ export type CronExecutionIdentityAdmission = {
   onPostAdmission?: (context: AdmittedRunContext) => void | Promise<void>;
 };
 
-type CronServiceDepsInternal = Omit<CronServiceDeps, "nowMs"> & {
+type CronServiceDepsInternal = Omit<CronServiceDeps, "env" | "nowMs"> & {
+  env: NodeJS.ProcessEnv;
   nowMs: () => number;
 };
 
@@ -344,7 +349,12 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
   const defaultAgentId =
     deps.defaultAgentId ?? (deps.resolveDefaultAgentId ? undefined : LEGACY_IMPLICIT_AGENT_ID);
   return {
-    deps: { ...deps, defaultAgentId, nowMs: deps.nowMs ?? (() => deps.scheduler.now()) },
+    deps: {
+      ...deps,
+      env: deps.env ?? process.env,
+      defaultAgentId,
+      nowMs: deps.nowMs ?? (() => deps.scheduler.now()),
+    },
     store: null,
     durableNextRunAtMsByJobId: new Map<string, number | undefined>(),
     schedulerScope: deps.scheduler.scope(),
@@ -434,8 +444,11 @@ export type CronListResult = CronJob[];
 export type CronAddInput = CronJobCreate;
 /** Caller-specific declaration-key visibility and explicit enablement metadata. */
 export type CronAddOptions = {
+  operatorSource?: NonNullable<CronStoredJob["operatorSource"]>["source"];
   inferenceBinding?: CronStoredJob["inferenceBinding"];
   sourceConversation?: CronStoredJob["sourceConversation"];
+  /** Logical sandbox target captured from the admitted creator, never public input. */
+  streamSandbox?: CronStoredJob["streamSandbox"];
   /** Selected revisions captured from a validated caller session, never public input. */
   skillLibrarySelections?: CronStoredJob["skillLibrarySelections"];
   matchesExisting?: (job: CronJob) => boolean;
@@ -452,6 +465,11 @@ export type CronAddOptions = {
   toolsAllowExecTarget?: CronToolsAllowExecTarget;
   /** Synchronous Gateway-owned liveness check repeated at mutation admission and commit. */
   commitGuard?: () => void;
+  /** Prepared caller policy; host floors use the committing transaction's approvals. */
+  execPolicy?: CronStreamExecPolicy;
+  streamExecApproval?: CronStreamExecApproval;
+  /** Creator-session facts refreshed by the worker at each native admission. */
+  sessionEntryCurrent?: SessionEntryCurrentCheck;
   /** One-use fresh capture; callback presence means fresh even when it returns undefined. */
   captureRuntimeAuthority?: () => CronRuntimeAuthority | undefined;
 };
@@ -464,6 +482,10 @@ export type CronUpdateOptions = Pick<
   | "commitGuard"
   | "captureRuntimeAuthority"
   | "inferenceBinding"
+  | "execPolicy"
+  | "streamExecApproval"
+  | "streamSandbox"
+  | "sessionEntryCurrent"
 > & {
   /** Null forbids policy adoption; undefined retains in-process operator defaults. */
   scheduledToolPolicy?: CronScheduledToolPolicy | null;

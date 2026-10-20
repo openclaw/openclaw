@@ -112,7 +112,9 @@ it
     if (mode === "interrupted" && output.includes("fixture-writer-ready")) {
       controller.abort();
     }
-    return true;
+    // A writable can accept bytes while asking its producer to wait for drain.
+    // That backpressure must not cancel the owned Doctor process.
+    return mode !== "normal";
   });
   let stderr = "";
   vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {

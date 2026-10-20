@@ -665,9 +665,12 @@ export function createChannelIngressDrainOwner<
       claims
         .filter((claim) => {
           const state = activeByClaim.get(activeClaimKey(claim));
+          // A failed deferral still owns the lane until its release/backoff commits.
           return !(
             state?.phase === "deferred" &&
             !state.occupiesLane &&
+            !state.settlement &&
+            !state.settlementFailure &&
             !state.guillotined &&
             !state.superseded
           );

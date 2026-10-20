@@ -609,6 +609,54 @@ async function legacySessionJson(
 }
 
 describe("sessionsCommand model resolution", () => {
+  it.each([false, true])(
+    "resolves fallback aliases with the store owner (agent-scoped=%s)",
+    async (agentScoped) => {
+      const store = await writeStore(
+        {
+          global: makeSession("alias-fallback"),
+          recorded: makeSession("recorded-model", {
+            modelProvider: "custom",
+            model: "recorded-model",
+          }),
+        },
+        "sessions-model-alias",
+        { agentId: "ops" },
+      );
+      setMockSessionsConfig(() => ({
+        session: { scope: "global", store },
+        agents: {
+          ownership: "explicit",
+          defaults: {
+            model: { primary: "selected" },
+            models: { "anthropic/default-model": { alias: "selected" } },
+            sessionStore: { agentId: "ops" },
+          },
+          entries: {
+            ops: agentScoped
+              ? {
+                  model: { primary: "selected" },
+                  models: { "custom/agent-model": { alias: "selected" } },
+                }
+              : {},
+          },
+        },
+      }));
+
+      const payload = await readSessionsJson(store);
+
+      expect(payload.sessions?.find((row) => row.key === "global")).toMatchObject({
+        agentId: "ops",
+        modelProvider: agentScoped ? "custom" : "anthropic",
+        model: agentScoped ? "agent-model" : "default-model",
+      });
+      expect(payload.sessions?.find((row) => row.sessionId === "recorded-model")).toMatchObject({
+        modelProvider: "custom",
+        model: "recorded-model",
+      });
+    },
+  );
+
   it("preserves nested override models when their provider is recorded separately", async () => {
     const payload = await legacySessionJson(
       "subagent-router-override",

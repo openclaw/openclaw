@@ -66,7 +66,6 @@ export function registerActivitySummaryPublicationTests(
     try {
       const onChanged = getOnChanged()!;
       producer.run(() => onChanged(target));
-      await entered.promise;
       projection.setEntry(target.key, { ...entry, label: "latest recap row" });
       producer.run(() => onChanged(target));
       await producer.drain();
@@ -82,6 +81,8 @@ export function registerActivitySummaryPublicationTests(
       await vi.advanceTimersByTimeAsync(0);
       expect(closed).toBe(false);
       expect(subscribed.socket.send).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await entered.promise;
       release.resolve();
       await vi.runAllTimersAsync();
       await closing;
@@ -176,7 +177,7 @@ export function registerActivitySummaryPublicationTests(
         vi.useFakeTimers();
         sql = observeHostDataSql();
         onChanged(target);
-        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(1_000);
         expect(params.broadcast).toHaveBeenCalledExactlyOnceWith(
           "sessions.changed",
           expect.objectContaining({

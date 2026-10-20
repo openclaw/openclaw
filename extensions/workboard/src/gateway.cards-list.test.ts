@@ -124,7 +124,7 @@ describe("workboard card list revisions", () => {
     await store.claim(card.id, { ownerId: "worker", token: "test-claim-token" });
     const reads = vi.spyOn(stores.cards, "entries");
     const changes = vi.fn();
-    store.subscribeChanges(changes);
+    store.onChange = changes;
     const listCards = captureCardsList(store);
     const list = (boardId?: string, sinceRevision?: unknown) =>
       listCards({ boardId, sinceRevision });

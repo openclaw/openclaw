@@ -211,12 +211,10 @@ export function runSessionNativeBindingTransaction(
     };
     const anchor = sqlPublicationAnchor(shared.db);
     stageSqliteTransactionState(anchor, {
-      stage() {},
       commit: () => {
         bindings = nextBindings;
         pluginState = nextPluginState;
       },
-      rollback() {},
     });
     deferSqliteWorkerCommitReceipt(anchor, receipt(agent, nextBindings, nextPluginState));
   };
@@ -283,12 +281,10 @@ export function runSessionNativeBindingTransaction(
     return withSqliteSessionDeletionWorkerParticipant(commitParticipant, () =>
       context.writeTransaction(operationLabel, owner, (current) => {
         stageSqliteTransactionState(sqlPublicationAnchor(current.db), {
-          stage() {},
           commit: () => {
             agent = "committed";
             agentCommitted = true;
           },
-          rollback() {},
         });
         return mutate(current, (transferred) => ({
           ...receipt("committed"),

@@ -14,6 +14,7 @@ function renderToggle(overrides?: Partial<ToggleProps>): HTMLElement {
     open: true,
     enabling: true,
     loading: false,
+    disabled: false,
     onConfirm: vi.fn(),
     onCancel: vi.fn(),
     hasError: false,

@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import type { ClawHubRecommendation } from "../../../../../src/shared/clawhub-recommendations.js";
 import { pathForPluginCatalogEntry } from "../../../app-route-paths.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -9,11 +9,7 @@ import { t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import type { ClawHubSkillDetail } from "../../../lib/skills/index.ts";
 import { loadSkillStatusReport } from "../../../lib/skills/status-report.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
-import {
-  PluginIconController,
-  pluginIconFetchContext,
-} from "../../plugins/plugin-icon-controller.ts";
+import { PluginIconOwner, pluginIconFetchContext } from "../../plugins/plugin-icon-owner.ts";
 import { resolvePluginCatalogIconUrl } from "../../plugins/presentation.ts";
 import "../../../styles/chat/clawhub-card.css";
 
@@ -30,7 +26,7 @@ type CardStatus = CardPresentation & { installed: boolean; canInstall: boolean }
 type Props = { recommendation?: ClawHubRecommendation; agentId?: string };
 
 /** Catalog owners authorize status; icon controllers own their object URLs through disposal. */
-function ChatClawHubCardContent(props: Props, host: SolidBridgeElement<Props>) {
+export function ChatClawHubCard(props: Props) {
   const context = useApplication();
   let active = true;
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
@@ -63,7 +59,7 @@ function ChatClawHubCardContent(props: Props, host: SolidBridgeElement<Props>) {
   let previousArgs: unknown[] = [];
   const connection = createGatewayConnectionLifecycle({ client: null, phase: "stopped" });
   const createIcons = (catalog: boolean) =>
-    new PluginIconController({
+    new PluginIconOwner({
       kind: catalog ? "catalog" : undefined,
       getFetchContext: () => pluginIconFetchContext(context),
       isConnected: () => active && context.gateway.snapshot.phase === "connected",
@@ -102,8 +98,8 @@ function ChatClawHubCardContent(props: Props, host: SolidBridgeElement<Props>) {
     if (connection.transition(snapshot)) {
       resetIcons();
     }
-    const card = host.recommendation;
-    const agentId = host.agentId;
+    const card = props.recommendation;
+    const agentId = props.agentId;
     const scope = connection.capture();
     const args = [
       scope?.client,
@@ -208,16 +204,6 @@ function ChatClawHubCardContent(props: Props, host: SolidBridgeElement<Props>) {
       }
     }
   }
-  // Recommendation changes refresh catalog status through the current Gateway client.
-  createEffect(
-    () => [
-      props.recommendation?.id,
-      props.recommendation?.kind,
-      props.recommendation?.kind === "skill" ? props.recommendation.registry : undefined,
-      props.agentId,
-    ],
-    () => void load(),
-  );
   onSettled(() => {
     // Connection edges retire request generations and icon URLs before later replies arrive.
     const stop = context.gateway.subscribe(() => void load());
@@ -243,7 +229,7 @@ function ChatClawHubCardContent(props: Props, host: SolidBridgeElement<Props>) {
     };
   });
   function openListing(install = false) {
-    const card = host.recommendation;
+    const card = props.recommendation;
     if (!card) {
       return;
     }
@@ -254,15 +240,13 @@ function ChatClawHubCardContent(props: Props, host: SolidBridgeElement<Props>) {
       });
     } else {
       const search = new URLSearchParams({ clawhub: card.id });
-      if (host.agentId) {
-        search.set("agent", host.agentId);
+      if (props.agentId) {
+        search.set("agent", props.agentId);
       }
       context.navigate("skills", { search: `?${search}` });
     }
   }
-  const card = createMemo(
-    (): CardPresentation | undefined => read().presentation ?? props.recommendation,
-  );
+  const card = (): CardPresentation | undefined => read().presentation ?? props.recommendation;
   const icon = createMemo(() => {
     const current = card();
     return current
@@ -273,7 +257,7 @@ function ChatClawHubCardContent(props: Props, host: SolidBridgeElement<Props>) {
         )
       : undefined;
   });
-  const iconPending = createMemo(() => {
+  const iconPending = () => {
     const currentState = read();
     const current = card();
     return icon()
@@ -284,148 +268,147 @@ function ChatClawHubCardContent(props: Props, host: SolidBridgeElement<Props>) {
             currentState.status !== "error" &&
             !current?.pluginId &&
             !current?.iconUrl);
-  });
+  };
   return (
-    <Show when={props.recommendation && !read().dismissed && card()}>
-      {(current) => (
-        <div
-          class="card chat-clawhub-card"
-          data-clawhub-id={current().id}
-          aria-busy={
-            read().status === "pending" || read().status === "initial" || iconPending()
-              ? "true"
-              : "false"
-          }
-        >
-          <button class="chat-clawhub-card__listing" type="button" onClick={() => openListing()}>
-            <span
-              class={["chat-clawhub-card__icon", { skeleton: iconPending() }]}
-              aria-hidden="true"
-            >
-              <Show
-                when={icon()}
-                keyed
-                fallback={
-                  <Show when={!iconPending()}>
-                    <Icon name="plug" />
-                  </Show>
-                }
+    <openclaw-chat-clawhub-card>
+      <Show when={[props.recommendation, props.agentId]} keyed>
+        {(_input) => {
+          onSettled(() => {
+            void load();
+          });
+          return null;
+        }}
+      </Show>
+      <Show when={props.recommendation && !read().dismissed && card()}>
+        {(current) => (
+          <div
+            class="card chat-clawhub-card"
+            data-clawhub-id={current().id}
+            aria-busy={
+              read().status === "pending" || read().status === "initial" || iconPending()
+                ? "true"
+                : "false"
+            }
+          >
+            <button class="chat-clawhub-card__listing" type="button" onClick={() => openListing()}>
+              <span
+                class={["chat-clawhub-card__icon", { skeleton: iconPending() }]}
+                aria-hidden="true"
               >
-                {(src) => (
-                  <img
-                    src={src}
-                    alt=""
-                    hidden={iconPending()}
-                    onLoad={() => {
-                      state.loadedImage = src;
-                      notify();
-                    }}
-                    onError={() => {
-                      state.failedImages = new Set([...state.failedImages, src]);
-                      notify();
-                    }}
-                  />
-                )}
-              </Show>
-            </span>
-            <span class="chat-clawhub-card__identity">
-              <span class="card-title chat-clawhub-card__name">
-                <span>{current().name}</span>{" "}
-                <Show when={current().author}>
-                  {(author) => (
-                    <span class="plugin-card-author">@{author().replace(/^@+/, "")}</span>
-                  )}
-                </Show>
-                <Show when={current().official}>
-                  <span
-                    class="plugin-official-badge"
-                    role="img"
-                    aria-label={t("pluginsPage.official")}
-                    title={t("pluginsPage.official")}
-                  >
-                    <Icon name="badgeCheck" />
-                  </span>
-                </Show>
-              </span>
-              <Show when={current().description}>
-                {(description) => <span class="card-sub">{description()}</span>}
-              </Show>
-            </span>
-          </button>
-          <div class="chat-clawhub-card__actions" aria-live="polite">
-            <Show
-              when={read().status === "ready"}
-              fallback={
                 <Show
-                  when={read().status === "error"}
+                  when={icon()}
+                  keyed
                   fallback={
-                    <>
-                      <span
-                        class="skeleton chat-clawhub-card__status-skeleton"
-                        aria-hidden="true"
-                      />
-                      <span class="sr-only">{t("common.loading")}</span>
-                    </>
+                    <Show when={!iconPending()}>
+                      <Icon name="plug" />
+                    </Show>
                   }
                 >
-                  <button
-                    type="button"
-                    class="btn chat-clawhub-card__dismiss"
-                    onClick={() => {
-                      void load(true);
-                    }}
-                  >
-                    {t("chat.clawhub.retryStatus")}
-                  </button>
+                  {(src) => (
+                    <img
+                      src={src}
+                      alt=""
+                      hidden={iconPending()}
+                      onLoad={() => {
+                        state.loadedImage = src;
+                        notify();
+                      }}
+                      onError={() => {
+                        state.failedImages = new Set([...state.failedImages, src]);
+                        notify();
+                      }}
+                    />
+                  )}
                 </Show>
-              }
-            >
+              </span>
+              <span class="chat-clawhub-card__identity">
+                <span class="card-title chat-clawhub-card__name">
+                  <span>{current().name}</span>{" "}
+                  <Show when={current().author}>
+                    {(author) => (
+                      <span class="plugin-card-author">@{author().replace(/^@+/, "")}</span>
+                    )}
+                  </Show>
+                  <Show when={current().official}>
+                    <span
+                      class="plugin-official-badge"
+                      role="img"
+                      aria-label={t("pluginsPage.official")}
+                      title={t("pluginsPage.official")}
+                    >
+                      <Icon name="badgeCheck" />
+                    </span>
+                  </Show>
+                </span>
+                <Show when={current().description}>
+                  {(description) => <span class="card-sub">{description()}</span>}
+                </Show>
+              </span>
+            </button>
+            <div class="chat-clawhub-card__actions" aria-live="polite">
               <Show
-                when={read().result?.installed}
+                when={read().status === "ready"}
                 fallback={
-                  <>
+                  <Show
+                    when={read().status === "error"}
+                    fallback={
+                      <>
+                        <span
+                          class="skeleton chat-clawhub-card__status-skeleton"
+                          aria-hidden="true"
+                        />
+                        <span class="sr-only">{t("common.loading")}</span>
+                      </>
+                    }
+                  >
                     <button
                       type="button"
                       class="btn chat-clawhub-card__dismiss"
                       onClick={() => {
-                        state.dismissed = true;
-                        notify();
+                        void load(true);
                       }}
                     >
-                      {t("common.dismiss")}
+                      {t("chat.clawhub.retryStatus")}
                     </button>
-                    <button
-                      type="button"
-                      class="btn primary chat-clawhub-card__install"
-                      onClick={() => openListing(read().result?.canInstall === true)}
-                    >
-                      {read().result?.canInstall
-                        ? t("pluginsPage.install")
-                        : t("chat.clawhub.viewDetails")}
-                    </button>
-                  </>
+                  </Show>
                 }
               >
-                <span class="chip chip-ok chat-clawhub-card__installed">
-                  <Icon name="check" />
-                  <span>{t("pluginsPage.installed")}</span>
-                </span>
+                <Show
+                  when={read().result?.installed}
+                  fallback={
+                    <>
+                      <button
+                        type="button"
+                        class="btn chat-clawhub-card__dismiss"
+                        onClick={() => {
+                          state.dismissed = true;
+                          notify();
+                        }}
+                      >
+                        {t("common.dismiss")}
+                      </button>
+                      <button
+                        type="button"
+                        class="btn primary chat-clawhub-card__install"
+                        onClick={() => openListing(read().result?.canInstall === true)}
+                      >
+                        {read().result?.canInstall
+                          ? t("pluginsPage.install")
+                          : t("chat.clawhub.viewDetails")}
+                      </button>
+                    </>
+                  }
+                >
+                  <span class="chip chip-ok chat-clawhub-card__installed">
+                    <Icon name="check" />
+                    <span>{t("pluginsPage.installed")}</span>
+                  </span>
+                </Show>
               </Show>
-            </Show>
+            </div>
           </div>
-        </div>
-      )}
-    </Show>
+        )}
+      </Show>
+    </openclaw-chat-clawhub-card>
   );
 }
-
-export const ChatClawHubCard = defineSolidBridge<Props>(
-  "openclaw-chat-clawhub-card",
-  ChatClawHubCardContent,
-  {
-    properties: {
-      recommendation: { default: undefined, attribute: false },
-      agentId: { default: undefined, attribute: false },
-    },
-  },
-);

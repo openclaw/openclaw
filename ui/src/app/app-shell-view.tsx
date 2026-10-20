@@ -1,21 +1,20 @@
 import "../lib/toast-host.ts";
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, Show } from "solid-js";
+import { createMemo, createSignal, onSettled, Show } from "solid-js";
+import { registerModalSurface } from "../components/overlay-registry.ts";
 import { LazySettingsSidebar } from "../components/settings-sidebar-lazy.tsx";
-import { renderGatewayStatus } from "../components/solid/gateway-status.tsx";
+import { GatewayStatus, gatewayStatusLabel } from "../components/solid/gateway-status.tsx";
 import { Icon } from "../components/solid/icon.tsx";
+import { ShortcutHint } from "../components/solid/kbd.tsx";
 import { ConnectingSplash } from "../components/solid/loading-skeleton.tsx";
 import {
   ContextNewSessionAction,
   renderNewSessionLink as NewSessionLink,
 } from "../components/solid/new-session-link.tsx";
-import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
-import {
-  formatKeyboardShortcutCombo,
-  KEYBOARD_SHORTCUT_COMBOS,
-} from "../lib/keyboard-shortcut-contract.ts";
+import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { resolveUiSelectedSessionAgentId } from "../lib/sessions/session-key.ts";
+import { registerToastContainer } from "../lib/toast.ts";
 import { PluginSurface } from "../plugins/control-ui-view.solid.tsx";
 import { DevicePairSetup } from "./app-shell-device-pair-setup.tsx";
 import { ShellDocks } from "./app-shell-docks.tsx";
@@ -25,11 +24,7 @@ import {
   type ShellOwnedElements,
 } from "./app-shell-lazy-view.tsx";
 import { readShellView, type ShellViewHost } from "./app-shell-view-state.ts";
-import {
-  isOptionalElementDefined,
-  MACOS_TITLEBAR_ELEMENT,
-  SIDEBAR_ATTENTION_ELEMENT,
-} from "./lazy-custom-element.ts";
+import { isOptionalElementDefined, APP_SIDEBAR_ELEMENT } from "./lazy-custom-element.ts";
 import { beginNativeWindowDrag, beginNativeWindowDragFromTopInset } from "./native-window-drag.ts";
 import { FloatingUpdateCard } from "./navigation-surface-view.tsx";
 import { floatingSidebarAttentionVisible } from "./navigation-surface.ts";
@@ -56,32 +51,38 @@ declare module "@solidjs/web" {
 
 export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
   let content!: HTMLElement;
+  let releaseNavDrawer: (() => void) | undefined;
+  onSettled(() => {
+    const stops = [
+      props.host.shellElement && registerToastContainer(props.host.shellElement, "shell"),
+      props.host.navDrawerElement && registerToastContainer(props.host.navDrawerElement, "drawer"),
+    ];
+    return () => {
+      stops.forEach((stop) => stop?.());
+      releaseNavDrawer?.();
+    };
+  });
   const [navResizing, setNavResizing] = createSignal(false);
   const view = createMemo(() => {
     props.host.shellRevision();
     return readShellView(props.host);
   });
   const shellConnectionStatus = createMemo(() => view().shellConnectionStatus);
+  const footerStatus = createMemo(() =>
+    shellConnectionStatus() || view().connectionRecovery ? view().gatewayStatus : null,
+  );
+  const connectionAnnouncement = createMemo(() => {
+    const kind = shellConnectionStatus();
+    return kind
+      ? gatewayStatusLabel(kind, view().gatewayStatus.queuedCount)
+      : view().gatewayConnected
+        ? t("nav.gateway.connected")
+        : "";
+  });
   // Legacy Mac hosts stamp this immutable host class before mounting the shell.
   // The web-chrome flag remains a reactive view read for the current host path.
   const legacyMacChrome = () =>
     !view().nativeWebChrome && document.documentElement.classList.contains("openclaw-native-macos");
-  // Lazy registrations and the native sidebar consume committed shell presentation.
-  createEffect(view, (state) => {
-    props.host.lazyCustomElements.requestWhileActive(
-      props.host.onboardingMemoryImportElement,
-      state.memoryImportActive,
-    );
-    if (state.nativeWebChrome && !state.onboarding) {
-      props.host.lazyCustomElements.preload(MACOS_TITLEBAR_ELEMENT, { reportError: true });
-    }
-    if (!state.nativeEmbed && (state.onboarding || state.floatingAttentionVisible)) {
-      props.host.lazyCustomElements.preload(SIDEBAR_ATTENTION_ELEMENT, { reportError: true });
-    }
-    if (!state.settingsTakeover && !state.nativeEmbed) {
-      Object.assign(props.host.navigationSidebar, state.sidebarProperties);
-    }
-  });
   const workspace = (
     <div style={{ display: "contents" }}>
       <ShellLazyOverlays
@@ -108,7 +109,6 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
             "shell--settings": view().settingsTakeover,
             "shell--home-control":
               view().collapsedControls && view().homePanelAvailable && !view().railAvailable,
-            "shell--connection-status": Boolean(view().shellConnectionStatus),
             "shell--floating-attention": floatingSidebarAttentionVisible(view().floatingUpdateCard),
             "shell--nav-resizing": navResizing(),
           },
@@ -120,9 +120,6 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
           "--shell-nav-expanded-width": `${view().expandedNavWidth}px`,
           "--shell-nav-rail-width": `${view().railWidth}px`,
         }}
-        onTheme-change={(event: CustomEvent<ThemeModeChangeDetail>) =>
-          props.host.handleThemeChange(event)
-        }
       >
         <a class="shell-skip-link" href="#control-ui-main" inert={view().navDrawerOpen}>
           {t("common.skipToMainContent")}
@@ -141,6 +138,7 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
             prop:resourceBasePath={view().context.resourceBasePath}
             prop:environment={view().config.environment}
             prop:navDrawerOpen={view().navDrawerOpen}
+            prop:gatewayStatus={view().mobileGatewayStatus}
             prop:newSessionAction={() => (
               <Show
                 when={
@@ -167,9 +165,13 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
           <div class="shell-chrome-controls" onMouseDown={beginNativeWindowDrag}>
             {/* Native hosts retain their window-control expand action; web uses the rail. */}
             <Show when={view().nativeWebChrome || legacyMacChrome()}>
-              <openclaw-tooltip
-                prop:content={`${t("nav.expand")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar)})`}
-              >
+              <openclaw-tooltip>
+                <span slot="content">
+                  <ShortcutHint
+                    label={t("nav.expand")}
+                    combo={KEYBOARD_SHORTCUT_COMBOS.toggleSidebar}
+                  />
+                </span>
                 <button
                   type="button"
                   class="shell-chrome-controls__button shell-chrome-controls__nav-toggle"
@@ -198,9 +200,13 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
               />
             </Show>
             <Show when={!view().railAvailable || legacyMacChrome()}>
-              <openclaw-tooltip
-                prop:content={`${t("chat.openCommandPalette")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.commandPalette)})`}
-              >
+              <openclaw-tooltip>
+                <span slot="content">
+                  <ShortcutHint
+                    label={t("chat.openCommandPalette")}
+                    combo={KEYBOARD_SHORTCUT_COMBOS.commandPalette}
+                  />
+                </span>
                 <button
                   type="button"
                   class="shell-chrome-controls__button shell-chrome-controls__search"
@@ -226,7 +232,11 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
             onClick={() => props.host.closeNavDrawer({ restoreFocus: true })}
           />
           <div
-            ref={(element) => (props.host.navDrawerElement = element)}
+            ref={(element) => {
+              releaseNavDrawer?.();
+              releaseNavDrawer = registerModalSurface(element);
+              props.host.navDrawerElement = element;
+            }}
             class={["shell-nav", { "nav-drawer": view().mobileNavLayout }]}
             role={view().mobileNavLayout ? "dialog" : undefined}
             aria-modal={view().mobileNavLayout && view().navDrawerOpen ? "true" : undefined}
@@ -240,8 +250,25 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
             <Show when={view().settingsTakeover} fallback={props.host.navigationSidebar}>
               <LazySettingsSidebar
                 loader={props.host.settingsSidebar}
-                sidebarProps={view().settingsSidebarProps}
+                host={props.host}
+                sidebarProps={{ ...view().settingsSidebarProps, footerStatus: footerStatus() }}
               />
+            </Show>
+            <Show
+              when={
+                (view().settingsTakeover
+                  ? props.host.settingsSidebar.renderer() === null
+                  : !isOptionalElementDefined(APP_SIDEBAR_ELEMENT)) && footerStatus()
+              }
+            >
+              <aside class="sidebar">
+                <div class="sidebar-shell">
+                  <div class="sidebar-shell__content" />
+                  <div class="sidebar-shell__footer">
+                    <GatewayStatus {...footerStatus()!} row />
+                  </div>
+                </div>
+              </aside>
             </Show>
           </div>
         </Show>
@@ -300,6 +327,7 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
           <Show when={view().embedNavigation}>
             <LazySettingsSidebar
               loader={props.host.settingsSidebar}
+              host={props.host}
               sidebarProps={view().settingsSidebarProps}
             />
           </Show>
@@ -326,21 +354,14 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
             />
           </ShellLayoutProvider>
         </main>
-        <Show when={shellConnectionStatus()}>
-          <div class="shell-connection-status">
-            {renderGatewayStatus({
-              kind: shellConnectionStatus()!,
-              get lastError() {
-                return view().gatewaySnapshot.lastError;
-              },
-              onRetry: props.host.viewCallbacks.retryGateway,
-            })}
-          </div>
-        </Show>
+        <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">
+          {connectionAnnouncement()}
+        </span>
         <openclaw-terminal-panel
           ref={(element) => (props.host.terminalPanel = element)}
           inert={view().navDrawerOpen}
-          prop:client={view().gatewayConnected ? view().gatewaySnapshot.client : null}
+          prop:client={view().gatewaySnapshot.client}
+          prop:gatewayConnected={view().gatewayConnected}
           prop:available={view().terminalAvailable}
           prop:agentId={view().selectedAgentId}
           prop:sessionKey={view().sessionRoute ? props.host.activeSessionKey : null}
@@ -366,6 +387,7 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
           prop:homeAvailable={view().homePanelAvailable && !view().nativeEmbed}
           prop:custodianSuppressed={view().activeRoute === "custodian"}
           prop:pageSessionKey={(props.host.shellRevision(), props.host.activeSessionKey)}
+          prop:getPrimaryChatPane={view().callbacks.getPrimaryChatPane}
           prop:pageAgentId={view().selectedAgentId}
           prop:pageRouteId={view().activeRoute}
           prop:pageRouteFailed={
@@ -385,6 +407,7 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
             prop:props={{
               queue: view().overlaySnapshot.approvalQueue,
               busy: view().overlaySnapshot.approvalBusy,
+              connected: view().gatewayConnected,
               canGrant: view().overlaySnapshot.approvalCanGrant,
               errors: view().overlaySnapshot.approvalErrors,
               onDecision: (

@@ -247,7 +247,7 @@ function subscriptionIdentity(params: Record<string, unknown>) {
   }
   return {
     name: params.name,
-    arguments: structuredClone(params.arguments),
+    arguments: params.arguments,
     delivery: { mode: "webhook", url: delivery.url },
   };
 }

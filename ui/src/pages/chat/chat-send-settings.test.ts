@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionsListResult, SessionsPatchResult } from "../../api/types.ts";
 import {
@@ -71,7 +72,11 @@ it("dispatches a fresh-pane send without waiting for background roster loading",
       expect.objectContaining({
         message: "send without changing a picker",
       }),
-      { timeoutMs: 30_000 },
+      {
+        timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
+        signal: expect.any(AbortSignal),
+        retainSentResultOnAbort: true,
+      },
     );
   } finally {
     roster.resolve(createSessionsListResult());
@@ -87,6 +92,10 @@ it.each(["success", "failure"] as const)(
     const patch = createDeferred<SessionsPatchResult>();
     const reconciliation = createDeferred<SessionsListResult>();
     const unrelated = createDeferred<SessionsListResult>();
+    const initial = createSessionsListResult({ model: "gpt-5", modelOverrideSource: "user" });
+    for (const row of initial.sessions) {
+      row.sessionId = "main";
+    }
     const result = createSessionsListResult({
       model: "gpt-5.6-luna",
       modelProvider: "openai",
@@ -95,16 +104,27 @@ it.each(["success", "failure"] as const)(
     let lists = 0;
     const host = makeChatHost({
       sessionKey: "main",
+      hello: {
+        ...sessionMutationGatewayHello(),
+        snapshot: {
+          sessionDefaults: {
+            defaultAgentId: "main",
+            mainKey: "main",
+            mainSessionKey: "agent:main:main",
+          },
+        },
+      },
       requestHandlers: {
         "sessions.patch": () => patch.promise,
         "sessions.list": () => {
           lists += 1;
-          return lists === 1 ? result : lists === 2 ? reconciliation.promise : unrelated.promise;
+          return lists === 1 ? initial : lists === 2 ? reconciliation.promise : unrelated.promise;
         },
         "chat.send": { status: "started" },
       },
       chatMessage: "use my confirmed model",
     });
+    await host.sessions.refresh({ agentId: "main", force: true });
     const selection = switchChatModel(host, "openai/gpt-5.6-luna");
     const send = handleSendChat(host);
     let later: Promise<void> | undefined;

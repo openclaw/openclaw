@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { normalizeTextForComparison } from "./embedded-agent-helpers.js";
+import { normalizeTextForComparison } from "./embedded-agent-helpers/messaging-dedupe.js";
 import {
   createMessageEndContext,
   createMessageToolEnvelope,

@@ -1254,7 +1254,6 @@ export interface ExtensionRuntime
 /** Host runtime with required worker-backed persistence capabilities. */
 export interface ExtensionRuntimeV2 extends ExtensionRuntimeState, ExtensionActionsV2 {}
 
-/** Loaded extension with all registered items. */
 export interface Extension {
   path: string;
   resolvedPath: string;

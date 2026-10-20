@@ -209,7 +209,7 @@ export async function drainSqliteTestAgentOwner(
   const globalStore = globalThis as Record<PropertyKey, unknown>;
   const owner = globalStore[agentKey] as AgentLifecycleModule["agentDatabaseLifecycle"] | undefined;
   const resources = globalStore[Symbol.for("openclaw.agentDatabaseAsyncResources")] as
-    | { active: Set<unknown>; closing: Map<unknown, unknown>; selections: Set<unknown> }
+    | { active: Set<unknown>; closing: Map<unknown, unknown>; selections: Map<unknown, unknown> }
     | undefined;
   const custody = () => ({
     databases: owner?.databases.size ?? 0,
@@ -253,17 +253,18 @@ export async function settleSqliteTestAgentCloses(): Promise<void> {
   ] as
     | {
         closing: Map<unknown, Promise<void> | undefined>;
-        selections: Map<unknown, Promise<void>>;
+        selections: Map<unknown, Promise<unknown> | undefined>;
       }
     | undefined;
   if (!resources) {
     return;
   }
-  const joined = new Set<Promise<void>>();
+  const joined = new Set<Promise<unknown>>();
   // A settled close can start dependent retirement; wait until nothing new is pending.
   while (true) {
     const pending = [...resources.closing.values(), ...resources.selections.values()].filter(
-      (operation): operation is Promise<void> => operation !== undefined && !joined.has(operation),
+      (operation): operation is Promise<unknown> =>
+        operation !== undefined && !joined.has(operation),
     );
     if (pending.length === 0) {
       return;

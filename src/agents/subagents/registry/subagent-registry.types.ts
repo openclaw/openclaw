@@ -4,9 +4,13 @@ import type {
 } from "../../../config/sessions/session-entry-current.types.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { SubagentEndReason } from "../../../context-engine/types.js";
-import type { RestartRecoveryOperatorSource } from "../../../gateway/operator-run-recovery-source.js";
+import type {
+  QueuedOperatorRecoverySource,
+  RestartRecoveryOperatorSource,
+} from "../../../gateway/operator-run-recovery-source.codec.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.types.js";
+import type { RequesterOrigin } from "../../requester-origin.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import type { SubagentLaunchAuthorization } from "../spawn/subagent-launch-authorization.js";
 import type { SpawnSubagentMode } from "../spawn/subagent-spawn.types.js";
@@ -104,6 +108,8 @@ type SwarmCollectorCompletion = NonNullable<SubagentRunReadRecord["collectorComp
   structured?: unknown;
   schemaError?: string;
   usage?: { inputTokens: number; outputTokens: number };
+  /** Set only when the registry sweeper settled a collector that yielded without a result. */
+  reason?: "yielded_without_result";
 };
 
 export type SwarmStructuredOutputState = {
@@ -114,6 +120,12 @@ export type SwarmStructuredOutputState = {
 
 type SwarmQueuedLaunch = {
   request: Record<string, unknown>;
+  /** A captured empty source is system work; legacy absence cannot establish a requester. */
+  requesterRecovery?: {
+    /** Null records requester facts that could not fit the bounded restart source. */
+    facts?: RequesterOrigin | null;
+    operator?: QueuedOperatorRecoverySource;
+  };
   /** Exact trusted launch capability, persisted so restart replay cannot lose it. */
   authorization?: SubagentLaunchAuthorization;
   timeoutMs: number;
@@ -128,9 +140,11 @@ export type RequesterSettleWakeState = {
   status: "pending" | "dispatching";
   /** Number of delivery attempts already admitted. */
   attemptCount: number;
+  /** Raw private input retained with its exact dispatch identity until this wake settles. */
+  privateInput?: { runId: string; message: string };
   /** Ambiguous transport replays made with the current idempotency key. */
   replayCount?: number;
-  /** Persisted retry deadline; restore waits until this instant. */
+  /** Retained retry receipt from an admitted attempt; mailbox admission owns scheduling. */
   nextAttemptAt?: number;
   /** Frozen wave membership after delivery admission or requester-yield re-admission. */
   batchRunIds?: string[];
@@ -279,4 +293,9 @@ export type RegisterSubagentRunOptions = {
   assertCurrent?: () => void;
   assertPublicationCurrent?: () => void;
   retainOwnership?: (scope: SubagentRegistrationScope) => void;
+  /** Retain rejection cleanup at the non-queued registration's durable commit. */
+  retainAdmission?: (reject: SubagentAdmissionRejection) => void;
+  admissionSessionEffects?: SubagentSessionEffects;
 };
+
+export type SubagentAdmissionRejection = (error: string) => Promise<void>;

@@ -32,8 +32,8 @@ export async function startGatewayServer(
     opts.startupConfigSnapshotRead?.snapshot,
     opts.startupConfigSnapshotRead?.databaseEngineSelection,
   );
-  const { initializeSqliteRuntimeCapabilities } = await import("../infra/bun-sqlite-library.js");
-  await initializeSqliteRuntimeCapabilities();
+  const { initializeSqliteRuntime } = await import("../infra/sqlite-runtime-initialize.js");
+  await initializeSqliteRuntime();
   const { acquireGatewayLock } = await import("../infra/gateway-lock.js");
   const ownedLock = opts.gatewayStateOwner
     ? null

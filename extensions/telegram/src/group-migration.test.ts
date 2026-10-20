@@ -62,7 +62,6 @@ describe("migrateTelegramGroupConfig", () => {
     });
 
     expect(result.migrated).toBe(true);
-    expect(result.scopes).toEqual(["account"]);
     expect(
       expectDefined(cfg.channels.telegram.accounts.primary, "primary Telegram account").groups,
     ).toEqual({
@@ -121,7 +120,7 @@ describe("migrateTelegramGroupConfig", () => {
       oldChatId: "-123",
       newChatId: "-123",
     });
-    expect(result).toEqual({ migrated: false, skippedExisting: false, scopes: [] });
+    expect(result).toEqual({ migrated: false, skippedExisting: false });
     expect(cfg.channels.telegram.groups).toEqual({
       "-123": { requireMention: true },
     });

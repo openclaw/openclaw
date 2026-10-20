@@ -3,7 +3,6 @@ import path from "node:path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodexThreadListParams } from "./app-server/protocol.js";
-import { CodexCatalogCurrency } from "./session-catalog-currency.js";
 import { CodexCatalogIndex } from "./session-catalog-index.js";
 import { projectNativeCatalogFixture as projectCodexCatalogPage } from "./session-catalog-projection.test-support.js";
 import {
@@ -29,36 +28,74 @@ describe("resident Codex catalog", () => {
     vi.useFakeTimers({
       toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
     });
+    const root = path.join(tempDirs.make("openclaw-catalog-blocked-walk-"), "sessions");
+    await fs.mkdir(root, { recursive: true });
+    const existing = idleThread({ id: "existing", source: "cli", recencyAt: 100 });
+    const older = idleThread({ id: "older", source: "cli", recencyAt: 99 });
     let release!: () => void;
     const blocked = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const reconcileFiles = vi.fn(async () => {});
-    const reconcileNative = vi.fn(async () => blocked);
-    const currency = new CodexCatalogCurrency({
-      local: true,
-      reconcileFiles,
-      reconcileNative,
-      report: () => {},
+    const readNative = vi.fn(async (params: CodexThreadListParams) => {
+      if (readNative.mock.calls.length === 3) {
+        await blocked;
+      }
+      return projectCodexCatalogPage({
+        data: params.cursor ? [older] : [existing],
+        nextCursor: params.cursor ? null : "older-page",
+      });
+    });
+    const index = new CodexCatalogIndex({
+      homeId: "blocked-local-currency",
+      localSessionsRoot: root,
+      readNative,
+      assertCurrent: () => {},
     });
     try {
-      currency.start();
+      await index.initialize();
+      expect(readNative).toHaveBeenCalledTimes(2);
+      const stat = vi.spyOn(fs, "lstat");
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
+      expect(stat.mock.calls.filter(([file]) => file === root)).toHaveLength(1);
+
       await vi.advanceTimersByTimeAsync(15 * 60_000);
-      expect(reconcileFiles).toHaveBeenCalledTimes(2);
-      const walk = currency.refreshNativeIfDue();
-      await vi.waitFor(() => expect(reconcileNative).toHaveBeenCalledExactlyOnceWith(true));
-      currency.requestNativeRefresh();
+      await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
+      expect(stat.mock.calls.filter(([file]) => file === root)).toHaveLength(2);
+      expect(readNative).toHaveBeenCalledTimes(2);
+      expect((await index.list({})).sessions.map((session) => session.threadId)).toEqual([
+        "existing",
+        "older",
+      ]);
+      await vi.waitFor(() => expect(readNative).toHaveBeenCalledTimes(3));
+      expect(readNative.mock.calls[2]?.[0]).toMatchObject({ useStateDbOnly: true });
+
+      await index.upsertThread(existing);
       await vi.advanceTimersByTimeAsync(15 * 60_000);
-      expect(reconcileFiles).toHaveBeenCalledTimes(3);
-      expect(reconcileNative).toHaveBeenCalledTimes(1);
-      expect(currency.hasActiveWork()).toBe(true);
+      await vi.waitFor(() =>
+        expect(stat.mock.calls.filter(([file]) => file === root)).toHaveLength(3),
+      );
+      expect(readNative).toHaveBeenCalledTimes(3);
+      expect(index.hasActiveWork()).toBe(true);
+      expect((await index.list({})).sessions.map((session) => session.threadId)).toEqual([
+        "existing",
+        "older",
+      ]);
+      expect(readNative).toHaveBeenCalledTimes(3);
+
       release();
-      await walk;
+      await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
+      expect(readNative).toHaveBeenCalledTimes(4);
+      expect(readNative.mock.calls[3]?.[0]).toMatchObject({ cursor: "older-page" });
       await vi.advanceTimersByTimeAsync(30_000);
-      expect(reconcileNative).toHaveBeenNthCalledWith(2, false);
+      await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
+      expect(readNative).toHaveBeenCalledTimes(5);
+      expect(readNative.mock.calls[4]?.[0]).toMatchObject({ useStateDbOnly: true });
+      expect(readNative.mock.calls[4]?.[0].cursor).toBeUndefined();
+      expect(stat.mock.calls.filter(([file]) => file === root)).toHaveLength(3);
     } finally {
       release();
-      await currency.close();
+      await index.close();
     }
   });
 
@@ -308,8 +345,10 @@ describe("resident Codex catalog", () => {
         root,
         idleThread({ id: "partial", preview: "Completed native request" }),
       );
-      await index.reconcile();
-      expect(open.mock.calls.map(([opened]) => opened)).toEqual([file]);
+      await vi.waitFor(async () => {
+        await index.reconcile();
+        expect(open.mock.calls.map(([opened]) => opened)).toEqual([file]);
+      });
       expect((await index.list({})).sessions[0]?.fallbackName).toBe("Completed native request");
     } finally {
       await index.close();

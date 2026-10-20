@@ -11,6 +11,7 @@ import type {
   RestartRecoveryTerminalDeliveryEvidence,
 } from "../config/sessions/restart-recovery-types.js";
 import type { ReplyToMode } from "../config/types.base.js";
+import type { AgentAssistantSourceReceipt } from "../infra/agent-events.types.js";
 import { hasReplyPayloadContent } from "../interactive/payload.js";
 import type { AssistantDeliveryTtsFacts } from "../llm/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -247,6 +248,8 @@ export type ReplyPayloadMetadata = {
   /** The model failed after a committed recovery compaction in the same turn. */
   postCompactionModelFailure?: true;
   assistantMessageIndex?: number;
+  /** Shares the occurrence receipt so deferred delivery observes its eventual commit. */
+  assistantTranscriptSource?: Readonly<AgentAssistantSourceReceipt>;
   /** First index of this block's physical assistant message; each content item advances the index. */
   assistantMessageStartIndex?: number;
   /** Answer to a preceding user input in the same run. */
@@ -368,6 +371,8 @@ export type ReplyPayloadMetadata = {
   nonTerminalToolErrorWarning?: boolean;
   /** Host label or status about the run (truncation, restart, compaction); not the answer. */
   hostNotice?: true;
+  /** Runtime acknowledgment of a committed queue decision, independent of active reply delivery. */
+  queueAdmissionNotice?: true;
   /** Unresolved mutating tool failure that makes a heartbeat run terminally failed. */
   heartbeatTerminalToolFailure?: {
     toolName: string;

@@ -3,6 +3,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openEditor } from "../../../lib/editor-links.ts";
+import { createApplicationGateway } from "../../../test-helpers/application-context.ts";
+import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
 import {
   clearNativeGatewayTestState,
   setNativeGatewayTestState,
@@ -637,6 +639,23 @@ describe("markdown sidebar", () => {
   );
 
   it("keeps a canvas scripts ceiling under a trusted global sandbox", async () => {
+    const gateway = createApplicationGateway();
+    gateway.publish({
+      ...gateway.gateway.snapshot,
+      client: createTestGatewayClient(vi.fn()),
+      phase: "connected",
+      hello: {
+        type: "hello-ok",
+        protocol: 1,
+        auth: {
+          role: "operator",
+          scopes: ["operator.read"],
+          recoveryScope: "test-recovery-scope",
+        },
+      },
+    });
+    const canvasContainer = createChatSidebarContainer(gateway.gateway);
+    container.append(canvasContainer);
     const panel = document.createElement("openclaw-chat-detail-panel") as DetailPanel;
     panel.embedSandboxMode = "trusted";
     panel.canvasPluginSurfaceUrl = "https://canvas.example";
@@ -648,7 +667,7 @@ describe("markdown sidebar", () => {
       sandbox: "scripts",
     } satisfies SidebarContent;
     panel.content = content;
-    container.append(panel);
+    canvasContainer.append(panel);
     await panel.updateComplete;
 
     const frame = panel.querySelector("iframe");

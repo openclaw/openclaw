@@ -1,5 +1,3 @@
-import type { ImportGlobFunction } from "vite/types/importGlob.js";
-
 /** Bundled host-placement templates, independent of runtime plugin activation. */
 /** Display-only fallback: never a JSON Schema default or a config write. */
 export type CuratedSettingsDefault =
@@ -53,12 +51,6 @@ export type CuratedSettingsPresentation = {
     fields: readonly CuratedSettingsField[];
   }[];
 };
-
-declare global {
-  interface ImportMeta {
-    glob: ImportGlobFunction;
-  }
-}
 
 // Available while disconnected or before the runtime catalog/schema arrives.
 // The distinct filename keeps settings templates outside the add-on metadata glob.

@@ -109,7 +109,6 @@ function fixture(initialEvents: TranscriptEvent[] = [user, assistant]) {
     const facts = projectSessionActorHotState(state).transcript.projection;
     assert(facts, "Hydrated actor did not publish projection facts");
     return {
-      path: database.path,
       sessionId: scope.sessionId,
       writeScopes,
       writeToken: token(),

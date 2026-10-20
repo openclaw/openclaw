@@ -292,10 +292,8 @@ function send(message, socket = relayWs) {
 
 function clearRelayOpeningDeadline() {
   relayOpeningDeadlineAt = 0;
-  if (relayOpeningDeadlineTimer) {
-    clearTimeout(relayOpeningDeadlineTimer);
-    relayOpeningDeadlineTimer = null;
-  }
+  clearTimeout(relayOpeningDeadlineTimer);
+  relayOpeningDeadlineTimer = null;
   void chrome.alarms.clear(RELAY_OPENING_DEADLINE_ALARM);
 }
 

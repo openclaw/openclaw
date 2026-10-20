@@ -1,14 +1,15 @@
 import { isSettingsNavigationRoute, isSettingsTakeover } from "../app-navigation.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import { APP_ROUTE_IDS } from "../app-routes.ts";
-import type { SettingsSidebarLoader } from "../components/settings-sidebar-lazy.tsx";
-import type { SettingsSidebarProps } from "../components/settings-sidebar.tsx";
-import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
-import { resolveGatewayStatus } from "../lib/gateway-status.ts";
+import type { GatewayStatusProps } from "../components/gateway-status.ts";
+import type {
+  SettingsSidebarFallbackProps,
+  SettingsSidebarLoader,
+} from "../components/settings-sidebar-lazy.tsx";
+import { isGatewayConnectionAttemptPending, resolveGatewayStatus } from "../lib/gateway-status.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
-import type { ChatPaneElement } from "../pages/chat/chat-pane.tsx";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import type { DevicePairSetupLoader } from "./app-shell-device-pair-setup.tsx";
@@ -20,11 +21,7 @@ import { canGoBackInNativeEmbed } from "./browser.ts";
 import type { ApplicationNavigationOptions } from "./context.ts";
 import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
 import { gatewayPresentationScope } from "./gateway-presentation-scope.ts";
-import {
-  APP_SIDEBAR_ELEMENT,
-  isOptionalElementDefined,
-  type OptionalCustomElement,
-} from "./lazy-custom-element.ts";
+import type { OptionalCustomElement } from "./lazy-custom-element.ts";
 import { isMobileNavLayout, shouldMergeChatChrome } from "./mobile-nav-layout.ts";
 import type { NativeHistoryState } from "./native-web-chrome.ts";
 import { isNativeEmbedHost, nativeEmbedHost, isNativeWebChromeHost } from "./native-web-chrome.ts";
@@ -45,6 +42,8 @@ import { NAV_WIDTH_MAX, normalizeCatalogOpenTarget } from "./settings.ts";
 import type { ShellLayoutOwner } from "./shell-layout-owner.ts";
 
 export interface ShellViewHost extends ShellLazyOverlayHost, ShellNavigationElements {
+  mobileGatewayStatus: GatewayStatusProps | null;
+  readonly connectionRecovery: boolean;
   routeOutlet?: ControlUiReadinessOutlet;
   terminalPanel?: HTMLElement & { readonly available?: boolean };
   readonly devicePairSetup: DevicePairSetupLoader;
@@ -71,7 +70,6 @@ export interface ShellViewHost extends ShellLazyOverlayHost, ShellNavigationElem
   exitSettings(): void;
   readonly handleNativeNewSession: () => void;
   handleSettingsSearchQueryChange(query: string): Promise<void>;
-  handleThemeChange(event: CustomEvent<ThemeModeChangeDetail>): void;
   nativeNavCollapsed(): boolean;
   readonly openPalette: () => void;
   readonly navigate: (routeId: string, options?: ApplicationNavigationOptions) => void;
@@ -97,9 +95,9 @@ export function readShellView(host: ShellViewHost) {
   const overlaySnapshot = context.overlays.snapshot;
   const controlUiRefreshRequired = overlaySnapshot.controlUiRefreshRequired;
   // Chat owns the live panes beneath its retained route island.
-  const historyRecovering = [
-    ...(host.routeOutlet?.querySelectorAll<ChatPaneElement>("openclaw-chat-pane") ?? []),
-  ].some((pane) => pane.conversationPresented && pane.historyRecovering);
+  const historyRecovering = (host.routeOutlet?.renderedElements?.("openclaw-chat-pane") ?? []).some(
+    (pane) => pane.conversationPresented && pane.historyRecovering,
+  );
   const connectionStatus = resolveGatewayStatus(
     gatewaySnapshot,
     controlUiRefreshRequired,
@@ -107,16 +105,13 @@ export function readShellView(host: ShellViewHost) {
   );
   const presentationScope = gatewayPresentationScope(context.gateway);
   // Initial hello can paint the shell before recovery finishes. Keep that brief
-  // startup state in existing chrome rather than inserting and removing a row.
+  // startup state in existing chrome rather than flashing recovery feedback.
   const initialConnection =
     !presentationScope.readyOnce &&
     !gatewaySnapshot.offlineStable &&
     (connectionStatus === "connecting" ||
       connectionStatus === "starting" ||
       connectionStatus === "restoring");
-  // The install keeps running after `update.run` answers, so the reconciliation
-  // — not the request — decides how long the update surfaces stay busy.
-  const updateBusy = overlaySnapshot.updateRunning || overlaySnapshot.updateReconciliationPending;
   const terminalAvailable = isTerminalAvailable(gatewaySnapshot, config.terminalEnabled ?? false);
   const desktopPanelAvailable = isDesktopPanelAvailable(gatewaySnapshot);
   const homePanelAvailable = isHomePanelAvailable(context.gateway);
@@ -144,7 +139,6 @@ export function readShellView(host: ShellViewHost) {
       activeRoute === "skills" ||
       activeRoute === "cron");
   const settingsTakeover = isSettingsTakeover(activeRoute) && !host.onboardingMode && !nativeEmbed;
-  const runtimeConfig = context.runtimeConfig.state;
   const onboarding = host.onboardingMode;
   const memoryImportActive = onboarding && activeRoute !== "custodian";
   const navDrawerOpen = host.navDrawerOpen && !onboarding && !nativeEmbed;
@@ -222,7 +216,7 @@ export function readShellView(host: ShellViewHost) {
     sessionKey: host.activeSessionKey,
     connected: gatewayConnected,
     connectionStatus,
-    lastError: gatewaySnapshot.lastError,
+    footerControlsOverlap: host.shellLayout.footerControlsOverlap,
     storedOutboxes: host.storedOutboxes,
     terminalAvailable,
     catalogOpenTarget: normalizeCatalogOpenTarget(uiSettings.catalogOpenTarget),
@@ -250,16 +244,18 @@ export function readShellView(host: ShellViewHost) {
     nativeEmbed && !(nativeEmbedHost()?.surface === "conversation" && activeRoute === "chat");
   const collapsedControls =
     !nativeEmbed && navCollapsed && !onboarding && !settingsTakeover && !mobileNavLayout;
-  const shellConnectionStatus =
-    (navigationSurfaceHidden ||
-      (settingsTakeover
-        ? host.settingsSidebar.renderer() === null
-        : !isOptionalElementDefined(APP_SIDEBAR_ELEMENT))) &&
-    !nativeEmbed &&
-    !onboarding &&
-    !initialConnection
-      ? connectionStatus
-      : null;
+  const shellConnectionStatus = !nativeEmbed && !initialConnection ? connectionStatus : null;
+  const gatewayStatus: GatewayStatusProps = {
+    kind: shellConnectionStatus ?? (!nativeEmbed && gatewayConnected ? "connected" : null),
+    lastError: shellConnectionStatus ? gatewaySnapshot.lastError : null,
+    queuedCount: shellConnectionStatus
+      ? (host.storedOutboxes?.total ?? 0) + (gatewaySnapshot.deferredIntentCount ?? 0)
+      : 0,
+    onRetry: callbacks.retryGateway,
+    retryPending: isGatewayConnectionAttemptPending(gatewaySnapshot),
+  };
+  const mobileGatewayStatus =
+    mobileNavLayout && !navDrawerOpen && !nativeEmbed ? gatewayStatus : null;
   const floatingUpdateCard = {
     navigationSurfaceHidden,
     mobileNavLayout,
@@ -271,31 +267,10 @@ export function readShellView(host: ShellViewHost) {
     onRefresh: host.refreshControlUi,
     onNavigate: host.navigate,
   };
-  const settingsSidebarProps: SettingsSidebarProps = {
+  const settingsSidebarProps: SettingsSidebarFallbackProps = {
     presentation: nativeEmbed ? (embedSettingsRoot ? "embed-list" : "embed-page") : "sidebar",
-    basePath: context.basePath,
     activeRouteId: activeRoute,
-    agents: context.agents.state.agentsList?.agents ?? [],
-    agentIdentity: context.agentIdentity,
-    settingsAgentSelection: context.settingsAgentSelection,
-    activePathname: host.routeState.location?.pathname ?? "",
-    activeSearch: host.routeState.location?.search ?? "",
-    activeHash: host.routeState.location?.hash ?? "",
     connectionStatus,
-    lastError: gatewaySnapshot.lastError,
-    gatewayVersion: config.serverVersion ?? gatewaySnapshot.hello?.server?.version ?? "",
-    searchQuery: embedSettingsRoot ? "" : host.settingsSearchQuery,
-    searchParams: {
-      query: host.settingsSearchQuery,
-      schema: runtimeConfig.configSchema,
-      value: runtimeConfig.configForm ?? runtimeConfig.configSnapshot?.config ?? null,
-      uiHints: runtimeConfig.configUiHints,
-      identityAvailable: Boolean(gatewaySnapshot.selfUser),
-      multipleProfiles: gatewaySnapshot.hello?.policy?.hasMultipleSessionSharingIdentities === true,
-      basePath: context.basePath,
-      canAdmin: operatorAccess.canAdmin,
-      nativeDeviceSettings: context.nativeDeviceSettings,
-    },
     onExit: () => {
       if (!nativeEmbed) {
         host.exitSettings();
@@ -306,27 +281,6 @@ export function readShellView(host: ShellViewHost) {
       } else {
         host.navigate("settings");
       }
-    },
-    onRetryConnect: callbacks.retryGateway,
-    onNavigate: host.navigate,
-    onPreload: callbacks.preloadRoute,
-    onSearchQueryChange: (nextQuery) => void host.handleSettingsSearchQueryChange(nextQuery),
-    preloadTimers: host.settingsPreloadTimers,
-    saveIndicator: {
-      status: runtimeConfig.configRecoveryError ? "recovery" : runtimeConfig.configAutoSaveStatus,
-      lastError: runtimeConfig.configRecoveryError ?? runtimeConfig.lastError,
-      needsApply: runtimeConfig.configNeedsApply,
-      applying: runtimeConfig.configApplying,
-      applyDisabled:
-        context.runtimeConfig.canApply === false ||
-        runtimeConfig.configLoading ||
-        runtimeConfig.configSaving ||
-        (runtimeConfig.configFormDirty && runtimeConfig.configFormMode === "raw") ||
-        updateBusy,
-      onRetry: () => void context.runtimeConfig.retry(),
-      onSave: () => void context.runtimeConfig.save(),
-      onReload: () => void context.runtimeConfig.discardDraft(),
-      onApply: () => void context.runtimeConfig.apply(),
     },
     canAdmin: operatorAccess.canAdmin,
     nativeDeviceSettings: context.nativeDeviceSettings,
@@ -380,8 +334,10 @@ export function readShellView(host: ShellViewHost) {
     embedNavigation,
     collapsedControls,
     shellConnectionStatus,
+    gatewayStatus,
+    mobileGatewayStatus,
+    connectionRecovery: host.connectionRecovery,
     floatingUpdateCard,
     settingsSidebarProps,
-    navigationSnapshot,
   };
 }

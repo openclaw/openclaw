@@ -53,7 +53,7 @@ beforeEach(async () => {
         filePath: skillPath,
         baseDir: skillDir,
         source: "openclaw-managed",
-        sourceOptions: { source: "openclaw-managed", scope: "project", origin: "top-level" },
+        sourceOptions: { source: "openclaw-managed", scope: "project" },
       }),
     },
   ];

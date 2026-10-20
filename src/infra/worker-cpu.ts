@@ -20,6 +20,8 @@ import {
   workerMessagePayloadBytes,
 } from "./worker-message-metrics.js";
 
+const gcStorm = channel("openclaw.code-mode.gc-storm");
+
 type WorkerMemorySample = Pick<
   NodeJS.MemoryUsage,
   "heapUsed" | "heapTotal" | "external" | "arrayBuffers"
@@ -395,7 +397,7 @@ export function receiveWorkerMemoryPort(worker: WorkerCpuHandle, message: unknow
     ) => {
       if ("retireWorkerId" in record) {
         recordWorkerMessage("memory", "from_worker");
-        channel("openclaw.code-mode.gc-storm").publish(record.retireWorkerId);
+        gcStorm.publish(record.retireWorkerId);
         return;
       }
       if ("gcStorm" in record) {

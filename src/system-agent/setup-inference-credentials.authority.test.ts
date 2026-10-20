@@ -20,7 +20,7 @@ import * as setupExecution from "../gateway/server-methods/system-agent-executio
 import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import { createWizardSessionTracker } from "../gateway/server-wizard-sessions.js";
 import * as providerChoices from "../plugins/provider-auth-choices.js";
-import { resolvePluginProvidersCore } from "../plugins/providers.runtime.js";
+import * as providerRuntime from "../plugins/providers.runtime.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
@@ -34,7 +34,7 @@ import {
   throwIfSetupInferenceCancelled,
 } from "./setup-inference-core.js";
 import { saveSetupCredential } from "./setup-inference-credentials.js";
-import { pluginRecord } from "./verified-inference.test-support.js";
+import { mockPluginRegistry, pluginRecord } from "./verified-inference.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -133,6 +133,7 @@ describe("native setup authority", () => {
   });
 
   it("blocks native Muse login after owner invalidation without abort", async ({ signal }) => {
+    const resolveProviders = providerRuntime.resolvePluginProvidersCore;
     const setup = await fixture({ surface: "gateway" });
     const binaryPath = path.join(path.dirname(setup.configPath), "muse");
     const attemptsPath = path.join(path.dirname(setup.configPath), "muse-attempts");
@@ -145,7 +146,7 @@ process.exit(1);
       { mode: 0o700 },
     );
     vi.stubEnv("PATH", `${path.dirname(binaryPath)}${path.delimiter}${process.env.PATH ?? ""}`);
-    const muse = resolvePluginProvidersCore({
+    const muse = resolveProviders({
       config: { plugins: { allow: ["meta"], entries: { meta: { enabled: true } } } },
       onlyPluginIds: ["meta"],
       mode: "setup",
@@ -170,7 +171,7 @@ process.exit(1);
     ]);
     const activate = setupExecution.activateGatewaySetupInference;
     vi.spyOn(setupExecution, "activateGatewaySetupInference").mockImplementation((params) =>
-      setup.runWithMetadata(() => activate({ ...params, modelRef, deps: setup.deps })),
+      setup.runWithMetadata(() => activate({ ...params, modelRef })),
     );
     const tracker = createWizardSessionTracker();
     const controller = new AbortController();
@@ -250,12 +251,11 @@ process.exit(1);
       label: "Meta",
       auth: [{ id: "fixture-login", label: "Muse Code", kind: "device_code", run: login }],
     };
-    setup.deps.resolvePluginProviders = () => [provider];
-    setup.deps.resolveManifestProviderAuthChoice = () =>
-      authChoice("meta", "device-code", "Muse Code");
-    setup.deps.loadPluginRegistrySnapshot = () => ({
-      plugins: ["meta", "muse", "codex", "openai"].map((id) => pluginRecord(id)),
-    });
+    vi.spyOn(providerRuntime, "resolvePluginProvidersCore").mockReturnValue([provider]);
+    setup.resolveManifestProviderAuthChoice.mockReturnValue(
+      authChoice("meta", "device-code", "Muse Code"),
+    );
+    mockPluginRegistry(["meta", "muse", "codex", "openai"].map((id) => pluginRecord(id)));
     vi.spyOn(runtimePluginInstall, "ensureModelSelectionRuntimePlugins").mockImplementation(
       async ({ cfg }) => ({ ok: true, cfg, codexInstalled: false }),
     );

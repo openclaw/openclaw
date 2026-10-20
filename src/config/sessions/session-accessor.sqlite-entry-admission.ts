@@ -2,53 +2,36 @@ import path from "node:path";
 import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
-import type { OpenClawAgentDatabaseClaim } from "../../state/openclaw-agent-db-identity.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
 import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
+import { toAgentExecutionConstraints } from "../../state/openclaw-agent-execution-scope.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../paths.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope.js";
-import type { SessionEntryTargetPatchScope } from "./session-accessor.types.js";
-import type { SessionActor, SessionActorLifetime } from "./session-actor-contract.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
+import type {
+  ActorSessionAdmissionClaim,
+  SessionAdmissionDatabaseClaim,
+} from "./session-admission-claim.types.js";
 import type { SessionAdmissionTransition } from "./session-admission-transition.types.js";
 import {
   readRetainedSessionEntryFacts,
   retainSessionEntryReadFacts,
 } from "./session-entry-read-facts.js";
 import { createAdmittedSessionEntryCohortReader } from "./session-entry-read-ordered.js";
-import type { SessionEntryCohortReader } from "./session-entry-read-runtime.types.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
 import { withSessionStoreTarget } from "./session-store-target-runtime.js";
 import { createSessionWorkerExecutionSource } from "./session-worker-execution-source.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
-export type { SessionAdmissionTransition } from "./session-admission-transition.types.js";
+export type { SessionAdmissionDatabaseClaim } from "./session-admission-claim.types.js";
 
 type SessionAdmissionEntryIdentity = SessionAdmissionTransition["current"];
-
-type ActorSessionAdmissionClaim = {
-  kind: "worker" | "memory";
-  identity: string;
-  incarnation: string;
-  readonly target: SessionEntryTargetPatchScope;
-  reader?: SessionEntryCohortReader;
-  acquireSessionActor(lifetime: SessionActorLifetime): Promise<SessionActor>;
-  afterTransition?(
-    transition: SessionAdmissionTransition,
-    assertOwnerCurrent: () => void,
-  ): Promise<ActorSessionAdmissionClaim>;
-  isCurrent(): boolean;
-  assertCurrent(): void;
-  release(): Promise<void>;
-};
-
-export type SessionAdmissionDatabaseClaim = OpenClawAgentDatabaseClaim | ActorSessionAdmissionClaim;
 
 /** Admission retains the exact owner that supplied its row across asynchronous policy work. */
 export async function loadSessionEntryForAdmission(
@@ -154,16 +137,7 @@ export async function loadSessionEntryForAdmission(
             // Discovery retains the file while queued; an earlier cancelled open may retire its executor.
             const execution = captureOpenClawAgentDatabaseExecution(
               options,
-              observed.key.startsWith("file:")
-                ? {
-                    expectedIdentity: {
-                      kind: "file",
-                      physicalIdentity: observed.key.slice("file:".length),
-                      nativeLocation: observed.canonicalPath,
-                      birthtime: observed.birthtime,
-                    },
-                  }
-                : { expectedCreationIdentity: observed },
+              toAgentExecutionConstraints(observed),
             );
             const assertSourceCurrent = () => {
               assertCurrent();

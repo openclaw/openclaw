@@ -16,6 +16,149 @@ import { sessionsListResponse } from "./session-management.test-support.ts";
 const suite = createControlUiE2eSuite({ name: "Chat waiting on subagents" });
 
 suite.define(() => {
+  it("streams inline narration without opening children and uses the available title width", async () => {
+    const artifactParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactParent
+      ? createControlUiE2eArtifactDir("subagent-inline-preview", artifactParent)
+      : undefined;
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { width: 1000, height: 900 } },
+      async ({ page }) => {
+        const now = Date.now();
+        await page.clock.setFixedTime(now);
+        await page.addInitScript(
+          ({ key }) => {
+            localStorage.setItem(key, JSON.stringify({ themeMode: "dark", navCollapsed: true }));
+          },
+          { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl) },
+        );
+        const parent = {
+          key: "agent:main:dependency-update",
+          sessionId: "dependency-update",
+          kind: "direct",
+          label: "Update dependencies",
+          status: "running",
+          hasActiveRun: true,
+          activeRunIds: ["parent-run"],
+          hasActiveSubagentRun: true,
+          startedAt: now - 60_000,
+        } satisfies GatewaySessionRow;
+        const titles = [
+          "Update Apple Android and Ruby dependencies",
+          "Update Rust and Go dependencies",
+          "Update standalone npm and CI dependency pins",
+          "Migrate upgraded TypeScript native API imports",
+        ];
+        const children = titles.map(
+          (label, index) =>
+            ({
+              key: "agent:main:subagent:dependency-" + index,
+              sessionId: "dependency-" + index,
+              kind: "direct",
+              classification: "subagent",
+              label,
+              status: "running",
+              hasActiveRun: true,
+              activeRunIds: ["child-run-" + index],
+              parentSessionKey: parent.key,
+              spawnedBy: parent.key,
+              createdAt: now - 50_000 + index,
+              startedAt: now - 50_000 + index,
+            }) satisfies GatewaySessionRow,
+        );
+        const gateway = await installMockGateway(page, {
+          sessionKey: parent.key,
+          sessions: [{ ...parent, childSessions: children.map((child) => child.key) }, ...children],
+          historyMessages: [
+            {
+              role: "user",
+              content: "Update the dependencies and verify compatibility.",
+              timestamp: now - 60_000,
+            },
+            {
+              role: "assistant",
+              content: "I am checking each dependency group in parallel.",
+              timestamp: now - 55_000,
+              __openclaw: { id: "delegation", seq: 2, runId: "parent-run" },
+            },
+          ],
+          inFlightRun: { runId: "parent-run", startedAt: parent.startedAt },
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, parent.key));
+        const pane = page.locator(".chat-pane-cache__pane--active");
+        const activity = pane.locator(".chat-subagent-activity").first();
+        const rows = activity.locator(".chat-subagent-activity__row");
+        await expect.poll(() => rows.count()).toBe(4);
+        const capture = async (name: string) => {
+          if (!artifactDir) {
+            return;
+          }
+          const frame = await takeControlUiScreenshotFrame(page, pane, [activity], {
+            animations: "disabled",
+          });
+          await writeFile(path.join(artifactDir, name), frame.png);
+        };
+        await capture("initial-wide.png");
+        const untruncatedTitles = () =>
+          rows
+            .locator(".chat-subagent-activity__name")
+            .evaluateAll((names) =>
+              names.every((name) => name.scrollWidth <= name.clientWidth + 1),
+            );
+        expect(await untruncatedTitles()).toBe(true);
+        await gateway.waitForRequest("sessions.messages.subscribe", {
+          match: { key: children[0]!.key, mode: "narration" },
+        });
+        const emit = (text: string, runId = "child-run-0") =>
+          gateway.emitGatewayEvent("session.narration", {
+            sessionKey: children[0]!.key,
+            agentId: "main",
+            runId,
+            text,
+          });
+        await emit("Checking manifests. Verifying the Android dependency graph.");
+        await rows
+          .first()
+          .getByText("Verifying the Android dependency graph.", { exact: true })
+          .waitFor();
+        await emit("This is from an obsolete run.", "old-run");
+        expect(await rows.first().textContent()).not.toContain("obsolete");
+        await emit("Checking CocoaPods and Gradle compatibility.");
+        await rows
+          .first()
+          .getByText("Checking CocoaPods and Gradle compatibility.", { exact: true })
+          .waitFor();
+        expect(await untruncatedTitles()).toBe(true);
+        await capture("live-wide.png");
+        await page.setViewportSize({ width: 390, height: 900 });
+        await page.locator(".shell--mobile-nav").waitFor();
+        const oneLine = () =>
+          rows.evaluateAll((elements) =>
+            elements.every((row) => {
+              const name = row.querySelector(".chat-subagent-activity__name");
+              const status = row.querySelector(".chat-subagent-activity__status");
+              if (!name || !status) {
+                return false;
+              }
+              return (
+                Math.abs(name.getBoundingClientRect().top - status.getBoundingClientRect().top) <
+                  2 &&
+                row.scrollWidth <= row.clientWidth + 1 &&
+                row.getBoundingClientRect().right <= window.innerWidth
+              );
+            }),
+          );
+        await expect.poll(oneLine).toBe(true);
+        await capture("live-narrow.png");
+        for (const child of children) {
+          expect(await gateway.getRequests("chat.history", { sessionKey: child.key })).toHaveLength(
+            0,
+          );
+        }
+      },
+    );
+  });
+
   it("keeps child activity without a duplicate composer line and restores the parent's working indicator", async () => {
     const artifactParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const artifactDir = artifactParent
@@ -502,8 +645,8 @@ suite.define(() => {
           block
             .locator(".chat-working-indicator:not(.chat-working-indicator--subagents)")
             .locator("openclaw-elapsed-time")
-            .evaluate((element) => Reflect.get(element, "startMs"));
-        await expect.poll(requestClock).toBe(history[0]!.timestamp);
+            .textContent();
+        await expect.poll(async () => (await requestClock())?.trim()).toBe("1m 13s");
         expect(await activePane.locator(".chat-group.assistant").count()).toBe(1);
         expect(await workingTokens()).toBe("4.1k output tokens");
         const answerText = "The backend is complete. I am reviewing the result.";
@@ -544,7 +687,7 @@ suite.define(() => {
         // runs' tokens count on its line.
         await block.getByText(answerText, { exact: true }).waitFor();
         expect(await activePane.locator(".chat-group.assistant").count()).toBe(1);
-        expect(await requestClock()).toBe(history[0]!.timestamp);
+        expect((await requestClock())?.trim()).toBe("1m 13s");
         await reportUsage("parent-resumed-run", 256, 3);
         await expect.poll(workingTokens).toBe("4.4k output tokens");
 

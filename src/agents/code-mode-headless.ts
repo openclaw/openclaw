@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { asPositiveInteger } from "@openclaw/normalization-core/number-coercion";
-import { raceWithTimeout } from "@openclaw/retry";
+import { racePromiseWithAbortSignal } from "@openclaw/retry";
 import { codeModeGcAttribution } from "../logging/code-mode-diagnostic.js";
 import { clampNumber } from "../utils.js";
 import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
@@ -75,19 +75,7 @@ export function createHeadlessDeadlineScope(
       if (controller.signal.aborted) {
         throw headlessAbortError(controller.signal);
       }
-      return await raceWithTimeout(
-        promise,
-        remainingMs,
-        () => {
-          throw timeoutError();
-        },
-        {
-          signal: controller.signal,
-          onAbort: (abortedSignal) => {
-            throw headlessAbortError(abortedSignal);
-          },
-        },
-      );
+      return await racePromiseWithAbortSignal(promise, controller.signal, headlessAbortError);
     },
     cleanup: () => {
       controller.abort(new CodeModeHeadlessAbortError());
@@ -282,23 +270,16 @@ export async function runCodeModeScriptHeadless(params: {
         if (context.yieldSignal.aborted) {
           return { kind: "checkpoint" };
         }
-        let onPressure: (() => void) | undefined;
         const settlement = new AbortController();
         try {
-          const ready = await abortScope.wait(
-            Promise.race([
-              waitForPendingBridgeSettlement(
-                pending,
-                boundary.settlementMode,
-                settlement.signal,
-              ).then(() => true),
-              new Promise<false>((resolve) => {
-                onPressure = () => resolve(false);
-                context.yieldSignal.addEventListener("abort", onPressure, { once: true });
-              }),
-            ]),
+          await abortScope.wait(
+            waitForPendingBridgeSettlement(
+              pending,
+              boundary.settlementMode,
+              AbortSignal.any([context.yieldSignal, settlement.signal]),
+            ),
           );
-          if (!ready || context.yieldSignal.aborted) {
+          if (context.yieldSignal.aborted) {
             return { kind: "checkpoint" };
           }
           // Admission already charged worker queue/initialization time. Respect that
@@ -319,9 +300,6 @@ export async function runCodeModeScriptHeadless(params: {
           };
         } finally {
           settlement.abort();
-          if (onPressure) {
-            context.yieldSignal.removeEventListener("abort", onPressure);
-          }
         }
       },
     };

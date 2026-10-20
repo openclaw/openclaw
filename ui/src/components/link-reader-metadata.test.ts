@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ControlUiLinkReaderDocument } from "../../../src/shared/control-ui-link-reader.js";
+import { GatewayBrowserClient } from "../api/gateway.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
@@ -60,11 +61,13 @@ const badge = () => document.querySelector(".link-reader-hovercard__state")?.tex
 beforeEach(() => {
   vi.useFakeTimers();
   vi.stubGlobal("localStorage", createStorageMock());
+  vi.spyOn(GatewayBrowserClient.prototype, "connected", "get").mockReturnValue(true);
 });
 afterEach(() => {
   document.body.replaceChildren();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 it.each(["same", "other-client", "other-agent", "other-session"])(

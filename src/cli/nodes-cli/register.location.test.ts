@@ -1,13 +1,14 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { registerNodesLocationCommands } from "./register.location.js";
+import { registerNodesCli } from "./register.js";
 
 const mocks = vi.hoisted(() => ({
   resolveCliNodeId: vi.fn(async () => "node-1"),
   callNodesGatewayCli: vi.fn(async () => ({ payload: { lat: 48.2, lon: 16.3 } })),
 }));
 
-vi.mock("./cli-utils.js", () => ({
+vi.mock("./cli-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./cli-utils.js")>()),
   runNodesCommand: async (_label: string, action: () => Promise<void>) => action(),
 }));
 
@@ -31,10 +32,10 @@ vi.mock("../../runtime.js", () => ({
   },
 }));
 
-function createNodesCommand(): Command {
-  const nodes = new Command("nodes");
-  registerNodesLocationCommands(nodes);
-  return nodes.exitOverride().configureOutput({ writeErr: () => {}, writeOut: () => {} });
+async function createNodesCommand(): Promise<Command> {
+  const program = new Command();
+  await registerNodesCli(program, ["node", "openclaw", "nodes", "location"]);
+  return program.exitOverride().configureOutput({ writeErr: () => {}, writeOut: () => {} });
 }
 
 describe("nodes location get validation", () => {
@@ -43,11 +44,12 @@ describe("nodes location get validation", () => {
   });
 
   it("rejects unsupported accuracy values before resolving or invoking a node", async () => {
-    const nodes = createNodesCommand();
+    const nodes = await createNodesCommand();
 
     await expect(
       nodes.parseAsync([
         "node",
+        "openclaw",
         "nodes",
         "location",
         "get",
@@ -63,10 +65,11 @@ describe("nodes location get validation", () => {
   });
 
   it("normalizes and forwards supported accuracy values", async () => {
-    const nodes = createNodesCommand();
+    const nodes = await createNodesCommand();
 
     await nodes.parseAsync([
       "node",
+      "openclaw",
       "nodes",
       "location",
       "get",
@@ -88,11 +91,12 @@ describe("nodes location get validation", () => {
   it.each(["", " \t "])(
     "rejects explicit blank --location-timeout %j before resolving or invoking a node",
     async (locationTimeout) => {
-      const nodes = createNodesCommand();
+      const nodes = await createNodesCommand();
 
       await expect(
         nodes.parseAsync([
           "node",
+          "openclaw",
           "nodes",
           "location",
           "get",

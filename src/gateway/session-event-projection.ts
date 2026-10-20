@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   GATEWAY_CLIENT_CAPS,
@@ -9,6 +10,7 @@ import type { SessionRow } from "../../packages/gateway-protocol/src/schema/sess
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { readGatewayAccessRevision } from "./gateway-access-revision.js";
 import type { PrepareSessionEventProjection } from "./server-broadcast-types.js";
+import type { GatewayClient } from "./server-methods/client-types.js";
 import { prepareSessionAncestor } from "./session-ancestor-references.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
 import { createSessionRowDeltaDiffer } from "./session-row-delta-fields.js";
@@ -30,6 +32,8 @@ export function prepareSessionEventProjection(
     ancestors: ReturnType<SessionRowProjection["ancestorRows"]>;
     /** The transcript publisher owns the message graph for synchronous fanout. */
     encodeMessage?: true;
+    /** Rechecked per recipient after row projection; exact interest always wins. */
+    omitMessage?: (client: GatewayClient) => boolean;
     controlUiOnly?: boolean;
   },
 ): PrepareSessionEventProjection {
@@ -109,6 +113,8 @@ export function prepareSessionEventProjection(
     >();
     const diff = createSessionRowDeltaDiffer();
     const deltaPayloads = new WeakMap<object, Map<string, Record<string, unknown>>>();
+    const fieldRefPayloads = new WeakMap<object, Record<string, unknown>>();
+    const bodylessPayloads = new WeakMap<object, Record<string, unknown>>();
     const baselineIds = new WeakMap<object, number>();
     let nextBaselineId = 0;
     const baselineId = (baseline: object | undefined) => {
@@ -207,16 +213,43 @@ export function prepareSessionEventProjection(
         : undefined;
       let wirePayload: Record<string, unknown> = projected;
       if (rowDelivery) {
+        if (
+          hasGatewayClientCap(client.connect.caps, GATEWAY_CLIENT_CAPS.SESSION_EVENT_FIELD_REFS)
+        ) {
+          let compact = fieldRefPayloads.get(projected);
+          if (!compact) {
+            compact = { ...projected };
+            const sessionFieldRefs: number[] = [];
+            // Reference the reconstructed JSON row, independent of patch insertion order.
+            const fields = Object.entries(row)
+              .filter(([, value]) => value !== undefined)
+              .toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+            for (const [index, [field, value]] of fields.entries()) {
+              if (
+                field !== "key" &&
+                field !== "agentId" &&
+                Object.hasOwn(projected, field) &&
+                isDeepStrictEqual(projected[field], value)
+              ) {
+                sessionFieldRefs.push(index);
+                delete compact[field];
+              }
+            }
+            compact.sessionFieldRefs = sessionFieldRefs;
+            fieldRefPayloads.set(projected, compact);
+          }
+          wirePayload = compact;
+        }
         const cacheKey = JSON.stringify([rowDelivery.key, rowDelivery.bases.map(baselineId)]);
-        let cached = deltaPayloads.get(projected);
+        let cached = deltaPayloads.get(wirePayload);
         if (!cached) {
           cached = new Map();
-          deltaPayloads.set(projected, cached);
+          deltaPayloads.set(wirePayload, cached);
         }
         let deltaPayload = cached.get(cacheKey);
         if (!deltaPayload) {
           deltaPayload = {
-            ...projected,
+            ...wirePayload,
             session: rowDelivery.wire[0],
             ...(Array.isArray(projected.ancestorSessions)
               ? { ancestorSessions: rowDelivery.wire.slice(1) }
@@ -226,11 +259,21 @@ export function prepareSessionEventProjection(
         }
         wirePayload = deltaPayload;
       }
+      const omitMessage = event === "session.message" && prepared?.omitMessage?.(client);
+      if (omitMessage) {
+        let bodyless = bodylessPayloads.get(wirePayload);
+        if (!bodyless) {
+          bodyless = { ...wirePayload };
+          delete bodyless.message;
+          bodylessPayloads.set(wirePayload, bodyless);
+        }
+        wirePayload = bodyless;
+      }
       return {
         payload: wirePayload,
         serializeSession: () =>
           rowDelivery ? JSON.stringify(rowDelivery.wire[0]) : serializeSessionRow(row),
-        serializeMessage,
+        serializeMessage: omitMessage ? undefined : serializeMessage,
         delivered: () => {
           rowDelivery?.delivered();
           references.forget(row.key);

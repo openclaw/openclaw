@@ -1,15 +1,16 @@
-import { createMemo, createSignal, For, onCleanup, untrack } from "solid-js";
+import { createMemo, createSignal, For, onCleanup } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
-import type { CheckoutChipOptions } from "./checkout-chip.ts";
+import type { resolveCheckoutChip } from "./checkout-chip.ts";
 import { SessionMenuItem } from "./cloud-target-view.tsx";
 import { isWorktreeNameValid } from "./create-params.ts";
 import { SessionPicker } from "./picker.tsx";
+import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
 
 function WorktreeFields(props: {
-  params: CheckoutChipOptions;
+  params: NewSessionPlaceControlsOptions;
   onConfirm: () => void;
   onClose: () => void;
 }) {
@@ -70,15 +71,17 @@ function WorktreeFields(props: {
     if (
       event.key !== "Enter" ||
       event.isComposing ||
-      (!props.params.repository && !isWorktreeNameValid(nameInput.value))
+      (!props.params.place.remoteRepository && !isWorktreeNameValid(nameInput.value))
     ) {
       return;
     }
     event.preventDefault();
     props.onConfirm();
   };
-  const suggestions = createMemo(() => (props.params.branches?.branches ?? []).slice(0, 8));
-  const branchName = () => props.params.worktreeName.trim();
+  const branches = () =>
+    props.params.place.repository.kind === "git" ? props.params.place.repository : null;
+  const suggestions = createMemo(() => (branches()?.branches ?? []).slice(0, 8));
+  const branchName = () => props.params.place.worktreeName.trim();
   const baseRefInput = (
     <input
       id="new-session-worktree-base-ref"
@@ -90,16 +93,16 @@ function WorktreeFields(props: {
       aria-expanded={suggestions().length ? (suggestionsOpen() ? "true" : "false") : undefined}
       disabled={props.params.submitting || props.params.pendingPlacement}
       placeholder={
-        props.params.branchesLoading
+        props.params.place.repository.kind === "checking"
           ? t("common.loading")
-          : (props.params.branches?.defaultBranch ?? t("newSession.worktreeBaseRef"))
+          : (branches()?.defaultBranch ?? t("newSession.worktreeBaseRef"))
       }
-      value={props.params.baseRef}
+      value={props.params.place.baseRef}
       onFocus={() => setSuggestionsOpen(true)}
       onInput={(event) => {
         clearActiveSuggestion();
         setSuggestionsOpen(true);
-        props.params.onBaseRefInput(event.currentTarget.value);
+        props.params.place.setBaseRef(event.currentTarget.value);
       }}
       ref={(node) => {
         baseRef = node;
@@ -141,10 +144,8 @@ function WorktreeFields(props: {
                 <For each={suggestions()} keyed={(branch) => branch.name}>
                   {(branch, index) => {
                     let button: HTMLButtonElement;
-                    // The For key fixes this identity for the row's entire lifetime.
-                    const name = untrack(() => branch().name);
                     onCleanup(() => {
-                      suggestionRefs.delete(name);
+                      suggestionRefs.delete(branch().name);
                       if (activeSuggestion === button) {
                         clearActiveSuggestion();
                       }
@@ -162,10 +163,10 @@ function WorktreeFields(props: {
                         ref={[
                           (node) => {
                             button = node;
-                            suggestionRefs.set(name, node);
+                            suggestionRefs.set(branch().name, node);
                           },
                           nativeListener("click", () => {
-                            props.params.onBaseRefInput(branch().name);
+                            props.params.place.setBaseRef(branch().name);
                             closeSuggestions();
                           }),
                         ]}
@@ -184,12 +185,12 @@ function WorktreeFields(props: {
       </div>
       <div class="new-session-page__menu-note">
         {t(
-          props.params.branches?.branchesUnavailable
+          branches()?.branchesUnavailable
             ? "newSession.worktreeBranchesUnavailable"
             : "newSession.worktreeBranchesLimited",
         )}
       </div>
-      {props.params.repository ? undefined : (
+      {props.params.place.remoteRepository ? undefined : (
         <>
           <label class="new-session-page__menu-field">
             <span>{t("newSession.worktreeName")}</span>
@@ -198,8 +199,8 @@ function WorktreeFields(props: {
               data-worktree-name=""
               disabled={props.params.submitting || props.params.pendingPlacement}
               placeholder={t("newSession.worktreeNamePlaceholder")}
-              value={props.params.worktreeName}
-              onInput={(event) => props.params.onWorktreeNameInput(event.currentTarget.value)}
+              value={props.params.place.worktreeName}
+              onInput={(event) => props.params.place.setWorktreeName(event.currentTarget.value)}
               ref={[(node) => (nameInput = node), nativeListener("keydown", handleFieldKeydown)]}
             />
           </label>
@@ -214,49 +215,56 @@ function WorktreeFields(props: {
   );
 }
 
-export function CheckoutChip(props: { params: CheckoutChipOptions }) {
+export function CheckoutChip(props: {
+  params: NewSessionPlaceControlsOptions;
+  state: ReturnType<typeof resolveCheckoutChip>;
+  folderLabel: string;
+}) {
   let popover!: PopoverHandle;
   let confirmPending = false;
+  const worktreeAvailable = () => props.params.place.worktreeAvailable();
+  const branches = () =>
+    props.params.place.repository.kind === "git" ? props.params.place.repository : null;
   return (
     <SessionPicker
       kind="checkout"
-      label={`${t("newSession.checkout")}: ${props.params.state.label}`}
-      value={props.params.state.label}
+      label={`${t("newSession.checkout")}: ${props.state.label}`}
+      value={props.state.label}
       icon={<Icon name="gitBranch" />}
       triggerAttributes={{
-        title: `${t("newSession.checkout")}: ${props.params.state.label}`,
-        "data-worktree": String(props.params.worktree),
+        title: `${t("newSession.checkout")}: ${props.state.label}`,
+        "data-worktree": String(props.params.place.worktree),
       }}
-      state={props.params}
+      params={props.params}
       ref={(handle) => {
         popover = handle;
       }}
       onAfterHide={() => {
         if (confirmPending) {
           confirmPending = false;
-          props.params.onConfirm();
+          props.params.onFocusComposer();
         }
       }}
     >
       <div class="new-session-page__picker-root">
         <div class="new-session-page__menu-title">{t("newSession.checkout")}</div>
-        {props.params.repository ? undefined : (
+        {props.params.place.remoteRepository ? undefined : (
           <>
             <SessionMenuItem
               item={{
                 value: "checkout",
                 label: t("newSession.checkoutCurrent"),
                 icon: <Icon name="folder" />,
-                sub: props.params.branches?.headBranch,
-                description: props.params.currentCheckoutUnavailableReason,
-                checked: !props.params.worktree,
+                sub: branches()?.headBranch,
+                description: props.params.place.currentCheckoutUnavailableReason,
+                checked: !props.params.place.worktree,
                 disabled:
-                  props.params.remotePlacement ||
-                  Boolean(props.params.currentCheckoutUnavailableReason),
-                title: props.params.remotePlacement
+                  props.params.place.remotePlacement ||
+                  Boolean(props.params.place.currentCheckoutUnavailableReason),
+                title: props.params.place.remotePlacement
                   ? t("newSession.checkoutRemoteLocked")
-                  : props.params.currentCheckoutUnavailableReason,
-                onSelect: () => props.params.onSelectWorktree(false),
+                  : props.params.place.currentCheckoutUnavailableReason,
+                onSelect: () => props.params.place.selectWorktree(false),
                 keepOpen: true,
               }}
               submitting={props.params.submitting}
@@ -267,22 +275,22 @@ export function CheckoutChip(props: { params: CheckoutChipOptions }) {
                 label: t("newSession.checkoutWorktree"),
                 icon: <Icon name="gitBranch" />,
                 sub: t("newSession.checkoutWorktreeSub"),
-                checked: props.params.worktree,
-                disabled: !props.params.worktreeAvailable,
-                title: props.params.worktreeAvailable
+                checked: props.params.place.worktree,
+                disabled: !worktreeAvailable(),
+                title: worktreeAvailable()
                   ? undefined
-                  : (props.params.currentCheckoutUnavailableReason ??
-                    (props.params.repositoryUnavailable
+                  : (props.params.place.currentCheckoutUnavailableReason ??
+                    (props.params.place.repository.kind === "unavailable"
                       ? t("newSession.gitCheckUnavailable")
                       : t("newSession.worktreeUnavailable"))),
-                onSelect: () => props.params.onSelectWorktree(true),
+                onSelect: () => props.params.place.selectWorktree(true),
                 keepOpen: true,
               }}
               submitting={props.params.submitting}
             />
           </>
         )}
-        {props.params.worktree || props.params.repository ? (
+        {props.params.place.worktree || props.params.place.remoteRepository ? (
           <WorktreeFields
             params={props.params}
             onClose={() => popover.hide()}
@@ -293,13 +301,13 @@ export function CheckoutChip(props: { params: CheckoutChipOptions }) {
             }}
           />
         ) : undefined}
-        {props.params.remotePlacement ? (
+        {props.params.place.remotePlacement ? (
           <div class="new-session-page__menu-note">
             {t(
-              props.params.repository
+              props.params.place.remoteRepository
                 ? "newSession.placementClonesRepository"
                 : "newSession.placementSyncsFolder",
-              { folder: props.params.folderLabel },
+              { folder: props.folderLabel },
             )}
           </div>
         ) : undefined}

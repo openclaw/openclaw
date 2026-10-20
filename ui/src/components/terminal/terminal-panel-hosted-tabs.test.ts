@@ -3,6 +3,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { i18n } from "../../i18n/index.ts";
+import { createInitializationContext } from "../../pages/chat/chat-pane.test-support.ts";
+import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { PANEL_HOSTED_TABS_CHANGE_EVENT, readPanelHostedTabs } from "../panel-hosted-tabs.ts";
@@ -38,7 +40,7 @@ async function mount(embedded = true, tabsInHeader = true) {
         const immediate = terminalOpenResult(`session-${++sequence}`);
         return (reply ? await reply.promise : immediate) as T;
       }
-      return (method === "terminal.list" ? { sessions: [] } : {}) as T;
+      return (method === "terminal.list" ? { sessions: [] } : { ok: true }) as T;
     },
     addEventListener: () => () => {},
   };
@@ -107,6 +109,67 @@ describe("Terminal panel hosted tabs", () => {
     vi.unstubAllGlobals();
   });
 
+  it.each(["reconnect", "context replacement"] as const)(
+    "settles queued header changes and restores a live terminal after %s",
+    async (transition) => {
+      const oldController = createTerminalController();
+      createGhosttyTerminalMock.mockResolvedValueOnce(oldController);
+      const session = terminalOpenResult("retained-session");
+      const client: TerminalGatewayClient = {
+        forceReconnect: () => {},
+        request: async <T>(method: string) => {
+          // SAFETY: Each fixture reply matches the terminal method requested by the owner.
+          return (
+            method === "terminal.open" || method === "terminal.attach"
+              ? { ...session, buffer: "", seq: 0 }
+              : method === "terminal.list"
+                ? { sessions: [{ ...session, attached: false, createdAtMs: 1 }] }
+                : { ok: true }
+          ) as T;
+        },
+        addEventListener: () => () => {},
+      };
+      const first = createInitializationContext();
+      const provider = createApplicationContextProvider(first);
+      const panel = createTestTerminalPanel(tagName);
+      panel.client = client;
+      panel.available = panel.embedded = panel.tabsInHeader = true;
+      provider.append(panel);
+      document.body.append(provider);
+      // The native bridge has not attached its presentation yet.
+      panel.toggle();
+      await waitForFast(() => expect(panel.hostedTabs[0]?.className).toBe("is-live"));
+      await panel.updateComplete;
+      const oldViewport = panel.querySelector(".tp-viewport");
+
+      panel.tabsInHeader = false;
+      const pending = panel.updateComplete;
+      if (transition === "reconnect") {
+        panel.remove();
+        await pending;
+        provider.append(panel);
+      } else {
+        provider.setContext({ ...first, basePath: "/replacement" });
+        await pending;
+      }
+      await waitForFast(() => expect(createGhosttyTerminalMock).toHaveBeenCalledTimes(2));
+      await waitForFast(() => expect(panel.hostedTabs[0]?.className).toBe("is-live"));
+      await panel.updateComplete;
+      expect(oldController.dispose).toHaveBeenCalledOnce();
+      expect(panel.querySelector(".tp-viewport")).not.toBe(oldViewport);
+      expect(panel.querySelector(".tp-header")).not.toBeNull();
+      const terminalHost = createGhosttyTerminalMock.mock.calls[1]![0].parent;
+      expect(panel.contains(terminalHost)).toBe(true);
+      expect(terminalHost.style.display).toBe("block");
+
+      panel.tabsInHeader = true;
+      await panel.updateComplete;
+      expect(panel.querySelector(".tp-header")).toBeNull();
+      expect(panel.hostedTabs).toHaveLength(1);
+      expect(panel.contains(terminalHost)).toBe(true);
+    },
+  );
+
   it.each([{ embedded: false, tabsInHeader: true, ownsStrip: true }])(
     "keeps its own chrome=$ownsStrip for embedded=$embedded and tabsInHeader=$tabsInHeader",
     async ({ embedded, tabsInHeader, ownsStrip }) => {
@@ -139,19 +202,22 @@ describe("Terminal panel hosted tabs", () => {
       cwd: "/work/ops",
       status: "live",
     };
-    const tabs = terminalPanelHostedTabs([
-      base,
-      {
-        ...base,
-        id: "connecting",
-        sequence: 2,
-        shellName: null,
-        status: "connecting",
-        agentId: null,
-      },
-      { ...base, id: "exited", status: "exited", exitReason: "process_exit", exitCode: 3 },
-      { ...base, id: "agent", agentOwned: true },
-    ]);
+    const tabs = terminalPanelHostedTabs(
+      [
+        base,
+        {
+          ...base,
+          id: "connecting",
+          sequence: 2,
+          shellName: null,
+          status: "connecting",
+          agentId: null,
+        },
+        { ...base, id: "exited", status: "exited", exitReason: "process_exit", exitCode: 3 },
+        { ...base, id: "agent", agentOwned: true },
+      ],
+      true,
+    );
     expect(
       tabs.map(({ id, label, title, statusLabel, badge, className }) => [
         id,

@@ -3,7 +3,7 @@ import { resolveExpiresAtMsFromDurationMs } from "openclaw/plugin-sdk/number-run
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ConsoleMessage, Dialog, Frame, Page, Request, Response } from "playwright-core";
-import { saveBrowserDownload, type BrowserDownloadCaptureOptions } from "./pw-download-capture.js";
+import { saveBrowserDownload } from "./pw-download-capture.js";
 import {
   MAX_CONSOLE_MESSAGES,
   MAX_NETWORK_REQUESTS,
@@ -226,18 +226,7 @@ export function ensurePageState(page: Page): PageState {
       return;
     }
     const actionCapture = state.actionDownloadCapture;
-    const beforeSave = actionCapture?.beforeSave;
-    const captureOptions: BrowserDownloadCaptureOptions | undefined =
-      actionCapture && beforeSave
-        ? {
-            beforeSave: (candidate) => {
-              const validation = Promise.resolve().then(() => beforeSave(candidate));
-              actionCapture.validations.push(validation);
-              return validation;
-            },
-          }
-        : undefined;
-    const managedSave = saveBrowserDownload(download, captureOptions);
+    const managedSave = saveBrowserDownload(download, actionCapture);
     managedSave.catch(() => {});
     download.path = async () => (await managedSave).path;
     if (actionCapture) {
@@ -362,30 +351,17 @@ export function createObservedDialogAbortSignalForPage(opts: {
       controller.abort(new BrowserObservedDialogBlockedError(serializeObservedBrowserState(state)));
     }
   };
-  const abortForParent = () => {
-    if (!controller.signal.aborted) {
-      controller.abort(opts.parentSignal?.reason ?? new Error("aborted"));
-    }
-  };
-
   if (state.pendingDialogs.length > 0) {
     abortForCurrentDialog();
   } else {
     state.dialogAbortControllers.add(controller);
   }
-  if (opts.parentSignal) {
-    if (opts.parentSignal.aborted) {
-      abortForParent();
-    } else {
-      opts.parentSignal.addEventListener("abort", abortForParent, { once: true });
-    }
-  }
-
   return {
-    signal: controller.signal,
+    signal: opts.parentSignal
+      ? AbortSignal.any([controller.signal, opts.parentSignal])
+      : controller.signal,
     cleanup: () => {
       state.dialogAbortControllers.delete(controller);
-      opts.parentSignal?.removeEventListener("abort", abortForParent);
     },
   };
 }

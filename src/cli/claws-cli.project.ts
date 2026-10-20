@@ -15,9 +15,8 @@ import {
 import { readClawManifestFile } from "../claws/reader.js";
 import { CLAW_OUTPUT_STABILITY, type ClawAddPlan } from "../claws/types.js";
 import { readConfigFileSnapshot } from "../config/config.js";
-import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
+import { defaultRuntime as runtime, writeRuntimeJson } from "../runtime.js";
 import {
   emitClawFailure,
   formatClawDiagnostics,
@@ -45,11 +44,10 @@ function reportProjectError(
     | typeof CLAW_BUILD_RESULT_SCHEMA_VERSION
     | typeof CLAW_DEV_RESULT_SCHEMA_VERSION,
   json: boolean | undefined,
-  runtime: RuntimeEnv,
 ): void {
   const code = error instanceof ClawProjectError ? error.code : fallbackCode;
   const message = error instanceof Error ? error.message : String(error);
-  emitClawFailure(runtime, json, message, {
+  emitClawFailure(json, message, {
     schemaVersion,
     stability: CLAW_OUTPUT_STABILITY,
     ok: false,
@@ -57,10 +55,10 @@ function reportProjectError(
   });
 }
 
-function logDevPlanSummary(plan: ClawAddPlan, runtime: RuntimeEnv): void {
+function logDevPlanSummary(plan: ClawAddPlan): void {
   runtime.log(`Agent: ${plan.agent.finalId}`);
   runtime.log(`Workspace: ${plan.agent.workspace}`);
-  logClawAgentConfiguration(plan, runtime);
+  logClawAgentConfiguration(plan);
   runtime.log(`Actions: ${plan.summary.totalActions}`);
   runtime.log(`Capability escalations: ${plan.capabilityChanges.length}`);
   runtime.log(`Blocked actions: ${plan.summary.blockedActions}`);
@@ -91,7 +89,7 @@ async function prepareDev(projectPath: string, opts: ClawsDevOptions): Promise<P
     );
   }
   const config = configSnapshot.resolved;
-  const existingMcpServers = normalizeConfiguredMcpServers(config.mcp?.servers);
+  const existingMcpServers = config.mcp?.servers ?? {};
   const existingAgentIds = listAgentIds(config);
   const plan = await buildClawAddPlan({
     manifest: result.manifest,
@@ -123,7 +121,6 @@ async function prepareDev(projectPath: string, opts: ClawsDevOptions): Promise<P
 export async function runClawsCreateCommand(
   projectPath: string,
   opts: ClawsCreateOptions,
-  runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
   try {
     const result = await createClawProject(projectPath, {
@@ -147,7 +144,6 @@ export async function runClawsCreateCommand(
       "project_create_failed",
       CLAW_PROJECT_RESULT_SCHEMA_VERSION,
       opts.json,
-      runtime,
     );
   }
 }
@@ -155,11 +151,10 @@ export async function runClawsCreateCommand(
 export async function runClawsValidateCommand(
   projectPath: string,
   opts: ClawsValidateOptions,
-  runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
   const result = await validateClawProject(projectPath);
   if (!result.ok) {
-    emitClawFailure(runtime, opts.json, formatClawDiagnostics(result.diagnostics), {
+    emitClawFailure(opts.json, formatClawDiagnostics(result.diagnostics), {
       schemaVersion: CLAW_PROJECT_RESULT_SCHEMA_VERSION,
       stability: CLAW_OUTPUT_STABILITY,
       ok: false,
@@ -192,7 +187,6 @@ export async function runClawsValidateCommand(
 export async function runClawsBuildCommand(
   projectPath: string,
   opts: ClawsBuildOptions,
-  runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
   try {
     const result = await buildClawProject(projectPath, opts.out);
@@ -205,32 +199,19 @@ export async function runClawsBuildCommand(
     runtime.log(`Integrity: ${result.integrity}`);
     runtime.log(`Excluded project paths: ${result.excludedPaths.length}`);
   } catch (error) {
-    reportProjectError(
-      error,
-      "project_build_failed",
-      CLAW_BUILD_RESULT_SCHEMA_VERSION,
-      opts.json,
-      runtime,
-    );
+    reportProjectError(error, "project_build_failed", CLAW_BUILD_RESULT_SCHEMA_VERSION, opts.json);
   }
 }
 
 export async function runClawsDevCommand(
   projectPath: string,
   opts: ClawsDevOptions,
-  runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
   let prepared: PreparedDev;
   try {
     prepared = await prepareDev(projectPath, opts);
   } catch (error) {
-    reportProjectError(
-      error,
-      "project_dev_failed",
-      CLAW_DEV_RESULT_SCHEMA_VERSION,
-      opts.json,
-      runtime,
-    );
+    reportProjectError(error, "project_dev_failed", CLAW_DEV_RESULT_SCHEMA_VERSION, opts.json);
     return;
   }
   const { build, plan } = prepared;
@@ -252,7 +233,7 @@ export async function runClawsDevCommand(
   } else {
     runtime.log(`Claw dev preview: ${build.claw.name}@${build.claw.version}`);
     runtime.log(`Artifact integrity: ${build.integrity}`);
-    logDevPlanSummary(plan, runtime);
+    logDevPlanSummary(plan);
     if (plan.blockers.length > 0) {
       runtime.error(formatClawDiagnostics(plan.blockers));
     }

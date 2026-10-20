@@ -12,6 +12,7 @@ import {
   loadPersistedTerminalActions,
   persistTerminalActions,
 } from "./terminal-session-storage.ts";
+import { CATALOG_TERMINAL_READY_TIMEOUT_MS } from "./terminal-tab-readiness.ts";
 import type { TerminalTaskQueue } from "./terminal-task-queue.ts";
 
 type TerminalHandoff = {
@@ -41,7 +42,6 @@ export type TerminalIntentHost = {
   hasTabs: () => boolean;
   publish: () => void;
   setBooting: (booting: boolean) => void;
-  timeoutMs: () => number;
   showTimeout: () => void;
   clearTimeout: () => void;
 };
@@ -216,8 +216,16 @@ export function createTerminalIntentQueue(persistent = true) {
       ownedTimeoutHost = fenceHost;
       fenceHost.showTimeout();
       fenceHost.setBooting(false);
-    }, fenceHost.timeoutMs());
+    }, CATALOG_TERMINAL_READY_TIMEOUT_MS);
   }
+  function releaseRefreshFence(host: TerminalIntentHost): void {
+    if (ownedFenceHost !== host) {
+      return;
+    }
+    api.resetLifecycle(host);
+    void api.drain();
+  }
+
   const api = {
     bindHost(host: TerminalIntentHost): void {
       if (ownedHosts.length === 0) {
@@ -252,23 +260,24 @@ export function createTerminalIntentQueue(persistent = true) {
       host: TerminalIntentHost,
       isConnected: () => boolean,
       restore?: () => void,
+      resume?: () => Promise<void>,
     ): void {
       const generation = host.currentGeneration();
       api.beginRefreshFence(host, generation);
       restore?.();
-      const release = () => {
+      const release = async () => {
         if (generation !== host.currentGeneration() || !isConnected()) {
           return;
         }
-        api.releaseRefreshFence(host);
+        // Retained streams recover under the fence before queued work uses their connection.
+        await resume?.();
+        if (generation === host.currentGeneration() && isConnected()) {
+          releaseRefreshFence(host);
+        }
       };
       void import("../../app/sw-refresh.runtime.ts")
         .then(({ refreshControlUiServiceWorker }) => refreshControlUiServiceWorker())
-        .then((replacementActivated) => {
-          if (!replacementActivated) {
-            release();
-          }
-        }, release);
+        .then((replacementActivated) => (replacementActivated ? undefined : release()), release);
     },
     beginRefreshFence(host: TerminalIntentHost, generation: number): void {
       ownedRefreshPending = true;
@@ -277,13 +286,6 @@ export function createTerminalIntentQueue(persistent = true) {
       clearRefreshFailure();
       clearRefreshTimer();
       armRefreshTimer();
-    },
-    releaseRefreshFence(host: TerminalIntentHost): void {
-      if (ownedFenceHost !== host) {
-        return;
-      }
-      api.resetLifecycle(host);
-      void api.drain();
     },
     // Only the panel that opened the fence may drop it; another panel disposing
     // its tabs must not unblock a refresh it knows nothing about.

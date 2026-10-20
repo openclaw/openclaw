@@ -2,6 +2,7 @@ import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { ControlUiBuildInfo } from "../build-info.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import {
   captureUnionProof,
   createSidebarFooterProofSuite,
@@ -34,6 +35,8 @@ async function expectRailConnectionStatus(footer: Locator, kind: string, label: 
   const identity = footer.locator(".sidebar-identity-card");
   await expect.poll(() => identity.getAttribute("data-connection-status")).toBe(kind);
   expect(await identity.isVisible()).toBe(true);
+  expect(await identity.locator(".sidebar-identity-card__status").isVisible()).toBe(true);
+  expect(await footer.locator(".gateway-status").count()).toBe(0);
   expect(await identity.getAttribute("aria-label")).toBe(
     `Identity and app menu for Riley: ${label}`,
   );
@@ -46,9 +49,7 @@ async function expectRailConnectionStatus(footer: Locator, kind: string, label: 
           ?.textContent?.trim(),
     ),
   ).toBe(`Identity and app menu for Riley: ${label}`);
-  const lifecycle = footer.locator(":scope > [role=status]");
-  expect(await lifecycle.count()).toBe(1);
-  expect(await lifecycle.textContent()).toBe(label);
+  expect(await footer.locator(":scope > [role=status]").count()).toBe(0);
   expect(await identity.getByRole("status").count()).toBe(0);
 }
 
@@ -233,17 +234,25 @@ suite.define(() => {
     await withFooter(
       async ({ gateway, page, sidebar }) => {
         const footer = sidebar.locator(".sidebar-footer-bar");
+        const identity = footer.locator(".sidebar-identity-card");
+        const connectionStatus = page.locator(".sidebar-shell__footer .gateway-status:visible");
+        const announcement = page.locator(".shell > .sr-only[role=status]");
         await setSidebarProofTheme(page, "dark");
         await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
         await waitForControlUiGatewayReady(page);
         await expectRailConnectionStatus(footer, "suspended", "Suspended");
+        await expect
+          .poll(() => connectionStatus.locator(".gateway-status__label").textContent())
+          .toBe("Suspended");
         const inbox = footer.locator("openclaw-sidebar-attention");
         expect(await inbox.getByRole("status").count()).toBe(1);
         expect(await inbox.getByRole("status").textContent()).toBe(
           await inbox.locator(".sidebar-issues-button").getAttribute("aria-label"),
         );
         await gateway.emitGatewayEvent("gateway.suspension", { phase: "accepting" });
-        await expect.poll(() => footer.locator(".gateway-status").count()).toBe(0);
+        await expect.poll(() => identity.getAttribute("data-connection-status")).toBe("connected");
+        await connectionStatus.waitFor({ state: "detached" });
+        expect(await announcement.textContent()).toBe("Connected");
 
         for (const [phase, label] of [
           ["preparing", "Suspending…"],
@@ -256,21 +265,38 @@ suite.define(() => {
             phase === "prepared" ? "suspended" : "suspending",
             label,
           );
+          await expect
+            .poll(() => connectionStatus.locator(".gateway-status__label").textContent())
+            .toBe(label);
+          expect(await announcement.textContent()).toBe(label);
         }
         await sidebar.locator(".sidebar-identity-card").click();
         await sidebar.locator('[data-value="command:settings"]').click();
-        const settingsStatus = page.locator(".settings-sidebar .gateway-status__label");
-        await expect.poll(() => settingsStatus.textContent()).toBe("Suspended");
+        const settingsFooter = page.locator(".settings-sidebar__footer");
+        await settingsFooter.waitFor();
+        expect(await settingsFooter.locator(".gateway-status").count()).toBe(1);
+        expect(await settingsFooter.locator("openclaw-settings-save-indicator").count()).toBe(1);
+        await expect
+          .poll(() => connectionStatus.locator(".gateway-status__label").textContent())
+          .toBe("Suspended");
         await gateway.emitGatewayEvent("gateway.suspension", { phase: "accepting" });
-        await expect.poll(() => settingsStatus.count()).toBe(0);
+        await connectionStatus.waitFor({ state: "detached" });
+        expect(await settingsFooter.locator("openclaw-settings-save-indicator").count()).toBe(1);
         await page.locator(".settings-sidebar__back").click();
         await sidebar.waitFor();
         await gateway.emitGatewayEvent("gateway.suspension", { phase: "prepared" });
         await expectRailConnectionStatus(footer, "suspended", "Suspended");
 
+        await page.clock.install();
+        await pauseVirtualClock(page);
         await gateway.setOnline(false);
+        await page.clock.runFor(2_001);
+        // Offline mock sockets stay connecting until their attempt explicitly fails.
+        await gateway.closeLatest(1006, "synthetic failed attempt");
         await expectRailConnectionStatus(footer, "reconnecting", "Reconnecting…");
-        expect(await footer.locator(".gateway-status").count()).toBe(1);
+        await connectionStatus
+          .getByRole("button", { name: "Reconnecting… — Retry now", exact: true })
+          .waitFor();
         expect(await footer.getByText("Offline", { exact: true }).count()).toBe(0);
 
         const socketCount = await gateway.getSocketCount();
@@ -288,17 +314,23 @@ suite.define(() => {
           .toBeGreaterThan(socketCount);
 
         await gateway.setOnline(true);
+        await page.clock.resume();
         await expectRailConnectionStatus(footer, "suspended", "Suspended");
         await gateway.emitGatewayEvent("gateway.suspension", { phase: "accepting" });
         await expect
-          .poll(() => footer.locator(".gateway-status").count(), { timeout: 10_000 })
-          .toBe(0);
+          .poll(() => identity.getAttribute("data-connection-status"), { timeout: 10_000 })
+          .toBe("connected");
+        await connectionStatus.waitFor({ state: "detached" });
+        expect(await announcement.textContent()).toBe("Connected");
         await gateway.emitGatewayEvent("gateway.suspension", { phase: "prepared" });
         await gateway.emitGatewayEvent("shutdown", {
           reason: "gateway restart",
           restartExpectedMs: 5_000,
         });
         await expectRailConnectionStatus(footer, "restarting", "Restarting…");
+        await expect
+          .poll(() => connectionStatus.locator(".gateway-status__label").textContent())
+          .toBe("Restarting…");
       },
       { ...gatewayBuild, awaitInitialRoster: false, gatewaySuspensionPhase: "prepared" },
     );

@@ -101,7 +101,7 @@ describe("worker inference manager", () => {
         return null;
       };
       let cancellation: ReturnType<typeof instance.cancel> | undefined;
-      let drain: ReturnType<ReturnType<typeof instance.reserveSessionDrain>["accept"]> | undefined;
+      let drain: ReturnType<typeof instance.reserveSessionDrain> | undefined;
       try {
         if (stage === "cancelPending") {
           cancellation = instance.cancel({ identity: IDENTITY, request: REQUEST, revalidate });
@@ -114,7 +114,7 @@ describe("worker inference manager", () => {
             await providerEntered.promise;
           }
         }
-        const reserved = instance.reserveSessionDrain(REQUEST.sessionId).accept();
+        const reserved = instance.reserveSessionDrain(REQUEST.sessionId);
         drain = reserved;
         const drained = Promise.allSettled([drain.drained]);
         invalid = true;
@@ -166,7 +166,7 @@ describe("worker inference manager", () => {
         invalid = false;
         release.resolve(DONE);
         if (drain) {
-          // Accepted reservations must start even when an earlier assertion fails.
+          // Accepted drains must start even when an earlier assertion fails.
           drain.start();
           await Promise.allSettled([cancellation, drain.drained, instance.stop()]);
           drain.release();
@@ -262,7 +262,7 @@ describe("worker inference manager", () => {
         },
       });
       const provider = await entered.promise;
-      const drain = instance.reserveSessionDrain(REQUEST.sessionId).accept();
+      const drain = instance.reserveSessionDrain(REQUEST.sessionId);
       const rejected = expect(drain.drained).rejects.toBe(failure);
       current = false;
       provider.emit({ type: "text_delta", contentIndex: 0, delta: "must be fenced" });
@@ -334,7 +334,7 @@ describe("worker inference manager", () => {
         ).rejects.toBe(failure);
         expect(cancelPending).not.toHaveBeenCalled();
         expect(sink.frames).toEqual([]);
-        const drain = instance.reserveSessionDrain(REQUEST.sessionId).accept();
+        const drain = instance.reserveSessionDrain(REQUEST.sessionId);
         drain.start();
         await expect(drain.drained).resolves.toBeUndefined();
         drain.release();
@@ -382,7 +382,7 @@ describe("worker inference manager", () => {
       invalid = true;
       release.resolve();
       expect(await started).toEqual({ ok: false, reason: "provider-error" });
-      const drain = instance.reserveSessionDrain(REQUEST.sessionId).accept();
+      const drain = instance.reserveSessionDrain(REQUEST.sessionId);
       drain.start();
       await expect(drain.drained).rejects.toBe(failure);
       drain.release();
@@ -546,7 +546,7 @@ describe("worker inference manager", () => {
       const original = createSink("original");
       await accept(instance, { sink: original.sink });
       await entered.promise;
-      const drain = instance.reserveSessionDrain(REQUEST.sessionId).accept();
+      const drain = instance.reserveSessionDrain(REQUEST.sessionId);
       drain.start();
       const failed = expect(drain.drained).rejects.toBe(failure);
       provider.resolve(ERROR);
@@ -574,7 +574,7 @@ describe("worker inference manager", () => {
           },
           false,
         );
-        const successorDrain = instance.reserveSessionDrain(REQUEST.sessionId).accept();
+        const successorDrain = instance.reserveSessionDrain(REQUEST.sessionId);
         successorDrain.start();
         await expect(successorDrain.drained).resolves.toBeUndefined();
         successorDrain.release();

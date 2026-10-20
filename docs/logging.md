@@ -348,6 +348,15 @@ results before repeating them.
 
 ### Targeted model transport diagnostics
 
+OpenAI Responses transport failures retain structured status, code, type, and
+error/cause names. When the active request signal was aborted, `abortReason`
+identifies OpenClaw-owned causes with fixed labels: `idle_timeout`, `no_progress`,
+`first_event_timeout`, `request_deadline`, `session_watchdog`, `restart`,
+`superseded`, or `caller_abort`. Unclassified caller cancellation uses
+`caller_abort`. Provider error messages and arbitrary abort-reason text are never
+logged because they can contain prompt or tool content. Headers and request or
+response bodies are also omitted.
+
 Prompt-cache history warnings identify the first changed message and bounded
 field paths, such as `content[0].thinkingSignature` or `content[0].arguments`.
 They report no message content, argument values, or signature bytes. Unknown
@@ -511,9 +520,7 @@ settlement and queue release. The Gateway's earlier operator-start queue is sepa
 
 `stepCount` counts admitted callbacks. `admittedStepMs` sums their elapsed time
 through actual settlement, including authority checks, factory work, and I/O
-waits. `continuationWaitMs` measures queue waiting after an incomplete step until
-resumption or cancellation; it excludes initial admission. These fields are not
-an exact disjoint partition and do not measure CPU time.
+waits. These fields are not an exact disjoint partition and do not measure CPU time.
 
 `admitted` and `providerInvoked` distinguish an attempt that never entered the
 queue's active slot from one that called the provider. Unreached intervals are
@@ -521,7 +528,6 @@ omitted. `outcome` reports the attempt's resolution or rejection;
 `signalAborted` reports the signal independently and does not identify an error's
 cause or prove that native work stopped. An active provider call or `next()` step
 keeps its slot until its actual promise settles, including after cancellation.
-An inert continuation queues with other callers between steps.
 
 `providerIdHash` hashes provider IDs of at most 256 UTF-16 units; longer IDs omit
 the field. It supports correlation, not anonymization or authorization. Host
@@ -653,15 +659,15 @@ even when content capture is off. Missing logs do not prove an absence of stalls
 
 When process diagnostics are enabled, the `sessions/lifecycle` logger emits
 `session lifecycle queue waiting` once when a queue acquisition is still pending
-after one second. It identifies the `mutation` or `lifecycle` queue and samples
-its current holder at that instant. The holder can have changed since the
-waiter entered the queue. A delayed timer that runs after acquisition emits no
+after one second. It identifies the controller mutation queue or lifecycle
+admission/settlement wait and samples an observed current holder at that instant.
+The holder can have changed since the waiter entered the queue. A delayed timer that runs after acquisition emits no
 holder sample.
 
 `operationId` and `holderOperationId` identify diagnostic operation instances
 within `diagnosticEpoch`, PID and thread. Operations use the fixed boundary
 labels `lifecycle`, `mutation` and `compaction`. Mutations also include the bounded
-`mutationKind` (for example, `create`, `archive`, `delete`, or `worktree-cleanup`);
+`mutationKind` (for example, `create`, `delete`, or `worktree-cleanup`);
 queue samples include `holderMutationKind`. Existing request traces appear in `operationTraceId`/`operationSpanId`
 and separate `holderTraceId`/`holderSpanId` fields when present. Missing trace
 fields remain unknown; no new trace or audit execution identity is created.
@@ -676,24 +682,34 @@ session. `holderSessionScopeHash` identifies that same scope for the current hol
 No session titles, transcript content, repository names, or raw identities are logged.
 
 `slow session lifecycle operation` records operations taking at least one
-second through their actual queued work's settlement. It separates
+second through their actual owner release. It separates
 `mutationQueueWaitMs`, `lifecycleQueueWaitMs`, `completionDelayMs` and
 `phaseDurationsMs.prepare`, `.run` and `.finalize`. The holder's current
 `holderPhase` can also identify activation, admission or release work. A
-`lifecycle` operation describes its queue attempt after the existing active-
-mutation idle wait; that prior idle wait is not measured here. Calls with no
-normalized identities have no queue and emit no queue-operation summary. A
+`lifecycle` operation includes admission, validation, the store-writer barrier
+and the acquired effect lifetime. Mutation timing includes the wait for captured
+turns, claims and effects before its body runs. A holder can remain unknown while
+a mutation waits for a turn or claim; an effect sample names only an effect whose
+settlement that mutation is actually awaiting. `completionDelayMs` measures
+synchronous owner-release cleanup after the callback settles. A
 caller can cancel before all of its queued work unwinds; `signalAborted`
 reports the signal without claiming that the holder has released.
 
 The tracker preserves outer ownership across reentrant work and retires a
-holder only when its actual queue callback exits. Its state weakly follows
-existing queue objects; it does not create another execution queue. Per
-runtime isolate, it retains at most 128 holder descriptors and 32 one-shot
-wait timers, and emits at most 60 records per minute. The queue timing owner
-explicitly distinguishes reentry, so unobserved outer holders stay unknown at
-capacity or after enablement. `omittedObservations` on a later record reports
-suppressed observations; missing records never prove no wait.
+holder only when its actual callback exits and the owner releases custody. Its
+metadata follows existing controller mutations and effects; it does not create
+another execution queue. Per runtime isolate, it retains at most 128 holder descriptors and 32 one-shot
+wait timers, and emits at most 60 records per minute. The mutation owner
+explicitly distinguishes reentry, so unobserved outer mutation holders stay
+unknown at capacity or after enablement. `omittedObservations` on a later record
+reports suppressed observations; missing records never prove no wait.
+
+Controller transition records use `session controller phase` on the `diagnostic`
+logger at `info` level, with the same process diagnostics gate. Session, source
+and priority-source identities are salted digests, and reasons are fixed labels.
+These records have a separate 60-record-per-minute budget so transition traffic
+cannot suppress the slow warnings above. Their `omittedObservations` count applies
+to phase records independently.
 
 Elapsed intervals can include asynchronous waits and nested work, so phase
 and queue totals need not form a disjoint partition. `isMainThread=true` identifies
@@ -738,6 +754,9 @@ structured file log. Records are limited to 60 per minute.
 the absolute checkout path; linked checkouts have different IDs. `checkoutClass`
 is `managed` when the caller supplies managed-index ownership, otherwise
 `unspecified`. Paths, refs, command arguments, and output contents are not logged.
+For `checkout.diff`, `scope` distinguishes `all`, `uncommitted`, and `commit`;
+`summaryOnly` distinguishes summary polling from full patch requests. These
+fields describe the admitted request without inspecting the checkout again.
 
 `workerQueueWaitMs` measures admission wait (null if never dispatched).
 `firstHostRequestMs` includes that wait plus worker startup and work before the
@@ -832,7 +851,12 @@ Plugin service starts taking at least 250 ms always log one compact
 `success` or `failure` outcome, even without opt-in tracing. Plugin and service IDs
 use encoded diagnostic segments; the record contains no service payload or error text.
 Set `OPENCLAW_GATEWAY_STARTUP_TRACE=1` for the complete breakdown and per-plugin
-import and registration timings.
+import and registration timings. `cli.main.gateway-run-select-environment-imports`
+separates the environment selector's module imports from its work;
+`cli.environment.*` breaks down trusted dotenv loading, config reads, validation,
+and recovery inside that work. These steps also appear in `process.bootstrap`.
+For external plugins, `modulePreparationMs` measures awaited source acquisition
+inside `loadMs`; it is not additional time to add to that total.
 
 Desktop permission narrowing and session identity checks remain on their required
 admission paths. Transcript projection repair, orphan settlement, channel
