@@ -17,9 +17,7 @@ vi.mock("../config/plugin-auto-enable.js", () => ({
 import { resolveCommandConfigWithSecrets } from "./command-config-resolution.js";
 
 describe("resolveCommandConfigWithSecrets", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
+  beforeEach(() => vi.clearAllMocks());
 
   it("preserves scoped secret resolution and stderr diagnostics without auto-enable", async () => {
     const runtime = createTestRuntime();
@@ -57,7 +55,6 @@ describe("resolveCommandConfigWithSecrets", () => {
     mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({ resolvedConfig, diagnostics: [] });
     mocks.applyPluginAutoEnable.mockReturnValue({
       config: effectiveConfig,
-      changes: ["enabled telegram"],
     });
 
     const result = await resolveCommandConfigWithSecrets({
