@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -18,126 +18,111 @@ import type { CronEvent } from "./service/state.js";
 
 const FOUR_HOURS_MS = 4 * 60 * 60_000;
 
-describe("manual cron delivery occurrence", () => {
-  it.each([
-    { label: "queued force", mode: "force", queued: true },
-    { label: "scheduled due", mode: "due", queued: false },
-  ] as const)(
-    "delivers according to the $label occurrence after the scheduled slot ages",
-    async ({ mode, queued }) => {
-      await withOpenClawTestState(
-        { layout: "state-only", prefix: "openclaw-cron-manual-delivery-" },
-        async (state) => {
-          const registry = captureActivePluginRegistrySnapshot();
-          const sendText = vi.fn(async () => ({ channel: "telegram", messageId: "fresh-result" }));
-          setActivePluginRegistry(
-            createTestRegistry([
-              {
-                pluginId: "telegram",
-                source: "test",
-                plugin: createOutboundTestPlugin({
-                  id: "telegram",
-                  outbound: { deliveryMode: "direct", sendText },
-                }),
-              },
-            ]),
-          );
-          let now = Date.now() - FOUR_HOURS_MS;
-          const cfg: OpenClawConfig = {
-            agents: { entries: { main: { workspace: state.workspaceDir } } },
-          };
-          await state.writeConfig(cfg);
-          const events: CronEvent[] = [];
-          const finished = createDeferred<CronEvent>();
-          const cron = new CronService(
-            cronTestDeps({
-              storePath: state.path("cron", "jobs.json"),
-              cronEnabled: false,
-              defaultAgentId: "main",
-              nowMs: () => now,
-              onEvent: (event) => {
-                events.push(event);
-                if (event.action === "finished") {
-                  finished.resolve(event);
-                }
-              },
-              runIsolatedAgentJob: async ({ job, abortSignal, deliveryAttemptFence }) => {
-                const text = "Fresh result from this invocation.";
-                const sessionKey = `agent:main:cron:${job.id}`;
-                const deliveryPlan = resolveCronDeliveryPlan(job);
-                const resolvedDelivery = await resolveDeliveryTarget(cfg, "main", {
-                  ...job,
-                  ...deliveryPlan,
-                });
-                const delivery = await dispatchCronDelivery({
-                  ...makeBaseParams({ synthesizedText: text, runStartedAt: now }),
-                  cfgWithAgentDefaults: cfg,
-                  job,
-                  deliveryAttemptFence,
-                  agentSessionKey: sessionKey,
-                  runSessionKey: sessionKey,
-                  sessionId: "manual-delivery-run",
-                  lifecycleRevision: "manual-delivery-revision",
-                  sessionUpdatedAt: now,
-                  resolvedDelivery,
-                  deliveryPlan,
-                  abortSignal,
-                  isAborted: () => abortSignal?.aborted === true,
-                });
-                const failure =
-                  delivery.disposition?.kind === "error" ? delivery.disposition : undefined;
-                return {
-                  ...delivery,
-                  status: failure ? "error" : "ok",
-                  error: failure?.error,
-                  errorKind: failure?.errorKind,
-                };
-              },
+it.each(["force", "due"] as const)(
+  "delivers according to the %s occurrence after the scheduled slot ages",
+  (mode) =>
+    withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-cron-manual-delivery-" },
+      async (state) => {
+        const registry = captureActivePluginRegistrySnapshot();
+        const sendText = vi.fn(async () => ({ channel: "telegram", messageId: "fresh-result" }));
+        const plugin = createOutboundTestPlugin({
+          id: "telegram",
+          outbound: { deliveryMode: "direct", sendText },
+        });
+        setActivePluginRegistry(
+          createTestRegistry([{ pluginId: "telegram", source: "test", plugin }]),
+        );
+        let now = Date.now() - FOUR_HOURS_MS;
+        const cfg: OpenClawConfig = {
+          agents: { entries: { main: { workspace: state.workspaceDir } } },
+        };
+        await state.writeConfig(cfg);
+        const events: CronEvent[] = [];
+        const finished = createDeferred<CronEvent>();
+        const cron = new CronService(
+          cronTestDeps({
+            storePath: state.path("cron", "jobs.json"),
+            cronEnabled: false,
+            defaultAgentId: "main",
+            nowMs: () => now,
+            onEvent: (event) => {
+              events.push(event);
+              if (event.action === "finished") {
+                finished.resolve(event);
+              }
+            },
+            runIsolatedAgentJob: async ({ job, abortSignal, deliveryAttemptFence }) => {
+              const text = "Fresh result from this invocation.";
+              const sessionKey = `agent:main:cron:${job.id}`;
+              const deliveryPlan = resolveCronDeliveryPlan(job);
+              const resolvedDelivery = await resolveDeliveryTarget(cfg, "main", {
+                ...job,
+                ...deliveryPlan,
+              });
+              const delivery = await dispatchCronDelivery({
+                ...makeBaseParams({ synthesizedText: text, runStartedAt: now }),
+                cfgWithAgentDefaults: cfg,
+                job,
+                deliveryAttemptFence,
+                agentSessionKey: sessionKey,
+                runSessionKey: sessionKey,
+                sessionUpdatedAt: now,
+                resolvedDelivery,
+                deliveryPlan,
+                abortSignal,
+                isAborted: () => abortSignal?.aborted === true,
+              });
+              const failure =
+                delivery.disposition?.kind === "error" ? delivery.disposition : undefined;
+              return {
+                ...delivery,
+                status: failure ? "error" : "ok",
+                error: failure?.error,
+                errorKind: failure?.errorKind,
+              };
+            },
+          }),
+        );
+        try {
+          await cron.start();
+          const job = await cron.add(
+            cronTestInput({
+              wakeMode: "now",
+              delivery: { mode: "announce", channel: "telegram", to: "123" },
             }),
           );
-          try {
-            await cron.start();
-            const job = await cron.add(
-              cronTestInput({
-                name: "fresh manual result",
-                wakeMode: "now",
-                payload: { kind: "agentTurn", message: "Produce a fresh report." },
-                delivery: { mode: "announce", channel: "telegram", to: "123" },
-              }),
-            );
-            const scheduledAt = job.state.nextRunAtMs;
-            now += FOUR_HOURS_MS;
-            if (queued) {
-              await expect(cron.enqueueRun(job.id, mode)).resolves.toMatchObject({
-                ok: true,
-                enqueued: true,
-              });
-              expect(await finished.promise).toMatchObject({ jobId: job.id });
-              await cron.status();
-            } else {
-              await expect(cron.run(job.id, mode)).resolves.toMatchObject({ ok: true, ran: true });
-            }
-            expect(sendText).toHaveBeenCalledTimes(mode === "force" ? 1 : 0);
-            expect(events.find((event) => event.action === "finished")).toMatchObject({
-              status: "ok",
-              completionStatus: mode === "force" ? "succeeded" : "failed",
-              deliveryStatus: mode === "force" ? "delivered" : "not-delivered",
+          const scheduledAt = job.state.nextRunAtMs;
+          now += FOUR_HOURS_MS;
+          if (mode === "force") {
+            await expect(cron.enqueueRun(job.id, mode)).resolves.toMatchObject({
+              ok: true,
+              enqueued: true,
             });
-            if (mode === "force") {
-              expect(sendText).toHaveBeenCalledWith(
-                expect.objectContaining({ text: "Fresh result from this invocation." }),
-              );
-              expect(cron.getJob(job.id)?.state).toMatchObject({
-                nextRunAtMs: scheduledAt,
-                lastDeliveryError: undefined,
-              });
-            }
-          } finally {
-            cron.stop();
-            restoreActivePluginRegistrySnapshot(registry);
+            expect(await finished.promise).toMatchObject({ jobId: job.id });
+            await cron.status();
+          } else {
+            await expect(cron.run(job.id, mode)).resolves.toMatchObject({ ok: true, ran: true });
           }
-        },
-      );
-    },
-  );
-});
+          expect(sendText).toHaveBeenCalledTimes(mode === "force" ? 1 : 0);
+          expect(events.find((event) => event.action === "finished")).toMatchObject({
+            status: "ok",
+            completionStatus: mode === "force" ? "succeeded" : "failed",
+            deliveryStatus: mode === "force" ? "delivered" : "not-delivered",
+          });
+          if (mode === "force") {
+            expect(sendText).toHaveBeenCalledWith(
+              expect.objectContaining({ text: "Fresh result from this invocation." }),
+            );
+            expect(cron.getJob(job.id)?.state).toMatchObject({
+              nextRunAtMs: scheduledAt,
+              lastDeliveryError: undefined,
+            });
+          }
+        } finally {
+          cron.stop();
+          restoreActivePluginRegistrySnapshot(registry);
+        }
+      },
+    ),
+);
