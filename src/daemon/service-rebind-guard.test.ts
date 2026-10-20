@@ -41,11 +41,9 @@ it.each(
   try {
     await seedCompletedRuntimePinMigration(state.env);
     mockProcessPlatform("darwin");
+    Object.assign(state.envVars, defaultIdentity);
     state.applyEnv();
     mockSystemAccountHome();
-    for (const key of Object.keys(defaultIdentity)) {
-      vi.stubEnv(key, undefined);
-    }
     const env = { ...state.env, ...defaultIdentity };
     expect([isDefaultInstallIdentity(process.env), isDefaultInstallIdentity(env)]).toEqual([
       kind === "gateway",
@@ -100,8 +98,6 @@ it.each(
       }
     });
   } finally {
-    // Unwind nested stubs before the state fixture restores its original home.
-    vi.unstubAllEnvs();
     await state.cleanup();
   }
 });

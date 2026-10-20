@@ -31,12 +31,11 @@ it.each<[string, boolean, string?]>([
     });
   };
   const mutate = vi.fn(async () => {
-    if (scenario === "pre-write") {
-      throw failure;
+    if (scenario !== "pre-write") {
+      command = { programArguments: ["/nodeB", "/B/openclaw.mjs"] };
+      pin = "b".repeat(64);
     }
-    command = { programArguments: ["/nodeB", "/B/openclaw.mjs"] };
-    pin = "b".repeat(64);
-    if (scenario === "failed-after-write" || scenario === "compensated") {
+    if (scenario !== "success") {
       throw failure;
     }
   });
@@ -72,17 +71,16 @@ it.each<[string, boolean, string?]>([
               }
             })
           : capture();
-      if (scenario === "success") {
-        await operation;
-      } else if (refusal) {
-        await expect(operation).rejects.toThrow(refusal);
-      } else {
-        await expect(operation).rejects.toBe(failure);
-      }
       if (refusal) {
+        await expect(operation).rejects.toThrow(refusal);
         expect(currentGatewayServiceRebindReceipt()).toBeUndefined();
         expect(mutate).not.toHaveBeenCalled();
       } else {
+        if (scenario === "success") {
+          await operation;
+        } else {
+          await expect(operation).rejects.toBe(failure);
+        }
         await expectReceipt(scenario !== "pre-write");
         expect(mutate).toHaveBeenCalledOnce();
       }
