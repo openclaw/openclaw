@@ -1,4 +1,4 @@
-import { createMemo, createRoot, createSignal } from "solid-js";
+import { createRoot, createSignal } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import "./components/chat-sidebar-region.runtime.tsx";
 import "../../components/browser/browser-panel.ts";
@@ -46,6 +46,16 @@ const reader: ControlUiLinkReaderDescriptor = {
   },
 };
 
+function pageState(root: HTMLElement) {
+  const state = createPageState(
+    createInitializationContext(),
+    { afterCommit: () => () => {} },
+    root,
+  );
+  state.sidebarLayout = { columns: [] };
+  return state;
+}
+
 function fixture() {
   const definitions = createDeferred<CustomElementConstructor>();
   const commit = createDeferred<boolean>();
@@ -56,15 +66,10 @@ function fixture() {
   region.deliverPanelEvent = deliverPanelEvent;
   const root = document.createElement("div");
   root.append(region);
-  const state = createPageState(
-    createInitializationContext(),
-    { afterCommit: () => () => {} },
-    root,
-  );
+  const state = pageState(root);
   state.connected = true;
   state.client = createGatewayBrowserClientFixture();
   state.sessionKey = "session-a";
-  state.sidebarLayout = { columns: [] };
   const owner = {
     sidebarRegion: region,
     state,
@@ -94,7 +99,6 @@ function fixture() {
     });
   return {
     flush,
-    dispose,
     definitions,
     commit,
     deliverPanelEvent,
@@ -126,36 +130,31 @@ describe("plugin panel intent delivery", () => {
     "routes %s intents only to registered session panels",
     (delivery) => {
       const f = fixture();
-      const stop = f.dispose;
       const send = (panelId: string, open: boolean) =>
         new CustomEvent(PLUGIN_PANEL_TOGGLE_EVENT, {
           detail: { pluginId: "review", panelId, sessionKey: "session-b", open },
         });
-      try {
-        const event = send("document", true);
-        if (delivery === "buffered") {
-          rememberSessionPanelToggle("plugin:review/document", event);
-          f.flush();
-        } else {
-          window.dispatchEvent(event);
-        }
-        expect(f.updateSidebarLayout).not.toHaveBeenCalled();
-        f.state.sessionKey = "session-b";
-        window.dispatchEvent(send("missing", true));
-        expect(f.updateSidebarLayout).not.toHaveBeenCalled();
-        if (delivery === "buffered") {
-          f.flush();
-        } else {
-          window.dispatchEvent(event);
-        }
-        expect(isSidebarSlotVisible(f.state.sidebarLayout, "plugin:review/document")).toBe(true);
-        expect(f.pending.requests.size).toBe(0);
-        expect(f.deliverPanelEvent).not.toHaveBeenCalled();
-        window.dispatchEvent(send("document", false));
-        expect(isSidebarSlotVisible(f.state.sidebarLayout, "plugin:review/document")).toBe(false);
-      } finally {
-        stop();
+      const event = send("document", true);
+      if (delivery === "buffered") {
+        rememberSessionPanelToggle("plugin:review/document", event);
+        f.flush();
+      } else {
+        window.dispatchEvent(event);
       }
+      expect(f.updateSidebarLayout).not.toHaveBeenCalled();
+      f.state.sessionKey = "session-b";
+      window.dispatchEvent(send("missing", true));
+      expect(f.updateSidebarLayout).not.toHaveBeenCalled();
+      if (delivery === "buffered") {
+        f.flush();
+      } else {
+        window.dispatchEvent(event);
+      }
+      expect(isSidebarSlotVisible(f.state.sidebarLayout, "plugin:review/document")).toBe(true);
+      expect(f.pending.requests.size).toBe(0);
+      expect(f.deliverPanelEvent).not.toHaveBeenCalled();
+      window.dispatchEvent(send("document", false));
+      expect(isSidebarSlotVisible(f.state.sidebarLayout, "plugin:review/document")).toBe(false);
     },
   );
 });
@@ -306,12 +305,7 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
   let pendingUpdate: Promise<void> | undefined;
   let sidebarRegion: HTMLElementTagNameMap["openclaw-chat-sidebar-region"] | null = null;
   let browserPanel: HTMLElement | undefined;
-  const state = createPageState(
-    createInitializationContext(),
-    { afterCommit: () => () => {} },
-    pane,
-  );
-  state.sidebarLayout = { columns: [] };
+  const state = pageState(pane);
   state.sessionKey = "agent:main:local-preview";
   const pending = { requests: new Map<SessionPanelToggleSlot, PendingSessionPanelToggle>() };
   const dispose = createRoot((stop) => {
@@ -333,34 +327,15 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
   });
   onTestFinished(dispose);
 
-  function BrowserCard(props: { sessionKey: string; presented: boolean; refresh: boolean }) {
-    return (
-      <openclaw-browser-panel
-        ref={(element) => (browserPanel = element)}
-        data-sidebar-panel-host
-        prop:embedded={true}
-        prop:available={true}
-        prop:client={gateway.client}
-        prop:sessionKey={props.sessionKey}
-        prop:presented={props.presented}
-        prop:refreshOnPresentation={props.refresh}
-      />
-    );
-  }
-  const conversation = document.createElement("main");
-  conversation.textContent = "Conversation";
-  const [snapshot, setSnapshot] = createSignal({
+  const readSnapshot = () => ({
     layout: state.sidebarLayout,
     sessionKey: state.sessionKey,
     refresh: !pending.requests.has("browser"),
   });
+  const [snapshot, setSnapshot] = createSignal(readSnapshot());
   let view: ReturnType<typeof mountSolid> | undefined;
   function draw() {
-    setSnapshot({
-      layout: state.sidebarLayout,
-      sessionKey: state.sessionKey,
-      refresh: !pending.requests.has("browser"),
-    });
+    setSnapshot(readSnapshot());
     view ??= mountSolid(
       () => {
         const definitions = sidebarPanelDefinitions();
@@ -369,42 +344,48 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
           if (definition.available) {
             Object.defineProperty(definition, "panelHost", { get: () => browserPanel });
             definition.content = (
-              <BrowserCard
-                sessionKey={snapshot().sessionKey}
-                presented={isSidebarSlotVisible(snapshot().layout, "browser")}
-                refresh={snapshot().refresh}
+              <openclaw-browser-panel
+                ref={(element) => (browserPanel = element)}
+                data-sidebar-panel-host
+                prop:embedded={true}
+                prop:available={true}
+                prop:client={gateway.client}
+                prop:sessionKey={snapshot().sessionKey}
+                prop:presented={isSidebarSlotVisible(snapshot().layout, "browser")}
+                prop:refreshOnPresentation={snapshot().refresh}
               />
             );
           }
         }
-        const region = createMemo(() =>
-          renderSidebarRegion({
-            presentationId: "delayed-browser-card",
-            onRegionViewRef: (element) => {
-              sidebarRegion = element;
-              return () => {
-                if (sidebarRegion === element) {
-                  sidebarRegion = null;
-                }
-              };
-            },
-            availableWidth: 1400,
-            callbacks: {
-              activatePanel: () => undefined,
-              togglePanelExpanded: () => undefined,
-              closeSlot: () => undefined,
-              openSlot: () => undefined,
-              reorderPanel: () => undefined,
-              resizePanel: () => undefined,
-              setOpen: () => undefined,
-            },
-            layout: snapshot().layout,
-            narrow: false,
-            panelDefinitions: definitions,
-            primary: conversation,
-          }),
+        return (
+          <SidebarRegionView
+            {...renderSidebarRegion({
+              presentationId: "delayed-browser-card",
+              onRegionViewRef: (element) => {
+                sidebarRegion = element;
+                return () => {
+                  if (sidebarRegion === element) {
+                    sidebarRegion = null;
+                  }
+                };
+              },
+              availableWidth: 1400,
+              callbacks: {
+                activatePanel: () => undefined,
+                togglePanelExpanded: () => undefined,
+                closeSlot: () => undefined,
+                openSlot: () => undefined,
+                reorderPanel: () => undefined,
+                resizePanel: () => undefined,
+                setOpen: () => undefined,
+              },
+              layout: snapshot().layout,
+              narrow: false,
+              panelDefinitions: definitions,
+              primary: <main>Conversation</main>,
+            })}
+          />
         );
-        return <SidebarRegionView {...region()} />;
       },
       { container: pane },
     );

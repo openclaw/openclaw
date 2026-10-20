@@ -3,6 +3,7 @@
 
 import { afterEach, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { closeSlot, isSidebarSlotVisible, openSlot } from "./sidebar-layout.ts";
@@ -29,24 +30,22 @@ function createPane() {
   const roster = { rows: [] as GatewaySessionRow[], hydrated: true, pendingChildRead: false };
   Reflect.set(fixture.pane.swarm, "hydrator", roster);
   fixture.state.sessionKey = parent.key;
-  fixture.state.sessionsResult = {
-    ts: 1,
-    path: "",
-    count: 1,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions: [parent],
+  fixture.state.sessionsResult = sessionsResult([parent], 1);
+  const run = (active: boolean) => {
+    child.hasActiveRun = parent.hasActiveSubagentRun = active;
+    child.status = active ? "running" : "done";
+    fixture.pane.render();
   };
-  return { ...fixture, parent, child, roster };
+  return { ...fixture, parent, child, roster, run };
 }
 
 it("keeps Subagents closed through hydration, new batches, and session identity changes", () => {
-  const { pane, state, parent, child, roster } = createPane();
+  const { pane, state, parent, child, roster, run } = createPane();
   pane.render();
   const layout = state.sidebarLayout;
 
   roster.rows = [child];
-  parent.hasActiveSubagentRun = true;
-  pane.render();
+  run(true);
   expect(state.sidebarLayout).toEqual(layout);
 
   delete parent.sessionId;
@@ -55,38 +54,25 @@ it("keeps Subagents closed through hydration, new batches, and session identity 
   pane.render();
   expect(state.sidebarLayout).toEqual(layout);
 
-  child.hasActiveRun = false;
-  child.status = "done";
-  parent.hasActiveSubagentRun = false;
-  pane.render();
-  child.hasActiveRun = true;
-  child.status = "running";
-  parent.hasActiveSubagentRun = true;
-  pane.render();
+  run(false);
+  run(true);
   expect(state.sidebarLayout).toEqual(layout);
 });
 
 it("preserves a manually opened panel and never reopens it after dismissal", () => {
-  const { pane, state, parent, child, roster } = createPane();
-  parent.hasActiveSubagentRun = true;
+  const { pane, state, child, roster, run } = createPane();
   roster.rows = [child];
   state.updateSidebarLayout(openSlot(state.sidebarLayout, "subagents"));
-  pane.render();
+  run(true);
   expect(isSidebarSlotVisible(state.sidebarLayout, "subagents")).toBe(true);
 
-  child.hasActiveRun = false;
-  child.status = "done";
-  parent.hasActiveSubagentRun = false;
-  pane.render();
+  run(false);
   expect(isSidebarSlotVisible(state.sidebarLayout, "subagents")).toBe(true);
 
   state.updateSidebarLayout(closeSlot(state.sidebarLayout, "subagents"));
   pane.render();
   expect(isSidebarSlotVisible(state.sidebarLayout, "subagents")).toBe(false);
-  child.hasActiveRun = true;
-  child.status = "running";
-  parent.hasActiveSubagentRun = true;
-  pane.render();
+  run(true);
   expect(isSidebarSlotVisible(state.sidebarLayout, "subagents")).toBe(false);
 });
 

@@ -1,17 +1,33 @@
 /* @vitest-environment jsdom */
 
 import { createSignal, Show } from "solid-js";
-import { afterEach, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { PRESENTATION_CHANGED_EVENT, type PresentationBinding } from "../../lib/presentation.ts";
-import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import { usePanePresentation } from "./chat-pane-presentation.ts";
 import { SidebarRegionView } from "./chat-pane-sidebar-view.tsx";
 import { fitSidebarLayout, openSlot, setSidebarOpen } from "./sidebar-layout.ts";
 
-// The lazy region separately owns the successful right outlet's contents.
-afterEach(cleanupSolid);
+function regionDefaults(presentationId: string) {
+  return {
+    presentationId,
+    panelIdPrefix: `chat-panel-${presentationId}`,
+    availableWidth: 1400,
+    narrow: false,
+    panelDefinitions: sidebarPanelDefinitions(),
+    callbacks: {
+      activatePanel() {},
+      togglePanelExpanded() {},
+      closeSlot() {},
+      openSlot() {},
+      reorderPanel() {},
+      resizePanel() {},
+      setOpen() {},
+    },
+  };
+}
 
 it("retains loading panel contents when fitting a new layout snapshot", () => {
   const layout = openSlot({ columns: [] }, "workspace");
@@ -21,21 +37,9 @@ it("retains loading panel contents when fitting a new layout snapshot", () => {
     resize = setWidth;
     return (
       <SidebarRegionView
-        presentationId="loading-layout"
-        panelIdPrefix="chat-panel-loading-layout"
+        {...regionDefaults("loading-layout")}
         availableWidth={width()}
-        narrow={false}
-        callbacks={{
-          activatePanel() {},
-          togglePanelExpanded() {},
-          closeSlot() {},
-          openSlot() {},
-          reorderPanel() {},
-          resizePanel() {},
-          setOpen() {},
-        }}
         layout={fitSidebarLayout(layout, width())!}
-        panelDefinitions={sidebarPanelDefinitions()}
         regionError={null}
       />
     );
@@ -66,21 +70,8 @@ it("retains the primary input and the region-owned outlet while changing the lay
     changeOpen = setOpen;
     return (
       <SidebarRegionView
-        presentationId="native-layout"
-        panelIdPrefix="chat-panel-native-layout"
-        availableWidth={1400}
-        narrow={false}
-        callbacks={{
-          activatePanel() {},
-          togglePanelExpanded() {},
-          closeSlot() {},
-          openSlot() {},
-          reorderPanel() {},
-          resizePanel() {},
-          setOpen() {},
-        }}
+        {...regionDefaults("native-layout")}
         layout={setSidebarOpen(layout, open())}
-        panelDefinitions={sidebarPanelDefinitions()}
         regionError={null}
         primary={primary}
       />
@@ -140,21 +131,8 @@ it("releases region refs when the lazy host or its containing view unmounts", ()
     loading = setPending;
     return (
       <SidebarRegionView
-        presentationId="owned-region-refs"
-        panelIdPrefix="chat-owned-region-refs"
-        availableWidth={1400}
-        narrow={false}
+        {...regionDefaults("owned-region-refs")}
         layout={{ columns: [] }}
-        panelDefinitions={sidebarPanelDefinitions()}
-        callbacks={{
-          activatePanel() {},
-          togglePanelExpanded() {},
-          closeSlot() {},
-          openSlot() {},
-          reorderPanel() {},
-          resizePanel() {},
-          setOpen() {},
-        }}
         regionError={pending() ? null : undefined}
         onRegionElementRef={(element) => {
           regionElement = element;
