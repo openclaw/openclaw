@@ -35,9 +35,20 @@ function artifact(relative = "dist/extensions/workboard") {
   return { rootDir, source };
 }
 
+function bundledRecord(entry: ReturnType<typeof artifact>) {
+  return createPluginRecord({ id: "workboard", origin: "bundled", ...entry });
+}
+
+function completeBinding(
+  record: ReturnType<typeof createPluginRecord>,
+  selection: Parameters<typeof bindPluginRuntimeArtifactSelection>[1],
+) {
+  bindPluginRuntimeArtifactSelection(record, selection).runtimeRegistrationComplete = true;
+}
+
 it("requires a completed canonical bundled runtime binding, not matching record metadata", () => {
   const runtimeEntry = artifact();
-  const record = createPluginRecord({ id: "workboard", origin: "bundled", ...runtimeEntry });
+  const record = bundledRecord(runtimeEntry);
   expect(hasCanonicalPluginDistribution(record)).toBe(false);
   const binding = bindPluginRuntimeArtifactSelection(record, { ...runtimeEntry, runtimeEntry });
   expect(hasCanonicalPluginDistribution(record)).toBe(false);
@@ -74,24 +85,20 @@ it.each([
       : "bundled",
     ...original,
   });
-  const binding = bindPluginRuntimeArtifactSelection(record, {
+  completeBinding(record, {
     ...(kind === "unknown" ? {} : original),
     sourcePreferred: kind === "preferred",
     packageManifest: kind === "external" ? { build: { bundledDist: false } } : undefined,
     runtimeEntry: kind === "selected" ? artifact("dist/extensions/another") : canonical,
   });
-  binding.runtimeRegistrationComplete = true;
   expect(hasCanonicalPluginDistribution(record)).toBe(false);
 });
 
 it("recognizes staging execution only when it resolves into the same canonical owner", () => {
   const canonical = artifact();
   const staging = artifact("dist-runtime/extensions/workboard");
-  const record = createPluginRecord({ id: "workboard", origin: "bundled", ...staging });
-  bindPluginRuntimeArtifactSelection(record, {
-    ...staging,
-    runtimeEntry: canonical,
-  }).runtimeRegistrationComplete = true;
+  const record = bundledRecord(staging);
+  completeBinding(record, { ...staging, runtimeEntry: canonical });
   expect(hasCanonicalPluginDistribution(record)).toBe(true);
 });
 
@@ -102,31 +109,24 @@ it.each(["inside", "outside"])(
     owner.packageRoot = path.join(root, "owner");
     fs.mkdirSync(path.join(owner.packageRoot, "dist"), { recursive: true });
     fs.symlinkSync(path.dirname(foreign.rootDir), path.join(owner.packageRoot, "dist/extensions"));
-    const record = createPluginRecord({ id: "workboard", origin: "bundled", ...foreign });
-    bindPluginRuntimeArtifactSelection(record, {
-      ...foreign,
-      runtimeEntry: foreign,
-    }).runtimeRegistrationComplete = true;
+    const record = bundledRecord(foreign);
+    completeBinding(record, { ...foreign, runtimeEntry: foreign });
     expect(hasCanonicalPluginDistribution(record)).toBe(false);
   },
 );
 
-it.each(["file", "directory", "symlink"])(
+it.each(["file", "directory", "symlink"] as const)(
   "retains the configured %s exclusion after installed-index hydration",
   (kind) => {
     const runtimeEntry = artifact();
-    fs.writeFileSync(
-      path.join(runtimeEntry.rootDir, "package.json"),
-      JSON.stringify({
-        name: "@openclaw/workboard",
-        version: "1.0.0",
-        openclaw: { extensions: ["./index.js"] },
-      }),
-    );
-    fs.writeFileSync(
-      path.join(runtimeEntry.rootDir, "openclaw.plugin.json"),
-      JSON.stringify({ id: "workboard", configSchema: { type: "object" } }),
-    );
+    const writeJson = (name: string, value: unknown) =>
+      fs.writeFileSync(path.join(runtimeEntry.rootDir, name), JSON.stringify(value));
+    writeJson("package.json", {
+      name: "@openclaw/workboard",
+      version: "1.0.0",
+      openclaw: { extensions: ["./index.js"] },
+    });
+    writeJson("openclaw.plugin.json", { id: "workboard", configSchema: { type: "object" } });
     const alias = path.join(root, "linked-workboard");
     if (kind === "symlink") {
       fs.symlinkSync(runtimeEntry.rootDir, alias);
@@ -138,20 +138,13 @@ it.each(["file", "directory", "symlink"])(
       origin: "bundled" as const,
       source: runtimeEntry.source,
     };
+    const configuredPath = {
+      file: runtimeEntry.source,
+      directory: runtimeEntry.rootDir,
+      symlink: alias,
+    };
     const candidate = prepareInstalledPluginCandidateResolver({
-      config: {
-        plugins: {
-          load: {
-            paths: [
-              kind === "file"
-                ? runtimeEntry.source
-                : kind === "symlink"
-                  ? alias
-                  : runtimeEntry.rootDir,
-            ],
-          },
-        },
-      },
+      config: { plugins: { load: { paths: [configuredPath[kind]] } } },
       env: {
         ...process.env,
         OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "dist/extensions"),
@@ -160,10 +153,7 @@ it.each(["file", "directory", "symlink"])(
     })(indexed);
     expect(candidate.sourcePreferred).toBe(true);
     const record = createPluginRecord({ id: "workboard", ...candidate });
-    bindPluginRuntimeArtifactSelection(record, {
-      ...candidate,
-      runtimeEntry,
-    }).runtimeRegistrationComplete = true;
+    completeBinding(record, { ...candidate, runtimeEntry });
     expect(hasCanonicalPluginDistribution(record)).toBe(false);
   },
 );

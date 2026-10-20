@@ -20,6 +20,15 @@ function nativeRootTransport(): GenerationNativeRootTransport {
   };
 }
 
+const disposable = () => ({ dispose() {}, async disposeAsync() {} });
+async function expectCollected(references: WeakRef<object>[]) {
+  const control = new WeakRef({});
+  await nextTurn();
+  queryObjects(WeakRef);
+  expect(control.deref()).toBeUndefined();
+  expect(references.map((reference) => reference.deref())).toEqual(references.map(() => undefined));
+}
+
 function resourceTransport() {
   const nativeRoots = nativeRootTransport();
   const sender = new GenerationCodec(() => undefined, nativeRoots);
@@ -64,8 +73,7 @@ it.each(["sync", "async"])(
     const parent = transport.exchange(
       transport.own({
         value: () => 42,
-        dispose() {},
-        async disposeAsync() {},
+        ...disposable(),
       }),
     );
     async function recovery() {
@@ -73,8 +81,7 @@ it.each(["sync", "async"])(
       const original = transport.own({
         sourceCapture: { read: () => payload },
         fork: () => payload,
-        dispose() {},
-        async disposeAsync() {},
+        ...disposable(),
       });
       const decoded = transport.exchange(original);
       expect(decoded.sourceCapture.read()).toEqual(payload);
@@ -94,11 +101,7 @@ it.each(["sync", "async"])(
       return references;
     }
     const references = await recovery();
-    const control = new WeakRef({});
-    await nextTurn();
-    queryObjects(WeakRef);
-    expect(control.deref()).toBeUndefined();
-    expect(references.every((reference) => reference.deref() === undefined)).toBe(true);
+    await expectCollected(references);
     expect(parent.value()).toBe(42);
     await recovery();
     await parent.disposeAsync();
@@ -112,8 +115,7 @@ it.each(["sync", "async"])("releases %s method replies after their last owner", 
     const read = () => payload;
     const facts = () => ({ read });
     const factsAsync = async () => facts();
-    const create = () =>
-      transport.own({ facts, factsAsync, dispose() {}, async disposeAsync() {} });
+    const create = () => transport.own({ facts, factsAsync, ...disposable() });
     const [first, second] = transport.exchange([create(), create()]);
     const reply = mode === "async" ? await first!.factsAsync() : first!.facts();
     first!.dispose();
@@ -123,18 +125,14 @@ it.each(["sync", "async"])("releases %s method replies after their last owner", 
     return references;
   }
   const references = await cycle();
-  const control = new WeakRef({});
-  await nextTurn();
-  queryObjects(WeakRef);
-  expect(control.deref()).toBeUndefined();
-  expect(references.every((reference) => reference.deref() === undefined)).toBe(true);
+  await expectCollected(references);
 });
 
 it("keeps shared callbacks with their remaining owner and retries failed disposal", async () => {
   const transport = resourceTransport();
   const shared = { value: () => 42 };
   let fail = true;
-  const first = transport.own({ shared, dispose() {}, async disposeAsync() {} });
+  const first = transport.own({ shared, ...disposable() });
   const second = transport.own({
     shared,
     dispose() {
@@ -231,16 +229,7 @@ it("releases ordinary message graphs while retaining callable identity", async (
     ];
   }
   const references = exchange();
-  const control = new WeakRef({});
-  await nextTurn();
-  queryObjects(WeakRef);
-  expect(control.deref()).toBeUndefined();
-  expect(references.map((reference) => reference.deref())).toEqual([
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-  ]);
+  await expectCollected(references);
   expect(callable(41)).toBe(42);
   const sameArgument = (first: object, second: object) => first === second;
   const compare = receiver.decode(sender.encode(sameArgument)) as typeof sameArgument;
