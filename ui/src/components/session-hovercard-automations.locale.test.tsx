@@ -25,7 +25,6 @@ it("updates retained automation labels and schedule without reloading its jobs",
   await i18n.setLocale("en");
   const job = createCronJob("example", "Example automation", {
     schedule: { kind: "every", everyMs: 300_000 },
-    wakeMode: "now",
   });
   const request = createGatewayRequestMock(async () => cronJobsListResponse([job], { limit: 20 }));
   const connect = () => {
@@ -42,7 +41,7 @@ it("updates retained automation labels and schedule without reloading its jobs",
     gateway: source.gateway,
     sessionKey: "agent:main:example",
     agentId: "main",
-    href: "/automations?session=agent%3Amain%3Aexample&agent=main",
+    href: "/automations",
     navigate: () => {},
   });
   const view = mountSolid(() => <SessionHovercardAutomations automation={automation()} />);
@@ -58,6 +57,8 @@ it("updates retained automation labels and schedule without reloading its jobs",
   });
   const tooltip = view.container.querySelector("openclaw-tooltip");
   const content = find("automations");
+  const expectStatus = (textContent: string) =>
+    expect(content?.querySelector('[role="status"]')).toMatchObject({ textContent });
   const link = find("automation-open")!;
   expect(content?.getAttribute("aria-label")).toBe("Automations");
   const trigger = find("automation-link")!;
@@ -76,16 +77,10 @@ it("updates retained automation labels and schedule without reloading its jobs",
   });
 
   source.publish({ ...source.gateway.snapshot, phase: "offline", client: null });
-  await waitForSolid(() =>
-    expect(content?.querySelector('[role="status"]')?.textContent).toBe(
-      "Automatisierungen für diese Sitzung nicht verfügbar.",
-    ),
-  );
+  await waitForSolid(() => expectStatus("Automatisierungen für diese Sitzung nicht verfügbar."));
   await i18n.setLocale("en");
   await waitForSolid(() => {
-    expect(content?.querySelector('[role="status"]')?.textContent).toBe(
-      "Automations unavailable for this session.",
-    );
+    expectStatus("Automations unavailable for this session.");
     expect(request).toHaveBeenCalledTimes(1);
   });
   setAutomation((previous) => ({ ...previous, href: "/automations?updated=1" }));

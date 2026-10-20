@@ -57,12 +57,9 @@ it.each([
     await userEvent.click(start);
     for (const link of host.querySelectorAll("a")) {
       const style = getComputedStyle(link);
-      expect([
-        style.borderTopWidth,
-        style.borderRightWidth,
-        style.borderBottomWidth,
-        style.borderLeftWidth,
-      ]).toEqual(["0px", "0px", "0px", "0px"]);
+      for (const side of ["Top", "Right", "Bottom", "Left"] as const) {
+        expect(style[`border${side}Width`]).toBe("0px");
+      }
       await userEvent.keyboard("{Tab}");
       expect(document.activeElement).toBe(link);
       expect(link.matches(":focus-visible")).toBe(true);

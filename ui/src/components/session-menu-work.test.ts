@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { ControlUiSessionPullRequest } from "../../../src/gateway/control-ui-contract.js";
 import { isLoopbackHostname } from "../lib/gateway-locality.ts";
 import {
@@ -20,6 +20,8 @@ const pullRequest: ControlUiSessionPullRequest = {
   url: "https://example.test/pr",
   state: "open",
 };
+const snapshot = { pullRequests: [pullRequest], rateLimited: false, status: "ready" as const };
+const noWork = { pullRequestUrl: null, worktreePath: null };
 
 function loadWork(
   request: GatewayRequestHandler,
@@ -32,12 +34,7 @@ function loadWork(
   });
 }
 
-beforeEach(() => setNativeGatewayTestState("local"));
-
-afterEach(() => {
-  clearNativeGatewayTestState();
-  vi.restoreAllMocks();
-});
+afterEach(clearNativeGatewayTestState);
 
 it.each([
   ["127.0.0.5", true],
@@ -48,25 +45,18 @@ it.each([
 });
 
 it.each([
-  ["plain browser", null, undefined, null],
-  ["native local gateway", "local", undefined, "/work/trees/demo"],
-  ["native remote gateway", "remote", undefined, null],
-  ["remote execution node", "local", "build-mac", null],
+  [null, undefined, null],
+  ["local", undefined, "/work/trees/demo"],
+  ["remote", undefined, null],
+  ["local", "build-mac", null],
 ] as const)(
-  "exposes editor paths only for native-local files: %s",
-  async (_name, nativeGateway, execNode, expectedPath) => {
+  "exposes editor paths only for native-local files: %s / %s",
+  async (nativeGateway, execNode, expectedPath) => {
     setNativeGatewayTestState(nativeGateway);
-    const request = vi.fn(async () => ({
-      worktrees: [{ id: "wt-1", path: "/work/trees/demo" }],
-    }));
-
+    const request = vi.fn(async () => ({ worktrees: [{ id: "wt-1", path: "/work/trees/demo" }] }));
     await expect(
       loadWork(request, {
-        loadPullRequests: async () => ({
-          pullRequests: [pullRequest],
-          rateLimited: false,
-          status: "ready",
-        }),
+        loadPullRequests: async () => snapshot,
         execNode,
       }),
     ).resolves.toEqual({
@@ -78,19 +68,11 @@ it.each([
 );
 
 it("returns nulls when the PR surface is absent, the worktree is removed, or requests fail", async () => {
+  setNativeGatewayTestState("local");
   const failing = vi.fn(() => Promise.reject(new Error("offline")));
-  await expect(
-    loadWork(failing, {
-      loadPullRequests: async () => {
-        throw new Error("offline");
-      },
-    }),
-  ).resolves.toEqual({ pullRequestUrl: null, worktreePath: null });
+  await expect(loadWork(failing, { loadPullRequests: failing })).resolves.toEqual(noWork);
 
-  const request = vi.fn(() =>
-    Promise.resolve({ worktrees: [{ id: "wt-1", path: "/gone", removedAt: 5 }] }),
-  );
-  await expect(loadWork(request)).resolves.toEqual({ pullRequestUrl: null, worktreePath: null });
-  expect(request).toHaveBeenCalledTimes(1);
-  expect(request).toHaveBeenCalledWith("worktrees.list", {});
+  const request = vi.fn(async () => ({ worktrees: [{ id: "wt-1", path: "/gone", removedAt: 5 }] }));
+  await expect(loadWork(request)).resolves.toEqual(noWork);
+  expect(request.mock.calls).toEqual([["worktrees.list", {}]]);
 });

@@ -14,7 +14,6 @@ function mountCard(
 ) {
   const [row, setRow] = createSignal<SidebarSessionHovercardRow | undefined>(initial);
   const view = mountSolid(() => <SessionHovercard row={row()} automationLink={automationLink} />);
-  onTestFinished(view.unmount);
   const find = (suffix = "") =>
     view.container.querySelector<HTMLElement>(`.session-hovercard${suffix}`);
   const parts = () => ({
@@ -38,11 +37,7 @@ it("refreshes retained hovercard labels and age without replacing its focused li
     placementProviderId: "local",
     placementProfileId: "default",
     placementMachine: { cpu: 4, memoryGb: 16 },
-    attention: {
-      kind: "error",
-      reason: "Synthetic failure",
-      sourceSessionKey: "agent:main:example",
-    },
+    attention: { kind: "error", reason: "Failure", sourceSessionKey: "agent:main:example" },
   };
   const view = mountCard(row, {
     gateway: null,
@@ -59,29 +54,29 @@ it("refreshes retained hovercard labels and age without replacing its focused li
   const card = view.find();
   const link = view.find("__automation-link")!;
   link.focus();
-  await waitForSolid(() => {
-    expect(card?.textContent).toContain("Linked to Slack");
-    expect(card?.querySelector('[aria-label="Project: Example"]')).not.toBeNull();
-    expect(card?.querySelector('[aria-label="Runs on local · default"]')).not.toBeNull();
-    expect(view.find("__created-age")).toMatchObject({ textContent: "2h" });
-    expect(card?.textContent).toContain("Run failed: Synthetic failure");
-    expect(card?.querySelector(".session-hovercard__machine")?.textContent).toContain("16 GB");
-  });
-
-  await i18n.setLocale("de");
-  await waitForSolid(() => {
-    expect(card?.textContent).toContain("Mit Slack verknüpft");
-    expect(card?.querySelector('[aria-label="Projekt: Example"]')).not.toBeNull();
-    expect(card?.querySelector('[aria-label="Läuft auf local · default"]')).not.toBeNull();
-    expect(view.find("__created-age")).toMatchObject({
-      textContent: "2 Std.",
-      title: "vor 2 Std.",
+  for (const [locale, channel, project, placement, age, failure] of [
+    ["en", "Linked to Slack", "Project", "Runs on", "2h", "Run failed"],
+    ["de", "Mit Slack verknüpft", "Projekt", "Läuft auf", "2 Std.", "Ausführung fehlgeschlagen"],
+  ] as const) {
+    await i18n.setLocale(locale);
+    await waitForSolid(() => {
+      for (const text of [channel, `${failure}: Failure`]) {
+        expect(card?.textContent).toContain(text);
+      }
+      for (const label of [`${project}: Example`, `${placement} local · default`]) {
+        expect(card?.querySelector(`[aria-label="${label}"]`)).not.toBeNull();
+      }
+      expect(view.find("__created-age")).toMatchObject({
+        textContent: age,
+        ...(locale === "de" ? { title: "vor 2 Std." } : {}),
+      });
+      if (locale === "en") {
+        expect(view.find("__machine")?.textContent).toContain("16 GB");
+      }
+      expect(view.find()).toBe(card);
+      expect(document.activeElement).toBe(link);
     });
-    expect(card?.textContent).toContain("Ausführung fehlgeschlagen: Synthetic failure");
-    expect(view.find()).toBe(card);
-    expect(document.activeElement).toBe(link);
-  });
-
+  }
   const machine = view.find("__machine");
   await i18n.setLocale("fr");
   await waitForSolid(() => {

@@ -54,6 +54,9 @@ function queryButton(menu: ParentNode, selector: string) {
 function expectLabels(menu: ParentNode, expected: readonly string[]) {
   expect(menuItemLabels(menu)).toEqual(expected);
 }
+function waitForOwners(menu: ParentNode, labels: readonly string[]) {
+  return waitForFast(() => expectLabels(menuItem(menu, "Assign to…"), labels));
+}
 
 const copyLabels = ["Preview link", "Conversation as Markdown", "Session ID"];
 const editorLabels = ["Cursor", "VS Code", "Windsurf", "Zed"];
@@ -133,9 +136,7 @@ describe("session menu", () => {
     request.mockImplementation(() => sessionOwnerProfiles("Ada", "Bob", "Carol"));
     await openSubmenu(menu, "Assign to…");
     await selectMenuValue(menu, "reload-owners");
-    await waitForFast(() =>
-      expectLabels(menuItem(menu, "Assign to…"), ["Me", "Research", "Bob", "Carol"]),
-    );
+    await waitForOwners(menu, ["Me", "Research", "Bob", "Carol"]);
     expect(menu.querySelector('[role="alert"]')).toBeNull();
     expect(request).toHaveBeenCalledTimes(3);
   });
@@ -155,9 +156,7 @@ describe("session menu", () => {
         const next = createSessionOwnerMenuHarness(() => sessionOwnerProfiles("Carol"));
         (menu.parentElement as ApplicationContextProvider).setContext(next.context);
       }
-      await waitForFast(() =>
-        expectLabels(menuItem(menu, "Assign to…"), ["Me", "Research", "Carol"]),
-      );
+      await waitForOwners(menu, ["Me", "Research", "Carol"]);
       pending.resolve(sessionOwnerProfiles("Bob"));
       await pending.promise;
       await settleSessionMenu(menu);
@@ -184,13 +183,10 @@ describe("session menu", () => {
     Object.assign(profiles[2]!, { mergedInto: "research:one" });
     const { context } = createSessionOwnerMenuHarness(() => ({ profiles }));
     const { menu, onAction, onClose } = await actionMenu({ context, currentOwner });
-    const submenu = menuItem(menu, "Assign to…");
     expect(menuItemLabels(menu).filter((label) => label.startsWith("Assign to"))).toEqual([
       "Assign to…",
     ]);
-    await waitForFast(() =>
-      expectLabels(submenu, ["Me", "Research", "Colleague", "zed@example.test"]),
-    );
+    await waitForOwners(menu, ["Me", "Research", "Colleague", "zed@example.test"]);
     const selected = menuItem(menu, selectedLabel);
     await waitForSolid(() => expect(selected.getAttribute("role")).toBe("menuitemradio"));
     expect(selected.getAttribute("aria-checked")).toBe("true");
@@ -447,21 +443,33 @@ describe("session menu", () => {
     }
   });
 
-  it("copies the common link directly while keeping other formats in Advanced", async () => {
+  it.each([
+    ["Pin session", "з", "KeyP", "P", "toggle-pin"],
+    ["Copy link", "c", undefined, "C", "copy-session-link"],
+  ] as const)("dispatches the advertised %s shortcut", async (label, key, code, hint, kind) => {
     const { calls, menu } = await recordedMenu();
-    const link = menuItem(menu, "Copy link");
-    expect(link.getAttribute("aria-keyshortcuts")).toBe("C");
-    expect(menu.querySelectorAll('[value="copy-session-link"]')).toHaveLength(1);
-    expectLabels(menuItem(menu, "Copy details"), copyLabels);
-    link.focus();
-    press(link, "c");
+    const item = menuItem(menu, label);
+    expect(item.getAttribute("aria-keyshortcuts")).toBe(hint);
+    expect(menuItem(menu, "Move to group").dataset.shortcut).toBeUndefined();
+    if (kind === "copy-session-link") {
+      expect(menu.querySelectorAll('[value="copy-session-link"]')).toHaveLength(1);
+      expectLabels(menuItem(menu, "Copy details"), copyLabels);
+    } else {
+      expect(item.querySelector(".session-menu__shortcut")?.textContent).toBe(hint);
+    }
+    item.focus();
+    const keydown = press(item, key, code ? { code } : {});
     await settleSessionMenu(menu);
-    expect(calls).toEqual(["close", "copy-session-link"]);
-    calls.length = 0;
-    await reopen(menu);
-    await openAdvanced(menu, "Copy details");
-    await selectMenuValue(menu, "copy-session-id");
-    expect(calls).toEqual(["close", "copy-session-id"]);
+    expect(calls).toEqual(["close", kind]);
+    if (kind === "copy-session-link") {
+      calls.length = 0;
+      await reopen(menu);
+      await openAdvanced(menu, "Copy details");
+      await selectMenuValue(menu, "copy-session-id");
+      expect(calls).toEqual(["close", "copy-session-id"]);
+    } else {
+      expect(keydown.defaultPrevented).toBe(true);
+    }
   });
 
   it("gates unavailable copy and navigation actions at native controls", async () => {
@@ -775,21 +783,6 @@ describe("session menu", () => {
         path: work.worktreePath,
       });
     }
-  });
-
-  it("renders shortcut hints and dispatches actions from bare letter keys", async () => {
-    const { calls, menu } = await recordedMenu();
-
-    const pin = menuItem(menu, "Pin session");
-    expect(pin.querySelector(".session-menu__shortcut")?.textContent).toBe("P");
-    expect(pin.getAttribute("aria-keyshortcuts")).toBe("P");
-    expect(menuItem(menu, "Move to group").dataset.shortcut).toBeUndefined();
-
-    pin.focus();
-    const keydown = press(pin, "з", { code: "KeyP" });
-    await settleSessionMenu(menu);
-    expect(calls).toEqual(["close", "toggle-pin"]);
-    expect(keydown.defaultPrevented).toBe(true);
   });
 
   it("ignores shortcut keys for disabled items and modified keystrokes", async () => {

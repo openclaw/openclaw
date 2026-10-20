@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createSignal, type Setter, Show } from "solid-js";
+import { createMemo, createSignal, type Setter } from "solid-js";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createQuestionPromptState } from "../app/question-prompt.ts";
 import { isSessionSnoozed } from "../lib/sessions/session-snooze.ts";
@@ -26,10 +26,7 @@ function mountAttention(
   const host = document.body.appendChild(document.createElement("section"));
   const questions = createQuestionPromptState(() => {});
   const view = mountSolid(
-    () => {
-      const attention = createSessionAttention(context, questions, host, () => true);
-      return render(attention);
-    },
+    () => render(createSessionAttention(context, questions, host, () => true)),
     { container: host },
   );
   onTestFinished(() => {
@@ -69,36 +66,28 @@ it("refreshes questions only for a changed client and retires the Gateway subscr
 function mountSnoozedSession(deadline: number) {
   vi.useFakeTimers();
   vi.setSystemTime(100);
-  let setDeadline!: Setter<number>;
-  let refresh!: () => void;
+  let updateRow!: Setter<{ snoozedUntil: number }>;
   const view = mountAttention((attention) => {
-    const [snoozedUntil, updateDeadline] = createSignal(deadline);
-    setDeadline = updateDeadline;
-    const [revision, setRevision] = createSignal(0);
-    refresh = () => setRevision((value) => value + 1);
+    const [row, setRow] = createSignal({ snoozedUntil: deadline });
+    updateRow = setRow;
     const visible = createMemo(() => {
-      revision();
       attention.resolve();
-      const row = { snoozedUntil: snoozedUntil() };
-      attention.scheduleSessionSnoozeWake([row]);
-      return !isSessionSnoozed(row, Date.now());
+      attention.scheduleSessionSnoozeWake([row()]);
+      return !isSessionSnoozed(row(), Date.now());
     });
-    return (
-      <Show when={visible()}>
-        <span>Resurfaced session</span>
-      </Show>
-    );
+    return <>{visible() && <span>Resurfaced session</span>}</>;
   });
   flush();
-  return { ...view, setDeadline, refresh };
+  return {
+    ...view,
+    setDeadline: (snoozedUntil: number) => updateRow({ snoozedUntil }),
+    refresh: () => updateRow((row) => ({ ...row })),
+  };
 }
 
-it.each([
-  { deadline: 200, clamped: false },
-  { deadline: 2_147_483_847, clamped: true },
-])("resurfaces a row at $deadline without polling", ({ deadline, clamped }) => {
+it.each([200, 2_147_483_847])("resurfaces a row at %d without polling", (deadline) => {
   const view = mountSnoozedSession(deadline);
-  if (clamped) {
+  if (deadline > 2_147_483_647) {
     advance(2_147_483_647);
     expect(view.queryByText("Resurfaced session")).toBeNull();
   }
@@ -117,8 +106,7 @@ it("keeps the earliest wake armed across unrelated session events", () => {
     view.refresh();
     flush();
   }
-  expect(clear).not.toHaveBeenCalled();
-  expect(schedule).not.toHaveBeenCalled();
+  expect([clear.mock.calls, schedule.mock.calls]).toEqual([[], []]);
   advance(101);
   expect(view.getByText("Resurfaced session")).toBeTruthy();
   expect(vi.getTimerCount()).toBe(0);

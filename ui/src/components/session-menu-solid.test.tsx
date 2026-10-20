@@ -16,12 +16,17 @@ import { createSessionOwnerMenuHarness } from "../test-helpers/session-owner-men
 import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { EMPTY_SESSION_MENU_DATA } from "./session-menu-actions.ts";
-import { SessionMenu } from "./session-menu-solid.tsx";
+import { SessionMenu, type SessionMenuAction } from "./session-menu-solid.tsx";
 
 function press(target: EventTarget, key: string, composed = false) {
   target.dispatchEvent(
     new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, composed }),
   );
+}
+function focusAndPress(item: HTMLElement, key: string, composed = false) {
+  item.focus();
+  expect(document.activeElement).toBe(item);
+  press(document.activeElement!, key, composed);
 }
 async function reopen(host: Awaited<ReturnType<typeof mountMenu>>, coordinate = 100) {
   host.anchor = { x: coordinate, y: coordinate };
@@ -29,7 +34,7 @@ async function reopen(host: Awaited<ReturnType<typeof mountMenu>>, coordinate = 
 }
 
 it("keeps advertised native menu shortcuts ahead of composer autotype", async () => {
-  const actions: unknown[] = [];
+  const actions: SessionMenuAction[] = [];
   const host = await mountMenu({
     groups: ["Research", "Personal"],
     onAction: (action) => actions.push(action),
@@ -42,26 +47,22 @@ it("keeps advertised native menu shortcuts ahead of composer autotype", async ()
     focusChatComposerFromPrintableKeydown(root, event, input);
   document.addEventListener("keydown", capture, true);
   try {
-    menuItem(host, "Pin session").focus();
-    press(document.activeElement!, "a", true);
-    await waitForSolid(() => expect(actions).toEqual([{ kind: "toggle-archived" }]));
-    expect(document.activeElement).not.toBe(input);
+    const expected: SessionMenuAction[] = [
+      { kind: "toggle-archived" },
+      { kind: "move-to-group", category: "Research" },
+    ];
+    for (const [index, key] of ["a", "1"].entries()) {
+      if (index) {
+        await reopen(host);
+      }
+      const target = index ? await openSubmenu(host, "Move to group") : host;
+      focusAndPress(menuItem(target, index ? "Personal" : "Pin session"), key, true);
+      await waitForSolid(() => expect(actions).toEqual(expected.slice(0, index + 1)));
+      expect(document.activeElement).not.toBe(input);
+    }
 
     await reopen(host);
-    const group = await openSubmenu(host, "Move to group");
-    menuItem(group, "Personal").focus();
-    press(document.activeElement!, "1", true);
-    await waitForSolid(() =>
-      expect(actions).toEqual([
-        { kind: "toggle-archived" },
-        { kind: "move-to-group", category: "Research" },
-      ]),
-    );
-    expect(document.activeElement).not.toBe(input);
-
-    await reopen(host);
-    menuItem(host, "Pin session").focus();
-    press(document.activeElement!, "x", true);
+    focusAndPress(menuItem(host, "Pin session"), "x", true);
     expect(document.activeElement).toBe(input);
   } finally {
     document.removeEventListener("keydown", capture, true);
@@ -80,8 +81,7 @@ it("updates registered menu props and retires its keyboard owner when unmounted"
   await settleSessionMenu(host);
   expect(archiveLabel()).toContain("Restore session");
   const pin = menuItem(host, "Pin session");
-  pin.focus();
-  press(pin, "d");
+  focusAndPress(pin, "d");
   expect(calls).toEqual(["close", "delete"]);
   host.remove();
   await Promise.resolve();
@@ -92,14 +92,13 @@ it("updates registered menu props and retires its keyboard owner when unmounted"
 
 it("preserves focus and owner search with the Solid application provider", async () => {
   const { context } = createSessionOwnerMenuHarness();
-  const provider = createSolidApplicationContextProvider(context);
-  const mounted = mountSolid(
+  const { container } = mountSolid(
     () => (
       <SessionMenu session={{ ...EMPTY_SESSION_MENU_DATA, label: "First title" }} archiveAllowed />
     ),
-    { wrapper: provider.wrapper },
+    { wrapper: createSolidApplicationContextProvider(context).wrapper },
   );
-  const host = mounted.container.querySelector("openclaw-session-menu")!;
+  const host = container.querySelector("openclaw-session-menu")!;
   await waitForSolid(() => expect(menuItemLabels(host)).toContain("Assign to…"));
   await settleSessionMenu(host);
   const pin = menuItem(host, "Pin session");
@@ -126,8 +125,8 @@ it("preserves focus and owner search with the Solid application provider", async
   expect(owner.getAttribute("aria-expanded")).toBe("true");
   expect(menuPanel(owner)).toBe(ownerPanel);
   expect(ownerPanel.querySelector('input[type="search"]')).toBe(search);
-  expect(search.value).toBe("Research");
   expect(document.activeElement).toBe(search);
+  expect(search).toMatchObject({ value: "Research" });
   expect(menuItemLabels(host)).toContain("Mark as read");
 });
 
@@ -140,8 +139,7 @@ it("ignores a stale native toggle after reopening the same session", async () =>
   const advanced = menuItem(menu, "Advanced");
   const child = await openSubmenu(menu, "Advanced");
   const childItem = menuItem(child, "Icon & color");
-  childItem.focus();
-  press(childItem, "Escape");
+  focusAndPress(childItem, "Escape");
   expect(child.matches(":popover-open")).toBe(false);
   expect(stalePanel.matches(":popover-open")).toBe(true);
   expect(document.activeElement).toBe(advanced);
