@@ -1,10 +1,7 @@
-import {
-  createPluginRegistryFixture,
-  registerTestPlugin,
-} from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterEach, describe, expect, it } from "vitest";
 import type { WidgetPresenter } from "./plugin-registration.types.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { expectDiagnostic, registrationFixture } from "./registry-registration.test-support.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 import { createPluginRecord } from "./status.test-fixtures.js";
@@ -13,132 +10,102 @@ import {
   resolveWidgetPresenters,
 } from "./widget-presenters.js";
 
-afterEach(() => {
-  resetPluginRuntimeStateForTest();
-});
+afterEach(resetPluginRuntimeStateForTest);
 
 function currentPresenter(
   description: string,
-  match: Extract<WidgetPresenter, { target: "current_channel" }>["match"] = () => true,
-): WidgetPresenter {
+): Extract<WidgetPresenter, { target: "current_channel" }> {
   return {
     target: "current_channel",
     description,
     capabilities: { sourceKinds: ["html"] },
-    match,
+    match: () => true,
     availability: async () => ({ ok: true, value: { available: true } }),
-    present: async () => ({
-      ok: false,
-      error: { code: "unavailable", message: "not used" },
-    }),
+    present: async () => ({ ok: false, error: { code: "unavailable", message: "not used" } }),
   };
 }
-
-function fixture() {
-  const { config, registry } = createPluginRegistryFixture();
-  const register = (id: string, presenter: WidgetPresenter) =>
-    registerTestPlugin({
-      registry,
-      config,
-      record: createPluginRecord({ id }),
-      register: (api) => api.registerWidgetPresenter(presenter),
-    });
-  return { registry: registry.registry, register };
+function presenterRegistry(pluginId: string, description: string) {
+  const registry = createEmptyPluginRegistry();
+  registry.widgetPresenters.push({
+    pluginId,
+    presenter: currentPresenter(description),
+    source: `/tmp/${pluginId}/index.ts`,
+  });
+  return registry;
 }
 
 describe("plugin widget presenter registry", () => {
-  it("registers one presenter for a target and rejects a competing owner", async () => {
-    const { registry, register } = fixture();
-    const presenter: WidgetPresenter = {
-      target: "node_panel",
-      description: "Show on a connected device panel",
-      availability: async () => ({ ok: true, value: { available: true } }),
-      present: async () => ({
-        ok: false,
-        error: { code: "no_eligible_node", message: "none" },
-      }),
-    };
-    register("first-presenter", presenter);
-    register("second-presenter", presenter);
-
-    expect(registry.widgetPresenters).toHaveLength(1);
-    const selected = registry.widgetPresenters[0]!;
-    expect(selected).toMatchObject({
-      pluginId: "first-presenter",
-      presenter: { target: "node_panel", description: "Show on a connected device panel" },
-    });
-    await expect(selected.presenter.availability({})).resolves.toEqual({
-      ok: true,
-      value: { available: true },
-    });
-    await expect(
-      selected.presenter.present({
-        context: {},
-        document: { kind: "html", html: "<p>Panel</p>" },
-        title: "Panel",
-      }),
-    ).resolves.toEqual({ ok: false, error: { code: "no_eligible_node", message: "none" } });
-    expect(registry.diagnostics).toContainEqual(
-      expect.objectContaining({
-        pluginId: "second-presenter",
-        message: "widget presenter already registered for node_panel (first-presenter)",
-      }),
-    );
-  });
-
-  it("allows multiple contextual presenters while keeping explicit targets unique", () => {
-    const { registry, register } = fixture();
-    for (const id of ["discord-presenter", "slack-presenter"]) {
-      register(
-        id,
-        currentPresenter(
-          `Present through ${id}`,
-          (context) => context.messageChannel === id.split("-")[0],
-        ),
-      );
-    }
-
-    expect(registry.widgetPresenters.map(({ pluginId }) => pluginId)).toEqual([
-      "discord-presenter",
-      "slack-presenter",
-    ]);
-    expect(registry.diagnostics).toEqual([]);
-  });
+  it.each(["node_panel", "current_channel"] as const)(
+    "enforces %s target ownership",
+    async (target) => {
+      const { registry, register } = registrationFixture();
+      const panel: WidgetPresenter = {
+        target: "node_panel",
+        description: "Show on a connected device panel",
+        availability: async () => ({ ok: true, value: { available: true } }),
+        present: async () => ({ ok: false, error: { code: "no_eligible_node", message: "none" } }),
+      };
+      const ids =
+        target === "node_panel"
+          ? ["first-presenter", "second-presenter"]
+          : ["discord-presenter", "slack-presenter"];
+      for (const id of ids) {
+        const presenter =
+          target === "node_panel"
+            ? panel
+            : {
+                ...currentPresenter(`Present through ${id}`),
+                match: (context: Parameters<WidgetPresenter["availability"]>[0]) =>
+                  context.messageChannel === id.split("-")[0],
+              };
+        register({ id }, (api) => api.registerWidgetPresenter(presenter));
+      }
+      if (target === "current_channel") {
+        expect(registry.widgetPresenters.map(({ pluginId }) => pluginId)).toEqual(ids);
+        expect(registry.diagnostics).toEqual([]);
+      } else {
+        expect(registry.widgetPresenters).toMatchObject([
+          {
+            pluginId: "first-presenter",
+            presenter: { target, description: "Show on a connected device panel" },
+          },
+        ]);
+        const selected = registry.widgetPresenters[0]!.presenter;
+        await expect(selected.availability({})).resolves.toEqual({
+          ok: true,
+          value: { available: true },
+        });
+        await expect(
+          selected.present({
+            context: {},
+            document: { kind: "html", html: "<p>Panel</p>" },
+            title: "Panel",
+          }),
+        ).resolves.toEqual({ ok: false, error: { code: "no_eligible_node", message: "none" } });
+        expectDiagnostic(registry, {
+          pluginId: "second-presenter",
+          message: "widget presenter already registered for node_panel (first-presenter)",
+        });
+      }
+    },
+  );
 
   it("adopts full-only presenters only from the matching lifecycle owner", () => {
-    const source = "/tmp/discord/index.ts";
+    const runtime = presenterRegistry("discord", "Runtime Discord");
     const target = createEmptyPluginRegistry();
-    const runtime = createEmptyPluginRegistry();
+    const source = "/tmp/discord/index.ts";
     target.plugins.push(createPluginRecord({ id: "discord", source }));
     runtime.plugins.push(createPluginRecord({ id: "discord", source }));
-    runtime.widgetPresenters.push({
-      pluginId: "discord",
-      presenter: currentPresenter("Runtime Discord"),
-      source,
-    });
-
-    const adopted = adoptRuntimeWidgetPresenterRegistrations(target, runtime);
-    expect(adopted.widgetPresenters).toEqual(runtime.widgetPresenters);
-
+    expect(adoptRuntimeWidgetPresenterRegistrations(target, runtime).widgetPresenters).toEqual(
+      runtime.widgetPresenters,
+    );
     target.plugins[0] = createPluginRecord({ id: "discord", source: "/tmp/other/index.ts" });
     expect(adoptRuntimeWidgetPresenterRegistrations(target, runtime)).toBe(target);
   });
 
   it("keeps request-scoped presenters ahead of the active lifecycle registry", () => {
-    const active = createEmptyPluginRegistry();
-    const scoped = createEmptyPluginRegistry();
-    for (const [registry, pluginId, description] of [
-      [active, "active", "Active"],
-      [scoped, "scoped", "Scoped"],
-    ] as const) {
-      registry.widgetPresenters.push({
-        pluginId,
-        presenter: currentPresenter(description),
-        source: `/tmp/${pluginId}/index.ts`,
-      });
-    }
-    setActivePluginRegistry(active);
-
+    setActivePluginRegistry(presenterRegistry("active", "Active"));
+    const scoped = presenterRegistry("scoped", "Scoped");
     expect(
       withPluginRuntimeRegistryScope(scoped, () =>
         resolveWidgetPresenters().map(({ pluginId }) => pluginId),

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   makePluginMetadataIndex as makeIndex,
   makePluginMetadataManifestRegistry,
@@ -9,101 +9,70 @@ import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { resetPluginRuntimeStateForTest } from "./runtime.js";
 
-const { loadPluginRegistrySnapshotWithMetadata, loadPluginManifestRegistryForInstalledIndex } =
-  vi.hoisted(() => {
-    // Shared plugin workers must load this graph after this file's mocks are installed.
-    vi.resetModules();
-    return {
-      loadPluginRegistrySnapshotWithMetadata: vi.fn(),
-      loadPluginManifestRegistryForInstalledIndex: vi.fn(),
-    };
-  });
-
-vi.mock("./plugin-registry-snapshot.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./plugin-registry-snapshot.js")>();
-  return {
-    ...actual,
-    loadPluginRegistrySnapshotWithMetadata: (params: unknown) =>
-      loadPluginRegistrySnapshotWithMetadata(params),
-  };
+const mocks = vi.hoisted(() => {
+  // Shared workers must import the graph after this file's mocks are installed.
+  vi.resetModules();
+  return { registry: vi.fn(), manifests: vi.fn() };
 });
-
-vi.mock("./manifest-registry-installed.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./manifest-registry-installed.js")>();
-  return {
-    ...actual,
-    loadPluginManifestRegistryForInstalledIndex: (params: unknown) =>
-      loadPluginManifestRegistryForInstalledIndex(params),
-  };
-});
-
+vi.mock("./plugin-registry-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./plugin-registry-snapshot.js")>()),
+  loadPluginRegistrySnapshotWithMetadata: (params: unknown) => mocks.registry(params),
+}));
+vi.mock("./manifest-registry-installed.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./manifest-registry-installed.js")>()),
+  loadPluginManifestRegistryForInstalledIndex: (params: unknown) => mocks.manifests(params),
+}));
 import { resolveExternalAuthProfilesWithPlugins } from "./provider-runtime.js";
 import { isPluginProvidersLoadInFlight } from "./providers.runtime.js";
 
 let request = { config: {}, env: {}, workspaceDir: "/workspace/a" };
-
 function armFallbackLoad(index = makeIndex()) {
-  loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-    source: "runtime",
-    snapshot: index,
-    diagnostics: [],
-  });
+  mocks.registry.mockReturnValue({ source: "runtime", snapshot: index, diagnostics: [] });
 }
-
 function registerCurrentSnapshot() {
   const index = makeIndex();
   index.policyHash = resolveInstalledPluginIndexPolicyHash(request.config);
   armFallbackLoad(index);
-  const snapshot = loadPluginMetadataSnapshot({ ...request, index });
-  setCurrentPluginMetadataSnapshot(snapshot, request);
-  loadPluginRegistrySnapshotWithMetadata.mockClear();
-  loadPluginManifestRegistryForInstalledIndex.mockClear();
+  setCurrentPluginMetadataSnapshot(loadPluginMetadataSnapshot({ ...request, index }), request);
+  mocks.registry.mockClear();
+  mocks.manifests.mockClear();
 }
+beforeEach(() => {
+  request = { config: {}, env: {}, workspaceDir: "/workspace/a" };
+  resetPluginRuntimeStateForTest();
+  clearPluginMetadataLifecycleCaches();
+  mocks.registry.mockReset();
+  const registry = makePluginMetadataManifestRegistry("demo");
+  for (const plugin of registry.plugins) {
+    plugin.commandAliases = [];
+  }
+  mocks.manifests.mockReset().mockReturnValue(registry);
+});
+afterEach(() => {
+  clearPluginMetadataLifecycleCaches();
+  resetPluginRuntimeStateForTest();
+});
 
-describe("provider runtime consults the current plugin metadata snapshot", () => {
-  beforeEach(() => {
-    request = { config: {}, env: {}, workspaceDir: "/workspace/a" };
-    resetPluginRuntimeStateForTest();
-    clearPluginMetadataLifecycleCaches();
-    loadPluginRegistrySnapshotWithMetadata.mockReset();
-    loadPluginManifestRegistryForInstalledIndex.mockReset();
-    const registry = makePluginMetadataManifestRegistry("demo");
-    for (const plugin of registry.plugins) {
-      plugin.commandAliases = [];
+it.each(["in-flight check", "external auth profiles"])(
+  "reuses the current snapshot for %s",
+  (consumer) => {
+    registerCurrentSnapshot();
+    if (consumer === "in-flight check") {
+      isPluginProvidersLoadInFlight(request);
+      expect(mocks.manifests).not.toHaveBeenCalled();
+    } else {
+      expect(
+        resolveExternalAuthProfilesWithPlugins({
+          ...request,
+          context: { env: {}, store: { version: 1, profiles: {} } },
+        }),
+      ).toEqual([]);
     }
-    loadPluginManifestRegistryForInstalledIndex.mockReturnValue(registry);
-  });
-
-  afterEach(() => {
-    clearPluginMetadataLifecycleCaches();
-    resetPluginRuntimeStateForTest();
-  });
-
-  it("reuses a compatible current snapshot for the in-flight check", () => {
-    registerCurrentSnapshot();
-    isPluginProvidersLoadInFlight(request);
-
-    expect(loadPluginRegistrySnapshotWithMetadata).not.toHaveBeenCalled();
-    expect(loadPluginManifestRegistryForInstalledIndex).not.toHaveBeenCalled();
-  });
-
-  it("falls back to a direct disk load when no current snapshot is registered", () => {
-    armFallbackLoad();
-
-    isPluginProvidersLoadInFlight(request);
-
-    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalled();
-  });
-
-  it("reuses a compatible current snapshot for external auth profiles", () => {
-    registerCurrentSnapshot();
-
-    const profiles = resolveExternalAuthProfilesWithPlugins({
-      ...request,
-      context: { env: {}, store: { version: 1, profiles: {} } },
-    });
-
-    expect(profiles).toEqual([]);
-    expect(loadPluginRegistrySnapshotWithMetadata).not.toHaveBeenCalled();
-  });
+    expect(mocks.registry).not.toHaveBeenCalled();
+  },
+);
+it("falls back to a direct disk load without a current snapshot", () => {
+  armFallbackLoad();
+  isPluginProvidersLoadInFlight(request);
+  expect(mocks.registry).toHaveBeenCalled();
 });
