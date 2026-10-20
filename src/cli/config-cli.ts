@@ -341,9 +341,8 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
       const issues = normalizeConfigIssues(snapshot.issues);
       if (opts.json) {
         writeRuntimeJson(runtime, {
-          ...formatCliJsonFailure(
-            `OpenClaw config is invalid: ${shortPath}\n${formatInvalidConfigRepairHint(snapshot, "to repair, then retry.")}`,
-          ),
+          ...formatCliJsonFailure(`OpenClaw config is invalid: ${shortPath}`),
+          repairHint: formatInvalidConfigRepairHint(snapshot, "to repair, then retry."),
           valid: false,
           path: outputPath,
           issues,

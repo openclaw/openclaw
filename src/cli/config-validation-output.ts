@@ -15,9 +15,8 @@ export function writeInvalidConfigCliJson(
   >,
 ): void {
   writeRuntimeJson(runtime, {
-    ...formatCliJsonFailure(
-      `${configFailureHeading(snapshot)}: ${shortenHomePath(snapshot.path)}\n${formatInvalidConfigRepairHint(snapshot, "to repair, then retry.")}`,
-    ),
+    ...formatCliJsonFailure(`${configFailureHeading(snapshot)}: ${shortenHomePath(snapshot.path)}`),
+    repairHint: formatInvalidConfigRepairHint(snapshot, "to repair, then retry."),
     issues: normalizeConfigIssues(snapshot.issues),
   });
 }

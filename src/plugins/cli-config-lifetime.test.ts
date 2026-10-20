@@ -79,7 +79,7 @@ describe("CLI config producer lifetime", () => {
         });
         fs.writeFileSync(
           path.join(owner.dir, "provider-policy-api.js"),
-          'exports.applyConfigDefaults = ({ config }) => ({ ...config, agents: { ...config.agents, defaults: { ...config.agents.defaults, contextPruning: { mode: "cache-ttl", ttl: "7m" } } } });',
+          'export const applyConfigDefaults = ({ config }) => ({ ...config, agents: { ...config.agents, defaults: { ...config.agents.defaults, contextPruning: { mode: "cache-ttl", ttl: "7m" } } } });',
         );
       }
       if (kind === "empty") {

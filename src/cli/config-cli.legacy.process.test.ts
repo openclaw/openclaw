@@ -67,7 +67,8 @@ it.each([
     );
     expect(result.code, result.stderr).toBe(1);
     const output = JSON.parse(result.stdout);
-    expect(output.error.message).toContain("openclaw doctor --fix");
+    expect(output.error.message).toMatch(/^OpenClaw config is invalid: [^\n]+$/);
+    expect(output.repairHint).toContain("openclaw doctor --fix");
     expect(output.issues).toContainEqual(
       expect.objectContaining({
         path: "skills.workshop",
