@@ -65,14 +65,11 @@ export function AgentFiles(
       canWrite: boolean;
     },
 ) {
-  const list = createMemo(
-    () =>
-      params.readData().agentFilesList?.agentId === params.agentId
-        ? params.readData().agentFilesList
-        : null,
-    { equals: false },
-  );
-  const files = createMemo(() => list()?.files ?? [], { equals: false });
+  const list = () =>
+    params.readData().agentFilesList?.agentId === params.agentId
+      ? params.readData().agentFilesList
+      : null;
+  const files = () => list()?.files ?? [];
   const active = createMemo(() => params.readData().agentFileActive ?? null);
   // Files whose absence is a normal workspace state stay out of the tab strip until
   // the operator picks them; only a genuinely faulty absence is badged as missing.
@@ -87,23 +84,20 @@ export function AgentFiles(
   const conflictName = createMemo(() =>
     active() && params.readData().agentFileConflict === active() ? active() : null,
   );
-  const showMissing = createMemo(() => activeEntry()?.missing && !conflictName());
+  const showMissing = () => activeEntry()?.missing && !conflictName();
   const hasContent = createMemo(() => {
     const name = active();
     return name ? hasAgentFileContent(params.readData(), name) : false;
   });
-  const editor = createMemo(
-    () => {
-      const name = active();
-      return name ? params.readData().agentFileEditors[name] : undefined;
-    },
-    { equals: false },
-  );
-  const hasBase = createMemo(() => {
+  const editor = () => {
+    const name = active();
+    return name ? params.readData().agentFileEditors[name] : undefined;
+  };
+  const hasBase = () => {
     const value = editor();
     return Boolean(value && Object.hasOwn(value, "content"));
-  });
-  const baseContent = createMemo(() => editor()?.content ?? "");
+  };
+  const baseContent = () => editor()?.content ?? "";
   const draft = createMemo(() => editor()?.draft ?? baseContent());
   const isDirty = createMemo(() => hasContent() && (!hasBase() || draft() !== baseContent()));
 

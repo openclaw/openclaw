@@ -172,7 +172,7 @@ export class RealtimeTalkMediaStreamMeter {
   }
 }
 
-export function estimateBase64DecodedByteLength(value: string): number {
+function estimateBase64DecodedByteLength(value: string): number {
   const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
   return Math.max(0, Math.floor((value.length * 3) / 4) - padding);
 }

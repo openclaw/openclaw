@@ -67,9 +67,8 @@ export function LogsView(props: LogsProps) {
       formatTime: createMsFormatter({ timeStyle: "short" }),
     };
   });
-  const exportFileLabel = createMemo(() =>
-    needle() || LOG_LEVELS.some((level) => !props.levelFilters[level]) ? "filtered" : "visible",
-  );
+  const exportFileLabel = () =>
+    needle() || LOG_LEVELS.some((level) => !props.levelFilters[level]) ? "filtered" : "visible";
 
   // Keep the fill-height flex chain from the workspace through the log stream.
   return (

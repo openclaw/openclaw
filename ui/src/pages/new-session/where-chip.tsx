@@ -77,14 +77,14 @@ function MacDeviceIcon(props: { form: "laptop" | "mini" | "studio" }) {
   );
 }
 function EnvironmentDeviceIcon(props: { device?: DevicePlacementOption }) {
-  const form = createMemo(() => {
+  const form = () => {
     const platform = props.device?.platform?.trim();
     if (platform && !/^(?:darwin|macos|mac os(?: x)?)\b/i.test(platform)) {
       return undefined;
     }
     const value = resolveMacFormFactorFromName(props.device?.label);
     return value === "laptop" || value === "mini" || value === "studio" ? value : undefined;
-  });
+  };
   return (
     <Show when={form()} fallback={<Icon name="monitor" />}>
       {(current) => (

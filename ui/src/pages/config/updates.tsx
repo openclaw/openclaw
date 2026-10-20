@@ -378,7 +378,7 @@ function BuildFacts(props: UpdatesViewProps) {
 }
 
 function CommitList(props: UpdatesViewProps) {
-  const commits = createMemo(() => {
+  const commits = () => {
     const update = props.update.updateAvailable;
     const comparison = getUpdateGitComparison(props.update.updateSchedule, update);
     return comparison &&
@@ -387,7 +387,7 @@ function CommitList(props: UpdatesViewProps) {
       comparison.upstreamSha === update?.upstreamSha
       ? (update?.commits ?? [])
       : [];
-  });
+  };
   return (
     <Show when={commits().length > 0}>
       <SettingsRow
@@ -422,17 +422,15 @@ export function Updates(props: UpdatesViewProps) {
     );
   };
   const runTarget = () => run()?.target.sha ?? run()?.target.version ?? run()?.target.tag;
-  const settings = createMemo(() =>
-    readUpdatesSettings(props.configObject, props.update.updateSchedule),
-  );
-  const channelOptions = createMemo<Array<{ value: UpdatesChannel; label: string }>>(() => [
+  const settings = () => readUpdatesSettings(props.configObject, props.update.updateSchedule);
+  const channelOptions = (): Array<{ value: UpdatesChannel; label: string }> => [
     { value: "stable", label: t("updates.channel.stable") },
     { value: "beta", label: t("updates.channel.beta") },
     { value: "dev", label: t("updates.channel.dev") },
     ...(settings().extendedStable
       ? [{ value: "extended-stable" as const, label: t("updates.channel.extendedStable") }]
       : []),
-  ]);
+  ];
   const automaticUpdatesSupported = () => settings().channel !== "extended-stable";
   const checksDisabled = () => asConfigRecord(props.configObject.update)?.checkOnStart === false;
   const devPackageInstall = () =>
