@@ -30,33 +30,10 @@ const HELD_STOP = `
   process.stdout.write("ready");
 `;
 
+const azureStop = { binary: "crabbox", id: LEASE_ID, provider: "azure", warn: vi.fn() };
+const azureStopArgs = ["crabbox", "stop", "--provider", "azure", "--id", LEASE_ID];
+
 describe("Crabbox stop lifetime", () => {
-  it("explicitly recovers an Azure fixed lease after local create-intent loss", async () => {
-    const runCommand = vi
-      .fn()
-      .mockResolvedValueOnce(
-        commandResult({
-          code: 4,
-          stderr: "Azure fixed lease cannot be adopted without its create intent",
-        }),
-      )
-      .mockResolvedValueOnce(commandResult());
-    vi.spyOn(processRunner, "runCrabboxProcess").mockImplementation(runCommand);
-
-    await expect(
-      stopCrabboxLease({
-        binary: "crabbox",
-        id: LEASE_ID,
-        provider: "azure",
-        warn: vi.fn(),
-      }),
-    ).resolves.toBeUndefined();
-    expect(runCommand.mock.calls.map(([argv]) => argv)).toEqual([
-      ["crabbox", "stop", "--provider", "azure", "--id", LEASE_ID],
-      ["crabbox", "stop", "--provider", "azure", "--id", LEASE_ID, "--force"],
-    ]);
-  });
-
   it.each(
     [60_000, CRABBOX_STOP_TIMEOUT_MS].flatMap((elapsedMs) =>
       [-90_000, 90_000].map((clockStepMs) => ({ elapsedMs, clockStepMs })),
@@ -81,29 +58,17 @@ describe("Crabbox stop lifetime", () => {
         .mockResolvedValue(commandResult());
       vi.spyOn(processRunner, "runCrabboxProcess").mockImplementation(runCommand);
       try {
-        const stopped = stopCrabboxLease({
-          binary: "crabbox",
-          id: LEASE_ID,
-          provider: "azure",
-          warn: vi.fn(),
-        });
+        const stopped = stopCrabboxLease(azureStop);
         if (elapsedMs < CRABBOX_STOP_TIMEOUT_MS) {
           await expect(stopped).resolves.toBeUndefined();
           expect(runCommand).toHaveBeenCalledTimes(2);
           expect(runCommand.mock.calls[1]?.[1].timeoutMs).toBe(CRABBOX_STOP_TIMEOUT_MS - elapsedMs);
-          expect(runCommand.mock.calls[1]?.[0]).toEqual([
-            "crabbox",
-            "stop",
-            "--provider",
-            "azure",
-            "--id",
-            LEASE_ID,
-            "--force",
-          ]);
+          expect(runCommand.mock.calls[1]?.[0]).toEqual([...azureStopArgs, "--force"]);
         } else {
           await expect(stopped).rejects.toThrow("timed out before Azure fixed-lease recovery");
           expect(runCommand).toHaveBeenCalledOnce();
         }
+        expect(runCommand.mock.calls[0]?.[0]).toEqual(azureStopArgs);
         expect(runCommand.mock.calls[0]?.[1].timeoutMs).toBe(CRABBOX_STOP_TIMEOUT_MS);
       } finally {
         wallClock.mockRestore();
@@ -196,12 +161,12 @@ describe("Crabbox stop lifetime", () => {
       const started = createDeferred<void>();
       let childResult: SpawnResult | undefined;
       let armed = false;
-      const runStop = async (
-        _argv: string[],
-        options: Parameters<typeof runCommandWithTimeout>[1],
-      ) => {
+      const { provider } = createWarmProvider(async ({ argv, options }) => {
+        if (!armed || argv[1] !== "stop") {
+          return undefined;
+        }
         const result = await runCommandWithTimeout([process.execPath, "-e", HELD_STOP, marker], {
-          ...(typeof options === "number" ? { timeoutMs: options } : options),
+          ...options,
           onOutputChunk: (chunk, stream) => {
             if (stream === "stdout" && chunk.toString() === "ready") {
               started.resolve();
@@ -210,12 +175,6 @@ describe("Crabbox stop lifetime", () => {
         });
         childResult = result;
         return result;
-      };
-      const { provider } = createWarmProvider(async ({ argv, options }) => {
-        if (armed && argv[1] === "stop") {
-          return await runStop(argv, options);
-        }
-        return undefined;
       });
       await provisionWarmProfile(provider);
       const store = openWarmImageStore();
