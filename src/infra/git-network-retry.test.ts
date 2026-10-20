@@ -5,6 +5,8 @@ import * as processExec from "../process/exec.js";
 import type { CommandOptions, SpawnResult } from "../process/exec.js";
 import { executeGitCommand, executeGitCommandBytes } from "./git-exec.js";
 
+const fetch = (options: Parameters<typeof executeGitCommandBytes>[2] = {}) =>
+  executeGitCommandBytes("/repo", ["fetch", "origin"], { timeoutMs: 10_000, ...options });
 const networkLog = vi.hoisted(() => ({ warn: vi.fn() }));
 vi.mock("../logging/subsystem.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
@@ -69,129 +71,114 @@ describe("Git network recovery", () => {
     );
   }
 
-  describe.each([{ name: "worker bytes", execute: executeGitCommandBytes }])(
-    "adapter: $name",
-    ({ execute }) => {
-      it("retries the same object request once without leaking partial output or resetting its budget", async () => {
-        results(
-          {
-            ...failure,
-            stderr:
-              "error: origin did not send all necessary objects\nprivate diagnostic must not be logged",
-          },
-          success,
-        );
-        const input = Buffer.from("0123456789abcdef0123456789abcdef01234567\n");
-        const pending = execute("/repo", ["fetch", "origin", "--stdin"], {
-          input,
-          timeoutMs: 10_000,
-        });
-        await vi.advanceTimersByTimeAsync(999);
-        expect(calls).toHaveLength(1);
-        await vi.advanceTimersByTimeAsync(1);
-        const result = await pending;
-        expect(result.code).toBe(0);
-        expect(result.stdout.toString()).toBe("complete output");
-        expect(calls).toHaveLength(2);
-        expect(calls[1]!.argv).toEqual(calls[0]!.argv);
-        expect(calls.map((call) => call.input)).toEqual([input, input]);
-        expect(calls.map((call) => call.timeoutMs)).toEqual([10_000, 9_000]);
-        expect(networkLog.warn).toHaveBeenCalledExactlyOnceWith(
-          "Git fetch hit a transient failure; retrying once",
-          { operation: "fetch", attempt: 1, maxAttempts: 2, delayMs: 1_000, exitCode: 1 },
-        );
-      });
+  it("retries the same object request once without leaking partial output or resetting its budget", async () => {
+    results(
+      {
+        ...failure,
+        stderr:
+          "error: origin did not send all necessary objects\nprivate diagnostic must not be logged",
+      },
+      success,
+    );
+    const input = Buffer.from("0123456789abcdef0123456789abcdef01234567\n");
+    const pending = executeGitCommandBytes("/repo", ["fetch", "origin", "--stdin"], {
+      input,
+      timeoutMs: 10_000,
+    });
+    await vi.advanceTimersByTimeAsync(999);
+    expect(calls).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    const result = await pending;
+    expect([result.code, result.stdout.toString()]).toEqual([0, "complete output"]);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]!.argv).toEqual(calls[0]!.argv);
+    expect(calls.map((call) => call.input)).toEqual([input, input]);
+    expect(calls.map((call) => call.timeoutMs)).toEqual([10_000, 9_000]);
+    expect(networkLog.warn).toHaveBeenCalledExactlyOnceWith(
+      "Git fetch hit a transient failure; retrying once",
+      { operation: "fetch", attempt: 1, maxAttempts: 2, delayMs: 1_000, exitCode: 1 },
+    );
+  });
 
-      it("cancels during backoff without starting another Git process", async () => {
-        results(failure);
-        const controller = new AbortController();
-        const pending = execute("/repo", ["fetch", "origin"], {
-          timeoutMs: 10_000,
-          signal: controller.signal,
-        });
-        await vi.advanceTimersByTimeAsync(100);
-        controller.abort();
-        expect(await pending).toMatchObject({ termination: "signal", code: null });
-        expect(calls).toHaveLength(1);
-      });
+  it("cancels during backoff without starting another Git process", async () => {
+    results(failure);
+    const controller = new AbortController();
+    const pending = fetch({ signal: controller.signal });
+    await vi.advanceTimersByTimeAsync(100);
+    controller.abort();
+    expect(await pending).toMatchObject({ termination: "signal", code: null });
+    expect(calls).toHaveLength(1);
+  });
 
-      it("rechecks authority before retrying", async () => {
-        results(failure);
-        const revoked = new Error("operation no longer owns the workspace");
-        const beforeRun = vi
-          .fn()
-          .mockImplementationOnce(() => {})
-          .mockImplementationOnce(() => {
-            throw revoked;
-          });
-        const pending = execute("/repo", ["fetch", "origin"], { timeoutMs: 10_000, beforeRun });
-        const outcome = expect(pending).rejects.toBe(revoked);
-        await vi.advanceTimersByTimeAsync(1_000);
-        await outcome;
-        expect(calls).toHaveLength(1);
+  it("rechecks authority before retrying", async () => {
+    results(failure);
+    const revoked = new Error("operation no longer owns the workspace");
+    const beforeRun = vi
+      .fn()
+      .mockImplementationOnce(() => {})
+      .mockImplementationOnce(() => {
+        throw revoked;
       });
+    const pending = fetch({ beforeRun });
+    const outcome = expect(pending).rejects.toBe(revoked);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await outcome;
+    expect(calls).toHaveLength(1);
+  });
 
-      it("admits each retry inside the current credential owner", async () => {
-        results(failure);
-        const rotated = new Error("credential rotated");
-        let current = true;
-        let admissions = 0;
-        const pending = execute("/repo", ["fetch", "origin"], {
-          timeoutMs: 10_000,
-          startRun: async <T>(start: () => T): Promise<Awaited<T>> => {
-            await Promise.resolve();
-            admissions += 1;
-            if (!current) {
-              throw rotated;
-            }
-            return await start();
-          },
-        });
-        const outcome = expect(pending).rejects.toBe(rotated);
-        await vi.advanceTimersByTimeAsync(0);
-        expect(calls).toHaveLength(1);
-        current = false;
-        await vi.advanceTimersByTimeAsync(1_000);
-        await outcome;
-        expect(admissions).toBe(2);
-        expect(calls).toHaveLength(1);
-      });
-    },
-  );
+  it("admits each retry inside the current credential owner", async () => {
+    results(failure);
+    const rotated = new Error("credential rotated");
+    let current = true;
+    let admissions = 0;
+    const pending = fetch({
+      startRun: async <T>(start: () => T): Promise<Awaited<T>> => {
+        await Promise.resolve();
+        admissions += 1;
+        if (!current) {
+          throw rotated;
+        }
+        return await start();
+      },
+    });
+    const outcome = expect(pending).rejects.toBe(rotated);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toHaveLength(1);
+    current = false;
+    await vi.advanceTimersByTimeAsync(1_000);
+    await outcome;
+    expect(admissions).toBe(2);
+    expect(calls).toHaveLength(1);
+  });
 
-  it.each([
-    {
-      args: ["--git-dir=/repo/.git", "ls-remote", "origin"],
-      stderr: "fatal: Could not resolve host: example.invalid",
-    },
-  ])("recovers transport errors with Git global options: $stderr", async ({ args, stderr }) => {
-    results({ ...failure, stderr }, success);
-    const pending = executeGitCommand("/repo", args, { timeoutMs: 10_000 });
+  it("recovers transport errors with Git global options", async () => {
+    results({ ...failure, stderr: "fatal: Could not resolve host: example.invalid" }, success);
+    const pending = executeGitCommand("/repo", ["--git-dir=/repo/.git", "ls-remote", "origin"], {
+      timeoutMs: 10_000,
+    });
     await vi.advanceTimersByTimeAsync(1_000);
     expect((await pending).code).toBe(0);
     expect(calls).toHaveLength(2);
   });
 
   it.each([
-    { args: ["fetch", "origin"], stderr: "fatal: repository not found" },
-    { args: ["push", "origin", "main"], stderr: failure.stderr },
-    {
-      args: ["fetch", "origin"],
-      stderr:
-        "error: cannot lock ref 'refs/remotes/origin/main': Unable to create '/repo/.git/refs/remotes/origin/main.lock': File exists.",
-    },
-    {
-      args: ["fetch", "origin"],
-      stderr: "error: cannot lock ref 'refs/remotes/origin/main': is at aaaa but expected bbbb",
-    },
-    {
-      args: ["fetch", "origin"],
-      stderr:
-        "error: cannot lock ref 'refs/remotes/origin/main': is at aaaa but expected bbbb\nerror: origin did not send all necessary objects",
-    },
-  ])(
-    "does not replay permanent failures or unsafe operations: $args $stderr",
-    async ({ args, stderr }) => {
+    [["fetch", "origin"], "fatal: repository not found"],
+    [["push", "origin", "main"], failure.stderr],
+    [
+      ["fetch", "origin"],
+      "error: cannot lock ref 'refs/remotes/origin/main': Unable to create '/repo/.git/refs/remotes/origin/main.lock': File exists.",
+    ],
+    [
+      ["fetch", "origin"],
+      "error: cannot lock ref 'refs/remotes/origin/main': is at aaaa but expected bbbb",
+    ],
+    [
+      ["fetch", "origin"],
+      "error: cannot lock ref 'refs/remotes/origin/main': is at aaaa but expected bbbb\nerror: origin did not send all necessary objects",
+    ],
+  ] satisfies Array<[string[], string]>)(
+    "does not replay permanent failures or unsafe operations: %j %s",
+    async (args, stderr) => {
       results({ ...failure, stderr });
       expect((await executeGitCommand("/repo", args, { timeoutMs: 10_000 })).code).toBe(1);
       expect(calls).toHaveLength(1);

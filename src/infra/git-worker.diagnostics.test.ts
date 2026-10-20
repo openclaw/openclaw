@@ -65,23 +65,18 @@ it("reuses concurrent Git readers across polling intervals and releases them whe
 });
 
 it.each([
-  {
-    operation: "pull-request.branch-facts",
-    args: ["--no-lazy-fetch", "-c", "diff.private=secret", "diff", "--shortstat"],
-    command: "diff",
-    diffMode: "--shortstat",
-  },
-  {
-    operation: "pull-request.branch-facts",
-    args: ["diff", "--patch", "--no-index"],
-    command: "diff",
-    diffMode: "--no-index",
-  },
-  { operation: "pull-request.branch-facts", args: ["private-command"], command: "other" },
-  { operation: "checkout.diff", args: ["diff", "--raw"], command: "diff", diffMode: "--raw" },
-])(
-  "prints $operation attribution and a $command $diffMode timeout in the journal message",
-  async ({ operation, args: slowArgs, command, diffMode }) => {
+  [
+    "pull-request.branch-facts",
+    ["--no-lazy-fetch", "-c", "diff.private=secret", "diff", "--shortstat"],
+    "diff",
+    "--shortstat",
+  ],
+  ["pull-request.branch-facts", ["diff", "--patch", "--no-index"], "diff", "--no-index"],
+  ["pull-request.branch-facts", ["private-command"], "other", undefined],
+  ["checkout.diff", ["diff", "--raw"], "diff", "--raw"],
+] as const)(
+  "prints %s attribution and a %j %s %s timeout in the journal message",
+  async (operation, slowArgs, command, diffMode) => {
     let clock = 1_000_000;
     vi.spyOn(performance, "now").mockImplementation(() => clock);
     vi.spyOn(diagnostics, "areDiagnosticsEnabledForProcess").mockReturnValue(true);
@@ -185,6 +180,7 @@ it.each([
       expect(fields).not.toHaveProperty("scope");
       expect(fields).not.toHaveProperty("summaryOnly");
     }
+    const journal = `${message}\n${JSON.stringify(fields)}`;
     for (const privateValue of [
       cwd,
       privateRef,
@@ -193,8 +189,7 @@ it.each([
       "fixture output",
       "private-command",
     ]) {
-      expect(message).not.toContain(privateValue);
-      expect(JSON.stringify(fields)).not.toContain(privateValue);
+      expect(journal).not.toContain(privateValue);
     }
   },
 );

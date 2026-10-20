@@ -14,11 +14,11 @@ vi.mock("node:fs", async (importOriginal) => {
 const fixtureRootTracker = createSuiteTempRootTracker({
   prefix: "openclaw-gateway-write-failure-",
 });
+const acquire = (options: Parameters<typeof acquireGatewayLock>[0]) =>
+  acquireGatewayLock({ allowInTests: true, timeoutMs: 0, ...options });
 
 describe("gateway lock write failure", () => {
-  beforeAll(async () => {
-    await fixtureRootTracker.setup();
-  });
+  beforeAll(() => fixtureRootTracker.setup());
   beforeEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
@@ -29,9 +29,7 @@ describe("gateway lock write failure", () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
-  afterAll(async () => {
-    await fixtureRootTracker.cleanup();
-  });
+  afterAll(() => fixtureRootTracker.cleanup());
 
   it.skipIf(process.platform === "win32")(
     "acquires a writable database on a filesystem that rejects chmod",
@@ -40,13 +38,11 @@ describe("gateway lock write failure", () => {
       const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
       const options = {
         env: { OPENCLAW_STATE_DIR: stateDir },
-        allowInTests: true,
-        timeoutMs: 0,
         listenerMode: "supervised" as const,
         supervisor: { kind: "systemd" as const, name: null },
         port: 12345,
       };
-      const initial = await acquireGatewayLock(options);
+      const initial = await acquire(options);
       await initial?.release();
       await fs.chmod(databasePath, 0o666);
       const chmod = fsSync.chmodSync.bind(fsSync);
@@ -56,7 +52,7 @@ describe("gateway lock write failure", () => {
         }
         chmod(pathname, mode);
       });
-      const lock = await acquireGatewayLock(options);
+      const lock = await acquire(options);
       try {
         expect(lock).not.toBeNull();
         expect(chmodSpy).toHaveBeenCalledWith(databasePath, 0o600);
@@ -68,7 +64,6 @@ describe("gateway lock write failure", () => {
   );
 
   it("closes handle and preserves an unowned lock file when writeFile fails after open succeeds", async () => {
-    vi.useRealTimers();
     const stateDir = await fixtureRootTracker.make("case");
     const configPath = path.join(stateDir, "openclaw.json");
     await fs.writeFile(configPath, "{}", "utf8");
@@ -121,12 +116,7 @@ describe("gateway lock write failure", () => {
       write(file, data, options);
     });
 
-    const failure = await acquireGatewayLock({
-      env,
-      allowInTests: true,
-      timeoutMs: 0,
-      lockDir,
-    }).catch((error: unknown) => error);
+    const failure = await acquire({ env, lockDir }).catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(GatewayLockError);
     expect(failure).toMatchObject({ cause: writeError, databasePath: undefined });
 
