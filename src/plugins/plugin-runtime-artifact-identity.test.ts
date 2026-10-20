@@ -6,7 +6,6 @@ import { gitRuntimeStagingPath } from "../infra/update-runtime-staging.js";
 import { fingerprintPluginRuntimeArtifact } from "./plugin-runtime-artifact-identity.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
-const tempRoot = () => temp.make("openclaw-plugin-artifact-");
 
 function write(filename: string, content: string) {
   fs.mkdirSync(path.dirname(filename), { recursive: true });
@@ -14,7 +13,7 @@ function write(filename: string, content: string) {
 }
 
 function createPluginFixture() {
-  const rootDir = tempRoot();
+  const rootDir = temp.make("openclaw-plugin-artifact-");
   const source = path.join(rootDir, "dist", "index.js");
   write(source, 'export { run } from "./runtime.js";\n');
   write(path.join(rootDir, "dist", "runtime.js"), "export const run = () => 1;\n");
@@ -124,7 +123,7 @@ describe("fingerprintPluginRuntimeArtifact", () => {
   );
 
   it("hashes canonical dist content when the registry points at dist-runtime", () => {
-    const packageRoot = tempRoot();
+    const packageRoot = temp.make("openclaw-plugin-artifact-");
     const stagingRoot = path.join(packageRoot, "dist-runtime", "extensions", "fixture");
     const canonicalRoot = path.join(packageRoot, "dist", "extensions", "fixture");
     const stagingSource = path.join(stagingRoot, "index.js");
@@ -147,7 +146,7 @@ describe("fingerprintPluginRuntimeArtifact", () => {
   });
 
   it("hashes source when a bundled plugin opts out of core dist", () => {
-    const rootDir = tempRoot();
+    const rootDir = temp.make("openclaw-plugin-artifact-");
     const source = path.join(rootDir, "index.ts");
     const staleDistSource = path.join(rootDir, "dist", "index.js");
     write(source, "export const revision = 'source-1';\n");

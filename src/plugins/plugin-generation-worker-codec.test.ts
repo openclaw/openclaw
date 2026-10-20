@@ -21,6 +21,7 @@ function nativeRootTransport(): GenerationNativeRootTransport {
 }
 
 const disposable = () => ({ dispose() {}, async disposeAsync() {} });
+const weak = (...values: object[]) => values.map((value) => new WeakRef(value));
 async function expectCollected(references: WeakRef<object>[]) {
   const control = new WeakRef({});
   await nextTurn();
@@ -70,12 +71,7 @@ it.each(["sync", "async"])(
   "collects disposed %s recovery graphs while another artifact stays live",
   async (mode) => {
     const transport = resourceTransport();
-    const parent = transport.exchange(
-      transport.own({
-        value: () => 42,
-        ...disposable(),
-      }),
-    );
+    const parent = transport.exchange(transport.own({ value: () => 42, ...disposable() }));
     async function recovery() {
       const payload = { value: "captured source" };
       const original = transport.own({
@@ -85,12 +81,7 @@ it.each(["sync", "async"])(
       });
       const decoded = transport.exchange(original);
       expect(decoded.sourceCapture.read()).toEqual(payload);
-      const references = [
-        new WeakRef(original),
-        new WeakRef(payload),
-        new WeakRef(decoded.fork),
-        new WeakRef(decoded.sourceCapture.read),
-      ];
+      const references = weak(original, payload, decoded.fork, decoded.sourceCapture.read);
       if (mode === "sync") {
         decoded.dispose();
         await decoded.disposeAsync();
@@ -120,7 +111,7 @@ it.each(["sync", "async"])("releases %s method replies after their last owner", 
     const reply = mode === "async" ? await first!.factsAsync() : first!.facts();
     first!.dispose();
     expect(reply.read()).toEqual({ value: 42 });
-    const references = [new WeakRef(payload), new WeakRef(read), new WeakRef(reply.read)];
+    const references = weak(payload, read, reply.read);
     await second!.disposeAsync();
     return references;
   }
@@ -202,31 +193,20 @@ it("releases ordinary message graphs while retaining callable identity", async (
   ) => number;
   function exchange() {
     const child = { marker: "payload" };
-    const payload: {
-      child: object;
-      aliases: object[];
-      map: Map<object, Set<object>>;
-      url: URL;
-      cycle?: unknown;
-    } = {
+    const payload = {
       child,
       aliases: [child, child],
       map: new Map([[child, new Set([child])]]),
       url: new URL("https://example.test/plugin"),
     };
-    payload.cycle = payload;
-    const decoded = receiver.decode(sender.encode(payload)) as typeof payload;
+    const cyclic = Object.assign(payload, { cycle: payload });
+    const decoded = receiver.decode(sender.encode(cyclic)) as typeof cyclic;
     expect(decoded.cycle).toBe(decoded);
     expect(decoded.aliases[0]).toBe(decoded.child);
     expect(decoded.aliases[1]).toBe(decoded.child);
     expect(decoded.map.get(decoded.child)?.has(decoded.child)).toBe(true);
     expect(decoded.url.href).toBe("https://example.test/plugin");
-    return [
-      new WeakRef(payload),
-      new WeakRef(child),
-      new WeakRef(decoded),
-      new WeakRef(decoded.child),
-    ];
+    return weak(payload, child, decoded, decoded.child);
   }
   const references = exchange();
   await expectCollected(references);

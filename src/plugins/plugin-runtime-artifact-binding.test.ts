@@ -35,20 +35,13 @@ function artifact(relative = "dist/extensions/workboard") {
   return { rootDir, source };
 }
 
-function bundledRecord(entry: ReturnType<typeof artifact>) {
-  return createPluginRecord({ id: "workboard", origin: "bundled", ...entry });
-}
-
-function completeBinding(
-  record: ReturnType<typeof createPluginRecord>,
-  selection: Parameters<typeof bindPluginRuntimeArtifactSelection>[1],
-) {
-  bindPluginRuntimeArtifactSelection(record, selection).runtimeRegistrationComplete = true;
+function completeBinding(...args: Parameters<typeof bindPluginRuntimeArtifactSelection>) {
+  bindPluginRuntimeArtifactSelection(...args).runtimeRegistrationComplete = true;
 }
 
 it("requires a completed canonical bundled runtime binding, not matching record metadata", () => {
   const runtimeEntry = artifact();
-  const record = bundledRecord(runtimeEntry);
+  const record = createPluginRecord({ id: "workboard", origin: "bundled", ...runtimeEntry });
   expect(hasCanonicalPluginDistribution(record)).toBe(false);
   const binding = bindPluginRuntimeArtifactSelection(record, { ...runtimeEntry, runtimeEntry });
   expect(hasCanonicalPluginDistribution(record)).toBe(false);
@@ -97,7 +90,7 @@ it.each([
 it("recognizes staging execution only when it resolves into the same canonical owner", () => {
   const canonical = artifact();
   const staging = artifact("dist-runtime/extensions/workboard");
-  const record = bundledRecord(staging);
+  const record = createPluginRecord({ id: "workboard", origin: "bundled", ...staging });
   completeBinding(record, { ...staging, runtimeEntry: canonical });
   expect(hasCanonicalPluginDistribution(record)).toBe(true);
 });
@@ -109,7 +102,7 @@ it.each(["inside", "outside"])(
     owner.packageRoot = path.join(root, "owner");
     fs.mkdirSync(path.join(owner.packageRoot, "dist"), { recursive: true });
     fs.symlinkSync(path.dirname(foreign.rootDir), path.join(owner.packageRoot, "dist/extensions"));
-    const record = bundledRecord(foreign);
+    const record = createPluginRecord({ id: "workboard", origin: "bundled", ...foreign });
     completeBinding(record, { ...foreign, runtimeEntry: foreign });
     expect(hasCanonicalPluginDistribution(record)).toBe(false);
   },

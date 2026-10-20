@@ -36,9 +36,7 @@ it.each(["dispose", "disposeAsync"] as const)(
     const pending = capture[method]();
     try {
       expect([...owned].filter((id) => cache[id] !== undefined)).toEqual([]);
-      for (const id of preserved) {
-        expect(cache[id]).toBe(record);
-      }
+      expect(preserved.every((id) => cache[id] === record)).toBe(true);
     } finally {
       await pending;
       for (const id of [...owned, ...preserved]) {

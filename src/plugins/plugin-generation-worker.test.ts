@@ -44,14 +44,31 @@ const workersActive = () =>
   captureRetainedNativeWorkerSource({ runtimeGeneration: undefined }).hasActiveWorkers;
 const expectBytes = (filename: string, fixture: Fixture) =>
   expect(fs.readFileSync(filename)).toEqual(fixture.bytes);
+const expectSource = (
+  source: { resolve(filename: string): string },
+  filename: string,
+  text = "fixture",
+) => expect(fs.readFileSync(source.resolve(filename), "utf8")).toContain(text);
+const withStorage = <T>(stateDir: string, run: () => T) =>
+  withPluginSourceCaptureStorage({ stateDir, placement: "temporary" }, run);
+const withInstalledCapture = <T>(
+  root: string,
+  cache: ReturnType<typeof createPluginCache>,
+  run: () => T,
+) =>
+  withPluginCache(cache, () =>
+    withPluginInstallRoots({ ...resolvePluginInstallRoots(), stateDir: root }, () =>
+      withStorage(root, run),
+    ),
+  );
 
-function sourceFixture(prefix: string, name: string, version?: string) {
-  const root = fs.realpathSync(temp.make(prefix));
+function sourceFixture(version?: string) {
+  const root = fs.realpathSync(temp.make("plugin-generation-worker-"));
   const source = path.join(root, "source");
   fs.mkdirSync(source);
   fs.writeFileSync(
     path.join(source, "package.json"),
-    JSON.stringify({ name, version, type: "module" }),
+    JSON.stringify({ name: "fixture", version, type: "module" }),
   );
   const entry = path.join(source, "index.js");
   fs.writeFileSync(entry, "export const value = 42;");
@@ -72,9 +89,7 @@ async function withWorkerFixture(
     const cache = createPluginCache();
     const work = () =>
       withPluginCache(cache, () =>
-        withPluginSourceCaptureStorage({ stateDir: state.stateDir, placement: "temporary" }, () =>
-          run({ state, fixture, cache }),
-        ),
+        withStorage(state.stateDir, () => run({ state, fixture, cache })),
       );
     try {
       await (readOnly ? withArtifactPreservingStateReads(work) : work());
@@ -243,19 +258,16 @@ it.each(["deferred", "superseded", "terminal"] as const)(
 );
 
 it("joins retained capture workers before terminal native-source shutdown", async () => {
-  const { root, source, entry } = sourceFixture(
-    "plugin-generation-worker-shutdown-",
-    "shutdown-fixture",
-  );
+  const { root, source, entry } = sourceFixture();
   await withArtifactPreservingStateReads(() =>
-    withPluginSourceCaptureStorage({ stateDir: root, placement: "temporary" }, async () => {
+    withStorage(root, async () => {
       const prepared = await preparePluginGenerationArtifact({ rootDir: source, source: entry });
       const capturesBeforeRecovery = fs.readdirSync(path.dirname(prepared.artifact.boundaryRoot));
       const recovery = prepared.artifact.captureRecoverySource();
       const capturesWithRecovery = fs.readdirSync(path.dirname(prepared.artifact.boundaryRoot));
       const nativeSource = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
       expect(nativeSource.hasActiveWorkers).toBe(true);
-      expect(fs.readFileSync(prepared.artifact.resolve(entry), "utf8")).toContain("42");
+      expectSource(prepared.artifact, entry, "42");
       await closeDefaultRetainedNativeWorkerSource();
       expect(nativeSource.hasActiveWorkers).toBe(false);
       expect(fs.existsSync(prepared.artifact.boundaryRoot)).toBe(false);
@@ -274,45 +286,38 @@ it("joins retained capture workers before terminal native-source shutdown", asyn
 it("finishes a capture after more than two minutes without retiring its worker", async () => {
   const root = fs.realpathSync(temp.make("plugin-generation-worker-long-capture-"));
   const fixture = createFixture(path.join(root, "installed"), false);
-  const roots = { ...resolvePluginInstallRoots(), stateDir: root };
   const cache = createPluginCache();
   const { promise: gate, resolve: releasePublication } = createDeferredCore();
   const { promise: started, resolve: publicationStarted } = createDeferredCore();
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
   try {
-    await withPluginCache(cache, () =>
-      withPluginInstallRoots(roots, () =>
-        withPluginSourceCaptureStorage({ stateDir: root, placement: "temporary" }, async () => {
-          preparePluginNativeAdmissions(fixture.index, cache);
-          const preparing = withPluginSourceAdmissionPublisher(
-            async () => {
-              publicationStarted();
-              await gate;
-              return false;
-            },
-            () => prepare(fixture),
-          );
-          // Observe rejection while the publication gate is held, then assert the result below.
-          void preparing.catch(() => {});
-          await started;
-          // Advance the real pool's task timer without sleeping for two minutes.
-          try {
-            await vi.advanceTimersByTimeAsync(120_001);
-            releasePublication();
-            const prepared = await preparing;
-            try {
-              expect(fs.readFileSync(prepared.artifact.resolve(fixture.entry), "utf8")).toContain(
-                "fixture",
-              );
-            } finally {
-              await prepared.artifact.disposeAsync();
-            }
-          } finally {
-            vi.useRealTimers();
-          }
-        }),
-      ),
-    );
+    await withInstalledCapture(root, cache, async () => {
+      preparePluginNativeAdmissions(fixture.index, cache);
+      const preparing = withPluginSourceAdmissionPublisher(
+        async () => {
+          publicationStarted();
+          await gate;
+          return false;
+        },
+        () => prepare(fixture),
+      );
+      // Observe rejection while the publication gate is held, then assert the result below.
+      void preparing.catch(() => {});
+      await started;
+      // Advance the real pool's task timer without sleeping for two minutes.
+      try {
+        await vi.advanceTimersByTimeAsync(120_001);
+        releasePublication();
+        const prepared = await preparing;
+        try {
+          expectSource(prepared.artifact, fixture.entry);
+        } finally {
+          await prepared.artifact.disposeAsync();
+        }
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   } finally {
     vi.useRealTimers();
     releasePublication();
@@ -330,29 +335,26 @@ it("publishes native admission to pinned install roots while capture storage is 
     try {
       await withPluginCache(cache, () =>
         withPluginInstallRoots(roots, () =>
-          withPluginSourceCaptureStorage(
-            { stateDir: state.stateDir, placement: "temporary" },
-            async () => {
-              preparePluginNativeAdmissions(fixture.index, cache);
-              const prepared = await prepare(fixture);
-              try {
-                expect(fs.existsSync(state.statePath("tmp", "plugin-captures"))).toBe(false);
-                const captured = fs.realpathSync(prepared.artifact.resolve(fixture.filename));
-                expectBytes(captured, fixture);
-                const persisted = await readPersistedInstalledPluginIndex({
-                  stateDir: roots.stateDir,
-                });
-                const receipt = Object.values(persisted?.plugins[0]?.sourceAdmissions ?? {})[0];
-                expect(receipt?.nativeArtifacts[fixture.filename]?.capturedPath).toBe(captured);
-                const redirected = await readPersistedInstalledPluginIndex({
-                  stateDir: state.stateDir,
-                });
-                expect(Object.keys(redirected?.plugins[0]?.sourceAdmissions ?? {})).toHaveLength(0);
-              } finally {
-                await prepared.artifact.disposeAsync();
-              }
-            },
-          ),
+          withStorage(state.stateDir, async () => {
+            preparePluginNativeAdmissions(fixture.index, cache);
+            const prepared = await prepare(fixture);
+            try {
+              expect(fs.existsSync(state.statePath("tmp", "plugin-captures"))).toBe(false);
+              const captured = fs.realpathSync(prepared.artifact.resolve(fixture.filename));
+              expectBytes(captured, fixture);
+              const persisted = await readPersistedInstalledPluginIndex({
+                stateDir: roots.stateDir,
+              });
+              const receipt = Object.values(persisted?.plugins[0]?.sourceAdmissions ?? {})[0];
+              expect(receipt?.nativeArtifacts[fixture.filename]?.capturedPath).toBe(captured);
+              const redirected = await readPersistedInstalledPluginIndex({
+                stateDir: state.stateDir,
+              });
+              expect(Object.keys(redirected?.plugins[0]?.sourceAdmissions ?? {})).toHaveLength(0);
+            } finally {
+              await prepared.artifact.disposeAsync();
+            }
+          }),
         ),
       );
     } finally {
@@ -367,18 +369,14 @@ it("publishes native admission to pinned install roots while capture storage is 
 it.each(["capture", "custody", "fork"] as const)(
   "keeps %s recovery alive beyond the short RPC deadline and owner disposal",
   async (operation) => {
-    const { root, source, entry } = sourceFixture(
-      "plugin-generation-worker-",
-      "worker-fixture",
-      "1.0.0",
-    );
+    const { root, source, entry } = sourceFixture("1.0.0");
     await withArtifactPreservingStateReads(() =>
-      withPluginSourceCaptureStorage({ stateDir: root, placement: "temporary" }, async () => {
+      withStorage(root, async () => {
         const prepared = await preparePluginGenerationArtifact({ rootDir: source, source: entry });
         prepared.attachModuleSource((filename) => filename);
         const artifact = prepared.artifact;
         let moduleFactCallbacks: WeakRef<object>[] | undefined;
-        expect(fs.readFileSync(artifact.resolve(entry), "utf8")).toContain("42");
+        expectSource(artifact, entry, "42");
         if (operation === "capture") {
           moduleFactCallbacks = (() => {
             const capturedEntry = artifact.resolve(entry);
@@ -400,7 +398,7 @@ it.each(["capture", "custody", "fork"] as const)(
           queryObjects(WeakRef);
           expect(control.deref()).toBeUndefined();
           expect(replies.every((reply) => reply.deref() === undefined)).toBe(true);
-          expect(fs.readFileSync(artifact.resolve(entry), "utf8")).toContain("42");
+          expectSource(artifact, entry, "42");
           const releaseRecovery = async () => {
             const recovery = artifact.captureRecoverySource();
             const references = [
@@ -414,7 +412,7 @@ it.each(["capture", "custody", "fork"] as const)(
           await nextTurn();
           queryObjects(WeakRef);
           expect(released.every((reference) => reference.deref() === undefined)).toBe(true);
-          expect(fs.readFileSync(artifact.resolve(entry), "utf8")).toContain("42");
+          expectSource(artifact, entry, "42");
         }
         // Recovery copies the captured package synchronously in the worker. Advance
         // its host deadline clock without making this lifecycle proof sleep for 30s.
@@ -433,12 +431,12 @@ it.each(["capture", "custody", "fork"] as const)(
           clock.mockRestore();
           await parentRecovery?.disposeAsync();
         }
-        expect(fs.readFileSync(artifact.resolve(entry), "utf8")).toContain("42");
+        expectSource(artifact, entry, "42");
         await artifact.disposeAsync();
         await nextTurn();
         queryObjects(WeakRef);
         const moduleFactsReleased = moduleFactCallbacks?.every((callback) => !callback.deref());
-        expect(fs.readFileSync(recovery.resolve(entry), "utf8")).toContain("42");
+        expectSource(recovery, entry, "42");
         const recoveredEntry = recovery.resolve(entry);
         await recovery.disposeAsync();
         // Later rollback generations compose this path mapping after its producer retires.
@@ -459,65 +457,58 @@ it("isolates an active artifact from a sibling capture waiting on host publicati
   const fixture = createFixture(path.join(root, "installed"), false);
   const cache = createPluginCache();
   const siblingCache = createPluginCache();
-  const roots = { ...resolvePluginInstallRoots(), stateDir: root };
   const { promise: gate, resolve: releasePublication } = createDeferredCore();
   const { promise: started, resolve: publicationStarted } = createDeferredCore();
   try {
-    await withPluginCache(cache, () =>
-      withPluginInstallRoots(roots, () =>
-        withPluginSourceCaptureStorage({ stateDir: root, placement: "temporary" }, async () => {
-          preparePluginNativeAdmissions(fixture.index, cache);
-          preparePluginNativeAdmissions(fixture.index, siblingCache);
-          const first = await withPluginSourceAdmissionPublisher(
-            async () => false,
-            () => prepare(fixture),
-          );
-          const firstDirectory = path.dirname(first.artifact.boundaryRoot);
-          const preparing = withPluginSourceAdmissionPublisher(
-            async () => {
-              publicationStarted();
-              await gate;
-              return false;
-            },
-            () => withPluginCache(siblingCache, () => prepare(fixture)),
-          );
-          try {
-            await Promise.race([
-              started,
-              preparing.then(() => {
-                throw new Error("Sibling capture completed without entering publication");
-              }),
-            ]);
-            // Registration may schedule a lazy import while another plugin is preparing.
-            await nextTimer(0);
-            expect(fs.readFileSync(first.artifact.resolve(fixture.entry), "utf8")).toContain(
-              "fixture",
-            );
-            await expect(
-              preparePluginGenerationArtifact({
-                rootDir: path.join(root, "missing"),
-                source: fixture.entry,
-              }),
-            ).rejects.toThrow();
-          } finally {
-            releasePublication();
-            const second = await preparing;
-            expect(path.dirname(second.artifact.boundaryRoot)).not.toBe(firstDirectory);
-            const secondDirectory = path.dirname(second.artifact.boundaryRoot);
-            const recovery = first.artifact.captureRecoverySource();
-            await first.artifact.disposeAsync();
-            await second.artifact.disposeAsync();
-            expect(fs.readFileSync(recovery.resolve(fixture.entry), "utf8")).toContain("fixture");
-            await recovery.disposeAsync();
-            // Admission keeps native bytes, but source workers retire with their last artifact.
-            expect(fs.existsSync(firstDirectory)).toBe(false);
-            expect(fs.existsSync(secondDirectory)).toBe(false);
-            await retirePluginCache(cache);
-            await retirePluginCache(siblingCache);
-          }
-        }),
-      ),
-    );
+    await withInstalledCapture(root, cache, async () => {
+      preparePluginNativeAdmissions(fixture.index, cache);
+      preparePluginNativeAdmissions(fixture.index, siblingCache);
+      const first = await withPluginSourceAdmissionPublisher(
+        async () => false,
+        () => prepare(fixture),
+      );
+      const firstDirectory = path.dirname(first.artifact.boundaryRoot);
+      const preparing = withPluginSourceAdmissionPublisher(
+        async () => {
+          publicationStarted();
+          await gate;
+          return false;
+        },
+        () => withPluginCache(siblingCache, () => prepare(fixture)),
+      );
+      try {
+        await Promise.race([
+          started,
+          preparing.then(() => {
+            throw new Error("Sibling capture completed without entering publication");
+          }),
+        ]);
+        // Registration may schedule a lazy import while another plugin is preparing.
+        await nextTimer(0);
+        expectSource(first.artifact, fixture.entry);
+        await expect(
+          preparePluginGenerationArtifact({
+            rootDir: path.join(root, "missing"),
+            source: fixture.entry,
+          }),
+        ).rejects.toThrow();
+      } finally {
+        releasePublication();
+        const second = await preparing;
+        expect(path.dirname(second.artifact.boundaryRoot)).not.toBe(firstDirectory);
+        const secondDirectory = path.dirname(second.artifact.boundaryRoot);
+        const recovery = first.artifact.captureRecoverySource();
+        await first.artifact.disposeAsync();
+        await second.artifact.disposeAsync();
+        expectSource(recovery, fixture.entry);
+        await recovery.disposeAsync();
+        // Admission keeps native bytes, but source workers retire with their last artifact.
+        expect(fs.existsSync(firstDirectory)).toBe(false);
+        expect(fs.existsSync(secondDirectory)).toBe(false);
+        await retirePluginCache(cache);
+        await retirePluginCache(siblingCache);
+      }
+    });
   } finally {
     releasePublication();
     await retirePluginCache(cache);

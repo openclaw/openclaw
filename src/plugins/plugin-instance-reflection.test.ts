@@ -125,51 +125,46 @@ describe("managed plugin reflection", () => {
 });
 
 const proxyOperations = [
-  { name: "get", read: (view: object) => Reflect.get(view, "value"), expected: 1 },
-  { name: "has", read: (view: object) => Reflect.has(view, "value"), expected: true },
-  {
-    name: "ownKeys",
-    read: (view: object) => Reflect.ownKeys(view),
-    expected: ["value", "execute"],
-  },
-  {
-    name: "getOwnPropertyDescriptor",
-    read: (view: object) => Reflect.getOwnPropertyDescriptor(view, "value")?.value,
-    expected: 1,
-  },
-  {
-    name: "getPrototypeOf",
-    read: (view: object) => Reflect.getPrototypeOf(view),
-    expected: Object.prototype,
-  },
-];
+  ["get", (view: object) => Reflect.get(view, "value"), 1],
+  ["has", (view: object) => Reflect.has(view, "value"), true],
+  ["ownKeys", Reflect.ownKeys, ["value", "execute"]],
+  [
+    "getOwnPropertyDescriptor",
+    (view: object) => Reflect.getOwnPropertyDescriptor(view, "value")?.value,
+    1,
+  ],
+  ["getPrototypeOf", Reflect.getPrototypeOf, Object.prototype],
+] as const;
 
 describe("managed plugin proxy exports", () => {
-  it.each(proxyOperations)("admits $name traps and fences retirement", async (operation) => {
-    const admissions: boolean[] = [];
-    const record =
-      <Args extends unknown[], Result>(reflect: (...args: Args) => Result) =>
-      (...args: Args): Result => {
-        admissions.push(instance.hasActiveCall);
-        return reflect(...args);
-      };
-    const target = { value: 1, execute: () => "current" };
-    const proxy = new Proxy(target, {
-      get: record(Reflect.get),
-      has: record(Reflect.has),
-      ownKeys: record(Reflect.ownKeys),
-      getOwnPropertyDescriptor: record(Reflect.getOwnPropertyDescriptor),
-      getPrototypeOf: record(Reflect.getPrototypeOf),
-    });
-    const source: object = operation.name === "get" ? Object.create(proxy) : proxy;
-    const view = instance.wrap(source);
-    admissions.length = 0;
-    expect(operation.read(view)).toEqual(operation.expected);
-    expect(admissions.length).toBeGreaterThan(0);
-    expect(admissions.every(Boolean)).toBe(true);
-    await instance.dispose();
-    admissions.length = 0;
-    expectRetired(() => operation.read(view));
-    expect(admissions).toEqual([]);
-  });
+  it.each(proxyOperations)(
+    "admits %s traps and fences retirement",
+    async (name, read, expected) => {
+      const admissions: boolean[] = [];
+      const record =
+        <Args extends unknown[], Result>(reflect: (...args: Args) => Result) =>
+        (...args: Args): Result => {
+          admissions.push(instance.hasActiveCall);
+          return reflect(...args);
+        };
+      const target = { value: 1, execute: () => "current" };
+      const proxy = new Proxy(target, {
+        get: record(Reflect.get),
+        has: record(Reflect.has),
+        ownKeys: record(Reflect.ownKeys),
+        getOwnPropertyDescriptor: record(Reflect.getOwnPropertyDescriptor),
+        getPrototypeOf: record(Reflect.getPrototypeOf),
+      });
+      const source: object = name === "get" ? Object.create(proxy) : proxy;
+      const view = instance.wrap(source);
+      admissions.length = 0;
+      expect(read(view)).toEqual(expected);
+      expect(admissions.length).toBeGreaterThan(0);
+      expect(admissions.every(Boolean)).toBe(true);
+      await instance.dispose();
+      admissions.length = 0;
+      expectRetired(() => read(view));
+      expect(admissions).toEqual([]);
+    },
+  );
 });
