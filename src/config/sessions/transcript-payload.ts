@@ -15,7 +15,6 @@ import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-
 import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
-import type { TranscriptIdentityInsertRow } from "./session-accessor.sqlite-transcript-identity.js";
 import { findSessionTranscriptHeader } from "./session-entry-codec.js";
 import {
   projectModelContextEventSql,
@@ -136,7 +135,13 @@ export function createTranscriptEventInserter(database: EngineConnection, sessio
       insert(prepared);
     }
   };
-  type Identity = Omit<TranscriptIdentityInsertRow, "seq" | "createdAt">;
+  type StoredIdentity = DB["transcript_event_identities"];
+  type Identity = {
+    eventId: StoredIdentity["event_id"];
+    eventType: StoredIdentity["event_type"];
+    parentId: StoredIdentity["parent_id"];
+    messageIdempotencyKey: StoredIdentity["message_idempotency_key"];
+  };
   type SingleRow = StoredRow & { eventId?: string; identity?: Identity };
   const createSingleInsert = (checkEventId: boolean, includeIdentity: boolean) =>
     prepareSqliteQueryTakeFirstSync<SingleRow, { seq: number }>(database, (parameter) => {
