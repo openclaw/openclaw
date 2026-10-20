@@ -14,45 +14,41 @@ import {
 
 const { controllerFixture, flushFrames } = setupNativeBrowserPanelTests();
 const urlOf = (panel: Element) => panel.querySelector<HTMLInputElement>(".bp-url")?.value;
-function createPanel() {
-  return Object.assign(document.createElement("openclaw-browser-panel"), {
+const createPanel = () =>
+  Object.assign(document.createElement("openclaw-browser-panel"), {
     available: true,
     remoteAvailable: false,
     embedded: true,
     presented: true,
   });
-}
-it.each(["reconnect", "context replacement"])(
-  "resumes queued native publications after %s",
-  async (transition) => {
-    const native = fakeNativeBrowser([nativeTab("mac-first")]);
-    const first = createInitializationContext();
-    const provider = createApplicationContextProvider(first);
-    const panel = createPanel();
+it.each(["reconnect", "context"])("rebinds publications after %s", async (transition) => {
+  const native = fakeNativeBrowser([nativeTab("mac-first")]);
+  const first = createInitializationContext();
+  const provider = createApplicationContextProvider(first);
+  const panel = createPanel();
+  provider.append(panel);
+  mountSolid(() => provider);
+  await panel.updateComplete;
+  const viewport = panel.querySelector(".bp-viewport");
+  native.publish([nativeTab("mac-queued", "https://example.test/queued")]);
+  const pending = panel.updateComplete;
+  if (transition === "reconnect") {
+    panel.remove();
+    await pending;
     provider.append(panel);
-    mountSolid(() => provider);
-    await panel.updateComplete;
-    const viewport = panel.querySelector(".bp-viewport");
-    native.publish([nativeTab("mac-queued", "https://example.test/queued")]);
-    const pending = panel.updateComplete;
-    if (transition === "reconnect") {
-      panel.remove();
-      await pending;
-      provider.append(panel);
-    } else {
-      provider.setContext({ ...first, basePath: "/replacement" });
-      await pending;
-    }
-    await panel.updateComplete;
-    expect(panel.querySelector(".bp-viewport")).not.toBe(viewport);
-    expect(panel.activeHostedTabId).toBe("mac-queued");
-    expect(urlOf(panel)).toBe("https://example.test/queued");
-    native.publish([nativeTab("mac-current", "https://example.test/current")]);
-    await panel.updateComplete;
-    expect(panel.activeHostedTabId).toBe("mac-current");
-    expect(urlOf(panel)).toBe("https://example.test/current");
-  },
-);
+  } else {
+    provider.setContext({ ...first, basePath: "/replacement" });
+    await pending;
+  }
+  await panel.updateComplete;
+  expect(panel.querySelector(".bp-viewport")).not.toBe(viewport);
+  expect(panel.activeHostedTabId).toBe("mac-queued");
+  expect(urlOf(panel)).toBe("https://example.test/queued");
+  native.publish([nativeTab("mac-current", "https://example.test/current")]);
+  await panel.updateComplete;
+  expect(panel.activeHostedTabId).toBe("mac-current");
+  expect(urlOf(panel)).toBe("https://example.test/current");
+});
 
 it("retains a pre-mount native open and retires its subscription and replies on disposal", async () => {
   const native = fakeNativeBrowser();
@@ -71,11 +67,9 @@ it("retains a pre-mount native open and retires its subscription and replies on 
   native.postMessage.mockImplementationOnce(() => reply.promise);
   panel.querySelector<HTMLButtonElement>('[aria-label="Reload"]')!.click();
   expect(native.messages().at(-1)).toMatchObject({ type: "reload" });
-  const scope = panel.dataset.nativeBrowserScope;
+  const released = { type: "release-scope", scope: panel.dataset.nativeBrowserScope };
   mounted.unmount();
-  await waitForSolid(() =>
-    expect(native.messages().at(-1)).toEqual({ type: "release-scope", scope }),
-  );
+  await waitForSolid(() => expect(native.messages().at(-1)).toEqual(released));
   native.postMessage.mockClear();
   native.publish([nativeTab("mac-replacement")]);
   window.dispatchEvent(new Event("resize"));
@@ -102,11 +96,9 @@ it.each([
 ])("keeps native %s errors with their owner: %s", async (kind, owner) => {
   const native = fakeNativeBrowser(
     kind === "command"
-      ? [
-          nativeTab("mac-first", "https://example.test/first", "agent:main:first"),
-          nativeTab("mac-other", "https://example.test/other", "agent:main:first"),
-          nativeTab("mac-second", "https://example.test/second", "agent:main:second"),
-        ]
+      ? ["first", "other", "second"].map((id) =>
+          nativeTab(`mac-${id}`, undefined, `agent:main:${id === "second" ? id : "first"}`),
+        )
       : [nativeTab("mac-one"), nativeTab("mac-two")],
   );
   const panel = kind === "command" ? await mountSessionPanel("agent:main:first") : null;
@@ -114,13 +106,12 @@ it.each([
   const reply = createDeferred<{ ok: true }>();
   native.postMessage.mockImplementationOnce(() => reply.promise);
   const reload = () => panel?.querySelector<HTMLButtonElement>('[aria-label="Reload"]')?.click();
-  if (panel) {
-    reload();
-    expect(native.messages().at(-1)).toEqual({ type: "reload", tabId: "mac-first" });
-  } else {
-    flushFrames();
-    expect(native.messages().at(-1)).toMatchObject({ type: "present", tabId: "mac-one" });
-  }
+  (panel ? reload : flushFrames)();
+  expect(native.messages().at(-1)).toEqual(
+    panel
+      ? { type: "reload", tabId: "mac-first" }
+      : expect.objectContaining({ type: "present", tabId: "mac-one" }),
+  );
   if (panel && owner === "session") {
     panel.sessionKey = "agent:main:second";
     await panel.updateComplete;
@@ -128,19 +119,18 @@ it.each([
     panel.selectHostedTab("mac-other");
   } else if (owner === "newer-command") {
     reload();
-  } else if (panel && owner === "hide-and-show") {
-    panel.presented = false;
-    await panel.updateComplete;
-    panel.presented = true;
-    await panel.updateComplete;
   } else if (fixture && (owner === "selection" || owner === "renew")) {
     await fixture.controller.selectTab(owner === "selection" ? "mac-two" : "mac-one");
-  } else if (fixture && owner === "hide-and-show") {
-    const { host, controller } = fixture;
-    host.open = false;
-    controller.native.presentation.update();
-    host.open = true;
-    controller.native.presentation.update();
+  } else if (owner === "hide-and-show") {
+    for (const open of [false, true]) {
+      if (panel) {
+        panel.presented = open;
+        await panel.updateComplete;
+      } else if (fixture) {
+        fixture.host.open = open;
+        fixture.controller.native.presentation.update();
+      }
+    }
   }
   if (fixture) {
     flushFrames();
@@ -149,10 +139,7 @@ it.each([
   reply.reject(new Error(message));
   await flushBrowserResponses();
   await panel?.updateComplete;
-  const error = panel ? panel.querySelector(".bp-note--error") : fixture?.controller.errorText;
-  if (owner === "current") {
-    expect(typeof error === "string" ? error : error?.textContent).toContain(message);
-  } else {
-    expect(error).toBeNull();
-  }
+  const error =
+    panel?.querySelector(".bp-note--error")?.textContent ?? fixture?.controller.errorText;
+  expect(error ?? null).toEqual(owner === "current" ? expect.stringContaining(message) : null);
 });
