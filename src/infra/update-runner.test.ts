@@ -10,20 +10,16 @@ vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   execFileSync: execFileSyncMock,
 }));
-type CommandResponse = { stdout?: string; stderr?: string; code?: number | null };
-function toCommandResult(response?: CommandResponse) {
-  return {
-    stdout: response?.stdout ?? "",
-    stderr: response?.stderr ?? "",
-    code: response?.code === undefined ? 0 : response.code,
-  };
-}
-function createRunner(responses: Record<string, CommandResponse>) {
+function createRunner(responses: Record<string, string>) {
   const calls: string[] = [];
   const runner = async (argv: string[]) => {
     const key = argv.join(" ");
     calls.push(key);
-    return toCommandResult(responses[key]);
+    const stdout = responses[key];
+    if (stdout === undefined) {
+      throw new Error(`unexpected command: ${key}`);
+    }
+    return { stdout, stderr: "", code: 0 };
   };
   return { runner, calls };
 }
@@ -36,6 +32,13 @@ describe("update install surface and command ownership", () => {
     execFileSyncMock.mockClear();
     tempDir = await fixtureRootTracker.make("case");
   });
+  const writePackage = (root: string, manifest: object) =>
+    fs.writeFile(path.join(root, "package.json"), JSON.stringify(manifest), "utf8");
+  const resolveSurface = (
+    root: string,
+    installKind: "git" | "package",
+    runCommand: ReturnType<typeof createRunner>["runner"],
+  ) => resolveUpdateInstallSurface({ root, installKind, timeoutMs: 1000, runCommand });
   it("owns default updater subprocess trees", async () => {
     const runCommandWithTimeoutMock = vi.fn(async () => ({
       stdout: "",
@@ -79,44 +82,20 @@ describe("update install surface and command ownership", () => {
       await fs.mkdir(path.dirname(packageRoot), { recursive: true });
       await fs.mkdir(storeRoot, { recursive: true });
       await Promise.all([
-        fs.writeFile(
-          path.join(installDir, "package.json"),
-          JSON.stringify({ private: true, dependencies: { openclaw: "1.0.0" } }),
-          "utf8",
-        ),
-        fs.writeFile(
-          path.join(storeRoot, "package.json"),
-          JSON.stringify({ name: "openclaw", version: "1.0.0" }),
-          "utf8",
-        ),
+        writePackage(installDir, { private: true, dependencies: { openclaw: "1.0.0" } }),
+        writePackage(storeRoot, { name: "openclaw", version: "1.0.0" }),
       ]);
       await Promise.all([
         fs.symlink(storeRoot, packageRoot, "dir"),
         fs.symlink(installDir, path.join(globalRoot, "hash-openclaw"), "dir"),
       ]);
 
-      const runCommand = async (argv: string[]) => {
-        const command = argv.join(" ");
-        if (command.startsWith("git -C ")) {
-          return toCommandResult({ code: 1 });
-        }
-        if (command === "npm root -g") {
-          return toCommandResult({ stdout: `${path.join(tempDir, "npm", "node_modules")}\n` });
-        }
-        if (command === "pnpm root -g") {
-          return toCommandResult({ stdout: `${globalRoot}\n` });
-        }
-        throw new Error(`unexpected command: ${command}`);
-      };
+      const { runner } = createRunner({
+        "npm root -g": `${path.join(tempDir, "npm", "node_modules")}\n`,
+        "pnpm root -g": `${globalRoot}\n`,
+      });
 
-      await expect(
-        resolveUpdateInstallSurface({
-          root: packageRoot,
-          installKind: "package",
-          timeoutMs: 1000,
-          runCommand,
-        }),
-      ).resolves.toMatchObject({
+      await expect(resolveSurface(packageRoot, "package", runner)).resolves.toMatchObject({
         kind: "global",
         mode: "pnpm",
         root: packageRoot,
@@ -129,14 +108,7 @@ describe("update install surface and command ownership", () => {
     const sourceRoot = path.join(tempDir, "source");
     const { runner, calls } = createRunner({});
 
-    await expect(
-      resolveUpdateInstallSurface({
-        root: sourceRoot,
-        installKind: "git",
-        timeoutMs: 1000,
-        runCommand: runner,
-      }),
-    ).resolves.toMatchObject({
+    await expect(resolveSurface(sourceRoot, "git", runner)).resolves.toMatchObject({
       kind: "git",
       mode: "git",
       root: sourceRoot,
@@ -148,8 +120,8 @@ describe("update install surface and command ownership", () => {
   it("preserves non-global package roots without probing Git or the process cwd", async () => {
     const root = path.join(tempDir, "standalone-package");
     const { runner, calls } = createRunner({
-      "npm root -g": { stdout: path.join(tempDir, "npm-global") },
-      "pnpm root -g": { stdout: path.join(tempDir, "pnpm-global") },
+      "npm root -g": path.join(tempDir, "npm-global"),
+      "pnpm root -g": path.join(tempDir, "pnpm-global"),
     });
 
     await expect(

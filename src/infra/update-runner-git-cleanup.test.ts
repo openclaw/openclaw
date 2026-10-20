@@ -7,6 +7,19 @@ import {
 import { createUpdateErrorFact } from "./update-failure-facts.js";
 import { createGitAdmissionFixture } from "./update-runner-git-admission.test-support.js";
 
+function cleanupReporting(start?: Error, complete?: Error) {
+  const report =
+    (error?: Error) =>
+    ({ name }: { name: string }) => {
+      if (name === "preflight-cleanup" && error) {
+        throw error;
+      }
+    };
+  return { onStepStart: report(start), onStepComplete: report(complete) };
+}
+const removals = (fixture: ReturnType<typeof createGitAdmissionFixture>) =>
+  fixture.calls.filter((args) => args.includes("worktree") && args.includes("remove"));
+
 it.each(["none", "start", "complete"] as const)(
   "retains post-stop failure and cleans candidate when reporting fails: %s",
   async (reportingFails) => {
@@ -19,9 +32,8 @@ it.each(["none", "start", "complete"] as const)(
     let validated = false;
     let stopped = false;
     const doctor = vi.fn();
-    let error: unknown;
-    try {
-      await fixture.run({
+    const error = await fixture
+      .run({
         validateCandidate: async () => {
           validated = true;
         },
@@ -31,28 +43,16 @@ it.each(["none", "start", "complete"] as const)(
           throw original;
         },
         runGitDoctor: doctor,
-        progress: {
-          onStepStart: ({ name }) => {
-            if (reportingFails === "start" && name === "preflight-cleanup") {
-              throw reporting;
-            }
-          },
-          onStepComplete: ({ name }) => {
-            if (reportingFails === "complete" && name === "preflight-cleanup") {
-              throw reporting;
-            }
-          },
-        },
-      });
-    } catch (caught) {
-      error = caught;
-    }
+        progress: cleanupReporting(
+          reportingFails === "start" ? reporting : undefined,
+          reportingFails === "complete" ? reporting : undefined,
+        ),
+      })
+      .catch((caught: unknown) => caught);
     expect(stopped).toBe(true);
     expect(fixture.git(fixture.install, "rev-parse", "HEAD")).toBe(before);
     expect(doctor).not.toHaveBeenCalled();
-    expect(
-      fixture.calls.filter((args) => args.includes("worktree") && args.includes("remove")),
-    ).toHaveLength(1);
+    expect(removals(fixture)).toHaveLength(1);
     if (reportingFails !== "none") {
       expect(error).toMatchObject({ cause: original, errors: [original, reporting] });
       const fact = createUpdateErrorFact("update", error);
@@ -61,9 +61,7 @@ it.each(["none", "start", "complete"] as const)(
     } else {
       expect(error).toBe(original);
     }
-    const removed = fixture.calls
-      .find((args) => args.includes("worktree") && args.includes("remove"))
-      ?.at(-1);
+    const removed = removals(fixture)[0]?.at(-1);
     expect(removed).toBeDefined();
     expect(fs.existsSync(removed!)).toBe(false);
   },
@@ -72,18 +70,10 @@ it.each(["none", "start", "complete"] as const)(
 it("keeps a successful update successful when cleanup reporting is unavailable", async () => {
   const fixture = createGitAdmissionFixture();
   const result = await fixture.run({
-    progress: {
-      onStepStart: ({ name }) => {
-        if (name === "preflight-cleanup") {
-          throw new Error("offline maintenance");
-        }
-      },
-      onStepComplete: ({ name }) => {
-        if (name === "preflight-cleanup") {
-          throw new Error("completion reporting unavailable");
-        }
-      },
-    },
+    progress: cleanupReporting(
+      new Error("offline maintenance"),
+      new Error("completion reporting unavailable"),
+    ),
   });
   expect(result.status).toBe("ok");
   expect(fixture.git(fixture.install, "rev-parse", "HEAD")).toBe(fixture.target);
@@ -109,18 +99,10 @@ it("preserves uncertain process cleanup and the original failure without removin
       beforeGitMutation: async () => {
         throw original;
       },
-      progress: {
-        onStepStart: ({ name }) => {
-          if (name === "preflight-cleanup") {
-            throw uncertain;
-          }
-        },
-      },
+      progress: cleanupReporting(uncertain),
     })
     .catch((caught: unknown) => caught);
   expect(error).toMatchObject({ cause: original, errors: [original, uncertain] });
   expect(hasCommandProcessCleanupError(error)).toBe(true);
-  expect(fixture.calls.some((args) => args.includes("worktree") && args.includes("remove"))).toBe(
-    false,
-  );
+  expect(removals(fixture)).toEqual([]);
 });
