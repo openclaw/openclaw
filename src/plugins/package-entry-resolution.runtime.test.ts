@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { PackageManifest } from "./manifest.js";
 import {
   resolvePackageRuntimeExtensionSources,
   resolvePackageSetupSource,
@@ -15,12 +14,10 @@ import {
 } from "./plugin-runtime-artifact-resolution.js";
 
 const temp = createTempDirTracker();
-type Resolution = Parameters<typeof resolvePackageRuntimeExtensionSources>[0] & {
-  manifest: PackageManifest;
-  extensions: string[];
-};
+type Resolution = Parameters<typeof resolvePackageRuntimeExtensionSources>[0] &
+  Parameters<typeof validatePackageExtensionEntriesForInstall>[0];
 
-function createPackageFixture(
+function fixture(
   sourceExtension: string,
   runtimeOutputs: readonly string[] = [],
   includeSource = true,
@@ -57,11 +54,7 @@ it.each([
 ] as const)(
   "aligns install, discovery, setup, and loading: %s, outputs %j, selected %s, source %s",
   async (sourceExtension, runtimeOutputs, expectedRuntime, includeSource) => {
-    const { sourceEntry, resolution } = createPackageFixture(
-      sourceExtension,
-      runtimeOutputs,
-      includeSource,
-    );
+    const { sourceEntry, resolution } = fixture(sourceExtension, runtimeOutputs, includeSource);
     const { packageDir } = resolution;
     const install = await validatePackageExtensionEntriesForInstall(resolution);
     const runtime = resolvePackageRuntimeExtensionSources(resolution);
@@ -89,7 +82,7 @@ it.each([
 it.each([".ts", ".tsx", ".mts", ".cts"])(
   "rejects published source-only %s entries while allowing linked source checkouts",
   async (sourceExtension) => {
-    const { sourceEntry, resolution } = createPackageFixture(sourceExtension, ["index.js"]);
+    const { sourceEntry, resolution } = fixture(sourceExtension, ["index.js"]);
     const { packageDir, manifest } = resolution;
     // A valid JS extension lets the source-only setup entry reach its own validation.
     for (const extensions of [[sourceEntry], ["./index.js"]]) {

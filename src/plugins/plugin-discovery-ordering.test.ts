@@ -51,11 +51,7 @@ function reverseDirectoryEntries(directory: string): void {
       "withFileTypes" in options &&
       options.withFileTypes;
     return reverse
-      ? entries.toSorted((left, right) => {
-          const leftName = String(left.name);
-          const rightName = String(right.name);
-          return leftName > rightName ? -1 : leftName < rightName ? 1 : 0;
-        })
+      ? entries.toSorted((left, right) => String(right.name).localeCompare(String(left.name)))
       : entries;
   });
 }

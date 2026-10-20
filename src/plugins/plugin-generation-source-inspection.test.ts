@@ -97,18 +97,15 @@ it("inspects a captured cyclic dependency graph without following its dependency
   }
 
   const readdir = fs.readdirSync;
-  const followedLinks = new Set<string>();
+  let followedLinks = false;
   vi.spyOn(fs, "readdirSync").mockImplementation((...args) => {
     const entries = readdir(...args);
-    for (const entry of entries) {
-      if (
+    followedLinks ||= entries.some(
+      (entry) =>
         entry instanceof fs.Dirent &&
         entry.parentPath.startsWith(captures + path.sep) &&
-        fs.realpathSync(entry.parentPath) !== entry.parentPath
-      ) {
-        followedLinks.add(entry.parentPath);
-      }
-    }
+        fs.realpathSync(entry.parentPath) !== entry.parentPath,
+    );
     return entries;
   });
   const inspection = withPluginSourceCaptureDirectory(captures, () =>
@@ -124,7 +121,7 @@ it("inspects a captured cyclic dependency graph without following its dependency
       .toSorted(),
   );
   expect(fs.readdirSync(captures)).toEqual([]);
-  expect(followedLinks.size).toBe(0);
+  expect(followedLinks).toBe(false);
 });
 
 it.each([

@@ -31,9 +31,7 @@ it.each([false, true])(
     const captureStack = Error.captureStackTrace.bind(Error);
     let resolutionErrors = 0;
     vi.spyOn(Error, "captureStackTrace").mockImplementation((target, constructor) => {
-      if (Error.stackTraceLimit === Infinity) {
-        resolutionErrors++;
-      }
+      resolutionErrors += Error.stackTraceLimit === Infinity ? 1 : 0;
       captureStack(target, constructor);
     });
     const capture = async () => {
@@ -71,9 +69,8 @@ it.each(["value.js", "value.js.ts", "value.js/index.js", "value.js.json", "value
     );
     const artifact = resources.keep(capturePluginGenerationArtifact(root, entry));
     expect(artifact.hasSource(expected)).toBe(true);
-    expect(artifact.hasSource(expected === winner ? path.join(root, "value.ts") : winner)).toBe(
-      false,
-    );
+    const rejected = expected === winner ? path.join(root, "value.ts") : winner;
+    expect(artifact.hasSource(rejected)).toBe(false);
   },
 );
 
