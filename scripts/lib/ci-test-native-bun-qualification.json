@@ -75,7 +75,6 @@
     "src/agents/embedded-agent-helpers/image-errors.test.ts": "3ab19c95b72b0127f9f3d381f61d0df7f88d8c7e008e5177b906cf76a68aca94",
     "src/agents/embedded-agent-message-delivery.test.ts": "ff271f79517dfb8cfe2e2ae862395facc256a78e39f9b1f7fea001a1c082662f",
     "src/agents/embedded-agent-runner/compaction-duplicate-user-messages.test.ts": "08a6a0eb92f9ee24d1a736d9424f1e7f2bae225f321597c3daca13e9ad1216bc",
-    "src/agents/embedded-agent-runner/failure-signal.test.ts": "7ad56835769b133807e258b1d96267e1fe894c854ca4ed6c35364a5d303eadb3",
     "src/agents/embedded-agent-runner/run.lane-timeout.test.ts": "6ce78843bea5c61f1a658c295084d061b6749234ffd06006b9ce8667c710c5af",
     "src/agents/embedded-agent-runner/run/attempt.context-engine-helpers.test.ts": "376a1fbb57be5872c3bc8f2564bbe2e7c82d507ae7d845a06375eda5e76594f0",
     "src/agents/embedded-agent-runner/run/attempt.user-transcript-context-registry.test.ts": "80f92c1c7596d5c529626310917ec3f75eba9e0f2fdf7e89eb7b4c523a05cc85",

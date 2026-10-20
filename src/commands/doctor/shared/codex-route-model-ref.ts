@@ -90,7 +90,7 @@ export function isBlockedLegacyCodexModelPair(params: {
   );
 }
 
-function readLegacyCodexModelId(model: unknown): string | undefined {
+export function toOpenAIModelId(model: unknown): string | undefined {
   if (typeof model !== "string") {
     return undefined;
   }
@@ -104,7 +104,7 @@ function readLegacyCodexModelId(model: unknown): string | undefined {
 }
 
 export function isOpenAICodexModelRef(model: string | undefined): model is string {
-  return readLegacyCodexModelId(model) !== undefined;
+  return toOpenAIModelId(model) !== undefined;
 }
 
 export function isOpenAICodexAuthProfileRef(profile: unknown): boolean {
@@ -119,12 +119,8 @@ export function isProviderlessModelRef(model: unknown): model is string {
 }
 
 export function toCanonicalOpenAIModelRef(model: string): string | undefined {
-  const modelId = readLegacyCodexModelId(model);
+  const modelId = toOpenAIModelId(model);
   return modelId ? `openai/${modelId}` : undefined;
-}
-
-export function toOpenAIModelId(model: string): string | undefined {
-  return readLegacyCodexModelId(model);
 }
 
 export function readModelConfigPrimaryRef(value: unknown): string | undefined {

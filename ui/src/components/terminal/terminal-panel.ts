@@ -31,8 +31,6 @@ const hostedTabIcon = renderSolidSnapshot(terminalPanelTabIcon).firstElementChil
 
 type TerminalDock = Exclude<DockPanelPlacement, "left">;
 
-export const CATALOG_TERMINAL_READY_TIMEOUT_MS = 30_000;
-
 export type TerminalPanelOwner = ReturnType<typeof createTerminalPanel>;
 export type TerminalPanelMethods = Pick<
   TerminalPanelOwner,

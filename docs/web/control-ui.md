@@ -105,6 +105,8 @@ Sidebar pull-request indicators reuse the last known snapshot. Opening a session
 
 Changes summaries share identical concurrent polls and reuse unchanged checkout results when file metadata can establish freshness. Summary reads have a separate worker queue from full patches and PR statistics, with priority inside the shared Git child limit. Running Git commands still finish normally, and background work keeps making progress.
 
+When a checkout is too large or its Git layout cannot be validated cheaply, summaries reuse the last result for up to ten seconds before probing again. Missing or unavailable checkouts retry after one second. Full patches still require fresh revision validation.
+
 Nested repositories remain separate from the parent checkout's file contents. Untracked repositories appear as directory entries, while tracked submodules report Git's change status. Unchanged results can be reused in both cases, including when the checkout uses an external `core.excludesFile`; editing that ignore file refreshes which files appear.
 
 In the chat’s **Changes** panel, gutter chevrons fold complete functions, classes, and other language-supported multiline blocks within a file. Everything starts expanded, including edits. A folded placeholder shows the hidden line count and additions/deletions; click it to expand. Split and unified views share the same folds. The file menu offers **Collapse Code**, **Collapse Functions and Classes**, and **Expand Code**, separately from collapsing whole files. Incomplete source, omitted gaps, unsupported languages, and oversized previews stay expanded. Changing the patch resets code folds.

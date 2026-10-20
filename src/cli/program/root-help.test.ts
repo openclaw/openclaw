@@ -13,7 +13,8 @@ const getPluginCliCommandDescriptorsMock = vi.fn(
   ],
 );
 
-vi.mock("./core-command-descriptors.js", () => ({
+vi.mock("./core-command-descriptors.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./core-command-descriptors.js")>()),
   CORE_CLI_COMMAND_DESCRIPTORS: [
     {
       name: "status",
@@ -28,7 +29,6 @@ vi.mock("./core-command-descriptors.js", () => ({
       hasSubcommands: false,
     },
   ],
-  getCoreCliCommandsWithSubcommands: () => [],
 }));
 
 vi.mock("../../plugins/cli-root-descriptors.js", () => ({

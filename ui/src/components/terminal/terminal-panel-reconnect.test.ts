@@ -765,7 +765,6 @@ describe("OpenClawTerminalPanel reconnect", () => {
       }),
     );
     const panel = createTestTerminalPanel(TERMINAL_PANEL_ELEMENT_NAME);
-    panel.catalogReadyTimeoutMs = 10;
     panel.client = client;
     panel.available = true;
     document.body.append(panel);
@@ -785,7 +784,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
       }),
     );
 
-    await vi.advanceTimersByTimeAsync(10);
+    await vi.advanceTimersByTimeAsync(30_000);
     await panel.updateComplete;
     expect(panel.querySelector(".tp-error")?.textContent).toContain(
       "Reload this page to continue the terminal action",

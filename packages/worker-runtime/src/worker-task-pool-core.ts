@@ -408,7 +408,8 @@ export class WorkerTaskPoolCore<Input, Output> {
         }
         prepareWorkerTaskInput(
           task,
-          (input) =>
+          (input) => {
+            task.diagnosticLabel = this.host.describeTask?.(this.options.workerUrl, input);
             sendWorkerTaskInput({
               slot,
               task,
@@ -417,13 +418,10 @@ export class WorkerTaskPoolCore<Input, Output> {
               bootstrapError: this.bootstrap.error,
               createWorker: () => this.createWorker(slot),
               fail: (error, nativeFailure) =>
-                this.fail(
-                  slot,
-                  new WorkerTaskError(String(error), "unavailable", { cause: error }),
-                  nativeFailure,
-                ),
+                this.fail(slot, this.unavailableError(slot, String(error), error), nativeFailure),
               refuse: (error) => this.finish(task, error, undefined, true),
-            }),
+            });
+          },
           (error) => this.finish(task, toErrorObject(error, "worker task preparation failed")),
           !slot.worker && this.options.prepareWorker
             ? () => runInWorkerPoolContext(() => this.host.prepareResources())
@@ -431,6 +429,16 @@ export class WorkerTaskPoolCore<Input, Output> {
         );
       });
     }
+  }
+
+  private unavailableError(slot: Slot<Input, Output>, message: string, cause?: unknown): Error {
+    const task = slot.task;
+    const stage = slot.ready === false ? "startup" : task?.exchange ? "exchange" : "running";
+    // Reuse owned estimates/progress without sizing or retaining input.
+    const detail = task?.diagnosticLabel
+      ? ` [task=${task.diagnosticLabel} admittedInputBytes=${task.inputBytes} exchanges=${task.exchangeSequence} stage=${stage}]`
+      : "";
+    return new WorkerTaskError(message + detail, "unavailable", { cause });
   }
 
   // Worker listeners outlive tasks; their creation scope must not retain an async task frame.
@@ -444,7 +452,7 @@ export class WorkerTaskPoolCore<Input, Output> {
       options: this.options,
       host: this.host,
       runInContext: runInWorkerPoolContext,
-      unavailableError: (message, cause) => new WorkerTaskError(message, "unavailable", { cause }),
+      unavailableError: (message, cause) => this.unavailableError(slot, message, cause),
       onStarted: (worker) => {
         this.workers++;
         this.workersCreated++;
@@ -456,7 +464,7 @@ export class WorkerTaskPoolCore<Input, Output> {
         if (counted) {
           this.workers--;
         }
-        const error = new WorkerTaskError(`worker exited with code ${code}`, "unavailable");
+        const error = this.unavailableError(slot, `worker exited with code ${code}`);
         this.fail(slot, error, true);
       },
     });
