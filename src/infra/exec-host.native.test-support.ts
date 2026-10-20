@@ -5,7 +5,8 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import { ignoreMissingPath } from "./errno.js";
 import { requestExecHostViaSocket, type ExecHostRequest } from "./exec-host.js";
 
 const [rootArgument, nativeSocket] = process.argv.slice(2);
@@ -19,17 +20,11 @@ assert.equal(await fs.realpath(process.env.OPENCLAW_STATE_DIR!), path.join(root,
 const token = "exec-host-native-proof-token";
 const marker = path.join(root, "native-markers");
 const release = path.join(root, "release-child");
-await fs.rm(marker, { force: true });
-await fs.rm(release, { force: true });
+await Promise.all([marker, release].map((file) => fs.rm(file, { force: true })));
+const shellScript =
+  'printf "START\\n" >> "$1"; while [ ! -f "$2" ]; do /bin/sleep 0.01; done; printf "COMPLETE\\n" >> "$1"';
 const request: ExecHostRequest = {
-  command: [
-    "/bin/sh",
-    "-c",
-    'printf "START\\n" >> "$1"; while [ ! -f "$2" ]; do /bin/sleep 0.01; done; printf "COMPLETE\\n" >> "$1"',
-    "exec-host-native-proof",
-    marker,
-    release,
-  ],
+  command: ["/bin/sh", "-c", shellScript, "exec-host-native-proof", marker, release],
   cwd: root,
   timeoutMs: 5_000,
   needsScreenRecording: false,
@@ -42,32 +37,23 @@ function send(payload: ExecHostRequest, socketPath = nativeSocket) {
 async function waitForStart() {
   const deadline = Date.now() + 3_000;
   while (Date.now() < deadline) {
-    try {
-      if ((await fs.readFile(marker, "utf8")) === "START\n") {
-        return;
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw error;
-      }
+    if ((await fs.readFile(marker, "utf8").catch(ignoreMissingPath)) === "START\n") {
+      return;
     }
     await delay(10);
   }
   throw new Error("Native child did not write START before the response fault");
 }
 
-async function withDeadline<T>(promise: Promise<T>, ms: number): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error("Native proof deadline exceeded")), ms);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
+function withDeadline<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return withTestTimeout(promise, ms, "Native proof deadline exceeded");
+}
+
+function assertSuccess(result: Awaited<ReturnType<typeof send>>) {
+  assert.ok(result?.ok === true);
+  assert.equal(result.payload.success, true);
+  assert.equal(result.payload.exitCode, 0);
+  return result.payload;
 }
 
 const success = await send({
@@ -75,17 +61,10 @@ const success = await send({
   cwd: root,
   timeoutMs: 5_000,
 });
-assert.equal(success?.ok, true);
-if (success?.ok) {
-  assert.equal(success.payload.success, true);
-  assert.equal(success.payload.exitCode, 0);
-  assert.equal(success.payload.stdout, "native-success\n");
-}
+assert.equal(assertSuccess(success).stdout, "native-success\n");
 const denied = await send({ ...request, agentId: "denied" });
-assert.equal(denied?.ok, false);
-if (denied && !denied.ok) {
-  assert.equal(denied.error.reason, "security=deny");
-}
+assert.ok(denied?.ok === false);
+assert.equal(denied.error.reason, "security=deny");
 await assert.rejects(fs.stat(marker), { code: "ENOENT" });
 console.log("native success and policy denial verified");
 
@@ -95,26 +74,20 @@ const closes: Promise<void>[] = [];
 const forwarded = createDeferred<net.Socket>();
 const nativeResponse = createDeferred<string>();
 const errors: Error[] = [];
-const order: string[] = [];
 function track(socket: net.Socket) {
+  const closed = createDeferred();
+  socket.once("close", () => closed.resolve());
   sockets.push(socket);
-  closes.push(
-    new Promise<void>((resolve) => {
-      socket.once("close", resolve);
-    }),
-  );
+  closes.push(closed.promise);
   socket.on("error", (error) => errors.push(error));
+  return socket;
 }
 const proxy = net.createServer({ allowHalfOpen: true }, (client) => {
   track(client);
-  const upstream = net.createConnection({ path: nativeSocket, allowHalfOpen: true });
-  track(upstream);
+  const upstream = track(net.createConnection({ path: nativeSocket, allowHalfOpen: true }));
   // pipe forwards the signed bytes unchanged and forwards the request's write EOF.
   client.pipe(upstream);
-  client.once("end", () => {
-    order.push("request-half-closed");
-    forwarded.resolve(client);
-  });
+  client.once("end", () => forwarded.resolve(client));
   let response = "";
   upstream.setEncoding("utf8");
   upstream.on("data", (chunk: string) => {
@@ -129,9 +102,7 @@ try {
   const outcome = send(request, proxySocket);
   const caller = await withDeadline(forwarded.promise, 3_000);
   await waitForStart();
-  order.push("native-started");
   caller.end();
-  order.push("response-dropped");
   assert.deepEqual(await outcome, {
     ok: false,
     error: {
@@ -140,27 +111,15 @@ try {
       message: "UNKNOWN: macOS app exec host response was lost; execution outcome is unknown",
     },
   });
-  order.push("client-outcome-unknown");
   assert.equal(await fs.readFile(marker, "utf8"), "START\n");
   await fs.writeFile(release, "finish\n");
   // Keep draining the native connection: its terminal reply proves the executor
   // awaited ShellExecutor and reaped the child, even though the caller lost it.
-  const response = JSON.parse(await withDeadline(nativeResponse.promise, 8_000)) as {
-    ok: boolean;
-    payload: { success: boolean; exitCode: number };
-  };
-  assert.equal(response.ok, true);
-  assert.equal(response.payload.success, true);
-  assert.equal(response.payload.exitCode, 0);
+  const response = JSON.parse(await withDeadline(nativeResponse.promise, 8_000)) as Awaited<
+    ReturnType<typeof send>
+  >;
+  assertSuccess(response);
   assert.equal(await fs.readFile(marker, "utf8"), "START\nCOMPLETE\n");
-  order.push("native-completed");
-  assert.deepEqual(order, [
-    "request-half-closed",
-    "native-started",
-    "response-dropped",
-    "client-outcome-unknown",
-    "native-completed",
-  ]);
   assert.deepEqual(errors, []);
   console.log("native START -> response dropped -> client null -> native COMPLETE");
 } finally {

@@ -40,12 +40,9 @@ export function makeExecutable(dir: string, name: string): string {
   return exe;
 }
 
-export function makeMockExecutableResolution(params: {
-  rawExecutable: string;
-  executableName: string;
-  resolvedPath?: string;
-  resolvedRealPath?: string;
-}): ExecutableResolution {
+export function makeMockExecutableResolution(
+  params: Omit<ExecutableResolution, "kind">,
+): ExecutableResolution {
   return {
     kind: "executable",
     rawExecutable: params.rawExecutable,
@@ -55,14 +52,9 @@ export function makeMockExecutableResolution(params: {
   };
 }
 
-export function makeMockCommandResolution(params: {
-  execution: ExecutableResolution;
-  policy?: ExecutableResolution;
-  effectiveArgv?: string[];
-  wrapperChain?: string[];
-  policyBlocked?: boolean;
-  blockedWrapper?: string;
-}): CommandResolution {
+export function makeMockCommandResolution(
+  params: Omit<CommandResolution, "kind" | "policy"> & { policy?: ExecutableResolution },
+): CommandResolution {
   return {
     kind: "command",
     execution: params.execution,
