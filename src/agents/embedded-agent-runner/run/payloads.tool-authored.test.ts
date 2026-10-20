@@ -1,6 +1,3 @@
-// Tool-authored source replies take the existing source-reply path: delivered to
-// the source even when automatic replies are suppressed, and mirrored into the
-// transcript by delivery because no tool owns the transcript row yet.
 import { describe, expect, it } from "vitest";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
@@ -23,17 +20,26 @@ const toolAssistant = makeAgentAssistantMessage({
   ],
 });
 
+const segment = { textEnd: 1, messageEnd: 1, finalMessageStart: 1, lastAssistant: toolAssistant };
+function buildToolPayloads(options: Parameters<typeof buildPayloads>[0]) {
+  return buildPayloads({
+    assistantTexts: ["I will check the order now."],
+    answerSegments: [segment],
+    messagingToolSourceReplyPayloads: [toolAuthoredReply],
+    ...options,
+  });
+}
+function textAssistant(text: string) {
+  return makeAgentAssistantMessage({ content: [{ type: "text", text }] });
+}
+
 describe("tool-authored source reply payloads", () => {
   it.each(["automatic", "message_tool_only"] as const)(
     "preserves earlier and later input answers around a tool-authored reply in %s mode",
     (sourceReplyDeliveryMode) => {
-      const earlier = makeAgentAssistantMessage({
-        content: [{ type: "text", text: "Earlier answer." }],
-      });
-      const later = makeAgentAssistantMessage({
-        content: [{ type: "text", text: "Later answer." }],
-      });
-      const payloads = buildPayloads({
+      const earlier = textAssistant("Earlier answer.");
+      const later = textAssistant("Later answer.");
+      const payloads = buildToolPayloads({
         sourceReplyDeliveryMode,
         sessionKey: "agent:vinalia:telegram:123",
         runId: "run-1",
@@ -44,7 +50,6 @@ describe("tool-authored source reply payloads", () => {
           { textEnd: 2, messageEnd: 2, finalMessageStart: 2, lastAssistant: toolAssistant },
         ],
         lastAssistant: later,
-        messagingToolSourceReplyPayloads: [toolAuthoredReply],
       });
       expect(payloads.map((payload) => payload.text)).toEqual([
         "Earlier answer.",
@@ -64,33 +69,28 @@ describe("tool-authored source reply payloads", () => {
     },
   );
 
-  it.each(["turnId"] as const)(
-    "does not attach a later reply to an earlier input that reused the same call ID (%s)",
-    (identity) => {
-      const earlier = {
-        ...toolAssistant,
-        [identity]: "earlier-turn",
-        content: [
-          { type: "text" as const, text: "Earlier answer." },
-          { type: "toolCall" as const, id: "tc-1", name: "order_status", arguments: {} },
-        ],
-      };
-      const payloads = buildPayloads({
-        assistantTexts: ["Earlier answer.", "I will check the order now."],
-        answerSegments: [
-          { textEnd: 1, messageEnd: 1, finalMessageStart: 1, lastAssistant: earlier },
-        ],
-        lastAssistant: { ...toolAssistant, [identity]: "current-turn" },
-        messagingToolSourceReplyPayloads: [
-          { ...toolAuthoredReply, toolAuthoredForTurnId: "current-turn" },
-        ],
-      });
-      expect(payloads.map((payload) => payload.text)).toEqual([
-        "Earlier answer.",
-        toolAuthoredReply.text,
-      ]);
-    },
-  );
+  it("does not attach a later reply to an earlier input that reused the same call ID", () => {
+    const earlier = {
+      ...toolAssistant,
+      turnId: "earlier-turn",
+      content: [
+        { type: "text" as const, text: "Earlier answer." },
+        { type: "toolCall" as const, id: "tc-1", name: "order_status", arguments: {} },
+      ],
+    };
+    const payloads = buildToolPayloads({
+      assistantTexts: ["Earlier answer.", "I will check the order now."],
+      answerSegments: [{ textEnd: 1, messageEnd: 1, finalMessageStart: 1, lastAssistant: earlier }],
+      lastAssistant: { ...toolAssistant, turnId: "current-turn" },
+      messagingToolSourceReplyPayloads: [
+        { ...toolAuthoredReply, toolAuthoredForTurnId: "current-turn" },
+      ],
+    });
+    expect(payloads.map((payload) => payload.text)).toEqual([
+      "Earlier answer.",
+      toolAuthoredReply.text,
+    ]);
+  });
 
   it("does not let an earlier tool-authored reply hide a later assistant failure", () => {
     const failed = makeAgentAssistantMessage({
@@ -98,26 +98,16 @@ describe("tool-authored source reply payloads", () => {
       content: [],
       errorMessage: "Provider request failed.",
     });
-    const payloads = buildPayloads({
+    const payloads = buildToolPayloads({
       sourceReplyDeliveryMode: "message_tool_only",
-      assistantTexts: ["I will check the order now."],
-      answerSegments: [
-        { textEnd: 1, messageEnd: 1, finalMessageStart: 1, lastAssistant: toolAssistant },
-      ],
       lastAssistant: failed,
-      messagingToolSourceReplyPayloads: [toolAuthoredReply],
     });
     expect(payloads[0]?.text).toBe(toolAuthoredReply.text);
     expect(payloads.some((payload) => payload.isError)).toBe(true);
   });
 
   it("does not let an earlier authored reply hide later tool failure with no answer", () => {
-    const payloads = buildPayloads({
-      assistantTexts: ["I will check the order now."],
-      answerSegments: [
-        { textEnd: 1, messageEnd: 1, finalMessageStart: 1, lastAssistant: toolAssistant },
-      ],
-      messagingToolSourceReplyPayloads: [toolAuthoredReply],
+    const payloads = buildToolPayloads({
       lastToolError: { toolName: "read", error: "Missing file" },
     });
     expect(payloads[0]?.text).toBe(toolAuthoredReply.text);
