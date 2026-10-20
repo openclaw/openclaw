@@ -1,20 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { createProgressDraftDiffStatTracker } from "./progress-draft-diffstat.js";
 
-type DiffStatTracker = ReturnType<typeof createProgressDraftDiffStatTracker>;
-
-function stageMutation(
-  tracker: DiffStatTracker,
-  toolCallId: string,
-  name: string,
-  args: Record<string, unknown>,
-  phase = "start",
-) {
-  tracker.stageToolEvent({ toolCallId, name, phase, args });
-}
-
-function completeMutation(tracker: DiffStatTracker, toolCallId: string, status = "completed") {
-  tracker.commitItemEvent({ toolCallId, phase: "end", status });
+function createTracker() {
+  const tracker = createProgressDraftDiffStatTracker({ canStage: () => true });
+  return {
+    ...tracker,
+    stage: (toolCallId: string, name: string, args: Record<string, unknown>, phase = "start") =>
+      tracker.stageToolEvent({ toolCallId, name, phase, args }),
+    complete: (toolCallId: string, status = "completed") =>
+      tracker.commitItemEvent({ toolCallId, phase: "end", status }),
+    expectStat: (files: number, added: number, removed: number) =>
+      expect(tracker.resolve()).toEqual({ files, added, removed }),
+  };
 }
 
 describe("createProgressDraftDiffStatTracker", () => {
@@ -28,30 +25,22 @@ describe("createProgressDraftDiffStatTracker", () => {
     ["one\rtwo\nthree\r\nfour", 4],
     ["\r\r\n\n", 4],
   ])("preserves completed write and edit line counts for %j", (content, lineCount) => {
-    const tracker = createProgressDraftDiffStatTracker({ canStage: () => true });
-    stageMutation(tracker, "write", "write", { path: "example.txt", content });
-    completeMutation(tracker, "write");
-    expect(tracker.resolve()).toEqual({ files: 1, added: lineCount, removed: 0 });
+    const tracker = createTracker();
+    tracker.stage("write", "write", { path: "example.txt", content });
+    tracker.complete("write");
+    tracker.expectStat(1, lineCount, 0);
 
-    stageMutation(tracker, "edit", "edit", {
-      path: "example.txt",
-      oldText: content,
-      newText: content,
-    });
-    completeMutation(tracker, "edit");
-    expect(tracker.resolve()).toEqual({ files: 1, added: lineCount * 2, removed: lineCount });
+    tracker.stage("edit", "edit", { path: "example.txt", oldText: content, newText: content });
+    tracker.complete("edit");
+    tracker.expectStat(1, lineCount * 2, lineCount);
   });
 
   it("stages starts and commits successful terminal items additively", () => {
-    const tracker = createProgressDraftDiffStatTracker({ canStage: () => true });
+    const tracker = createTracker();
 
-    stageMutation(tracker, "write-1", "write", {
-      path: "src/example.ts",
-      content: "one\ntwo",
-    });
+    tracker.stage("write-1", "write", { path: "src/example.ts", content: "one\ntwo" });
     expect(tracker.resolve()).toBeUndefined();
-    stageMutation(
-      tracker,
+    tracker.stage(
       "write-1",
       "write",
       { path: "src/example.ts", content: "ignored\npartial\nargs" },
@@ -59,93 +48,80 @@ describe("createProgressDraftDiffStatTracker", () => {
     );
     expect(tracker.resolve()).toBeUndefined();
 
-    completeMutation(tracker, "write-1");
-    expect(tracker.resolve()).toEqual({ files: 1, added: 2, removed: 0 });
+    tracker.complete("write-1");
+    tracker.expectStat(1, 2, 0);
 
-    stageMutation(tracker, "edit-1", "edit", {
+    tracker.stage("edit-1", "edit", {
       path: "src/example.ts",
       edits: [{ oldText: "one\ntwo", newText: "three" }],
     });
-    completeMutation(tracker, "edit-1");
-    expect(tracker.resolve()).toEqual({ files: 1, added: 3, removed: 2 });
+    tracker.complete("edit-1");
+    tracker.expectStat(1, 3, 2);
 
     for (const status of ["failed", "error", "blocked", "unknown", ""]) {
       const toolCallId = `failed-${status}`;
-      stageMutation(tracker, toolCallId, "write", {
+      tracker.stage(toolCallId, "write", {
         path: `src/${toolCallId}.ts`,
         content: "ignored",
       });
-      completeMutation(tracker, toolCallId, status);
+      tracker.complete(toolCallId, status);
     }
-    expect(tracker.resolve()).toEqual({ files: 1, added: 3, removed: 2 });
+    tracker.expectStat(1, 3, 2);
 
-    stageMutation(tracker, "patch-1", "apply_patch", {
-      input: [
-        "*** Begin Patch",
-        "*** Update File: src/example.ts",
-        "@@",
-        "-three",
-        "+four",
-        "+five",
-        "*** Add File: src/new.ts",
-        "+new",
-        "+line",
-        "*** End Patch",
-      ].join("\n"),
+    tracker.stage("patch-1", "apply_patch", {
+      input:
+        "*** Begin Patch\n*** Update File: src/example.ts\n@@\n-three\n+four\n+five\n*** Add File: src/new.ts\n+new\n+line\n*** End Patch",
     });
-    completeMutation(tracker, "patch-1");
-    expect(tracker.resolve()).toEqual({ files: 2, added: 7, removed: 3 });
+    tracker.complete("patch-1");
+    tracker.expectStat(2, 7, 3);
 
-    stageMutation(tracker, "codex-patch-1", "apply_patch", {
+    tracker.stage("codex-patch-1", "apply_patch", {
       changes: [
         { path: "src/example.ts", stat: { added: 7, removed: 3 } },
         { path: "src/third.ts", stat: { added: 5, removed: 2 } },
       ],
     });
-    completeMutation(tracker, "codex-patch-1");
-    expect(tracker.resolve()).toEqual({ files: 3, added: 19, removed: 8 });
+    tracker.complete("codex-patch-1");
+    tracker.expectStat(3, 19, 8);
 
-    stageMutation(tracker, "pending-reset", "write", {
-      path: "src/pending-reset.ts",
-      content: "pending",
-    });
+    tracker.stage("pending-reset", "write", { path: "src/pending-reset.ts", content: "pending" });
     tracker.reset();
     expect(tracker.resolve()).toBeUndefined();
-    completeMutation(tracker, "pending-reset");
+    tracker.complete("pending-reset");
     expect(tracker.resolve()).toBeUndefined();
   });
 
   it("bounds pending staging and distinct committed file tracking", () => {
-    const tracker = createProgressDraftDiffStatTracker({ canStage: () => true });
+    const tracker = createTracker();
 
     for (let index = 0; index < 65; index += 1) {
-      stageMutation(tracker, `write-${index}`, "write", {
+      tracker.stage(`write-${index}`, "write", {
         path: `src/file-${index}.ts`,
         content: "line",
       });
     }
     expect(tracker.resolve()).toBeUndefined();
     for (let index = 0; index < 65; index += 1) {
-      completeMutation(tracker, `write-${index}`);
+      tracker.complete(`write-${index}`);
     }
-    expect(tracker.resolve()).toEqual({ files: 64, added: 64, removed: 0 });
+    tracker.expectStat(64, 64, 0);
 
     for (let index = 64; index < 257; index += 1) {
       const toolCallId = `restaged-write-${index}`;
-      stageMutation(tracker, toolCallId, "write", {
+      tracker.stage(toolCallId, "write", {
         path: `src/file-${index}.ts`,
         content: "line",
       });
-      completeMutation(tracker, toolCallId);
+      tracker.complete(toolCallId);
     }
-    expect(tracker.resolve()).toEqual({ files: 257, added: 257, removed: 0 });
+    tracker.expectStat(257, 257, 0);
 
-    stageMutation(tracker, "edit-known", "edit", {
+    tracker.stage("edit-known", "edit", {
       path: "src/file-0.ts",
       oldText: "one\ntwo",
       newText: "one\ntwo\nthree",
     });
-    completeMutation(tracker, "edit-known");
-    expect(tracker.resolve()).toEqual({ files: 257, added: 260, removed: 2 });
+    tracker.complete("edit-known");
+    tracker.expectStat(257, 260, 2);
   });
 });

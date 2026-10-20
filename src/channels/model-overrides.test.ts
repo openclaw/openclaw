@@ -1,16 +1,36 @@
-// Model override tests cover channel-level model selection and override precedence.
 import { beforeEach, describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { resolveChannelModelOverride } from "./model-overrides.js";
+import type { ChannelPlugin } from "./plugins/types.public.js";
 
-function createModelOverrideConfig(
+function resolve(
   channel: string,
   models: Record<string, string>,
-): OpenClawConfig {
-  return { channels: { modelByChannel: { [channel]: models } } };
+  params: Omit<Parameters<typeof resolveChannelModelOverride>[0], "cfg" | "channel">,
+) {
+  return resolveChannelModelOverride({
+    cfg: { channels: { modelByChannel: { [channel]: models } } },
+    channel,
+    ...params,
+  });
+}
+
+function installPlugin(
+  id: string,
+  hooks: Pick<ChannelPlugin, "messaging" | "conversationBindings">,
+  chatTypes: ("group" | "channel")[] = ["group"],
+) {
+  const plugin = {
+    ...createChannelTestPluginBase({ id, label: id, capabilities: { chatTypes } }),
+    ...hooks,
+  };
+  setActivePluginRegistry(createTestRegistry([{ pluginId: id, source: "test", plugin }]));
+}
+
+function expectMatch(result: ReturnType<typeof resolve>, model: string, matchKey: string) {
+  expect(result).toMatchObject({ model, matchKey });
 }
 
 describe("resolveChannelModelOverride", () => {
@@ -20,140 +40,86 @@ describe("resolveChannelModelOverride", () => {
   });
 
   it("passes channel kind to plugin-owned parent fallback resolution", () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "channel-kind",
-          source: "test",
-          plugin: {
-            ...createChannelTestPluginBase({
-              id: "channel-kind",
-              label: "Channel Kind",
-              capabilities: { chatTypes: ["group", "channel"] },
-            }),
-            messaging: {
-              resolveSessionConversation: ({
-                kind,
-                rawId,
-              }: {
-                kind: "group" | "channel";
-                rawId: string;
-              }) => ({
-                id: rawId,
-                parentConversationCandidates: kind === "channel" ? ["thread-parent"] : [],
-              }),
-            },
-          },
+    installPlugin(
+      "channel-kind",
+      {
+        messaging: {
+          resolveSessionConversation: ({ kind, rawId }) => ({
+            id: rawId,
+            parentConversationCandidates: kind === "channel" ? ["thread-parent"] : [],
+          }),
         },
-      ]),
+      },
+      ["group", "channel"],
     );
 
-    const resolved = resolveChannelModelOverride({
-      cfg: createModelOverrideConfig("channel-kind", {
-        "thread-parent": "demo-provider/demo-channel-model",
-      }),
-      channel: "channel-kind",
-      groupId: "thread-123",
-      groupChatType: "channel",
-    });
+    const resolved = resolve(
+      "channel-kind",
+      { "thread-parent": "demo/channel" },
+      { groupId: "thread-123", groupChatType: "channel" },
+    );
 
-    expect(resolved?.model).toBe("demo-provider/demo-channel-model");
-    expect(resolved?.matchKey).toBe("thread-parent");
+    expectMatch(resolved, "demo/channel", "thread-parent");
   });
 
   it("uses plugin-owned parent fallback candidates", () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "scoped-chat",
-          source: "test",
-          plugin: {
-            ...createChannelTestPluginBase({
-              id: "scoped-chat",
-              label: "Scoped Chat",
-              capabilities: { chatTypes: ["group"] },
-            }),
-            conversationBindings: {
-              buildModelOverrideParentCandidates: ({
-                parentConversationId,
-              }: {
-                parentConversationId?: string | null;
-              }) =>
-                parentConversationId === "room:topic:thread:sender:user"
-                  ? ["room:topic:thread", "room"]
-                  : [],
-            },
-          },
-        },
-      ]),
-    );
-
-    const resolved = resolveChannelModelOverride({
-      cfg: createModelOverrideConfig("scoped-chat", {
-        "room:topic:thread": "demo-provider/demo-scoped-model",
-      }),
-      channel: "scoped-chat",
-      groupId: "unrelated",
-      parentSessionKey: "agent:main:scoped-chat:group:room:topic:thread:sender:user",
+    installPlugin("scoped-chat", {
+      conversationBindings: {
+        buildModelOverrideParentCandidates: ({ parentConversationId }) =>
+          parentConversationId === "room:topic:thread:sender:user"
+            ? ["room:topic:thread", "room"]
+            : [],
+      },
     });
 
-    expect(resolved?.model).toBe("demo-provider/demo-scoped-model");
-    expect(resolved?.matchKey).toBe("room:topic:thread");
+    const resolved = resolve(
+      "scoped-chat",
+      { "room:topic:thread": "demo/scoped" },
+      {
+        groupId: "unrelated",
+        parentSessionKey: "agent:main:scoped-chat:group:room:topic:thread:sender:user",
+      },
+    );
+
+    expectMatch(resolved, "demo/scoped", "room:topic:thread");
   });
 
   it("applies provider wildcard model overrides to direct chats", () => {
-    const resolved = resolveChannelModelOverride({
-      cfg: createModelOverrideConfig("telegram", {
-        "*": "demo-provider/demo-direct-model",
-      }),
-      channel: "telegram",
-      groupChatType: "direct",
-    });
+    const resolved = resolve("telegram", { "*": "demo/direct" }, { groupChatType: "direct" });
 
-    expect(resolved?.model).toBe("demo-provider/demo-direct-model");
-    expect(resolved?.matchKey).toBe("*");
-    expect(resolved?.matchSource).toBe("wildcard");
+    expect(resolved).toMatchObject({
+      model: "demo/direct",
+      matchKey: "*",
+      matchSource: "wildcard",
+    });
   });
 
   it("prefers parent conversation ids over channel-name fallbacks", () => {
-    const resolved = resolveChannelModelOverride({
-      cfg: createModelOverrideConfig("telegram", {
-        "-100123": "demo-provider/demo-parent-model",
-        "#general": "demo-provider/demo-channel-name-model",
-      }),
-      channel: "telegram",
-      groupId: "-100123:topic:99",
-      groupChannel: "#general",
-    });
+    const resolved = resolve(
+      "telegram",
+      { "-100123": "demo/parent", "#general": "demo/name" },
+      { groupId: "-100123:topic:99", groupChannel: "#general" },
+    );
 
-    expect(resolved?.model).toBe("demo-provider/demo-parent-model");
-    expect(resolved?.matchKey).toBe("-100123");
+    expectMatch(resolved, "demo/parent", "-100123");
   });
 
   it("matches slack DM when origin.from is slack:U... but config has user:U... (multi-candidate)", () => {
-    const resolved = resolveChannelModelOverride({
-      cfg: createModelOverrideConfig("slack", {
-        "user:U12345": "demo-provider/demo-slack-dm-model",
-      }),
-      channel: "slack",
-      groupChatType: "direct",
-      directUserIds: ["slack:U12345", "user:U12345"],
-    });
+    const resolved = resolve(
+      "slack",
+      { "user:U12345": "demo/slack-dm" },
+      { groupChatType: "direct", directUserIds: ["slack:U12345", "user:U12345"] },
+    );
 
-    expect(resolved?.model).toBe("demo-provider/demo-slack-dm-model");
-    expect(resolved?.matchKey).toBe("user:U12345");
+    expectMatch(resolved, "demo/slack-dm", "user:U12345");
   });
 
   it("does not leak directUserId match into non-direct conversations", () => {
-    const resolved = resolveChannelModelOverride({
-      cfg: createModelOverrideConfig("telegram", {
-        user123: "demo-provider/demo-dm-model",
-      }),
-      channel: "telegram",
-      groupChatType: "group",
-      groupId: "some-group",
-      directUserIds: ["user123"],
-    });
+    const resolved = resolve(
+      "telegram",
+      { user123: "demo/dm" },
+      { groupChatType: "group", groupId: "some-group", directUserIds: ["user123"] },
+    );
 
     expect(resolved).toBeNull();
   });

@@ -1,5 +1,4 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
-// Thread binding policy tests cover how channel thread bindings are created and reused.
 import { beforeEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -13,24 +12,16 @@ import {
 describe("thread binding spawn policy helpers", () => {
   beforeEach(() => {
     setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "child-chat",
+      createTestRegistry(
+        (["child", "current"] as const).map((placement) => ({
+          pluginId: `${placement}-chat`,
           source: "test",
           plugin: {
-            ...createChannelTestPluginBase({ id: "child-chat", label: "Child chat" }),
-            conversationBindings: { defaultTopLevelPlacement: "child" },
+            ...createChannelTestPluginBase({ id: `${placement}-chat`, label: `${placement} chat` }),
+            conversationBindings: { defaultTopLevelPlacement: placement },
           },
-        },
-        {
-          pluginId: "current-chat",
-          source: "test",
-          plugin: {
-            ...createChannelTestPluginBase({ id: "current-chat", label: "Current chat" }),
-            conversationBindings: { defaultTopLevelPlacement: "current" },
-          },
-        },
-      ]),
+        })),
+      ),
     );
   });
 
@@ -47,9 +38,11 @@ describe("thread binding spawn policy helpers", () => {
       kind: "subagent",
     });
 
-    expect(policy.enabled).toBe(true);
-    expect(policy.spawnEnabled).toBe(true);
-    expect(policy.defaultSpawnContext).toBe("fork");
+    expect(policy).toMatchObject({
+      enabled: true,
+      spawnEnabled: true,
+      defaultSpawnContext: "fork",
+    });
   });
 
   it("preserves long lifecycle hour values while capping unsafe conversions", () => {
@@ -68,28 +61,12 @@ describe("thread binding spawn policy helpers", () => {
   });
 
   it("uses spawnSessions for both subagent and ACP spawn policy", () => {
-    const cfg = {
-      channels: {
-        discord: {
-          threadBindings: { spawnSessions: false },
-        },
-      },
-    };
-
-    expect(
-      resolveThreadBindingSpawnPolicy({
-        cfg,
-        channel: "discord",
-        kind: "subagent",
-      }).spawnEnabled,
-    ).toBe(false);
-    expect(
-      resolveThreadBindingSpawnPolicy({
-        cfg,
-        channel: "discord",
-        kind: "acp",
-      }).spawnEnabled,
-    ).toBe(false);
+    const cfg = { channels: { discord: { threadBindings: { spawnSessions: false } } } };
+    for (const kind of ["subagent", "acp"] as const) {
+      expect(resolveThreadBindingSpawnPolicy({ cfg, channel: "discord", kind }).spawnEnabled).toBe(
+        false,
+      );
+    }
   });
 
   it("lets account config override channel spawnSessions and spawn context", () => {
@@ -97,16 +74,10 @@ describe("thread binding spawn policy helpers", () => {
       cfg: {
         channels: {
           discord: {
-            threadBindings: {
-              spawnSessions: false,
-              defaultSpawnContext: "fork",
-            },
+            threadBindings: { spawnSessions: false, defaultSpawnContext: "fork" },
             accounts: {
               work: {
-                threadBindings: {
-                  spawnSessions: true,
-                  defaultSpawnContext: "isolated",
-                },
+                threadBindings: { spawnSessions: true, defaultSpawnContext: "isolated" },
               },
             },
           },
@@ -117,7 +88,6 @@ describe("thread binding spawn policy helpers", () => {
       kind: "subagent",
     });
 
-    expect(policy.spawnEnabled).toBe(true);
-    expect(policy.defaultSpawnContext).toBe("isolated");
+    expect(policy).toMatchObject({ spawnEnabled: true, defaultSpawnContext: "isolated" });
   });
 });
