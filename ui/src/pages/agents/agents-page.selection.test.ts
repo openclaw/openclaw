@@ -493,8 +493,11 @@ describe("AgentsPage routing", () => {
         oldRequest.reject(new Error("Retired identity request"));
         await mutations[0]?.catch(() => undefined);
       } else {
+        vi.mocked(context.agentIdentity.ensure).mockClear();
         oldRefresh.resolve(agentsList);
-        await waitForFast(() => expect(context.agentIdentity.ensure).toHaveBeenCalledOnce());
+        await waitForFast(() =>
+          expect(context.agentIdentity.ensure).toHaveBeenCalledWith(["main"]),
+        );
       }
       await Promise.resolve();
       expect(page.read().readData().identitySaving).toBe(true);

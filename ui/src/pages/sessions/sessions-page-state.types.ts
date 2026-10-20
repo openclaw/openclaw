@@ -1,28 +1,29 @@
-import type { SessionsListResult } from "../../api/types.ts";
-import type { SessionArchivedFilter } from "../../lib/sessions/index.ts";
-import type { SessionsTableState } from "./page-state.ts";
 import type { SessionDeleteRow } from "./selection.ts";
 import type { SessionsPageMenuProps } from "./session-menu.tsx";
-import type { TranscriptSearchProps } from "./transcript-search-view.tsx";
+import type { SessionsProps } from "./view-types.ts";
 
-export type SessionsFilters = {
-  activeMinutes: string;
-  limit: string;
-  includeGlobal: boolean;
-  includeUnknown: boolean;
+export type SessionsPageState = Pick<
+  SessionsProps,
+  | "sortColumn"
+  | "sortDir"
+  | "groupBy"
+  | "page"
+  | "pageSize"
+  | "result"
+  | "loading"
+  | "refreshing"
+  | "error"
+  | "activeMinutes"
+  | "limit"
+  | "includeGlobal"
+  | "includeUnknown"
+  | "statusFilter"
+  | "searchQuery"
+  | "transcriptSearchQuery"
+  | "expandedSessionKey"
+  | "transcriptSearch"
+> & {
+  selectedSessions: Map<string, SessionDeleteRow>;
+  sessionMenu: SessionsPageMenuProps["menu"] | null;
+  sessionMenuWork: SessionsPageMenuProps["work"];
 };
-
-export type SessionsPageState = SessionsFilters &
-  SessionsTableState &
-  Pick<TranscriptSearchProps, "transcriptSearchQuery" | "transcriptSearch"> & {
-    result: SessionsListResult | null;
-    loading: boolean;
-    refreshing: boolean;
-    error: string | null;
-    statusFilter: SessionArchivedFilter;
-    searchQuery: string;
-    expandedSessionKey: string | null;
-    selectedSessions: Map<string, SessionDeleteRow>;
-    sessionMenu: SessionsPageMenuProps["menu"] | null;
-    sessionMenuWork: SessionsPageMenuProps["work"];
-  };

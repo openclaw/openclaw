@@ -17,8 +17,6 @@ type AgentSelectionDraftHost = AgentFilesState & {
 
 type Selection = {
   selectedId: string | null;
-  intentRevision: number;
-  awaitingRoster: boolean;
   profileId: string | null;
 };
 

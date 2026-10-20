@@ -3,14 +3,6 @@ import { getSafeLocalStorage } from "../../local-storage.ts";
 
 const GROUP_BY_STORAGE_KEY = "openclaw:sessions:group-by";
 
-export type SessionsTableState = {
-  sortColumn: "key" | "updated";
-  sortDir: "asc" | "desc";
-  groupBy: SessionsGroupBy;
-  page: number;
-  pageSize: number;
-};
-
 export function loadStoredGroupBy(): SessionsGroupBy {
   return normalizeSessionsGroupBy(getSafeLocalStorage()?.getItem(GROUP_BY_STORAGE_KEY));
 }

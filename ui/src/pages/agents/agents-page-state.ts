@@ -77,7 +77,6 @@ type AgentsPageData = Omit<AgentsState, "agentsLoading" | "agentsError"> &
     chatModelCatalogStatus: ReturnType<typeof createPanelRefreshStatus>;
     agentFilesList: AgentsFilesListResult | null;
     agentFileActive: string | null;
-    agentIdentityLoading: boolean;
     identityDraft: AgentIdentityDraft;
     identitySaving: boolean;
     identityError: string | null;
@@ -98,7 +97,6 @@ type AgentsViewData = Omit<
   | "sessionsResult"
   | "sessionKey"
   | "agentFileWriteRevisions"
-  | "agentIdentityLoading"
   | "toolsCatalogLoadingAgentId"
   | "toolsEffectiveLoadingKey"
   | "toolsEffectiveResultKey"
@@ -136,7 +134,6 @@ export function createAgentsPageState(
     agentFileConflict: null,
     agentFileActive: null,
     agentFileSaving: false,
-    agentIdentityLoading: false,
     identityDraft: { name: null, emoji: null, avatar: null },
     identitySaving: false,
     identityError: null,
@@ -276,8 +273,6 @@ export function createAgentsPageState(
     const selection = context.settingsAgentSelection;
     const restoredIdentity = selectionDrafts.select({
       selectedId: selection.state.selectedId,
-      intentRevision: selection.intentRevision,
-      awaitingRoster: !selection.state.selectedId && !context.agents.state.agentsList,
       profileId: context.gateway.snapshot.selfUser?.id ?? null,
     });
     if (restoredIdentity) {
@@ -325,7 +320,6 @@ export function createAgentsPageState(
     state.agentFilesLoading = false;
     state.agentFileSaving = false;
     state.identitySaving = false;
-    state.agentIdentityLoading = false;
     state.agentSkillsLoading = false;
     state.toolsCatalogLoading = false;
     state.toolsCatalogLoadingAgentId = null;
@@ -428,24 +422,7 @@ export function createAgentsPageState(
   }
 
   function ensureAgentIdentities() {
-    const client = state.client;
-    const agentIdentity = context.agentIdentity;
-    const ids =
-      state.agentsList?.agents.map((entry) => entry.id).filter((id) => !agentIdentity.get(id)) ??
-      [];
-    if (!client || !state.connected || ids.length === 0 || state.agentIdentityLoading) {
-      return;
-    }
-    const generation = state.requestGeneration;
-    state.agentIdentityLoading = true;
-    void agentIdentity
-      .ensure(ids)
-      .catch(() => undefined)
-      .finally(() => {
-        if (isCurrentRequest(client, generation, undefined, { agentIdentity })) {
-          state.agentIdentityLoading = false;
-        }
-      });
+    void context.agentIdentity.ensure(state.agentsList?.agents.map((entry) => entry.id) ?? []);
   }
 
   function loadActivePanelData() {
@@ -707,7 +684,6 @@ export function createAgentsPageState(
     state.agentSkillsLoading = false;
     state.agentSkillsError = null;
     state.agentSkillsAgentId = null;
-    state.agentIdentityLoading = false;
     resetIdentityDraft(state);
     state.toolsCatalogResult = null;
     state.toolsCatalogError = null;

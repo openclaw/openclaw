@@ -35,7 +35,6 @@ import {
   sessionPullRequestsForGateway,
 } from "../../lib/session-pull-requests.ts";
 import { resolveSessionRenamePatch, resolveSessionRenameValue } from "../../lib/session-rename.ts";
-import type { SessionsGroupBy } from "../../lib/sessions/grouping.ts";
 import {
   SESSIONS_PAGE_DEFAULT_LIMIT,
   filterSessionRows,
@@ -44,7 +43,7 @@ import {
   type SessionListSnapshot,
 } from "../../lib/sessions/index.ts";
 import { fetchPagedSessionRows } from "../../lib/sessions/paged-session-rows.ts";
-import type { SessionPatch, SessionPatchResult } from "../../lib/sessions/patch.ts";
+import type { SessionPatchResult } from "../../lib/sessions/patch.ts";
 import {
   resolveSessionPreferredFaceForKey,
   resolveSessionNavigationAgentId,
@@ -80,7 +79,8 @@ import {
   handleSessionManagementNavigationAction,
   type SessionsPageMenuProps,
 } from "./session-menu.tsx";
-import type { SessionsFilters, SessionsPageState } from "./sessions-page-state.types.ts";
+import type { SessionsPageState } from "./sessions-page-state.types.ts";
+import type { SessionsProps } from "./view-types.ts";
 
 registerSessionOrganizationEnglish();
 
@@ -569,7 +569,7 @@ export function createSessionsPage(
     await searchTranscripts(query);
   }
 
-  function updateFilters(next: SessionsFilters) {
+  function updateFilters(next: Parameters<SessionsProps["onFiltersChange"]>[0]) {
     state.activeMinutes = next.activeMinutes;
     state.limit = next.limit;
     state.includeGlobal = next.includeGlobal;
@@ -981,7 +981,7 @@ export function createSessionsPage(
 
   async function patchSession(
     key: string,
-    patch: SessionPatch,
+    patch: Parameters<SessionsProps["onPatch"]>[1],
     scope: SessionsPageRequestScope | null = captureRequestScope(),
     expectedSessionId?: string,
     options: { onConfirmed?: (result: SessionPatchResult) => void; sessionScope?: boolean } = {},
@@ -1320,7 +1320,7 @@ export function createSessionsPage(
     };
   }
 
-  function viewProps() {
+  function viewProps(): SessionsProps {
     const context = application;
     const { selectedSessions, sessionMenuWork: _sessionMenuWork, ...viewState } = state;
     const personGroupingAvailable = (state.result?.owners?.length ?? 0) > 1;
@@ -1343,11 +1343,10 @@ export function createSessionsPage(
       ),
       personGroupingAvailable,
       // Keep the stored Person preference while the owner roster is unavailable.
-      groupBy:
-        personGroupingAvailable || state.groupBy !== "person" ? state.groupBy : ("none" as const),
+      groupBy: personGroupingAvailable || state.groupBy !== "person" ? state.groupBy : "none",
       knownCategories: knownCategories(),
       selectedKeys: new Set(selectedSessions.keys()),
-      labelDisabledReason: (row: GatewaySessionRow) =>
+      labelDisabledReason: (row) =>
         mutationDisabledReason({
           method: "sessions.patch",
           params: { key: row.key, label: null },
@@ -1367,7 +1366,7 @@ export function createSessionsPage(
         params: { key: "", archivedOnly: true, deleteTranscript: true },
       }),
       deleteSelectedDisabledReason: selectedDeleteDisabledReason(),
-      onFiltersChange: (next: SessionsFilters) => updateFilters(next),
+      onFiltersChange: (next) => updateFilters(next),
       onClearFilters: () => {
         state.searchQuery = "";
         updateFilters({
@@ -1377,7 +1376,7 @@ export function createSessionsPage(
           includeUnknown: false,
         });
       },
-      onSearchChange: (query: string) => {
+      onSearchChange: (query) => {
         deepLinkSessionKey = null;
         state.searchQuery = query;
         state.page = 0;
@@ -1394,18 +1393,18 @@ export function createSessionsPage(
       onTranscriptSearchChange: actions.updateTranscriptSearchQuery,
       onTranscriptSearch: () => void actions.runTranscriptSearch(),
       onClearTranscriptSearch: () => resetTranscriptSearchState(""),
-      onSortChange: (column: "key" | "updated", direction: "asc" | "desc") => {
+      onSortChange: (column, direction) => {
         state.sortColumn = column;
         state.sortDir = direction;
         state.page = 0;
       },
-      onGroupByChange: (mode: SessionsGroupBy) => {
+      onGroupByChange: (mode) => {
         state.groupBy = mode;
         state.page = 0;
         saveStoredGroupBy(mode);
       },
       onAssignCategory: assignCategory,
-      onRequestNewCategory: (sessionKey?: string) => void actions.requestNewCategory(sessionKey),
+      onRequestNewCategory: (sessionKey) => void actions.requestNewCategory(sessionKey),
       onLoadMore: () => {
         const binding = listBinding;
         const offset = state.result?.nextOffset;
@@ -1413,27 +1412,26 @@ export function createSessionsPage(
           void loadSessionList(binding, { offset, append: true });
         }
       },
-      onPageChange: (page: number) => {
+      onPageChange: (page) => {
         state.page = page;
       },
-      onPageSizeChange: (pageSize: number) => {
+      onPageSizeChange: (pageSize) => {
         state.pageSize = pageSize;
         state.page = 0;
       },
       onRefresh: () => void refreshSessionList(),
-      onStatusFilterChange: (statusFilter: SessionArchivedFilter) =>
-        updateStatusFilter(statusFilter),
+      onStatusFilterChange: (statusFilter) => updateStatusFilter(statusFilter),
       onDeleteAllArchived: () => void actions.deleteAllArchived(),
-      onPatch: (key: string, patch: SessionPatch, options?: { sessionScope?: boolean }) =>
+      onPatch: (key, patch, options) =>
         void actions.patchSession(key, patch, undefined, undefined, options),
-      onToggleSelect: (key: string) => updateSelection([key], "toggle"),
-      onSelectPage: (keys: string[]) => updateSelection(keys, "select"),
-      onDeselectPage: (keys: string[]) => updateSelection(keys, "deselect"),
+      onToggleSelect: (key) => updateSelection([key], "toggle"),
+      onSelectPage: (keys) => updateSelection(keys, "select"),
+      onDeselectPage: (keys) => updateSelection(keys, "deselect"),
       onDeselectAll: () => {
         state.selectedSessions = new Map();
       },
       onDeleteSelected: () => void actions.deleteSelected(),
-      onNavigateToChat: (sessionKey: string) => {
+      onNavigateToChat: (sessionKey) => {
         const face = resolveSessionPreferredFaceForKey(context, sessionKey);
         const target = sessionNavigationTarget({
           context,
@@ -1445,7 +1443,7 @@ export function createSessionsPage(
         context.navigate(face, target.options);
       },
       onOpenSessionMenu: actions.openSessionMenu,
-      onToggleDetails: (key: string) => {
+      onToggleDetails: (key) => {
         state.expandedSessionKey = state.expandedSessionKey === key ? null : key;
         details.synchronize();
         if (deepLinkSessionKey !== null) {
@@ -1525,7 +1523,7 @@ export function createSessionsPage(
       revision();
       return sessionMenuProps();
     },
-    view: () => {
+    view: (): SessionsProps => {
       revision();
       return viewProps();
     },
