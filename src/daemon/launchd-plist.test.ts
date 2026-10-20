@@ -14,6 +14,7 @@ vi.mock("../process/exec.js", async (importOriginal) => ({
 }));
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+const readCommand = readLaunchAgentProgramArgumentsFromFile;
 const buildPlist = (overrides: Partial<Parameters<typeof buildLaunchAgentPlist>[0]> = {}) =>
   buildLaunchAgentPlist({
     label: "ai.openclaw.gateway",
@@ -42,41 +43,39 @@ it("gives the installed Gateway 330 seconds to drain and exit", () => {
   expect(buildPlist()).toMatch(/<key>ExitTimeOut<\/key>\s*<integer>330<\/integer>/u);
 });
 
-it("keeps lenient hand-edited expressions from consuming following assignments", async () => {
-  const { plistPath } = await environmentFixture("export EDITED=$(id)\nexport NEXT='retained'\n");
-  await expect(readLaunchAgentProgramArgumentsFromFile(plistPath)).resolves.toMatchObject({
-    environment: { EDITED: "$(id)", NEXT: "retained" },
-  });
-});
-
-it("preserves inline, file, and overlapping provenance after merging generated environment", async () => {
-  const { plistPath, envFile, wrapper } = await environmentFixture(
-    "export FILE='file'\nexport SHARED='file wins'\n",
-    { INLINE: "inline", SHARED: "original" },
-  );
-  const command = await readLaunchAgentProgramArgumentsFromFile(plistPath, {
+it.each([false, true])("round-trips environment (strict=%s)", async (strict) => {
+  const contents = strict
+    ? "export FILE='file'\nexport SHARED='file wins'\n"
+    : "export EDITED=$(id)\nexport NEXT='retained'\n";
+  const inline = strict ? { INLINE: "inline", SHARED: "original" } : undefined;
+  const { plistPath, envFile, wrapper } = await environmentFixture(contents, inline);
+  const options = {
     requireEffective: true,
     expectedEnvironmentWrapperPath: wrapper,
     expectedEnvironmentFilePath: envFile,
-  });
-  expect(command).toMatchObject({
-    programArguments: ["openclaw", "gateway"],
-    environment: { INLINE: "inline", SHARED: "file wins", FILE: "file" },
-    environmentValueSources: { INLINE: "inline", SHARED: "inline-and-file", FILE: "file" },
-  });
+  };
+  const command = await readCommand(plistPath, strict ? options : undefined);
+  expect(command?.environment).toMatchObject(
+    strict
+      ? { INLINE: "inline", SHARED: "file wins", FILE: "file" }
+      : { EDITED: "$(id)", NEXT: "retained" },
+  );
+  if (strict) {
+    expect(command).toMatchObject({
+      programArguments: ["openclaw", "gateway"],
+      environmentValueSources: { INLINE: "inline", SHARED: "inline-and-file", FILE: "file" },
+    });
+  }
 });
 
-it.each(["", "--max-old-space-size=24576"])(
-  "round-trips NODE_OPTIONS=%j, omitting other empty values",
-  async (nodeOptions) => {
-    const plistPath = path.join(dirs.make("openclaw-plist-env-"), "gateway.plist");
-    const programArguments = ["/usr/bin/node", "--max-old-space-size=16384", "gateway.js"];
-    await writePlist(plistPath, {
-      programArguments,
-      environment: { NODE_OPTIONS: nodeOptions, UNUSED: "", MISSING: undefined },
-    });
-    const command = await readLaunchAgentProgramArgumentsFromFile(plistPath);
-    expect(command?.environment).toEqual({ NODE_OPTIONS: nodeOptions });
-    expect(command?.programArguments).toEqual(programArguments);
-  },
-);
+it.each(["", "--max-old-space-size=24576"])("preserves NODE_OPTIONS=%j", async (nodeOptions) => {
+  const plistPath = path.join(dirs.make("openclaw-plist-env-"), "gateway.plist");
+  const programArguments = ["/usr/bin/node", "--max-old-space-size=16384", "gateway.js"];
+  await writePlist(plistPath, {
+    programArguments,
+    environment: { NODE_OPTIONS: nodeOptions, UNUSED: "", MISSING: undefined },
+  });
+  const command = await readCommand(plistPath);
+  expect(command?.environment).toEqual({ NODE_OPTIONS: nodeOptions });
+  expect(command?.programArguments).toEqual(programArguments);
+});

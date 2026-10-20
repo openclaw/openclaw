@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { note } from "../../packages/terminal-core/src/note.js";
+import { nativeResult } from "../cli/update-cli/update-command-service-fixtures.test-support.js";
 import { noteMacForeignLaunchdJobs } from "../commands/doctor-foreign-launchd-jobs.js";
 import { runGatewayServicesHealth } from "../flows/doctor-health-contribution-runners.gateway.js";
 import { createDoctorHealthFlowContext } from "../flows/doctor-health-contributions.test-support.js";
@@ -63,12 +64,7 @@ it.skipIf(!hasGuiLaunchd).each(["interpreter", "direct"] as const)(
       if (result.error) {
         throw result.error;
       }
-      return {
-        code: result.status ?? 1,
-        stdout: result.stdout,
-        stderr: result.stderr,
-        termination: "exit" as const,
-      };
+      return nativeResult(result.stdout, result.status ?? 1, result.stderr);
     };
     const env = { HOME: dir, OPENCLAW_LAUNCHD_LABEL: labels[1] };
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
@@ -107,14 +103,10 @@ it.skipIf(!hasGuiLaunchd).each(["interpreter", "direct"] as const)(
         `#!/bin/bash\nopenclaw_bin=${cli}\n"$openclaw_bin" gateway restart\nfor attempt in 1 2; do\n  "$openclaw_bin" gateway status\n  /bin/sleep 1\ndone\n`,
         { mode: 0o700 },
       );
+      const lifecycleCommand = mode === "direct" ? [script] : ["/bin/bash", script];
       for (const label of labels) {
         created.push(label);
-        const command =
-          label === observerLabel
-            ? ["/bin/sleep", "120"]
-            : mode === "direct"
-              ? [script]
-              : ["/bin/bash", script];
+        const command = label === observerLabel ? ["/bin/sleep", "120"] : lifecycleCommand;
         const result = native(["submit", "-l", label, "--", ...command]);
         expect(result.code, "scratch launchctl submit must not require privileges").toBe(0);
       }
@@ -144,10 +136,11 @@ it.skipIf(!hasGuiLaunchd).each(["interpreter", "direct"] as const)(
         `Removed stray launchd job ${lifecycleLabel}`,
       );
       expect(mutations).toEqual([lifecycleLabel]);
-      expect(native(["print", `${domain}/${lifecycleLabel}`]).code).not.toBe(0);
-      for (const label of labels.slice(1)) {
-        expect(native(["print", `${domain}/${label}`]).code).toBe(0);
-      }
+      expect(labels.map((label) => native(["print", `${domain}/${label}`]).code === 0)).toEqual([
+        false,
+        true,
+        true,
+      ]);
     } catch (error) {
       errors.push(error);
     }
