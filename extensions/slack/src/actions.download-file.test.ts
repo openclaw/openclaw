@@ -1,5 +1,5 @@
 import type { WebClient } from "@slack/web-api";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { downloadSlackFile } from "./actions.js";
 
 const resolveSlackMedia = vi.fn<typeof import("./monitor/media.js").resolveSlackMedia>();
@@ -12,8 +12,9 @@ vi.mock("./client.js", () => ({
   getSlackWriteClient: vi.fn(),
 }));
 
-function createClient() {
-  return { files: { info: vi.fn(async () => ({ file: {} })) } } as unknown as WebClient & {
+function createClient(file: Record<string, unknown> = {}) {
+  const info = vi.fn(async () => ({ file: {} })).mockResolvedValueOnce({ file: fileInfo(file) });
+  return { files: { info } } as unknown as WebClient & {
     files: { info: ReturnType<typeof vi.fn> };
   };
 }
@@ -29,11 +30,7 @@ function fileInfo(overrides: Record<string, unknown> = {}) {
 function privateShare(channel: string, ts: string, thread_ts?: string) {
   return { shares: { private: { [channel]: [{ ts, ...(thread_ts ? { thread_ts } : {}) }] } } };
 }
-const media = {
-  path: "/tmp/image.png",
-  contentType: "image/png",
-  placeholder: "[Slack file: image.png]",
-};
+const media = { path: "/tmp/a.png", contentType: "image/png", placeholder: "[file]" };
 function download(
   client: WebClient,
   overrides: Partial<Parameters<typeof downloadSlackFile>[1]> = {},
@@ -47,80 +44,60 @@ function download(
   });
 }
 
-describe("downloadSlackFile", () => {
-  beforeEach(() => {
-    resolveSlackMedia.mockReset().mockResolvedValueOnce([media]);
-    createSlackLookupClientMock.mockReset();
-  });
+beforeEach(() => {
+  resolveSlackMedia.mockReset().mockResolvedValueOnce([media]);
+  createSlackLookupClientMock.mockReset();
+});
 
-  it("uses cfg credentials and the prepared GovSlack client for fresh scoped metadata", async () => {
-    const client = Object.assign(createClient(), { slackApiUrl: "https://slack-gov.com/api/" });
-    client.files.info.mockResolvedValueOnce({
-      file: fileInfo({
-        channels: ["C999"],
-        groups: undefined,
-        ims: ["C123"],
-        has_more_shares: true,
-      }),
-    });
-    createSlackLookupClientMock.mockReturnValueOnce(client);
-    await expect(
-      downloadSlackFile("F123", {
-        cfg: { channels: { slack: { accounts: { default: { botToken: "xoxb-from-cfg" } } } } },
-        accountId: "default",
-        maxBytes: 1024,
-        channelId: "C123",
-      }),
-    ).resolves.toEqual(media);
-    expect(client.files.info).toHaveBeenCalledExactlyOnceWith({ file: "F123" });
-    expect(createSlackLookupClientMock).toHaveBeenCalledWith(
-      "xoxb-from-cfg",
-      { teamId: undefined },
-      undefined,
-    );
-    expect(resolveSlackMedia).toHaveBeenCalledExactlyOnceWith({
-      files: [{ ...fileMetadata, url_private: undefined }],
-      client,
-      token: "xoxb-from-cfg",
+it("uses cfg credentials and the prepared GovSlack client for fresh scoped metadata", async () => {
+  const client = Object.assign(
+    createClient({ channels: ["C999"], ims: ["C123"], has_more_shares: true }),
+    { slackApiUrl: "https://slack-gov.com/api/" },
+  );
+  createSlackLookupClientMock.mockReturnValueOnce(client);
+  await expect(
+    downloadSlackFile("F123", {
+      cfg: { channels: { slack: { accounts: { default: { botToken: "xoxb-from-cfg" } } } } },
+      accountId: "default",
       maxBytes: 1024,
-      isRefreshedFileAllowed: expect.any(Function),
-    });
+      channelId: "C123",
+    }),
+  ).resolves.toEqual(media);
+  expect(client.files.info).toHaveBeenCalledExactlyOnceWith({ file: "F123" });
+  expect(createSlackLookupClientMock).toHaveBeenCalledWith(
+    "xoxb-from-cfg",
+    { teamId: undefined },
+    undefined,
+  );
+  expect(resolveSlackMedia).toHaveBeenCalledExactlyOnceWith({
+    files: [{ ...fileMetadata, url_private: undefined }],
+    client,
+    token: "xoxb-from-cfg",
+    maxBytes: 1024,
+    isRefreshedFileAllowed: expect.any(Function),
   });
+});
 
-  it("reapplies channel and thread admission when download metadata is refreshed", async () => {
-    const client = createClient();
-    client.files.info.mockResolvedValueOnce({
-      file: fileInfo(privateShare("C123", "111.111")),
-    });
-    await expect(download(client, { threadId: "111.111" })).resolves.toEqual(media);
-    const isAllowed = resolveSlackMedia.mock.calls[0]?.[0].isRefreshedFileAllowed;
-    if (!isAllowed) {
-      throw new Error("Expected refreshed Slack file admission");
-    }
-    expect(isAllowed(fileInfo(privateShare("C123", "222.222", "111.111")))).toBe(true);
-    expect(isAllowed(fileInfo(privateShare("C999", "111.111")))).toBe(false);
-    expect(isAllowed(fileInfo(privateShare("C123", "222.222")))).toBe(false);
-  });
+it("reapplies channel and thread admission when download metadata is refreshed", async () => {
+  const client = createClient(privateShare("C123", "111.111"));
+  await expect(download(client, { threadId: "111.111" })).resolves.toEqual(media);
+  const isAllowed = resolveSlackMedia.mock.calls[0]?.[0].isRefreshedFileAllowed;
+  if (!isAllowed) {
+    throw new Error("Expected refreshed Slack file admission");
+  }
+  expect(isAllowed(fileInfo(privateShare("C123", "222.222", "111.111")))).toBe(true);
+  expect(isAllowed(fileInfo(privateShare("C999", "111.111")))).toBe(false);
+  expect(isAllowed(fileInfo(privateShare("C123", "222.222")))).toBe(false);
+});
 
-  it.each([
-    { name: "missing private URL", file: { url_private_download: undefined } },
-    { name: "wrong channel", file: { channels: ["C999"] } },
-    {
-      name: "wrong thread",
-      file: privateShare("C123", "111.111", "111.111"),
-      threadId: "222.222",
-    },
-    {
-      name: "shares without timestamps",
-      file: { channels: undefined, shares: { private: { C123: [{}] } } },
-    },
-    { name: "blank requested channel", file: {}, channelId: "   " },
-  ])("rejects $name before downloading", async ({ file, threadId, channelId }) => {
-    const client = createClient();
-    client.files.info.mockResolvedValueOnce({ file: fileInfo(file) });
-    await expect(
-      download(client, { threadId, channelId: channelId ?? "C123" }),
-    ).resolves.toBeNull();
-    expect(resolveSlackMedia).not.toHaveBeenCalled();
-  });
+it.each([
+  ["missing private URL", { url_private_download: undefined }],
+  ["wrong channel", { channels: ["C999"] }],
+  ["wrong thread", privateShare("C123", "111.111", "111.111"), "222.222"],
+  ["shares without timestamps", { channels: undefined, shares: { private: { C123: [{}] } } }],
+  ["blank requested channel", {}, undefined, "   "],
+] as const)("rejects %s before downloading", async (_name, file, threadId, channelId) => {
+  const client = createClient(file);
+  await expect(download(client, { threadId, channelId: channelId ?? "C123" })).resolves.toBeNull();
+  expect(resolveSlackMedia).not.toHaveBeenCalled();
 });
