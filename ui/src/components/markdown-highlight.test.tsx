@@ -1,5 +1,5 @@
 import { createMemo, createSignal } from "solid-js";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { prepareMessageMarkdown } from "../pages/chat/components/chat-message-text-preparation.ts";
 import { MessageJson } from "../pages/chat/components/chat-message-text-view.tsx";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
@@ -35,20 +35,23 @@ it("keeps code readable while loading and refreshes cached, streamed, and reader
   const [stream, setStream] = createSignal(initial);
   const [streaming, setStreaming] = createSignal(true);
   const proseRuns = { cached: 0, streaming: 0 };
+  const counted = (key: keyof typeof proseRuns, read: () => string) =>
+    createMemo(() => {
+      proseRuns[key]++;
+      return read();
+    });
   function Prose() {
-    const cached = createMemo(() => {
-      proseRuns.cached += 1;
-      return prepareMessageMarkdown(
+    const cached = counted("cached", () =>
+      prepareMessageMarkdown(
         "Plain **text**",
         "plain-history",
         { role: "assistant", isStreaming: false },
         {},
-      ).parts.join("");
-    });
-    const streamed = createMemo(() => {
-      proseRuns.streaming += 1;
-      return toStreamingMarkdownParts("Plain **streamed** prose", {}, "plain-stream").join("");
-    });
+      ).parts.join(""),
+    );
+    const streamed = counted("streaming", () =>
+      toStreamingMarkdownParts("Plain **streamed** prose", {}, "plain-stream").join(""),
+    );
     return (
       <>
         <SanitizedHtml html={cached()} />
@@ -132,8 +135,7 @@ it("keeps code readable while loading and refreshes cached, streamed, and reader
   );
   for (const wrapper of wrappers) {
     expect(wrapper.isConnected).toBe(true);
-    expect(wrapper.classList.contains("is-expanded")).toBe(true);
-    expect(wrapper.classList.contains("is-wrapped")).toBe(true);
+    expect(wrapper.matches(".is-expanded.is-wrapped")).toBe(true);
   }
   expect(wrappers[2]!.classList.contains("is-json-raw")).toBe(true);
   expect(proseRuns).toEqual({ cached: 1, streaming: 1 });
@@ -141,9 +143,7 @@ it("keeps code readable while loading and refreshes cached, streamed, and reader
   expect(view.container.querySelector(".streaming-fixture")?.innerHTML).toBe(sample.html);
 });
 
-describe("transcript HTML corpus captured before the loading change", () => {
-  it.each(corpus)("preserves $name byte for byte", ({ source, html, options }) => {
-    // SAFETY: This checked-in corpus was captured with these renderer options at the merge base.
-    expect(toSanitizedMarkdownHtml(source, options as MarkdownRenderOptions)).toBe(html);
-  });
+it.each(corpus)("preserves transcript $name byte for byte", ({ source, html, options }) => {
+  // SAFETY: This checked-in corpus was captured with these renderer options at the merge base.
+  expect(toSanitizedMarkdownHtml(source, options as MarkdownRenderOptions)).toBe(html);
 });
