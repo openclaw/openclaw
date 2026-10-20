@@ -14,6 +14,7 @@ export type MatrixTestReplyOptions = Pick<DispatcherConfig, "client" | "runtime"
       | "threadTarget"
       | "replyToEventId"
       | "mediaLocalRoots"
+      | "shouldDeliverReasoning"
     >
   >;
 
@@ -38,6 +39,7 @@ export async function createMatrixTestReplyDispatcher(options: MatrixTestReplyOp
     | "replyToMode"
     | "streaming"
     | "logVerboseMessage"
+    | "shouldDeliverReasoning"
   >;
   const draftController = await createMatrixDraftController({
     ...context,

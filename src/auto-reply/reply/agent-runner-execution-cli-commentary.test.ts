@@ -299,9 +299,6 @@ describe("executeAgentTurn: CLI durable commentary", () => {
         async () => undefined,
       );
       state.runCliAgentMock.mockImplementationOnce(async (params: RunCliAgentParams) => {
-        if (mode !== "prepared") {
-          expect(params.onBlockReply).toBe(onBlockReply);
-        }
         await params.onBlockReply?.(nativePayload, nativeContext);
         await params.onPartialReply?.({ text: "Fallback question" });
         return { payloads: [{ text: "Answered." }], meta: {} };

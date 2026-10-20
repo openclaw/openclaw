@@ -26,6 +26,8 @@ import {
   createMatrixReactionTestHarness,
   createMatrixRoomMessageEvent,
   createMatrixTextMessageEvent as textEvent,
+  createMatrixThreadRelationTestContent as threadRelation,
+  createMatrixThreadRootTestEvent as threadRoot,
 } from "./handler.test-helpers.js";
 import { stripMatrixMentionPrefix } from "./mentions.js";
 
@@ -71,7 +73,8 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
 });
 
 // mock-isolation: Keep Matrix network sends inert while testing monitor routing and delivery decisions.
-vi.mock("../send.js", () => ({
+vi.mock("../send.js", async () => ({
+  chunkMatrixText: (await import("../send/chunking.js")).chunkMatrixText,
   editMessageMatrix: editMock,
   prepareMatrixSingleText: prepareMatrixSingleTextMock,
   reactMatrixMessage: vi.fn(async () => {}),
@@ -104,10 +107,6 @@ type SessionOrigin = {
   nativeChannelId?: string;
 };
 
-function threadRoot(eventId = "$root", body = "Root topic") {
-  return textEvent({ eventId, sender: "@alice:example.org", body });
-}
-
 function agentRoute(sessionKey = "agent:ops:main") {
   return {
     agentId: "ops",
@@ -117,10 +116,6 @@ function agentRoute(sessionKey = "agent:ops:main") {
     mainSessionKey: "agent:ops:main",
     matchedBy: "binding.account" as const,
   };
-}
-
-function threadRelation(root = "$root") {
-  return { rel_type: "m.thread", event_id: root, "m.in_reply_to": { event_id: root } };
 }
 
 function dispatchResult(final = 0, block = 0) {
