@@ -16,15 +16,6 @@ import type { MatrixQaCanaryArtifact, MatrixQaScenarioExecution } from "./scenar
 
 type MatrixQaThreadScenarioResult = Awaited<ReturnType<typeof runThreadScenario>>;
 
-function buildMatrixQaThreadArtifacts(result: MatrixQaThreadScenarioResult) {
-  return {
-    driverEventId: result.driverEventId,
-    reply: result.reply,
-    rootEventId: result.rootEventId,
-    token: result.token,
-  };
-}
-
 export function buildMatrixQaThreadDetailLines(params: {
   result: MatrixQaThreadScenarioResult;
   extraLines?: string[];
@@ -124,7 +115,6 @@ export async function runThreadRootPreservationScenario(context: MatrixQaScenari
     label: "thread root preservation reply",
   });
   return {
-    artifacts: buildMatrixQaThreadArtifacts(result),
     details: buildMatrixQaThreadDetailLines({
       result,
       extraLines: [
@@ -184,7 +174,6 @@ export async function runThreadNestedReplyShapeScenario(context: MatrixQaScenari
   }
   const explicitReply = buildMatrixReplyArtifact(explicit.event, explicitToken);
   return {
-    artifacts: { ...buildMatrixQaThreadArtifacts(result), secondReply: explicitReply },
     details: buildMatrixQaThreadDetailLines({
       result,
       extraLines: [

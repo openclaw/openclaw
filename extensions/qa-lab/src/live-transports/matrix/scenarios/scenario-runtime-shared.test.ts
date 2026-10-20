@@ -165,7 +165,10 @@ describe("matrix scenario runtime shared", () => {
           });
         } else {
           expect(result).toMatchObject({
-            value: { artifacts: { driverEventId: "$trigger", expectedNoReplyWindowMs: 8_000 } },
+            value: {
+              details:
+                "trigger event: $trigger\ntrigger sender: @observer:matrix-qa.test\nwaited 8000ms with no SUT reply",
+            },
           });
         }
       } finally {

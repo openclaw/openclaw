@@ -308,13 +308,10 @@ it("checks deleted-device status before releasing its disposable recovery runtim
     createMatrixQaE2eeTestContext({ gatewayRuntimeEnv: {} }),
   );
 
-  expect(result.artifacts).toMatchObject({
-    defaultStatusError: "M_UNKNOWN_TOKEN",
-    defaultStatusExitCode: 1,
-    deletedDeviceId: "RECOVERY",
-    serverDeviceKnown: false,
-    statusExitCode: 0,
-  });
+  expect(result.details).toContain("deleted device: RECOVERY");
+  expect(result.details).toContain("default status exit code: 1");
+  expect(result.details).toContain("degraded status exit code: 0");
+  expect(result.details).toContain("device present on server: no");
   expect(mocks.runMatrixQaCliJson.mock.calls.slice(1).map(([call]) => call.args)).toEqual([
     ["matrix", "verify", "status", "--account", "deleted-device", "--json"],
     [
@@ -385,10 +382,8 @@ it("uses disposable source and target owners without reading observer credential
   expect(mocks.runMatrixQaCliJson).toHaveBeenCalledWith(
     expect.objectContaining({ stdin: "source-recovery-key\n" }),
   );
-  expect(result.artifacts).toMatchObject({
-    restoreExitCode: 1,
-    targetRecoveryDeviceId: "TARGET-RECOVERY-DEVICE",
-  });
+  expect(result.details).toContain("restore exit code: 1");
+  expect(result.details).toContain("restore error: bad MAC");
   expect(cleanupOrder).toEqual([
     "cli:dispose",
     "target:delete:TARGET-RECOVERY-DEVICE",
