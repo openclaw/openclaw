@@ -220,7 +220,7 @@ function readUniqueConstraints(db: DatabaseSync, table: CanonicalStrictTable): U
   }
   const indexes = db
     .prepare(`PRAGMA index_list(${quoteSqliteIdentifier(tableName)})`)
-    .all() as IndexListRow[];
+    .all() as IndexListRow[]; // SAFETY: PRAGMA index_list row shape is stable across SQLite versions.
   const constraints: UniqueConstraint[] = [];
   for (const index of indexes) {
     if (Number(index.unique ?? 0) !== 1 || typeof index.name !== "string") {
@@ -233,7 +233,8 @@ function readUniqueConstraints(db: DatabaseSync, table: CanonicalStrictTable): U
       db
         .prepare(`PRAGMA index_xinfo(${quoteSqliteIdentifier(index.name)})`)
         .all() as IndexXInfoRow[]
-    ).toSorted((left, right) => Number(left.seqno ?? 0) - Number(right.seqno ?? 0));
+    ) // SAFETY: PRAGMA index_xinfo row shape is stable across SQLite versions.
+      .toSorted((left, right) => Number(left.seqno ?? 0) - Number(right.seqno ?? 0));
     const columns: string[] = [];
     const collations: string[] = [];
     let hasExpressionTerm = false;
@@ -582,6 +583,7 @@ export function migrateSqliteSchemaToStrictInTransaction(
             `HAVING COUNT(*) > 1 AND ${nonNullGuards.join(" AND ")}` +
             `);`,
         )
+        // SAFETY: COUNT aggregate always returns a numeric cnt column.
         .get() as { cnt?: unknown } | undefined;
       if (Number(collisionCount?.cnt ?? 0) > 0) {
         throw new Error(
