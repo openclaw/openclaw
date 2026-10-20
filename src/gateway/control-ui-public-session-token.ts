@@ -348,6 +348,11 @@ export async function mintPublicSessionWidgetToken(
   locator: PublicSessionShareLocator,
   docId: string,
 ): Promise<string | undefined> {
+  // Shortcode references are model-authored; an unmintable one omits its frame
+  // instead of failing the whole public page.
+  if (!isValidWidgetDocumentId(docId)) {
+    return undefined;
+  }
   const codec = await resolveProcessCodec({ create: false });
   if (!codec) {
     return undefined;

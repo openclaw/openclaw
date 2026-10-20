@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ControlUiPublicSessionRequestGate } from "./control-ui-public-session-admission.js";
 import { buildPublicSessionWidgetUrl } from "./control-ui-public-session-attachments.js";
@@ -51,7 +52,11 @@ export async function servePublicSessionRepresentation(params: {
         return null;
       }
       const widgetUrls = new Map<string, string>();
-      for (const item of projectPublicSessionItems(session.messages)) {
+      // Disabled hosting serves no widget documents; omit their frames rather than link 404s.
+      const items = isCoreCanvasHostEnabled(config)
+        ? projectPublicSessionItems(session.messages)
+        : [];
+      for (const item of items) {
         if (item.kind !== "message") {
           continue;
         }

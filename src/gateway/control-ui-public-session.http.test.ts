@@ -166,6 +166,27 @@ describe("anonymous public session HTTP boundary", () => {
       'src="/control/share/session/media?widget=v1.document-only"',
     );
   });
+  it("keeps the page available but omits frames for disabled hosting or unmintable references", async () => {
+    reader.mockResolvedValue({
+      ...PUBLIC_SESSION,
+      messages: [{ role: "assistant", content: 'Chart below.\n\n[embed ref="chart" /]' }],
+    });
+    const disabled = await send(
+      createPublicGateway("", {
+        ...TEST_CONFIG,
+        plugins: { entries: { canvas: { config: { host: { enabled: false } } } } },
+      }),
+      { path: requestPath() },
+    );
+    expect(disabled.res.statusCode).toBe(200);
+    expect(disabled.getBody()).toContain("Chart below.");
+    expect(disabled.getBody()).not.toContain("<iframe");
+    expect(widgetToken).not.toHaveBeenCalled();
+    widgetToken.mockResolvedValue(undefined);
+    const unmintable = await send(createPublicGateway(), { path: requestPath() });
+    expect(unmintable.res.statusCode).toBe(200);
+    expect(unmintable.getBody()).not.toContain("<iframe");
+  });
   it.each(["", "/control"])(
     "serves only published text and keeps private APIs authenticated (%s)",
     async (basePath) => {

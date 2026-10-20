@@ -144,9 +144,7 @@ describe("public session widget token", () => {
       ).toBeNull();
       expect(await resolvePublicSessionWidgetToken(`v1.${"a".repeat(16_384)}`)).toBeNull();
       for (const docId of ["", ".", "..", "../widget", " widget", "widget/a", "a".repeat(129)]) {
-        await expect(mintPublicSessionWidgetToken(LOCATOR, docId)).rejects.toThrow(
-          "invalid public session widget document",
-        );
+        expect(await mintPublicSessionWidgetToken(LOCATOR, docId)).toBeUndefined();
       }
     });
   });
