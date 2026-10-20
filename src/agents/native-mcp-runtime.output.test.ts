@@ -6,7 +6,7 @@ import {
   fixtureReceiptClientSource,
   openFixtureReceiptChannel,
 } from "../../test/helpers/fixture-receipts.js";
-import { withinTest } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { acquireNativeMcpServer, type NativeMcpServerView } from "./native-mcp-runtime.js";
 import { createFixtureRuntime, options } from "./native-mcp-runtime.test-support.js";
@@ -95,20 +95,7 @@ if (${JSON.stringify(era)} === "modern") {
   };
   const value = (view: NativeMcpServerView, count: unknown, extra = {}) =>
     view.callTool({ name: "value", arguments: { count, ...extra } }, options(signal));
-  return { file, receipts, acquire, value, close };
-}
-
-async function withFixture(
-  era: "legacy" | "modern",
-  signal: AbortSignal,
-  run: (peer: Awaited<ReturnType<typeof fixture>>) => Promise<void>,
-) {
-  const peer = await fixture(era, signal);
-  try {
-    await run(peer);
-  } finally {
-    await peer.close();
-  }
+  return { file, receipts, acquire, value, [Symbol.asyncDispose]: close };
 }
 
 const completeValue = (count: number) => ({
@@ -118,77 +105,75 @@ const completeValue = (count: number) => ({
 const schemaError = "does not match the tool's output schema";
 
 async function changeSchema(view: NativeMcpServerView, signal: AbortSignal) {
-  const invalidated = new Promise<void>((resolve) => {
-    const unsubscribe = view.subscribe((event) => {
-      if (
-        event.kind === "invalidated" ||
-        (event.kind === "notification" &&
-          event.notification.method === "notifications/tools/list_changed")
-      ) {
-        unsubscribe();
-        resolve();
-      }
-    });
+  const invalidated = createDeferred();
+  const unsubscribe = view.subscribe((event) => {
+    if (
+      event.kind === "invalidated" ||
+      (event.kind === "notification" &&
+        event.notification.method === "notifications/tools/list_changed")
+    ) {
+      unsubscribe();
+      invalidated.resolve();
+    }
   });
   await view.callTool({ name: "change-schema" }, options(signal));
-  await withinTest(invalidated, signal);
+  await withinTest(invalidated.promise, signal);
 }
 
 it.for(["legacy", "modern"] as const)(
   "validates completed %s tool results against their output schema",
-  async (era, { signal }) =>
-    withFixture(era, signal, async (peer) => {
-      const view = await peer.acquire();
-      await expect(peer.value(view, "oops")).rejects.toThrow(schemaError);
-      expect(await peer.value(view, 7)).toMatchObject({
-        kind: "complete",
-        result: { content: [], structuredContent: { count: 7 } },
-      });
-    }),
+  async (era, { signal }) => {
+    await using peer = await fixture(era, signal);
+    const view = await peer.acquire();
+    await expect(peer.value(view, "oops")).rejects.toThrow(schemaError);
+    expect(await peer.value(view, 7)).toMatchObject({
+      kind: "complete",
+      result: { content: [], structuredContent: { count: 7 } },
+    });
+  },
 );
 
 it.for(["legacy", "modern"] as const)(
   "retains the admitted %s output schema across catalog refresh",
-  async (era, { signal }) =>
-    withFixture(era, signal, async (peer) => {
-      const view = await peer.acquire();
-      const pending = peer.value(view, 7, { hold: true });
-      void pending.catch(() => {});
-      try {
-        await withinTest(peer.receipts.waitFor(peer.file, "held"), signal);
-        await changeSchema(view, signal);
-        const next = await peer.acquire();
-        expect(
-          (await next.listTools(undefined, options(signal))).tools[0]?.outputSchema,
-        ).toMatchObject({
-          properties: { count: { type: "string" } },
-        });
-        peer.receipts.release(peer.file, "finish");
-        expect(await pending).toMatchObject(completeValue(7));
-        await expect(peer.value(next, 7)).rejects.toThrow(schemaError);
-      } finally {
-        peer.receipts.release(peer.file, "finish");
-        await pending.catch(() => {});
-      }
-    }),
+  async (era, { signal }) => {
+    await using peer = await fixture(era, signal);
+    const view = await peer.acquire();
+    const pending = peer.value(view, 7, { hold: true });
+    void pending.catch(() => {});
+    try {
+      await withinTest(peer.receipts.waitFor(peer.file, "held"), signal);
+      await changeSchema(view, signal);
+      const next = await peer.acquire();
+      expect(
+        (await next.listTools(undefined, options(signal))).tools[0]?.outputSchema,
+      ).toMatchObject({
+        properties: { count: { type: "string" } },
+      });
+      peer.receipts.release(peer.file, "finish");
+      expect(await pending).toMatchObject(completeValue(7));
+      await expect(peer.value(next, 7)).rejects.toThrow(schemaError);
+    } finally {
+      peer.receipts.release(peer.file, "finish");
+      await pending.catch(() => {});
+    }
+  },
 );
 
 it("validates resumed results with the continuation's original output schema", async ({
   signal,
 }) => {
-  await withFixture("modern", signal, async (peer) => {
-    const view = await peer.acquire();
-    const pending = await peer.value(view, 7, { continue: true });
-    assert(pending.kind === "input-required");
-    await changeSchema(view, signal);
-    const next = await peer.acquire();
-    expect(await pending.resume({ roots: { roots: [] } }, options(signal))).toMatchObject(
-      completeValue(7),
-    );
-    const invalid = await peer.value(next, 7, { continue: true });
-    assert(invalid.kind === "input-required");
-    await expect(invalid.resume({ roots: { roots: [] } }, options(signal))).rejects.toThrow(
-      schemaError,
-    );
-  });
+  await using peer = await fixture("modern", signal);
+  const view = await peer.acquire();
+  const pending = await peer.value(view, 7, { continue: true });
+  assert(pending.kind === "input-required");
+  await changeSchema(view, signal);
+  const next = await peer.acquire();
+  expect(await pending.resume({ roots: { roots: [] } }, options(signal))).toMatchObject(
+    completeValue(7),
+  );
+  const invalid = await peer.value(next, 7, { continue: true });
+  assert(invalid.kind === "input-required");
+  await expect(invalid.resume({ roots: { roots: [] } }, options(signal))).rejects.toThrow(
+    schemaError,
+  );
 });

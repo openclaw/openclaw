@@ -87,14 +87,7 @@ async function writeFinal(sessionKey: string, runId: string, text: string, sessi
       touchSessionEntry: false,
       updateMode: "none",
       messages: [
-        {
-          message: {
-            role: "assistant",
-            phase: "final_answer",
-            stopReason: "stop",
-            content: [{ type: "text", text }],
-          },
-        },
+        { message: { ...textAssistant(text), phase: "final_answer", stopReason: "stop" } },
       ],
     },
   );
@@ -102,6 +95,10 @@ async function writeFinal(sessionKey: string, runId: string, text: string, sessi
 
 function cloneTestConfig() {
   return { ...TEST_CONFIG, session: { ...TEST_CONFIG.session } };
+}
+
+function sessionSender(agentSessionKey: string, agentChannel?: string, config?: OpenClawConfig) {
+  return getSessionTool("sessions_send", { agentSessionKey, agentChannel, config });
 }
 
 function mockGatewayResponses(responses: Record<string, unknown>) {
@@ -114,6 +111,15 @@ function gatewayCalls(method: string) {
   return callGatewayMock.mock.calls
     .map(([request]) => request)
     .filter((request) => request.method === method);
+}
+
+async function readHistory(callId: string, messages: unknown[], includeTools?: true) {
+  mockGatewayResponses({ "chat.history": { messages } });
+  const result = await getSessionTool("sessions_history").execute(callId, {
+    sessionKey: "main",
+    ...(includeTools ? { includeTools } : {}),
+  });
+  return result.details as { messages?: Array<Record<string, unknown>>; bytes?: number };
 }
 
 type AgentCallParams = {
@@ -160,39 +166,31 @@ describe("sessions tools", () => {
     ),
   );
 
-  registerSessionsSendResumeTests({
-    getSessionTool,
-    callGatewayMock,
-  });
+  registerSessionsSendResumeTests({ getSessionTool, callGatewayMock });
 
   it("sessions_send notify queues next-turn context without starting or steering work", async () => {
     const targetKey = "agent:main:dashboard:notification-target";
     await seedSession(targetKey);
     callGatewayMock.mockImplementation(async () => ({}));
-    const tool = getSessionTool("sessions_send", { agentSessionKey: "agent:main:main" });
+    const tool = sessionSender("agent:main:main");
     const result = await tool.execute("notify", {
       sessionKey: targetKey,
       message: "Evidence is ready",
       mode: "notify",
     });
-    expect(result.details).toMatchObject({
-      status: "queued",
-      sessionKey: targetKey,
-      durability: "process",
-      runStarted: false,
-    });
-    expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
     const queuedReceipt = {
       status: "queued",
       sessionKey: targetKey,
-      notificationId: "notification-fixture",
       durability: "process",
       runStarted: false,
     };
-    expect(Value.Check(tool.outputSchema!, { ...queuedReceipt, durability: "durable" })).toBe(
+    expect(result.details).toMatchObject(queuedReceipt);
+    expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
+    const schemaReceipt = { ...queuedReceipt, notificationId: "notification-fixture" };
+    expect(Value.Check(tool.outputSchema!, { ...schemaReceipt, durability: "durable" })).toBe(
       false,
     );
-    expect(Value.Check(tool.outputSchema!, { ...queuedReceipt, runStarted: true })).toBe(false);
+    expect(Value.Check(tool.outputSchema!, { ...schemaReceipt, runStarted: true })).toBe(false);
     expect(callGatewayMock.mock.calls.some(([request]) => request.method === "agent")).toBe(false);
     const queued = peekSystemEventEntries(targetKey);
     expect(queued).toHaveLength(1);
@@ -208,7 +206,7 @@ describe("sessions tools", () => {
       agent: { runId: "followup-run", status: "accepted" },
       "agent.wait": { status: "ok", terminalReply: { disposition: "empty" } },
     });
-    const tool = getSessionTool("sessions_send", { agentSessionKey: "agent:main:main" });
+    const tool = sessionSender("agent:main:main");
     const idle = await tool.execute("idle-steer", {
       sessionKey: targetKey,
       message: "Adjust this",
@@ -373,24 +371,19 @@ describe("sessions tools", () => {
   });
 
   it("sessions_history caps oversized payloads and strips tool-owned heavy fields", async () => {
-    mockGatewayResponses({
-      "chat.history": {
-        messages: Array.from({ length: 80 }, (_, idx) => ({
-          role: "assistant",
-          content: [
-            { type: "text", text: `${idx}:${"x".repeat(5000)}` },
-            { type: "thinking", thinking: "y".repeat(7000) },
-          ],
-          details: { giant: "z".repeat(12000) },
-          usage: { input: 1, output: 1 },
-        })),
-      },
-    });
-    const result = await getSessionTool("sessions_history").execute("bounded", {
-      sessionKey: "main",
-      includeTools: true,
-    });
-    const details = result.details as { messages?: Array<Record<string, unknown>>; bytes?: number };
+    const details = await readHistory(
+      "bounded",
+      Array.from({ length: 80 }, (_, idx) => ({
+        role: "assistant",
+        content: [
+          { type: "text", text: `${idx}:${"x".repeat(5000)}` },
+          { type: "thinking", thinking: "y".repeat(7000) },
+        ],
+        details: { giant: "z".repeat(12000) },
+        usage: { input: 1, output: 1 },
+      })),
+      true,
+    );
     expect(details).toMatchObject({
       truncated: true,
       droppedMessages: true,
@@ -413,18 +406,15 @@ describe("sessions tools", () => {
 
   it("sessions_history preserves credential text while reporting truncation", async () => {
     const secret = "sk-9876543210fedcba9876";
-    mockGatewayResponses({
-      "chat.history": { messages: [textAssistant(`${secret} ${"safe text ".repeat(420)}`)] },
-    });
-    const result = await getSessionTool("sessions_history").execute("preserved", {
-      sessionKey: "main",
-    });
-    expect(result.details).toMatchObject({
+    const details = await readHistory("preserved", [
+      textAssistant(`${secret} ${"safe text ".repeat(420)}`),
+    ]);
+    expect(details).toMatchObject({
       contentRedacted: false,
       contentTruncated: true,
       truncated: true,
     });
-    expect(JSON.stringify(result.details)).toContain(secret);
+    expect(JSON.stringify(details)).toContain(secret);
   });
 
   it("sessions_send does not redeliver a source reply when history lacks its message-tool result", async () => {
@@ -433,8 +423,7 @@ describe("sessions tools", () => {
     const marker = "source reply delivered once";
     let waitObserved = false;
     const deliveredMessages: string[] = [];
-    callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as GatewayCall;
+    callGatewayMock.mockImplementation(async (request: GatewayCall) => {
       if (request.method === "agent") {
         return { runId: "run-source-reply", status: "accepted" };
       }
@@ -468,10 +457,7 @@ describe("sessions tools", () => {
       }
       return {};
     });
-    const tool = getSessionTool("sessions_send", {
-      agentSessionKey: sessionKey,
-      agentChannel: "discord",
-    });
+    const tool = sessionSender(sessionKey, "discord");
 
     const result = await tool.execute("call-source-reply", {
       sessionKey,
@@ -566,10 +552,7 @@ describe("sessions tools", () => {
     }
   });
 
-  registerSessionsSendParticipantTests({
-    config: TEST_CONFIG,
-    callGatewayMock,
-  });
+  registerSessionsSendParticipantTests({ config: TEST_CONFIG, callGatewayMock });
 
   it("returns an inline ordinary peer reply without starting a detached continuation", async () => {
     const requesterKey = "agent:main:whatsapp:group:req";
@@ -580,10 +563,7 @@ describe("sessions tools", () => {
       agent: { runId: "inline-result", status: "accepted" },
       "agent.wait": { status: "ok", terminalReply: { disposition: "visible", text: "initial" } },
     });
-    const tool = getSessionTool("sessions_send", {
-      agentSessionKey: requesterKey,
-      agentChannel: "whatsapp",
-    });
+    const tool = sessionSender(requesterKey, "whatsapp");
     const waited = await tool.execute("inline-reply", {
       sessionKey: targetKey,
       message: "ping",
@@ -670,11 +650,7 @@ describe("sessions tools", () => {
         agent: { runId: "fallback-run", status: "accepted", acceptedAt: 2000 },
       });
       const result = await withGatewayToolCallerIdentity(caller, () =>
-        getSessionTool("sessions_send", {
-          agentSessionKey: "agent:re-portal:main",
-          agentChannel: "telegram",
-          config,
-        }).execute("active-send", {
+        sessionSender("agent:re-portal:main", "telegram", config).execute("active-send", {
           sessionKey: key,
           message: "[TASK-COMPLETE] occupancy ready",
           timeoutSeconds: 0,
@@ -750,9 +726,7 @@ describe("sessions tools", () => {
         createSessionsSendGatewayScope(),
         () =>
           withGatewayToolCallerIdentity(caller, () =>
-            getSessionTool("sessions_send", {
-              agentSessionKey: requesterKey,
-            }).execute("child-send", {
+            sessionSender(requesterKey).execute("child-send", {
               sessionKey: targetKey,
               message: "deps are ready",
               timeoutSeconds: 0,
@@ -823,11 +797,7 @@ describe("sessions tools", () => {
       agent: { runId: "ordinary-agent-run", status: "accepted", acceptedAt: 2000 },
     });
 
-    const tool = getSessionTool("sessions_send", {
-      agentSessionKey: "agent:re-portal:main",
-      agentChannel: "telegram",
-      config: cloneTestConfig(),
-    });
+    const tool = sessionSender("agent:re-portal:main", "telegram", cloneTestConfig());
 
     const result = await tool.execute("call-ordinary-active", {
       sessionKey: ordinaryActiveKey,
@@ -882,11 +852,7 @@ describe("sessions tools", () => {
       },
     });
 
-    const tool = getSessionTool("sessions_send", {
-      agentSessionKey: requesterKey,
-      agentChannel: "telegram",
-      config,
-    });
+    const tool = sessionSender(requesterKey, "telegram", config);
 
     const result = await withGatewayToolCallerIdentity(
       createSessionsSendTestCaller(requesterKey),
@@ -1011,32 +977,11 @@ describe("sessions tools", () => {
   });
 
   it("sessions_history enforces a hard byte cap even when a single message is huge", async () => {
-    mockGatewayResponses({
-      "chat.history": {
-        messages: [
-          {
-            role: "assistant",
-            content: [{ type: "text", text: "ok" }],
-            extra: "x".repeat(200_000),
-          },
-        ],
-      },
-    });
-
-    const tool = getSessionTool("sessions_history");
-
-    const result = await tool.execute("call4c", {
-      sessionKey: "main",
-      includeTools: true,
-    });
-    const details = result.details as {
-      messages?: Array<Record<string, unknown>>;
-      truncated?: boolean;
-      droppedMessages?: boolean;
-      contentTruncated?: boolean;
-      contentRedacted?: boolean;
-      bytes?: number;
-    };
+    const details = await readHistory(
+      "call4c",
+      [{ ...textAssistant("ok"), extra: "x".repeat(200_000) }],
+      true,
+    );
     expect(details).toMatchObject({
       truncated: true,
       droppedMessages: true,

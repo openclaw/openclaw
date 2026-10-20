@@ -129,10 +129,7 @@ it.each(streams)(
     const firstContext = {
       messages: [{ role: "user", content: "Run the synthetic probe.", timestamp: 1 }],
     } satisfies Context;
-    const call = async (context: Context) => {
-      const result = fixture.call(context);
-      return await (await result).result();
-    };
+    const call = async (context: Context) => (await fixture.call(context)).result();
     const assistant = await call(firstContext);
     expect(assistant.errorMessage).toBeUndefined();
     expect(assistant.stopReason).toBe("toolUse");

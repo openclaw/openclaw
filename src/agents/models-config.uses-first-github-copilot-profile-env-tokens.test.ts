@@ -1,5 +1,4 @@
-// Verifies GitHub Copilot profile token fallback and implicit provider planning.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { planModelsJsonForTest } from "./models-config.plan.test-support.js";
 import { resolveImplicitProviders } from "./models-config.providers.implicit.js";
 import { createProviderAuthResolver } from "./models-config.providers.secrets.js";
@@ -67,61 +66,49 @@ beforeEach(() => {
     .mockImplementation(async ({ explicitProviders }) => explicitProviders ?? {});
 });
 
-describe("models-config", () => {
-  it("uses the first github-copilot profile when env tokens are missing", () => {
-    const auth = createProviderAuthResolver(
-      {},
-      {
-        version: 1,
-        profiles: {
-          "github-copilot:alpha": tokenProfile("alpha-token"),
-          "github-copilot:beta": tokenProfile("beta-token"),
-        },
+it.each([
+  {
+    name: "uses the first github-copilot profile when env tokens are missing",
+    env: {},
+    profiles: {
+      "github-copilot:alpha": tokenProfile("alpha-token"),
+      "github-copilot:beta": tokenProfile("beta-token"),
+    },
+    expected: expectedAuth("alpha", "alpha-token"),
+  },
+  {
+    name: "uses tokenRef env var when github-copilot profile omits plaintext token",
+    env: { COPILOT_REF_TOKEN: "token-from-ref-env" },
+    profiles: {
+      "github-copilot:default": {
+        type: "token" as const,
+        provider: "github-copilot",
+        tokenRef: { source: "env" as const, provider: "default", id: "COPILOT_REF_TOKEN" },
       },
-    );
+    },
+    expected: expectedAuth("default", "COPILOT_REF_TOKEN", "token-from-ref-env"),
+  },
+] as const)("$name", ({ env, profiles, expected }) => {
+  const auth = createProviderAuthResolver(env, { version: 1, profiles });
+  expect(auth("github-copilot")).toEqual(expected);
+});
 
-    expect(auth("github-copilot")).toEqual(expectedAuth("alpha", "alpha-token"));
+it("keeps a non-empty existing models.json baseUrl when merge mode regenerates the provider", async () => {
+  const kilocodeProvider = {
+    baseUrl: "https://api.kilo.ai/api/gateway/v1",
+    api: "openai-completions" as const,
+    models: [],
+  };
+  const existing = {
+    providers: { kilocode: { ...kilocodeProvider, baseUrl: "https://api.kilo.ai/api/gateway" } },
+  };
+  const plan = await planModelsJsonForTest({
+    cfg: { models: { providers: { kilocode: kilocodeProvider } } },
+    agentDir: "/tmp/openclaw-agent",
+    env: {},
+    existingRaw: `${JSON.stringify(existing, null, 2)}\n`,
+    existingParsed: existing,
   });
 
-  it("keeps a non-empty existing models.json baseUrl when merge mode regenerates the provider", async () => {
-    const kilocodeProvider = {
-      baseUrl: "https://api.kilo.ai/api/gateway/v1",
-      api: "openai-completions" as const,
-      models: [],
-    };
-    const existing = {
-      providers: { kilocode: { ...kilocodeProvider, baseUrl: "https://api.kilo.ai/api/gateway" } },
-    };
-    const plan = await planModelsJsonForTest({
-      cfg: { models: { providers: { kilocode: kilocodeProvider } } },
-      agentDir: "/tmp/openclaw-agent",
-      env: {},
-      existingRaw: `${JSON.stringify(existing, null, 2)}\n`,
-      existingParsed: existing,
-    });
-
-    expect(plan).toEqual({ action: "noop", pluginCatalogWrites: {} });
-  });
-
-  it("uses tokenRef env var when github-copilot profile omits plaintext token", () => {
-    const auth = createProviderAuthResolver(
-      {
-        COPILOT_REF_TOKEN: "token-from-ref-env",
-      },
-      {
-        version: 1,
-        profiles: {
-          "github-copilot:default": {
-            type: "token",
-            provider: "github-copilot",
-            tokenRef: { source: "env", provider: "default", id: "COPILOT_REF_TOKEN" },
-          },
-        },
-      },
-    );
-
-    expect(auth("github-copilot")).toEqual(
-      expectedAuth("default", "COPILOT_REF_TOKEN", "token-from-ref-env"),
-    );
-  });
+  expect(plan).toEqual({ action: "noop", pluginCatalogWrites: {} });
 });

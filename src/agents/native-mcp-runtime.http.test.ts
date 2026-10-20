@@ -13,18 +13,14 @@ import { acquireNativeMcpServer, type NativeMcpServerView } from "./native-mcp-r
 import { options } from "./native-mcp-runtime.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const requests: Array<{
-  method: string | null;
-  name: string | null;
-  tenant: string | null;
-  enabled: string | null;
-}> = [];
+const requests: Array<Record<"method" | "name" | "tenant" | "enabled", string | null>> = [];
 let mirrorCalls = 0;
 let inputCalls = 0;
 let sessionId = 0;
 let runtime: SessionMcpRuntime | undefined;
 let view: NativeMcpServerView | undefined;
 let listener: Awaited<ReturnType<typeof reserveTestPortListener<http.Server>>>;
+const textResult = (text: string) => ({ content: [{ type: "text" as const, text }] });
 
 const handler = createMcpHandler(
   ({ requestInfo }) => {
@@ -46,17 +42,12 @@ const handler = createMcpHandler(
       },
       async () => {
         mirrorCalls += 1;
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                tenant: headers.get("mcp-param-tenant"),
-                enabled: headers.get("mcp-param-enabled"),
-              }),
-            },
-          ],
-        };
+        return textResult(
+          JSON.stringify({
+            tenant: headers.get("mcp-param-tenant"),
+            enabled: headers.get("mcp-param-enabled"),
+          }),
+        );
       },
     );
     server.registerTool("needs-input", {}, async () => {
@@ -138,9 +129,7 @@ async function expectMirror(tenant: string, enabled: boolean, signal: AbortSigna
     ),
   ).toMatchObject({
     kind: "complete",
-    result: {
-      content: [{ type: "text", text: JSON.stringify({ tenant, enabled: String(enabled) }) }],
-    },
+    result: textResult(JSON.stringify({ tenant, enabled: String(enabled) })),
   });
 }
 
@@ -152,24 +141,20 @@ describe("native MCP HTTP projection calls", () => {
   }) => {
     expect(view!.getProtocolEra()).toBe("modern");
     requests.length = 0;
-    await expectMirror("tenant-a", true, signal);
-    expect(requestsFor("tools/call")).toEqual([
+    const expected: typeof requests = [
       { method: "tools/call", name: "mirror", tenant: null, enabled: null },
-      { method: "tools/call", name: "mirror", tenant: "tenant-a", enabled: "true" },
-    ]);
-    expect(requestsFor("tools/list")).toHaveLength(1);
-    expect(mirrorCalls).toBe(1);
-
-    await expectMirror("tenant-b", false, signal);
-    expect(requestsFor("tools/call")).toHaveLength(3);
-    expect(requests.at(-1)).toEqual({
-      method: "tools/call",
-      name: "mirror",
-      tenant: "tenant-b",
-      enabled: "false",
-    });
-    expect(requestsFor("tools/list")).toHaveLength(1);
-    expect(mirrorCalls).toBe(2);
+    ];
+    for (const [tenant, enabled] of [
+      ["tenant-a", true],
+      ["tenant-b", false],
+    ] as const) {
+      await expectMirror(tenant, enabled, signal);
+      expected.push({ method: "tools/call", name: "mirror", tenant, enabled: String(enabled) });
+      expect(requestsFor("tools/call")).toEqual(expected);
+      expect(requestsFor("tools/list")).toHaveLength(1);
+      expect(mirrorCalls).toBe(expected.length - 1);
+    }
+    expect(requests.at(-1)).toEqual(expected.at(-1));
     expect(runtime!.activeLeases).toBe(0);
   });
 
