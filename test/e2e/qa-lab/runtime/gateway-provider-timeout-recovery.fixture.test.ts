@@ -1,4 +1,3 @@
-import { request, type ClientRequest } from "node:http";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 
@@ -17,7 +16,7 @@ it("keeps bootstrap outside the hold deadline and reports progress with console 
 }) => {
   let now = 0;
   let providerUrl = "";
-  let providerRequest: ClientRequest | undefined;
+  const providerRequest = new AbortController();
   let providerReply: Promise<string> | undefined;
   let requestAt = 0;
   let releasedAt = 0;
@@ -75,23 +74,13 @@ it("keeps bootstrap outside the hold deadline and reports progress with console 
             }
             if (method === "chat.send") {
               requestAt = now;
-              providerReply = new Promise<string>((resolve, reject) => {
-                providerRequest = request(
-                  `${providerUrl}/responses`,
-                  { method: "POST" },
-                  (response) => {
-                    releasedAt = now;
-                    let body = "";
-                    response.setEncoding("utf8");
-                    response.on("data", (chunk: string) => {
-                      body += chunk;
-                    });
-                    response.on("end", () => resolve(body));
-                    response.on("error", reject);
-                  },
-                );
-                providerRequest.on("error", reject);
-                providerRequest.end("{}");
+              providerReply = fetch(`${providerUrl}/responses`, {
+                method: "POST",
+                body: "{}",
+                signal: providerRequest.signal,
+              }).then((response) => {
+                releasedAt = now;
+                return response.text();
               });
               return { status: "started", runId: "fixture-run" };
             }
@@ -146,15 +135,12 @@ it("keeps bootstrap outside the hold deadline and reports progress with console 
     for (const [index, entry] of activeProgress.entries()) {
       expect(entry.at - (activeProgress[index - 1]?.at ?? requestAt)).toBeLessThanOrEqual(60_000);
     }
-    expect
-      .soft(
-        progress.some(({ text }) =>
-          text.includes('"phase":"provider-timeout-recovery-proof-complete"'),
-        ),
-      )
-      .toBe(true);
+    const completed = progress.some(({ text }) =>
+      text.includes('"phase":"provider-timeout-recovery-proof-complete"'),
+    );
+    expect.soft(completed).toBe(true);
   } finally {
-    providerRequest?.destroy();
+    providerRequest.abort();
     for (const run of cleanup.splice(0).toReversed()) {
       await run();
     }

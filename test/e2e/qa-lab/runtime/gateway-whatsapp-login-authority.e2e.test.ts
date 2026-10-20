@@ -11,14 +11,6 @@ import {
   type OpenClawTestInstance,
 } from "../../../helpers/openclaw-test-instance.js";
 
-type ToolsInvokeResult = {
-  ok: boolean;
-  toolName: string;
-  output?: unknown;
-  source?: string;
-  error?: { code?: string; message?: string };
-};
-
 let instance: OpenClawTestInstance | undefined;
 
 afterEach(async () => {
@@ -48,13 +40,7 @@ it(
       },
     });
 
-    const credsPath = path.join(
-      instance.stateDir,
-      "credentials",
-      "whatsapp",
-      "default",
-      "creds.json",
-    );
+    const credsPath = path.join(instance.stateDir, "credentials/whatsapp/default/creds.json");
     const sentinel = `${JSON.stringify({ registered: true, proof: "preserve" })}\n`;
     await fs.mkdir(path.dirname(credsPath), { recursive: true });
     await fs.writeFile(credsPath, sentinel, "utf8");
@@ -73,7 +59,7 @@ it(
     const owner = await connect(true);
 
     try {
-      const denied = await nonOwner.request<ToolsInvokeResult>("tools.invoke", {
+      const denied = await nonOwner.request("tools.invoke", {
         name: "whatsapp_login",
         args: { action: "start", force: true, timeoutMs: 1 },
         sessionKey: "main",
@@ -81,14 +67,11 @@ it(
       expect(denied).toEqual({
         ok: false,
         toolName: "whatsapp_login",
-        error: {
-          code: "not_found",
-          message: "Tool not available: whatsapp_login",
-        },
+        error: { code: "not_found", message: "Tool not available: whatsapp_login" },
       });
       await expect(fs.readFile(credsPath, "utf8")).resolves.toBe(sentinel);
 
-      const allowed = await owner.request<ToolsInvokeResult>("tools.invoke", {
+      const allowed = await owner.request("tools.invoke", {
         name: "whatsapp_login",
         args: { action: "wait", timeoutMs: 1 },
         sessionKey: "main",
