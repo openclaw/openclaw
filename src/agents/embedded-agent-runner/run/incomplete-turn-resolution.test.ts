@@ -10,10 +10,7 @@ import {
 } from "./incomplete-turn-resolution.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
-function payloadText(
-  attempt: Parameters<typeof resolveIncompleteTurnPayloadText>[0]["attempt"],
-  payloadCount = 0,
-) {
+function payloadText(attempt: EmbeddedRunAttemptResult, payloadCount = 0) {
   return resolveIncompleteTurnPayloadText({
     payloadCount,
     aborted: false,
@@ -119,61 +116,51 @@ describe("incomplete-turn terminal metadata", () => {
 });
 
 describe("tool-authored source replies", () => {
-  // A `canDeliverSourceReply` tool wrote the final answer; the host delivers it, so a
-  // tool-use stop with no post-tool assistant text is not an incomplete turn.
-  it("does not let an earlier authored reply complete an unfinished later input", () => {
-    const assistant = buildEmbeddedRunnerAssistant({
-      stopReason: "toolUse",
-      content: [{ type: "toolCall", id: "later-call", name: "read", arguments: {} }],
-    });
-    const result = payloadText(
-      makeEmbeddedRunnerAttempt({
-        lastAssistant: assistant,
-        sourceReplyDeliveryState: "missing",
-        messagingToolSourceReplyPayloads: [
+  it.each([
+    [
+      "earlier-call",
+      "later-call",
+      "read",
+      "Earlier answer.",
+      undefined,
+      "No answer was returned. Ask again if you still need one.",
+    ],
+    [
+      "tool_1",
+      "tool_1",
+      "order_status",
+      "Pedido SO1 creado.",
+      [{ toolName: "order_status", meta: "orderId=SO1" }],
+      null,
+    ],
+  ] as const)(
+    "only completes the owning tool-use turn (%s / %s)",
+    (replyId, callId, name, text, toolMetas, expected) => {
+      const assistant = buildEmbeddedRunnerAssistant({
+        stopReason: "toolUse",
+        content: [
           {
-            text: "Earlier answer.",
-            sourceReplyFinal: true,
-            toolAuthored: true,
-            toolAuthoredForToolCallId: "earlier-call",
+            type: "toolCall",
+            id: callId,
+            name,
+            arguments: name === "order_status" ? { orderId: "SO1" } : {},
           },
         ],
-      }),
-      1,
-    );
-    expect(result).toBe("No answer was returned. Ask again if you still need one.");
-  });
-
-  it("treats a final tool-authored source reply as a complete tool-use turn", () => {
-    expect(
-      payloadText(
-        makeEmbeddedRunnerAttempt({
-          assistantTexts: [],
-          toolMetas: [{ toolName: "order_status", meta: "orderId=SO1" }],
-          // A live run starts with no source reply delivered yet.
-          sourceReplyDeliveryState: "missing",
-          messagingToolSourceReplyPayloads: [
-            {
-              text: "Pedido SO1 creado.",
-              sourceReplyFinal: true,
-              toolAuthored: true,
-              toolAuthoredForToolCallId: "tool_1",
-            },
-          ],
-          lastAssistant: buildEmbeddedRunnerAssistant({
-            stopReason: "toolUse",
-            content: [
-              {
-                type: "toolCall",
-                id: "tool_1",
-                name: "order_status",
-                arguments: { orderId: "SO1" },
-              },
-            ],
-          }),
-        }),
-        1,
-      ),
-    ).toBeNull();
-  });
+      });
+      const attempt = makeEmbeddedRunnerAttempt({
+        lastAssistant: assistant,
+        sourceReplyDeliveryState: "missing",
+        ...(toolMetas ? { assistantTexts: [], toolMetas: [...toolMetas] } : {}),
+        messagingToolSourceReplyPayloads: [
+          {
+            text,
+            sourceReplyFinal: true,
+            toolAuthored: true,
+            toolAuthoredForToolCallId: replyId,
+          },
+        ],
+      });
+      expect(payloadText(attempt, 1)).toBe(expected);
+    },
+  );
 });

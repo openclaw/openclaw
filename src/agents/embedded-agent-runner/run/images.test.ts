@@ -1,5 +1,3 @@
-// Prompt image tests cover local reference parsing, sandbox-aware loading, and
-// attachment ordering for embedded runs that send images to vision models.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -105,6 +103,53 @@ describe("prompt image preparation", () => {
   });
 });
 
+async function imageWorkspace(files: Record<string, Uint8Array | undefined>) {
+  const dir = tempDirs.make("openclaw-images-");
+  for (const [name, data] of Object.entries(files)) {
+    const file = path.join(dir, name);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, data ?? Buffer.from(TINY_PNG_BASE64, "base64"));
+  }
+  return dir;
+}
+
+async function pngFile(name = "photo.png") {
+  const workspaceDir = await imageWorkspace({ [name]: undefined });
+  return { workspaceDir, imagePath: path.join(workspaceDir, name) };
+}
+
+function hydrate(messages: AgentMessage[], workspaceDir: string) {
+  return hydratePromptMediaMessages(messages, {
+    workspaceDir,
+    model: { input: ["text", "image"] },
+    workspaceOnly: true,
+  });
+}
+function persistedMedia(text: string, paths: string[]) {
+  return buildPersistedUserTurnMessage({
+    text,
+    media: paths.map((file, index) => ({
+      path: file,
+      contentType: index === 0 || paths[0] === file ? "image/png" : "image/gif",
+    })),
+    mediaImageLayout: {
+      slots: [
+        { kind: "offloaded", factIndex: 0 },
+        { kind: "inline", factIndex: 1 },
+      ],
+    },
+  });
+}
+function restoredMedia(
+  runtimeMessage: AgentMessage,
+  preparedMessage: ReturnType<typeof persistedMedia>,
+) {
+  const serialized = JSON.stringify(
+    mergePreparedUserTurnMessageForRuntime({ runtimeMessage, preparedMessage }),
+  );
+  return JSON.parse(serialized) as AgentMessage;
+}
+
 function writePng(file: string) {
   return fs.writeFile(file, Buffer.from(TINY_PNG_BASE64, "base64"));
 }
@@ -113,80 +158,63 @@ function pathRef(raw: string, resolved = raw) {
   return { raw, type: "path", resolved };
 }
 
-function expectNoPromptImages(result: { detectedRefs: unknown[]; images: unknown[] }) {
-  expect(result.detectedRefs).toHaveLength(0);
-  expect(result.images).toHaveLength(0);
-}
-
-function expectNoImageReferences(prompt: string) {
-  const refs = detectImageReferences(prompt);
-  expect(refs).toHaveLength(0);
-}
-
-function expectImageReferenceCount(prompt: string, count: number) {
-  const refs = detectImageReferences(prompt);
-  expect(refs).toHaveLength(count);
-  return refs;
-}
-
-function expectSingleImageReference(prompt: string) {
-  // Most parser cases should find exactly one local image ref; this helper
-  // keeps failures about over-detection obvious.
-  const refs = expectImageReferenceCount(prompt, 1);
-  return refs[0];
-}
-
 describe("detectImageReferences", () => {
-  it("detects home directory paths starting with ~/", () => {
-    const ref = expectSingleImageReference("My photo is at ~/Pictures/vacation.png");
-
-    expect(ref).toStrictEqual(
-      pathRef(
-        "~/Pictures/vacation.png",
-        path.join(process.env.HOME ?? os.homedir(), "Pictures/vacation.png"),
-      ),
-    );
+  const stale = path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-images", "stale.jpg");
+  it.each([
+    [
+      "~/Pictures/vacation.png",
+      path.join(process.env.HOME ?? os.homedir(), "Pictures/vacation.png"),
+      false,
+    ],
+    ["/workspace/openclaw-cli-images/current.png", undefined, false],
+    ["/path/image.png", undefined, true],
+    [String.raw`C:\Users\Ada\Pictures\screenshot.png`, undefined, false],
+  ] as const)("parses local reference %s", (raw, resolved, duplicate) => {
+    expect(
+      detectImageReferences(`See ${raw}${duplicate ? ` and ${raw} again` : ""}`),
+    ).toStrictEqual([pathRef(raw, resolved ?? raw)]);
   });
-
-  it("ignores OpenClaw CLI image cache paths from prior prompt transcripts", () => {
-    // Cache paths from generated tool reminders are replay artifacts, not new
-    // user attachments to hydrate again.
-    const refs = detectImageReferences(
+  it.each([
+    [
+      "transcript cache paths",
       [
-        '<system-reminder>Called the Read tool with {"file_path":"/Users/ada/.openclaw/workspace/.openclaw-cli-images/stale.png"}</system-reminder>',
-        "Compare it with /Users/ada/Pictures/current.png",
-      ].join("\n"),
-    );
-
-    expect(refs).toStrictEqual([pathRef("/Users/ada/Pictures/current.png")]);
-  });
-
-  it("ignores temporary OpenClaw CLI image cache paths", () => {
-    expectNoImageReferences(
-      `Prior turn wrote ${path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-images", "stale.jpg")}`,
-    );
-    expectNoImageReferences(
-      `[media attached: ${path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-images", "stale.jpg")} (image/jpeg)]`,
-    );
-    expectNoImageReferences(
-      `Prior turn wrote ${path.join(os.tmpdir(), "openclaw", "openclaw-cli-images", "stale.jpg")}`,
-    );
-    expectNoImageReferences(
-      `Prior turn wrote ${path.join(os.tmpdir(), "openclaw-501", "openclaw-cli-images", "stale.jpg")}`,
-    );
-  });
-
-  it("ignores file URLs into the OpenClaw CLI image cache", () => {
-    const stalePath = path.join(os.tmpdir(), "openclaw", "openclaw-cli-images", "stale.png");
-
-    expectNoImageReferences(`Prior turn wrote ${pathToFileURL(stalePath).href}`);
-  });
-
-  it("detects normal user image paths in similarly named directories", () => {
-    expect(detectImageReferences("/workspace/openclaw-cli-images/current.png")).toStrictEqual([
-      pathRef("/workspace/openclaw-cli-images/current.png"),
-    ]);
-  });
+        '<system-reminder>Called the Read tool with {"file_path":"/Users/ada/.openclaw/workspace/.openclaw-cli-images/stale.png"}</system-reminder>\nCompare it with /Users/ada/Pictures/current.png',
+      ],
+      [pathRef("/Users/ada/Pictures/current.png")],
+    ],
+    [
+      "temporary cache paths",
+      [
+        `Prior turn wrote ${stale}`,
+        `[media attached: ${stale} (image/jpeg)]`,
+        `Prior turn wrote ${path.join(os.tmpdir(), "openclaw", "openclaw-cli-images", "stale.jpg")}`,
+        `Prior turn wrote ${path.join(os.tmpdir(), "openclaw-501", "openclaw-cli-images", "stale.jpg")}`,
+      ],
+      [],
+    ],
+    [
+      "cache file URLs",
+      [
+        `Prior turn wrote ${pathToFileURL(path.join(os.tmpdir(), "openclaw", "openclaw-cli-images", "stale.png")).href}`,
+      ],
+      [],
+    ],
+    [
+      "remote URLs",
+      [
+        "To send an image: MEDIA:https://example.com/image.jpg\nHere is my actual image: /path/to/real.png\nAlso https://cdn.mysite.com/img.jpg",
+      ],
+      [pathRef("/path/to/real.png")],
+    ],
+    ["remote-host file URLs", ["See file://attacker/share/evil.png"], []],
+  ] satisfies Array<[string, string[], ReturnType<typeof pathRef>[]]>)(
+    "filters %s",
+    (_name, prompts, expected) => {
+      for (const prompt of prompts) {
+        expect(detectImageReferences(prompt)).toStrictEqual(expected);
+      }
+    },
+  );
 
   it("does not leak parser state between calls", () => {
     expect(detectImageReferences("See /tmp/first.png")).toStrictEqual([pathRef("/tmp/first.png")]);
@@ -199,15 +227,7 @@ describe("detectImageReferences", () => {
     expect(detectImageReferences("See ./fourth.jpeg")).toStrictEqual([pathRef("./fourth.jpeg")]);
   });
 
-  it("deduplicates repeated image references", () => {
-    expect(
-      detectImageReferences("Look at /path/image.png and also /path/image.png again"),
-    ).toStrictEqual([pathRef("/path/image.png")]);
-  });
-
   it("dedupe casing follows host filesystem conventions", () => {
-    // Windows resolves these as the same path, while POSIX hosts preserve both
-    // candidates because case can identify different files.
     const prompt = "Look at /tmp/Image.png and /tmp/image.png";
     if (process.platform === "win32") {
       expect(detectImageReferences(prompt)).toStrictEqual([pathRef("/tmp/Image.png")]);
@@ -218,62 +238,24 @@ describe("detectImageReferences", () => {
       pathRef("/tmp/image.png"),
     ]);
   });
-
-  it("detects Windows drive image paths in plain prompts", () => {
-    const ref = expectSingleImageReference(
-      String.raw`Look at C:\Users\Ada\Pictures\screenshot.png`,
-    );
-
-    expect(ref).toStrictEqual({
-      raw: String.raw`C:\Users\Ada\Pictures\screenshot.png`,
-      type: "path",
-      resolved: String.raw`C:\Users\Ada\Pictures\screenshot.png`,
-    });
-  });
-
-  it("ignores remote URLs entirely (local-only)", () => {
-    const refs = expectImageReferenceCount(
-      `To send an image: MEDIA:https://example.com/image.jpg
-Here is my actual image: /path/to/real.png
-Also https://cdn.mysite.com/img.jpg`,
-      1,
-    );
-
-    expect(refs).toStrictEqual([pathRef("/path/to/real.png")]);
-  });
-
-  it("ignores remote-host file URLs", () => {
-    expectNoImageReferences("See file://attacker/share/evil.png");
-  });
 });
 
 describe("detectAndLoadPromptImages", () => {
-  it("returns no images for non-vision models even when existing images are provided", async () => {
-    const result = await loadImages({
-      prompt: "ignore",
-      workspaceDir: "/tmp",
-      model: { input: ["text"] },
-      existingImages: [{ type: "image", data: "abc", mimeType: "image/png" }],
-    });
-
-    expectNoPromptImages(result);
-  });
-
-  it("sanitizes existing images even when prompt has no image references", async () => {
+  it.each([
+    ["non-vision input", ["text"], "abc"],
+    ["invalid inline image", ["text", "image"], "not-valid-base64"],
+  ] satisfies Array<[string, string[], string]>)("rejects %s", async (_name, input, data) => {
     const result = await loadImages({
       prompt: "describe the attached image",
       workspaceDir: "/tmp",
-      existingImages: [{ type: "image", data: "not-valid-base64", mimeType: "image/png" }],
+      model: { input },
+      existingImages: [{ type: "image", data, mimeType: "image/png" }],
     });
-
-    expect(result.images).toHaveLength(0);
-    expect(result.detectedRefs).toHaveLength(0);
+    expect(result).toMatchObject({ detectedRefs: [], images: [] });
   });
 
   it("skips generated media-note refs already supplied inline", async () => {
-    const stateDir = tempDirs.make("openclaw-native-image-dedupe-");
-    const imagePath = path.join(stateDir, "photo.png");
-    await writePng(imagePath);
+    const { workspaceDir: stateDir, imagePath } = await pngFile();
 
     const result = await loadImages({
       prompt: "[media attached: ./photo.png (image/png)]\ndescribe it",
@@ -293,9 +275,7 @@ describe("detectAndLoadPromptImages", () => {
   });
 
   it("uses a described fact identity to suppress its generated media-note path", async () => {
-    const workspaceDir = tempDirs.make("openclaw-described-dedupe-");
-    const imagePath = path.join(workspaceDir, "photo.png");
-    await writePng(imagePath);
+    const { workspaceDir, imagePath } = await pngFile();
 
     const result = await loadImages({
       prompt: `[media attached: ${imagePath} (image/png)]`,
@@ -311,7 +291,6 @@ describe("detectAndLoadPromptImages", () => {
         ],
       }).media,
       workspaceDir,
-      model: { input: ["text", "image"] },
     });
 
     expect(result.detectedRefs).toEqual([pathRef(imagePath)]);
@@ -320,13 +299,12 @@ describe("detectAndLoadPromptImages", () => {
   });
 
   it("dedupes a relative fact projection against the fact workspace", async () => {
-    const rootDir = tempDirs.make("openclaw-fact-workspace-dedupe-");
+    const rootDir = await imageWorkspace({
+      "staged/photo.png": undefined,
+      "current/photo.png": TINY_GIF_BUFFER,
+    });
     const stagedDir = path.join(rootDir, "staged");
     const currentDir = path.join(rootDir, "current");
-    await fs.mkdir(stagedDir, { recursive: true });
-    await fs.mkdir(currentDir, { recursive: true });
-    await writePng(path.join(stagedDir, "photo.png"));
-    await fs.writeFile(path.join(currentDir, "photo.png"), TINY_GIF_BUFFER);
 
     const result = await loadImages({
       prompt: "[media attached: ./photo.png (image/png)]",
@@ -359,15 +337,11 @@ describe("detectAndLoadPromptImages", () => {
   });
 
   it("classifies prompt and attachment refs while preserving mixed attachment order", async () => {
-    const stateDir = tempDirs.make("openclaw-native-image-order-");
-    const inboundDir = path.join(stateDir, "media", "inbound");
-    await fs.mkdir(inboundDir, { recursive: true });
-    await fs.writeFile(path.join(inboundDir, "att-b.gif"), TINY_GIF_BUFFER);
-    await fs.writeFile(
-      path.join(inboundDir, "prompt-ref.png"),
-      Buffer.from(TINY_PNG_BASE64, "base64"),
-    );
-    await writePng(path.join(stateDir, "prompt-b.png"));
+    const stateDir = await imageWorkspace({
+      "media/inbound/att-b.gif": TINY_GIF_BUFFER,
+      "media/inbound/prompt-ref.png": undefined,
+      "prompt-b.png": undefined,
+    });
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     const prompt =
       "compare [media attached: media://inbound/prompt-ref.png] and ./prompt-b.png\n[media attached: media://inbound/att-b.gif]";
@@ -394,11 +368,10 @@ describe("detectAndLoadPromptImages", () => {
   });
 
   it("preserves an empty described-image slot in mixed attachment order", async () => {
-    const stateDir = tempDirs.make("openclaw-described-image-order-");
-    const inboundDir = path.join(stateDir, "media", "inbound");
     const mediaId = "remaining.gif";
-    await fs.mkdir(inboundDir, { recursive: true });
-    await fs.writeFile(path.join(inboundDir, mediaId), TINY_GIF_BUFFER);
+    const stateDir = await imageWorkspace({
+      [`media/inbound/${mediaId}`]: TINY_GIF_BUFFER,
+    });
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     const inlineImage = pngImage();
 
@@ -418,8 +391,7 @@ describe("detectAndLoadPromptImages", () => {
   });
 
   it("does not load an explicit prompt ref twice when the same fact owns it", async () => {
-    const workspaceDir = tempDirs.make("openclaw-native-image-fact-");
-    await writePng(path.join(workspaceDir, "same.png"));
+    const { workspaceDir } = await pngFile("same.png");
 
     const result = await loadImages({
       prompt: "Compare ./same.png",
@@ -434,8 +406,6 @@ describe("detectAndLoadPromptImages", () => {
   });
 
   it("blocks prompt image refs outside workspace when sandbox workspaceOnly is enabled", async () => {
-    // Sandbox workspaceOnly uses the bridge to validate mounted paths; ordinary
-    // prompt refs outside the workspace are detected but intentionally skipped.
     const stateDir = tempDirs.make("openclaw-native-image-sandbox-");
     const sandboxRoot = path.join(stateDir, "sandbox");
     const agentRoot = path.join(stateDir, "agent");
@@ -461,9 +431,7 @@ describe("detectAndLoadPromptImages", () => {
     });
 
     expect(result.detectedRefs).toHaveLength(1);
-    expect(result.loadedCount).toBe(0);
-    expect(result.skippedCount).toBe(1);
-    expect(result.images).toHaveLength(0);
+    expect(result).toMatchObject({ loadedCount: 0, skippedCount: 1, images: [] });
     expect(warn.mock.calls).toEqual([["Native image: sandbox validation failed"]]);
     expect(JSON.stringify(warn.mock.calls)).not.toContain("synthetic-private-image");
   });
@@ -491,9 +459,7 @@ describe("detectAndLoadPromptImages", () => {
   });
 
   it("keeps the fact hydration size limit", async () => {
-    const workspaceDir = tempDirs.make("openclaw-native-image-size-");
-    const imagePath = path.join(workspaceDir, "synthetic-private-attachment.png");
-    await writePng(imagePath);
+    const { workspaceDir, imagePath } = await pngFile("synthetic-private-attachment.png");
 
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
     const result = await loadImages({
@@ -503,10 +469,12 @@ describe("detectAndLoadPromptImages", () => {
       maxBytes: 1,
     });
 
-    expect(result.loadedCount).toBe(0);
-    expect(result.failedMediaCount).toBe(1);
-    expect(result.skippedCount).toBe(1);
-    expect(result.images).toHaveLength(0);
+    expect(result).toMatchObject({
+      loadedCount: 0,
+      failedMediaCount: 1,
+      skippedCount: 1,
+      images: [],
+    });
     expect(warn.mock.calls).toEqual([["Native image: failed to load"]]);
     expect(JSON.stringify(warn.mock.calls)).not.toContain("synthetic-private-attachment");
   });
@@ -531,11 +499,10 @@ describe("detectAndLoadPromptImages", () => {
 
 describe("hydratePromptMediaMessages", () => {
   it("hydrates queued facts in attachment order without mutating cache-stable input", async () => {
-    const stateDir = tempDirs.make("openclaw-queued-image-facts-");
-    const inboundDir = path.join(stateDir, "media", "inbound");
     const mediaId = "queued.gif";
-    await fs.mkdir(inboundDir, { recursive: true });
-    await fs.writeFile(path.join(inboundDir, mediaId), TINY_GIF_BUFFER);
+    const stateDir = await imageWorkspace({
+      [`media/inbound/${mediaId}`]: TINY_GIF_BUFFER,
+    });
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     const inlineImage = pngImage();
     const message = attachRuntimePromptMediaFacts(
@@ -561,19 +528,13 @@ describe("hydratePromptMediaMessages", () => {
   });
 
   it("hydrates a fact-owned user message whose content is a string", async () => {
-    const workspaceDir = tempDirs.make("openclaw-string-image-facts-");
-    const imagePath = path.join(workspaceDir, "photo.png");
-    await writePng(imagePath);
+    const { workspaceDir, imagePath } = await pngFile("photo.png");
     const message = attachRuntimePromptMediaFacts(
       { role: "user" as const, content: "describe it" },
       [{ path: imagePath, contentType: "image/png" }],
     ) as unknown as AgentMessage;
 
-    const result = await hydratePromptMediaMessages([message], {
-      workspaceDir,
-      model: { input: ["text", "image"] },
-      workspaceOnly: true,
-    });
+    const result = await hydrate([message], workspaceDir);
     expect((result[0] as unknown as { content?: unknown }).content).toEqual([
       { type: "text", text: "describe it" },
       pngImage(),
@@ -597,35 +558,15 @@ describe("hydratePromptMediaMessages", () => {
         [{ path: offloadedPath, contentType: "image/png" }],
         ["offloaded", "inline"],
       ) as unknown as AgentMessage;
-      const persisted = buildPersistedUserTurnMessage({
-        text: "compare",
-        media: [
-          { path: offloadedPath, contentType: "image/png" },
-          { path: inlinePath, contentType: "image/gif" },
-        ],
-        mediaImageLayout: {
-          slots: [
-            { kind: "offloaded", factIndex: 0 },
-            { kind: "inline", factIndex: 1 },
-          ],
-        },
-      });
-      const serialized = JSON.stringify(
+      const persisted = persistedMedia("compare", [offloadedPath, inlinePath]);
+      const serialized = JSON.stringify(persisted);
+      const restored =
         owner === "recorder"
-          ? persisted
-          : mergePreparedUserTurnMessageForRuntime({
-              runtimeMessage: runtime,
-              preparedMessage: persisted,
-            }),
-      );
-      const restored = JSON.parse(serialized) as AgentMessage;
+          ? (JSON.parse(serialized) as AgentMessage)
+          : restoredMedia(runtime, persisted);
 
       expect(readRuntimePromptMediaFacts(restored)).toBeUndefined();
-      const result = await hydratePromptMediaMessages([restored], {
-        workspaceDir,
-        model: { input: ["text", "image"] },
-        workspaceOnly: true,
-      });
+      const result = await hydrate([restored], workspaceDir);
       expect((result[0] as unknown as { content?: unknown }).content).toEqual([
         { type: "text", text: "compare" },
         pngImage(),
@@ -635,39 +576,18 @@ describe("hydratePromptMediaMessages", () => {
   );
 
   it("keeps duplicate fact slots across serialize and restore", async () => {
-    const workspaceDir = tempDirs.make("openclaw-replay-duplicates-");
-    const imagePath = path.join(workspaceDir, "same.png");
-    await writePng(imagePath);
+    const { workspaceDir, imagePath } = await pngFile("same.png");
     const inlineImage = pngImage();
-    const persisted = buildPersistedUserTurnMessage({
-      text: "compare duplicates",
-      media: [
-        { path: imagePath, contentType: "image/png" },
-        { path: imagePath, contentType: "image/png" },
-      ],
-      mediaImageLayout: {
-        slots: [
-          { kind: "offloaded", factIndex: 0 },
-          { kind: "inline", factIndex: 1 },
-        ],
-      },
-    });
-    const serialized = JSON.stringify(
-      mergePreparedUserTurnMessageForRuntime({
-        runtimeMessage: {
-          role: "user",
-          content: [{ type: "text", text: "compare duplicates" }, inlineImage],
-        } as AgentMessage,
-        preparedMessage: persisted,
-      }),
+    const persisted = persistedMedia("compare duplicates", [imagePath, imagePath]);
+    const restored = restoredMedia(
+      {
+        role: "user",
+        content: [{ type: "text", text: "compare duplicates" }, inlineImage],
+      } as AgentMessage,
+      persisted,
     );
-    const restored = JSON.parse(serialized) as AgentMessage;
 
-    const result = await hydratePromptMediaMessages([restored], {
-      workspaceDir,
-      model: { input: ["text", "image"] },
-      workspaceOnly: true,
-    });
+    const result = await hydrate([restored], workspaceDir);
     const content = (result[0] as unknown as { content?: unknown[] }).content ?? [];
     expect(content.filter((block) => (block as { type?: unknown }).type === "image")).toEqual([
       inlineImage,
