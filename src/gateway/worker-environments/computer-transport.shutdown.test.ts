@@ -10,9 +10,9 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { NodeRegistry } from "../node-registry.js";
+import { makeClient } from "../node-registry.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { handleNodeInvokeResult } from "../server-methods/nodes.handlers.invoke-result.js";
-import type { GatewayWsClient } from "../server/ws-types.js";
 import { COMPUTER_USE, EXECUTION_ID, createHarness } from "./computer-transport.test-support.js";
 
 afterEach(() => {
@@ -26,37 +26,22 @@ it.each(["current", "lease", "epoch", "connection", "pairing", "after-handler-lo
   async (boundary) => {
     const h = createHarness(true);
     const frames: Array<{ id: string; nodeId: string; command: string; paramsJSON: string }> = [];
-    // SAFETY: the fixture implements the connected node fields consumed by registry and router.
-    const client = {
-      connId: "desktop-connection",
-      usesSharedGatewayAuth: false,
-      socket: {
-        readyState: 1,
-        bufferedAmount: 0,
-        send: (value: string) => {
-          const frame = JSON.parse(value);
-          if (frame.event === "node.invoke.request") {
-            frames.push(frame.payload);
-          }
-        },
-      },
-      connect: {
-        minProtocol: 1,
-        maxProtocol: 1,
-        role: "node",
-        scopes: [],
-        client: {
-          id: "node-host",
-          version: "test",
-          platform: "linux",
-          deviceFamily: "Linux",
-          mode: "node",
-        },
-        device: { id: "desktop-node", publicKey: "key", signature: "sig", signedAt: 1, nonce: "n" },
-        commands: ["screen.snapshot", "computer.act"],
-        computerUse: COMPUTER_USE,
-      },
-    } as unknown as GatewayWsClient;
+    const client = makeClient("desktop-connection", "desktop-node", [], {
+      clientId: "node-host",
+      version: "test",
+      platform: "linux",
+      commands: ["screen.snapshot", "computer.act"],
+      computerUse: COMPUTER_USE,
+    });
+    client.connect.role = "node";
+    client.connect.scopes = [];
+    client.connect.client.deviceFamily = "Linux";
+    client.socket.send = (value) => {
+      const frame = JSON.parse(String(value));
+      if (frame.event === "node.invoke.request") {
+        frames.push(frame.payload);
+      }
+    };
     const registry = new NodeRegistry({
       resolveCurrentPairingState: async () => ({ identity: "paired", generation: "pairing-1" }),
     });

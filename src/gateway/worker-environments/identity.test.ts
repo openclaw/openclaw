@@ -4,6 +4,18 @@ import { resolveWorkerSshIdentity } from "./identity.js";
 
 const KEY_REF = { source: "file", provider: "worker", id: "/lease" } as const;
 const PROFILE = { provider: "example" };
+function resolveIdentity(overrides: Partial<Parameters<typeof resolveWorkerSshIdentity>[0]>) {
+  const controller = new AbortController();
+  return resolveWorkerSshIdentity({
+    provider: provider(),
+    leaseId: "lease-1",
+    profile: PROFILE,
+    keyRef: KEY_REF,
+    assertAuthorized: () => controller.signal.throwIfAborted(),
+    resolveGeneric: vi.fn(),
+    ...overrides,
+  });
+}
 
 function provider(overrides: Partial<WorkerProvider> = {}): WorkerProvider {
   return {
@@ -25,11 +37,8 @@ describe("resolveWorkerSshIdentity", () => {
     const resolveGeneric = vi.fn(async () => ({ kind: "material", contents: "unused" }) as const);
 
     await expect(
-      resolveWorkerSshIdentity({
+      resolveIdentity({
         provider: provider({ resolveSshIdentity }),
-        leaseId: "lease-1",
-        profile: PROFILE,
-        keyRef: KEY_REF,
         assertAuthorized,
         resolveGeneric,
       }),
@@ -53,35 +62,20 @@ describe("resolveWorkerSshIdentity", () => {
     const assertAuthorized = () => controller.signal.throwIfAborted();
     const resolveGeneric = vi.fn(async () => identity);
 
-    await expect(
-      resolveWorkerSshIdentity({
-        provider: provider(),
-        leaseId: "lease-1",
-        profile: PROFILE,
-        keyRef: KEY_REF,
-        assertAuthorized,
-        resolveGeneric,
-      }),
-    ).resolves.toEqual(identity);
+    await expect(resolveIdentity({ assertAuthorized, resolveGeneric })).resolves.toEqual(identity);
     expect(resolveGeneric).toHaveBeenCalledWith(KEY_REF, assertAuthorized);
   });
 
   it("fails closed when the provider resolver rejects", async () => {
-    const controller = new AbortController();
-    const assertAuthorized = () => controller.signal.throwIfAborted();
     const resolveGeneric = vi.fn();
 
     await expect(
-      resolveWorkerSshIdentity({
+      resolveIdentity({
         provider: provider({
           resolveSshIdentity: async () => {
             throw new Error("provider identity unavailable");
           },
         }),
-        leaseId: "lease-1",
-        profile: PROFILE,
-        keyRef: KEY_REF,
-        assertAuthorized,
         resolveGeneric,
       }),
     ).rejects.toThrow("provider identity unavailable");
@@ -98,15 +92,13 @@ describe("resolveWorkerSshIdentity", () => {
         return { kind: "material" as const, contents: "synthetic-worker-key" };
       };
       const resolveGeneric = vi.fn(resolve);
-      const request = {
-        provider: provider(owner === "provider" ? { resolveSshIdentity: resolve } : {}),
-        leaseId: "lease-1",
-        profile: PROFILE,
-        keyRef: KEY_REF,
-        assertAuthorized: () => controller.signal.throwIfAborted(),
-        resolveGeneric,
-      };
-      await expect(resolveWorkerSshIdentity(request)).rejects.toBe(closed);
+      await expect(
+        resolveIdentity({
+          provider: provider(owner === "provider" ? { resolveSshIdentity: resolve } : {}),
+          assertAuthorized: () => controller.signal.throwIfAborted(),
+          resolveGeneric,
+        }),
+      ).rejects.toBe(closed);
       expect(resolveGeneric).toHaveBeenCalledTimes(owner === "generic" ? 1 : 0);
     },
   );

@@ -100,6 +100,14 @@ describe("worker environment startup authority", () => {
         ownerEpoch: environment.ownerEpoch,
         sessionId: "session-device",
       });
+      const start = (overrides: Partial<Parameters<typeof workerService.startTunnel>[0]> = {}) =>
+        workerService.startTunnel({
+          environmentId: environment.environmentId,
+          ownerEpoch: credential.ownerEpoch,
+          ...overrides,
+        });
+      const revoke = () =>
+        support.testState.store.revokeEnvironmentCredential(environment.environmentId);
       const prepareInstallation = vi.mocked(support.testState.prepareInstallation);
       const prepareCallsBeforeTunnel = prepareInstallation.mock.calls.length;
       if (revokeDuringPreparation) {
@@ -109,12 +117,9 @@ describe("worker environment startup authority", () => {
           preparing.resolve();
           return await release.promise;
         });
-        const starting = workerService.startTunnel({
-          environmentId: environment.environmentId,
-          ownerEpoch: credential.ownerEpoch,
-        });
+        const starting = start();
         await preparing.promise;
-        await support.testState.store.revokeEnvironmentCredential(environment.environmentId);
+        await revoke();
         release.resolve(support.BUNDLE_ARTIFACT);
         await expect(starting).rejects.toThrow("owner credential is not current");
         expect(nodeTunnelManager.start).not.toHaveBeenCalled();
@@ -128,13 +133,9 @@ describe("worker environment startup authority", () => {
         }
       };
 
-      await expect(
-        workerService.startTunnel({
-          environmentId: environment.environmentId,
-          ownerEpoch: credential.ownerEpoch,
-          authorize,
-        }),
-      ).resolves.toMatchObject({ environmentId: environment.environmentId });
+      await expect(start({ authorize })).resolves.toMatchObject({
+        environmentId: environment.environmentId,
+      });
       expect(tunnelManager.start).not.toHaveBeenCalled();
       expect(prepareInstallation).toHaveBeenCalledTimes(prepareCallsBeforeTunnel + 1);
       expect(nodeTunnelManager.start).toHaveBeenCalledWith(
@@ -150,19 +151,11 @@ describe("worker environment startup authority", () => {
       expect(() => nodeTunnelManager.start.mock.calls[0]![0].authorize?.()).toThrow(
         "node startup invocation closed",
       );
-      await expect(
-        workerService.startTunnel({
-          environmentId: environment.environmentId,
-          ownerEpoch: credential.ownerEpoch - 1,
-        }),
-      ).rejects.toThrow("owner credential is not current");
-      await support.testState.store.revokeEnvironmentCredential(environment.environmentId);
-      await expect(
-        workerService.startTunnel({
-          environmentId: environment.environmentId,
-          ownerEpoch: credential.ownerEpoch,
-        }),
-      ).rejects.toThrow("owner credential is not current");
+      await expect(start({ ownerEpoch: credential.ownerEpoch - 1 })).rejects.toThrow(
+        "owner credential is not current",
+      );
+      await revoke();
+      await expect(start()).rejects.toThrow("owner credential is not current");
       expect(nodeTunnelManager.start).toHaveBeenCalledOnce();
     },
   );

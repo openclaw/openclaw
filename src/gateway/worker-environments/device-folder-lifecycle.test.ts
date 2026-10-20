@@ -4,12 +4,12 @@ import { afterEach, expect, test, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import { DEVICE_FOLDER_MANIFEST_REF } from "../../worker/device-folder.js";
-import { seedSyncingPlacement, REQUEST } from "./placement-dispatch-test-fixtures.js";
+import { REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
 import { forceAbandonWorkerEnvironment } from "./placement-force-abandon.js";
 import { createWorkerPlacementReclaim } from "./placement-reclaim.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
-import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
+import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 import {
@@ -25,13 +25,13 @@ async function fixture() {
   const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
   const placements = createWorkerSessionPlacementStore({ database, now: () => 1000 });
   const harness = await createHarness(database, placements, { workspacePath: root });
-  const seeded = await harness.placements.seedActive(1);
+  await harness.placements.seedActive(1);
   harness.markEnvironmentOwnerEpoch(1);
   const folder = path.join(root, "user-folder");
   await fs.mkdir(folder);
   await fs.writeFile(path.join(folder, "keep.txt"), "user data");
   const workspace = { kind: "device-folder" as const, deviceId: "paired-node", path: folder };
-  return { root, database, placements, harness, seeded, folder, workspace };
+  return { root, placements, harness, folder, workspace };
 }
 
 test("device-folder results release the turn without capture, transfer, reconciliation, or quiescence", async () => {
@@ -63,20 +63,16 @@ test("device-folder results release the turn without capture, transfer, reconcil
     quiesceWorkspace: unexpected,
     stop: unexpected,
   };
-  const workspaceOperations = createWorkerWorkspaceOperationCoordinator();
-  await recoverWorkspaceBeforeTurn({
+  const result = {
     placement,
     placements: f.placements,
     turnClaim: claim,
-    workspaceOperations,
+    workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
     workspace: f.workspace,
-  });
+  };
+  await recoverWorkspaceBeforeTurn(result);
   await reconcileWorkspaceAfterTurn({
-    placement,
-    placements: f.placements,
-    turnClaim: claim,
-    workspaceOperations,
-    workspace: f.workspace,
+    ...result,
     tunnel,
     transcriptTarget: {
       agentId: REQUEST.agentId,
@@ -113,32 +109,12 @@ test("forced abandonment refuses a device-folder placement before mutation", asy
   const root = dirs.make("device-folder-abandon-");
   const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
   const placements = createWorkerSessionPlacementStore({ database });
-  const syncing = await seedSyncingPlacement(placements, "folder-device");
-  const starting = await placements.transition({
-    sessionId: REQUEST.sessionId,
-    from: "syncing",
-    to: "starting",
-    expectedGeneration: syncing.generation,
-    patch: {
-      workspaceBaseManifestRef: DEVICE_FOLDER_MANIFEST_REF,
-      remoteWorkspaceDir: "/user-folder",
-    },
-  });
-  seedAttachedPlacementEnvironment(database, {
+  const active = await advancePlacementFixtureToActive(placements, database, REQUEST, {
     environmentId: "folder-device",
-    sessionId: REQUEST.sessionId,
     ownerEpoch: 1,
+    workspaceBaseManifestRef: DEVICE_FOLDER_MANIFEST_REF,
+    remoteWorkspaceDir: "/user-folder",
   });
-  const active = await placements.transition({
-    sessionId: REQUEST.sessionId,
-    from: "starting",
-    to: "active",
-    expectedGeneration: starting.generation,
-    patch: { activeOwnerEpoch: 1 },
-  });
-  if (active.state !== "active") {
-    throw new Error("missing active fixture");
-  }
   await expect(
     forceAbandonWorkerEnvironment({
       placements,
