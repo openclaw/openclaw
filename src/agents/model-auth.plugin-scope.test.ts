@@ -68,6 +68,7 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
 });
 
 const id = "credential-fixture";
+const entry: ModelCatalogEntry = { id: "decision", name: "Decision", provider: id };
 const store = {
   version: 1,
   profiles: { [id + ":implicit"]: { type: "api_key" as const, provider: id, key: "agent-key" } },
@@ -189,6 +190,22 @@ function fixture(
   return { cfg, metadata, registry, instance, run, activate, params, lookup, hook, prepare };
 }
 
+function project(
+  f: ReturnType<typeof fixture>,
+  overrides: Partial<Parameters<typeof createModelCatalogDecisions>[0]> = {},
+) {
+  return createModelCatalogDecisions({
+    cfg: f.cfg,
+    agentId: "main",
+    snapshot: { entries: [entry], routeVariants: [entry] },
+    metadataSnapshot: f.metadata,
+    preparedAuthStore: store,
+    pluginRegistry: f.registry,
+    isCurrent: () => true,
+    ...overrides,
+  });
+}
+
 describe("plugin physical credential ownership through common auth", () => {
   it("plans plugin-owned auth before agent stores, configured bindings and cooldowns", () => {
     const f = fixture();
@@ -256,7 +273,6 @@ describe("plugin physical credential ownership through common auth", () => {
         },
       ],
     });
-    const entry: ModelCatalogEntry = { id: "decision", name: "Decision", provider: id };
     const modelPolicy = await import("./model-auth-policy.js");
     const policy = vi.spyOn(modelPolicy, "isAuthModeAllowedForModel").mockImplementation(
       () =>
@@ -271,15 +287,7 @@ describe("plugin physical credential ownership through common auth", () => {
         withPluginMetadataSnapshotScope(
           foreign,
           async () => {
-            const projection = createModelCatalogDecisions({
-              cfg: f.cfg,
-              agentId: "main",
-              snapshot: { entries: [entry], routeVariants: [entry] },
-              metadataSnapshot: f.metadata,
-              preparedAuthStore: store,
-              pluginRegistry: f.registry,
-              isCurrent: () => true,
-            });
+            const projection = project(f);
             expect(projection.evaluateEntry(entry)).toMatchObject({ availability: true });
           },
           { config: f.cfg, trustConfigIdentity: true },
@@ -324,25 +332,13 @@ describe("plugin physical credential ownership through common auth", () => {
       const f = fixture();
       f.activate();
       const empty = createEmptyPluginRegistry();
-      const entry: ModelCatalogEntry = {
-        id: "decision",
-        name: "Decision",
-        provider: id,
-      };
       await f.run(() =>
         withPluginRuntimeGenerationRegistryScope(
           ambient === "live" ? f.registry : empty,
           async () => {
-            const projection = createModelCatalogDecisions({
-              cfg: f.cfg,
-              agentId: "main",
-              snapshot: { entries: [entry], routeVariants: [entry] },
-              metadataSnapshot: f.metadata,
-              preparedAuthStore: store,
-              ...(prepared === "absent"
-                ? {}
-                : { pluginRegistry: prepared === "live" ? f.registry : empty }),
-              isCurrent: () => true,
+            const projection = project(f, {
+              pluginRegistry:
+                prepared === "absent" ? undefined : prepared === "live" ? f.registry : empty,
             });
             const evaluation = projection.evaluateEntry(entry);
             expect(evaluation.availability).toBe(expected);
@@ -358,21 +354,8 @@ describe("plugin physical credential ownership through common auth", () => {
   it("projects live plugin readiness without profile fallback or a stale positive cache", async () => {
     const f = fixture();
     f.activate();
-    const entry: ModelCatalogEntry = {
-      id: "decision",
-      name: "Decision",
-      provider: id,
-    };
     await f.run(async () => {
-      const projection = createModelCatalogDecisions({
-        cfg: f.cfg,
-        agentId: "main",
-        snapshot: { entries: [entry], routeVariants: [entry] },
-        metadataSnapshot: f.metadata,
-        preparedAuthStore: store,
-        pluginRegistry: f.registry,
-        isCurrent: () => true,
-      });
+      const projection = project(f);
       expect(projection.evaluateEntry(entry)).toMatchObject({
         availability: true,
         selectedAuthMode: "api-key",
@@ -395,17 +378,8 @@ describe("plugin physical credential ownership through common auth", () => {
         nativeAuth: { runtime: "native-fixture", mode: "oauth" },
       }),
     });
-    const entry: ModelCatalogEntry = { id: "model", name: "Model", provider: id };
     await f.run(async () => {
-      const projection = createModelCatalogDecisions({
-        cfg: f.cfg,
-        agentId: "main",
-        snapshot: { entries: [entry], routeVariants: [entry] },
-        metadataSnapshot: f.metadata,
-        preparedAuthStore: store,
-        pluginRegistry: f.registry,
-        isCurrent: () => true,
-      });
+      const projection = project(f);
       expect(projection.evaluateEntry(entry, undefined, "other-runtime").availability).toBe(false);
       expect(projection.evaluateEntry(entry, undefined, "native-fixture")).toMatchObject({
         availability: true,
@@ -422,22 +396,10 @@ describe("plugin physical credential ownership through common auth", () => {
   it("refuses a catalog account pin before reading the protected plugin credential", async () => {
     const f = fixture();
     f.activate();
-    const entry: ModelCatalogEntry = {
-      id: "decision",
-      name: "Decision",
-      provider: id,
-    };
     await f.run(async () => {
-      const projection = createModelCatalogDecisions({
-        cfg: f.cfg,
-        agentId: "main",
-        snapshot: { entries: [entry], routeVariants: [entry] },
-        metadataSnapshot: f.metadata,
-        preparedAuthStore: store,
-        pluginRegistry: f.registry,
+      const projection = project(f, {
         pinnedProfileId: id + ":implicit",
         profileProvider: id,
-        isCurrent: () => true,
       });
       expect(projection.evaluateEntry(entry)).toMatchObject({ availability: false });
     });

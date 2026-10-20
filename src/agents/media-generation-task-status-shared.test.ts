@@ -39,6 +39,14 @@ function makeTask(overrides: Partial<MediaGenerationOperation> = {}): MediaGener
   };
 }
 
+function prompt(tasks: MediaGenerationOperation[]) {
+  return buildActiveMediaGenerationTaskPromptContext({
+    tasks,
+    taskKind: "video_generation",
+    sourcePrefix: "video_generate",
+  });
+}
+
 beforeEach(() => {
   resetRecentMediaGenerationDuplicateGuardsForTests();
   mediaActivityMocks.listMediaGenerationOperations.mockReset();
@@ -48,13 +56,7 @@ describe("media generation delivery-phase prompt guard", () => {
   it("does not warn about a task waiting only for completion delivery", () => {
     const tasks = [makeTask({ progressSummary: MEDIA_GENERATION_DELIVERING_COMPLETION_PROGRESS })];
 
-    expect(
-      buildActiveMediaGenerationTaskPromptContext({
-        tasks,
-        taskKind: "video_generation",
-        sourcePrefix: "video_generate",
-      }),
-    ).toBeUndefined();
+    expect(prompt(tasks)).toBeUndefined();
   });
 
   it("carries only bounded single-line facts while media generation is running", () => {
@@ -66,13 +68,7 @@ describe("media generation delivery-phase prompt guard", () => {
       }),
     ];
 
-    expect(
-      buildActiveMediaGenerationTaskPromptContext({
-        tasks,
-        taskKind: "video_generation",
-        sourcePrefix: "video_generate",
-      }),
-    ).toBe(
+    expect(prompt(tasks)).toBe(
       `- tool=video_generate; task=task-${"t".repeat(123)}; status=running; provider_json="${"p".repeat(128)}"; progress_json="Generatingvideo${"x".repeat(305)}"`,
     );
   });
@@ -85,32 +81,19 @@ describe("media generation delivery-phase prompt guard", () => {
         status: index % 2 === 0 ? "queued" : "running",
       }),
     );
-    const context = buildActiveMediaGenerationTaskPromptContext({
-      tasks,
-      taskKind: "video_generation",
-      sourcePrefix: "video_generate",
-    });
+    const context = prompt(tasks);
     expect(context).toBe(
       [
-        "- tool=video_generate; task=task-0; status=queued",
-        "- tool=video_generate; task=task-1; status=running",
-        "- tool=video_generate; task=task-2; status=queued",
-        "- tool=video_generate; task=task-3; status=running",
-        "- tool=video_generate; task=task-4; status=queued",
-        "- tool=video_generate; task=task-5; status=running",
-        "- tool=video_generate; task=task-6; status=queued",
-        "- tool=video_generate; task=task-7; status=running",
+        ...Array.from(
+          { length: 8 },
+          (_, i) =>
+            `- tool=video_generate; task=task-${i}; status=${i % 2 === 0 ? "queued" : "running"}`,
+        ),
         "- additional_tasks=2",
       ].join("\n"),
     );
 
-    expect(
-      buildActiveMediaGenerationTaskPromptContext({
-        tasks: tasks.toReversed(),
-        taskKind: "video_generation",
-        sourcePrefix: "video_generate",
-      }),
-    ).toBe(context);
+    expect(prompt(tasks.toReversed())).toBe(context);
   });
 
   it("keeps bare-session operations visible only to their explicit requester agent", async () => {

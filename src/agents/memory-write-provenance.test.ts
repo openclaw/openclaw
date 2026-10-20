@@ -13,6 +13,28 @@ afterEach(() => {
   resetPluginStateStoreForTests();
 });
 
+function wrappedReadFailure(code: string, message: string) {
+  const writeFile = vi.fn(async (_absolutePath: string, _content: string) => {});
+  const write = vi.fn(async ({ commit }: { commit: () => Promise<void> }) => {
+    await commit();
+  });
+  const operations = withMemoryWriteProvenance(
+    {
+      readFile: async () => {
+        throw new Error(message, { cause: Object.assign(new Error(code), { code }) });
+      },
+      writeFile,
+    },
+    { classifies: async () => true, write, clearAfterDelete: async () => {} },
+  );
+  const run = (target: string, content: string) =>
+    withGatewayToolCallerIdentity(
+      { agentId: "main", sessionKey: "agent:main:memory-read-cause" },
+      () => operations.writeFile(target, content),
+    );
+  return { writeFile, write, run };
+}
+
 describe("memory write provenance", () => {
   it.each([
     { phase: "write-classification", revoke: false },
@@ -103,64 +125,21 @@ describe("memory write provenance", () => {
   });
 
   it("treats a wrapped missing-path read as empty prior content", async () => {
-    const missingPath = Object.assign(new Error("file not found"), { code: "not-found" });
-    const writeFile = vi.fn(async (_absolutePath: string, _content: string) => {});
-    let observedContentBefore: string | undefined;
-    const operations = withMemoryWriteProvenance(
-      {
-        readFile: async () => {
-          throw new Error("sandbox bridge read failed", { cause: missingPath });
-        },
-        writeFile,
-      },
-      {
-        classifies: async () => true,
-        write: async ({ contentBefore, commit }) => {
-          observedContentBefore = contentBefore;
-          await commit();
-        },
-        clearAfterDelete: async () => {},
-      },
-    );
-
-    await withGatewayToolCallerIdentity(
-      { agentId: "main", sessionKey: "agent:main:memory-missing-path-cause" },
-      () => operations.writeFile("/workspace/memory/new.md", "new memory file"),
-    );
-
-    expect(observedContentBefore).toBe("");
+    const { writeFile, write, run } = wrappedReadFailure("not-found", "sandbox bridge read failed");
+    await run("/workspace/memory/new.md", "new memory file");
+    expect(write).toHaveBeenCalledWith(expect.objectContaining({ contentBefore: "" }));
     expect(writeFile).toHaveBeenCalledOnce();
   });
 
   it("does not treat a wrapped boundary read error as a missing path", async () => {
-    const boundaryError = Object.assign(new Error("outside workspace"), { code: "EACCES" });
-    const writeFile = vi.fn(async (_absolutePath: string, _content: string) => {});
-    let observerWriteCount = 0;
-    const operations = withMemoryWriteProvenance(
-      {
-        readFile: async () => {
-          throw new Error("sandbox boundary checks failed", { cause: boundaryError });
-        },
-        writeFile,
-      },
-      {
-        classifies: async () => true,
-        write: async ({ commit }) => {
-          observerWriteCount += 1;
-          await commit();
-        },
-        clearAfterDelete: async () => {},
-      },
+    const { writeFile, write, run } = wrappedReadFailure(
+      "EACCES",
+      "sandbox boundary checks failed",
     );
-
-    await expect(
-      withGatewayToolCallerIdentity(
-        { agentId: "main", sessionKey: "agent:main:memory-boundary-cause" },
-        () => operations.writeFile("/outside/new.md", "must not write"),
-      ),
-    ).rejects.toThrow("sandbox boundary checks failed");
-
-    expect(observerWriteCount).toBe(0);
+    await expect(run("/outside/new.md", "must not write")).rejects.toThrow(
+      "sandbox boundary checks failed",
+    );
+    expect(write).not.toHaveBeenCalled();
     expect(writeFile).not.toHaveBeenCalled();
   });
 });
