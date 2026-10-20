@@ -80,8 +80,6 @@ it.each(["normal", "interrupted", "removed backup", "decomposed target", "decomp
     const movedSource = {
       ...source,
       sourcePath: path.join(moved, "openclaw-workspace-state.json"),
-      rootDir: moved,
-      workspaceDir: identity.workspacePath,
       workspaceKey: identity.workspaceKey,
     };
     const receipt = readReceipt(movedSource, env);

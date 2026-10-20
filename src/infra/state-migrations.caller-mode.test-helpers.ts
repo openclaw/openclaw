@@ -43,9 +43,7 @@ export function writeLegacyStateSchemaV1(stateDatabasePath: string): void {
         kind TEXT NOT NULL, action TEXT NOT NULL, status TEXT NOT NULL,
         error_code TEXT,
         actor_type TEXT NOT NULL, actor_id TEXT NOT NULL, agent_id TEXT NOT NULL,
-        session_key TEXT, session_id TEXT,
-        run_id TEXT NOT NULL,
-        tool_call_id TEXT, tool_name TEXT
+        session_key TEXT, session_id TEXT, run_id TEXT NOT NULL, tool_call_id TEXT, tool_name TEXT
       );
     `);
 }
@@ -80,13 +78,9 @@ export function expectBlockedTailInPlanOrder(params: {
   expect(receipts.map((receipt) => receipt.id)).toEqual(plan.steps.map((step) => step.id));
   const blockerIndex = plan.steps.findIndex((step) => step.id === blockerId);
   expect(blockerIndex).toBeGreaterThanOrEqual(0);
-  expect(
-    receipts
-      .slice(blockerIndex + 1)
-      .map(({ id, outcome, refusal }) => [id, outcome, refusal?.code]),
-  ).toEqual(
-    plan.steps.slice(blockerIndex + 1).map(({ id }) => [id, "refused", "blocked-by-prior-refusal"]),
-  );
+  for (const { outcome, refusal } of receipts.slice(blockerIndex + 1)) {
+    expect([outcome, refusal?.code]).toEqual(["refused", "blocked-by-prior-refusal"]);
+  }
 }
 
 function stableStepDescriptor(

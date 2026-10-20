@@ -11,25 +11,16 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 const MAIN_KEY = "agent:main:main";
-const legacyEntry = {
-  sessionId: " session-1 ",
-  updatedAt: 1,
-  channel: "slack",
-  provider: false,
-  lastProvider: false,
-  pendingFinalDeliveryAttemptCount: -1,
-};
-let root: string;
+type Store = ReturnType<typeof loadLegacySessionStore>;
 let storePath: string;
 beforeEach(() => {
-  root = tempDirs.make("openclaw-legacy-session-");
-  storePath = path.join(root, "sessions.json");
+  storePath = path.join(tempDirs.make("openclaw-legacy-session-"), "sessions.json");
 });
 const writeStore = (value: unknown) => fs.writeFile(storePath, JSON.stringify(value));
 function mainStore<T extends object>(entry: T) {
   return { [MAIN_KEY]: { sessionId: "session-1", updatedAt: 1, ...entry } };
 }
-const saveStore = (store: Parameters<typeof saveLegacySessionStore>[1]) =>
+const saveStore = (store: Store) =>
   saveLegacySessionStore(storePath, store, { skipMaintenance: true });
 function expectNormalized(store: Record<string, unknown>, channel: string) {
   expect(store.malformed).toBeUndefined();
@@ -43,7 +34,7 @@ function expectNormalized(store: Record<string, unknown>, channel: string) {
 }
 
 it("stages prompt blobs after a recreated session directory", async () => {
-  const storeDir = path.join(root, "sessions");
+  const storeDir = path.join(path.dirname(storePath), "sessions");
   storePath = path.join(storeDir, "sessions.json");
   const prompt = `<available_skills>\n${"recreated dir prompt\n".repeat(200)}</available_skills>`;
   const realMkdir = fs.mkdir.bind(fs);
@@ -61,18 +52,40 @@ it("stages prompt blobs after a recreated session directory", async () => {
   expect(loadLegacySessionStore(storePath)[MAIN_KEY]?.skillsSnapshot?.prompt).toBe(prompt);
 });
 
-it("normalizes file-era rows and drops malformed entries", async () => {
-  await writeStore({
+it.each(["read", "write"] as const)("normalizes legacy rows during %s", async (mode) => {
+  const channel = mode === "read" ? "telegram" : "slack";
+  const provider = mode === "read" ? false : "obsolete-provider";
+  const skillsSnapshot = {
+    prompt: "compact skill prompt",
+    skills: [{ name: "demo" }],
+    skillFilter: ["demo"],
+    version: 7,
+  };
+  const store = {
     malformed: null,
     ...mainStore({
-      ...legacyEntry,
-      lastChannel: "telegram",
+      sessionId: " session-1 ",
+      channel: "slack",
+      pendingFinalDeliveryAttemptCount: -1,
+      provider,
+      lastProvider: provider,
+      lastChannel: channel,
       pluginExtensions: { " demo ": { " valid ": { ok: true }, invalid: undefined } },
+      skillsSnapshot: {
+        ...skillsSnapshot,
+        resolvedSkills: [{ name: "demo", description: "runtime-only catalog" }],
+      },
     }),
-  });
-  const store = loadLegacySessionStore(storePath);
-  expectNormalized(store, "telegram");
-  expect(store[MAIN_KEY]?.pluginExtensions).toEqual({ demo: { valid: { ok: true } } });
+  } as unknown as Store;
+  await (mode === "read" ? writeStore(store) : saveStore(store));
+  const raw = await fs.readFile(storePath, "utf8");
+  const normalized: Store = mode === "read" ? loadLegacySessionStore(storePath) : JSON.parse(raw);
+  expectNormalized(normalized, channel);
+  expect(normalized[MAIN_KEY]?.pluginExtensions).toEqual({ demo: { valid: { ok: true } } });
+  expect(normalized[MAIN_KEY]?.skillsSnapshot).toMatchObject(skillsSnapshot);
+  expect(normalized[MAIN_KEY]?.skillsSnapshot).not.toHaveProperty("resolvedSkills");
+  expectNormalized(loadLegacySessionStore(storePath), channel);
+  expect(await fs.readFile(storePath, "utf8")).toBe(raw);
 });
 
 it("preserves retired room-only source bytes across inspection, loading, and refused writes", async () => {
@@ -90,35 +103,4 @@ it("imports provider-only fields still preserved by the July Doctor writer", asy
   const raw = await fs.readFile(storePath, "utf8");
   expectNormalized(loadLegacySessionStore(storePath), "telegram");
   expect(await fs.readFile(storePath, "utf8")).toBe(raw);
-});
-
-it("normalizes compatibility writes before persistence", async () => {
-  const skillsSnapshot = {
-    prompt: "compact skill prompt",
-    skills: [{ name: "demo" }],
-    skillFilter: ["demo"],
-    version: 7,
-  };
-  const store = {
-    malformed: null,
-    ...mainStore({
-      ...legacyEntry,
-      provider: "obsolete-provider",
-      lastProvider: "obsolete-provider",
-      lastChannel: "slack",
-      skillsSnapshot: {
-        ...skillsSnapshot,
-        resolvedSkills: [{ name: "demo", description: "runtime-only catalog" }],
-      },
-    }),
-  } as unknown as Parameters<typeof saveLegacySessionStore>[1];
-  await saveStore(store);
-  const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
-    string,
-    Record<string, unknown>
-  >;
-  expectNormalized(persisted, "slack");
-  expect(persisted[MAIN_KEY]?.skillsSnapshot).toMatchObject(skillsSnapshot);
-  expect(persisted[MAIN_KEY]?.skillsSnapshot).not.toHaveProperty("resolvedSkills");
-  expectNormalized(loadLegacySessionStore(storePath), "slack");
 });

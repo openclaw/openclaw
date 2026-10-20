@@ -43,12 +43,9 @@ export function insertSession(
   const sessionKey = `agent:main:${sessionId}`;
   const insert = (table: string, row: Record<string, SQLInputValue>) => {
     const columns = Object.keys(row).join(",");
-    const placeholders = Object.keys(row)
-      .map(() => "?")
-      .join(",");
-    database
-      .prepare(`INSERT INTO ${table}(${columns}) VALUES(${placeholders})`)
-      .run(...Object.values(row));
+    const values = Object.values(row);
+    const placeholders = values.map(() => "?").join(",");
+    database.prepare(`INSERT INTO ${table}(${columns}) VALUES(${placeholders})`).run(...values);
   };
   insert("session_nodes", {
     session_key: sessionKey,
