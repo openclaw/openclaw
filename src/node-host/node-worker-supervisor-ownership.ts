@@ -163,6 +163,7 @@ export type NodeWorkerSupervisorOptions = {
   bundleRoot?: string;
   env?: NodeJS.ProcessEnv;
   capacity?: number;
+  capacityWaitMs?: number;
   onCapacityChanged?: (capacity: NodeWorkerCapacitySnapshot) => void;
   onProcessesChanged?: (binding: NodeWorkerProcessesChanged) => void;
   workspace?: NodeWorkerWorkspaceRuntime;

@@ -39,6 +39,7 @@ import {
 } from "./manager-registry.js";
 import { waitForMemoryReindexLock } from "./manager-reindex-lock.js";
 import type { MemoryIndexIdentityState } from "./manager-reindex-state.js";
+import { runMemorySearchMaintenance } from "./manager-search-maintenance.js";
 import { MemorySearchOrchestration } from "./manager-search-orchestration.js";
 import { collectMemoryStatusSnapshot, resolveStatusProviderInfo } from "./manager-status-state.js";
 import type { MemoryEmbeddingBatchConfig } from "./manager-sync-base.js";
@@ -339,15 +340,19 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       return await this.syncing;
     }
     await this.syncOutcomes.track(() =>
-      this.runSearchMaintenance(params.reason, () =>
-        MemoryIndexManager.get({
-          cfg: this.cfg,
-          agentId: this.agentId,
-          purpose: "maintenance",
-          acquireLocalService: this.acquireLocalService,
-          maintenanceSource: this,
-        }),
-      ).catch((error: unknown) => {
+      runMemorySearchMaintenance({
+        reason: params.reason,
+        takeDirtyGeneration: () => this.takeSearchMaintenanceRequest(),
+        restoreDirtyGeneration: (generation) => this.adoptReindexRetryState(generation),
+        acquireManager: () =>
+          MemoryIndexManager.get({
+            cfg: this.cfg,
+            agentId: this.agentId,
+            purpose: "maintenance",
+            acquireLocalService: this.acquireLocalService,
+            maintenanceSource: this,
+          }),
+      }).catch((error: unknown) => {
         if (
           this.providerRequirement.mode === "optional" &&
           isMemoryEmbeddingOperationError(error)

@@ -4,7 +4,6 @@ import type {
   QuestionRecord,
   QuestionResolvedEvent,
 } from "../../packages/gateway-protocol/src/schema/questions.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runWithRetainedGatewayRootWork } from "../process/gateway-work-admission.js";
 import {
   AsyncWorkScope,
@@ -15,7 +14,6 @@ import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import type { GatewayScheduler, GatewayScheduledJob } from "./gateway-scheduler.js";
 
 const TERMINAL_DELIVERY_RETENTION_MS = 24 * 60 * 60 * 1_000;
-const log = createSubsystemLogger("gateway/questions");
 
 type QuestionDeliveryFinalizer = (statusLine: string) => void | Promise<void>;
 
@@ -59,7 +57,11 @@ function formatQuestionTerminalStatusLine(
   return labels.length > 0 ? `Answered: ${labels.join(", ")}` : "Answered";
 }
 
-export function createQuestionChannelRuntime() {
+export function createQuestionChannelRuntime(
+  options: {
+    onFinalizeError?: (error: unknown, questionId: string, deliveryId: string) => void;
+  } = {},
+) {
   const entries = new Map<string, QuestionChannelEntry>();
   const retainedEntries = new Set<QuestionChannelEntry>();
   const deliveryContext = new AsyncLocalStorage<{
@@ -79,11 +81,7 @@ export function createQuestionChannelRuntime() {
     // Reset joins the original callback; its captured owner retains descendants.
     void finalizers
       .track(() => track(() => runWithRetainedGatewayRootWork(() => finalize(statusLine))))
-      .catch((error: unknown) => {
-        log.warn(`question message finalization failed id=${questionId} delivery=${deliveryId}`, {
-          error: String(error),
-        });
-      });
+      .catch((error: unknown) => options.onFinalizeError?.(error, questionId, deliveryId));
   };
 
   const finalizeDelivery = (

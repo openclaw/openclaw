@@ -5,7 +5,9 @@ export function normalizeProviderId(provider: string): string {
 }
 
 /** Normalize provider ID before manifest-owned auth alias lookup. */
-export { normalizeProviderId as normalizeProviderIdForAuth };
+export function normalizeProviderIdForAuth(provider: string): string {
+  return normalizeProviderId(provider);
+}
 
 export function findNormalizedProviderValue<T>(
   entries: Record<string, T> | undefined,

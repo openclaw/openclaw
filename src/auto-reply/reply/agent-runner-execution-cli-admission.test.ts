@@ -3,6 +3,7 @@ import { assert, expect, it, onTestFinished, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { buildPreparedCliRunContext } from "../../agents/cli-runner.test-helpers.js";
 import { buildCliRunResult } from "../../agents/cli-runner/cli-run-settlement.js";
+import { executeDeps } from "../../agents/cli-runner/execute-deps.js";
 import { executePreparedCliRun } from "../../agents/cli-runner/execute.js";
 import { buildCliMcpGrantContext } from "../../agents/cli-runner/mcp-grant-context.js";
 import { admitCliRunParams } from "../../agents/cli-runner/run-admission.js";
@@ -16,7 +17,7 @@ import {
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveSqliteScope } from "../../config/sessions/session-accessor.sqlite-scope.js";
-import * as nodeRuntime from "../../gateway/node-agent-cli-runtime.js";
+import type * as nodeRuntime from "../../gateway/node-agent-cli-runtime.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -485,7 +486,7 @@ it("carries the admitted session permission and placement into the CLI grant", a
     prepared.cwd = run.cwd;
     prepared.reusableCliSession = { mode: "reuse", sessionId: observedCliSessionId };
     const nodeInvokeSpy = vi
-      .spyOn(nodeRuntime, "invokeNodeClaudeCliRun")
+      .spyOn(executeDeps, "invokeNodeClaudeCliRun")
       .mockImplementation(nodeInvoke);
     try {
       await executePreparedCliRun(prepared, observedCliSessionId);

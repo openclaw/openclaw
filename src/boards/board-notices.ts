@@ -64,3 +64,7 @@ export function appendBoardEventNotice(params: {
     params.agentId ? withSystemEventOwner(options, params.agentId) : options,
   );
 }
+
+export function resetBoardEventNoticeStateForTest(): void {
+  recentNotices.clear();
+}

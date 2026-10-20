@@ -310,6 +310,14 @@ it.each(["node", "bun-all"])("keeps exact UI and core owners with %s timings", (
       ] as const) {
         expect(group[key], `${group.shard_name} group ${key}`).toEqual(selectedGroup[key]);
       }
+      const singletonProjection = job.groups?.length === 1 && selectedJob.planConcurrency === 2;
+      // Splitting an unpinned parallel owner must retain an exact two-worker singleton ceiling.
+      const expectedJobEnv =
+        singletonProjection &&
+        selectedGroup.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined &&
+        selectedJob.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined
+          ? { ...selectedJob.env, OPENCLAW_VITEST_MAX_WORKERS: "2" }
+          : selectedJob.env;
       for (const key of [
         "env",
         "runner",
@@ -317,12 +325,12 @@ it.each(["node", "bun-all"])("keeps exact UI and core owners with %s timings", (
         "requiresDist",
         "timeoutMinutes",
       ] as const) {
-        expect(job[key], `${group.shard_name} job ${key}`).toEqual(selectedJob[key]);
+        expect(job[key], `${group.shard_name} job ${key}`).toEqual(
+          key === "env" ? expectedJobEnv : selectedJob[key],
+        );
       }
       expect(job.planConcurrency, `${group.shard_name} job planConcurrency`).toBe(
-        job.groups?.length === 1 && selectedJob.planConcurrency === 2
-          ? 1
-          : selectedJob.planConcurrency,
+        singletonProjection ? 1 : selectedJob.planConcurrency,
       );
     }
   }

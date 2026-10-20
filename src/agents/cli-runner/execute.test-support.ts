@@ -1,9 +1,8 @@
 import { beforeEach, vi } from "vitest";
-import * as sessionEventHandoff from "../../auto-reply/reply/session-event-handoff.js";
 import type { enqueueSessionEventForHost } from "../../auto-reply/reply/session-event-handoff.js";
-import * as processRuntime from "../../process/supervisor/index.js";
 import type { ProcessSupervisor, RunExit } from "../../process/supervisor/types.js";
 import { withTestRunAdmission } from "../admitted-run-context.test-support.js";
+import { executeDeps } from "./execute-deps.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 /** Encloses a logical test run, including retries, in the admission preparation normally owns. */
@@ -33,7 +32,7 @@ export const enqueueSessionEventMock = vi.fn<typeof enqueueSessionEventForHost>(
 
 beforeEach(({ onTestFinished }) => {
   const getProcessSupervisorSpy = vi
-    .spyOn(processRuntime, "getProcessSupervisor")
+    .spyOn(executeDeps, "getProcessSupervisor")
     .mockImplementation(() => {
       const activeRuns = new Map<string, Awaited<ReturnType<ProcessSupervisor["spawn"]>>>();
       return {
@@ -88,7 +87,7 @@ beforeEach(({ onTestFinished }) => {
       };
     });
   const captureSessionEventTargetForHostSpy = vi
-    .spyOn(sessionEventHandoff, "captureSessionEventTargetForHost")
+    .spyOn(executeDeps, "captureSessionEventTarget")
     .mockImplementation(async (agentId, sessionKey) => ({
       agentId,
       sessionKey,
@@ -96,7 +95,7 @@ beforeEach(({ onTestFinished }) => {
       generation: "test",
     }));
   const enqueueSessionEventForHostSpy = vi
-    .spyOn(sessionEventHandoff, "enqueueSessionEventForHost")
+    .spyOn(executeDeps, "enqueueSessionEvent")
     .mockImplementation((text, options) => enqueueSessionEventMock(text, options));
   onTestFinished(() => {
     getProcessSupervisorSpy.mockRestore();

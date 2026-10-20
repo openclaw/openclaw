@@ -19,6 +19,7 @@ const log = createSubsystemLogger("node/worker");
 
 type NodeWorkerCapacityOptions = {
   capacity?: number;
+  capacityWaitMs?: number;
   onCapacityChanged?: (capacity: NodeWorkerCapacitySnapshot) => void;
 };
 
@@ -40,6 +41,7 @@ export class NodeWorkerCapacityExhaustedError extends Error {
 /** Owns durable worker slot admission and exact live capacity publication. */
 export class NodeWorkerCapacity {
   private readonly capacity: number;
+  private readonly waitMs: number;
   private readonly onCapacityChanged?: (capacity: NodeWorkerCapacitySnapshot) => void;
   private readonly waiters = new Set<() => void>();
   private readonly closeAbort = new AbortController();
@@ -56,6 +58,7 @@ export class NodeWorkerCapacity {
     this.capacity =
       options.capacity ??
       Math.min(NODE_WORKER_CAPACITY_MAX, Math.max(1, os.availableParallelism()));
+    this.waitMs = options.capacityWaitMs ?? DEFAULT_CAPACITY_WAIT_MS;
     this.onCapacityChanged = options.onCapacityChanged;
     if (
       !Number.isSafeInteger(this.capacity) ||
@@ -65,6 +68,9 @@ export class NodeWorkerCapacity {
       throw new Error(`node worker capacity must be between 1 and ${NODE_WORKER_CAPACITY_MAX}`);
     }
     this.publishedCapacity = Object.freeze({ total: this.capacity, available: 0 });
+    if (!Number.isSafeInteger(this.waitMs) || this.waitMs < 0) {
+      throw new Error("node worker capacity wait must be a non-negative safe integer");
+    }
   }
 
   async initialize(
@@ -91,7 +97,7 @@ export class NodeWorkerCapacity {
     signal?: AbortSignal,
     reclaimIdle?: () => Promise<boolean>,
   ): Promise<Exclude<NodeWorkerLaunchClaimResult, { action: "at-capacity" }>> {
-    const deadlineMs = Date.now() + DEFAULT_CAPACITY_WAIT_MS;
+    const deadlineMs = Date.now() + this.waitMs;
     const assertCurrent = () => {
       if (this.closeAbort.signal.aborted) {
         throw new Error("node worker supervisor is closed");
@@ -222,7 +228,7 @@ export class NodeWorkerCapacity {
   ): Promise<boolean> {
     const remainingMs = deadlineMs - Date.now();
     if (remainingMs <= 0) {
-      throw new NodeWorkerCapacityExhaustedError(DEFAULT_CAPACITY_WAIT_MS);
+      throw new NodeWorkerCapacityExhaustedError(this.waitMs);
     }
     if (signal?.aborted) {
       throw capacityAbortReason(signal);
@@ -245,7 +251,7 @@ export class NodeWorkerCapacity {
               : capacityAbortReason(waiting),
           );
         } else if (reclaimIdle && Date.now() >= deadlineMs) {
-          reject(new NodeWorkerCapacityExhaustedError(DEFAULT_CAPACITY_WAIT_MS));
+          reject(new NodeWorkerCapacityExhaustedError(this.waitMs));
         } else {
           complete();
         }

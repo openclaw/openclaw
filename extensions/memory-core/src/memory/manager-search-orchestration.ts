@@ -1,14 +1,9 @@
 import { getAgentWorkspaceAccess } from "openclaw/plugin-sdk/agent-workspace-runtime";
-import {
-  formatErrorMessage,
-  readErrorName,
-  toErrorObject,
-} from "openclaw/plugin-sdk/error-runtime";
+import { formatErrorMessage, readErrorName } from "openclaw/plugin-sdk/error-runtime";
 import { classifyMemoryMultimodalPath } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   readMemoryFile,
-  readMemorySearchManagerStatus,
   MEMORY_SEARCH_DEADLINE_CONTROL,
   type MemoryReadResult,
   type MemorySearchManager,
@@ -20,7 +15,6 @@ import { uniqueValues } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveActiveMemoryRecallSources } from "./active-memory-session-sources.js";
 import { mergeHybridResults, selectHybridSearchResults } from "./hybrid.js";
 import { tokenizeFtsQuery } from "./keyword-query.js";
-import { MemoryIndexRevisionConflictError } from "./manager-db-kernel.js";
 import {
   createMemoryEmbeddingOperationError,
   isMemoryEmbeddingOperationError,
@@ -36,7 +30,6 @@ import {
 import { prepareExactPathMatcher } from "./manager-search.js";
 import type { MemoryKeywordWorkerResult } from "./manager-search.worker.js";
 import type { MemorySourceFileStateRow } from "./manager-source-state.js";
-import { MEMORY_SYNC_DEFERRED, type MemorySyncOutcome } from "./manager-sync-outcome.js";
 import { applyRetrievalRanking, prepareActiveProjectKeys } from "./project-ranking.js";
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 
@@ -635,70 +628,6 @@ export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
         }
       }
     });
-  }
-
-  protected async runSearchMaintenance(
-    reason: string,
-    acquireManager: () => Promise<
-      | (MemorySearchOrchestration &
-          MemorySearchManager &
-          Required<Pick<MemorySearchManager, "close">>)
-      | null
-    >,
-  ): Promise<MemorySyncOutcome> {
-    const dirtyGeneration = this.takeSearchMaintenanceRequest();
-    let manager: Awaited<ReturnType<typeof acquireManager>>;
-    try {
-      manager = await acquireManager();
-    } catch (err) {
-      this.adoptReindexRetryState(dirtyGeneration);
-      throw toErrorObject(err, "Memory search maintenance manager acquisition failed");
-    }
-    if (!manager) {
-      this.adoptReindexRetryState(dirtyGeneration);
-      return undefined;
-    }
-
-    let maintenanceError: Error | undefined;
-    let incompleteReason: MemorySyncOutcome;
-    try {
-      // The transient manager owns exactly this handed-off generation, merged with
-      // its initial repair state. Full-retry flags still select rebuilds in runSync.
-      manager.adoptReindexRetryState(dirtyGeneration);
-      try {
-        await manager.sync({ reason });
-      } catch (err) {
-        if (!(err instanceof MemoryIndexRevisionConflictError)) {
-          throw err;
-        }
-        // Retry only this automatic generation. The failed sync released its reindex
-        // lease, and the next shadow build starts from the newest live revision.
-        await manager.sync({ reason, force: true });
-      }
-      const status = await readMemorySearchManagerStatus(manager);
-      if (status.dirty === true) {
-        // Return remaining work, including edits skipped by a completed full rebuild.
-        const remaining = manager.takeReindexRetryStateForMaintenance();
-        this.adoptReindexRetryState(remaining);
-        incompleteReason =
-          status.lastSyncError ??
-          (remaining.memoryFullRetryDirty || remaining.sessionsFullRetryDirty
-            ? MEMORY_SYNC_DEFERRED
-            : undefined);
-      }
-    } catch (err) {
-      this.adoptReindexRetryState(dirtyGeneration);
-      maintenanceError = toErrorObject(err, "Memory search maintenance failed");
-    }
-    try {
-      await manager.close();
-    } catch (err) {
-      maintenanceError ??= toErrorObject(err, "Memory search maintenance close failed");
-    }
-    if (maintenanceError) {
-      throw maintenanceError;
-    }
-    return incompleteReason;
   }
 
   private async activateSearchFallback(reason: string): Promise<boolean> {

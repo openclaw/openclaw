@@ -16,24 +16,11 @@ import {
 } from "../test-utils/gateway-scheduler-clock.js";
 import { createQuestionChannelRuntime } from "./question-channel-runtime-internal.js";
 
-const finalizerLog = vi.hoisted(() => ({ warn: vi.fn() }));
-vi.mock("../logging/subsystem.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
-  return {
-    ...actual,
-    createSubsystemLogger: (subsystem: string) => {
-      const log = actual.createSubsystemLogger(subsystem);
-      return subsystem === "gateway/questions" ? { ...log, warn: finalizerLog.warn } : log;
-    },
-  };
-});
-
 let clock: ReturnType<typeof createGatewaySchedulerClock>;
 let scheduler: ReturnType<typeof createTestGatewayScheduler>;
 let runtime: ReturnType<typeof createQuestionChannelRuntime>;
 
 beforeEach(() => {
-  finalizerLog.warn.mockReset();
   clock = createGatewaySchedulerClock();
   scheduler = createTestGatewayScheduler(clock.clock);
   runtime = createQuestionChannelRuntime();
@@ -455,6 +442,8 @@ describe("question channel runtime", () => {
 
   it("reports finalizer failures without retrying a double resolve", async () => {
     const error = new Error("edit failed");
+    const onFinalizeError = vi.fn();
+    runtime = createQuestionChannelRuntime({ onFinalizeError });
     runtime.handleRequested(record, scheduler);
     runtime.registerDelivery({
       questionId: record.id,
@@ -466,10 +455,7 @@ describe("question channel runtime", () => {
     runtime.handleResolved({ id: record.id, status: "cancelled" });
     runtime.handleResolved({ id: record.id, status: "cancelled" });
 
-    await vi.waitFor(() => expect(finalizerLog.warn).toHaveBeenCalledOnce());
-    expect(finalizerLog.warn).toHaveBeenCalledWith(
-      `question message finalization failed id=${record.id} delivery=discord:1`,
-      { error: "Error: edit failed" },
-    );
+    await vi.waitFor(() => expect(onFinalizeError).toHaveBeenCalledOnce());
+    expect(onFinalizeError).toHaveBeenCalledWith(error, record.id, "discord:1");
   });
 });

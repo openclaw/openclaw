@@ -156,7 +156,7 @@ async function enqueueGuardedCliWatchdog(params: {
   const { testing: cliBackends } = await import("../../agents/cli-backends.test-support.js");
   const { prepareCliRunContext } = await import("../../agents/cli-runner/prepare.js");
   const { runPreparedCliAgent } = await import("../../agents/cli-runner.js");
-  const processRuntime = await import("../../process/supervisor/index.js");
+  const { executeDeps } = await import("../../agents/cli-runner/execute-deps.js");
   const { resolveSessionFilePathCore, resolveSessionFilePathOptions, resolveSessionStorePathCore } =
     await import("../../config/sessions/paths.js");
   const sessionTarget = {
@@ -187,14 +187,12 @@ async function enqueueGuardedCliWatchdog(params: {
     ],
   });
   let receipt: ReturnType<typeof enqueueSessionEventForHost> | undefined;
-  const enqueue = sessionEventHandoff.enqueueSessionEventForHost;
-  const observer = vi
-    .spyOn(sessionEventHandoff, "enqueueSessionEventForHost")
-    .mockImplementation((...args) => {
-      receipt = enqueue(...args);
-      return receipt;
-    });
-  const supervisor = vi.spyOn(processRuntime, "getProcessSupervisor").mockReturnValue({
+  const enqueue = executeDeps.enqueueSessionEvent;
+  const observer = vi.spyOn(executeDeps, "enqueueSessionEvent").mockImplementation((...args) => {
+    receipt = enqueue(...args);
+    return receipt;
+  });
+  const supervisor = vi.spyOn(executeDeps, "getProcessSupervisor").mockReturnValue({
     acquireScopeCleanup: () => async () => {},
     spawn: async () => ({
       runId,
