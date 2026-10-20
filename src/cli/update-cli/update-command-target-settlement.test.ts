@@ -40,6 +40,24 @@ afterEach(async () => {
   vi.resetAllMocks();
 });
 
+function prepareTarget(overrides: Partial<Parameters<typeof resolveUpdateCommandTarget>[3]> = {}) {
+  return {
+    startedAt: 0,
+    postCoreUpdateResume: false,
+    postCoreUpdateChannel: undefined,
+    timeoutMs: 1000,
+    shouldRestart: false,
+    requestedChannel: null,
+    devTarget: undefined,
+    controlPlaneUpdateSentinelMeta: null,
+    discoveredRoot: state.root,
+    installKind: "git",
+    servicePlan: undefined,
+    pkgOwnership: { assertUnowned: boundary.inspect, assertEntryUnowned: vi.fn() },
+    ...overrides,
+  } satisfies Parameters<typeof resolveUpdateCommandTarget>[3];
+}
+
 it.each(["recovered", "busy", "corrupt"] as const)(
   "continues target inspection only after a successful contention reinspection (%s)",
   async (outcome) => {
@@ -66,34 +84,19 @@ it.each(["recovered", "busy", "corrupt"] as const)(
       { json: true, dryRun: true, sourceUpdate: { root: state.root }, run },
       { triageTarget: { root: state.root, env: state.env } },
       undefined,
-      {
-        startedAt: Date.now(),
-        postCoreUpdateResume: false,
-        postCoreUpdateChannel: undefined,
-        timeoutMs: 1000,
-        shouldRestart: false,
-        requestedChannel: null,
-        devTarget: undefined,
-        controlPlaneUpdateSentinelMeta: null,
-        discoveredRoot: state.root,
-        installKind: "git",
-        servicePlan: undefined,
-        pkgOwnership: { assertUnowned: boundary.inspect, assertEntryUnowned: vi.fn() },
-      },
+      prepareTarget({ startedAt: Date.now() }),
       { enter },
       1000,
     );
     if (outcome === "recovered") {
       await expect(target).resolves.toMatchObject({ updateInstallKind: "git", channel: "dev" });
       expect(warning).toHaveBeenCalledWith(expect.stringContaining("continuing the update"));
-      expect(getUpdateRun(run.runId, { env: state.env })?.steps).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            step: "warning:installation-inspection",
-            status: "completed",
-            detail: expect.stringContaining(contention.message),
-          }),
-        ]),
+      expect(getUpdateRun(run.runId, { env: state.env })?.steps).toContainEqual(
+        expect.objectContaining({
+          step: "warning:installation-inspection",
+          status: "completed",
+          detail: expect.stringContaining(contention.message),
+        }),
       );
     } else {
       await expect(target).rejects.toBe(outcome === "busy" ? contention : corruption);
@@ -119,20 +122,11 @@ it.each(["forced", "uncertain"] as const)(
       });
     });
     const enter = vi.fn(async () => ({ assertCurrent: () => {} }));
-    const prepared = {
-      startedAt: 0,
-      postCoreUpdateResume: false,
-      postCoreUpdateChannel: undefined,
-      timeoutMs: 1000,
+    const prepared = prepareTarget({
       shouldRestart: true,
       requestedChannel: "extended-stable",
-      devTarget: undefined,
-      controlPlaneUpdateSentinelMeta: null,
       discoveredRoot: "/synthetic/install",
-      installKind: "git",
-      servicePlan: undefined,
-      pkgOwnership: { assertUnowned: boundary.inspect, assertEntryUnowned: vi.fn() },
-    } satisfies Parameters<typeof resolveUpdateCommandTarget>[3];
+    });
     const work = withCommandProcessScope(() =>
       resolveUpdateCommandTarget(
         { json: true, run: { runId: run.runId, env: state.env } },
@@ -160,8 +154,7 @@ it.each(["forced", "uncertain"] as const)(
     expect(hasCommandProcessCleanupError(result)).toBe(cleanupResult === "uncertain");
     if (cleanupResult === "forced") {
       expect(result).toBe(reported);
-      expect(boundary.report).toHaveBeenCalledOnce();
-      expect(boundary.report).toHaveBeenCalledWith(
+      expect(boundary.report).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ reason: "unsupported_git_channel", installKind: "git" }),
       );
     } else {

@@ -38,7 +38,7 @@ afterEach(() => {
   vi.mocked(resolvePinnedDaemonRuntimePath).mockClear();
 });
 
-async function fixture({ systemd = false } = {}) {
+async function fixture() {
   const root = tempDirs.make("service-root-plan-");
   const serviceRoot = path.join(root, "service");
   const invokingRoot = path.join(root, "invoking");
@@ -49,15 +49,17 @@ async function fixture({ systemd = false } = {}) {
     JSON.stringify({ name: "openclaw", version: "2026.9.4" }),
   );
   const nodeRunner = path.join(root, "bin", "node");
-  const command = {
-    programArguments: [nodeRunner, path.join(serviceRoot, "dist", "index.js"), "gateway"],
-    sourcePath: path.join(root, "gateway.cmd"),
-  };
-  service.readCommand.mockResolvedValue(
-    systemd ? { ...command, managedDefinition: command, managedOverrides: {} } : command,
-  );
   service.readDefinitionMutationCapability.mockResolvedValue({ kind: "writable" });
-  return { serviceRoot, invokingRoot, nodeRunner };
+  const entrypoint = path.join(serviceRoot, "dist", "index.js");
+  return {
+    serviceRoot,
+    invokingRoot,
+    nodeRunner,
+    entrypoint,
+    command: (runtime: string) => ({
+      programArguments: [path.join(root, "bin", runtime), entrypoint, "gateway"],
+    }),
+  };
 }
 
 describe("managed service root planning", () => {
@@ -90,7 +92,7 @@ describe("managed service root planning", () => {
           ? { OPENCLAW_SQLITE_LIBRARY: "/fixture/sqlite.dylib" }
           : { NODE_OPTIONS: "--max-old-space-size=4096" };
       const command = {
-        programArguments: [nodeRunner, path.join(f.serviceRoot, "dist", "index.js"), "gateway"],
+        ...f.command(runtime),
         ...(definition === "plain"
           ? { sourcePath: path.join(path.dirname(f.serviceRoot), "gateway.cmd") }
           : definition === "empty" && runtime === "node"
@@ -117,7 +119,7 @@ describe("managed service root planning", () => {
           sameRoot || rebind ? null : { root: f.serviceRoot, previousRoot: f.invokingRoot },
         ...(rebind ? { serviceRoot: f.serviceRoot } : {}),
         nodeRunner,
-        serviceUnitTarget: path.join(f.serviceRoot, "dist", "index.js"),
+        serviceUnitTarget: f.entrypoint,
       });
       expect(service.readDefinitionMutationCapability).toHaveBeenCalledOnce();
       if (platform === "win32" && !sameRoot) {
@@ -138,15 +140,9 @@ describe("managed service root planning", () => {
   it.each(["node", "bun"])(
     "refuses app-owned %s services before split-root redirection or runtime probing",
     async (runtime) => {
-      const f = await fixture({ systemd: true });
+      const f = await fixture();
       vi.stubGlobal("process", { ...process, platform: "linux" });
-      const command = {
-        programArguments: [
-          path.join(path.dirname(f.nodeRunner), runtime),
-          path.join(f.serviceRoot, "dist", "index.js"),
-          "gateway",
-        ],
-      };
+      const command = f.command(runtime);
       service.readCommand.mockResolvedValue({
         ...command,
         managedDefinition: command,

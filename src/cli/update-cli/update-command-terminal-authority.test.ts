@@ -88,8 +88,6 @@ const dirs = useAutoCleanupTempDirTracker(afterEach);
 let base: string;
 let temporary: string;
 let jsonOutput: unknown[];
-let humanOutput: string[];
-let errorOutput: string[];
 beforeEach(async () => {
   vi.mocked(verifyUpdatedGateway).mockReset();
   base = await fs.realpath(dirs.make("update-terminal-outcome-"));
@@ -100,18 +98,11 @@ beforeEach(async () => {
   vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(base, "state", "openclaw.json"));
   vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", "");
   jsonOutput = [];
-  humanOutput = [];
-  errorOutput = [];
   vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value) => {
     jsonOutput.push(structuredClone(value));
   });
-  vi.spyOn(defaultRuntime, "log").mockImplementation((value) => {
-    humanOutput.push(String(value));
-  });
-  vi.spyOn(defaultRuntime, "error").mockImplementation((value) => {
-    humanOutput.push(String(value));
-    errorOutput.push(String(value));
-  });
+  vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+  vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -139,6 +130,37 @@ async function journaledFixture(root: string) {
   return fixture;
 }
 
+function createRun(): NonNullable<UpdateCommandOptions["run"]> {
+  return {
+    runId: createUpdateRun({ trigger: "cli" }, { env: process.env }).runId,
+    env: { ...process.env },
+  };
+}
+function reportPath(run: NonNullable<UpdateCommandOptions["run"]>) {
+  return path.join(run.env!.OPENCLAW_STATE_DIR!, "update-reports", `${run.runId}.md`);
+}
+function expectUnpublished(onResult: ReturnType<typeof vi.fn>) {
+  expect(jsonOutput).toEqual([]);
+  expect(onResult).not.toHaveBeenCalled();
+}
+async function publishPackage(
+  fixture: Awaited<ReturnType<typeof journaledFixture>>,
+  fence: NonNullable<NonNullable<UpdateCommandOptions["run"]>["executorFence"]>,
+  installTarget = fixture.params.installTarget,
+) {
+  let transaction: PackageUpdateTransaction | undefined;
+  const published = await swapStagedPackageInstall({
+    ...fixture.params,
+    installTarget,
+    activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
+    onTransaction: (value) => {
+      transaction = value;
+    },
+  });
+  expect(published.status, published.step.stderrTail ?? "").toBe("committed");
+  return transaction;
+}
+
 it.skipIf(process.platform === "win32").each([
   { cancel: false, captured: false },
   { cancel: false, captured: true },
@@ -149,10 +171,7 @@ it.skipIf(process.platform === "win32").each([
     const fixture = await journaledFixture(base);
     const next = await journaledFixture(path.join(base, "next"));
     const anchor = resolvePackageActivationAnchor(fixture.packageRoot);
-    const run: NonNullable<UpdateCommandOptions["run"]> = {
-      runId: createUpdateRun({ trigger: "cli" }, { env: process.env }).runId,
-      env: { ...process.env },
-    };
+    const run = createRun();
     const onResult = vi.fn();
     const notification = createDeferredCore();
     const resumeNotification = createDeferredCore();
@@ -182,17 +201,7 @@ it.skipIf(process.platform === "win32").each([
     const publishNext = () =>
       withUpdateCommandExecutor("next-update", async (executor) => {
         const fence = await executor.enter(fixture.packageRoot);
-        const published = await swapStagedPackageInstall({
-          ...next.params,
-          installTarget: fixture.params.installTarget,
-          activation: {
-            fence,
-            runtime: packageActivationRuntimeForTest(),
-            onPrepared: () => {},
-          },
-          onTransaction: () => {},
-        });
-        expect(published.status, published.step.stderrTail ?? "").toBe("committed");
+        await publishPackage(next, fence, fixture.params.installTarget);
       });
     vi.spyOn(sentinel, "writeControlPlaneUpdateRestartSentinel").mockImplementation(
       async (...args) => {
@@ -210,9 +219,7 @@ it.skipIf(process.platform === "win32").each([
             leaseKind: createManagedHandoffLeaseStore().read(fixture.packageRoot).kind,
             originalJournalRetired: !syncFs.existsSync(anchor),
           };
-          await publishNext().catch((error: unknown) => {
-            contenderFailure = error;
-          });
+          contenderFailure = await publishNext().catch((error: unknown) => error);
         } catch (error) {
           // Sentinel notification is best-effort; surface fixture failures outside that catch.
           injectionFailure = error;
@@ -225,23 +232,10 @@ it.skipIf(process.platform === "win32").each([
     const work = withUpdateCommandTerminalResult(
       async (registerRun) => {
         registerRun(run);
-        let operationFailure: unknown;
-        await withUpdateCommandExecutor(run.runId, async (executor) => {
+        const operationFailure = await withUpdateCommandExecutor(run.runId, async (executor) => {
           const fence = await executor.enter(fixture.packageRoot);
           run.executorFence = fence;
-          let transaction: PackageUpdateTransaction | undefined;
-          const published = await swapStagedPackageInstall({
-            ...fixture.params,
-            activation: {
-              fence,
-              runtime: packageActivationRuntimeForTest(),
-              onPrepared: () => {},
-            },
-            onTransaction: (value) => {
-              transaction = value;
-            },
-          });
-          expect(published.status, published.step.stderrTail ?? "").toBe("committed");
+          const transaction = await publishPackage(fixture, fence);
           expect(openPackageActivationJournal(anchor).read().phase).toBe("publication-complete");
           expect(transaction).toBeDefined();
           if (captured) {
@@ -289,26 +283,18 @@ it.skipIf(process.platform === "win32").each([
               controlPlaneUpdateSentinelMeta: { runId: run.runId, note: "requested update" },
             },
           );
-        }).catch((error: unknown) => {
-          operationFailure = error;
-        });
+        }).catch((error: unknown) => error);
         expect(createManagedHandoffLeaseStore().read(fixture.packageRoot).kind).toBe("absent");
-        expect(jsonOutput).toEqual([]);
-        expect(onResult).not.toHaveBeenCalled();
+        expectUnpublished(onResult);
         // A real successor is now admitted before the outer publisher emits.
         // It must not cause that publisher to re-read or mutate the old run.
         await publishNext();
         expect(openPackageActivationJournal(anchor).read().phase).toBe("publication-complete");
-        const reportPath = path.join(
-          run.env!.OPENCLAW_STATE_DIR!,
-          "update-reports",
-          `${run.runId}.md`,
-        );
         afterRelease = {
           run: getUpdateRun(run.runId, { env: run.env }),
           journal: syncFs.readFileSync(resolvePackageActivationJournalPath(anchor)),
-          report: syncFs.existsSync(reportPath)
-            ? syncFs.readFileSync(reportPath, "utf8")
+          report: syncFs.existsSync(reportPath(run))
+            ? syncFs.readFileSync(reportPath(run), "utf8")
             : undefined,
         };
         postReleaseRenames = rename.mock.calls.length;
@@ -334,14 +320,10 @@ it.skipIf(process.platform === "win32").each([
       await notification.promise;
       expect(injectionFailure).toBeUndefined();
       expect(contenderFailure).toBeInstanceOf(UpdateCommandRecoveryPendingError);
-      expect(onResult).not.toHaveBeenCalled();
-      expect(jsonOutput).toEqual([]);
+      expectUnpublished(onResult);
       if (cancel) {
         requestUpdateCommandExecutorCancellation(run.executorFence!, run.runId, cancellation);
-        let cancelledContender: unknown;
-        await publishNext().catch((error: unknown) => {
-          cancelledContender = error;
-        });
+        const cancelledContender = await publishNext().catch((error: unknown) => error);
         expect(cancelledContender).toBeInstanceOf(UpdateCommandRecoveryPendingError);
       }
     } finally {
@@ -361,8 +343,7 @@ it.skipIf(process.platform === "win32").each([
     if (cancel) {
       expect(failure).toBeInstanceOf(UpdateCommandPendingRecoveryFailure);
       expect(collectNestedErrorCandidates(failure)).toContain(cancellation);
-      expect(onResult).not.toHaveBeenCalled();
-      expect(jsonOutput).toEqual([]);
+      expectUnpublished(onResult);
       expect(afterRelease?.run).toEqual(before?.run);
       expect(afterRelease?.report).toBeUndefined();
     } else {
@@ -392,14 +373,11 @@ it
   const prepared = kind === "prepared-admission" || kind === "prepared-child-failure";
   const childFailure = new Error("fixture completed child settlement failure");
   const fixture = await journaledFixture(base);
-  const run: NonNullable<UpdateCommandOptions["run"]> = {
-    runId: createUpdateRun({ trigger: "cli" }, { env: process.env }).runId,
-    env: { ...process.env },
-  };
+  const run = createRun();
   const original = getUpdateRun(run.runId, { env: run.env });
   const anchor = resolvePackageActivationAnchor(fixture.packageRoot);
   const onResult = vi.fn();
-  const reportPath = path.join(run.env!.OPENCLAW_STATE_DIR!, "update-reports", `${run.runId}.md`);
+  const report = reportPath(run);
   let originalFailure: unknown;
   let journal: Buffer | undefined;
   let settledRecord: ReturnType<typeof getUpdateRun>;
@@ -410,7 +388,7 @@ it
     await withUpdateCommandTerminalResult(
       async (registerRun) => {
         registerRun(run);
-        await withUpdateCommandExecutor(run.runId, async (executor) => {
+        originalFailure = await withUpdateCommandExecutor(run.runId, async (executor) => {
           run.executorFence = await executor.enter(fixture.packageRoot, {
             preflight: true,
             ...(kind === "timeout" ? { activationTimeoutMs: 60_000 } : {}),
@@ -457,9 +435,7 @@ it
             });
           }
           throw refused;
-        }).catch((error: unknown) => {
-          originalFailure = error;
-        });
+        }).catch((error: unknown) => error);
         vi.useRealTimers();
         expect(originalFailure).toBeInstanceOf(
           kind === "timeout"
@@ -471,8 +447,7 @@ it
                 : UnreportedUpdateAdmissionOutcome,
         );
         expect(createManagedHandoffLeaseStore().read(fixture.packageRoot).kind).toBe("absent");
-        expect(jsonOutput).toEqual([]);
-        expect(onResult).not.toHaveBeenCalled();
+        expectUnpublished(onResult);
         settledRecord = getUpdateRun(run.runId, { env: run.env });
         if (prepared) {
           expect(settledRecord).toMatchObject({
@@ -482,7 +457,7 @@ it
                 ? "update-admission-cleanup-failed"
                 : "fixture-preflight-refusal",
           });
-          preparedReport = syncFs.readFileSync(reportPath, "utf8");
+          preparedReport = syncFs.readFileSync(report, "utf8");
           if (kind === "prepared-child-failure") {
             expect(collectNestedErrorCandidates(originalFailure)).toContain(childFailure);
             expect(preparedReport).toContain("Package manager admission refused");
@@ -493,16 +468,7 @@ it
         }
         await withUpdateCommandExecutor("successor-update", async (executor) => {
           const fence = await executor.enter(fixture.packageRoot);
-          const published = await swapStagedPackageInstall({
-            ...fixture.params,
-            activation: {
-              fence,
-              runtime: packageActivationRuntimeForTest(),
-              onPrepared: () => {},
-            },
-            onTransaction: () => {},
-          });
-          expect(published.status, published.step.stderrTail ?? "").toBe("committed");
+          await publishPackage(fixture, fence);
         });
         expect(openPackageActivationJournal(anchor).read().phase).toBe("publication-complete");
         journal = syncFs.readFileSync(resolvePackageActivationJournalPath(anchor));
@@ -530,10 +496,9 @@ it
       exitCode: kind === "prepared-child-failure" ? 1 : 0,
       result: { status, reason },
     });
-    expect(jsonOutput).toHaveLength(1);
-    expect(jsonOutput[0]).toMatchObject({ status, reason });
+    expect(jsonOutput).toEqual([expect.objectContaining({ status, reason })]);
     expect(onResult).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ status, reason }));
-    expect(syncFs.readFileSync(reportPath, "utf8")).toBe(preparedReport);
+    expect(syncFs.readFileSync(report, "utf8")).toBe(preparedReport);
   } else {
     expect(failure).toBeInstanceOf(UpdateCommandPendingRecoveryFailure);
     expect(failure).toMatchObject({
@@ -542,9 +507,8 @@ it
         reason: kind === "timeout" ? "update-activation-timeout" : "fixture-preflight-refusal",
       },
     });
-    expect(syncFs.existsSync(reportPath)).toBe(false);
-    expect(onResult).not.toHaveBeenCalled();
-    expect(jsonOutput).toEqual([]);
+    expect(syncFs.existsSync(report)).toBe(false);
+    expectUnpublished(onResult);
   }
   expect(postReleaseRead).not.toHaveBeenCalled();
   postReleaseRead?.mockRestore();
