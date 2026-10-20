@@ -217,7 +217,8 @@ export function sqliteSnapshotStagingError(
       // A failed capacity observation must preserve the original storage error.
     }
   }
-  const message = `${cause instanceof Error ? cause.message : String(cause)}${sqliteErrcode !== undefined ? ` (SQLite errcode=${sqliteErrcode})` : ""}; snapshot staging root ${allocation ? tempDir : path.dirname(tempDir)}${capacityDetail}: ${guidance} or set XDG_CACHE_HOME to a writable filesystem`;
+  const selector = process.env.OPENCLAW_UPDATE_IN_PROGRESS === "1" ? "TMPDIR" : "XDG_CACHE_HOME";
+  const message = `${cause instanceof Error ? cause.message : String(cause)}${sqliteErrcode !== undefined ? ` (SQLite errcode=${sqliteErrcode})` : ""}; snapshot staging root ${allocation ? tempDir : path.dirname(tempDir)}${capacityDetail}: ${guidance} or set ${selector} to a writable filesystem`;
   const error = new Error(message, { cause });
   return isPrivateDirectoryCreationRefused(cause)
     ? markPrivateDirectoryCreationRefused(error)

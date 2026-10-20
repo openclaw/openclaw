@@ -34,7 +34,12 @@ const mocks = vi.hoisted(() => ({
   serviceState: vi.fn<typeof import("../../daemon/service.js").readGatewayServiceState>(),
   execSchtasks: vi.fn<typeof import("../../daemon/schtasks-exec.js").execSchtasks>(),
 }));
-vi.mock("../../daemon/schtasks-exec.js", () => ({ execSchtasks: mocks.execSchtasks }));
+// mock-isolation: Rollback owns a synthetic task; native enable/disable must not reach the host.
+vi.mock("../../daemon/schtasks-exec.js", () => ({
+  execSchtasks: mocks.execSchtasks,
+  execScheduledTaskEnabledChange: (taskName: string, enabled: boolean) =>
+    mocks.execSchtasks(["/Change", "/TN", taskName, enabled ? "/ENABLE" : "/DISABLE"]),
+}));
 vi.mock("../../daemon/service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/service.js")>()),
   readGatewayServiceState: mocks.serviceState,
@@ -53,6 +58,7 @@ import { inspectActivatedUpdateState } from "./update-command-migrated.js";
 import * as packageModule from "./update-command-package.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
 import {
+  ACTIVE_ROLLBACK_IDENTITY_FAILURES,
   expectActiveRollbackIdentity,
   expectDoctorRollback,
   readRollbackFixtureSchemaVersions,
@@ -987,23 +993,16 @@ describe("verified package rollback", () => {
     expect(mocks.restart).not.toHaveBeenCalled();
   });
 
-  it.each([
-    "source-failed",
-    "restored-shims-failed",
-    "partial-restore",
-    "restart-unhealthy",
-    "restart-refused",
-    "restart-threw",
-    "restart-cleanup",
-    "restart-timeout",
-    "restart-verified",
-  ] as const)("retains active installation identity after %s", async (failure) => {
-    await expectActiveRollbackIdentity({
-      failure,
-      candidateRoot,
-      previousRoot,
-      stateDir: serviceStateDir,
-      restart: mocks.restart,
-    });
-  });
+  it.each(ACTIVE_ROLLBACK_IDENTITY_FAILURES)(
+    "retains active installation identity after %s",
+    async (failure) => {
+      await expectActiveRollbackIdentity({
+        failure,
+        candidateRoot,
+        previousRoot,
+        stateDir: serviceStateDir,
+        restart: mocks.restart,
+      });
+    },
+  );
 });

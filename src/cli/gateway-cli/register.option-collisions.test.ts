@@ -351,9 +351,14 @@ describe("gateway register option collisions", () => {
       blockers: [{ kind: "root-request", count: 1, message: "1 active request" }],
     };
     callGatewayCli.mockResolvedValueOnce(busy);
-    const runtime = await vi.importActual<typeof import("../../runtime.js")>("../../runtime.js");
+    const { ExitError } =
+      await vi.importActual<typeof import("../../runtime.js")>("../../runtime.js");
+    // Model a non-exiting runtime: the default runtime terminates the process here.
+    const exit = (code: number) => {
+      throw new ExitError(code);
+    };
 
-    await defaultRuntime.exit.withImplementation(runtime.defaultRuntime.exit, async () => {
+    await defaultRuntime.exit.withImplementation(exit, async () => {
       await expect(
         sharedProgram.parseAsync(
           ["gateway", "suspend", "--request-id", "host-operation", "--json"],

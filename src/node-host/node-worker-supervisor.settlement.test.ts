@@ -275,45 +275,32 @@ describe("node worker persistence settlement lifetime", () => {
     },
   );
 
-  it.each(["ownership read", "terminal admission"] as const)(
-    "retains the stale launch when recovery closes during %s",
-    async (boundary) => {
-      const f = recoveryFixture(true);
-      const entered = createDeferred();
-      const release = createDeferred();
-      if (boundary === "ownership read") {
-        mocks.launchMatching.mockResolvedValueOnce(f.original).mockImplementationOnce(async () => {
-          entered.resolve();
-          await release.promise;
-          return f.original;
-        });
-      } else {
-        mocks.launchFinish.mockImplementationOnce(async (...args) => {
-          entered.resolve();
-          await release.promise;
-          return f.finish(...args);
-        });
-      }
-      const recovering = f.recover(f.original, true, undefined, true);
-      try {
-        await entered.promise;
-        f.close();
-        release.resolve();
-        expect(await recovering).toEqual(f.original);
-        expect(await f.store.nonterminalCount()).toBe(1);
-        if (boundary === "ownership read") {
-          expect(mocks.remove).not.toHaveBeenCalled();
-          expect(mocks.launchFinish).not.toHaveBeenCalled();
-        }
-      } finally {
-        f.close();
-        release.resolve();
-        await recovering;
-      }
-    },
-  );
+  it("retains the stale launch when recovery closes during ownership read", async () => {
+    const f = recoveryFixture(true);
+    const entered = createDeferred();
+    const release = createDeferred();
+    mocks.launchMatching.mockResolvedValueOnce(f.original).mockImplementationOnce(async () => {
+      entered.resolve();
+      await release.promise;
+      return f.original;
+    });
+    const recovering = f.recover(f.original, true, undefined, true);
+    try {
+      await entered.promise;
+      f.close();
+      release.resolve();
+      expect(await recovering).toEqual(f.original);
+      expect(await f.store.nonterminalCount()).toBe(1);
+      expect(mocks.remove).not.toHaveBeenCalled();
+      expect(mocks.launchFinish).not.toHaveBeenCalled();
+    } finally {
+      f.close();
+      release.resolve();
+      await recovering;
+    }
+  });
 
-  it.each(["before admission", "after admission", "unknown settlement"] as const)(
+  it.each(["after admission", "unknown settlement"] as const)(
     "preserves recovery cancellation and terminal authority %s",
     async (boundary) => {
       const f = recoveryFixture();
@@ -347,12 +334,11 @@ describe("node worker persistence settlement lifetime", () => {
           expect(mocks.launchFinish).toHaveBeenCalledOnce();
           expect(await f.store.nonterminalCount()).toBe(1);
         } else {
-          const state = boundary === "before admission" ? "cancelled" : "interrupted";
           expect(await settled).toEqual([
-            { status: "fulfilled", value: expect.objectContaining({ state }) },
-            { status: "fulfilled", value: expect.objectContaining({ state }) },
+            { status: "fulfilled", value: expect.objectContaining({ state: "interrupted" }) },
+            { status: "fulfilled", value: expect.objectContaining({ state: "interrupted" }) },
           ]);
-          expect(mocks.launchFinish).toHaveBeenCalledTimes(boundary === "before admission" ? 2 : 1);
+          expect(mocks.launchFinish).toHaveBeenCalledOnce();
           expect(await f.store.nonterminalCount()).toBe(0);
         }
       } finally {

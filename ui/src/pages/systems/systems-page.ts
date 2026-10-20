@@ -4,6 +4,7 @@ import { property } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { repeat } from "lit/directives/repeat.js";
 import type { ApplicationContext } from "../../app/context.ts";
+import { hostDesktopSetupCopy } from "../../components/desktop/host-desktop-setup.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/sparkline-tile.ts";
 import { DESKTOP_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
@@ -289,24 +290,11 @@ class SystemsPage extends OpenClawLightDomElement {
     const enabled = controller.hostDesktopEnabled;
     const isMac = systemPlatform(row)?.startsWith("macOS") === true;
     const ready = setup?.state === "ready" || setup?.state === "managed";
-    const title = enabled
-      ? "systems.desktopSetupEnabled"
-      : ([
-          ["managed", "systems.managedDesktopConfigured"],
-          ["ready", isMac ? "systems.screenSharingDetected" : "systems.desktopDetected"],
-          ["needs-server", isMac ? "systems.screenSharingNeeded" : "systems.desktopServerNeeded"],
-        ].find(([kind]) => kind === setup?.state)?.[1] ?? "systems.desktopSetupAttention");
-    const hint = enabled
-      ? "systems.desktopSetupConnecting"
-      : ready
-        ? "systems.desktopSetupEnableHint"
-        : isMac && setup?.state === "needs-server"
-          ? "systems.screenSharingSetupHint"
-          : "systems.desktopServerSetupHint";
+    const copy = hostDesktopSetupCopy(setup?.state, isMac, enabled);
     return html`<div class="systems-state" role="status">
       <span class="systems-state__icon" aria-hidden="true">${icons.monitor}</span>
-      <h2>${t(title)}</h2>
-      <p>${t(hint)}</p>
+      <h2>${t(copy.title)}</h2>
+      <p>${t(copy.hint)}</p>
       ${setup?.state === "unsupported" && setup.detail ? html`<p>${setup.detail}</p>` : nothing}
       ${controller.desktopSetupError ? html`<p class="systems-callout--error" role="alert">${controller.desktopSetupError}</p>` : nothing}
       ${

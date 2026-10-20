@@ -12,9 +12,12 @@ import {
 } from "../../components/settings-ui.ts";
 import "../../components/web-awesome.ts";
 import { i18n, t } from "../../i18n/index.ts";
+import { registerSecretsStoreEnglish } from "../../i18n/locales/en-secrets-store.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import type { SecretsStoreDraft } from "../../lib/secrets-store/index.ts";
 import "../../styles/secrets-store.css";
+
+registerSecretsStoreEnglish();
 
 export type SecretsDialogMode = "add" | "edit" | null;
 

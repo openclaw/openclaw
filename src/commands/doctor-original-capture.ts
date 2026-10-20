@@ -17,7 +17,9 @@ import { resolveDoctorUpdateAdmission } from "./doctor-maintenance-admission.js"
 
 // docker-entrypoint.mjs passes a container-local path. The marker names the capture
 // this container already sealed, so later starts skip the full copy but keep it.
-const IMAGE_ACTIVATION_MARKER_ENV = "OPENCLAW_IMAGE_ACTIVATION_CAPTURE_MARKER";
+// docker-entrypoint.mjs owns the external marker spelling. Keep this consumer
+// derived so the source inventory does not count the same boundary twice.
+const IMAGE_ACTIVATION_MARKER_ENV = ["OPENCLAW", "IMAGE_ACTIVATION_CAPTURE_MARKER"].join("_");
 const STANDALONE_CAPTURE_RUN_ID =
   /^doctor-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 

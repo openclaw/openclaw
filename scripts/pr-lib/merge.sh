@@ -586,7 +586,7 @@ merge_run() {
   local legacy_directory="${6:-}" legacy_refusal="" legacy_captures=()
   local cancel_auto="${7:-false}"
   local refusal_directory="${8:-}" refusal="" qualified_refusal=false
-  local provider_rejection="" stale_head_retirement="" qualified_pending_recovery=false
+  local provider_rejection="" stale_head_retirement="" async_failure="" qualified_pending_recovery=false
   local retired_auto_admin=false stale_admin_head=false
   local MERGE_REFUSAL_DIRECTORY=""
   local MERGE_ADMIN_EVIDENCE="${9:-}" confirmed_admin="${10:-false}" MERGE_PRIOR_CI_PROOF=""
@@ -634,7 +634,11 @@ merge_run() {
           .priorCiAdmin.dispatchTransport == "rest" and .head != $replacement
          else (.accepted == false and (.route == "immediate" or
             ($refusal != "" and .route == "auto" and .method == "squash"))) or
-          (.route == "auto" and .cancellation.state == "confirmed") end)
+          (.route == "auto" and .cancellation.state == "confirmed") or
+          ($replacement == "" and $refusal == "" and .accepted == true and
+            .route == "immediate" and .transport == "rest" and
+            .asyncMerge.status == "failed" and .asyncMerge.sha == null and
+            (.asyncMerge.uuid | type == "string")) end)
       ' >/dev/null; then
       if [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ]; then
         merge_outcome_stop "operator admin recovery requires an exact qualified prior-CI intent or a confirmed auto cancellation with an explicit selected head; no attempt was authorized"
@@ -644,6 +648,7 @@ merge_run() {
       return 1
     fi
     recovery_record="$MERGE_OUTCOME_RECORD"
+    async_failure=$(printf '%s\n' "$recovery_record" | jq -c 'select(.asyncMerge.status == "failed") | .asyncMerge') || return 1
   elif [ -n "$refusal_directory" ]; then
     merge_outcome_stop "pre-dispatch qualification requires explicit operator recovery"; return 1
   elif [ -n "$MERGE_OUTCOME_OID" ]; then
@@ -1124,6 +1129,9 @@ merge_run() {
   fi
   if [ -n "$provider_rejection" ]; then
     intent=$(printf '%s\n' "$intent" | jq -c --argjson rejection "$provider_rejection" '.recovery.providerRejection=$rejection') || return 1
+  fi
+  if [ -n "$async_failure" ]; then
+    intent=$(printf '%s\n' "$intent" | jq -c --argjson failure "$async_failure" '.recovery.asyncFailure=$failure') || return 1
   fi
   if [ -n "$stale_head_retirement" ]; then
     intent=$(printf '%s\n' "$intent" | jq -c --argjson retirement "$stale_head_retirement" '.recovery.staleHeadRetirement=$retirement') || return 1

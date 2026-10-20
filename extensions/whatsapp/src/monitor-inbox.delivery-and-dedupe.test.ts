@@ -228,12 +228,18 @@ describe("web monitor inbox delivery and dedupe", () => {
     ]);
     expect(sock.sendPresenceUpdate).toHaveBeenCalledWith("available");
     expect(sock.sendPresenceUpdate).toHaveBeenCalledWith("composing", "999@s.whatsapp.net");
-    expect(sock.sendMessage).toHaveBeenNthCalledWith(1, "999@s.whatsapp.net", {
-      text: "nested reply works",
-    });
-    expect(sock.sendMessage).toHaveBeenNthCalledWith(2, "999@s.whatsapp.net", {
-      text: "nested media works",
-    });
+    expect(sock.sendMessage).toHaveBeenNthCalledWith(
+      1,
+      "999@s.whatsapp.net",
+      { text: "nested reply works" },
+      expect.objectContaining({ messageId: expect.any(String) }),
+    );
+    expect(sock.sendMessage).toHaveBeenNthCalledWith(
+      2,
+      "999@s.whatsapp.net",
+      { text: "nested media works" },
+      expect.objectContaining({ messageId: expect.any(String) }),
+    );
 
     await listener.close();
   });
@@ -719,9 +725,11 @@ describe("web monitor inbox delivery and dedupe", () => {
     await closePromise;
 
     expect(onMessage).toHaveBeenCalledTimes(1);
-    expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
-      text: "pong",
-    });
+    expect(sock.sendMessage).toHaveBeenCalledWith(
+      "999@s.whatsapp.net",
+      { text: "pong" },
+      expect.objectContaining({ messageId: expect.any(String) }),
+    );
     expect(sock.end).toHaveBeenCalledTimes(1);
     expect(sock.sendMessage.mock.invocationCallOrder.at(0)).toBeLessThan(
       sock.end.mock.invocationCallOrder.at(0),

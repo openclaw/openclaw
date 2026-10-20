@@ -1292,6 +1292,7 @@ src/plugins/doctor-contract-artifact.ts
 src/plugins/doctor-contract-legacy-setup.ts
 src/plugins/doctor-contract-module.ts
 src/plugins/doctor-contract-registry.ts
+src/plugins/doctor-migration-deferral.ts
 src/plugins/doctor-contract-relevance.ts
 src/plugins/loader-channel-setup.ts
 src/plugins/doctor-session-route-state-owner-types.ts
@@ -1742,6 +1743,7 @@ src/state/openclaw-state-db-failure.ts
 src/state/openclaw-state-db-fast-path.ts
 src/state/openclaw-state-db-handle.ts
 src/state/openclaw-state-db-initialization.ts
+src/state/openclaw-state-db-integrity.ts
 src/state/openclaw-state-db-integrity-admission.ts
 src/state/openclaw-state-db-legacy-backfills.ts
 src/state/openclaw-state-db-maintenance.ts
@@ -1809,6 +1811,7 @@ src/state/openclaw-state-worker-lease.ts
 src/state/openclaw-state-worker-memory-pressure.ts
 src/state/openclaw-state-worker-operation.ts
 src/state/openclaw-state-worker-owner.ts
+src/state/openclaw-state-worker-owner-get.ts
 src/state/openclaw-state-worker-store.ts
 src/state/openclaw-state.worker.ts
 src/state/openclaw-update-schema-refusal.ts

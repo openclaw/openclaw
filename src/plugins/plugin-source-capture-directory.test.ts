@@ -19,6 +19,7 @@ import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js
 import { retainGatewayPluginMetadata } from "./plugin-metadata-lifecycle.js";
 import { withPluginSourceCaptureDirectory } from "./plugin-package-metadata-capture.js";
 import {
+  createPluginNativeCaptureRoot,
   createPluginSourceCaptureRoot,
   prunePluginNativeCaptureDirectories,
   retainPluginSourceCaptureInstance,
@@ -51,6 +52,29 @@ function createSource(): string {
   fs.writeFileSync(path.join(source, "index.cjs"), capturedSource);
   return source;
 }
+
+it("keeps update source copies in TMPDIR without relocating retained native captures", async () => {
+  const stateDir = temp.make("plugin-capture-update-placement-");
+  vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  const source = createSource();
+  const artifact = capturePluginGenerationArtifact(source);
+  const native = createPluginNativeCaptureRoot(stateDir);
+  try {
+    expect(fs.readFileSync(artifact.resolve(path.join(source, "index.cjs")), "utf8")).toBe(
+      capturedSource,
+    );
+    expect(
+      artifact.boundaryRoot.startsWith(path.join(process.env.TMPDIR!, "openclaw-plugin-captures-")),
+    ).toBe(true);
+    expect(
+      native.directory.startsWith(path.join(stateDir, "tmp", "plugin-captures") + path.sep),
+    ).toBe(true);
+  } finally {
+    await artifact.disposeAsync();
+    await native.disposeAsync();
+  }
+});
 
 function age(directory: string): void {
   const timestamp = new Date(Date.now() - 2 * hour);

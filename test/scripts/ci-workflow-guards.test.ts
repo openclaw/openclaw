@@ -6381,9 +6381,7 @@ it.each(["publish", "promote"])(
 it("serializes Linux manifests with stable activation and reuses completed Linux builds", () => {
   const linux = parse(readFileSync(".github/workflows/linux-app-release.yml", "utf8"));
   expect(linux.env.WINDOWS_COMPANION_RELEASE).toBe("false");
-  expect(linux.jobs.validate_release.outputs.windows_build).toContain(
-    "WINDOWS_COMPANION_RELEASE",
-  );
+  expect(linux.jobs.validate_release.outputs.windows_build).toContain("WINDOWS_COMPANION_RELEASE");
   const finalizers = (
     [
       ["openclaw-release-publish.yml", "finalize_github_release"],

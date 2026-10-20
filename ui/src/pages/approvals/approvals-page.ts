@@ -33,10 +33,13 @@ import {
 } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
+import { registerApprovalsEnglish } from "../../i18n/locales/en-approvals.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { formatDateTimeMs } from "../../lib/format.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+
+registerApprovalsEnglish();
 
 const APPROVAL_HISTORY_PAGE_SIZE = 50;
 

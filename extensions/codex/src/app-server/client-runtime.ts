@@ -6,6 +6,7 @@ import type { CodexAppServerAuthRuntimeContext as ClientRuntimeContext } from ".
 import type { CodexAppServerAuthHandoff } from "./auth-types.js";
 import {
   createThreadOwnerToken,
+  isThreadBackgroundOnly,
   releaseThreadProtection,
   forgetThreadOwnership,
   hasSiblingThreadWork,
@@ -513,6 +514,7 @@ function claimCodexAppServerThreadOwnership(
   const previousClaim = runtime.claimedThreads.get(threadId);
   runtime.retainedThreads.delete(threadId);
   const claimed = createThreadOwnerToken(threadId, onInvalidated);
+  claimed.configFingerprint = retained.configFingerprint;
   runtime.claimedThreads.set(threadId, claimed);
   previousClaim?.invalidate();
   retained.ownerToken?.invalidate();
@@ -633,6 +635,15 @@ export function isCodexAppServerLiveThreadClaimed(
 ): boolean {
   const runtime = configuredClients.get(client);
   return runtime !== undefined && !runtime.closed && runtime.claimedThreads.has(threadId);
+}
+
+/** Completed foreground work may leave cleanup custody with native background work. */
+export function isCodexAppServerLiveThreadBackgroundOnly(
+  client: CodexAppServerClient,
+  threadId: string,
+  configFingerprint?: string,
+): boolean {
+  return isThreadBackgroundOnly(configuredClients.get(client), threadId, configFingerprint);
 }
 
 /** Native commands and children can still need an otherwise-idle subscription. */

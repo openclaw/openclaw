@@ -30,7 +30,7 @@ import {
   createNativeDispatchConfig as createConfig,
   registerNativeRegistryRoutingCases,
   type MockCalls,
-} from "./native-command.plugin-dispatch.registry.cases.js";
+} from "./native-command.plugin-dispatch.registry.test-support.js";
 import {
   createMockCommandInteraction as createInteraction,
   createRouteState,

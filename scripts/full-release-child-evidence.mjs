@@ -5,7 +5,6 @@ import { dirname } from "node:path";
 import process from "node:process";
 import {
   composeReleaseChildAttemptEvidence,
-  readReleaseJobListing,
   releaseChildSpec,
   releaseCompositeJobsSha256,
   validateReleaseChildRunProvenance,

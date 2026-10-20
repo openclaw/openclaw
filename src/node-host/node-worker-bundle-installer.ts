@@ -334,7 +334,6 @@ export class NodeWorkerBundleInstaller {
   readonly #root: string;
   readonly #packageRoot: string | null;
   readonly #operations = new KeyedAsyncQueue();
-  readonly #bundleGenerationsByNamespace = new Map<string, Map<string, number>>();
   readonly #currentGenerationByNamespace = new Map<string, number>();
   readonly #prewarmedBundles = new Set<string>();
   readonly #workerEnv: NodeJS.ProcessEnv;
@@ -346,13 +345,9 @@ export class NodeWorkerBundleInstaller {
     this.#workerEnv = snapshotNodeWorkerEnv(env);
   }
 
-  #markPendingRetention(gatewayNamespace: string, bundleHash: string): void {
+  #recordInstall(gatewayNamespace: string): void {
     const generation = (this.#currentGenerationByNamespace.get(gatewayNamespace) ?? 0) + 1;
     this.#currentGenerationByNamespace.set(gatewayNamespace, generation);
-    const generations =
-      this.#bundleGenerationsByNamespace.get(gatewayNamespace) ?? new Map<string, number>();
-    generations.set(bundleHash, generation);
-    this.#bundleGenerationsByNamespace.set(gatewayNamespace, generations);
   }
 
   async #prewarmBundle(bundleDir: string, signal?: AbortSignal): Promise<void> {
@@ -454,7 +449,7 @@ export class NodeWorkerBundleInstaller {
           await this.#prewarmBundle(destination, params.signal);
         }
         params.signal?.throwIfAborted();
-        this.#markPendingRetention(input.gatewayNamespace, input.build.bundleHash);
+        this.#recordInstall(input.gatewayNamespace);
         return structuredClone(input.build);
       } catch (error) {
         if (error instanceof NodeWorkerBundleInstallError) {
@@ -522,20 +517,6 @@ export class NodeWorkerBundleInstaller {
         throw error;
       }
       const protectedHashes = new Set(params.bundleHashes);
-      const generations = this.#bundleGenerationsByNamespace.get(params.gatewayNamespace);
-      const acknowledgedGeneration = params.acknowledgedGeneration ?? 0;
-      if (generations) {
-        for (const [bundleHash, generation] of generations) {
-          if (generation > acknowledgedGeneration) {
-            protectedHashes.add(bundleHash);
-          } else {
-            generations.delete(bundleHash);
-          }
-        }
-        if (generations.size === 0) {
-          this.#bundleGenerationsByNamespace.delete(params.gatewayNamespace);
-        }
-      }
       const candidates = entries
         .filter(
           (entry) =>

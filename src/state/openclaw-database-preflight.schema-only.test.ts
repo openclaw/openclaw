@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { SqliteReadOnlyInspectionContentionError } from "../infra/sqlite-readonly-worker-protocol.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
 import {
@@ -30,6 +31,45 @@ afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
 });
+
+it.each([
+  {
+    name: "retryable snapshot contention",
+    error: new SqliteReadOnlyInspectionContentionError("snapshot did not stabilize"),
+    guidance: "Wait a moment for write activity to settle, then retry the inspection.",
+    restore: false,
+  },
+  {
+    name: "database corruption",
+    error: new Error("database disk image is malformed"),
+    guidance: "Stop OpenClaw processes, then restore the affected database from a verified backup.",
+    restore: true,
+  },
+])(
+  "keeps Doctor's refusal and gives the next step for $name",
+  async ({ error, guidance, restore }) => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("doctor-readiness-guidance-") };
+    openOpenClawStateDatabase({ env });
+    closeOpenClawStateDatabaseForTest();
+    vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockRejectedValueOnce(error);
+
+    const failure = await assertOpenClawDatabasesReady({
+      env,
+      operation: "doctor",
+      config: { agents: { entries: {} } },
+      configuredAgentDatabaseTargets: [],
+    }).catch((cause: unknown) => cause);
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure).toMatchObject({
+      message: expect.stringContaining("Doctor could not complete repair"),
+    });
+    expect(failure).toMatchObject({ message: expect.stringContaining(error.message) });
+    expect(failure).toMatchObject({ message: expect.stringContaining(guidance) });
+    if (!restore) {
+      expect(failure).toMatchObject({ message: expect.not.stringContaining("restore") });
+    }
+  },
+);
 
 it("keeps readiness on the admitted shared-state snapshot and observes changes in the next admission", async () => {
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("schema-admitted-snapshot-") };

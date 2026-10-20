@@ -10,6 +10,7 @@ import {
   finishBackupScratch,
   maintainBackupScratch,
 } from "./backup-scratch.js";
+import * as fsSafe from "./fs-safe.js";
 import * as nodeSqlite from "./node-sqlite.js";
 import * as privateDirectory from "./sqlite-private-directory.js";
 import * as stagingToken from "./sqlite-staging-token.js";
@@ -57,6 +58,40 @@ it.each([false, true])(
     }
   },
 );
+
+it("reclaims scratch when the platform cannot rename onto an existing directory", async () => {
+  const root = await fs.realpath(dirs.make("backup-scratch-windows-"));
+  const scratch = await createBackupScratchDirectory(root);
+  await fs.writeFile(path.join(scratch.directory, "config-0"), "synthetic config");
+  const nativePlatform = process.platform;
+  const platform = vi.spyOn(process, "platform", "get").mockReturnValue(nativePlatform);
+  const createRoot = fsSafe.root;
+  // Keep filesystem admission native; emulate Windows only at the retirement move.
+  vi.spyOn(fsSafe, "root").mockImplementation(async (...args) => {
+    const boundary = await createRoot(...args);
+    if (args[0] === root) {
+      platform.mockReturnValue("win32");
+      vi.spyOn(boundary, "move").mockImplementation(async (from, to, options) => {
+        platform.mockReturnValue(nativePlatform);
+        options?.assertBeforeMutation?.();
+        const destination = path.join(root, to);
+        if (fsSync.existsSync(destination)) {
+          throw Object.assign(new Error("Windows cannot replace a directory"), { code: "EPERM" });
+        }
+        await fs.rename(path.join(root, from), destination);
+      });
+    }
+    return boundary;
+  });
+  // A precreated target must reach EPERM even on hosts without Windows ACL helpers.
+  vi.spyOn(privateDirectory, "createPrivateSqliteTempDirectory").mockImplementation(
+    (parent, prefix) => fs.mkdtemp(path.join(parent, prefix)),
+  );
+  const log = vi.fn();
+  await expect(finishBackupScratch(scratch, log)).resolves.toBeUndefined();
+  expect(log).not.toHaveBeenCalled();
+  await expect(fs.readdir(root)).resolves.toEqual([]);
+});
 
 it.each(["reclaimed", "replaced"] as const)(
   "recovers only reclaimed scratch after boundary observation (%s)",

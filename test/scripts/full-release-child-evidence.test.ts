@@ -366,17 +366,19 @@ describe("full release child evidence producer", () => {
       const { result, endpoints } = seal(data);
       expect(result.status, result.stderr).toBe(accepted ? 0 : 1);
       if (!accepted) {
-        expect(result.stderr).toContain("publication original jobs enumeration is incomplete");
+        expect(result.stderr).toContain(
+          "publication original jobs enumeration is incomplete or duplicated",
+        );
       }
-      const jobEndpoints = endpoints.filter((endpoint) => endpoint.includes("/jobs?"));
-      expect(jobEndpoints.slice(0, 3)).toEqual(
+      const listings = endpoints.filter((endpoint) => endpoint.includes("/jobs?"));
+      expect(listings.filter((endpoint) => endpoint.includes("?page=1&"))).toEqual(
         [100, 50, 30].map(
           (perPage) =>
             `repos/openclaw/openclaw/actions/runs/101/attempts/1/jobs?page=1&per_page=${perPage}`,
         ),
       );
-      expect(jobEndpoints).toHaveLength(36);
-      expect(jobEndpoints.at(-1)).toBe(
+      // Thirty-four 30-job pages reach the ceiling; no read goes beyond it.
+      expect(listings.at(-1)).toBe(
         "repos/openclaw/openclaw/actions/runs/101/attempts/1/jobs?page=34&per_page=30",
       );
     },

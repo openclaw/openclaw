@@ -99,6 +99,8 @@ describe("FRV protected gh evidence reads", () => {
       }),
     ).rejects.toBe(notFound);
     expect(pageSizes).toEqual([100, 50, 30, 100]);
+  });
+
   it("reads the mutable release tip freshly even when watcher reads are cached", () => {
     const result = runProtectedFrv(
       "getRef",

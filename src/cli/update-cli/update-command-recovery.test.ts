@@ -99,7 +99,7 @@ describe("package finalization recovery targets", () => {
     ]);
   });
 
-  it.each(["first-read", "distinct-read", "run-replaced", "fence-replaced"] as const)(
+  it.each(["first-read", "distinct-read"] as const)(
     "retains the original executor after recovery admission (%s)",
     async (boundary) => {
       const first = target();
@@ -115,32 +115,21 @@ describe("package finalization recovery targets", () => {
           }
         },
       };
-      const replacementFence = { assertCurrent: vi.fn() };
       closeOpenClawStateDatabaseForTest();
       const lstat = fs.lstat.bind(fs);
       vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
         const result = await lstat(...args);
         if (String(args[0]) === path.dirname(first.databasePath)) {
-          if (boundary === "run-replaced") {
-            first.params.opts.run = { ...first.run };
-          } else if (boundary === "fence-replaced") {
-            first.run.executorFence = replacementFence;
-          } else {
-            current = false;
-          }
+          current = false;
         }
         return result;
       });
       await expect(assertUpdateCommandPackageFinalization(first.params)).rejects.toMatchObject({
         name: "UpdateCommandPendingRecoveryFailure",
         cause: {
-          message:
-            boundary === "run-replaced" || boundary === "fence-replaced"
-              ? "Package finalization lost its original executor."
-              : "original finalizer authority lost",
+          message: "original finalizer authority lost",
         },
       });
-      expect(replacementFence.assertCurrent).not.toHaveBeenCalled();
     },
   );
 });

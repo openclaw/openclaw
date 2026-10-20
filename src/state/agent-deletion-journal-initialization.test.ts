@@ -523,7 +523,7 @@ describe("agent deletion journal initialization", () => {
     "unresolved-runtime-type-env",
     "invalid-roster",
     "invalid-agent-dir",
-  ] as const)("does not infer empty deletion history from %s", (source) => {
+  ] as const)("classifies deletion history from %s", (source) => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("journal-unknown-") };
     if (source === "existing-empty-database") {
       const pathname = resolveOpenClawStateSqlitePath(env);
@@ -557,11 +557,11 @@ describe("agent deletion journal initialization", () => {
     }
     for (let operation = 0; operation < 2; operation += 1) {
       const opened = openOpenClawStateDatabase({ env });
-      expect(
-        opened.db
-          .prepare("SELECT name FROM sqlite_master WHERE name = 'agent_deletion_journal'")
-          .get(),
-      ).toBeUndefined();
+      const journal = opened.db
+        .prepare("SELECT name FROM sqlite_master WHERE name = 'agent_deletion_journal'")
+        .get();
+      const nativeBootstrap = source === "existing-empty-database" || source === "shared-wal";
+      expect(journal).toEqual(nativeBootstrap ? { name: "agent_deletion_journal" } : undefined);
       closeOpenClawStateDatabaseForTest();
     }
   });

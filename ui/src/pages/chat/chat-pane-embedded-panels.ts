@@ -10,6 +10,7 @@ import type {
   BrowserTabSelection,
   BrowserTabTarget,
 } from "../../components/browser/browser-target.ts";
+import type { HostDesktopRuntimeConfig } from "../../components/desktop/host-desktop-setup.ts";
 import { icons } from "../../components/icons.ts";
 import { EMPTY_LINK_READERS } from "../../components/link-reader-target.ts";
 import { renderPanelLoadingSkeleton } from "../../components/panel-loading-skeleton.ts";
@@ -80,6 +81,7 @@ type SidebarPanelDefinitionParams = {
   desktopRefreshOnPresentation: boolean;
   desktopAvailable: boolean;
   desktopSource: string | null;
+  desktopRuntimeConfig: HostDesktopRuntimeConfig | null;
   desktopFocusHref: string;
   portalPresented?: PresentationValue;
   onDesktopFocusTargetChange: (
@@ -253,6 +255,7 @@ export function sidebarPanelDefinitions(
           .presented=${livePresentation(params?.desktopPresented ?? false)}
           .refreshOnPresentation=${params?.desktopRefreshOnPresentation ?? true}
           .requestedSource=${params?.desktopSource ?? null}
+          .runtimeConfig=${params.desktopRuntimeConfig}
           .sessionKey=${state.sessionKey}
           .onFocusTargetChange=${params?.onDesktopFocusTargetChange}
         ></openclaw-desktop-panel>`

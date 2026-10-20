@@ -157,10 +157,10 @@ merge_outcome_load_local() {
       def recovery:
         if has("recovery") then . as $record | .recovery |
           type == "object" and
-          (((keys - ["preDispatchRefusal","providerRejection","staleHeadRetirement"]) == ["actor","attempt","outcome","reason"]) or
-           ((keys - ["preDispatchRefusal","providerRejection","staleHeadRetirement"]) == ["actor","attempt","outcome","reason","replacementHead"] and
+          (((keys - ["preDispatchRefusal","providerRejection","staleHeadRetirement","asyncFailure"]) == ["actor","attempt","outcome","reason"]) or
+           ((keys - ["preDispatchRefusal","providerRejection","staleHeadRetirement","asyncFailure"]) == ["actor","attempt","outcome","reason","replacementHead"] and
             (.replacementHead | oid) and .replacementHead == $record.head)) and
-          ([.preDispatchRefusal,.providerRejection,.staleHeadRetirement] |
+          ([.preDispatchRefusal,.providerRejection,.staleHeadRetirement,.asyncFailure] |
             map(select(. != null)) | length <= 1) and
           (if has("preDispatchRefusal") then (.preDispatchRefusal | type == "object") else true end) and
           (if has("providerRejection") then (.providerRejection | type == "object") and
@@ -170,6 +170,11 @@ merge_outcome_load_local() {
           (if has("staleHeadRetirement") then (.staleHeadRetirement | type == "object") and
             has("replacementHead") and $record.route == "auto" and
             ($record | has("priorCiAdmin") | not)
+           else true end) and
+          (if has("asyncFailure") then $record.route == "immediate" and
+            (has("replacementHead") | not) and (.asyncFailure |
+              keys == ["message","sha","status","uuid"] and (.uuid | attempt) and
+              .status == "failed" and .sha == null and (.message | type == "string"))
            else true end) and
           (.outcome | oid) and (.attempt | attempt) and
           (.actor | type == "string" and length > 0) and .reason == "explicit-operator-recovery"
@@ -245,6 +250,9 @@ merge_outcome_load_local() {
           (if $next.recovery.providerRejection != null then
              .accepted == false and .route == "admin" and $next.route == "admin" and
              .priorCiAdmin.dispatchTransport == "rest" and .head == $next.head
+           elif $next.recovery.asyncFailure != null then
+             .accepted == true and .route == "immediate" and .transport == "rest" and
+             .head == $next.head and .asyncMerge == $next.recovery.asyncFailure
            elif $next.recovery.staleHeadRetirement != null then
              .accepted == false and .route == "admin" and $next.route == "auto" and
              .priorCiAdmin.dispatchTransport == "rest" and

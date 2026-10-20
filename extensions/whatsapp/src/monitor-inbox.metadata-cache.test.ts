@@ -125,10 +125,11 @@ describe("web monitor inbox metadata cache", () => {
       await listener.sendMessage("123@g.us", "ping @+15551234567");
 
       expect(sock.groupMetadata).not.toHaveBeenCalled();
-      expect(sock.sendMessage).toHaveBeenCalledWith("123@g.us", {
-        text: "ping @277038292303944",
-        mentions: [participantLid],
-      });
+      expect(sock.sendMessage).toHaveBeenCalledWith(
+        "123@g.us",
+        { text: "ping @277038292303944", mentions: [participantLid] },
+        expect.objectContaining({ messageId: expect.any(String) }),
+      );
     } finally {
       await listener.close();
     }
@@ -331,10 +332,14 @@ describe("web monitor inbox metadata cache", () => {
         );
         await sending;
 
-        expect(sock.sendMessage).toHaveBeenCalledWith("123@g.us", {
-          text: "removed @15551234567 current @15559876543",
-          mentions: ["15559876543@s.whatsapp.net"],
-        });
+        expect(sock.sendMessage).toHaveBeenCalledWith(
+          "123@g.us",
+          {
+            text: "removed @15551234567 current @15559876543",
+            mentions: ["15559876543@s.whatsapp.net"],
+          },
+          expect.objectContaining({ messageId: expect.any(String) }),
+        );
         expect(sock.groupMetadata).toHaveBeenCalledTimes(expectedMetadataRequests);
         await expectCachedGroupMetadata(baileysCache, {
           id: "123@g.us",
@@ -387,10 +392,14 @@ describe("web monitor inbox metadata cache", () => {
       resolveFormerParticipant("15551234567@s.whatsapp.net");
       await sending;
 
-      expect(sock.sendMessage).toHaveBeenCalledWith("123@g.us", {
-        text: "removed @15551234567 current @15559876543",
-        mentions: ["15559876543@s.whatsapp.net"],
-      });
+      expect(sock.sendMessage).toHaveBeenCalledWith(
+        "123@g.us",
+        {
+          text: "removed @15551234567 current @15559876543",
+          mentions: ["15559876543@s.whatsapp.net"],
+        },
+        expect.objectContaining({ messageId: expect.any(String) }),
+      );
       await expectCachedGroupMetadata(baileysCache, {
         id: "123@g.us",
         subject: "Current Group",
@@ -445,10 +454,14 @@ describe("web monitor inbox metadata cache", () => {
       await affectedSend;
 
       expect(sock.groupMetadata).toHaveBeenCalledTimes(3);
-      expect(sock.sendMessage).toHaveBeenCalledWith("456@g.us", {
-        text: "unrelated @15551111111",
-        mentions: ["15551111111@s.whatsapp.net"],
-      });
+      expect(sock.sendMessage).toHaveBeenCalledWith(
+        "456@g.us",
+        {
+          text: "unrelated @15551111111",
+          mentions: ["15551111111@s.whatsapp.net"],
+        },
+        expect.objectContaining({ messageId: expect.any(String) }),
+      );
       await expectCachedGroupMetadata(baileysCache, {
         id: "456@g.us",
         subject: "Unrelated Group",

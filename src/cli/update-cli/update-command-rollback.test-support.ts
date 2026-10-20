@@ -194,6 +194,18 @@ export function expectDoctorRollback(
   });
 }
 
+export const ACTIVE_ROLLBACK_IDENTITY_FAILURES = [
+  "source-failed",
+  "restored-shims-failed",
+  "partial-restore",
+  "restart-unhealthy",
+  "restart-refused",
+  "restart-threw",
+  "restart-cleanup",
+  "restart-timeout",
+  "restart-verified",
+] as const;
+
 export async function expectActiveRollbackIdentity(params: {
   failure: string;
   candidateRoot: string;

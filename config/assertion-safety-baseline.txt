@@ -1210,7 +1210,6 @@ src/agents/bash-tools.process.ts	5
 src/agents/bootstrap-files.ts	1
 src/agents/bootstrap-hooks.ts	1
 src/agents/btw-transcript.ts	5
-src/agents/btw.ts	6
 src/agents/cache-trace.ts	3
 src/agents/cli-credentials.ts	7
 src/agents/cli-executable-identity.ts	3
@@ -2532,7 +2531,7 @@ src/sessions/session-key-utils.ts	1
 src/sessions/session-lifecycle-admission.ts	1
 src/sessions/session-upstream-monitor.ts	2
 src/sessions/user-turn-transcript-runtime-context.ts	2
-src/sessions/user-turn-transcript.ts	4
+src/sessions/user-turn-transcript.ts	3
 src/shared/account-enabled.ts	1
 src/shared/bounded-serial-queue.ts	1
 src/shared/chat-content.ts	2

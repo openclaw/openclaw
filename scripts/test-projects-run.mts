@@ -617,11 +617,13 @@ export async function runTestProjects(
     throw error;
   } finally {
     try {
-      await workers?.dispose({ interrupted: Boolean(termination.signal) }).catch((error: unknown) => {
-        reportFailure ??= String(error);
-        process.exitCode ||= 1;
-        console.error(error);
-      });
+      await workers
+        ?.dispose({ interrupted: Boolean(termination.signal) })
+        .catch((error: unknown) => {
+          reportFailure ??= String(error);
+          process.exitCode ||= 1;
+          console.error(error);
+        });
       if (reports) {
         const reportCode = await reports.finish(
           async (mergeArgs) => {

@@ -2,6 +2,7 @@ import { once } from "node:events";
 import { postRawWebhook } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
+import { buildSlackProgressCommentaryRun } from "../../live-transports/slack/slack-live.scenario-fixtures.js";
 import { readQaMockRequestCursor } from "../shared/debug-request-cursor.js";
 import { adaptAnthropicToolCallIds } from "./mock-anthropic-wire.js";
 import type { StreamEvent } from "./mock-openai-contracts.js";
@@ -728,14 +729,18 @@ describe("qa mock openai server", () => {
 
   it("dispatches structured Slack commentary, exec, and final phases", async () => {
     const server = await startMockServer();
-    const suffix = "A1B2C3D4";
+    const run = buildSlackProgressCommentaryRun("U_SUT", {
+      commentary: "standalone",
+      toolProgress: "absent",
+    });
+    const finalMarker = run.matchText;
+    const suffix = finalMarker.slice("SLACK-QA-COMMENTARY-DONE-".length);
     const commentaryMarker = `SLACK-QA-COMMENTARY-${suffix}`;
     const toolMarker = `SLACK-QA-TOOL-${suffix}`;
-    const finalMarker = `SLACK-QA-COMMENTARY-DONE-${suffix}`;
-    const command = `grep '${toolMarker}' /dev/null || sleep 5`;
-    const prompt = `${commentaryMarker} ${command} ${finalMarker}`;
+    const command = `printf '%s' '${toolMarker}' >/dev/null; sleep 5; printf '%s\\n' 'SLACK-QA-OUTPUT-${suffix}'`;
+    const prompt = run.input.replaceAll(">", "&gt;");
     const stalePrompt =
-      "SLACK-QA-COMMENTARY-11112222 grep 'SLACK-QA-TOOL-11112222' /dev/null || sleep 5 SLACK-QA-COMMENTARY-DONE-11112222";
+      "SLACK-QA-COMMENTARY-11112222 printf '%s' 'SLACK-QA-TOOL-11112222' >/dev/null; sleep 5; printf '%s\\n' 'SLACK-QA-OUTPUT-11112222' SLACK-QA-COMMENTARY-DONE-11112222";
     const currentEnvelope = `${stalePrompt}\n${prompt}`;
 
     const planResponse = await expectStreamingResponses(server, {
@@ -789,7 +794,7 @@ describe("qa mock openai server", () => {
       tools: [{ type: "function", name: "exec" }],
       input: [
         makeUserInput(
-          "SLACK-QA-COMMENTARY-A1B2C3D4 grep 'SLACK-QA-TOOL-11112222' /dev/null || sleep 5 SLACK-QA-COMMENTARY-DONE-A1B2C3D4",
+          "SLACK-QA-COMMENTARY-A1B2C3D4 printf '%s' 'SLACK-QA-TOOL-11112222' >/dev/null; sleep 5; printf '%s\\n' 'SLACK-QA-OUTPUT-A1B2C3D4' SLACK-QA-COMMENTARY-DONE-A1B2C3D4",
         ),
       ],
     });

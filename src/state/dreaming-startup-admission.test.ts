@@ -232,6 +232,8 @@ it.each([
               activate();
               await prepared;
               await startup;
+              // Startup cleanup is instance-owned background maintenance and is joined at stop.
+              await service.stop?.(context);
               expect.soft(logger.warn.mock.calls).toEqual([]);
               expect.soft(getSessionEntry({ agentId: "main", sessionKey })).toBeUndefined();
               expect

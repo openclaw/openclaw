@@ -38,6 +38,7 @@ import { DesktopPictureInPicture } from "./desktop-picture-in-picture.ts";
 import { renderDesktopPresentation } from "./desktop-presentation.ts";
 import { DesktopSessionController } from "./desktop-session-controller.ts";
 import { desktopSourceForEnvironment } from "./desktop-source.ts";
+import * as hostDesktop from "./host-desktop-setup.ts";
 
 registerDesktopEnglish();
 
@@ -60,6 +61,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   @property({ type: Boolean }) presented = false;
   /** Whether a newly ready embedded presentation owns its initial inventory refresh. */
   @property({ type: Boolean }) refreshOnPresentation = true;
+  @property({ attribute: false }) runtimeConfig: hostDesktop.HostDesktopRuntimeConfig | null = null;
   @property({ attribute: false }) onDocumentClose: (() => void) | null = null;
   @property({ attribute: false }) onFocusTargetChange:
     | ((target: Extract<ControlUiFocusBuildTarget, { kind: "desktop" }>) => void)
@@ -101,6 +103,8 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   private credentialAuth: "vnc-password" | "ard-account" | undefined;
   private pendingConnection: PendingDesktopConnection | null = null;
   private operationId = 0;
+  readonly refreshHostDesktop = () => void this.refreshEnvironments(undefined, undefined, true);
+  private readonly hostSetup = hostDesktop.createDesktopHostSetupOwner(this);
   private controlTakeoverRecoveryUsed = false;
   // Automatic resolution follows the session; an explicit choice owns its pop-out target.
   @state() private sourceSelection: "pending" | "resolved" | "explicit" | "picker" = "pending";
@@ -108,7 +112,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     this,
     () => this.environmentId,
     (target) => {
-      if (this.usesAutomaticSource) {
+      if (this.usesAutomaticSource()) {
         this.returnToPicker("pending");
         void this.refreshEnvironments(undefined, target);
       }
@@ -117,7 +121,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       // Inventory refresh advances operationId; active viewers and credential prompts keep their owner.
       if (
         (this.state === "picker" ||
-          (this.state === "inventory-error" && this.usesAutomaticSource)) &&
+          (this.state === "inventory-error" && this.usesAutomaticSource())) &&
         !this.suppressed &&
         (this.embedded ? this.presented : this.documentMode || this.dockLayout.open)
       ) {
@@ -127,11 +131,11 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     () =>
       (this.state === "picker" && !this.loading) || this.state === "inventory-error"
         ? null
-        : (this.environmentId ?? (this.usesAutomaticSource ? this.requestedSource : null)),
+        : (this.environmentId ?? (this.usesAutomaticSource() ? this.requestedSource : null)),
     (error) => {
       // Failed refreshes keep an attached viewer, but cannot strand initial target loading.
       if (
-        this.usesAutomaticSource &&
+        this.usesAutomaticSource() &&
         (this.state === "picker" || this.state === "inventory-error")
       ) {
         this.sessionSource.invalidate();
@@ -176,7 +180,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
 
   override disconnectedCallback(): void {
     window.removeEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
-    if (this.documentMode && this.usesAutomaticSource) {
+    if (this.documentMode && this.usesAutomaticSource()) {
       this.returnToPicker("pending");
     } else {
       this.disconnectConnection();
@@ -204,7 +208,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     }
     const gatewayAvailabilityChanged = changed.has("client") || changed.has("available");
     // Embedded source props track placement without replacing a picker's explicit choice.
-    const contextChanged = this.sessionSource.targetChanged(changed, this.usesAutomaticSource);
+    const contextChanged = this.sessionSource.targetChanged(changed, this.usesAutomaticSource());
     if ((this.documentMode || this.embedded) && contextChanged) {
       // Release input and invalidate pending work before resolving a different session or machine.
       this.returnToPicker("pending");
@@ -298,9 +302,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     }
   }
 
-  private get usesAutomaticSource(): boolean {
-    return this.sourceSelection === "pending" || this.sourceSelection === "resolved";
-  }
+  private readonly usesAutomaticSource = () => hostDesktop.isAutomaticSource(this.sourceSelection);
 
   private returnToPicker(sourceSelection: typeof this.sourceSelection = "picker"): void {
     this.disconnectConnection();
@@ -315,6 +317,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     this.sizingMode = "fit";
     this.canResize = false;
     this.disconnectedReason = null;
+    this.hostSetup.clear();
     this.sessionSource.clearDesktopSource();
   }
 
@@ -367,6 +370,12 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       const inventory = await inventoryRequest.result;
       if (inventory && inventoryRequest.isCurrent()) {
         requestedSource = inventory.selectedSource;
+        const automatic = hostDesktop.isAutoPicker(
+          this.sourceSelection,
+          this.embedded,
+          this.sessionKey,
+        );
+        this.hostSetup.set(automatic ? (inventory.hostSetup ?? null) : null);
         this.environments = inventory.environments;
         refreshed = true;
       }
@@ -388,7 +397,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
         this.sourceSelection = "resolved";
         await this.connectEnvironment(requestedSource, this.documentControl);
       } else if (this.requestedSource !== null || this.sessionKey !== null) {
-        this.noticeText = t("desktop.sourceUnavailable");
+        this.noticeText = this.hostSetup.view() ? null : t("desktop.sourceUnavailable");
       }
     }
     return refreshed;
@@ -642,12 +651,13 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       content: {
         state: this.state,
         loading: this.loading,
-        automaticSource: this.usesAutomaticSource,
+        automaticSource: this.usesAutomaticSource(),
         hasTarget: this.sessionKey !== null || this.requestedSource !== null,
         notice: html`${notice}${this.audio.renderNotice()}`,
         picker: {
-          automatic: this.usesAutomaticSource && this.embedded && this.sessionKey !== null,
+          automatic: hostDesktop.isAutoPicker(this.sourceSelection, this.embedded, this.sessionKey),
           environments: this.environments,
+          hostSetup: this.hostSetup.view(),
           onRefresh: () => void this.refreshEnvironments(undefined, undefined, true),
           onConnect: (environmentId: string) => {
             this.sourceSelection = "explicit";

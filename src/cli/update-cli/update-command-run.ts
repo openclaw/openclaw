@@ -80,6 +80,7 @@ import type { UpdateDisplayProgress } from "./progress.js";
 import { parseUpdateTimeoutMs, resolveUpdateRoot, type UpdateCommandOptions } from "./shared.js";
 import { suppressDeprecations } from "./suppress-deprecations.js";
 import { resolveForegroundUpdateAdmission } from "./update-command-handoff.js";
+import { revalidateUpdateInitializationAdmission } from "./update-command-initialization-revalidation.js";
 import type { UpdateInitializationAdmission } from "./update-command-initialization-types.js";
 import { resolveMutableUpdateInstallKind } from "./update-command-install-kind.js";
 import {
@@ -226,6 +227,12 @@ export async function admitUpdateCommandRun(params: {
     databasePath: resolveOpenClawStateSqlitePath(env),
     env,
     recoverOrphanedSidecars: false,
+  });
+  await revalidateUpdateInitializationAdmission({
+    initialization: params.initialization,
+    env,
+    opts: params.opts,
+    installKind: params.installKind,
   });
   const meta = await readControlPlaneUpdateSentinelMeta(env);
   await resolveForegroundUpdateAdmission({

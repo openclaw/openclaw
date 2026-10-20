@@ -12,8 +12,11 @@ import {
   renderSettingsToggle,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerLogsEnglish } from "../../i18n/locales/en-logs.ts";
 import { createMsFormatter } from "../../lib/format.ts";
 import { LOG_LEVELS, type LogEntry, type LogLevel } from "./log-lines.ts";
+
+registerLogsEnglish();
 
 type LogsProps = {
   loading: boolean;

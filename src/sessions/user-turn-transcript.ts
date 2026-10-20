@@ -23,6 +23,7 @@ import {
   registerUserTurnTranscriptAdmissionOwner,
 } from "./user-turn-transcript-admission.js";
 import { createUserTurnProcessingCompletion } from "./user-turn-transcript-processing.js";
+import * as transcriptPublication from "./user-turn-transcript-publication.js";
 import {
   capturePersistedModelPromptProjection,
   confirmPersistedSteerTargetRunId,
@@ -51,9 +52,6 @@ import type {
   UserTurnTranscriptTargetResolver,
   UserTurnTranscriptUpdateMode,
 } from "./user-turn-transcript.types.js";
-
-type InputNotifier = (anchor: TranscriptEntryAnchor) => void;
-const originalInputCommitNotifiers = new WeakMap<UserTurnTranscriptRecorder, InputNotifier>();
 
 export type {
   PersistedUserTurnMessage,
@@ -336,7 +334,7 @@ export function createUserTurnTranscriptRecorder(
       )
     ) {
       for (const source of params.pendingInputSources) {
-        originalInputCommitNotifiers.get(source)?.(commit.anchor);
+        transcriptPublication.notifyOriginalInputCommitted(source, commit.anchor);
       }
     }
     try {
@@ -641,6 +639,8 @@ export function createUserTurnTranscriptRecorder(
         admission,
         message: admittedMessage,
         text,
+        // SAFETY: This is the host config already consumed by persistUserTurnTranscript.
+        config: resolvedPersistenceTarget?.config as SessionTranscriptTurnPersistOptions["config"],
         assertCurrent,
         assertWritable: () => {
           assertCurrent();
@@ -720,7 +720,7 @@ export function createUserTurnTranscriptRecorder(
         cwd: options?.cwd,
       }),
   };
-  originalInputCommitNotifiers.set(recorder, (anchor) => {
+  transcriptPublication.registerOriginalInputCommitNotifier(recorder, (anchor) => {
     const sourceMessage = pendingInput?.message ?? resolvedSourceMessage ?? message;
     if (sourceMessage) {
       notifyOriginalInputCommitted({ message: sourceMessage, anchor });
@@ -737,3 +737,5 @@ export function createUserTurnTranscriptRecorder(
   });
   return recorder;
 }
+
+transcriptPublication.publishUserTurnTranscriptTestApi({ persistUserTurnTranscript });

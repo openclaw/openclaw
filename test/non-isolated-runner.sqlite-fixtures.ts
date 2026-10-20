@@ -487,7 +487,7 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseAsync } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-db-cache.ts"))};
 import { captureOpenClawStateWorkerContext } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-worker-context.ts"))};
-import { getOpenClawStateWorkerOwner } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-worker-owner.ts"))};
+import { getOpenClawStateWorkerOwner } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-worker-owner-get.ts"))};
 
 const generation = ${JSON.stringify(generation)};
 const probeKey = Symbol.for("fixture.sharedStateOwnerGenerations");
@@ -544,7 +544,7 @@ function retiredOwnerGenerationFixtureFiles(): Record<string, string> {
   return {
     "10-e-retired-owner-generation.test.ts": `
 import { expect, it } from "vitest";
-import { getOpenClawStateWorkerOwner } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-worker-owner.ts"))};
+import { getOpenClawStateWorkerOwner } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-worker-owner-get.ts"))};
 it("leaves its owner getter behind like detached work that outlives the file", () => {
   Reflect.set(globalThis, Symbol.for("fixture.retiredOwnerGetter"), getOpenClawStateWorkerOwner);
   expect(Reflect.has(globalThis, Symbol.for("openclaw.sharedStateWorkerOwner"))).toBe(false);

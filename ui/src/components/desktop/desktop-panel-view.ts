@@ -12,6 +12,7 @@ import { renderPanelLoadingSkeleton } from "../panel-loading-skeleton.ts";
 import type { DesktopSizingMode } from "./desktop-client.ts";
 import type { DesktopPanelState } from "./desktop-panel-state.ts";
 import { desktopSourceForEnvironment } from "./desktop-source.ts";
+import { hostDesktopSetupCopy, type DesktopHostSetup } from "./host-desktop-setup.ts";
 
 registerDesktopEnglish();
 
@@ -126,10 +127,14 @@ export function renderDesktopPanelContent(options: {
 export function renderDesktopPicker(options: {
   automatic: boolean;
   environments: EnvironmentSummary[];
+  hostSetup?: DesktopHostSetup | null;
   loading: boolean;
   onConnect: (environmentId: string) => void;
   onRefresh: () => void;
 }) {
+  if (options.automatic && options.hostSetup) {
+    return renderDesktopHostSetup(options.hostSetup, options.loading);
+  }
   if (options.automatic) {
     return html`<div class="desktop-status" role="status">
       <button class="desktop-button" type="button" @click=${options.onRefresh}>
@@ -162,6 +167,71 @@ export function renderDesktopPicker(options: {
       }
     </div>
   `;
+}
+
+const HOST_SETUP_HINTS: Record<string, string> = {
+  "systems.desktopSetupEnableHint": "desktop.hostDesktopEnableHint",
+  "systems.screenSharingSetupHint": "desktop.hostScreenSharingSetupHint",
+  "systems.desktopServerSetupHint": "desktop.hostDesktopServerSetupHint",
+};
+
+function renderDesktopHostSetup(setup: DesktopHostSetup, loading: boolean) {
+  const state = setup.environment.desktopSetup?.state;
+  const ready = state === "ready" || state === "managed";
+  const mac = setup.environment.platform === "darwin";
+  const copy = hostDesktopSetupCopy(state, mac, false);
+  return html`<div class="desktop-status" role="status">
+    <div>${t("desktop.hostDesktopOff")}</div>
+    <h2>${t(copy.title)}</h2>
+    <div>${t(HOST_SETUP_HINTS[copy.hint] ?? copy.hint)}</div>
+    ${
+      state === "needs-server" || state === "ready"
+        ? html`<div>
+            ${t(mac ? "desktop.screenSharingNetwork" : "desktop.desktopServerNetwork")}
+          </div>`
+        : nothing
+    }
+    ${
+      state === "ready"
+        ? html`<div>
+            ${t(mac ? "desktop.hostScreenSharingAccount" : "desktop.hostDesktopServerAccount")}
+          </div>`
+        : nothing
+    }
+    ${
+      state === "unsupported" && setup.environment.desktopSetup?.detail
+        ? html`<div>${setup.environment.desktopSetup.detail}</div>`
+        : nothing
+    }
+    ${setup.error ? html`<div class="desktop-note--error" role="alert">${setup.error}</div>` : nothing}
+    ${
+      ready
+        ? html`<button
+              class="desktop-button desktop-button--primary"
+              type="button"
+              ?disabled=${!setup.canEnable || setup.busy}
+              @click=${setup.onEnable}
+            >
+              ${t(setup.busy ? "systems.desktopSetupEnabling" : "systems.enableDesktopAccess")}
+            </button>
+            <div>
+              ${t(setup.canEnable ? "systems.desktopSetupApplyHint" : "systems.desktopSetupAdminHint")}
+            </div>`
+        : nothing
+    }
+    ${
+      !ready || !setup.canEnable
+        ? html`<button
+            class="desktop-button"
+            type="button"
+            ?disabled=${loading}
+            @click=${setup.onCheckAgain}
+          >
+            ${t(loading ? "desktop.refreshing" : "systems.desktopSetupCheckAgain")}
+          </button>`
+        : nothing
+    }
+  </div>`;
 }
 
 function renderDesktopEnvironment(

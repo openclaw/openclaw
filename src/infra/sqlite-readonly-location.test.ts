@@ -103,6 +103,45 @@ describe("prepareSqliteReadOnlyLocation", () => {
     }
   });
 
+  it("stages update inspection snapshots in TMPDIR instead of the home cache", async () => {
+    const root = tempDirs.make("openclaw-update-snapshot-placement-");
+    const scratch = path.join(root, "large-volume");
+    fs.mkdirSync(scratch);
+    const cacheRoot = path.join(root, "home-cache");
+    const source = createTempDatabasePath(
+      "CREATE TABLE probe(value); INSERT INTO probe VALUES ('kept');",
+    );
+    const before = readFamily(source);
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        TMPDIR: scratch,
+        TMP: scratch,
+        TEMP: scratch,
+        XDG_CACHE_HOME: cacheRoot,
+      },
+      () =>
+        withSqliteReadOnlyWorkerScope(async () => {
+          const prepared = await prepareSqliteReadOnlyLocation(source, {
+            preserveSourceArtifacts: true,
+          });
+          try {
+            const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
+            try {
+              expect(snapshot.prepare("SELECT value FROM probe").get()).toEqual({ value: "kept" });
+            } finally {
+              snapshot.close();
+            }
+            expect(prepared.location.startsWith(scratch + path.sep)).toBe(true);
+            expect(fs.existsSync(cacheRoot)).toBe(false);
+            expect(readFamily(source)).toEqual(before);
+          } finally {
+            expect(await prepared.cleanupAsync()).toBe(true);
+          }
+        }),
+    );
+  });
+
   it.each([13, 778])(
     "retains SQLite destination write failure %i and identifies the snapshot cache",
     async (errcode) => {

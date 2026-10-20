@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -168,28 +169,31 @@ async function cleanupBackupScratchDirectory(
     if (boundary && !path.basename(directory).startsWith(retiredPrefix)) {
       const expected = await boundary.stat(".");
       const parent = await createRoot(path.dirname(directory));
-      const retiredPath = await createPrivateSqliteTempDirectory(parent.rootReal, retiredPrefix);
-      const retiredName = path.basename(retiredPath);
-      const reservation = await fs.lstat(retiredPath);
-      // The committed token fenced every writer before this move into our empty reservation.
+      const retiredPath =
+        process.platform === "win32"
+          ? path.join(parent.rootReal, `${retiredPrefix}${crypto.randomUUID()}`)
+          : await createPrivateSqliteTempDirectory(parent.rootReal, retiredPrefix);
+      const reservation = process.platform === "win32" ? undefined : await fs.lstat(retiredPath);
+      // Windows cannot rename onto a directory; fs-safe's native no-replace move
+      // claims the absent name atomically. POSIX retains its owned reservation.
       // The retired name survives failures after the token itself is removed.
-      await parent.move(path.basename(directory), retiredName, {
-        overwrite: true,
+      await parent.move(path.basename(directory), path.basename(retiredPath), {
+        overwrite: reservation !== undefined,
         mutationSymlinks: "reject",
         assertBeforeMutation: () => {
           const current = fsSync.lstatSync(directory);
-          const destination = fsSync.lstatSync(retiredPath);
+          const destination = reservation && fsSync.lstatSync(retiredPath);
           if (
             !current.isDirectory() ||
             !sameFileIdentity(expected, current) ||
-            !destination.isDirectory() ||
-            !sameFileIdentity(reservation, destination)
+            (reservation &&
+              (!destination?.isDirectory() || !sameFileIdentity(reservation, destination)))
           ) {
             throw new Error("Backup scratch directory identity changed");
           }
         },
       });
-      directory = path.join(parent.rootReal, retiredName);
+      directory = retiredPath;
       boundary = await createRoot(directory);
       if (!sameFileIdentity(expected, await boundary.stat("."))) {
         throw new Error("Retired backup scratch directory identity changed");

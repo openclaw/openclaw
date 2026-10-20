@@ -1998,7 +1998,7 @@ describe("codex conversation binding", () => {
               method,
             );
           }
-          return { thread: conversationThreadStartResult(tempDir, "thread-1").thread };
+          return { thread: conversationThreadStartResult("thread-1").thread };
         }
         if (method === "thread/resume") {
           throw new CodexAppServerRpcError(

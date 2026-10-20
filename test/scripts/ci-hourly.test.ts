@@ -108,7 +108,7 @@ describe("hourly main CI admission", () => {
         const scheduled = { ...shared, eventName: "schedule" as const };
         const push = { ...shared, eventName: "push" as const };
         for (const [name, raw] of Object.entries(ci.jobs)) {
-          if (name === "pr-fail-fast") {
+          if (name === "pr-failure-report") {
             expect(evaluate(ci.jobs[name].if, scheduled), name).toBe(false);
             expect(evaluate(ci.jobs[name].if, push), name).toBe(false);
             continue;
