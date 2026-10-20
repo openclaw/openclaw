@@ -26,7 +26,7 @@ type OtherClientResult = { before: FileKey; after: FileKey; deviceId?: string };
 
 async function otherClient(
   databasePath: string,
-  operation: "read" | "copied" | "newer" | "replace" | "damage",
+  operation: "read" | "copied" | "newer" | "newer-layout" | "replace" | "damage",
 ): Promise<OtherClientResult> {
   const { stdout } = await execFileAsync(
     resolveTestNodeExecPath(),
@@ -65,9 +65,13 @@ async function otherClient(
             db.exec("PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE");
             if (operation === "copied") {
               db.exec("UPDATE client_credential_migration SET phase = 'copied' WHERE version = 1");
-            } else if (operation === "newer") {
+            } else if (operation === "newer" || operation === "newer-layout") {
               db.exec("PRAGMA user_version = 2");
-              db.exec("UPDATE client_credential_migration SET source_store = 'future receipt format'");
+              if (operation === "newer-layout") {
+                db.exec("ALTER TABLE client_credential_migration RENAME TO future_migration_receipt");
+              } else {
+                db.exec("UPDATE client_credential_migration SET source_store = 'future receipt format'");
+              }
             } else if (operation === "damage") {
               db.exec("DROP TABLE device_auth_tokens");
             } else {
@@ -111,13 +115,16 @@ it("refuses an in-place copied receipt from another process despite an unchanged
   await expect(read()).rejects.toThrow("migration is incomplete or stale");
 });
 
-it("refuses a newer schema before parsing its changed receipt format", async () => {
-  const { read, databasePath } = await fixture();
-  const observed = await otherClient(databasePath, "newer");
-  expect(observed.before.version).toBe(1);
-  expect(observed.after).toEqual({ ...observed.before, version: 2 });
-  await expect(read()).rejects.toThrow("unsupported schema version 2");
-});
+it.each(["newer", "newer-layout"] as const)(
+  "refuses a %s schema before interpreting its changed receipt",
+  async (operation) => {
+    const { read, databasePath } = await fixture();
+    const observed = await otherClient(databasePath, operation);
+    expect(observed.before.version).toBe(1);
+    expect(observed.after).toEqual({ ...observed.before, version: 2 });
+    await expect(read()).rejects.toThrow("unsupported schema version 2");
+  },
+);
 
 it("re-admits a replacement file before serving a row that remains readable", async () => {
   const { read, databasePath } = await fixture();

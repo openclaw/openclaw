@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync, SQLOutputValue } from "node:sqlite";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { readIndependentClientCredentialSource } from "./client-credential-native-bootstrap.js";
@@ -21,6 +21,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { readSqliteUserVersion } from "./sqlite-user-version.js";
 import { StartupMaintenanceRequiredError } from "./startup-maintenance-required.js";
 
 function notReady(): Error {
@@ -34,28 +35,39 @@ type ClientCredentialReceiptState = {
   receipt: ClientCredentialReceipt;
 };
 
+function assertSupportedVersion(version: number): void {
+  if (version !== CLIENT_CREDENTIAL_SCHEMA_VERSION) {
+    throw new Error(
+      `Client credentials have unsupported schema version ${String(version)}. Use a compatible OpenClaw version.`,
+    );
+  }
+}
+
 /** The receipt is a cross-process migration-phase guard, including in-place copied → complete transitions. */
 export function readClientCredentialAdmission(database: DatabaseSync): {
   version: number;
   stored: ClientCredentialReceiptState | null;
 } {
-  const row =
-    // sqlite-allow-raw -- Read the native header and its migration receipt in one bounded statement.
-    database
-      .prepare(`
+  let row: Record<string, SQLOutputValue> | undefined;
+  try {
+    row =
+      // sqlite-allow-raw -- Read the native header and its migration receipt in one bounded statement.
+      database
+        .prepare(`
     SELECT header.user_version, receipt.source_store, receipt.phase
     FROM pragma_user_version AS header
     LEFT JOIN client_credential_migration AS receipt ON receipt.version = 1
   `)
-      .get();
+        .get();
+  } catch (error) {
+    // A newer schema may change the receipt's SQL shape before this query can read its version.
+    assertSupportedVersion(readSqliteUserVersion(database));
+    throw error;
+  }
   if (!row || typeof row.user_version !== "number") {
     throw notReady();
   }
-  if (row.user_version !== CLIENT_CREDENTIAL_SCHEMA_VERSION) {
-    throw new Error(
-      `Client credentials have unsupported schema version ${String(row.user_version)}. Use a compatible OpenClaw version.`,
-    );
-  }
+  assertSupportedVersion(row.user_version);
   const localPath = database.location();
   return {
     version: row.user_version,
