@@ -160,6 +160,24 @@ function writeAcp(db: PostgresSqlConnection, name: string, value: string | null)
   );
 }
 
+function expectRows(rows: unknown, ...names: (string | null)[]) {
+  expect(rows).toMatchObject(
+    names.map((name) => (name === null ? null : { runtime_session_name: name })),
+  );
+}
+
+function acpReader(store: StoreFixture, ...names: string[]) {
+  const input = commandFor(...names);
+  const reader = store.open();
+  const read = () => readAcpSessionCommand(reader, input).rows;
+  return {
+    reader,
+    read,
+    snapshot: () => runSqliteReadSnapshotSync(reader, read),
+    published: () => readPublishedAcpSessionRows(store.pathname, input.entries),
+  };
+}
+
 describe.skipIf(!connection)("PostgreSQL admitted read facts", () => {
   let state: StoreFixture;
   beforeAll(() => {
@@ -171,36 +189,25 @@ describe.skipIf(!connection)("PostgreSQL admitted read facts", () => {
 
   it("publishes positive and absent ACP rows after snapshot close and consumes typed postimages", () => {
     withEngineStoreAdmission(() => {
-      const input = commandFor("published", "absent");
       seedAcp(state.writer, "published", "initial");
-      const reader = state.open();
+      const { reader, read, snapshot, published } = acpReader(state, "published", "absent");
       const query = vi.spyOn(reader, "query");
       const metadataReads = () =>
         query.mock.calls.filter(([sql]) => /\b(?:from|join)\s+"?acp_sessions\b/iu.test(sql));
       try {
         runSqliteReadSnapshotSync(reader, () => {
-          expect(readAcpSessionCommand(reader, input).rows).toMatchObject([
-            { runtime_session_name: "initial" },
-            null,
-          ]);
-          expect(readPublishedAcpSessionRows(state.pathname, input.entries)).toBeUndefined();
+          expectRows(read(), "initial", null);
+          expect(published()).toBeUndefined();
         });
         expect(metadataReads()).toHaveLength(1);
-        expect(readPublishedAcpSessionRows(state.pathname, input.entries)).toMatchObject([
-          { runtime_session_name: "initial" },
-          null,
-        ]);
+        expectRows(published(), "initial", null);
         query.mockClear();
         const revision = readSqliteDatabaseWriteRevision(reader);
         writeAcp(state.writer, "absent", "created");
         expect(readSqliteDatabaseWriteRevision(reader)).not.toBe(revision);
-        expect(
-          runSqliteReadSnapshotSync(reader, () => readAcpSessionCommand(reader, input)).rows,
-        ).toMatchObject([{ runtime_session_name: "initial" }, { runtime_session_name: "created" }]);
+        expectRows(snapshot(), "initial", "created");
         writeAcp(state.writer, "published", null);
-        expect(
-          runSqliteReadSnapshotSync(reader, () => readAcpSessionCommand(reader, input)).rows,
-        ).toMatchObject([null, { runtime_session_name: "created" }]);
+        expectRows(snapshot(), null, "created");
         expect(metadataReads()).toHaveLength(0);
       } finally {
         query.mockRestore();
@@ -210,31 +217,27 @@ describe.skipIf(!connection)("PostgreSQL admitted read facts", () => {
 
   it("discards read-derived ACP facts when the snapshot callback fails", () => {
     withEngineStoreAdmission(() => {
-      const input = commandFor("aborted-positive", "aborted-negative");
       seedAcp(state.writer, "aborted-positive", "durable");
-      const reader = state.open();
+      const { reader, read, snapshot, published } = acpReader(
+        state,
+        "aborted-positive",
+        "aborted-negative",
+      );
       expect(() =>
         runSqliteReadSnapshotSync(reader, () => {
-          expect(readAcpSessionCommand(reader, input).rows).toMatchObject([
-            { runtime_session_name: "durable" },
-            null,
-          ]);
+          expectRows(read(), "durable", null);
           throw new Error("abort snapshot");
         }),
       ).toThrow("abort snapshot");
-      expect(readPublishedAcpSessionRows(state.pathname, input.entries)).toBeUndefined();
-      runSqliteReadSnapshotSync(reader, () => readAcpSessionCommand(reader, input));
-      expect(readPublishedAcpSessionRows(state.pathname, input.entries)).toMatchObject([
-        { runtime_session_name: "durable" },
-        null,
-      ]);
+      expect(published()).toBeUndefined();
+      snapshot();
+      expectRows(published(), "durable", null);
     });
   });
 
   it("does not publish ACP facts when snapshot closure has an unknown outcome", () => {
     withEngineStoreAdmission(() => {
-      const input = commandFor("unknown-close");
-      const reader = state.open();
+      const { reader, read, snapshot, published } = acpReader(state, "unknown-close");
       const exec = reader.exec.bind(reader);
       const close = vi.spyOn(reader, "exec").mockImplementation((sql) => {
         exec(sql);
@@ -245,46 +248,35 @@ describe.skipIf(!connection)("PostgreSQL admitted read facts", () => {
       try {
         expect(() =>
           runSqliteReadSnapshotSync(reader, () => {
-            expect(readAcpSessionCommand(reader, input).rows).toEqual([null]);
+            expect(read()).toEqual([null]);
           }),
         ).toThrow("snapshot close response lost");
-        expect(readPublishedAcpSessionRows(state.pathname, input.entries)).toBeUndefined();
+        expect(published()).toBeUndefined();
       } finally {
         close.mockRestore();
       }
-      runSqliteReadSnapshotSync(reader, () => readAcpSessionCommand(reader, input));
-      expect(readPublishedAcpSessionRows(state.pathname, input.entries)).toEqual([null]);
+      snapshot();
+      expect(published()).toEqual([null]);
     });
   });
 
   it("keeps old ACP snapshots isolated from newer positive and negative postimages", () => {
     withEngineStoreAdmission(() => {
-      const input = commandFor("overlap-positive", "overlap-negative");
       seedAcp(state.writer, "overlap-positive", "before");
-      const reader = state.open();
+      const { reader, read, snapshot, published } = acpReader(
+        state,
+        "overlap-positive",
+        "overlap-negative",
+      );
       runSqliteReadSnapshotSync(reader, () => {
-        expect(readAcpSessionCommand(reader, input).rows).toMatchObject([
-          { runtime_session_name: "before" },
-          null,
-        ]);
+        expectRows(read(), "before", null);
         writeAcp(state.writer, "overlap-positive", null);
         writeAcp(state.writer, "overlap-negative", "after");
-        expect(readPublishedAcpSessionRows(state.pathname, input.entries)).toMatchObject([
-          null,
-          { runtime_session_name: "after" },
-        ]);
-        expect(readAcpSessionCommand(reader, input).rows).toMatchObject([
-          { runtime_session_name: "before" },
-          null,
-        ]);
+        expectRows(published(), null, "after");
+        expectRows(read(), "before", null);
       });
-      expect(readPublishedAcpSessionRows(state.pathname, input.entries)).toMatchObject([
-        null,
-        { runtime_session_name: "after" },
-      ]);
-      expect(
-        runSqliteReadSnapshotSync(reader, () => readAcpSessionCommand(reader, input)).rows,
-      ).toMatchObject([null, { runtime_session_name: "after" }]);
+      expectRows(published(), null, "after");
+      expectRows(snapshot(), null, "after");
     });
   });
 
