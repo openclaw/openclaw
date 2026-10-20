@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAttachGrant } from "../mcp-grant-store.js";
 import { closeMcpLoopbackServer } from "../mcp-http.js";
 import { attachHandlers } from "./attach.js";
-import type { GatewayRequestHandlerOptions } from "./types.js";
+import type { GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
 const loadSessionEntryMock = vi.hoisted(() =>
   vi.fn((_sessionKey: string) => ({ entry: undefined as Record<string, unknown> | undefined })),
@@ -19,28 +19,17 @@ vi.mock("../../config/sessions/session-accessor.entry.js", async (importOriginal
   };
 });
 
-const grantOpts = (sessionKey: string, respond: ReturnType<typeof vi.fn>) =>
-  ({
-    params: { sessionKey },
-    respond,
-    context: { getRuntimeConfig: () => ({}) },
-  }) as unknown as GatewayRequestHandlerOptions;
-
-const grantWithAgentOpts = (agentId: string, respond: ReturnType<typeof vi.fn>) =>
-  ({
-    params: { agentId },
-    respond,
-    context: {
-      getRuntimeConfig: () => ({
-        agents: { ownership: "explicit", entries: { [agentId]: {}, other: {} } },
-      }),
-    },
-  }) as unknown as GatewayRequestHandlerOptions;
-
 const grant = expectDefined(attachHandlers["attach.grant"], "attach.grant handler");
 const revoke = expectDefined(attachHandlers["attach.revoke"], "attach.revoke handler");
 
-function responseCall(respond: ReturnType<typeof vi.fn>) {
+async function request(params: Record<string, unknown>, handler = grant, config = {}) {
+  const respond = vi.fn<RespondFn>();
+  await handler({
+    params,
+    respond,
+    context: { getRuntimeConfig: () => config },
+  } as unknown as GatewayRequestHandlerOptions);
+  expect(respond).toHaveBeenCalledTimes(1);
   return expectDefined(respond.mock.calls[0], "attach response");
 }
 
@@ -55,11 +44,7 @@ describe("attach gateway methods", () => {
   });
 
   it("attach.grant mints a session-bound grant and returns loopback config + token env", async () => {
-    const respond = vi.fn();
-    await grant(grantOpts("agent:main:attach-method", respond));
-
-    expect(respond).toHaveBeenCalledTimes(1);
-    const [ok, payload] = responseCall(respond);
+    const [ok, payload] = await request({ sessionKey: "agent:main:attach-method" });
     expect(ok).toBe(true);
     const body = payload as {
       token: string;
@@ -80,18 +65,17 @@ describe("attach gateway methods", () => {
   });
 
   it("uses an explicit agent for an omitted session key", async () => {
-    const respond = vi.fn();
-    await grant(grantWithAgentOpts("research", respond));
-
-    expect(respond.mock.calls[0]?.[0]).toBe(true);
-    const result = respond.mock.calls[0]?.[1] as { sessionKey?: string } | undefined;
+    const [ok, payload] = await request({ agentId: "research" }, grant, {
+      agents: { ownership: "explicit", entries: { research: {}, other: {} } },
+    });
+    expect(ok).toBe(true);
+    const result = payload as { sessionKey?: string } | undefined;
     expect(result?.sessionKey).toBe("agent:research:main");
   });
   it("rejects attach grants for reserved harness sessions", async () => {
-    const respond = vi.fn();
-    await grant(grantOpts("agent:main:harness:codex:supervision:native-thread", respond));
-
-    const [ok, , error] = responseCall(respond);
+    const [ok, , error] = await request({
+      sessionKey: "agent:main:harness:codex:supervision:native-thread",
+    });
     expect(ok).toBe(false);
     expect(error).toMatchObject({ code: "INVALID_REQUEST" });
     expect((error as { message: string }).message).toContain("reserved");
@@ -101,13 +85,10 @@ describe("attach gateway methods", () => {
     loadSessionEntryMock.mockReturnValue({
       entry: { sessionId: "legacy-session", modelSelectionLocked: false },
     });
-    const respond = vi.fn();
     const sessionKey = "agent:main:harness:legacy-notes";
-
-    await grant(grantOpts(sessionKey, respond));
-
-    expect(respond.mock.calls[0]?.[0]).toBe(true);
-    const response = respond.mock.calls[0]?.[1] as { token: string } | undefined;
+    const [ok, payload] = await request({ sessionKey });
+    expect(ok).toBe(true);
+    const response = payload as { token: string } | undefined;
     expect(response).toBeDefined();
     const token = response?.token ?? "";
     expect(resolveAttachGrant(token)?.sessionKey).toBe(sessionKey);
@@ -121,67 +102,36 @@ describe("attach gateway methods", () => {
         modelSelectionLocked: true,
       },
     });
-    const respond = vi.fn();
-
-    await grant(grantOpts("agent:main:harness:codex:supervision:native-thread", respond));
-
-    expect(respond.mock.calls[0]?.[0]).toBe(false);
-    expect(respond.mock.calls[0]?.[2]).toMatchObject({
+    const [ok, , error] = await request({
+      sessionKey: "agent:main:harness:codex:supervision:native-thread",
+    });
+    expect(ok).toBe(false);
+    expect(error).toMatchObject({
       code: "INVALID_REQUEST",
       message: expect.stringContaining("reserved"),
     });
   });
 
   it("attach.revoke removes a grant; missing token is an INVALID_REQUEST", async () => {
-    const grantRespond = vi.fn();
-    await grant(grantOpts("agent:main:revoke-me", grantRespond));
-    const token = (
-      responseCall(grantRespond)[1] as {
-        token: string;
-      }
-    ).token;
-
-    const revokeRespond = vi.fn();
-    await revoke({
-      params: { token },
-      respond: revokeRespond,
-    } as unknown as GatewayRequestHandlerOptions);
-    expect(revokeRespond).toHaveBeenCalledWith(true, { revoked: true });
+    const [, payload] = await request({ sessionKey: "agent:main:revoke-me" });
+    const { token } = payload as { token: string };
+    expect(await request({ token }, revoke)).toEqual([true, { revoked: true }]);
     expect(resolveAttachGrant(token)).toBeUndefined();
 
-    const errRespond = vi.fn();
-    await revoke({
-      params: {},
-      respond: errRespond,
-    } as unknown as GatewayRequestHandlerOptions);
-    const [errOk, , err] = responseCall(errRespond);
+    const [errOk, , err] = await request({}, revoke);
     expect(errOk).toBe(false);
     expect((err as { code: string }).code).toBe("INVALID_REQUEST");
   });
 
   it("applies a positive ttlMs and falls back to the default for an invalid one", async () => {
-    const r1 = vi.fn();
-    await grant({
-      params: { sessionKey: "agent:main:ttl", ttlMs: 30_000 },
-      respond: r1,
-      context: { getRuntimeConfig: () => ({}) },
-    } as unknown as GatewayRequestHandlerOptions);
+    const [, first] = await request({ sessionKey: "agent:main:ttl", ttlMs: 30_000 });
+    const b1 = first as { expiresAtMs: number };
     const now1 = Date.now();
-    const b1 = responseCall(r1)[1] as {
-      expiresAtMs: number;
-    };
     expect(b1.expiresAtMs).toBeGreaterThan(now1 + 20_000);
     expect(b1.expiresAtMs).toBeLessThan(now1 + 40_000); // honored 30s ttl, not the 1h default
 
-    const r2 = vi.fn();
-    await grant({
-      params: { sessionKey: "agent:main:ttl2", ttlMs: -5 },
-      respond: r2,
-      context: { getRuntimeConfig: () => ({}) },
-    } as unknown as GatewayRequestHandlerOptions);
-    const b2 = responseCall(r2)[1] as {
-      expiresAtMs: number;
-    };
+    const [, second] = await request({ sessionKey: "agent:main:ttl2", ttlMs: -5 });
+    const b2 = second as { expiresAtMs: number };
     expect(b2.expiresAtMs).toBeGreaterThan(Date.now() + 50 * 60_000);
   });
 });

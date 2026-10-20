@@ -37,20 +37,16 @@ it("returns bounded RPC image previews rather than inline originals when HTTP gr
     };
     await replaceSessionEntry(scope, entry);
     const source = createSolidPngBuffer(2400, 1200, { r: 24, g: 64, b: 128, a: 96 });
+    const image = (title: string, mimeType: string, bytes: Buffer) => ({
+      type: "image",
+      title,
+      mimeType,
+      data: bytes.toString("base64"),
+    });
     const fixtures = [
-      { type: "image", title: "photo.png", mimeType: "image/png", data: source.toString("base64") },
-      {
-        type: "image",
-        title: "invalid.png",
-        mimeType: "image/png",
-        data: Buffer.from("invalid image").toString("base64"),
-      },
-      {
-        type: "image",
-        title: "animated.gif",
-        mimeType: "image/gif",
-        data: ANIMATED_GIF_BYTES.toString("base64"),
-      },
+      image("photo.png", "image/png", source),
+      image("invalid.png", "image/png", Buffer.from("invalid image")),
+      image("animated.gif", "image/gif", ANIMATED_GIF_BYTES),
       { type: "image", title: "remote.png", url: "https://example.invalid/never-fetch.png" },
       { type: "file", title: "not-an-image.txt", mimeType: "text/plain", data: "aGVsbG8=" },
     ];
@@ -76,20 +72,21 @@ it("returns bounded RPC image previews rather than inline originals when HTTP gr
         hasCurrentClientAuthority,
         respond,
       });
-      return respond;
+      return respond.mock.calls[0]!;
+    };
+    const denied = (response: Parameters<RespondFn>) => {
+      expect(response[0]).toBe(false);
+      expect(response[1]).toBeUndefined();
     };
     const listed = await invoke("artifacts.list", {});
-    expect(listed.mock.calls[0]?.[0]).toBe(true);
-    const listedPayload = listed.mock.calls[0]?.[1] as ArtifactsListResult | undefined;
-    if (!listedPayload) {
-      throw new Error("Expected artifact list payload");
-    }
+    expect(listed[0]).toBe(true);
+    const listedPayload = listed[1] as ArtifactsListResult;
     const artifacts = listedPayload.artifacts;
     const artifactId = artifacts.find((artifact) => artifact.title === "photo.png")!.id;
     const download = async (params: Record<string, unknown>) => {
       const response = await invoke("artifacts.download", { artifactId, ...params });
-      expect(response.mock.calls[0]?.[0]).toBe(true);
-      return response.mock.calls[0]?.[1] as ArtifactsDownloadResult;
+      expect(response[0]).toBe(true);
+      return response[1] as ArtifactsDownloadResult;
     };
     const processor = createImageProcessor();
     let defaultData: string | undefined;
@@ -124,7 +121,7 @@ it("returns bounded RPC image previews rather than inline originals when HTTP gr
     expect(Buffer.from(original.data!, "base64")).toEqual(source);
     for (const previewWidth of [0, -1, 480.5, "480"]) {
       const invalid = await invoke("artifacts.download", { artifactId, previewWidth });
-      expect(invalid.mock.calls[0]?.[0]).toBe(false);
+      expect(invalid[0]).toBe(false);
     }
 
     // A source too large for an original inline frame must still be resized first.
@@ -132,14 +129,11 @@ it("returns bounded RPC image previews rather than inline originals when HTTP gr
       .spyOn(frameBudget, "resolveChatAttachmentFrameBudgetBytes")
       .mockReturnValue(512);
     const oversizedOriginal = await invoke("artifacts.download", { artifactId });
-    expect(oversizedOriginal.mock.calls[0]?.[0]).toBe(false);
+    expect(oversizedOriginal[0]).toBe(false);
     const preview = await download({ previewWidth: 960 });
     expect(preview.data).toBe(defaultData);
     const imagePage = await invoke("artifacts.list", { type: "image", limit: 4 });
-    const imagePayload = imagePage.mock.calls[0]?.[1] as ArtifactsListResult | undefined;
-    if (!imagePayload) {
-      throw new Error("Expected image artifact list payload");
-    }
+    const imagePayload = imagePage[1] as ArtifactsListResult;
     const imageId = imagePayload.artifacts.find((item) => item.title === "photo.png")!.id;
     expect((await download({ artifactId: imageId, previewWidth: 960 })).data).toBe(defaultData);
     budget.mockRestore();
@@ -149,7 +143,7 @@ it("returns bounded RPC image previews rather than inline originals when HTTP gr
       previewWidth: 960,
       runId: "another-run",
     });
-    expect(filtered.mock.calls[0]?.[0]).toBe(false);
+    expect(filtered[0]).toBe(false);
     const connection = new AbortController();
     const capableClient = {
       ...client,
@@ -163,12 +157,12 @@ it("returns bounded RPC image previews rather than inline originals when HTTP gr
           { artifactId: selectedId, transport: "http", previewWidth: 480 },
           capableClient,
         );
-        expect(response.mock.calls[0]?.[0]).toBe(true);
-        expect(response.mock.calls[0]?.[1]).toMatchObject({
+        expect(response[0]).toBe(true);
+        expect(response[1]).toMatchObject({
           url: expect.stringContaining("/api/artifacts/download/"),
         });
-        expect(response.mock.calls[0]?.[1]).not.toHaveProperty("data");
-        expect(response.mock.calls[0]?.[1]).not.toHaveProperty("artifact.image");
+        expect(response[1]).not.toHaveProperty("data");
+        expect(response[1]).not.toHaveProperty("artifact.image");
       }
     } finally {
       connection.abort();
@@ -180,8 +174,7 @@ it("returns bounded RPC image previews rather than inline originals when HTTP gr
         artifactId: artifact.id,
         previewWidth: 960,
       });
-      expect(unavailable.mock.calls[0]?.[0]).toBe(false);
-      expect(unavailable.mock.calls[0]?.[1]).toBeUndefined();
+      denied(unavailable);
     }
     expect(fetch).not.toHaveBeenCalled();
 
@@ -206,11 +199,8 @@ it("returns bounded RPC image previews rather than inline originals when HTTP gr
       return bytes;
     });
     const revoked = await invoke("artifacts.download", { artifactId, previewWidth: 960 });
-    expect(revoked.mock.calls[0]?.[0]).toBe(false);
-    expect(revoked.mock.calls[0]?.[1]).toBeUndefined();
-    expect(revoked.mock.calls[0]?.[2]).toMatchObject({ code: "UNAVAILABLE", retryable: true });
-    const denied = await invoke("artifacts.download", { artifactId, previewWidth: 960 });
-    expect(denied.mock.calls[0]?.[0]).toBe(false);
-    expect(denied.mock.calls[0]?.[1]).toBeUndefined();
+    denied(revoked);
+    expect(revoked[2]).toMatchObject({ code: "UNAVAILABLE", retryable: true });
+    denied(await invoke("artifacts.download", { artifactId, previewWidth: 960 }));
   });
 });

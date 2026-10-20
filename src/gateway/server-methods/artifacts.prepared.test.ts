@@ -1,5 +1,4 @@
 import { createServer } from "node:http";
-import { performance } from "node:perf_hooks";
 import { afterEach, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
@@ -135,42 +134,18 @@ it("admits session-only artifact readers with current session visibility and pre
       expect(unrelated[2]).toMatchObject({ details: { type: "artifact_not_found" } });
     }
     const prepare = vi.spyOn(preparation, "prepareSessionMutationFacts");
-    const samples: Record<string, number[]> = {
-      "artifacts.list": [],
-      "artifacts.get": [],
-      "artifacts.download": [],
-    };
-    const rounds = process.env.OPENCLAW_DB_WORKER_BENCH === "1" ? 100 : 1;
-    for (let round = 0; round < rounds; round++) {
-      for (const method of ["artifacts.list", "artifacts.get", "artifacts.download"] as const) {
-        const start = performance.now();
-        const result = await request(
-          method,
-          method === "artifacts.list" ? {} : { artifactId },
-          false,
-        );
-        samples[method]!.push(performance.now() - start);
-        expect(result[0]).toBe(true);
-        if (method !== "artifacts.list") {
-          expect(result[1]).toMatchObject({ artifact: { id: artifactId, sizeBytes: 912 } });
-        }
-        if (method === "artifacts.download") {
-          expect(result[1]).toMatchObject({ data, encoding: "base64" });
-        }
+    for (const method of ["artifacts.list", "artifacts.get", "artifacts.download"] as const) {
+      const result = await request(
+        method,
+        method === "artifacts.list" ? {} : { artifactId },
+        false,
+      );
+      expect(result[0]).toBe(true);
+      if (method !== "artifacts.list") {
+        expect(result[1]).toMatchObject({ artifact: { id: artifactId, sizeBytes: 912 } });
       }
-    }
-    if (rounds > 1) {
-      for (const [method, values] of Object.entries(samples)) {
-        values.sort((a, b) => a - b);
-        console.log(
-          JSON.stringify({
-            method,
-            samples: values.length,
-            payloadBytes: 912,
-            medianMs: values[Math.floor(values.length / 2)],
-            p99Ms: values[Math.ceil(values.length * 0.99) - 1],
-          }),
-        );
+      if (method === "artifacts.download") {
+        expect(result[1]).toMatchObject({ data, encoding: "base64" });
       }
     }
     expect(prepare).not.toHaveBeenCalled();

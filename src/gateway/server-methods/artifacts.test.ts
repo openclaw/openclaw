@@ -79,17 +79,8 @@ vi.mock("../managed-image-attachments.js", async () => {
   };
 });
 
-function createResponder() {
-  const calls: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
-  return {
-    calls,
-    respond: (ok: boolean, payload?: unknown, error?: unknown) => {
-      calls.push({ ok, payload, error });
-    },
-  };
-}
-
 const artifactConfig = { agents: { entries: { main: {} } } };
+const defaultSessionKey = "agent:main:main";
 
 type ArtifactMethod = "artifacts.list" | "artifacts.get" | "artifacts.download";
 type ArtifactHandlerOptions = {
@@ -104,20 +95,19 @@ async function invokeArtifactHandler(
   params: Record<string, unknown>,
   options: ArtifactHandlerOptions = {},
 ) {
-  const responder = createResponder();
-  const defaultContext = {
-    getRuntimeConfig: () => artifactConfig,
-  };
+  const calls: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
   await artifactsHandlers[method]?.({
     req: { type: "req", id: options.id ?? method, method, params: {} },
     params,
     client: options.client ?? null,
     signal: options.signal,
     isWebchatConnect: () => false,
-    respond: responder.respond,
-    context: (options.context ?? defaultContext) as never,
+    respond: (ok, payload, error) => {
+      calls.push({ ok, payload, error });
+    },
+    context: (options.context ?? { getRuntimeConfig: () => artifactConfig }) as never,
   });
-  return responder;
+  return { calls };
 }
 
 async function listArtifacts(
@@ -145,21 +135,21 @@ function mockedMessages(messages: unknown[]) {
   });
 }
 
+function mockArtifactBlock(seq: number, block: Record<string, unknown>, role = "assistant") {
+  mockedMessages([{ role, content: [block], __openclaw: { seq } }]);
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  setRuntimeConfigSnapshot(artifactConfig);
+  hoisted.realSessionFacts = false;
+  hoisted.resolveSessionForRun.mockReset();
+  hoisted.resolveManagedArtifactDownload.mockResolvedValue(null);
+  hoisted.resolveManagedUrlDownload.mockResolvedValue(null);
+  mockedMessages([resultImageMessage()]);
+});
+
 describe("artifacts RPC handlers", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    setRuntimeConfigSnapshot(artifactConfig);
-    hoisted.realSessionFacts = false;
-    hoisted.resolveSessionForRun.mockReset();
-    hoisted.resolveManagedArtifactDownload.mockResolvedValue(null);
-    hoisted.resolveManagedUrlDownload.mockResolvedValue(null);
-    mockedMessages([resultImageMessage()]);
-  });
-
-  function mockArtifactBlock(seq: number, block: Record<string, unknown>, role = "assistant") {
-    mockedMessages([{ role, content: [block], __openclaw: { seq } }]);
-  }
-
   it("translates run lookup selection-required into INVALID_REQUEST", async () => {
     hoisted.resolveSessionForRun.mockImplementation(() => {
       throw new AgentSelectionRequiredError(["ops", "research"], {
@@ -200,7 +190,7 @@ describe("artifacts RPC handlers", () => {
     },
     { data: "", sizeBytes: 0, title: "untyped.bin" },
   ])("lists, gets, and downloads the zero-byte $title artifact", async (block) => {
-    mockedMessages([{ role: "assistant", content: [block], __openclaw: { seq: 2 } }]);
+    mockArtifactBlock(2, block);
     const artifact = expectFirstArtifact(
       (await listArtifacts({ sessionKey: "agent:main:main" })).calls,
     );
@@ -226,11 +216,7 @@ describe("artifacts RPC handlers", () => {
   it("treats transcript non-base64 data URLs as unsupported downloads", async () => {
     mockArtifactBlock(
       4,
-      {
-        type: "input_image",
-        image_url: "data:text/plain,hello",
-        alt: "uploaded.txt",
-      },
+      { type: "input_image", image_url: "data:text/plain,hello", alt: "uploaded.txt" },
       "user",
     );
 
@@ -250,13 +236,7 @@ describe("artifacts RPC handlers", () => {
     { type: "file", data: "AA=A", title: "bad.txt" },
     { type: "file", data: "A", title: "bad.txt" },
   ])("treats malformed artifact data as unsupported downloads: %j", async (block) => {
-    mockedMessages([
-      {
-        role: "assistant",
-        content: [block],
-        __openclaw: { seq: 6 },
-      },
-    ]);
+    mockArtifactBlock(6, block);
 
     const { calls } = await listArtifacts({ sessionKey: "agent:main:main" });
     const artifacts = expectArtifactList(calls).artifacts;
@@ -272,19 +252,7 @@ describe("artifacts RPC handlers", () => {
     { data: "JVBERi0", expected: "JVBERi0=", sizeBytes: 5 },
     { data: " \t-_\r\n8=\n", expected: "+/8=", sizeBytes: 2 },
   ])("normalizes downloadable artifact base64: %j", async ({ data, expected, sizeBytes }) => {
-    mockedMessages([
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "file",
-            data,
-            title: "report.pdf",
-          },
-        ],
-        __openclaw: { seq: 7 },
-      },
-    ]);
+    mockArtifactBlock(7, { type: "file", data, title: "report.pdf" });
 
     const listed = await listArtifacts({ sessionKey: "agent:main:main" });
     const artifact = expectArtifactList(listed.calls).artifacts?.[0];
@@ -307,13 +275,7 @@ describe("artifacts RPC handlers", () => {
   });
 
   it("treats unsafe artifact URLs as unsupported downloads", async () => {
-    mockedMessages([
-      {
-        role: "assistant",
-        content: [{ type: "file", title: "secret.txt", url: "file:///etc/passwd" }],
-        __openclaw: { seq: 4 },
-      },
-    ]);
+    mockArtifactBlock(4, { type: "file", title: "secret.txt", url: "file:///etc/passwd" });
 
     const { calls } = await listArtifacts({ sessionKey: "agent:main:main" });
     const artifacts = expectArtifactList(calls).artifacts;
@@ -341,27 +303,10 @@ describe("artifacts RPC handlers", () => {
 
 describe("managed artifact lifecycle", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    setRuntimeConfigSnapshot(artifactConfig);
-    hoisted.realSessionFacts = false;
-    hoisted.resolveManagedArtifactDownload.mockResolvedValue(null);
-    hoisted.resolveManagedUrlDownload.mockResolvedValue(null);
-    hoisted.visitSessionMessagesAsync.mockImplementation(async (_scope, visit) => {
-      visit(
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "image",
-              artifactId: "artifact_managed_image_11111111-1111-4111-8111-111111111111",
-              url: "/api/chat/media/outgoing/agent%3Amain%3Amain/22222222-2222-4222-8222-222222222222/full",
-            },
-          ],
-          __openclaw: { seq: 2 },
-        },
-        2,
-      );
-      return 1;
+    mockArtifactBlock(2, {
+      type: "image",
+      artifactId: "artifact_managed_image_11111111-1111-4111-8111-111111111111",
+      url: "/api/chat/media/outgoing/agent%3Amain%3Amain/22222222-2222-4222-8222-222222222222/full",
     });
   });
 
@@ -386,18 +331,8 @@ describe("managed artifact lifecycle", () => {
         connectionSignal: connection.client.connectionSignal,
       };
       const artifactId = "artifact_managed_image_11111111-1111-4111-8111-111111111111";
-      async function invoke() {
-        const calls: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
-        await artifactsHandlers["artifacts.download"]?.({
-          req: { type: "req", id: "artifacts.download", method: "artifacts.download", params: {} },
-          params: { sessionKey, artifactId },
-          client,
-          isWebchatConnect: () => false,
-          respond: (ok, payload, error) => calls.push({ ok, payload, error }),
-          context: runtimeContext({}) as never,
-        });
-        return { calls };
-      }
+      const invoke = () =>
+        downloadArtifact({ sessionKey, artifactId }, { client, context: runtimeContext({}) });
       const url = "/api/chat/media/outgoing/fixture/id/full";
       hoisted.resolveManagedArtifactDownload.mockResolvedValue({
         artifactId,
@@ -434,17 +369,10 @@ describe("managed artifact lifecycle", () => {
 
   it("does not retarget a stale managed artifact id through a different block URL", async () => {
     const artifactId = "artifact_managed_image_11111111-1111-4111-8111-111111111111";
-    const calls: Array<{ ok: boolean; error?: unknown }> = [];
-
-    setRuntimeConfigSnapshot({});
-    await artifactsHandlers["artifacts.download"]?.({
-      req: { type: "req", id: "download", method: "artifacts.download", params: {} },
-      params: { sessionKey: "agent:main:main", artifactId },
-      client: null,
-      isWebchatConnect: () => false,
-      respond: (ok, _payload, error) => calls.push({ ok, error }),
-      context: { getRuntimeConfig: () => ({}) } as never,
-    });
+    const { calls } = await downloadArtifact(
+      { sessionKey: defaultSessionKey, artifactId },
+      { context: runtimeContext({}) },
+    );
 
     expect(calls[0]?.ok).toBe(false);
     expectFields(expectErrorDetails(calls), { type: "artifact_not_found", artifactId });
@@ -453,40 +381,25 @@ describe("managed artifact lifecycle", () => {
   });
 
   it("lists managed attachment envelopes as file artifacts", async () => {
+    const block = {
+      type: "attachment",
+      attachment: {
+        artifactId: "artifact_managed_media_11111111-1111-4111-8111-111111111111",
+        kind: "document",
+        label: "report.csv",
+        mimeType: "text/csv",
+        sizeBytes: 12,
+        url: "/api/chat/media/outgoing/agent%3Amain%3Amain/11111111-1111-4111-8111-111111111111/full",
+      },
+    };
     hoisted.visitSessionMessagesAsync.mockImplementationOnce(async (_scope, visit) => {
-      visit(
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "attachment",
-              attachment: {
-                artifactId: "artifact_managed_media_11111111-1111-4111-8111-111111111111",
-                kind: "document",
-                label: "report.csv",
-                mimeType: "text/csv",
-                sizeBytes: 12,
-                url: "/api/chat/media/outgoing/agent%3Amain%3Amain/11111111-1111-4111-8111-111111111111/full",
-              },
-            },
-          ],
-          __openclaw: { seq: 2 },
-        },
-        2,
-      );
+      visit({ role: "assistant", content: [block], __openclaw: { seq: 2 } }, 2);
       return 1;
     });
-    const calls: Array<{ ok: boolean; payload?: unknown }> = [];
-
-    setRuntimeConfigSnapshot({});
-    await artifactsHandlers["artifacts.list"]?.({
-      req: { type: "req", id: "list", method: "artifacts.list", params: {} },
-      params: { sessionKey: "agent:main:main" },
-      client: null,
-      isWebchatConnect: () => false,
-      respond: (ok, payload) => calls.push({ ok, payload }),
-      context: { getRuntimeConfig: () => ({}) } as never,
-    });
+    const { calls } = await listArtifacts(
+      { sessionKey: defaultSessionKey },
+      { context: runtimeContext({}) },
+    );
 
     expect(calls[0]).toMatchObject({
       ok: true,
@@ -592,14 +505,6 @@ describe("managed artifact lifecycle", () => {
 });
 
 describe("artifact download lookup", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    setRuntimeConfigSnapshot(artifactConfig);
-    hoisted.realSessionFacts = false;
-    hoisted.resolveManagedUrlDownload.mockResolvedValue(null);
-    hoisted.resolveManagedArtifactDownload.mockResolvedValue(null);
-    mockedMessages([resultImageMessage()]);
-  });
   it("bounds inline base64 downloads and directs oversized artifacts to HTTP", async () => {
     const budget = vi
       .spyOn(attachmentFrameBudget, "resolveChatAttachmentFrameBudgetBytes")
@@ -642,18 +547,8 @@ describe("artifact download lookup", () => {
       {
         role: "assistant",
         content: [
-          {
-            type: "image",
-            data: "Zmlyc3Q=",
-            mimeType: "image/png",
-            alt: "first.png",
-          },
-          {
-            type: "image",
-            data: "c2Vjb25k",
-            mimeType: "image/png",
-            alt: "second.png",
-          },
+          { type: "image", data: "Zmlyc3Q=", mimeType: "image/png", alt: "first.png" },
+          { type: "image", data: "c2Vjb25k", mimeType: "image/png", alt: "second.png" },
         ],
         __openclaw: { seq: 2 },
       },

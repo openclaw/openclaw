@@ -9,7 +9,7 @@ import {
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { registerPendingApprovalRecord } from "./approval-registration.js";
-import { handlePendingApprovalRequest } from "./approval-shared.js";
+import { buildRequestedApprovalEvent, handlePendingApprovalRequest } from "./approval-shared.js";
 import { handleApprovalResolve } from "./approval.test-support.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -21,6 +21,11 @@ describe("approval storage failures", () => {
   let record: ReturnType<ExecApprovalManager["create"]>;
   const respond = vi.fn();
   const logError = vi.fn();
+  const context = {
+    getRuntimeConfig: () => ({}),
+    broadcast: vi.fn(),
+    logGateway: { error: logError },
+  } as unknown as GatewayRequestContext;
 
   beforeEach(({ onTestFinished }) => {
     vi.clearAllMocks();
@@ -71,7 +76,7 @@ describe("approval storage failures", () => {
         record,
         timeoutMs: 60_000,
         respond,
-        context: { logGateway: { error: logError } } as unknown as GatewayRequestContext,
+        context: { logGateway: context.logGateway } as unknown as GatewayRequestContext,
       }),
     ).toBeUndefined();
     expectStorageFailure("request");
@@ -85,19 +90,9 @@ describe("approval storage failures", () => {
       manager,
       record,
       respond,
-      context: {
-        getRuntimeConfig: () => ({}),
-        broadcast: vi.fn(),
-        hasExecApprovalClients: () => false,
-        logGateway: { error: logError },
-      } as unknown as GatewayRequestContext,
+      context: { ...context, hasExecApprovalClients: () => false },
       requestEventName: "exec.approval.requested",
-      requestEvent: {
-        id: record.id,
-        request: record.request,
-        createdAtMs: record.createdAtMs,
-        expiresAtMs: record.expiresAtMs,
-      },
+      requestEvent: buildRequestedApprovalEvent(record),
       twoPhase: true,
       deliverRequest: () => false,
       afterDecision,
@@ -119,12 +114,7 @@ describe("approval storage failures", () => {
       inputId: record.id,
       decision: "deny",
       respond,
-      context: {
-        getRuntimeConfig: () => ({}),
-        broadcast: vi.fn(),
-        broadcastToConnIds: vi.fn(),
-        logGateway: { error: logError },
-      } as unknown as GatewayRequestContext,
+      context: { ...context, broadcastToConnIds: vi.fn() },
       client: null,
     });
 
