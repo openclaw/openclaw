@@ -41,7 +41,7 @@ it.each([
           : state.statePath("agents", agentId, "agent", "openclaw-agent.sqlite");
       const cfg: OpenClawConfig = {
         agents: { entries: { alpha: {}, beta: {} } },
-        ...(layout === "custom" ? { session: { store: logicalStore } } : {}),
+        ...(layout === "custom" && { session: { store: logicalStore } }),
       };
       setRuntimeConfigSnapshot(cfg);
       await replaceSessionEntry(
@@ -121,6 +121,7 @@ it.each([
         expectsCompletionMessage: true,
       });
       const turn = { sessionKey, sessionId, agentId, storePath: logicalStore };
+      const foreignChild = { ...child, requesterStorePath: physicalStore + ".other" };
       try {
         expect(io.emitAcceptance).not.toHaveBeenCalled();
         await withSessionTurn({ ...turn, controllerInput: source.input }, async (operation) => {
@@ -128,12 +129,7 @@ it.each([
           expect(isClaimedByLiveRequesterTurn(child)).toBe(true);
           await withSessionTurn({ ...turn, replyOperation: requester }, async () => {
             expect(isClaimedByLiveRequesterTurn(child)).toBe(true);
-            expect(
-              isClaimedByLiveRequesterTurn({
-                ...child,
-                requesterStorePath: physicalStore + ".other",
-              }),
-            ).toBe(false);
+            expect(isClaimedByLiveRequesterTurn(foreignChild)).toBe(false);
             requester.yield();
             expect(isClaimedByLiveRequesterTurn(child)).toBe(true);
           });

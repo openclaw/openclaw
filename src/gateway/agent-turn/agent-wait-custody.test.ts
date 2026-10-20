@@ -24,6 +24,37 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+function identityFor(runId: string) {
+  return {
+    runId,
+    agentId: "main",
+    sessionKey: "agent:main:queue-admission",
+    sessionId: runId,
+    storeScope: `/synthetic/agent-wait/${runId}/sessions`,
+  };
+}
+type Source = ReturnType<typeof createRpcSourceForTest>;
+type Identity = ReturnType<typeof identityFor>;
+type Context = ReturnType<typeof createGatewayRequestContext>;
+function bindRun(source: Source, identity: Identity) {
+  const run = createQueueTestRun({ prompt: "queued source" });
+  Object.assign(run.run, {
+    agentId: identity.agentId,
+    sessionKey: identity.sessionKey,
+    sessionId: identity.sessionId,
+    config: { ...run.run.config, session: { store: identity.storeScope } },
+  });
+  bindSessionControllerSource(source.input, run);
+  return run;
+}
+function publish(context: Context, runId: string, status: string) {
+  setGatewayDedupeEntry({
+    dedupe: context.dedupe,
+    key: `chat:${runId}`,
+    entry: { ts: Date.now(), ok: true, payload: { runId, status } },
+  });
+}
+
 describe("agent.wait queue admission", () => {
   it("keeps the wait's Gateway when another scope publishes queue admission", async ({
     signal,
@@ -32,13 +63,7 @@ describe("agent.wait queue admission", () => {
     const context = createGatewayRequestContext(makeContextParams());
     const resolveGatewayContext = () => context;
     const resolveForeign = () => undefined;
-    const identity = {
-      runId,
-      agentId: "main",
-      sessionKey: "agent:main:cross-gateway-queue",
-      sessionId: "cross-gateway-session",
-      storeScope: "/synthetic/cross-gateway-queue/sessions",
-    };
+    const identity = identityFor(runId);
     const source = withPluginRuntimeGatewayContextResolver(resolveGatewayContext, () =>
       createRpcSourceForTest({ kind: "chat-send" }, identity),
     );
@@ -50,24 +75,11 @@ describe("agent.wait queue admission", () => {
     );
     registerRpcSource(runId, source);
     registerRpcSource(runId, foreign);
-    const run = createQueueTestRun({ prompt: "queued source" });
-    run.run = {
-      ...run.run,
-      agentId: identity.agentId,
-      sessionKey: identity.sessionKey,
-      sessionId: identity.sessionId,
-      config: { ...run.run.config, session: { store: identity.storeScope } },
-    };
+    const run = bindRun(source, identity);
     run.turnAdoptionLifecycle = {
       onAdopted: () => {},
-      onDeferred: () =>
-        setGatewayDedupeEntry({
-          dedupe: context.dedupe,
-          key: `chat:${runId}`,
-          entry: { ts: Date.now(), ok: true, payload: { runId, status: "accepted" } },
-        }),
+      onDeferred: () => publish(context, runId, "accepted"),
     };
-    bindSessionControllerSource(source.input, run);
     vi.useFakeTimers();
     const waiting = prepareAgentWaitForTurn(
       { dedupe: context.dedupe, resolveGatewayContext },
@@ -75,27 +87,22 @@ describe("agent.wait queue admission", () => {
     ).wait();
     try {
       withPluginRuntimeGatewayContextResolver(resolveForeign, () => {
-        expect(
-          enqueueFollowupRun(
-            identity.sessionKey,
-            run,
-            { mode: "followup" },
-            "none",
-            undefined,
-            false,
-          ),
-        ).toBe(true);
+        const enqueued = enqueueFollowupRun(
+          identity.sessionKey,
+          run,
+          { mode: "followup" },
+          "none",
+          undefined,
+          false,
+        );
+        expect(enqueued).toBe(true);
       });
       await expect(withinTest(waiting, signal)).resolves.toMatchObject({
         session: { sessionId: identity.sessionId },
         result: { runId, status: "pending", timeoutPhase: "queue", providerStarted: false },
       });
     } finally {
-      setGatewayDedupeEntry({
-        dedupe: context.dedupe,
-        key: `chat:${runId}`,
-        entry: { ts: Date.now(), ok: true, payload: { runId, status: "ok" } },
-      });
+      publish(context, runId, "ok");
       await waiting;
     }
   });
@@ -109,11 +116,7 @@ describe("agent.wait queue admission", () => {
     "reports queue pending only after follow-up admission: $name",
     async ({ name, enqueued, injecting }) => {
       const runId = `queue-admission-${name}`;
-      const identity = {
-        storeScope: `/synthetic/agent-wait/${name}/sessions`,
-        sessionKey: "agent:main:queue-admission",
-        sessionId: runId,
-      };
+      const identity = identityFor(runId);
       let blocker: SessionControllerMailboxClaim | undefined;
       if (!enqueued && !injecting) {
         const blockingSource = createRpcSourceForTest({}, identity);
@@ -129,14 +132,7 @@ describe("agent.wait queue admission", () => {
         injecting && !enqueued ? beginSessionControllerSourceInjection(source.input) : undefined;
       let queuedInjection: ReturnType<typeof reserveSteerCandidate>;
       if (enqueued && injecting) {
-        const run = createQueueTestRun({ prompt: "queued steering" });
-        run.run = {
-          ...run.run,
-          sessionKey: identity.sessionKey,
-          sessionId: identity.sessionId,
-          config: { ...run.run.config, session: { store: identity.storeScope } },
-        };
-        bindSessionControllerSource(source.input, run);
+        const run = bindRun(source, identity);
         queuedInjection = reserveSteerCandidate(
           identity.sessionKey,
           run,
@@ -189,11 +185,7 @@ describe("agent.wait queue admission", () => {
         if (directClaim) {
           releaseSessionControllerClaim(await directClaim);
         }
-        setGatewayDedupeEntry({
-          dedupe: context.dedupe,
-          key: `chat:${runId}`,
-          entry: { ts: Date.now(), ok: true, payload: { runId, status: "ok" } },
-        });
+        publish(context, runId, "ok");
         await waiting;
       }
       if (!enqueued) {

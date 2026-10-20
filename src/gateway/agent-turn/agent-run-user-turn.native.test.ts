@@ -18,8 +18,48 @@ import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-cli
 import { createTrackedDispatch } from "./agent-run-dispatch.test-support.js";
 import { prepareAgentRunUserTurn, releasePreparedAgentRunUserTurn } from "./agent-run-user-turn.js";
 
-describe("fresh child input custody", () => {
-  const fixture = useTempSessionsFixture("fresh-child-input-native-");
+type TurnParams = Parameters<typeof prepareAgentRunUserTurn>[0];
+function makeTurnParams(
+  target: { sessionKey: string; sessionId: string; storePath: string },
+  message: string,
+  runId: string,
+  overrides: Partial<TurnParams> = {},
+): TurnParams {
+  return {
+    assertCurrent: () => {},
+    onUserTurnMediaPersisted: () => {},
+    request: { message, idempotencyKey: runId },
+    cfg: { session: { store: target.storePath } },
+    resolvedSessionKey: target.sessionKey,
+    admittedSessionId: target.sessionId,
+    activeSessionAgentId: "main",
+    suppressVisibleSessionEffects: false,
+    requestedPromptPersistenceSuppression: false,
+    canUseInternalRuntimeHandoff: false,
+    message,
+    effectiveTranscriptInputText: message,
+    images: [],
+    offloadedRefs: [],
+    runId,
+    client: null,
+    context: createTrackedDispatch().context,
+    ...overrides,
+  };
+}
+async function withTurn<T>(
+  params: TurnParams,
+  body: (turn: Awaited<ReturnType<typeof prepareAgentRunUserTurn>>) => Promise<T>,
+) {
+  const turn = await prepareAgentRunUserTurn(params);
+  try {
+    return await body(turn);
+  } finally {
+    await releasePreparedAgentRunUserTurn(turn);
+  }
+}
+
+describe("native user-turn custody", () => {
+  const fixture = useTempSessionsFixture("user-turn-native-");
 
   it("keeps the committed child target and later owner metadata through input persistence", async () => {
     const sessionKey = "agent:main:subagent:fresh-child";
@@ -27,7 +67,6 @@ describe("fresh child input custody", () => {
     const sessionEntry = { sessionId, updatedAt: 1, label: "Created child" };
     const target = { agentId: "main", sessionKey, sessionId, storePath: fixture.storePath() };
     await upsertSessionEntryCore(target, sessionEntry);
-    // The owner may publish newer metadata after the creation receipt was captured.
     await upsertSessionEntryCore(target, { ...sessionEntry, updatedAt: 2, label: "Renamed child" });
     const reroutedTarget = {
       ...target,
@@ -41,29 +80,12 @@ describe("fresh child input custody", () => {
       sessionId: reroutedTarget.sessionId,
       updatedAt: 1,
     });
-    const context = createTrackedDispatch().context;
-    const turn = await prepareAgentRunUserTurn({
-      assertCurrent: () => {},
-      onUserTurnMediaPersisted: () => {},
-      request: { message: "Child task", idempotencyKey: "fresh-child-run" },
+    const params = makeTurnParams(target, "Child task", "fresh-child-run", {
       cfg: { session: { store: reroutedTarget.storePath } },
       sessionEntry,
       freshChildStorePath: target.storePath,
-      resolvedSessionKey: sessionKey,
-      admittedSessionId: sessionId,
-      activeSessionAgentId: "main",
-      suppressVisibleSessionEffects: false,
-      requestedPromptPersistenceSuppression: false,
-      canUseInternalRuntimeHandoff: false,
-      message: "Child task",
-      effectiveTranscriptInputText: "Child task",
-      images: [],
-      offloadedRefs: [],
-      runId: "fresh-child-run",
-      client: null,
-      context,
     });
-    try {
+    await withTurn(params, async (turn) => {
       expect(turn.recorder?.getPendingInputMessage?.()).toMatchObject({ content: "Child task" });
       expect(await loadTranscriptEvents(target)).toEqual([]);
       expect(await turn.recorder!.persistApproved()).toMatchObject({ appended: true });
@@ -75,14 +97,8 @@ describe("fresh child input custody", () => {
       expect(messages[0]).toMatchObject({ message: { role: "user", content: "Child task" } });
       expect(loadSessionEntry(target)).toMatchObject({ sessionId, label: "Renamed child" });
       expect(await loadTranscriptEvents(reroutedTarget)).toEqual([]);
-    } finally {
-      await releasePreparedAgentRunUserTurn(turn);
-    }
+    });
   });
-});
-
-describe("private completion sender replay", () => {
-  const fixture = useTempSessionsFixture("private-input-sender-native-");
 
   it.each(["Original requester", null])(
     "retains accepted sender presentation after a profile rename (%s)",
@@ -99,11 +115,9 @@ describe("private completion sender replay", () => {
         "private-sender@example.test",
         profileOptions,
       );
-      const { profile: original } = await setCanonicalUserProfileDisplayName(
-        profile.id,
-        originalName,
-        profileOptions,
-      );
+      const rename = (name: string | null) =>
+        setCanonicalUserProfileDisplayName(profile.id, name, profileOptions);
+      const { profile: original } = await rename(originalName);
       const clientFor = (displayName: string | null, profileId = profile.id) =>
         createSyntheticPluginRuntimeClient({
           authenticatedUserProfile: {
@@ -114,9 +128,7 @@ describe("private completion sender replay", () => {
             updatedAt: original.updatedAt,
           },
         });
-      const params = {
-        assertCurrent: () => {},
-        onUserTurnMediaPersisted: () => {},
+      const params = makeTurnParams(target, "Retained private result", runId, {
         privateCompletion: true,
         request: {
           message: "Retained private result",
@@ -124,101 +136,65 @@ describe("private completion sender replay", () => {
           expectedExistingSessionId: sessionId,
           deliver: false,
         },
-        cfg: { session: { store: target.storePath } },
-        resolvedSessionKey: sessionKey,
-        admittedSessionId: sessionId,
-        activeSessionAgentId: "main",
-        suppressVisibleSessionEffects: false,
-        requestedPromptPersistenceSuppression: false,
-        canUseInternalRuntimeHandoff: false,
-        message: "Retained private result",
-        effectiveTranscriptInputText: "Retained private result",
         inputProvenance: {
           kind: "inter_session",
           sourceTool: "subagent_announce",
           sourceSessionKey: "agent:main:subagent:sender-child",
         },
-        images: [],
-        offloadedRefs: [],
-        runId,
         client: clientFor(original.displayName),
-        context: createTrackedDispatch().context,
-      } satisfies Parameters<typeof prepareAgentRunUserTurn>[0];
-      const first = await prepareAgentRunUserTurn(params);
-      const accepted = expectDefined(first.recorder?.getPendingInputMessage?.(), "accepted input");
-      try {
-        expect(accepted["__openclaw"]).toMatchObject({
+      });
+      const accepted = await withTurn(params, async (first) => {
+        const input = expectDefined(first.recorder?.getPendingInputMessage?.(), "accepted input");
+        expect(input["__openclaw"]).toMatchObject({
           senderId: profile.id,
           senderIsOwner: false,
         });
         if (originalName === null) {
-          expect(accepted["__openclaw"]).not.toHaveProperty("senderName");
+          expect(input["__openclaw"]).not.toHaveProperty("senderName");
         } else {
-          expect(accepted["__openclaw"]).toHaveProperty("senderName", originalName);
+          expect(input["__openclaw"]).toHaveProperty("senderName", originalName);
         }
         await first.recorder!.completeProcessingAsync!(
           buildAgentRunTerminalOutcome({ status: "error", stopReason: "restart" }),
         );
-      } finally {
-        await releasePreparedAgentRunUserTurn(first);
-      }
-      const { profile: renamed } = await setCanonicalUserProfileDisplayName(
-        profile.id,
-        "Renamed requester",
-        profileOptions,
-      );
+        return input;
+      });
+      const { profile: renamed } = await rename("Renamed requester");
       const replayParams = { ...params, client: clientFor(renamed.displayName) };
-      const replay = await prepareAgentRunUserTurn(replayParams);
-      try {
+      await withTurn(replayParams, async (replay) => {
         expect(replay.recorder?.getPendingInputMessage?.()).toEqual(accepted);
-      } finally {
-        await releasePreparedAgentRunUserTurn(replay);
-      }
+      });
       const retained = await pendingInputs.listSessionPendingInputs(target);
       expect(retained.items).toMatchObject([{ state: "interrupted", message: accepted }]);
-      const prepareAndRelease = async (
-        candidate: Parameters<typeof prepareAgentRunUserTurn>[0],
-      ) => {
-        const turn = await prepareAgentRunUserTurn(candidate);
-        await releasePreparedAgentRunUserTurn(turn);
-        return turn;
-      };
-      await expect(
-        prepareAndRelease({
-          ...replayParams,
-          message: "Changed result",
-          effectiveTranscriptInputText: "Changed result",
-        }),
-      ).rejects.toThrow("conflicts with the accepted input");
-      await expect(
-        prepareAndRelease({
-          ...replayParams,
-          client: clientFor(original.displayName, "different-profile"),
-        }),
-      ).rejects.toThrow("conflicts with the accepted input");
+      const prepareAndRelease = (candidate: TurnParams) =>
+        withTurn(candidate, async (turn) => turn);
+      for (const mismatch of [
+        { message: "Changed result", effectiveTranscriptInputText: "Changed result" },
+        { client: clientFor(original.displayName, "different-profile") },
+      ]) {
+        await expect(prepareAndRelease({ ...replayParams, ...mismatch })).rejects.toThrow(
+          "conflicts with the accepted input",
+        );
+      }
       const readSubmitted = pendingInputs.readSessionSubmittedInput;
       let current = true;
-      const read = vi
+      using _ = vi
         .spyOn(pendingInputs, "readSessionSubmittedInput")
         .mockImplementationOnce(async (...args) => {
           const submitted = await readSubmitted(...args);
           current = false;
           return submitted;
         });
-      try {
-        await expect(
-          prepareAndRelease({
-            ...replayParams,
-            assertCurrent: () => {
-              if (!current) {
-                throw new Error("Private source revoked");
-              }
-            },
-          }),
-        ).rejects.toThrow("Private source revoked");
-      } finally {
-        read.mockRestore();
-      }
+      await expect(
+        prepareAndRelease({
+          ...replayParams,
+          assertCurrent: () => {
+            if (!current) {
+              throw new Error("Private source revoked");
+            }
+          },
+        }),
+      ).rejects.toThrow("Private source revoked");
       expect(await pendingInputs.listSessionPendingInputs(target)).toEqual(retained);
       expect(await loadTranscriptEvents(target)).toEqual([]);
     },
