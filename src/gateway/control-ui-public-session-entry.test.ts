@@ -117,8 +117,11 @@ describe("public reader operator handoff", () => {
       { type: "openclaw:widget-size", height: Infinity },
     ])
       send(data);
-    send({ type: "openclaw:widget-size", height: 500 }, f.window);
+    send({ type: "openclaw:widget-size", height: 500 }, other!.contentWindow);
+    expect(other!.style.height).toBe("500px");
+    send({ type: "openclaw:widget-size", height: 600 }, null);
     expect(frame!.style.height).toBe("8000px");
+    expect(other!.style.height).toBe("500px");
   });
   it.each([204, 401])(
     "keeps the unavailable result pending through a delayed %s handoff",
