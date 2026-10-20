@@ -53,8 +53,8 @@ function expectFontStatus(page: Page, expectedStatus: string) {
 }
 
 suite.define(() => {
-  it("renders bundled Nerd Font glyphs in a real terminal", async () => {
-    await suite.withPage(
+  it("renders bundled Nerd Font glyphs in a real terminal", () =>
+    suite.withPage(
       { serviceWorkers: "block", viewport: { width: 1180, height: 600 }, deviceScaleFactor: 2 },
       async ({ page, context }) => {
         await observeTerminalControllers(page);
@@ -142,10 +142,9 @@ suite.define(() => {
         expect(await input.inputValue()).toBe("");
         await settings.close();
       },
-    );
-  });
-  it("keeps the main terminal usable when the bundled font download fails", async () => {
-    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+    ));
+  it("keeps the main terminal usable when the bundled font download fails", () =>
+    suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const errors: string[] = [];
       page.on("pageerror", (error) => errors.push(error.message));
       await page.route("**/symbols-nerd-font-mono.woff2*", (route) => route.abort());
@@ -162,6 +161,5 @@ suite.define(() => {
         .toBeGreaterThan(0);
       expect(await gateway.getRequests("terminal.open")).toHaveLength(1);
       expect(errors).toEqual([]);
-    });
-  });
+    }));
 });

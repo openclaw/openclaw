@@ -5,9 +5,7 @@ import { installMockGateway, controlUiSessionUrl } from "../test-helpers/control
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Spatial overflow fades" });
-// Calibrate the real scroller with a solid paint layer, without replacing its
-// mask, geometry or overflow state. Sampling the rendered pixels catches a hard
-// clip even when the observer attributes and computed gradient both look valid.
+// Sample real mask pixels: correct observer attributes do not rule out a hard clip.
 async function expectClearEdge(scroller: Locator) {
   const page = scroller.page();
   await scroller.evaluate((element) => {
@@ -26,8 +24,7 @@ async function expectClearEdge(scroller: Locator) {
       const width = image.get_width();
       const pixels = image.get_raw_pixels();
       const sample = (y: number) => pixels[(y * width + Math.floor(width / 2)) * 4]!;
-      // Fractional locator bounds can include the parent border in the outermost
-      // screenshot pixel. Start inside the scrollport, not on that rounded clip.
+      // Skip the rounded outer pixel, which can include the parent border.
       for (const edge of ["top", "bottom"]) {
         const ramp = Array.from({ length: 36 }, (_, y) =>
           sample(edge === "top" ? y + 1 : image.get_height() - 2 - y),
@@ -37,9 +34,7 @@ async function expectClearEdge(scroller: Locator) {
         expect(ramp[35], `${edge}: interior stays fully legible`).toBeGreaterThanOrEqual(250);
         for (let y = 1; y < ramp.length; y++) {
           const step = ramp[y]! - ramp[y - 1]!;
-          expect(step, `${edge}: opacity does not reverse at pixel ${y}`).toBeGreaterThanOrEqual(
-            -1,
-          );
+          expect(step, `${edge}: reverse at ${y}`).toBeGreaterThanOrEqual(-1);
           expect(step, `${edge}: no abrupt opacity jump at pixel ${y}`).toBeLessThan(25);
         }
       }
@@ -56,28 +51,19 @@ async function expectClearEdge(scroller: Locator) {
 }
 
 suite.define(() => {
-  it.each([390, 1280])("preserves scroll endpoints and controls at %ipx", async (width) => {
-    await suite.withPage(
+  it.each([390, 1280])("preserves scroll endpoints and controls at %ipx", (width) =>
+    suite.withPage(
       { viewport: { width, height: 800 }, colorScheme: "dark", reducedMotion: "reduce" },
       async ({ page }) => {
         const key = "agent:main:dashboard:fade-proof";
-        const sessions = Array.from({ length: 40 }, (_, i) => ({
-          key: i === 0 ? key : `agent:main:dashboard:proof-${i}`,
-          label: i === 0 ? "Review overflow fades" : `Design review ${i}`,
-          kind: "direct",
-          updatedAt: 40 - i,
-        }));
         const gateway = await installMockGateway(page, {
           sessionKey: key,
-          methodResponses: {
-            "sessions.list": {
-              count: sessions.length,
-              defaults: { contextTokens: null, model: "example-model", modelProvider: "example" },
-              path: "",
-              sessions,
-              ts: Date.now(),
-            },
-          },
+          sessions: Array.from({ length: 40 }, (_, i) => ({
+            key: i === 0 ? key : `agent:main:dashboard:proof-${i}`,
+            label: i === 0 ? "Review overflow fades" : `Design review ${i}`,
+            kind: "direct",
+            updatedAt: 40 - i,
+          })),
           historyMessages: [{ role: "assistant", content: "Review the overflow edges." }],
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
@@ -126,6 +112,6 @@ suite.define(() => {
           await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1),
         ).toBe(true);
       },
-    );
-  });
+    ),
+  );
 });

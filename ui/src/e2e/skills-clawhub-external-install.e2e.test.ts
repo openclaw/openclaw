@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { createSkill } from "../pages/skills/view.test-support.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -12,27 +13,17 @@ const emptyStatus = {
   managedSkillsDir: "/tmp/openclaw-e2e/skills",
   skills: [],
 };
-const requirements = { anyBins: [], bins: [], env: [], config: [], os: [] };
 const installRef = "skills-sh:openai/skills/pdf";
 
 const installedStatus = {
   ...emptyStatus,
   skills: [
-    {
+    createSkill({
       name: "pdf",
-      description: "PDF tools",
       source: "clawhub",
-      filePath: "/tmp/openclaw-e2e/skills/pdf/SKILL.md",
-      baseDir: "/tmp/openclaw-e2e/skills/pdf",
       skillKey: "pdf",
-      always: false,
-      disabled: false,
-      blockedByAllowlist: false,
-      eligible: true,
-      requirements,
-      missing: requirements,
-      configChecks: [],
-      install: [],
+      primaryEnv: undefined,
+      homepage: undefined,
       clawhub: {
         status: "linked",
         valid: true,
@@ -41,14 +32,16 @@ const installedStatus = {
         requestedReference: installRef,
         installedVersion: "0.0.0",
         installedAt: 1,
+        originPath: "/tmp/.clawhub/origin.json",
+        lockPath: "/tmp/.clawhub/lock.json",
       },
-    },
+    }),
   ],
 };
 
 suite.define(() => {
-  it("searches, installs the exact skills.sh reference, and renders installed state", async () => {
-    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+  it("searches, installs the exact skills.sh reference, and renders installed state", () =>
+    suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         featureMethods: [
           "chat.metadata",
@@ -99,6 +92,5 @@ suite.define(() => {
       await row.getByRole("img", { name: "Ready", exact: true }).waitFor();
       expect(await row.count()).toBe(1);
       expect(await row.getByRole("button", { name: /^Install / }).count()).toBe(0);
-    });
-  });
+    }));
 });

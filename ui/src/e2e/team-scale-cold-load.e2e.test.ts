@@ -57,7 +57,13 @@ function observeStoreWrite(
   }, observation);
 }
 
-async function readStoredWarmState({ sessionKey }: { sessionKey: string }) {
+async function readStoredWarmState({
+  sessionKey,
+  includeDrafts = false,
+}: {
+  sessionKey: string;
+  includeDrafts?: boolean;
+}) {
   const result = <T>(request: IDBRequest<T>, failure: string) =>
     new Promise<T>((resolve, reject) => {
       request.addEventListener("success", () => resolve(request.result), { once: true });
@@ -84,7 +90,22 @@ async function readStoredWarmState({ sessionKey }: { sessionKey: string }) {
     if (!sidebar) {
       throw new Error("Selected sidebar was not persisted");
     }
-    return { transcript: record.snapshot, sidebar: sidebar.model };
+    let drafts: number | null = null;
+    if (includeDrafts) {
+      const controls = await result(
+        indexedDB.open("openclaw-control-ui"),
+        "Draft database open failed",
+      );
+      try {
+        drafts = await result(
+          controls.transaction("composerDrafts").objectStore("composerDrafts").count(),
+          "Draft count failed",
+        );
+      } finally {
+        controls.close();
+      }
+    }
+    return { transcript: record.snapshot, sidebar: sidebar.model, drafts };
   } finally {
     database.close();
   }
@@ -177,20 +198,18 @@ suite.define(() => {
         const connectRequest = await gateway.waitForRequest("connect");
         const instanceId = asRecord(asRecord(connectRequest.params)?.client)?.instanceId;
         expect(typeof instanceId).toBe("string");
+        const ownPresence = <T extends { instanceId?: string }>(entry: T) =>
+          Object.assign({}, entry, {
+            instanceId:
+              entry.instanceId === TEAM_SCALE_SELF_INSTANCE_ID ? instanceId : entry.instanceId,
+          });
         for (const frame of fixture.events) {
           await gateway.emitGatewayEvent(
             frame.event,
             frame.event === "sessions.catalog.host"
               ? { ...frame.payload, progressId }
               : {
-                  presence: frame.payload.presence.map((entry) =>
-                    Object.assign({}, entry, {
-                      instanceId:
-                        entry.instanceId === TEAM_SCALE_SELF_INSTANCE_ID
-                          ? instanceId
-                          : entry.instanceId,
-                    }),
-                  ),
+                  presence: frame.payload.presence.map(ownPresence),
                 },
           );
         }
@@ -231,15 +250,9 @@ suite.define(() => {
         expect(await dashboard.getByRole("img", { name: /^Synthetic chart / }).count()).toBe(4);
         const fontState = await dashboard.locator("body").evaluate(async () => {
           await document.fonts.ready;
-          return {
-            fonts: [...document.fonts].map((font) => ({
-              family: font.family,
-              status: font.status,
-            })),
-            resources: performance.getEntriesByType("resource").map((entry) => entry.name),
-          };
+          return [...document.fonts].map(({ family, status }) => ({ family, status }));
         });
-        expect(fontState.fonts, JSON.stringify(fontState)).toContainEqual({
+        expect(fontState).toContainEqual({
           family: "TeamMetric",
           status: "loaded",
         });
@@ -343,12 +356,7 @@ suite.define(() => {
         await gateway.emitGatewayEvent("presence", {
           presence: presence.payload.presence
             .filter((entry) => entry.user?.id !== "team-person-120")
-            .map((entry) =>
-              Object.assign({}, entry, {
-                instanceId:
-                  entry.instanceId === TEAM_SCALE_SELF_INSTANCE_ID ? instanceId : entry.instanceId,
-              }),
-            ),
+            .map(ownPresence),
         });
         await sidebar.locator('[data-online-user-id="team-person-120"]').waitFor({
           state: "detached",
@@ -369,35 +377,9 @@ suite.define(() => {
         await draftWrite.evaluate(({ done }) => done);
         await draftWrite.dispose();
         await restoreColdLoadWarmState(page, warm.storage);
-        expect(await page.evaluate(readStoredWarmState, warmInput)).toEqual(baseline);
-        const draftCount = await page.evaluate(
-          () =>
-            new Promise<number>((resolve, reject) => {
-              const request = indexedDB.open("openclaw-control-ui");
-              const fail = (error: DOMException | null, message: string) =>
-                reject(error ?? new Error(message));
-              request.addEventListener(
-                "error",
-                () => fail(request.error, "Draft database open failed"),
-                { once: true },
-              );
-              request.addEventListener(
-                "success",
-                () => {
-                  const database = request.result;
-                  const transaction = database.transaction("composerDrafts");
-                  const count = transaction.objectStore("composerDrafts").count();
-                  count.addEventListener("success", () => resolve(count.result), { once: true });
-                  count.addEventListener("error", () => fail(count.error, "Draft count failed"), {
-                    once: true,
-                  });
-                  transaction.addEventListener("complete", () => database.close(), { once: true });
-                },
-                { once: true },
-              );
-            }),
-        );
-        expect(draftCount).toBe(0);
+        expect(
+          await page.evaluate(readStoredWarmState, { ...warmInput, includeDrafts: true }),
+        ).toEqual({ ...baseline, drafts: 0 });
         await page.reload();
         await sidebar.locator('[data-navigation-view="online"][aria-pressed="true"]').waitFor();
         await sidebar.locator('[data-online-user-id="team-person-120"]').waitFor();

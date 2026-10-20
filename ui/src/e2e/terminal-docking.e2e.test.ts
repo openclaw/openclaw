@@ -1,11 +1,7 @@
 import { createHash } from "node:crypto";
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
   defaultControlUiFeatureMethods,
@@ -31,121 +27,123 @@ async function typeInTerminal(page: Page, panel: Locator, text: string) {
   await terminalCanvas(panel).click();
   await page.keyboard.type(text);
 }
+function hasFocus(element: Element, descendants = false) {
+  const root = element.getRootNode();
+  const active =
+    root instanceof ShadowRoot ? root.activeElement : element.ownerDocument.activeElement;
+  return descendants ? element.contains(active) : element === active;
+}
+async function openDockingChat(page: Page, labels: string[], content?: string) {
+  const keys = [
+    "agent:main:dashboard:11111111-1111-4111-8111-111111111111",
+    "agent:main:dashboard:22222222-2222-4222-8222-222222222222",
+  ];
+  const gateway = await installMockGateway(page, {
+    sessionKey: keys[0],
+    sessions: labels.map((label, index) =>
+      createControlUiSessionRow(keys[index]!, label, 1_790_000_000_000 + index),
+    ),
+    featureMethods: [...defaultControlUiFeatureMethods, "terminal.open"],
+    terminalEnabled: true,
+    ...(content
+      ? { historyMessages: [{ role: "assistant", content: [{ type: "text", text: content }] }] }
+      : {}),
+  });
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, keys[0]!));
+  await waitForControlUiGatewayReady(page);
+  const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
+  return {
+    gateway,
+    pane,
+    embedded: pane.locator(".sidebar-region__right-runtime openclaw-terminal-panel"),
+    bottom: page.locator("openclaw-terminal-panel:not([embedded])"),
+  };
+}
 
 suite.define(() => {
-  it.each([false, true])(
-    "preserves exited diagnostic output across docks (mixed: %s)",
-    async (mixed) => {
-      await suite.withPage(
-        { colorScheme: "dark", viewport: { width: 1440, height: 900 } },
-        async ({ page }) => {
-          const key = "agent:main:dashboard:11111111-1111-4111-8111-111111111111";
-          const gateway = await installMockGateway(page, {
-            sessionKey: key,
-            sessions: [createControlUiSessionRow(key, "Diagnostic output", 1_790_000_000_000)],
-            featureMethods: [...defaultControlUiFeatureMethods, "terminal.open"],
-            terminalEnabled: true,
-          });
-          await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
-          await waitForControlUiGatewayReady(page);
-          const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
-          await openChatSidePanelType(pane, "Terminal");
-          const embedded = pane.locator(".sidebar-region__right-runtime openclaw-terminal-panel");
-          const bottom = page.locator("openclaw-terminal-panel:not([embedded])");
-          await typeInTerminal(page, embedded, "diagnostic-command\r");
-          const sessionId = (
-            (await gateway.waitForRequest("terminal.input")).params as { sessionId: string }
-          ).sessionId;
-          await dock(pane, "bottom");
-          await terminalCanvas(bottom).waitFor();
-          if (mixed) {
-            await bottom.getByRole("button", { name: "New terminal session", exact: true }).click();
-            await expect.poll(() => liveTabs(bottom).count()).toBe(2);
-            await bottom.locator(".tabstrip-tab").first().click();
-          }
-          const output =
-            "\u001b[2J\u001b[H\u001b[?25lDIAGNOSTIC_OUTPUT_RETAINED\r\ncommand failed: exit 17\r\n";
-          const echoed = (await gateway.getRequests("terminal.input")).reduce((size, request) => {
-            const input = request.params as { sessionId: string; data: string };
-            return size + (input.sessionId === sessionId ? input.data.length : 0);
-          }, 0);
-          const banner =
-            "OpenClaw mock terminal\r\nType anything and the mock Gateway will echo it.\r\n$ ";
-          await gateway.emitGatewayEvent("terminal.data", {
-            sessionId,
-            seq: banner.length + echoed + output.length,
-            data: output,
-          });
-          await gateway.emitGatewayEvent("terminal.exit", {
-            sessionId,
-            reason: "process_exit",
-            exitCode: 17,
-            signal: null,
-            error: "Command failed; inspect retained output.",
-          });
-          await bottom.getByText("exited (17)", { exact: true }).waitFor();
-          const canvas = terminalCanvas(bottom);
-          const original = await canvas.elementHandle();
-          const digest = async () =>
-            createHash("sha256")
-              .update(await canvas.screenshot({ animations: "disabled" }))
-              .digest("hex");
-          const before = await digest();
-          await dock(bottom, "right");
-          if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR && mixed) {
-            const dir = createControlUiE2eArtifactDir("terminal-exited-docking");
-            const frame = await takeControlUiScreenshotFrame(
-              page,
-              pane.locator(".chat-pane__header"),
-              [],
-              { animations: "disabled" },
-            );
-            await writeFile(path.join(dir, "exited-dock-to-right.png"), frame.png);
-          }
-          await pane.getByText("exited (17)", { exact: true }).waitFor();
+  it.each([false, true])("preserves exited diagnostic output across docks (mixed: %s)", (mixed) =>
+    suite.withPage(
+      { colorScheme: "dark", viewport: { width: 1440, height: 900 } },
+      async ({ page }) => {
+        const { gateway, pane, embedded, bottom } = await openDockingChat(page, [
+          "Diagnostic output",
+        ]);
+        await openChatSidePanelType(pane, "Terminal");
+        await typeInTerminal(page, embedded, "diagnostic-command\r");
+        const sessionId = inputSession(await gateway.waitForRequest("terminal.input"));
+        await dock(pane, "bottom");
+        await terminalCanvas(bottom).waitFor();
+        if (mixed) {
+          await bottom.getByRole("button", { name: "New terminal session", exact: true }).click();
+          await expect.poll(() => liveTabs(bottom).count()).toBe(2);
+          await bottom.locator(".tabstrip-tab").first().click();
+        }
+        const output =
+          "\u001b[2J\u001b[H\u001b[?25lDIAGNOSTIC_OUTPUT_RETAINED\r\ncommand failed: exit 17\r\n";
+        const echoed = (await gateway.getRequests("terminal.input")).reduce((size, request) => {
+          const input = request.params as { sessionId: string; data: string };
+          return size + (input.sessionId === sessionId ? input.data.length : 0);
+        }, 0);
+        const banner =
+          "OpenClaw mock terminal\r\nType anything and the mock Gateway will echo it.\r\n$ ";
+        await gateway.emitGatewayEvent("terminal.data", {
+          sessionId,
+          seq: banner.length + echoed + output.length,
+          data: output,
+        });
+        await gateway.emitGatewayEvent("terminal.exit", {
+          sessionId,
+          reason: "process_exit",
+          exitCode: 17,
+          signal: null,
+          error: "Command failed; inspect retained output.",
+        });
+        await bottom.getByText("exited (17)", { exact: true }).waitFor();
+        const canvas = terminalCanvas(bottom);
+        const original = await canvas.elementHandle();
+        const expectOriginalCanvas = async (panel: Locator) =>
           expect(
-            await embedded
-              .locator(".tp-host canvas:visible")
-              .evaluate((element, prior) => element === prior, original),
+            await terminalCanvas(panel).evaluate((element, prior) => element === prior, original),
           ).toBe(true);
-          await embedded
-            .getByText("Command failed; inspect retained output.", { exact: true })
-            .waitFor();
-          for (let cycle = 0; cycle < 2; cycle += 1) {
-            await dock(pane, "bottom");
-            await bottom.getByText("exited (17)", { exact: true }).waitFor();
-            expect(await digest()).toBe(before);
-            expect(await bottom.locator(".tabstrip-tab").count()).toBe(mixed ? 2 : 1);
-            await dock(bottom, "right");
-            await pane.getByText("exited (17)", { exact: true }).waitFor();
-            expect(
-              await embedded
-                .locator(".tp-host canvas:visible")
-                .evaluate((element, prior) => element === prior, original),
-            ).toBe(true);
-          }
-          if (mixed) {
-            await pane.locator(".sidebar-region__right-runtime .tabstrip-tab.is-live").click();
-            await typeInTerminal(page, embedded, "LIVE_WITH_DIAGNOSTICS\r");
-            const liveId = await lastInputSession(gateway);
-            expect(liveId).not.toBe(sessionId);
-            await dock(pane, "bottom");
-            await bottom.locator('.tabstrip-tab.is-live[aria-selected="true"]').waitFor();
-            await typeInTerminal(page, bottom, "LIVE_STILL_SELECTED\r");
-            expect(await lastInputSession(gateway)).toBe(liveId);
-            await bottom.locator(".tabstrip-tab.is-exited").click();
-            expect(await canvas.evaluate((element, prior) => element === prior, original)).toBe(
-              true,
-            );
-            expect(await digest()).toBe(before);
-          }
-          const attaches = await gateway.getRequests("terminal.attach");
-          expect(attaches.filter((request) => inputSession(request) === sessionId)).toHaveLength(1);
-          expect(await gateway.getRequests("terminal.open")).toHaveLength(mixed ? 2 : 1);
-          expect(await gateway.getRequests("terminal.close")).toHaveLength(0);
-        },
-      );
-    },
+        const digest = async () =>
+          createHash("sha256")
+            .update(await canvas.screenshot({ animations: "disabled" }))
+            .digest("hex");
+        const before = await digest();
+        await dock(bottom, "right");
+        await pane.getByText("exited (17)", { exact: true }).waitFor();
+        await expectOriginalCanvas(embedded);
+        await embedded
+          .getByText("Command failed; inspect retained output.", { exact: true })
+          .waitFor();
+        for (let cycle = 0; cycle < 2; cycle += 1) {
+          await dock(pane, "bottom");
+          await bottom.getByText("exited (17)", { exact: true }).waitFor();
+          expect(await digest()).toBe(before);
+          expect(await bottom.locator(".tabstrip-tab").count()).toBe(mixed ? 2 : 1);
+          await dock(bottom, "right");
+          await pane.getByText("exited (17)", { exact: true }).waitFor();
+          await expectOriginalCanvas(embedded);
+        }
+        if (mixed) {
+          await pane.locator(".sidebar-region__right-runtime .tabstrip-tab.is-live").click();
+          await typeInTerminal(page, embedded, "LIVE_WITH_DIAGNOSTICS\r");
+          const liveId = await lastInputSession(gateway);
+          expect(liveId).not.toBe(sessionId);
+          await dock(pane, "bottom");
+          await bottom.locator('.tabstrip-tab.is-live[aria-selected="true"]').waitFor();
+          await typeInTerminal(page, bottom, "LIVE_STILL_SELECTED\r");
+          expect(await lastInputSession(gateway)).toBe(liveId);
+          await bottom.locator(".tabstrip-tab.is-exited").click();
+          await expectOriginalCanvas(bottom);
+          expect(await digest()).toBe(before);
+        }
+        const attaches = await gateway.getRequests("terminal.attach");
+        expect(attaches.filter((request) => inputSession(request) === sessionId)).toHaveLength(1);
+        expect(await gateway.getRequests("terminal.open")).toHaveLength(mixed ? 2 : 1);
+        expect(await gateway.getRequests("terminal.close")).toHaveLength(0);
+      },
+    ),
   );
 
   it.each([
@@ -155,55 +153,33 @@ suite.define(() => {
     { destination: "Other conversation", populated: true, picker: "keyboard" },
   ])(
     "returns the bottom terminal to $destination (populated terminal: $populated; picker: $picker)",
-    async ({ destination, populated, picker }) => {
-      await suite.withPage(
+    ({ destination, populated, picker }) =>
+      suite.withPage(
         { colorScheme: "dark", viewport: { width: 1440, height: 900 } },
         async ({ page }) => {
-          const keyA = "agent:main:dashboard:11111111-1111-4111-8111-111111111111";
-          const keyB = "agent:main:dashboard:22222222-2222-4222-8222-222222222222";
-          const gateway = await installMockGateway(page, {
-            sessionKey: keyA,
-            sessions: [
-              createControlUiSessionRow(keyA, "Docking check", 1_790_000_000_000),
-              createControlUiSessionRow(keyB, "Other conversation", 1_790_000_000_001),
-            ],
-            featureMethods: [...defaultControlUiFeatureMethods, "terminal.open"],
-            terminalEnabled: true,
-            historyMessages: [
-              {
-                role: "assistant",
-                content: [
-                  { type: "text", text: "Keep this terminal beside the current conversation." },
-                ],
-              },
-            ],
-          });
-          await page.goto(controlUiSessionUrl(suite.server.baseUrl, keyA));
-          await waitForControlUiGatewayReady(page);
-          const activePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
+          const {
+            gateway,
+            pane: activePane,
+            embedded,
+            bottom,
+          } = await openDockingChat(
+            page,
+            ["Docking check", "Other conversation"],
+            "Keep this terminal beside the current conversation.",
+          );
+          const sidebar = page.locator("openclaw-app-sidebar");
+          const header = activePane.locator(".chat-pane__header");
           const selectChat = async (label: string) => {
-            await page
-              .locator("openclaw-app-sidebar")
-              .getByRole("link", { name: label, exact: true })
-              .click();
-            await activePane
-              .locator(".chat-pane__header")
-              .getByText(label, { exact: true })
-              .waitFor();
+            await sidebar.getByRole("link", { name: label, exact: true }).click();
+            await header.getByText(label, { exact: true }).waitFor();
           };
           // Keep an independent Files panel in B while moving A’s terminal.
           await selectChat("Other conversation");
           await openChatSidePanelType(activePane, "Files");
           await selectChat("Docking check");
           await openChatSidePanelType(activePane, "Terminal");
-          const embedded = activePane.locator(
-            ".sidebar-region__right-runtime openclaw-terminal-panel",
-          );
-          const bottom = page.locator("openclaw-terminal-panel:not([embedded])");
-          await terminalCanvas(embedded).waitFor();
           await typeInTerminal(page, embedded, "echo DOCKING_CONTINUITY\r");
-          const input = await gateway.waitForRequest("terminal.input");
-          const sessionId = (input.params as { sessionId: string }).sessionId;
+          const sessionId = inputSession(await gateway.waitForRequest("terminal.input"));
           await selectChat("Other conversation");
           await expect.poll(() => embedded.isVisible()).toBe(false);
           await selectChat("Docking check");
@@ -218,11 +194,8 @@ suite.define(() => {
             await bottom.getByRole("button", { name: "New terminal session", exact: true }).click();
             await gateway.waitForRequest("terminal.open", { after });
             try {
-              expect(
-                await bottom
-                  .getByRole("button", { name: "Dock to right", exact: true })
-                  .isDisabled(),
-              ).toBe(true);
+              const dockRight = bottom.getByRole("button", { name: "Dock to right", exact: true });
+              expect(await dockRight.isDisabled()).toBe(true);
             } finally {
               await gateway.resolveDeferred("terminal.open");
             }
@@ -258,16 +231,7 @@ suite.define(() => {
               await gateway.waitForRequest("terminal.attach", { after: restoreAfter + 1 });
               await expect.poll(() => rightTabs(activePane).count()).toBe(2);
               await expectMenu(true);
-              expect(
-                await menu.evaluate((element) => {
-                  const root = element.getRootNode();
-                  return element.contains(
-                    root instanceof ShadowRoot
-                      ? root.activeElement
-                      : element.ownerDocument.activeElement,
-                  );
-                }),
-              ).toBe(true);
+              expect(await menu.evaluate(hasFocus, true)).toBe(true);
 
               // A hovered hint owns the first Escape before the focused menu does.
               await addTab.hover();
@@ -300,19 +264,7 @@ suite.define(() => {
                 for (let index = 0; index < terminalIndex; index += 1) {
                   await page.keyboard.press("ArrowDown");
                 }
-                await expect
-                  .poll(() =>
-                    terminalItem.evaluate((element) => {
-                      const root = element.getRootNode();
-                      return (
-                        element ===
-                        (root instanceof ShadowRoot
-                          ? root.activeElement
-                          : element.ownerDocument.activeElement)
-                      );
-                    }),
-                  )
-                  .toBe(true);
+                await expect.poll(() => terminalItem.evaluate(hasFocus)).toBe(true);
                 await page.keyboard.press("Enter");
               } else {
                 await terminalItem.click();
@@ -330,22 +282,6 @@ suite.define(() => {
             await terminalCanvas(embedded).waitFor();
           }
           await dock(bottom, "right");
-          // Capture the same settled post-click state on both the broken and repaired source.
-          if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR && destination === "Docking check") {
-            const dir = createControlUiE2eArtifactDir("terminal-docking");
-            const frame = await takeControlUiScreenshotFrame(
-              page,
-              activePane.locator(".chat-pane__header"),
-              [
-                activePane.getByText("Keep this terminal beside the current conversation.", {
-                  exact: true,
-                }),
-              ],
-              { animations: "disabled" },
-            );
-            await writeFile(path.join(dir, "dock-to-right.png"), frame.png);
-          }
-          await terminalCanvas(embedded).waitFor();
           await expect.poll(() => bottom.locator(".tp").count()).toBe(0);
           if (populated) {
             await expect.poll(() => rightTabs(activePane).count()).toBe(3);
@@ -378,14 +314,9 @@ suite.define(() => {
             await dock(bottom, "right");
             await typeInTerminal(page, embedded, "RETAINED_DESTINATION\r");
             expect(await lastInputSession(gateway)).toBe(retainedId);
-            await activePane
-              .locator(".sidebar-region__right-runtime .tabstrip-tab.is-live")
-              .last()
-              .click();
+            await rightTabs(activePane).last().click();
             await typeInTerminal(page, embedded, "DESTINATION_TAB\r");
-            const destinationInputs = await gateway.getRequests("terminal.input");
-            const destinationId = (destinationInputs.at(-1)!.params as { sessionId: string })
-              .sessionId;
+            const destinationId = await lastInputSession(gateway);
             expect(destinationId).not.toBe(sessionId);
             await dock(activePane, "bottom");
             await expect.poll(() => liveTabs(bottom).count()).toBe(3);
@@ -408,7 +339,6 @@ suite.define(() => {
           await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
           await expect.poll(() => bottom.locator(".tp").count()).toBe(0);
         },
-      );
-    },
+      ),
   );
 });
