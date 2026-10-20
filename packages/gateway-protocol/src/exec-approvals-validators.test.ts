@@ -13,7 +13,7 @@ const fileWithEntry = (entry: Record<string, unknown>) => ({
 });
 
 describe("exec approvals protocol validators", () => {
-  it("requires a bound native execution and refuses host-floor bypass", () => {
+  it("accepts native authorization and refuses host-floor bypass", () => {
     const request = {
       operation: "commit",
       agentId: "main",
@@ -26,10 +26,8 @@ describe("exec approvals protocol validators", () => {
         ask: "off",
         allowlistSatisfied: false,
       },
-      execution: { command: ["/usr/bin/echo", "native"], cwd: "/synthetic", env: {} },
     };
     expect(validateExecApprovalsNativeRequest(request)).toBe(true);
-    expect(validateExecApprovalsNativeRequest({ ...request, execution: undefined })).toBe(false);
     expect(
       validateExecApprovalsNativeRequest({
         ...request,

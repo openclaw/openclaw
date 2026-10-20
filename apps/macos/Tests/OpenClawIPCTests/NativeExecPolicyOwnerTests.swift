@@ -15,6 +15,56 @@ import Testing
 @MainActor
 struct NativeExecPolicyOwnerTests {
     enum Engine: String, CaseIterable { case sqlite, postgres }
+    enum PolicyEdit: CaseIterable { case removeMatchedRule, deny, removeUnrelatedRule }
+
+    @Test(arguments: Engine.allCases, PolicyEdit.allCases)
+    func `final commit reauthorizes against the current effective policy`(
+        engine: Engine,
+        edit: PolicyEdit) async throws
+    {
+        try await self.withFixture(engine: engine) { fixture in
+            let matched = ExecAllowlistEntry(id: "matched", pattern: "/usr/bin/touch")
+            let unrelated = ExecAllowlistEntry(id: "unrelated", pattern: "/usr/bin/true")
+            var policy = self.policy(security: .allowlist, ask: .off)
+            policy.agents = ["main": ExecApprovalsAgent(allowlist: [matched, unrelated])]
+            try await fixture.replace(policy)
+            let command = ["/usr/bin/touch", fixture.marker.path]
+            let evaluation = await ExecApprovalEvaluator.evaluate(
+                command: command, rawCommand: nil, cwd: fixture.root.path,
+                envOverrides: nil, agentId: "main")
+            try #require(evaluation.allowlistAuthorizationSatisfied)
+            let boundCommand = try #require(evaluation.boundCommand)
+            let cwd = try #require(ExecCommandResolution.captureApprovalCwdSnapshot(fixture.root.path))
+            let executableSnapshots = ExecCommandResolution.captureApprovalExecutables(evaluation.allowlistResolutions)
+            let commit = ExecApprovalExecutionCommit.build(
+                context: evaluation, effectiveSecurity: evaluation.security,
+                approvalSource: nil, explicitlyApproved: false, persistAllowlist: false)
+            switch edit {
+            case .removeMatchedRule:
+                policy.agents?["main"]?.allowlist = [unrelated]
+            case .deny:
+                policy.defaults?.security = .deny
+            case .removeUnrelatedRule:
+                policy.agents?["main"]?.allowlist = [matched]
+            }
+            try await fixture.replace(policy)
+            switch await ExecApprovalsStore.commitExecution(commit) {
+            case .success:
+                #expect(edit == .removeUnrelatedRule)
+                let result = await ExecHostExecutor.runApprovedCommand(
+                    authorization: commit.authorization, command: boundCommand,
+                    cwd: cwd, env: evaluation.env, timeout: 2,
+                    executableSnapshots: executableSnapshots)
+                #expect(result.success)
+            case let .failure(error):
+                #expect(edit != .removeUnrelatedRule)
+                #expect(
+                    error.localizedDescription.contains("changed before execution"),
+                    Comment(rawValue: error.localizedDescription))
+            }
+            #expect(FileManager.default.fileExists(atPath: fixture.marker.path) == (edit == .removeUnrelatedRule))
+        }
+    }
 
     @Test(arguments: Engine.allCases)
     func `native execution and CLI policy edits share the same owner`(engine: Engine) async throws {

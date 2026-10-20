@@ -106,7 +106,6 @@ describe("exec approvals gateway methods", () => {
                   ask: "off",
                   allowlistSatisfied: true,
                 },
-                execution: { command: [pattern, "native"], cwd: stateDir, env: {} },
               },
               createSessionMutationTestContext({}),
               () => current,

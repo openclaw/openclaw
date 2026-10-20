@@ -138,10 +138,7 @@ enum ExecHostExecutor {
             delayedPolicySnapshot: validatedRequest.delayedPolicySnapshot)
         let timeoutSec = request.timeoutMs.flatMap { Double($0) / 1000.0 }
         let env = context.env
-        if case let .failure(error) = await ExecApprovalsStore.commitExecution(
-            executionCommit,
-            execution: NativeExecPolicyExecution(command: executionCommand, cwd: effectiveCwd, env: env))
-        {
+        if case let .failure(error) = await ExecApprovalsStore.commitExecution(executionCommit) {
             return self.errorResponse(
                 code: "UNAVAILABLE",
                 message: "SYSTEM_RUN_DENIED: \(error.localizedDescription)",

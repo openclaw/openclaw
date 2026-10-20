@@ -130,6 +130,10 @@ falls back to opening the shared database from Swift. Saving a policy requires
 the last observed hash; a stale save fails and must be reloaded. Gateway and
 headless execution enforce the same policy through the shared owner.
 
+The native final commit re-authorizes the command against the current effective
+policy inside the locked write transaction. Policy edits that keep the command
+allowed do not deny it; execution does not require an unchanged policy hash.
+
 An unavailable owner or PostgreSQL database denies native execution with an
 `Exec policy unavailable` diagnostic. Inspect `openclaw gateway status` and the
 selected database, or update the app and CLI if the required operation is

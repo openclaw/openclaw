@@ -8,12 +8,6 @@ struct NativeExecPolicySnapshot: Decodable, Sendable {
     let file: ExecApprovalsFile
 }
 
-struct NativeExecPolicyExecution: Encodable, Sendable {
-    let command: [String]
-    let cwd: String
-    let env: [String: String]
-}
-
 /// The CLI selects the running shared-state owner or takes exclusive offline custody.
 enum NativeExecPolicyOwner {
     private struct Request: Encodable {
@@ -25,7 +19,6 @@ enum NativeExecPolicyOwner {
         var uses: [Use]?
         var grants: [Grant]?
         var authorization: Authorization?
-        var execution: NativeExecPolicyExecution?
     }
 
     private struct Use: Encodable {
@@ -107,7 +100,6 @@ enum NativeExecPolicyOwner {
 
     static func commit(
         _ commit: ExecApprovalExecutionCommit,
-        execution: NativeExecPolicyExecution,
         stateDirectory: URL) async throws
     {
         let source: String
@@ -155,8 +147,7 @@ enum NativeExecPolicyOwner {
                     ask: ask,
                     allowlistSatisfied: basis != nil,
                     policySnapshot: policy,
-                    requireAutoAllowSkills: skillTrust ? true : nil),
-                execution: execution),
+                    requireAutoAllowSkills: skillTrust ? true : nil)),
             stateDirectory: stateDirectory)
         guard result.authorized else { throw Unavailable(detail: "Owner denied execution") }
     }

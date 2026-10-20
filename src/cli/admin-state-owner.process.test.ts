@@ -364,7 +364,6 @@ describe("administrative CLI state owner routing", () => {
                 ask: "off",
                 allowlistSatisfied: true,
               },
-              execution: { command: [pattern], cwd: root, env: {} },
             }
           : { version: 1, agents: { "*": { allowlist: [pattern] } } },
       ),

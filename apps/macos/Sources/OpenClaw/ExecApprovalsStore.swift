@@ -172,11 +172,10 @@ enum ExecApprovalsStore {
 extension ExecApprovalsStore {
     @discardableResult
     static func commitExecution(
-        _ commit: ExecApprovalExecutionCommit,
-        execution: NativeExecPolicyExecution) async -> Result<Void, ExecApprovalsMutationError>
+        _ commit: ExecApprovalExecutionCommit) async -> Result<Void, ExecApprovalsMutationError>
     {
         do {
-            try await NativeExecPolicyOwner.commit(commit, execution: execution, stateDirectory: self.stateDirURL())
+            try await NativeExecPolicyOwner.commit(commit, stateDirectory: self.stateDirURL())
             return .success(())
         } catch {
             let diagnostic = error.localizedDescription

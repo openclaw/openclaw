@@ -257,11 +257,6 @@ const NativeExecApprovalCommitFields = {
     policySnapshot: Type.Optional(ExecApprovalPolicySnapshotSchema),
     requireAutoAllowSkills: Type.Optional(Type.Boolean()),
   }),
-  execution: closedObject({
-    command: Type.Array(Type.String(), { minItems: 1, maxItems: 4096 }),
-    cwd: NonEmptyString,
-    env: Type.Record(Type.String(), Type.String()),
-  }),
 };
 
 /** Final native decision; the caller retains the live native request through spawn. */
@@ -270,7 +265,7 @@ export const ExecApprovalsNativeCommitParamsSchema = closedObject({
   expectedOwnerId: NonEmptyString,
 });
 
-/** Private stdin transport; policy and execution data never appear in argv. */
+/** Private stdin transport; policy and authorization data never appear in argv. */
 export const ExecApprovalsNativeRequestSchema = Type.Union([
   closedObject({ operation: Type.Literal("get") }),
   closedObject({

@@ -50,7 +50,6 @@ describe.each(["sqlite", ...(connection ? ["postgres"] : [])])(
         ask: "on-miss",
         allowlistSatisfied: true,
       },
-      execution: { command: ["/usr/bin/echo", "native"], cwd: root, env: {} },
     });
     const inspect = <T>(run: (database: ReturnType<typeof openOpenClawStateDatabase>) => T) =>
       runWithLocalStateOwner({

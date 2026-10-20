@@ -81,9 +81,7 @@ struct SkillBinsGatewayOwnershipTests {
                     persistAllowlist: false)
             }
             let capturedCommit = commit()
-            let nativeExecution = try NativeExecPolicyExecution(
-                command: #require(evaluation.boundCommand), cwd: root.path, env: evaluation.env)
-            try await ExecApprovalsStore.commitExecution(capturedCommit, execution: nativeExecution).get()
+            try await ExecApprovalsStore.commitExecution(capturedCommit).get()
 
             if replaceGateway {
                 selectedURL.withValue { $0 = URL(string: "ws://127.0.0.1:49346/")! }
@@ -106,15 +104,12 @@ struct SkillBinsGatewayOwnershipTests {
                 #expect(execution.preflightError != nil)
             }
             #expect(evaluation.skillAllow == !replaceGateway)
-            let committed = switch await ExecApprovalsStore.commitExecution(commit(), execution: nativeExecution) {
+            let committed = switch await ExecApprovalsStore.commitExecution(commit()) {
             case .success: true
             case .failure: false
             }
             #expect(committed == executionAllowed)
-            let capturedCommitAccepted = switch await ExecApprovalsStore.commitExecution(
-                capturedCommit,
-                execution: nativeExecution)
-            {
+            let capturedCommitAccepted = switch await ExecApprovalsStore.commitExecution(capturedCommit) {
             case .success: true
             case .failure: false
             }
@@ -131,10 +126,7 @@ struct SkillBinsGatewayOwnershipTests {
                     entry.autoAllowSkills = nil
                 }
                 try #require(evaluation.skillAllow)
-                let revoked = switch await ExecApprovalsStore.commitExecution(
-                    capturedCommit,
-                    execution: nativeExecution)
-                {
+                let revoked = switch await ExecApprovalsStore.commitExecution(capturedCommit) {
                 case .failure(.unavailable): true
                 case .success, .failure: false
                 }
