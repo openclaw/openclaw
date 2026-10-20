@@ -63,42 +63,39 @@ The old diary entry stays.
     expect(dreamsContent).not.toContain("- Old summary.");
   });
 
-  it.each([
-    {
-      label: "daily inline phase",
-      relativePath: path.join("memory", "2026-04-05.md"),
-      mode: "inline",
-    },
-    {
-      label: "separate light report",
-      relativePath: path.join("memory", "dreaming", "light", "2026-04-05.md"),
-      mode: "separate",
-    },
-  ] as const)("keeps an existing $label when replacement fails", async ({ relativePath, mode }) => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-atomic-");
-    const targetPath = path.join(workspaceDir, relativePath);
-    await fs.mkdir(path.dirname(targetPath), { recursive: true });
-    await fs.writeFile(targetPath, "# Previous dreaming artifact\n", "utf-8");
-    const priorBytes = await fs.readFile(targetPath);
-    const realRename = fs.rename;
-    vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
-      if (
-        typeof destination === "string" &&
-        path.resolve(destination) === path.resolve(targetPath)
-      ) {
-        throw Object.assign(new Error("replace failed"), { code: "ENOSPC" });
-      }
-      await realRename(source, destination);
-    });
+  it.each(["inline", "separate"] as const)(
+    "keeps an existing %s report when replacement fails",
+    async (mode) => {
+      const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-atomic-");
+      const targetPath = path.join(
+        workspaceDir,
+        "memory",
+        ...(mode === "separate" ? ["dreaming", "light"] : []),
+        "2026-04-05.md",
+      );
+      await fs.mkdir(path.dirname(targetPath), { recursive: true });
+      await fs.writeFile(targetPath, "# Previous dreaming artifact\n", "utf-8");
+      const priorBytes = await fs.readFile(targetPath);
+      const realRename = fs.rename;
+      vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
+        if (
+          typeof destination === "string" &&
+          path.resolve(destination) === path.resolve(targetPath)
+        ) {
+          throw Object.assign(new Error("replace failed"), { code: "ENOSPC" });
+        }
+        await realRename(source, destination);
+      });
 
-    await expect(
-      daily(workspaceDir, { storage: { mode, separateReports: false } }),
-    ).rejects.toThrow("replace failed");
-    await expect(fs.readFile(targetPath)).resolves.toEqual(priorBytes);
-    await expect(fs.readdir(path.dirname(targetPath))).resolves.toEqual([
-      path.basename(targetPath),
-    ]);
-  });
+      await expect(
+        daily(workspaceDir, { storage: { mode, separateReports: false } }),
+      ).rejects.toThrow("replace failed");
+      await expect(fs.readFile(targetPath)).resolves.toEqual(priorBytes);
+      await expect(fs.readdir(path.dirname(targetPath))).resolves.toEqual([
+        path.basename(targetPath),
+      ]);
+    },
+  );
 
   it("preserves read errors from an empty daily report", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-read-error-");

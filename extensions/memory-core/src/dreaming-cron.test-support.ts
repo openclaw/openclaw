@@ -29,12 +29,6 @@ export type CronJobLike = {
   delivery?: { mode?: string };
   createdAtMs?: number;
 };
-type CronParam = {
-  list: (opts?: { includeDisabled?: boolean }) => Promise<CronJobLike[]>;
-  add: (input: CronAddInput) => Promise<unknown>;
-  update: (id: string, patch: CronPatch) => Promise<unknown>;
-  remove: (id: string) => Promise<{ removed?: boolean }>;
-};
 export type CronHarnessOptions = {
   listThrowsForFirstCalls?: number;
 };
@@ -46,33 +40,25 @@ export function createCronHarness(initialJobs: CronJobLike[] = [], opts?: CronHa
   const removeCalls: string[] = [];
   const mutationCalls: string[] = [];
 
-  const cron: CronParam = {
+  const cron = {
     async list() {
       listCalls += 1;
       if (opts?.listThrowsForFirstCalls && listCalls <= opts.listThrowsForFirstCalls) {
         throw new Error(`list failed on call ${listCalls}`);
       }
-      return jobs.map((job) => ({
-        ...job,
-        ...(job.schedule ? { schedule: { ...job.schedule } } : {}),
-        ...(job.payload ? { payload: { ...job.payload } } : {}),
-        ...(job.delivery ? { delivery: { ...job.delivery } } : {}),
-      }));
+      return structuredClone(jobs);
     },
-    async add(input) {
+    async add(input: CronAddInput) {
       mutationCalls.push("add");
       addCalls.push(input);
       jobs.push({
-        ...input,
+        ...structuredClone(input),
         id: `job-${jobs.length + 1}`,
-        schedule: { ...input.schedule },
-        payload: { ...input.payload },
-        ...(input.delivery ? { delivery: { ...input.delivery } } : {}),
         createdAtMs: Date.now(),
       });
       return {};
     },
-    async update(id, patch) {
+    async update(id: string, patch: CronPatch) {
       mutationCalls.push(`update:${id}`);
       updateCalls.push({ id, patch });
       const index = jobs.findIndex((entry) => entry.id === id);
@@ -93,7 +79,7 @@ export function createCronHarness(initialJobs: CronJobLike[] = [], opts?: CronHa
       };
       return {};
     },
-    async remove(id) {
+    async remove(id: string) {
       mutationCalls.push(`remove:${id}`);
       removeCalls.push(id);
       const index = jobs.findIndex((entry) => entry.id === id);

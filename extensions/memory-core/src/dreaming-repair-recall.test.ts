@@ -59,45 +59,38 @@ async function seedRecallSources() {
     timezone: "America/Los_Angeles",
   });
   const recalls = await readShortTermRecallEntries({ workspaceDir, nowMs });
-  await recordDreamingPhaseSignals({
-    workspaceDir,
-    phase: "light",
-    keys: recalls.map((entry) => entry.key),
-    nowMs,
-  });
+  const keys = recalls.map((entry) => entry.key);
+  await recordDreamingPhaseSignals({ workspaceDir, phase: "light", keys, nowMs });
   const phases = (await readPhaseSignalStore(workspaceDir, nowIso)).entries;
   const survivors = recalls.filter((entry) => entry.path !== corpusPath);
+  const before = { recalls: new Set(recalls), phases };
+  const after = {
+    recalls: new Set(survivors),
+    phases: Object.fromEntries(survivors.map((entry) => [entry.key, phases[entry.key]])),
+  };
   return {
     workspaceDir,
     async expectState(archived: boolean) {
-      const expected = archived ? survivors : recalls;
-      expect(new Set(await readShortTermRecallEntries({ workspaceDir, nowMs }))).toEqual(
-        new Set(expected),
-      );
-      expect((await readPhaseSignalStore(workspaceDir, nowIso)).entries).toEqual(
-        archived
-          ? Object.fromEntries(survivors.map((entry) => [entry.key, phases[entry.key]]))
-          : phases,
-      );
-    },
-    async expectClean() {
-      await expect(auditShortTermPromotionArtifacts({ workspaceDir })).resolves.toMatchObject({
-        danglingEntryCount: 0,
-      });
+      expect({
+        recalls: new Set(await readShortTermRecallEntries({ workspaceDir, nowMs })),
+        phases: (await readPhaseSignalStore(workspaceDir, nowIso)).entries,
+      }).toEqual(archived ? after : before);
+      if (archived) {
+        await expect(auditShortTermPromotionArtifacts({ workspaceDir })).resolves.toMatchObject({
+          danglingEntryCount: 0,
+        });
+      }
     },
   };
 }
 
 it("prunes archived corpus recalls and phase signals while preserving existing sources", async () => {
-  const { workspaceDir, expectState, expectClean } = await seedRecallSources();
+  const { workspaceDir, expectState } = await seedRecallSources();
 
   const repair = await repairDreamingArtifacts({ workspaceDir });
 
   expect(repair).toMatchObject({ archivedSessionCorpus: true, warnings: [] });
-  const retained = await readShortTermRecallEntries({ workspaceDir, nowMs });
-  expect(retained.map((entry) => entry.path).toSorted()).toEqual(livePaths.toSorted());
   await expectState(true);
-  await expectClean();
   await expect(repairShortTermPromotionArtifacts({ workspaceDir })).resolves.toMatchObject({
     changed: false,
   });
@@ -118,7 +111,7 @@ it("preserves recall and phase signals when the archive rename fails", async () 
 });
 
 it("rolls back interrupted archive pruning and lets nightly repair finish", async () => {
-  const { workspaceDir, expectState, expectClean } = await seedRecallSources();
+  const { workspaceDir, expectState } = await seedRecallSources();
   const db = openOpenClawStateDatabase().db;
   const workspaceKey = memoryCoreWorkspaceStateKey(workspaceDir);
   db.exec(`
@@ -131,10 +124,10 @@ it("rolls back interrupted archive pruning and lets nightly repair finish", asyn
   try {
     const repair = await repairDreamingArtifacts({ workspaceDir });
 
-    expect(repair.archivedSessionCorpus).toBe(true);
-    expect(repair.warnings).toEqual([
-      expect.stringContaining("Archive completed but recall cleanup failed"),
-    ]);
+    expect(repair).toMatchObject({
+      archivedSessionCorpus: true,
+      warnings: [expect.stringContaining("Archive completed but recall cleanup failed")],
+    });
     await expect(fs.stat(path.join(workspaceDir, corpusPath))).rejects.toMatchObject({
       code: "ENOENT",
     });
@@ -148,5 +141,4 @@ it("rolls back interrupted archive pruning and lets nightly repair finish", asyn
     removedDanglingEntries: 1,
   });
   await expectState(true);
-  await expectClean();
 });

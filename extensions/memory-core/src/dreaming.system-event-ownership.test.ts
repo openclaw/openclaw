@@ -51,7 +51,12 @@ function createHook(enabled = true) {
   expect(registration).toBeDefined();
   const beforeReply = registration![1] as Parameters<typeof api.on<"before_agent_reply">>[1];
   return async (context: Parameters<typeof beforeReply>[1]) => {
-    const result = await beforeReply(event, context);
+    const result = await beforeReply(event, {
+      agentId: "main",
+      trigger: "heartbeat",
+      workspaceDir: ".",
+      ...context,
+    });
     expect(error).not.toHaveBeenCalled();
     return result;
   };
@@ -59,31 +64,19 @@ function createHook(enabled = true) {
 
 const event = { cleanedBody: MEMORY_DREAMING_SYSTEM_EVENT_TEXT };
 const handled = { handled: true, reason: "memory-core: short-term dreaming disabled by limit" };
-
-it.each(
-  ["global", "agent:research:global:heartbeat"].flatMap((sessionKey) =>
-    ["main", "research"].map((queuedAgentId) => ({ sessionKey, queuedAgentId })),
-  ),
-)(
-  "checks $sessionKey against its heartbeat owner, with an event for $queuedAgentId",
-  async ({ sessionKey, queuedAgentId }) => {
-    const beforeReply = createHook();
-    systemEvents.enqueueSystemEvent(MEMORY_DREAMING_SYSTEM_EVENT_TEXT, {
-      sessionKey: `agent:${queuedAgentId}:global`,
-      contextKey: "cron:memory-dreaming",
-    });
-    const result = await beforeReply({
-      agentId: "research",
-      trigger: "heartbeat",
-      sessionKey,
-      heartbeatEventQueueSessionKey: "agent:research:global",
-      workspaceDir: ".",
-    });
-    expect(result).toEqual(queuedAgentId === "research" ? handled : undefined);
-  },
-);
-
 it.each([
+  ...["global", "agent:research:global:heartbeat"].flatMap((sessionKey) =>
+    ["main", "research"].map(
+      (queuedAgentId) =>
+        [
+          sessionKey,
+          "agent:research:global",
+          `agent:${queuedAgentId}:global`,
+          queuedAgentId === "research" ? handled : undefined,
+          "research",
+        ] as const,
+    ),
+  ),
   ["agent:main:heartbeat", undefined, undefined, undefined],
   ["agent:main:heartbeat:heartbeat", "agent:main:heartbeat", "agent:main:heartbeat", handled],
   [
@@ -96,8 +89,8 @@ it.each([
   ["agent:main:main:heartbeat", undefined, "agent:main:main", undefined],
   ["agent:main", undefined, undefined, undefined],
 ] as const)(
-  "uses only the supplied queue or current session: %s / %s",
-  async (sessionKey, queueKey, pendingKey, expected) => {
+  "routes heartbeat %s through queue %s with pending event %s",
+  async (sessionKey, queueKey, pendingKey, expected, agentId?: string) => {
     const beforeReply = createHook();
     if (pendingKey) {
       systemEvents.enqueueSystemEvent(MEMORY_DREAMING_SYSTEM_EVENT_TEXT, {
@@ -107,11 +100,9 @@ it.each([
     }
     expect(
       await beforeReply({
-        agentId: "main",
-        trigger: "heartbeat",
+        agentId: agentId ?? "main",
         sessionKey,
         heartbeatEventQueueSessionKey: queueKey,
-        workspaceDir: ".",
       }),
     ).toEqual(expected);
   },
@@ -123,7 +114,6 @@ it.each(["heartbeat", "cron"])(
     const beforeReply = createHook(false);
     const peek = vi.spyOn(systemEvents, "peekSystemEventEntries");
     const result = await beforeReply({
-      agentId: "main",
       trigger,
       sessionKey: "agent:main:heartbeat",
     });

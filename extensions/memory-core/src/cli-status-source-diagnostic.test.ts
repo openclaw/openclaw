@@ -38,7 +38,7 @@ const cfg = {
   },
 };
 
-function mockManager(results: MemorySearchResult[] = []) {
+async function run(args: string[], results: MemorySearchResult[] = []) {
   getMemorySearchManager.mockResolvedValueOnce({
     manager: {
       search: async () => results,
@@ -55,14 +55,9 @@ function mockManager(results: MemorySearchResult[] = []) {
       close: vi.fn(async () => {}),
     },
   });
-}
-
-async function runStatus(json = false) {
   const program = new Command();
   registerMemoryCli(program);
-  await program.parseAsync(json ? ["memory", "status", "--json"] : ["memory", "status"], {
-    from: "user",
-  });
+  await program.parseAsync(["memory", ...args], { from: "user" });
 }
 
 beforeEach(() => {
@@ -73,17 +68,15 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 it("shows the excluded session source in human and JSON status", async () => {
-  mockManager();
   const logs = spyRuntimeLogs(defaultRuntime);
-  await runStatus();
+  await run(["status"]);
 
   const output = logs.mock.calls.map((call) => String(call[0])).join("\n");
   expect(output).toContain("sessions requested but disabled");
   expect(output).toContain("memory.search.experimental.sessionMemory=true");
 
-  mockManager();
   const json = spyRuntimeJson(defaultRuntime);
-  await runStatus(true);
+  await run(["status", "--json"]);
   expect(firstWrittenJsonArg(json)).toEqual([
     expect.objectContaining({ excludedConfiguredSources: ["sessions"] }),
   ]);
@@ -102,16 +95,12 @@ it("reports recall recording failure without discarding search results", async (
     ...cfg,
     plugins: { entries: { "memory-core": { config: { dreaming: { enabled: true } } } } },
   });
-  mockManager([result]);
   const promotion = await import("./short-term-promotion-record.js");
   vi.spyOn(promotion, "recordShortTermRecalls").mockRejectedValueOnce(
     new Error("fixture recall persistence failed"),
   );
   const json = spyRuntimeJson(defaultRuntime);
-  const program = new Command();
-  registerMemoryCli(program);
-
-  await program.parseAsync(["memory", "search", "telescope", "--json"], { from: "user" });
+  await run(["search", "telescope", "--json"], [result]);
 
   expect(firstWrittenJsonArg(json)).toEqual({
     results: [result],
