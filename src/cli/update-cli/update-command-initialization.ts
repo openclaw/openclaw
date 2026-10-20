@@ -1,6 +1,7 @@
+import fs from "node:fs/promises";
 import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
-import { pathEntryExists } from "../../infra/path-existence.js";
+import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { SQLITE_SIDECAR_SUFFIXES } from "../../infra/sqlite-files.js";
 import type { UpdateCandidateAdmissionResult } from "../../infra/update-candidate-admission.js";
 import { compareSemverStrings } from "../../infra/update-check.js";
@@ -113,16 +114,27 @@ export async function updateStateNeedsInitialization(env: NodeJS.ProcessEnv): Pr
     env,
     recoverOrphanedSidecars: false,
   });
-  if (await pathEntryExists(databasePath)) {
+  try {
+    await fs.lstat(databasePath);
     return false;
+  } catch (error) {
+    if (!hasNodeErrorCode(error, "ENOENT")) {
+      throw error;
+    }
   }
   for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
-    if (await pathEntryExists(`${databasePath}${suffix}`)) {
-      throw new UpdatePreMutationError(
-        "target-state-initialization",
-        "The state database is missing but SQLite sidecars remain. Preserve the database family and restore its main file before updating.",
-      );
+    try {
+      await fs.lstat(`${databasePath}${suffix}`);
+    } catch (error) {
+      if (hasNodeErrorCode(error, "ENOENT")) {
+        continue;
+      }
+      throw error;
     }
+    throw new UpdatePreMutationError(
+      "target-state-initialization",
+      "The state database is missing but SQLite sidecars remain. Preserve the database family and restore its main file before updating.",
+    );
   }
   return true;
 }

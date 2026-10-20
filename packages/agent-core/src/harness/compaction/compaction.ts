@@ -386,7 +386,7 @@ export function prepareCompaction(
   settings: CompactionSettings,
   requestState?: "unresolved",
   constraints?: CompactionRetentionConstraints,
-): CompactionPreparation | undefined {
+): Result<CompactionPreparation | undefined, CompactionError> {
   const lastEntry = pathEntries.at(-1);
   if (
     !lastEntry ||
@@ -394,7 +394,7 @@ export function prepareCompaction(
     (lastEntry.type === "compaction" && lastEntry.fromHook)
   ) {
     // Safeguard-owned compactions are anti-loop boundaries for the current turn.
-    return undefined;
+    return ok(undefined);
   }
 
   const prevBoundaryIndex = pathEntries.findLastIndex(
@@ -480,16 +480,20 @@ export function prepareCompaction(
     constraints,
   );
   if (cutPoint.firstKeptEntryIndex === boundaryEnd) {
-    throw new CompactionError(
-      "summarization_failed",
-      "No complete recent message fits beside the foreground prompt, tools, and summary. Reduce the request or select a larger context window.",
+    return err(
+      new CompactionError(
+        "summarization_failed",
+        "No complete recent message fits beside the foreground prompt, tools, and summary. Reduce the request or select a larger context window.",
+      ),
     );
   }
   const firstKeptEntry = effectiveEntries[cutPoint.firstKeptEntryIndex];
   if (!firstKeptEntry?.id) {
-    throw new CompactionError(
-      "invalid_session",
-      "First kept entry has no UUID - session may need migration",
+    return err(
+      new CompactionError(
+        "invalid_session",
+        "First kept entry has no UUID - session may need migration",
+      ),
     );
   }
   const firstKeptEntryId = firstKeptEntry.id;
@@ -505,7 +509,7 @@ export function prepareCompaction(
     }
   }
   if (messagesToSummarize.length === 0 && turnPrefixMessages.length === 0) {
-    return undefined;
+    return ok(undefined);
   }
   const fileOps = createFileOps();
   if (previousSummaryDetails) {
@@ -520,7 +524,7 @@ export function prepareCompaction(
     }
   }
 
-  return {
+  return ok({
     firstKeptEntryId,
     messagesToSummarize,
     turnPrefixMessages,
@@ -531,7 +535,7 @@ export function prepareCompaction(
     previousSummaryDetails,
     fileOps,
     settings,
-  };
+  });
 }
 
 const TURN_PREFIX_SUMMARIZATION_PROMPT = `This is the PREFIX of a turn that was too large to keep. The SUFFIX (recent work) is retained.

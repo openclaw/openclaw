@@ -23,7 +23,7 @@ export function discoverStandaloneWorkers({
       const contents = fs.readFileSync(path.join(runtimeRoot, entry), "utf8");
       if (
         contents.includes("import.meta") &&
-        /\b(?:Worker|createCpuTrackedWorker)\b/.test(contents) &&
+        /\b(?:Worker|createCpuTrackedWorker|createRetainedNativeWorker)\b/.test(contents) &&
         hasSelfTargetedWorker(
           contents,
           parse(contents, { ecmaVersion: "latest", sourceType: "module" }),
@@ -237,7 +237,9 @@ function workerBindings(contents, ast) {
     }
   };
   const knownFactory = (name) =>
-    name === "createCpuTrackedWorker" && contents.includes("//#region src/infra/worker-cpu.ts");
+    (name === "createCpuTrackedWorker" && contents.includes("//#region src/infra/worker-cpu.ts")) ||
+    (name === "createRetainedNativeWorker" &&
+      contents.includes("//#region src/infra/worker-native-lifecycle.ts"));
   const visit = (node, outer) => {
     if (!node || typeof node !== "object" || !node.type) {
       return;
@@ -282,7 +284,9 @@ function workerBindings(contents, ast) {
     scopes.set(node, scope);
     if (node.type === "ImportDeclaration") {
       const native = ["worker_threads", "node:worker_threads"].includes(node.source.value);
-      const factoryModule = /(?:^|\/)worker-cpu(?:[.-]|$)/.test(node.source.value);
+      const factoryModule = /(?:^|\/)(?:worker-cpu|worker-native-lifecycle)(?:[.-]|$)/.test(
+        node.source.value,
+      );
       for (const specifier of node.specifiers) {
         bind(
           specifier.local,
@@ -292,8 +296,8 @@ function workerBindings(contents, ast) {
               ? specifier.imported.name === "Worker" && "worker"
               : "namespace"
             : factoryModule &&
-                [specifier.imported?.name, specifier.local.name].some(
-                  (name) => name === "createCpuTrackedWorker",
+                [specifier.imported?.name, specifier.local.name].some((name) =>
+                  ["createCpuTrackedWorker", "createRetainedNativeWorker"].includes(name),
                 )
               ? "worker"
               : false,

@@ -103,6 +103,11 @@ vi.mock("../plugins/capability-provider-runtime.js", async () => {
   };
 });
 
+vi.mock("./tts-core.js", async () => {
+  const actual = await vi.importActual<typeof import("./tts-core.js")>("./tts-core.js");
+  return { ...actual, scheduleCleanup: vi.fn() };
+});
+
 export const {
   testApi,
   buildTtsSystemPromptHint,

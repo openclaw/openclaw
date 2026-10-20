@@ -1,4 +1,3 @@
-import { throwCollectedErrors } from "../infra/error-graph-internal.js";
 import type { ReplyOperation } from "./session-controller.contracts.js";
 import { notify } from "./session-controller.lifecycle-state.js";
 import {
@@ -135,7 +134,11 @@ export function createReplyOperationRecovery(context: ReplyOperationRecoveryCont
       return false;
     }
     const { fenced, failures } = await context.revokeTerminalProducerFences(canRetire);
-    throwCollectedErrors(failures, "Session admission writer fencing failed");
+    if (failures.length) {
+      throw failures.length === 1
+        ? failures[0]
+        : new AggregateError(failures, "Session admission writer fencing failed");
+    }
     if (!fenced || !canRetire()) {
       return false;
     }

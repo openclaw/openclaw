@@ -1,5 +1,4 @@
 import { createAgentRunDirectAbortError } from "../agents/run-termination.js";
-import { throwCollectedErrors } from "../infra/error-graph-internal.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   agentWorkAdmissionIdentity,
@@ -115,7 +114,12 @@ export function startAgentWorkAdmissionInterruption(
   return {
     interruptedRunIds,
     released: Promise.all(settlements).then(() => {
-      throwCollectedErrors(failures, "Agent work interruption failed");
+      if (failures.length === 1) {
+        throw failures[0];
+      }
+      if (failures.length) {
+        throw new AggregateError(failures, "Agent work interruption failed");
+      }
     }),
   };
 }

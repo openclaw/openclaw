@@ -124,8 +124,8 @@ it.each([
     const originalEntries = structuredClone(entries);
     const lastEntry = entries.at(-1);
     const preparation = prepareCompaction(entries, settings);
-    assert(preparation && lastEntry, "expected compactable image history");
-    expect(preparation).toMatchObject({
+    assert(preparation.ok && preparation.value && lastEntry, "expected compactable image history");
+    expect(preparation.value).toMatchObject({
       isSplitTurn: splitTurn,
       firstKeptEntryId: lastEntry.id,
     });
@@ -136,7 +136,7 @@ it.each([
       (conversation) => conversation || "No conversation content",
       6,
     );
-    const result = await compactWith(preparation, model, { runtime });
+    const result = await compactWith(preparation.value, model, { runtime });
     assert(result.ok);
     const marker = "[image data omitted from summary input]";
     expect(prompts).toHaveLength(1);
@@ -206,9 +206,9 @@ it.each([
         ),
       );
       const preparation = prepareCompaction(entries, settings);
-      assert(preparation, "expected compactable history");
-      expect(preparation.isSplitTurn).toBe(mode === "split");
-      result = await compactWith(preparation, model, { runtime });
+      assert(preparation.ok && preparation.value, "expected compactable history");
+      expect(preparation.value.isSplitTurn).toBe(mode === "split");
+      result = await compactWith(preparation.value, model, { runtime });
     }
     expect(result.ok).toBe(true);
     expect(conversations).toHaveLength(1);

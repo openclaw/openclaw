@@ -1,6 +1,5 @@
 import type { GatewayContextResolver } from "../gateway/server-methods/types.js";
 import { captureGatewayScopeMatcher } from "../gateway/session-runtime-scope.js";
-import { throwCollectedErrors, throwIfSettledRejected } from "../infra/error-graph-internal.js";
 import { hasGatewayContextOwner } from "../plugins/runtime/gateway-request-scope.js";
 import { sourceSettlements } from "./session-controller.context.js";
 import type {
@@ -198,7 +197,15 @@ export function captureGatewaySessionWorkAdmissionInterruption(
       });
       return {
         released: Promise.allSettled(cancellations).then((results) => {
-          throwIfSettledRejected(results, "Gateway effect interruption failed");
+          const failures = results.flatMap((result) =>
+            result.status === "rejected" ? [result.reason] : [],
+          );
+          if (failures.length === 1) {
+            throw failures[0];
+          }
+          if (failures.length) {
+            throw new AggregateError(failures, "Gateway effect interruption failed");
+          }
         }),
       };
     },
@@ -324,7 +331,12 @@ export function startSessionControllerInterruption(
         (settlement) => settlement !== params.deferSourceSettlement?.settlement.promise,
       ),
     ).then(() => {
-      throwCollectedErrors(failures, "Session interruption failed");
+      if (failures.length === 1) {
+        throw failures[0];
+      }
+      if (failures.length) {
+        throw new AggregateError(failures, "Session interruption failed");
+      }
     }),
   };
 }

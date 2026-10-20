@@ -58,11 +58,11 @@ it("persists a generated provenance compaction across reload and branch navigati
       reserveTokens: 1_000,
       keepRecentTokens: 1,
     });
-    if (!preparation) {
+    if (!preparation.ok || !preparation.value) {
       throw new Error("expected persisted transcript to be compactable");
     }
     const result = await compact(
-      preparation,
+      preparation.value,
       summaryModel,
       undefined,
       undefined,

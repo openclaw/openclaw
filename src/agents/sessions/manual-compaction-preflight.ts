@@ -14,12 +14,16 @@ export function preflightManualSessionCompaction(
   pathEntries: SessionEntry[],
   settings: CompactionSettings,
 ): ManualCompactionPreflight {
-  let preparation = prepareCompaction(pathEntries, settings);
-  if (!preparation) {
+  let result = prepareCompaction(pathEntries, settings);
+  if (result.ok && !result.value) {
     // Explicit manual compaction uses the smallest valid history rather than
     // treating a session that fits the configured keep budget as a no-op.
-    preparation = prepareCompaction(pathEntries, { ...settings, keepRecentTokens: 0 });
+    result = prepareCompaction(pathEntries, { ...settings, keepRecentTokens: 0 });
   }
+  if (!result.ok) {
+    throw result.error;
+  }
+  const preparation = result.value;
   if (preparation) {
     return { compactable: true, preparation };
   }

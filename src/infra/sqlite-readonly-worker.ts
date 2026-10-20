@@ -16,7 +16,6 @@ import {
   observeChildRuntime,
 } from "./child-runtime-viability.js";
 import { hasErrnoCode } from "./errno.js";
-import { throwSettledAggregate } from "./error-graph-internal.js";
 import { resolveNodeCompileCacheEnv } from "./node-compile-cache-env.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
@@ -165,7 +164,12 @@ export function createSqliteReadOnlyWorkerScope(options?: {
           scope.worker?.close(),
           scope.releaseReadWorker?.(),
         ]);
-        throwSettledAggregate(closed, "SQLite read-only worker scope cleanup failed");
+        const failures = closed.flatMap((result) =>
+          result.status === "rejected" ? [result.reason] : [],
+        );
+        if (failures.length > 0) {
+          throw new AggregateError(failures, "SQLite read-only worker scope cleanup failed");
+        }
       })();
       return closing;
     },

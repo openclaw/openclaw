@@ -40,7 +40,14 @@ export class BoundedSerialQueue {
       maxPendingCount: number;
       maxPendingWeight: number;
     },
-  ) {}
+  ) {
+    if (!Number.isSafeInteger(options.maxPendingCount) || options.maxPendingCount < 0) {
+      throw new Error("maxPendingCount must be a non-negative safe integer");
+    }
+    if (!Number.isFinite(options.maxPendingWeight) || options.maxPendingWeight < 0) {
+      throw new Error("maxPendingWeight must be a non-negative finite number");
+    }
+  }
 
   get isIdle(): boolean {
     return !this.active && this.pending.length === 0;
@@ -58,6 +65,9 @@ export class BoundedSerialQueue {
       return { accepted: false, reason: "sealed" };
     }
     const weight = options.weight ?? 1;
+    if (!Number.isFinite(weight) || weight < 0) {
+      throw new Error("queue task weight must be a non-negative finite number");
+    }
     if (
       this.active &&
       (this.pending.length >= this.options.maxPendingCount ||

@@ -66,8 +66,11 @@ export async function runNativeResourceLifecycle(
     import("../shared/deferred.js"),
     import("./runtime-worker-url.js"),
   ]);
-  const { captureRetainedNativeWorkerSource, closeDefaultRetainedNativeWorkerSource } =
-    await import("./worker-native-lifecycle.js");
+  const {
+    captureRetainedNativeWorkerSource,
+    closeDefaultRetainedNativeWorkerSource,
+    createRetainedNativeWorker,
+  } = await import("./worker-native-lifecycle.js");
   const { assertNativeResourceCustody, createIdleBrokerRetirementProof } =
     await import("./worker-native-lifecycle.custody.test-support.js");
   const databasePath = path.join(directory, "native-child.sqlite");
@@ -142,9 +145,10 @@ export async function runNativeResourceLifecycle(
     parentPort.on("message", (value) => port.postMessage(value, []));
     port.postMessage({ open: true }, []);`;
   const createResourceWorker = (owner: ResourceControl, input: unknown) =>
-    source.create(
+    createRetainedNativeWorker(
       resourceWorkerSource,
       { eval: true, execArgv: [], workerData: {} },
+      source,
       source.captureResource(
         resolveRuntimeWorkerUrl(nativeWorkerResourceEntrypoint),
         "nativeResource",

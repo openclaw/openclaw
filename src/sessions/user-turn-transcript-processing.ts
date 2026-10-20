@@ -1,7 +1,6 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import type { AgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.types.js";
 import type { SessionPendingInputReceipt } from "../config/sessions/session-accessor.pending-inputs.js";
-import { throwCollectedErrors } from "../infra/error-graph-internal.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import type { UserTurnTranscriptRecorder } from "./user-turn-transcript.types.js";
 
@@ -112,7 +111,12 @@ export function createUserTurnProcessingCompletion(
           settled.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
         ),
       ];
-      throwCollectedErrors(failures, "Failed to settle pending input custody");
+      if (failures.length === 1) {
+        throw failures[0];
+      }
+      if (failures.length) {
+        throw new AggregateError(failures, "Failed to settle pending input custody");
+      }
     },
   };
 }

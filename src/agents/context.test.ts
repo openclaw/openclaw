@@ -12,7 +12,6 @@ import { resetContextWindowCacheForTest } from "./context.test-support.js";
 vi.mock("../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/config.js")>()),
   getRuntimeConfig: () => ({}),
-  getRuntimeConfigSnapshot: () => ({}),
   projectConfigOntoRuntimeSourceSnapshot: (config: unknown) => config,
 }));
 

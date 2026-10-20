@@ -52,7 +52,10 @@ import {
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "./sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { createSqliteDatabaseAdmissionRelay } from "./sqlite-worker-operation-admission.js";
-import { captureRetainedNativeWorkerSource } from "./worker-native-lifecycle.js";
+import {
+  captureRetainedNativeWorkerSource,
+  createRetainedNativeWorker,
+} from "./worker-native-lifecycle.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -585,7 +588,9 @@ it.each([false, true])(
       },
       transferList: [relay.port],
     };
-    const retainedWorker = source?.create(script, options);
+    const retainedWorker = retained
+      ? createRetainedNativeWorker(script, options, source)
+      : undefined;
     const worker: WorkerLifecycle = retainedWorker ?? new Worker(script, options);
     source?.retain(worker, async () => {
       await worker.terminate();

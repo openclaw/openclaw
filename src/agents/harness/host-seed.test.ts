@@ -169,7 +169,7 @@ it.each<SeedCase>([
               : {}),
           },
         );
-        const prepared = expectDefined(result, "prepared compaction");
+        const prepared = expectDefined(result.ok ? result.value : undefined, "prepared compaction");
         expect(
           JSON.stringify([
             ...prepared.messagesToSummarize,

@@ -144,3 +144,13 @@ test("startup spans stay request-owned and include unfinished parents without ti
   );
   expectLog(secondLog, "slow chat send 1020ms stage=startup ack=0ms detail.workspace=20ms");
 });
+
+test("span observer failures preserve synchronous and asynchronous results and errors", async () => {
+  const failure = new Error("operation failure");
+  const observer = () => {
+    throw new Error("observer failure");
+  };
+  expect(observeTimeline(observer, () => measureSpanSync("sync", () => 42))).toBe(42);
+  const rejectOperation = () => measureSpan("async", () => Promise.reject(failure));
+  await expect(observeTimeline(() => observer, rejectOperation)).rejects.toBe(failure);
+});

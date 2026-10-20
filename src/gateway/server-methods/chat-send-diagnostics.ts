@@ -108,7 +108,7 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
     scope,
     observeSpan: (name: string, attributes: Record<string, unknown> | undefined) => {
       const spanName = name === "agent.prepare" ? attributes?.stage : name;
-      return typeof spanName === "string" ? scope(`detail.${spanName}`) : undefined;
+      return typeof spanName === "string" ? scope(`detail.${spanName}`)?.finish : undefined;
     },
     acknowledge(disposition: PostAckStage = "startup") {
       if (!finished && stage === "request") {

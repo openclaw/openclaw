@@ -1,5 +1,4 @@
 import type { Result } from "@openclaw/normalization-core/result";
-import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { acquireBundledCapabilityRuntimeRegistry } from "./bundled-capability-runtime.js";
@@ -53,7 +52,12 @@ export async function acquirePluginCapabilityProviders<
     }
     return Promise.allSettled(releases.map(async (releaseClaim) => await releaseClaim())).then(
       (results) => {
-        throwSettledAggregate(results, "Capability registration cleanup failed");
+        const errors = results.flatMap((result) =>
+          result.status === "rejected" ? [result.reason] : [],
+        );
+        if (errors.length > 0) {
+          throw new AggregateError(errors, "Capability registration cleanup failed");
+        }
       },
     );
   };

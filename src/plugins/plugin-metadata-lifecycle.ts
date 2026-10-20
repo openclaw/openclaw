@@ -1,5 +1,4 @@
 /** Coordinates plugin metadata snapshot and process memo cache lifecycle resets. */
-import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
@@ -114,7 +113,12 @@ export function retainGatewayPluginMetadata(
         return completed;
       }),
     ]);
-    throwSettledAggregate(results, "Gateway plugin metadata cleanup failed");
+    const failures = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (failures.length) {
+      throw new AggregateError(failures, "Gateway plugin metadata cleanup failed");
+    }
     const completed: PluginHostCleanupResult[] = results.flatMap((result) =>
       result.status === "fulfilled" && result.value ? [result.value] : [],
     );

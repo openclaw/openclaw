@@ -1,7 +1,6 @@
 /** Exact input identity and custody; scheduling remains with the mailbox selector. */
 import type { FollowupRun, QueueSettings } from "../auto-reply/reply/queue/types.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
-import { throwCollectedErrors } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { notifyGatewayWorkMetricsChanged } from "../infra/gateway-work-metrics-events.js";
 import { defaultRuntime } from "../runtime.js";
@@ -446,7 +445,12 @@ export async function captureSessionControllerSourceStopAcknowledgment(
       failures.push(error);
     }
   }
-  throwCollectedErrors(failures, "Session cancellation acknowledgment failed");
+  if (failures.length === 1) {
+    throw failures[0];
+  }
+  if (failures.length > 1) {
+    throw new AggregateError(failures, "Session cancellation acknowledgment failed");
+  }
 }
 
 export function captureSessionControllerSourceSettlement(

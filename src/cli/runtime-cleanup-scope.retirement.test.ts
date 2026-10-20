@@ -59,12 +59,12 @@ it.each(["success", "failure"])(
           // the cleanup scope's distinct resolution after its files disappear.
           const { closeCliResources, waitForPendingCliDisposers } = await import(entries.cleanup);
           const { registerOpenClawStateDatabaseAsyncResource } = await import(entries.database);
-          const { captureRetainedNativeWorkerSource, closeDefaultRetainedNativeWorkerSource } =
+          const { createRetainedNativeWorker, closeDefaultRetainedNativeWorkerSource } =
             await import(entries.workers);
           const supervisors = [];
           const captureWorker = worker => supervisors.push(worker);
           process.on("worker", captureWorker);
-          const worker = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined }).create(
+          const worker = createRetainedNativeWorker(
             'const {parentPort} = require("node:worker_threads"); parentPort.on("message", () => {}); parentPort.postMessage("ready");',
             { eval: true, env: {} },
           );

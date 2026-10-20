@@ -3,7 +3,6 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { isMainThread, threadId } from "node:worker_threads";
-import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "../infra/node-sqlite.js";
 import { isPathInside } from "../infra/path-guards.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
@@ -506,7 +505,12 @@ export async function closeOpenClawAgentDatabasesAsync(rootPath?: string): Promi
           : drainAgentDatabaseResources({ ...selection, path: pathname }, async () => {}),
       ),
     );
-    throwSettledAggregate(results, "Agent database close failed");
+    const errors = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (errors.length > 0) {
+      throw new AggregateError(errors, "Agent database close failed");
+    }
   });
 }
 

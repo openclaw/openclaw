@@ -18,6 +18,7 @@ import {
   buildSlackMessageDispatchReplayKey,
   claimSlackMessageDispatchReplay,
   createSlackMessageDispatchReplayGuard,
+  SlackMessageDispatchRetryError,
   type SlackMessageDispatchReplayClaim,
   type SlackMessageDispatchReplayGuard,
 } from "./message-dispatch-dedupe.js";
@@ -47,6 +48,8 @@ type SlackDispatchCompletion = ReturnType<typeof createDeferred<void>>;
 type QueuedSlackMessageOptions = Parameters<SlackMessageHandler>[1] & {
   dispatchCompletion?: Omit<SlackDispatchCompletion, "promise">;
 };
+
+const RETRYABLE_FLUSH_MAX_ATTEMPTS = 3;
 
 function shouldDebounceSlackMessage(message: SlackMessageEvent, cfg: SlackMonitorContext["cfg"]) {
   const text = message.text ?? "";
@@ -82,6 +85,7 @@ export function createSlackMessageHandler(params: {
     message: SlackMessageEvent;
     opts: QueuedSlackMessageOptions;
     debounceMs: number;
+    retry?: { attempt: number; runtimeContext: SlackMonitorContext };
   }>({
     cfg: ctx.cfg,
     channel: "slack",
@@ -90,7 +94,7 @@ export function createSlackMessageHandler(params: {
     buildKey: (entry) =>
       buildSlackDebounceKey(entry.message, ctx.accountId, entry.opts.eventScope?.teamId),
     shouldDebounce: (entry) =>
-      !entry.opts.eventScope && shouldDebounceSlackMessage(entry.message, ctx.cfg),
+      !entry.retry && !entry.opts.eventScope && shouldDebounceSlackMessage(entry.message, ctx.cfg),
     onFlush: (entries, createFlush) =>
       createFlush({
         lifecycle: {
@@ -105,8 +109,10 @@ export function createSlackMessageHandler(params: {
           const completions = entries
             .map((entry) => entry.opts.dispatchCompletion)
             .filter((completion) => completion !== undefined);
+          const retry = entries.find((entry) => entry.retry)?.retry;
+          let admittedContext = retry?.runtimeContext;
           try {
-            const runtimeContext = await ctx.readRuntimeContext();
+            const runtimeContext = (admittedContext ??= await ctx.readRuntimeContext());
             admissionLifecycle.abortSignal.throwIfAborted();
             await (async () => {
               const flushedEntry = entries.at(-1);
@@ -334,6 +340,25 @@ export function createSlackMessageHandler(params: {
               completion.resolve();
             }
           } catch (error) {
+            const runtimeContext = admittedContext;
+            if (
+              runtimeContext &&
+              (retry?.attempt ?? 0) < RETRYABLE_FLUSH_MAX_ATTEMPTS &&
+              error instanceof SlackMessageDispatchRetryError &&
+              !entries.some((entry) => entry.opts.eventScope || entry.opts.dispatchCompletion)
+            ) {
+              // The twin released its claim. Re-enter FIFO admission immediately;
+              // core already owns retries for session initialization failures.
+              await Promise.all(
+                entries.map((entry) =>
+                  debouncer.enqueue({
+                    ...entry,
+                    retry: { attempt: (retry?.attempt ?? 0) + 1, runtimeContext },
+                  }),
+                ),
+              );
+              return;
+            }
             for (const completion of completions) {
               completion.reject(error);
             }

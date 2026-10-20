@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   captureRetainedNativeWorkerSource,
+  createRetainedNativeWorker,
   type RetainedNativeWorkerSource,
 } from "./worker-native-lifecycle.js";
 
@@ -40,10 +41,11 @@ export function createIdleBrokerRetirementProof(source: RetainedNativeWorkerSour
       assert.throws(() => process.kill(brokerPid, 0), { code: "ESRCH" });
       assert.equal(domainClosed, false);
       assert.equal(captureRetainedNativeWorkerSource({ runtimeGeneration: undefined }), source);
-      const next = source.create('require("node:worker_threads").parentPort.postMessage(42)', {
-        eval: true,
-        execArgv: [],
-      });
+      const next = createRetainedNativeWorker(
+        'require("node:worker_threads").parentPort.postMessage(42)',
+        { eval: true, execArgv: [] },
+        source,
+      );
       assert.equal(source.hasActiveWorkers, true);
       const nextReply = createDeferredCore<unknown>();
       next.on("message", nextReply.resolve);

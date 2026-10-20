@@ -96,14 +96,14 @@ describe("compaction sender provenance", () => {
       reserveTokens: 1_000,
       keepRecentTokens: 1,
     });
-    if (!preparation) {
+    if (!preparation.ok || !preparation.value) {
       throw new Error("expected transcript to be compactable");
     }
 
     let prompt = "";
     let systemPrompt = "";
     const result = await compact(
-      preparation,
+      preparation.value,
       model,
       undefined,
       undefined,

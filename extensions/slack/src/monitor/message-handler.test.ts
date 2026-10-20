@@ -516,7 +516,7 @@ describe("createSlackMessageHandler", () => {
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
-  it("releases every claim and rejects completions for durable ingress retry", async () => {
+  it("requeues a released twin and releases other claims from its flush", async () => {
     const owner = createDeferred<boolean>();
     const release = vi.fn();
     const claim = vi
@@ -527,30 +527,30 @@ describe("createSlackMessageHandler", () => {
     const { handler } = createHandlerWithTracker({
       dispatchReplayGuard: { claim } as unknown as DispatchReplayGuard,
     });
-    const handling = ["1709000000.000701", "1709000000.000702"].map((ts) =>
-      handler({ type: "message", channel: "C111", user: "U111", ts, text: "retry me" } as never, {
-        source: "message",
-        awaitDispatch: true,
-      }),
-    );
-    const failures = handling.map((pending) =>
-      expect(pending).rejects.toThrow("Slack dispatch owner released while its twin was waiting"),
-    );
-    await vi.waitFor(() => expect(enqueueMock).toHaveBeenCalledTimes(2));
+    for (const ts of ["1709000000.000701", "1709000000.000702"]) {
+      await handler(
+        { type: "message", channel: "C111", user: "U111", ts, text: "retry me" } as never,
+        { source: "message" },
+      );
+    }
     const entries = queuedEntries();
     const flushing = runOnFlush(entries);
-    const rejected = expect(flushing).rejects.toThrow(
-      "Slack dispatch owner released while its twin was waiting",
-    );
     await vi.waitFor(() => expect(claim).toHaveBeenCalledTimes(2));
-    owner.reject(new Error("original dispatch failed"));
-    await rejected;
-    await Promise.all(failures);
-    expect(release).toHaveBeenCalledOnce();
-    expect(claim).toHaveBeenCalledTimes(2);
-    expect(prepareMock).not.toHaveBeenCalled();
-    expect(dispatchMock).not.toHaveBeenCalled();
-    expect(enqueueMock).toHaveBeenCalledTimes(2);
+    vi.useFakeTimers();
+    try {
+      owner.reject(new Error("original dispatch failed"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(release).toHaveBeenCalledOnce();
+      expect(claim).toHaveBeenCalledTimes(2);
+      expect(prepareMock).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await flushing;
+      expect(enqueueMock).toHaveBeenCalledTimes(4);
+      expect(enqueueMock.mock.calls[2]?.[0]).toMatchObject({ retry: { attempt: 1 } });
+      expect(enqueueMock.mock.calls[3]?.[0]).toMatchObject({ retry: { attempt: 1 } });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("settles rejected policy admission and dispatches after configuration is repaired", async () => {

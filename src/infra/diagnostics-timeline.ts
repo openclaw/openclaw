@@ -79,7 +79,7 @@ const activeDiagnosticsTimelineSpan = new AsyncLocalStorage<ActiveDiagnosticsTim
 type SpanObserver = (
   name: string,
   attributes: DiagnosticsTimelineAttributes | undefined,
-) => Disposable | undefined;
+) => (() => void) | undefined;
 const spanObserver = new AsyncLocalStorage<SpanObserver>();
 
 /** Observe existing spans within one request, independently of timeline file logging. */
@@ -87,6 +87,26 @@ export function withDiagnosticsTimelineObserver<T>(observer: SpanObserver, run: 
   return spanObserver.run(observer, run);
 }
 
+function observeSpan(name: string, options: DiagnosticsTimelineSpanOptions) {
+  let finish: (() => void) | undefined;
+  try {
+    finish = spanObserver.getStore()?.(name, options.attributes);
+  } catch {
+    // Best-effort observers cannot change the operation they measure.
+  }
+  if (!finish) {
+    return undefined;
+  }
+  return {
+    [Symbol.dispose]() {
+      try {
+        finish?.();
+      } catch {
+        // Preserve the original result or failure.
+      }
+    },
+  };
+}
 const timelineWriter = resolveGlobalSingleton(
   Symbol.for("openclaw.diagnosticsTimelineWriter"),
   () => {
@@ -352,7 +372,7 @@ export async function measureDiagnosticsTimelineSpan<T>(
   run: () => Promise<T> | T,
   options: DiagnosticsTimelineSpanOptions = {},
 ): Promise<T> {
-  using _ = spanObserver.getStore()?.(name, options.attributes);
+  using _ = observeSpan(name, options);
   const span = startDiagnosticsTimelineSpan(name, options);
   if (!span) {
     return await runWithMainThreadTask(name, run);
@@ -373,7 +393,7 @@ export function measureDiagnosticsTimelineSpanSync<T>(
   run: () => T,
   options: DiagnosticsTimelineSpanOptions = {},
 ): T {
-  using _ = spanObserver.getStore()?.(name, options.attributes);
+  using _ = observeSpan(name, options);
   const span = startDiagnosticsTimelineSpan(name, options);
   if (!span) {
     return runWithMainThreadTask(name, run);
