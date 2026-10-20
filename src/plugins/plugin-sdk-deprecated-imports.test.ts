@@ -8,35 +8,34 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
 const execute = promisify(execFile);
+const moduleUrl = (relative: string) => pathToFileURL(path.resolve(relative)).href;
+const run = (entry: string, args: string[] = [], env = process.env) =>
+  execute(process.execPath, ["--import", moduleUrl("scripts/tsx.mjs"), entry, ...args], { env });
 
-function write(root: string, relative: string, content: string): string {
+function write(root: string, relative: string, content: string | Record<string, unknown>): string {
   const filename = path.join(root, relative);
   fs.mkdirSync(path.dirname(filename), { recursive: true });
-  fs.writeFileSync(filename, content);
+  fs.writeFileSync(filename, typeof content === "string" ? content : JSON.stringify(content));
   return filename;
 }
-const writeJson = (root: string, relative: string, content: unknown) =>
-  write(root, relative, JSON.stringify(content));
 
 it("records a real deprecated member only when the loaded plugin calls it", async () => {
   const root = fs.realpathSync(temp.make("plugin-deprecated-member-"));
-  const { stdout, stderr } = await execute(process.execPath, [
-    "--import",
-    pathToFileURL(path.resolve("scripts/tsx.mjs")).href,
+  const { stdout, stderr } = await run(
     path.resolve("src/plugins/plugin-sdk-deprecated-member.test-support.ts"),
-    root,
-  ]);
-  expect(JSON.parse(stdout)).toEqual([
-    expect.objectContaining({
+    [root],
+  );
+  expect(JSON.parse(stdout)).toMatchObject([
+    {
       code: "deprecated-sdk-api",
       severity: "info",
       apis: [
-        expect.objectContaining({
+        {
           displayName: "resolveCronStorePath",
           replacement: "resolveCronStorePathAsync",
-        }),
+        },
       ],
-    }),
+    },
   ]);
   expect(stderr).toContain("[DEP_PLUGIN_SDK]");
 });
@@ -50,7 +49,7 @@ it.each([false, true])(
       compilerOptions: { paths: Record<string, string[]> };
     };
     // Keep workspace imports while allowing the synthetic host to own its SDK self-imports.
-    const tsconfig = writeJson(root, "tsconfig.json", {
+    const tsconfig = write(root, "tsconfig.json", {
       extends: path.resolve("tsconfig.json"),
       compilerOptions: {
         paths: Object.fromEntries(
@@ -60,7 +59,9 @@ it.each([false, true])(
         ),
       },
     });
-    writeJson(host, "package.json", {
+    const legacy = "openclaw/plugin-sdk/agent-runtime";
+    const active = "openclaw/plugin-sdk/command-auth-native";
+    write(host, "package.json", {
       name: "openclaw",
       type: "module",
       bin: { openclaw: "./openclaw.mjs" },
@@ -77,32 +78,15 @@ it.each([false, true])(
        export const value = hostLegacyValue === 'deprecated' ? 'active' : 'broken';`,
     );
     const entries = [
-      [
-        "synthetic-source",
-        "index.ts",
-        "export { value } from 'openclaw/plugin-sdk/agent-runtime';",
-      ],
-      [
-        "synthetic-commonjs",
-        "index.cjs",
-        "module.exports = require('openclaw/plugin-sdk/agent-runtime');",
-      ],
-      [
-        "synthetic-deferred",
-        "index.ts",
-        "export const read = () => import('openclaw/plugin-sdk/agent-runtime');",
-      ],
-      [
-        "synthetic-active",
-        "index.ts",
-        "export { value } from 'openclaw/plugin-sdk/command-auth-native';",
-      ],
+      ["synthetic-source", "index.ts", `export { value } from '${legacy}';`],
+      ["synthetic-commonjs", "index.cjs", `module.exports = require('${legacy}');`],
+      ["synthetic-deferred", "index.ts", `export const read = () => import('${legacy}');`],
+      ["synthetic-active", "index.ts", `export { value } from '${active}';`],
     ].map(([id, source, body]) => {
       const directory = path.join(root, id);
-      writeJson(directory, "package.json", { name: id, type: "module" });
+      write(directory, "package.json", { name: id, type: "module" });
       return { id, directory, entry: write(directory, source, body) };
     });
-    const moduleUrl = (relative: string) => pathToFileURL(path.resolve(relative)).href;
     const probe = write(
       root,
       "probe.mts",
@@ -145,11 +129,7 @@ it.each([false, true])(
          for (const instance of instances.reverse()) await instance.dispose();
        }`,
     );
-    const { stdout } = await execute(
-      process.execPath,
-      ["--import", pathToFileURL(path.resolve("scripts/tsx.mjs")).href, probe],
-      { env: { ...process.env, TSX_TSCONFIG_PATH: tsconfig } },
-    );
+    const { stdout } = await run(probe, [], { ...process.env, TSX_TSCONFIG_PATH: tsconfig });
     expect(stdout.trim()).toBe("deprecated imports attributed once");
   },
 );

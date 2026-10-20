@@ -30,6 +30,9 @@ function context(overrides: Partial<ProviderAuthMethodNonInteractiveContext> = {
     ...overrides,
   };
 }
+const discoveredMethod = (
+  resolveDefaultModel: NonNullable<Parameters<typeof method>[0]>["resolveDefaultModel"],
+) => method({ defaultModel: "example/static-model", resolveDefaultModel });
 
 describe("createProviderApiKeyAuthMethod", () => {
   it("persists non-interactive credentials through the runtime auth owner", async () => {
@@ -67,10 +70,7 @@ describe("createProviderApiKeyAuthMethod", () => {
   it("applies a key-scoped default model during non-interactive auth", async () => {
     const resolveDefaultModel = vi.fn(async () => "example/enabled-model");
     const toApiKeyCredential = vi.fn(() => null);
-    const auth = method({
-      defaultModel: "example/static-model",
-      resolveDefaultModel,
-    });
+    const auth = discoveredMethod(resolveDefaultModel);
 
     const config = await auth.runNonInteractive?.(context({ toApiKeyCredential }));
 
@@ -93,10 +93,7 @@ describe("createProviderApiKeyAuthMethod", () => {
       expected: undefined,
     },
   ])("$name", async ({ resolveDefaultModel, expected }) => {
-    const auth = method({
-      defaultModel: "example/static-model",
-      resolveDefaultModel,
-    });
+    const auth = discoveredMethod(resolveDefaultModel);
 
     const config = await auth.runNonInteractive?.(context());
 
@@ -105,10 +102,7 @@ describe("createProviderApiKeyAuthMethod", () => {
 
   it("returns a key-scoped default model during interactive auth", async () => {
     const resolveDefaultModel = vi.fn(async () => "example/enabled-model");
-    const auth = method({
-      defaultModel: "example/static-model",
-      resolveDefaultModel,
-    });
+    const auth = discoveredMethod(resolveDefaultModel);
 
     const result = await auth.run({
       config: {},
