@@ -39,14 +39,6 @@ it.each([
 it.each([
   [{ installKind: "git", gitTag: "v2026.2.24" }, "stable (v2026.2.24)"],
   [{ currentVersion: "2026.5.2-beta.1", installKind: "package" }, "beta (installed version)"],
-] satisfies Array<[Parameters<typeof resolveUpdateChannelDisplay>[0], string]>)(
-  "formats channel label for %j",
-  (params, label) => {
-    expect(resolveUpdateChannelDisplay(params).label).toBe(label);
-  },
-);
-
-it.each([
   [
     { configChannel: "stable", currentVersion: "2026.5.2-beta.1", installKind: "package" },
     { channel: "stable", source: "config", label: "stable (config)" },
@@ -63,10 +55,15 @@ it.each([
 ] satisfies Array<
   [
     Parameters<typeof resolveUpdateChannelDisplay>[0],
-    ReturnType<typeof resolveUpdateChannelDisplay>,
+    string | ReturnType<typeof resolveUpdateChannelDisplay>,
   ]
 >)("resolves display metadata for %j", (params, expected) => {
-  expect(resolveUpdateChannelDisplay(params)).toEqual(expected);
+  const actual = resolveUpdateChannelDisplay(params);
+  if (typeof expected === "string") {
+    expect(actual.label).toBe(expected);
+  } else {
+    expect(actual).toEqual(expected);
+  }
 });
 
 it.each([

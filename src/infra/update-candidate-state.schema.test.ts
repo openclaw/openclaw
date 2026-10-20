@@ -14,6 +14,9 @@ import {
 import { updateStateSchemaVersionsMatch } from "./update-candidate-state.versions.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+type SchemaInput = Parameters<typeof readUpdateStateSchemaVersions>[0];
+const inspect = (stateDir: string, options: Partial<SchemaInput> = {}) =>
+  readUpdateStateSchemaVersions({ stateDir, config: {}, ...options });
 
 function createDatabase(file: string, sql: string, registered?: string) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -53,11 +56,10 @@ it.each(["malformed", "nonregular-wal", "empty-worker"])(
       fs.writeFileSync(worker, "process.exitCode = 1;\n");
     }
     const before = fs.readFileSync(file);
-    const failure = await readUpdateStateSchemaVersions({
+    const failure = await inspect(
       stateDir,
-      config: {},
-      ...(kind === "empty-worker" ? { root: candidateRoot } : {}),
-    }).catch((error: unknown) => error);
+      kind === "empty-worker" ? { root: candidateRoot } : {},
+    ).catch((error: unknown) => error);
     assert(failure instanceof Error);
     expect(failure).toHaveProperty(
       "message",
@@ -166,11 +168,7 @@ it.skipIf(process.platform === "win32")(
     `,
     );
     await expect(
-      readUpdateStateSchemaVersions({
-        stateDir,
-        config: {},
-        env: { ...process.env, ...sqliteWorkerPreloadEnv(preload) },
-      }),
+      inspect(stateDir, { env: { ...process.env, ...sqliteWorkerPreloadEnv(preload) } }),
     ).rejects.toThrow(/SQLite source changed/);
     expect(fs.readFileSync(file)).toEqual(fs.readFileSync(`${file}.retired`));
   },
@@ -182,7 +180,7 @@ it("discovers an agent registered after directory enumeration in the shared snap
   const agentPath = agentFile(stateDir, "late");
   createDatabase(sharedPath, "PRAGMA user_version=7; CREATE TABLE agent_databases(path TEXT);");
   fs.mkdirSync(path.join(stateDir, "agents"));
-  const before = await readUpdateStateSchemaVersions({ stateDir, config: {} });
+  const before = await inspect(stateDir);
   const preload = path.join(stateDir, "late-registration.cjs");
   // Insert after enumeration returns its old directory list. Only discovery
   // from the subsequently captured shared generation can find this new store.
@@ -208,9 +206,7 @@ it("discovers an agent registered after directory enumeration in the shared snap
     };
   `,
   );
-  const after = await readUpdateStateSchemaVersions({
-    stateDir,
-    config: {},
+  const after = await inspect(stateDir, {
     env: { ...process.env, ...sqliteWorkerPreloadEnv(preload) },
   });
   expect(before.some((entry) => entry.path === agentPath)).toBe(false);
@@ -242,7 +238,7 @@ it("fences WAL schema migration without copying a large registered agent payload
   `,
     agentPath,
   );
-  const writer = openNodeSqliteDatabase(agentPath);
+  using writer = openNodeSqliteDatabase(agentPath);
   writer.exec(`
     PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;
     CREATE TABLE payload(data BLOB); INSERT INTO payload VALUES(zeroblob(67108864));
@@ -280,32 +276,27 @@ it("fences WAL schema migration without copying a large registered agent payload
   `,
   );
   const env = { ...process.env, ...sqliteWorkerPreloadEnv(preload), XDG_CACHE_HOME: cache };
-  const inspect = () => readUpdateStateSchemaVersions({ stateDir, config: {}, env });
-  try {
-    // Only WAL records the committed candidate version; the main header stays at 3.
-    writer.exec("BEGIN IMMEDIATE; PRAGMA user_version=4; COMMIT;");
-    const baseline = await inspect();
-    expect(baseline).toContainEqual({ path: agentPath, userVersion: 4 });
-    expect(baseline).toContainEqual({ path: sharedPath, userVersion: 15, contentVersion: 16 });
-    expect(baseline).toContainEqual({
-      path: agentFile(stateDir),
-      userVersion: null,
-    });
-    expect(fs.readFileSync(copiedShared, "utf8")).toBe("copied");
-    const comparison = { sharedPath, candidateSchemaVersions: { state: 16, agent: 5 } };
-    expect(updateStateSchemaVersionsMatch(baseline, await inspect(), comparison)).toBe(true);
-    writer.exec("BEGIN IMMEDIATE; PRAGMA user_version=5; COMMIT;");
-    const migrated = await inspect();
-    expect(migrated).toContainEqual({ path: agentPath, userVersion: 5 });
-    expect(updateStateSchemaVersionsMatch(baseline, migrated, comparison)).toBe(false);
-    expect(
-      fs.existsSync(path.join(cache, "openclaw"))
-        ? fs.readdirSync(path.join(cache, "openclaw"))
-        : [],
-    ).toEqual([]);
-  } finally {
-    writer.close();
-  }
+  const read = () => inspect(stateDir, { env });
+  // Only WAL records the committed candidate version; the main header stays at 3.
+  writer.exec("BEGIN IMMEDIATE; PRAGMA user_version=4; COMMIT;");
+  const baseline = await read();
+  expect(baseline).toEqual(
+    expect.arrayContaining([
+      { path: agentPath, userVersion: 4 },
+      { path: sharedPath, userVersion: 15, contentVersion: 16 },
+      { path: agentFile(stateDir), userVersion: null },
+    ]),
+  );
+  expect(fs.readFileSync(copiedShared, "utf8")).toBe("copied");
+  const comparison = { sharedPath, candidateSchemaVersions: { state: 16, agent: 5 } };
+  expect(updateStateSchemaVersionsMatch(baseline, await read(), comparison)).toBe(true);
+  writer.exec("BEGIN IMMEDIATE; PRAGMA user_version=5; COMMIT;");
+  const migrated = await read();
+  expect(migrated).toContainEqual({ path: agentPath, userVersion: 5 });
+  expect(updateStateSchemaVersionsMatch(baseline, migrated, comparison)).toBe(false);
+  expect(
+    fs.existsSync(path.join(cache, "openclaw")) ? fs.readdirSync(path.join(cache, "openclaw")) : [],
+  ).toEqual([]);
 });
 
 async function writeInstalledCandidateWorkers(packageRoot: string, legacy: boolean): Promise<void> {
@@ -408,7 +399,7 @@ it.each([
       });
     }
     try {
-      const before = await readUpdateStateSchemaVersions({ stateDir, config: {} });
+      const before = await inspect(stateDir);
       expect(before).toEqual([
         { path: shared, userVersion: 3 },
         { path: external, userVersion: 7 },
@@ -429,9 +420,7 @@ it.each([
         );
       }
       const report = path.join(root, "snapshot.json");
-      const after = await readUpdateStateSchemaVersions({
-        stateDir,
-        config: {},
+      const after = await inspect(stateDir, {
         root: candidateRoot,
         nodeRunner,
         env: {

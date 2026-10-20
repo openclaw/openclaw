@@ -56,13 +56,9 @@ async function readArtifacts(files: string[]) {
       const names = (await fs.readdir(path.dirname(file)))
         .filter((name) => [base, `${base}-wal`, `${base}-shm`].includes(name))
         .toSorted();
-      return {
-        file,
-        names,
-        bytes: await Promise.all(
-          names.map((name) => fs.readFile(path.join(path.dirname(file), name))),
-        ),
-      };
+      return Promise.all(
+        names.map(async (name) => [name, await fs.readFile(path.join(path.dirname(file), name))]),
+      );
     }),
   );
 }
@@ -156,7 +152,7 @@ describe.skipIf(!connection)("mixed-engine update inventory", () => {
     await client.end();
   });
 
-  it.each(choices)("inspects selected state and physical retained agents: %s", async (choice) => {
+  it.each(choices)("inspects and admits selected state and retained agents: %s", async (choice) => {
     const fixture = fixtures.get(choice)!;
     const files = [fixture.shared, fixture.agent];
     const before = await readArtifacts(files);
@@ -172,33 +168,27 @@ describe.skipIf(!connection)("mixed-engine update inventory", () => {
       ]),
     );
     expect(await readArtifacts(files)).toEqual(before);
-  });
-
-  it.each(choices)(
-    "public update admission inspects the selected state and physical agent: %s",
-    async (choice) => {
-      const fixture = fixtures.get(choice)!;
-      const files = [fixture.shared, fixture.agent];
-      const before = await readArtifacts(files);
-      for (const kind of ["state", "agent"] as const) {
-        const result = await admit(fixture, {
+    for (const kind of ["state", "agent"] as const) {
+      expect(
+        await admit(fixture, {
           ...schemaVersions,
           [kind]: schemaVersions[kind] - 1,
-        });
-        expect(result.indeterminate).toEqual([]);
-        expect(result.incompatible).toEqual([
-          expect.objectContaining({
+        }),
+      ).toMatchObject({
+        indeterminate: [],
+        incompatible: [
+          {
             kind,
             path: kind === "state" ? fixture.shared : fixture.agent,
             foundVersion: schemaVersions[kind],
             supportedVersion: schemaVersions[kind] - 1,
-          }),
-        ]);
-      }
-      expect(await admit(fixture)).toMatchObject({ indeterminate: [], incompatible: [] });
-      expect(await readArtifacts(files)).toEqual(before);
-    },
-  );
+          },
+        ],
+      });
+    }
+    expect(await admit(fixture)).toMatchObject({ indeterminate: [], incompatible: [] });
+    expect(await readArtifacts(files)).toEqual(before);
+  });
 
   it.each([OPENCLAW_AGENT_SCHEMA_VERSION - 1, OPENCLAW_AGENT_SCHEMA_VERSION + 1])(
     "reports a retained PostgreSQL agent's physical version %s instead of the descriptor version",
@@ -209,10 +199,12 @@ describe.skipIf(!connection)("mixed-engine update inventory", () => {
         throw new Error("Expected the retained PostgreSQL agent fixture");
       }
       const before = await fs.readFile(fixture.agent);
-      await client.query(
-        `UPDATE "${anchor.namespace}".openclaw_schema_meta SET version = $1 WHERE store = 'agent'`,
-        [version],
-      );
+      const setVersion = (physicalVersion: number) =>
+        client.query(
+          `UPDATE "${anchor.namespace}".openclaw_schema_meta SET version = $1 WHERE store = 'agent'`,
+          [physicalVersion],
+        );
+      await setVersion(version);
       try {
         const versions = await inspect(fixture);
         expect(versions.find((entry) => entry.path === fixture.agent)).toEqual({
@@ -221,10 +213,7 @@ describe.skipIf(!connection)("mixed-engine update inventory", () => {
         });
         expect(await fs.readFile(fixture.agent)).toEqual(before);
       } finally {
-        await client.query(
-          `UPDATE "${anchor.namespace}".openclaw_schema_meta SET version = $1 WHERE store = 'agent'`,
-          [OPENCLAW_AGENT_SCHEMA_VERSION],
-        );
+        await setVersion(OPENCLAW_AGENT_SCHEMA_VERSION);
       }
     },
   );
