@@ -214,9 +214,9 @@ baseIt("plans plugin-owned auth before agent stores, configured bindings and coo
     providerForAuth: id,
     modelId: "fixture-model",
     credentialSource: { kind: "direct", evidence: "synthetic", authorization: "declared" },
-    forwardedAuthProfileId: undefined,
-    forwardedAuthProfileCandidateIds: undefined,
   });
+  expect(prepared.plan.forwardedAuthProfileId).toBeUndefined();
+  expect(prepared.plan.forwardedAuthProfileCandidateIds).toBeUndefined();
   expect(readProfiles).not.toHaveBeenCalled();
   expect(f.hook).not.toHaveBeenCalled();
 });

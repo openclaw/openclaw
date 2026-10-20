@@ -1,5 +1,42 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { mocks, resetResolutionMocks } from "./agent-delivery.resolution.test-support.js";
+
+const mocks = vi.hoisted(() => ({
+  resolveOutboundChannelPlugin: vi.fn<() => unknown>(),
+  resolveChannelTarget: vi.fn<(params: { input: string }) => Promise<unknown>>(),
+  resolveOutboundTarget: vi.fn<() => { ok: true; to: string } | { ok: false; error: Error }>(),
+  resolveOutboundSessionRoute: vi.fn<() => Promise<unknown>>(),
+  resolveSessionDeliveryTarget: vi.fn(
+    (params: { requestedChannel?: string; explicitTo?: string }) => ({
+      channel: params.requestedChannel,
+      to: params.explicitTo,
+      mode: params.explicitTo ? "explicit" : "implicit",
+    }),
+  ),
+}));
+
+vi.mock("./targets.js", () => ({
+  resolveOutboundTarget: mocks.resolveOutboundTarget,
+  resolveSessionDeliveryTarget: mocks.resolveSessionDeliveryTarget,
+}));
+
+vi.mock("./channel-resolution.js", () => ({
+  resolveOutboundChannelPlugin: mocks.resolveOutboundChannelPlugin,
+}));
+
+vi.mock("./outbound-session.js", () => ({
+  resolveOutboundSessionRoute: mocks.resolveOutboundSessionRoute,
+}));
+
+vi.mock("./target-resolver.js", () => ({
+  resolveChannelTarget: mocks.resolveChannelTarget,
+}));
+
+vi.mock("../../utils/message-channel.js", () => ({
+  INTERNAL_MESSAGE_CHANNEL: "webchat",
+  isDeliverableMessageChannel: (channel: string) => channel === "workspace",
+  isGatewayMessageChannel: (channel: string) => ["webchat", "workspace"].includes(channel),
+  normalizeMessageChannel: (value: string) => value.trim().toLowerCase(),
+}));
 
 let resolveAgentDeliveryPlanWithSessionRoute: typeof import("./agent-delivery.js").resolveAgentDeliveryPlanWithSessionRoute;
 let resolveAgentOutboundTarget: typeof import("./agent-delivery.js").resolveAgentOutboundTarget;
@@ -10,13 +47,12 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  resetResolutionMocks("workspace", true);
+  mocks.resolveOutboundChannelPlugin.mockReset();
+  mocks.resolveChannelTarget.mockReset();
+  mocks.resolveOutboundTarget.mockReset();
+  mocks.resolveOutboundSessionRoute.mockReset();
   mocks.resolveOutboundSessionRoute.mockResolvedValue(null);
-  mocks.resolveSessionDeliveryTarget.mockImplementation(({ requestedChannel, explicitTo }) => ({
-    channel: requestedChannel,
-    to: explicitTo,
-    mode: explicitTo ? "explicit" : "implicit",
-  }));
+  mocks.resolveSessionDeliveryTarget.mockClear();
 });
 
 function resolvePlan(explicitTo?: string, currentSessionKey?: string) {

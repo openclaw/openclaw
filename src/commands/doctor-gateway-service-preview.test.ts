@@ -95,10 +95,6 @@ it.each([
         }
         expect(message).not.toContain("recommended defaults");
       }
-      expect(mocks.note).toHaveBeenCalledWith(
-        expect.stringContaining("`openclaw --profile preview-proof gateway install --force`"),
-        "Gateway service config",
-      );
       return approved;
     });
     await withEnvAsync(
@@ -111,6 +107,10 @@ it.each([
         maybeRepairGatewayServiceConfig({ gateway: {} }, "local", makeDoctorIo(), prompter, {
           writeConfig: mocks.writeConfig,
         }),
+    );
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("`openclaw --profile preview-proof gateway install --force`"),
+      "Gateway service config",
     );
     expect(prompter.confirmRuntimeRepair).toHaveBeenCalledOnce();
     expect(mocks.install).toHaveBeenCalledTimes(Number(approved));
