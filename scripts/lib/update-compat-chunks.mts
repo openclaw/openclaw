@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import * as ts from "typescript/unstable/ast";
+import { packageActivationRuntimeEntrypoint } from "../../src/infra/package-update-activation-runtime-assets.ts";
+import { managedHandoffRuntimeEntrypoint } from "../../src/infra/update-managed-service-handoff-runtime-assets.ts";
 import { createNativeTypeScriptParser } from "./native-typescript.mts";
 import { controlUiBuildSiblingPid } from "./output-root-guard.mjs";
 import { isRecord as object } from "./record-shared.mjs";
@@ -75,10 +77,18 @@ function portable(value: string): string {
 }
 
 function moduleFiles(root: string): string[] {
+  const independentFiles = new Set([
+    managedHandoffRuntimeEntrypoint.distWorkerPath,
+    packageActivationRuntimeEntrypoint.distWorkerPath,
+  ]);
   const files: string[] = [];
   const visit = (directory: string) => {
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
       const file = path.join(directory, entry.name);
+      // Sealed helpers cannot supply the main updater's compatibility bindings.
+      if (independentFiles.has(portable(path.relative(root, file)))) {
+        continue;
+      }
       if (entry.isDirectory()) {
         // The UI publishes its independent browser graph by renaming these trees.
         if (

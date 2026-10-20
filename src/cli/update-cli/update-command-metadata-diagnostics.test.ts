@@ -272,9 +272,10 @@ it.each([
   });
   if (entry.kind === "graph") {
     expect(printed.markdown).toContain("OpenClaw update failed");
-    for (const text of ["EACCES", "ECONNRESET", "Transport failed", "Connection refused"]) {
+    for (const text of ["EACCES", "ECONNRESET", "Connection refused"]) {
       expect(report.body).toContain(text);
     }
+    expect(report.body).not.toContain("Transport failed");
   } else {
     for (const text of [
       "Failed phase: target-resolution",
@@ -283,10 +284,11 @@ it.each([
       "Update action: CLI command: openclaw update",
       "Installation method: npm-global",
       entry.metadata === "constructor" ? "(Error)" : "TypeError",
-      "Target response was invalid",
+      "[redacted-diagnostic]",
     ]) {
       expect(report.body).toContain(text);
     }
+    expect(report.body).not.toContain("Target response was invalid");
     if (!entry.metadata) {
       expect(report.body).toContain("src/cli/update-cli/shared.ts:101:9");
     }

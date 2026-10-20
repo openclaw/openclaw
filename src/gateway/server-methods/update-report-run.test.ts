@@ -447,9 +447,9 @@ describe("Report action from the authoritative update ledger", () => {
   );
 
   it.each([
-    ["hooks.internal.entries.private-customer-key.enabled", "hooks.internal.entries.*"],
-    ["gateway.auth.identityScopes.private-customer-key", "gateway.*"],
-    ["tools.byProvider.private-customer-key.profile", "tools.*"],
+    ["hooks.internal.entries.private-customer-key.enabled", "hooks.internal.entries.<id>.enabled"],
+    ["gateway.auth.identityScopes.private-customer-key", "gateway.auth.identityScopes.<id>"],
+    ["tools.byProvider.private-customer-key.profile", "tools.byProvider.<id>.profile"],
   ])(
     "removes operator names from Doctor config path %s in public reports",
     async (configKey, publicKey) => {

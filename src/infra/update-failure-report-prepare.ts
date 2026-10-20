@@ -5,11 +5,13 @@ import path from "node:path";
 import { valid as validSemver } from "semver";
 import { resolveStateDir } from "../config/paths.js";
 import {
+  publicConfigIssueMessage,
   redactPublicSupportConfigKey,
   redactPublicSupportDiagnosticLine,
   redactPublicSupportVersion,
   redactSupportDiagnosticLine,
   redactSupportString,
+  type SupportRedactionContext,
 } from "../logging/diagnostic-support-redaction.js";
 import {
   classifyUpdateOutcome,
@@ -73,10 +75,7 @@ export type UpdateFailureReportInput = {
   target?: string;
 };
 
-type UpdateFailureReportContext = {
-  env: NodeJS.ProcessEnv;
-  stateDir: string;
-};
+type UpdateFailureReportContext = SupportRedactionContext;
 
 function redactDiagnosticLines(value: string): string {
   // An unquoted final path component and trailing prose are grammatically
@@ -304,16 +303,57 @@ async function renderBoundedDiagnostics(
     const npm = facts.find(
       (fact) => (fact.check === "npm" || fact.check === "bun") && fact.npmErrorCode,
     );
+    const publicFacts = await Promise.all(
+      facts.map(async (fact) => {
+        const identifiers = await projectPublicUpdateFailureIdentifiers(fact);
+        const affectedKey = fact.affectedKey
+          ? redactPublicSupportConfigKey(fact.affectedKey, context.redactConfigPathSegment)
+          : undefined;
+        const issueKind = publicConfigIssueMessage({
+          path: fact.affectedKey ?? "",
+          message: fact.message ?? "",
+        });
+        const publicMessage =
+          affectedKey &&
+          (fact.code === "invalid-config" ||
+            fact.code === "candidate-config-failed" ||
+            issueKind !== "Invalid configuration field")
+            ? issueKind
+            : (updatePreflightDetailMessage(fact.code) ??
+              redactPublicSupportDiagnosticLine(fact.message ?? "", context));
+        return {
+          ...identifiers,
+          affectedKey,
+          ...(fact.location ? { location: fact.location } : {}),
+          ...(fact.destination ? { destination: fact.destination } : {}),
+          ...(!refused ? { message: publicMessage } : {}),
+        };
+      }),
+    );
     const diagnostic = refused
       ? "[redacted-diagnostic]"
       : npm
         ? [npm.npmErrorCode, npm.packageSpec].filter(Boolean).join(" ")
-        : redactPublicSupportDiagnosticLine(message, context);
+        : truncateUtf8Prefix(
+            [
+              ...new Set(
+                [
+                  redactPublicSupportDiagnosticLine(message, context),
+                  ...publicFacts
+                    .filter((fact) => fact.message && fact.message !== "[redacted-diagnostic]")
+                    .map(
+                      (fact) =>
+                        `${fact.affectedKey ? `${fact.affectedKey}: ` : ""}${fact.message}${fact.pluginId && fact.pluginId !== "[redacted-plugin]" ? `: ${fact.pluginId}` : ""}`,
+                    ),
+                ]
+                  .flatMap((line) => line.split("; "))
+                  .filter((line) => line && line !== "[redacted-diagnostic]"),
+              ),
+            ].join("; "),
+            200,
+          ) || "[redacted-diagnostic]";
     const exit = `exit ${step.exitCode ?? "unknown"}`;
-    const publicDetail =
-      diagnostic === "[redacted-diagnostic]"
-        ? facts.map((fact) => updatePreflightDetailMessage(fact.code)).find(Boolean)
-        : diagnostic;
+    const publicDetail = diagnostic === "[redacted-diagnostic]" ? undefined : diagnostic;
     const detail = !publicDetail
       ? exit
       : step.exitCode == null
@@ -322,29 +362,9 @@ async function renderBoundedDiagnostics(
     diagnostics.push(`Failed phase ${phase}: ${detail}${termination}`);
     diagnostics.push(...formatNpmFailureFacts(facts, context));
     diagnostics.push(
-      ...(await Promise.all(
-        facts
-          .filter((fact) => fact.check !== "npm" && fact.check !== "bun")
-          .map(async (fact) =>
-            formatUpdateFailureFact({
-              ...(await projectPublicUpdateFailureIdentifiers(fact)),
-              ...(fact.location ? { location: fact.location } : {}),
-              ...(fact.destination ? { destination: fact.destination } : {}),
-              ...(fact.affectedKey
-                ? { affectedKey: redactPublicSupportConfigKey(fact.affectedKey) }
-                : {}),
-              ...(fact.message && !refused
-                ? {
-                    message:
-                      updatePreflightDetailMessage(fact.code) ??
-                      (fact.errorName
-                        ? redactSupportDiagnosticLine(fact.message, context)
-                        : redactPublicSupportDiagnosticLine(fact.message, context)),
-                  }
-                : {}),
-            }),
-          ),
-      )),
+      ...publicFacts
+        .filter((fact) => fact.check !== "npm" && fact.check !== "bun")
+        .map(formatUpdateFailureFact),
     );
   }
   return diagnostics;
@@ -374,7 +394,27 @@ export async function prepareUpdateFailureReport(
   };
   const env = options.env ?? process.env;
   const stateDir = options.stateDir ?? resolveStateDir(env);
-  const context = { env, stateDir };
+  const { buildConfigSchemaCore, classifyConfigSchemaPathSegment } =
+    await import("../config/schema.js");
+  const schema = buildConfigSchemaCore();
+  const context: UpdateFailureReportContext = {
+    env,
+    stateDir,
+    redactConfigPathSegment: (parentParts, segment) => {
+      // Runtime admission reports the package's engine field, outside the config schema.
+      if (
+        (parentParts.length === 0 && segment === "engines") ||
+        (parentParts.length === 1 && parentParts[0] === "engines" && segment === "node")
+      ) {
+        return segment;
+      }
+      const kind = classifyConfigSchemaPathSegment(schema, parentParts, segment);
+      if (kind === "property" || kind === "array-index") {
+        return segment;
+      }
+      return kind === "record-key" || kind === "invalid-record-key" ? "<id>" : "<key>";
+    },
+  };
   const version = sanitizeReportField(VERSION, context);
   const platform = sanitizeReportField(`${process.platform}/${process.arch}`, context);
   const target = resolveUpdateTarget(input, context);
