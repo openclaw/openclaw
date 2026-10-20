@@ -20,14 +20,28 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
     return privateDir;
   }
 
-  function createUnsafeVault(name: string, paths: string[]) {
-    return createVault({
-      prefix: `memory-wiki-${name}-`,
+  async function importSources(paths: string[]) {
+    const { rootDir: vaultDir, config } = await createVault({
+      prefix: "memory-wiki-unsafe-vault-",
       config: {
         vaultMode: "unsafe-local",
         unsafeLocal: { allowPrivateMemoryCoreAccess: true, paths },
       },
     });
+    return { vaultDir, config, first: await syncMemoryWikiUnsafeLocalSources(config) };
+  }
+
+  async function addNotes(pagePath: string, note: string) {
+    const page = await fs.readFile(pagePath, "utf8");
+    await fs.writeFile(
+      pagePath,
+      page.replace(
+        "<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->",
+        () => `<!-- openclaw:human:start -->\n${note}\n<!-- openclaw:human:end -->`,
+      ),
+      "utf8",
+    );
+    return page;
   }
 
   it("imports explicit private paths and preserves unsafe-local provenance", async () => {
@@ -40,12 +54,10 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
     const directPath = path.join(privateDir, "events.log");
     await fs.writeFile(directPath, "private log\n", "utf8");
 
-    const { rootDir: vaultDir, config } = await createUnsafeVault("vault", [
+    const { vaultDir, config, first } = await importSources([
       path.join(privateDir, "nested"),
       directPath,
     ]);
-
-    const first = await syncMemoryWikiUnsafeLocalSources(config);
 
     expect(first).toMatchObject({
       artifactCount: 3,
@@ -100,21 +112,11 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
     const secretPath = path.join(privateDir, "secret.md");
     await fs.writeFile(secretPath, "# private\n", "utf8");
 
-    const { rootDir: vaultDir, config } = await createUnsafeVault("prune-vault", [privateDir]);
-
-    const first = await syncMemoryWikiUnsafeLocalSources(config);
+    const { vaultDir, config, first } = await importSources([privateDir]);
     const firstPagePath = first.pagePaths[0] ?? "";
     const firstPageAbsPath = path.join(vaultDir, firstPagePath);
-    const firstPage = await fs.readFile(firstPageAbsPath, "utf8");
+    const firstPage = await addNotes(firstPageAbsPath, humanNotes);
     expect(firstPage).toContain("# private");
-    await fs.writeFile(
-      firstPageAbsPath,
-      firstPage.replace(
-        "<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->",
-        `<!-- openclaw:human:start -->\n${humanNotes}\n<!-- openclaw:human:end -->`,
-      ),
-      "utf8",
-    );
 
     await fs.rm(secretPath);
     const second = await syncMemoryWikiUnsafeLocalSources(config);
@@ -135,12 +137,7 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
     await fs.writeFile(unavailableSource, "# keep me\n", "utf8");
     await fs.writeFile(availableSource, "# delete me\n", "utf8");
 
-    const { rootDir: vaultDir, config } = await createUnsafeVault("unavailable-vault", [
-      unavailableDir,
-      availableDir,
-    ]);
-
-    const first = await syncMemoryWikiUnsafeLocalSources(config);
+    const { vaultDir, config, first } = await importSources([unavailableDir, availableDir]);
     const pageContents = await Promise.all(
       first.pagePaths.map(async (pagePath) => ({
         pagePath,
@@ -151,14 +148,9 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
     const availablePage = pageContents.find((page) => page.content.includes("# delete me"));
     expect(unavailablePage).toBeDefined();
     expect(availablePage).toBeDefined();
-    await fs.writeFile(
-      path.join(vaultDir, unavailablePage!.pagePath),
-      unavailablePage!.content.replace(
-        "<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->",
-        "<!-- openclaw:human:start -->\nremember this\n<!-- openclaw:human:end -->",
-      ),
-      "utf8",
-    );
+    const unavailablePagePath = path.join(vaultDir, unavailablePage!.pagePath);
+    const availablePagePath = path.join(vaultDir, availablePage!.pagePath);
+    await addNotes(unavailablePagePath, "remember this");
 
     const offlinePath = `${unavailableDir}.offline`;
     await fs.rename(unavailableDir, offlinePath);
@@ -166,21 +158,14 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
     const duringOutage = await syncMemoryWikiUnsafeLocalSources(config);
 
     expect(duringOutage).toMatchObject({ artifactCount: 0, removedCount: 1 });
-    await expect(
-      fs.readFile(path.join(vaultDir, unavailablePage!.pagePath), "utf8"),
-    ).resolves.toContain("remember this");
-    await expect(fs.stat(path.join(vaultDir, availablePage!.pagePath))).rejects.toHaveProperty(
-      "code",
-      "ENOENT",
-    );
+    await expect(fs.readFile(unavailablePagePath, "utf8")).resolves.toContain("remember this");
+    await expect(fs.stat(availablePagePath)).rejects.toHaveProperty("code", "ENOENT");
 
     await fs.rename(offlinePath, unavailableDir);
     const afterRecovery = await syncMemoryWikiUnsafeLocalSources(config);
 
     expect(afterRecovery).toMatchObject({ skippedCount: 1, removedCount: 0 });
-    await expect(
-      fs.readFile(path.join(vaultDir, unavailablePage!.pagePath), "utf8"),
-    ).resolves.toContain("remember this");
+    await expect(fs.readFile(unavailablePagePath, "utf8")).resolves.toContain("remember this");
   });
 
   it("skips generated source pages copied into a configured path", async () => {
@@ -193,11 +178,7 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
     await Promise.all(
       sourcePaths.map((sourcePath) => fs.writeFile(sourcePath, `# ${path.basename(sourcePath)}\n`)),
     );
-    const { rootDir: vaultDir, config } = await createUnsafeVault("copied-vault-target", [
-      privateDir,
-    ]);
-
-    const first = await syncMemoryWikiUnsafeLocalSources(config);
+    const { vaultDir, config, first } = await importSources([privateDir]);
     const generatedPage = first.pagePaths.find((pagePath) => pagePath.includes("legitimate-md"));
     expect(generatedPage).toBeDefined();
     const copiedPage = path.join(privateDir, "mirror", generatedPage!);
@@ -218,20 +199,15 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
     const privateDir = await createPrivateDir("canonical-vault");
     const sourcePath = path.join(privateDir, "legitimate.md");
     await fs.writeFile(sourcePath, "# legitimate\n", "utf8");
-    const { rootDir: vaultDir, config } = await createUnsafeVault("canonical-vault-target", [
-      sourcePath,
-    ]);
-    const first = await syncMemoryWikiUnsafeLocalSources(config);
+    const { vaultDir, config, first } = await importSources([sourcePath]);
     const generatedPage = path.join(vaultDir, first.pagePaths[0] ?? "");
-    const configWithVaultPage = {
+    const second = await syncMemoryWikiUnsafeLocalSources({
       ...config,
       unsafeLocal: {
         ...config.unsafeLocal,
         paths: [sourcePath, generatedPage],
       },
-    };
-
-    const second = await syncMemoryWikiUnsafeLocalSources(configWithVaultPage);
+    });
 
     expect(second).toMatchObject({ artifactCount: 1, importedCount: 0, skippedCount: 1 });
     expect(second.pagePaths).toHaveLength(1);
@@ -244,11 +220,7 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
     await fs.mkdir(nestedDir, { recursive: true });
     await fs.writeFile(secretPath, "# very private\n", "utf8");
 
-    const { rootDir: vaultDir, config } = await createUnsafeVault("long-unsafe-vault", [
-      privateDir,
-    ]);
-
-    const result = await syncMemoryWikiUnsafeLocalSources(config);
+    const { vaultDir, first: result } = await importSources([privateDir]);
     const pagePath = result.pagePaths[0] ?? "";
 
     expect(result.importedCount).toBe(1);

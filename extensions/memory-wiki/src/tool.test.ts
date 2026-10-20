@@ -6,13 +6,6 @@ import { parseWikiMarkdown } from "./markdown.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 import { createWikiApplyTool, createWikiLintTool } from "./tool.js";
 
-function asSchemaObject(value: unknown): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error("Expected JSON schema object");
-  }
-  return value as Record<string, unknown>;
-}
-
 describe("memory-wiki tools", () => {
   const harness = createMemoryWikiTestHarness();
 
@@ -20,12 +13,11 @@ describe("memory-wiki tools", () => {
     const { config } = await harness.createVault({ initialize: true });
     const tool = createWikiApplyTool(config);
 
-    await expect(tool.execute("malformed-null", null)).rejects.toThrow(
-      'wiki mutation op must be one of "create_synthesis", "update_metadata"',
-    );
-    await expect(tool.execute("malformed-undefined", undefined)).rejects.toThrow(
-      'wiki mutation op must be one of "create_synthesis", "update_metadata"',
-    );
+    for (const input of [null, undefined]) {
+      await expect(tool.execute("malformed", input)).rejects.toThrow(
+        'wiki mutation op must be one of "create_synthesis", "update_metadata"',
+      );
+    }
   });
 
   async function createApplyFixture() {
@@ -73,19 +65,20 @@ describe("memory-wiki tools", () => {
       "utf8",
     );
 
-    const tool = createWikiLintTool(config);
-    const result = await tool.execute("lint-call", {});
+    const result = await createWikiLintTool(config).execute("lint-call", {});
     const text = result.content.find((part) => part.type === "text")?.text ?? "";
-    const details = asSchemaObject(result.details);
+    const details = result.details;
 
     expect(text).toContain("Report: reports/lint.md");
     expect(text).not.toContain(rootDir);
-    expect(details.reportPath).toBe("reports/lint.md");
+    expect(details).toMatchObject({
+      reportPath: "reports/lint.md",
+      issuesByCategory: {
+        links: expect.arrayContaining([expect.objectContaining({ code: "broken-wikilink" })]),
+      },
+    });
     expect(details).not.toHaveProperty("vaultRoot");
     expect(JSON.stringify(details)).not.toContain(rootDir);
-    expect(asSchemaObject(details.issuesByCategory).links).toEqual(
-      expect.arrayContaining([expect.objectContaining({ code: "broken-wikilink" })]),
-    );
 
     const lintResult = await lintMemoryWikiVault(config);
     expect(path.isAbsolute(lintResult.reportPath)).toBe(true);

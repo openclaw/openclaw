@@ -60,6 +60,21 @@ async function addNotes(pagePath: string, note: string) {
   await fs.writeFile(pagePath, page, "utf8");
 }
 
+function failPageReads(pagePath: string, error: Error, once = false) {
+  const readFile = fs.readFile.bind(fs);
+  let injected = false;
+  vi.spyOn(fs, "readFile").mockImplementation(
+    async (...args: Parameters<typeof fs.readFile>): ReturnType<typeof fs.readFile> => {
+      if (args[0] === pagePath && (!once || !injected)) {
+        injected = true;
+        throw error;
+      }
+      return readFile(...args);
+    },
+  );
+  return { readFile, injected: () => injected };
+}
+
 async function createImportedFixture() {
   const suiteRoot = await createTempDir("memory-wiki-source-page-");
   const sourcePath = path.join(suiteRoot, "imported.txt");
@@ -281,22 +296,13 @@ describe("memory-wiki existing-page read retry", () => {
     const userNote = "KEY INSIGHT: covers the Q2 roadmap";
     await addNotes(pagePath, userNote);
     await changeSource();
-    const originalReadFile = fs.readFile.bind(fs);
-    let injectedFailure = false;
-    vi.spyOn(fs, "readFile").mockImplementation(
-      async (...args: Parameters<typeof fs.readFile>): ReturnType<typeof fs.readFile> => {
-        if (!injectedFailure && args[0] === pagePath) {
-          injectedFailure = true;
-          throw new Error("transient existing-page read failure");
-        }
-        return originalReadFile(...args);
-      },
-    );
+    const error = new Error("transient existing-page read failure");
+    const failure = failPageReads(pagePath, error, true);
 
     await update();
 
-    const after = await originalReadFile(pagePath, "utf8");
-    expect(injectedFailure).toBe(true);
+    const after = await failure.readFile(pagePath, "utf8");
+    expect(failure.injected()).toBe(true);
     expect(after).toContain("v2 content updated");
     expect(after).toContain(userNote);
   });
@@ -327,19 +333,12 @@ describe("memory-wiki existing-page read retry", () => {
     const { pagePath, changeSource, update } = await createIngestFixture();
     const before = await fs.readFile(pagePath, "utf8");
     await changeSource();
-    const originalReadFile = fs.readFile.bind(fs);
-    vi.spyOn(fs, "readFile").mockImplementation(
-      async (...args: Parameters<typeof fs.readFile>): ReturnType<typeof fs.readFile> => {
-        if (args[0] === pagePath) {
-          throw Object.assign(new Error("resource busy"), { code: "EBUSY" });
-        }
-        return originalReadFile(...args);
-      },
-    );
+    const error = Object.assign(new Error("resource busy"), { code: "EBUSY" });
+    const failure = failPageReads(pagePath, error);
 
     await expect(update()).rejects.toMatchObject({ code: "EBUSY" });
 
-    await expect(originalReadFile(pagePath, "utf8")).resolves.toBe(before);
+    await expect(failure.readFile(pagePath, "utf8")).resolves.toBe(before);
   });
 
   it("preserves synthesis notes and frontmatter after a transient existing-page read failure", async () => {

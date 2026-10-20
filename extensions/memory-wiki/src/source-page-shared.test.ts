@@ -37,6 +37,13 @@ describe("writeImportedSourcePage", () => {
     };
   }
 
+  async function createPage(raw: string, overrides: Partial<Params> = {}) {
+    const params = importParams({ sourceSize: Buffer.byteLength(raw), ...overrides });
+    await fs.writeFile(params.sourcePath, raw, "utf8");
+    await writeImportedSourcePage(params);
+    return params;
+  }
+
   beforeEach(async () => {
     suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-source-page-"));
   });
@@ -90,17 +97,9 @@ describe("writeImportedSourcePage", () => {
     const buildRendered = vi.fn();
     fsRootMock.mockClear();
 
+    const params = importParams({ ...entry, state, buildRendered });
     const results = await Promise.all(
-      syncKeys.map((syncKey) =>
-        writeImportedSourcePage(
-          importParams({
-            syncKey,
-            ...entry,
-            state,
-            buildRendered,
-          }),
-        ),
-      ),
+      syncKeys.map((syncKey) => writeImportedSourcePage({ ...params, syncKey })),
     );
 
     expect(fsRootMock).not.toHaveBeenCalled();
@@ -142,15 +141,8 @@ describe("writeImportedSourcePage", () => {
   ])(
     "preserves a $group page and tracked state when its human Notes $missingMarker marker is missing",
     async ({ group, missingMarker }) => {
-      const params = importParams({ group });
+      const params = await createPage("first imported body", { group });
       const { state, sourcePath, pagePath } = params;
-      const firstSource = "first imported body";
-
-      await fs.writeFile(sourcePath, firstSource, "utf8");
-      await writeImportedSourcePage({
-        ...params,
-        sourceSize: Buffer.byteLength(firstSource),
-      });
 
       const absPage = path.join(suiteRoot, pagePath);
       const userNote = `DURABLE ${group.toUpperCase()} ANNOTATION`;
@@ -185,14 +177,8 @@ describe("writeImportedSourcePage", () => {
     "preserves a %s page and tracked state when source bytes are malformed UTF-8",
     async (group) => {
       const original = "Café 🤖 � original";
-      const params = importParams({
-        sourceUpdatedAtMs: 123,
-        sourceSize: Buffer.byteLength(original),
-        group,
-      });
+      const params = await createPage(original, { sourceUpdatedAtMs: 123, group });
       const { state, sourcePath, pagePath } = params;
-      await fs.writeFile(sourcePath, original);
-      await writeImportedSourcePage(params);
       const pageBefore = await fs.readFile(path.join(suiteRoot, pagePath));
       expect(pageBefore.toString("utf8")).toContain(original);
       const stateBefore = structuredClone(state);
@@ -218,15 +204,10 @@ describe("writeImportedSourcePage", () => {
   );
 
   it("preserves CRLF human notes without copying marker comments from existing imported content", async () => {
-    const params = importParams();
-    const { sourcePath, pagePath } = params;
     const sourceWithMarkers =
       "first imported body\n<!-- openclaw:human:start -->\nOLD IMPORTED SOURCE MARKER PAYLOAD\n<!-- openclaw:human:end -->\n";
-    await fs.writeFile(sourcePath, sourceWithMarkers, "utf8");
-    await writeImportedSourcePage({
-      ...params,
-      sourceSize: sourceWithMarkers.length,
-    });
+    const params = await createPage(sourceWithMarkers);
+    const { sourcePath, pagePath } = params;
 
     const absPage = path.join(suiteRoot, pagePath);
     const userNote = "CRLF IMPORTED PAGE NOTE";
