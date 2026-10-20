@@ -22,8 +22,9 @@ it.each([false, true])(
       // Existing installs have a deletion journal before aliases appear. A symlink in fresh
       // state correctly prevents inferring empty deletion history and blocks maintenance.
       openOpenClawStateDatabase({ env: state.env });
-      const upperDirectory = state.statePath("agents", "BA-EA");
-      const lowerDirectory = state.statePath("agents", "ba-ea");
+      const agentPath = (id: string, ...parts: string[]) => state.statePath("agents", id, ...parts);
+      const upperDirectory = agentPath("BA-EA");
+      const lowerDirectory = agentPath("ba-ea");
       fs.mkdirSync(upperDirectory, { recursive: true });
       // Exercise native case aliases on macOS and the same physical alias on case-sensitive hosts.
       if (!fs.existsSync(lowerDirectory)) {
@@ -32,11 +33,11 @@ it.each([false, true])(
       const scope = {
         agentId: "ba-ea",
         env: state.env,
-        storePath: state.statePath("agents", "BA-EA", "sessions", "sessions.json"),
+        storePath: agentPath("BA-EA", "sessions", "sessions.json"),
       };
       const canonicalScope = {
         ...scope,
-        storePath: state.statePath("agents", "ba-ea", "sessions", "sessions.json"),
+        storePath: agentPath("ba-ea", "sessions", "sessions.json"),
       };
       const cfg: OpenClawConfig = {
         agents: { entries: { "ba-ea": {}, ...(foreignWinner ? { main: {} } : {}) } },
@@ -48,7 +49,7 @@ it.each([false, true])(
         ? {
             ...scope,
             agentId: "main",
-            storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
+            storePath: agentPath("main", "sessions", "sessions.json"),
           }
         : scope;
       insertLegacySession({
@@ -63,21 +64,16 @@ it.each([false, true])(
         entry: { sessionId: "kept-history", updatedAt: 2 },
         eventText: "Preserve this transcript through Doctor.",
       });
-      const report = await repairCanonicalSessionKeys({ apply: true, cfg, env: state.env });
-      expect(report).toMatchObject({
-        repairedGroups: 1,
-        removedRows: 1,
-      });
-      expect(loadExactSessionEntryReadOnly({ ...scope, sessionKey: legacyKey })).toBeUndefined();
-      expect(
-        loadExactSessionEntryReadOnly({ ...canonicalScope, sessionKey: legacyKey }),
-      ).toBeUndefined();
-      expect(loadExactSessionEntryReadOnly({ ...source, sessionKey: legacyKey })).toBeUndefined();
+      const repair = () => repairCanonicalSessionKeys({ apply: true, cfg, env: state.env });
+      const load = (alias: typeof scope, sessionKey: string) =>
+        loadExactSessionEntryReadOnly({ ...alias, sessionKey });
+      const report = await repair();
+      expect(report).toMatchObject({ repairedGroups: 1, removedRows: 1 });
+      for (const alias of [scope, canonicalScope, source]) {
+        expect(load(alias, legacyKey)).toBeUndefined();
+      }
       for (const aliasScope of [scope, canonicalScope]) {
-        expect(
-          loadExactSessionEntryReadOnly({ ...aliasScope, sessionKey: canonicalKey })?.entry
-            .sessionId,
-        ).toBe("kept-history");
+        expect(load(aliasScope, canonicalKey)?.entry.sessionId).toBe("kept-history");
         expect(
           await loadTranscriptEvents({
             ...aliasScope,
@@ -109,10 +105,7 @@ it.each([false, true])(
           message: { role: "user", content: "Retain the older destination in its archive." },
         }),
       ]);
-      expect(await repairCanonicalSessionKeys({ apply: true, cfg, env: state.env })).toMatchObject({
-        foundGroups: 0,
-        repairedGroups: 0,
-      });
+      expect(await repair()).toMatchObject({ foundGroups: 0, repairedGroups: 0 });
     });
   },
 );

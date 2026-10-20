@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { build } from "tsdown";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
 import packageJson from "../../package.json" with { type: "json" };
 import { createSqliteSchemaAssetsPlugin } from "../../scripts/lib/sqlite-schema-assets.mts";
 import { createStateSchemaInlinePlugin } from "../../scripts/lib/state-schema-inline-plugin.mts";
@@ -83,122 +83,94 @@ function payloadFor(index: number): string {
   return `${prefix}${"x".repeat(ENTRY_PAYLOAD_BYTES - prefix.length)}`;
 }
 
-describe("canonical SQLite session repair memory", () => {
-  it("keeps entry JSON streaming under a low child heap", async () => {
-    state = await createOpenClawTestState({
-      applyEnv: false,
-      label: "canonical-memory",
-      layout: "state-only",
-    });
-    const storeTemplate = path.join(
-      state.stateDir,
-      "agents",
-      "{agentId}",
-      "sessions",
-      "sessions.json",
-    );
-    const storePath = resolveSessionStorePathCore(storeTemplate, {
-      agentId: "main",
-      env: state.env,
-    });
-    fs.mkdirSync(path.dirname(storePath), { recursive: true });
-    const database = openOpenClawAgentDatabase({
-      agentId: "main",
-      env: state.env,
-      path: resolveSqliteTargetFromSessionStorePath(storePath, {
-        agentId: "main",
-        env: state.env,
-      }).path,
-    });
-    const runChild = async () => {
-      const { stdout } = await execFileAsync(
-        process.execPath,
-        [`--max-old-space-size=${CHILD_HEAP_MIB}`, childPath, state!.stateDir, storeTemplate],
-        {
-          cwd: process.cwd(),
-          encoding: "utf8",
-          env: state!.env,
-          maxBuffer: 1024 * 1024,
-          timeout: 60_000,
-        },
-      );
-      return JSON.parse(stdout) as { foundGroups: number; scannedStores: number };
-    };
+const sessionKeyFor = (index: number) =>
+  index === 0
+    ? "agent:main:main"
+    : `agent:main:dashboard:memory-${index.toString().padStart(4, "0")}`;
 
-    closeOpenClawAgentDatabasesForTest();
-    await expect(runChild()).resolves.toMatchObject({ foundGroups: 0, scannedStores: 1 });
-    const writable = openOpenClawAgentDatabase({
-      agentId: "main",
-      env: state.env,
-      path: database.path,
-    });
-    const updateWindow = writable.db.prepare(
-      `UPDATE session_windows
+it("keeps canonical SQLite entry JSON streaming under a low child heap", async () => {
+  state = await createOpenClawTestState({
+    applyEnv: false,
+    label: "canonical-memory",
+    layout: "state-only",
+  });
+  const scope = { agentId: "main", env: state.env };
+  const storeTemplate = state.statePath("agents", "{agentId}", "sessions", "sessions.json");
+  const storePath = resolveSessionStorePathCore(storeTemplate, scope);
+  fs.mkdirSync(path.dirname(storePath), { recursive: true });
+  const databaseOptions = {
+    ...scope,
+    path: resolveSqliteTargetFromSessionStorePath(storePath, scope).path,
+  };
+  openOpenClawAgentDatabase(databaseOptions);
+  const runChild = async () => {
+    const { stdout } = await execFileAsync(
+      process.execPath,
+      [`--max-old-space-size=${CHILD_HEAP_MIB}`, childPath, state!.stateDir, storeTemplate],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: state!.env,
+        maxBuffer: 1024 * 1024,
+        timeout: 60_000,
+      },
+    );
+    return JSON.parse(stdout) as { foundGroups: number; scannedStores: number };
+  };
+
+  closeOpenClawAgentDatabasesForTest();
+  await expect(runChild()).resolves.toMatchObject({ foundGroups: 0, scannedStores: 1 });
+  const writable = openOpenClawAgentDatabase(databaseOptions);
+  const updateWindow = writable.db.prepare(
+    `UPDATE session_windows
           SET chat_type = 'direct', model_provider = 'openai', model = 'gpt-5.5',
               agent_harness_id = 'codex'
         WHERE session_id = ?`,
-    );
-    writable.db.exec("BEGIN IMMEDIATE");
-    try {
-      for (let index = 0; index < ROW_COUNT; index += 1) {
-        const sessionKey =
-          index === 0
-            ? "agent:main:main"
-            : `agent:main:dashboard:memory-${index.toString().padStart(4, "0")}`;
-        const sessionId = `memory-session-${index.toString().padStart(4, "0")}`;
-        const updatedAt = 1_800_000_000_000 + index;
-        insertLegacySession({
-          agentId: "main",
-          env: state.env,
-          entry: {
-            sessionId,
-            skillsSnapshot: { prompt: payloadFor(index), skills: [] },
-            updatedAt,
-          },
-          sessionKey,
-          storePath,
-        });
-        updateWindow.run(sessionId);
-      }
-      writable.db.prepare("UPDATE session_nodes SET entry_valid = 1").run();
-      writable.db.exec("COMMIT");
-    } catch (error) {
-      writable.db.exec("ROLLBACK");
-      throw error;
+  );
+  writable.db.exec("BEGIN IMMEDIATE");
+  try {
+    for (let index = 0; index < ROW_COUNT; index += 1) {
+      const sessionId = `memory-session-${index.toString().padStart(4, "0")}`;
+      const updatedAt = 1_800_000_000_000 + index;
+      insertLegacySession({
+        ...scope,
+        entry: {
+          sessionId,
+          skillsSnapshot: { prompt: payloadFor(index), skills: [] },
+          updatedAt,
+        },
+        sessionKey: sessionKeyFor(index),
+        storePath,
+      });
+      updateWindow.run(sessionId);
     }
-    closeOpenClawAgentDatabasesForTest();
+    writable.db.prepare("UPDATE session_nodes SET entry_valid = 1").run();
+    writable.db.exec("COMMIT");
+  } catch (error) {
+    writable.db.exec("ROLLBACK");
+    throw error;
+  }
+  closeOpenClawAgentDatabasesForTest();
 
-    await expect(runChild()).resolves.toMatchObject({ foundGroups: 0, scannedStores: 1 });
-    const verifier = openOpenClawAgentDatabase({
-      agentId: "main",
-      env: state.env,
-      path: database.path,
-    });
-    expect(verifier.db.prepare("SELECT count(*) AS count FROM session_nodes").get()).toEqual({
+  await expect(runChild()).resolves.toMatchObject({ foundGroups: 0, scannedStores: 1 });
+  const { db } = openOpenClawAgentDatabase(databaseOptions);
+  for (const table of ["session_nodes", "session_windows"]) {
+    expect(db.prepare(`SELECT count(*) AS count FROM ${table}`).get()).toEqual({
       count: ROW_COUNT,
     });
-    expect(verifier.db.prepare("SELECT count(*) AS count FROM session_windows").get()).toEqual({
-      count: ROW_COUNT,
-    });
-    expect(
-      verifier.db
-        .prepare("SELECT count(*) AS count FROM session_nodes WHERE entry_valid <> 1")
-        .get(),
-    ).toEqual({ count: 0 });
-    for (const index of [0, Math.floor(ROW_COUNT / 2), ROW_COUNT - 1]) {
-      const sessionKey =
-        index === 0
-          ? "agent:main:main"
-          : `agent:main:dashboard:memory-${index.toString().padStart(4, "0")}`;
-      const row = verifier.db
-        .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
-        .get(sessionKey) as { entry_json: string };
-      const prompt = (JSON.parse(row.entry_json) as { skillsSnapshot: { prompt: string } })
-        .skillsSnapshot.prompt;
-      expect(prompt).toHaveLength(ENTRY_PAYLOAD_BYTES);
-      expect(createHash("sha256").update(prompt).digest("hex")).toBe(
-        createHash("sha256").update(payloadFor(index)).digest("hex"),
-      );
-    }
-  }, 90_000);
-});
+  }
+  expect(
+    db.prepare("SELECT count(*) AS count FROM session_nodes WHERE entry_valid <> 1").get(),
+  ).toEqual({ count: 0 });
+  for (const index of [0, Math.floor(ROW_COUNT / 2), ROW_COUNT - 1]) {
+    const row = db
+      .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
+      .get(sessionKeyFor(index)) as { entry_json: string };
+    const prompt = (JSON.parse(row.entry_json) as { skillsSnapshot: { prompt: string } })
+      .skillsSnapshot.prompt;
+    expect(prompt).toHaveLength(ENTRY_PAYLOAD_BYTES);
+    expect(createHash("sha256").update(prompt).digest("hex")).toBe(
+      createHash("sha256").update(payloadFor(index)).digest("hex"),
+    );
+  }
+}, 90_000);

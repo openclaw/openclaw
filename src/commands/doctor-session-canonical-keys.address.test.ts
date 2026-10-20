@@ -8,23 +8,33 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSessionStoreKey } from "../gateway/session-store-key.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  type OpenClawTestState,
+  withOpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import {
   insertLegacySession,
   repairCanonicalSessionKeys,
 } from "./doctor-session-canonical-keys.test-support.js";
+
+function sessionFixture(state: OpenClawTestState, agentId = "main") {
+  const store = state.statePath("agents", "{agentId}", "sessions.json");
+  const scope = { agentId, env: state.env, storePath: store.replace("{agentId}", agentId) };
+  const load = (sessionKey: string) => loadExactSessionEntryReadOnly({ ...scope, sessionKey });
+  const transcript = async (sessionKey: string, sessionId: string, content: string) => {
+    expect(await loadTranscriptEvents({ ...scope, sessionKey, sessionId })).toContainEqual(
+      expect.objectContaining({ type: "message", message: { role: "user", content } }),
+    );
+  };
+  return { store, scope, load, transcript };
+}
 
 describe("Doctor stored session addresses", () => {
   it.each(["custom-main", "global"])(
     "preserves literal main rows and lineage beside the %s request destination",
     async (variant) => {
       await withOpenClawTestState({ prefix: "doctor-stored-address-" }, async (state) => {
-        const store = state.statePath("agents", "{agentId}", "sessions.json");
-        const scope = {
-          agentId: "main",
-          env: state.env,
-          storePath: store.replace("{agentId}", "main"),
-        };
+        const { store, scope, load, transcript } = sessionFixture(state);
         const cfg: OpenClawConfig = {
           agents: { entries: { main: {} } },
           session: variant === "global" ? { scope: "global", store } : { mainKey: "work", store },
@@ -56,10 +66,7 @@ describe("Doctor stored session addresses", () => {
             updateMode: "none",
           });
         }
-        const readRows = () =>
-          [literal, destination, child].map((sessionKey) =>
-            loadExactSessionEntryReadOnly({ ...scope, sessionKey }),
-          );
+        const readRows = () => [literal, destination, child].map(load);
         const before = readRows();
         expect(resolveSessionStoreKey({ cfg, sessionKey: literal, storeAgentId: "main" })).toBe(
           destination,
@@ -72,18 +79,7 @@ describe("Doctor stored session addresses", () => {
           });
           expect(readRows()).toEqual(before);
           for (const sessionKey of [literal, destination, child]) {
-            expect(
-              await loadTranscriptEvents({
-                ...scope,
-                sessionKey,
-                sessionId: `window-${sessionKey}`,
-              }),
-            ).toContainEqual(
-              expect.objectContaining({
-                type: "message",
-                message: { role: "user", content: sessionKey },
-              }),
-            );
+            await transcript(sessionKey, `window-${sessionKey}`, sessionKey);
           }
         }
       });
@@ -91,21 +87,14 @@ describe("Doctor stored session addresses", () => {
   );
 
   it("still repairs a removed default agent's legacy work address into the store owner", async () => {
-    const suffix = "work";
-
     await withOpenClawTestState({ prefix: "doctor-legacy-default-owner-" }, async (state) => {
-      const store = state.statePath("agents", "{agentId}", "sessions.json");
-      const scope = {
-        agentId: "ops",
-        env: state.env,
-        storePath: store.replace("{agentId}", "ops"),
-      };
+      const { store, scope, load, transcript } = sessionFixture(state, "ops");
       const cfg: OpenClawConfig = {
         agents: { entries: { ops: {} } },
         session: { mainKey: "work", store },
       };
       setRuntimeConfigSnapshot(cfg);
-      const sessionKey = `agent:main:${suffix}`;
+      const sessionKey = "agent:main:work";
       insertLegacySession({
         ...scope,
         sessionKey,
@@ -152,17 +141,11 @@ describe("Doctor stored session addresses", () => {
         repairedGroups: 2,
         removedRows: 1,
       });
-      expect(loadExactSessionEntryReadOnly({ ...scope, sessionKey })).toBeUndefined();
+      expect(load(sessionKey)).toBeUndefined();
       const repairedScope = { ...scope, sessionKey: "agent:ops:work" };
-      expect(loadExactSessionEntryReadOnly(repairedScope)?.entry.sessionId).toBe("legacy-history");
-      expect(
-        await loadTranscriptEvents({ ...repairedScope, sessionId: "legacy-history" }),
-      ).toContainEqual(
-        expect.objectContaining({ message: { role: "user", content: "kept legacy history" } }),
-      );
-      expect(
-        loadExactSessionEntryReadOnly({ ...scope, sessionKey: childKey })?.entry,
-      ).toMatchObject({
+      expect(load(repairedScope.sessionKey)?.entry.sessionId).toBe("legacy-history");
+      await transcript(repairedScope.sessionKey, "legacy-history", "kept legacy history");
+      expect(load(childKey)?.entry).toMatchObject({
         parentSessionKey: repairedScope.sessionKey,
         spawnedBy: repairedScope.sessionKey,
         forkSource: {

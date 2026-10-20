@@ -17,6 +17,11 @@ it.each(["import", "recover"] as const)(
   async (mode) => {
     await withOpenClawTestState({ label: "missing-retained-primary" }, async (state) => {
       const { cfg, scope, storePath } = await seedDeferredPluginSessionSource(state, "default");
+      const run = (importMode: "import" | "recover") =>
+        runDoctorSessionSqlite({ cfg, env: state.env, allAgents: true, mode: importMode });
+      const readTranscript = () => loadTranscriptEventsSync({ ...scope, sessionId: "legacy-kept" });
+      const writeJson = (file: string, value: unknown) =>
+        fs.writeFileSync(file, JSON.stringify(value));
       const transcript = path.join(path.dirname(storePath), "legacy-kept.jsonl");
       const rows = [
         { type: "session", version: 3, id: "legacy-kept", timestamp: "", cwd: "" },
@@ -28,26 +33,17 @@ it.each(["import", "recover"] as const)(
         })),
       ];
       fs.writeFileSync(transcript, rows.map((row) => JSON.stringify(row)).join("\n") + "\n");
-      const imported = await runDoctorSessionSqlite({
-        cfg,
-        env: state.env,
-        allAgents: true,
-        mode: "import",
-      });
-      const target = imported.targets[0]!;
+      const target = (await run("import")).targets[0]!;
       const receiptParams = { cfg, env: state.env, target, sqlitePath: target.sqlitePath };
-      const canonical = loadTranscriptEventsSync({ ...scope, sessionId: "legacy-kept" });
+      const canonical = readTranscript();
       expect(canonical).toHaveLength(11);
       fs.unlinkSync(transcript);
       // Match the reported shape: a diagnostic pointer survives without its primary.
       const pointer = transcript.replace(/\.jsonl$/, ".trajectory-path.json");
-      fs.writeFileSync(
-        pointer,
-        JSON.stringify({
-          traceSchema: "openclaw-trajectory-pointer",
-          runtimeFile: "missing.trajectory.jsonl",
-        }),
-      );
+      writeJson(pointer, {
+        traceSchema: "openclaw-trajectory-pointer",
+        runtimeFile: "missing.trajectory.jsonl",
+      });
 
       // The same row count cannot prove the missing content; leave its receipt active.
       const transcriptScope = { ...scope, sessionKey: "agent:main:kept", sessionId: "legacy-kept" };
@@ -56,7 +52,7 @@ it.each(["import", "recover"] as const)(
         { ...rows[1]!, message: { role: "user", content: "Different history" } },
         ...canonical.slice(2),
       ]);
-      const refused = await runDoctorSessionSqlite({ cfg, env: state.env, allAgents: true, mode });
+      const refused = await run(mode);
       expect(refused.targets.flatMap((entry) => entry.issues)).toContainEqual(
         expect.objectContaining({ code: "retained_plugin_source_conflict" }),
       );
@@ -74,12 +70,7 @@ it.each(["import", "recover"] as const)(
       ];
       await replaceTranscriptEvents(transcriptScope, extended);
 
-      const recovered = await runDoctorSessionSqlite({
-        cfg,
-        env: state.env,
-        allAgents: true,
-        mode,
-      });
+      const recovered = await run(mode);
       expect(recovered.targets.flatMap((entry) => entry.issues)).toContainEqual(
         expect.objectContaining({ code: "retained_plugin_source_index_rebuilt" }),
       );
@@ -91,14 +82,12 @@ it.each(["import", "recover"] as const)(
           reason: expect.stringContaining("SHA-256"),
         }),
       );
-      expect(loadTranscriptEventsSync({ ...scope, sessionId: "legacy-kept" })).toEqual(extended);
+      expect(readTranscript()).toEqual(extended);
 
       if (mode === "import") {
         const pluginRoot = state.path("fixture-plugin");
         const marker = state.statePath("post-session-completed");
         fs.mkdirSync(pluginRoot);
-        const writeJson = (file: string, value: unknown) =>
-          fs.writeFileSync(file, JSON.stringify(value));
         writeJson(path.join(pluginRoot, "package.json"), {
           name: "@example/fixture-plugin",
           version: "1.0.0",

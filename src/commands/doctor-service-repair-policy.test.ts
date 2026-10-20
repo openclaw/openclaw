@@ -8,17 +8,22 @@ import {
 } from "./doctor-service-repair-policy.js";
 
 const mocks = vi.hoisted(() => ({
-  findInstalledSystemdGatewayScope: vi.fn<
-    (typeof import("../daemon/systemd.js"))["findInstalledSystemdGatewayScope"]
-  >(async () => ({
-    scope: "user",
-    unitName: "openclaw-gateway.service",
-    unitPath: "/home/alice/.config/systemd/user/openclaw-gateway.service",
-  })),
+  findInstalledSystemdGatewayScope:
+    vi.fn<(typeof import("../daemon/systemd.js"))["findInstalledSystemdGatewayScope"]>(),
   isContainerEnvironment: vi.fn(() => false),
   isLoaded: vi.fn(async () => false),
   resolveGatewayService: vi.fn(),
 }));
+
+type Scenario = {
+  env?: NodeJS.ProcessEnv;
+  container?: boolean;
+  scope?: "system";
+  installed?: boolean;
+  failedScope?: boolean;
+  unavailableManager?: boolean;
+  platform?: "darwin";
+};
 
 vi.mock("../infra/container-environment.js", () => ({
   isContainerEnvironment: mocks.isContainerEnvironment,
@@ -51,76 +56,37 @@ describe("doctor gateway service repair policy", () => {
     vi.restoreAllMocks();
   });
 
-  it.each([
-    { name: "native host", env: {}, expected: true, probes: "none" },
-    {
-      name: "Doctor-only external repair policy on a native host",
-      env: { OPENCLAW_SERVICE_REPAIR_POLICY: "external" },
-      expected: true,
-      probes: "none",
-    },
-    {
-      name: "globally external supervision",
-      env: { OPENCLAW_SUPERVISOR_MODE: "external" },
-      container: true,
-      expected: false,
-      probes: "none",
-    },
-    {
-      name: "Kubernetes orchestration",
-      env: { KUBERNETES_SERVICE_HOST: "10.96.0.1", KUBERNETES_SERVICE_PORT: "443" },
-      container: true,
-      expected: false,
-      probes: "none",
-    },
-    {
-      name: "Docker without an installed OpenClaw service",
-      env: {},
-      container: true,
-      installed: false,
-      expected: false,
-      probes: "scope",
-    },
-    {
-      name: "Docker with an installed but unloaded service and reachable manager",
-      env: {},
-      container: true,
-      expected: true,
-      probes: "manager",
-    },
-    {
-      name: "Docker with an installed system-scoped OpenClaw service",
-      env: {},
-      container: true,
-      scope: "system" as const,
-      expected: false,
-      probes: "scope",
-    },
-    {
-      name: "Docker with an installed service and unavailable manager",
-      env: {},
-      container: true,
-      unavailableManager: true,
-      expected: false,
-      probes: "manager",
-    },
-    {
-      name: "Docker with failed installed-scope discovery",
-      env: {},
-      container: true,
-      failedScope: true,
-      expected: false,
-      probes: "scope",
-    },
-    {
-      name: "non-Linux container",
-      env: {},
-      container: true,
-      platform: "darwin" as const,
-      expected: false,
-      probes: "none",
-    },
-  ])("applies native service ownership in $name", async (scenario) => {
+  it.each<[string, boolean, "none" | "scope" | "manager", Scenario]>([
+    ["native host", true, "none", {}],
+    [
+      "Doctor-only external policy",
+      true,
+      "none",
+      { env: { OPENCLAW_SERVICE_REPAIR_POLICY: "external" } },
+    ],
+    [
+      "external supervision",
+      false,
+      "none",
+      { container: true, env: { OPENCLAW_SUPERVISOR_MODE: "external" } },
+    ],
+    [
+      "Kubernetes",
+      false,
+      "none",
+      {
+        container: true,
+        env: { KUBERNETES_SERVICE_HOST: "10.96.0.1", KUBERNETES_SERVICE_PORT: "443" },
+      },
+    ],
+    ["Docker without a service", false, "scope", { container: true, installed: false }],
+    ["Docker with an unloaded user service", true, "manager", { container: true }],
+    ["Docker with a system service", false, "scope", { container: true, scope: "system" }],
+    ["Docker without a manager", false, "manager", { container: true, unavailableManager: true }],
+    ["Docker with failed discovery", false, "scope", { container: true, failedScope: true }],
+    ["non-Linux container", false, "none", { container: true, platform: "darwin" }],
+  ])("applies native service ownership in %s", async (_name, expected, probes, scenario) => {
+    const env = scenario.env ?? {};
     mocks.isContainerEnvironment.mockReturnValue(scenario.container === true);
     if (scenario.platform) {
       mockProcessPlatform(scenario.platform);
@@ -144,17 +110,16 @@ describe("doctor gateway service repair policy", () => {
       mocks.isLoaded.mockRejectedValue(new Error("systemd user manager unavailable"));
     }
 
-    await expect(shouldManageGatewayService(scenario.env)).resolves.toBe(scenario.expected);
+    await expect(shouldManageGatewayService(env)).resolves.toBe(expected);
 
-    if (scenario.probes === "none") {
+    if (probes === "none") {
       expect(mocks.findInstalledSystemdGatewayScope).not.toHaveBeenCalled();
-      expect(mocks.resolveGatewayService).not.toHaveBeenCalled();
     } else {
-      expect(mocks.findInstalledSystemdGatewayScope).toHaveBeenCalledWith(scenario.env);
+      expect(mocks.findInstalledSystemdGatewayScope).toHaveBeenCalledWith(env);
     }
-    if (scenario.probes === "manager") {
+    if (probes === "manager") {
       expect(mocks.resolveGatewayService).toHaveBeenCalledOnce();
-      expect(mocks.isLoaded).toHaveBeenCalledWith({ env: scenario.env, timeoutMs: 5_000 });
+      expect(mocks.isLoaded).toHaveBeenCalledWith({ env, timeoutMs: 5_000 });
     } else {
       expect(mocks.resolveGatewayService).not.toHaveBeenCalled();
       expect(mocks.isLoaded).not.toHaveBeenCalled();

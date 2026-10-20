@@ -28,6 +28,8 @@ async function main() {
   const payloadBytes = scenario === "public" ? 16_384 : scenario === "batch" ? 32768 : 256;
   const sessionsDir = path.join(stateDir, "agents/main/sessions");
   const storePath = path.join(sessionsDir, "sessions.json");
+  const importSessions = () =>
+    runDoctorSessionSqlite({ mode: "import", store: storePath, env: process.env });
   fs.mkdirSync(sessionsDir, { recursive: true });
   const store: Record<string, { sessionId: string; updatedAt: number; sessionFile: string }> = {};
   const expected = new Map<string, string>();
@@ -96,11 +98,7 @@ async function main() {
     );
     assert(!fs.readdirSync(sessionsDir).some((name) => name.includes(".pre-doctor-")));
   }
-  const report = await runDoctorSessionSqlite({
-    mode: "import",
-    store: storePath,
-    env: process.env,
-  });
+  const report = await importSessions();
   assert.equal(report.totals.issues, 0, JSON.stringify(report.targets.map((t) => t.issues)));
   assert.equal(report.totals.importedEntries, scenario === "public" ? 0 : sessionCount);
   assert.equal(
@@ -147,11 +145,7 @@ async function main() {
   } finally {
     db.close();
   }
-  const rerun = await runDoctorSessionSqlite({
-    mode: "import",
-    store: storePath,
-    env: process.env,
-  });
+  const rerun = await importSessions();
   assert.equal(rerun.totals.importedEntries, 0);
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();

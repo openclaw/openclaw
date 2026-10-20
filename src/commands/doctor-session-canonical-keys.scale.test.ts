@@ -2,31 +2,21 @@ import { execFile } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, expect, it } from "vitest";
-import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { createTranscriptEventInserter } from "../config/sessions/transcript-payload.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { doctorConfigRuntimeEntrypoints } from "./doctor-config-runtime.test-support.js";
+import { createCanonicalRepairFixture } from "./doctor-session-repair-fixture.test-support.js";
 
 afterEach(() => closeOpenClawAgentDatabasesForTest());
 const execFileAsync = promisify(execFile);
 
 it("repairs deep owner aliases without losing a large healthy transcript", async () => {
   await withStateDirEnv("openclaw-doctor-canonical-scale-", async ({ stateDir }) => {
-    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const { env, database } = createCanonicalRepairFixture(stateDir);
     const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions.json");
-    const storePath = resolveSessionStorePathCore(storeTemplate, { agentId: "main", env });
-    const databaseOptions = {
-      agentId: "main",
-      env,
-      path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main", env }).path,
-    };
-    const { db } = openOpenClawAgentDatabase(databaseOptions);
+    const { db } = database();
     const aliasCount = 12_000;
     const eventCount = 200_000;
     const key = (index: number) => `agent:main:dashboard:scale-${String(index).padStart(5, "0")}`;
@@ -88,13 +78,11 @@ it("repairs deep owner aliases without losing a large healthy transcript", async
       repairedGroups: 1,
       removedRows: aliasCount,
     });
-    const { db: verified } = openOpenClawAgentDatabase(databaseOptions);
-    expect(verified.prepare("SELECT count(*) AS count FROM transcript_events").get()).toEqual({
-      count: eventCount,
-    });
-    expect(verified.prepare("SELECT count(*) AS count FROM session_nodes").get()).toEqual({
-      count: 1,
-    });
+    const { db: verified } = database();
+    const count = (table: string) =>
+      verified.prepare(`SELECT count(*) AS count FROM ${table}`).get();
+    expect(count("transcript_events")).toEqual({ count: eventCount });
+    expect(count("session_nodes")).toEqual({ count: 1 });
     expect(
       verified.prepare("SELECT session_key, current_session_id FROM session_nodes").get(),
     ).toEqual({

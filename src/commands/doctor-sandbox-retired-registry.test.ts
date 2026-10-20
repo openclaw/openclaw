@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -34,86 +34,80 @@ beforeEach(() => {
   vi.mocked(note).mockClear();
 });
 
-describe("retired sandbox registry files", () => {
-  it.each([
-    { name: "containers.json", sharded: false, bytes: '{"entries":[]}' },
-    { name: "browsers.json", sharded: false, bytes: "{malformed original bytes\n" },
-    { name: "containers", sharded: true, bytes: '{"containerName":"retained-container"}' },
-    { name: "browsers", sharded: true, bytes: '{"containerName":"retained-browser"}' },
-  ])("reports then archives $name byte-for-byte", async ({ name, sharded, bytes }) => {
-    const source = path.join(fixture.root, name);
-    if (sharded) {
-      fs.mkdirSync(source);
-    }
-    const contentPath = sharded ? path.join(source, "entry.json") : source;
-    fs.writeFileSync(contentPath, bytes);
+const repair = (shouldRepair = true) => maybeRepairSandboxRegistryFiles({ shouldRepair }, () => {});
+const expectArchiveNote = (location: string) =>
+  expect(note).toHaveBeenLastCalledWith(expect.stringContaining(location), "Sandbox");
 
-    await maybeRepairSandboxRegistryFiles({ shouldRepair: false }, () => {});
-    expect(note).toHaveBeenCalledWith(expect.stringContaining("doctor --fix"), "Sandbox");
-    const issues = await detectLegacySandboxRegistryFileIssues();
-    expect(issues).toHaveLength(1);
-    const finding = legacySandboxRegistryInspectionToHealthFinding(issues[0]!);
-    expect(finding).toMatchObject({
-      path: source,
-      fixHint: expect.stringContaining("archive retired registry files"),
-    });
-    expect(legacySandboxRegistryInspectionToRepairEffect(issues[0]!)).toMatchObject({
-      action: "archive-retired-sandbox-registry",
-      target: source,
-    });
-
-    await maybeRepairSandboxRegistryFiles({ shouldRepair: true }, () => {});
-    const archive = sharded ? `${source}.migrated/entry.json.migrated` : `${source}.migrated`;
-    expect(fs.existsSync(source)).toBe(false);
-    expect(fs.readFileSync(archive, "utf8")).toBe(bytes);
-    expect(await detectLegacySandboxRegistryFileIssues()).toEqual([]);
-    expect(note).toHaveBeenLastCalledWith(expect.stringContaining(".migrated"), "Sandbox");
-  });
-
-  it("preserves occupied archive paths and reports the final sharded archive location", async () => {
-    const source = path.join(fixture.root, "containers");
+it.each([
+  { name: "containers.json", sharded: false, bytes: '{"entries":[]}' },
+  { name: "browsers.json", sharded: false, bytes: "{malformed original bytes\n" },
+  { name: "containers", sharded: true, bytes: '{"containerName":"retained-container"}' },
+  { name: "browsers", sharded: true, bytes: '{"containerName":"retained-browser"}' },
+])("reports then archives $name byte-for-byte", async ({ name, sharded, bytes }) => {
+  const source = path.join(fixture.root, name);
+  if (sharded) {
     fs.mkdirSync(source);
-    fs.writeFileSync(path.join(source, "entry.json"), "original bytes");
-    fs.symlinkSync(path.join(fixture.root, "missing-archive"), `${source}.migrated`);
+  }
+  const contentPath = sharded ? path.join(source, "entry.json") : source;
+  fs.writeFileSync(contentPath, bytes);
 
-    await maybeRepairSandboxRegistryFiles({ shouldRepair: true }, () => {});
-
-    expect(fs.readlinkSync(`${source}.migrated`)).toBe(path.join(fixture.root, "missing-archive"));
-    expect(fs.readFileSync(`${source}.migrated.2/entry.json.migrated`, "utf8")).toBe(
-      "original bytes",
-    );
-    expect(note).toHaveBeenLastCalledWith(
-      expect.stringContaining(`${source}.migrated.2/entry.json.migrated`),
-      "Sandbox",
-    );
+  await repair(false);
+  expect(note).toHaveBeenCalledWith(expect.stringContaining("doctor --fix"), "Sandbox");
+  const issues = await detectLegacySandboxRegistryFileIssues();
+  expect(issues).toHaveLength(1);
+  expect(legacySandboxRegistryInspectionToHealthFinding(issues[0]!)).toMatchObject({
+    path: source,
+    fixHint: expect.stringContaining("archive retired registry files"),
+  });
+  expect(legacySandboxRegistryInspectionToRepairEffect(issues[0]!)).toMatchObject({
+    action: "archive-retired-sandbox-registry",
+    target: source,
   });
 
-  it("preserves broken source links when a byte-for-byte backup is impossible", async () => {
-    const source = path.join(fixture.root, "containers.json");
-    const target = path.join(fixture.root, "missing-original.json");
-    fs.symlinkSync(target, source);
+  await repair();
+  const archive = sharded ? `${source}.migrated/entry.json.migrated` : `${source}.migrated`;
+  expect(fs.existsSync(source)).toBe(false);
+  expect(fs.readFileSync(archive, "utf8")).toBe(bytes);
+  expect(await detectLegacySandboxRegistryFileIssues()).toEqual([]);
+  expectArchiveNote(".migrated");
+});
 
-    await expect(maybeRepairSandboxRegistryFiles({ shouldRepair: true }, () => {})).rejects.toThrow(
-      /symlink|symbolic|regular|link|ENOENT/i,
-    );
-    expect(fs.readlinkSync(source)).toBe(target);
-  });
+it("preserves occupied archive paths and reports the final sharded archive location", async () => {
+  const source = path.join(fixture.root, "containers");
+  fs.mkdirSync(source);
+  fs.writeFileSync(path.join(source, "entry.json"), "original bytes");
+  fs.symlinkSync(path.join(fixture.root, "missing-archive"), `${source}.migrated`);
 
-  it("refuses an uninspectable source path instead of treating it as absent", async () => {
-    fixture.root = path.join(fixture.root, "not-a-directory");
-    fs.writeFileSync(fixture.root, "retained bytes");
+  await repair();
 
-    await expect(maybeRepairSandboxRegistryFiles({ shouldRepair: true }, () => {})).rejects.toThrow(
-      /Cannot inspect potentially retired state/,
-    );
-    expect(fs.readFileSync(fixture.root, "utf8")).toBe("retained bytes");
-  });
+  expect(fs.readlinkSync(`${source}.migrated`)).toBe(path.join(fixture.root, "missing-archive"));
+  expect(fs.readFileSync(`${source}.migrated.2/entry.json.migrated`, "utf8")).toBe(
+    "original bytes",
+  );
+  expectArchiveNote(`${source}.migrated.2/entry.json.migrated`);
+});
 
-  it("leaves current installations alone when retired registry paths are absent", async () => {
-    fs.writeFileSync(path.join(fixture.root, "current-state"), "current installation");
-    expect(await detectLegacySandboxRegistryFileIssues()).toEqual([]);
-    await maybeRepairSandboxRegistryFiles({ shouldRepair: true }, () => {});
-    expect(note).not.toHaveBeenCalled();
-    expect(fs.readdirSync(fixture.root)).toEqual(["current-state"]);
-  });
+it("preserves broken source links when a byte-for-byte backup is impossible", async () => {
+  const source = path.join(fixture.root, "containers.json");
+  const target = path.join(fixture.root, "missing-original.json");
+  fs.symlinkSync(target, source);
+
+  await expect(repair()).rejects.toThrow(/symlink|symbolic|regular|link|ENOENT/i);
+  expect(fs.readlinkSync(source)).toBe(target);
+});
+
+it("refuses an uninspectable source path instead of treating it as absent", async () => {
+  fixture.root = path.join(fixture.root, "not-a-directory");
+  fs.writeFileSync(fixture.root, "retained bytes");
+
+  await expect(repair()).rejects.toThrow(/Cannot inspect potentially retired state/);
+  expect(fs.readFileSync(fixture.root, "utf8")).toBe("retained bytes");
+});
+
+it("leaves current installations alone when retired registry paths are absent", async () => {
+  fs.writeFileSync(path.join(fixture.root, "current-state"), "current installation");
+  expect(await detectLegacySandboxRegistryFileIssues()).toEqual([]);
+  await repair();
+  expect(note).not.toHaveBeenCalled();
+  expect(fs.readdirSync(fixture.root)).toEqual(["current-state"]);
 });
