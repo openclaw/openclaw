@@ -60,31 +60,27 @@ type Receipt = {
     execution: SqliteReaderOwner | undefined;
   };
 };
+type Operation<Input, Output> = { input: Input; output: Output };
+type Value = { value: string };
 export type FixtureOperations = {
-  append: { input: { value: string }; output: Receipt };
-  "database.domain.execute": {
-    input: {
+  append: Operation<Value, Receipt>;
+  "database.domain.execute": Operation<
+    {
       command: {
         type: "session.actor.appendTranscriptEvent" | "session.private-customer-command";
-        input: { value: string };
+        input: Value;
       };
-    };
-    output: Receipt;
-  };
-  read: { input: undefined; output: string[] };
-  takeReplyOwnership: { input: undefined; output: ReplyOwnership[] };
-  commitThenExit: { input: { value: string }; output: never };
-  commitWithoutReceipt: {
-    input: { value: string; mode: "native" | "schema-maintenance" };
-    output: never;
-  };
-  commitUnserializable: { input: { value: string }; output: symbol };
-  failClose: { input: undefined; output: undefined };
-  delayClose: { input: { markerPath: string; reject: boolean }; output: undefined };
-  illegalAsync: {
-    input: { value: string; gatePath: string; reject: boolean };
-    output: Promise<Receipt>;
-  };
+    },
+    Receipt
+  >;
+  read: Operation<undefined, string[]>;
+  takeReplyOwnership: Operation<undefined, ReplyOwnership[]>;
+  commitThenExit: Operation<Value, never>;
+  commitWithoutReceipt: Operation<Value & { mode: "native" | "schema-maintenance" }, never>;
+  commitUnserializable: Operation<Value, symbol>;
+  failClose: Operation<undefined, undefined>;
+  delayClose: Operation<{ markerPath: string; reject: boolean }, undefined>;
+  illegalAsync: Operation<Value & { gatePath: string; reject: boolean }, Promise<Receipt>>;
 };
 
 function waitForFile(file: string): Promise<void> {
@@ -137,6 +133,8 @@ function createFixtureBackend(
     db.exec("CREATE TABLE IF NOT EXISTS entries (id INTEGER PRIMARY KEY, value TEXT NOT NULL)");
   }
   const query = getNodeSqliteKysely<{ entries: { id: Generated<number>; value: string } }>(db);
+  const insert = (value: string) =>
+    executeSqliteQuerySync(db, query.insertInto("entries").values({ value }));
   const actor = randomUUID();
   let writes = 0;
   let prepared = false;
@@ -148,7 +146,7 @@ function createFixtureBackend(
       if (input?.type === "prepare" && input.guarded) {
         requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
       }
-      executeSqliteQuerySync(db, query.insertInto("entries").values({ value }));
+      insert(value);
       if (input?.type === "prepare" && input.guarded) {
         requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
       }
@@ -238,10 +236,7 @@ function createFixtureBackend(
         };
         const write = () =>
           runSqliteImmediateTransactionSync(db, () => {
-            executeSqliteQuerySync(
-              db,
-              query.insertInto("entries").values({ value: command.input.value }),
-            );
+            insert(command.input.value);
           });
         if (command.input.mode === "schema-maintenance") {
           withStateDatabaseSchemaMaintenance({ databasePath }, write);

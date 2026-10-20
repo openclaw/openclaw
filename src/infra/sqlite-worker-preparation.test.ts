@@ -7,10 +7,30 @@ import { expect, it } from "vitest";
 import { waitForFixtureFile } from "../../test/helpers/process-wait.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { SqliteWorkerBroker } from "./sqlite-worker-broker.js";
-import { useSqliteWorkerStoreFixture } from "./sqlite-worker-fixture.test-support.js";
+import {
+  useSqliteWorkerStoreFixture,
+  appendWorkerRow as append,
+  readWorkerRows as read,
+} from "./sqlite-worker-fixture.test-support.js";
 import { runSqliteWorkerStoreWrite } from "./sqlite-worker-store.js";
 
 const { tempDirs: dirs, open } = useSqliteWorkerStoreFixture("sqlite-worker-preparation-");
+function preparationPaths() {
+  const root = dirs.make("sqlite-worker-preparation-");
+  return {
+    databasePath: path.join(root, "store.sqlite"),
+    markerPath: path.join(root, "preparing"),
+    gatePath: path.join(root, "release"),
+  };
+}
+async function waitForPreparation(marker: string, operation: Promise<unknown>) {
+  await Promise.race([
+    waitForFixtureFile(marker, operation),
+    operation.then(() => {
+      throw new Error("Command executed before its code preparation");
+    }),
+  ]);
+}
 
 it.each([
   { mib: 40, owner: "client" },
@@ -18,40 +38,27 @@ it.each([
 ] as const)(
   "retains FIFO, cancellation, and $owner close while preparing a $mib MiB command",
   async ({ mib, owner }) => {
-    const root = dirs.make("sqlite-worker-preparation-");
-    const databasePath = path.join(root, "store.sqlite");
-    const markerPath = path.join(root, "preparing");
-    const gatePath = path.join(root, "release");
+    const { databasePath, markerPath, gatePath } = preparationPaths();
     const store = await open(databasePath, { type: "prepare", markerPath, gatePath });
     const activeCancel = new AbortController();
     const queuedCancel = new AbortController();
     const value = mib ? "x".repeat(mib * 1024 * 1024) : "first";
     let settled = false;
-    const active = store
-      .execute({ type: "append", input: { value } }, { signal: activeCancel.signal })
-      .then((receipt) => {
-        settled = true;
-        return receipt;
-      });
+    const active = append(store, value, activeCancel.signal).then((receipt) => {
+      settled = true;
+      return receipt;
+    });
     let canceled: Promise<unknown> | undefined;
     let following: Promise<unknown> | undefined;
     let closing: Promise<void> | undefined;
     try {
-      await Promise.race([
-        waitForFixtureFile(markerPath, active),
-        active.then(() => {
-          throw new Error("Command executed before its code preparation");
-        }),
-      ]);
+      await waitForPreparation(markerPath, active);
       expect(settled).toBe(false);
-      canceled = store.execute(
-        { type: "append", input: { value: "canceled" } },
-        { signal: queuedCancel.signal },
-      );
+      canceled = append(store, "canceled", queuedCancel.signal);
       const reason = new Error("Cancel the queued command");
       queuedCancel.abort(reason);
       await expect(canceled).rejects.toBe(reason);
-      following = store.execute({ type: "append", input: { value: "second" } });
+      following = append(store, "second");
       activeCancel.abort(new Error("Dispatched preparation remains owned"));
       let closed = false;
       closing = (
@@ -59,9 +66,7 @@ it.each([
       ).then(() => {
         closed = true;
       });
-      await expect(store.execute({ type: "read", input: undefined })).rejects.toMatchObject({
-        code: "closed",
-      });
+      await expect(read(store)).rejects.toMatchObject({ code: "closed" });
       expect(closed).toBe(false);
       await writeFile(gatePath, "release preparation");
       const first = await active;
@@ -80,9 +85,7 @@ it.each([
       expect(closed).toBe(true);
       const reopened = await open(databasePath);
       const digest = (text: string) => createHash("sha256").update(text).digest("hex");
-      expect((await reopened.execute({ type: "read", input: undefined })).map(digest)).toEqual(
-        [value, "second"].map(digest),
-      );
+      expect((await read(reopened)).map(digest)).toEqual([value, "second"].map(digest));
     } finally {
       queuedCancel.abort();
       await writeFile(gatePath, "release for cleanup");
@@ -94,10 +97,7 @@ it.each([
 it.each(["revoked", "rejected"] as const)(
   "preserves uncommitted state after %s preparation and permits the next command",
   async (failure) => {
-    const root = dirs.make("sqlite-worker-preparation-authority-");
-    const databasePath = path.join(root, "store.sqlite");
-    const markerPath = path.join(root, "preparing");
-    const gatePath = path.join(root, "release");
+    const { databasePath, markerPath, gatePath } = preparationPaths();
     const store = await open(databasePath, {
       type: "prepare",
       markerPath,
@@ -119,12 +119,7 @@ it.each(["revoked", "rejected"] as const)(
     );
     const outcome = Promise.allSettled([operation]);
     try {
-      await Promise.race([
-        waitForFixtureFile(markerPath, operation),
-        operation.then(() => {
-          throw new Error("Command executed before its code preparation");
-        }),
-      ]);
+      await waitForPreparation(markerPath, operation);
       current = false;
       await writeFile(gatePath, "release preparation");
       const [result] = await outcome;
@@ -134,13 +129,11 @@ it.each(["revoked", "rejected"] as const)(
           message: failure === "revoked" ? refused.message : "Fixture code preparation failed",
         },
       });
-      expect(await store.execute({ type: "read", input: undefined })).toEqual([]);
+      expect(await read(store)).toEqual([]);
       await store.close();
       const reopened = await open(databasePath);
-      expect(await reopened.execute({ type: "read", input: undefined })).toEqual([]);
-      expect(
-        await reopened.execute({ type: "append", input: { value: "after refusal" } }),
-      ).toMatchObject({ writes: 1 });
+      expect(await read(reopened)).toEqual([]);
+      expect(await append(reopened, "after refusal")).toMatchObject({ writes: 1 });
     } finally {
       await writeFile(gatePath, "release for cleanup");
       await outcome;

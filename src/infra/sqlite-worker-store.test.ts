@@ -51,6 +51,32 @@ import { resolveSqliteBrokerWorkerCount } from "./worker-pool-sizing.js";
 const { stores, tempDirs, databasePath, open } = useSqliteWorkerStoreFixture(
   "openclaw-sqlite-worker-store-",
 );
+type Store = SqliteWorkerStore<FixtureOperations>;
+// Capture before any interception; forwarding must retain the emitting worker.
+// oxlint-disable-next-line typescript/unbound-method -- Reflect.apply below retains the receiver.
+const nativeEmit = Worker.prototype.emit;
+function emit(worker: Worker, event: string | symbol, reply: SqliteWorkerReply) {
+  return Reflect.apply(nativeEmit, worker, [event, reply]);
+}
+function interceptReply(
+  handler: (this: Worker, event: string | symbol, reply: SqliteWorkerReply) => boolean,
+  once = false,
+) {
+  const spy = vi.spyOn(Worker.prototype, "emit");
+  return once ? spy.mockImplementationOnce(handler) : spy.mockImplementation(handler);
+}
+async function expectUncertainAndUnavailable(...operations: Promise<unknown>[]) {
+  expect(await Promise.allSettled(operations)).toEqual([
+    { status: "rejected", reason: expect.objectContaining({ code: "outcome-unknown" }) },
+    { status: "rejected", reason: expect.objectContaining({ code: "unavailable" }) },
+  ]);
+}
+async function expectRecovery(file: string, rows: string[], next: string) {
+  const recovered = await open(file);
+  expect(await read(recovered)).toEqual(rows);
+  expect(await append(recovered, next)).toMatchObject({ writes: 1 });
+  return recovered;
+}
 
 async function expectRejectedOpen(
   file: string,
@@ -77,17 +103,11 @@ describe("SQLite worker store", () => {
     const key = "openclaw.sqliteNativeRuntimeAdmission";
     const previous = getEnvironmentData(key);
     const receipts: unknown[] = [];
-    // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply preserves the emitting worker.
-    const originalEmit = Worker.prototype.emit;
-    const messages = vi.spyOn(Worker.prototype, "emit").mockImplementation(function (
-      this: Worker,
-      event: string | symbol,
-      reply: SqliteWorkerReply,
-    ) {
+    const messages = interceptReply(function (event, reply) {
       if (event === "message" && reply.ok && reply.nativeRuntimeAdmission !== undefined) {
         receipts.push(reply.nativeRuntimeAdmission);
       }
-      return Reflect.apply(originalEmit, this, [event, reply]);
+      return emit(this, event, reply);
     });
     const requests = vi.spyOn(Worker.prototype, "postMessage");
     setEnvironmentData(key, undefined);
@@ -121,13 +141,7 @@ describe("SQLite worker store", () => {
       const frames: Array<{ bytes: number; backingBytes: number }> = [];
       const aborted = new AbortController();
       let closing: Promise<void> | undefined;
-      // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply preserves the emitting worker below.
-      const originalEmit = Worker.prototype.emit;
-      const messages = vi.spyOn(Worker.prototype, "emit").mockImplementation(function (
-        this: Worker,
-        event: string | symbol,
-        reply: SqliteWorkerReply,
-      ) {
+      const messages = interceptReply(function (event, reply) {
         if (event === "message" && reply.ok) {
           if (!reply.transfer) {
             inlineReplies.push(Object.keys(reply).toSorted());
@@ -147,15 +161,12 @@ describe("SQLite worker store", () => {
                 aborted.abort(new Error("Canceled after read dispatch"));
               }
               if (action === "failed frame") {
-                return Reflect.apply(originalEmit, this, [
-                  event,
-                  { ...reply, value: new Uint8Array([0]) },
-                ]);
+                return emit(this, event, { ...reply, value: new Uint8Array([0]) });
               }
             }
           }
         }
-        return Reflect.apply(originalEmit, this, [event, reply]);
+        return emit(this, event, reply);
       });
       const requests = vi.spyOn(Worker.prototype, "postMessage");
       try {
@@ -170,10 +181,7 @@ describe("SQLite worker store", () => {
         );
         if (action === "failed frame") {
           const queued = append(store, "must not be dispatched");
-          expect(await Promise.allSettled([reading, queued])).toEqual([
-            { status: "rejected", reason: expect.objectContaining({ code: "outcome-unknown" }) },
-            { status: "rejected", reason: expect.objectContaining({ code: "unavailable" }) },
-          ]);
+          await expectUncertainAndUnavailable(reading, queued);
         } else {
           const result = await reading;
           expect(result).toHaveLength(values.length);
@@ -246,7 +254,7 @@ describe("SQLite worker store", () => {
     let exited = false;
     let recoverySettled = false;
     let recoveredBeforeExit = false;
-    let recovering: Promise<SqliteWorkerStore<FixtureOperations>> | undefined;
+    let recovering: Promise<Store> | undefined;
     // oxlint-disable-next-line typescript/unbound-method -- call preserves the retiring worker.
     const terminate = Worker.prototype.terminate;
     const retirement = vi
@@ -518,7 +526,7 @@ describe("SQLite worker store", () => {
       return this.terminate();
     });
     const closed = first.close();
-    let replacement: SqliteWorkerStore<FixtureOperations> | undefined;
+    let replacement: Store | undefined;
     try {
       await retiring.promise;
       replacement = await open(databasePath());
@@ -554,14 +562,8 @@ describe("SQLite worker store", () => {
     const store = await open(databasePath());
     const dispatched = new AbortController();
     const queued = new AbortController();
-    const committed = store.execute(
-      { type: "append", input: { value: "dispatched" } },
-      { signal: dispatched.signal },
-    );
-    const canceled = store.execute(
-      { type: "append", input: { value: "queued" } },
-      { signal: queued.signal },
-    );
+    const committed = append(store, "dispatched", dispatched.signal);
+    const canceled = append(store, "queued", queued.signal);
     const reason = new Error("owner retired");
     dispatched.abort(reason);
     queued.abort(reason);
@@ -581,16 +583,12 @@ describe("SQLite worker store", () => {
 
     const replyReady = createDeferredCore();
     let publish: (() => void) | undefined;
-    const messages = vi.spyOn(Worker.prototype, "emit").mockImplementationOnce(function (
-      this: Worker,
-      event: string | symbol,
-      reply: SqliteWorkerReply,
-    ) {
+    const messages = interceptReply(function (event, reply) {
       messages.mockRestore();
       publish = () => this.emit(event, reply);
       replyReady.resolve();
       return true;
-    });
+    }, true);
     const write = append(retiring, "write before close");
     const closed = retiring.close();
     try {
@@ -622,17 +620,13 @@ describe("SQLite worker store", () => {
   });
 
   poolIt("times out a waiting open without retiring healthy workers or writes", async () => {
-    const active: SqliteWorkerStore<FixtureOperations>[] = [];
+    const active: Store[] = [];
     for (let index = 0; index < resolveSqliteBrokerWorkerCount(); index += 1) {
       active.push(await open(databasePath()));
     }
     const repliesReady = createDeferredCore();
     const replies: (() => void)[] = [];
-    const messages = vi.spyOn(Worker.prototype, "emit").mockImplementation(function (
-      this: Worker,
-      event: string | symbol,
-      reply: SqliteWorkerReply,
-    ) {
+    const messages = interceptReply(function (event, reply) {
       replies.push(() => this.emit(event, reply));
       if (replies.length === active.length) {
         messages.mockRestore();
@@ -731,8 +725,6 @@ describe("SQLite worker store", () => {
       await append(store, "preserved");
       await store.execute({ type: "delayClose", input: { markerPath, reject } });
       stores.delete(store);
-      // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply preserves the emitting worker below.
-      const originalEmit = Worker.prototype.emit;
       const events = vi.spyOn(Worker.prototype, "emit");
       const replyHeld = createDeferredCore();
       let resumeReply: (() => void) | undefined;
@@ -746,12 +738,12 @@ describe("SQLite worker store", () => {
                 return;
               }
               delivered = true;
-              Reflect.apply(originalEmit, this, args);
+              Reflect.apply(nativeEmit, this, args);
             };
             replyHeld.resolve();
             return true;
           }
-          return Reflect.apply(originalEmit, this, args);
+          return Reflect.apply(nativeEmit, this, args);
         });
       }
       const cleanup = Promise.allSettled([
@@ -795,9 +787,7 @@ describe("SQLite worker store", () => {
         await clientCleanup;
         await peer?.close();
       }
-      const recovered = await open(file);
-      expect(await read(recovered)).toEqual(["preserved"]);
-      await expect(append(recovered, "recovered")).resolves.toMatchObject({ writes: 1 });
+      await expectRecovery(file, ["preserved"], "recovered");
     },
   );
 
@@ -815,11 +805,7 @@ describe("SQLite worker store", () => {
           input: { value: "late write", gatePath, reject },
         });
         const queued = append(store, "queued write");
-        const outcomes = await Promise.allSettled([operation, queued]);
-        expect(outcomes).toEqual([
-          { status: "rejected", reason: expect.objectContaining({ code: "outcome-unknown" }) },
-          { status: "rejected", reason: expect.objectContaining({ code: "unavailable" }) },
-        ]);
+        await expectUncertainAndUnavailable(operation, queued);
         expect(events.mock.calls.filter(([event]) => event === "error")).toEqual([]);
         await writeFile(gatePath, "released after operation settled");
       } finally {
@@ -828,40 +814,29 @@ describe("SQLite worker store", () => {
         await Promise.allSettled([store.close()]);
         stores.delete(store);
       }
-      const recovered = await open(file);
-      expect(await read(recovered)).toEqual(["before"]);
-      await expect(append(recovered, "after recovery")).resolves.toMatchObject({ writes: 1 });
+      await expectRecovery(file, ["before"], "after recovery");
     },
   );
 
   it("retires a worker after a committed result cannot be deserialized without dispatching queued writes", async () => {
     const file = databasePath();
     const store = await open(file);
-    const messages = vi.spyOn(Worker.prototype, "emit").mockImplementationOnce(function (
-      this: Worker,
-      event: string | symbol,
-      reply: SqliteWorkerReply,
-    ) {
+    const messages = interceptReply(function (event, reply) {
       messages.mockRestore();
       expect(event).toBe("message");
       expect(reply.ok).toBe(true);
       return this.emit(event, { ...reply, value: new Uint8Array([0]) });
-    });
+    }, true);
     try {
       const committed = append(store, "committed once");
       const queued = append(store, "never dispatched");
-      expect(await Promise.allSettled([committed, queued])).toEqual([
-        { status: "rejected", reason: expect.objectContaining({ code: "outcome-unknown" }) },
-        { status: "rejected", reason: expect.objectContaining({ code: "unavailable" }) },
-      ]);
+      await expectUncertainAndUnavailable(committed, queued);
     } finally {
       messages.mockRestore();
       await Promise.allSettled([store.close()]);
       stores.delete(store);
     }
-    const recovered = await open(file);
-    expect(await read(recovered)).toEqual(["committed once"]);
-    await expect(append(recovered, "after recovery")).resolves.toMatchObject({ writes: 1 });
+    await expectRecovery(file, ["committed once"], "after recovery");
   });
 
   it("reports an uncertain result when serialization fails after commit without replaying the write", async () => {
@@ -892,9 +867,7 @@ describe("SQLite worker store", () => {
     await expect(store.close()).resolves.toBeUndefined();
     stores.delete(store);
 
-    const recovered = await open(file);
-    expect(await read(recovered)).toEqual(["committed"]);
-    expect(await append(recovered, "explicit recovery")).toMatchObject({ writes: 1 });
+    const recovered = await expectRecovery(file, ["committed"], "explicit recovery");
     expect(await read(recovered)).toEqual(["committed", "explicit recovery"]);
   });
 
