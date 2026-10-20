@@ -88,6 +88,14 @@ stop changing for a private copy. Inspection without that admission still uses
 an artifact-preserving copy and refuses an inconsistent source. This is
 candidate-side behavior; the installed updater runs first with its shipped checks.
 
+During update finalization, disposable plugin source copies and private SQLite
+inspection snapshots use the candidate helper's absolute `TMPDIR` (including
+when an older installed updater starts that helper). Normal Gateway cache
+placement is unchanged. Installed plugin projects, retained native admissions,
+and recovery or migration backups remain with their existing durable owners;
+`TMPDIR` does not relocate those writes or remove the need for free space on the
+installation and state filesystems.
+
 ### Migration integrity checks
 
 SQLite upgrades default to a whole-database `quick_check`, a full
