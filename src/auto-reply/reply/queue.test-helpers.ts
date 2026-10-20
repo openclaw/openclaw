@@ -1,37 +1,17 @@
-/** Test helpers for queued follow-up reply runs. */
 import { afterAll, beforeAll, expect } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { defaultRuntime } from "../../runtime.js";
 import { deferSessionControllerClaimBeforeExecution } from "../../sessions/session-controller.mailbox-claim.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
 
-/** Builds a minimal queued follow-up run fixture. */
-export function createQueueTestRun(params: {
-  prompt: string;
-  messageId?: string;
-  originatingChannel?: FollowupRun["originatingChannel"];
-  originatingTo?: string;
-  originatingAccountId?: string;
-  originatingThreadId?: string | number;
-  originatingReplyToId?: string;
-  originatingReplyToMode?: FollowupRun["originatingReplyToMode"];
-  originatingChatType?: string;
-  currentInboundEventKind?: FollowupRun["currentInboundEventKind"];
-}): FollowupRun {
+export function createQueueTestRun(
+  params: Pick<FollowupRun, "prompt"> & Partial<Omit<FollowupRun, "run">>,
+  execution: Partial<FollowupRun["run"]> = {},
+): FollowupRun {
   return {
-    prompt: params.prompt,
-    messageId: params.messageId,
     enqueuedAt: Date.now(),
-    originatingChannel: params.originatingChannel,
-    originatingTo: params.originatingTo,
-    originatingAccountId: params.originatingAccountId,
-    originatingThreadId: params.originatingThreadId,
-    originatingReplyToId: params.originatingReplyToId,
-    originatingReplyToMode: params.originatingReplyToMode,
-    originatingChatType: params.originatingChatType,
-    currentInboundEventKind: params.currentInboundEventKind,
+    ...params,
     run: {
       agentId: "agent",
       agentDir: "/tmp",
@@ -39,11 +19,12 @@ export function createQueueTestRun(params: {
       sessionId: `queue-test:${expect.getState().currentTestName}`,
       sessionFile: "/tmp/session.json",
       workspaceDir: "/tmp",
-      config: {} as OpenClawConfig,
+      config: {},
       provider: "openai",
       model: "gpt-test",
       timeoutMs: 10_000,
       blockReplyBreak: "text_end",
+      ...execution,
     },
   };
 }
@@ -54,7 +35,7 @@ export function installQueueRuntimeErrorSilencer(): void {
 
   beforeAll(() => {
     previousRuntimeError = defaultRuntime.error;
-    defaultRuntime.error = (() => {}) as typeof defaultRuntime.error;
+    defaultRuntime.error = () => {};
   });
 
   afterAll(() => {
@@ -63,13 +44,7 @@ export function installQueueRuntimeErrorSilencer(): void {
 }
 
 export function createQueueSettings(overrides: Partial<QueueSettings> = {}): QueueSettings {
-  return {
-    mode: "collect",
-    debounceMs: 0,
-    cap: 50,
-    dropPolicy: "summarize",
-    ...overrides,
-  };
+  return { mode: "collect", debounceMs: 0, cap: 50, dropPolicy: "summarize", ...overrides };
 }
 
 export function createDrainRecorder(expectedCalls = 1) {
@@ -99,11 +74,7 @@ export function enqueueTestRun(
   settings: QueueSettings,
   runOverrides?: Partial<FollowupRun["run"]>,
 ) {
-  const run = createQueueTestRun(params);
-  if (runOverrides) {
-    run.run = { ...run.run, ...runOverrides };
-  }
-  return enqueueFollowupRun(key, run, settings);
+  return enqueueFollowupRun(key, createQueueTestRun(params, runOverrides), settings);
 }
 
 export function enqueueSlackRun(

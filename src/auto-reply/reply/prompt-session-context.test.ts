@@ -1,4 +1,3 @@
-// Conversation facts stay separate from execution identity and current sender context.
 import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
@@ -31,12 +30,9 @@ const current: TemplateContext = {
 };
 
 function metadata(ctx: TemplateContext) {
-  const text = buildInboundMetaSystemPrompt(ctx, {});
-  const json = /```json\n([\s\S]*?)\n```/.exec(text)?.[1];
-  if (!json) {
-    throw new Error("missing rendered inbound metadata");
-  }
-  return JSON.parse(json) as Record<string, unknown>;
+  const json = /```json\n([\s\S]*?)\n```/.exec(buildInboundMetaSystemPrompt(ctx, {}))?.[1];
+  expect(json, "rendered inbound metadata").toBeDefined();
+  return JSON.parse(json!) as Record<string, unknown>;
 }
 
 describe("prepared reply conversation", () => {
@@ -80,29 +76,26 @@ describe("prepared reply conversation", () => {
   );
 
   it("keeps current room text and sender/execution facts on the current context", () => {
-    const input = {
-      ...current,
-      GroupSubject: "Live operations",
-      GroupChannel: "#live",
-      GroupSpace: "live workspace",
+    const facts = {
       Body: "current event",
       SenderId: "current-sender",
       WasMentioned: false,
       CommandAuthorized: false,
       SessionKey: "isolated-execution",
     };
+    const input = {
+      ...current,
+      ...facts,
+      GroupSubject: "Live operations",
+      GroupChannel: "#live",
+      GroupSpace: "live workspace",
+    };
     const conversation = prepareReplyConversation({ ctx: input, sessionEntry: stored });
     const prompt = { ...input, ...conversation.fields };
     const rendered = buildInboundUserContextPrefix(prompt);
     expect(rendered).toContain('"group_subject":"Live operations"');
     expect(rendered).not.toContain('"group_subject":"Operations"');
-    expect(prompt).toMatchObject({
-      Body: "current event",
-      SenderId: "current-sender",
-      WasMentioned: false,
-      CommandAuthorized: false,
-      SessionKey: "isolated-execution",
-    });
+    expect(prompt).toMatchObject(facts);
     expect(conversation.fields).not.toHaveProperty("SessionKey");
     expect(conversation.fields).not.toHaveProperty("SenderId");
   });

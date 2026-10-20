@@ -23,14 +23,21 @@ const settings = createQueueSettings();
 let sequence = 0;
 let key: string;
 
-function source(prompt: string, overrides: Partial<Parameters<typeof createRun>[0]> = {}) {
-  return createRun({
-    prompt,
-    messageId: "same-id",
-    originatingChannel: "line",
-    originatingTo: "group:G1",
-    ...overrides,
-  });
+function source(
+  prompt: string,
+  overrides: Partial<Parameters<typeof createRun>[0]> = {},
+  execution?: Partial<FollowupRun["run"]>,
+) {
+  return createRun(
+    {
+      prompt,
+      messageId: "same-id",
+      originatingChannel: "line",
+      originatingTo: "group:G1",
+      ...overrides,
+    },
+    execution,
+  );
 }
 
 function routeEnqueuer(queueKey: string, route: Partial<Parameters<typeof createRun>[0]>) {
@@ -50,15 +57,15 @@ afterEach(() => {
 describe("followup queue deduplication", () => {
   it("deduplicates settled redeliveries within their physical store, not across stores", async () => {
     const queueKey = "agent:main:physical-dedupe";
-    const makeRun = (store: string) => {
-      const run = source(store, {
-        originatingChannel: "discord",
-        originatingTo: "channel:physical",
-      });
-      run.run.sessionKey = queueKey;
-      run.run.config = { session: { store } };
-      return run;
-    };
+    const makeRun = (store: string) =>
+      source(
+        store,
+        {
+          originatingChannel: "discord",
+          originatingTo: "channel:physical",
+        },
+        { sessionKey: queueKey, config: { session: { store } } },
+      );
     const originals = [
       makeRun("/synthetic/store-a/sessions.json"),
       makeRun("/synthetic/store-b/sessions.json"),
@@ -123,9 +130,9 @@ describe("followup queue deduplication", () => {
       scheduleFollowupDrain(key, runFollowup);
       await settled.promise;
       expect(runFollowup).toHaveBeenCalledExactlyOnceWith(original);
-      expect(onAdopted).toHaveBeenCalledOnce();
-      expect(onSettled).toHaveBeenCalledOnce();
-      expect(onAbandoned).not.toHaveBeenCalled();
+      expect([onAdopted, onSettled, onAbandoned].map((fn) => fn.mock.calls.length)).toEqual([
+        1, 1, 0,
+      ]);
     },
   );
 
@@ -197,28 +204,15 @@ describe("followup queue deduplication", () => {
 
   it("does not collide recent message-id keys when routing contains delimiters", async () => {
     const { done, runFollowup } = createDrainRecorder();
-    expect(
-      enqueueFollowupRun(
-        key,
-        source("first", {
-          originatingChannel: "signal|group",
-          originatingTo: "peer",
-        }),
-        settings,
-      ),
-    ).toBe(true);
+    const enqueue = routeEnqueuer(key, {});
+    expect(enqueue("first", { originatingChannel: "signal|group", originatingTo: "peer" })).toBe(
+      true,
+    );
     scheduleFollowupDrain(key, runFollowup);
     await done.promise;
-    expect(
-      enqueueFollowupRun(
-        key,
-        source("second", {
-          originatingChannel: "signal",
-          originatingTo: "group|peer",
-        }),
-        settings,
-      ),
-    ).toBe(true);
+    expect(enqueue("second", { originatingChannel: "signal", originatingTo: "group|peer" })).toBe(
+      true,
+    );
   });
 
   it.each([
