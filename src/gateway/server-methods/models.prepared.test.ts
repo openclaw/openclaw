@@ -32,6 +32,30 @@ import {
 import { modelsHandlers } from "./models.js";
 import type { GatewayClient, GatewayRequestHandlerOptions } from "./types.js";
 
+function modelsReader(
+  context: GatewayRequestHandlerOptions["context"],
+  params: GatewayRequestHandlerOptions["params"],
+  client: GatewayClient | null = null,
+) {
+  return async () => {
+    let result: ModelsListResult | undefined;
+    await modelsHandlers["models.list"]!({
+      req: { type: "req", id: "prepared", method: "models.list", params },
+      params,
+      context,
+      client,
+      isWebchatConnect: () => false,
+      respond: (ok, value, error) => {
+        if (!ok) {
+          throw new Error(JSON.stringify(error));
+        }
+        result = value as ModelsListResult;
+      },
+    });
+    return result;
+  };
+}
+
 it("retains the model-list projection until its catalog facts change", async () => {
   await withOpenClawTestState(
     { layout: "state-only", prefix: "model-list-projection-" },
@@ -90,30 +114,22 @@ it("retains the model-list projection until its catalog facts change", async () 
         readPrepared: unpreparedRead,
         loadDeferred: unpreparedRead,
       });
-      const read = async () => {
-        let result: unknown;
-        await modelsHandlers["models.list"]!({
-          req: { type: "req", id: "prepared", method: "models.list", params },
-          params,
-          context,
-          client,
-          isWebchatConnect: () => false,
-          respond: (ok, value, error) => {
-            if (!ok) {
-              throw new Error(JSON.stringify(error));
-            }
-            result = value;
-          },
-        } satisfies GatewayRequestHandlerOptions);
-        return result;
+      const read = modelsReader(context, params, client);
+      const readCommands = () => harness.runtime.read({ agentId: "main", includeModels: false });
+      const publishConfig = async (next: OpenClawConfig) => {
+        currentConfig = next;
+        setRuntimeConfigSnapshot(next, next);
+        harness.setConfig(next);
+        harness.setOwner({ ...owner, config: next });
+        await harness.runtime.refresh();
       };
       const prepareProjection = vi.spyOn(modelsListResult, "prepareModelsListResult");
       try {
         await harness.runtime.refresh();
         expect(JSON.stringify(await read())).toBe(JSON.stringify(expected));
-        await expect(
-          harness.runtime.read({ agentId: "main", includeModels: false }),
-        ).resolves.toMatchObject({ commands: [{ name: "command-1-1" }] });
+        await expect(readCommands()).resolves.toMatchObject({
+          commands: [{ name: "command-1-1" }],
+        });
         const enterPluginScope = vi.spyOn(pluginScope, "withPluginRuntimeRegistryScope");
         const resolvePolicy = vi.spyOn(
           providerPolicySurface,
@@ -137,19 +153,15 @@ it("retains the model-list projection until its catalog facts change", async () 
           prepareStatement.mockRestore();
           executeStatement.mockRestore();
         }
-        currentConfig = {
+        harness.setSkillsVersion(2);
+        await publishConfig({
           ...config,
           ui: { seamColor: "#123456", prefs: { chatShowToolCalls: false } },
           meta: { lastTouchedVersion: "2026.10.11" },
-        };
-        setRuntimeConfigSnapshot(currentConfig, currentConfig);
-        harness.setConfig(currentConfig);
-        harness.setOwner({ ...owner, config: currentConfig });
-        harness.setSkillsVersion(2);
-        await harness.runtime.refresh();
-        await expect(
-          harness.runtime.read({ agentId: "main", includeModels: false }),
-        ).resolves.toMatchObject({ commands: [{ name: "command-2-1" }] });
+        });
+        await expect(readCommands()).resolves.toMatchObject({
+          commands: [{ name: "command-2-1" }],
+        });
         expect(harness.buildCommands).toHaveBeenCalledTimes(2);
         expect(await read()).toEqual(expected);
         expect(prepareProjection).toHaveBeenCalledOnce();
@@ -157,11 +169,7 @@ it("retains the model-list projection until its catalog facts change", async () 
         await harness.runtime.refresh();
         expect(await read()).toEqual(expected);
         expect(prepareProjection).toHaveBeenCalledOnce();
-        expect(await harness.runtime.read({ agentId: "main", includeModels: false })).toMatchObject(
-          {
-            commands: [{ name: "command-2-1" }],
-          },
-        );
+        expect(await readCommands()).toMatchObject({ commands: [{ name: "command-2-1" }] });
         owner.modelCatalog.pendingProviders = ["test"];
         expect(await read()).toMatchObject({ pendingProviders: ["test"] });
         owner.modelCatalog.pendingProviders = undefined;
@@ -169,7 +177,7 @@ it("retains the model-list projection until its catalog facts change", async () 
         expect(await read()).toMatchObject({ refreshFailed: true });
         expect(await read()).not.toHaveProperty("pendingProviders");
         expect(prepareProjection).toHaveBeenCalledOnce();
-        currentConfig = {
+        await publishConfig({
           ...currentConfig,
           agents: {
             ...currentConfig.agents,
@@ -178,11 +186,7 @@ it("retains the model-list projection until its catalog facts change", async () 
               modelPolicy: { allow: ["test/first"] },
             },
           },
-        };
-        setRuntimeConfigSnapshot(currentConfig, currentConfig);
-        harness.setConfig(currentConfig);
-        harness.setOwner({ ...owner, config: currentConfig });
-        await harness.runtime.refresh();
+        });
         expect(await read()).toMatchObject({
           models: expect.arrayContaining([
             expect.objectContaining({ id: "first", manualSelectionAllowed: true }),
@@ -259,25 +263,18 @@ it("bounds saved-session reads while projecting configured models and runtime ch
       await state.writeConfig(config);
       setRuntimeConfigSnapshot(config);
       const sessionKey = "agent:main:catalog-reader";
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey },
-        {
-          sessionId: "catalog-reader",
-          updatedAt: 1,
-          authProfileOverride: "openai:fixture",
-          authProfileOverrideSource: "user",
-        },
-      );
       const siblingSessionKey = "agent:main:catalog-sibling";
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: siblingSessionKey },
-        {
-          sessionId: "catalog-sibling",
-          updatedAt: 1,
-          authProfileOverride: "openai:fixture",
-          authProfileOverrideSource: "user",
-        },
-      );
+      for (const id of ["catalog-reader", "catalog-sibling"]) {
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey: `agent:main:${id}` },
+          {
+            sessionId: id,
+            updatedAt: 1,
+            authProfileOverride: "openai:fixture",
+            authProfileOverrideSource: "user",
+          },
+        );
+      }
       const pluginRegistry = createEmptyPluginRegistry();
       const loadNativeCatalog = vi.fn(async () => catalog);
       pluginRegistry.agentHarnesses.push({
@@ -333,23 +330,7 @@ it("bounds saved-session reads while projecting configured models and runtime ch
       harness.setAuthStore(authStore);
       context.readPreparedModelsList = harness.runtime.readModelsList;
       const params = { agentId: "main", sessionKey, view: "configured" as const };
-      const read = async () => {
-        let result: ModelsListResult | undefined;
-        await modelsHandlers["models.list"]!({
-          req: { type: "req", id: "session-models", method: "models.list", params },
-          params,
-          context,
-          client: null,
-          isWebchatConnect: () => false,
-          respond: (ok, value, error) => {
-            if (!ok) {
-              throw new Error(JSON.stringify(error));
-            }
-            result = value as ModelsListResult;
-          },
-        } satisfies GatewayRequestHandlerOptions);
-        return result;
-      };
+      const read = modelsReader(context, params);
       const sessionRead = vi.spyOn(sessionReads, "withGatewaySessionEntry");
       const prepareProjection = vi.spyOn(modelsListResult, "prepareModelsListResult");
       try {
@@ -375,35 +356,6 @@ it("bounds saved-session reads while projecting configured models and runtime ch
         expect(await Promise.all(Array.from({ length: 6 }, read))).toEqual(
           Array.from({ length: 6 }, () => result),
         );
-        if (process.env.OPENCLAW_BENCH_MODELS_LIST === "1") {
-          for (let warmup = 0; warmup < 5; warmup++) {
-            await read();
-          }
-          sessionRead.mockClear();
-          const durations: number[] = [];
-          for (let batch = 0; batch < 20; batch++) {
-            await Promise.all(
-              Array.from({ length: 6 }, async () => {
-                const started = performance.now();
-                await read();
-                durations.push(performance.now() - started);
-              }),
-            );
-          }
-          durations.sort((left, right) => left - right);
-          console.log(
-            JSON.stringify({
-              benchmark: "models.list",
-              callers: 6,
-              requests: durations.length,
-              sessionReads: sessionRead.mock.calls.length,
-              readsPerRequest,
-              warmReadsPerRequest,
-              p50Ms: durations[Math.floor(durations.length * 0.5)],
-              p99Ms: durations[Math.ceil(durations.length * 0.99) - 1],
-            }),
-          );
-        }
         expect(loadNativeCatalog).not.toHaveBeenCalled();
         // Model/runtime cardinality must not multiply live session authority acquisitions.
         expect(readsPerRequest).toBeLessThanOrEqual(12);

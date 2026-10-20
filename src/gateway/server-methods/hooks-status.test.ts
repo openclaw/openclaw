@@ -18,7 +18,9 @@ afterEach(() => {
   }
 });
 
-function createHookRegistry(workspaceDir: string) {
+function createHookRegistry() {
+  const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-status-"));
+  tempDirs.push(workspaceDir);
   const registry = createEmptyPluginRegistry();
   registry.hooks.push({
     pluginId: "live-hooks",
@@ -40,6 +42,7 @@ function createHookRegistry(workspaceDir: string) {
     },
   });
   return {
+    workspaceDir,
     config: { agents: { defaults: { workspace: workspaceDir } } },
     methodRegistry: createGatewayMethodRegistry(
       createCoreGatewayMethodDescriptors(hooksStatusHandlers),
@@ -51,7 +54,7 @@ function createHookRegistry(workspaceDir: string) {
 async function dispatchHooksStatus(params: {
   methodRegistry: ReturnType<typeof createGatewayMethodRegistry>;
   config: object;
-  scopes: string[];
+  scopes?: string[];
   requestParams?: Record<string, unknown>;
 }) {
   const respond = vi.fn();
@@ -67,7 +70,7 @@ async function dispatchHooksStatus(params: {
       connId: "hooks-status-client",
       connect: {
         role: "operator",
-        scopes: params.scopes,
+        scopes: params.scopes ?? ["operator.read"],
         client: { id: "cli", version: "test", platform: "test", mode: "cli" },
         minProtocol: 1,
         maxProtocol: 1,
@@ -85,9 +88,8 @@ async function dispatchHooksStatus(params: {
 
 describe("hooks.status", () => {
   it("returns typed selection-required for an ownerless explicit fleet", async () => {
-    const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-status-"));
-    tempDirs.push(workspaceDir);
-    const fixture = createHookRegistry(workspaceDir);
+    const fixture = createHookRegistry();
+    const { workspaceDir } = fixture;
     const config = {
       ...fixture.config,
       agents: {
@@ -97,11 +99,7 @@ describe("hooks.status", () => {
       },
     };
 
-    const missing = await dispatchHooksStatus({
-      ...fixture,
-      config,
-      scopes: ["operator.read"],
-    });
+    const missing = await dispatchHooksStatus({ ...fixture, config });
     expect(missing).toHaveBeenCalledWith(
       false,
       undefined,
@@ -114,7 +112,6 @@ describe("hooks.status", () => {
     const selected = await dispatchHooksStatus({
       ...fixture,
       config,
-      scopes: ["operator.read"],
       requestParams: { agentId: "research" },
     });
     expect(selected).toHaveBeenCalledWith(
@@ -125,20 +122,15 @@ describe("hooks.status", () => {
   });
 
   it("returns registered plugin hooks from the request-attached live registry", async () => {
-    const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-status-"));
-    tempDirs.push(workspaceDir);
-    const fixture = createHookRegistry(workspaceDir);
+    const fixture = createHookRegistry();
     setActivePluginRegistry(createEmptyPluginRegistry());
 
-    const respond = await dispatchHooksStatus({
-      ...fixture,
-      scopes: ["operator.read"],
-    });
+    const respond = await dispatchHooksStatus(fixture);
 
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({
-        workspaceDir,
+        workspaceDir: fixture.workspaceDir,
         hooks: expect.arrayContaining([
           expect.objectContaining({
             name: "live-plugin-hook",
@@ -152,9 +144,7 @@ describe("hooks.status", () => {
   });
 
   it("requires operator.read and rejects unexpected params", async () => {
-    const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-status-"));
-    tempDirs.push(workspaceDir);
-    const fixture = createHookRegistry(workspaceDir);
+    const fixture = createHookRegistry();
 
     const denied = await dispatchHooksStatus({ ...fixture, scopes: [] });
     expect(denied).toHaveBeenCalledWith(false, undefined, {
@@ -169,7 +159,6 @@ describe("hooks.status", () => {
 
     const invalid = await dispatchHooksStatus({
       ...fixture,
-      scopes: ["operator.read"],
       requestParams: { reload: true },
     });
     expect(invalid).toHaveBeenCalledWith(
