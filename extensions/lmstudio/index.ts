@@ -4,7 +4,6 @@ import {
 } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   definePluginEntry,
-  type OpenClawConfig,
   type OpenClawPluginApi,
   type ProviderAuthContext,
   type ProviderAuthResult,
@@ -26,17 +25,6 @@ import { wrapLmstudioInferencePreload } from "./src/stream.js";
 const PROVIDER_ID = "lmstudio";
 const loadSetup = createLazyRuntimeModule(() => import("./src/setup.js"));
 const setupMethod = createLazyRuntimeMethodBinder(loadSetup);
-
-function resolveLmstudioAugmentedCatalogEntries(config: OpenClawConfig | undefined) {
-  return normalizeLmstudioConfiguredCatalogEntries(config?.models?.providers?.lmstudio?.models).map(
-    (entry) =>
-      Object.assign({}, entry, {
-        provider: PROVIDER_ID,
-        name: entry.name ?? entry.id,
-        compat: { ...entry.compat, supportsUsageInStreaming: true },
-      }),
-  );
-}
 
 export default definePluginEntry({
   id: PROVIDER_ID,
@@ -100,7 +88,8 @@ export default definePluginEntry({
         resolvedApiKey?.trim() === CUSTOM_LOCAL_AUTH_MARKER,
       normalizeConfig: ({ providerConfig }) => normalizeLmstudioProviderConfig(providerConfig),
       prepareDynamicModel: setupMethod((setup) => setup.prepareLmstudioDynamicModel),
-      augmentModelCatalog: (ctx) => resolveLmstudioAugmentedCatalogEntries(ctx.config),
+      augmentModelCatalog: ({ config }) =>
+        normalizeLmstudioConfiguredCatalogEntries(config?.models?.providers?.lmstudio?.models),
       wrapStreamFn: wrapLmstudioInferencePreload,
       ...buildProviderToolCompatFamilyHooks("llamacpp-gbnf"),
       wizard: {
