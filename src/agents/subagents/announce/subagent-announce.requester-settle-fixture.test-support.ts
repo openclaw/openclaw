@@ -168,14 +168,28 @@ afterEach(() => {
   clearRuntimeConfigSnapshot();
 });
 
-function setSessionStore(store: typeof sessionStore): void {
+export function setSessionStore(store: typeof sessionStore): void {
   sessionStore = store;
+}
+
+export function visibleCompletion(text: string) {
+  return {
+    required: true,
+    resultText: text,
+    terminalReply: { disposition: "visible" as const, text },
+  };
+}
+
+export function pendingWake(
+  batchRunIds: string[],
+  overrides: Partial<NonNullable<SubagentRunRecord["requesterSettleWake"]>> = {},
+): NonNullable<SubagentRunRecord["requesterSettleWake"]> {
+  return { status: "pending", attemptCount: 0, batchRunIds, ...overrides };
 }
 
 export {
   sessionStore,
   readDescendantFacts,
-  setSessionStore,
   registryRuntimeMock,
   findTranscriptEventMock,
   listedRequesterRuns,

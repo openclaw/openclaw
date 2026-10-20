@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   readOperatorToolGatewayAuthority,
   runWithOperatorToolGatewayAuthority,
@@ -8,7 +8,6 @@ import {
   reserveSessionControllerSource,
   retireSessionControllerInput,
 } from "../../../sessions/session-controller.mailbox.js";
-// Completion predicates read recorded facts, not rendered placeholder wording.
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { createAdmittedRunOperatorAuthority } from "../../admitted-run-context.js";
 import { hasFailedSubagentNoOutputCompletion } from "../../internal-event-contract.js";
@@ -16,6 +15,16 @@ import { runAnnounceAgentCall } from "./subagent-announce-completion-delivery.js
 import { setSubagentAnnounceDeliveryDepsForTest } from "./subagent-announce-overrides.test-support.js";
 
 const failedChild = { type: "task_completion", source: "subagent", status: "error" } as const;
+type CompletionEvent = NonNullable<
+  Parameters<typeof hasFailedSubagentNoOutputCompletion>[0]
+>[number];
+const failedEvent = (overrides: Partial<CompletionEvent & { result: string }> = {}) => ({
+  ...failedChild,
+  result: "(no output)",
+  noVisibleResult: true,
+  ...overrides,
+});
+afterEach(() => setSubagentAnnounceDeliveryDepsForTest());
 
 it("does not dispatch a private handoff after its caller has already cancelled", async () => {
   const caller = new AbortController();
@@ -24,19 +33,15 @@ it("does not dispatch a private handoff after its caller has already cancelled",
     throw new Error("cancelled dispatch must not start");
   });
   setSubagentAnnounceDeliveryDepsForTest({ dispatchGatewayMethodInProcess: dispatch });
-  try {
-    await expect(
-      runAnnounceAgentCall({
-        agentParams: {},
-        privateCompletion: true,
-        signal: caller.signal,
-        isExecutionAllowed: () => true,
-      }),
-    ).rejects.toThrow("requester stopped");
-    expect(dispatch).not.toHaveBeenCalled();
-  } finally {
-    setSubagentAnnounceDeliveryDepsForTest();
-  }
+  await expect(
+    runAnnounceAgentCall({
+      agentParams: {},
+      privateCompletion: true,
+      signal: caller.signal,
+      isExecutionAllowed: () => true,
+    }),
+  ).rejects.toThrow("requester stopped");
+  expect(dispatch).not.toHaveBeenCalled();
 });
 
 it("keeps genuine cancellation attached after requester execution starts", async () => {
@@ -51,19 +56,15 @@ it("keeps genuine cancellation attached after requester execution starts", async
     });
   });
   setSubagentAnnounceDeliveryDepsForTest({ dispatchGatewayMethodInProcess: dispatch });
-  try {
-    const delivery = runAnnounceAgentCall({
-      agentParams: {},
-      signal: caller.signal,
-      onExecutionStarted: started,
-      isExecutionAllowed: () => true,
-    });
-    expect(started).toHaveBeenCalledOnce();
-    caller.abort(new Error("requester stopped"));
-    await expect(delivery).rejects.toThrow("requester stopped");
-  } finally {
-    setSubagentAnnounceDeliveryDepsForTest();
-  }
+  const delivery = runAnnounceAgentCall({
+    agentParams: {},
+    signal: caller.signal,
+    onExecutionStarted: started,
+    isExecutionAllowed: () => true,
+  });
+  expect(started).toHaveBeenCalledOnce();
+  caller.abort(new Error("requester stopped"));
+  await expect(delivery).rejects.toThrow("requester stopped");
 });
 
 it.each([
@@ -125,7 +126,6 @@ it.each([
       }
       expect(input.continuationCaller?.deliveryRoute).toBe(route);
     } finally {
-      setSubagentAnnounceDeliveryDepsForTest();
       retireSessionControllerInput(input);
       await input.settlement.promise;
     }
@@ -169,34 +169,17 @@ it.each(["commit", "failure", "revocation"] as const)(
       }
     } finally {
       release.resolve();
-      setSubagentAnnounceDeliveryDepsForTest();
     }
   },
 );
 
 describe("hasFailedSubagentNoOutputCompletion", () => {
   it.each([
-    [
-      "recorded no visible result",
-      { ...failedChild, result: "(no output)", noVisibleResult: true },
-      true,
-    ],
-    [
-      "reworded placeholder",
-      { ...failedChild, result: "(nothing to report)", noVisibleResult: true },
-      true,
-    ],
+    ["recorded no visible result", failedEvent(), true],
+    ["reworded placeholder", failedEvent({ result: "(nothing to report)" }), true],
     ["real result resembling placeholder", { ...failedChild, result: "(no output)" }, false],
-    [
-      "successful child",
-      { ...failedChild, status: "ok", result: "(no output)", noVisibleResult: true },
-      false,
-    ],
-    [
-      "non-subagent source",
-      { ...failedChild, source: "image_generation", result: "(no output)", noVisibleResult: true },
-      false,
-    ],
+    ["successful child", failedEvent({ status: "ok" }), false],
+    ["non-subagent source", failedEvent({ source: "image_generation" }), false],
   ] as const)("classifies %s from the recorded result fact", (_label, event, expected) => {
     expect(hasFailedSubagentNoOutputCompletion([event])).toBe(expected);
   });

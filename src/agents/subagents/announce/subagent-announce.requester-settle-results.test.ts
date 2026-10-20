@@ -6,6 +6,7 @@ import {
   findTranscriptEventMock,
   sessionStore,
   wakeParams,
+  visibleCompletion,
 } from "./subagent-announce.requester-settle-fixture.test-support.js";
 import {
   deliverSpy,
@@ -46,11 +47,13 @@ describe("maybeWakeRequesterAfterAllChildrenSettled results", () => {
     expect(woke).toBe(true);
     expect(deliverSpy).toHaveBeenCalledTimes(1);
     const call = deliveredCallArg();
-    expect(call.targetRequesterSessionKey).toBe(REQUESTER);
-    expect(call.requesterIsSubagent).toBe(false);
-    expect(call.expectsCompletionMessage).toBe(false);
+    expect(call).toMatchObject({
+      targetRequesterSessionKey: REQUESTER,
+      requesterIsSubagent: false,
+      expectsCompletionMessage: false,
+      directIdempotencyKey: requesterSettleKey("run-a,run-b,run-quiet"),
+    });
     expect(call.requireVisibleReply).toBeUndefined();
-    expect(call.directIdempotencyKey).toBe(requesterSettleKey("run-a,run-b,run-quiet"));
     expect(quietChild.requesterTurnRunId).toBe("quiet-cancellation-owner");
     const message = String(call.triggerMessage);
     expect(message).toContain("settled");
@@ -69,11 +72,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled results", () => {
           outcome: { status },
           completion:
             index === 3
-              ? {
-                  required: true,
-                  terminalReply: { disposition: "visible", text: "blocked fetch" },
-                  resultText: "blocked fetch",
-                }
+              ? visibleCompletion("blocked fetch")
               : {
                   required: true,
                   terminalReply: { disposition: "empty" },
