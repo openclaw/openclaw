@@ -1,15 +1,13 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   SkillLibraryEntry,
   SkillLibraryFile,
 } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import type { SkillLibraryAuthoringCapability } from "../../skills/library/authoring.js";
-import { applyCodeModeCatalog } from "../code-mode.js";
 import {
-  createCodeModeHarness,
+  createCatalogCodeModeHarness,
   resetCodeModeTestState,
-  runUntilCompleted,
+  resultText,
 } from "../code-mode.test-support.js";
 import { createLibrarySkillWorkshopTool } from "./skill-workshop-tool-library.js";
 
@@ -69,21 +67,14 @@ describe("personal Skill Workshop results", () => {
       expect(skillId).toBe(entry.skillId);
       return readResult([file("private")]);
     });
-    const h = createCodeModeHarness();
-    applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, tool] });
-
-    const result = await runUntilCompleted({
-      execTool: expectDefined(h.tools[0], "exec"),
-      waitTool: expectDefined(h.tools[1], "wait"),
-      code: `
+    const h = createCatalogCodeModeHarness([tool]);
+    const result = await h.complete(`
         const [workshop] = await catalog.search("skill_workshop");
         const listed = await workshop({ action: "list", target: "personal" });
-        const read = await workshop({
+        return { listed, read: await workshop({
           action: "read", target: "personal", skill_id: listed.entries[0].skillId
-        });
-        return { listed, read };
-      `,
-    });
+        }) };
+      `);
 
     expect(result.status, JSON.stringify(result)).toBe("completed");
     expect(result.value).toMatchObject({
@@ -135,9 +126,7 @@ describe("personal Skill Workshop results", () => {
         omittedFiles: 1,
       });
       expect(result.details).toHaveProperty("supportFiles.length", 32);
-      const text = result.content.find((block) => block.type === "text");
-      expect(text?.type).toBe("text");
-      expect(JSON.parse(text!.text)).toEqual(result.details);
+      expect(JSON.parse(resultText(result))).toEqual(result.details);
       expect(JSON.stringify(result)).not.toContain(privateBytes);
       if (!included) {
         expect(result.details).not.toHaveProperty("content", expect.any(String));

@@ -15,24 +15,21 @@ import { captureSessionStopCaller, stopSessionTool } from "./sessions-tool-contr
 
 it.each(["current", "replaced target", "retired Gateway"] as const)(
   "retains slow Stop after the caller finishes while fencing a %s",
-  async (boundary) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  (boundary) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = { agents: { entries: { main: {} } } };
       setRuntimeConfigSnapshot(cfg);
       const target = { agentId: "main", sessionKey: "agent:main:yielded-parent" };
       await upsertSessionEntryCore(target, { sessionId: "parent-session", updatedAt: 1 });
       const entered = createDeferredCore();
       const resume = createDeferredCore();
-      const observed: {
-        cancelled: boolean;
-        result?: Awaited<ReturnType<typeof stopSessionTool>>;
-        failure?: unknown;
-      } = { cancelled: false, failure: undefined };
+      let cancelled = false;
+      const settled = vi.fn<(result: Awaited<ReturnType<typeof stopSessionTool>>) => void>();
       const abort = async (options: GatewayRequestHandlerOptions) => {
         entered.resolve();
         await resume.promise;
         readGatewayRequestMutationAuthority(options).assertCurrent();
-        observed.cancelled = true;
+        cancelled = true;
         options.respond(true, { ok: true, status: "aborted", abortedRunId: "parent-run" });
       };
       const context = createContext(
@@ -84,20 +81,14 @@ it.each(["current", "replaced target", "retired Gateway"] as const)(
             isWebchatConnect: () => false,
           },
           () => withGatewayToolCallerIdentity(caller, invokeStop),
-        ).then(
-          (result) => Object.assign(observed, { result }),
-          (failure: unknown) => Object.assign(observed, { failure }),
-        );
-        await Promise.race([
-          entered.promise,
-          stop.then(() => expect(observed.failure).toBeUndefined()),
-        ]);
+        ).then(settled);
+        await Promise.race([entered.promise, stop]);
         await vi.advanceTimersByTimeAsync(5_000);
-        expect(observed).toMatchObject({
-          failure: undefined,
-          result: { details: { status: "settling", abortedRunId: null } },
-          cancelled: false,
+        expect(settled.mock.calls[0]?.[0].details).toMatchObject({
+          status: "settling",
+          abortedRunId: null,
         });
+        expect(cancelled).toBe(false);
         callerCurrent = false;
         callerSignal.abort(new Error("Calling turn finished"));
         // Cross the former in-process deadline before allowing the Gateway effect.
@@ -109,15 +100,14 @@ it.each(["current", "replaced target", "retired Gateway"] as const)(
         }
         resume.resolve();
         await settleExecutions();
-        expect(observed.cancelled).toBe(boundary === "current");
+        expect(cancelled).toBe(boundary === "current");
       } finally {
         resume.resolve();
-        await stop;
+        await Promise.allSettled([stop]);
         await settleExecutions();
         executions.mockRestore();
         await vi.advanceTimersByTimeAsync(0);
         vi.useRealTimers();
       }
-    });
-  },
+    }),
 );

@@ -1,7 +1,6 @@
 import { expect } from "vitest";
 import {
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
+  prepareSystemAgentRunAdmission,
   type AdmittedRunOperatorAuthority,
 } from "../admitted-run-context.js";
 import {
@@ -52,16 +51,14 @@ export async function withSessionToolTestCaller<T>(
   run: () => Promise<T>,
   operatorAuthority?: AdmittedRunOperatorAuthority,
 ): Promise<T> {
-  const admission = prepareAgentRunAdmission({
-    cfg: {},
+  const admission = prepareSystemAgentRunAdmission(
+    {},
+    "session-tool-test",
+    "main",
+    "session-tool-test",
+    undefined,
     operatorAuthority,
-    facts: {
-      runId: "session-tool-test",
-      agentId: "main",
-      ingress: { kind: "system", boundary: "session-tool-test", state: "present" },
-    },
-    operationalRunInstance: createOperationalRunInstanceRef("session-tool-test"),
-  });
+  );
   try {
     const admittedRunContext = await admission.admit("gateway", "session-tool-test");
     const caller = createAdmittedGatewayToolCallerIdentity({

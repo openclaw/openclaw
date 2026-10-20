@@ -38,6 +38,8 @@ describe("sessions tool responses", () => {
   it("routes group actions to existing gateway methods", async () => {
     gatewayMocks.callGateway.mockImplementation(async (request) => request);
     const tool = createTool();
+    const rejects = (params: Record<string, unknown>, message: string) =>
+      expect(tool.execute("invalid", params)).rejects.toThrow(message);
 
     await tool.execute("list", { action: "group_list" });
     await tool.execute("set", { action: "group_set", names: ["Now", "Later"] });
@@ -50,12 +52,8 @@ describe("sessions tool responses", () => {
       [{ method: "sessions.groups.rename", params: { name: "Now", to: "Next" } }],
       [{ method: "sessions.groups.delete", params: { name: "Later" } }],
     ]);
-    await expect(tool.execute("set-missing", { action: "group_set" })).rejects.toThrow(
-      "names required",
-    );
-    await expect(
-      tool.execute("set-invalid", { action: "group_set", names: ["Now", null] }),
-    ).rejects.toThrow("names[1] required");
+    await rejects({ action: "group_set" }, "names required");
+    await rejects({ action: "group_set", names: ["Now", null] }, "names[1] required");
     expect(gatewayMocks.callGateway).toHaveBeenCalledTimes(4);
   });
 

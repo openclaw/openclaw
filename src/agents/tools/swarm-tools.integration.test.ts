@@ -1,11 +1,10 @@
 import "../subagents/registry/subagent-registry.mocks.shared.js";
 import assert from "node:assert/strict";
 import os from "node:os";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
-import { getRuntimeConfig } from "../../config/config.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
@@ -40,7 +39,6 @@ import {
 } from "./structured-output-tool.js";
 
 vi.mock("../../browser-lifecycle-cleanup.js", { spy: true });
-vi.mock("../../config/config.js", { spy: true });
 vi.mock("../../context-engine/init.js", { spy: true });
 vi.mock("../../context-engine/registry.js", { spy: true });
 vi.mock("../runtime-plugins.js", () => ({
@@ -50,10 +48,8 @@ vi.mock("../runtime-plugins.js", () => ({
 vi.mock("../timeout.js", { spy: true });
 vi.mock("../subagents/announce/subagent-announce.js", { spy: true });
 vi.mock("../subagents/announce/subagent-announce.requester-settle-wake.js", { spy: true });
-vi.mock("../subagents/registry/subagent-registry-state.js", { spy: true });
 vi.mock("../subagents/registry/subagent-registry-persistence.js", { spy: true });
 
-const requesterSessionKey = "agent:main:main";
 const config: OpenClawConfig = {
   session: { mainKey: "main", scope: "per-sender" },
   tools: { swarm: true },
@@ -65,6 +61,7 @@ const config: OpenClawConfig = {
     },
   },
 };
+const requester = { agentSessionKey: "agent:main:main", config };
 
 function requestParams({ params }: Parameters<typeof callGateway>[0]): Record<string, unknown> {
   return params && typeof params === "object" ? (params as Record<string, unknown>) : {};
@@ -73,24 +70,15 @@ function requestParams({ params }: Parameters<typeof callGateway>[0]): Record<st
 async function testContextEngine(): Promise<ContextEngine> {
   return {
     info: { id: "test", name: "Test", version: "0.0.1" },
-    ingest: vi.fn(async () => ({ ingested: false })),
-    assemble: vi.fn<ContextEngine["assemble"]>(async ({ messages }) => ({
-      messages,
-      estimatedTokens: 0,
-    })),
-    compact: vi.fn(async () => ({ ok: false, compacted: false })),
+    ingest: async () => ({ ingested: false }),
+    assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+    compact: async () => ({ ok: false, compacted: false }),
   };
 }
 
 const tempDirs = createTempDirTracker();
 const completionResolvers = new Map<string, () => void>();
 const collectorRunIds = new Set<string>();
-
-beforeEach(async () => {
-  completionResolvers.clear();
-  await resetSubagentRegistryForTests({ persist: false });
-  swarmSchedulerTesting.reset();
-});
 
 afterEach(async () => {
   spawnTesting.setDepsForTest();
@@ -109,6 +97,8 @@ afterEach(async () => {
 });
 
 it("spawns text and structured collectors with explicit collection guidance and drains them in completion order", async () => {
+  await resetSubagentRegistryForTests({ persist: false });
+  swarmSchedulerTesting.reset();
   const settleRootWork = observeRootWork();
   const waitsStarted = createDeferred();
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-swarm-tools-"));
@@ -118,7 +108,7 @@ it("spawns text and structured collectors with explicit collection guidance and 
   const modelStructuredCalls: number[] = [];
   const guidance: string[] = [];
   let launchCount = 0;
-  const launchGateway = vi.fn(async (request: Parameters<typeof callGateway>[0]) => {
+  async function launchGateway(request: Parameters<typeof callGateway>[0]) {
     if (request.method !== "agent") {
       return {};
     }
@@ -127,7 +117,6 @@ it("spawns text and structured collectors with explicit collection guidance and 
     assert(typeof params.message === "string", "child task must be text");
     guidance.push(`${params.extraSystemPrompt}\n${params.message}`);
     const publicRunId = String(params.idempotencyKey);
-    const childSessionKey = String(params.sessionKey);
     const outputSchema = params.swarmOutputSchema as Record<string, unknown>;
     const index = ++launchCount;
     const gatewayRunId = `gateway-${index}`;
@@ -135,7 +124,7 @@ it("spawns text and structured collectors with explicit collection guidance and 
     collectorRunIds.add(gatewayRunId);
     const structuredOutput = (
       await createOpenClawToolsAsync({
-        agentSessionKey: childSessionKey,
+        agentSessionKey: String(params.sessionKey),
         runId: publicRunId,
         config,
         disableMessageTool: true,
@@ -155,10 +144,9 @@ it("spawns text and structured collectors with explicit collection guidance and 
     publicToGateway.set(publicRunId, gatewayRunId);
     resultTextByRun.set(gatewayRunId, `result-${index}`);
     return { runId: gatewayRunId, status: "accepted", acceptedAt: Date.now() };
-  });
+  }
   spawnTesting.setDepsForTest({
     getGlobalHookRunner: () => null,
-    getRuntimeConfig: () => config,
     hasInProcessGatewayContext: () => false,
     ensureContextEnginesInitialized: vi.fn(),
     prepareModelChoice: supportedSpawnModelChoice,
@@ -188,7 +176,6 @@ it("spawns text and structured collectors with explicit collection guidance and 
     },
   );
   vi.mocked(cleanupBrowserSessionsForLifecycleEnd).mockResolvedValue(undefined);
-  vi.mocked(getRuntimeConfig).mockReturnValue(config);
   vi.mocked(maybeWakeRequesterAfterAllChildrenSettled).mockResolvedValue(false);
   await configureMockSubagentRegistryPersistence({
     persistRegistryRows: saveSubagentRegistryChangesToSqlite,
@@ -200,16 +187,8 @@ it("spawns text and structured collectors with explicit collection guidance and 
   vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReturnValue(createTestRegistry([]));
   vi.mocked(resolveContextEngine).mockImplementation(testContextEngine);
 
-  const spawn = createSessionsSpawnTool({
-    agentSessionKey: requesterSessionKey,
-    requesterRunId: "parent-run",
-    config,
-  });
-  const wait = createAgentsWaitTool({
-    agentSessionKey: requesterSessionKey,
-    agentId: "main",
-    config,
-  });
+  const spawn = createSessionsSpawnTool({ ...requester, requesterRunId: "parent-run" });
+  const wait = createAgentsWaitTool({ ...requester, agentId: "main" });
   finalizeAgentToolAvailability([spawn, wait]);
   const runIds: string[] = [];
   const outputSchema = {
@@ -227,10 +206,7 @@ it("spawns text and structured collectors with explicit collection guidance and 
     });
     const details = result.details as { status: string; runId?: string };
     guidance.push(
-      result.content
-        .filter((block) => block.type === "text")
-        .map((block) => block.text)
-        .join("\n"),
+      result.content.flatMap((block) => (block.type === "text" ? block.text : [])).join("\n"),
     );
     expect(details).toMatchObject({ status: "accepted", expectsCompletionMessage: false });
     expect(details.runId).toBeTruthy();
