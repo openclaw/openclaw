@@ -19,6 +19,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { createPermitPool } from "../shared/permit-pool.js";
+import { AgentDatabaseSchemaAdmissionChangedError } from "./agent-database-admission-error.js";
 import {
   AgentDatabaseAdmissionError,
   assertAgentDatabaseAdmitted,
@@ -540,22 +541,27 @@ class AgentDatabaseStartupAdmission {
                 await previous;
                 assertCurrent();
                 this.publishingAgentId = agentId;
-                // Retry only publication; opening and migration have already completed.
+                // Retry only publication; opening and migration have already completed. A
+                // schema-admission change means the receipt lost its publication race: the
+                // next attempt re-enters the publication owner, which re-reads current config,
+                // secrets, and database admission instead of replaying the stale receipt.
                 for (let attempt = 1; ; attempt++) {
                   try {
                     await activation.publishAgent(input);
                     break;
                   } catch (error) {
-                    if (
-                      !(error instanceof AgentDatabaseStartupSupersededError) ||
-                      attempt >= STARTUP_PUBLICATION_ATTEMPTS
-                    ) {
+                    const retryable =
+                      error instanceof AgentDatabaseStartupSupersededError ||
+                      error instanceof AgentDatabaseSchemaAdmissionChangedError;
+                    if (!retryable || attempt >= STARTUP_PUBLICATION_ATTEMPTS) {
                       throw error;
                     }
-                    log.warn("agent database startup preparation was superseded; retrying", {
-                      agentId,
-                      attempt,
-                    });
+                    log.warn(
+                      error instanceof AgentDatabaseSchemaAdmissionChangedError
+                        ? "agent database startup publication lost its schema admission; retrying"
+                        : "agent database startup preparation was superseded; retrying",
+                      { agentId, attempt },
+                    );
                     await assertNotDeleted();
                   }
                 }
