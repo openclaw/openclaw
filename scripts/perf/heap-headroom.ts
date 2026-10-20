@@ -42,7 +42,7 @@ const files = [
   "packages/normalization-core/src/number-coercion.ts",
   "packages/normalization-core/src/string-coerce.ts",
   "src/infra/worker-memory.ts",
-];
+] as const;
 const hashes = Object.fromEntries(
   await Promise.all(
     files.map(async (file) => [
@@ -83,7 +83,7 @@ const scripts = [
   "other",
 ];
 const workerHeaps = Array.from({ length: workerCount }, (_, index) => ({
-  script: scripts[index % scripts.length],
+  script: scripts[index % scripts.length]!,
   threadId: index + 1,
   heapUsed: (80 + index) * mib,
   heapTotal: 160 * mib,
@@ -192,9 +192,14 @@ const worker = new Worker(
     },
   },
 );
-let workerMemory: Record<string, number>;
+type WorkerMemoryProof = {
+  heapSizeLimitBytes?: number;
+  heapUsed: number;
+  oldGenerationAfterGcBytes?: number;
+};
+let workerMemory: WorkerMemoryProof;
 try {
-  workerMemory = await new Promise<Record<string, number>>((resolveSample, reject) => {
+  workerMemory = await new Promise<WorkerMemoryProof>((resolveSample, reject) => {
     const timeout = setTimeout(() => reject(new Error("Worker memory proof timed out")), 10_000);
     let port: MessagePort;
     let received = 0;
@@ -217,10 +222,15 @@ try {
 } finally {
   await worker.terminate();
 }
-assert(workerMemory.heapSizeLimitBytes > 0 && workerMemory.heapUsed > 0);
+assert(
+  workerMemory.heapSizeLimitBytes !== undefined &&
+    workerMemory.heapSizeLimitBytes > 0 &&
+    workerMemory.heapUsed > 0,
+);
 if (observer.getOldGenerationAfterGcBytes) {
   assert(
-    workerMemory.oldGenerationAfterGcBytes > 0,
+    workerMemory.oldGenerationAfterGcBytes !== undefined &&
+      workerMemory.oldGenerationAfterGcBytes > 0,
     "Missing worker native post-major-GC baseline",
   );
 }
