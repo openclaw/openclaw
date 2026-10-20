@@ -1,7 +1,7 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import {
-  getPreparedModelRuntimeTestApi,
+  getPreparedModelRuntimeTestApi as getTestApi,
   usePreparedModelRuntimeHarness,
 } from "./prepared-model-runtime.test-harness.js";
 import { setImmediate as nextTurn } from "node:timers/promises";
@@ -13,18 +13,19 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as inlineProviderModels from "./embedded-agent-runner/model.inline-provider.js";
 import * as legacyAuth from "./legacy-inherited-auth-dir.js";
+import { model as configuredModel, providerConfig } from "./model-catalog-fixtures.test-support.js";
 import * as configuredModels from "./model-selection-shared.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import {
-  advancePreparedModelRuntimeConfig,
-  getPreparedModelRuntimeSnapshot,
-  loadPublishedGatewayReplyDispatchRuntime,
-  markPreparedModelRuntimeSnapshotsStale,
-  publishPreparedModelRuntimeSnapshot,
+  advancePreparedModelRuntimeConfig as advanceConfig,
+  getPreparedModelRuntimeSnapshot as readSnapshot,
+  loadPublishedGatewayReplyDispatchRuntime as loadDispatch,
+  markPreparedModelRuntimeSnapshotsStale as invalidate,
+  publishPreparedModelRuntimeSnapshot as publishSnapshot,
   refreshPreparedModelRuntimeSnapshots,
   registerPreparedModelRuntimePublicationListener,
 } from "./prepared-model-runtime.js";
-import { getPreparedModelRuntimeStartupStatus } from "./prepared-model-runtime.startup-status.js";
+import { getPreparedModelRuntimeStartupStatus as startupStatus } from "./prepared-model-runtime.startup-status.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
 
 const fixture = usePreparedModelRuntimeHarness({ label: "prepared-fleet-batch" });
@@ -38,17 +39,18 @@ function publish(config: OpenClawConfig = {}, startup = false) {
   });
 }
 
+function readAgentSnapshot(agentId: string, config: OpenClawConfig) {
+  return readSnapshot({ agentId, config, agentDir: fixture.state.agentDir(agentId) });
+}
+
 describe("prepared fleet batches", () => {
   beforeEach(() => {
     mocks.configuredAgentIds = ["first", "middle", "last"];
   });
 
-  it.each([
-    { heldIndex: 32, earlyAuth: false },
-    { heldIndex: 32, earlyAuth: true },
-  ])(
-    "continues first Gateway startup while fleet workspace $heldIndex is acquiring (early auth: $earlyAuth)",
-    async ({ heldIndex, earlyAuth }) => {
+  it.each([false, true])(
+    "continues first Gateway startup while fleet workspace 32 is acquiring (early auth: %s)",
+    async (earlyAuth) => {
       mocks.configuredAgentIds = Array.from({ length: 64 }, (_, index) => `fleet-${index}`);
       const acquiring = createDeferredCore();
       const acquired = createDeferredCore();
@@ -56,11 +58,11 @@ describe("prepared fleet batches", () => {
       const lastAcquired = createDeferredCore();
       const completed = createDeferredCore();
       const unregister = registerPreparedModelRuntimePublicationListener(({ phase }) => {
-        if (phase === "published" && getPreparedModelRuntimeStartupStatus()?.degraded === false) {
+        if (phase === "published" && startupStatus()?.degraded === false) {
           completed.resolve();
         }
       });
-      const heldAgent = `fleet-${heldIndex}`;
+      const heldAgent = "fleet-32";
       const config = {};
       const credentials = { custom: { type: "api_key" as const, key: "updated-test-key" } };
       const mutateAuth = () => {
@@ -82,12 +84,11 @@ describe("prepared fleet batches", () => {
         return { entries: [] };
       });
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      getPreparedModelRuntimeTestApi().setModelRuntimeBuildTimeoutMsForTest(120_000);
       const publication = publishConfiguredModelRuntimeSnapshots({ cfg: config });
       const ready = expect(publication).resolves.toBeUndefined();
       // Attach before advancing timers so the expected pre-fix rejection is always observed.
       void ready.catch(() => undefined);
-      let admission: ReturnType<typeof loadPublishedGatewayReplyDispatchRuntime> | undefined;
+      let admission: ReturnType<typeof loadDispatch> | undefined;
       try {
         await acquiring.promise;
         if (earlyAuth) {
@@ -95,64 +96,50 @@ describe("prepared fleet batches", () => {
         }
         await vi.advanceTimersByTimeAsync(120_000);
         await ready;
-        expect(getPreparedModelRuntimeStartupStatus()).toMatchObject({
+        expect(startupStatus()).toMatchObject({
           degraded: true,
           pendingAgents: expect.arrayContaining([heldAgent, "fleet-63"]),
           stage: `static provider catalog; agent ${heldAgent}`,
         });
         expect(mocks.warn).toHaveBeenCalledWith(expect.stringContaining(`agent ${heldAgent}`));
-        admission = loadPublishedGatewayReplyDispatchRuntime({ agentId: heldAgent });
+        admission = loadDispatch({ agentId: heldAgent });
         let admissionSettled = false;
         void admission
           .finally(() => {
             admissionSettled = true;
           })
           .catch(() => undefined);
-        if (heldIndex > 0) {
-          await expect(
-            loadPublishedGatewayReplyDispatchRuntime({ agentId: "fleet-0" }),
-          ).resolves.toMatchObject({ agentId: "fleet-0" });
-          if (!earlyAuth) {
-            mutateAuth();
-          }
-          await expect(
-            loadPublishedGatewayReplyDispatchRuntime({ agentId: "fleet-0" }),
-          ).resolves.toMatchObject({ agentId: "fleet-0" });
-          expect(
-            getPreparedModelRuntimeSnapshot({
-              config,
-              agentId: "fleet-0",
-              agentDir: fixture.state.agentDir("fleet-0"),
-            })
-              ?.createStores()
-              .authStorage.getAll(),
-          ).toEqual(credentials);
+        await expect(loadDispatch({ agentId: "fleet-0" })).resolves.toMatchObject({
+          agentId: "fleet-0",
+        });
+        if (!earlyAuth) {
+          mutateAuth();
         }
+        await expect(loadDispatch({ agentId: "fleet-0" })).resolves.toMatchObject({
+          agentId: "fleet-0",
+        });
+        expect(readAgentSnapshot("fleet-0", config)?.createStores().authStorage.getAll()).toEqual(
+          credentials,
+        );
         expect(admissionSettled).toBe(false);
         acquired.resolve();
         await lastAcquiring.promise;
         await expect(admission).resolves.toMatchObject({ agentId: heldAgent });
         lastAcquired.resolve();
         await completed.promise;
-        expect(getPreparedModelRuntimeStartupStatus()).toEqual({
+        expect(startupStatus()).toEqual({
           degraded: false,
           pendingAgents: [],
         });
-        await expect(
-          loadPublishedGatewayReplyDispatchRuntime({ agentId: heldAgent }),
-        ).resolves.toMatchObject({ agentId: heldAgent });
-        expect(
-          getPreparedModelRuntimeSnapshot({
-            config,
-            agentId: heldAgent,
-            agentDir: fixture.state.agentDir(heldAgent),
-          }),
-        ).toBeDefined();
+        await expect(loadDispatch({ agentId: heldAgent })).resolves.toMatchObject({
+          agentId: heldAgent,
+        });
+        expect(readAgentSnapshot(heldAgent, config)).toBeDefined();
       } finally {
         acquired.resolve();
         lastAcquired.resolve();
         await Promise.allSettled([publication, admission]);
-        await getPreparedModelRuntimeTestApi().resetPreparedModelRuntimeSnapshotsForTest();
+        await getTestApi().resetPreparedModelRuntimeSnapshotsForTest();
         unregister();
         vi.useRealTimers();
       }
@@ -198,11 +185,11 @@ describe("prepared fleet batches", () => {
     });
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const publication = publish({}, true);
-    let admission: ReturnType<typeof loadPublishedGatewayReplyDispatchRuntime> | undefined;
+    let admission: ReturnType<typeof loadDispatch> | undefined;
     let settled = false;
     try {
       await firstAuth.promise;
-      admission = loadPublishedGatewayReplyDispatchRuntime({ agentId: "first" });
+      admission = loadDispatch({ agentId: "first" });
       void admission.then(
         () => {
           settled = true;
@@ -223,7 +210,7 @@ describe("prepared fleet batches", () => {
       finishFirstAuth.resolve();
       finishSecondAuth.resolve();
       await Promise.allSettled([publication, admission]);
-      await getPreparedModelRuntimeTestApi().resetPreparedModelRuntimeSnapshotsForTest();
+      await getTestApi().resetPreparedModelRuntimeSnapshotsForTest();
       vi.useRealTimers();
     }
   });
@@ -251,20 +238,18 @@ describe("prepared fleet batches", () => {
       await acquiring.promise;
       await vi.advanceTimersByTimeAsync(120_000);
       await publication;
-      advancePreparedModelRuntimeConfig({ logging: { level: "debug" } });
+      advanceConfig({ logging: { level: "debug" } });
       acquired.reject(new Error("fixture catalog failure"));
       await failed.promise;
-      await expect(
-        loadPublishedGatewayReplyDispatchRuntime({ agentId: "first" }),
-      ).resolves.toMatchObject({ agentId: "first" });
-      expect(getPreparedModelRuntimeStartupStatus()).toMatchObject({
+      await expect(loadDispatch({ agentId: "first" })).resolves.toMatchObject({ agentId: "first" });
+      expect(startupStatus()).toMatchObject({
         degraded: true,
         pendingAgents: ["last"],
       });
     } finally {
       acquired.resolve();
       await Promise.allSettled([publication]);
-      await getPreparedModelRuntimeTestApi().resetPreparedModelRuntimeSnapshotsForTest();
+      await getTestApi().resetPreparedModelRuntimeSnapshotsForTest();
       vi.useRealTimers();
     }
   });
@@ -302,13 +287,13 @@ describe("prepared fleet batches", () => {
       }
       return createEmptyPluginRegistry();
     });
-    const publication = publishPreparedModelRuntimeSnapshot({
+    const publication = publishSnapshot({
       config: {},
       agentDir: fixture.state.agentDir("cancelled"),
       workspaceDir: fixture.state.workspaceDir,
     });
     cancelled = true;
-    markPreparedModelRuntimeSnapshotsStale("cancel before workspace preparation");
+    invalidate("cancel before workspace preparation");
     await expect(publication).rejects.toBeInstanceOf(
       PreparedModelRuntimePublicationSupersededError,
     );
@@ -318,23 +303,13 @@ describe("prepared fleet batches", () => {
   it("prepares shared configured model facts once per immutable fleet publication", async () => {
     const config: OpenClawConfig = {
       agents: { defaults: { model: "fixture/first" } },
-      models: {
-        providers: {
-          fixture: {
-            api: "openai-completions",
-            baseUrl: "https://fixture.invalid/v1",
-            models: ["first", "second"].map((id) => ({
-              id,
-              name: id,
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 32_000,
-              maxTokens: 4096,
-            })),
-          },
-        },
-      },
+      ...providerConfig("fixture", {
+        api: "openai-completions",
+        baseUrl: "https://fixture.invalid/v1",
+        models: ["first", "second"].map((id) =>
+          configuredModel(id, id, { contextWindow: 32_000, maxTokens: 4096 }),
+        ),
+      }),
     };
     const inlineProjection = vi.spyOn(inlineProviderModels, "buildInlineProviderModels");
     const configuredProjection = vi.spyOn(configuredModels, "buildConfiguredModelCatalog");
@@ -346,33 +321,21 @@ describe("prepared fleet batches", () => {
     mocks.createStaticCatalogResolver.mockImplementation((options) => {
       const workspace = options?.workspaceDir?.split("/").at(-1);
       return ({ provider, modelId }) => {
-        const model = options?.cfg?.models?.providers?.[provider]?.models.find(
+        const entry = options?.cfg?.models?.providers?.[provider]?.models.find(
           (candidate) => candidate.id === modelId,
         );
-        return model
+        return entry
           ? {
-              id: model.id,
-              name: model.name,
+              ...configuredModel(entry.id, entry.name, { contextWindow: 32_000, maxTokens: 4096 }),
               provider,
               api: "openai-responses",
               baseUrl: `https://${workspace}.fixture.invalid/v1`,
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 32_000,
-              maxTokens: 4096,
             }
           : undefined;
       };
     });
     const readSnapshots = () =>
-      mocks.configuredAgentIds.map((agentId) =>
-        getPreparedModelRuntimeSnapshot({
-          config,
-          agentId,
-          agentDir: fixture.state.agentDir(agentId),
-        }),
-      );
+      mocks.configuredAgentIds.map((agentId) => readAgentSnapshot(agentId, config));
     try {
       await publish(config);
       expect(captures).toHaveLength(3);
@@ -386,10 +349,7 @@ describe("prepared fleet batches", () => {
         expect(snapshot).toMatchObject({
           agentId: mocks.configuredAgentIds[index],
           workspaceDir: `/tmp/workspace-${mocks.configuredAgentIds[index]}`,
-          inlineProviderModels: [
-            { id: "first", name: "first" },
-            { id: "second", name: "second" },
-          ],
+          inlineProviderModels: ["first", "second"].map((id) => ({ id, name: id })),
           modelCatalog: {
             entries: [
               {
@@ -448,7 +408,7 @@ describe("prepared fleet batches", () => {
     });
 
     await publish(config);
-    const snapshot = getPreparedModelRuntimeSnapshot({
+    const snapshot = readSnapshot({
       ...fixture.agentInput("first", config),
       workspaceDir: "/tmp/workspace-first",
     });
@@ -468,7 +428,7 @@ describe("prepared fleet batches", () => {
     });
     try {
       await publish(config);
-      const snapshot = getPreparedModelRuntimeSnapshot({
+      const snapshot = readSnapshot({
         config,
         agentId: "first",
         agentDir: fixture.state.agentDir("first"),

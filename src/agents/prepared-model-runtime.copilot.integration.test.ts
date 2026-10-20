@@ -5,17 +5,18 @@ import { afterAll, afterEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as pluginState from "../plugin-state/plugin-state-store.js";
 import * as pluginModuleRuntime from "../plugins/loader-module-runtime.js";
-import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
+import { loadAndActivateRootPluginRegistry as activateRoot } from "../plugins/loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   makePluginLoaderTempDir,
   resetPluginLoaderTestStateForTest,
 } from "../plugins/loader.test-fixtures.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { loadPluginMetadataSnapshot as loadMetadata } from "../plugins/plugin-metadata-snapshot.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
-import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
-import { prepareWorkspacePluginRegistries } from "./prepared-model-runtime.inbound-registry.js";
+import { ensureSelectedAgentHarnessPlugin as ensureHarness } from "./harness/runtime-plugin.js";
+import { model, providerConfig } from "./model-catalog-fixtures.test-support.js";
+import { prepareWorkspacePluginRegistries as prepareRegistries } from "./prepared-model-runtime.inbound-registry.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -30,7 +31,6 @@ it("prepares an agent-local Copilot BYOK harness without replacing the active ro
       throw new Error("prepared harness discovery must not activate state stores");
     });
   const workspaceDir = fs.realpathSync(makePluginLoaderTempDir());
-  // This composition uses the checkout's source fixture, not installed plugin resolution.
   const bundledRoot = path.resolve(import.meta.dirname, "../../extensions");
   const entrypoint = path.join(bundledRoot, "copilot", "index.ts");
   const copilotModule = await loadBundledPluginFacade({
@@ -40,11 +40,7 @@ it("prepares an agent-local Copilot BYOK harness without replacing the active ro
   // Reuse Vitest's source graph at the module-loading seam. The real loader
   // still discovers and validates the entrypoint and owns registration.
   const loadModule = Object.assign(
-    vi.fn<
-      (
-        ...args: Parameters<pluginModuleRuntime.PluginModuleLoader>
-      ) => ReturnType<pluginModuleRuntime.PluginModuleLoader>
-    >((source) => {
+    vi.fn((...[source]: Parameters<pluginModuleRuntime.PluginModuleLoader>) => {
       expect(source).toBe(entrypoint);
       return copilotModule;
     }),
@@ -71,34 +67,21 @@ it("prepares an agent-local Copilot BYOK harness without replacing the active ro
         },
       },
     },
-    models: {
-      providers: {
-        "custom-proxy": {
-          api: "openai-responses",
-          baseUrl: "https://api.example.com/v1",
-          models: [
-            {
-              id: "test-model",
-              name: "Test model",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              maxTokens: 8192,
-            },
-          ],
-        },
-      },
-    },
+    ...providerConfig("custom-proxy", {
+      api: "openai-responses",
+      baseUrl: "https://api.example.com/v1",
+      models: [model("test-model", "Test model", { maxTokens: 8192 })],
+    }),
     plugins: { allow: ["copilot"], slots: { memory: "none" } },
   };
-  const root = await loadAndActivateRootPluginRegistry({
+  const root = await activateRoot({
     config,
     env,
     workspaceDir,
     onlyPluginIds: [],
     cache: false,
   });
-  const metadata = loadPluginMetadataSnapshot({
+  const metadata = loadMetadata({
     config,
     env,
     workspaceDir,
@@ -107,7 +90,7 @@ it("prepares an agent-local Copilot BYOK harness without replacing the active ro
     preferPersisted: false,
   });
   const selection = { agentId: "worker", provider: "custom-proxy", modelId: "test-model" };
-  const { runtimePluginRegistry } = await prepareWorkspacePluginRegistries(
+  const { runtimePluginRegistry } = await prepareRegistries(
     {
       config,
       env,
@@ -133,7 +116,7 @@ it("prepares an agent-local Copilot BYOK harness without replacing the active ro
     JSON.stringify(runtimePluginRegistry?.diagnostics),
   ).toEqual([expect.objectContaining({ id: "copilot", status: "loaded", source: entrypoint })]);
   await expect(
-    ensureSelectedAgentHarnessPlugin({
+    ensureHarness({
       ...selection,
       config,
       workspaceDir,
