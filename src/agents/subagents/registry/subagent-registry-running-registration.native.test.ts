@@ -12,6 +12,7 @@ import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { requireNativeSqliteDatabase } from "../../../test-utils/native-sqlite.js";
 import { holdStateDatabaseWriteTransaction } from "../../../test-utils/state-database-contention.js";
+import { createSubagentRunParams } from "../../subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
@@ -68,7 +69,7 @@ it("keeps ordinary subagent registration responsive while a SQLite writer is hel
   let holder: ReturnType<typeof holdStateDatabaseWriteTransaction> | undefined;
   let registration: Promise<void> | undefined;
   let hostSql: ReturnType<typeof observeHostDataSql> | undefined;
-  let registrationSettled = false;
+  const registrationSettled = vi.fn();
   const failures: unknown[] = [];
   try {
     // Warm the real workers before the independent holder starts its existing release deadline.
@@ -83,21 +84,16 @@ it("keeps ordinary subagent registration responsive while a SQLite writer is hel
     Atomics.store(nativeBegin, 0, 1);
     hostSql = observeHostDataSql();
     registration = Promise.resolve(
-      registerSubagentRun({
-        runId,
-        childSessionKey,
-        childAgentId: "main",
-        sessionEntry: { sessionId: "contended-registration-session" },
-        requesterSessionKey: "agent:main:main",
-        requesterDisplayKey: "main",
-        task: "Register while a foreign SQLite writer holds its transaction",
-        cleanup: "keep",
-        expectsCompletionMessage: false,
-      }),
+      registerSubagentRun(
+        createSubagentRunParams({
+          runId,
+          childSessionKey,
+          sessionEntry: { sessionId: "contended-registration-session" },
+          expectsCompletionMessage: false,
+        }),
+      ),
     );
-    const settlement = registration.finally(() => {
-      registrationSettled = true;
-    });
+    const settlement = registration.finally(registrationSettled);
     await Promise.race([Atomics.waitAsync(nativeBegin, 1, 0).value, settlement, holder.joined]);
     await setImmediate();
     await setImmediate();
@@ -107,10 +103,10 @@ it("keeps ordinary subagent registration responsive while a SQLite writer is hel
     ).toBe(0);
     expect(Atomics.load(nativeBegin, 1)).toBeGreaterThan(0);
     expect(Atomics.load(nativeBegin, 2)).toBe(0);
-    expect(registrationSettled).toBe(false);
+    expect(registrationSettled).not.toHaveBeenCalled();
     expect(subagentRuns.has(runId)).toBe(false);
     expect(
-      database.db.prepare("SELECT run_id FROM subagent_runs WHERE run_id = ?").get(runId),
+      db.prepare("SELECT run_id FROM subagent_runs WHERE run_id = ?").get(runId),
     ).toBeUndefined();
   } catch (error) {
     failures.push(error);

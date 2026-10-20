@@ -9,21 +9,24 @@ import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 export function registerSubagentCollectorPublicationCases(params: {
-  createRun: (runId: string) => SubagentRunRecord;
+  createRun: (runId: string, overrides?: Partial<SubagentRunRecord>) => SubagentRunRecord;
   mockRestoredRows(runs: Map<string, SubagentRunRecord>): void;
 }) {
   const { createRun } = params;
   const parent = { sessionKey: "global", agentId: "ops", reason: "swarm", scope: "runtime" };
-  it("invalidates the strict collector parent after each committed lifecycle transition", async () => {
-    const run: SubagentRunRecord = {
-      ...createRun("cross-agent"),
-      childSessionKey: "agent:research:subagent:child",
+  const collector = (id: string, overrides: Partial<SubagentRunRecord> = {}) =>
+    createRun(id, {
       collect: true,
       swarmRequesterSessionKey: "global",
       requesterAgentId: "ops",
       groupId: "opaque-group",
-      execution: { status: "queued" as const },
-    };
+      ...overrides,
+    });
+  it("invalidates the strict collector parent after each committed lifecycle transition", async () => {
+    const run = collector("cross-agent", {
+      childSessionKey: "agent:research:subagent:child",
+      execution: { status: "queued" },
+    });
     const runs = new Map([[run.runId, run]]);
     params.mockRestoredRows(new Map());
     await restoreSubagentRunsFromDisk({ runs: new Map() });
@@ -50,15 +53,12 @@ export function registerSubagentCollectorPublicationCases(params: {
   });
 
   it("invalidates archived cold-restored groups once per exact parent", async () => {
-    const rows = ["a", "b"].map((runId) => {
-      const run = createRun(runId);
-      run.collect = true;
-      run.swarmRequesterSessionKey = "global";
-      run.requesterAgentId = "ops";
-      run.groupId = "batch";
-      run.collectorCompletion = { status: "done" };
-      return run;
-    });
+    const rows = ["a", "b"].map((runId) =>
+      collector(runId, {
+        groupId: "batch",
+        collectorCompletion: { status: "done" },
+      }),
+    );
     params.mockRestoredRows(new Map(rows.map((row) => [row.runId, row])));
     const runs = new Map<string, SubagentRunRecord>();
     const received = vi.fn();

@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
@@ -8,27 +8,36 @@ import { getSubagentActivationRuns, subagentRuns } from "./subagent-registry-mem
 import { restoreSubagentRunsFromDisk } from "./subagent-registry-persistence.js";
 import { persistRegistryFixture } from "./subagent-registry-state.fixture.test-support.js";
 import {
-  getSubagentSessionListRunsSnapshotForRead,
-  getSubagentRunsSnapshotForRead,
+  getSubagentSessionListRunsSnapshotForRead as readCompact,
+  getSubagentRunsSnapshotForRead as readRuns,
 } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 export function registerSubagentRestoreCacheCases(params: {
-  createRun: (runId: string) => SubagentRunRecord;
+  createRun: (runId: string, overrides?: Partial<SubagentRunRecord>) => SubagentRunRecord;
   mockRestoredRows(runs: Map<string, SubagentRunRecord>): void;
   refuseNextWrite(): void;
 }) {
   const { createRun } = params;
+  function observe<T>(registration: { release(): void }, read: () => T) {
+    const listener = vi.fn(read);
+    const stop = sessionChanges.subscribe(listener);
+    onTestFinished(() => {
+      stop();
+      registration.release();
+      subagentRuns.clear();
+    });
+    return listener;
+  }
   it("keeps restored history cold without publishing unchanged session facts", async () => {
     vi.useRealTimers();
     const restored = new Map(
       Array.from({ length: 257 }, (_, index) => {
-        const entry: SubagentRunRecord = {
-          ...createRun(`retained-${index}`),
+        const entry = createRun(`retained-${index}`, {
           execution: { status: "terminal", endedAt: 100, outcome: { status: "ok" } },
           cleanupCompletedAt: 100,
           delivery: { status: "not_required" },
-        };
+        });
         return [entry.runId, entry] as const;
       }),
     );
@@ -37,30 +46,23 @@ export function registerSubagentRestoreCacheCases(params: {
     const first = subagentRuns.get("retained-0")!;
     const registration = subagentRuns.captureRegistrationOwnership(first.childSessionKey, first);
     const gateway = { resolveGatewayContext: () => gateway as never };
-    const observe = vi.fn();
-    const unsubscribe = sessionChanges.subscribe(observe);
-    try {
-      expect(
-        await bindSubagentRunGatewayOwners({
-          runs: subagentRuns,
-          entries: [...getSubagentActivationRuns(subagentRuns)],
-          resumedRuns: new Set(),
-          getGatewayContextResolver: () => gateway.resolveGatewayContext,
-          onRecovered: () => {},
-        }),
-      ).toBe(true);
-      expect(observe).not.toHaveBeenCalled();
-      expect(subagentRuns.size).toBe(restored.size);
-      for (const entry of subagentRuns.values()) {
-        expect(getGatewayContextResolver(entry)).toBeUndefined();
-        expect(entry.execution.outcome).toEqual({ status: "ok" });
-      }
-      expect(() => registration.assertCurrent()).not.toThrow();
-    } finally {
-      unsubscribe();
-      registration.release();
-      subagentRuns.clear();
+    const listener = observe(registration, () => {});
+    expect(
+      await bindSubagentRunGatewayOwners({
+        runs: subagentRuns,
+        entries: [...getSubagentActivationRuns(subagentRuns)],
+        resumedRuns: new Set(),
+        getGatewayContextResolver: () => gateway.resolveGatewayContext,
+        onRecovered: () => {},
+      }),
+    ).toBe(true);
+    expect(listener).not.toHaveBeenCalled();
+    expect(subagentRuns.size).toBe(restored.size);
+    for (const entry of subagentRuns.values()) {
+      expect(getGatewayContextResolver(entry)).toBeUndefined();
+      expect(entry.execution.outcome).toEqual({ status: "ok" });
     }
+    expect(() => registration.assertCurrent()).not.toThrow();
   });
 
   it("publishes restored rows together after replacing ownership and cached facts", async () => {
@@ -77,26 +79,19 @@ export function registerSubagentRestoreCacheCases(params: {
       ["second", createRun("second")],
     ]);
     params.mockRestoredRows(restored);
-    const observe = vi.fn(() => ({
+    const listener = observe(registration, () => ({
       live: [...subagentRuns.keys()],
-      cached: [...getSubagentSessionListRunsSnapshotForRead(new Map()).keys()],
+      cached: [...readCompact(new Map()).keys()],
       superseded: registration.superseded,
     }));
-    const unsubscribe = sessionChanges.subscribe(observe);
-    try {
-      await restoreSubagentRunsFromDisk({ runs: subagentRuns });
-      expect(observe.mock.results).toEqual([
-        {
-          type: "return",
-          value: { live: [...restored.keys()], cached: [...restored.keys()], superseded: true },
-        },
-      ]);
-      expect(registration.assertCurrent).toThrow("owner changed");
-    } finally {
-      unsubscribe();
-      registration.release();
-      subagentRuns.clear();
-    }
+    await restoreSubagentRunsFromDisk({ runs: subagentRuns });
+    expect(listener.mock.results).toEqual([
+      {
+        type: "return",
+        value: { live: [...restored.keys()], cached: [...restored.keys()], superseded: true },
+      },
+    ]);
+    expect(registration.assertCurrent).toThrow("owner changed");
   });
 
   it.each([true, false])(
@@ -146,7 +141,7 @@ export function registerSubagentRestoreCacheCases(params: {
       }
       await restoring;
       expect(restored.has(entry.runId)).toBe(!committed);
-      expect(getSubagentRunsSnapshotForRead(new Map()).has(entry.runId)).toBe(!committed);
+      expect(readRuns(new Map()).has(entry.runId)).toBe(!committed);
     },
   );
 }

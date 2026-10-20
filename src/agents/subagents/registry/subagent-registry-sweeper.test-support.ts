@@ -16,10 +16,7 @@ export function createSubagentSweeperRun(): SubagentRunRecord {
     runId: "interrupted-run",
     childSessionKey: "agent:main:subagent:interrupted",
     childSessionIdentity: { sessionId: "session-id", lifecycleRevision: "session-revision" },
-    requesterSessionKey: "agent:main:main",
-    requesterDisplayKey: "main",
     task: "recover after restart",
-    cleanup: "keep",
     createdAt: Date.now() - 60_000,
     startedAt: Date.now() - 55_000,
   });
@@ -145,10 +142,5 @@ export function createSubagentSweeperHarness(
     collectorLookup.mockRestore();
     worker.mockRestore();
   });
-  return {
-    ...callbacks,
-    entry,
-    runs,
-    sweeper,
-  };
+  return { ...callbacks, entry, runs, sweeper };
 }

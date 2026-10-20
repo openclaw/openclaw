@@ -8,13 +8,13 @@ import {
 import { publishSubagentRunsAfterAtomicStore } from "./subagent-registry-state.js";
 import { bindSubagentRunRecord, rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import { writeSubagentRunValuesInDatabase } from "./subagent-registry.store.kernel.js";
-import type { SubagentRunSqliteRow } from "./subagent-registry.store.row.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { copySubagentRunRuntimeOwner } from "./subagent-run-generation.js";
 
 export function createSubagentStoreRunFixture(
   overrides: Partial<SubagentRunRecord> = {},
 ): SubagentRunRecord {
+  const timing = { startedAt: 110, endedAt: 250 };
   const identity = {
     childSessionKey: "agent:main:subagent:one",
     requesterSessionKey: "agent:main:main",
@@ -29,9 +29,8 @@ export function createSubagentStoreRunFixture(
     expectsCompletionMessage: true,
     execution: {
       status: "terminal",
-      startedAt: 110,
-      endedAt: 250,
-      outcome: { status: "ok", startedAt: 110, endedAt: 250, elapsedMs: 140 },
+      ...timing,
+      outcome: { status: "ok", ...timing, elapsedMs: 140 },
     },
     completion: {
       required: true,
@@ -48,8 +47,7 @@ export function createSubagentStoreRunFixture(
       payload: {
         ...identity,
         childRunId: "run-one",
-        startedAt: 110,
-        endedAt: 250,
+        ...timing,
         outcome: { status: "ok" },
         expectsCompletionMessage: true,
       },
@@ -78,28 +76,35 @@ export function loadSubagentRegistryFromSqlite(
   );
 }
 
-function writeSubagentRunValues(
-  values: readonly SubagentRunSqliteRow[],
-  deleteRunIds?: readonly string[],
-  retainedRunIds?: readonly string[],
-): void {
-  if (values.length === 0 && deleteRunIds?.length === 0 && retainedRunIds === undefined) {
+function writeFixture(runs: Map<string, SubagentRunRecord>, changedRunIds?: readonly string[]) {
+  const ids = changedRunIds
+    ? [...new Set(changedRunIds.map((id) => id.trim()).filter(Boolean))]
+    : [...runs.keys()];
+  if (changedRunIds && ids.length === 0) {
     return;
   }
+  const values = ids.flatMap((id) => {
+    const entry = runs.get(id);
+    return entry ? [bindSubagentRunRecord(entry)] : [];
+  });
   runOpenClawStateWriteTransaction((database) => {
     writeSubagentRunValuesInDatabase(
       database,
       values,
-      retainedRunIds === undefined ? (deleteRunIds ?? []) : [],
+      changedRunIds ? ids.filter((id) => !runs.has(id)) : [],
     );
-    if (retainedRunIds !== undefined) {
+    if (!changedRunIds) {
       const stateDb = getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "subagent_runs">>(
         database.db,
       );
       const deleteQuery =
-        retainedRunIds.length === 0
+        ids.length === 0
           ? stateDb.deleteFrom("subagent_runs")
-          : stateDb.deleteFrom("subagent_runs").where("run_id", "not in", retainedRunIds);
+          : stateDb.deleteFrom("subagent_runs").where(
+              "run_id",
+              "not in",
+              values.map((row) => row.run_id),
+            );
       executeSqliteQuerySync(database.db, deleteQuery);
     }
   });
@@ -107,9 +112,7 @@ function writeSubagentRunValues(
 
 /** Seed an out-of-band snapshot without publishing resident facts. */
 export function saveSubagentRegistryToSqlite(runs: Map<string, SubagentRunRecord>): void {
-  const values = [...runs.values()].map(bindSubagentRunRecord);
-  const retained = values.map((row) => row.run_id);
-  writeSubagentRunValues(values, undefined, retained);
+  writeFixture(runs);
 }
 
 /** Seed named foreign writes, deleting IDs absent from the supplied fixture. */
@@ -117,18 +120,7 @@ export function saveSubagentRegistryChangesToSqlite(
   runs: Map<string, SubagentRunRecord>,
   changedRunIds: readonly string[],
 ): void {
-  const runIds = [...new Set(changedRunIds.map((runId) => runId.trim()).filter(Boolean))];
-  const values: SubagentRunSqliteRow[] = [];
-  const deleteRunIds: string[] = [];
-  for (const runId of runIds) {
-    const entry = runs.get(runId);
-    if (entry) {
-      values.push(bindSubagentRunRecord(entry));
-    } else {
-      deleteRunIds.push(runId);
-    }
-  }
-  writeSubagentRunValues(values, deleteRunIds);
+  writeFixture(runs, changedRunIds);
 }
 
 /** Seed committed projection facts; row-owner behavior is exercised by the real-worker tests. */
