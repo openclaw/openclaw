@@ -8,6 +8,12 @@ import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
 import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const affinityHeaders = ["Session_ID", "X-Client-Request-ID", "X-Session-Affinity"];
+const completion = (delta: { role?: string; content?: string }, finish_reason: "stop" | null) => ({
+  id: "affinity",
+  object: "chat.completion.chunk",
+  choices: [{ index: 0, delta, finish_reason }],
+});
 
 describe("agent --local session affinity at HTTP egress", () => {
   it.each([
@@ -30,24 +36,7 @@ describe("agent --local session affinity at HTTP egress", () => {
         requests.push({ url: request.url, headers: request.headers, body });
         response.writeHead(200, { "content-type": "text/event-stream" });
         response.end(
-          [
-            {
-              id: "affinity",
-              object: "chat.completion.chunk",
-              choices: [
-                {
-                  index: 0,
-                  delta: { role: "assistant", content: "affinity-ok" },
-                  finish_reason: null,
-                },
-              ],
-            },
-            {
-              id: "affinity",
-              object: "chat.completion.chunk",
-              choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-            },
-          ]
+          [completion({ role: "assistant", content: "affinity-ok" }, null), completion({}, "stop")]
             .map((frame) => `data: ${JSON.stringify(frame)}\n\n`)
             .join("") + "data: [DONE]\n\n",
         );
@@ -61,6 +50,28 @@ describe("agent --local session affinity at HTTP egress", () => {
       if (!address || typeof address === "string") {
         throw new Error("Loopback receiver did not bind");
       }
+      const model = {
+        id: "affinity-fixture",
+        name: "Affinity fixture",
+        reasoning: false,
+        input: ["text"],
+        contextWindow: 128000,
+        maxTokens: 4096,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        compat: {
+          sendSessionAffinityHeaders: testCase.enabled,
+          ...(testCase.name === "cache-none" ? { supportsPromptCacheKey: true } : {}),
+        },
+        ...(testCase.name === "configured"
+          ? { headers: Object.fromEntries(affinityHeaders.map((key) => [key, testCase.expected])) }
+          : {}),
+      };
+      const provider = {
+        api: "openai-completions",
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        apiKey: "synthetic-loopback-key",
+        models: [model],
+      };
       await fs.writeFile(
         configPath,
         JSON.stringify({
@@ -73,57 +84,18 @@ describe("agent --local session affinity at HTTP egress", () => {
             },
             entries: { main: {} },
           },
-          models: {
-            mode: "replace",
-            providers: {
-              "affinity-fixture": {
-                api: "openai-completions",
-                baseUrl: `http://127.0.0.1:${address.port}/v1`,
-                apiKey: "synthetic-loopback-key",
-                models: [
-                  {
-                    id: "affinity-fixture",
-                    name: "Affinity fixture",
-                    reasoning: false,
-                    input: ["text"],
-                    contextWindow: 128000,
-                    maxTokens: 4096,
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    compat: {
-                      sendSessionAffinityHeaders: testCase.enabled,
-                      ...(testCase.name === "cache-none" ? { supportsPromptCacheKey: true } : {}),
-                    },
-                    ...(testCase.name === "configured"
-                      ? {
-                          headers: {
-                            Session_ID: testCase.expected,
-                            "X-Client-Request-ID": testCase.expected,
-                            "X-Session-Affinity": testCase.expected,
-                          },
-                        }
-                      : {}),
-                  },
-                ],
-              },
-            },
-          },
+          models: { mode: "replace", providers: { "affinity-fixture": provider } },
           tools: { profile: "minimal" },
         }),
       );
       const result = await runCliProcessChild({
         nodeArgs: [
           ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli)),
-          "agent",
-          "--local",
-          "--agent",
-          "main",
-          "--session-id",
+          ..."agent --local --agent main --session-id".split(" "),
           `affinity-${testCase.name}`,
           "--message",
           "Reply affinity-ok",
-          "--thinking",
-          "off",
-          "--json",
+          ..."--thinking off --json".split(" "),
         ],
         env: {
           PATH: process.env.PATH,

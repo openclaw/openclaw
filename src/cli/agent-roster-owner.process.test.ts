@@ -16,6 +16,10 @@ const roots = useAutoCleanupTempDirTracker(afterAll);
 const entrypoint = resolveRuntimeWorkerArgv(
   resolveRuntimeWorkerUrl(localStateOwnerFixtureEntrypoint),
 );
+const run = (env: NodeJS.ProcessEnv, ...args: string[]) =>
+  runCliProcessChild({ env, nodeArgs: [...entrypoint, ...args] });
+const lock = (env: NodeJS.ProcessEnv, port?: number) =>
+  acquireGatewayLock({ env, port, allowInTests: true, timeoutMs: 0 });
 
 function environment(root: string): NodeJS.ProcessEnv {
   return {
@@ -50,7 +54,7 @@ describe("agent roster offline ownership", () => {
     await fs.writeFile(env.OPENCLAW_CONFIG_PATH!, config);
     openOpenClawStateDatabase({ env });
     await closeOpenClawStateDatabaseAsync();
-    owner = await acquireGatewayLock({ env, port: claim.port, allowInTests: true, timeoutMs: 0 });
+    owner = await lock(env, claim.port);
     expect(owner).not.toBeNull();
   });
   afterAll(async () => {
@@ -59,21 +63,15 @@ describe("agent roster offline ownership", () => {
   });
 
   it.each([
-    ["setup", ["setup", "--baseline", "--workspace", "WORKSPACE", "--json"]],
-    [
-      "advanced creation",
-      ["agents", "add", "advanced", "--role", "researcher", "--workspace", "WORKSPACE", "--json"],
-    ],
-    [
-      "team creation",
-      ["agents", "team", "create", "--workspace-root", "WORKSPACE", "--non-interactive", "--json"],
-    ],
+    ["setup", "setup --baseline --workspace WORKSPACE --json"],
+    ["advanced creation", "agents add advanced --role researcher --workspace WORKSPACE --json"],
+    ["team creation", "agents team create --workspace-root WORKSPACE --non-interactive --json"],
   ])("refuses live %s before creating state", async (name, args) => {
     const workspace = path.join(root, `uncreated-${name.replaceAll(" ", "-")}`);
-    const result = await runCliProcessChild({
-      nodeArgs: [...entrypoint, ...args.map((arg) => (arg === "WORKSPACE" ? workspace : arg))],
+    const result = await run(
       env,
-    });
+      ...args.split(" ").map((arg) => (arg === "WORKSPACE" ? workspace : arg)),
+    );
     expect(result.code, result.stderr).toBe(1);
     expect(result.stderr).toContain("exclusive offline state ownership");
     expect(result.stderr).toContain("stop the Gateway");
@@ -85,31 +83,22 @@ describe("agent roster offline ownership", () => {
     await owner?.release();
     owner = null;
     const workspace = path.join(root, "offline-workspace");
-    const result = await runCliProcessChild({
-      nodeArgs: [
-        ...entrypoint,
-        "agents",
-        "add",
-        "offline",
-        "--workspace",
-        workspace,
-        "--non-interactive",
-        "--json",
-      ],
+    const result = await run(
       env,
-    });
+      ..."agents add offline --workspace".split(" "),
+      workspace,
+      "--non-interactive",
+      "--json",
+    );
     expect(result.code, result.stderr).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({ agentId: "offline", workspace });
-    const next = await runCliProcessChild({
-      nodeArgs: [...entrypoint, "agents", "list", "--json"],
-      env,
-    });
+    const next = await run(env, "agents", "list", "--json");
     expect(next.code, next.stderr).toBe(0);
     expect(JSON.parse(next.stdout)).toContainEqual(
       expect.objectContaining({ id: "offline", workspace }),
     );
     expect((await fs.stat(workspace)).isDirectory()).toBe(true);
-    const successor = await acquireGatewayLock({ env, allowInTests: true, timeoutMs: 0 });
+    const successor = await lock(env);
     expect(successor).not.toBeNull();
     await successor?.release();
   });
@@ -118,31 +107,19 @@ describe("agent roster offline ownership", () => {
     const home = roots.make("openclaw-onboard-offline-");
     const offline = environment(home);
     const workspace = path.join(home, "workspace");
-    const result = await runCliProcessChild({
-      nodeArgs: [
-        ...entrypoint,
-        "onboard",
-        "--non-interactive",
-        "--accept-risk",
-        "--agent-name",
-        "first",
-        "--workspace",
-        workspace,
-        "--auth-choice",
-        "skip",
-        "--skip-skills",
-        "--skip-channels",
-        "--skip-ui",
-        "--skip-health",
-        "--json",
-      ],
-      env: offline,
-    });
+    const result = await run(
+      offline,
+      ..."onboard --non-interactive --accept-risk --agent-name first --workspace".split(" "),
+      workspace,
+      ..."--auth-choice skip --skip-skills --skip-channels --skip-ui --skip-health --json".split(
+        " ",
+      ),
+    );
     expect(result.code, result.stderr).toBe(0);
     expect((await fs.stat(workspace)).isDirectory()).toBe(true);
     const saved = JSON.parse(await fs.readFile(offline.OPENCLAW_CONFIG_PATH!, "utf8"));
     expect(saved.agents.entries.first).toBeDefined();
-    const successor = await acquireGatewayLock({ env: offline, allowInTests: true, timeoutMs: 0 });
+    const successor = await lock(offline);
     expect(successor).not.toBeNull();
     await successor?.release();
   });

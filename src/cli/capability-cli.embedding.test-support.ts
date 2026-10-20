@@ -16,18 +16,11 @@ export function registerEmbeddingCapabilityCliTests({
   log: Mock;
   expectError: (message: string) => void;
 }): void {
+  const create = (...args: string[]) =>
+    runCapability("embedding", "create", "--text", "hello", ...args);
+
   it("creates embeddings with explicit provider selection", async () => {
-    await runCapability(
-      "embedding",
-      "create",
-      "--text",
-      "hello",
-      "--text",
-      "world",
-      "--model",
-      "openai/text-embedding-3-large",
-      "--json",
-    );
+    await create("--text", "world", "--model", "openai/text-embedding-3-large", "--json");
     expect(providerCall()).toMatchObject({
       provider: "openai",
       model: "text-embedding-3-large",
@@ -47,11 +40,7 @@ export function registerEmbeddingCapabilityCliTests({
   });
 
   it("keeps a slash-containing model id under a matching provider prefix", async () => {
-    await runCapability(
-      "embedding",
-      "create",
-      "--text",
-      "hello",
+    await create(
       "--provider",
       "deepinfra",
       "--model",
@@ -70,19 +59,9 @@ export function registerEmbeddingCapabilityCliTests({
   ])(
     "rejects --provider %s that conflicts with --model %s before creating a provider",
     async (provider, model, modelProvider) => {
-      await expect(
-        runCapability(
-          "embedding",
-          "create",
-          "--text",
-          "hello",
-          "--provider",
-          provider,
-          "--model",
-          model,
-          "--json",
-        ),
-      ).rejects.toThrow("exit 1");
+      await expect(create("--provider", provider, "--model", model, "--json")).rejects.toThrow(
+        "exit 1",
+      );
       expect(providerCall()).toBeUndefined();
       expectError(
         `Embedding --provider "${provider}" must match the provider "${modelProvider}" in --model.`,
@@ -97,7 +76,7 @@ export function registerEmbeddingCapabilityCliTests({
       [],
     ]);
 
-    await runCapability("embedding", "create", "--text", "hello", "--text", "world", "--text", "");
+    await create("--text", "world", "--text", "");
 
     expect(log).toHaveBeenCalledWith(
       [
@@ -128,9 +107,7 @@ export function registerEmbeddingCapabilityCliTests({
         return Promise.reject(new Error("close failed"));
       });
       embedBatch.mockRejectedValueOnce(new Error("embedding failed"));
-      await expect(
-        runCapability("embedding", "create", "--text", "hello", "--json"),
-      ).rejects.toThrow("exit 1");
+      await expect(create("--json")).rejects.toThrow("exit 1");
       expect(closeProvider).toHaveBeenCalledTimes(1);
       expectError("embedding failed");
     },
