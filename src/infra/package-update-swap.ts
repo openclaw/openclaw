@@ -564,15 +564,22 @@ export async function swapStagedPackageInstall(
       }
     };
     const restoreShim = (shim: (typeof shims)[number]) => async (assertCurrent: () => void) => {
-      if (shim.backup) {
-        await copyPathEntry(
-          shim.backup,
-          shim.destination,
-          assertCurrent,
-          activation?.recordRestoredLauncher.bind(activation, path.basename(shim.destination)),
+      try {
+        if (shim.backup) {
+          await copyPathEntry(
+            shim.backup,
+            shim.destination,
+            assertCurrent,
+            activation?.recordRestoredLauncher.bind(activation, path.basename(shim.destination)),
+          );
+        } else {
+          await removePath(shim.destination, assertCurrent);
+        }
+      } catch (error) {
+        throw new Error(
+          `launcher ${shim.destination}${shim.backup ? ` from retained backup ${shim.backup}` : ""}: ${formatErrorMessage(error)}`,
+          { cause: error },
         );
-      } else {
-        await removePath(shim.destination, assertCurrent);
       }
     };
     if (activation) {

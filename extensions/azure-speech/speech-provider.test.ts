@@ -171,6 +171,40 @@ describe("buildAzureSpeechProvider", () => {
     );
   });
 
+  it.each([
+    {
+      config: { region: "westus" },
+      environment: "AZURE_SPEECH_REGION",
+      value: "eastus",
+      expected: westusUrl,
+    },
+    {
+      config: { endpoint: customUrl },
+      environment: "AZURE_SPEECH_REGION",
+      value: "eastus",
+      expected: customUrl,
+    },
+    {
+      config: { region: "westus" },
+      environment: "AZURE_SPEECH_ENDPOINT",
+      value: customUrl,
+      expected: westusUrl,
+    },
+  ])(
+    "prefers explicit $config routing over $environment",
+    async ({ config, environment, value, expected }) => {
+      vi.stubEnv(environment, value);
+      const providerConfig = { apiKey: "key", ...config };
+      await provider.synthesize({ ...synthesisRequest, providerConfig, target: "audio-file" });
+      fetchMock.mockResolvedValueOnce(Response.json([]));
+      await provider.listVoices?.({ providerConfig, timeoutMs: 30_000 });
+
+      expect(
+        fetchMock.mock.calls.map(([url]) => (url instanceof Request ? url.url : url.toString())),
+      ).toEqual([`${expected}/cognitiveservices/v1`, `${expected}/cognitiveservices/voices/list`]);
+    },
+  );
+
   it("parses provider-specific TTS directives", () => {
     const policy = {
       enabled: true,

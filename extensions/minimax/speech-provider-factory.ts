@@ -65,21 +65,6 @@ function resolveConfiguredPortalTtsBaseUrl(cfg: OpenClawConfig | undefined): str
   return portalBaseUrl ? normalizeMinimaxTtsBaseUrl(portalBaseUrl) : undefined;
 }
 
-async function resolveMinimaxTtsApiKey(params: {
-  cfg: OpenClawConfig | undefined;
-  configApiKey?: string;
-}): Promise<string | undefined> {
-  const { resolveProviderAuthProfileApiKey } = await import("openclaw/plugin-sdk/provider-auth");
-  return resolveSpeechProviderApiKey(
-    params.configApiKey,
-    await resolveProviderAuthProfileApiKey({
-      cfg: params.cfg,
-      provider: MINIMAX_PORTAL_PROVIDER_ID,
-    }),
-    resolveMinimaxDirectTtsApiKey(),
-  );
-}
-
 function resolveMinimaxDirectTtsApiKey(configApiKey?: string): string | undefined {
   return resolveSpeechProviderApiKey(
     configApiKey,
@@ -244,10 +229,16 @@ export function buildMinimaxSpeechProvider({
     synthesize: async (req) => {
       const config = readMinimaxProviderConfig(req.providerConfig, req.cfg);
       const overrides = readMinimaxOverrides(req.providerOverrides);
-      const apiKey = await resolveMinimaxTtsApiKey({
-        cfg: req.cfg,
-        configApiKey: config.apiKey,
-      });
+      const { resolveProviderAuthProfileApiKey } =
+        await import("openclaw/plugin-sdk/provider-auth");
+      const apiKey = resolveSpeechProviderApiKey(
+        config.apiKey,
+        await resolveProviderAuthProfileApiKey({
+          cfg: req.cfg,
+          provider: MINIMAX_PORTAL_PROVIDER_ID,
+        }),
+        resolveMinimaxDirectTtsApiKey(),
+      );
       if (!apiKey) {
         throw new Error("MiniMax TTS auth missing");
       }

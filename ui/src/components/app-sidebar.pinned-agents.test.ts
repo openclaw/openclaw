@@ -14,7 +14,7 @@ import {
   SESSION_MUTATION_TEST_METHODS,
 } from "../test-helpers/gateway-methods.ts";
 
-it("pins an agent above the roster, preserves the other agents, and unpins through its menu", async () => {
+it("pins an agent into a menu-less gallery above the roster and preserves the other agents", async () => {
   const { sidebar, context, provider } = await mountRoster(roster, [
     session("main", 30, {
       lastMessagePreview: "A newer user question",
@@ -62,18 +62,11 @@ it("pins an agent above the roster, preserves the other agents, and unpins throu
   );
   await vi.waitFor(() => expect(tooltip.hasAttribute("open")).toBe(false));
   expect(document.activeElement).toBe(link);
-  const options = pin.querySelector<HTMLButtonElement>('button[aria-label="Options for Harbor"]')!;
-  options.focus();
-  options.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
-  await vi.waitFor(() =>
-    expect(remounted.sidebar.querySelector('[data-value="pin"]')?.textContent).toContain("Unpin"),
-  );
-  remounted.sidebar.querySelector<HTMLElement>('[data-value="pin"]')!.click();
+  expect(pin.querySelector("button")).toBeNull();
+  remounted.context.navigation.update({ pinnedAgentIds: [] });
   await vi.waitFor(() => {
     expect(remounted.sidebar.querySelector("[data-pinned-agent]")).toBeNull();
     expect(agentIds(remounted.sidebar)).toEqual(["main", "recent", "working"]);
-    expect(loadSettings().pinnedAgentIds).toEqual([]);
-    expect(document.activeElement).toBe(remounted.sidebar.querySelector('[data-agent-id="main"]'));
   });
 });
 

@@ -26,9 +26,7 @@ import { captureSessionTarget, runSessionMutation } from "./session-controller.l
 // must stay outside the transcript-only delivery-mirror model set.
 const AUTOMATION_RESULT_MODEL = "automation-result" as const;
 
-type BackgroundSessionResultCommit =
-  | { ok: true; messageId: string }
-  | { ok: false; reason: string };
+type BackgroundSessionResultCommit = { ok: true } | { ok: false; reason: string };
 
 type BackgroundSessionResultProvenance = {
   kind: "cron";
@@ -174,7 +172,7 @@ export async function commitBackgroundResultToSession(params: {
       });
       const appended = committed.messages[0];
       return appended
-        ? { ok: true, messageId: appended.messageId }
+        ? { ok: true }
         : { ok: false, reason: committed.rejectedReason ?? "background result was not committed" };
     },
   });

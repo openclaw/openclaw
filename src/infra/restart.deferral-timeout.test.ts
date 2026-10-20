@@ -427,6 +427,23 @@ describe("scheduled restart requester authority", () => {
   });
 });
 
+describe("restart signal handling", () => {
+  it("coalesces consumed authorization and intent until the signal is handled", () => {
+    const intent = { force: true, reason: "first" };
+    expect(requestGatewayRestartWithSignalAdmission("first", intent)).toEqual({
+      status: "emitted",
+    });
+    expect(consumeGatewayRestartAuthorization()).toBe(true);
+    expect(consumeGatewayRestartIntent()).toEqual(intent);
+    expect(requestGatewayRestartWithSignalAdmission("second")).toEqual({ status: "coalesced" });
+    expect(restartSignalHandler).toHaveBeenCalledOnce();
+
+    markGatewayRestartHandled();
+    expect(requestGatewayRestartWithSignalAdmission("second")).toEqual({ status: "emitted" });
+    expect(restartSignalHandler).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("restart control-flow deadlines use the monotonic clock", () => {
   it("expires SIGUSR2 authorization grace on monotonic time despite wall-clock rollback", () => {
     expect(requestGatewayRestartWithSignalAdmission("probe")).toEqual({ status: "emitted" });

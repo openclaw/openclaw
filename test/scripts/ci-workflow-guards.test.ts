@@ -4349,26 +4349,73 @@ ${buildScript}`,
     }
   });
 
-  it("prepares the real CLI before native policy tests without widening other native phases", () => {
-    const steps = readCiWorkflow().jobs["macos-swift"].steps;
+  it("reuses the exact Linux runtime without installing or building every workspace", async () => {
+    const workflow = readCiWorkflow();
+    const steps = workflow.jobs["macos-swift"].steps;
     const install = requiredWorkflowStep(steps, "Install native asset dependencies");
+    const download = requiredWorkflowStep(steps, "Download runtime for native policy tests");
     const prepare = requiredWorkflowStep(steps, "Prepare native test CLI");
+    const producer = requiredWorkflowStep(
+      workflow.jobs["build-artifacts"].steps,
+      "Upload runtime for native policy tests",
+    );
+    expect(workflow.jobs["macos-swift"].needs).toContain("build-artifacts");
+    expect(download.with).toMatchObject({
+      "artifact-ids": "${{ needs.build-artifacts.outputs.native_runtime_artifact_id }}",
+      "merge-multiple": true,
+    });
+    expect(producer.with.name).toBe(
+      "macos-native-runtime-${{ needs.preflight.outputs.checkout_revision }}-${{ github.run_attempt }}",
+    );
+    expect(prepare.env.TARGET_SHA).toBe("${{ needs.preflight.outputs.checkout_revision }}");
     expect(steps.indexOf(install)).toBeLessThan(steps.indexOf(prepare));
+    expect(steps.indexOf(download)).toBeLessThan(steps.indexOf(prepare));
     expect(steps.indexOf(prepare)).toBeLessThan(
       steps.indexOf(requiredWorkflowStep(steps, "Swift test")),
     );
-    for (const [phase, hasOwner, buildExit] of [
-      ["tests", true, 0],
-      ["tests", true, 23],
-      ["tests", false, 0],
-      ["release", true, 0],
-      ["packages", true, 0],
+    const { packNativeRuntime } = await import("../../scripts/macos-native-runtime-artifact.mjs");
+    const revision = "a".repeat(40);
+    for (const [phase, hasOwner, revisionMatches] of [
+      ["tests", true, true],
+      ["tests", true, false],
+      ["tests", false, false],
+      ["release", true, false],
+      ["packages", true, false],
     ] as const) {
       const root = tempDirs.make("native-cli-preparation-");
       const bin = path.join(root, "bin");
       const calls = path.join(root, "calls");
+      const githubPath = path.join(root, "github-path");
       const owner = "apps/macos/Sources/OpenClaw/NativeExecPolicyOwner.swift";
       mkdirSync(bin);
+      mkdirSync(path.join(root, ".ci-harness/scripts"), { recursive: true });
+      copyFileSync(
+        new URL("../../scripts/macos-native-runtime-artifact.mjs", import.meta.url),
+        path.join(root, ".ci-harness/scripts/macos-native-runtime-artifact.mjs"),
+      );
+      writeFileSync(
+        path.join(root, "openclaw.mjs"),
+        "process.stdout.write(JSON.stringify(process.argv.slice(2)));",
+      );
+      const built = path.join(root, "built");
+      mkdirSync(path.join(built, "dist"), { recursive: true });
+      mkdirSync(path.join(built, "packages/protocol/dist"), { recursive: true });
+      mkdirSync(path.join(built, "node_modules"));
+      writeFileSync(path.join(built, "dist/build-info.json"), JSON.stringify({ commit: revision }));
+      writeExecutable(path.join(built, "dist/executable.js"), ["#!/bin/sh", "exit 0"]);
+      writeFileSync(path.join(built, "packages/protocol/dist/index.js"), "export {};\n");
+      writeFileSync(path.join(built, "node_modules/linux-only"), "not portable");
+      const excluded = [
+        "dist/extensions",
+        "dist/control-ui",
+        "dist/worker",
+        "dist-runtime/extensions",
+      ];
+      for (const directory of excluded) {
+        mkdirSync(path.join(built, directory), { recursive: true });
+        writeFileSync(path.join(built, directory, "unneeded.node"), "not needed by policy");
+      }
+      packNativeRuntime(built, path.join(root, ".artifacts/macos-native-runtime"), revision);
       if (hasOwner) {
         mkdirSync(path.dirname(path.join(root, owner)), { recursive: true });
         writeFileSync(path.join(root, owner), "");
@@ -4376,7 +4423,6 @@ ${buildScript}`,
       writeExecutable(path.join(bin, "pnpm"), [
         "#!/bin/bash",
         'printf "%s\\n" "$*" >> "$PNPM_CALLS"',
-        'if [[ "$1" == "build:runtime" ]]; then exit "$BUILD_EXIT"; fi',
       ]);
       const preparesCli = evaluateWorkflowCondition(prepare.if, {
         eventName: "schedule",
@@ -4395,16 +4441,35 @@ ${buildScript}`,
             PATH: `${bin}:${process.env.PATH ?? ""}`,
             MACOS_NATIVE_PHASE: phase,
             PNPM_CALLS: calls,
-            BUILD_EXIT: String(buildExit),
+            GITHUB_PATH: githubPath,
+            TARGET_SHA: revisionMatches ? revision : "b".repeat(40),
           },
         },
       );
-      expect(result.status, result.stderr).toBe(buildExit);
-      expect(result.stdout).toBe(buildExit === 0 ? "ready" : "");
+      const prepareFails = preparesCli && !revisionMatches;
+      expect(result.status, result.stderr).toBe(prepareFails ? 1 : 0);
+      expect(result.stdout).toBe(prepareFails ? "" : "ready");
       const commands = readFileSync(calls, "utf8").trim().split("\n");
       expect(commands[0]).toContain("install --frozen-lockfile --prefer-offline --optional");
-      expect(commands[0]?.includes("--filter")).toBe(!preparesCli);
-      expect(commands.slice(1)).toEqual(preparesCli ? ["build:runtime"] : []);
+      expect(commands[0]).toContain("--filter @openclaw/mermaid-renderer...");
+      expect(commands[0]).toContain("--filter @openclaw/gateway-protocol...");
+      expect(commands[0]?.includes("--filter openclaw...")).toBe(preparesCli);
+      expect(commands).toHaveLength(1);
+      if (preparesCli && revisionMatches) {
+        const preparedBin = readFileSync(githubPath, "utf8").trim();
+        const args = ["--profile", "native-test", "approvals", "native", "--stdin", "--json"];
+        const invocation = spawnSync(path.join(preparedBin, "openclaw"), args, {
+          encoding: "utf8",
+        });
+        expect(invocation.status, invocation.stderr).toBe(0);
+        expect(JSON.parse(invocation.stdout)).toEqual(args);
+        expect(statSync(path.join(root, "dist/executable.js")).mode & 0o111).not.toBe(0);
+        expect(existsSync(path.join(root, "packages/protocol/dist/index.js"))).toBe(true);
+        expect(existsSync(path.join(root, "node_modules"))).toBe(false);
+        for (const directory of excluded) {
+          expect(existsSync(path.join(root, directory)), directory).toBe(false);
+        }
+      }
     }
   });
 

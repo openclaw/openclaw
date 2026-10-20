@@ -71,39 +71,6 @@ function decodePossibleText(data: string): string {
   return trimmed;
 }
 
-async function downloadTrackFromUrl(params: {
-  url: string;
-  timeoutMs?: number;
-  maxBytes: number;
-  policy: MinimaxRequestPolicy;
-}): Promise<GeneratedMusicAsset> {
-  return await downloadGeneratedMusicAsset({
-    candidate: { url: params.url },
-    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-    fetchFn: fetch,
-    provider: "MiniMax",
-    requestFailedMessage: "MiniMax generated music download failed",
-    maxBytes: params.maxBytes,
-    validateBinaryResponse: true,
-    includeSourceUrl: false,
-    fetchResponse: async ({ timeoutMs }) => {
-      const result = await fetchMinimaxResponse({
-        stage: "download",
-        url: params.url,
-        init: { method: "GET" },
-        timeoutMs,
-        requestFailedMessage: "MiniMax generated music download failed",
-        policy: params.policy,
-      });
-      return {
-        ...result,
-        mimeType:
-          normalizeOptionalString(result.response.headers.get("content-type")) ?? "audio/mpeg",
-      };
-    },
-  });
-}
-
 function resolveBodyReadTimeoutMs(deadline: ProviderOperationDeadline): number {
   return resolveProviderOperationTimeoutMs({
     deadline,
@@ -314,14 +281,35 @@ export function buildMinimaxMusicGenerationProvider(
         const taskId = normalizeOptionalString(payload?.task_id);
 
         const track = audioUrl
-          ? await downloadTrackFromUrl({
-              url: audioUrl,
-              timeoutMs: resolveProviderOperationTimeoutMs({
-                deadline,
-                defaultTimeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-              }),
+          ? await downloadGeneratedMusicAsset({
+              candidate: { url: audioUrl },
+              timeoutMs:
+                resolveProviderOperationTimeoutMs({
+                  deadline,
+                  defaultTimeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+                }) ?? DEFAULT_TIMEOUT_MS,
+              fetchFn: fetch,
+              provider: "MiniMax",
+              requestFailedMessage: "MiniMax generated music download failed",
               maxBytes: maxGeneratedMusicBytes,
-              policy: requestPolicy,
+              validateBinaryResponse: true,
+              includeSourceUrl: false,
+              fetchResponse: async ({ timeoutMs }) => {
+                const result = await fetchMinimaxResponse({
+                  stage: "download",
+                  url: audioUrl,
+                  init: { method: "GET" },
+                  timeoutMs,
+                  requestFailedMessage: "MiniMax generated music download failed",
+                  policy: requestPolicy,
+                });
+                return {
+                  ...result,
+                  mimeType:
+                    normalizeOptionalString(result.response.headers.get("content-type")) ??
+                    "audio/mpeg",
+                };
+              },
             })
           : inlineAudio
             ? {

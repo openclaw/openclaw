@@ -47,7 +47,8 @@ const rows: Array<GatewaySessionRow & ControlUiSessionFixture> = [
     kind: "direct",
     updatedAt: 98,
     status: "failed",
-    lastRunError: "Geometry mismatch",
+    lastRunError:
+      "Preflight compaction required but failed: agent tool caller authority is no longer active",
   },
 ];
 const sessions: SessionsListResult = {
@@ -152,6 +153,27 @@ suite.define(() => {
               .locator('[data-agent-group="writing"] .sidebar-agent-roster__avatar img')
               .getAttribute("src"),
           ).toBe(imageAvatar);
+
+          if (!touch) {
+            // Sidebar attention tooltips open inline to the right; a centered top
+            // placement clamps over the app rail at the sidebar's left edge.
+            const attention = main.locator(
+              '.sidebar-agent-roster__signals [data-session-attention="error"]',
+            );
+            await attention.hover();
+            const tooltip = main.locator(".tooltip-surface[popover]:popover-open");
+            await expect
+              .poll(() => tooltip.textContent())
+              .toContain("caller authority is no longer active");
+            await captureSidebarUiProof(suite, page, `attention-tooltip-${mode}-${width}.png`);
+            const icon = (await attention.boundingBox())!;
+            const surface = (await tooltip.boundingBox())!;
+            expect(surface.x).toBeGreaterThanOrEqual(icon.x + icon.width);
+            expect(surface.y).toBeLessThan(icon.y + icon.height / 2);
+            expect(surface.y + surface.height).toBeGreaterThan(icon.y + icon.height / 2);
+            await page.mouse.move(640, 880);
+            await tooltip.waitFor({ state: "hidden" });
+          }
 
           const restingPadding = await row.evaluate((el) => getComputedStyle(el).paddingRight);
           expect(restingPadding).toBe(touch ? "32px" : "0px");

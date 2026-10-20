@@ -154,28 +154,6 @@ function firstDeepInfraVideoUrl(job: DeepInfraVideoJob): string | undefined {
   return undefined;
 }
 
-async function extractDeepInfraVideoAsset(
-  job: DeepInfraVideoJob,
-  baseUrl: string,
-  maxBytes: number,
-): Promise<GeneratedVideoAsset> {
-  const videoUrl = firstDeepInfraVideoUrl(job);
-  if (!videoUrl) {
-    throw new Error("DeepInfra video response missing video URL");
-  }
-  const normalizedUrl = normalizeDeepInfraVideoUrl(videoUrl, baseUrl);
-  // Some models return the MP4 inline as a data: URL, others a hosted https URL.
-  const dataAsset = await parseVideoDataUrl(normalizedUrl, maxBytes);
-  if (dataAsset) {
-    return dataAsset;
-  }
-  return {
-    url: normalizedUrl,
-    mimeType: "video/mp4",
-    fileName: "video-1.mp4",
-  };
-}
-
 function resolveDeepInfraVideoBaseUrl(req: VideoGenerationRequest): string {
   const providerConfig = req.cfg?.models?.providers?.deepinfra;
   // Canonical `baseUrl` only; legacy `nativeBaseUrl`/`/v1/inference` values are
@@ -289,11 +267,21 @@ export function buildDeepInfraVideoGenerationProvider(options?: {
                   : undefined,
             });
 
-      const video = await extractDeepInfraVideoAsset(
-        completed,
-        baseUrl,
+      const videoUrl = firstDeepInfraVideoUrl(completed);
+      if (!videoUrl) {
+        throw new Error("DeepInfra video response missing video URL");
+      }
+      const normalizedUrl = normalizeDeepInfraVideoUrl(videoUrl, baseUrl);
+      // Some models return the MP4 inline as a data: URL, others a hosted https URL.
+      const dataAsset = await parseVideoDataUrl(
+        normalizedUrl,
         resolveGeneratedMediaMaxBytes(req.cfg, "video"),
       );
+      const video = dataAsset ?? {
+        url: normalizedUrl,
+        mimeType: "video/mp4",
+        fileName: "video-1.mp4",
+      };
       return {
         videos: [video],
         model: normalizeOptionalString(completed.model) ?? model,

@@ -308,10 +308,10 @@ it("rebuilds changed source bytes and version before publishing an in-flight sna
   const content = "---\nname: visible\ndescription: Updated instructions\n---\n";
   fs.writeFileSync(params.visibleFile, content);
   const currentVersion = bumpSkillsSnapshotVersion({ workspaceDir: params.workspaceDir });
-  const { snapshot, snapshotVersion } = await pending;
+  const { snapshot } = await pending;
   expect(snapshot.prompt).toContain("Updated instructions");
   expect(snapshot.prompt).not.toContain("Original instructions");
-  expect([snapshot.version, snapshotVersion]).toEqual([currentVersion, currentVersion]);
+  expect(snapshot.version).toBe(currentVersion);
   expect((await params.resolve()).snapshot).toEqual(snapshot);
 });
 

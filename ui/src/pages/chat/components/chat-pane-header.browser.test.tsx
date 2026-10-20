@@ -74,11 +74,21 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
         actions.getBoundingClientRect().left,
       );
       expect(header.scrollWidth).toBeLessThanOrEqual(header.clientWidth);
+      // Idle pill is only avatar and name; settings is hover-only, outside the
+      // pill, and has no title tooltip.
+      expect(trigger.querySelector(":scope > svg")).toBeNull();
+      expect(settings.hasAttribute("title")).toBe(false);
+      expect(getComputedStyle(settings).opacity).toBe("0");
       const idleBackground = getComputedStyle(settings).backgroundColor;
       await userEvent.hover(trigger);
       expect(getComputedStyle(settings).opacity).toBe("1");
       expect(getComputedStyle(settings).backgroundColor).toBe(idleBackground);
-      expect(getComputedStyle(trigger.querySelector(":scope > svg")!).opacity).toBe("0");
+      expect(settings.getBoundingClientRect().left).toBeGreaterThanOrEqual(
+        trigger.getBoundingClientRect().right - 0.5,
+      );
+      expect(settings.getBoundingClientRect().right).toBeLessThanOrEqual(
+        actions.getBoundingClientRect().left,
+      );
       trigger.focus();
       await userEvent.keyboard("{Enter}");
       const context = container.querySelector<HTMLElement>(".chat-pane__agent-context")!;
@@ -91,6 +101,32 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
       expect(document.activeElement).toBe(trigger);
       settings.click();
       expect(props.onOpenAgentSettings).toHaveBeenCalledWith("research");
+    });
+
+    it.each([
+      ["window controls on the left", "--chat-pane-header-inset-start", "paddingLeft", "90px"],
+      ["caption buttons on the right", "--chat-pane-header-inset-end", "paddingRight", "146px"],
+    ] as const)("centers the agent on the pane with %s", async (_label, inset, side, value) => {
+      await page.viewport(1440, 900);
+      const { container } = mountChatPaneHeader(containers, {
+        agent: { id: "research", name: "Research lead", textAvatar: "🔬" },
+      });
+      const header = container.querySelector<HTMLElement>(".chat-pane__header")!;
+      // Mirrors the shell's window-chrome inset rules, which set both values.
+      header.style.setProperty(inset, value);
+      header.style[side] = value;
+      const headerRect = header.getBoundingClientRect();
+      const trigger = container
+        .querySelector<HTMLElement>(".chat-pane__agent-identity > button")!
+        .getBoundingClientRect();
+      const actions = container
+        .querySelector<HTMLElement>(".chat-pane__header-trailing")!
+        .getBoundingClientRect();
+      expect(
+        Math.abs(trigger.left + trigger.width / 2 - (headerRect.left + headerRect.width / 2)),
+      ).toBeLessThanOrEqual(1);
+      expect(trigger.right).toBeLessThanOrEqual(actions.left);
+      expect(header.scrollWidth).toBeLessThanOrEqual(header.clientWidth);
     });
 
     it("opens the labelled Layout menu and dispatches focus, swap, docking, and panel choices", async () => {

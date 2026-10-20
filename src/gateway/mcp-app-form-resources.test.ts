@@ -27,6 +27,7 @@ import { testing as viewTesting } from "../agents/mcp-ui-resource.test-support.j
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { QuestionManager } from "./question-manager.js";
+import * as sessionScopedRead from "./server-methods/session-scoped-read.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 
 const state = vi.hoisted(() => ({ root: "", current: true, uploads: true, apps: true }));
@@ -478,6 +479,55 @@ describe("registered MCP form resource route", () => {
     ).toBe(false);
     expect((await f.invoke({ action: "preview", optionIndex: 1 }))[0]).toBe(false);
     expect(f.readResource).toHaveBeenCalledTimes(1);
+  });
+
+  it("limits concurrent form previews before session admission yields", async () => {
+    const f = await fixture();
+    const gate = createDeferred();
+    const entered = createDeferred();
+    f.readResource.mockImplementation(async (_server, uri) => {
+      if (f.readResource.mock.calls.length === 4) {
+        entered.resolve();
+      }
+      await gate.promise;
+      return { contents: [{ uri, text: "preview" }] };
+    });
+    const replies = Promise.all(
+      Array.from({ length: 5 }, () => f.invoke({ action: "preview", optionIndex: 0 })),
+    );
+    try {
+      await entered.promise;
+      expect(f.readResource).toHaveBeenCalledTimes(4);
+    } finally {
+      gate.resolve();
+      await replies;
+    }
+    const results = await replies;
+    expect(results.filter(([ok]) => ok)).toHaveLength(4);
+    expect(results.find(([ok]) => !ok)?.[2]).toMatchObject({
+      message: "MCP form resource request limit reached",
+    });
+    expect((await f.invoke({ action: "preview", optionIndex: 0 }))[0]).toBe(true);
+  });
+
+  it("releases form operation slots when session admission fails", async () => {
+    const f = await fixture();
+    const admission = vi
+      .spyOn(sessionScopedRead, "retainSessionScopedRead")
+      .mockRejectedValue(new Error("Session admission unavailable"));
+    try {
+      const replies = await Promise.all(
+        Array.from({ length: 4 }, () => f.invoke({ action: "preview", optionIndex: 0 })),
+      );
+      for (const reply of replies) {
+        expect(reply[0]).toBe(false);
+        expect(reply[2]).toMatchObject({ message: "Session admission unavailable" });
+      }
+      expect(f.readResource).not.toHaveBeenCalled();
+    } finally {
+      admission.mockRestore();
+    }
+    expect((await f.invoke({ action: "preview", optionIndex: 0 }))[0]).toBe(true);
   });
 
   it("rejects other requesters, sessions and forged pending records even when viewId was copied", async () => {

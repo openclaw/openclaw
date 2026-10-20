@@ -242,7 +242,6 @@ export interface TestChatPane extends HTMLElement, PaneTestLifecycle {
     row: GatewaySessionRow,
     workspaceRoot: string | null,
     branch: string | null,
-    copy?: (value: string) => Promise<boolean>,
   ) => void;
   loadHeaderMenuData: (
     row: GatewaySessionRow,

@@ -240,7 +240,6 @@ function AgentCrumb(
                   <AgentIdentityAvatar agent={props.agent} />
                 </span>
                 <span class="chat-pane__agent-name">{props.agent.name}</span>
-                <Icon name="chevronDown" />
               </>
             }
           >
@@ -251,7 +250,6 @@ function AgentCrumb(
       <button
         class="chat-pane__agent-settings"
         type="button"
-        title={t("agentChip.namedSettings", { name: props.agent.name })}
         aria-label={t("agentChip.namedSettings", { name: props.agent.name })}
         onClick={() => props.onOpenAgentSettings?.(props.agent.id)}
       >

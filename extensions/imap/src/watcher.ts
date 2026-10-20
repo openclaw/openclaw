@@ -8,7 +8,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { ImapAccountConfig } from "./config.js";
 import { renderImapPrompt } from "./prompt.js";
-import { evaluateImapSender, type MailAuthenticator } from "./sender-gate.js";
+import { evaluateImapSender } from "./sender-gate.js";
 import {
   advanceImapCursor,
   countImapSkip,
@@ -31,7 +31,6 @@ type ImapWatcherOptions = {
   runtime: OpenClawPluginApi["runtime"];
   state: ImapWatcherState;
   context: OpenClawPluginServiceContextV2;
-  authenticator?: MailAuthenticator;
   reconnectBaseMs?: number;
 };
 
@@ -375,7 +374,6 @@ export class ImapAccountWatcher {
       raw: message.source,
       internalDate: messageDate(message),
       account,
-      ...(this.options.authenticator ? { authenticator: this.options.authenticator } : {}),
     });
     if (!verdict.accepted) {
       if (

@@ -26,6 +26,7 @@ import {
 import { createSessionActivitySummaries } from "./session-activity-summaries.js";
 import { projectSessionActivitySummary } from "./session-activity-summary-state.js";
 import { defaultCompleteModel, defaultPrepareModel } from "./session-observer-model.js";
+import * as observerModel from "./session-observer-model.js";
 import {
   createHarness,
   flushObserver,
@@ -212,12 +213,11 @@ describe("utility completion with an unavailable implicit harness", () => {
       });
       // Warm the fixture's database before timing utility completion.
       await prewarmSessionHistoryWorker({ agentId: scope.agentId, env: state.env });
-      const complete = vi.fn(defaultCompleteModel);
+      const complete = vi.spyOn(observerModel, "defaultCompleteModel");
       const recaps = createSessionActivitySummaries({
         scheduler: createTestGatewayScheduler(),
         getConfig: () => config,
         onChanged: vi.fn(),
-        completeModel: complete,
       });
       dispose = () => recaps.dispose();
       await recaps.ensure(target, await readSessionEntryReadOnlyInWorker(scope));

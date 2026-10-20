@@ -87,10 +87,9 @@ function ChatAudioPlayerContent(
   let waveformAttempted = false;
   let waveformVisible = false;
   let active = true;
-  let sourceSyncQueued = false;
   function handleInputsChanged(key: keyof ChatAudioPlayerProps): void {
     if (key === "sizeBytes" || key === "serverDurationMs") {
-      queueSourceSync();
+      sourceController.queueSync(syncSource);
       return;
     }
     if (key !== "src" && key !== "sourceIdentity" && key !== "playback" && key !== "authToken") {
@@ -118,18 +117,7 @@ function ChatAudioPlayerContent(
         releaseChatAudioPlayback(mediaElement);
       }
     }
-    queueSourceSync();
-  }
-  function queueSourceSync(): void {
-    if (sourceSyncQueued) {
-      return;
-    }
-    sourceSyncQueued = true;
-    // Native callers assign related properties together; consume their complete source once.
-    queueMicrotask(() => {
-      sourceSyncQueued = false;
-      syncSource();
-    });
+    sourceController.queueSync(syncSource);
   }
   onSettled(() => {
     inputHandlers.set(host, handleInputsChanged);

@@ -35,6 +35,7 @@ import {
   type AppSidebarRenderHost,
 } from "./app-sidebar-render.tsx";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
+import { McpAppCatalog } from "./mcp-app-catalog.tsx";
 import { personActivityLink, personActivityRouting } from "./person-activity-link.ts";
 import { SessionIconGraphic } from "./session-icon-glyph-solid.tsx";
 import { SidebarCollapseToggle } from "./sidebar-collapse-toggle.tsx";
@@ -531,7 +532,7 @@ export function renderSidebarPages(host: AppSidebarRenderHost): JSX.Element {
         <span>{t("nav.pages")}</span>
         <SidebarCollapseToggle onToggle={() => host.onToggleSidebar?.()} />
       </div>
-      <openclaw-mcp-app-catalog surface="sidebar" />
+      <McpAppCatalog surface="sidebar" />
       <For each={entries()} keyed={serializeSidebarEntry}>
         {(entry) => {
           // The For key is the complete serialized identity; labels stay live in the renderer.
