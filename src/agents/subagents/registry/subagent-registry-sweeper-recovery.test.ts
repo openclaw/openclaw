@@ -37,6 +37,7 @@ import {
   detachActiveEmbeddedRun,
 } from "./subagent-control-native.test-support.js";
 import { prepareSubagentKillSession } from "./subagent-control-session.js";
+import { getSubagentRunsForChildSession } from "./subagent-registry-memory.js";
 import { reconcileDurableSubagentKillIntent } from "./subagent-registry-sweep-kill.js";
 import { registerSubagentSweepKillCustodyTests } from "./subagent-registry-sweeper-kill-custody.test-support.js";
 import { retireSupersededSubagentRun } from "./subagent-registry-sweeper-retire.js";
@@ -669,6 +670,7 @@ describe("subagent registry recovery scheduling", () => {
                 runId: entry.runId,
                 entry,
                 runs,
+                getRunsForChildSession: getSubagentRunsForChildSession,
                 retireObligations: vi.fn(async () => {}),
                 completeSubagentRunWithRecovery,
                 retireSupersededRun: vi.fn(),

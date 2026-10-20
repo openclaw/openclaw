@@ -79,6 +79,7 @@ it("bounds durable kill reconciliation when an accepted live source never settle
     runId: entry.runId,
     entry,
     runs,
+    getRunsForChildSession: childLookup,
     completeSubagentRunWithRecovery,
     retireSupersededRun: vi.fn(),
     retireObligations: vi.fn(async () => {}),

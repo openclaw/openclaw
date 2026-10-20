@@ -32,7 +32,6 @@ import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
-import { getSubagentRunsForChildSession } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { getLatestSubagentRunForChild } from "./subagent-registry-queries.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
@@ -65,6 +64,10 @@ export async function reconcileDurableSubagentKillIntent(params: {
   runId: string;
   entry: SubagentRunRecord;
   runs: Map<string, SubagentRunRecord>;
+  getRunsForChildSession: (
+    childSessionKey: string,
+    childAgentId?: string,
+  ) => Iterable<SubagentRunRecord>;
   completeSubagentRunWithRecovery: (
     completion: SubagentCompletionRequest,
     source: string,
@@ -82,7 +85,7 @@ export async function reconcileDurableSubagentKillIntent(params: {
     return false;
   }
   const childRuns = () =>
-    getSubagentRunsForChildSession(params.entry.childSessionKey, params.entry.childAgentId);
+    params.getRunsForChildSession(params.entry.childSessionKey, params.entry.childAgentId);
   const latest = getLatestSubagentRunForChild(childRuns(), params.entry);
   if (!isSameSubagentRunOwner(latest, params.entry)) {
     try {
@@ -273,6 +276,10 @@ type ProvisionalSubagentKillParams = {
   retireSupersededRun: (runId: string, entry: SubagentRunRecord) => Promise<void>;
   retireObligations: (entry: SubagentRunRecord) => Promise<void>;
   startSubagentAnnounceCleanupFlow: (entry: SubagentRunRecord) => boolean;
+  getRunsForChildSession: (
+    childSessionKey: string,
+    childAgentId?: string,
+  ) => Iterable<SubagentRunRecord>;
   warn: (message: string, meta?: Record<string, unknown>) => void;
 };
 
@@ -341,7 +348,7 @@ async function confirmProvisionalSubagentKill(
   // decision boundary so a newly registered generation can supersede this run.
   const findNextRunCreatedAt = () =>
     findNextSubagentRunCreatedAt(
-      getSubagentRunsForChildSession(entry.childSessionKey, entry.childAgentId),
+      params.getRunsForChildSession(entry.childSessionKey, entry.childAgentId),
       entry,
     );
   const killedAt = killReconciliation.killedAt;

@@ -25,11 +25,7 @@ import type {
   SubagentLifecycleController,
   SubagentLifecycleOptions,
 } from "./subagent-registry-lifecycle.js";
-import {
-  getSubagentActivationRuns,
-  getSubagentRunsForCollectorGroup,
-  subagentRuns,
-} from "./subagent-registry-memory.js";
+import { getSubagentActivationRuns, subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { createInterruptedRecoveryCoordinator } from "./subagent-registry-restart-recovery-coordinator.js";
 import { isRestoredQueuedFailureSettlementClaimed } from "./subagent-registry-restore.js";
@@ -100,6 +96,15 @@ export function createSubagentRegistrySweeper(params: {
   notifyContextEngineSubagentEnded: (params: ContextEngineSubagentEndedParams) => Promise<void>;
   retireSupersededRun: (runId: string, entry: SubagentRunRecord) => Promise<void>;
   retireObligations: (entry: SubagentRunRecord) => Promise<void>;
+  getRunsForChildSession: (
+    childSessionKey: string,
+    childAgentId?: string,
+  ) => Iterable<SubagentRunRecord>;
+  getRunsForCollectorGroup: (
+    requesterSessionKey: string,
+    groupId: string,
+    requesterAgentId?: string,
+  ) => Iterable<[string, SubagentRunRecord]>;
   warn: (message: string, meta?: Record<string, unknown>) => void;
 }) {
   const { runs } = params;
@@ -182,6 +187,7 @@ export function createSubagentRegistrySweeper(params: {
 
   const recovery = createInterruptedRecoveryCoordinator({
     runs,
+    getRunsForChildSession: params.getRunsForChildSession,
     getGatewayRuntime: params.getGatewayRecoveryRuntime,
     finalizeRun: params.finalizeInterruptedSubagentRun,
     isTerminalTailActive: params.isTerminalTailActive,
@@ -517,7 +523,7 @@ export function createSubagentRegistrySweeper(params: {
         requesterAgentId,
       } of collectorArchiveCandidates.values()) {
         const readGroup = () => [
-          ...getSubagentRunsForCollectorGroup(requesterSessionKey, groupId, requesterAgentId),
+          ...params.getRunsForCollectorGroup(requesterSessionKey, groupId, requesterAgentId),
         ];
         const groupEntries = readGroup();
         if (

@@ -49,6 +49,7 @@ const hasPending = (pluginId: string) => expect.objectContaining({ pluginId });
 async function prepareMigrationOwner() {
   const owner = createDoctorPluginMigrationPreparation({
     enabled: true,
+    env: () => process.env,
     report: (result) => owner.observe(result),
     recordReceipt: () => {},
     measure: async (_name, run) => run(),

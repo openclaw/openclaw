@@ -25,6 +25,7 @@ import {
 import type {
   LegacyStateMigrationStepReceipt,
   MigrationMessages,
+  MigrationLogger,
 } from "../infra/state-migrations.types.js";
 import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
@@ -45,16 +46,18 @@ import { shouldDeferConfiguredPluginInstallRepair } from "./doctor/shared/update
 /** One preflight retains unavailable owners until their migration reports completion. */
 export function createDoctorPluginMigrationPreparation(params: {
   enabled: boolean;
+  env: () => NodeJS.ProcessEnv;
   report: (result: MigrationMessages) => void;
   recordReceipt: (receipt: LegacyStateMigrationStepReceipt) => void;
   measure: ConfigSnapshotReadMeasure;
   runWithPluginMetadataSnapshot: PluginMetadataSnapshotScopeRunner;
   doctorOnlyStateMigrations: boolean;
   integrityCheck?: "quick" | "full";
+  log?: MigrationLogger;
 }) {
   const shouldDeferInstallation = () =>
-    Boolean(resolveUpdateRehearsalRoot(process.env)) ||
-    shouldDeferConfiguredPluginInstallRepair(process.env);
+    Boolean(resolveUpdateRehearsalRoot(params.env())) ||
+    shouldDeferConfiguredPluginInstallRepair(params.env());
   const previousById = new Map<string, DeferredPluginMigration>();
   let deferred: readonly DeferredPluginMigration[] = [];
   let expectedPending: readonly DeferredPluginMigration[] = [];
@@ -64,7 +67,7 @@ export function createDoctorPluginMigrationPreparation(params: {
     if (previousLoaded) {
       return;
     }
-    const env = cloneEnvWithPlatformSemantics(process.env);
+    const env = cloneEnvWithPlatformSemantics(params.env());
     if (!(snapshot?.exists ?? existsSync(resolveConfigPath(env)))) {
       return;
     }
@@ -126,7 +129,7 @@ export function createDoctorPluginMigrationPreparation(params: {
     if (!prepared && params.enabled) {
       const availability = await inspectPluginMigrationAvailability({
         cfg: snapshot.sourceConfig,
-        env: process.env,
+        env: params.env(),
         retainedPluginIds: [...previousById.keys()],
         deferInstallation: shouldDeferInstallation(),
       });
@@ -138,7 +141,7 @@ export function createDoctorPluginMigrationPreparation(params: {
     return [...previousById.values()];
   };
   const reportPending = (plugin: DeferredPluginMigration) => {
-    const warning = formatDeferredPluginMigration(plugin, process.env);
+    const warning = formatDeferredPluginMigration(plugin, params.env());
     const previous = reported.get(plugin.pluginId);
     if (previous?.warnings[0] === warning) {
       return;
@@ -174,7 +177,7 @@ export function createDoctorPluginMigrationPreparation(params: {
   ) => {
     try {
       const committed = await recordDeferredPluginMigrations({
-        env: process.env,
+        env: params.env(),
         pending,
         ...(resolvedPluginIds ? { resolvedPluginIds } : {}),
         ...(settlements ? { settlements } : {}),
@@ -227,7 +230,8 @@ export function createDoctorPluginMigrationPreparation(params: {
           params.runWithPluginMetadataSnapshot({ config }, () =>
             autoMigrateLegacyPluginDoctorState({
               config,
-              env: process.env,
+              env: params.env(),
+              log: params.log,
               integrityCheck: params.integrityCheck,
               ...(params.doctorOnlyStateMigrations ? { doctorOnlyStateMigrations: true } : {}),
             }),
@@ -378,7 +382,7 @@ export function createDoctorPluginMigrationPreparation(params: {
       const persist = () => persistPending(pending, resolvedPluginIds, settlements);
       let committed: boolean;
       if (settlements.length > 0 && sourceSnapshot) {
-        const env = cloneEnvWithPlatformSemantics(process.env);
+        const env = cloneEnvWithPlatformSemantics(params.env());
         const { snapshot, writeOptions } = await createConfigIO({
           env,
           observe: false,

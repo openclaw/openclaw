@@ -198,8 +198,9 @@ export type SubagentSessionListReadView = {
 /** A long-lived projection retains its source; registry publications still own the facts. */
 export function createSubagentSessionListReadView(options: {
   env: NodeJS.ProcessEnv;
+  path?: string;
 }): SubagentSessionListReadView {
-  const path = resolveOpenClawStateSqlitePath(options.env);
+  const path = options.path ?? resolveOpenClawStateSqlitePath(options.env);
   const source = prepareOpenClawStateReadSource({ path, env: options.env });
   const cache = persistedSubagentSessionListRunsReadCache;
   const readPersisted = shouldReadPersistedSubagentRuns();

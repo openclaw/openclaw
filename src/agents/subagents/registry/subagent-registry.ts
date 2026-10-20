@@ -40,6 +40,7 @@ import { createSubagentRegistryListener } from "./subagent-registry-listener.js"
 import {
   getSubagentChildSessionCandidates,
   getSubagentRunsForChildSession,
+  getSubagentRunsForCollectorGroup,
   subagentRuns,
 } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
@@ -359,6 +360,7 @@ async function confirmAfterSettlements(
       retireSupersededRun: retireSupersededSubagentRun,
       retireObligations: retireKilledSubagentObligations,
       startSubagentAnnounceCleanupFlow,
+      getRunsForChildSession: getSubagentRunsForChildSession,
       warn,
     });
   }, "subagents:kill-confirm").catch((error: unknown) => {
@@ -583,6 +585,8 @@ const subagentSweeper = createSubagentRegistrySweeper({
   callGateway: callSubagentRegistryGateway,
   retireSupersededRun: retireSupersededSubagentRun,
   retireObligations: retireKilledSubagentObligations,
+  getRunsForChildSession: getSubagentRunsForChildSession,
+  getRunsForCollectorGroup: getSubagentRunsForCollectorGroup,
   warn,
 });
 

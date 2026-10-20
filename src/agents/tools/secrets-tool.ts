@@ -23,6 +23,7 @@ import {
   createGatewayQuestionCanceller,
   createQuestionPromptLifetime,
   readQuestionRejection,
+  type GatewayQuestionCall,
 } from "./gateway-question-lifecycle.js";
 import { callGatewayTool } from "./gateway.js";
 import { type QuestionPromptDelivery, sendQuestionToolPrompt } from "./question-prompt-send.js";
@@ -149,23 +150,23 @@ function noSecretAnswerResult(status: "pending" | "expired" | "cancelled") {
   return textResult(`${note}\n\n${JSON.stringify(details, null, 2)}`, details);
 }
 
-async function fetchSecretStore(signal?: AbortSignal) {
-  const result = await callGatewayTool(
-    "secrets.store.list",
-    {},
-    {},
-    signal ? { signal } : undefined,
-  );
+async function fetchSecretStore(gatewayCall: GatewayQuestionCall, signal?: AbortSignal) {
+  const result = await gatewayCall("secrets.store.list", {}, {}, signal ? { signal } : undefined);
   if (!validateSecretsStoreListResult(result)) {
     throw new Error("secrets.store.list returned invalid metadata");
   }
   return result;
 }
 
-async function storedSecretResult(name: string, provider: string, signal?: AbortSignal) {
+async function storedSecretResult(
+  name: string,
+  provider: string,
+  gatewayCall: GatewayQuestionCall,
+  signal?: AbortSignal,
+) {
   // This read observes current policy, not the earlier approval. Its failure
   // cannot undo a committed save; never expose the inventory or read error.
-  const currentPolicy = await fetchSecretStore(signal)
+  const currentPolicy = await fetchSecretStore(gatewayCall, signal)
     .then(({ entries }) => {
       const entry = entries.find((candidate) => candidate.name === name);
       if (!entry) {
@@ -228,10 +229,12 @@ export function createSecretsTool(params: {
   agentId?: string;
   sessionKey?: string;
   runId?: string;
+  gatewayCall?: GatewayQuestionCall;
   /** How this run shows a prompt when its harness does not reserve one. */
   questionPrompt?: QuestionPromptDelivery;
 }): AnyAgentTool {
-  const questionGatewayCall = resolveAgentQuestionGatewayCall();
+  const gatewayCall: GatewayQuestionCall = params.gatewayCall ?? callGatewayTool;
+  const questionGatewayCall = params.gatewayCall ?? resolveAgentQuestionGatewayCall();
   const storeProvider = resolveDefaultSecretProviderAlias(params.config ?? {}, "store");
   // Native credential cards arrive through question.requested, not a public link, so a
   // channel that cannot carry a Control UI link gets no chat prompt here either.
@@ -250,11 +253,11 @@ export function createSecretsTool(params: {
       }
       const action = readToolStringParam(input, "action", { required: true });
       if (action === "list") {
-        return listSecretStoreResult(await fetchSecretStore(signal));
+        return listSecretStoreResult(await fetchSecretStore(gatewayCall, signal));
       }
       if (action === "delete") {
         const name = readSecretStoreName(input);
-        const result = await callGatewayTool(
+        const result = await gatewayCall(
           "secrets.store.delete",
           {},
           { name },
@@ -368,7 +371,7 @@ export function createSecretsTool(params: {
           if (questionResult.answers.answers.secret_value?.[0] !== "stored") {
             throw new Error("credential request returned an unexpected answer marker");
           }
-          return await storedSecretResult(request.name, storeProvider, signal);
+          return await storedSecretResult(request.name, storeProvider, gatewayCall, signal);
         }
         if (
           questionResult.status === "pending" ||

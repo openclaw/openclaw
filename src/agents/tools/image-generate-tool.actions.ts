@@ -54,6 +54,7 @@ export async function createImageGenerateListActionResult(params: {
   workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
+  authProfileStoreSource?: boolean;
 }): Promise<MediaGenerateActionResult> {
   return createMediaGenerateProviderListActionResult({
     ...params,

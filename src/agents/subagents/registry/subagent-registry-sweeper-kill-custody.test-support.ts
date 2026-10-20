@@ -55,6 +55,7 @@ export function registerSubagentSweepKillCustodyTests(killSessionEntry: {
         runId: entry.runId,
         entry,
         runs,
+        getRunsForChildSession: childLookup,
         retireObligations: vi.fn(async () => {}),
         completeSubagentRunWithRecovery,
         retireSupersededRun,

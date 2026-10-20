@@ -101,6 +101,7 @@ async function runDoctorConfigPreflightOperation(
   let configSnapshotRead: ConfigPreflightSnapshotRead | undefined;
   const pluginMigrations = createDoctorPluginMigrationPreparation({
     enabled: stateMigrationsRequested,
+    env: () => process.env,
     report: (result) => noteDoctorStateMigrationResult(result),
     recordReceipt: (receipt) => stateMigrationStepReceipts.push(receipt),
     measure: measurePreflightStep,

@@ -188,6 +188,8 @@ export function requesterWakeDriver(inputs: ReturnType<typeof records>[]) {
         notifyContextEngineSubagentEnded: vi.fn(async () => {}),
         retireSupersededRun: vi.fn(async () => {}),
         retireObligations: vi.fn(async () => {}),
+        getRunsForChildSession: () => [],
+        getRunsForCollectorGroup: () => [],
         warn,
       });
       const settleRootWork = observeRootWork();

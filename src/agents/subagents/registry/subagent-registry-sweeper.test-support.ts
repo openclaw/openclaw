@@ -149,6 +149,8 @@ export function createSubagentSweeperHarness(
     notifyContextEngineSubagentEnded,
     retireSupersededRun: vi.fn(),
     retireObligations: vi.fn(async () => {}),
+    getRunsForChildSession: childLookup,
+    getRunsForCollectorGroup: collectorLookup,
     warn,
   });
   onTestFinished(async () => {
