@@ -3,6 +3,7 @@ import { resolveSlackUserAllowlist } from "./resolve-users.js";
 
 const { createClient, list } = vi.hoisted(() => ({ createClient: vi.fn(), list: vi.fn() }));
 
+// mock-isolation: user lookup uses the fixture client instead of real Slack network clients.
 vi.mock("./client.js", () => ({
   createSlackLookupClient: createClient,
 }));

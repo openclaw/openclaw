@@ -12,6 +12,7 @@ const { authTest, usersInfo, createClient } = vi.hoisted(() => ({
   usersInfo: vi.fn(),
   createClient: vi.fn(),
 }));
+// mock-isolation: directory requests use the fixture client instead of real Slack network clients.
 vi.mock("./client.js", () => ({ createSlackLookupClient: createClient }));
 
 function config(slack: NonNullable<OpenClawConfig["channels"]>["slack"]): OpenClawConfig {

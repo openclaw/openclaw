@@ -5,6 +5,7 @@ import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { matrixDiscoveryPlugin } from "../../test-helpers/plugins-e2e-fixtures.test-support.ts";
 
 const fetchIcon = vi.hoisted(() => vi.fn());
+// mock-isolation: control icon fetch settlement without real browser Blob or network I/O.
 vi.mock("./icon-loader.ts", () => ({ fetchCatalogIconBlobUrl: fetchIcon }));
 
 const { PluginIconOwner } = await import("./plugin-icon-owner.ts");

@@ -26,6 +26,7 @@ const gatewayTestState = vi.hoisted(() => ({
   targetBySessionKey: new Map<string, { agentId: string; storePath: string }>(),
 }));
 
+// mock-isolation: the in-process lifecycle fixture replaces Gateway transport with exact store operations.
 vi.mock("../gateway/call.js", () => ({ callGateway: gatewayTestState.callGateway }));
 
 gatewayTestState.callGateway.mockImplementation(

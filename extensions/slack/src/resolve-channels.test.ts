@@ -6,6 +6,7 @@ const { list, createClient } = vi.hoisted(() => ({
   createClient: vi.fn(),
 }));
 
+// mock-isolation: channel lookup uses the fixture client instead of real Slack network clients.
 vi.mock("./client.js", () => ({ createSlackLookupClient: createClient }));
 
 function channel(id: string, name: string) {
