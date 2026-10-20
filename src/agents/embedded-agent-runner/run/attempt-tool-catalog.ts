@@ -11,6 +11,7 @@ import {
   gateAgentToolExecution,
 } from "../../agent-tool-availability.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
+import { isCodeModeControlTool } from "../../code-mode-control-tools.js";
 import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "../../code-mode.js";
 import { logAgentRuntimeToolDiagnostics } from "../../runtime-plan/tools.js";
 import { createToolPolicyMatcher, isToolAllowedByPolicyName } from "../../tool-policy-match.js";
@@ -218,6 +219,11 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
         (controlName) => !explicitControlAllowlistNames.has(normalizeToolPolicyName(controlName)),
       ),
     );
+    // The exec policy entry names the shell tool, not the Code Mode bridge.
+    // Its controls can remain visible even when no task tools were constructed.
+    const codeModeControlNames = new Set(
+      effectiveTools.filter(isCodeModeControlTool).map((tool) => tool.name),
+    );
     const explicitlyAllowedClientTool = hasExplicitlyAllowedClientTool({
       clientTools,
       explicitAllowlistSources: explicitToolAllowlistSources,
@@ -227,9 +233,12 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
       : visibleAllowedToolNames;
     // Auto-added controls cannot conceal an explicit allowlist that matched nothing.
     const hasCallableTools =
+      preparedToolBase.hasProviderNativeTools ||
       toolSearch.catalogToolCount > 0 ||
       ((clientToolsCataloged || deferredDirectoryToolsCallable) && explicitlyAllowedClientTool) ||
-      [...emptyAllowlistVisibleToolNames].some((toolName) => !autoAddedControlNames.has(toolName));
+      [...emptyAllowlistVisibleToolNames].some(
+        (toolName) => !autoAddedControlNames.has(toolName) && !codeModeControlNames.has(toolName),
+      );
     const toolSearchRunPlan = {
       visibleAllowedToolNames,
       replayAllowedToolNames,

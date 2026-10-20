@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
+import { markCodeModeControlTool } from "../../code-mode-control-tools.js";
 import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../../harness/tool-surface-bridge.js";
 import { createSandboxTestContext } from "../../sandbox/test-fixtures.js";
@@ -37,6 +38,7 @@ async function plan(
     uncompactedTools?: AnyAgentTool[];
     catalogToolCount?: number;
     codeMode?: boolean;
+    hasProviderNativeTools?: boolean;
     directory?: boolean;
     allow?: string[];
     configAllow?: string[];
@@ -114,6 +116,7 @@ async function plan(
         throw new Error("The catalog fixture does not prepare permission changes");
       },
       webSearchUnconfigured: false,
+      hasProviderNativeTools: options.hasProviderNativeTools ?? false,
       codeModeControlsEnabledForRun: surface.codeModeControlsEnabled,
       codeModeSkills: [],
       computerContextEpoch: { value: 0 },
@@ -181,6 +184,39 @@ async function plan(
 }
 
 describe("embedded attempt tool catalog", () => {
+  it.each([
+    { label: "shell exec", allow: ["exec"] },
+    { label: "shell alias", allow: ["bash"] },
+    { label: "maintenance tools", allow: ["read", "write", "exec", "process"] },
+  ])("does not count an empty Code Mode bridge as $label", async ({ allow }) => {
+    const result = await plan({
+      visibleTools: [markCodeModeControlTool(tool("exec")), markCodeModeControlTool(tool("wait"))],
+      codeMode: true,
+      allow,
+    });
+    expect(result.hasCallableTools).toBe(false);
+    expect(result.emptyExplicitToolAllowlistError?.message).toContain("No callable tools remain");
+  });
+
+  it("counts provider-native tools without exposing them as local functions", async () => {
+    const result = await plan({
+      visibleTools: [markCodeModeControlTool(tool("exec")), markCodeModeControlTool(tool("wait"))],
+      codeMode: true,
+      allow: ["web_search", "exec"],
+      hasProviderNativeTools: true,
+    });
+    expect(result.hasCallableTools).toBe(true);
+    expect(result.emptyExplicitToolAllowlistError).toBeNull();
+    expect([...result.liveAllowedToolNames]).toEqual(["exec", "wait"]);
+    expect(result.capabilityToolNames.has("web_search")).toBe(false);
+  });
+
+  it("counts a real directly exposed shell exec", async () => {
+    const result = await plan({ visibleTools: [tool("exec")], allow: ["exec"] });
+    expect(result.hasCallableTools).toBe(true);
+    expect(result.emptyExplicitToolAllowlistError).toBeNull();
+  });
+
   it("carries native catalog capabilities without widening direct execution authority", async () => {
     const foreignTool = tool("sessions_yield");
     setPluginToolMeta(foreignTool, { pluginId: "bundle-mcp", optional: false });
