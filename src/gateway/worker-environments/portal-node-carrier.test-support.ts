@@ -5,6 +5,7 @@ import {
   NODE_WORKER_PORTAL_STREAM_VERSION,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
 } from "../../infra/node-runner-inventory.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import type { NodeDesktopStreamBroker } from "../desktop/node-stream-broker.js";
 import type {
   NodeWorkerSupervisorNodeProof,
@@ -13,14 +14,9 @@ import type {
 import * as support from "./service.test-support.js";
 
 export function deferredPortalValue<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: Error) => void;
-  const promise = new Promise<T>((promiseResolve, promiseReject) => {
-    resolve = promiseResolve;
-    reject = promiseReject;
-  });
-  void promise.catch(() => undefined);
-  return { promise, reject, resolve };
+  const deferred = createDeferredCore<T>();
+  void deferred.promise.catch(() => undefined);
+  return deferred;
 }
 
 export function portalNodeProof(nodeId: string): NodeWorkerSupervisorNodeProof {

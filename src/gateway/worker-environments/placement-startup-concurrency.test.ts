@@ -11,10 +11,13 @@ import {
   createCoordinatorTestService,
   REQUEST,
 } from "./placement-dispatch-coordinator.test-support.js";
-import { BUNDLE_HASH, MANIFEST_REF } from "./placement-dispatch-test-fixtures.js";
+import { BUNDLE_HASH } from "./placement-dispatch-test-fixtures.js";
 import { createRecoveryService } from "./placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
-import { writePlacementEnvironmentFixture } from "./placement-test-fixtures.js";
+import {
+  advancePlacementFixtureToActive,
+  writePlacementEnvironmentFixture,
+} from "./placement-test-fixtures.js";
 import * as support from "./service.test-support.js";
 import { createWorkerEnvironmentCommitAdmission } from "./store-commit-authority.js";
 import { workerEnvironmentProjections } from "./store-projection.js";
@@ -47,32 +50,22 @@ async function seedActiveNode(
     to: "attached",
     patch: support.attachedPatch(environmentId, sessionId),
   });
-  let placement = await placements.startDispatch({
-    sessionId,
-    sessionKey: `agent:main:${sessionId}`,
-    agentId: "main",
-    executionMode: "worker-turn",
-  });
-  const transitions = [
-    { to: "provisioning", patch: { environmentId } },
-    { to: "syncing", patch: { workerBundleHash: BUNDLE_HASH } },
+  const placement = await advancePlacementFixtureToActive(
+    placements,
+    support.testState.stateDb,
     {
-      to: "starting",
-      patch: {
-        workspaceBaseManifestRef: MANIFEST_REF,
-        remoteWorkspaceDir: `/worker/workspace-${index}`,
-      },
-    },
-    { to: "active", patch: { activeOwnerEpoch: environment.ownerEpoch } },
-  ] as const;
-  for (const transition of transitions) {
-    placement = await placements.transition({
       sessionId,
-      from: placement.state,
-      expectedGeneration: placement.generation,
-      ...transition,
-    });
-  }
+      sessionKey: `agent:main:${sessionId}`,
+      agentId: "main",
+      executionMode: "worker-turn",
+    },
+    {
+      environmentId,
+      ownerEpoch: environment.ownerEpoch,
+      remoteWorkspaceDir: `/worker/workspace-${index}`,
+      seedEnvironment: false,
+    },
+  );
   return { environment, placement };
 }
 

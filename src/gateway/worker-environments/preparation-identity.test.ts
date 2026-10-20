@@ -29,10 +29,22 @@ const input: Omit<Parameters<typeof createWorkerPreparationIdentity>[0], "projec
   },
   setupRecipe: "f".repeat(40),
 };
+const { project: _project, setupRecipe: _setupRecipe, ...runtime } = input;
+const project = (change: Partial<typeof input.project>) => ({
+  project: { ...input.project, ...change },
+});
+const targetPatch = (change: Partial<typeof input.target>) => ({
+  target: { ...input.target, ...change },
+});
+const artifacts = (change: Partial<typeof input.artifacts>) => ({
+  artifacts: { ...input.artifacts, ...change },
+});
+const profile = (change: Partial<typeof input.profileSnapshot>) => ({
+  profileSnapshot: { ...input.profileSnapshot, ...change },
+});
 
 describe("worker preparation identity", () => {
   it("keeps empty runtime preparation separate from project content", () => {
-    const { project: _project, setupRecipe: _setupRecipe, ...runtime } = input;
     const preparation = createWorkerPreparationIdentity(runtime);
     expect(preparation.key).not.toBe(createWorkerPreparationIdentity(input).key);
     expect(preparation).not.toHaveProperty("setupRecipe");
@@ -118,66 +130,38 @@ describe("worker preparation identity", () => {
     ).not.toBe(original.cacheKey);
   });
 
-  it.each<[string, Partial<typeof input>]>([
+  it.each<[string, Partial<typeof input>, boolean?]>([
     ["namespace", { namespace: "gateway-two" }],
     ["provider", { providerId: "another-provider" }],
-    ["profile id", { profileId: "another-profile" }],
-    ["commit", { project: { ...input.project, baseCommit: "1".repeat(40) } }],
+    ["profile id", { profileId: "another-profile" }, false],
+    ["commit", project({ baseCommit: "1".repeat(40) }), false],
     ["recipe", { setupRecipe: "2".repeat(40) }],
-    [
-      "profile",
-      { profileSnapshot: { ...input.profileSnapshot, settings: { region: "elsewhere" } } },
-    ],
-    ["project", { project: { ...input.project, key: "9".repeat(64) } }],
-    ["class", { target: { ...input.target, machineClass: "large" } }],
-    ["target", { target: { ...input.target, arch: "arm64" } }],
-    ["OS", { target: { ...input.target, platform: "darwin" } }],
-    ["mode", { profileSnapshot: { ...input.profileSnapshot, executionMode: "remote-exec" } }],
-    ["version", { artifacts: { ...input.artifacts, openclawVersion: "2026.9.1" } }],
-    ["archive", { artifacts: { ...input.artifacts, workerArchiveSha256: "6".repeat(64) } }],
-    ["runtime", { artifacts: { ...input.artifacts, nodeBootstrapSha256: "3".repeat(64) } }],
+    ["profile", profile({ settings: { region: "elsewhere" } })],
+    ["project", project({ key: "9".repeat(64) })],
+    ["class", targetPatch({ machineClass: "large" })],
+    ["target", targetPatch({ arch: "arm64" })],
+    ["OS", targetPatch({ platform: "darwin" })],
+    ["mode", profile({ executionMode: "remote-exec" }), false],
+    ["version", artifacts({ openclawVersion: "2026.9.1" }), false],
+    ["archive", artifacts({ workerArchiveSha256: "6".repeat(64) }), false],
+    ["runtime", artifacts({ nodeBootstrapSha256: "3".repeat(64) }), false],
     [
       "plugins",
-      {
-        artifacts: {
-          ...input.artifacts,
-          enabledPluginIds: [...input.artifacts.enabledPluginIds, "third"],
-        },
-      },
+      artifacts({ enabledPluginIds: [...input.artifacts.enabledPluginIds, "third"] }),
+      false,
     ],
-    ["bundle", { artifacts: { ...input.artifacts, workerBundleHash: "4".repeat(64) } }],
+    ["bundle", artifacts({ workerBundleHash: "4".repeat(64) }), false],
     [
       "protocol",
-      {
-        artifacts: {
-          ...input.artifacts,
-          protocolFeatures: [...input.artifacts.protocolFeatures, "worker-computer-v1"],
-        },
-      },
+      artifacts({ protocolFeatures: [...input.artifacts.protocolFeatures, "worker-computer-v1"] }),
+      false,
     ],
-  ])("invalidates a changed %s before allocation", (label, change) => {
+  ])("invalidates a changed %s before allocation", (label, change, cacheChanges = true) => {
     const original = createWorkerPreparationIdentity(input);
     const next = createWorkerPreparationIdentity({ ...input, ...change });
     expect(next.key).not.toBe(original.key);
     expect(next.cacheKey).toMatch(/^[a-f0-9]{64}$/u);
-    if (
-      [
-        "profile id",
-        "commit",
-        "mode",
-        "runtime",
-        "plugins",
-        "bundle",
-        "protocol",
-        "version",
-        "archive",
-      ].includes(label)
-    ) {
-      expect(next.cacheKey).toBe(original.cacheKey);
-    } else {
-      expect(next.cacheKey).not.toBe(original.cacheKey);
-    }
-    const { project: _project, setupRecipe: _setupRecipe, ...runtime } = input;
+    expect(next.cacheKey === original.cacheKey).toBe(!cacheChanges);
     const { project: _changedProject, setupRecipe: _changedRecipe, ...runtimeChange } = change;
     if (!["recipe", "commit", "project"].includes(label)) {
       expect(createWorkerPreparationIdentity({ ...runtime, ...runtimeChange }).key).not.toBe(

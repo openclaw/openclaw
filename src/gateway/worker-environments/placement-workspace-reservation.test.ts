@@ -96,28 +96,23 @@ describe("workspace publication reservation authority", () => {
       };
       database.db.exec("PRAGMA foreign_keys = OFF");
       try {
-        if (kind === "pending") {
-          executeSqliteQuerySync(
-            database.db,
-            query.insertInto("worker_workspace_pending_results").values({
-              ...authority,
-              claim_id: "claim-1",
-              run_id: "run-1",
-              gateway_instance_id: "gateway-1",
-            }),
-          );
-        } else {
-          executeSqliteQuerySync(
-            database.db,
-            query.insertInto("worker_workspace_reconciliations").values({
-              ...authority,
-              base_manifest_ref: "base-1",
-              current_manifest_ref: "current-1",
-              plan_json: "{}",
-              base_pack: Buffer.alloc(0),
-            }),
-          );
-        }
+        executeSqliteQuerySync(
+          database.db,
+          kind === "pending"
+            ? query.insertInto("worker_workspace_pending_results").values({
+                ...authority,
+                claim_id: "claim-1",
+                run_id: "run-1",
+                gateway_instance_id: "gateway-1",
+              })
+            : query.insertInto("worker_workspace_reconciliations").values({
+                ...authority,
+                base_manifest_ref: "base-1",
+                current_manifest_ref: "current-1",
+                plan_json: "{}",
+                base_pack: Buffer.alloc(0),
+              }),
+        );
       } finally {
         database.db.exec("PRAGMA foreign_keys = ON");
       }

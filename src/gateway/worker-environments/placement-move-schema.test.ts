@@ -20,10 +20,13 @@ describe("worker placement move schema", () => {
     const stateDir = tempDirs.make("openclaw-placement-move-schema-");
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
     const database = openOpenClawStateDatabase(options);
-    const versionBefore = database.db.prepare("PRAGMA user_version").get();
-    const metadataBefore = database.db
-      .prepare("SELECT schema_version, updated_at FROM schema_meta WHERE meta_key = 'primary'")
-      .get();
+    const schemaMetadata = (db: typeof database.db) => ({
+      version: db.prepare("PRAGMA user_version").get(),
+      metadata: db
+        .prepare("SELECT schema_version, updated_at FROM schema_meta WHERE meta_key = 'primary'")
+        .get(),
+    });
+    const metadataBefore = schemaMetadata(database.db);
     const previousSchema = OPENCLAW_STATE_SCHEMA_SQL.replace("  target_machine_class TEXT,\n", "")
       .replace("  target_os TEXT,\n", "")
       .replace(
@@ -34,9 +37,13 @@ describe("worker placement move schema", () => {
       "CREATE TABLE IF NOT EXISTS worker_session_placement_moves (",
     );
     const moveSchemaEnd = previousSchema.indexOf(") STRICT;", moveSchemaStart);
+    const previousMoveTable = previousSchema.slice(
+      moveSchemaStart,
+      moveSchemaEnd + ") STRICT;".length,
+    );
     database.db.exec(`
       DROP TABLE worker_session_placement_moves;
-      ${previousSchema.slice(moveSchemaStart, moveSchemaEnd + ") STRICT;".length)}
+      ${previousMoveTable}
       INSERT INTO worker_environments (
         environment_id, provider_id, profile_id, profile_snapshot_json,
         provision_operation_id, lease_id, state, owner_epoch,
@@ -58,15 +65,16 @@ describe("worker placement move schema", () => {
       );
     `);
     const store = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
-    const beforeMove = await store.readProjection(["session-move"]);
+    const readProjection = () => store.readProjection(["session-move"]);
+    const beforeMove = await readProjection();
     expect(beforeMove.placements.get("session-move")).toMatchObject({ state: "active" });
     expect(beforeMove.moves.size).toBe(0);
     expect(beforeMove.workspaceResultReconcilingSessionIds.size).toBe(0);
     database.db.exec("DROP TABLE worker_session_placement_moves");
-    const withoutMoveTable = await store.readProjection(["session-move"]);
+    const withoutMoveTable = await readProjection();
     expect(withoutMoveTable.placements.get("session-move")).toMatchObject({ state: "active" });
     expect(withoutMoveTable.moves.size).toBe(0);
-    database.db.exec(previousSchema.slice(moveSchemaStart, moveSchemaEnd + ") STRICT;".length));
+    database.db.exec(previousMoveTable);
     const begun = await store.beginPlacementMove({
       sessionId: "session-move",
       source: { generation: 4, environmentId: "environment-source", ownerEpoch: 7 },
@@ -77,17 +85,11 @@ describe("worker placement move schema", () => {
         os: "os-a",
       },
     });
-    expect((await store.readProjection(["session-move"])).moves.get("session-move")).toEqual(
-      begun.intent,
-    );
+    expect((await readProjection()).moves.get("session-move")).toEqual(begun.intent);
     expect(database.db.prepare("PRAGMA table_info(worker_session_placement_moves)").all()).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ name: "target_machine_class" }),
         expect.objectContaining({ name: "target_os", type: "TEXT", notnull: 0, dflt_value: null }),
-      ]),
-    );
-    expect(database.db.prepare("PRAGMA table_info(worker_session_placement_moves)").all()).toEqual(
-      expect.arrayContaining([
         expect.objectContaining({ name: "abandon_source", type: "INTEGER", notnull: 0 }),
       ]),
     );
@@ -117,11 +119,6 @@ describe("worker placement move schema", () => {
     expect(
       (await reopenedStore.readProjection(["session-move"])).moves.get("session-move"),
     ).toEqual(begun.intent);
-    expect(reopened.db.prepare("PRAGMA user_version").get()).toEqual(versionBefore);
-    expect(
-      reopened.db
-        .prepare("SELECT schema_version, updated_at FROM schema_meta WHERE meta_key = 'primary'")
-        .get(),
-    ).toEqual(metadataBefore);
+    expect(schemaMetadata(reopened.db)).toEqual(metadataBefore);
   });
 });

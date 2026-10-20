@@ -1,21 +1,10 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { deserialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import * as brokerReply from "../../infra/sqlite-worker-broker-reply.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
-import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { placementTurnOwner, type WorkerSessionPlacementIdentity } from "./placement-record.js";
-import {
-  createWorkerSessionPlacementStore,
-  type WorkerSessionPlacementStore,
-} from "./placement-store.js";
+import { usePlacementStoreFixture } from "./placement-store-fixture.test-support.js";
 import {
   advancePlacementFixtureToActive,
   writePlacementEnvironmentFixture,
@@ -28,23 +17,10 @@ const SESSION: WorkerSessionPlacementIdentity = {
 };
 
 describe("failed worker placement redispatch", () => {
-  let root: string;
-  let database: OpenClawStateDatabase;
-  let store: WorkerSessionPlacementStore;
-
-  beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-redispatch-"));
-    database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
-  });
-
-  afterEach(async () => {
-    vi.restoreAllMocks();
-    await closeStateDatabaseForTest();
-    await fs.rm(root, { recursive: true, force: true });
-  });
+  const fixture = usePlacementStoreFixture();
 
   it("continues a committed dispatch after its real worker reply is corrupted", async () => {
+    const { store } = fixture;
     const receive = brokerReply.receiveSqliteWorkerReply;
     let corrupted = 0;
     vi.spyOn(brokerReply, "receiveSqliteWorkerReply").mockImplementation((slot, reply, owner) => {
@@ -79,6 +55,7 @@ describe("failed worker placement redispatch", () => {
   it.each(["replaced", "cleanup", "claim", "move"] as const)(
     "rechecks the complete %s source in the redispatch transaction",
     async (scenario) => {
+      const { store, database } = fixture;
       const executionMode = scenario === "claim" ? "remote-exec" : "worker-turn";
       const active = await advancePlacementFixtureToActive(store, database, {
         ...SESSION,
