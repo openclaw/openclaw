@@ -17,17 +17,23 @@ describe("Firecrawl search cache", () => {
     body = "original";
     resolveCredentialBody = undefined;
     authorizations = [];
-    server = createServer(async (request, response) => {
+    server = createServer((request, response) => {
       networkCalls += 1;
       const authorization = request.headers.authorization ?? "";
       authorizations.push(authorization);
-      const content = resolveCredentialBody ? await resolveCredentialBody(authorization) : body;
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(
-        JSON.stringify({
-          success: true,
-          data: [{ url: `https://example.com/${content}`, title: content }],
-        }),
+      void Promise.resolve(resolveCredentialBody?.(authorization) ?? body).then(
+        (content) => {
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(
+            JSON.stringify({
+              success: true,
+              data: [{ url: `https://example.com/${content}`, title: content }],
+            }),
+          );
+        },
+        (error: unknown) => {
+          response.destroy(new Error("credential response failed", { cause: error }));
+        },
       );
     });
     await new Promise<void>((resolve) => {
