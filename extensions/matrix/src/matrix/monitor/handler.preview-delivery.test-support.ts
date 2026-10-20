@@ -14,6 +14,7 @@ type PreviewDeliveryHarness = {
       opts: Pick<
         GetReplyOptions,
         | "onPartialReply"
+        | "onReasoningVisibility"
         | "onItemEvent"
         | "onObservedReplyDelivery"
         | "onBlockReplyQueued"
@@ -84,10 +85,17 @@ export function registerMatrixPreviewDeliveryTests(harness: PreviewDeliveryHarne
       branch: "reasoning",
       payload: { mediaUrl: "https://example.com/image.png", isReasoning: true },
       failEdit: false,
+      revokeAtHandoff: false,
+    },
+    {
+      branch: "late-revoked reasoning",
+      payload: { text: "Reasoning:\nHidden", isReasoning: true },
+      failEdit: false,
+      revokeAtHandoff: true,
     },
   ])(
     "retains a visible draft when $branch replacement is suppressed",
-    async ({ payload, failEdit }) => {
+    async ({ payload, failEdit, revokeAtHandoff }) => {
       const { dispatch, redactEventMock } = createStreamingHarness({ streaming: "partial" });
       const { deliver, opts, finish } = await dispatch();
 
@@ -98,6 +106,19 @@ export function registerMatrixPreviewDeliveryTests(harness: PreviewDeliveryHarne
       if (failEdit) {
         editMessageMatrixMock.mockRejectedValueOnce(new Error("final edit failed"));
       }
+      let reachedPlatformSend = false;
+      if (revokeAtHandoff) {
+        let reasoningVisible = true;
+        expect(opts.onReasoningVisibility).toBeTypeOf("function");
+        opts.onReasoningVisibility?.(() => reasoningVisible);
+        sendMessageMatrixMock.mockImplementationOnce(async (_roomId, _text, sendOptions) => {
+          reasoningVisible = false;
+          expect(sendOptions?.assertDirectAdapterHandoff).toBeTypeOf("function");
+          sendOptions?.assertDirectAdapterHandoff?.();
+          reachedPlatformSend = true;
+          throw new Error("revoked reasoning unexpectedly crossed platform handoff");
+        });
+      }
       const result = await deliver(payload, { kind: "final" });
       await finish();
 
@@ -107,6 +128,13 @@ export function registerMatrixPreviewDeliveryTests(harness: PreviewDeliveryHarne
         content: "Visible preview",
       });
       expect(redactEventMock).not.toHaveBeenCalled();
+      expect(editMessageMatrixMock).not.toHaveBeenCalled();
+      if (revokeAtHandoff) {
+        expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
+        expect(reachedPlatformSend).toBe(false);
+      } else {
+        expect(sendMessageMatrixMock).not.toHaveBeenCalled();
+      }
     },
   );
 

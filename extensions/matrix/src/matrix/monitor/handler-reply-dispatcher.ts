@@ -253,18 +253,6 @@ export function createMatrixReplyDispatcher(config: {
       onIdle: typingCallbacks.onIdle,
     },
     deliverReply: async (payload: ReplyPayload, info: { kind: "tool" | "block" | "final" }) => {
-      if (payload.isReasoning === true) {
-        try {
-          return config.shouldDeliverReasoning?.(payload)
-            ? await deliverPayload(payload)
-            : mergeMatrixReplyDeliveryResults([]);
-        } catch (error: unknown) {
-          // Preserve partial-delivery evidence while keeping the shared error callback
-          // from advancing an answer draft for a reasoning-only block.
-          reasoningDeliveryErrors.add(error);
-          throw error;
-        }
-      }
       const createDraftReceipt = (id: string): MessageReceipt =>
         createPreviewMessageReceipt({
           id,
@@ -285,6 +273,34 @@ export function createMatrixReplyDispatcher(config: {
           content,
         };
       };
+      if (payload.isReasoning === true) {
+        try {
+          const deliveryResult = config.shouldDeliverReasoning?.(payload)
+            ? await deliverPayload(payload)
+            : mergeMatrixReplyDeliveryResults([]);
+          if (
+            info.kind === "final" &&
+            !deliveryResult.visibleReplySent &&
+            !previewLifecycle.previewFinalized
+          ) {
+            const id = draftStream?.eventId();
+            const content = draftStream?.content();
+            if (id && content) {
+              previewLifecycle.retainPreview();
+              return mergeMatrixReplyDeliveryResults([
+                createDraftDeliveryResult(id, content),
+                deliveryResult,
+              ]);
+            }
+          }
+          return deliveryResult;
+        } catch (error: unknown) {
+          // Preserve partial-delivery evidence while keeping the shared error callback
+          // from advancing an answer draft for a reasoning-only block.
+          reasoningDeliveryErrors.add(error);
+          throw error;
+        }
+      }
       const settlesPreview =
         Boolean(draftStream) && info.kind !== "tool" && !payload.isCompactionNotice;
       const ttsSupplement = getReplyPayloadTtsSupplement(payload);

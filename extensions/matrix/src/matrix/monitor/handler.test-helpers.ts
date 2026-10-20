@@ -461,6 +461,14 @@ export function createMatrixTextMessageEvent(params: {
   });
 }
 
+export function createMatrixThreadRootTestEvent(eventId = "$root", body = "Root topic") {
+  return createMatrixTextMessageEvent({ eventId, sender: "@alice:example.org", body });
+}
+
+export function createMatrixThreadRelationTestContent(root = "$root") {
+  return { rel_type: "m.thread", event_id: root, "m.in_reply_to": { event_id: root } };
+}
+
 export function createMatrixRoomMessageEvent(params: {
   eventId: string;
   sender?: string;
