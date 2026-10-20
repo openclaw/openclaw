@@ -111,43 +111,31 @@ describe("appendLiveModelCandidates", () => {
     );
   });
 
-  it("materializes a directly prepared model without retrying synchronous resolution", async () => {
-    const preparedModel = model(DYNAMIC_PROVIDER, "glm-5");
-    providerRuntimeMocks.prepareProviderDynamicModel.mockResolvedValue(preparedModel);
-
-    const result = await candidates();
-
-    expect(result.added).toEqual([preparedModel]);
-    expect(providerRuntimeMocks.prepareProviderDynamicModel).toHaveBeenCalledOnce();
-    expect(providerRuntimeMocks.runProviderDynamicModel).not.toHaveBeenCalled();
-    expect(normalizeDiscoveredAgentModelMock).toHaveBeenCalledWith(
-      preparedModel,
-      "/tmp/openclaw-agent",
-      { config: undefined, workspaceDir: undefined },
-    );
-  });
-
-  it("uses default provider runtime hooks when resolvers are not injected", async () => {
-    providerRuntimeMocks.runProviderDynamicModel.mockImplementation((params) =>
-      params.context.provider === DYNAMIC_PROVIDER && params.context.modelId === "glm-5"
-        ? model(DYNAMIC_PROVIDER, "glm-5")
-        : undefined,
-    );
-
-    const result = await candidates({
-      config,
-      workspaceDir: "/tmp/openclaw-workspace",
-    });
-
-    expect(result.added.map((entry) => `${entry.provider}/${entry.id}`)).toEqual([
-      `${DYNAMIC_PROVIDER}/glm-5`,
-    ]);
-    expect(providerRuntimeMocks.prepareProviderDynamicModel).toHaveBeenCalledTimes(1);
-    expect(providerRuntimeMocks.runProviderDynamicModel).toHaveBeenCalledTimes(1);
-    expect(normalizeDiscoveredAgentModelMock).toHaveBeenCalledWith(
-      expect.objectContaining(ref),
-      "/tmp/openclaw-agent",
-      { config, workspaceDir: "/tmp/openclaw-workspace" },
-    );
-  });
+  it.each(["prepared", "resolved"])(
+    "materializes a %s model through default hooks",
+    async (mode) => {
+      const preparedModel = model(DYNAMIC_PROVIDER, "glm-5");
+      if (mode === "prepared") {
+        providerRuntimeMocks.prepareProviderDynamicModel.mockResolvedValue(preparedModel);
+      } else {
+        providerRuntimeMocks.runProviderDynamicModel.mockImplementation((params) =>
+          params.context.provider === DYNAMIC_PROVIDER && params.context.modelId === "glm-5"
+            ? preparedModel
+            : undefined,
+        );
+      }
+      const options =
+        mode === "prepared" ? {} : { config, workspaceDir: "/tmp/openclaw-workspace" };
+      const result = await candidates(options);
+      expect(result.added).toEqual([preparedModel]);
+      expect(providerRuntimeMocks.prepareProviderDynamicModel).toHaveBeenCalledTimes(1);
+      expect(providerRuntimeMocks.runProviderDynamicModel).toHaveBeenCalledTimes(
+        mode === "prepared" ? 0 : 1,
+      );
+      expect(normalizeDiscoveredAgentModelMock).toHaveBeenCalledWith(preparedModel, agentDir, {
+        config: options.config,
+        workspaceDir: options.workspaceDir,
+      });
+    },
+  );
 });

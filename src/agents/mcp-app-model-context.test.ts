@@ -46,23 +46,16 @@ describe("MCP App model context", () => {
     updateMcpAppModelContext(active, view, {
       content: content.map((block) => ({
         ...structuredClone(block),
-        _meta: {
-          "openai/title": "Part",
-          "openai/thumbnail": { src: "https://example.com/part.png" },
-        },
+        _meta: { "openai/title": "Part" },
         ...(block.type === "resource"
           ? { resource: { ...block.resource, _meta: { private: true } } }
           : {}),
       })),
       structuredContent: { selection: 1 },
     });
-    expect(getMcpAppModelContext(active, view)?.content?.[0]?._meta).toHaveProperty(
-      "openai/title",
-      "Part",
-    );
+    expect(getMcpAppModelContext(active, view)?.content?.[0]?._meta?.["openai/title"]).toBe("Part");
     const lease = leaseMcpAppModelContextForTurn({ runtime: active });
-    expect(lease?.modelContext[0]?.content).toEqual(content);
-    expect(lease?.modelContext[0]?.structuredContent).toEqual({ selection: 1 });
+    expect(lease?.modelContext[0]).toEqual({ content, structuredContent: { selection: 1 } });
     expect(lease?.context.text).not.toContain("_meta");
   });
 

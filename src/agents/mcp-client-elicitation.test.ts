@@ -1,6 +1,6 @@
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { Server } from "@modelcontextprotocol/server";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { z } from "zod";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
@@ -9,6 +9,7 @@ import {
   type McpElicitationHandler,
 } from "./mcp-client-elicitation.js";
 import { buildMcpClientCapabilities } from "./mcp-metadata.js";
+const accepted = { action: "accept" as const };
 
 async function fixture() {
   const client = new Client(
@@ -35,53 +36,48 @@ async function fixture() {
     },
   };
 }
-describe("direct MCP elicitation binding", () => {
-  it("advertises and answers OpenAI forms on the actual MCP connection", async () => {
-    await using f = await fixture();
-    f.server.setRequestHandler("tools/call", async () => {
-      const result = await f.request({
-        requestedSchema: { type: "object", properties: {} },
-        message: "Pick",
-      });
-      return { content: [], structuredContent: result };
+it("advertises and answers OpenAI forms on the actual MCP connection", async () => {
+  await using f = await fixture();
+  f.server.setRequestHandler("tools/call", async () => {
+    const result = await f.request({
+      requestedSchema: { type: "object", properties: {} },
+      message: "Pick",
     });
-    const handler = vi.fn(async () => ({
-      action: "accept" as const,
-      content: { color: "blue" },
-    }));
-    const result = await f.call(handler, () => f.client.callTool({ name: "pick" }));
-    expect(result.structuredContent).toEqual({ action: "accept", content: { color: "blue" } });
-    expect(handler).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "openai/elicitation/create",
-        params: expect.objectContaining({ message: "Pick" }),
-      }),
-    );
-    expect(f.server.getClientCapabilities()?.extensions?.["openai/elicitation"]).toEqual({
-      form: {},
-    });
+    return { content: [], structuredContent: result };
   });
-  it("refuses ambiguous concurrent requesters and releases settled ownership", async () => {
-    await using f = await fixture();
-    const hold = createDeferred();
-    const started = createDeferred();
-    const first = f.call(
-      async () => ({ action: "accept" }),
-      async () => {
-        started.resolve();
-        await hold.promise;
-      },
-    );
-    await started.promise;
-    const second = f.call(
-      async () => ({ action: "accept" }),
-      async () => {
-        await expect(f.request()).rejects.toThrow("unambiguous active requester");
-      },
-    );
-    await second;
-    hold.resolve();
-    await first;
-    await expect(f.request()).rejects.toThrow("unambiguous active requester");
+  const handler = vi.fn<McpElicitationHandler>(async () => ({
+    ...accepted,
+    content: { color: "blue" },
+  }));
+  const result = await f.call(handler, () => f.client.callTool({ name: "pick" }));
+  expect(result.structuredContent).toEqual({ action: "accept", content: { color: "blue" } });
+  expect(handler.mock.calls[0]?.[0]).toMatchObject({
+    method: "openai/elicitation/create",
+    params: { message: "Pick" },
   });
+  expect(f.server.getClientCapabilities()?.extensions?.["openai/elicitation"]).toEqual({
+    form: {},
+  });
+});
+it("refuses ambiguous concurrent requesters and releases settled ownership", async () => {
+  await using f = await fixture();
+  const hold = createDeferred();
+  const started = createDeferred();
+  const first = f.call(
+    async () => accepted,
+    async () => {
+      started.resolve();
+      await hold.promise;
+    },
+  );
+  await started.promise;
+  await f.call(
+    async () => accepted,
+    async () => {
+      await expect(f.request()).rejects.toThrow("unambiguous active requester");
+    },
+  );
+  hold.resolve();
+  await first;
+  await expect(f.request()).rejects.toThrow("unambiguous active requester");
 });
