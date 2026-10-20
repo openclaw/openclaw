@@ -8,6 +8,7 @@ import type { WorkerWriteOperationContext } from "../state/worker-operation-regi
 import { commitExecAuthorizationsInWorker } from "./exec-approvals-authorization.worker.js";
 import type { ExecAuthorizationCommitInput } from "./exec-approvals-contracts.js";
 import type { ExecApprovalsFile } from "./exec-approvals-core.js";
+import { currentPolicyExec } from "./exec-approvals-current-policy.test-support.js";
 import { writeExecApprovalsConfigRow } from "./exec-approvals-sqlite.js";
 import * as workerAdmission from "./sqlite-worker-operation-admission.js";
 
@@ -23,17 +24,7 @@ beforeEach(() => {
   vi.spyOn(workerAdmission, "requestSqliteWorkerOperationAdmission").mockImplementation(() => {});
 });
 const entry = { id: "echo", pattern: "/usr/bin/echo" };
-const input: ExecAuthorizationCommitInput = {
-  agentId: "main",
-  matches: [],
-  command: "echo first",
-  authorization: {
-    source: "current-policy",
-    security: "allowlist",
-    ask: "on-miss",
-    allowlistSatisfied: true,
-  },
-};
+const input = currentPolicyExec("echo first");
 const usage = { ...input, matches: [entry] };
 const changed = { ok: false, message: "Exec approval changed before execution" };
 function fixture(agents: ExecApprovalsFile["agents"] = { main: { allowlist: [entry] } }) {
@@ -55,12 +46,9 @@ function fixture(agents: ExecApprovalsFile["agents"] = { main: { allowlist: [ent
     write: (operation, transactionOptions) => {
       const { port1, port2 } = new MessageChannel();
       try {
+        const write = stateDatabase.runOpenClawStateWriteTransaction;
         return workerAdmission.withSqliteWorkerOperationAdmission({ port: port1 }, () =>
-          stateDatabase.runOpenClawStateWriteTransaction(
-            operation,
-            { ...options, database },
-            transactionOptions,
-          ),
+          write(operation, { ...options, database }, transactionOptions),
         );
       } finally {
         port1.close();
@@ -68,19 +56,14 @@ function fixture(agents: ExecApprovalsFile["agents"] = { main: { allowlist: [ent
       }
     },
   };
-  return {
-    database,
-    save,
-    writes,
-    commit: (...items: ExecAuthorizationCommitInput[]) =>
-      commitExecAuthorizationsInWorker({ items }, context),
-  };
+  const commit = (...items: ExecAuthorizationCommitInput[]) =>
+    commitExecAuthorizationsInWorker({ items }, context);
+  return { database, save, writes, commit };
 }
 
 it("does not acquire writer admission for an unchanged authorization batch", () => {
   const { commit, writes } = fixture();
-  const outcomes = commit(input, input);
-  expect(outcomes.map((outcome) => outcome.ok)).toEqual([true, true]);
+  expect(commit(input, input).map((outcome) => outcome.ok)).toEqual([true, true]);
   expect(writes).not.toHaveBeenCalled();
 });
 

@@ -1,24 +1,21 @@
 import { expect, it } from "vitest";
 import { resolveSafeBins } from "./exec-approvals-allowlist.js";
-import {
-  makeMockCommandResolution,
-  makeMockExecutableResolution,
-} from "./exec-approvals-test-helpers.js";
+import * as mock from "./exec-approvals-test-helpers.js";
 import { evaluateExecAllowlist } from "./exec-approvals.js";
 
 function segment(
   argv: [string, ...string[]],
   paths: { resolvedPath?: string; resolvedRealPath?: string; executableName?: string } = {},
 ) {
-  const execution = makeMockExecutableResolution({
+  const execution = mock.makeMockExecutableResolution({
     rawExecutable: argv[0],
     executableName: argv[0],
     ...paths,
   });
-  return { raw: argv.join(" "), argv, resolution: makeMockCommandResolution({ execution }) };
+  return { raw: argv.join(" "), argv, resolution: mock.makeMockCommandResolution({ execution }) };
 }
 
-function evaluateAutoAllowSkills(command: ReturnType<typeof segment>, resolvedPath: string) {
+function evaluateSkill(command: ReturnType<typeof segment>, resolvedPath: string) {
   return evaluateExecAllowlist({
     analysis: { ok: true, segments: [command] },
     allowlist: [],
@@ -29,7 +26,7 @@ function evaluateAutoAllowSkills(command: ReturnType<typeof segment>, resolvedPa
   });
 }
 
-function expectAutoAllowSkillsMiss(result: ReturnType<typeof evaluateExecAllowlist>): void {
+function expectSkillMiss(result: ReturnType<typeof evaluateExecAllowlist>): void {
   expect(result).toMatchObject({ allowlistSatisfied: false, segmentSatisfiedBy: [null] });
 }
 
@@ -38,22 +35,17 @@ it("matches auto-allow skill bins against the executable trust realpath", () => 
     resolvedPath: "/tmp/symlink-bin/skill-bin",
     resolvedRealPath: "/opt/skills/skill-bin",
   });
-  expect(evaluateAutoAllowSkills(command, "/opt/skills/skill-bin").allowlistSatisfied).toBe(true);
-  expectAutoAllowSkillsMiss(evaluateAutoAllowSkills(command, "/tmp/symlink-bin/skill-bin"));
+  expect(evaluateSkill(command, "/opt/skills/skill-bin").allowlistSatisfied).toBe(true);
+  expectSkillMiss(evaluateSkill(command, "/tmp/symlink-bin/skill-bin"));
 });
 
+const skillPath = "/tmp/skill-bin";
+const resolvedSkill = { resolvedPath: skillPath, executableName: "skill-bin" };
 it.each([
-  [
-    "explicit relative paths",
-    segment(["./skill-bin", "--help"], {
-      resolvedPath: "/tmp/skill-bin",
-      executableName: "skill-bin",
-    }),
-    "/tmp/skill-bin",
-  ],
-  ["missing resolution", segment(["skill-bin", "--help"]), "/opt/skills/skill-bin"],
-] as const)("does not auto-allow skills with %s", (_reason, command, trustedPath) => {
-  expectAutoAllowSkillsMiss(evaluateAutoAllowSkills(command, trustedPath));
+  ["relative paths", "./skill-bin", resolvedSkill, skillPath],
+  ["missing resolution", "skill-bin", {}, "/opt/skills/skill-bin"],
+] as const)("does not auto-allow skills with %s", (_reason, executable, paths, trustedPath) => {
+  expectSkillMiss(evaluateSkill(segment([executable, "--help"], paths), trustedPath));
 });
 
 it("returns empty segment details for chain misses", () => {
