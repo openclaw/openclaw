@@ -96,10 +96,39 @@ it("keeps legacy ownership when the configured inheritance owner has credentials
     setRuntimeConfigSnapshot(config, config);
     await prepareActor(env);
 
+    const updated = await updateAuthProfileStoreWithLock({ updater: () => false });
+
+    expect(updated).not.toBeNull();
+    expect(resolveSharedAuthStoreOwnership(env).location).toBe("legacy-main");
+    expect(readConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, { env })).toBeUndefined();
+  });
+});
+
+it("does not combine an explicit environment with the ambient runtime auth owner", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env, stateDir }) => {
+    const ambientOwnerDir = path.join(stateDir, "agents", "ambient", "agent");
+    const ambientPath = resolveAuthProfileDatabasePath(ambientOwnerDir);
+    const database = openOpenClawAgentDatabase({
+      agentId: "ambient",
+      path: ambientPath,
+      env,
+    });
+    writeAuthProfileJsonCell(database.db, "store", "agent", { version: 1, profiles: {} });
+    const config = {
+      agents: {
+        defaults: { authInheritance: { agentId: "ambient" } },
+        entries: { main: {}, ambient: {} },
+      },
+    };
+    setRuntimeConfigSnapshot(config, config);
+    await prepareActor(env);
+
     const prepared = await prepareAuthProfileWriteTransactionAsync(undefined, { env });
 
-    expect(prepared.sharedOwner.location).toBe("legacy-main");
-    expect(readConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, { env })).toBeUndefined();
+    expect(prepared.sharedOwner.location).toBe("state-db");
+    expect(readConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, { env })).toEqual({
+      location: "state-db",
+    });
   });
 });
 

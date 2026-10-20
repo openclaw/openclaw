@@ -16,6 +16,7 @@ import {
   saveAuthProfileStore,
 } from "../agents/auth-profiles/store-runtime.js";
 import { upsertAuthProfileWithLockOrThrow } from "../agents/auth-profiles/upsert-with-lock.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import {
@@ -313,6 +314,71 @@ it("uses a configured non-main inheritance owner as the migration source", async
   });
   expect(sharedAuth(fixture.env).store).toEqual(ownerStore);
   expect(localAuth(ownerDir).store).toBeNull();
+});
+
+it("binds Doctor detection to the selected config instead of the runtime snapshot", async () => {
+  const fixture = await createEmptyFixture(false);
+  const ownerDir = path.join(fixture.stateDir, "agents", "ops", "agent");
+  sqlite.writePersistedAuthProfileStoreRaw(
+    makeStore("openai:inherited", "inherited-key"),
+    ownerDir,
+  );
+  const selectedConfig: OpenClawConfig = {
+    agents: {
+      defaults: { authInheritance: { agentId: "ops" } },
+      entries: { main: {}, ops: {} },
+    },
+  };
+  const ambientConfig: OpenClawConfig = {
+    agents: {
+      defaults: { authInheritance: { agentId: "research" } },
+      entries: { main: {}, research: { agentDir: path.join(fixture.stateDir, "ambient-auth") } },
+    },
+  };
+  setRuntimeConfigSnapshot(ambientConfig, ambientConfig);
+  try {
+    const detected = await doctor.detectLegacyStateMigrations({
+      cfg: selectedConfig,
+      env: fixture.env,
+      doctorOnlyStateMigrations: true,
+      pluginSessionStoreAgentIds: [],
+      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+    });
+    expect(detected.sharedAuthStore).toEqual({
+      sourcePath: sqlite.resolveAuthProfileDatabasePath(ownerDir),
+      hasLegacy: true,
+    });
+  } finally {
+    clearRuntimeConfigSnapshot();
+  }
+});
+
+it("refuses a copied-state migration when the configured owner is outside the snapshot", async () => {
+  const root = tempDirs.make("openclaw-shared-auth-plan-");
+  const stateDir = path.join(root, "state");
+  const outsideDir = path.join(root, "outside-auth");
+  const configPath = path.join(root, "openclaw.json");
+  fs.mkdirSync(stateDir, { recursive: true });
+  fs.writeFileSync(
+    configPath,
+    JSON.stringify({
+      plugins: { enabled: false },
+      agents: {
+        ownership: "explicit",
+        defaults: { authInheritance: { agentId: "ops" } },
+        entries: { main: {}, ops: { agentDir: outsideDir } },
+      },
+    }),
+  );
+
+  const plan = await doctor.planLegacyStateMigrationsReadOnly({
+    mode: "doctor",
+    candidate: { root, version: "test" },
+    snapshot: { homeDir: root, configPath, stateDir },
+  });
+
+  expect(plan.refusal?.code).toBe("shared-auth-source-outside-snapshot");
+  expect(plan.refusal?.message).toContain("outside the copied state snapshot");
 });
 
 it("moves exact rows, preserves every effective agent store, and records receipts", async () => {

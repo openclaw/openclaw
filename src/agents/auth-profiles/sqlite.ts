@@ -7,6 +7,7 @@ import path from "node:path";
 import { safeParseJson } from "@openclaw/normalization-core";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { resolveStateDir } from "../../config/paths.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
 import { assertEngineStoreExecutionAllowed } from "../../infra/database-engine/admission-scope.js";
 import { getDatabaseEngineInput } from "../../infra/database-engine/context.js";
@@ -507,6 +508,7 @@ function mutateAuthProfileCell(
 
 type AuthProfileWriteOptions = {
   env?: NodeJS.ProcessEnv;
+  config?: OpenClawConfig;
   sharedStoreWrite?: boolean;
   stateDir?: string;
   assertEnvironment?: (env: NodeJS.ProcessEnv) => void;
@@ -543,6 +545,7 @@ export function prepareAuthProfileWriteTransaction(
     agentDir,
     allowExplicitMain: options.sharedStoreWrite === true,
     env,
+    config: options.config,
   });
   const databaseTarget = resolveAuthProfileDatabaseOptions(
     sharedStoreWrite ? undefined : agentDir,
@@ -563,6 +566,7 @@ export async function prepareAuthProfileWriteTransactionAsync(
     agentDir: capturedAgentDir,
     allowExplicitMain: options.sharedStoreWrite === true,
     env,
+    config: options.config,
     assertCurrent,
   });
   options.assertEnvironment?.(env);

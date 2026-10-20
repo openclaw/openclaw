@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Result } from "@openclaw/normalization-core/result";
+import { getRuntimeConfigSnapshot } from "../../config/config.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
@@ -567,6 +568,7 @@ export function createAuthProfileStoreUpdater(
       }
       const workerWrites = getWorkerAuthProfileWrites();
       const writeOptions = {
+        config: params.stateDir ? undefined : (getRuntimeConfigSnapshot() ?? undefined),
         sharedStoreWrite: params.sharedStoreWrite,
         stateDir: params.stateDir,
         env: params.stateDir ? undefined : (getScopedAuthProfileEnv() ?? workerWrites?.env),

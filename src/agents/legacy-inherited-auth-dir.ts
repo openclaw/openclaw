@@ -32,6 +32,13 @@ export function resolveLegacyInheritedAuthSourceAgentDir(
     : resolveLegacyInheritedAuthAgentDir(config, env);
 }
 
+export function resolveLegacyAuthSourceStorePath(
+  config: OpenClawConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  return path.join(resolveLegacyInheritedAuthSourceAgentDir(config, env), "openclaw-agent.sqlite");
+}
+
 export function resolveLegacyInheritedAuthDir(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,

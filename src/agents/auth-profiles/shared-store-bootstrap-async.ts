@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { getRuntimeConfigSnapshot } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   assertDatabasePathIdentity,
   inspectDatabasePathIdentitySync,
@@ -35,6 +35,7 @@ export async function prepareFreshSharedAuthStoreWriteAsync(params: {
   agentDir: string | undefined;
   allowExplicitMain: boolean;
   env: NodeJS.ProcessEnv;
+  config?: OpenClawConfig;
   assertCurrent?: () => void;
 }): Promise<boolean> {
   const sharedWrite = isSharedAuthProfileWrite(params);
@@ -55,10 +56,7 @@ export async function prepareFreshSharedAuthStoreWriteAsync(params: {
     params.assertCurrent?.();
     return false;
   }
-  const sourceDir = resolveLegacyInheritedAuthSourceAgentDir(
-    getRuntimeConfigSnapshot() ?? undefined,
-    params.env,
-  );
+  const sourceDir = resolveLegacyInheritedAuthSourceAgentDir(params.config, params.env);
   const sourcePath = path.join(sourceDir, "openclaw-agent.sqlite");
   let sourceIdentity: ReturnType<typeof inspectDatabasePathIdentitySync>;
   try {

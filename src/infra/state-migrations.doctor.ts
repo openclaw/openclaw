@@ -5,7 +5,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { listAgentIds } from "../agents/agent-scope-config.js";
-import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
+import { resolveLegacyAuthSourceStorePath } from "../agents/legacy-inherited-auth-dir.js";
 import {
   discardLegacyRegistryWorktrees,
   rewriteRegistryWorktreePathsForMigration,
@@ -398,9 +398,9 @@ export async function detectLegacyStateMigrations(params: {
   const deviceAuth = detectDoctorOwnedState(detectLegacyDeviceAuth);
   const sharedAuthStore = detectSharedAuthStoreMigration({
     stateDir,
+    config: params.cfg,
     env,
-    doctorOnlyStateMigrations:
-      stateSchemaMigrations.length === 0 && params.doctorOnlyStateMigrations === true,
+    doctorOnlyStateMigrations: !stateSchemaMigrations.length && params.doctorOnlyStateMigrations,
     artifactPreservingReadOnly: params.artifactPreservingReadOnly,
   });
   const deviceIdentity = detectLegacyDeviceIdentity({
@@ -1671,7 +1671,7 @@ export async function planLegacyStateMigrationsReadOnly(params: {
           [
             {
               kind: "sqlite",
-              path: path.join(resolveSharedMainAuthAgentDir(env), "openclaw-agent.sqlite"),
+              path: resolveLegacyAuthSourceStorePath(configBefore.config, env),
             },
           ],
           snapshot.stateDir,

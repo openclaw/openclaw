@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { getRuntimeConfigSnapshot } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { assertEngineStoreExecutionAllowed } from "../../infra/database-engine/admission-scope.js";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { executeWithCachedStatement } from "../../infra/kysely-sync-cache-state.js";
@@ -281,15 +281,12 @@ export function publishFreshSharedAuthStoreHandoff(
   }
 }
 
-function initializeFreshSharedAuthStore(env: NodeJS.ProcessEnv): void {
+function initializeFreshSharedAuthStore(env: NodeJS.ProcessEnv, config?: OpenClawConfig): void {
   const ownership = prepareSharedAuthStoreOwnershipForNative(env);
   if (ownership.location === "state-db" || inspectedLegacySharedAuthOwnerships.has(ownership)) {
     return;
   }
-  const sourceDir = resolveLegacyInheritedAuthSourceAgentDir(
-    getRuntimeConfigSnapshot() ?? undefined,
-    env,
-  );
+  const sourceDir = resolveLegacyInheritedAuthSourceAgentDir(config, env);
   const sourcePath = path.join(sourceDir, "openclaw-agent.sqlite");
   try {
     if (listLegacyAuthProfileSources({ agentDir: sourceDir, env }).length > 0) {
@@ -327,12 +324,13 @@ export function prepareFreshSharedAuthStoreWrite(params: {
   agentDir: string | undefined;
   allowExplicitMain: boolean;
   env: NodeJS.ProcessEnv;
+  config?: OpenClawConfig;
 }): boolean {
   // A main-agent credential is shared; explicit main writes must follow the shared target.
   // On legacy roots both routes already resolve to the same file, so redirecting is a no-op.
   const isSharedWrite = isSharedAuthProfileWrite(params);
   if (isSharedWrite) {
-    initializeFreshSharedAuthStore(params.env);
+    initializeFreshSharedAuthStore(params.env, params.config);
   }
   return isSharedWrite;
 }
