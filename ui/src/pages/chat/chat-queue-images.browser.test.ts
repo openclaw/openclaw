@@ -1,4 +1,4 @@
-import { createComponent, createSignal, merge } from "solid-js";
+import { createComponent, merge } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { t } from "../../i18n/index.ts";
@@ -22,7 +22,9 @@ let container: HTMLDivElement;
 let styles: HTMLStyleElement;
 let attachments: ChatAttachment[];
 let view: ReturnType<typeof mountSolid> | undefined;
-let updateQueue: ((props: Parameters<typeof renderChatQueueSolid>[0]) => void) | undefined;
+type QueueProps = Parameters<typeof renderChatQueueSolid>[0];
+let current: QueueProps;
+let invalidate: (() => void) | undefined;
 const all = <T extends HTMLElement = HTMLElement>(selector: string) => [
   ...container.querySelectorAll<T>(selector),
 ];
@@ -47,7 +49,7 @@ beforeEach(() => {
 afterEach(() => {
   view?.unmount();
   view = undefined;
-  updateQueue = undefined;
+  invalidate = undefined;
   container.remove();
   styles.remove();
   releaseChatAttachmentPayloads(attachments);
@@ -55,18 +57,30 @@ afterEach(() => {
   document.documentElement.removeAttribute("data-theme-mode");
 });
 
-function draw(queue: ChatQueueItem[], editingId?: string) {
-  const props: Parameters<typeof renderChatQueueSolid>[0] = {
+function draw(queue: ChatQueueItem[], editingId?: string, onQueueMove?: QueueProps["onQueueMove"]) {
+  current = {
     queue,
-    queuedEdit: { editingId: editingId ?? null, onCancel: vi.fn(), onEdit: vi.fn() },
+    onQueueMove,
+    queuedEdit: onQueueMove
+      ? undefined
+      : { editingId: editingId ?? null, onCancel: vi.fn(), onEdit: vi.fn() },
     onQueueRemove: vi.fn(),
   };
-  if (updateQueue) {
-    updateQueue(props);
+  if (invalidate) {
+    invalidate();
   } else {
-    const [current, setCurrent] = createSignal(props);
-    updateQueue = setCurrent;
-    view = mountSolid(() => createComponent(renderChatQueueSolid, merge(current)), { container });
+    view = mountSolid(
+      () => {
+        const lifecycle = createSolidRenderLifecycle({
+          host: {},
+          presented: () => true,
+          read: () => current,
+        });
+        invalidate = lifecycle.invalidate;
+        return createComponent(renderChatQueueSolid, merge(lifecycle.snapshot));
+      },
+      { container },
+    );
   }
   flush();
 }
@@ -75,8 +89,6 @@ it.each([
   { key: "ArrowUp", expected: ["c", "b"] },
   { key: "ArrowDown", expected: ["c", "d"] },
 ])("moves the focused row on $key", async ({ key, expected }) => {
-  const host = {};
-  let invalidate = () => {};
   const waiting = (id: string, createdAt: number): ChatQueueItem => ({
     id,
     text: id,
@@ -87,26 +99,10 @@ it.each([
   const ids = key === "ArrowUp" ? ["a", "c", "b", "d"] : ["a", "b", "d", "c"];
   const onQueueMove = vi.fn<(id: string, targetId: string) => void>(() => {
     queue = ids.map((id, index) => waiting(id, index));
-    invalidate();
+    current = { ...current, queue };
+    invalidate?.();
   });
-  view = mountSolid(
-    () => {
-      const lifecycle = createSolidRenderLifecycle({
-        host,
-        presented: () => true,
-        read: () => queue,
-      });
-      invalidate = () => lifecycle.invalidate();
-      return createComponent(renderChatQueueSolid, {
-        get queue() {
-          return lifecycle.snapshot();
-        },
-        onQueueMove,
-        onQueueRemove: vi.fn(),
-      });
-    },
-    { container },
-  );
+  draw(queue, undefined, onQueueMove);
   await waitForSolid(() => expect(all(".chat-queue__grip")).toHaveLength(4));
   const grip = all<HTMLButtonElement>(".chat-queue__grip")[2]!;
   grip.focus();

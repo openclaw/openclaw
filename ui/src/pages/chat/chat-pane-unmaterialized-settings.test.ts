@@ -35,10 +35,7 @@ const model: ModelCatalogEntry = {
   provider: "fixture",
   reasoning: true,
   supportsFastMode: true,
-  thinkingLevels: [
-    { id: "low", label: "Low" },
-    { id: "high", label: "High" },
-  ],
+  thinkingLevels: ["low", "high"].map((id) => ({ id, label: id === "low" ? "Low" : "High" })),
   thinkingDefault: "low",
 };
 const defaults = {
@@ -79,25 +76,17 @@ it.each([
   const reply = createDeferred<unknown>();
   const latestReply = createDeferred<unknown>();
   const latestDispatched = createDeferred();
-  const materialized: GatewaySessionRow = {
-    ...initial,
-    sessionId: "settings-return-session",
-    updatedAt: 2,
-    ...change,
-  };
-  const committed: GatewaySessionRow = {
-    ...initial,
-    sessionId: materialized.sessionId,
-    updatedAt: 3,
-    thinkingLevel: initialState === "absent" ? undefined : initial.thinkingLevel,
-  };
+  const sessionId = "settings-return-session";
+  const materialized: GatewaySessionRow = { ...initial, sessionId, updatedAt: 2, ...change };
+  const thinkingLevel = initialState === "absent" ? undefined : initial.thinkingLevel;
+  const committed: GatewaySessionRow = { ...initial, sessionId, updatedAt: 3, thinkingLevel };
   const ack = (entry: GatewaySessionRow) => ({ ok: true, key, path: "", entry });
   const patch = vi.fn<GatewayRequestHandler>((_method, raw) => {
     if (patch.mock.calls.length === 1) {
       return reply.promise;
     }
     expect(patch.mock.calls.length).toBe(2);
-    expect(raw).toMatchObject({ key, expectedSessionId: materialized.sessionId });
+    expect(raw).toMatchObject({ key, expectedSessionId: sessionId });
     latestDispatched.resolve();
     return latestReply.promise.then((result) => {
       rows.splice(0, rows.length, committed);
@@ -132,10 +121,7 @@ it.each([
     };
     const draw = () => {
       const access = readChatPaneMutationAccess(context.gateway.snapshot, key);
-      expect(access).toMatchObject({
-        effort: { allowed: true },
-        contextWindow: { allowed: true },
-      });
+      expect([access.effort.allowed, access.contextWindow.allowed]).toEqual([true, true]);
       const controls = renderChatPaneComposerControls({
         state: pane.state,
         selectedSession: selectedChatSessionRow(pane.state),
@@ -192,7 +178,7 @@ it.each([
       expect.soft(patch).toHaveBeenCalledTimes(2);
       expect.soft(patch.mock.calls[1]?.[1]).toEqual({
         key,
-        expectedSessionId: materialized.sessionId,
+        expectedSessionId: sessionId,
         [field]:
           setting === "thinking" ? initialThinking || null : setting === "speed" ? false : "64k",
       });
@@ -205,15 +191,14 @@ it.each([
     }
     draw();
     expect(controlValues()).toEqual(initialValues);
-    if (returnToInitial) {
-      expect(pane.state.chatError).toBeNull();
-    } else {
-      expect(pane.state.chatError).toContain("Synthetic unmaterialized selection rejection");
-    }
+    expect(pane.state.chatError).toEqual(
+      returnToInitial
+        ? null
+        : expect.stringContaining("Synthetic unmaterialized selection rejection"),
+    );
   } finally {
     reply.resolve(ack(initial));
     latestReply.resolve(ack(committed));
     await Promise.allSettled([operation, latestOperation]);
-    await vi.dynamicImportSettled();
   }
 });

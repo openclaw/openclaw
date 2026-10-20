@@ -68,51 +68,43 @@ function fixture(review: Partial<NonNullable<GatewaySessionRow["providerReview"]
   });
   const { container } = mounted;
   flush();
-  const click = (text: string, settle = true) => {
-    const button = [...container.querySelectorAll("button")].find(
-      (candidate) => candidate.textContent?.trim() === text,
-    );
-    expect(button, text).toBeDefined();
-    button!.click();
-    if (settle) {
-      flush();
-    }
-    return button!;
-  };
-  const open = async () => {
-    click("Review findings");
-    await vi.dynamicImportSettled();
-    flush();
-  };
   const calls = () => requestCalls(request, "sessions.providerReview.continue");
-  const acknowledge = async () => {
-    await open();
-    click("Acknowledge findings and continue");
-    return requireRecord(calls()[0]?.[1], "acknowledgment");
-  };
-  const setRow = (patch: Partial<GatewaySessionRow>, version = 2) => {
-    state.sessionsResult = sessionsResult([{ ...row, ...patch }], version);
-  };
-  const expectPaused = (disabled: boolean) => {
-    expect(container.querySelector("button.primary")?.hasAttribute("disabled")).toBe(disabled);
-    expect(calls()).toHaveLength(1);
-    expect(state.sessionsResult?.sessions[0]?.providerReview).toEqual(row.providerReview);
-  };
   return {
     state,
     container,
     input,
     owner,
     publishSource,
-    click,
-    open,
-    acknowledge,
     calls,
     outcome,
     request,
     refresh,
-    setRow,
-    expectPaused,
+    click(text: string, settle = true) {
+      const button = mounted.getByRole("button", { name: text });
+      button.click();
+      if (settle) {
+        flush();
+      }
+      return button;
+    },
+    async open() {
+      this.click("Review findings");
+      await vi.dynamicImportSettled();
+      flush();
+    },
+    async acknowledge() {
+      await this.open();
+      this.click("Acknowledge findings and continue");
+      return requireRecord(calls()[0]?.[1], "acknowledgment");
+    },
+    setRow(patch: Partial<GatewaySessionRow>, version = 2) {
+      state.sessionsResult = sessionsResult([{ ...row, ...patch }], version);
+    },
+    expectPaused(disabled: boolean) {
+      expect(container.querySelector("button.primary")?.hasAttribute("disabled")).toBe(disabled);
+      expect(calls()).toHaveLength(1);
+      expect(state.sessionsResult?.sessions[0]?.providerReview).toEqual(row.providerReview);
+    },
     text: () => container.textContent,
     unmount: mounted.unmount,
   };
@@ -351,10 +343,9 @@ it.each(["missing", "foreign", "active", "active-ids", "running"] as const)(
       activeRunIds: proof === "active-ids" ? [runId] : [],
     });
     f.publishSource();
-    expect(f.container.querySelector("button.primary")?.hasAttribute("disabled")).toBe(true);
+    f.expectPaused(true);
     f.click("Acknowledge findings and continue");
     expect(f.calls()).toHaveLength(1);
-    expect(f.state.sessionsResult?.sessions[0]?.providerReview).toEqual(row.providerReview);
   },
 );
 

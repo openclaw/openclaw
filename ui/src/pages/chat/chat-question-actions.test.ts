@@ -12,23 +12,19 @@ it.each(["session", "connection", "pane", "outbox"] as const)(
   "does not resubmit a question after %s changes",
   async (changed) => {
     const send = vi.fn(async () => true);
+    const pendingAnswer = {
+      id: "pending-answer",
+      asyncQuestionItemId: "audience",
+      text: "Original answer",
+      createdAt: 1,
+      sendState: "failed" as const,
+    };
     const state: Parameters<typeof createChatQuestionActions>[0]["state"] = {
       sessionKey: "agent:main:one",
       connectionEpoch: 1,
       handleSendChat: send,
       lastError: null,
-      chatQueue:
-        changed === "outbox"
-          ? [
-              {
-                id: "pending-answer",
-                asyncQuestionItemId: "audience",
-                text: "Original answer",
-                createdAt: 1,
-                sendState: "failed",
-              },
-            ]
-          : [],
+      chatQueue: changed === "outbox" ? [pendingAnswer] : [],
     };
     let current = true;
     const actions = createChatQuestionActions({
@@ -89,11 +85,8 @@ it.each(["session", "connection", "agent", "drafts"] as const)(
     stop();
     expect(await retained.submit?.("> Which audience?\n\nEveryone")).toBe(false);
     expect([originalSend.mock.calls, nextSend.mock.calls]).toEqual([[], []]);
-    expect(await current.submit?.("> Which audience?\n\nEngineers")).toBe(true);
-    expect(nextSend).toHaveBeenCalledExactlyOnceWith(
-      "> Which audience?\n\nEngineers",
-      undefined,
-      undefined,
-    );
+    const answer = "> Which audience?\n\nEngineers";
+    expect(await current.submit?.(answer)).toBe(true);
+    expect(nextSend.mock.calls).toEqual([[answer, undefined, undefined]]);
   },
 );

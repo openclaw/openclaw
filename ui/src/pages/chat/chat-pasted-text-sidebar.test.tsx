@@ -1,10 +1,10 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { mountSolid as mountReactive } from "../../test-helpers/solid-render.tsx";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   getChatAttachmentDataUrl,
@@ -50,39 +50,23 @@ function button(container: Element, selector: string) {
   return expectDefined(container.querySelector<HTMLButtonElement>(selector), selector);
 }
 
-it("retains the focused restore action when the same attachment is refreshed", () => {
-  const attachment: ChatAttachment = {
-    id: "focused-paste",
-    mimeType: "text/plain",
-    origin: "paste",
-    dataUrl: "data:text/plain;base64,cGFzdGU=",
-  };
-  const controls: ChatAttachmentControlsProps = {
-    attachments: [attachment],
-    onDraftChange: vi.fn(),
-  };
-  let updateControls!: (next: ChatAttachmentControlsProps) => void;
-  const view = mountSolid(() => {
-    const [current, setCurrent] = createSignal(controls);
-    updateControls = setCurrent;
-    return <ComposerPastedText attachment={current().attachments![0]!} controls={current()} />;
-  });
-  flush();
-  const restore = view.getByRole("button", { name: "Show in text field" });
-  restore.focus();
-  updateControls({ ...controls, attachments: [{ ...attachment }] });
-  flush();
-  expect(view.getByRole("button", { name: "Show in text field" })).toBe(restore);
-  expect(document.activeElement).toBe(restore);
-});
-
-it.each(["restore", "preview"] as const)(
+it.each(["focus", "restore", "preview"] as const)(
   "handles the pasted file card %s action independently",
   async (action) => {
-    const text =
-      (action === "restore" ? "  Preserve indentation 🦞\n" : "Review this paste ") +
-      "x".repeat(1100);
+    const text = "  Preserve indentation 🦞\n" + "x".repeat(1100);
     const f = pastedText(text);
+    if (action === "focus") {
+      const controls = { attachments: [f.attachment], onDraftChange: f.props.onDraftChange };
+      const view = mountReactive(ComposerPastedText, { attachment: f.attachment, controls });
+      document.body.append(view.container);
+      const restore = button(view.container, ".chat-attachment-text-action");
+      restore.focus();
+      const refreshed = { ...f.attachment };
+      view.update({ attachment: refreshed, controls: { ...controls, attachments: [refreshed] } });
+      expect(button(view.container, ".chat-attachment-text-action")).toBe(restore);
+      expect(document.activeElement).toBe(restore);
+      return;
+    }
     const sidebar = action === "preview" ? createAttachmentSidebarHarness() : undefined;
     const onOpenSidebar = sidebar?.open ?? f.props.onOpenSidebar;
     const { onDraftChange } = f.props;
@@ -93,15 +77,9 @@ it.each(["restore", "preview"] as const)(
       onOpenSidebar,
     });
     document.body.append(container);
-    await waitForFast(() =>
-      expect(
-        container.querySelector(
-          action === "restore"
-            ? "openclaw-chat-pasted-text button"
-            : ".chat-attachment-file__icon svg",
-        ),
-      ).not.toBeNull(),
-    );
+    const target =
+      action === "restore" ? "openclaw-chat-pasted-text button" : ".chat-attachment-file__icon svg";
+    await waitForFast(() => expect(container.querySelector(target)).not.toBeNull());
     if (action === "restore") {
       const restore = button(container, ".chat-attachments-preview .chat-attachment-text-action");
       const card = expectDefined(
@@ -169,11 +147,9 @@ it.each(["disabled", "removed", "aborted"] as const)(
       expect(action.disabled).toBe(state === "disabled");
       action.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     }
-    expect([
-      onDraftChange.mock.calls,
-      onAttachmentsChange.mock.calls,
-      onOpenSidebar.mock.calls,
-    ]).toEqual([[], [], []]);
+    for (const callback of [onDraftChange, onAttachmentsChange, onOpenSidebar]) {
+      expect(callback).not.toHaveBeenCalled();
+    }
     expect(getChatAttachmentDataUrl(attachment)).not.toBeNull();
   },
 );
