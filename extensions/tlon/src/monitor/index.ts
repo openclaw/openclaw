@@ -754,7 +754,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
         author: senderShip,
         content: rawText,
         timestamp: sentAt,
-        id: messageId,
       });
 
       const { allowedShips, senderAllowed, mentionDecision, parentId, isAdmissionAllowed } =

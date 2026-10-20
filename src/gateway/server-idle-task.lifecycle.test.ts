@@ -27,6 +27,36 @@ afterEach(async () => {
   resetGatewayWorkAdmission();
 });
 
+function scheduleIdle(run: () => Promise<void>, log = { warn: vi.fn() }, retryDelayMs = 1) {
+  return scheduleGatewayIdleTask({
+    id: "test:idle",
+    scheduler,
+    delayMs: 0,
+    retryDelayMs,
+    isClosing: () => false,
+    isBusy: () => false,
+    run,
+    log,
+    errorMessage: "idle task failed",
+  });
+}
+
+function scheduleHandler(
+  load: () => Promise<void>,
+  later: () => Promise<void>,
+  log: { warn: (message: string) => void },
+) {
+  return scheduleGatewayHandlerPrewarm({
+    scheduler,
+    getConfig: () => ({}),
+    log,
+    items: [
+      { name: "first", load },
+      { name: "later", load: later },
+    ],
+  });
+}
+
 it.each(["idle", "handler"] as const)(
   "joins started %s work before the Gateway sidecar owner closes",
   async (kind) => {
@@ -41,28 +71,7 @@ it.each(["idle", "handler"] as const)(
     };
     const log = { warn: vi.fn() };
     const later = vi.fn(async () => {});
-    const handle =
-      kind === "idle"
-        ? scheduleGatewayIdleTask({
-            id: "test:idle",
-            scheduler,
-            delayMs: 0,
-            retryDelayMs: 1,
-            isClosing: () => false,
-            isBusy: () => false,
-            run,
-            log,
-            errorMessage: "idle lifecycle test failed",
-          })
-        : scheduleGatewayHandlerPrewarm({
-            scheduler,
-            getConfig: () => ({}),
-            log,
-            items: [
-              { name: "first", load: run },
-              { name: "later", load: later },
-            ],
-          });
+    const handle = kind === "idle" ? scheduleIdle(run, log) : scheduleHandler(run, later, log);
     const owner = createGatewaySidecarStopOwner();
     owner.publish(handle);
     let stopping: Promise<void> | undefined;
@@ -97,26 +106,10 @@ it.each(["suspension", "restart signal"] as const)(
     const restart = kind === "restart signal" ? beginGatewayRestartSignalAdmission() : null;
     expect(suspension?.commit() ?? Boolean(restart)).toBe(true);
     const run = vi.fn(async () => {});
-    const handle = scheduleGatewayIdleTask({
-      id: "test:idle",
-      scheduler,
-      delayMs: 0,
-      retryDelayMs: 10,
-      isClosing: () => false,
-      isBusy: () => false,
-      run,
-      log: { warn: vi.fn() },
-      errorMessage: "idle task failed",
-    });
-    let stopping: Promise<void> | undefined;
+    const handle = scheduleIdle(run, undefined, 10);
     try {
       await clock.advanceBy(0);
-      let closed = false;
-      stopping = Promise.resolve(handle.stop()).then(() => {
-        closed = true;
-      });
-      await stopping;
-      expect(closed).toBe(true);
+      await expect(Promise.resolve(handle.stop())).resolves.toBeUndefined();
       expect(run).not.toHaveBeenCalled();
       expect(getActiveGatewayRootWorkCount()).toBe(0);
     } finally {
@@ -124,7 +117,6 @@ it.each(["suspension", "restart signal"] as const)(
       suspension?.release();
       restart?.rollback();
       await closing;
-      await stopping;
     }
     await clock.advanceBy(10);
     expect(run).not.toHaveBeenCalled();
@@ -143,31 +135,19 @@ it("joins the outgoing handler when shutdown begins in its warning callback", as
       events.push("closed");
     });
   });
-  const sidecar = scheduleGatewayHandlerPrewarm({
-    scheduler,
-    getConfig: () => ({}),
-    log: { warn },
-    items: [
-      {
-        name: "first",
-        load: async () => {
-          events.push("started");
-          throw new Error("cold load failed");
-        },
-      },
-      { name: "later", load: later },
-    ],
-  });
-  try {
-    await Promise.resolve();
-    await clock.advanceBy(0);
-    await stopping;
-    expect(warn).toHaveBeenCalledOnce();
-    expect(events).toEqual(["started", "warning", "closed"]);
-    expect(rootsAfterStop).toBe(0);
-    expect(later).not.toHaveBeenCalled();
-  } finally {
-    await sidecar.stop();
-    await stopping;
-  }
+  const sidecar = scheduleHandler(
+    async () => {
+      events.push("started");
+      throw new Error("cold load failed");
+    },
+    later,
+    { warn },
+  );
+  await Promise.resolve();
+  await clock.advanceBy(0);
+  await stopping;
+  expect(warn).toHaveBeenCalledOnce();
+  expect(events).toEqual(["started", "warning", "closed"]);
+  expect(rootsAfterStop).toBe(0);
+  expect(later).not.toHaveBeenCalled();
 });

@@ -16,21 +16,29 @@ function row(key: string, extra: Record<string, unknown> = {}): GatewaySessionRo
   });
 }
 
-it("retains only handed-off vectors, separates ancestor admission, and restarts generations in full", async () => {
+async function fixture(connectionCount = 1) {
   const resets: Array<{ cause: string; count: number }> = [];
-  const readRetention = observeSessionEventRowRetention(({ cause, count }) =>
-    resets.push({ cause, count }),
-  );
-  const owner = new ConnectionSessionRows();
+  const read = observeSessionEventRowRetention(({ cause, count }) => resets.push({ cause, count }));
+  const owners = Array.from({ length: connectionCount }, () => new ConnectionSessionRows());
+  const owner = owners[0]!;
   owner.clear();
-  const before = await readRetention();
+  const before = await read();
   const diff = createSessionRowDeltaDiffer();
+  const close = async () => {
+    owners.forEach((value) => value.clear());
+    expect(await read()).toEqual(before);
+  };
+  return { owner, owners, resets, read, before, diff, close };
+}
+
+it("retains only handed-off vectors, separates ancestor admission, and restarts generations in full", async () => {
+  const { owner, resets, read, before, diff, close } = await fixture();
   const first = row("agent:main:one", { label: "a".repeat(500), lastRunError: "old" });
   try {
     owner.prepareRows([first], diff);
-    expect(await readRetention()).toEqual(before);
+    expect(await read()).toEqual(before);
     owner.prepareRows([first], diff).delivered();
-    expect((await readRetention()).entries - before.entries).toBe(1);
+    expect((await read()).entries - before.entries).toBe(1);
     owner.clearAncestors();
     const changed = owner.prepareRows([row(first.key, { label: first.label, updatedAt: 2 })], diff);
     expect(changed.wire[0]).toMatchObject({
@@ -42,15 +50,14 @@ it("retains only handed-off vectors, separates ancestor admission, and restarts 
     changed.delivered();
     const replacement = owner.prepareRows([row(first.key, { sessionId: "replacement" })], diff);
     expect(replacement.wire[0]).toHaveProperty("full");
-    await readRetention();
+    await read();
     expect(resets).toEqual([]);
     replacement.delivered();
     owner.clear("projection");
     expect(owner.prepareRows([first], diff).wire[0]).toMatchObject({ version: 4, full: first });
   } finally {
-    owner.clear();
+    await close();
   }
-  expect(await readRetention()).toEqual(before);
   expect(resets).toEqual([
     { cause: "generation", count: 1 },
     { cause: "projection", count: 1 },
@@ -58,39 +65,30 @@ it("retains only handed-off vectors, separates ancestor admission, and restarts 
 });
 
 it("evicts by handed-off row order and bounds 25 fully populated connections", async () => {
-  const resets: Array<{ cause: string; count: number }> = [];
-  const readRetention = observeSessionEventRowRetention(({ cause, count }) =>
-    resets.push({ cause, count }),
-  );
-  const owners = Array.from({ length: 25 }, () => new ConnectionSessionRows());
-  owners[0]!.clear();
-  const before = await readRetention();
+  const { owner, owners, resets, read, before, diff, close } = await fixture(25);
   const rows = Array.from({ length: SESSION_ROW_DELTA_MAX_ENTRIES }, (_, i) =>
     row(`agent:main:memory-${i}`, { label: "reusable".repeat(100) }),
   );
-  const diff = createSessionRowDeltaDiffer();
   try {
-    for (const owner of owners) {
+    for (const connection of owners) {
       for (const value of rows) {
-        owner.prepareRows([value], diff).delivered();
+        connection.prepareRows([value], diff).delivered();
       }
     }
-    const retained = await readRetention();
+    const retained = await read();
     expect(retained.entries - before.entries).toBe(25 * SESSION_ROW_DELTA_MAX_ENTRIES);
     expect(retained.estimatedBytes - before.estimatedBytes).toBeLessThanOrEqual(
       25 * 2 * 1024 * 1024,
     );
-    const owner = owners[0]!;
     owner.prepareRows([rows[0]!], diff).delivered();
     owner.prepareRows([row("agent:main:overflow")], diff).delivered();
     expect(owner.prepareRows([rows[0]!], diff).wire[0]).toHaveProperty("base");
     expect(owner.prepareRows([rows[1]!], diff).wire[0]).toHaveProperty("full");
-    await readRetention();
+    await read();
     expect(resets).toEqual([{ cause: "evicted", count: 1 }]);
   } finally {
-    owners.forEach((owner) => owner.clear());
+    await close();
   }
-  expect(await readRetention()).toEqual(before);
   expect(resets).toEqual([
     { cause: "evicted", count: 1 },
     { cause: "close", count: 25 * SESSION_ROW_DELTA_MAX_ENTRIES },
@@ -98,11 +96,7 @@ it("evicts by handed-off row order and bounds 25 fully populated connections", a
 });
 
 it("sends retain:false without disturbing the LRU when vectors exceed the byte cap", async () => {
-  const readRetention = observeSessionEventRowRetention();
-  const owner = new ConnectionSessionRows();
-  owner.clear();
-  const before = await readRetention();
-  const diff = createSessionRowDeltaDiffer();
+  const { owner, read, before, diff, close } = await fixture();
   const wide = Object.fromEntries(Array.from({ length: 250 }, (_, i) => [`field${i}`, i]));
   let rejected: GatewaySessionRow | undefined;
   try {
@@ -116,7 +110,7 @@ it("sends retain:false without disturbing the LRU when vectors exceed the byte c
       }
     }
     expect(rejected).toBeDefined();
-    expect((await readRetention()).estimatedBytes - before.estimatedBytes).toBeLessThanOrEqual(
+    expect((await read()).estimatedBytes - before.estimatedBytes).toBeLessThanOrEqual(
       2 * 1024 * 1024,
     );
     if (!rejected) {
@@ -127,7 +121,6 @@ it("sends retain:false without disturbing the LRU when vectors exceed the byte c
       retain: false,
     });
   } finally {
-    owner.clear();
+    await close();
   }
-  expect(await readRetention()).toEqual(before);
 });

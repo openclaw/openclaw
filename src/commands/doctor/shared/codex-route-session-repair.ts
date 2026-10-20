@@ -221,17 +221,11 @@ function repairProviderlessCodexSessionOverride(
 
   entry.providerOverride = "openai";
   entry.modelOverrideRouteResolution = "resolved";
-  if (entry.model !== undefined || entry.modelProvider !== undefined) {
-    delete entry.model;
-    delete entry.modelProvider;
-  }
-  if (entry.contextTokens !== undefined || entry.contextTokensSource !== undefined) {
-    delete entry.contextTokens;
-    delete entry.contextTokensSource;
-  }
-  if (entry.contextBudgetStatus !== undefined) {
-    delete entry.contextBudgetStatus;
-  }
+  delete entry.model;
+  delete entry.modelProvider;
+  delete entry.contextTokens;
+  delete entry.contextTokensSource;
+  delete entry.contextBudgetStatus;
   return true;
 }
 

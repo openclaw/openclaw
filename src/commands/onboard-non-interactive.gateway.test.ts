@@ -310,8 +310,6 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         const writesBeforeSecond = capturedReplaceConfigFileCalls.length;
         await expect(runNonInteractiveSetup(options, runtime)).rejects.toMatchObject({
           name: "SetupTargetLockedError",
-          code: "setup_target_locked",
-          holderPid: process.pid,
         });
 
         expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(readsBeforeSecond);

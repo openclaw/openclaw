@@ -29,7 +29,6 @@ const htmlSummary = {
   dataImages: 0,
   cidImages: 0,
   srcHosts: [],
-  attachmentTags: 0,
   attachmentIds: [],
 };
 
@@ -60,9 +59,7 @@ function setup(
             channelData: { channel: { id: "19:channel-thread@thread.tacv2" } },
           },
           sendActivity: vi.fn(async () => undefined),
-          sendActivities: vi.fn(async () => []),
           updateActivity: vi.fn(async () => undefined),
-          deleteActivity: vi.fn(async () => undefined),
         },
         rawText: options.rawBody ?? "hello",
         text: options.rawBody ?? "hello",

@@ -43,7 +43,6 @@ ui/src/lib/reactive/shadow-styles.ts	1
 ui/src/lib/reactive/stream-auto-follow.ts	1
 ui/src/lib/reactive/timers.ts	2
 ui/src/lib/reactive/visible-poll.ts	1
-ui/src/pages/activity/activity-page-view.tsx	1
 ui/src/pages/activity/activity-page.ts	1
 ui/src/pages/activity/session-activity-media.tsx	1
 ui/src/pages/agents/agents-page.tsx	1
@@ -62,9 +61,7 @@ ui/src/pages/chat/components/chat-message-bubble-view.tsx	1
 ui/src/pages/chat/components/chat-model-picker.tsx	1
 ui/src/pages/chat/components/chat-pull-request-checks.tsx	1
 ui/src/pages/chat/components/chat-question-answer-controls.tsx	1
-ui/src/pages/chat/components/chat-question-panel.tsx	1
 ui/src/pages/chat/components/chat-read-aloud.tsx	1
-ui/src/pages/chat/components/chat-session-rail-composer.tsx	1
 ui/src/pages/chat/solid-render-lifecycle.ts	1
 ui/src/pages/config/config-page-state.ts	1
 ui/src/pages/cron/cron-page.tsx	1

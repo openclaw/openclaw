@@ -144,6 +144,14 @@ export async function collectGatewayHealthFindings(
       }),
     );
     const sqliteWalWarning = formatSqliteWalHealthWarning(status.sqliteWal);
+    if (status.modelReasoningWarning) {
+      findings.push(
+        warning(
+          formatGatewayHealthDiagnostic(status.modelReasoningWarning),
+          "Set reasoning: true on the configured model, or choose a non-thinking model.",
+        ),
+      );
+    }
     if (sqliteWalWarning) {
       findings.push(
         warning(`SQLite WAL: ${sqliteWalWarning}`, "Inspect openclaw status --deep output."),
@@ -248,7 +256,7 @@ function noteGatewayStateDirectory(
   });
   if (comparison.kind === "warn") {
     note(
-      `${comparison.message}\nRun plugin inspection and doctor --fix with the Gateway's OPENCLAW_STATE_DIR and OPENCLAW_CONFIG_PATH. To change the managed service, run \`openclaw gateway install --force\` from the intended profile and review operator-owned service overrides.`,
+      `${comparison.message}\nAfter moving or renaming the state directory, the running Gateway still uses the paths it started with. A full restart is required: \`openclaw gateway restart\` (not a reload). Then rerun \`openclaw doctor\`.\nRun plugin inspection and doctor --fix with the Gateway's OPENCLAW_STATE_DIR and OPENCLAW_CONFIG_PATH. To change the managed service, run \`openclaw gateway install --force\` from the intended profile and review operator-owned service overrides.`,
       "Gateway state directory mismatch",
     );
   }
@@ -343,6 +351,7 @@ export async function checkGatewayHealth(params: {
       note(sqliteWalWarning, "SQLite WAL");
     }
     noteWarning(status.startupRecoveryWarning, "Startup session recovery");
+    noteWarning(status.modelReasoningWarning, "Model reasoning");
     const childRuntimeWarning = status.childRuntime
       ? formatMissingChildRuntimeWarning(status.childRuntime)
       : undefined;

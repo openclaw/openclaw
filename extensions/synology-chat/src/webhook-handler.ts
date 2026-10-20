@@ -459,14 +459,11 @@ export async function processSynologyWebhookIngressEvent(params: {
   await params.deliver(
     {
       body,
-      channelIngress,
       resolveChannelIngress,
       messageId: payload.post_id,
       from: authorizedWebhookUserId,
       senderName: payload.username,
-      provider: "synology-chat",
       chatType: "direct",
-      accountId: params.account.accountId,
       commandAuthorized: channelIngress.senderAccess.allowed,
       chatUserId: deliveryUserId,
     },

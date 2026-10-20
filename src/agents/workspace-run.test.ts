@@ -179,7 +179,6 @@ describe("resolveRunWorkspaceDir", () => {
     });
 
     expect(result.agentId).toBe("ops");
-    expect(result.agentIdSource).toBe("explicit");
     expect(result.workspaceDir).toBe(path.resolve(workspaceDir));
   });
 
@@ -237,7 +236,6 @@ describe("resolveRunWorkspaceDir", () => {
     });
 
     expect(result.agentId).toBe("main");
-    expect(result.agentIdSource).toBe("default");
     expect(result.workspaceDir).toBe(path.resolve(fallbackWorkspace));
   });
 

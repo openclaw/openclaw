@@ -1,6 +1,7 @@
 import { note } from "../../packages/terminal-core/src/note.js";
 import { withProgress } from "../cli/progress.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
+import { isGatewayServiceInstalled } from "../daemon/service-load-state.js";
 import { describeGatewayServiceRestart, resolveGatewayService } from "../daemon/service.js";
 import { isNonFatalSystemdInstallProbeError } from "../daemon/systemd.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -20,16 +21,16 @@ export async function maybeInstallDaemon(params: {
   daemonRuntime?: GatewayDaemonRuntime;
 }): Promise<DaemonSetupOutcome> {
   const service = resolveGatewayService();
-  let loaded;
+  let installed;
   try {
-    loaded = await service.isLoaded({ env: process.env });
+    installed = await isGatewayServiceInstalled(service, { env: process.env });
   } catch (error) {
     if (!isNonFatalSystemdInstallProbeError(error)) {
       throw error;
     }
-    loaded = false;
+    installed = false;
   }
-  const action = loaded
+  const action = installed
     ? await prompts.select({
         message: "Gateway service already installed",
         options: [

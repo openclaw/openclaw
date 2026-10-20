@@ -109,19 +109,6 @@ export function createSessionCatalogTestContext(
   );
 }
 
-export function provider(
-  id: string,
-  overrides: Partial<SessionCatalogProvider> = {},
-): SessionCatalogProvider {
-  return {
-    id,
-    label: id.toUpperCase(),
-    list: vi.fn(async () => []),
-    read: vi.fn(async ({ hostId, threadId }) => ({ hostId, threadId, items: [] })),
-    ...overrides,
-  };
-}
-
 export async function call(
   method: keyof typeof sessionCatalogHandlers,
   params: unknown,

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { makeCronJob } from "./delivery.test-helpers.js";
+import { cronJobDefinitionFromReadView, cronJobReadView } from "./job-read-view.js";
 import { toPublicCronJob } from "./public-job.js";
+import { makeCronStreamSandboxTarget } from "./stream-sandbox.test-support.js";
 import type { CronStoredJob } from "./types.js";
 
 describe("toPublicCronJob", () => {
@@ -102,10 +104,12 @@ describe("toPublicCronJob", () => {
     },
   );
 
-  it("strips private creator provenance without mutating the stored job", () => {
+  it("strips private creator provenance and sandbox target without mutating the stored job", () => {
+    const streamSandbox = makeCronStreamSandboxTarget();
     const job: CronStoredJob = {
-      ...makeCronJob({}),
+      ...makeCronJob({ schedule: { kind: "stream", command: ["watch-source"] } }),
       createdActor: { type: "human", source: "profile", id: "profile-ada" },
+      streamSandbox,
       sourceConversation: {
         sessionKey: "agent:main:conversation",
         sessionId: "creating-session",
@@ -115,6 +119,20 @@ describe("toPublicCronJob", () => {
 
     expect(toPublicCronJob(job)).not.toHaveProperty("createdActor");
     expect(toPublicCronJob(job)).not.toHaveProperty("sourceConversation");
+    expect(toPublicCronJob(job)).not.toHaveProperty("streamSandbox");
+    expect(toPublicCronJob(job).schedule.kind).toBe("stream");
+    expect(toPublicCronJob(job).streamExecutionHost).toBe("sandbox");
+    expect(toPublicCronJob({ ...job, streamSandbox: undefined }).streamExecutionHost).toBe(
+      "gateway",
+    );
+    expect(toPublicCronJob(makeCronJob({}))).not.toHaveProperty("streamExecutionHost");
+    for (const storedJob of [job, { ...job, streamSandbox: undefined }]) {
+      const view = cronJobReadView(storedJob);
+      const definition = cronJobDefinitionFromReadView(view);
+      expect(definition).not.toHaveProperty("streamExecutionHost");
+      expect(definition.schedule).toEqual(storedJob.schedule);
+    }
+    expect(job.streamSandbox).toEqual(streamSandbox);
     expect(job.createdActor).toEqual({ type: "human", source: "profile", id: "profile-ada" });
     expect(job.sourceConversation?.lifecycleRevision).toBe("generation-1");
   });

@@ -23,7 +23,7 @@ async function collect() {
   }
 }
 
-function createScenario() {
+function createScenario(resourceLoader: Awaited<ReturnType<typeof createResourceLoader>>) {
   const catalogRef = createToolSearchCatalogRef();
   const context = {
     config: { tools: { codeMode: true, toolSearch: false } },
@@ -46,7 +46,6 @@ function createScenario() {
   const exec = compacted.tools.find((tool) => tool.name === "exec");
   assert.ok(exec);
   const definition = createToolDefinitionFromAgentTool(exec);
-  const resourceLoader = createResourceLoader();
   const extensionRunnerRef: { current?: ExtensionRunner } = {};
   const agent = new Agent({
     streamFn: () => {
@@ -98,8 +97,13 @@ function createScenario() {
   };
 }
 
-let scenario: ReturnType<typeof createScenario> | undefined = createScenario();
+let scenario: ReturnType<typeof createScenario> | undefined;
+// Do not retain the observed session as the result of an awaited setup promise.
+await createResourceLoader().then((resourceLoader) => {
+  scenario = createScenario(resourceLoader);
+});
 try {
+  assert.ok(scenario);
   scenario.refresh();
   await scenario.reload();
   await scenario.reload();

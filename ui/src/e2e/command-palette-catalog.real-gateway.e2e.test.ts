@@ -19,6 +19,7 @@ import {
 } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { pickerValue } from "../test-helpers/select-picker-e2e.ts";
+import { createCatalogAcquisitionDiagnostics } from "./catalog-acquisition.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const requireRecord = createRequireRecord("record", "expected-object-value");
@@ -32,6 +33,7 @@ let readback: GatewayClient;
 let providerMode: "ready" | "failed" | "empty" = "ready";
 let providerModel = "refresh-fixture:latest";
 const providerTraffic: Array<{ path: string; status: number }> = [];
+const acquisitionDiagnostics = createCatalogAcquisitionDiagnostics();
 const suite = createControlUiE2eSuite({
   name: "Control UI catalog publication with a real Gateway",
   startServerBeforeBrowser: true,
@@ -39,6 +41,9 @@ const suite = createControlUiE2eSuite({
     const provider = http.createServer((req, res) => {
       const status = providerMode === "failed" ? 503 : 200;
       providerTraffic.push({ path: req.url ?? "", status });
+      if (req.url === "/api/tags") {
+        acquisitionDiagnostics.acquired(status);
+      }
       const body =
         status === 503
           ? { error: "private upstream error body" }
@@ -148,13 +153,22 @@ suite.define(() => {
     const assets: Array<Promise<{ path: string; sha256: string }>> = [];
     const acquisitions = () => providerTraffic.filter((entry) => entry.path === "/api/tags").length;
     const publish = async () => {
-      return requireRecord(
-        await readback.request("models.list", {
-          agentId: "main",
-          view: "configured",
-          refresh: true,
-        }),
-      );
+      acquisitionDiagnostics.trigger("publication");
+      acquisitionDiagnostics.request("readback", "readback", "models.list", true);
+      try {
+        const result = requireRecord(
+          await readback.request("models.list", {
+            agentId: "main",
+            view: "configured",
+            refresh: true,
+          }),
+        );
+        acquisitionDiagnostics.reply("readback", true, result);
+        return result;
+      } catch (error) {
+        acquisitionDiagnostics.reply("readback", false);
+        throw error;
+      }
     };
     const handoff = await instance.cli(["dashboard", "--json"]);
     expect(handoff.code, handoff.stderr).toBe(0);
@@ -173,6 +187,7 @@ suite.define(() => {
       await suite.withPage(
         { serviceWorkers: "block", locale: "en-US", viewport: { width: 1280, height: 900 } },
         async ({ page }) => {
+          acquisitionDiagnostics.observe(page);
           page.on("response", (response) => {
             const asset = new URL(response.url());
             if (asset.origin === url.origin && /\/assets\/.*\.(?:js|css)$/u.test(asset.pathname)) {
@@ -209,6 +224,7 @@ suite.define(() => {
             });
           });
           const initialAcquisitions = acquisitions();
+          acquisitionDiagnostics.trigger("prefetch");
           await page.goto(url.href);
           await waitForControlUiGatewayReady(page);
           const settings = page.locator("openclaw-model-providers-page");
@@ -268,6 +284,7 @@ suite.define(() => {
           };
           const open = async () => {
             await waitForCatalogIdle();
+            acquisitionDiagnostics.trigger("picker-open");
             const requestsBeforeOpen = requests.length;
             const acquisitionsBeforeOpen = acquisitions();
             if ((await trigger.getAttribute("aria-expanded")) === "true") {
@@ -326,6 +343,7 @@ suite.define(() => {
           await capture("settings-published-reopen.png");
 
           await trigger.click();
+          acquisitionDiagnostics.trigger("refresh");
           await catalogRefresh(() =>
             settings.getByRole("button", { name: "Refresh", exact: true }).click(),
           );
@@ -336,11 +354,13 @@ suite.define(() => {
           stages.push({ stage: "core-replacement-open", acquisitions: acquisitions() });
 
           // A new page starts its own request lifetime and keeps the published rows on failure.
+          acquisitionDiagnostics.trigger("reconnect");
           await page.reload();
           await waitForControlUiGatewayReady(page);
           await trigger.waitFor({ state: "visible" });
           await expect.poll(() => pickerValue(primary)).toBe("fixture/anchor");
           providerMode = "failed";
+          acquisitionDiagnostics.trigger("refresh");
           const failed = await catalogRefresh(() =>
             settings.getByRole("button", { name: "Refresh", exact: true }).click(),
           );
@@ -366,6 +386,7 @@ suite.define(() => {
 
           providerMode = "ready";
           providerModel = "recovered-fixture:latest";
+          acquisitionDiagnostics.trigger("retry");
           await catalogRefresh(() => retry.click());
           await retry.waitFor({ state: "hidden" });
           await open();
@@ -378,6 +399,12 @@ suite.define(() => {
           await capture("settings-retry.png");
         },
       );
+    } catch (error) {
+      console.error(
+        "catalog-acquisition-failure",
+        JSON.stringify(acquisitionDiagnostics.snapshot()),
+      );
+      throw error;
     } finally {
       providerMode = "ready";
       providerModel = "refresh-fixture:latest";

@@ -248,21 +248,6 @@ export async function repairLegacySessionEntryStates(params: {
     assertCurrent();
     note(backup.changes.map((change) => `- ${change}`).join("\n"), "Session SQLite backups");
     report.repaired = plan.apply(assertTargetCurrent);
-    for (const { target, scope, identity } of plan.pending) {
-      assertTargetCurrent(target);
-      scanDoctorSessionEntryRecords(
-        scope,
-        ({ entry, sessionKey }) => {
-          if (hasLegacySessionEntryState(entry)) {
-            throw new Error(
-              `Legacy session state remains in ${sessionKey}; original rows are backed up. Resolve the remaining row repair before retrying Doctor.`,
-            );
-          }
-        },
-        identity,
-      );
-      assertTargetCurrent(target);
-    }
     note(
       `- Canonicalized entry state for ${report.repaired} durable session row(s).`,
       "Session SQLite",

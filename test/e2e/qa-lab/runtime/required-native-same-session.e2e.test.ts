@@ -36,7 +36,6 @@ import {
   closeWireServer,
   connectWireClient,
   createPairedNodeWorkerHost,
-  createWireWorkspaceSettlementWaiter,
   startPairedNodeWorkerGateway,
   wireMessageText,
   type PairedNodeWorkerHost,
@@ -122,7 +121,6 @@ it.skipIf(process.platform === "win32")(
   async (context) => {
     const { signal } = context;
     const gatewayOwner = createQaGatewayChild();
-    const settlement = createWireWorkspaceSettlementWaiter();
     const requests: string[] = [];
     const providerErrors: unknown[] = [];
     const observationFailure = createDeferred<never>();
@@ -273,7 +271,6 @@ it.skipIf(process.platform === "win32")(
           role: "operator",
           identity: null,
           onEvent: (event) => {
-            settlement.onEvent(event);
             if (event.event === "sessions.changed") {
               try {
                 onChanged?.(event.payload as Changed);
@@ -309,7 +306,6 @@ it.skipIf(process.platform === "win32")(
           operator,
           root,
           capacity: 1,
-          capacityWaitMs: 0,
           nodeConfig: {
             ...nodeConfig.config,
             models: { providers: { [providerId!]: nativeProvider } },
@@ -374,6 +370,7 @@ it.skipIf(process.platform === "win32")(
             const continueResume = createDeferred();
             const changedClear = createDeferred();
             const bEntered = createDeferred();
+            const bWorkspaceSettled = createDeferred();
             barriers.push(continueQuiesce, continueResume);
             let aClaim: string | undefined;
             let aRun: string | undefined;
@@ -394,6 +391,13 @@ it.skipIf(process.platform === "win32")(
                     reason: event.reason,
                   })}\n${gateway.logs().slice(-12_000)}`,
                 );
+              }
+              if (bRun && placement?.state === "active" && !placement.workspaceResultReconciling) {
+                // A delayed snapshot from A cannot prove that B released its workspace.
+                const current = readSettlement(gateway, key);
+                if (!current.pending && current.placement?.turn_claim_id === null) {
+                  bWorkspaceSettled.resolve();
+                }
               }
               if (
                 !placement?.workspaceResultReconciling &&
@@ -521,7 +525,7 @@ it.skipIf(process.platform === "win32")(
             await checkpoint(bEntered.promise);
             // Wait on the adopted execution claim, not chat.send's queue-cancellation ID.
             expect(await wait(bRun!)).toMatchObject({ status: "ok" });
-            await settlement.wait(operator, key, signal);
+            await checkpoint(bWorkspaceSettled.promise);
             const final = readSettlement(gateway, key);
             expect(final.pending).toBeUndefined();
             expect(final.placement).toMatchObject({

@@ -7,6 +7,7 @@ import { createDesktopFullscreen } from "../desktop-fullscreen.ts";
 import { DockResizer } from "../dock-layout-solid.tsx";
 import { nativeDockPanelCss as dockStyles } from "../dock-panel-styles.ts";
 import { FullscreenButton } from "../fullscreen-solid.tsx";
+import { StrokeIcon } from "../solid/stroke-icon.tsx";
 import { createDesktopAppLauncher } from "./desktop-app-launcher.ts";
 import { DesktopAudioControl, DesktopAudioNotice } from "./desktop-audio-view.tsx";
 import { createDesktopAudio } from "./desktop-audio.ts";
@@ -91,6 +92,7 @@ defineSolidBridge<DesktopPanelInputs, Methods>(
       embedded: { default: false, type: Boolean, reflect: true },
       presented: { default: false, type: Boolean },
       refreshOnPresentation: { default: true, type: Boolean },
+      runtimeConfig: { default: null, attribute: false },
       onDocumentClose: { default: null, attribute: false },
       onFocusTargetChange: { default: null, attribute: false },
       desktopClientFactory: { default: () => new DesktopClient(), attribute: false },
@@ -143,17 +145,10 @@ function PictureInPictureButton(props: {
       }
       onClick={() => void props.controller.toggle()}
     >
-      <svg
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="2"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-      >
+      <StrokeIcon>
         <rect x="2" y="3" width="20" height="18" rx="2" />
         <rect x="12" y="11" width="7" height="7" rx="1" />
-      </svg>
+      </StrokeIcon>
     </button>
   );
 }

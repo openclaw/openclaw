@@ -133,6 +133,35 @@ describe("projectSessionDisplayMessage", () => {
     }
   });
 
+  test("omits heartbeat acknowledgements without hiding alerts, forwarded text, or model context", () => {
+    for (const message of [
+      { role: "assistant", content: "HEARTBEAT_OK" },
+      { role: "ASSISTANT", text: "**HEARTBEAT_OK**" },
+      {
+        role: "assistant",
+        content: [
+          { type: "reasoning", text: "Checking the monitor" },
+          { type: "text", text: "HEARTBEAT_OK" },
+        ],
+      },
+    ]) {
+      expect(projectSessionDisplayMessage(message)).toBeNull();
+      expect(projectSessionDisplayMessage(message, { view: "model-context" })?.text).toContain(
+        "HEARTBEAT_OK",
+      );
+    }
+    for (const text of ["Disk usage crossed 95 percent.", "no_r"]) {
+      expect(projectSessionDisplayMessage({ role: "assistant", content: text })?.text).toBe(text);
+    }
+    expect(
+      projectSessionDisplayMessage({
+        role: "assistant",
+        content: "HEARTBEAT_OK",
+        provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+      })?.text,
+    ).toBe("HEARTBEAT_OK");
+  });
+
   test("bounds previews without splitting surrogate pairs", () => {
     const longReply = `${"a".repeat(SESSION_LAST_MESSAGE_PREVIEW_DEFAULT_CHARS - 2)}😊tail`;
     const preview = projectSessionDisplayMessage({ role: "assistant", content: longReply });

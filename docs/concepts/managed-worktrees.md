@@ -89,9 +89,12 @@ source-only fallback, preserving their ordinary installation contract.
 See [Workspace access](/gateway/sandboxing/workspace-access#managed-project-workspaces)
 for write policy, reconciliation, and conflict recovery. To update an existing
 local sandbox workspace from its selected repository base, use `github_publish`
-action `refresh_base` before tests and Auto Review. Resolve reported conflicts and
-repeat it with `conflictsResolved: true` and the returned `baseCommit`. Completion
-stages current source inside the sandbox while retaining its HEAD and commit
+action `refresh_base` before tests and Auto Review.
+Only sessions with a writable managed sandbox are offered this action; direct
+host sessions merge the base with git in their workspace before publishing.
+Resolve reported conflicts and repeat it with `conflictsResolved: true` and the
+returned `baseCommit`. Completion stages current source inside the sandbox while
+retaining its HEAD and commit
 history; use the returned local/base Auto Review target before publishing. The host retains the integrated base ancestry; guest Git metadata,
 host credentials, and unrelated ignored host files remain separate.
 

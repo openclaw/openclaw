@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -14,6 +15,7 @@ import {
   registerBoardProviderLeaseCases,
 } from "./provider.lease-cases.test-support.ts";
 import {
+  acquireBoardProviderForSession,
   boardExists,
   boardProviderForSession,
   canvasWidgetNameForDocument,
@@ -27,6 +29,69 @@ afterEach(() => {
 });
 
 describe("board providers", () => {
+  it("persists authoritative receipts for late and surviving leases", async () => {
+    let now = 1000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const session = { sessionKey: "agent:main:shared-persistence" };
+    let response: BoardSnapshot | null = boardSnapshot(session.sessionKey, 1);
+    const client = boardClient(
+      vi.fn(async () => {
+        if (!response) {
+          throw new GatewayProtocolRequestError({ code: "FORBIDDEN", message: "Access removed" });
+        }
+        return response;
+      }),
+    );
+    const scope = {};
+    const leases: Array<ReturnType<typeof acquireBoardProviderForSession>> = [];
+    const acquire = (persist?: (snapshot: BoardSnapshot | null, receivedAtMs: number) => void) => {
+      const lease = acquireBoardProviderForSession(
+        session,
+        client,
+        true,
+        false,
+        false,
+        true,
+        false,
+        scope,
+        persist,
+      );
+      leases.push(lease);
+      return lease;
+    };
+    try {
+      const preview = acquire();
+      await preview.provider.refreshWidgetFrame("chart");
+      now = 2000;
+      const firstPersist = vi.fn();
+      const first = acquire(firstPersist);
+      expect(firstPersist).toHaveBeenCalledExactlyOnceWith(response, 1000);
+      const survivingPersist = vi.fn();
+      const surviving = acquire(survivingPersist);
+      expect(survivingPersist).toHaveBeenCalledExactlyOnceWith(response, 1000);
+
+      first.release();
+      now = 3000;
+      response = boardSnapshot(session.sessionKey, 2);
+      await surviving.provider.applyOps([]);
+      expect(firstPersist).toHaveBeenCalledTimes(1);
+      expect(survivingPersist).toHaveBeenLastCalledWith(response, 3000);
+
+      now = 4000;
+      response = null;
+      await surviving.provider.refreshWidgetFrame("chart");
+      expect(survivingPersist).toHaveBeenLastCalledWith(null, 4000);
+      surviving.release();
+      now = 5000;
+      const afterDenial = vi.fn();
+      acquire(afterDenial);
+      expect(afterDenial).toHaveBeenCalledExactlyOnceWith(null, 4000);
+    } finally {
+      leases.forEach((lease) => lease.release());
+      vi.restoreAllMocks();
+    }
+  });
+
   it("keeps generated canvas widget names distinct after normalization and truncation", () => {
     const longPrefix = "x".repeat(80);
     const names = [

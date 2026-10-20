@@ -16,7 +16,6 @@ import {
 } from "./models.fetch.js";
 import {
   mapLmstudioWireEntry,
-  normalizeLmstudioConfiguredCatalogEntry,
   normalizeLmstudioProviderConfig,
   resolveLmstudioReasoningCompat,
 } from "./models.js";
@@ -131,27 +130,6 @@ describe("lmstudio-models", () => {
       request: { allowPrivateNetwork: false, headers: { "X-Proxy-Auth": "token" } },
       models: [],
     });
-  });
-
-  it("rejects malformed and unapproved configured compatibility fields", () => {
-    expect(
-      normalizeLmstudioConfiguredCatalogEntry({
-        id: "qwen/qwen3-1.7b",
-        compat: {
-          supportsStore: "false",
-          supportsPromptCacheKey: 1,
-          visibleReasoningDetailTypes: ["reasoning.summary", 1],
-          maxTokensField: "max_output_tokens",
-          codeMode: "unsupported",
-          thinkingFormat: "unsupported",
-          toolSchemaProfile: 1,
-          unsupportedToolSchemaKeywords: ["additionalProperties", ""],
-          toolCallArgumentsEncoding: false,
-          requiresOpenAiAnthropicToolPayload: "true",
-          unapprovedCompatField: true,
-        },
-      }),
-    ).toMatchObject({ id: "qwen/qwen3-1.7b", compat: undefined });
   });
 
   it("uses the loaded context as the effective runtime budget", () => {

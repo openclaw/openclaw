@@ -683,7 +683,12 @@ describe("retained npm package integrity", () => {
         { env: {}, stateDir: base },
       );
       expect(report.body).toContain("baseline-scan-failed");
-      expect(report.body).toContain(cause);
+      if (shape === "timed-out scan") {
+        expect(report.body).toContain(cause);
+      } else {
+        expect(report.body).not.toContain(cause);
+        expect(report.body).toContain("[redacted-diagnostic]");
+      }
       expect(report.body).not.toContain("identity fallback unavailable");
       expect(report.body).not.toContain(base);
       expect(result).toMatchObject({ packageRollbackVerified: false });

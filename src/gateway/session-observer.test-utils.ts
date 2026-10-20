@@ -122,8 +122,6 @@ export function createHarness(options?: {
   persistDigest?: ReturnType<typeof vi.fn<(params: PersistDigestParams) => Promise<unknown>>>;
   readSession?: ReturnType<typeof vi.fn>;
   config?: OpenClawConfig;
-  utilityModelRef?: string | null;
-  resolveUtilityModelRef?: ReturnType<typeof vi.fn>;
 }) {
   const subscribers = createSessionMessageSubscriberRegistry();
   const sessionEventSubscribers = createSessionEventSubscriberRegistry();
@@ -152,11 +150,6 @@ export function createHarness(options?: {
     subscribers,
     sessionEventSubscribers,
     broadcastToConnIds,
-    resolveUtilityModelRef: (options?.resolveUtilityModelRef ??
-      (() =>
-        options?.utilityModelRef === null
-          ? undefined
-          : (options?.utilityModelRef ?? "openai/gpt-test"))) as never,
     prepareModel: prepareModel as never,
     completeModel: completeModel as never,
     readSession: readSession as never,

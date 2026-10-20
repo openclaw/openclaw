@@ -29,11 +29,9 @@ export function resolvePairedAccessScopes(
   return normalizeSortedUniqueTrimmedStringList(scopes);
 }
 
-function isSetupCodeMobileBootstrapClient(client: {
-  id?: string;
-  platform?: string;
-  deviceFamily?: string;
-}): boolean {
+function isSetupCodeMobileBootstrapClient(
+  client: Parameters<typeof isSetupCodeHandoffBootstrapClient>[0]["client"],
+): boolean {
   const platform = normalizeDeviceMetadataForAuth(client.platform);
   const deviceFamily = normalizeDeviceMetadataForAuth(client.deviceFamily);
   if (client.id === GATEWAY_CLIENT_IDS.ANDROID_APP) {
@@ -45,11 +43,9 @@ function isSetupCodeMobileBootstrapClient(client: {
   return false;
 }
 
-function isSetupCodeVoiceNodeBootstrapClient(client: {
-  id?: string;
-  platform?: string;
-  deviceFamily?: string;
-}): boolean {
+function isSetupCodeVoiceNodeBootstrapClient(
+  client: Parameters<typeof isSetupCodeHandoffBootstrapClient>[0]["client"],
+): boolean {
   const platform = normalizeDeviceMetadataForAuth(client.platform);
   const deviceFamily = normalizeDeviceMetadataForAuth(client.deviceFamily);
   return (

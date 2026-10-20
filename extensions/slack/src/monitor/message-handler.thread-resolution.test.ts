@@ -1,9 +1,10 @@
+import { text } from "node:stream/consumers";
 import { App } from "@slack/bolt";
 import { WebClient } from "@slack/web-api";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import type { SlackMessageEvent } from "../types.js";
-import { createSlackMonitorContext } from "./context.js";
+import { createMonitorTestContext } from "./monitor-context.test-support.js";
 
 const enqueue = vi.hoisted(() => vi.fn(async (_entry: unknown) => {}));
 
@@ -28,15 +29,11 @@ describe("Slack message handler thread resolution", () => {
     const requests: Array<{ path?: string; token?: string; body: string }> = [];
     await withServer(
       (request, response) => {
-        const chunks: Buffer[] = [];
-        request.on("data", (chunk: Buffer) => {
-          chunks.push(chunk);
-        });
-        request.on("end", () => {
+        void text(request).then((body) => {
           requests.push({
             path: request.url,
             token: request.headers.authorization,
-            body: Buffer.concat(chunks).toString("utf8"),
+            body,
           });
           const root = request.headers.authorization?.endsWith("replacement") ? "100.2" : "100.1";
           response.writeHead(200, { "content-type": "application/json" });
@@ -44,59 +41,18 @@ describe("Slack message handler thread resolution", () => {
         });
       },
       async (baseUrl) => {
-        const client = (token: string) =>
-          new WebClient(token, {
-            slackApiUrl: `${baseUrl}/api/`,
-            retryConfig: { retries: 0 },
-          });
+        const clientOptions = { slackApiUrl: `${baseUrl}/api/`, retryConfig: { retries: 0 } };
+        const client = (token: string) => new WebClient(token, clientOptions);
         const app = new App({
           token: "synthetic-default",
           signingSecret: "synthetic-signing-secret",
           tokenVerificationEnabled: false,
-          clientOptions: {
-            slackApiUrl: `${baseUrl}/api/`,
-            retryConfig: { retries: 0 },
-          },
+          clientOptions,
         });
         const listenerClient = client("synthetic-listener");
         const replacementClient = client("synthetic-replacement");
         const handler = createSlackMessageHandler({
-          ctx: createSlackMonitorContext({
-            cfg: {},
-            accountId: "thread-test",
-            app,
-            runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-            botToken: "synthetic-default",
-            botUserId: "U111",
-            identityHealth: { lifecycle: "ready", lastError: null },
-            teamId: "T111",
-            apiAppId: "A111",
-            historyLimit: 0,
-            sessionScope: "per-sender",
-            mainKey: "main",
-            dmEnabled: true,
-            dmPolicy: "open",
-            allowFrom: [],
-            allowNameMatching: false,
-            groupDmEnabled: false,
-            groupDmChannels: [],
-            groupPolicy: "open",
-            useAccessGroups: true,
-            reactionMode: "off",
-            reactionAllowlist: [],
-            replyToMode: "off",
-            threadHistoryScope: "thread",
-            threadInheritParent: false,
-            slashCommand: {
-              enabled: false,
-              name: "openclaw",
-              ephemeral: true,
-              sessionPrefix: "slack:slash",
-            },
-            textLimit: 4000,
-            typingReaction: "",
-            mediaMaxBytes: 20 * 1024 * 1024,
-          }),
+          ctx: createMonitorTestContext({ cfg: {}, accountId: "thread-test", app }),
         });
         const message: SlackMessageEvent = {
           type: "message",

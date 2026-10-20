@@ -37,6 +37,22 @@ function attach(
   operation.attachBackend({ kind: "embedded", runId: "watchdog-run", cancel });
   return cancel;
 }
+function running() {
+  const operation = begin();
+  return { operation, cancel: attach(operation) };
+}
+function watchdogFixture(
+  overrides: Partial<Parameters<typeof createSessionControllerWatchdog>[0]>,
+) {
+  return createSessionControllerWatchdog({
+    startedAtMs: 0,
+    isCurrent: () => true,
+    readPhase: () => "active",
+    requestStop: () => "blocked",
+    expireCleanup: () => "blocked",
+    ...overrides,
+  });
+}
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(0);
@@ -57,13 +73,9 @@ describe("execution deadline recovery", () => {
       return true;
     });
     const laterRecovery = vi.fn(async () => true);
-    const watchdog = createSessionControllerWatchdog({
-      startedAtMs: 0,
-      isCurrent: () => true,
-      readPhase: () => "active",
+    const watchdog = watchdogFixture({
       requestStop: async (effect) =>
         (await effect.recoverExecutionDeadline?.()) ? "resumed" : "blocked",
-      expireCleanup: () => "blocked",
     });
     const attempt = watchdog.attachAttempt({ assertCurrent() {} });
     attempt.setExecutionDeadline(10);
@@ -82,12 +94,8 @@ describe("execution deadline recovery", () => {
     async (cause) => {
       const recover = vi.fn(async () => true);
       const stop = vi.fn((_effect: SessionWatchdogEffect) => "settled" as const);
-      const watchdog = createSessionControllerWatchdog({
-        startedAtMs: 0,
-        isCurrent: () => true,
-        readPhase: () => "active",
+      const watchdog = watchdogFixture({
         requestStop: stop,
-        expireCleanup: () => "blocked",
       });
       watchdog.beginExecution(() => abortMs * 2, recover);
       if (cause === "ordinary_deadline") {
@@ -112,10 +120,8 @@ describe("execution deadline recovery", () => {
       let current = true;
       let effectCurrent: boolean | undefined;
       let accepted: boolean | undefined;
-      const watchdog = createSessionControllerWatchdog({
-        startedAtMs: 0,
+      const watchdog = watchdogFixture({
         isCurrent: () => current,
-        readPhase: () => "active",
         requestStop: async (effect): Promise<SessionWatchdogEffectResult> => {
           started.resolve();
           await resume.promise;
@@ -123,7 +129,6 @@ describe("execution deadline recovery", () => {
           accepted = await effect.recoverExecutionDeadline?.();
           return "blocked";
         },
-        expireCleanup: () => "blocked",
       });
       const execution = watchdog.beginExecution(undefined, recover);
       execution.setDeadline(1);
@@ -152,17 +157,13 @@ describe("execution deadline recovery", () => {
       const started = createDeferredCore();
       const resume = createDeferredCore();
       let effectCurrent: boolean | undefined;
-      const watchdog = createSessionControllerWatchdog({
-        startedAtMs: 0,
-        isCurrent: () => true,
-        readPhase: () => "active",
+      const watchdog = watchdogFixture({
         requestStop: async (effect): Promise<SessionWatchdogEffectResult> => {
           started.resolve();
           await resume.promise;
           effectCurrent = effect.isCurrent();
           return "resumed";
         },
-        expireCleanup: () => "blocked",
       });
       const attempt = watchdog.attachAttempt({ assertCurrent() {} });
       const execution = kind === "owned" ? watchdog.beginExecution() : undefined;
@@ -253,8 +254,7 @@ describe("operation-owned watchdog through controller admission", () => {
           return undefined;
         },
       });
-      const operation = begin();
-      const cancel = attach(operation);
+      const { operation, cancel } = running();
       const attempt = operation.watchdog.attachAttempt({ assertCurrent() {} });
       vi.setSystemTime(abortMs);
       const pending = operation.watchdog.tick();
@@ -281,9 +281,7 @@ describe("operation-owned watchdog through controller admission", () => {
   it("gives resumed terminal recovery cleanup time without manufacturing semantic progress", async () => {
     let phase: "active" | "terminal" = "active";
     const expireCleanup = vi.fn(() => "resumed" as const);
-    const watchdog = createSessionControllerWatchdog({
-      startedAtMs: 0,
-      isCurrent: () => true,
+    const watchdog = watchdogFixture({
       readPhase: () => phase,
       requestStop: () => "resumed",
       expireCleanup,
@@ -304,8 +302,7 @@ describe("operation-owned watchdog through controller admission", () => {
   });
 
   it("stops a silent run without diagnostics, inbound traffic or a backlog", async () => {
-    const operation = begin();
-    const cancel = attach(operation);
+    const { operation, cancel } = running();
     vi.setSystemTime(abortMs - 1);
     operation.recordActivity(); // A source arrival is not semantic progress.
     expect(operation.watchdog.decide().action).toBe("warn");
@@ -317,8 +314,7 @@ describe("operation-owned watchdog through controller admission", () => {
   });
 
   it("runs its timer with diagnostic logging disabled", async () => {
-    const operation = begin();
-    const cancel = attach(operation);
+    const { operation, cancel } = running();
     await vi.advanceTimersByTimeAsync(abortMs + 1_000);
     expect(cancel).toHaveBeenCalledOnce();
     expect(operation.result).toMatchObject({ kind: "failed", code: "run_stalled" });
@@ -327,8 +323,7 @@ describe("operation-owned watchdog through controller admission", () => {
   it.each(["global_capacity", "deferred_maintenance", "human_question", "runtime_owned"] as const)(
     "protects explicit live %s waits, not detached flags",
     async (kind) => {
-      const operation = begin();
-      const cancel = attach(operation);
+      const { operation, cancel } = running();
       let live = true;
       operation.watchdog.beginWait({ kind, isCurrent: () => live });
       vi.setSystemTime(abortMs * 4);
@@ -341,8 +336,7 @@ describe("operation-owned watchdog through controller admission", () => {
   );
 
   it("uses actual approval expiry and revocation, without a second timeout", async () => {
-    const operation = begin();
-    const cancel = attach(operation);
+    const { operation, cancel } = running();
     const expiry = abortMs * 3;
     operation.watchdog.beginWait({ kind: "approval", deadlineAtMs: expiry, isCurrent: () => true });
     vi.setSystemTime(expiry - 1);
@@ -356,8 +350,7 @@ describe("operation-owned watchdog through controller admission", () => {
   it.each(["expires", "ends", "retires"] as const)(
     "honors the current fallback request until it %s without renewing semantic progress",
     async (terminal) => {
-      const operation = begin();
-      const cancel = attach(operation);
+      const { operation, cancel } = running();
       const first = operation.watchdog.attachAttempt({ assertCurrent() {} });
       first.observeStagnation({ active: true });
       first.beginRequest({ deadlineAtMs: abortMs * 10 });
@@ -405,8 +398,7 @@ describe("operation-owned watchdog through controller admission", () => {
   });
 
   it("honors owned tool and execution deadlines on the exact attempt", async () => {
-    const operation = begin();
-    const cancel = attach(operation);
+    const { operation, cancel } = running();
     const attempt = operation.watchdog.attachAttempt({ assertCurrent() {} });
     let enforcedDeadline = 120_000;
     attempt.beginTool({
@@ -435,8 +427,7 @@ describe("operation-owned watchdog through controller admission", () => {
   });
 
   it("counts async tool completion only while its exact attempt is current", async () => {
-    const operation = begin();
-    const cancel = attach(operation);
+    const { operation, cancel } = running();
     const old = operation.watchdog.attachAttempt({ assertCurrent() {} });
     const endOldTool = old.beginTool({ toolName: "process", toolCallId: "old-command" });
     const current = operation.watchdog.attachAttempt({ assertCurrent() {} });
@@ -525,19 +516,38 @@ describe("operation-owned watchdog through controller admission", () => {
     await operation.ownerSettlement;
     createSuccessor().complete();
   });
-  it("publishes running maintenance wait and resumes the same semantic owner", async () => {
-    const operation = begin();
-    const cancel = attach(operation);
-    operation.markWaitingForDeferredMaintenance();
-    vi.setSystemTime(abortMs * 2);
-    await operation.watchdog.tick();
-    expect(cancel).not.toHaveBeenCalled();
-    expect(operation.phase).toBe("waiting_for_deferred_maintenance");
-    operation.markDeferredMaintenanceWaitEnded();
-    expect(operation.phase).toBe("running");
-    expect(operation.watchdog.snapshot().semanticProgressAtMs).toBe(Date.now());
-    operation.complete();
-  });
+  it.each([
+    [
+      "queued",
+      "markWaitingForDeferredMaintenance",
+      "markDeferredMaintenanceWaitEnded",
+      "waiting_for_deferred_maintenance",
+    ],
+    [
+      "running",
+      "markWaitingForDeferredMaintenance",
+      "markDeferredMaintenanceWaitEnded",
+      "waiting_for_deferred_maintenance",
+    ],
+    ["queued", "markWaitingForGlobalLane", "markGlobalLaneWaitEnded", "waiting_for_global_lane"],
+    ["running", "markWaitingForGlobalLane", "markGlobalLaneWaitEnded", "waiting_for_global_lane"],
+  ] as const)(
+    "publishes %s %s and resumes the same semantic owner",
+    async (phase, wait, ready, waiting) => {
+      const operation = begin();
+      operation.setPhase(phase);
+      const cancel = attach(operation);
+      operation[wait]();
+      vi.setSystemTime(abortMs * 2);
+      await operation.watchdog.tick();
+      expect(cancel).not.toHaveBeenCalled();
+      expect(operation.phase).toBe(waiting);
+      operation[ready]();
+      expect(operation.phase).toBe(phase);
+      expect(operation.watchdog.snapshot().semanticProgressAtMs).toBe(Date.now());
+      operation.complete();
+    },
+  );
 
   it.each(["backend-throw", "cleanup-throw", "attempt-close"] as const)(
     "keeps an unfenced terminal writer after requesting every captured cleanup for %s",

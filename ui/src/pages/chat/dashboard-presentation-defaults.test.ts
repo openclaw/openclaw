@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionsPatchResult } from "../../api/types.ts";
@@ -9,7 +10,6 @@ import { sessionsResult } from "../../lib/sessions/session-capability.test-suppo
 import { showToast } from "../../lib/toast.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { createChatPaneRails } from "./chat-pane-rails.ts";
-import { sidebarRegionCallbacks } from "./chat-pane-sidebar-layout.ts";
 import {
   createDashboardHarness,
   expectPresentation,
@@ -361,15 +361,8 @@ describe("dashboard default activation and personal layout persistence", () => {
         (panel) => panel.slot === "dashboard",
       );
       expect(dashboard).toBeDefined();
-      sidebarRegionCallbacks({
-        state: h.state,
-        layout: h.state.sidebarLayout,
-        closePanelSlot: vi.fn(),
-        openPanelSlot: vi.fn(),
-        forgetDiscussionUrl: vi.fn(),
-        resizePanel: vi.fn(),
-        setPanelOpen: vi.fn(),
-      }).togglePanelExpanded(dashboard!.id);
+      const layout = expectDefined(h.pane.render().layout, "Dashboard pane layout");
+      layout.region.callbacks.togglePanelExpanded(dashboard!.id);
     };
     focusPanel();
     expectPresentation(h.state.sidebarLayout, true);

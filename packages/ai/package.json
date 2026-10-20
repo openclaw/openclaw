@@ -81,6 +81,11 @@
       "import": "./dist/internal/google-model-family.mjs",
       "default": "./dist/internal/google-model-family.mjs"
     },
+    "./internal/model-request-body": {
+      "types": "./dist/internal/model-request-body.d.mts",
+      "import": "./dist/internal/model-request-body.mjs",
+      "default": "./dist/internal/model-request-body.mjs"
+    },
     "./internal/openai": {
       "types": "./dist/internal/openai.d.mts",
       "import": "./dist/internal/openai.mjs",
@@ -123,8 +128,8 @@
     "@opentelemetry/semantic-conventions": "1.43.0",
     "openai": "7.32.0",
     "partial-json": "0.1.7",
-    "typebox": "1.3.36",
-    "zod": "4.6.6",
+    "typebox": "1.3.37",
+    "zod": "4.6.7",
     "zod-to-json-schema": "3.25.2"
   },
   "peerDependencies": {

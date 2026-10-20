@@ -22,7 +22,6 @@ import {
 } from "./session-row-projection.read-fixture.test-support.js";
 import { reportPlacementTransition } from "./worker-environments/placement-record.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
-import { createPlacementTurnClaimFixtureOps } from "./worker-environments/placement-test-fixtures.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -119,11 +118,15 @@ it("publishes local placement receipts without rereading or adopting another sto
       await projection.ensureMaterialized();
 
       reads.mockClear();
-      const native = createPlacementTurnClaimFixtureOps(database);
-      const nativeClaim = native.claimTurn(claimInput);
-      await describe(placements.get(target.sessionId)!.updatedAtMs);
-      expect(reads).toHaveBeenCalled();
-      native.releaseTurn(nativeClaim);
+      const shared = createWorkerSessionPlacementStore({ database, now: () => nowMs });
+      nowMs = 40;
+      const sharedClaim = await shared.claimTurn(claimInput);
+      await describe(40);
+      expect(reads).not.toHaveBeenCalled();
+      nowMs = 50;
+      await shared.releaseTurn(sharedClaim);
+      await describe(50);
+      expect(reads).not.toHaveBeenCalled();
     } finally {
       resumeRead.resolve();
       projection.dispose();

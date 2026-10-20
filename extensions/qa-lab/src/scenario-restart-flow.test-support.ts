@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { createQaBusState } from "./bus-state.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
 
@@ -20,13 +21,15 @@ export function createRestartFlowFixture(fault: RestartFlowFault = "none") {
   const sessionKey = "agent:qa:restart-flow";
   let restarts = 0;
   let conversationId = "";
-  const delivery = () => {
+  const at = (failure: RestartFlowFault, restart: number) =>
+    fault === failure && restarts === restart;
+  const planned = { plannedToolName: "qa_restart_wait", plannedWireToolName: "exec" };
+  const delivery = () =>
     state.addOutboundMessage({
       accountId: "default",
       to: `dm:${conversationId}`,
       text: "unsafeVisible=false\nRESTART-CODE-MODE-WAIT-OK",
     });
-  };
   const run = () =>
     runLoadedScenarioFlow("gateway-restart-inflight-run", {
       state,
@@ -69,10 +72,7 @@ export function createRestartFlowFixture(fault: RestartFlowFault = "none") {
         fetchJson: async (url: string) =>
           url.endsWith("request-cursor")
             ? { cursor: 0 }
-            : Array.from({ length: Math.min(restarts + 1, 3) }, () => ({
-                plannedToolName: "qa_restart_wait",
-                plannedWireToolName: "exec",
-              })),
+            : Array.from({ length: Math.min(restarts + 1, 3) }, () => ({ ...planned })),
         readSessionTranscriptSummary: async (
           _env: unknown,
           _sessionKey: string,
@@ -93,11 +93,8 @@ export function createRestartFlowFixture(fault: RestartFlowFault = "none") {
         },
         readRawQaSessionStore: async () => {
           events.push(`persisted:${restarts + 1}`);
-          const generation = fault === "stale lifecycle" && restarts === 2 ? 2 : restarts + 1;
-          const runId =
-            fault === "stale delivery owner" && restarts === 2
-              ? "delivery-2"
-              : `delivery-${restarts + 1}`;
+          const generation = at("stale lifecycle", 2) ? 2 : restarts + 1;
+          const runId = `delivery-${at("stale delivery owner", 2) ? 2 : restarts + 1}`;
           return {
             [sessionKey]: {
               restartRecoveryDeliveryContext:
@@ -111,23 +108,16 @@ export function createRestartFlowFixture(fault: RestartFlowFault = "none") {
         },
         runQaCli: async (_env: unknown, args: string[]) => {
           const runId = args[2];
-          if (!runId) {
-            throw new Error("audit command omitted the run identity");
-          }
+          assert.ok(runId, "audit command omitted the run identity");
           auditRunIds.push(runId);
-          return {
-            identity: {
-              state: "present",
-              context: {
-                runId,
-                contextId: "original-context",
-                executionId:
-                  fault === "changed audit identity" && restarts === 3
-                    ? "replacement-execution"
-                    : "original-execution",
-              },
-            },
+          const context = {
+            runId,
+            contextId: "original-context",
+            executionId: at("changed audit identity", 3)
+              ? "replacement-execution"
+              : "original-execution",
           };
+          return { identity: { state: "present", context } };
         },
         restartGatewayWithConfigPatch: async (input: {
           patch: { gateway: { controlUi: { allowedOrigins: string[] } } };

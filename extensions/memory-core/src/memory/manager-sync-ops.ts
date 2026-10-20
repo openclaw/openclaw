@@ -185,7 +185,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       return;
     }
     this.assertRequiredProviderAvailable("sync");
-    const existingMeta = this.readMeta();
+    const existingMeta = this.database.facts.meta;
     if (
       !existingMeta ||
       existingMeta.model === "fts-only" ||
@@ -238,7 +238,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       // Keyword-only generations never write vectors, so they must not wait for
       // the vector extension before text and FTS indexing can proceed.
       const vectorReady = syncProvider ? await this.ensureVectorReady() : false;
-      const meta = this.readMeta();
+      const meta = this.database.facts.meta;
       // A sibling manager can publish different dimensions or an empty rebuild.
       if (this.database.ensuredVectorDimensions !== meta?.vectorDims) {
         this.database.ensuredVectorDimensions = undefined;
@@ -261,7 +261,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         : this.providerKey;
       const syncProviderIdentities =
         this.syncProviderGeneration?.identities ?? this.resolveProviderIndexIdentities();
-      const hasIndexedChunks = this.hasIndexedChunks();
+      const hasIndexedChunks = this.database.facts.hasIndexedChunks;
       const indexIdentity = resolveMemoryIndexIdentityState({
         meta,
         // Also detects provider→FTS-only transitions so orphaned old-model FTS rows are cleaned up.
@@ -325,7 +325,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         syncProvider === null &&
         Boolean(this.settings.provider) &&
         this.settings.provider !== "none";
-      const hasOnlyFtsChunks = needsFtsOnlyClassification && !this.hasSemanticChunks();
+      const hasOnlyFtsChunks = needsFtsOnlyClassification && !this.database.facts.hasSemanticChunks;
       const canRebuildMissingIdentity =
         syncProvider !== null ||
         !this.settings.provider ||
@@ -680,7 +680,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
             nextMeta.vectorDims = this.vector.dims;
           }
 
-          await this.writeMeta(nextMeta);
+          await this.database.writeMetadata(nextMeta);
           return {
             nextMeta,
             vectorIndexComplete,

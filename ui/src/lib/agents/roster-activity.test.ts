@@ -3,6 +3,51 @@ import type { AgentsListResult, GatewaySessionRow } from "../../api/types.ts";
 import { agentRosterCards } from "./roster-activity.ts";
 
 describe("agent roster activity", () => {
+  it.each([
+    { key: "agent:main:subagent:recap", label: "Conversation recap" },
+    { key: "agent:main:delegated", spawnedBy: "agent:main:main" },
+    { key: "agent:main:internal-status", createdVia: "run" },
+    { key: "agent:main:heartbeat", classification: "heartbeat" },
+  ] satisfies Partial<GatewaySessionRow>[])(
+    "keeps internal assistant output out of the preview: $key",
+    (internal) => {
+      const roster: AgentsListResult = {
+        defaultId: "main",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: [{ id: "main" }],
+      };
+      const internalRow: GatewaySessionRow = {
+        kind: "direct",
+        updatedAt: 40,
+        hasActiveRun: true,
+        lastAssistantMessage: { text: '{"title":"Internal recap"}', timestamp: 30 },
+        ...internal,
+      };
+      const cards = agentRosterCards(roster, [
+        {
+          key: "agent:main:main",
+          kind: "direct",
+          lastAssistantMessage: { text: "Earlier reply", timestamp: 10 },
+        },
+        {
+          key: "agent:main:dashboard:delegated-work",
+          kind: "direct",
+          spawnedBy: "agent:main:main",
+          lastAssistantMessage: { text: "The validation is running.", timestamp: 20 },
+        },
+        internalRow,
+      ]);
+
+      expect(cards[0]).toMatchObject({
+        assistantPreview: "The validation is running.",
+        activeNow: true,
+        lastActiveAt: 40,
+      });
+      expect(agentRosterCards(roster, [internalRow])[0]?.assistantPreview).toBeUndefined();
+    },
+  );
+
   it("selects the latest assistant reply across sessions without using user activity", () => {
     const cards = agentRosterCards(
       {
@@ -44,7 +89,6 @@ describe("agent roster activity", () => {
       "I have set up the template.",
       undefined,
     ]);
-    expect(cards.map((card) => card.sessionCount)).toEqual([3, 1]);
     expect(cards[0]?.mainKey).toBe("agent:main:main");
   });
 
@@ -86,9 +130,9 @@ describe("agent roster activity", () => {
     );
 
     expect(cards).toMatchObject([
-      { id: "beta", lastActiveAt: 7, preview: "First beta", activeNow: false, unreadCount: 0 },
-      { id: "alpha", lastActiveAt: 10, preview: "Canonical", activeNow: true, unreadCount: 1 },
-      { id: "empty", lastActiveAt: 0, preview: undefined, activeNow: false, unreadCount: 0 },
+      { id: "beta", lastActiveAt: 7, preview: "First beta", activeNow: false },
+      { id: "alpha", lastActiveAt: 10, preview: "Canonical", activeNow: true },
+      { id: "empty", lastActiveAt: 0, preview: undefined, activeNow: false },
     ]);
     expect(identities).toEqual(["beta", "alpha", "empty"]);
     expect(rows).toEqual(before);
@@ -147,7 +191,6 @@ describe("agent roster activity", () => {
       name: "Ember",
       textAvatar: "🔥",
       activeNow: true,
-      sessionCount: 3,
       lastActiveAt: 6,
       preview: "Main summary",
       mainKey: "agent:ember:team",
@@ -157,7 +200,7 @@ describe("agent roster activity", () => {
       lastActiveAt: 9,
       preview: "Recent fallback",
     });
-    expect(cards[2]).toMatchObject({ activeNow: false, sessionCount: 0, lastActiveAt: 0 });
+    expect(cards[2]).toMatchObject({ activeNow: false, lastActiveAt: 0 });
   });
 
   it("honors terminal run state and uses the main flag when its canonical key is absent", () => {

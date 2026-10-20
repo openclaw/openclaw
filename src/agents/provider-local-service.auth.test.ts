@@ -22,7 +22,7 @@ async function createFixture() {
     current: true,
     started: false,
     unhealthy: false,
-    revokeOn: "" as "" | "start" | "retry",
+    revokeOn: "" as "" | "retry",
     probes: [] as string[],
     revokedProbes: 0,
     modelRequests: 0,
@@ -33,9 +33,6 @@ async function createFixture() {
   const server = createServer((request, response) => {
     if (request.url === "/started") {
       state.started = true;
-      if (state.revokeOn === "start") {
-        state.current = false;
-      }
     } else if (request.url === "/v1/models" || request.url === "/healthy") {
       state.probes.push(request.headers.authorization ?? "");
       if (!state.current) {
@@ -132,6 +129,15 @@ describe("local service credential authority", () => {
             state.current = false;
           },
         );
+      } else if (phase === "start") {
+        const track = localServiceProcess.trackLocalServiceProcess;
+        vi.spyOn(localServiceProcess, "trackLocalServiceProcess").mockImplementation((child) => {
+          const owned = track(child);
+          // Revoke after spawn, before readiness dispatch. A child HTTP notification
+          // can arrive after an already-authorized health request is in flight.
+          state.current = false;
+          return owned;
+        });
       } else {
         state.revokeOn = phase;
       }

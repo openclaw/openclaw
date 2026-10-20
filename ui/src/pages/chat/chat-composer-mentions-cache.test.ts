@@ -70,7 +70,7 @@ describe("mention query cache", () => {
     {
       failure: "access revoked",
       error: new GatewayRequestError({ code: "FORBIDDEN", message: "Access revoked" }),
-      message: "You cannot mention people here.",
+      message: "Mention access denied.",
     },
     {
       failure: "profile unavailable",
@@ -79,7 +79,7 @@ describe("mention query cache", () => {
         message: "Profile unavailable",
         details: { code: "AUTHENTICATED_PROFILE_UNAVAILABLE" },
       }),
-      message: "Your profile could not be verified.",
+      message: "Profile unverified.",
     },
     {
       failure: "invalid destination",
@@ -87,7 +87,7 @@ describe("mention query cache", () => {
         code: "INVALID_REQUEST",
         message: "Session was not found.",
       }),
-      message: "Mention search was rejected for this conversation.",
+      message: "Mention search rejected.",
     },
   ])("handles a background refresh failure: $failure", async ({ error, message }) => {
     const view = await staleFixture();

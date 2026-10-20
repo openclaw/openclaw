@@ -4,8 +4,14 @@ import { Chat } from "@mistralai/mistralai/sdk/chat";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
-import type { Model } from "../types.js";
 import { streamMistral } from "./mistral.js";
+import { makeProviderModel } from "./provider-model.test-support.js";
+
+type ClientOptions = ConstructorParameters<typeof Chat>[0];
+const sse = (data = "") =>
+  new Response(`${data}data: [DONE]\n\n`, {
+    headers: { "content-type": "text/event-stream" },
+  });
 
 describe("Mistral HTTPClient contract", () => {
   it("serializes TypeBox tool schemas through the SDK without modifying their owner", async () => {
@@ -16,31 +22,21 @@ describe("Mistral HTTPClient contract", () => {
       }),
     );
     Object.freeze(parameters.properties);
-    const model: Model<"mistral-conversations"> = {
-      id: "mistral-test",
-      name: "Mistral Test",
-      api: "mistral-conversations",
-      provider: "mistral",
+    const model = makeProviderModel("mistral-conversations", "mistral", "mistral-test", {
       baseUrl: "https://mistral.invalid",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 128_000,
-      maxTokens: 8192,
-    };
+    });
     let body: unknown;
     const host = getAiTransportHost();
     configureAiTransportHost({
       ...host,
       buildModelFetch: () => async (input, init) => {
         body = await new Request(input, init).json();
-        return new Response(
+        return sse(
           `data: ${JSON.stringify({
             id: "response-fixture",
             model: model.id,
             choices: [{ index: 0, delta: { content: "ok" }, finish_reason: "stop" }],
-          })}\n\ndata: [DONE]\n\n`,
-          { headers: { "content-type": "text/event-stream" } },
+          })}\n\n`,
         );
       },
     });
@@ -54,17 +50,8 @@ describe("Mistral HTTPClient contract", () => {
         {
           apiKey: "fixture-key",
           onPayload: (payload) => {
-            const request = payload as {
-              tools: [
-                {
-                  function: {
-                    parameters: {
-                      properties: { value: { type: string; description?: string } };
-                    };
-                  };
-                },
-              ];
-            };
+            type Schema = { properties: { value: { type: string; description?: string } } };
+            const request = payload as { tools: [{ function: { parameters: Schema } }] };
             request.tools[0].function.parameters.properties.value.description = "Hook description";
           },
         },
@@ -84,19 +71,10 @@ describe("Mistral HTTPClient contract", () => {
   });
 
   it.each([
-    {
-      name: "root client",
-      createChat: (options: ConstructorParameters<typeof Chat>[0]) => new Mistral(options).chat,
-    },
-    {
-      name: "chat subclient",
-      createChat: (options: ConstructorParameters<typeof Chat>[0]) => new Chat(options),
-    },
-  ])("routes $name responses through the injected HTTPClient hooks", async ({ createChat }) => {
-    const response = new Response("data: [DONE]\n\n", {
-      status: 200,
-      headers: { "content-type": "text/event-stream" },
-    });
+    ["root", (options: ClientOptions) => new Mistral(options).chat],
+    ["chat", (options: ClientOptions) => new Chat(options)],
+  ] as const)("routes %s client responses through HTTPClient hooks", async (_name, createChat) => {
+    const response = sse();
     const fetcher = vi.fn(async () => response);
     const onResponse = vi.fn();
     const httpClient = new HTTPClient({ fetcher });

@@ -114,7 +114,6 @@ it.each([
       : new AcceptedWorkspacePublicationIndeterminateError(
           phase,
           new Error(`${phase} transport lost`),
-          new Error("settlement timed out"),
         );
     const state = journalFixture(
       async () => {

@@ -22,8 +22,6 @@ import {
   resolveVoiceCallSessionKey,
   resolveVoiceCallStreamExposurePaths,
   resolveTwilioAuthToken,
-  resolveVoiceCallConfig,
-  validateProviderConfig,
 } from "./config.js";
 import { CallManager } from "./manager.js";
 import type { VoiceCallProvider } from "./providers/base.js";
@@ -46,11 +44,8 @@ import { cleanupTailscaleExposure, setupTailscaleExposure } from "./webhook/tail
 
 export type VoiceCallRuntime = {
   config: VoiceCallConfig;
-  provider: VoiceCallProvider;
   manager: CallManager;
   webhookServer: VoiceCallWebhookServer;
-  webhookUrl: string;
-  publicUrl: string | null;
   stop: () => Promise<void>;
 };
 
@@ -227,22 +222,12 @@ export async function createVoiceCallRuntime(params: {
   };
 
   const cfg = fullConfig ?? coreConfig;
-  const unresolvedConfig = resolveVoiceCallConfig(rawConfig);
-  const config = { ...unresolvedConfig, agentId: resolveVoiceCallAgentId(unresolvedConfig, cfg) };
-
-  if (!config.enabled) {
-    throw new Error("Voice call disabled. Enable the plugin entry in config.");
-  }
+  const config = { ...rawConfig, agentId: resolveVoiceCallAgentId(rawConfig, cfg) };
 
   if (config.skipSignatureVerification) {
     log.warn(
       "[voice-call] SECURITY WARNING: skipSignatureVerification=true disables webhook signature verification (development only). Do not use in production.",
     );
-  }
-
-  const validation = validateProviderConfig(config);
-  if (!validation.valid) {
-    throw new Error(`Invalid voice-call config: ${validation.errors.join("; ")}`);
   }
 
   const provider = await resolveProvider(config);
@@ -555,11 +540,8 @@ export async function createVoiceCallRuntime(params: {
 
     return {
       config,
-      provider,
       manager,
       webhookServer,
-      webhookUrl,
-      publicUrl,
       stop: () => stop(),
     };
   } catch (err) {

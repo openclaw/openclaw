@@ -1,37 +1,17 @@
 /* @vitest-environment node */
 import type { ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { createVitestWorkerRun } from "../scripts/lib/vitest-worker-run.mts";
 import { resolveTestNodeExecPath } from "../src/test-utils/node-process.js";
 import { runVitestShutdownCommand } from "./helpers/vitest-shutdown-command.ts";
+import { withRunnerFixture } from "./non-isolated-runner.fixture-support.ts";
 import { responsesProducerFixtureFiles } from "./non-isolated-runner.responses-fixtures.ts";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
-const require = createRequire(import.meta.url);
-
-function childEnv(): NodeJS.ProcessEnv {
-  return Object.fromEntries(
-    Object.entries(process.env).filter(
-      ([key, value]) =>
-        value !== undefined &&
-        !key.startsWith("VITEST") &&
-        !key.startsWith("OPENCLAW_VITEST") &&
-        key !== "GITHUB_ACTIONS",
-    ),
-  );
-}
-
-async function verifyResponsesProducerSettlement(signal: AbortSignal): Promise<void> {
-  const fixtureRoots = path.join(repoRoot, ".artifacts", "non-isolated-runner-responses");
-  await fs.mkdir(fixtureRoots, { recursive: true });
-  // openclaw-temp-dir: allow retains failed child-runner fixtures for diagnosis.
-  const root = await fs.mkdtemp(path.join(fixtureRoots, "run-"));
-  try {
-    const vitestPackageDir = path.dirname(require.resolve("vitest/package.json"));
-    await fs.symlink(path.dirname(vitestPackageDir), path.join(root, "node_modules"), "junction");
+it("settles a real Responses producer before the next non-isolated file loads", (context) => {
+  const run = withRunnerFixture("non-isolated-runner-responses", async ({ root, args, env }) => {
     const files = responsesProducerFixtureFiles(repoRoot);
     files["vitest.config.ts"] =
       `import { sharedVitestConfig } from ${JSON.stringify(path.join(repoRoot, "test", "vitest", "vitest.shared.config.ts"))};
@@ -60,27 +40,17 @@ export default defineConfig({
       await fs.writeFile(path.join(root, name), contents, "utf8");
     }
     let child!: ChildProcess;
-    const workers = createVitestWorkerRun(childEnv());
+    const workers = createVitestWorkerRun(env);
     let result: Awaited<ReturnType<typeof runVitestShutdownCommand>>;
     try {
       result = await runVitestShutdownCommand({
         bin: resolveTestNodeExecPath(),
-        args: [
-          path.join(vitestPackageDir, "vitest.mjs"),
-          "run",
-          "--root",
-          root,
-          "--config",
-          path.join(root, "vitest.config.ts"),
-          "--configLoader",
-          "runner",
-          "--reporter=verbose",
-        ],
+        args,
         cwd: repoRoot,
-        env: childEnv(),
+        env,
         workerRun: workers,
         maxBytes: 4 * 1024 * 1024,
-        signal,
+        signal: context.signal,
         onReady(owned) {
           child = owned;
         },
@@ -90,20 +60,9 @@ export default defineConfig({
     }
     const output = `${result.stdout}\n${result.stderr}`;
     expect(result.code, output).toBe(0);
-    expect(child.exitCode, output).toBe(0);
-    expect(child.signalCode, output).toBeNull();
+    expect(child, output).toMatchObject({ exitCode: 0, signalCode: null });
     expect(output).toContain("5 passed");
-    await fs.rm(root, { recursive: true, force: true });
-  } catch (error) {
-    if (error instanceof Error) {
-      error.message += `; retained fixture ${root}`;
-    }
-    throw error;
-  }
-}
-
-it("settles a real Responses producer before the next non-isolated file loads", (context) => {
-  const run = verifyResponsesProducerSettlement(context.signal);
+  });
   context.onTestFinished(() => run);
   return run;
 });

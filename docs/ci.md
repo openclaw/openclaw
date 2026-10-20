@@ -60,9 +60,10 @@ a default weight. Inspect any assignment with `--shard 1/3 --list` (or `2/3`, `3
 The combined inventory matches the local full suite; a failure in one shard leaves
 the others running and fails the aggregate gate.
 
-The PostgreSQL Weekly Qualification workflow runs the same conformance action unsharded on
+The PostgreSQL Weekly Qualification workflow runs the same three conformance shards on
 digest-pinned PostgreSQL 16 and 18 images every Monday at 06:43 UTC, or by manual dispatch on main.
-Its two hosted jobs run sequentially; PR CI keeps only the existing three PostgreSQL 17 shards.
+Its six hosted jobs use the same measured shard allocator with a 50-minute job budget,
+with at most three running at once. PR CI keeps only the existing three PostgreSQL 17 shards.
 All versions start with `max_locks_per_transaction=512` for the conformance workload.
 Weekly failures surface through the workflow's failed jobs, like other standalone scheduled audits;
 the PR failure classifier continues to compare against hourly main CI's matching PostgreSQL 17 jobs.

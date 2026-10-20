@@ -76,7 +76,7 @@ type FeishuDoctorSessionEntry = {
 type FeishuDoctorInspection = Awaited<ReturnType<typeof inspectFeishuDoctorState>>;
 type FeishuDoctorRepairReport = Awaited<ReturnType<typeof repairFeishuDoctorState>>;
 
-function timestampForPath(now = new Date()): string {
+function timestampForPath(now: Date): string {
   return now.toISOString().replaceAll(":", "-");
 }
 
@@ -632,16 +632,8 @@ function archiveSessionArtifacts(params: {
   return archived;
 }
 
-async function repairFeishuDoctorState(params: {
-  cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  now?: Date;
-  inspection?: FeishuDoctorInspection;
-}) {
-  const env = params.env ?? process.env;
-  const now = params.now ?? new Date();
-  const inspection =
-    params.inspection ?? (await inspectFeishuDoctorState({ cfg: params.cfg, env }));
+async function repairFeishuDoctorState(inspection: FeishuDoctorInspection) {
+  const now = new Date();
   const backupDir = ensureBackupDir(inspection.stateDir, now);
   const archiveTimestamp = timestampForPath(now);
   const warnings: string[] = [];
@@ -799,11 +791,7 @@ async function runFeishuDoctorSequence(params: {
     };
   }
 
-  const report = await repairFeishuDoctorState({
-    cfg: params.cfg,
-    env: params.env,
-    inspection,
-  });
+  const report = await repairFeishuDoctorState(inspection);
   return {
     changeNotes: [formatRepairChange(report)],
     ...notes,

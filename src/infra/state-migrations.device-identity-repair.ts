@@ -9,13 +9,14 @@ import {
 } from "./device-identity-store.js";
 import { formatErrorMessage } from "./errors.js";
 import { pathMayExistSync } from "./path-existence.js";
-import type { LegacyDeviceIdentityDetection } from "./state-migrations.device-identity.types.js";
+import type {
+  LegacyDeviceIdentityDetection,
+  LegacyDeviceIdentitySource,
+} from "./state-migrations.device-identity.types.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 
-const LEGACY_IDENTITY_RELATIVE_PATH = path.join("identity", "device.json");
 const DOCTOR_CLAIM_SUFFIX = ".doctor-importing";
 const NATIVE_CLAIM_SUFFIX = ".native-importing";
-const IDENTITY_KEY = "primary";
 
 /** Detect retired paths for an authorized importer; only Doctor may rotate invalid SQLite state. */
 export function detectLegacyDeviceIdentity(params: {
@@ -23,38 +24,52 @@ export function detectLegacyDeviceIdentity(params: {
   env?: NodeJS.ProcessEnv;
   doctorOnlyStateMigrations?: boolean;
 }): LegacyDeviceIdentityDetection {
-  const sourcePath = path.join(params.stateDir, LEGACY_IDENTITY_RELATIVE_PATH);
-  const claimPath = `${sourcePath}${DOCTOR_CLAIM_SUFFIX}`;
-  const nativeClaimPath = `${sourcePath}${NATIVE_CLAIM_SUFFIX}`;
-  const doctorAuthorized = params.doctorOnlyStateMigrations === true;
-  let hasInvalidCanonical = false;
-  if (doctorAuthorized) {
-    try {
-      // Planning must preserve WAL/SHM files as well as SQLite rows.
-      withArtifactPreservingStateReads(() =>
-        readStoredDeviceIdentityReadOnly({
-          env: { ...(params.env ?? process.env), OPENCLAW_STATE_DIR: params.stateDir },
-          identityKey: IDENTITY_KEY,
-        }),
-      );
-    } catch (error) {
-      hasInvalidCanonical = error instanceof DeviceIdentityStorageError;
+  const sources = (
+    [
+      ["primary", "device.json"],
+      ["node", "node-device.json"],
+      ["shareExtension", "share-device.json"],
+    ] as const
+  ).map(([identityKey, filename]) => {
+    const sourcePath = path.join(params.stateDir, "identity", filename);
+    const claimPath = `${sourcePath}${DOCTOR_CLAIM_SUFFIX}`;
+    const nativeClaimPath = `${sourcePath}${NATIVE_CLAIM_SUFFIX}`;
+    const doctorAuthorized = params.doctorOnlyStateMigrations === true;
+    let hasInvalidCanonical = false;
+    if (doctorAuthorized) {
+      try {
+        // Planning must preserve WAL/SHM files as well as SQLite rows.
+        withArtifactPreservingStateReads(() =>
+          readStoredDeviceIdentityReadOnly({
+            env: { ...(params.env ?? process.env), OPENCLAW_STATE_DIR: params.stateDir },
+            identityKey,
+          }),
+        );
+      } catch (error) {
+        hasInvalidCanonical = error instanceof DeviceIdentityStorageError;
+      }
     }
-  }
+    return {
+      identityKey,
+      sourcePath,
+      claimPath,
+      nativeClaimPath,
+      hasLegacy:
+        doctorAuthorized &&
+        (pathMayExistSync(claimPath) ||
+          pathMayExistSync(nativeClaimPath) ||
+          pathMayExistSync(sourcePath)),
+      hasInvalidCanonical,
+    };
+  });
   return {
-    sourcePath,
-    claimPath,
-    nativeClaimPath,
-    hasLegacy:
-      doctorAuthorized &&
-      (pathMayExistSync(claimPath) ||
-        pathMayExistSync(nativeClaimPath) ||
-        pathMayExistSync(sourcePath)),
-    hasInvalidCanonical,
+    sources,
+    hasLegacy: sources.some((source) => source.hasLegacy),
+    hasInvalidCanonical: sources.some((source) => source.hasInvalidCanonical),
   };
 }
 
-export function hasLegacyDeviceIdentityPath(detected: LegacyDeviceIdentityDetection): boolean {
+export function hasLegacyDeviceIdentityPath(detected: LegacyDeviceIdentitySource): boolean {
   return (
     pathMayExistSync(detected.claimPath) ||
     pathMayExistSync(detected.nativeClaimPath) ||
@@ -63,23 +78,26 @@ export function hasLegacyDeviceIdentityPath(detected: LegacyDeviceIdentityDetect
 }
 
 /** Generate a replacement only after the caller acquires Doctor's exclusive state lock. */
-export function repairInvalidCanonicalIdentity(env: NodeJS.ProcessEnv): MigrationMessages {
+export function repairInvalidCanonicalIdentity(
+  env: NodeJS.ProcessEnv,
+  identityKey: LegacyDeviceIdentitySource["identityKey"],
+): MigrationMessages {
   try {
     const result = repairInvalidStoredDeviceIdentity(generateStoredDeviceIdentity(), {
       env,
-      identityKey: IDENTITY_KEY,
+      identityKey,
     });
     if (!result.repaired) {
       return { changes: [], warnings: [] };
     }
     if (!result.rotated) {
       return {
-        changes: ["Repaired invalid primary device identity metadata in SQLite."],
+        changes: [`Repaired invalid ${identityKey} device identity metadata in SQLite.`],
         warnings: [],
       };
     }
     return {
-      changes: ["Replaced invalid primary device identity in SQLite."],
+      changes: [`Replaced invalid ${identityKey} device identity in SQLite.`],
       warnings: [],
       notices: ["The repaired device has a new identity and must be approved again."],
     };

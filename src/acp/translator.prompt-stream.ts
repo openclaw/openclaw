@@ -478,21 +478,20 @@ export class AcpTranslatorPromptStream {
     }
 
     if (state === "final") {
-      const rawStopReason = payload.stopReason as string | undefined;
-      const stopReason: StopReason = rawStopReason === "max_tokens" ? "max_tokens" : "end_turn";
+      const atTokenLimit = payload.stopReason === "length" || payload.stopReason === "max_tokens";
+      const stopReason: StopReason = atTokenLimit ? "max_tokens" : "end_turn";
       await this.finishPrompt(pending.sessionId, pending, stopReason);
       return;
     }
+    const interruption =
+      typeof payload.errorMessage === "string" ? payload.errorMessage : undefined;
     if (state === "aborted") {
-      const interruption =
-        typeof payload.errorMessage === "string" ? payload.errorMessage : undefined;
       await this.finishPrompt(pending.sessionId, pending, "cancelled", { interruption });
       return;
     }
     if (state === "error") {
-      const errorKind = payload.errorKind as string | undefined;
-      const stopReason: StopReason = errorKind === "refusal" ? "refusal" : "end_turn";
-      void this.finishPrompt(pending.sessionId, pending, stopReason);
+      const stopReason: StopReason = payload.errorKind === "refusal" ? "refusal" : "end_turn";
+      await this.finishPrompt(pending.sessionId, pending, stopReason, { interruption });
     }
   }
 

@@ -351,32 +351,6 @@ describe("Codex catalog worker transport", () => {
     },
   );
 
-  it.each(["close", "abort"])(
-    "does not read cached previews or deliver an inline response after %s",
-    async (cancel) => {
-      const harness = createHarness();
-      const abort = new AbortController();
-      const cache = vi.fn(() => "retained");
-      const request = harness.client.request(
-        "thread/list",
-        {},
-        { catalogPreview: true, catalogPreviewCache: cache, signal: abort.signal },
-      );
-      const rejected = expect(request).rejects.toThrow();
-      harness.send({
-        id: requestId(harness),
-        result: { data: [{ id: "closed", preview: "new" }] },
-      });
-      if (cancel === "close") {
-        harness.client.close();
-      } else {
-        abort.abort();
-      }
-      await rejected;
-      expect(cache).not.toHaveBeenCalled();
-    },
-  );
-
   it("preserves native RPC rejection and keeps projection failures scoped to their request", async () => {
     const harness = createHarness();
     const native = harness.client.request("thread/list", {}, { catalogPreview: true });

@@ -953,7 +953,7 @@ describe("requester settle wake product flow", () => {
     },
   );
 
-  it("re-evaluates a waiting wave when a yielded cohort settles during that evaluation", async () => {
+  it("retires a delivered wave while a yielded cohort settles during its evaluation", async () => {
     vi.setSystemTime(100_000);
     const context = createGatewayContext();
     await registry.initSubagentRegistry();
@@ -1009,7 +1009,7 @@ describe("requester settle wake product flow", () => {
     try {
       emitCompleted(wave[0]!.runId, wave[0]!.childSessionKey, "wave alpha findings");
       await alphaPending.promise;
-      // Hold the grouped evaluation after it reads the still-running cohort.
+      // Hold the grouped evaluation after its delivered wave retires.
       emitCompleted(wave[1]!.runId, wave[1]!.childSessionKey, "wave beta findings");
       await waitForDeliveredCleanup(wave[1]!.runId, { allowPendingRequesterSettleWake: true });
       // Members share one evaluation slot; either member may own the grouped read.
@@ -1029,10 +1029,10 @@ describe("requester settle wake product flow", () => {
     await flushOwnedWork();
     expect(
       getRequesterWakeCalls().map((request) => request.params?.inputProvenance?.sourceSessionKey),
-    ).toEqual([cohort.childSessionKey, expect.any(String)]);
-    const waveWake = String(getRequesterWakeCalls()[1]?.params?.message);
-    expect(waveWake).toContain("wave alpha findings");
-    expect(waveWake).toContain("wave beta findings");
+    ).toEqual([cohort.childSessionKey]);
+    for (const child of wave) {
+      expect(registry.getSubagentRunByRunId(child.runId)?.requesterSettleWake).toBeUndefined();
+    }
   });
 
   registerRequesterWakeSettlementBoundaryTests({

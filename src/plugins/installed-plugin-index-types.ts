@@ -115,7 +115,6 @@ export type InstalledPluginIndex = {
 
 export type InstalledPluginIndexScopeLookup = {
   addAgentHarnessOwners: (target: Set<string>, ids: readonly string[]) => void;
-  addChannelContributionOwners: (target: Set<string>, ids: readonly string[]) => void;
   addDirectChannelOwners: (target: Set<string>, ids: readonly string[]) => void;
   addDirectProviderOwners: (target: Set<string>, ids: readonly string[]) => void;
   addProviderContributionOwners: (target: Set<string>, ids: readonly string[]) => void;

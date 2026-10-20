@@ -147,6 +147,16 @@ describe("user turn transcript persistence", () => {
         await recorder.waitForPendingInputSettlement?.();
         const replay = createUserTurnTranscriptRecorder({
           input: { text: input.text, idempotencyKey: input.idempotencyKey },
+          assertOriginalInputCommit: Object.assign(
+            () => {
+              throw new Error("Accepted input no longer belongs to its original source");
+            },
+            {
+              prepareSessionSourceScope: async () => {
+                throw new Error("Accepted input must not prepare its original source again");
+              },
+            },
+          ),
           trackInputCompletion: true,
           pendingInputRequestFingerprint: "authenticated-requester-custody",
           target,

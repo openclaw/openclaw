@@ -6,10 +6,10 @@ import {
 } from "../../infra/diagnostic-events.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { catalogLog } from "./session-catalog-log.test-support.js";
+import { catalogProvider as provider } from "./session-catalog.fixtures.test-support.js";
 import {
   call,
   hoisted,
-  provider,
   resetSessionCatalogTestState,
   startCall,
   type SessionCatalogProvider,

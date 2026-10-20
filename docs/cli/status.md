@@ -189,6 +189,9 @@ Use `openclaw skills check --agent <id>` to inspect the missing requirements.
 
 ## Session and model resolution
 
+- Configured model labels resolve default and per-agent aliases, including
+  `provider/alias` and `alias@profile`, to the selected model ID. These read-only
+  lookups do not start provider discovery.
 - Session status output separates `Execution:` from `Runtime:`. `Execution`
   is the sandbox path (`direct`, `docker/*`), while `Runtime` tells you
   whether the session is using `OpenClaw Default`, `OpenAI Codex`, a CLI

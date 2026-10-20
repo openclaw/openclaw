@@ -344,7 +344,7 @@ describe("Gateway index over Harness workspace files", () => {
     const oldTime = new Date(Date.now() - 90 * 86_400_000);
     await fs.utimes(old, oldTime, oldTime);
     // Native search applies a 30-day half-life; the Gateway has no copy of these files.
-    const { manager } = await createIndexedManager({ extraPaths: ["imports"] });
+    const { cfg, manager } = await createIndexedManager({ extraPaths: ["imports"] });
     const before = await search(manager, "alpha", 10);
     const oldScore = before.find((hit) => hit.path === "imports/old.md")?.score;
     const newScore = before.find((hit) => hit.path === "imports/new.md")?.score;
@@ -356,6 +356,17 @@ describe("Gateway index over Harness workspace files", () => {
     await write(fixture.paths.workspace, "imports/old.md", "Gateway decoy.");
     const after = await search(manager, "alpha", 10);
     expect(after.find((hit) => hit.path === "imports/old.md")?.score).toBeCloseTo(oldScore, 5);
+
+    // A same-content save changes host recency even though its content hash stays stable.
+    const refreshedTime = new Date();
+    await fs.utimes(old, refreshedTime, refreshedTime);
+    await manager.close();
+    const reopened = await fixture.getFreshManager(cfg, "cli", true);
+    await reopened.sync({ reason: "cli" });
+    const refreshed = await search(reopened, "alpha", 10);
+    expect(refreshed.find((hit) => hit.path === "imports/old.md")?.score).toBeGreaterThan(
+      oldScore * 4,
+    );
   });
 
   it("rechecks Harness content before publishing and does not adopt a Gateway decoy", async () => {

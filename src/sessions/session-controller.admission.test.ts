@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { withSessionTurn } from "./session-controller.admission.js";
 import { ReplyRunAlreadyActiveError } from "./session-controller.contracts.js";
@@ -19,24 +19,56 @@ import {
   type SessionControllerEntry,
 } from "./session-controller.state.js";
 
+const turnKinds = ["visible", "heartbeat", "queued_followup", "direct"] as const;
 afterEach(() => {
   sessionControllers.clear();
 });
 
-it("runs a turn its own mutation requests ahead of the inputs that mutation keeps waiting", async () => {
-  // sessions.compact owns no turn: it fences an idle session with a compaction
-  // mutation, then manual compaction requests its controller turn from inside it.
-  const target = captureSessionTarget({
-    storeScope: "/synthetic/mutation-owned-turn/sessions.json",
-    sessionKey: "agent:main:mutation-owned-turn",
-    incarnation: "mutation-owned-turn-session",
+function targetFor(label: string, incarnation = `${label}-session`) {
+  return captureSessionTarget({
+    storeScope: `/synthetic/${label}/sessions.json`,
+    sessionKey: `agent:main:${label}`,
+    incarnation,
   });
-  const order: string[] = [];
-  const cancel = new AbortController();
-  const kept = reserveSessionControllerSource(target.sessionKey, {
+}
+
+function reserve(
+  target: ReturnType<typeof targetFor>,
+  options: Partial<Parameters<typeof reserveSessionControllerSource>[1]> = {},
+) {
+  return reserveSessionControllerSource(target.sessionKey, {
     target,
     policy: { mode: "followup" },
+    ...options,
   });
+}
+
+function turnParams(target: ReturnType<typeof targetFor>, materialize = true) {
+  return {
+    target,
+    sessionKey: target.sessionKey,
+    ...(materialize ? { sessionId: target.incarnation } : {}),
+  };
+}
+
+async function releaseInput(
+  input: ReturnType<typeof reserve>,
+  pending: ReturnType<typeof claimSessionControllerTask>,
+) {
+  retireSessionControllerInput(input);
+  const claim = await pending.catch(() => undefined);
+  if (claim) {
+    releaseSessionControllerClaim(claim);
+  }
+  await input.settlement.promise;
+}
+
+it("runs a turn its own mutation requests ahead of the inputs that mutation keeps waiting", async () => {
+  // Manual compaction requests its turn from inside the idle session's mutation fence.
+  const target = targetFor("mutation-owned-turn");
+  const order: string[] = [];
+  const cancel = new AbortController();
+  const kept = reserve(target);
   const compaction = runSessionMutation({
     target,
     kind: "compaction",
@@ -45,9 +77,7 @@ it("runs a turn its own mutation requests ahead of the inputs that mutation keep
     run: async () => {
       const turn = withSessionTurn(
         {
-          sessionKey: target.sessionKey,
-          sessionId: target.incarnation,
-          target,
+          ...turnParams(target),
           abortSignal: cancel.signal,
         },
         async (operation) => {
@@ -70,12 +100,7 @@ it("runs a turn its own mutation requests ahead of the inputs that mutation keep
   } finally {
     cancel.abort(new Error("test cleanup"));
     await compaction.catch(() => {});
-    retireSessionControllerInput(kept);
-    const claim = await keptClaim.catch(() => undefined);
-    if (claim) {
-      releaseSessionControllerClaim(claim);
-    }
-    await kept.settlement.promise;
+    await releaseInput(kept, keptClaim);
   }
 });
 
@@ -86,10 +111,8 @@ it("relays caller cancellation through a borrowed ambient turn", async () => {
     sessionId: "borrowed-cancellation-session",
   };
   const caller = new AbortController();
-  const callbackStarted = createDeferred();
-  const releaseCallback = createDeferred();
+  const [callbackStarted, releaseCallback] = [createDeferred(), createDeferred()];
   let borrowedSignal: AbortSignal | undefined;
-
   await withSessionTurn(params, async (operation) => {
     const borrowed = withSessionTurn(
       { ...params, abortSignal: caller.signal },
@@ -100,7 +123,6 @@ it("relays caller cancellation through a borrowed ambient turn", async () => {
       },
     );
     await callbackStarted.promise;
-
     try {
       caller.abort("caller cancelled");
       expect(borrowedSignal).toMatchObject({ aborted: true, reason: "caller cancelled" });
@@ -121,18 +143,15 @@ it.each([false, true])(
       incarnation: "borrowed-claim-session",
     });
     const caller = new AbortController();
-    await withSessionTurn({ target, sessionKey: target.sessionKey }, async (_, outerSignal) => {
+    await withSessionTurn(turnParams(target, false), async (_, outerSignal) => {
       await withSessionTurn(
         {
-          target,
-          sessionKey: target.sessionKey,
-          ...(materialize ? { sessionId: target.incarnation } : {}),
+          ...turnParams(target, materialize),
           abortSignal: caller.signal,
         },
         async (operation, signal) => {
           caller.abort("nested caller cancelled");
-          expect(signal.aborted).toBe(true);
-          expect(signal.reason).toBe("nested caller cancelled");
+          expect(signal).toMatchObject({ aborted: true, reason: "nested caller cancelled" });
           expect(outerSignal.aborted).toBe(false);
           expect(operation?.abortSignal.aborted ?? false).toBe(false);
         },
@@ -149,21 +168,14 @@ it.each([false, true])(
       sessionKey: `agent:main:ambient-input-${materialize}`,
       incarnation: "incarnation",
     });
-    const params = {
-      target,
-      sessionKey: target.sessionKey,
-      ...(materialize ? { sessionId: target.incarnation } : {}),
-    };
+    const params = turnParams(target, materialize);
     let input: ReturnType<typeof reserveSessionControllerSource> | undefined;
     let nested: Promise<void> | undefined;
     let nestedStarted = false;
     let nestedOwnedInput = false;
     try {
       const startedInsidePredecessor = await withSessionTurn(params, async () => {
-        const reserved = reserveSessionControllerSource(target.sessionKey, {
-          target,
-          policy: { mode: "followup" },
-        });
+        const reserved = reserve(target);
         input = reserved;
         nested = withSessionTurn({ ...params, controllerInput: reserved }, async () => {
           nestedStarted = true;
@@ -186,20 +198,13 @@ it.each([false, true])(
   },
 );
 
-it.each(["visible", "heartbeat", "queued_followup", "direct"] as const)(
+it.each(turnKinds)(
   "keeps direct %s admission behind an unclaimed source's cleanup receipt",
   async (kind) => {
     const sessionId = "cleanup-session";
-    const target = captureSessionTarget({
-      storeScope: `/synthetic/consumed-admission-${kind}/sessions.json`,
-      sessionKey: `agent:main:consumed-admission-${kind}`,
-      incarnation: sessionId,
-    });
-    const cleanupStarted = createDeferred();
-    const cleanup = createDeferred();
-    const input = reserveSessionControllerSource(target.sessionKey, {
-      target,
-      policy: { mode: "followup" },
+    const target = targetFor(`consumed-admission-${kind}`, sessionId);
+    const [cleanupStarted, cleanup] = [createDeferred(), createDeferred()];
+    const input = reserve(target, {
       adapter: {
         onSettled: async () => {
           cleanupStarted.resolve();
@@ -210,9 +215,8 @@ it.each(["visible", "heartbeat", "queued_followup", "direct"] as const)(
     let operation: ReturnType<typeof createReplyOperation> | undefined;
     const create = () => {
       operation = createReplyOperation({
-        sessionKey: target.sessionKey,
+        ...turnParams(target),
         sessionId,
-        target,
         resetTriggered: false,
         turnKind: kind,
       });
@@ -234,20 +238,12 @@ it.each(["visible", "heartbeat", "queued_followup", "direct"] as const)(
 );
 
 it("keeps interrupt execution behind a cancelled unclaimed source's raw cleanup", async () => {
-  const target = captureSessionTarget({
-    storeScope: "/synthetic/retiring-admission/sessions.json",
-    sessionKey: "agent:main:retiring-admission",
-    incarnation: "retiring-admission-session",
-  });
+  const target = targetFor("retiring-admission");
   const cleanup = createDeferred();
-  const predecessor = reserveSessionControllerSource(target.sessionKey, {
-    target,
-    policy: { mode: "followup" },
-  });
+  const predecessor = reserve(target);
   trackSessionControllerSourceWork(predecessor, cleanup.promise);
   abortSessionControllerInput(predecessor, new Error("interrupt"));
-  const successor = reserveSessionControllerSource(target.sessionKey, {
-    target,
+  const successor = reserve(target, {
     policy: { mode: "interrupt" },
   });
   let started = false;
@@ -264,59 +260,52 @@ it("keeps interrupt execution behind a cancelled unclaimed source's raw cleanup"
   } finally {
     cleanup.resolve();
     await predecessor.settlement.promise;
-    retireSessionControllerInput(successor);
-    const claim = await pending.catch(() => undefined);
-    if (claim) {
-      releaseSessionControllerClaim(claim);
-    }
-    await successor.settlement.promise;
+    await releaseInput(successor, pending);
   }
 });
 
-describe("turn admission parity", () => {
-  it.each(
-    (["visible", "heartbeat", "queued_followup", "direct"] as const).flatMap((kind) => [
-      { kind, deliveryPending: false },
-      { kind, deliveryPending: true },
-    ]),
-  )(
-    "makes mailbox and direct creation agree for $kind (delivery pending=$deliveryPending)",
-    async ({ kind, deliveryPending }) => {
-      const blocked = deliveryPending && (kind === "heartbeat" || kind === "queued_followup");
-      const sessionKey = `agent:main:admission-parity:${kind}:${deliveryPending}`;
-      const entry = getSessionControllerEntry(sessionKey);
-      const input = reserveSessionControllerSource(sessionKey, { policy: { mode: "followup" } });
-      if (deliveryPending) {
-        entry.followupBarrier = {} as NonNullable<SessionControllerEntry["followupBarrier"]>;
-      }
+it.each(
+  turnKinds.flatMap((kind) => [
+    { kind, deliveryPending: false },
+    { kind, deliveryPending: true },
+  ]),
+)(
+  "makes mailbox and direct creation agree for $kind (delivery pending=$deliveryPending)",
+  async ({ kind, deliveryPending }) => {
+    const blocked = deliveryPending && (kind === "heartbeat" || kind === "queued_followup");
+    const sessionKey = `agent:main:admission-parity:${kind}:${deliveryPending}`;
+    const entry = getSessionControllerEntry(sessionKey);
+    const input = reserveSessionControllerSource(sessionKey, { policy: { mode: "followup" } });
+    if (deliveryPending) {
+      entry.followupBarrier = {} as NonNullable<SessionControllerEntry["followupBarrier"]>;
+    }
 
-      const claim = tryClaimSessionControllerTask(input, kind);
-      expect(Boolean(claim)).toBe(!blocked);
-      let operation: ReturnType<typeof createReplyOperation> | undefined;
-      const create = () => {
-        operation = createReplyOperation({
-          sessionKey,
-          sessionId: `session-${kind}`,
-          resetTriggered: false,
-          turnKind: kind,
-          mailboxClaim: claim,
-        });
-      };
-      if (blocked) {
-        expect(create).toThrow("Reply follow-up admission is blocked");
-      } else {
-        expect(create).not.toThrow();
-      }
+    const claim = tryClaimSessionControllerTask(input, kind);
+    expect(Boolean(claim)).toBe(!blocked);
+    let operation: ReturnType<typeof createReplyOperation> | undefined;
+    const create = () => {
+      operation = createReplyOperation({
+        sessionKey,
+        sessionId: `session-${kind}`,
+        resetTriggered: false,
+        turnKind: kind,
+        mailboxClaim: claim,
+      });
+    };
+    if (blocked) {
+      expect(create).toThrow("Reply follow-up admission is blocked");
+    } else {
+      expect(create).not.toThrow();
+    }
 
-      operation?.complete();
-      if (claim) {
-        releaseSessionControllerClaim(claim);
-        await claim.settlement.promise;
-      } else {
-        entry.followupBarrier = undefined;
-        retireSessionControllerInput(input);
-        await input.settlement.promise;
-      }
-    },
-  );
-});
+    operation?.complete();
+    if (claim) {
+      releaseSessionControllerClaim(claim);
+      await claim.settlement.promise;
+    } else {
+      entry.followupBarrier = undefined;
+      retireSessionControllerInput(input);
+      await input.settlement.promise;
+    }
+  },
+);

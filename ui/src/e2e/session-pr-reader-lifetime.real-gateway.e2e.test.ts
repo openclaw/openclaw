@@ -266,14 +266,15 @@ suite.define(() => {
             return json([pullRequest(repository)]);
           }
           if (url.pathname.includes("/pulls/")) {
+            return json(pullRequest(repository));
+          }
+          if (url.pathname.endsWith("/check-runs")) {
+            // CI details read the admitted commit without fetching the mutable PR again.
             if (repository === replacement && holdChecks) {
               holdChecks = false;
               checksEntered.resolve();
               await releaseIdentityReads.promise;
             }
-            return json(pullRequest(repository));
-          }
-          if (url.pathname.endsWith("/check-runs")) {
             return json({
               total_count: 1,
               check_runs: [

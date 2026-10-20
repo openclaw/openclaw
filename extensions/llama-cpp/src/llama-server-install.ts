@@ -671,7 +671,6 @@ async function installLlamaServer(
 
 export async function ensureLlamaServerInstalled(options: LlamaServerInstallOptions = {}): Promise<{
   command: string;
-  asset: LlamaServerAsset;
 }> {
   options.signal?.throwIfAborted();
   const asset = options.asset ?? selectLlamaServerAsset();
@@ -693,5 +692,5 @@ export async function ensureLlamaServerInstalled(options: LlamaServerInstallOpti
     previous ? options.signal : undefined,
     (signal) => toErrorObject(signal.reason, "Installation cancelled"),
   );
-  return { command, asset };
+  return { command };
 }

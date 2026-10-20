@@ -1,39 +1,31 @@
 /** @vitest-environment node */
+import { getEventListeners } from "node:events";
 import { DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createBrowserGatewaySocket } from "./gateway-browser-socket.ts";
 
 type MockSocketEvent = { code?: number; data?: unknown; reason?: string };
-type MockSocketHandler = (event: MockSocketEvent) => void;
 
 const sockets: MockWebSocket[] = [];
 
-class MockWebSocket {
+class MockWebSocket extends EventTarget {
   static readonly OPEN = 1;
   readonly close = vi.fn((code?: number, _reason?: string) => {
     if (code !== undefined && code !== 1000 && (code < 3000 || code > 4999)) {
       throw new DOMException("invalid code", "InvalidAccessError");
     }
   });
-  readonly handlers = new Map<string, MockSocketHandler[]>();
   readyState = 0;
 
   constructor(readonly url: string) {
+    super();
     sockets.push(this);
-  }
-
-  addEventListener(type: string, handler: MockSocketHandler) {
-    const handlers = this.handlers.get(type) ?? [];
-    handlers.push(handler);
-    this.handlers.set(type, handlers);
   }
 
   send(_data: string) {}
 
   emit(type: string, event: MockSocketEvent = {}) {
-    for (const handler of this.handlers.get(type) ?? []) {
-      handler(event);
-    }
+    this.dispatchEvent(Object.assign(new Event(type), event));
   }
 }
 
@@ -122,6 +114,22 @@ describe("createBrowserGatewaySocket", () => {
 
     expect(socket.close).toHaveBeenCalledWith(1000, "stopped");
     expect(handlers.error).not.toHaveBeenCalled();
+
+    socket.emit("close", { code: 1000, reason: "stopped" });
+    expect(handlers.close).toHaveBeenCalledWith(1000, "stopped");
+  });
+
+  it("retires native listeners before delivering terminal close", () => {
+    let retained: string[] | undefined;
+    handlers.close.mockImplementation(() => {
+      retained = ["open", "message", "close", "error"].filter(
+        (type) => getEventListeners(socket, type).length > 0,
+      );
+    });
+
+    socket.emit("close", { code: 1000, reason: "stopped" });
+
+    expect(retained).toEqual([]);
   });
 
   it("maps protocol policy-violation closes to the browser-safe connect failure code", () => {

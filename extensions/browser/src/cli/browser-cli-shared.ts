@@ -163,7 +163,7 @@ export function parseBrowserNonNegativeIntegerOption(raw: string, flag: string):
 export async function callBrowserRequest<T>(
   opts: BrowserParentOpts,
   params: BrowserRequestParams,
-  extra?: { timeoutMs?: number; progress?: boolean },
+  extra?: { timeoutMs?: number },
 ): Promise<T> {
   const resolvedTimeout =
     typeof extra?.timeoutMs === "number" && Number.isFinite(extra.timeoutMs)
@@ -183,7 +183,7 @@ export async function callBrowserRequest<T>(
       body: params.body,
       timeoutMs: budgets?.proxyTimeoutMs,
     },
-    { progress: extra?.progress, scopes: [...BROWSER_REQUEST_GATEWAY_SCOPES] },
+    { scopes: [...BROWSER_REQUEST_GATEWAY_SCOPES] },
   );
   if (payload === undefined) {
     throw new Error("Unexpected browser.request response");

@@ -125,15 +125,21 @@ describe("PostgreSQL conformance selection", () => {
     expect(workflow.jobs["ci-gate"].needs).toContain("postgres-conformance");
   });
 
-  it("qualifies pinned pg16 and pg18 sequentially on main without adding PR jobs", () => {
+  it("qualifies pinned pg16 and pg18 in three shards each on main without adding PR jobs", () => {
     const workflow = parse(
       readFileSync(".github/workflows/postgres-conformance-weekly.yml", "utf8"),
     );
     expect(Object.keys(workflow.on).toSorted()).toEqual(["schedule", "workflow_dispatch"]);
     expect(workflow.on.schedule).toEqual([{ cron: "43 6 * * 1" }]);
     const job = workflow.jobs["postgres-conformance"];
-    expect(job.strategy["max-parallel"]).toBe(1);
+    expect(job.strategy["max-parallel"]).toBe(3);
     expect(job.strategy["fail-fast"]).toBe(false);
+    expect(job.strategy.matrix.version).toEqual(["pg16", "pg18"]);
+    expect(job.strategy.matrix.shard).toEqual(
+      readCiWorkflow().jobs["postgres-conformance"].strategy.matrix.shard,
+    );
+    expect(job["timeout-minutes"]).toBe(50);
+    expect(job.name).toBe("PostgreSQL conformance (${{ matrix.version }}, ${{ matrix.shard }})");
     expect(job.strategy.matrix.include.map((row: { image: string }) => row.image)).toEqual([
       "pgvector/pgvector:pg16@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a",
       "pgvector/pgvector:pg18@sha256:2358fcba361ed2233a5ed81b5fe4ca779ccb304120ce531a3bf51c0ed7e2bc11",
@@ -156,7 +162,10 @@ describe("PostgreSQL conformance selection", () => {
       (step: WorkflowStep) => step.name === "Run PostgreSQL conformance",
     );
     expect(conformance.uses).toBe("./.github/actions/postgres-conformance");
-    expect(conformance.with).toEqual({ image: "${{ matrix.image }}" });
+    expect(conformance.with).toEqual({
+      image: "${{ matrix.image }}",
+      shard: "${{ matrix.shard }}",
+    });
   });
 
   it.each<[string[] | null, boolean, Partial<Parameters<typeof runCiManifestFixture>[0]>?]>([

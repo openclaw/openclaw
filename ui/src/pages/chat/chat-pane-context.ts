@@ -1,6 +1,7 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
+import type { ExecApprovalDecision } from "../../app/exec-approval.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { hasOperatorSelfReadAccess } from "../../app/operator-access.ts";
 import {
@@ -34,6 +35,7 @@ import { isTerminalAvailable } from "../../lib/terminal-availability.ts";
 import { invalidateChatAvatarCache } from "./chat-avatar.ts";
 import { commitCurrentChatHistorySnapshot } from "./chat-history-snapshot.ts";
 import {
+  chatHistoryRequests,
   getChatHistoryLoadState,
   synchronizeInitialChatSnapshotConnection,
 } from "./chat-history-state.ts";
@@ -63,6 +65,7 @@ import {
   replayPendingChatAbort,
 } from "./run-lifecycle.ts";
 import { cancelChatScroll } from "./scroll.ts";
+import { currentSessionApprovalReplay } from "./session-approval-projection.ts";
 import {
   clearChatMessagesFromCache,
   readChatSessionSnapshot,
@@ -79,18 +82,20 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     if (!state || parseCatalogSessionKey(state.sessionKey)) {
       return { selectedSession: undefined };
     }
+    const observation = this.resourceSessionObservation();
+    const session = selectedSession ?? observation?.row ?? undefined;
     if (
       !this.ownsChatSnapshot({ sessionKey: state.sessionKey }) ||
-      this.resourceSessionObservation()?.hasObserved ||
-      (selectedSession && !state.sessions.state.resultCached)
+      observation?.hasObserved ||
+      (session && !state.sessions.state.resultCached)
     ) {
-      return { selectedSession };
+      return { selectedSession: session };
     }
     const snapshot = readChatSessionSnapshot(state.chatMessagesBySession, state, {
       sessionKey: state.sessionKey,
     });
     return {
-      selectedSession,
+      selectedSession: session,
       transcriptMetadata:
         snapshot?.sessionId === state.currentSessionId ? snapshot?.transcriptMetadata : undefined,
     };
@@ -224,13 +229,16 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     for (const { key, agentId } of stateValue.deletedSessions) {
       clearChatMessagesFromCache(state.chatMessagesBySession, state, { sessionKey: key, agentId });
     }
+    // Live rows retire on disconnect; the session owner retains same-identity
+    // presentation (including deferred metadata) until the next canonical list.
+    const presentation = this.context.sessions.presentation;
     // A list for another agent must not overwrite this pane's global history.
     if (
       !isUiSelectedGlobalSessionKey(state, state.sessionKey) ||
-      stateValue.agentId === resolveChatAgentId(state)
+      presentation.agentId === resolveChatAgentId(state)
     ) {
-      state.sessionsResult = stateValue.result;
-      state.sessionsResultAgentId = stateValue.agentId;
+      state.sessionsResult = presentation.result;
+      state.sessionsResultAgentId = presentation.agentId;
     }
     this.projectObservedSessionRow();
     state.sessionsLoading = stateValue.loading;
@@ -334,6 +342,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     const questions = visible
       ? listQuestionPrompts(this.questionPromptState).filter(matchesConversation)
       : [];
+    const approvalReplay = visible ? currentSessionApprovalReplay(state, agentId) : undefined;
+    const pendingReplay = chatHistoryRequests(state).pendingApprovalReplay;
+    const isPending = (id: string) => pendingReplay?.events.get(id)?.phase !== "terminal";
     // Question records mutate in place; their revisions own transcript-cache invalidation.
     if (
       questions.length !== this.questionProjection.prompts.length ||
@@ -348,16 +359,29 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         revisions: questions.map((prompt) => prompt.revision),
       };
     }
+    const overlays = this.context.overlays;
+    // Only a complete pending replay supersedes the global queue. Live
+    // events and partial pending reads cannot prove another request absent.
+    const inlineApproval = visible
+      ? (state.chatSessionApprovalQueue?.find((approval) => isPending(approval.id)) ??
+        (approvalReplay?.complete
+          ? null
+          : overlays?.snapshot?.approvalQueue?.find(
+              (approval) => isPending(approval.id) && matchesConversation(approval.request),
+            )) ??
+        null)
+      : null;
     return {
       gatewayQuestionPrompts: this.questionProjection.prompts,
-      // Session replay already owns the parent's presentation scope for delegated approvals.
-      inlineApproval: visible
-        ? (state.chatSessionApprovalQueue?.[0] ??
-          this.context.overlays?.snapshot?.approvalQueue?.find((approval) =>
-            matchesConversation(approval.request),
-          ) ??
-          null)
-        : null,
+      inlineApproval,
+      approvalBusy: overlays?.snapshot?.approvalBusy,
+      approvalCanGrant: overlays?.snapshot?.approvalCanGrant ?? false,
+      approvalErrors: overlays?.snapshot?.approvalErrors,
+      onApprovalDecision:
+        overlays && visible
+          ? (approvalId: string, decision: ExecApprovalDecision) =>
+              overlays.decideApproval(decision, approvalId, inlineApproval ?? undefined)
+          : undefined,
     };
   }
 
@@ -499,6 +523,8 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       // suppress the fresh load or leak the prior account's identities.
       this.collaboration.sharingStates = new Map();
       this.sessionSharingHydrationTargets.clear();
+      state.chatSessionApprovalQueue = [];
+      state.chatSessionApprovalReplay = undefined;
       state.guardianNotices = [];
       state.providerPolicyNotice = null;
       this.resetSessionPullRequests();

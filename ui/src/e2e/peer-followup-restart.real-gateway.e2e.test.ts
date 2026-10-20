@@ -1,14 +1,11 @@
-// Opt-in only: real Chromium, real OpenAI inference, and one owned Gateway crash.
-import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { readFile, writeFile } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
-import { promisify } from "node:util";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { OpenClawTestInstance } from "../../../test/helpers/openclaw-test-instance.ts";
+import type { GatewaySessionRow as SessionRow } from "../api/types.ts";
 
 if (process.env.OPENCLAW_PEER_RESTART_LIVE !== "1") {
   it.skip("peer restart browser proof requires OPENCLAW_PEER_RESTART_LIVE=1", () => {});
@@ -54,27 +51,10 @@ if (process.env.OPENCLAW_PEER_RESTART_LIVE !== "1") {
   const noProxy = [process.env.no_proxy ?? process.env.NO_PROXY, "127.0.0.1", "localhost", "::1"]
     .filter(Boolean)
     .join(",");
-  const sha256 = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
   let instance: OpenClawTestInstance | undefined;
-  let artifactDir: string | undefined;
   let gate: Awaited<ReturnType<typeof startGate>> | undefined;
-  let stage = "preflight";
-  const proof: Record<string, unknown> = {
-    complete: false,
-    scenario:
-      "UI operator -> real sessions_send -> completed exec -> SIGKILL -> automatic continuation",
-    provider: {
-      name: "openai",
-      endpoint: "https://api.openai.com/v1",
-      modelEnvironment: "OPENCLAW_LIVE_PEER_RESTART_MODEL",
-    },
-    boundaries:
-      "No provider or Gateway mocks; only a read-only loopback HTTP command is held. No sessions.recover or post-crash chat.send.",
-    viewport,
-  };
-  const sanitize = (value: string) => {
-    let text = value;
-    for (const secret of [
+  const sanitize = (value: string) =>
+    [
       apiKey,
       modelRef,
       modelRef.slice("openai/".length),
@@ -82,21 +62,10 @@ if (process.env.OPENCLAW_PEER_RESTART_LIVE !== "1") {
       instance?.hookToken,
       instance?.stateDir,
       instance?.homeDir,
-    ]) {
-      if (secret) {
-        text = text.replaceAll(secret, "[redacted]");
-      }
-    }
-    return text;
-  };
-  const saveProof = async () => {
-    if (artifactDir) {
-      await writeFile(
-        path.join(artifactDir, "proof.json"),
-        sanitize(JSON.stringify({ ...proof, stage }, null, 2)) + "\n",
-      );
-    }
-  };
+    ].reduce<string>(
+      (text, secret) => (secret ? text.replaceAll(secret, "[redacted]") : text),
+      value,
+    );
 
   // This is not an inference fixture. The first real exec fetch remains unresolved;
   // only a fetch issued after the old process has died can return the final marker.
@@ -106,7 +75,6 @@ if (process.env.OPENCLAW_PEER_RESTART_LIVE !== "1") {
     const held = new Set<ServerResponse>();
     let afterCrash = false;
     let requestsBeforeCrash = 0;
-    let requestsAfterCrash = 0;
     const reservation = await reserveTestPortListener({
       offsets: [0],
       createListener: () =>
@@ -116,7 +84,6 @@ if (process.env.OPENCLAW_PEER_RESTART_LIVE !== "1") {
             return;
           }
           if (afterCrash) {
-            requestsAfterCrash++;
             response.writeHead(200, { "content-type": "text/plain" }).end(finalAnswer);
             resumed.resolve();
           } else {
@@ -131,7 +98,7 @@ if (process.env.OPENCLAW_PEER_RESTART_LIVE !== "1") {
       url: "http://127.0.0.1:" + reservation.claim.port + "/continue",
       blocked: blocked.promise,
       resumed: resumed.promise,
-      counts: () => ({ requestsBeforeCrash, requestsAfterCrash }),
+      beforeCrashRequests: () => requestsBeforeCrash,
       openAfterCrash() {
         afterCrash = true;
         for (const response of held) {
@@ -140,9 +107,7 @@ if (process.env.OPENCLAW_PEER_RESTART_LIVE !== "1") {
       },
       close: () =>
         runQaGatewayFixture(
-          async () => {
-            reservation.listener.closeAllConnections();
-          },
+          async () => reservation.listener.closeAllConnections(),
           reservation.releaseListener,
           reservation.claim.release,
         ),
@@ -162,43 +127,41 @@ if (process.env.OPENCLAW_PEER_RESTART_LIVE !== "1") {
       { method, params },
     );
   }
-  type History = { sessionId?: string; messages?: unknown[] };
-  type SessionRow = {
-    key: string;
-    sessionId?: string;
-    status?: string;
-    hasActiveRun?: boolean;
-    restartRecoveryStatus?: string;
-    lastRunError?: string;
-  };
+  type History = { messages?: unknown[] };
   const messages = (history: History) =>
     (history.messages ?? []).map((entry) => {
       const envelope = record(entry);
       return record(envelope?.message) ?? envelope ?? {};
     });
-  const completedTool = (history: History, toolName: string, text: string) =>
+  const completedDelegation = (history: History) =>
     messages(history).some(
       (message) =>
         message.role === "toolResult" &&
-        message.toolName === toolName &&
-        (toolName !== "exec" || record(message.details)?.exitCode === 0) &&
+        message.toolName === "sessions_send" &&
         message.isError !== true &&
-        JSON.stringify(message).includes(text),
+        JSON.stringify(message).includes(targetKey),
+    );
+  const assistantBlocks = (history: History) =>
+    messages(history).flatMap((message) =>
+      message.role === "assistant" && Array.isArray(message.content)
+        ? message.content.map(record)
+        : [],
     );
   const hasAssistantText = (history: History, expected: string) =>
-    messages(history).some(
-      (message) =>
-        message.role === "assistant" &&
-        Array.isArray(message.content) &&
-        message.content.some((value) => {
-          const block = record(value);
-          return (
-            block?.type === "text" &&
-            typeof block.text === "string" &&
-            block.text.trim() === expected
-          );
-        }),
+    assistantBlocks(history).some(
+      (block) =>
+        block?.type === "text" && typeof block.text === "string" && block.text.trim() === expected,
     );
+  const completedEffects = (history: History) =>
+    messages(history).filter(
+      (message) =>
+        message.role === "toolResult" &&
+        message.toolName === "exec" &&
+        record(message.details)?.exitCode === 0 &&
+        message.isError !== true &&
+        JSON.stringify(message.content).includes(effect),
+    );
+  const poll = <T>(read: () => T | Promise<T>) => expect.poll(read, { timeout: 30_000 });
 
   const suite = createControlUiE2eSuite({
     name: "Peer followup live browser restart",
@@ -221,15 +184,8 @@ if (process.env.OPENCLAW_PEER_RESTART_LIVE !== "1") {
       await Promise.all([readFile("dist/index.js"), readFile("dist/control-ui/index.html")]);
       const close = () =>
         runQaGatewayFixture(
-          async () => {
-            await instance?.cleanup();
-            proof.gatewayStopped = !instance?.child;
-          },
-          async () => {
-            await gate?.close();
-            proof.gateCounts = gate?.counts();
-          },
-          saveProof,
+          async () => instance?.cleanup(),
+          () => gate?.close(),
         );
       try {
         gate = await startGate();
@@ -312,7 +268,6 @@ if (process.env.OPENCLAW_PEER_RESTART_LIVE !== "1") {
             controlUi: { enabled: true },
           },
         });
-        stage = "Gateway startup";
         await instance.startGateway();
         return { baseUrl: "http://127.0.0.1:" + instance.port + "/", close };
       } catch (error) {
@@ -325,7 +280,6 @@ if (process.env.OPENCLAW_PEER_RESTART_LIVE !== "1") {
 
   suite.define(() => {
     it("automatically finishes an authenticated peer task without replaying its completed effect", async (test) => {
-      artifactDir = suite.artifactDir;
       await suite.runScenario(test, {
         retainedState: () => instance?.stateDir,
         run: async (signal) => {
@@ -334,22 +288,13 @@ if (process.env.OPENCLAW_PEER_RESTART_LIVE !== "1") {
           await suite.withPage(
             { viewport, locale: "en-US", serviceWorkers: "block" },
             async ({ page, context }) => {
-              const sent: Array<{ method: string; sessionKey?: string }> = [];
+              const sent: string[] = [];
               const errors: string[] = [];
               page.on("websocket", (socket) => {
                 socket.on("framesent", ({ payload }) => {
                   const frame = record(JSON.parse(String(payload)));
-                  if (
-                    frame?.type === "req" &&
-                    typeof frame.method === "string" &&
-                    frame.method !== "connect"
-                  ) {
-                    const params = record(frame.params);
-                    sent.push({
-                      method: frame.method,
-                      sessionKey:
-                        typeof params?.sessionKey === "string" ? params.sessionKey : undefined,
-                    });
+                  if (frame?.type === "req" && typeof frame.method === "string") {
+                    sent.push(frame.method);
                   }
                 });
                 socket.on("framereceived", ({ payload }) => {
@@ -374,23 +319,26 @@ if (process.env.OPENCLAW_PEER_RESTART_LIVE !== "1") {
               const rows = async () =>
                 (await rpc<{ sessions: SessionRow[] }>(page, "sessions.list", { agentId: "main" }))
                   .sessions;
-              const capture = async (name: string, surface: Locator, content: Locator[]) => {
-                // Save only the real transcript viewport crop, excluding the model picker,
-                // connection controls and sidebar. Never retain an auth-bearing page URL.
+              const targetRow = async () => (await rows()).find((row) => row.key === targetKey);
+              const readEffect = () =>
+                readFile(path.join(owner.state.workspaceDir, effectFile), "utf8");
+              const capture = async (name: string, surface: Locator) => {
+                // Crop the transcript only; exclude model metadata, controls, and auth-bearing URLs.
                 const text = (await surface.textContent()) ?? "";
-                expect(
-                  sanitize(text) === text,
-                  "Screenshot surface contains private fixture data",
-                ).toBe(true);
+                expect(sanitize(text), "Screenshot surface contains private fixture data").toBe(
+                  text,
+                );
                 expect(new URL(page.url()).hash).toBe("");
-                const frame = await takeControlUiScreenshotFrame(page, surface, content, {
+                const frame = await takeControlUiScreenshotFrame(page, surface, [surface], {
                   elements: [surface],
                   animations: "disabled",
                 });
-                await writeFile(path.join(artifactDir!, name + ".png"), frame.elements[0]!.png);
+                await writeFile(
+                  path.join(suite.artifactDir, name + ".png"),
+                  frame.elements[0]!.png,
+                );
               };
               try {
-                stage = "browser pairing and public session creation";
                 await page.addInitScript(() =>
                   localStorage.setItem(
                     "openclaw:control-ui:community-invite:v2",
@@ -415,25 +363,6 @@ if (process.env.OPENCLAW_PEER_RESTART_LIVE !== "1") {
                     permissionMode: "full",
                   });
                 }
-                const sourcePaths = [
-                  "src/agents/operator-run-recovery-source.ts",
-                  "src/agents/command/session-preparation.ts",
-                  "src/auto-reply/reply/restart-recovery-claim.ts",
-                  "ui/src/e2e/peer-followup-restart.real-gateway.e2e.test.ts",
-                  "dist/index.js",
-                  "dist/.buildstamp",
-                  "dist/.runtime-postbuildstamp",
-                ];
-                proof.sourceBinding = {
-                  gitHead: (await promisify(execFile)("git", ["rev-parse", "HEAD"])).stdout.trim(),
-                  files: await Promise.all(
-                    sourcePaths.map(async (file) => ({
-                      path: file,
-                      sha256: sha256(await readFile(file)),
-                    })),
-                  ),
-                  modelSha256: sha256(modelRef),
-                };
                 await page.goto(controlUiSessionUrl(suite.server.baseUrl, sourceKey));
                 await waitForControlUiGatewayReady(page);
                 const assetPath = await page
@@ -451,15 +380,12 @@ if (process.env.OPENCLAW_PEER_RESTART_LIVE !== "1") {
                     await readFile(path.join("dist/control-ui", assetPath!.slice(1))),
                   ),
                 ).toBe(true);
-                proof.uiAsset = { path: assetPath, sha256: sha256(assetBytes) };
 
                 const effectCommand = "echo " + effect + " >> " + effectFile + "; echo " + effect;
                 const safeCommand =
                   "node -e " +
                   JSON.stringify(
-                    "fetch('" +
-                      commandGate.url +
-                      "').then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); }).then(console.log).catch(e => { console.error(e.message); process.exitCode = 1; })",
+                    `fetch('${commandGate.url}').then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); }).then(console.log).catch(e => { console.error(e.message); process.exitCode = 1; })`,
                   );
                 const targetTask = [
                   "Perform this small task in order. First use exec exactly once for this command, wait for its successful result, and preserve that completed result:",
@@ -468,79 +394,45 @@ if (process.env.OPENCLAW_PEER_RESTART_LIVE !== "1") {
                   safeCommand,
                   "After the HTTP command succeeds, reply with exactly its response text. Do not call sessions_send or announce back to the source.",
                 ].join("\n");
-                const prompt =
-                  "Use sessions_send once with sessionKey=" +
-                  targetKey +
-                  ", mode=followup, timeoutSeconds=0, and this exact message:\n" +
-                  targetTask +
-                  "\nAfter acceptance, reply only " +
-                  delegated +
-                  ". Do not run the commands yourself or wait for the peer.";
+                const prompt = [
+                  `Use sessions_send once with sessionKey=${targetKey}, mode=followup, timeoutSeconds=0, and this exact message:`,
+                  targetTask,
+                  `After acceptance, reply only ${delegated}. Do not run the commands yourself or wait for the peer.`,
+                ].join("\n");
                 const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
-                stage = "UI operator sends delegation";
                 await pane
                   .getByRole("textbox", { name: "Chat composer", exact: true })
                   .fill(prompt);
                 await pane.getByRole("button", { name: "Send message", exact: true }).click();
                 await withinTest(commandGate.blocked, signal);
-                await expect
-                  .poll(
-                    async () => completedTool(await history(sourceKey), "sessions_send", targetKey),
-                    { timeout: 30_000 },
-                  )
-                  .toBe(true);
-                await expect
-                  .poll(async () => hasAssistantText(await history(sourceKey), delegated), {
-                    timeout: 30_000,
-                  })
-                  .toBe(true);
-                proof.sourceHistory = await history(sourceKey);
-                const beforeHistory = await history(targetKey);
-                proof.targetHistoryBeforeAssertions = beforeHistory;
-                stage = "verify completed target exec before crash";
-                // Public history retains exitCode, not the private exec status field.
-                expect(completedTool(beforeHistory, "exec", effect)).toBe(true);
-                const completedEffect = messages(beforeHistory).find(
-                  (message) =>
-                    message.role === "toolResult" &&
-                    message.toolName === "exec" &&
-                    record(message.details)?.exitCode === 0 &&
-                    JSON.stringify(message.content).includes(effect),
+                await poll(async () => completedDelegation(await history(sourceKey))).toBe(true);
+                await poll(async () => hasAssistantText(await history(sourceKey), delegated)).toBe(
+                  true,
                 );
+                const beforeHistory = await history(targetKey);
+                const completedEffect = completedEffects(beforeHistory)[0];
                 expect(completedEffect?.toolCallId).toEqual(expect.any(String));
-                // The gate must belong to the target's actual second tool call, not
-                // merely appear in the delegated prompt or an unrelated source command.
+                // Match the target's actual exec, not a URL in its prompt or the source's command.
                 expect(
-                  messages(beforeHistory).some(
-                    (message) =>
-                      message.role === "assistant" &&
-                      Array.isArray(message.content) &&
-                      message.content.some((value) => {
-                        const block = record(value);
-                        const command = record(block?.arguments)?.command;
-                        return (
-                          block?.type === "toolCall" &&
-                          block.name === "exec" &&
-                          typeof command === "string" &&
-                          command.includes(commandGate.url)
-                        );
-                      }),
-                  ),
+                  assistantBlocks(beforeHistory).some((block) => {
+                    const command = record(block?.arguments)?.command;
+                    return (
+                      block?.type === "toolCall" &&
+                      block.name === "exec" &&
+                      typeof command === "string" &&
+                      command.includes(commandGate.url)
+                    );
+                  }),
                 ).toBe(true);
-                expect(
-                  await readFile(path.join(owner.state.workspaceDir, effectFile), "utf8"),
-                ).toBe(effect + "\n");
-                const before = (await rows()).find((row) => row.key === targetKey);
-                expect(typeof before?.sessionId).toBe("string");
-                expect(before?.sessionId?.length).toBeGreaterThan(0);
-                proof.before = { target: before, history: beforeHistory };
+                expect(await readEffect()).toBe(effect + "\n");
+                const before = await targetRow();
+                expect(before?.sessionId).toEqual(expect.stringMatching(/./s));
                 await page.goto(controlUiSessionUrl(suite.server.baseUrl, targetKey));
                 await waitForControlUiGatewayReady(page);
                 const thread = pane.locator(".chat-thread");
-                await capture("01-before-crash", thread, [thread]);
-                expect(commandGate.counts().requestsBeforeCrash).toBe(1);
+                await capture("01-before-crash", thread);
+                expect(commandGate.beforeCrashRequests()).toBe(1);
 
-                stage = "SIGKILL owned Gateway";
                 const child = owner.child;
                 if (!child?.pid) {
                   throw new Error("Owned Gateway child missing");
@@ -551,41 +443,19 @@ if (process.env.OPENCLAW_PEER_RESTART_LIVE !== "1") {
                 await withinTest(crashed, signal);
                 expect(child.signalCode).toBe("SIGKILL");
                 commandGate.openAfterCrash();
-                proof.crash = {
-                  pid: oldPid,
-                  signal: child.signalCode,
-                  stateDirectorySha256: sha256(owner.stateDir),
-                };
-                const sendCountAtCrash = sent.filter((item) => item.method === "chat.send").length;
+                const sendCountAtCrash = sent.filter((method) => method === "chat.send").length;
                 expect(sendCountAtCrash).toBe(1);
-                stage = "restart same disk and await automatic continuation";
                 await owner.startGateway();
                 expect(owner.child?.pid).not.toBe(oldPid);
-                proof.restart = {
-                  pid: owner.child?.pid,
-                  stateDirectorySha256: sha256(owner.stateDir),
-                };
-                // No refresh, new task, or recovery RPC: the existing tab reconnects itself.
-                stage = "automatic browser reconnect";
                 await waitForControlUiGatewayReady(page);
-                stage = "resumed read-only request";
                 await withinTest(commandGate.resumed, signal);
-                stage = "final answer rendering";
                 const answer = pane
                   .locator(".chat-group.assistant .chat-text")
                   .filter({ hasText: finalAnswer })
                   .last();
                 await answer.waitFor({ state: "visible", timeout: 120_000 });
-                await expect
-                  .poll(
-                    async () => {
-                      const row = (await rows()).find((item) => item.key === targetKey);
-                      return row?.status;
-                    },
-                    { timeout: 30_000 },
-                  )
-                  .toBe("done");
-                const after = (await rows()).find((row) => row.key === targetKey);
+                await poll(async () => (await targetRow())?.status).toBe("done");
+                const after = await targetRow();
                 expect(after).toMatchObject({
                   sessionId: before!.sessionId,
                   status: "done",
@@ -594,68 +464,29 @@ if (process.env.OPENCLAW_PEER_RESTART_LIVE !== "1") {
                 expect(after?.restartRecoveryStatus).toBeUndefined();
                 expect(after?.lastRunError).toBeUndefined();
                 expect(errors).toEqual([]);
-                expect(sent.filter((item) => item.method === "chat.send")).toHaveLength(
+                expect(sent.filter((method) => method === "chat.send")).toHaveLength(
                   sendCountAtCrash,
                 );
-                expect(sent.some((item) => item.method === "sessions.recover")).toBe(false);
-                stage = "verify completed effect and final transcript";
+                expect(sent).not.toContain("sessions.recover");
                 const afterHistory = await history(targetKey);
-                proof.targetHistoryAfterAssertions = afterHistory;
                 expect(hasAssistantText(afterHistory, finalAnswer)).toBe(true);
-                const effects = messages(afterHistory).filter(
-                  (message) =>
-                    message.role === "toolResult" &&
-                    message.toolName === "exec" &&
-                    message.toolCallId === completedEffect!.toolCallId &&
-                    record(message.details)?.exitCode === 0 &&
-                    message.isError !== true &&
-                    JSON.stringify(message.content).includes(effect),
+                const effects = completedEffects(afterHistory).filter(
+                  (message) => message.toolCallId === completedEffect!.toolCallId,
                 );
                 expect(effects).toHaveLength(1);
-                expect(
-                  await readFile(path.join(owner.state.workspaceDir, effectFile), "utf8"),
-                ).toBe(effect + "\n");
-                // The group includes private tool/model metadata even when collapsed.
-                // Capture only the real rendered answer; keep the privacy assertion intact.
-                await capture("02-automatically-finished", answer, [answer]);
-                proof.after = {
-                  target: after,
-                  history: afterHistory,
-                  completedEffectResults: effects.length,
-                  effectLines: 1,
-                };
-                proof.complete = true;
-                stage = "complete";
+                expect(await readEffect()).toBe(effect + "\n");
+                // Capture only the answer; the collapsed group still contains private tool/model metadata.
+                await capture("02-automatically-finished", answer);
               } catch (error) {
-                proof.gatewayLog = sanitize(owner.logs());
-                try {
-                  const [sessions, targetHistory] = await withinTest(
-                    Promise.all([rows(), history(targetKey)]),
-                    signal,
-                  );
-                  proof.failureSessions = sessions;
-                  proof.failureTargetHistory = targetHistory;
-                } catch (snapshotError) {
-                  proof.failureSnapshotError = sanitize(String(snapshotError));
-                }
-                proof.failure = sanitize(
+                const failure = sanitize(
                   error instanceof Error ? (error.stack ?? error.message) : String(error),
                 );
-                throw new Error(
-                  "Peer restart live proof failed during " + stage + ": " + String(proof.failure),
-                  { cause: error },
-                );
-              } finally {
-                proof.browserRequests = sent;
-                proof.targetErrors = errors;
-                proof.gateCounts = commandGate.counts();
-                await saveProof();
+                throw new Error("Peer restart live proof failed: " + failure, { cause: error });
               }
             },
           );
         },
       });
-      console.log("Peer restart browser proof: " + artifactDir);
     }, 300_000);
   });
 }

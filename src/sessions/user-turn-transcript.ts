@@ -298,9 +298,7 @@ export function createUserTurnTranscriptRecorder(
       "logicalTurnId" in receipt ? receipt : { ...receipt, logicalTurnId, role: "user" };
     admissionReceipt = admission;
     admittedMessage = persistedMessage;
-    const run = async () => {
-      await admissionHandler?.(admission);
-    };
+    const run = async () => admissionHandler?.(admission);
     // Runtime writes must queue behind the transcript writer instead of reentering it.
     admissionWrite = detached ? runInDetachedAsyncContext(run) : run();
     // The turn owner awaits this write; an early rejection must not be unobserved.
@@ -499,9 +497,7 @@ export function createUserTurnTranscriptRecorder(
           }
         }
         const appendedMedia = await persistMessage(lateMediaMessage, "none");
-        if (appendedMedia) {
-          persistedResult = appendedMedia;
-        }
+        persistedResult = appendedMedia ?? persistedResult;
         return appendedMedia;
       }
       if (runtimePersisted) {
@@ -574,6 +570,9 @@ export function createUserTurnTranscriptRecorder(
       withSessionInputActor(inputActorBinding, () => {
         staging ??= (async () => {
           const candidate = await resolveMessageForPersistence();
+          if (pendingInput) {
+            return pendingInput.state !== "consumed";
+          }
           const target = await resolveUserTurnTranscriptTarget(params.target);
           if (!candidate || !target || persistedResult || runtimePersisted) {
             return false;
