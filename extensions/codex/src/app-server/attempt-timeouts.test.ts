@@ -111,3 +111,26 @@ it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
     await expect(outcome).resolves.toBe(reason);
   },
 );
+
+it("honors combined request budgets beyond the native timer limit", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+  const timeoutMs = MAX_TIMER_TIMEOUT_MS + 600_000;
+  const reason = new Error("combined request budget expired");
+  const settled = vi.fn();
+  const outcome = withAbortableTimeout({
+    promise: new Promise<never>(() => {}),
+    timeoutMs,
+    timeoutMessage: "unexpected deadline",
+    createTimeoutError: () => reason,
+  }).catch((error: unknown) => {
+    settled();
+    return error;
+  });
+
+  await vi.advanceTimersByTimeAsync(1);
+  expect(settled).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(timeoutMs - 2);
+  expect(settled).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
+  await expect(outcome).resolves.toBe(reason);
+});

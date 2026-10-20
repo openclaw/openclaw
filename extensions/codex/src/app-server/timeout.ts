@@ -1,6 +1,5 @@
 import {
   racePromiseWithAbortSignal,
-  raceWithTimeout,
   withTimeout as withSharedTimeout,
 } from "openclaw/plugin-sdk/time-runtime";
 
@@ -30,25 +29,31 @@ export async function withAbortableTimeout<T>(params: {
   timeoutMessage: string;
   createTimeoutError?: () => Error;
 }): Promise<T> {
-  if (params.signal?.aborted) {
-    throw resolveAbortError(params.signal);
+  const signal = params.signal;
+  if (signal?.aborted) {
+    throw resolveAbortError(signal);
   }
-  if (!Number.isFinite(params.timeoutMs) || params.timeoutMs <= 0) {
-    return await racePromiseWithAbortSignal(params.promise, params.signal, resolveAbortError);
+  let removeAbortListener: (() => void) | undefined;
+  const operation = signal
+    ? Promise.race([
+        params.promise,
+        new Promise<never>((_, reject) => {
+          const onAbort = () => reject(resolveAbortError(signal));
+          signal.addEventListener("abort", onAbort, { once: true });
+          removeAbortListener = () => signal.removeEventListener("abort", onAbort);
+        }),
+      ])
+    : params.promise;
+  try {
+    return await withTimeout(
+      operation,
+      params.timeoutMs,
+      params.timeoutMessage,
+      params.createTimeoutError,
+    );
+  } finally {
+    removeAbortListener?.();
   }
-  return await raceWithTimeout(
-    params.promise,
-    params.timeoutMs,
-    () => {
-      throw params.createTimeoutError?.() ?? new Error(params.timeoutMessage);
-    },
-    {
-      signal: params.signal,
-      onAbort: (signal) => {
-        throw resolveAbortError(signal);
-      },
-    },
-  );
 }
 
 export async function waitForPromiseOrAbort(
