@@ -1,14 +1,8 @@
-import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { captureFrame } from "./sidebar-assertions.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI queued startup wait" });
-const capture = (page: Page, name: string, content: Locator[]) =>
-  process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
-    ? captureFrame(suite.artifactDir, name + ".png", page.locator("openclaw-app"), content)
-    : undefined;
 
 suite.define(() => {
   it.each(["first accepted message", "restored queued run"])(
@@ -66,7 +60,6 @@ suite.define(() => {
         if (first) {
           await prompt.waitFor();
           await status.waitFor();
-          await capture(page, "first-message-order", [prompt, status]);
           const promptBox = await prompt.boundingBox();
           const statusBox = await status.boundingBox();
           expect(statusBox!.y).toBeGreaterThanOrEqual(promptBox!.y + promptBox!.height);
@@ -74,11 +67,7 @@ suite.define(() => {
           const statusText = status.locator(".chat-working-indicator__status > span:first-child");
           await stop.waitFor();
           await statusText.waitFor();
-          await capture(page, "queued-recovery", [
-            statusText,
-            stop,
-            page.getByText(message, { exact: true }),
-          ]);
+          await page.getByText(message, { exact: true }).waitFor();
           expect(await statusText.textContent()).toBe("Waiting for turn to start…");
           await gateway.emitGatewayEvent("chat", {
             sessionKey,

@@ -1,6 +1,4 @@
-import path from "node:path";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   chatSessionListResponse,
   controlUiSessionUrl,
@@ -56,12 +54,11 @@ suite.define(() => {
         const composers = cells.locator(".agent-chat__composer-combobox textarea");
         await expect.poll(() => composers.count()).toBe(3);
         const historyLength = await page.evaluate(() => history.length);
+        const drafts = ["Left draft stays unsent", "Active lower-right draft stays unsent"];
         // Focus back before the first navigation can finish loading its route.
-        await composers.evaluateAll((nodes) => {
-          for (const [node, text] of [
-            [nodes[0], "Left draft stays unsent"],
-            [nodes[nodes.length - 1], "Active lower-right draft stays unsent"],
-          ] as const) {
+        await composers.evaluateAll((nodes, texts) => {
+          for (const [index, text] of texts.entries()) {
+            const node = nodes[index * 2];
             if (!(node instanceof HTMLTextAreaElement)) {
               throw new Error("Expected split composers");
             }
@@ -69,7 +66,7 @@ suite.define(() => {
             node.value = text;
             node.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true }));
           }
-        });
+        }, drafts);
         await expect.poll(() => cells.last().getAttribute("class")).toContain("--active");
         const geometry = () =>
           cells.evaluateAll((nodes) =>
@@ -98,21 +95,19 @@ suite.define(() => {
         for (const cell of [cells.first(), cells.nth(1)]) {
           expect(await cell.locator("openclaw-chat-pane").getAttribute("inert")).not.toBeNull();
         }
-        await page.screenshot({
-          path: path.join(createControlUiE2eArtifactDir("split-rapid-focus"), "narrow.png"),
-        });
         const activePane = cells.last().locator("openclaw-chat-pane:not([inert])");
         expect(await activePane.evaluate((pane) => Reflect.get(pane, "sessionKey"))).toBe(
           "agent:main:session-c",
         );
         expect(new URL(page.url()).pathname).toBe("/chat/main/session-c");
         expect(await page.evaluate(() => history.length)).toBe(historyLength);
-        expect(await composers.last().inputValue()).toBe("Active lower-right draft stays unsent");
+        expect(await composers.last().inputValue()).toBe(drafts[1]);
         await page.setViewportSize({ height: 900, width: 1440 });
         await expect.poll(visibleCells).toEqual([true, true, true]);
         await expect.poll(geometry).toEqual(desktop);
-        expect(await composers.first().inputValue()).toBe("Left draft stays unsent");
-        expect(await composers.last().inputValue()).toBe("Active lower-right draft stays unsent");
+        expect([await composers.first().inputValue(), await composers.last().inputValue()]).toEqual(
+          drafts,
+        );
       },
     );
   });
