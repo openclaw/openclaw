@@ -1,6 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { t } from "../../../i18n/index.ts";
+import { registerChatAutomationsEnglish } from "../../../i18n/locales/en-chat-automations.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import { normalizeAttachmentContentBlock } from "../../../lib/chat/message-normalizer-attachments.ts";
@@ -10,6 +11,7 @@ import { isSessionActivityGroup } from "../chat-turn-boundary.ts";
 import { attachmentFailureReason } from "./chat-message-attachment-status.ts";
 
 registerChatMessageMetadataEnglish();
+registerChatAutomationsEnglish();
 
 export type TranscriptAnnouncement = {
   key: string;
@@ -53,6 +55,13 @@ export function latestTranscriptAnnouncement(
     const item = items[itemIndex];
     if (!item) {
       continue;
+    }
+    if (item.kind === "automation-activity") {
+      const latest = item.runs.at(-1)?.input;
+      return announcement(
+        latest?.key ?? item.key,
+        `${latest?.senderSession?.label ?? t("chat.messages.forwardedAutomation")} · ${t(item.runs.length === 1 ? "chat.messages.automationCheck" : "chat.messages.automationChecks", { count: String(item.runs.length) })}`,
+      );
     }
     let messageText = assistantMessageAnnouncementText;
     if (item.kind === "agent-run-frame") {

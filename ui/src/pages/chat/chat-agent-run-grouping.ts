@@ -6,6 +6,7 @@ import {
   assistantMessageIsInterrupted,
   resolveAssistantReplyPhase,
 } from "./chat-assistant-reply.ts";
+import type { AutomationActivity } from "./chat-automation-grouping.ts";
 import {
   groupEndsRunInFailure,
   joinActivityRuns,
@@ -44,8 +45,14 @@ export type AgentRunFrameRenderItem = {
 type AgentRunFrameInput = CompletedTurnRenderItem | ActivityRunRenderItem;
 
 export function chatItemGroups(
-  item: AgentRunFrameInput | AgentRunFrameRenderItem | SystemEventGroup,
+  item: AgentRunFrameInput | AgentRunFrameRenderItem | SystemEventGroup | AutomationActivity,
 ): MessageGroup[] {
+  if (item.kind === "automation-activity") {
+    return item.runs.flatMap(({ input, frame }) => [
+      input,
+      ...(frame ? chatItemGroups(frame) : []),
+    ]);
+  }
   if (item.kind === "agent-run-frame") {
     return item.parts.flatMap(chatItemGroups);
   }
@@ -85,7 +92,7 @@ function itemIsActive(item: AgentRunFramePart): boolean {
   return chatItemGroups(item).some((group) => group.isStreaming);
 }
 
-function groupBoundaryId(group: MessageGroup): string | undefined {
+export function groupBoundaryId(group: MessageGroup): string | undefined {
   const firstMessage = group.messages[0]?.message;
   const identity = readSessionMessageIdentity(firstMessage);
   const runId = identity?.runId;

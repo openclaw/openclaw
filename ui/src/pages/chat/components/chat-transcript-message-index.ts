@@ -2,6 +2,7 @@ import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { agentRunFrameActiveStatusParts, chatItemGroups } from "../chat-agent-run-grouping.ts";
+import { coalesceAutomationActivity } from "../chat-automation-grouping.ts";
 import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
 import { coalesceSystemEvents } from "../chat-system-event-grouping.ts";
 import {
@@ -241,7 +242,7 @@ export function projectTranscriptChain(
   );
   const collapsedItems = options.searchActive
     ? frames
-    : coalesceSystemEvents(coalesceInterSessionUpdates(frames));
+    : coalesceSystemEvents(coalesceInterSessionUpdates(coalesceAutomationActivity(frames)));
   const continuations = new Map<string, StreamGroupPart[]>();
   const transcriptItems = collapsedItems.filter((item, index) => {
     // A handoff boundary only shapes the grouping above; it has no row of its own.
@@ -381,7 +382,12 @@ function buildTranscriptIndex(
         rows.push({ kind: "item", key: `${item.key}:${group.key}`, item: group });
       }
     }
-    const parts = item.kind === "agent-run-frame" ? item.parts : [item];
+    const parts =
+      item.kind === "automation-activity"
+        ? item.runs.flatMap(({ input, frame }) => [input, ...(frame?.parts ?? [])])
+        : item.kind === "agent-run-frame"
+          ? item.parts
+          : [item];
     const groups = chatItemGroups(item);
     const firstGroup = groups.find((group) => group.role === "assistant") ?? groups[0];
     // The anchor owner uses the first key, so keep stream and persisted keys
@@ -432,7 +438,20 @@ export function expandReplyTargetWork(
   messageId: string,
 ): void {
   for (const item of transcriptItems) {
-    const parts = item.kind === "agent-run-frame" ? item.parts : [item];
+    if (
+      item.kind === "automation-activity" &&
+      chatItemGroups(item).some((group) =>
+        group.messages.some((source) => persistedMessageEntryId(source.message) === messageId),
+      )
+    ) {
+      setExpansionState(expandedToolCards, item.key, true);
+    }
+    const parts =
+      item.kind === "automation-activity"
+        ? item.runs.flatMap(({ input, frame }) => [input, ...(frame?.parts ?? [])])
+        : item.kind === "agent-run-frame"
+          ? item.parts
+          : [item];
     for (const part of parts) {
       if (
         part.kind === "group" &&

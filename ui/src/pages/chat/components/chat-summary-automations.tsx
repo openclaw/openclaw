@@ -1,19 +1,13 @@
-import { For, Show, createMemo, createSignal, onSettled, untrack } from "solid-js";
+import { For, Show, createMemo, onSettled, untrack } from "solid-js";
 import type { CronCompactJob } from "../../../api/types.ts";
 import { pathForRoute } from "../../../app-route-paths.ts";
-import { gatewayPresentationScope } from "../../../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { loadCompactCronJobsPage } from "../../../lib/cron/jobs.ts";
-import { createInitialCronState } from "../../../lib/cron/state.ts";
-import { createGatewayConnectionLifecycle } from "../../../lib/gateway-connection-lifecycle.ts";
-import { canCallGatewayMethod, canPresentGatewayMethod } from "../../../lib/gateway-methods.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { formatCronSchedule } from "../../../lib/presenter.ts";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { listen } from "../../../lib/reactive/listener.ts";
-import { resolveUiConversationIdentity } from "../../../lib/sessions/session-key.ts";
+import { projectSessionAutomationInventory } from "../../../lib/reactive/session-automation-inventory.ts";
 import "../../../styles/chat/summary-automations.css";
 
 type Props = {
@@ -31,110 +25,40 @@ export function ChatSummaryAutomations(props: Props) {
   const sessionKey = createMemo(() => props.sessionKey);
   const presented = createMemo(() => props.presented);
   const binding = createMemo(() => ({ source: gateway(), key: sessionKey() }));
-  const [revision, setRevision] = createSignal(0);
-  const publish = () => setRevision((value) => value + 1);
-  // The loader owns synchronous request state; Solid only observes its revision.
-  let cron = createInitialCronState<CronCompactJob>();
-  let showError = false;
-  let readAccess = false;
-  let dirty = true;
-  let active = true;
-  let presentationScope = 0;
+  const inventory = projectSessionAutomationInventory();
   const jobLinks = new Map<string, HTMLAnchorElement>();
   let statusMessage: HTMLDivElement | undefined;
-  const visible = (isPresented = presented()) =>
-    active && host.isConnected && isPresented && host.ownerDocument.visibilityState !== "hidden";
-  const state = () => {
-    revision();
-    return cron;
-  };
-  const error = () => {
-    revision();
-    return showError;
-  };
-
-  const readable = () => {
-    revision();
-    return readAccess;
-  };
-
-  function reset(source: ApplicationGateway | undefined, key: string, retain = false) {
-    readAccess = canPresentGatewayMethod(source?.snapshot, "cron.list", "operator.read", {
-      requireAdvertisement: false,
-    });
-    const next = createInitialCronState<CronCompactJob>({
-      client: source?.snapshot.client ?? null,
-      connected: source?.snapshot.phase === "connected",
-    });
-    const identity = resolveUiConversationIdentity(source?.snapshot ?? {}, key);
-    next.cronSessionFilter =
-      identity.sessionKey && identity.agentId
-        ? { sessionKey: identity.sessionKey, sessionAgentId: identity.agentId }
-        : undefined;
-    next.cronJobsSortBy = "name";
-    next.canRefresh = () =>
-      cron === next &&
-      visible() &&
-      Boolean(next.cronSessionFilter) &&
-      canCallGatewayMethod(source?.snapshot, "cron.list", "operator.read", {
-        requireAdvertisement: false,
-      });
-    const scope = source ? gatewayPresentationScope(source).key : 0;
-    if (retain && readAccess && scope !== 0 && scope === presentationScope) {
-      next.cronJobs = cron.cronJobs;
-      next.cronJobsSnapshotRevision = cron.cronJobsSnapshotRevision;
-      next.cronJobsTotal = cron.cronJobsTotal;
-      next.cronJobsHasMore = cron.cronJobsHasMore;
-      next.cronJobsNextOffset = cron.cronJobsNextOffset;
-    }
-    presentationScope = scope;
-    cron = next;
-    showError = false;
-    dirty = true;
-    publish();
-  }
+  const visible = () =>
+    host.isConnected && presented() && host.ownerDocument.visibilityState !== "hidden";
+  const state = () => inventory.read().cron;
+  const error = () => inventory.read().error;
+  const readable = () => inventory.read().readable;
 
   async function load({
     append = false,
     retry,
-    isPresented = presented(),
-    event,
-  }: {
-    append?: boolean;
-    retry?: HTMLButtonElement;
-    isPresented?: boolean;
-    event?: unknown;
-  } = {}) {
-    const current = cron;
-    if (
-      !readAccess ||
-      !visible(isPresented) ||
-      !current.connected ||
-      !current.cronSessionFilter ||
-      ((current.cronLoading || current.cronJobsLoadingMore) && !dirty)
-    ) {
-      return;
-    }
-    dirty = false;
-    const pending = loadCompactCronJobsPage(current, { append, event });
-    publish();
-    await pending;
-    if (cron !== current || !active || !host.isConnected) {
-      return;
-    }
-    // The loader pauses trailing reads while hidden; retain one visible catch-up.
-    dirty ||= !visible();
-    showError = current.cronJobsError !== null;
-    const restoreFocus = retry && visible() && host.ownerDocument.activeElement === retry;
-    publish();
-    if (restoreFocus && !showError) {
+  }: { append?: boolean; retry?: HTMLButtonElement } = {}) {
+    const current = state();
+    let restoreFocus = false;
+    // Observe completion before the projection commits away the focused Retry button.
+    const stop = retry
+      ? // oxlint-disable-next-line solid/reactivity -- Explicit owner notifications read current state synchronously.
+        inventory.subscribe(() => {
+          if (current === state() && !loading() && !error()) {
+            restoreFocus = visible() && host.ownerDocument.activeElement === retry;
+          }
+        })
+      : undefined;
+    await inventory.load({ append });
+    stop?.();
+    if (restoreFocus) {
       onSettled(() => {
         if (
-          current === cron &&
+          current === state() &&
           visible() &&
           host.ownerDocument.activeElement === host.ownerDocument.body
         ) {
-          const target = jobLinks.get(cron.cronJobs[0]?.id ?? "") ?? statusMessage;
+          const target = jobLinks.get(current.cronJobs[0]?.id ?? "") ?? statusMessage;
           if (target?.isConnected) {
             target.focus();
           }
@@ -147,77 +71,23 @@ export function ChatSummaryAutomations(props: Props) {
     onSettled(() => {
       const source = scope.source;
       const key = scope.key;
-      reset(source, key);
-      if (!source) {
-        return undefined;
-      }
-      const lifecycle = createGatewayConnectionLifecycle(source.snapshot);
-      let identity = JSON.stringify(resolveUiConversationIdentity(source.snapshot, key));
-      // Reject obsolete event delivery before queued binding cleanup runs.
-      const current = () => props.gateway === source && props.sessionKey === key;
-      // Connection publications retire request scopes before the next cron event is delivered.
-      const unsubscribe = source.subscribe((snapshot) => {
-        if (!current()) {
-          return;
-        }
-        const nextIdentity = JSON.stringify(resolveUiConversationIdentity(snapshot, key));
-        const changed = lifecycle.transition(snapshot);
-        const nextReadAccess = canPresentGatewayMethod(snapshot, "cron.list", "operator.read", {
-          requireAdvertisement: false,
-        });
-        if (changed || identity !== nextIdentity || readAccess !== nextReadAccess) {
-          reset(
-            source,
-            key,
-            identity === nextIdentity &&
-              readAccess === nextReadAccess &&
-              snapshot.phase !== "connected",
-          );
-          identity = nextIdentity;
-        }
-        if (dirty) {
-          void load();
-        }
+      inventory.replaceSource({
+        gateway: source,
+        sessionKey: key,
+        document: host.ownerDocument,
+        // Reject obsolete deliveries before queued binding cleanup runs.
+        isVisible: () => props.gateway === source && props.sessionKey === key && visible(),
       });
-      const unsubscribeEvents = source.subscribeEvents((event) => {
-        if (current() && event.event === "cron") {
-          dirty = true;
-          void load({ event: event.payload });
-        }
-      });
-      void load();
-      return () => {
-        unsubscribe();
-        unsubscribeEvents();
-        lifecycle.dispose();
-      };
     });
     return null;
   }
   function PresentedLifetime() {
     onSettled(() => {
-      void load({ isPresented: true });
-      return () => {
-        dirty = true;
-      };
+      inventory.activate();
+      return () => inventory.park();
     });
     return null;
   }
-  onSettled(() => {
-    const activate = () => {
-      if (dirty) {
-        void load();
-      }
-    };
-    const stopVisibility = listen(host.ownerDocument, "visibilitychange", activate);
-    const stopFocus = listen(globalThis, "focus", activate);
-    activate();
-    return () => {
-      active = false;
-      stopVisibility();
-      stopFocus();
-    };
-  });
 
   const loading = () => state().cronLoading || state().cronJobsLoadingMore;
   const loaded = () => state().cronJobsSnapshotRevision !== null;

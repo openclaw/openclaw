@@ -16,6 +16,9 @@ export class GuardedTranscriptItem {
 }
 
 function itemDependencies(item: ChatRenderItem): readonly unknown[] {
+  if (item.kind === "automation-activity") {
+    return [item.key, ...item.runs.flatMap(({ input, frame }) => [input, frame])];
+  }
   if (item.kind === "system-event-group") {
     return [item.key, ...item.events];
   }

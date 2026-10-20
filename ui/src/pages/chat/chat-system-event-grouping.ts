@@ -1,9 +1,11 @@
 import type { SystemEventGroup, SystemEventItem } from "../../lib/chat/chat-types.ts";
 import type { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
+import type { AutomationActivity } from "./chat-automation-grouping.ts";
 
 export type SystemEventRenderItem =
   | ReturnType<typeof coalesceAgentRunFrames>[number]
-  | SystemEventGroup;
+  | SystemEventGroup
+  | AutomationActivity;
 type RenderItem = SystemEventRenderItem;
 
 /** Presentation only: semantic turn and run grouping has already finished. */

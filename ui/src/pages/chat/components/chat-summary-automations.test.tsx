@@ -423,3 +423,37 @@ it.each([false, true])("retires automation access and late pages: loaded=%s", as
   await current.ready("Current automation");
   expect(current.element.textContent).not.toContain("Retired automation");
 });
+
+it("shares inventory between mounted consumers and keeps the remaining consumer live", async () => {
+  const current = component(sequence(page([job()])).mockResolvedValue(page([job()])));
+  await current.ready();
+  const second = mountSolid(() => (
+    <ChatSummaryAutomations
+      gateway={current.gateway}
+      sessionKey="agent:ops:task"
+      presented={true}
+    />
+  ));
+  await waitForSolid(() => expect(second.container.textContent).toContain("Check the task"));
+  expect(current.request).toHaveBeenCalledTimes(1);
+  current.unmount();
+  current.cron("started", {
+    jobId: "summary-job",
+    job: {
+      id: "summary-job",
+      name: "Check the task",
+      agentId: "ops",
+      enabled: true,
+      updatedAtMs: 2,
+      state: { runningAtMs: 2 },
+    },
+  });
+  await waitForSolid(() => expect(second.container.textContent).toContain("Running"));
+  expect(current.request).toHaveBeenCalledTimes(1);
+  current.cron("updated");
+  await waitForSolid(() => expect(second.container.textContent).not.toContain("Running"));
+  expect(current.request).toHaveBeenCalledTimes(2);
+  second.unmount();
+  current.cron("updated");
+  expect(current.request).toHaveBeenCalledTimes(2);
+});

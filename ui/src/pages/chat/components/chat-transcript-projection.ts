@@ -431,6 +431,14 @@ export function projectChatTranscript(
       : "";
     return `${continuationKey}|${statusKey}|${searchFiltering ? "search-result" : ""}`;
   };
+  const frameOptions = {
+    basePath: props.basePath,
+    sessionPublicOrigin: props.sessionPublicOrigin,
+    streamOptions: streamGroupOptions,
+    renderGroupOptions,
+    isWorkExpanded: (key: string) => expandedToolCards.get(key) ?? false,
+    onToggleWork: toggleToolCardExpanded,
+  };
   const renderItem = guardChatRenderItems(
     state,
     (item) => [liveStatusSignature(item), ...transcriptReplyDependencies(item, loadedReplySources)],
@@ -473,19 +481,21 @@ export function projectChatTranscript(
               presentation: "standalone",
             };
       }
+      if (item.kind === "automation-activity") {
+        return {
+          kind: "automation",
+          item,
+          gateway: props.applicationContext?.gateway,
+          sessionKey: props.sessionKey,
+          presented,
+          options: frameOptions,
+        };
+      }
       if (item.kind === "agent-run-frame") {
         return {
           kind: "frame",
           frame: item,
-          options: {
-            basePath: props.basePath,
-            sessionPublicOrigin: props.sessionPublicOrigin,
-            streamOptions: streamGroupOptions,
-            renderGroupOptions,
-            isWorkExpanded: (key) => expandedToolCards.get(key) ?? false,
-            onToggleWork: toggleToolCardExpanded,
-            turnRecap: recapForGroup(item.key),
-          },
+          options: { ...frameOptions, turnRecap: recapForGroup(item.key) },
         };
       }
       if (item.kind === "divider") {

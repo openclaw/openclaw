@@ -40,9 +40,10 @@ export function projectChatPositions(
     markerIdsByMessageId.set(messageId, id);
     messageRowKeysById.set(messageId, rowKey);
   };
-  const group = (item: MessageGroup, rowKey: string) => {
+  const group = (item: MessageGroup, rowKey: string, activityExpanded = false) => {
     if (
       isSessionActivityGroup(item) &&
+      !activityExpanded &&
       !searchActive &&
       !expandedWork.get("session-activity:" + item.key)
     ) {
@@ -68,7 +69,14 @@ export function projectChatPositions(
     }
   };
   const visit = (item: RenderItem, rowKey: string) => {
-    if (item.kind === "group") {
+    if (item.kind === "automation-activity") {
+      if (expandedWork.get(item.key) || searchActive) {
+        for (const run of item.runs) {
+          group(run.input, rowKey, true);
+          if (run.frame) visit(run.frame, rowKey);
+        }
+      }
+    } else if (item.kind === "group") {
       group(item, rowKey);
     } else if (item.kind === "agent-run-frame") {
       for (const part of item.parts) {

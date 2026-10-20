@@ -203,6 +203,14 @@ the original messages and timestamps in one step, or select the source name to
 open that session. Search results and reply navigation reveal the matching
 messages. This changes only presentation, not stored messages or run ownership.
 
+Consecutive checks from the same automation share a quiet activity row, including
+their associated tool-only execution frames. Expand it to inspect the original
+inputs, timestamps, run links, and tool activity. Human messages, meaningful
+assistant replies, failed runs, and other automations keep their chronological place.
+The row shows current scheduler status and next-check timing when permitted;
+without automation read access it shows only the checks in loaded history.
+Offline or unavailable scheduler state is never presented as a successful check.
+
 When an incoming message causes an unstarted tool call to be skipped, its card
 and work summary show **Skipped**, including after reloading the conversation.
 Approval blocks and tool failures keep their separate outcomes. A failed command

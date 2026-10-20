@@ -66,10 +66,11 @@ describe("session activity", () => {
   it("collapses recorded automation inputs and reveals their exact run from the shared disclosure", () => {
     const input = automation("execution");
     const projection = chain([input]);
-    const group = projection.transcriptItems[0];
-    if (group?.kind !== "group") {
-      throw new Error("expected automation activity group");
+    const activity = projection.transcriptItems[0];
+    if (activity?.kind !== "automation-activity") {
+      throw new Error("expected automation activity");
     }
+    const group = activity.runs[0]!.input;
     const expanded = new Map<string, boolean>();
     const draw = () =>
       view.render(group, {
@@ -99,7 +100,7 @@ describe("session activity", () => {
         .markers,
     ).toHaveLength(0);
     expect(latestTranscriptAnnouncement(projection.collapsedItems)?.text).toBe(
-      "1 update from Daily report",
+      "Daily report · 1 check",
     );
     expandReplyTargetWork(projection.transcriptItems, expanded, "execution");
     draw();
@@ -118,7 +119,7 @@ describe("session activity", () => {
     { jobId: "other", runId: "execution" },
     { jobId: "daily", runId: "another-run" },
     { jobId: "daily", runId: "execution" },
-  ])("never coalesces automation inputs sharing a session: %j", (identity) => {
+  ])("retains distinct original automation inputs inside presentation rows: %j", (identity) => {
     const first = automation("execution");
     const last = automation("next");
     last.provenance = { ...last.provenance, ...identity };
@@ -127,13 +128,13 @@ describe("session activity", () => {
       Object.assign({}, message, { __openclaw: { id: message["__openclaw"].id } }),
     );
     const projection = chain(messages);
-    expect(projection.transcriptItems).toHaveLength(2);
-    for (const [index, group] of projection.transcriptItems.entries()) {
-      if (group.kind !== "group") {
-        throw new Error("expected automation group");
-      }
-      expect(group.messages.map((entry) => entry.message)).toEqual([messages[index]]);
-    }
+    expect(projection.transcriptItems).toHaveLength(identity.jobId === "daily" ? 1 : 2);
+    const inputs = projection.transcriptItems.flatMap((item) =>
+      item.kind === "automation-activity" ? item.runs.map((run) => run.input) : [],
+    );
+    expect(inputs.map((group) => group.messages.map((entry) => entry.message))).toEqual(
+      messages.map((message) => [message]),
+    );
   });
 
   it.each([

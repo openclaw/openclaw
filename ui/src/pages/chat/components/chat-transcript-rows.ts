@@ -1,4 +1,5 @@
 import { AgentRunFrame } from "./chat-agent-run-frame.tsx";
+import { ChatAutomationActivity } from "./chat-automation-activity.tsx";
 import { ChatDivider, ChatNotice } from "./chat-divider.tsx";
 import { ActivityGroup, MessageGroup } from "./chat-message-group-view.tsx";
 import {
@@ -13,6 +14,7 @@ import { ChatTypingIndicator } from "./chat-typing-indicator.tsx";
 import { TurnRecapRow } from "./chat-working-indicator.tsx";
 
 export const nativeRows = {
+  automation: ChatAutomationActivity,
   "system-events": ChatSystemEvents,
   group: MessageGroup,
   activity: ActivityGroup,
