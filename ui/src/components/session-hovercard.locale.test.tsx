@@ -8,6 +8,23 @@ import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts";
 import { SessionHovercard } from "./session-hovercard-solid.tsx";
 
+function mountCard(
+  initial: SidebarSessionHovercardRow,
+  automationLink?: Parameters<typeof SessionHovercard>[0]["automationLink"],
+) {
+  const [row, setRow] = createSignal<SidebarSessionHovercardRow | undefined>(initial);
+  const view = mountSolid(() => <SessionHovercard row={row()} automationLink={automationLink} />);
+  onTestFinished(view.unmount);
+  const find = (suffix = "") =>
+    view.container.querySelector<HTMLElement>(`.session-hovercard${suffix}`);
+  const parts = () => ({
+    channel: find("__channel"),
+    creator: find("__creator-avatar"),
+    color: view.container.querySelector(".session-color-dot"),
+  });
+  return { ...view, find, parts, setRow };
+}
+
 it("refreshes retained hovercard labels and age without replacing its focused link", async () => {
   const restoreI18n = captureI18nStateForTesting();
   await i18n.setLocale("en");
@@ -27,35 +44,26 @@ it("refreshes retained hovercard labels and age without replacing its focused li
       sourceSessionKey: "agent:main:example",
     },
   };
-  const view = mountSolid(() => (
-    <SessionHovercard
-      row={row}
-      automationLink={{
-        gateway: null,
-        sessionKey: "agent:main:example",
-        agentId: "main",
-        href: "/automations",
-        navigate: () => {},
-      }}
-    />
-  ));
+  const view = mountCard(row, {
+    gateway: null,
+    sessionKey: "agent:main:example",
+    agentId: "main",
+    href: "/automations",
+    navigate: () => {},
+  });
   onTestFinished(async () => {
     view.unmount();
     await restoreI18n();
   });
-  await waitForSolid(() =>
-    expect(view.container.querySelector(".session-hovercard__automation-link")).not.toBeNull(),
-  );
-  const card = view.container.querySelector(".session-hovercard");
-  const link = view.container.querySelector<HTMLAnchorElement>(
-    ".session-hovercard__automation-link",
-  )!;
+  await waitForSolid(() => expect(view.find("__automation-link")).not.toBeNull());
+  const card = view.find();
+  const link = view.find("__automation-link")!;
   link.focus();
   await waitForSolid(() => {
     expect(card?.textContent).toContain("Linked to Slack");
     expect(card?.querySelector('[aria-label="Project: Example"]')).not.toBeNull();
     expect(card?.querySelector('[aria-label="Runs on local · default"]')).not.toBeNull();
-    expect(card?.querySelector(".session-hovercard__created-age")?.textContent).toBe("2h");
+    expect(view.find("__created-age")).toMatchObject({ textContent: "2h" });
     expect(card?.textContent).toContain("Run failed: Synthetic failure");
     expect(card?.querySelector(".session-hovercard__machine")?.textContent).toContain("16 GB");
   });
@@ -65,19 +73,20 @@ it("refreshes retained hovercard labels and age without replacing its focused li
     expect(card?.textContent).toContain("Mit Slack verknüpft");
     expect(card?.querySelector('[aria-label="Projekt: Example"]')).not.toBeNull();
     expect(card?.querySelector('[aria-label="Läuft auf local · default"]')).not.toBeNull();
-    const age = card?.querySelector(".session-hovercard__created-age");
-    expect(age?.textContent).toBe("2 Std.");
-    expect(age?.getAttribute("title")).toBe("vor 2 Std.");
+    expect(view.find("__created-age")).toMatchObject({
+      textContent: "2 Std.",
+      title: "vor 2 Std.",
+    });
     expect(card?.textContent).toContain("Ausführung fehlgeschlagen: Synthetic failure");
-    expect(view.container.querySelector(".session-hovercard")).toBe(card);
+    expect(view.find()).toBe(card);
     expect(document.activeElement).toBe(link);
   });
 
-  const machine = card?.querySelector(".session-hovercard__machine");
+  const machine = view.find("__machine");
   await i18n.setLocale("fr");
   await waitForSolid(() => {
     expect(machine?.textContent).toContain("16 Go");
-    expect(card?.querySelector(".session-hovercard__machine")).toBe(machine);
+    expect(view.find("__machine")).toBe(machine);
     expect(document.activeElement).toBe(link);
   });
 });
@@ -96,37 +105,26 @@ it("retains the header across row updates and clears optional details without st
       identity: { type: "profile", id: "synthetic-person" },
     },
   };
-  const [row, setRow] = createSignal<SidebarSessionHovercardRow | undefined>(initial);
-  const view = mountSolid(() => <SessionHovercard row={row()} />);
-  onTestFinished(view.unmount);
-  await waitForSolid(() => {
-    expect(view.container.querySelector(".session-color-dot")).not.toBeNull();
-    expect(view.container.querySelector(".session-hovercard__creator-avatar")).not.toBeNull();
-  });
-  const header = view.container.querySelector(".session-hovercard__header");
+  const { find, parts, setRow } = mountCard(initial);
+  const populated = { color: expect.any(Element), creator: expect.any(Element) };
+  await waitForSolid(() => expect(parts()).toMatchObject(populated));
+  const header = find("__header");
   setRow({ ...initial, label: "Updated synthetic session", color: "purple" });
   await waitForSolid(() => {
-    expect(view.container.querySelector(".session-hovercard__header")).toBe(header);
+    expect(find("__header")).toBe(header);
     expect(header?.textContent).toContain("Updated synthetic session");
-    expect(view.container.querySelector(".session-color-dot")?.getAttribute("style")).toContain(
-      "session-color-purple",
-    );
+    expect(parts().color?.getAttribute("style")).toContain("session-color-purple");
   });
   setRow({ label: "Plain synthetic session", hasActiveRun: false, hasAutomation: false });
   await waitForSolid(() => {
-    expect(view.container.querySelector(".session-hovercard__header")).toBe(header);
-    expect(view.container.querySelector(".session-color-dot")).toBeNull();
-    expect(view.container.querySelector(".session-hovercard__channel")).toBeNull();
-    expect(view.container.querySelector(".session-hovercard__creator-avatar")).toBeNull();
+    expect(find("__header")).toBe(header);
+    expect(parts()).toEqual({ color: null, channel: null, creator: null });
   });
   setRow(undefined);
-  await waitForSolid(() => expect(view.container.querySelector(".session-hovercard")).toBeNull());
+  await waitForSolid(() => expect(find()).toBeNull());
   setRow(initial);
   await waitForSolid(() => {
-    expect(view.container.querySelector(".session-hovercard__header")?.textContent).toContain(
-      "Synthetic session",
-    );
-    expect(view.container.querySelector(".session-color-dot")).not.toBeNull();
-    expect(view.container.querySelector(".session-hovercard__creator-avatar")).not.toBeNull();
+    expect(find("__header")?.textContent).toContain("Synthetic session");
+    expect(parts()).toMatchObject(populated);
   });
 });

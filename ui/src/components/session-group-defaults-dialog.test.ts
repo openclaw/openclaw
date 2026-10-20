@@ -34,6 +34,17 @@ function submitForm(modal: ParentNode) {
     .querySelector("form")!
     .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
 }
+function key(target: EventTarget, value: string) {
+  const event = new KeyboardEvent("keydown", { key: value, bubbles: true, cancelable: true });
+  target.dispatchEvent(event);
+  expect(event.defaultPrevented).toBe(true);
+}
+const saveButton = (modal: ParentNode) =>
+  modal.querySelector<HTMLButtonElement>('button[type="submit"]');
+const browserInput = (modal: ParentNode) =>
+  modal.querySelector<HTMLInputElement>(".new-session-page__browser-path");
+const waitForSave = (modal: ParentNode) =>
+  waitForSolid(() => expect(saveButton(modal)?.disabled).toBe(false));
 async function openFolderPicker(modal: ParentNode) {
   const trigger = modal.querySelector<HTMLButtonElement>("#session-group-defaults-folder-trigger")!;
   trigger.click();
@@ -77,7 +88,7 @@ it("keeps folder input focus while filtering and saves the keyboard-completed fo
   await openFolderPicker(modal);
   modal.querySelector<HTMLButtonElement>('[data-value="browse"]')!.click();
   await waitForSolid(() => expect(modal.querySelectorAll('[role="option"]')).toHaveLength(2));
-  const input = modal.querySelector<HTMLInputElement>(".new-session-page__browser-path")!;
+  const input = browserInput(modal)!;
   expect(document.activeElement).toBe(input);
   input.value = "/workspace/to";
   input.dispatchEvent(new InputEvent("input", { bubbles: true }));
@@ -86,14 +97,12 @@ it("keeps folder input focus while filtering and saves the keyboard-completed fo
     expect(modal.querySelector('[role="option"]')?.textContent).toContain("tools");
     expect(document.activeElement).toBe(input);
   });
-  const tab = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
-  input.dispatchEvent(tab);
-  expect(tab.defaultPrevented).toBe(true);
+  key(input, "Tab");
   await waitForSolid(() => expect(input.value).toBe("/workspace/tools"));
   modal.querySelector<HTMLButtonElement>(".new-session-page__browser-use")!.click();
   await waitForSolid(() => {
     expect(inspectRepository).toHaveBeenLastCalledWith("/workspace/tools");
-    expect(modal.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(false);
+    expect(saveButton(modal)?.disabled).toBe(false);
   });
   submitForm(modal);
   await completed;
@@ -118,22 +127,16 @@ it("clears a saved directory when the agent workspace choice closes the popover"
   trigger.click();
   await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
   modal.querySelector<HTMLButtonElement>('[data-value="browse"]')!.click();
-  await waitForSolid(() =>
-    expect(modal.querySelector(".new-session-page__browser-path")).not.toBeNull(),
-  );
-  const input = modal.querySelector<HTMLInputElement>(".new-session-page__browser-path")!;
+  await waitForSolid(() => expect(browserInput(modal)).not.toBeNull());
+  const input = browserInput(modal)!;
   expect(document.activeElement).toBe(input);
-  const back = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
-  input.dispatchEvent(back);
-  expect(back.defaultPrevented).toBe(true);
+  key(input, "Escape");
   await waitForSolid(() => {
-    expect(modal.querySelector(".new-session-page__browser-path")).toBeNull();
+    expect(browserInput(modal)).toBeNull();
     expect(trigger.getAttribute("aria-expanded")).toBe("true");
     expect(document.activeElement).toBe(modal.querySelector('[data-value="agent-workspace"]'));
   });
-  const close = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
-  document.activeElement!.dispatchEvent(close);
-  expect(close.defaultPrevented).toBe(true);
+  key(document.activeElement!, "Escape");
   await waitForSolid(() => {
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
     expect(document.activeElement).toBe(trigger);
@@ -151,9 +154,7 @@ it("retires a pending save without letting its late completion release a reopene
   const retired = showDialog({ group: "Earlier", signal: owner.signal, submit });
   try {
     const { modal } = await getRenderedModalDialog(document.body);
-    await waitForSolid(() =>
-      expect(modal.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(false),
-    );
+    await waitForSave(modal);
     submitForm(modal);
     expect(submit).toHaveBeenCalledOnce();
     owner.abort();
@@ -164,11 +165,7 @@ it("retires a pending save without letting its late completion release a reopene
     const { modal: current } = await getRenderedModalDialog(document.body);
     resolveSave(null);
     await save;
-    await waitForSolid(() =>
-      expect(current.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(
-        false,
-      ),
-    );
+    await waitForSave(current);
     void showDialog({ group: "Unexpected", submit: freshSubmit });
     expect(document.body.querySelectorAll("openclaw-modal-dialog")).toHaveLength(1);
     expect(current.getAttribute("label")).toContain("Current");
@@ -196,7 +193,7 @@ it("gates saving synchronously and lets a failed save retry the restored worktre
   });
   try {
     const { modal } = await getRenderedModalDialog(document.body);
-    const save = modal.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+    const save = saveButton(modal)!;
     submitForm(modal);
     expect(submit).not.toHaveBeenCalled();
     expect(save.disabled).toBe(true);

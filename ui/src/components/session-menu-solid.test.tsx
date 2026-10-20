@@ -18,10 +18,19 @@ import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { EMPTY_SESSION_MENU_DATA } from "./session-menu-actions.ts";
 import { SessionMenu } from "./session-menu-solid.tsx";
 
+function press(target: EventTarget, key: string, composed = false) {
+  target.dispatchEvent(
+    new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, composed }),
+  );
+}
+async function reopen(host: Awaited<ReturnType<typeof mountMenu>>, coordinate = 100) {
+  host.anchor = { x: coordinate, y: coordinate };
+  await settleSessionMenu(host);
+}
+
 it("keeps advertised native menu shortcuts ahead of composer autotype", async () => {
   const actions: unknown[] = [];
   const host = await mountMenu({
-    archiveAllowed: true,
     groups: ["Research", "Personal"],
     onAction: (action) => actions.push(action),
   });
@@ -34,19 +43,14 @@ it("keeps advertised native menu shortcuts ahead of composer autotype", async ()
   document.addEventListener("keydown", capture, true);
   try {
     menuItem(host, "Pin session").focus();
-    document.activeElement!.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "a", bubbles: true, cancelable: true, composed: true }),
-    );
+    press(document.activeElement!, "a", true);
     await waitForSolid(() => expect(actions).toEqual([{ kind: "toggle-archived" }]));
     expect(document.activeElement).not.toBe(input);
 
-    host.anchor = { x: 100, y: 100 };
-    await settleSessionMenu(host);
+    await reopen(host);
     const group = await openSubmenu(host, "Move to group");
     menuItem(group, "Personal").focus();
-    document.activeElement!.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "1", bubbles: true, cancelable: true, composed: true }),
-    );
+    press(document.activeElement!, "1", true);
     await waitForSolid(() =>
       expect(actions).toEqual([
         { kind: "toggle-archived" },
@@ -55,12 +59,9 @@ it("keeps advertised native menu shortcuts ahead of composer autotype", async ()
     );
     expect(document.activeElement).not.toBe(input);
 
-    host.anchor = { x: 100, y: 100 };
-    await settleSessionMenu(host);
+    await reopen(host);
     menuItem(host, "Pin session").focus();
-    document.activeElement!.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "x", bubbles: true, cancelable: true, composed: true }),
-    );
+    press(document.activeElement!, "x", true);
     expect(document.activeElement).toBe(input);
   } finally {
     document.removeEventListener("keydown", capture, true);
@@ -70,29 +71,21 @@ it("keeps advertised native menu shortcuts ahead of composer autotype", async ()
 it("updates registered menu props and retires its keyboard owner when unmounted", async () => {
   const calls: string[] = [];
   const host = await mountMenu({
-    session: { label: "Synthetic session", archived: false },
-    archiveAllowed: true,
-    deleteAllowed: true,
     onClose: () => calls.push("close"),
     onAction: (action) => calls.push(action.kind),
   });
-  await waitForSolid(() =>
-    expect(host.querySelector('[data-value="toggle-archived"]')?.textContent).toContain(
-      "Archive session",
-    ),
-  );
+  const archiveLabel = () => host.querySelector('[data-value="toggle-archived"]')?.textContent;
+  await waitForSolid(() => expect(archiveLabel()).toContain("Archive session"));
   host.session = { ...host.session, archived: true };
   await settleSessionMenu(host);
-  expect(host.querySelector('[data-value="toggle-archived"]')?.textContent).toContain(
-    "Restore session",
-  );
+  expect(archiveLabel()).toContain("Restore session");
   const pin = menuItem(host, "Pin session");
   pin.focus();
-  pin.dispatchEvent(new KeyboardEvent("keydown", { key: "d", bubbles: true, cancelable: true }));
+  press(pin, "d");
   expect(calls).toEqual(["close", "delete"]);
   host.remove();
   await Promise.resolve();
-  pin.dispatchEvent(new KeyboardEvent("keydown", { key: "d", bubbles: true, cancelable: true }));
+  press(pin, "d");
   document.dispatchEvent(new KeyboardEvent("keydown", { key: "d", cancelable: true }));
   expect(calls).toEqual(["close", "delete"]);
 });
@@ -142,27 +135,22 @@ it("ignores a stale native toggle after reopening the same session", async () =>
   const onClose = vi.fn();
   const trigger = document.body.appendChild(document.createElement("button"));
   containers.push(trigger);
-  const escape = (item: HTMLElement) =>
-    item.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
-    );
   const menu = await mountMenu({ onClose, trigger });
   const stalePanel = menuPanel(menu);
   const advanced = menuItem(menu, "Advanced");
   const child = await openSubmenu(menu, "Advanced");
   const childItem = menuItem(child, "Icon & color");
   childItem.focus();
-  escape(childItem);
+  press(childItem, "Escape");
   expect(child.matches(":popover-open")).toBe(false);
   expect(stalePanel.matches(":popover-open")).toBe(true);
   expect(document.activeElement).toBe(advanced);
   expect(onClose).not.toHaveBeenCalled();
-  escape(advanced);
+  press(advanced, "Escape");
   expect(onClose).toHaveBeenCalledTimes(1);
   expect(document.activeElement).toBe(trigger);
 
-  menu.anchor = { x: 120, y: 120 };
-  await settleSessionMenu(menu);
+  await reopen(menu, 120);
   stalePanel.dispatchEvent(new Event("toggle"));
   stalePanel.dispatchEvent(new Event("overlay-after-hide"));
 
