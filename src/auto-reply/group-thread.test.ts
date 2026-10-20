@@ -2,37 +2,22 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { prepareAgentRunTerminalReply } from "../agents/agent-run-terminal-reply.js";
-import {
-  readAgentRunTerminalOutcome,
-  recordAgentRunTerminalOutcome,
-} from "../channels/turn/agent-run-terminal-outcome.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  createOutboundPayloadPlan,
-  createStructuredOutboundPayloadPlan,
-} from "../infra/outbound/payloads.js";
-import {
-  registerSessionBindingAdapter,
-  unregisterSessionBindingAdapter,
-  type SessionBindingAdapter,
-  type SessionBindingRecord,
-} from "../infra/outbound/session-binding-service.js";
+import * as outcome from "../channels/turn/agent-run-terminal-outcome.js";
+import type { OpenClawConfig as Config } from "../config/types.openclaw.js";
+import * as payloads from "../infra/outbound/payloads.js";
+import * as bindings from "../infra/outbound/session-binding-service.js";
 import type { PluginHookReplyPayloadSendingEvent } from "../plugins/hook-types.js";
 import { dispatchInboundMessage } from "./dispatch.js";
 import { resolveGroupThreadConfig } from "./group-thread-config.js";
 import { buildThreadingToolContext } from "./reply/agent-runner-utils.js";
 import { createReplyTurnLedger } from "./reply/dispatch-from-config.turn-ledger.js";
 import type {
-  DispatchFromConfigParams,
-  DispatchFromConfigResult,
+  DispatchFromConfigParams as Turn,
+  DispatchFromConfigResult as Result,
 } from "./reply/dispatch-from-config.types.js";
 import { createReplyDispatcher } from "./reply/reply-dispatcher.js";
 import type { ReplyDispatchRuntimeInfo } from "./reply/reply-dispatcher.types.js";
-import {
-  buildChannelSourceTurnId,
-  readChannelSourceTurnId,
-  setChannelSourceTurnId,
-} from "./reply/source-turn-id.js";
+import * as sourceIds from "./reply/source-turn-id.js";
 import type { MsgContext } from "./templating.js";
 import type { ReplyPayload } from "./types.js";
 
@@ -63,7 +48,7 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
   }),
 }));
 
-const roster: OpenClawConfig["agents"] = {
+const roster: Config["agents"] = {
   entries: {
     alice: { identity: { name: "Alice", emoji: "🦉" } },
     bob: { identity: { name: "Bob" } },
@@ -71,9 +56,7 @@ const roster: OpenClawConfig["agents"] = {
   },
 };
 
-function config(
-  entry: NonNullable<OpenClawConfig["broadcast"]>[string] = ["alice", "bob"],
-): OpenClawConfig {
+function config(entry: NonNullable<Config["broadcast"]>[string] = ["alice", "bob"]): Config {
   return { agents: roster, broadcast: { "telegram:-100123": entry } };
 }
 
@@ -81,21 +64,18 @@ const continuationConfig = () => config({ agents: ["alice", "bob"], maxRounds: 2
 
 function dispatch(
   params: {
-    cfg?: OpenClawConfig;
+    cfg?: Config;
     enableHooks?: boolean;
     prepared?: boolean;
     deliveryFinalization?: Promise<{ visibleReplySent: true }>;
     text?: string;
     context?: Partial<MsgContext>;
-    replyOptions?: DispatchFromConfigParams["replyOptions"];
-    reply?: (turn: DispatchFromConfigParams, index: number) => string[] | Promise<string[]>;
-    result?: (
-      turn: DispatchFromConfigParams,
-      result: DispatchFromConfigResult,
-    ) => DispatchFromConfigResult;
+    replyOptions?: Turn["replyOptions"];
+    reply?: (turn: Turn, index: number) => string[] | Promise<string[]>;
+    result?: (turn: Turn, result: Result) => Result;
   } = {},
 ) {
-  const turns: DispatchFromConfigParams[] = [];
+  const turns: Turn[] = [];
   const delivered: {
     text: string | undefined;
     participant: ReplyDispatchRuntimeInfo["participant"];
@@ -110,7 +90,7 @@ function dispatch(
   };
   const dispatcher = createReplyDispatcher({
     deliver: async (payload, info) => {
-      const [plan] = createOutboundPayloadPlan([payload]);
+      const [plan] = payloads.createOutboundPayloadPlan([payload]);
       return plan ? deliver(plan.payload, info) : { visibleReplySent: false };
     },
     deliverPrepared: (plan, info) => deliver(plan.payload, info),
@@ -153,7 +133,7 @@ function dispatch(
           ? ledger.sendPreparedQueued(
               "final",
               expectDefined(
-                createStructuredOutboundPayloadPlan([payload])[0],
+                payloads.createStructuredOutboundPayloadPlan([payload])[0],
                 "expected reply plan",
               ),
             )
@@ -200,7 +180,7 @@ async function held(
 describe("agent group thread dispatch", () => {
   it.each([false, true])("shares settled post-hook finals (prepared: %s)", async (prepared) => {
     replyHooks.enabled = true;
-    const publicFinal = "Bob, this is the public final. [[reply_to:999]]";
+    const publicFinal = "Bob, final. [[reply_to:999]]";
     replyHooks.rewriteText = publicFinal;
     const deliveryFinalization = createDeferred<{ visibleReplySent: true }>();
     const run = dispatch({
@@ -208,22 +188,19 @@ describe("agent group thread dispatch", () => {
       enableHooks: true,
       prepared,
       deliveryFinalization: deliveryFinalization.promise,
-      reply: (_turn, index) =>
-        index === 0 ? ["Bob, this is the unfiltered draft."] : ["NO_REPLY"],
+      reply: (_turn, index) => (index === 0 ? ["Bob, draft."] : ["NO_REPLY"]),
     });
     try {
       await vi.waitFor(() => expect(run.deliveredPayloads).toHaveLength(1));
       expect(run.turns).toHaveLength(2);
-      expect(run.deliveredPayloads[0]?.text).toBe(
-        prepared ? publicFinal : "Bob, this is the public final.",
-      );
+      expect(run.deliveredPayloads[0]?.text).toBe(prepared ? publicFinal : "Bob, final.");
       expect(run.deliveredPayloads[0]?.replyToId).toBe(prepared ? undefined : "999");
       deliveryFinalization.resolve({ visibleReplySent: true });
       await run.done;
       expect(run.turns).toHaveLength(4);
       const continuation = expectDefined(run.turns[3], "expected Bob's continuation");
       expect(continuation.ctx.BodyForAgent).toContain(publicFinal);
-      expect(continuation.ctx.BodyForAgent).not.toContain("unfiltered draft");
+      expect(continuation.ctx.BodyForAgent).not.toContain("draft");
     } finally {
       deliveryFinalization.resolve({ visibleReplySent: true });
       await run.done;
@@ -232,36 +209,30 @@ describe("agent group thread dispatch", () => {
     }
   });
 
-  it.each([
-    { name: "operator UI", context: { Provider: "webchat", Surface: "webchat" } },
-    { name: "internal event", context: { InternalTurnSource: "heartbeat" as const } },
-  ])("does not fan out an $name with an external reply target", async ({ context }) => {
-    const run = await completed({ context });
-    expect(run.turns).toHaveLength(1);
-    expect(run.turns[0]?.ctx.AgentId).toBe("routed");
-    expect(expectDefined(run.delivered[0], "expected ordinary reply").participant).toBeUndefined();
-  });
-
-  it.each([
-    { text: "@Bob, review this.", participants: ["bob"] },
-    { text: "@Alice and @Bob, review this.", participants: ["alice", "bob"] },
-  ])("selects explicit participant addresses in '$text'", async ({ text, participants }) => {
-    const run = await completed({ text });
-    expect(run.turns.map((turn) => turn.ctx.AgentId)).toEqual(participants);
-    expect(run.delivered.map((reply) => reply.participant?.agentId)).toEqual(participants);
-    expect(run.delivered.map((reply) => reply.participant?.name)).toEqual(
-      participants.map((id) => (id === "alice" ? "Alice" : "Bob")),
-    );
-  });
-
-  it("can disable selection and leaves a single configured participant unlabeled", async () => {
-    const all = await completed({
-      cfg: config({ agents: ["alice", "bob"], mentionGating: false }),
-      text: "@Bob",
-    });
-    expect(all.turns.map((turn) => turn.ctx.AgentId)).toEqual(["alice", "bob"]);
-    const single = await completed({ cfg: config(["bob"]) });
-    expect(single.delivered).toEqual([{ text: "A useful answer.", participant: undefined }]);
+  it.each<[string, Parameters<typeof dispatch>[0], string[], boolean]>([
+    ["operator UI", { context: { Provider: "webchat", Surface: "webchat" } }, ["routed"], false],
+    ["internal event", { context: { InternalTurnSource: "heartbeat" } }, ["routed"], false],
+    ["single mention", { text: "@Bob, review this." }, ["bob"], true],
+    ["two mentions", { text: "@Alice and @Bob, review this." }, ["alice", "bob"], true],
+    [
+      "mention gating disabled",
+      { cfg: config({ agents: ["alice", "bob"], mentionGating: false }), text: "@Bob" },
+      ["alice", "bob"],
+      true,
+    ],
+    ["single participant", { cfg: config(["bob"]) }, ["bob"], false],
+  ])("routes and labels %s", async (_name, params, agents, labeled) => {
+    const run = await completed(params);
+    expect(run.turns.map(({ ctx }) => ctx.AgentId)).toEqual(agents);
+    const expected = agents.map((agentId) => ({
+      text: "A useful answer.",
+      participant: labeled ? { agentId, name: agentId === "alice" ? "Alice" : "Bob" } : undefined,
+    }));
+    if (labeled) {
+      expect(run.delivered).toMatchObject(expected);
+    } else {
+      expect(run.delivered).toEqual(expected);
+    }
   });
 
   it.each(["group", "direct"] as const)("isolates %s account/topic namespaces", async (kind) => {
@@ -338,13 +309,13 @@ describe("agent group thread dispatch", () => {
       MessageSidFirst: "physical-first",
       MessageSidLast: "physical-last",
     };
-    const originalSourceId = buildChannelSourceTurnId({
+    const originalSourceId = sourceIds.buildChannelSourceTurnId({
       provider: "telegram",
       accountId: "work",
       conversationId: "telegram:-100123",
       messageId: "physical-1",
     });
-    setChannelSourceTurnId(context, originalSourceId);
+    sourceIds.setChannelSourceTurnId(context, originalSourceId);
     const run = await completed({ cfg: continuationConfig(), context });
     const continuations = run.turns.slice(2).map((turn) => turn.ctx);
     expect(continuations).toHaveLength(2);
@@ -362,10 +333,10 @@ describe("agent group thread dispatch", () => {
       });
     }
     expect(new Set(continuations.map((ctx) => ctx.MessageSid)).size).toBe(2);
-    const sourceIds = continuations.map(readChannelSourceTurnId);
-    expect(sourceIds.every(Boolean)).toBe(true);
-    expect(sourceIds).not.toContain(originalSourceId);
-    expect(new Set(sourceIds).size).toBe(2);
+    const ids = continuations.map(sourceIds.readChannelSourceTurnId);
+    expect(ids.every(Boolean)).toBe(true);
+    expect(ids).not.toContain(originalSourceId);
+    expect(new Set(ids).size).toBe(2);
   });
 
   it.each([2, 4])("reserves maxTurns=%i before parallel launch", async (maxTurns) => {
@@ -390,18 +361,12 @@ describe("agent group thread dispatch", () => {
     }
     const cfg = config({ agents: ["alice", "bob"], maxRounds: 4, maxTurns: 8 });
     cfg.broadcast = { ...cfg.broadcast, strategy: "sequential" };
+    const abortSignal = controller.signal;
+    const lifecycle = { abortSignal, onAdopted: async () => {} };
     const participantSignals: (AbortSignal | undefined)[] = [];
     const run = await completed({
       cfg,
-      replyOptions:
-        source === "ordinary"
-          ? { abortSignal: controller.signal }
-          : {
-              turnAdoptionLifecycle: {
-                abortSignal: controller.signal,
-                onAdopted: async () => {},
-              },
-            },
+      replyOptions: source === "ordinary" ? { abortSignal } : { turnAdoptionLifecycle: lifecycle },
       reply: ({ replyOptions }) => {
         participantSignals.push(replyOptions?.abortSignal);
         controller.abort();
@@ -432,28 +397,21 @@ describe("agent group thread dispatch", () => {
     expect(events.at(-1)).toBe("settled");
     expect(events.filter((event) => event === "adopted")).toHaveLength(1);
     expect(events.filter((event) => event === "settled")).toHaveLength(1);
-    expect(events.filter((event) => event.endsWith(":completed"))).toEqual([
-      "alice:completed",
-      "bob:completed",
-    ]);
+    const finished = events.filter((event) => event.endsWith(":completed"));
+    expect(finished).toEqual(["alice:completed", "bob:completed"]);
   });
 
   it("shares an in-flight root budget across equivalent thread ids, while isolating accounts and other threads", async () => {
-    const first = await held(
-      {
-        context: { AccountId: "work", MessageThreadId: 7 },
-      },
-      async () => {
-        const duplicate = dispatch({ context: { AccountId: "work", MessageThreadId: "7" } });
-        const otherAccount = dispatch({ context: { AccountId: "personal", MessageThreadId: 7 } });
-        const otherThread = dispatch({ context: { AccountId: "work", MessageThreadId: 8 } });
-        await Promise.all([duplicate.done, otherAccount.done, otherThread.done]);
-        expect(duplicate.turns).toHaveLength(0);
-        expect(duplicate.delivered).toHaveLength(0);
-        expect(otherAccount.turns).toHaveLength(2);
-        expect(otherThread.turns).toHaveLength(2);
-      },
-    );
+    const first = await held({ context: { AccountId: "work", MessageThreadId: 7 } }, async () => {
+      const duplicate = dispatch({ context: { AccountId: "work", MessageThreadId: "7" } });
+      const otherAccount = dispatch({ context: { AccountId: "personal", MessageThreadId: 7 } });
+      const otherThread = dispatch({ context: { AccountId: "work", MessageThreadId: 8 } });
+      await Promise.all([duplicate.done, otherAccount.done, otherThread.done]);
+      expect(duplicate.turns).toHaveLength(0);
+      expect(duplicate.delivered).toHaveLength(0);
+      expect(otherAccount.turns).toHaveLength(2);
+      expect(otherThread.turns).toHaveLength(2);
+    });
     expect(first.turns).toHaveLength(2);
   });
 
@@ -461,7 +419,7 @@ describe("agent group thread dispatch", () => {
     "keeps an ACP %s exclusive",
     async (source) => {
       const targetSessionKey = "agent:routed:acp:bound";
-      const binding: SessionBindingRecord = {
+      const binding: bindings.SessionBindingRecord = {
         bindingId: "group-thread-acp-binding",
         targetSessionKey,
         targetKind: "session",
@@ -469,14 +427,14 @@ describe("agent group thread dispatch", () => {
         status: "active",
         boundAt: 1,
       };
-      const adapter: SessionBindingAdapter = {
+      const adapter: bindings.SessionBindingAdapter = {
         channel: "telegram",
         accountId: "default",
         listBySession: (key) => (key === targetSessionKey ? [binding] : []),
         resolveByConversation: (ref) => (ref.conversationId === "-100123" ? binding : null),
       };
       if (source === "conversation binding") {
-        registerSessionBindingAdapter(adapter);
+        bindings.registerSessionBindingAdapter(adapter);
       }
       try {
         const context: Partial<MsgContext> =
@@ -502,7 +460,11 @@ describe("agent group thread dispatch", () => {
         expect(expectDefined(run.delivered[0], "expected ACP reply").participant).toBeUndefined();
       } finally {
         if (source === "conversation binding") {
-          unregisterSessionBindingAdapter({ channel: "telegram", accountId: "default", adapter });
+          bindings.unregisterSessionBindingAdapter({
+            channel: "telegram",
+            accountId: "default",
+            adapter,
+          });
         }
       }
     },
@@ -522,22 +484,16 @@ describe("agent group thread dispatch", () => {
     } finally {
       replyHooks.enabled = false;
     }
-    expect(
-      replyHooks.events.map(({ payload, runId, sessionKey }) => ({
-        text: payload.text,
-        runId,
-        sessionKey,
-      })),
-    ).toEqual(
+    expect(replyHooks.events).toMatchObject(
       ["alice", "bob"].map((id) => ({
-        text: `Answer from ${id}.`,
+        payload: { text: `Answer from ${id}.` },
         runId: `run-${id}`,
         sessionKey: `agent:${id}:telegram:group:-100123`,
       })),
     );
   });
 
-  it("preserves intentional silence for a message-tool-only group without starting follow-up rounds", async () => {
+  it("preserves message-tool-only silence without follow-up rounds", async () => {
     const run = dispatch({
       cfg: config({ agents: ["alice", "bob"], maxRounds: 4, maxTurns: 8 }),
       reply: () => ["NO_REPLY"],
@@ -556,7 +512,7 @@ describe("agent group thread dispatch", () => {
     expect(run.delivered).toHaveLength(0);
   });
 
-  it("reports a participant failure while still delivering its sibling's reply", async () => {
+  it("reports a failed participant while delivering its sibling's reply", async () => {
     const run = dispatch({
       reply: ({ ctx }) => {
         if (ctx.AgentId === "alice") {
@@ -565,10 +521,13 @@ describe("agent group thread dispatch", () => {
         return ["Bob completed the review."];
       },
       result: ({ ctx }, result) =>
-        recordAgentRunTerminalOutcome(result, ctx.AgentId === "alice" ? "failed" : "completed"),
+        outcome.recordAgentRunTerminalOutcome(
+          result,
+          ctx.AgentId === "alice" ? "failed" : "completed",
+        ),
     });
     const result = await run.done;
-    expect(readAgentRunTerminalOutcome(result)).toBe("failed");
+    expect(outcome.readAgentRunTerminalOutcome(result)).toBe("failed");
     expect(result.queuedFinal).toBe(true);
     expect(run.turns).toHaveLength(2);
     expect(run.delivered).toEqual([
@@ -579,29 +538,20 @@ describe("agent group thread dispatch", () => {
 
 describe("group thread entry compatibility", () => {
   it("prefers a qualified WhatsApp entry and keeps unqualified arrays single-pass and WhatsApp-only", () => {
-    const legacy: OpenClawConfig = { agents: roster, broadcast: { "1203@g.us": ["alice", "bob"] } };
-    const cfg: OpenClawConfig = {
+    const legacy: Config = { agents: roster, broadcast: { "1203@g.us": ["alice", "bob"] } };
+    const cfg: Config = {
       ...legacy,
       broadcast: {
         ...legacy.broadcast,
         "whatsapp:1203@g.us": { agents: ["carol"], maxRounds: 3, maxTurns: 8 },
       },
     };
-    const resolve = (value: OpenClawConfig, channel = "whatsapp") =>
+    const resolve = (value: Config, channel = "whatsapp") =>
       resolveGroupThreadConfig({ cfg: value, channel, peerId: "1203@g.us" });
-    expect(resolve(cfg)).toMatchObject({
-      agents: ["carol"],
-      qualified: true,
-      maxRounds: 3,
-      maxTurns: 8,
-    });
-    expect(resolve(legacy)).toMatchObject({
-      agents: ["alice", "bob"],
-      qualified: false,
-      mentionGating: false,
-      maxRounds: 1,
-      maxTurns: 2,
-    });
+    const qualified = { agents: ["carol"], qualified: true, maxRounds: 3, maxTurns: 8 };
+    const singlePass = { qualified: false, mentionGating: false, maxRounds: 1, maxTurns: 2 };
+    expect(resolve(cfg)).toMatchObject(qualified);
+    expect(resolve(legacy)).toMatchObject({ agents: ["alice", "bob"], ...singlePass });
     expect(resolve(legacy, "telegram")).toBeUndefined();
   });
 });

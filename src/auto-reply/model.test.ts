@@ -15,12 +15,8 @@ describe("extractModelDirective", () => {
       "runtime-extra=codex",
     ],
   ] as const)("parses model options: %s", (args, rawModel, rawRuntime, cleaned) => {
-    expect(extractModelDirective(`/model ${args}`)).toMatchObject({
-      hasDirective: true,
-      rawModel,
-      rawRuntime,
-      cleaned,
-    });
+    const parsed = extractModelDirective(`/model ${args}`);
+    expect(parsed).toMatchObject({ hasDirective: true, rawModel, rawRuntime, cleaned });
   });
 
   it("allows profile overrides after OpenRouter preset paths", () => {
@@ -32,11 +28,8 @@ describe("extractModelDirective", () => {
   });
 
   it.each(["--runtime codex -s", "-s --runtime codex"])("parses alias options: %s", (options) => {
-    expect(extractModelDirective(`/gpt ${options}`, { aliases: ["gpt"] })).toMatchObject({
-      rawModel: "gpt",
-      rawRuntime: "codex",
-      cleaned: "",
-    });
+    const parsed = extractModelDirective(`/gpt ${options}`, { aliases: ["gpt"] });
+    expect(parsed).toMatchObject({ rawModel: "gpt", rawRuntime: "codex", cleaned: "" });
   });
 
   it.each([
@@ -67,9 +60,7 @@ describe("extractModelDirective", () => {
   });
 
   it.each(["/gpt-turbo", ""])("rejects partial or absent aliases: %j", (body) => {
-    expect(extractModelDirective(body, { aliases: ["gpt"] })).toMatchObject({
-      hasDirective: false,
-      cleaned: body,
-    });
+    const parsed = extractModelDirective(body, { aliases: ["gpt"] });
+    expect(parsed).toMatchObject({ hasDirective: false, cleaned: body });
   });
 });

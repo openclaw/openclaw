@@ -109,10 +109,8 @@ describe("directive parsing", () => {
   ] as const)(
     "accepts digit/underscore aliases: /%s %s",
     (name, args, levelKey, level, cleaned) => {
-      expect(parse(`/${name} ${args}`, { command: { kind: "text", name } })).toMatchObject({
-        [levelKey]: level,
-        cleaned,
-      });
+      const parsed = parse(`/${name} ${args}`, { command: { kind: "text", name } });
+      expect(parsed).toMatchObject({ [levelKey]: level, cleaned });
     },
   );
 });
