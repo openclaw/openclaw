@@ -83,46 +83,40 @@ it.each(["success", "rejected", "released", "expired", "stale-owner"] as const)(
       expect(
         await releaseDesktopObserverToken("/desktop/observe?token=" + grant.token, requester),
       ).toBe(true);
-      await expectAudioDenied();
-      return;
+      return expectAudioDenied();
     }
     if (outcome === "expired") {
       vi.advanceTimersByTime(60_001);
-      await expectAudioDenied();
-      return;
+      return expectAudioDenied();
     }
-    let upstreamStage = 0;
+    const upstreamReplies = [Buffer.from([1, 2]), Buffer.alloc(16, 1)];
     serverStream.on("data", () => {
-      if (upstreamStage++ === 0) {
-        serverStream.write(Buffer.from([1, 2]));
-      } else if (upstreamStage === 2) {
-        serverStream.write(Buffer.alloc(16, 1));
+      const reply = upstreamReplies.shift();
+      if (reply) {
+        serverStream.write(reply);
       } else {
         authenticated.resolve();
       }
     });
     const screen = new WebSocket(origin + "/desktop/observe?token=" + grant.token);
     cleanups.push(() => screen.terminate());
-    let browserStage = 0;
+    const browserReplies = [version, Buffer.from([1])];
     screen.on("message", () => {
-      if (browserStage++ === 0) {
-        screen.send(version);
-      } else if (browserStage === 2) {
-        screen.send(Buffer.from([1]));
+      const reply = browserReplies.shift();
+      if (reply) {
+        screen.send(reply);
       }
     });
     await once(screen, "open");
     if (outcome === "stale-owner") {
-      await expectAudioDenied();
-      return;
+      return expectAudioDenied();
     }
     serverStream.write(version);
     await authenticated.promise;
     expect(start).not.toHaveBeenCalled();
     if (outcome === "rejected") {
       serverStream.write(Buffer.from([0, 0, 0, 1, 0, 0, 0, 0]));
-      await expectAudioDenied();
-      return;
+      return expectAudioDenied();
     }
     const startFrame = once(audio, "message");
     serverStream.write(Buffer.alloc(4));

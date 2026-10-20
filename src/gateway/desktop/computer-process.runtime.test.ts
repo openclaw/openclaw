@@ -41,8 +41,7 @@ process.once("exit", (code) => record("exit:" + code));
 record("runtime:" + process.execPath);
 module.exports = {
   id: ${JSON.stringify(pluginId)},
-  register(api) {
-    registerComputerUseProvider(api, {
+  register: (api) => registerComputerUseProvider(api, {
       id: ${JSON.stringify(pluginId)},
       label: "Synthetic computer",
       isAvailable: () => true,
@@ -54,11 +53,9 @@ module.exports = {
             throw new Error("synthetic watcher cleanup failed");
           }
         };
-        if (${JSON.stringify(cleanupMode)} === "sync") {
-          finish();
-          return;
-        }
-        return require("node:fs/promises").readFile(${JSON.stringify(lifecycleFile)}).then(finish);
+        return ${JSON.stringify(cleanupMode)} === "sync"
+          ? finish()
+          : require("node:fs/promises").readFile(${JSON.stringify(lifecycleFile)}).then(finish);
       },
       capabilities: () => (${JSON.stringify(computerCapabilities(provider))}),
       async openExecution({ executionId, sessionKey }) {
@@ -72,8 +69,7 @@ module.exports = {
           async close(reason) { record("close:" + reason); },
         };
       },
-    });
-  },
+    }),
 };
 `,
     );

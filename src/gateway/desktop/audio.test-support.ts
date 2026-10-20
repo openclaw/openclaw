@@ -1,11 +1,6 @@
 import { vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import type {
-  ManagedRun,
-  ProcessSupervisor,
-  RunExit,
-  SpawnInput,
-} from "../../process/supervisor/types.js";
+import type * as Supervisor from "../../process/supervisor/types.js";
 import { runExit } from "./computer.test-support.js";
 import { createManagedLinuxAudio, managedLinuxAudioEnv } from "./managed-linux-audio.js";
 
@@ -26,8 +21,8 @@ export function createAudioFixture(
     beforeCaptureReturn?: () => void;
   } = {},
 ) {
-  const inputs: Array<Extract<SpawnInput, { mode: "child" }>> = [];
-  const runs: ManagedRun[] = [];
+  const inputs: Array<Extract<Supervisor.SpawnInput, { mode: "child" }>> = [];
+  const runs: Supervisor.ManagedRun[] = [];
   const events = {
     serverSpawned: createDeferred(),
     captureSpawned: createDeferred(),
@@ -36,7 +31,7 @@ export function createAudioFixture(
     captureAdmitted: vi.fn(),
   };
   const inScope = (scope: string) => runs.filter((_, index) => inputs[index]?.scopeKey === scope);
-  const supervisor: ProcessSupervisor = {
+  const supervisor: Supervisor.ProcessSupervisor = {
     acquireScopeCleanup: (scope) => async () => {
       supervisor.cancelScope(scope);
       await Promise.all(inScope(scope).map((run) => run.wait()));
@@ -48,9 +43,9 @@ export function createAudioFixture(
       }
       input.assertCurrent?.();
       inputs.push(input);
-      const exit = createDeferred<RunExit>();
+      const exit = createDeferred<Supervisor.RunExit>();
       const activity = { resultSettled: false, lastOutputAtMs: 0 };
-      const run: ManagedRun = {
+      const run: Supervisor.ManagedRun = {
         runId: String(runs.length),
         startedAtMs: 0,
         activity,
