@@ -844,8 +844,13 @@ describe("openSessionWorkspaceFile", () => {
   });
 
   it.each([
-    { error: new Error("session file not found"), message: "session file not found" },
     {
+      path: "/outside/workspace/chat.md",
+      error: new Error("session file not found"),
+      message: "session file not found",
+    },
+    {
+      path: "/outside/workspace/chat.md",
       error: new GatewayRequestError({
         code: "INVALID_REQUEST",
         message: "session file not found",
@@ -853,7 +858,26 @@ describe("openSessionWorkspaceFile", () => {
       }),
       message: "This file is outside Main Session's workspace, and you can't open it.",
     },
-  ])("keeps a rejected file open with its reason: $message", async ({ error, message }) => {
+    {
+      path: "ORGANIZATION_REPORT.md",
+      error: new GatewayRequestError({
+        code: "INVALID_REQUEST",
+        message: "session file not found",
+        details: { type: "session_file_not_found" },
+      }),
+      message:
+        "This file location is unresolved. Use the Files browser to locate nested workspace files.",
+    },
+    {
+      path: "nested/ORGANIZATION_REPORT.md",
+      error: new GatewayRequestError({
+        code: "INVALID_REQUEST",
+        message: "session file not found",
+        details: { type: "session_file_not_found" },
+      }),
+      message: "session file not found",
+    },
+  ])("keeps a rejected file open with its reason: $message", async ({ path, error, message }) => {
     const handleOpenSidebar = createSidebarContentRecorder();
     const state: SessionWorkspaceHost = createHost({
       client: createGatewayBrowserClientFixture(),
@@ -870,7 +894,7 @@ describe("openSessionWorkspaceFile", () => {
     );
 
     openSessionWorkspaceFile(state, {
-      path: "/outside/workspace/chat.md",
+      path,
       sessionKey: "agent:research:main",
     });
 

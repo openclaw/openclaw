@@ -15,6 +15,8 @@ const catalog = {
       showInFiles: "Show in Files",
       unavailable: "Unable to open",
       outsideSessionBoundary: "This file is outside {session}'s workspace, and you can't open it.",
+      unresolvedLocation:
+        "This file location is unresolved. Use the Files browser to locate nested workspace files.",
       assetsUnavailable: "Some assets couldn't be loaded ({count})",
       previousMatch: "Previous match",
       nextMatch: "Next match",

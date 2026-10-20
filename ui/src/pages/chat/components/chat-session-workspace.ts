@@ -109,6 +109,16 @@ function workspaceBrowserFilePath(root: string | undefined, filePath: string): s
   return base ? `${base}${separator}${relative}` : `${separator}${relative}`;
 }
 
+function isBareWorkspaceFilePath(filePath: string): boolean {
+  return (
+    Boolean(filePath) &&
+    !filePath.includes("/") &&
+    !filePath.includes("\\") &&
+    filePath !== "." &&
+    filePath !== ".."
+  );
+}
+
 function readWorkspaceFileText(file: SessionWorkspaceGetResult["file"] | undefined): string | null {
   return file?.previewKind === "text" &&
     file.contentEncoding === "utf8" &&
@@ -413,18 +423,30 @@ function openFile(
           ? sessionWorkspaceFileKey(result.sessionKey, result.root, canonicalPath)
           : undefined;
       },
-      resolveError: (error) =>
-        error instanceof GatewayRequestError &&
-        typeof error.details === "object" &&
-        error.details !== null &&
-        "reason" in error.details &&
-        error.details.reason === "outside_session_boundary"
-          ? t("chat.detailPanel.outsideSessionBoundary", {
+      resolveError: (error) => {
+        if (
+          error instanceof GatewayRequestError &&
+          typeof error.details === "object" &&
+          error.details !== null
+        ) {
+          if ("reason" in error.details && error.details.reason === "outside_session_boundary") {
+            return t("chat.detailPanel.outsideSessionBoundary", {
               session:
                 (viewingSession ? draftContext?.sessionTitle : undefined) ??
                 resolveSessionDisplayName(sessionKey),
-            })
-          : undefined,
+            });
+          }
+          if (
+            "type" in error.details &&
+            error.details.type === "session_file_not_found" &&
+            isBareWorkspaceFilePath(path) &&
+            isBareWorkspaceFilePath(requestPath)
+          ) {
+            return t("chat.detailPanel.unresolvedLocation");
+          }
+        }
+        return undefined;
+      },
     },
   );
 }
