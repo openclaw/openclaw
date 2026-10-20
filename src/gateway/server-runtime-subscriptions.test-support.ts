@@ -184,7 +184,7 @@ export function registerAuditSubscriptionTests(params: {
       stream: "lifecycle",
       data: { phase: "start", startedAt: 1_000 },
     });
-    expect(auditTestState.recorded).toBe(1);
+    expect(auditTestState.recorded).toBe(0);
     expect(hasExecutionIdentityAdmissionSink()).toBe(true);
     expect(
       enqueueExecutionIdentityContextAtAdmission(
@@ -199,6 +199,7 @@ export function registerAuditSubscriptionTests(params: {
     ).toBe(true);
     expect(auditTestState.identityRecorded).toBe(1);
     await unsubs.agentUnsub();
+    expect(auditTestState.recorded).toBe(1);
     expect(auditTestState.stopped).toBe(1);
     expect(hasExecutionIdentityAdmissionSink()).toBe(false);
   });
@@ -318,17 +319,17 @@ export function registerAuditSubscriptionTests(params: {
         messages: 0,
         identities: 0,
       },
-      { audit: {}, events: 1, messages: 0, identities: 0 },
+      { audit: {}, events: 2, messages: 0, identities: 0 },
       {
         audit: { messages: "direct", executionIdentity: true },
-        events: 2,
+        events: 4,
         messages: 1,
         identities: 1,
       },
-      { audit: { messages: "all" }, events: 3, messages: 3, identities: 1 },
+      { audit: { messages: "all" }, events: 6, messages: 3, identities: 1 },
       {
         audit: { enabled: false, messages: "all", executionIdentity: true },
-        events: 3,
+        events: 6,
         messages: 3,
         identities: 1,
       },
@@ -341,6 +342,11 @@ export function registerAuditSubscriptionTests(params: {
         runId,
         stream: "lifecycle",
         data: { phase: "start", startedAt: 1_000 },
+      });
+      emitAgentAuditEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: 1_000, endedAt: 2_000 },
       });
       for (const conversationKind of ["direct", "group"] as const) {
         emitTrustedMessageAuditEvent({
@@ -399,7 +405,7 @@ export function registerAuditSubscriptionTests(params: {
       stream: "lifecycle",
       data: { phase: "start", startedAt: 2_000 },
     });
-    expect(auditTestState.recorded).toBe(1);
+    expect(auditTestState.recorded).toBe(0);
     runtimeConfigState.value = { logging: { audit: { enabled: false } } };
     emitAgentAuditEvent({
       runId: "disabled-again",

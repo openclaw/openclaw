@@ -220,6 +220,7 @@ export type ExecToolDetails = {
       sessionId: string;
       pid?: number;
       startedAt: number;
+      deadlineAtMs?: number;
       cwd?: string;
       tail?: string;
       followUp?: string;

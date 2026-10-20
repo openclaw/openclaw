@@ -249,7 +249,6 @@ export async function inspectGatewayRestart(params: {
   }
   // Runtime identity remains required even with a separately configured UI root.
   if (expectedBuildId) {
-    snapshot.expectedBuildId = expectedBuildId;
     if (snapshot.gatewayBuildId !== expectedBuildId) {
       snapshot.healthy = false;
       if (snapshot.gatewayBuildId !== undefined) {

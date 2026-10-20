@@ -8,6 +8,8 @@ import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { resolveSessionWorkspace } from "../../lib/sessions/workspace.ts";
+import { clawCreatorFlow } from "../claws/creator-flow.ts";
+import { canCreateClawDraft } from "../claws/draft-navigation.ts";
 import { PaneOutboxRecovery } from "./chat-outbox-recovery.tsx";
 import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
@@ -15,19 +17,24 @@ import type { PaneLayoutData } from "./chat-pane-layout-view.tsx";
 import { resolveChatPaneDesktopTarget } from "./chat-pane-placement.ts";
 import type { createChatPaneRails } from "./chat-pane-rails.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
-import { renderSidebarRegion, sidebarRegionCallbacks } from "./chat-pane-sidebar-layout.ts";
+import { renderSidebarRegion } from "./chat-pane-sidebar-layout.ts";
+import { createSideChatModelControlProps } from "./chat-session-companion-model-controls.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createChatToolIcons, type PluginToolIcons } from "./chat-tool-icon-controller.ts";
 import type { ChatProps } from "./chat-view.tsx";
 import { publishChatWorkContext } from "./chat-work-context.ts";
 import { getChatComposerState, hasTerminalRunStatus } from "./components/chat-composer-state.ts";
 import type { ChatDetailsElements, ChatDetailsViewProps } from "./components/chat-details.tsx";
+import type { SidebarRegionCallbacks } from "./components/chat-sidebar-region-types.ts";
 import { resolveAssistantDisplayAvatar } from "./components/chat-welcome.ts";
 import { resolveChatLinkFaviconFetcher } from "./link-favicon-loader.ts";
 import {
   SIDEBAR_NARROW_BREAKPOINT_PX,
+  activatePanel,
   sidebarMainPanel,
   isSidebarSlotVisible,
+  reorderPanel,
+  toggleSidebarPanelExpanded,
   type SidebarLayout,
   type SidebarSlotId,
 } from "./sidebar-layout.ts";
@@ -306,6 +313,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       desktopRefreshOnPresentation: !this.pendingPanelToggles.requests.has("desktop"),
       desktopAvailable,
       desktopSource,
+      desktopRuntimeConfig: this.context.runtimeConfig,
       portalPresented: slotPresentation("portal"),
       desktopFocusHref: desktopFocus.href,
       onDesktopFocusTargetChange: (target) => {
@@ -326,6 +334,11 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       activeRunId: observerRunId,
       pullRequests: this.sessionPullRequests,
       companion: companionThread,
+      companionModelControls: createSideChatModelControlProps({
+        state,
+        companion: companionThread,
+        onSelect: (patch) => this.sessionCompanionThreads.setModelSelection(currentAgentId, patch),
+      }),
       companionFocusRequest: this.companionIntents.focusRequest,
       companionPresented,
       onCompanionSubmit: (question) => void this.submitSessionCompanionQuestion(question),
@@ -339,6 +352,10 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
         ),
       connected: state.connected,
       onClearCompanion: () => void this.clearSessionCompanion(),
+      onCreateClaw:
+        currentAgentId && canCreateClawDraft(this.context)
+          ? () => void clawCreatorFlow(this.context).start(currentAgentId)
+          : undefined,
       discussion,
       discussionAvailable,
       discussionOpenUrl: discussion?.openUrl ?? null,
@@ -346,15 +363,39 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       pluginPanels: this.context.plugins.registrations("panels"),
       isPluginPanelPresented: (slot) => slotPresentation(slot, "active"),
     });
-    const callbacks = sidebarRegionCallbacks({
-      state,
-      layout: savedLayout,
-      closePanelSlot,
-      openPanelSlot,
-      forgetDiscussionUrl: () => this.sessionDiscussion.forgetOpenUrl(state.sessionKey.trim()),
+    const setPanelOpen = (open: boolean) => this.setChatSidePanelOpen(open, savedLayout);
+    const callbacks: SidebarRegionCallbacks = {
+      activatePanel: (panelId) => {
+        const slot = savedLayout.columns[0]?.panels.find((panel) => panel.id === panelId)?.slot;
+        if (slot === "dashboard" && !isSidebarSlotVisible(savedLayout, "dashboard")) {
+          openPanelSlot(slot);
+        } else {
+          state.updateSidebarLayout(activatePanel(savedLayout, panelId));
+        }
+        state.updateSidebarActivePanel(panelId);
+      },
+      togglePanelExpanded: (panelId) => {
+        state.updateSidebarLayout(toggleSidebarPanelExpanded(savedLayout, panelId), {
+          dashboardPresentation: "personal",
+        });
+        state.updateSidebarActivePanel(panelId);
+      },
+      closeSlot: (slot) => {
+        if (slot === "conversation") {
+          setPanelOpen(false);
+          return;
+        }
+        if (slot === "discussion") {
+          this.sessionDiscussion.forgetOpenUrl(state.sessionKey.trim());
+        }
+        closePanelSlot(slot);
+      },
+      openSlot: openPanelSlot,
+      reorderPanel: (panelId, targetPanelId, placement) =>
+        state.updateSidebarLayout(reorderPanel(savedLayout, panelId, targetPanelId, placement)),
       resizePanel: (columnId, size) => this.commitSidebarPanelResize(savedLayout, columnId, size),
-      setPanelOpen: (open) => this.setChatSidePanelOpen(open, savedLayout),
-    });
+      setOpen: setPanelOpen,
+    };
     const connectionGeneration = this.connectionGeneration;
     // Main panel actions share the task toolbar. Content roots stay in the
     // sidebar region so changing their presentation never reconnects them.

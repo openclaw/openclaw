@@ -198,6 +198,7 @@ export function ClawsDetailView(props: { view: ClawsCatalogViewProps }) {
         {(selected) => {
           const view = () => props.view!;
           const detail = () => view().detail;
+          const publisher = () => detail() ?? selected();
           const canAdd = () =>
             view().canAdd &&
             Boolean(detail()) &&
@@ -217,9 +218,10 @@ export function ClawsDetailView(props: { view: ClawsCatalogViewProps }) {
                 onBack={view().onBack}
                 icon={<Icon name="box" />}
                 identity={renderPublisherIdentity({
-                  name: "OpenClaw",
-                  handle: t("clawsCatalog.publisher"),
-                  official: selected().official,
+                  name:
+                    publisher().ownerHandle === "openclaw" ? "OpenClaw" : publisher().ownerHandle,
+                  handle: `@${publisher().ownerHandle}`,
+                  official: publisher().official,
                 })}
                 titleAction={
                   <span data-claws-confirm>

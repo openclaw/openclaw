@@ -106,7 +106,6 @@ export function registerRequesterCompletionCustodyTests({
       });
       const overloaded = recovery.startsWith("overloaded");
       const unavailablePolicy = recovery === "unavailable policy then current";
-      const deferred = overloaded || unavailablePolicy;
       const missingSource = recovery.startsWith("missing source");
       const terminalRecovery =
         missingSource ||
@@ -363,6 +362,7 @@ export function registerRequesterCompletionCustodyTests({
                 ...draft.execution,
                 status: "terminal",
                 endedAt: Date.now(),
+                interruptionReason: "gateway-restart",
                 outcome: { status: "error", error: "Gateway restarted" },
               };
               draft.completion = {
@@ -506,7 +506,7 @@ export function registerRequesterCompletionCustodyTests({
             expect(deliver).not.toHaveBeenCalled();
             return;
           }
-          if (deferred) {
+          if (overloaded || unavailablePolicy) {
             const blockedEffect = vi.fn();
             expect(() =>
               subagentRuns.runWithCompletionAuthority(currentChild(), blockedEffect),
@@ -544,7 +544,7 @@ export function registerRequesterCompletionCustodyTests({
           if (recovery === "revoked after restore") {
             grantCurrent = false;
           }
-          if (deferred || recovery === "revoked after restore") {
+          if (overloaded || unavailablePolicy || recovery === "revoked after restore") {
             const resumedGrants = resumeGrant.mock.calls.length;
             await testing.sweepOnceForTests();
             expect(resumeGrant).toHaveBeenCalledTimes(resumedGrants);
@@ -704,6 +704,5 @@ export function registerRequesterCompletionCustodyTests({
       });
     },
   );
-
   registerRequesterAutomationCustodyTests({ registration, updateRun });
 }

@@ -87,7 +87,7 @@ export function loadGuidance(rawConfig: unknown) {
         requireDirectories: true,
       });
       const { buffer, stat } = readRegularFileSync({ filePath, maxBytes: MAX_FILE_BYTES });
-      if (stat.nlink !== 1 || buffer.length > MAX_FILE_BYTES) {
+      if (stat.nlink !== 1) {
         throw invalid("unsafe file");
       }
       text = new TextDecoder("utf-8", { fatal: true }).decode(buffer);

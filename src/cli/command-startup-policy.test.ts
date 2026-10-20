@@ -80,6 +80,7 @@ describe("command-startup-policy", () => {
       ["memory", "search"],
       ["memory", "status"],
       ["gateway", "stop"],
+      ["gateway", "recover-lock"],
       ["gateway", "restart"],
       ["gateway", "uninstall"],
       ["daemon", "stop"],

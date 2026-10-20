@@ -316,7 +316,6 @@ export async function createQaBundledPluginsDir(params: {
   );
   return {
     bundledPluginsDir,
-    stagedRoot,
     runtimeHostVersion: hostVersion?.version,
   };
 }

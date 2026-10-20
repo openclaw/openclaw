@@ -5,10 +5,6 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import pMap from "p-map";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { buildPortHints } from "./ports-format.js";
-import {
-  parseLsofListenerRecordsByPort,
-  readLsofListenersForPort,
-} from "./ports-lsof-listeners.js";
 import { resolveLsofCommand } from "./ports-lsof.js";
 import {
   parseTcpEndpoint,
@@ -33,7 +29,6 @@ import {
 
 type SocketReadResult<T extends PortListener> = {
   entries: T[];
-  detail?: string;
   errors: string[];
 };
 
@@ -64,6 +59,69 @@ async function runCommandSafe(argv: string[], signal?: AbortSignal) {
       error: String(err),
     };
   }
+}
+
+function parseLsofListenerRecordsByPort(output: string): Map<number, PortListener[]> {
+  const recordsByPort = new Map<number, PortListener[]>();
+  let processFields: Pick<PortListener, "pid" | "command"> = {};
+  for (const rawLine of output.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) {
+      continue;
+    }
+    if (line.startsWith("p")) {
+      const pid = parseStrictPositiveInteger(line.slice(1));
+      processFields = pid !== undefined ? { pid } : {};
+      continue;
+    }
+    if (line.startsWith("c")) {
+      processFields.command = line.slice(1);
+      continue;
+    }
+    if (line.startsWith("n")) {
+      const listener = { ...processFields, address: line.slice(1) };
+      const port = parseLsofListenerPort(listener.address);
+      if (port !== null) {
+        const records = recordsByPort.get(port) ?? [];
+        records.push(listener);
+        recordsByPort.set(port, records);
+      }
+    }
+  }
+  return recordsByPort;
+}
+
+function parseLsofListenerPort(address: string | undefined): number | null {
+  const normalized = address
+    ?.replace(/^tcp\s+/i, "")
+    .replace(/\s*\([^)]*\)\s*$/i, "")
+    .trim();
+  if (!normalized || normalized.includes("->")) {
+    return null;
+  }
+  return parseTcpEndpoint(normalized)?.port ?? null;
+}
+
+function listenerIdentity(listener: PortListener): string {
+  return `${listener.pid ?? ""}\0${listener.command ?? ""}\0${listener.address ?? ""}`;
+}
+
+function readLsofListenersForPort(
+  recordsByPort: Map<number, PortListener[]>,
+  port: number,
+): PortListener[] {
+  const records = recordsByPort.get(port) ?? [];
+  const seen = new Set<string>();
+  const listeners: PortListener[] = [];
+  for (const record of records) {
+    const key = listenerIdentity(record);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    listeners.push(record);
+  }
+  return listeners;
 }
 
 function parseLsofTcpConnectionAddress(
@@ -220,10 +278,8 @@ async function readUnixSocketEntries<T extends PortListener>(
 ) {
   const result = await readUnixSocketOutput(argv, signal);
   const entries = result.stdout === undefined ? [] : parse(result.stdout);
-  const detail = result.stdout?.trim() || undefined;
   return {
     entries,
-    detail: fallbackErrors && entries.length === 0 ? undefined : detail,
     errors:
       fallbackErrors && entries.length === 0
         ? [...fallbackErrors, ...result.errors]
@@ -305,8 +361,8 @@ async function readUnixListeners(
 ): Promise<SocketReadResult<PortListener>> {
   const listenerSnapshot = snapshot ?? (await readUnixListenerSnapshot(port, signal));
   if (!listenerSnapshot.lsofUnavailable) {
-    const { listeners, detail } = readLsofListenersForPort(listenerSnapshot.recordsByPort, port);
-    return { entries: listeners, detail, errors: listenerSnapshot.errors };
+    const listeners = readLsofListenersForPort(listenerSnapshot.recordsByPort, port);
+    return { entries: listeners, errors: listenerSnapshot.errors };
   }
   return await readUnixSocketEntries(
     ["ss", "-H", "-ltnp", `sport = :${port}`],
@@ -459,7 +515,7 @@ async function readWindowsNetstatEntries<T extends PortListener>(
     },
     { concurrency: PORT_PROCESS_ENRICHMENT_CONCURRENCY, signal },
   );
-  return { entries, detail: res.stdout.trim() || undefined, errors };
+  return { entries, errors };
 }
 
 export async function inspectPortUsage(
@@ -496,9 +552,22 @@ async function buildPortUsage(
   if (status !== "busy") {
     listeners = [];
   } else if (probeHosts) {
-    listeners = listeners.filter((listener) =>
-      isListenerRelevantToProbeHosts(listener, port, probeHosts),
-    );
+    listeners = listeners.filter((listener) => {
+      const endpoint = parseTcpListenerEndpoint(listener.address);
+      if (!endpoint || endpoint.port !== port) {
+        return false;
+      }
+      return probeHosts.some((probeHost) => {
+        const normalizedProbeHost = normalizeLowercaseStringOrEmpty(probeHost);
+        if (isWildcardTcpHost(endpoint.host)) {
+          return isSameTcpAddressFamily(endpoint.host, normalizedProbeHost);
+        }
+        if (isWildcardTcpHost(normalizedProbeHost)) {
+          return isSameTcpAddressFamily(normalizedProbeHost, endpoint.host);
+        }
+        return normalizedProbeHost === endpoint.host;
+      });
+    });
   }
   const hints = buildPortHints(listeners, port);
   if (status === "busy" && listeners.length === 0) {
@@ -512,7 +581,6 @@ async function buildPortUsage(
     status,
     listeners,
     hints,
-    detail: result.detail,
     errors: result.errors.length > 0 ? [...result.errors] : undefined,
   };
 }
@@ -525,27 +593,6 @@ function isSameTcpAddressFamily(leftHost: string, rightHost: string): boolean {
   const leftFamily = net.isIP(leftHost);
   const rightFamily = net.isIP(rightHost);
   return leftFamily === 0 || rightFamily === 0 || leftFamily === rightFamily;
-}
-
-function isListenerRelevantToProbeHosts(
-  listener: PortListener,
-  port: number,
-  probeHosts: readonly string[],
-): boolean {
-  const endpoint = parseTcpListenerEndpoint(listener.address);
-  if (!endpoint || endpoint.port !== port) {
-    return false;
-  }
-  return probeHosts.some((probeHost) => {
-    const normalizedProbeHost = normalizeLowercaseStringOrEmpty(probeHost);
-    if (isWildcardTcpHost(endpoint.host)) {
-      return isSameTcpAddressFamily(endpoint.host, normalizedProbeHost);
-    }
-    if (isWildcardTcpHost(normalizedProbeHost)) {
-      return isSameTcpAddressFamily(normalizedProbeHost, endpoint.host);
-    }
-    return normalizedProbeHost === endpoint.host;
-  });
 }
 
 export async function inspectPortUsages(
@@ -592,7 +639,5 @@ export async function inspectPortConnections(port: number): Promise<PortConnecti
   return {
     port,
     connections: result.entries,
-    detail: result.detail,
-    errors: result.errors.length > 0 ? result.errors : undefined,
   };
 }

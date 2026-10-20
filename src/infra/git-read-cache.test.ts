@@ -286,7 +286,8 @@ describe("typed Git read ownership", () => {
     await vi.waitFor(() => expect(gitRead).toHaveBeenCalledOnce());
     vi.advanceTimersByTime(15_000);
     const second = loadCheckoutDiff({ ...input, sessionKey: "second" });
-    await Promise.resolve();
+    // Admit the second viewer through its async revision check before settling the scan.
+    await vi.advanceTimersByTimeAsync(0);
     expect(gitRead).toHaveBeenCalledOnce();
     held.resolve({ ...emptyDiff, additions: 2 });
     await expect(first).resolves.toMatchObject({ sessionKey: "first", additions: 2 });

@@ -1,6 +1,10 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, expect, it, vi } from "vitest";
+import { renderAssistantRequestFailureCopy } from "../../agents/failover/assistant-request-failure-copy.js";
 import { appendSessionManagerActor } from "../../agents/sessions/session-manager-actor-append.js";
+import { formatErrorMessageWithCode } from "../../infra/errors.js";
+import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
+import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   getOpenClawAgentDatabaseIfOpen,
@@ -26,7 +30,7 @@ import { withActor } from "./session-actor-transport.test-support.js";
 import { seedSessionActorOutcomeTransferEntry } from "./session-actor-worker.test-support.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
 import { captureSessionEntryCurrentCheckAsyncInternal } from "./session-entry-current-check.js";
-import { acquireSessionInputActor } from "./session-input-actor.js";
+import { acquireSessionInputActor, throwSessionInputActorFailure } from "./session-input-actor.js";
 
 // mock-isolation: this transport proof does not schedule unrelated maintenance.
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
@@ -817,7 +821,33 @@ it.each([false, true])(
   },
 );
 
-it("retains rollback state and fences unknown commits until an explicit read", async () => {
+it.each([
+  [
+    Object.assign(new SqliteWorkerError("SQLite worker stopped", "outcome-unknown"), {
+      cause: Object.assign(new Error("database or disk is full"), { errcode: 13 }),
+    }),
+    "SQLITE_FULL",
+    "unknown",
+    false,
+    undefined,
+  ],
+  [new Error("database or disk is full"), "SQLITE_FULL", "unknown-result", false, undefined],
+  [new Error("Ordinary reply lost"), "session_actor_reconciliation", "unknown", false, undefined],
+  [
+    Object.assign(new Error("database or disk is full"), { errcode: 13 }),
+    "SQLITE_FULL",
+    "normal",
+    true,
+    undefined,
+  ],
+  [
+    new Error("Ordinary reply lost"),
+    "SQLITE_FULL",
+    "unknown",
+    false,
+    Object.assign(new Error("database or disk is full during settlement"), { code: "SQLITE_FULL" }),
+  ],
+] as const)("retains %s (%s, %s)", async (cause, expected, reply, rollback, settlementError) => {
   await withActor(async ({ actor, commands, fault }) => {
     const initial = await actor.read(authority);
     if (actor.target.database.kind !== "file") {
@@ -842,7 +872,11 @@ it("retains rollback state and fences unknown commits until an explicit read", a
     const rolledBack = actor.snapshot(authority) ?? (await actor.read(authority));
     expect(rolledBack.entry?.updatedAt).toBe(initial.entry?.updatedAt);
     expect(retained.isCurrent()).toBe(true);
-    fault.reply = "unknown";
+    fault.reply = reply;
+    fault.replyError = cause;
+    fault.transactionError = rollback ? cause : undefined;
+    fault.settlementLost = rollback;
+    fault.settlementError = settlementError;
     const unknown = await actor.patch(
       activity("unknown", 456, { expected: rolledBack.version }),
       authority,
@@ -851,14 +885,75 @@ it("retains rollback state and fences unknown commits until an explicit read", a
     expect(retained.isCurrent()).toBe(false);
     expect(actor.snapshot(authority)).toBeUndefined();
     const before = commands.length;
-    expect(
-      (await actor.patch({ commandId: "unknown", phaseId: "turn", reducers: [] }, authority)).kind,
-    ).toBe("unknown");
+    const refused = await actor.patch(
+      { commandId: "unknown", phaseId: "turn", reducers: [] },
+      authority,
+    );
+    assert(refused.kind === "unknown");
+    let failure: unknown;
+    try {
+      throwSessionInputActorFailure(refused);
+    } catch (error) {
+      failure = error;
+    }
+    expect(classifyGatewayStorageFailure(failure)).toBe(expected);
+    if (expected === "SQLITE_FULL") {
+      expect(
+        renderAssistantRequestFailureCopy({
+          storageFailure: classifyGatewayStorageFailure(failure),
+        }),
+      ).toContain("disk is full. Free up space");
+    }
+    const diagnostic = formatErrorMessageWithCode(failure);
+    expect(diagnostic).toContain("Session actor requires reconciliation before another command");
+    expect(diagnostic).toContain(cause.message);
+    if (settlementError) {
+      expect(diagnostic).toContain(settlementError.message);
+    }
+    await expect(
+      appendSessionManagerActor({
+        actor,
+        toolResult: false,
+        assertCurrent() {},
+        append: messageAppend(actor, initial.entry!.sessionId, { role: "user", content: [] }),
+      }),
+    ).rejects.toSatisfy((error: unknown) => classifyGatewayStorageFailure(error) === expected);
     expect(commands).toHaveLength(before);
     fault.reply = "normal";
-    expect((await actor.read(authority)).entry?.updatedAt).toBe(456);
+    expect((await actor.read(authority)).entry?.updatedAt).toBe(
+      rollback ? initial.entry?.updatedAt : 456,
+    );
   });
 });
+
+it.each(["command", "flush"] as const)(
+  "preserves storage guidance when a phase %s has an unknown outcome",
+  async (stage) => {
+    await withActor(async ({ actor, fault, commands }) => {
+      await actor.read(authority);
+      fault.reply = "unknown-result";
+      fault.replyError = new Error("database or disk is full");
+      await expect(
+        actor.withPhase("turn", authority, async (phase) => {
+          if (stage === "command") {
+            await phase.actor.patch(activity("unknown", 456), authority);
+          } else {
+            phase.patch([{ kind: "activity", updatedAt: 456 }]);
+          }
+        }),
+      ).rejects.toSatisfy((error: unknown) => {
+        expect(
+          renderAssistantRequestFailureCopy({
+            storageFailure: classifyGatewayStorageFailure(error),
+          }),
+        ).toContain("disk is full. Free up space");
+        expect(formatErrorMessageWithCode(error)).toContain("database or disk is full");
+        return true;
+      });
+      expect(commands.filter((command) => command === "session.actor.patch")).toHaveLength(1);
+    });
+  },
+);
 
 it("release waits actual native settlement and flushes accepted phase work after an await", async () => {
   await withActor(async ({ actor, fault, commands }) => {

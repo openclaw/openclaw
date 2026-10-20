@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { loadTranscriptEvents } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   asBoolean,
   isRecord,
@@ -39,7 +38,7 @@ import type { runAgentPrompt } from "./suite-runtime-agent-process.js";
 import {
   type createSession,
   type readEffectiveTools,
-  readRawQaSessionStore,
+  readQaSessionTranscriptEvents,
 } from "./suite-runtime-agent-session.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 
@@ -311,21 +310,7 @@ async function readSessionTranscriptBytes(
   env: Pick<QaSuiteRuntimeEnv, "gateway">,
   sessionKey: string,
 ) {
-  const store = await readRawQaSessionStore(env);
-  const entry = store[sessionKey];
-  const sessionId = normalizeOptionalString(entry?.sessionId);
-  if (!sessionId) {
-    throw new Error(`session transcript entry not found for ${sessionKey}`);
-  }
-  const events = await loadTranscriptEvents({
-    agentId: "qa",
-    env: {
-      ...process.env,
-      OPENCLAW_STATE_DIR: path.join(env.gateway.tempRoot, "state"),
-    },
-    sessionId,
-    sessionKey,
-  });
+  const { events } = await readQaSessionTranscriptEvents(env, sessionKey);
   const transcriptBytes = events.map((event) => JSON.stringify(event)).join("\n");
   if (!transcriptBytes.trim()) {
     throw new Error(`session transcript is empty for ${sessionKey}`);
@@ -401,8 +386,6 @@ function findToolRequestEvidence(params: {
   const planned = plannedRequests[0];
   const output = outputRequest
     ? {
-        id: outputRequest.toolOutputCallId,
-        tool: params.toolName,
         text: outputRequest.toolOutput,
         hardFailure: requestHasHappyPathFailureToolOutput(outputRequest),
         failure: requestHasFailureLikeToolOutput(outputRequest),
@@ -410,13 +393,10 @@ function findToolRequestEvidence(params: {
       }
     : undefined;
   return {
-    plannedRequest: planned
-      ? { id: planned.plannedToolCallId, tool: params.toolName, args: planned.plannedToolArgs }
-      : undefined,
+    plannedRequest: planned ? { args: planned.plannedToolArgs } : undefined,
     executedRequest: executedRequest
       ? {
           id: executedRequest.plannedToolCallId,
-          tool: params.toolName,
           args: executedRequest.plannedToolArgs,
         }
       : undefined,

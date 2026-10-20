@@ -20,7 +20,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
-import { loadAgentTrajectoryOperations } from "../state/openclaw-agent-execution-operations.js";
+import { createAgentWorkerTestLoaders } from "../state/openclaw-agent-execution-operations.test-support.js";
 import type { AgentWorkerOperationContext } from "../state/openclaw-agent-operation-context.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
@@ -129,7 +129,6 @@ describe("SQLite trajectory runtime store", () => {
   async function workerAppend(busyTimeoutMs?: number) {
     const options = { agentId: "main", path: sqlitePath() };
     const database = openOpenClawAgentDatabase(options);
-    const operations = await loadAgentTrajectoryOperations();
     const context: AgentWorkerOperationContext = {
       options,
       open: () => database,
@@ -141,6 +140,7 @@ describe("SQLite trajectory runtime store", () => {
           busyTimeoutMs,
         }),
     };
+    const operations = await createAgentWorkerTestLoaders(context)["trajectory.events.append"]();
     const event = createTrajectoryEvent({ type: "terminal-insert" });
     const input: SqliteTrajectoryRuntimeAppend = {
       sessionId: "session-1",

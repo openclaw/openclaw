@@ -164,17 +164,21 @@ suite.define(() => {
         await expect.poll(() => row.textContent()).not.toContain(`${generatedTitle} updated`);
         await openRename();
         await expect.poll(() => field.inputValue()).toBe(generatedTitle);
-        if (surface === "sidebar") {
-          const dialog = page.getByRole("dialog", { name: "Rename session", exact: true });
+        if (surface === "sidebar" || surface === "header") {
           await gateway.setOnline(false);
           await waitForControlUiGatewayReconnecting(page);
           expect(await field.inputValue()).toBe(generatedTitle);
           expect(await field.isEnabled()).toBe(true);
           await field.fill(`${generatedTitle} queued`);
-          await expect
-            .poll(() => dialog.getByRole("button", { name: "Save", exact: true }).isEnabled())
-            .toBe(true);
-          await dialog.getByRole("button", { name: "Save", exact: true }).click();
+          if (surface === "header") {
+            await field.press("Enter");
+          } else {
+            const dialog = page.getByRole("dialog", { name: "Rename session", exact: true });
+            await expect
+              .poll(() => dialog.getByRole("button", { name: "Save", exact: true }).isEnabled())
+              .toBe(true);
+            await dialog.getByRole("button", { name: "Save", exact: true }).click();
+          }
           await field.waitFor({ state: "detached" });
           await expect.poll(() => row.textContent()).toContain(`${generatedTitle} queued`);
           expect(await gateway.getRequests("sessions.patch")).toHaveLength(2);
@@ -194,7 +198,7 @@ suite.define(() => {
         }
         await field.waitFor({ state: "detached" });
         expect(await gateway.getRequests("sessions.patch")).toHaveLength(
-          surface === "sidebar" ? 3 : 2,
+          surface === "sessions" ? 2 : 3,
         );
       });
     },

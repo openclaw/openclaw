@@ -37,6 +37,7 @@ export function advanceCliHistoryBoundaryRangeInTransaction(
   writer: CliHistoryWriterFacts,
   assertCurrent: () => void,
   confirmsOwner?: () => boolean,
+  onEntryUpdated?: (entry: InternalSessionEntry) => void,
 ): boolean {
   if (range.last < range.first) {
     return false;
@@ -54,6 +55,9 @@ export function advanceCliHistoryBoundaryRangeInTransaction(
   if (!cliHistoryOwnerHolds(writer, confirmsOwner)) {
     return false;
   }
-  writeSessionEntry(database, scope.sessionKey, next, { previousEntry: entry });
+  const updatedEntry = writeSessionEntry(database, scope.sessionKey, next, {
+    previousEntry: entry,
+  });
+  onEntryUpdated?.(updatedEntry);
   return true;
 }

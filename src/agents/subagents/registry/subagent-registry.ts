@@ -26,7 +26,6 @@ import {
   createSubagentRegistryGatewayCaller,
   loadSubagentAnnounceModule,
   loadSubagentBrowserCleanupModule,
-  resetSubagentRegistryRuntimeLoadersForTests,
 } from "./subagent-registry-deps.js";
 import { bindSubagentRunGatewayOwners } from "./subagent-registry-gateway-owner.js";
 import {
@@ -668,7 +667,6 @@ async function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   resumedRuns.clear();
   resumeReader.reset();
   pendingLifecycle.clearAll();
-  resetSubagentRegistryRuntimeLoadersForTests();
   contextCleanup.reset();
   clearSubagentRunsReadCacheForTest();
   const sweeperRetirement = subagentSweeper.reset();

@@ -69,8 +69,6 @@ export type SystemAgentSetupApplyParams = {
 
 export type SystemAgentSetupApplyResult = {
   configPath: string;
-  configHashBefore: string | null;
-  configHashAfter: string | null;
   bootstrapPending: boolean;
   workspaceReady: boolean;
   gateway: GatewayServiceSetupOutcome;
@@ -590,8 +588,6 @@ export async function applySystemAgentSetup(
 
   return {
     configPath: committed.path,
-    configHashBefore,
-    configHashAfter: committed.persistedHash,
     bootstrapPending: workspaceResult?.bootstrapPending === true,
     workspaceReady: workspaceResult !== undefined,
     gateway,

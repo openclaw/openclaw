@@ -25,6 +25,7 @@ const SESSION_SQLITE_WARNING_ISSUE_CODES = new Set([
   "retained_missing_transcript_superseded",
   "retained_plugin_source_conflict",
   "transcript_archive_failed",
+  "transcript_filename_mismatch",
   "transcript_malformed",
   "transcript_missing",
   "unreferenced_jsonl_archive_failed",

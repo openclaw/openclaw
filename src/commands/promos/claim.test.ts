@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, TransformConfigFileParams } from "../../config/config.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 
 const mocks = vi.hoisted(() => ({
@@ -19,14 +18,8 @@ const mocks = vi.hoisted(() => ({
   promptYesNo: vi.fn(),
   enablePluginInConfig: vi.fn(),
   repairRuntimePlugins: vi.fn(),
-  recordPromotionClaim: vi.fn(),
-  markPromotionSlugsNotified: vi.fn(),
 }));
 
-vi.mock("../../infra/promotions-feed.js", () => ({
-  recordPromotionClaim: mocks.recordPromotionClaim,
-  markPromotionSlugsNotified: mocks.markPromotionSlugsNotified,
-}));
 vi.mock("../../infra/clawhub-promotions.js", async () => {
   const actual = await vi.importActual<typeof import("../../infra/clawhub-promotions.js")>(
     "../../infra/clawhub-promotions.js",
@@ -104,16 +97,6 @@ function writtenModels() {
   return mocks.replaceConfigFile.mock.calls[0]?.[0]?.sourceConfig.agents.defaults;
 }
 
-function blockRecording(mock: typeof mocks.recordPromotionClaim) {
-  const done = createDeferredCore();
-  const started = createDeferredCore();
-  mock.mockImplementationOnce(() => {
-    started.resolve();
-    return done.promise;
-  });
-  return { ...done, started: started.promise };
-}
-
 const now = Date.now();
 const modelRef = "openrouter/example/model-alpha";
 const providerPackage = "@openclaw/openrouter-provider";
@@ -189,43 +172,16 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("promosClaimCommand", () => {
-  it("joins claim and notice recording before reporting success", async () => {
-    const claim = blockRecording(mocks.recordPromotionClaim);
-    const notices = blockRecording(mocks.markPromotionSlugsNotified);
-    const runtime = makeRuntime();
-    const pending = runClaim({}, runtime);
-    await claim.started;
-    try {
-      expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
-      expect(mocks.markPromotionSlugsNotified).not.toHaveBeenCalled();
-      expect(runtime.log).not.toHaveBeenCalledWith('Claimed "Free Example models".');
-      claim.resolve();
-      await notices.started;
-      expect(runtime.log).not.toHaveBeenCalledWith('Claimed "Free Example models".');
-    } finally {
-      claim.resolve();
-      notices.resolve();
-      await pending;
-    }
-    expect(runtime.log).toHaveBeenCalledWith('Claimed "Free Example models".');
-  });
-
   it("registers promo models with aliases without changing the default", async () => {
     offer({ pluginNames: [providerPackage] });
-    await runClaim();
+    const runtime = makeRuntime();
+    await runClaim({}, runtime);
     expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(1);
     const next = writtenModels();
     expect(next.models[modelRef]).toEqual({ alias: "model-alpha" });
     expect(next.model).toBeUndefined();
     expect(mocks.applyAuthChoiceLoadedPluginProvider).not.toHaveBeenCalled();
-    expect(mocks.recordPromotionClaim).toHaveBeenCalledWith(
-      expect.objectContaining({
-        slug: "spring-models",
-        provider: "openrouter",
-        modelKeys: ["openrouter/example/model-alpha"],
-      }),
-    );
-    expect(mocks.markPromotionSlugsNotified).toHaveBeenCalledWith(["spring-models"]);
+    expect(runtime.log).toHaveBeenCalledWith('Claimed "Free Example models".');
   });
 
   it("sets the suggested model as default with --set-default", async () => {
@@ -363,7 +319,6 @@ describe("promosClaimCommand", () => {
         await expect(runClaim({ apiKey: "synthetic-promo-input" })).rejects.toThrow(/not live yet/);
         expect(mocks.applyAuthChoiceLoadedPluginProvider).toHaveBeenCalledOnce();
         expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
-        expect(mocks.recordPromotionClaim).not.toHaveBeenCalled();
         expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toMatchObject({
           messages: { responsePrefix: "${OPENCLAW_TEST_PROMO_PREFIX}" },
           logging: { level: "debug" },
@@ -384,7 +339,6 @@ describe("promosClaimCommand", () => {
     );
     await rejectClaim(/changed while the claim was in progress/);
     expect(mocks.fetchClawHubPromotion).toHaveBeenCalledTimes(2);
-    expect(mocks.recordPromotionClaim).not.toHaveBeenCalled();
   });
 
   it("runs the install path when the auth choice is not installed, even with existing auth", async () => {

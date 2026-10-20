@@ -38,10 +38,12 @@ import {
 } from "./session-upstream-marker.js";
 
 const CODEX_SUPERVISION_SESSION_KEY_PREFIX = "harness:codex:supervision:";
-const continueOperations = new Map<
-  string,
-  Promise<{ sessionKey: string; disposition: CodexSessionDisposition }>
->();
+type ContinuedCodexSession = {
+  sessionKey: string;
+  disposition: CodexSessionDisposition;
+  upstream?: CodexUpstreamBaseline & { connectionFingerprint: string };
+};
+const continueOperations = new Map<string, Promise<ContinuedCodexSession>>();
 
 const boundCatalogSessionId = (value: unknown) =>
   boundedCatalogString(value, MAX_SESSION_ID_LENGTH);
@@ -401,7 +403,7 @@ type ContinueLocalCodexSessionParams = {
 
 async function continueLocalCodexSessionInner(
   params: ContinueLocalCodexSessionParams,
-): Promise<{ sessionKey: string; disposition: CodexSessionDisposition }> {
+): Promise<ContinuedCodexSession> {
   await params.control.requireEligibleThread(params.threadId);
   const existing = await findAdoptedSessionEntry({ ...params, runtime: params.api.runtime });
   if (existing) {
@@ -434,13 +436,18 @@ async function continueLocalCodexSessionInner(
       throw changedError();
     }
     const connectionFingerprint = params.control.connectionFingerprint;
-    if (connectionFingerprint) {
-      params.onContinued?.({
-        connectionFingerprint,
-        ...codexUpstreamBaseline(boundThread, boundCatalogSessionId),
-      });
-    }
-    return { sessionKey: existing.key, disposition: "existing" };
+    return {
+      sessionKey: existing.key,
+      disposition: "existing",
+      ...(connectionFingerprint
+        ? {
+            upstream: {
+              connectionFingerprint,
+              ...codexUpstreamBaseline(boundThread, boundCatalogSessionId),
+            },
+          }
+        : {}),
+    };
   }
 
   const sourceThread = await params.control.readThread(params.threadId, true);
@@ -467,11 +474,14 @@ async function continueLocalCodexSessionInner(
   if (baselineThread.id !== boundThreadId) {
     throw new Error("Codex app-server returned a different thread than requested");
   }
-  params.onContinued?.({
-    connectionFingerprint,
-    ...codexUpstreamBaseline(baselineThread, boundCatalogSessionId),
-  });
-  return { sessionKey: adopted.key, disposition: "forked" };
+  return {
+    sessionKey: adopted.key,
+    disposition: "forked",
+    upstream: {
+      connectionFingerprint,
+      ...codexUpstreamBaseline(baselineThread, boundCatalogSessionId),
+    },
+  };
 }
 
 /** Creates one locked OpenClaw branch whose first harness run forks the Codex source. */
@@ -486,18 +496,22 @@ export async function continueLocalCodexSession(params: ContinueLocalCodexSessio
   const operationKey = sessionCatalogAdoptedSourceKey(params.agentId, sourceKey);
   // Memoization is agent-qualified while the native action lock is source-qualified,
   // so different agents serialize on one thread without joining one adoption result.
-  const current = continueOperations.get(operationKey);
-  if (current) {
-    return await current;
+  let operation = continueOperations.get(operationKey);
+  if (!operation) {
+    const run = async (control: CodexSessionCatalogControl) =>
+      await continueLocalCodexSessionInner({ ...params, control });
+    operation = catalogSessionActions.enqueue(sourceKey, async () =>
+      params.control.withPinnedConnection(run),
+    );
+    continueOperations.set(operationKey, operation);
   }
-  const run = async (control: CodexSessionCatalogControl) =>
-    await continueLocalCodexSessionInner({ ...params, control });
-  const operation = catalogSessionActions.enqueue(sourceKey, async () =>
-    params.control.withPinnedConnection(run),
-  );
-  continueOperations.set(operationKey, operation);
   try {
-    return await operation;
+    const { sessionKey, disposition, upstream } = await operation;
+    // The native work is shared, but each request needs its own upstream seed.
+    if (upstream) {
+      params.onContinued?.(upstream);
+    }
+    return { sessionKey, disposition };
   } finally {
     if (continueOperations.get(operationKey) === operation) {
       continueOperations.delete(operationKey);

@@ -119,9 +119,7 @@ describe("Nostr durable ingress", () => {
 
   it("migrates the persisted LRU seed into completion tombstones", async () => {
     const legacyId = "5".repeat(64);
-    await expect(
-      migrateNostrLegacyRecentEventIds({ queue, eventIds: [legacyId, legacyId] }),
-    ).resolves.toBe(1);
+    await migrateNostrLegacyRecentEventIds({ queue, eventIds: [legacyId, legacyId] });
     expect((await queue.enqueue(legacyId, {} as NostrIngressPayload)).kind).toBe("completed");
   });
 

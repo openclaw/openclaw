@@ -23,7 +23,7 @@ import {
   type CronWakeMode,
   createCronServiceState,
 } from "./service/state.js";
-import type { CronJob, CronJobCreate, CronJobPatch } from "./types.js";
+import type { CronJob, CronJobCreate, CronJobPatch, CronStoredJob } from "./types.js";
 
 export type { CronEvent } from "./service/state.js";
 
@@ -196,16 +196,16 @@ export class CronService implements CronServiceContract {
     return await runOps.waitForManualRun(this.state, runId, timeoutMs, signal);
   }
 
-  getJob(id: string): CronJob | undefined {
+  getJob(id: string): CronStoredJob | undefined {
     return this.state.store?.jobs.find((job) => job.id === id);
   }
 
   /** In-memory job snapshot; undefined until the store is loaded. */
-  getLoadedJobs(): readonly CronJob[] | undefined {
+  getLoadedJobs(): readonly CronStoredJob[] | undefined {
     return this.state.store?.jobs;
   }
 
-  async readJob(id: string): Promise<CronJob | undefined> {
+  async readJob(id: string): Promise<CronStoredJob | undefined> {
     return await readOps.readJob(this.state, id);
   }
 

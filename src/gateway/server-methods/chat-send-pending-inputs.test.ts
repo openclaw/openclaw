@@ -9,6 +9,7 @@ import { seedCanonicalAcpSessionMeta } from "../../acp/runtime/session-meta-fixt
 import * as acpReads from "../../acp/runtime/session-meta-readonly.js";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import {
   listSessionPendingInputs,
@@ -38,7 +39,7 @@ import {
 } from "../../sessions/user-turn-transcript.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
-import { setDisplayName } from "../../state/user-profile-writes.worker.js";
+import { setDisplayName, setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { useUserProfileCatalogForTest } from "../../test-utils/user-profile-catalog.js";
@@ -46,6 +47,8 @@ import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import { createMentionInbox } from "../mention-inbox.js";
 import { readMentionInbox, dismissMentionInbox } from "../mention-inbox.test-support.js";
 import { refusePendingInputCommit } from "../pending-input-commit.test-support.js";
+import { handleGatewayRequest } from "../server-methods.js";
+import * as sharingTargetRead from "../session-sharing-target-read.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
 import { getTestPluginRegistry } from "../test-helpers.plugin-registry.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
@@ -98,9 +101,8 @@ async function admitPending(fixture: FollowupFixture) {
 
 describe("ordinary chat input admission", () => {
   async function createMentionFixture(
-    options: { active?: boolean; preserveContent?: boolean } = {},
+    options: { active?: boolean; preserveContent?: boolean; guest?: boolean } = {},
   ) {
-    const fixture = await createBrowserFollowupFixture({ preserveContent: true, ...options });
     const createProfile = (name: string) => {
       const profile = ensureProfileForEmail(`${name.toLowerCase()}@mentions.example.test`);
       setDisplayName(profile.id, name);
@@ -109,6 +111,16 @@ describe("ordinary chat input admission", () => {
     const alice = createProfile("Alice"),
       bob = createProfile("Bob"),
       carol = createProfile("Carol");
+    const fixture = await createBrowserFollowupFixture({
+      preserveContent: true,
+      ...options,
+      ...(options.guest
+        ? {
+            sessionKey: "agent:main:dashboard:guest-mentions",
+            createdActor: { type: "human", source: "profile", id: alice.profileId },
+          }
+        : {}),
+    });
     fixture.client.authenticatedUserProfile = alice;
     const bobClient = { ...fixture.client, connId: "bob-one", authenticatedUserProfile: bob };
     const carolClient = { ...fixture.client, connId: "carol", authenticatedUserProfile: carol };
@@ -141,6 +153,153 @@ describe("ordinary chat input admission", () => {
       [Symbol.asyncDispose]: cleanup,
     };
   }
+
+  async function createGuestMentionFixture() {
+    const fixture = await createMentionFixture({ active: false, guest: true });
+    const cfg = getRuntimeConfig();
+    setRuntimeConfigSnapshot({
+      ...cfg,
+      gateway: {
+        ...cfg.gateway,
+        roles: {
+          default: "guest",
+          definitions: {
+            administrator: {
+              agents: "*",
+              scopes: ["operator.admin"],
+              sessions: { others: "write" },
+            },
+            disabled: { agents: [], scopes: [], sessions: { others: "none" } },
+            guest: {
+              agents: ["main"],
+              scopes: ["operator.sessions.read", "operator.sessions.write"],
+              sessions: { others: "none" },
+            },
+          },
+        },
+      },
+    });
+    fixture.client.connect = {
+      ...fixture.client.connect,
+      scopes: ["operator.sessions.read", "operator.sessions.write"],
+    };
+    setUserProfileRole(fixture.bobClient.authenticatedUserProfile.profileId, "administrator");
+    const request = async (method: string, params: Record<string, unknown>) => {
+      const respond = vi.fn<RespondFn>();
+      await handleGatewayRequest({
+        req: { type: "req", id: "guest-mention", method, params },
+        client: fixture.client,
+        context: fixture.context,
+        isWebchatConnect: () => true,
+        respond,
+      });
+      return respond;
+    };
+    return { ...fixture, request };
+  }
+
+  it("lets a session-only guest look up and send a mention through the dispatcher", async () => {
+    await using fixture = await createGuestMentionFixture();
+    const lookup = await fixture.request("users.mentionable", {
+      sessionKey: fixture.scope.sessionKey,
+      query: "Bob",
+    });
+    expect(lookup).toHaveBeenCalledWith(
+      true,
+      {
+        users: [
+          {
+            profileId: fixture.bobClient.authenticatedUserProfile.profileId,
+            displayName: "Bob",
+            avatarUrl: expect.stringContaining(
+              `/api/users/${fixture.bobClient.authenticatedUserProfile.profileId}/avatar`,
+            ),
+            online: true,
+          },
+        ],
+        truncated: false,
+      },
+      undefined,
+    );
+    expectStarted(await fixture.send(vi.fn(), {}));
+    await fixture.finishDispatch();
+    expect(await fixture.read()).toMatchObject([
+      {
+        senderProfileId: fixture.client.authenticatedUserProfile?.profileId,
+        excerpt: fixture.params.message,
+      },
+    ]);
+  });
+
+  it("keeps session-only mention lookup and sending within current authority", async () => {
+    await using fixture = await createGuestMentionFixture();
+    const rejected = (response: RespondFn) => {
+      expect(response).toHaveBeenCalledOnce();
+      expect(response).toHaveBeenCalledWith(false, undefined, expect.anything());
+    };
+    for (const method of ["users.list", "system-presence", "cron.list"]) {
+      rejected(await fixture.request(method, {}));
+    }
+    rejected(await fixture.request("users.mentionable", { sessionKey: "unrelated" }));
+    rejected(await fixture.send(vi.fn(), {}, { ...fixture.params, sessionKey: "unrelated" }));
+    setUserProfileRole(fixture.bobClient.authenticatedUserProfile.profileId, "guest");
+    const unavailableRecipient = await fixture.send(vi.fn(), {});
+    expect(unavailableRecipient).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: "One or more mentioned people are unavailable. Select the recipients again.",
+      }),
+    );
+    expect(await pending(fixture)).toEqual({ items: [], total: 0 });
+    expect(fixture.readTranscript()).toEqual(fixture.activeTranscript);
+    setUserProfileRole(fixture.bobClient.authenticatedUserProfile.profileId, "administrator");
+    fixture.client.invalidated = true;
+    rejected(await fixture.request("users.mentionable", { sessionKey: fixture.scope.sessionKey }));
+    rejected(await fixture.send(vi.fn(), {}));
+    fixture.client.invalidated = false;
+    const prepareRead = sharingTargetRead.prepareSessionSharingRead;
+    for (const method of ["users.mentionable", "chat.send"] as const) {
+      const ready = createDeferred();
+      const release = createDeferred();
+      const held = vi
+        .spyOn(sharingTargetRead, "prepareSessionSharingRead")
+        .mockImplementationOnce(async (params) => {
+          const prepared = await prepareRead(params);
+          ready.resolve();
+          await release.promise;
+          return prepared;
+        });
+      const inFlight =
+        method === "users.mentionable"
+          ? fixture.request(method, { sessionKey: fixture.scope.sessionKey })
+          : fixture.send(vi.fn(), {});
+      try {
+        await Promise.race([
+          ready.promise,
+          inFlight.then(() => {
+            throw new Error(`${method} completed before the held preparation`);
+          }),
+        ]);
+        setUserProfileRole(fixture.client.authenticatedUserProfile!.profileId, "disabled");
+        release.resolve();
+        expect(await inFlight).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ code: "FORBIDDEN" }),
+        );
+        expect(fixture.readTranscript()).toEqual(fixture.activeTranscript);
+        expect(await pending(fixture)).toEqual({ items: [], total: 0 });
+        expect(await fixture.read()).toEqual([]);
+      } finally {
+        release.resolve();
+        held.mockRestore();
+        await inFlight;
+        setUserProfileRole(fixture.client.authenticatedUserProfile!.profileId, "guest");
+      }
+    }
+  });
 
   it("creates recipient-only mentions at original message commit, never at the queued ACK", async () => {
     await using fixture = await createMentionFixture();
@@ -544,20 +703,37 @@ describe("ordinary chat input admission", () => {
     }
   });
 
-  it.each(["cancellation", "lifecycle rotation", "session replacement"] as const)(
+  it.each(["cancellation", "lifecycle rotation", "session replacement", "session access"] as const)(
     "revalidates %s after message approval before committing custody",
     async (change) => {
       await using fixture = await createBrowserFollowupFixture();
+      if (change === "session access") {
+        setClientProfile(
+          fixture.client,
+          ensureProfileForEmail("pending-input-caller@example.test"),
+        );
+        fixture.client.connect.scopes = ["operator.read", "operator.write"];
+        await patchSessionEntryCore(fixture.scope, () => ({
+          createdActor: { type: "human", source: "profile", id: "another-profile" },
+          visibility: "shared",
+        }));
+      }
       fixture.beforeApprove.mockImplementation(() => {
         if (change === "lifecycle rotation") {
           rotateAgentEventLifecycleGeneration();
           return;
         }
-        if (change === "session replacement") {
-          replaceSessionEntrySync(fixture.scope, {
-            sessionId: "successor-session",
-            updatedAt: Date.now(),
-          });
+        if (change === "session replacement" || change === "session access") {
+          const current = loadSessionEntry(fixture.scope);
+          if (!current) {
+            throw new Error("Expected the session to exist before input approval");
+          }
+          replaceSessionEntrySync(
+            fixture.scope,
+            change === "session replacement"
+              ? { sessionId: "successor-session", updatedAt: Date.now() }
+              : { ...current, visibility: "draft" },
+          );
           return;
         }
         const active = rpcSourceTesting.get(fixture.params.idempotencyKey);
@@ -577,7 +753,7 @@ describe("ordinary chat input admission", () => {
         active.adapter.abortStopReason = "rpc";
         requestRpcSourceCancellation(active);
       });
-      const respond = await fixture.send();
+      const respond = await fixture.send(undefined, change === "session access" ? {} : undefined);
       expect(fixture.beforeApprove).toHaveBeenCalledOnce();
       expectNotStarted(respond);
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();

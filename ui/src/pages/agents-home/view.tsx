@@ -19,7 +19,7 @@ import "../../styles/agents-home.css";
 
 registerEnglishCatalog(registerAgentsHomeEnglish);
 
-type AgentCard = Omit<ReturnType<typeof agentRosterCards>[number], "mainKey" | "unreadCount"> & {
+type AgentCard = Omit<ReturnType<typeof agentRosterCards>[number], "mainKey"> & {
   target: { href: string; options: ApplicationNavigationOptions };
 };
 

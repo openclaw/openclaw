@@ -97,7 +97,6 @@ export function isSilentOverflowProneModel(model: {
   );
 }
 
-// Reapply after resource reload: settingsManager.reload() restores the disk setting.
 export function applyAgentAutoCompactionGuard(params: {
   settingsManager: SettingsManager;
   contextEngineInfo?: ContextEngineInfo;

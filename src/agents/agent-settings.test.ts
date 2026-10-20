@@ -20,21 +20,17 @@ const settingsWithReserve = (reserveTokens: number, enabled?: boolean) =>
   });
 
 describe("applyAgentCompactionSettingsFromConfig", () => {
-  it.each([false, true])(
-    "applies and preserves compaction.enabled=%s across a settings reload",
-    async (configuredEnabled) => {
-      const settingsManager = settingsWithReserve(20_000, !configuredEnabled);
-      const setCompactionEnabled = vi.spyOn(settingsManager, "setCompactionEnabled");
-      const cfg = compactionConfig({ enabled: configuredEnabled });
-      applySettings({ settingsManager, cfg });
-      await settingsManager.reload();
-      expect(settingsManager.getCompactionEnabled()).toBe(configuredEnabled);
-      applySettings({ settingsManager, cfg });
+  it.each([false, true])("applies compaction.enabled=%s idempotently", (configuredEnabled) => {
+    const settingsManager = settingsWithReserve(20_000, !configuredEnabled);
+    const setCompactionEnabled = vi.spyOn(settingsManager, "setCompactionEnabled");
+    const cfg = compactionConfig({ enabled: configuredEnabled });
+    applySettings({ settingsManager, cfg });
+    expect(settingsManager.getCompactionEnabled()).toBe(configuredEnabled);
+    applySettings({ settingsManager, cfg });
 
-      expect(setCompactionEnabled).toHaveBeenCalledExactlyOnceWith(configuredEnabled);
-      expect(settingsManager.getCompactionEnabled()).toBe(configuredEnabled);
-    },
-  );
+    expect(setCompactionEnabled).toHaveBeenCalledExactlyOnceWith(configuredEnabled);
+    expect(settingsManager.getCompactionEnabled()).toBe(configuredEnabled);
+  });
 
   const forcedDisableCases: Array<
     [string, Omit<Parameters<typeof applyGuard>[0], "settingsManager">]

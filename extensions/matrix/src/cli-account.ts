@@ -5,7 +5,7 @@ import { resolveMatrixAccountConfig } from "./matrix/accounts.js";
 import { listMatrixOwnDevices } from "./matrix/actions/devices.js";
 import { updateMatrixOwnProfile } from "./matrix/actions/profile.js";
 import { resolveMatrixConfigPath, updateMatrixAccountConfig } from "./matrix/config-update.js";
-import { isOpenClawManagedMatrixDevice } from "./matrix/device-health.js";
+import { listStaleOpenClawMatrixDevices } from "./matrix/device-health.js";
 import type { MatrixProfileSyncResult } from "./matrix/profile.js";
 import { getMatrixRuntime } from "./runtime.js";
 import type { maybeBootstrapNewEncryptedMatrixAccount } from "./setup-bootstrap.js";
@@ -148,9 +148,9 @@ async function addMatrixAccount(params: {
       const addedDevices = await listMatrixOwnDevices({ accountId, cfg: updated });
       deviceHealth = {
         currentDeviceId: addedDevices.find((device) => device.current)?.deviceId ?? null,
-        staleOpenClawDeviceIds: addedDevices
-          .filter((device) => !device.current && isOpenClawManagedMatrixDevice(device.displayName))
-          .map((device) => device.deviceId),
+        staleOpenClawDeviceIds: listStaleOpenClawMatrixDevices(addedDevices).map(
+          (device) => device.deviceId,
+        ),
       };
     } catch (err) {
       deviceHealth = {

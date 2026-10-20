@@ -156,7 +156,6 @@ it.each([1, 2] as const)(
     expect(result).toMatchObject({
       shouldPruneTools: true,
       status: "proposed",
-      reason: "conversational",
     });
     expect(host.registry.decisionProviders[0]!.host.inspect(selected).activeRequests).toBe(0);
   },

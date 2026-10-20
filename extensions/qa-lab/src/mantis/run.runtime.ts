@@ -7,11 +7,10 @@ import { normalizeOptionalString as trimToValue } from "openclaw/plugin-sdk/stri
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
 import {
   copyMantisLaneArtifacts,
-  createMantisRunStaging,
   publishMantisRunOutput,
   readMantisLaneResult,
   remapMantisLaneResult,
-  removeMantisRunStaging,
+  removeMantisOutputTree,
   stageMantisLaneOutput,
   type LaneResult,
   type MantisRunStaging,
@@ -398,7 +397,9 @@ export async function runMantisBeforeAfter(
       repoRoot,
       runner,
     });
-    staging = await createMantisRunStaging({ outputDir, outputRoot, runId });
+    const stagingRelative = `.mantis-staged-${runId}`;
+    await outputRoot.mkdir(stagingRelative);
+    staging = { dir: path.join(outputDir, stagingRelative), relative: stagingRelative };
     const stagingRoot = await root(staging.dir);
     const commonOpts = {
       credentialRole: trimToValue(opts.credentialRole) ?? DEFAULT_CREDENTIAL_ROLE,
@@ -483,7 +484,7 @@ export async function runMantisBeforeAfter(
     let failure = error;
     if (staging) {
       try {
-        await removeMantisRunStaging({ outputRoot, staging });
+        await removeMantisOutputTree(outputRoot, staging.relative);
       } catch (cleanupError) {
         failure = new AggregateError(
           [error, cleanupError],

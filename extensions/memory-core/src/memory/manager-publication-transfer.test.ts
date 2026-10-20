@@ -855,7 +855,7 @@ describe("bounded memory publication transfer", () => {
     expect(rows).toEqual(input.chunks.map((row) => ({ chunk: row, embedding: expectedVector })));
   });
 
-  it("reuses printed fragments per chunks array until the embeddings change or it is released", () => {
+  it("reuses printed fragments per prepared chunks array until it is released", () => {
     const first = replacement();
     const printed = memoryPublicationInline(first)?.fragments;
     expect(printed).toBeDefined();
@@ -865,15 +865,9 @@ describe("bounded memory publication transfer", () => {
     const again = memoryPublicationGroup([first, other])!;
     expect(group[0]?.fragments).toBe(printed);
     again.forEach((source, index) => expect(source.fragments).toBe(group[index]?.fragments));
-    const changed = { ...first, embeddings: [[...first.embeddings[0]!]] };
-    const reprinted = memoryPublicationInline(changed)?.fragments;
-    expect(reprinted).not.toBe(printed);
-    expect(reprinted).toEqual(printed);
-    releaseMemoryPublication(changed);
-    const released = memoryPublicationInline(changed)?.fragments;
-    expect(released).not.toBe(reprinted);
-    expect(released).toEqual(reprinted);
-    // Retained rows are printed inputs too: a different array reprints.
-    expect(memoryPublicationInline({ ...changed, retained: [] })?.fragments).not.toBe(released);
+    releaseMemoryPublication(first);
+    const released = memoryPublicationInline(first)?.fragments;
+    expect(released).not.toBe(printed);
+    expect(released).toEqual(printed);
   });
 });

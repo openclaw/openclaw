@@ -66,9 +66,17 @@ import {
 
 const RESTART_RECOVERY_RESUME_MESSAGE = formatSystemTurnPrompt(
   `${RESTART_RECOVERY_INTERRUPTION_NOTE} The restart did not cancel the user's task. ` +
-    "Continue from the existing transcript: check the current state, recover interrupted work, " +
-    "and finish the task without asking the user to repeat the request. " +
-    `${SUBAGENT_RESTART_RECOVERY_INSTRUCTION} ${TOOL_FAILURE_INSTRUCTION}`,
+    "Continue from the existing transcript: check the current state and continue permitted work. " +
+    "Before promising or attempting further action, check this turn's available tools and " +
+    "recorded approval outcomes. Do not ask the user to repeat the request solely because a " +
+    "restart occurred. If further action requires a fresh user request, explain that requirement " +
+    "instead of promising or attempting a retry, replacement, or fallback. " +
+    `${SUBAGENT_RESTART_RECOVERY_INSTRUCTION} Treat a tool result ` +
+    "marked interrupted or missing as having an unknown outcome; verify the operation's recorded " +
+    "state before repeating an action or reporting whether it happened. Recovery permission facts " +
+    "do not establish execution outcomes. Missing fallback artifacts or unavailable tools do not " +
+    "prove that an earlier action did not run. If the available tools cannot establish its outcome, " +
+    `report it as unknown. ${TOOL_FAILURE_INSTRUCTION}`,
 );
 
 const RESTART_SAFE_TOOLS_NOTICE =

@@ -99,7 +99,6 @@ function prepareAttachment(input: SidebarAttachmentProps, onSourceChange: () => 
   const width = source?.width ?? content.width;
   const height = source?.height ?? content.height;
   return {
-    resolution,
     source,
     mimeType,
     kind,

@@ -1,6 +1,5 @@
 import type { MatrixQaObservedEvent } from "../substrate/events.js";
 import {
-  advanceMatrixQaActorCursor,
   buildMatrixQaToken,
   buildMatrixPartialStreamingPrompt,
   buildMatrixQuietStreamingPrompt,
@@ -9,7 +8,6 @@ import {
   doesMatrixQaReplyBodyMatchToken,
   isMatrixQaMessageLikeKind,
   primeMatrixQaDriverScenarioClient,
-  truncateMatrixQaPreview,
   type MatrixQaScenarioContext,
 } from "./scenario-runtime-shared.js";
 import type { MatrixQaScenarioExecution } from "./scenario-types.js";
@@ -73,7 +71,7 @@ export async function runStreamingReplacementRetentionScenario(
     }),
   });
   try {
-    const firstDriverEventId = await client.sendTextMessage({
+    await client.sendTextMessage({
       body: buildMatrixReplacementPrompt(context.sutUserId, firstText),
       mentionUserIds: [context.sutUserId],
       roomId: context.roomId,
@@ -107,7 +105,7 @@ export async function runStreamingReplacementRetentionScenario(
 
     const secondText = `@room ${buildMatrixStreamingPreviewFinalText("MATRIX_QA_SUPERSEDED_DRAFT")}`;
     const secondToken = secondText.split(" ")[1]!;
-    const secondDriverEventId = await client.sendTextMessage({
+    await client.sendTextMessage({
       body: buildMatrixReplacementPrompt(context.sutUserId, secondText),
       mentionUserIds: [context.sutUserId],
       roomId: context.roomId,
@@ -166,25 +164,7 @@ export async function runStreamingReplacementRetentionScenario(
     if (context.observedEvents.some((event) => event.redactsEventId === firstDraftEventId)) {
       throw new Error(`Matrix healthy turn redacted retained draft ${firstDraftEventId}`);
     }
-    advanceMatrixQaActorCursor({
-      actorId: "driver",
-      syncState: context.syncState,
-      nextSince: duplicateRedaction.since,
-      startSince,
-    });
     return {
-      artifacts: {
-        faultHitCount: faultRule.hits().length,
-        faultRuleId: MATRIX_REPLACEMENT_FAULT_RULE_ID,
-        firstDriverEventId,
-        previewEventId: firstDraftEventId,
-        redactionCount: 1,
-        redactionEventId: secondRedaction.event.eventId,
-        redactionTargetEventId: secondRedaction.event.redactsEventId,
-        secondDriverEventId,
-        secondReply: buildMatrixReplyArtifact(secondReply.event),
-        secondToken,
-      },
       details: [
         `retained draft event: ${firstDraftEventId}`,
         `replacement fault hits: ${faultRule.hits().length}`,
@@ -260,28 +240,8 @@ async function runMatrixStreamingPreviewScenario(
         since: preview.since,
         timeoutMs: context.timeoutMs,
       });
-  advanceMatrixQaActorCursor({
-    actorId: "driver",
-    syncState: context.syncState,
-    nextSince: finalized.since,
-    startSince,
-  });
   const finalReply = buildMatrixReplyArtifact(finalized.event, params.finalText);
   return {
-    artifacts: {
-      driverEventId,
-      ...(finalWithoutPreview
-        ? { previewEventId: undefined }
-        : {
-            previewFormattedBodyPreview: truncateMatrixQaPreview(preview.event.formattedBody),
-            previewBodyPreview: truncateMatrixQaPreview(preview.event.body),
-            previewEventId: preview.event.eventId,
-            previewMentions: preview.event.mentions,
-          }),
-      reply: finalReply,
-      token: params.finalText,
-      triggerBody,
-    },
     details: [
       `driver event: ${driverEventId}`,
       `scenario: ${params.label}`,

@@ -92,12 +92,17 @@ export function expectResponsiveTableGeometry(
   geometry: ReturnType<typeof readResponsiveTableGeometry>,
   width: number,
 ) {
-  expect(geometry.withinPane).toBe(true);
+  expect(geometry).toMatchObject({
+    withinPane: true,
+    topAligned: true,
+    headerPainted: true,
+    actionBelowTable: true,
+    tableStartsShell: true,
+    controlHeight: width > 932 ? 32 : 40,
+    visibleExpandLabel: width <= 932,
+    controlsGap: width > 932 ? 0 : 4,
+  });
   expect(geometry.verticalOverflow).toBeLessThanOrEqual(1);
-  expect(geometry.topAligned).toBe(true);
-  expect(geometry.headerPainted).toBe(true);
-  expect(geometry.actionBelowTable).toBe(true);
-  expect(geometry.tableStartsShell).toBe(true);
   expect(geometry.columnWidths[0]).toBeGreaterThan(geometry.columnWidths[1]!);
   if (width > 932) {
     expect(geometry.width).toBeCloseTo(geometry.prose, 0);
@@ -106,18 +111,11 @@ export function expectResponsiveTableGeometry(
     );
     expect(geometry.denseWidth).toBeGreaterThan(geometry.prose);
     expect(geometry.denseOverflow).toBeLessThanOrEqual(1);
-    expect(geometry.controlHeight).toBe(32);
-    expect(geometry.visibleExpandLabel).toBe(false);
-    expect(geometry.controlsGap).toBe(0);
     expect(geometry.bottomGap).toBeGreaterThanOrEqual(20);
     expect(geometry.prose).toBeLessThanOrEqual(768);
   } else {
-    expect(geometry.controlHeight).toBe(40);
-    expect(geometry.visibleExpandLabel).toBe(true);
-    expect(geometry.controlsGap).toBe(4);
     expect(geometry.denseOverflow).toBeGreaterThan(0);
     if (width === 932) {
-      // 4px shell inset plus the shared 16px reading gutter on each side.
       expect(geometry.width).toBeCloseTo(width - 2 * 20, 0);
     } else {
       expect(geometry.width).toBeLessThanOrEqual(geometry.prose + 1);

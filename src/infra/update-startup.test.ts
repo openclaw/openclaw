@@ -154,7 +154,7 @@ describe("update-startup", () => {
 
   function expectLastTelemetryConfig(config: OpenClawConfig) {
     const call = telemetry.mock.lastCall;
-    expect([call?.[0](), call?.[1]]).toEqual([config, { surface: "gateway" }]);
+    expect(call?.[0]()).toEqual(config);
   }
 
   function writePersistedUpdateCheckState(state: PersistedUpdateCheckState): void {

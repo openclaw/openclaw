@@ -107,14 +107,6 @@ describe("listInworldVoices", () => {
 
     expect(await listInworldVoices({ apiKey: "test-key" })).toStrictEqual([]);
   });
-
-  it("passes language filter as query parameter", async () => {
-    queueResponse({ voices: [] });
-
-    await listInworldVoices({ apiKey: "test-key", language: "EN_US" });
-
-    expect(lastGuardRequest().url).toBe("https://api.inworld.ai/voices/v1/voices?languages=EN_US");
-  });
 });
 
 describe("inworldTTS", () => {

@@ -308,9 +308,6 @@ async function executeOperation(
   const request = async (value: unknown, signal: AbortSignal): Promise<WorkerTaskResponse> => {
     try {
       signal.throwIfAborted();
-      if (!isRecord(value) || typeof value.type !== "string" || !isRecord(value.input)) {
-        throw new Error("Invalid Git worker host request");
-      }
       // SAFETY: Only the registered typed operation worker can send requests on this live channel.
       const effect = value as GitWorkerHostRequest;
       let result: unknown;

@@ -252,6 +252,7 @@ it("rejects invalid remote config before a node pairing mutation without opening
       type: "cli_error",
       message: expect.stringContaining("OpenClaw config is invalid:"),
     },
+    repairHint: "Run `openclaw doctor --fix` to repair, then retry.",
     issues: [
       {
         path: "gateway.mode",

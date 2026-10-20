@@ -127,15 +127,6 @@ export async function runMatrixQaE2eeCliEncryptionSetupMultiAccountScenario(
     }
 
     return {
-      artifacts: {
-        accountId,
-        cliDeviceId: setup.status.deviceId ?? cliDevice.deviceId,
-        decoyAccountPreserved,
-        defaultAccountPreserved,
-        encryptionChanged: setup.encryptionChanged,
-        setupSuccess: setup.success,
-        verificationBootstrapSuccess: setup.bootstrap.success,
-      },
       details: [
         "Matrix CLI encryption setup changed only the requested account in a multi-account config",
         `setup stdout: ${setupArtifacts.stdoutPath}`,
@@ -335,18 +326,6 @@ export async function runMatrixQaE2eeCliSetupThenGatewayReplyScenario(
     })();
 
     return {
-      artifacts: {
-        accountId,
-        cliDeviceId: setup.status?.deviceId ?? account.deviceId ?? null,
-        driverUserId: driverAccount.userId,
-        encryptionChanged: setup.encryptionChanged,
-        gatewayReply: replied.reply,
-        gatewayUserId: account.userId,
-        roomKey,
-        roomId,
-        setupSuccess: setup.success,
-        verificationBootstrapSuccess: setup.bootstrap.success,
-      },
       details: [
         "Matrix CLI encryption setup left the gateway able to reply in an encrypted room",
         `setup stdout: ${setupArtifacts.stdoutPath}`,

@@ -314,7 +314,10 @@ it.each([
 
 it("discards a queued preamble from a reset lifecycle", async () => {
   const readSession = sessionReader({ lifecycleRevision: "lifecycle-a", updatedAt: 0 });
-  const harness = createHarness({ readSession, utilityModelRef: null });
+  const harness = createHarness({
+    readSession,
+    config: { agents: { defaults: { utilityModel: "" } } },
+  });
   await emitEvent(harness, "item", { kind: "preamble", progressText: "Initial work" });
   await advanceAndFlush(100);
   await emitEvent(harness, "item", { kind: "preamble", progressText: "Obsolete queued work" });

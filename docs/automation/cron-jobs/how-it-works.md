@@ -68,9 +68,12 @@ schedule.
 There is no repetition-detection engine and no new stored history. The agent
 recognizes the repeat from the conversation itself and checks
 `automations(action: "list")` for an existing job before proposing a new one,
-so a routine you already created is not duplicated. The prompting that drives
-this is gated on the automations tool, so agents without it never offer a
-routine they could not create.
+so a routine you already created is not duplicated. The prompt includes this
+guidance when the automations tool is available and tells the agent to offer
+promotion only when its current actions include `list`, `add`, `run`, and
+`remove`. Read-only recovery and other restricted tool variants do not support
+this workflow. This is model guidance; tool policy and approvals still govern
+the actions.
 
 The confirmation restates the schedule and the task in plain words before
 anything is created, for example: "Every weekday at 07:00 Europe/Vienna, I

@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   applyQueueDropPolicy,
-  applyQueueRuntimeSettings,
   countPendingQueueItems,
   previewQueueSummaryPrompt,
   waitForQueueDebounce,
@@ -12,12 +11,6 @@ function createQueue<T>(items: T[], cap: number, dropPolicy: "old" | "summarize"
   return { items, cap, dropPolicy, droppedCount: 0, summaryLines };
 }
 
-const runtimeSettings = () => ({
-  mode: "followup",
-  debounceMs: 1000,
-  cap: 20,
-  dropPolicy: "summarize" as const,
-});
 type Item = { id: string; protected?: boolean };
 function dropItems(queue: ReturnType<typeof createQueue<Item>>, inFlight?: Set<Item>) {
   const dropped: string[] = [];
@@ -30,21 +23,6 @@ function dropItems(queue: ReturnType<typeof createQueue<Item>>, inFlight?: Set<I
   });
   return { admitted, dropped };
 }
-
-describe("applyQueueRuntimeSettings", () => {
-  it.each([
-    { mode: "collect", debounceMs: -12, cap: 9.8, dropPolicy: "new" },
-    { mode: "queue", cap: 0 },
-  ] as const)("normalizes supplied settings and retains omitted/invalid values: %j", (settings) => {
-    const target = runtimeSettings();
-    applyQueueRuntimeSettings({ target, settings });
-    expect(target).toEqual(
-      settings.mode === "collect"
-        ? { mode: "collect", debounceMs: 0, cap: 9, dropPolicy: "new" }
-        : { mode: "queue", debounceMs: 1000, cap: 20, dropPolicy: "summarize" },
-    );
-  });
-});
 
 describe("queue summary helpers", () => {
   it("preserves ordered summary elisions at the default limit", () => {

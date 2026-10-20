@@ -72,19 +72,6 @@ const changedConfig: OpenClawConfig = {
   agents: { defaults: { model: "anthropic/claude-opus-4-8" } },
 };
 
-function configSnapshot(config: OpenClawConfig) {
-  return {
-    exists: true,
-    valid: true,
-    path: "/tmp/openclaw.json",
-    hash: "h",
-    config,
-    runtimeConfig: config,
-    sourceConfig: config,
-    issues: [],
-  };
-}
-
 let sharedFixture: Awaited<ReturnType<typeof createSystemAgentVerifiedInferenceTestFixture>>;
 let configFixture: Awaited<ReturnType<typeof createInferenceConfigFixture>>;
 
@@ -97,10 +84,7 @@ function createVerifiedRunOptions(deps: SystemAgentCommandDeps = {}) {
   const fixture = sharedFixture;
   return {
     verifiedInference: fixture.binding,
-    deps: {
-      readConfigFileSnapshot: vi.fn(async () => configSnapshot(verifiedConfig)) as never,
-      ...deps,
-    },
+    deps,
   };
 }
 
@@ -221,7 +205,7 @@ describe("runSystemAgent", () => {
         }
         return configFixture.read();
       });
-    const verified = { verifiedInference: fixture.binding, deps: { readConfigFileSnapshot } };
+    const verified = { verifiedInference: fixture.binding, deps: {} };
     const run = runner(runtime, verified);
 
     await expect(
@@ -285,7 +269,7 @@ describe("runSystemAgent", () => {
     );
     const run = runner(runtime, {
       verifiedInference: fixture.binding,
-      deps: { readConfigFileSnapshot: vi.mocked(configModule.readConfigFileSnapshot) },
+      deps: {},
     });
 
     await expect(

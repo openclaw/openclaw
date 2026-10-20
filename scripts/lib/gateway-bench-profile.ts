@@ -18,6 +18,7 @@ export type GatewayProfileCommand = {
   profilePath: string;
   includeWorkers?: boolean;
   includeCollectedObjects?: boolean;
+  samplingIntervalBytes?: number;
 };
 
 export type GatewayCpuUsageSnapshot = {
@@ -32,6 +33,12 @@ export type GatewayResourceSnapshot = GatewayCpuUsageSnapshot & {
   memory: NodeJS.MemoryUsage;
   activeResources: Record<string, number>;
   runtime: { node: string; platform: string; arch: string };
+  sessionCensus?: {
+    scope: "source-main-isolate";
+    SessionManager: number;
+    AgentSession: number;
+    Agent: number;
+  };
 };
 
 export type GatewayBenchCommand =
@@ -49,6 +56,7 @@ export type GatewayBenchCommand =
       action: "sample";
       initial?: boolean;
       collectGarbage?: boolean;
+      sessionCensus?: boolean;
       snapshotPath?: string;
     };
 
@@ -88,7 +96,11 @@ function readProfileArtifacts(profilePath: string): GatewayProfileArtifacts {
 }
 
 /** Read promoted bytes from V8, excluding worker isolates and GC outside this capture. */
-export function readGatewayGcTrace(logPath: string, profilePath: string) {
+export function readGatewayGcTrace(
+  logPath: string,
+  profilePath: string,
+  captureKind: "heap" | "diagnostics" = "heap",
+) {
   let identifying = false;
   let identified = false;
   let pid: number | undefined;
@@ -116,14 +128,14 @@ export function readGatewayGcTrace(logPath: string, profilePath: string) {
         identifying = false;
         identified = true;
       } else if (marker.profilePath === profilePath) {
-        if (marker.phase === "heap-start") {
+        if (marker.phase === `${captureKind}-start`) {
           if (!identified || marker.pid !== pid || capturing || completed) {
-            throw new Error("GC trace has an invalid heap capture start");
+            throw new Error(`GC trace has an invalid ${captureKind} capture start`);
           }
           capturing = true;
-        } else if (marker.phase === "heap-stop") {
+        } else if (marker.phase === `${captureKind}-stop`) {
           if (!capturing || marker.pid !== pid) {
-            throw new Error("GC trace has an invalid heap capture stop");
+            throw new Error(`GC trace has an invalid ${captureKind} capture stop`);
           }
           capturing = false;
           completed = true;
@@ -169,7 +181,9 @@ export function readGatewayGcTrace(logPath: string, profilePath: string) {
     }
   }
   if (!identified || !completed || capturing) {
-    throw new Error("GC trace is missing identification or the complete heap capture window");
+    throw new Error(
+      `GC trace is missing identification or the complete ${captureKind} capture window`,
+    );
   }
   return {
     scope: "main-isolate" as const,
@@ -189,7 +203,11 @@ export async function controlGatewayProfile(
   kind: GatewayProfileCommand["kind"],
   action: GatewayProfileCommand["action"],
   profilePath: string,
-  options: { includeWorkers?: boolean; includeCollectedObjects?: boolean } = {},
+  options: {
+    includeWorkers?: boolean;
+    includeCollectedObjects?: boolean;
+    samplingIntervalBytes?: number;
+  } = {},
 ): Promise<void> {
   await sendGatewayBenchCommand(child, {
     channel: GATEWAY_PROFILE_CHANNEL,
@@ -237,7 +255,12 @@ export async function readGatewayCpuUsage(child: ChildProcess): Promise<GatewayC
 /** Samples the Gateway itself, not the controller or its descendants. */
 export async function readGatewayResources(
   child: ChildProcess,
-  options: { initial?: boolean; collectGarbage?: boolean; snapshotPath?: string } = {},
+  options: {
+    initial?: boolean;
+    collectGarbage?: boolean;
+    sessionCensus?: boolean;
+    snapshotPath?: string;
+  } = {},
 ): Promise<GatewayResourceSnapshot> {
   const reply = await sendGatewayBenchCommand(child, {
     channel: GATEWAY_PROFILE_CHANNEL,
@@ -348,7 +371,7 @@ export function readGatewayCpuProfile(profilePath: string) {
 
 export function readGatewayHeapProfile(
   profilePath: string,
-  options: { includeCollectedObjects?: boolean } = {},
+  options: { includeCollectedObjects?: boolean; samplingIntervalBytes?: number } = {},
 ) {
   const profile: HeapProfiler.SamplingHeapProfile = JSON.parse(readFileSync(profilePath, "utf8"));
   const sites: Array<{ sampledBytes: number; stack: string[] }> = [];
@@ -372,7 +395,7 @@ export function readGatewayHeapProfile(
   return {
     ...readProfileArtifacts(profilePath),
     profilePath,
-    samplingIntervalBytes: GATEWAY_HEAP_SAMPLE_INTERVAL,
+    samplingIntervalBytes: options.samplingIntervalBytes ?? GATEWAY_HEAP_SAMPLE_INTERVAL,
     includesCollectedObjects: options.includeCollectedObjects ?? true,
     sampledAllocatedBytes,
     topAllocationSites: sites.toSorted((a, b) => b.sampledBytes - a.sampledBytes).slice(0, 20),

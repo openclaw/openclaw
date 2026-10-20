@@ -9,6 +9,7 @@ import { registerAgentsHomeEnglish } from "../../ui/src/i18n/locales/en-agents-h
 import { registerApprovalsEnglish } from "../../ui/src/i18n/locales/en-approvals.ts";
 import { registerAppsEnglish } from "../../ui/src/i18n/locales/en-apps.ts";
 import { registerBoardWebsiteEnglish } from "../../ui/src/i18n/locales/en-board-website.ts";
+import { registerBoardEnglish } from "../../ui/src/i18n/locales/en-board.ts";
 import { registerBrowserEnglish } from "../../ui/src/i18n/locales/en-browser.ts";
 import { registerChatCameraEnglish } from "../../ui/src/i18n/locales/en-chat-camera.ts";
 import { registerChatCiEnglish } from "../../ui/src/i18n/locales/en-chat-ci.ts";
@@ -83,6 +84,7 @@ const sourceFiles = [
   "en-approvals.ts",
   "en-secrets-store.ts",
   "en-board-website.ts",
+  "en-board.ts",
   "en-browser.ts",
   "en-chat-camera.ts",
   "en-chat-ci.ts",
@@ -133,6 +135,10 @@ const sourceFiles = [
   "en-usage.ts",
 ];
 
+export function loadControlUiStartupCatalog(): TranslationMap {
+  return en;
+}
+
 export function loadControlUiSourceCatalog(): TranslationMap {
   const newSession: TranslationMap = {};
   for (const [key, value] of Object.entries(registerNewSessionSetupEnglish.catalog.newSession)) {
@@ -162,6 +168,9 @@ export function loadControlUiSourceCatalog(): TranslationMap {
   const boardWidget: TranslationMap = {};
   for (const [key, value] of Object.entries(en.board.widget)) {
     boardWidget[key] = value;
+    if (key === "remove") {
+      Object.assign(boardWidget, registerBoardEnglish.catalog.board.widget);
+    }
     if (key === "kindWebsite") {
       Object.assign(boardWidget, registerBoardWebsiteEnglish.catalog.board.widget);
     }

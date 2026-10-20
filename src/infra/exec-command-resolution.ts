@@ -116,19 +116,13 @@ export function resolveExecutableTrustPath(
 export function resolveExecutionTargetResolution(
   resolution: CommandResolution | ExecutableResolution | null,
 ): ExecutableResolution | null {
-  if (!resolution) {
-    return null;
-  }
-  return resolution.kind === "command" ? resolution.execution : resolution;
+  return resolution?.kind === "command" ? resolution.execution : (resolution ?? null);
 }
 
 export function resolvePolicyTargetResolution(
   resolution: CommandResolution | ExecutableResolution | null,
 ): ExecutableResolution | null {
-  if (!resolution) {
-    return null;
-  }
-  return resolution.kind === "command" ? resolution.policy : resolution;
+  return resolution?.kind === "command" ? resolution.policy : (resolution ?? null);
 }
 
 export function resolveExecutionTargetCandidatePath(

@@ -23,6 +23,7 @@ import {
   cloneChatAttachmentsForIndependentOwner,
   replaceChatAttachmentsFromEditor,
 } from "./attachment-payload-store.ts";
+import { mergeStoredChatSessionSnapshot } from "./chat-board-snapshot.ts";
 import { rewindChatHistory, switchChatHistoryBranch } from "./chat-history-actions.ts";
 import {
   fetchStagedOlderHistoryPage,
@@ -70,7 +71,6 @@ import {
 import {
   applyChatCacheSnapshot,
   cacheChatSessionSnapshot,
-  readChatSessionSnapshot,
   resolveChatSnapshotKey,
 } from "./session-message-cache.ts";
 import { resetToolStream } from "./tool-stream-state.ts";
@@ -109,7 +109,6 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
         .then((storedSnapshot) => {
           if (
             requests.initialSnapshotHydration !== hydration ||
-            requests.acceptedHistory ||
             this.state !== state ||
             !this.ownsChatSnapshot({ sessionKey }) ||
             !areUiSessionKeysEquivalent(state.sessionKey, sessionKey) ||
@@ -117,10 +116,24 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
           ) {
             return hydration.complete?.();
           }
+          const snapshot = mergeStoredChatSessionSnapshot(
+            state.chatMessagesBySession,
+            state,
+            { sessionKey },
+            storedSnapshot,
+          );
+          if (snapshot?.board) {
+            this.boardProviderLease?.restoreSnapshot(
+              snapshot.board.snapshot,
+              snapshot.board.receivedAtMs,
+            );
+          }
+          if (requests.acceptedHistory) {
+            return hydration.complete?.();
+          }
           // A sibling can fill the shared cache while this pane still needs its
           // own transcript. Adopt those messages before revalidating their cursor.
           const cache = state.chatMessagesBySession;
-          const snapshot = readChatSessionSnapshot(cache, state, { sessionKey }) ?? storedSnapshot;
           if (!snapshot) {
             return hydration.complete?.();
           }
