@@ -16,6 +16,37 @@ import type { CodexSessionCatalogPage } from "./session-catalog-types.js";
 const fulfilled = <T>(value: T) => ({ status: "fulfilled", value });
 const failedHost = (code: string) => ({ error: { code } });
 const payload = (ids: string[] = []) => ({ payloadJSON: JSON.stringify(page(ids)) });
+const nodeAnswer = (threadId: string) =>
+  expect.objectContaining({
+    hostId: "node:remote",
+    sessions: [expect.objectContaining({ threadId })],
+  });
+function heldCall<T>() {
+  const held = createDeferred<T>();
+  const started = createDeferred<void>();
+  return {
+    ...held,
+    started: started.promise,
+    call: () => {
+      started.resolve();
+      return held.promise;
+    },
+  };
+}
+async function finish(
+  f: Awaited<ReturnType<typeof fixture>>,
+  operation: ReturnType<typeof f.start>,
+  pending?: Promise<unknown>,
+) {
+  if (pending) {
+    await pending;
+  }
+  operation.close();
+  await Promise.allSettled(f.publications);
+}
+async function expectHosts(pending: Promise<unknown>, hosts: unknown[]) {
+  await expect(pending).resolves.toMatchObject(fulfilled({ done: true, hosts }));
+}
 const catalogNode = (nodeId = "remote", connected = true, displayName?: string) => ({
   nodeId,
   connected,
@@ -64,8 +95,10 @@ it("yields an inert exclusion checkpoint and retains filled rows, limits and cur
 
     const result = await operation.next();
     assert(result.done, "filled result missing");
-    expect(result.hosts[0]?.sessions.map((row) => row.threadId)).toEqual(["keep-one", "keep-two"]);
-    expect(result.hosts[0]?.nextCursor).toBe("remaining");
+    expect(result.hosts[0]).toMatchObject({
+      sessions: [{ threadId: "keep-one" }, { threadId: "keep-two" }],
+      nextCursor: "remaining",
+    });
     expect(f.listPage.mock.calls[1]).toEqual([
       "home-0",
       { limit: 1, cursor: "next", searchTerm: "keep" },
@@ -74,8 +107,7 @@ it("yields an inert exclusion checkpoint and retains filled rows, limits and cur
     expect(f.onHost).toHaveBeenCalledOnce();
     expect(f.onHost).toHaveBeenCalledWith(result.hosts[0]);
   } finally {
-    operation.close();
-    await Promise.allSettled(f.publications);
+    await finish(f, operation);
   }
 });
 
@@ -98,37 +130,28 @@ it("closes uninitialized and paused operations without starting or reviving sour
     expect(f.onHost).not.toHaveBeenCalled();
     expect(f.listPage).toHaveBeenCalledOnce();
   } finally {
-    operation.close();
-    await Promise.allSettled(f.publications);
+    await finish(f, operation);
   }
 });
 
 it("joins a held control page after active abort before allowing closure", async () => {
   const f = await fixture();
-  const held = createDeferred<CodexSessionCatalogPage>();
-  const started = createDeferred<void>();
-  f.listPage.mockImplementation(() => {
-    started.resolve();
-    return held.promise;
-  });
+  const held = heldCall<CodexSessionCatalogPage>();
+  f.listPage.mockImplementation(held.call);
   const operation = f.start();
   const advancing = observe(operation.next());
   try {
-    await started.promise;
+    await held.started;
     f.controller.abort(new Error("catalog retired"));
     await nextTurn();
     expect(advancing.state.settled).toBe(false);
     held.resolve(page(["managed"], "next"));
-    await expect(advancing.done).resolves.toMatchObject(
-      fulfilled({ done: true, hosts: [failedHost("APP_SERVER_UNAVAILABLE")] }),
-    );
+    await expectHosts(advancing.done, [failedHost("APP_SERVER_UNAVAILABLE")]);
     operation.close();
     expect(f.listPage).toHaveBeenCalledOnce();
   } finally {
     held.resolve(page([]));
-    await advancing.done;
-    operation.close();
-    await Promise.allSettled(f.publications);
+    await finish(f, operation, advancing.done);
   }
 });
 
@@ -187,9 +210,7 @@ it("yields before the next local page after a completed terminal-only node place
     expect(f.onHost).toHaveBeenCalledWith(expect.objectContaining({ canStartTerminal: true }));
   } finally {
     firstPage.resolve(page([]));
-    await advancing.done;
-    operation.close();
-    await Promise.allSettled(f.publications);
+    await finish(f, operation, advancing.done);
   }
 });
 
@@ -210,8 +231,7 @@ it("keeps the filled operation inline after failed discovery", async () => {
     expect(listNodes).toHaveBeenCalledOnce();
     expect(result.hosts[1]?.hostId).toBe("node:registry");
   } finally {
-    operation.close();
-    await Promise.allSettled(f.publications);
+    await finish(f, operation);
   }
 });
 
@@ -221,21 +241,15 @@ it.each(["reject", "no waitUntil"] as const)(
     const f = await fixture();
     vi.useFakeTimers();
     const first = createDeferred<CodexSessionCatalogPage>();
-    const invoked = createDeferred<void>();
-    const invokeResult = createDeferred<unknown>();
+    const invokeResult = heldCall<unknown>();
     const published = createDeferred<void>();
     const publication = createDeferred<void>();
     const publicationError = new Error("node publication failed");
-    vi.mocked(f.runtime.nodes.invoke).mockImplementation(() => {
-      invoked.resolve();
-      return invokeResult.promise;
-    });
+    vi.mocked(f.runtime.nodes.invoke).mockImplementation(invokeResult.call);
     f.listPage.mockImplementation(async () => first.promise);
     const operation = f.start({
       hostIds: undefined,
-      listNodes: async () => ({
-        nodes: [catalogNode()],
-      }),
+      listNodes: async () => ({ nodes: [catalogNode()] }),
       // oxlint-disable-next-line typescript/no-misused-promises -- A JS publication promise remains owned after the fail-soft response.
       onHost: (host) => {
         if (host.hostId === "node:remote") {
@@ -248,18 +262,13 @@ it.each(["reject", "no waitUntil"] as const)(
     });
     const advancing = observe(operation.next());
     try {
-      await invoked.promise;
+      await invokeResult.started;
       await vi.advanceTimersByTimeAsync(CODEX_CATALOG_HOST_RESPONSE_TIMEOUT_MS);
       expect(advancing.state.settled).toBe(true);
-      await expect(advancing.done).resolves.toMatchObject(
-        fulfilled({
-          done: true,
-          hosts: [
-            failedHost("APP_SERVER_UNAVAILABLE"),
-            { hostId: "node:remote", ...failedHost("NODE_INVOKE_FAILED") },
-          ],
-        }),
-      );
+      await expectHosts(advancing.done, [
+        failedHost("APP_SERVER_UNAVAILABLE"),
+        { hostId: "node:remote", ...failedHost("NODE_INVOKE_FAILED") },
+      ]);
       operation.close();
       first.resolve(page(["managed"], "second"));
       invokeResult.resolve(payload());
@@ -283,9 +292,7 @@ it.each(["reject", "no waitUntil"] as const)(
       invokeResult.resolve(payload());
       publication.resolve();
       first.resolve(page([]));
-      await advancing.done;
-      operation.close();
-      await Promise.allSettled(f.publications);
+      await finish(f, operation, advancing.done);
       vi.useRealTimers();
     }
   },
@@ -304,26 +311,14 @@ it("delivers each cold query when the newer query publishes first", async () => 
   try {
     await nextTurn();
     await vi.advanceTimersByTimeAsync(250);
-    expect(first.state.settled).toBe(true);
-    expect(second.state.settled).toBe(true);
+    expect([first.state.settled, second.state.settled]).toEqual([true, true]);
     newer.resolve(payload(["newer-answer"]));
     await nextTurn();
     older.resolve(payload(["first-answer"]));
     await nextTurn();
-    expect(firstHost).toHaveBeenCalledWith(
-      expect.objectContaining({
-        hostId: "node:remote",
-        sessions: [expect.objectContaining({ threadId: "first-answer" })],
-      }),
-    );
-    newer.resolve(payload(["newer-answer"]));
+    expect(firstHost).toHaveBeenCalledWith(nodeAnswer("first-answer"));
     await Promise.all(f.publications);
-    expect(secondHost).toHaveBeenCalledWith(
-      expect.objectContaining({
-        hostId: "node:remote",
-        sessions: [expect.objectContaining({ threadId: "newer-answer" })],
-      }),
-    );
+    expect(secondHost).toHaveBeenCalledWith(nodeAnswer("newer-answer"));
   } finally {
     older.resolve(payload());
     newer.resolve(payload());
@@ -354,8 +349,7 @@ it("invalidates delayed node publications after abort", async () => {
         host.sessions.map((row: { threadId: string }) => row.threadId),
       ),
     ).not.toContain("obsolete");
-    const result = await pending.done;
-    expect(result.status).toBe("fulfilled");
+    await expect(pending.done).resolves.toMatchObject({ status: "fulfilled" });
   } finally {
     old.resolve(payload());
     held.resolve(payload());
@@ -367,12 +361,8 @@ it("invalidates delayed node publications after abort", async () => {
 
 it("joins a started node sibling before rejecting a fatal publication failure", async () => {
   const f = await fixture();
-  const held = createDeferred<unknown>();
-  const started = createDeferred<void>();
-  vi.mocked(f.runtime.nodes.invoke).mockImplementation(() => {
-    started.resolve();
-    return held.promise;
-  });
+  const held = heldCall<unknown>();
+  vi.mocked(f.runtime.nodes.invoke).mockImplementation(held.call);
   const reason = new Error("offline node publication failed");
   const operation = f.start({
     hostIds: ["node:offline", "node:online"],
@@ -387,7 +377,7 @@ it("joins a started node sibling before rejecting a fatal publication failure", 
   });
   const advancing = observe(operation.next());
   try {
-    await started.promise;
+    await held.started;
     await nextTurn();
     expect.soft(advancing.state.settled).toBe(false);
     expect.soft(() => operation.close()).toThrow(/active/);
@@ -396,16 +386,13 @@ it("joins a started node sibling before rejecting a fatal publication failure", 
     expect(f.runtime.nodes.invoke).toHaveBeenCalledOnce();
   } finally {
     held.resolve(payload());
-    await advancing.done;
-    operation.close();
-    await Promise.allSettled(f.publications);
+    await finish(f, operation, advancing.done);
   }
 });
 
 it("disables intermediate handoff after a local page fails", async () => {
   const f = await fixture(2);
-  const surviving = createDeferred<CodexSessionCatalogPage>();
-  const survivorStarted = createDeferred<void>();
+  const surviving = heldCall<CodexSessionCatalogPage>();
   f.listPage.mockImplementation(async (home, params) => {
     if (home === "home-0") {
       throw new Error("native page failed");
@@ -413,27 +400,22 @@ it("disables intermediate handoff after a local page fails", async () => {
     if (params.cursor) {
       return page(["survivor"]);
     }
-    survivorStarted.resolve();
-    return surviving.promise;
+    return surviving.call();
   });
   const operation = f.start();
   const advancing = observe(operation.next());
   try {
-    await survivorStarted.promise;
+    await surviving.started;
     await nextTurn();
     surviving.resolve(page(["managed"], "next"));
-    await expect(advancing.done).resolves.toMatchObject(
-      fulfilled({
-        done: true,
-        hosts: [failedHost("APP_SERVER_UNAVAILABLE"), { sessions: [{ threadId: "survivor" }] }],
-      }),
-    );
+    await expectHosts(advancing.done, [
+      failedHost("APP_SERVER_UNAVAILABLE"),
+      { sessions: [{ threadId: "survivor" }] },
+    ]);
     expect(f.listPage).toHaveBeenCalledTimes(3);
   } finally {
     surviving.resolve(page([]));
-    await advancing.done;
-    operation.close();
-    await Promise.allSettled(f.publications);
+    await finish(f, operation, advancing.done);
   }
 });
 
@@ -470,22 +452,18 @@ it.each([
     await started.promise;
     if (progressive) {
       await vi.advanceTimersByTimeAsync(250);
-      await expect(advancing.done).resolves.toMatchObject(
-        fulfilled({
-          done: true,
-          hosts: [{ pending: true }, { sessions: [{ threadId: "survivor" }] }],
-        }),
-      );
+      await expectHosts(advancing.done, [
+        { pending: true },
+        { sessions: [{ threadId: "survivor" }] },
+      ]);
       operation.close();
     }
     await vi.advanceTimersByTimeAsync(CODEX_CATALOG_HOST_RESPONSE_TIMEOUT_MS);
     if (!progressive) {
-      await expect(advancing.done).resolves.toMatchObject(
-        fulfilled({
-          done: true,
-          hosts: [failedHost("APP_SERVER_UNAVAILABLE"), { sessions: [{ threadId: "survivor" }] }],
-        }),
-      );
+      await expectHosts(advancing.done, [
+        failedHost("APP_SERVER_UNAVAILABLE"),
+        { sessions: [{ threadId: "survivor" }] },
+      ]);
     }
     await Promise.all(f.publications);
     expect(f.onHost).toHaveBeenCalledWith(
@@ -506,9 +484,7 @@ it.each([
     adoption.hold = undefined;
     heldPage.resolve(page([]));
     heldAdoption.resolve(new Map<string, never>());
-    await advancing.done;
-    operation.close();
-    await Promise.allSettled(f.publications);
+    await finish(f, operation, advancing.done);
     vi.useRealTimers();
   }
 });

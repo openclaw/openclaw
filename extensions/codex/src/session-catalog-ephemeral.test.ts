@@ -6,12 +6,7 @@ import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runt
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
 import { runBoundedCodexAppServerTurn } from "./app-server/bounded-turn.js";
-import {
-  codexModel,
-  completedTurnResult,
-  inProgressTurnResult,
-  threadStartResult,
-} from "./app-server/bounded-turn.test-harness.js";
+import * as turns from "./app-server/bounded-turn.test-harness.js";
 import { resolveCodexAppServerRuntimeOptions } from "./app-server/config.js";
 import type { CodexThread } from "./app-server/protocol.js";
 import * as sharedClient from "./app-server/shared-client.js";
@@ -34,10 +29,8 @@ it.each([false, true])(
     const pluginConfig = {};
     const { start } = resolveCodexAppServerRuntimeOptions({ pluginConfig });
     const homeId = await codexCatalogResidentHomeKey({ startOptions: start, agentDir });
-    const native = threadStartResult("gpt-5.4");
+    const native = turns.threadStartResult("gpt-5.4");
     Object.assign(native.thread, {
-      status: { type: "idle" },
-      path: null,
       recencyAt: 100,
       preview: "Name this conversation.",
       source: "cli",
@@ -58,21 +51,22 @@ it.each([false, true])(
         assertCurrent: () => {},
       });
     const index = createIndex();
+    const thread = native.thread;
     const harness = createClientHarness({
       onWrite: (line, send) => {
         const request: { id: number; method: string; params: { ephemeral?: boolean } } =
           JSON.parse(line);
         const responses: Record<string, unknown> = {
-          "model/list": { data: [codexModel()], nextCursor: null },
+          "model/list": { data: [turns.codexModel()], nextCursor: null },
           "thread/start": native,
-          "thread/read": { thread: native.thread },
-          "turn/start": inProgressTurnResult(),
+          "thread/read": { thread },
+          "turn/start": turns.inProgressTurnResult(),
         };
         expect(request.method in responses).toBe(true);
         if (request.method === "thread/start") {
           expect(request.params.ephemeral).toBe(true);
           if (!existing) {
-            send({ method: "thread/started", params: { thread: native.thread } });
+            send({ method: "thread/started", params: { thread } });
           }
         }
         send({ id: request.id, result: responses[request.method] });
@@ -80,7 +74,7 @@ it.each([false, true])(
           setImmediate(() =>
             send({
               method: "turn/completed",
-              params: { threadId: native.thread.id, ...completedTurnResult() },
+              params: { threadId: thread.id, ...turns.completedTurnResult() },
             }),
           );
         }
@@ -99,7 +93,7 @@ it.each([false, true])(
     try {
       await index.initialize();
       if (existing) {
-        await index.upsertThread({ ...native.thread, ephemeral: false });
+        await index.upsertThread({ ...thread, ephemeral: false });
       }
       expect((await index.list({})).sessions).toHaveLength(existing ? 1 : 0);
       const result = await runBoundedCodexAppServerTurn({
@@ -117,7 +111,7 @@ it.each([false, true])(
       expect(harness.client.getCloseError()).toBeDefined();
       await nextTurn();
       expect((await index.list({})).sessions).toEqual([]);
-      expect(index.get(native.thread.id)).toBeUndefined();
+      expect(index.get(thread.id)).toBeUndefined();
       expect(harness.writes.some((line) => JSON.parse(line).method === "thread/read")).toBe(true);
     } finally {
       await harness.client.closeAndWait();
@@ -132,7 +126,7 @@ it.each([false, true])(
       expect((await openState().entries()).filter((entry) => entry.value.kind === "row")).toEqual(
         [],
       );
-      expect((await projectCodexCatalogPage({ data: [native.thread] })).rows).toEqual([]);
+      expect((await projectCodexCatalogPage({ data: [thread] })).rows).toEqual([]);
     } finally {
       await restarted.close();
     }

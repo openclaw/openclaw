@@ -32,6 +32,9 @@ afterEach(async () => {
 });
 
 const project = (data: CodexThread[]) => projectCodexCatalogPage({ data });
+const firstSession = async (index: CodexCatalogIndex) => (await index.list({})).sessions[0];
+const ids = async (index: CodexCatalogIndex) =>
+  (await index.list({})).sessions.map((row) => row.threadId);
 
 function catalog(
   root: string,
@@ -58,15 +61,14 @@ async function rollout(id: string, fields: Partial<CodexThread> = {}) {
   return { home, root, file, original };
 }
 
-function clientOptions(home: string, homeScope?: "user"): CodexAppServerStartOptions {
-  return {
-    transport: "stdio",
-    command: "codex",
-    args: ["app-server"],
-    env: { CODEX_HOME: home },
-    ...(homeScope ? { homeScope } : {}),
-    headers: {},
-  };
+async function provisional(id: string, fields: Partial<CodexThread> = {}) {
+  const value = await rollout(id, {
+    cwd: "/workspace/original",
+    originator: "codex_cli_rs",
+    ...fields,
+  });
+  const readNative = vi.fn(async () => project([]));
+  return { ...value, readNative };
 }
 
 async function compress(file: string) {
@@ -88,12 +90,12 @@ it("serves a remote restart snapshot immediately and reconciles offline changes 
   });
   const index = catalog("remote-restart", readNative, { state, local: false });
   try {
-    expect((await index.list({})).sessions.map((row) => row.threadId)).toEqual([original.id]);
+    expect(await ids(index)).toEqual([original.id]);
     expect(readNative).not.toHaveBeenCalled();
     await vi.waitFor(() => expect(readNative).toHaveBeenCalledOnce());
     native.resolve();
     await vi.waitFor(async () => {
-      expect((await index.list({})).sessions.map((row) => row.threadId)).toEqual([replacement.id]);
+      expect(await ids(index)).toEqual([replacement.id]);
     });
     expect(readNative).toHaveBeenCalledOnce();
   } finally {
@@ -123,7 +125,7 @@ it.each([false, true])(
     if (!duringHydration) {
       await index.upsertThread({ ...original, name: "Updated native title" });
       await index.reconcile();
-      expect((await index.list({})).sessions[0]?.name).toBe("Updated native title");
+      expect((await firstSession(index))?.name).toBe("Updated native title");
       await fs.unlink(physicalPath);
       await index.reconcile();
     }
@@ -133,13 +135,16 @@ it.each([false, true])(
 );
 
 it("publishes changed provisional rollout metadata alongside a concurrent native rename", async () => {
-  const { home, root, file, original } = await rollout("changing-thread", {
-    cwd: "/workspace/original",
-    originator: "codex_cli_rs",
-  });
-  const startOptions = clientOptions(home, "user");
+  const { home, root, file, original, readNative } = await provisional("changing-thread");
+  const startOptions: CodexAppServerStartOptions = {
+    transport: "stdio",
+    command: "codex",
+    args: ["app-server"],
+    env: { CODEX_HOME: home },
+    homeScope: "user",
+    headers: {},
+  };
   const homeId = await codexCatalogResidentHomeKey({ startOptions });
-  const readNative = vi.fn(async () => project([]));
   const index = catalog(root, readNative, { homeId });
   const harness = createClientHarness();
   const opened = createDeferred<void>();
@@ -168,9 +173,9 @@ it("publishes changed provisional rollout metadata alongside a concurrent native
     readAllowed.resolve();
     await reconciling;
     const renamed = { name: "New native title", cwd: "/workspace/changed" };
-    expect((await index.list({})).sessions[0]).toMatchObject(renamed);
+    expect(await firstSession(index)).toMatchObject(renamed);
     await index.reconcile();
-    expect((await index.list({})).sessions[0]).toMatchObject(renamed);
+    expect(await firstSession(index)).toMatchObject(renamed);
     expect(open.mock.calls.filter(([value]) => value === file)).toHaveLength(1);
     expect(harness.writes).toEqual([]);
     expect(readNative).not.toHaveBeenCalled();
@@ -181,11 +186,7 @@ it("publishes changed provisional rollout metadata alongside a concurrent native
 });
 
 it("retries a failed rollout read after access recovers without a fingerprint change", async () => {
-  const { root, file, original } = await rollout("unreadable-thread", {
-    cwd: "/workspace/original",
-    originator: "codex_cli_rs",
-  });
-  const readNative = vi.fn(async () => project([]));
+  const { root, file, original, readNative } = await provisional("unreadable-thread");
   const index = catalog(root, readNative);
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
   await index.initialize();
@@ -204,10 +205,10 @@ it("retries a failed rollout read after access recovers without a fingerprint ch
   });
   await expect(index.reconcile()).resolves.toBeUndefined();
   expect(open.mock.calls.some(([candidate]) => candidate === file)).toBe(true);
-  expect((await index.list({})).sessions[0]?.cwd).toBe("/workspace/original");
+  expect((await firstSession(index))?.cwd).toBe("/workspace/original");
   readable = true;
   await index.reconcile();
-  expect((await index.list({})).sessions[0]?.cwd).toBe("/workspace/changed");
+  expect((await firstSession(index))?.cwd).toBe("/workspace/changed");
   expect(await fs.stat(file)).toMatchObject({ mtimeMs: changed.mtimeMs, size: changed.size });
   expect(readNative).toHaveBeenCalledOnce();
 });
@@ -240,21 +241,18 @@ it.each(["covered", "flat", "outside"])(
     const index = catalog(root, readNative);
     await index.initialize();
     await index.reconcile();
-    expect((await index.list({})).sessions.map((session) => session.threadId)).toEqual(
-      layout === "covered" ? [] : [original.id],
-    );
+    expect(await ids(index)).toEqual(layout === "covered" ? [] : [original.id]);
     expect(readNative).toHaveBeenCalledOnce();
   },
 );
 
 it("retains a known preview when a bounded rollout read cannot reach the first user message", async () => {
   const preview = "A durable searchable preview from the first user request";
-  const { root, file, original } = await rollout("bounded-preview", {
+  const { root, file, original, readNative } = await provisional("bounded-preview", {
+    cwd: "/workspace/project",
     name: null,
     preview,
-    originator: "codex_cli_rs",
   });
-  const readNative = vi.fn(async () => project([]));
   const index = catalog(root, readNative);
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
   await index.initialize();
@@ -301,7 +299,7 @@ it("retains a known preview when a bounded rollout read cannot reach the first u
   );
   await fs.rename(replacement, file);
   await index.reconcile();
-  expect((await index.list({})).sessions[0]).toMatchObject({
+  expect(await firstSession(index)).toMatchObject({
     threadId: original.id,
     cwd: "/workspace/changed",
     fallbackName: preview,

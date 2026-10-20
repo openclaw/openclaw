@@ -4,32 +4,23 @@ import type { CodexThread } from "./app-server/protocol.js";
 import { memoryCatalogState } from "./session-catalog-index.test-support.js";
 import { lookupNodeCodexCatalogRecord } from "./session-catalog-node-lookup.js";
 import { NODE_INVOKE_TIMEOUT_MS } from "./session-catalog-parsing.js";
-import {
-  nativeCatalogFixture,
-  remoteCatalogFactory,
-} from "./session-catalog-resident.test-support.js";
-import {
-  commandRpcMocks,
-  config,
-  createRuntime,
-  pinnedConnectionMocks,
-} from "./session-catalog.test-helpers.js";
+import * as resident from "./session-catalog-resident.test-support.js";
+import * as catalog from "./session-catalog.test-helpers.js";
 
 afterEach(() => vi.restoreAllMocks());
 
 async function remoteFixture(count: number) {
-  const native = nativeCatalogFixture(count);
-  const target = native.rows.at(-1)!;
-  let activeRows: CodexThread[] = native.rows;
+  let activeRows: CodexThread[] = resident.nativeCatalogFixture(count).rows;
+  const target = activeRows.at(-1)!;
   const { values: stored, state } = memoryCatalogState();
-  const factory = remoteCatalogFactory("exact-overflow", {
-    getRuntimeConfig: () => config,
+  const factory = resident.remoteCatalogFactory("exact-overflow", {
+    getRuntimeConfig: () => catalog.config,
     openResidentState: () => state,
   });
   const home = (await factory.homesForAgent("main"))[0]!;
   expect(home.localSessionsRoot).toBeUndefined();
   const control = factory.forRequest("main", home);
-  pinnedConnectionMocks.request.mockImplementation(async ({ method, requestParams }) => {
+  catalog.pinnedConnectionMocks.request.mockImplementation(async ({ method, requestParams }) => {
     if (method === "thread/read") {
       return { thread: target };
     }
@@ -43,7 +34,6 @@ async function remoteFixture(count: number) {
     throw new Error(`Unexpected exact lookup request ${method}`);
   });
   await control.initialize();
-  commandRpcMocks.codexControlRequest.mockClear();
   return {
     control,
     target,
@@ -61,13 +51,11 @@ it.each(["evicted", "not-member", "archived"])(
     const rows = [...f.stored.values()].flatMap((entry) =>
       entry.kind === "row" ? [entry.row] : [],
     );
-    if (kind === "evicted") {
-      expect(rows).toHaveLength(20_000);
-      expect(rows.some((row) => row.threadId === f.target.id)).toBe(false);
-    } else if (kind === "not-member") {
-      expect(rows.some((row) => row.threadId === f.target.id)).toBe(true);
+    expect(rows).toHaveLength(kind === "evicted" ? 20_000 : 1);
+    expect(rows.some((row) => row.threadId === f.target.id)).toBe(kind !== "evicted");
+    if (kind === "not-member") {
       f.setActiveRows([]);
-    } else {
+    } else if (kind === "archived") {
       await f.control.archiveThread(f.target.id);
       f.setActiveRows([f.target]);
     }
@@ -78,9 +66,9 @@ it.each(["evicted", "not-member", "archived"])(
       await result.resolves.toMatchObject({ id: f.target.id });
     }
     if (kind === "evicted") {
-      expect(pinnedConnectionMocks.request.mock.calls.map(([request]) => request.method)).toEqual(
-        expect.arrayContaining(["thread/read", "thread/list"]),
-      );
+      expect(
+        catalog.pinnedConnectionMocks.request.mock.calls.map(([request]) => request.method),
+      ).toEqual(expect.arrayContaining(["thread/read", "thread/list"]));
     }
   },
 );
@@ -99,7 +87,7 @@ it("finds a paired-node thread after more than 100 catalog pages", async () => {
       ...(page < 125 ? { nextCursor: `page-${page}` } : {}),
     }),
   }));
-  const { runtime } = createRuntime({ invoke });
+  const { runtime } = catalog.createRuntime({ invoke });
   await expect(
     lookupNodeCodexCatalogRecord({
       agentId: "main",
@@ -118,7 +106,7 @@ it("keeps one node lookup deadline across advancing pages", async () => {
     elapsed += NODE_INVOKE_TIMEOUT_MS / 2 + 1;
     return { payloadJSON: JSON.stringify({ sessions: [], nextCursor: String(elapsed) }) };
   });
-  const { runtime } = createRuntime({ invoke });
+  const { runtime } = catalog.createRuntime({ invoke });
   await expect(
     lookupNodeCodexCatalogRecord({ agentId: "main", runtime, nodeId: "node", threadId: "older" }),
   ).rejects.toThrow("eligibility could not be verified");

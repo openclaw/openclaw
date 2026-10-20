@@ -14,15 +14,10 @@ import {
   createRuntime,
 } from "./session-catalog.test-helpers.js";
 
+const idleSession = { status: "idle", source: "cli", archived: false };
 export function page(ids: string[], nextCursor?: string): CodexSessionCatalogPage {
   return {
-    sessions: ids.map((threadId) => ({
-      threadId,
-      name: threadId,
-      status: "idle",
-      source: "cli",
-      archived: false,
-    })),
+    sessions: ids.map((threadId) => ({ ...idleSession, threadId, name: threadId })),
     ...(nextCursor ? { nextCursor } : {}),
   };
 }
@@ -66,9 +61,7 @@ export async function fixture(homeCount = 1) {
       ...base,
       homesForAgent: async () => homes,
       forRequest: (_agentId, source) =>
-        createControl({
-          listPage: (params) => listPage(source!.sourceHomeId, params),
-        }),
+        createControl({ listPage: (params) => listPage(source!.sourceHomeId, params) }),
     },
     runtime,
     bindingStore,
@@ -92,27 +85,14 @@ export async function fixture(homeCount = 1) {
       ...params,
     });
   };
-  return {
-    runtime,
-    homes,
-    listPage,
-    snapshot,
-    controller,
-    onHost,
-    publications,
-    start,
-  };
+  return { runtime, homes, listPage, snapshot, controller, onHost, publications, start };
 }
 
 export async function nodeFixture() {
   const f = await fixture();
-  const node = {
-    nodeId: "remote",
-    connected: true,
-    connectedAtMs: 1,
-    commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND],
-  };
-  const listNodes = vi.fn(async () => ({ nodes: [node] }));
+  const commands = [CODEX_APP_SERVER_THREADS_LIST_COMMAND];
+  const node = { nodeId: "remote", connected: true, connectedAtMs: 1, commands };
+  const listNodes = async () => ({ nodes: [node] });
   const invoke = vi.mocked(f.runtime.nodes.invoke);
   invoke.mockResolvedValue({ payloadJSON: JSON.stringify(page(["original"])) });
   const read = (params: Partial<Parameters<SessionCatalogProvider["list"]>[0]> = {}) =>
@@ -124,5 +104,5 @@ export async function nodeFixture() {
         ...params,
       }),
     );
-  return { ...f, node, listNodes, invoke, read };
+  return { ...f, invoke, read };
 }
