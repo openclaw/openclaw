@@ -7,6 +7,10 @@ import { buildChannelOutboundSessionRoute } from "../plugin-sdk/core.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { resolveHeartbeatPreflight } from "./heartbeat-runner-prompt.js";
+import {
+  bindHeartbeatReply,
+  observeHeartbeatClock,
+} from "./heartbeat-runner.boundary-test-support.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import {
@@ -111,11 +115,12 @@ async function createMirrorFixture(
     });
   }
   replySpy.mockResolvedValueOnce({ text: "Status needs attention." });
-  const run = (wake: Omit<Parameters<typeof runHeartbeatOnce>[0], "cfg" | "deps"> = {}) =>
+  bindHeartbeatReply(replySpy);
+  const clock = observeHeartbeatClock();
+  const run = (wake: Omit<Parameters<typeof runHeartbeatOnce>[0], "cfg"> = {}) =>
     runHeartbeatOnce({
       cfg,
       ...wake,
-      deps: { getReplyFromConfig: replySpy, nowMs: () => nowMs },
     });
   const awareness = (events?: Parameters<typeof drainFormattedSystemEvents>[0]["events"]) =>
     drainFormattedSystemEvents({
@@ -126,11 +131,11 @@ async function createMirrorFixture(
       isNewSession: false,
       events,
     });
-  return { ...sandbox, cfg, baseKey, isolatedKey, targetKey, nowMs, run, awareness };
+  return { ...sandbox, cfg, baseKey, isolatedKey, targetKey, nowMs, run, clock, awareness };
 }
 
 it("keeps the base policy key when wake re-entry starts from the isolated key", () =>
-  withMirror(async ({ storePath, replySpy, baseKey, isolatedKey, nowMs, run }) => {
+  withMirror(async ({ storePath, replySpy, baseKey, isolatedKey, nowMs, run, clock }) => {
     await seedSessionStore(storePath, isolatedKey, {
       sessionId: "isolated-session",
       updatedAt: nowMs - 1_000,
@@ -139,12 +144,14 @@ it("keeps the base policy key when wake re-entry starts from the isolated key", 
     enqueueSystemEvent("Exec completed (mirror-reentry, code 0) :: result needs attention", {
       sessionKey: isolatedKey,
     });
-    const result = await run({
-      sessionKey: isolatedKey,
-      source: "exec-event",
-      intent: "event",
-      reason: "exec-event",
-    });
+    const { result, startedAt } = await clock.run(() =>
+      run({
+        sessionKey: isolatedKey,
+        source: "exec-event",
+        intent: "event",
+        reason: "exec-event",
+      }),
+    );
 
     expect(result.status).toBe("ran");
     expect(replySpy.mock.calls[0]?.[0]).toMatchObject({ SessionKey: isolatedKey });
@@ -155,7 +162,7 @@ it("keeps the base policy key when wake re-entry starts from the isolated key", 
     const store = readSessionStoreForTest(storePath);
     expect(store[baseKey]).toMatchObject({
       lastHeartbeatText: "Status needs attention.",
-      lastHeartbeatSentAt: nowMs,
+      lastHeartbeatSentAt: startedAt,
     });
     expect(store[isolatedKey]?.heartbeatIsolatedBaseSessionKey).toBe(baseKey);
     expect(store[isolatedKey]?.lastHeartbeatText).toBeUndefined();

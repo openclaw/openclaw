@@ -697,19 +697,11 @@ const sealedRecoveryNativeLoaderModules = [
 const sqliteWorkerProtocolModules = new Map<string, ReadonlySet<string>>([
   [
     "createSqliteWorkerBackend",
-    new Set([
-      "src/state/openclaw-state.worker.ts",
-      "src/state/openclaw-agent-execution.worker.ts",
-      "src/infra/client-credential.worker.ts",
-    ]),
+    new Set(["src/state/openclaw-state.worker.ts", "src/state/openclaw-agent-execution.worker.ts"]),
   ],
   [
     "openExistingSqliteWorkerBackend",
-    new Set([
-      "src/state/openclaw-state.worker.ts",
-      "src/state/openclaw-agent-execution.worker.ts",
-      "src/infra/client-credential.worker.ts",
-    ]),
+    new Set(["src/state/openclaw-state.worker.ts", "src/state/openclaw-agent-execution.worker.ts"]),
   ],
   [
     "bindSqliteWorkerBackend",

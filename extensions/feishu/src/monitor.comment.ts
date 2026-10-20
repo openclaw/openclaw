@@ -103,16 +103,13 @@ type ResolvedWholeCommentTimelineEntry = {
   content: ParsedCommentContent;
 };
 
-function truncatePromptText(
-  text: string | undefined,
-  maxLength = FEISHU_PROMPT_TEXT_LIMIT,
-): string {
+function truncatePromptText(text: string | undefined): string {
   const normalized = normalizeString(text);
   if (!normalized) {
     return "";
   }
-  return normalized.length > maxLength
-    ? `${sliceUtf16Safe(normalized, 0, maxLength - 1)}…`
+  return normalized.length > FEISHU_PROMPT_TEXT_LIMIT
+    ? `${sliceUtf16Safe(normalized, 0, FEISHU_PROMPT_TEXT_LIMIT - 1)}…`
     : normalized;
 }
 
@@ -695,7 +692,6 @@ async function fetchDriveCommentContext(
     rootCommentText: rootReplyContext?.content.semanticText ?? rootReplyContext?.content.plainText,
     targetReplyText:
       targetReplyContext?.content.semanticText ?? targetReplyContext?.content.plainText,
-    rootCommentContent: rootReplyContext?.content,
     targetReplyContent: targetReplyContext?.content,
     currentCommentThreadReplies: resolvedReplies,
     wholeCommentTimeline,

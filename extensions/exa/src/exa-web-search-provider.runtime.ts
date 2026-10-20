@@ -1,3 +1,4 @@
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { ProviderHttpError, readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import {
@@ -314,6 +315,7 @@ export async function executeExaWebSearchProviderTool(
   );
   const cacheKey = buildSearchCacheKey([
     "exa",
+    sha256Hex(apiKey),
     endpoint,
     type,
     query,

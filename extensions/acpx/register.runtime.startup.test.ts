@@ -4,12 +4,29 @@ import {
   requireAcpRuntimeBackend,
 } from "openclaw/plugin-sdk/acp-runtime-backend";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolvePreferredOpenClawTmpDir, tempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { afterEach, expect, it, vi, type MockInstance } from "vitest";
-import { createAcpxRuntimeService } from "./register.runtime.js";
+import { createRegisteredAcpxService } from "./registration.test-support.js";
 import type { OpenClawPluginServiceContext } from "./runtime-api.js";
 import { createEmptyAcpxKeyedStore } from "./src/empty-keyed-store.test-support.js";
 import { makeEmptySessionStore, makeRuntime } from "./src/runtime.test-support.js";
+
+type RuntimeFactory = NonNullable<
+  NonNullable<
+    Parameters<(typeof import("./src/service.js"))["createAcpxRuntimeService"]>[0]
+  >["runtimeFactory"]
+>;
+const { runtimeFactory } = vi.hoisted(() => ({ runtimeFactory: vi.fn<RuntimeFactory>() }));
+
+vi.mock("./src/service.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./src/service.js")>();
+  return {
+    ...actual,
+    createAcpxRuntimeService: (params: Parameters<typeof actual.createAcpxRuntimeService>[0]) =>
+      actual.createAcpxRuntimeService({ ...params, runtimeFactory }),
+  };
+});
 
 // mock-isolation: auth-file preparation is unrelated to startup admission and must not read host credentials.
 vi.mock("./src/codex-auth-bridge.js", () => ({
@@ -55,9 +72,9 @@ async function withStartingBackend(
   vi.stubEnv("OPENCLAW_SKIP_ACPX_RUNTIME", undefined);
   vi.stubEnv("OPENCLAW_SKIP_ACPX_RUNTIME_PROBE", undefined);
   vi.stubEnv("OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE", "1");
-  const service = createAcpxRuntimeService({
-    openKeyedStore: createEmptyAcpxKeyedStore,
-    runtimeFactory: () => runtime,
+  runtimeFactory.mockReturnValue(runtime);
+  const service = createRegisteredAcpxService({
+    runtime: createPluginRuntimeMock({ state: { openKeyedStoreV2: createEmptyAcpxKeyedStore } }),
   });
   const admit = async (name: string) =>
     requireAcpRuntimeBackend("acpx").runtime.ensureSession({

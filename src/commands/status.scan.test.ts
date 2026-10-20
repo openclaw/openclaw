@@ -51,11 +51,10 @@ beforeAll(async () => {
   configure();
   ({ scanStatus } = await loadStatusScanModuleForTest(mocks));
   ({ scanStatusJsonFast } = await loadStatusScanModuleForTest(mocks, { fastJson: true }));
-  vi.doMock("./status.scan.runtime.js", () => ({
-    statusScanRuntime: {
-      buildChannelsTable: mocks.buildChannelsTable,
-      collectChannelStatusIssues: mocks.collectChannelStatusIssues,
-    },
+  vi.doMock("./status.scan.runtime.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("./status.scan.runtime.js")>()),
+    buildChannelsTable: mocks.buildChannelsTable,
+    collectChannelStatusIssues: mocks.collectChannelStatusIssues,
   }));
   ({ collectStatusScanOverview } = await import("./status.scan-overview.js"));
   commandConfigSnapshot = await import("../cli/command-config-snapshot.js");

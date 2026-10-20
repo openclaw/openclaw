@@ -114,7 +114,9 @@ export class CustodianAutoSetup {
     }
   }
 
-  async retry(): Promise<void> {
+  private async run(
+    task: (client: GatewayBrowserClient) => Promise<SetupAutoResult>,
+  ): Promise<void> {
     const client = this.client;
     if (!client || this.pending) {
       return;
@@ -124,12 +126,7 @@ export class CustodianAutoSetup {
     this.error = null;
     this.changed();
     try {
-      // Verification and plugin preparation can exceed a minute. The Gateway owns the lifetime.
-      const result = await client.request<SetupAutoResult>(
-        "openclaw.setup.auto",
-        {},
-        { timeoutMs: null },
-      );
+      const result = await task(client);
       if (epoch !== this.epoch || client !== this.client) {
         return;
       }
@@ -149,29 +146,28 @@ export class CustodianAutoSetup {
     }
   }
 
+  retry(): Promise<void> {
+    // Verification and plugin preparation can exceed a minute. The Gateway owns the lifetime.
+    return this.run((client) =>
+      client.request<SetupAutoResult>("openclaw.setup.auto", {}, { timeoutMs: null }),
+    );
+  }
+
   async activate(candidate: SetupAutoCandidate): Promise<void> {
-    const client = this.client;
     const previous = this.result;
-    if (!client || !previous || this.pending) {
+    if (!previous) {
       return;
     }
-    const epoch = ++this.epoch;
-    this.pending = true;
-    this.error = null;
-    this.changed();
-    try {
+    await this.run(async (client) => {
       const result = await client.request<SystemAgentSetupActivateResult>(
         "openclaw.setup.activate",
         { kind: candidate.kind },
         { timeoutMs: null },
       );
-      if (epoch !== this.epoch || client !== this.client) {
-        return;
-      }
       if (!result.ok) {
         throw new Error(result.error || t("custodian.autoSetup.failed"));
       }
-      this.result = {
+      return {
         ...previous,
         status: "activated",
         selected: { ...candidate, modelRef: result.modelRef ?? candidate.modelRef },
@@ -180,17 +176,7 @@ export class CustodianAutoSetup {
           ...previous.alternatives.filter((entry) => entry !== candidate),
         ],
       };
-      void this.context?.agents.refreshList();
-    } catch (error) {
-      if (epoch === this.epoch && client === this.client) {
-        this.error = formatUiError(error, t("custodian.autoSetup.failed"));
-      }
-    } finally {
-      if (epoch === this.epoch && client === this.client) {
-        this.pending = false;
-        this.changed();
-      }
-    }
+    });
   }
 
   async signIn(): Promise<void> {

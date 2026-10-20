@@ -1,8 +1,47 @@
 import { setImmediate } from "node:timers/promises";
+import type { ProviderFetchUsageSnapshotContext } from "openclaw/plugin-sdk/plugin-entry";
+import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchOpenRouterUsage } from "./usage.js";
+import openrouterPlugin from "./index.js";
+
+const provider = await registerSingleProviderPlugin(openrouterPlugin);
+
+async function fetchOpenRouterUsage(
+  params: Pick<ProviderFetchUsageSnapshotContext, "token" | "timeoutMs" | "signal" | "fetchFn"> & {
+    baseUrl?: string;
+    request?: ModelProviderConfig["request"];
+  },
+) {
+  if (!provider.fetchUsageSnapshot) {
+    throw new Error("OpenRouter usage provider is not registered");
+  }
+  const snapshot = await provider.fetchUsageSnapshot({
+    config: {
+      models: {
+        providers: {
+          openrouter: {
+            baseUrl: params.baseUrl ?? "https://openrouter.ai/api/v1",
+            request: params.request,
+            models: [],
+          },
+        },
+      },
+    },
+    env: {},
+    provider: "openrouter",
+    token: params.token,
+    timeoutMs: params.timeoutMs,
+    signal: params.signal,
+    fetchFn: params.fetchFn,
+  });
+  if (!snapshot) {
+    throw new Error("OpenRouter usage provider returned no snapshot");
+  }
+  return snapshot;
+}
 
 function requestUrl(input: string | URL | Request): string {
   return typeof input === "string" ? input : input instanceof URL ? input.href : input.url;

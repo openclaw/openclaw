@@ -7,10 +7,8 @@ export class TokenRateLimiter {
   private readonly attempts = new Map<string, number[]>();
   private globalAttempts: Array<{ at: number }> = [];
 
-  constructor(private readonly now: () => number) {}
-
   allowKey(key: string): boolean {
-    const now = this.now();
+    const now = Date.now();
     const active = (this.attempts.get(key) ?? []).filter(
       (timestamp) => timestamp > now - TOKEN_RATE_WINDOW_MS,
     );
@@ -30,7 +28,7 @@ export class TokenRateLimiter {
   }
 
   reserveGlobal(): { at: number } | null {
-    const now = this.now();
+    const now = Date.now();
     this.globalAttempts = this.globalAttempts.filter(
       (reservation) => reservation.at > now - TOKEN_RATE_WINDOW_MS,
     );

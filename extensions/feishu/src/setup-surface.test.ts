@@ -239,7 +239,6 @@ describe("feishu setup wizard", () => {
     });
     expect(probeFeishuMock).toHaveBeenCalledWith({
       accountId: "main-bot",
-      selectionSource: "explicit-default",
       enabled: true,
       configured: true,
       name: undefined,
