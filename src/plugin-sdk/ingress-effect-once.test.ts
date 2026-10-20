@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { createIngressEffectOnce } from "./ingress-effect-once.js";
 
@@ -49,28 +50,15 @@ describe("createIngressEffectOnce", () => {
   it("releases a failed claim so an in-flight sibling executes on retry", async () => {
     const effectOnce = createIngressEffectOnce(EFFECT_ONCE_PARAMS);
     const failure = new Error("write failed");
-    let rejectFirst!: (error: unknown) => void;
-    const firstRun = vi.fn(
-      () =>
-        new Promise<string>((_resolve, reject) => {
-          rejectFirst = reject;
-        }),
-    );
+    const gate = createDeferred<string>();
+    const firstRun = vi.fn(() => gate.promise);
     const retryRun = vi.fn(async () => "retried");
-
-    const first = effectOnce.runOnce({
-      eventId: "event-2",
-      effect: "config-write",
-      run: firstRun,
-    });
+    const params = { eventId: "event-2", effect: "config-write" };
+    const first = effectOnce.runOnce({ ...params, run: firstRun });
     await vi.waitFor(() => expect(firstRun).toHaveBeenCalledOnce());
-    const retry = effectOnce.runOnce({
-      eventId: "event-2",
-      effect: "config-write",
-      run: retryRun,
-    });
+    const retry = effectOnce.runOnce({ ...params, run: retryRun });
     await Promise.resolve();
-    rejectFirst(failure);
+    gate.reject(failure);
 
     await expect(first).rejects.toBe(failure);
     await expect(retry).resolves.toEqual({ kind: "executed", value: "retried" });
@@ -79,19 +67,16 @@ describe("createIngressEffectOnce", () => {
 
   it("settles concurrent same-key claims with one execution", async () => {
     const effectOnce = createIngressEffectOnce(EFFECT_ONCE_PARAMS);
-    let finish!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      finish = resolve;
-    });
+    const gate = createDeferred();
     const run = vi.fn(async () => {
-      await gate;
+      await gate.promise;
       return "cleared";
     });
 
     const first = effectOnce.runOnce({ eventId: "event-3", effect: "storage-clear", run });
     await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
     const second = effectOnce.runOnce({ eventId: "event-3", effect: "storage-clear", run });
-    finish();
+    gate.resolve();
 
     await expect(first).resolves.toEqual({ kind: "executed", value: "cleared" });
     await expect(second).resolves.toEqual({ kind: "replayed" });
@@ -113,60 +98,19 @@ describe("createIngressEffectOnce", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
-  it("rejects a failed durable commit and settles its in-flight waiter", async () => {
-    const onDiskError = vi.fn();
-    let finish!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      finish = resolve;
-    });
-    const run = vi.fn(async () => {
-      await gate;
-      resetPluginStateStoreForTests();
-      await fs.rm(stateDir, { recursive: true, force: true });
-      await fs.writeFile(stateDir, "not a directory");
-      return "already-visible";
-    });
-    const waiterRun = vi.fn(async () => "unsafe-retry");
-    const effectOnce = createIngressEffectOnce({ ...EFFECT_ONCE_PARAMS, onDiskError });
-
-    const first = effectOnce.runOnce({
-      eventId: "event-write-error",
-      effect: "visible-ack",
-      run,
-    });
-    await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
-    const waiter = effectOnce.runOnce({
-      eventId: "event-write-error",
-      effect: "visible-ack",
-      run: waiterRun,
-    });
-    const outcomes = Promise.all([
-      expect(first).rejects.toThrow("Failed to open the plugin state database"),
-      expect(waiter).rejects.toThrow("Failed to open the plugin state database"),
-    ]);
-    finish();
-    await outcomes;
-    expect(onDiskError).toHaveBeenCalledOnce();
-    expect(run).toHaveBeenCalledOnce();
-    expect(waiterRun).not.toHaveBeenCalled();
-  });
-
-  it("propagates a transient commit failure to its in-flight waiter", async () => {
+  it.each([false, true])("rejects a durable commit and its waiter (repair=%s)", async (repair) => {
     let repairedStateDir = false;
     const onDiskError = vi.fn(() => {
-      if (repairedStateDir) {
+      if (!repair || repairedStateDir) {
         return;
       }
       repairedStateDir = true;
       rmSync(stateDir, { recursive: true, force: true });
       mkdirSync(stateDir, { recursive: true });
     });
-    let finish!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      finish = resolve;
-    });
+    const gate = createDeferred();
     const run = vi.fn(async () => {
-      await gate;
+      await gate.promise;
       resetPluginStateStoreForTests();
       await fs.rm(stateDir, { recursive: true, force: true });
       await fs.writeFile(stateDir, "not a directory");
@@ -175,22 +119,15 @@ describe("createIngressEffectOnce", () => {
     const waiterRun = vi.fn(async () => "unsafe-retry");
     const effectOnce = createIngressEffectOnce({ ...EFFECT_ONCE_PARAMS, onDiskError });
 
-    const first = effectOnce.runOnce({
-      eventId: "event-transient-write-error",
-      effect: "visible-ack",
-      run,
-    });
+    const params = { eventId: "event-write-error", effect: "visible-ack" };
+    const first = effectOnce.runOnce({ ...params, run });
     await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
-    const waiter = effectOnce.runOnce({
-      eventId: "event-transient-write-error",
-      effect: "visible-ack",
-      run: waiterRun,
-    });
+    const waiter = effectOnce.runOnce({ ...params, run: waiterRun });
     const outcomes = Promise.all([
       expect(first).rejects.toThrow("Failed to open the plugin state database"),
       expect(waiter).rejects.toThrow("Failed to open the plugin state database"),
     ]);
-    finish();
+    gate.resolve();
     await outcomes;
     expect(onDiskError).toHaveBeenCalledOnce();
     expect(run).toHaveBeenCalledOnce();

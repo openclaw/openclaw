@@ -1,9 +1,14 @@
-/**
- * Tests plugin SDK fetch runtime helpers and fixture path behavior.
- */
+import { setImmediate } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { responseWithRelease } from "./fetch-runtime.js";
+
+function getReader(response: Response) {
+  if (!response.body) {
+    throw new Error("expected wrapped response body");
+  }
+  return response.body.getReader();
+}
 
 describe("plugin SDK fetch runtime", () => {
   it("closes downstream EOF before awaiting release", async () => {
@@ -13,10 +18,7 @@ describe("plugin SDK fetch runtime", () => {
       await releaseGate.promise;
       releaseFinished.resolve();
     });
-    const reader = wrapped.body?.getReader();
-    if (!reader) {
-      throw new Error("expected wrapped response body");
-    }
+    const reader = getReader(wrapped);
 
     await expect(reader.read()).resolves.toMatchObject({ done: false });
     const eof = reader.read();
@@ -24,9 +26,7 @@ describe("plugin SDK fetch runtime", () => {
     void eof.then(() => {
       eofSettled = true;
     });
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await setImmediate();
 
     expect(eofSettled).toBe(true);
     await expect(eof).resolves.toEqual({ done: true, value: undefined });
@@ -40,9 +40,7 @@ describe("plugin SDK fetch runtime", () => {
     const releaseGate = createDeferred();
     const release = vi.fn(async () => await releaseGate.promise);
     const reason = new Error("consumer stopped");
-    const upstreamCancel = vi.fn(async () => {
-      await cancelGate.promise;
-    });
+    const upstreamCancel = vi.fn(async () => await cancelGate.promise);
     const response = new Response(
       new ReadableStream<Uint8Array>({
         pull() {
@@ -52,10 +50,7 @@ describe("plugin SDK fetch runtime", () => {
       }),
     );
     const wrapped = responseWithRelease(response, release);
-    const reader = wrapped.body?.getReader();
-    if (!reader) {
-      throw new Error("expected wrapped response body");
-    }
+    const reader = getReader(wrapped);
     const read = reader.read();
     await pullStarted.promise;
 
@@ -64,16 +59,12 @@ describe("plugin SDK fetch runtime", () => {
       settled = true;
     });
     try {
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await setImmediate();
       expect(upstreamCancel).toHaveBeenCalledWith(reason);
       expect(release).toHaveBeenCalledTimes(1);
       expect(settled).toBe(false);
       cancelGate.resolve();
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await setImmediate();
       expect(settled).toBe(false);
     } finally {
       cancelGate.resolve();
@@ -95,9 +86,7 @@ describe("plugin SDK fetch runtime", () => {
       settled = true;
     });
     try {
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await setImmediate();
       expect(release).toHaveBeenCalledTimes(1);
       expect(sourceCancel).toHaveBeenCalledTimes(1);
       expect(settled).toBe(true);

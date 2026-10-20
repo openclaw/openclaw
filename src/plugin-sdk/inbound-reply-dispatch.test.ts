@@ -4,94 +4,59 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.types.js";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import type { RecordInboundSession } from "../channels/session.types.js";
-import type {
-  AssembledChannelTurn,
-  ChannelTurnResult,
-  PreparedChannelTurn,
-} from "../channels/turn/types.js";
+import type { ChannelTurnResult } from "../channels/turn/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   dispatchChannelInboundReply,
   dispatchChannelInboundTurn,
   runPreparedInboundReply,
 } from "./channel-inbound.js";
-import {
-  deliverInboundReplyWithMessageSendContext,
-  dispatchChannelInboundReply as dispatchChannelInboundReplyFromLegacySubpath,
-  dispatchInboundReplyWithBase,
-  hasFinalInboundReplyDispatch,
-  hasVisibleInboundReplyDispatch,
-  recordChannelBotPairLoopAndCheckSuppression,
-  recordDroppedChannelInboundHistory,
-  recordDroppedChannelTurnHistory,
-  resolveInboundReplyDispatchCounts,
-  runChannelInboundEvent,
-  runPreparedInboundReply as runPreparedInboundReplyFromLegacySubpath,
-  type AssembledInboundReply,
-  type ChannelBotLoopProtectionFacts,
-  type ChannelInboundDroppedHistoryOptions,
-  type ChannelInboundEventRunnerParams,
-  type ChannelTurnDroppedHistoryOptions,
-  type ChannelTurnRecordOptions,
-  type DurableInboundReplyDeliveryParams,
-  type InboundReplyDispatchResult,
-  type InboundReplyRecordOptions,
-  type PreparedInboundReply,
-} from "./inbound-reply-dispatch.js";
+import * as legacy from "./inbound-reply-dispatch.js";
 
 describe("inbound reply dispatch compatibility", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   it("keeps the deprecated package subpath compatibility exports", () => {
     const callableExports = [
-      ["hasFinalInboundReplyDispatch", hasFinalInboundReplyDispatch],
-      ["hasVisibleInboundReplyDispatch", hasVisibleInboundReplyDispatch],
-      ["resolveInboundReplyDispatchCounts", resolveInboundReplyDispatchCounts],
-      ["recordDroppedChannelTurnHistory", recordDroppedChannelTurnHistory],
-      ["recordDroppedChannelInboundHistory", recordDroppedChannelInboundHistory],
-      ["recordChannelBotPairLoopAndCheckSuppression", recordChannelBotPairLoopAndCheckSuppression],
-      ["deliverInboundReplyWithMessageSendContext", deliverInboundReplyWithMessageSendContext],
-      ["dispatchInboundReplyWithBase", dispatchInboundReplyWithBase],
-      ["runPreparedInboundReply", runPreparedInboundReplyFromLegacySubpath],
-      ["runChannelInboundEvent", runChannelInboundEvent],
-      ["dispatchChannelInboundReply", dispatchChannelInboundReplyFromLegacySubpath],
+      "hasFinalInboundReplyDispatch",
+      "hasVisibleInboundReplyDispatch",
+      "resolveInboundReplyDispatchCounts",
+      "recordDroppedChannelTurnHistory",
+      "recordDroppedChannelInboundHistory",
+      "recordChannelBotPairLoopAndCheckSuppression",
+      "deliverInboundReplyWithMessageSendContext",
+      "dispatchInboundReplyWithBase",
+      "runPreparedInboundReply",
+      "runChannelInboundEvent",
+      "dispatchChannelInboundReply",
     ] as const;
 
-    for (const [exportName, exportedValue] of callableExports) {
-      expect(exportedValue, exportName).toBeTypeOf("function");
+    for (const exportName of callableExports) {
+      expect(legacy[exportName], exportName).toBeTypeOf("function");
     }
 
     type LegacyTypeExports = [
-      AssembledInboundReply,
-      ChannelBotLoopProtectionFacts,
-      ChannelInboundDroppedHistoryOptions,
-      ChannelInboundEventRunnerParams<unknown>,
-      ChannelTurnDroppedHistoryOptions,
-      ChannelTurnRecordOptions,
-      DurableInboundReplyDeliveryParams,
-      InboundReplyDispatchResult<unknown>,
-      InboundReplyRecordOptions,
-      PreparedInboundReply<unknown>,
+      legacy.AssembledInboundReply,
+      legacy.ChannelBotLoopProtectionFacts,
+      legacy.ChannelInboundDroppedHistoryOptions,
+      legacy.ChannelInboundEventRunnerParams<unknown>,
+      legacy.ChannelTurnDroppedHistoryOptions,
+      legacy.ChannelTurnRecordOptions,
+      legacy.DurableInboundReplyDeliveryParams,
+      legacy.InboundReplyDispatchResult<unknown>,
+      legacy.InboundReplyRecordOptions,
+      legacy.PreparedInboundReply<unknown>,
     ];
     expectTypeOf<LegacyTypeExports>().not.toBeNever();
   });
 
   it("keeps public channel-inbound entry points drop-capable", () => {
     type DispatchResult = { queuedFinal: true };
-    const prepared = {} as PreparedChannelTurn<DispatchResult>;
-    const assembled = {} as AssembledChannelTurn;
-
-    if (Date.now() < 0) {
-      expectTypeOf(runPreparedInboundReply(prepared)).toEqualTypeOf<
-        Promise<ChannelTurnResult<DispatchResult>>
-      >();
-      expectTypeOf(dispatchChannelInboundReply(assembled)).toEqualTypeOf<
-        Promise<ChannelTurnResult>
-      >();
-      expectTypeOf(dispatchChannelInboundTurn({} as never)).toEqualTypeOf<
-        Promise<ChannelTurnResult>
-      >();
-    }
+    expectTypeOf(runPreparedInboundReply<DispatchResult>).returns.toEqualTypeOf<
+      Promise<ChannelTurnResult<DispatchResult>>
+    >();
+    expectTypeOf(dispatchChannelInboundReply).returns.toEqualTypeOf<Promise<ChannelTurnResult>>();
+    expectTypeOf(dispatchChannelInboundTurn).returns.toEqualTypeOf<Promise<ChannelTurnResult>>();
   });
 
   it("records and dispatches through dispatchInboundReplyWithBase", async () => {
@@ -115,7 +80,7 @@ describe("inbound reply dispatch compatibility", () => {
       Surface: "test",
     } as FinalizedMsgContext;
 
-    await dispatchInboundReplyWithBase({
+    await legacy.dispatchInboundReplyWithBase({
       cfg: {} as OpenClawConfig,
       channel: "test",
       accountId: "default",

@@ -4,14 +4,11 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  makeEmptyPluginMetadataOwners,
-  setCurrentPluginMetadataSnapshot,
-} from "../plugins/current-plugin-metadata.test-support.js";
+import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
+import { createEmptyPluginMetadataSnapshot } from "../plugins/plugin-metadata-empty.test-support.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import { buildDeclaredProviderOwnerIndex } from "../plugins/provider-owner-index.js";
+import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 import { captureEnv } from "../test-utils/env.js";
 import * as facadeActivationRuntime from "./facade-activation-check.runtime.js";
 import { resolveBundledPluginPublicSurfaceAccess as resolveActivationCheckBundledPluginPublicSurfaceAccess } from "./facade-activation-check.runtime.js";
@@ -31,11 +28,14 @@ const originalEnv = captureEnv([
 ]);
 const trustedBundledFixturesRoot = path.resolve("dist-runtime", "extensions");
 const trustedBundledFixtureDirs: string[] = [];
-type SnapshotPluginRecord = PluginMetadataSnapshot["manifestRegistry"]["plugins"][number];
 
 function writeJsonFile(filePath: string, value: unknown): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+function writeModule(root: string, basename: string, source: string): void {
+  fs.writeFileSync(path.join(root, basename), `${source}\n`, "utf8");
 }
 
 function writeInstalledRuntimeFacadeFixture(
@@ -44,7 +44,7 @@ function writeInstalledRuntimeFacadeFixture(
 ): void {
   const modulePath = path.join(rootDir, "runtime-api.js");
   fs.mkdirSync(path.dirname(modulePath), { recursive: true });
-  fs.writeFileSync(modulePath, `export const marker = ${JSON.stringify(params.marker)};\n`, "utf8");
+  writeModule(rootDir, "runtime-api.js", `export const marker = ${JSON.stringify(params.marker)};`);
   writeJsonFile(path.join(rootDir, "package.json"), {
     name: `@openclaw/${params.pluginId}`,
     version: "0.0.0",
@@ -84,11 +84,7 @@ function createBundledPluginDir(prefix: string, marker: string): string {
   const pluginDir = path.join(rootDir, "demo");
   fs.mkdirSync(pluginDir, { recursive: true });
   writePluginPackageJson(pluginDir);
-  fs.writeFileSync(
-    path.join(pluginDir, "api.js"),
-    `export const marker = ${JSON.stringify(marker)};\n`,
-    "utf8",
-  );
+  writeModule(pluginDir, "api.js", `export const marker = ${JSON.stringify(marker)};`);
   return rootDir;
 }
 
@@ -130,17 +126,20 @@ describe("plugin-sdk facade runtime", () => {
     const profiles = await import("./browser-profiles.js");
     const maintenance = await import("./browser-maintenance.js");
     const writeSurfaces = (generation: number) => {
-      fs.writeFileSync(
-        path.join(pluginDir, "browser-control-auth.js"),
-        `exports.resolveBrowserControlAuth = () => ({ token: "fixture-${generation}" });\n`,
+      writeModule(
+        pluginDir,
+        "browser-control-auth.js",
+        `exports.resolveBrowserControlAuth = () => ({ token: "fixture-${generation}" });`,
       );
-      fs.writeFileSync(
-        path.join(pluginDir, "browser-profiles.js"),
-        `exports.resolveBrowserConfig = () => ({ defaultProfile: "fixture-${generation}" });\n`,
+      writeModule(
+        pluginDir,
+        "browser-profiles.js",
+        `exports.resolveBrowserConfig = () => ({ defaultProfile: "fixture-${generation}" });`,
       );
-      fs.writeFileSync(
-        path.join(pluginDir, "browser-maintenance.js"),
-        `exports.closeTrackedBrowserTabsForSessions = async () => ${generation};\n`,
+      writeModule(
+        pluginDir,
+        "browser-maintenance.js",
+        `exports.closeTrackedBrowserTabsForSessions = async () => ${generation};`,
       );
     };
     const readSurfaces = async () => [
@@ -215,17 +214,13 @@ describe("plugin-sdk facade runtime", () => {
     } as never);
 
     const params = { dirName: "demo", artifactBasename: "api.js" };
-    const profileARoot = path.join(profileA.OPENCLAW_STATE_DIR!, "plugins", "demo");
-    const profileBRoot = path.join(profileB.OPENCLAW_STATE_DIR!, "plugins", "demo");
-
-    expect(testing.resolveFacadeModuleLocation({ ...params, env: profileA })).toEqual({
-      modulePath: path.join(profileARoot, "api.js"),
-      boundaryRoot: profileARoot,
-    });
-    expect(testing.resolveFacadeModuleLocation({ ...params, env: profileB })).toEqual({
-      modulePath: path.join(profileBRoot, "api.js"),
-      boundaryRoot: profileBRoot,
-    });
+    for (const env of [profileA, profileB]) {
+      const boundaryRoot = path.join(env.OPENCLAW_STATE_DIR!, "plugins", "demo");
+      expect(testing.resolveFacadeModuleLocation({ ...params, env })).toEqual({
+        modulePath: path.join(boundaryRoot, "api.js"),
+        boundaryRoot,
+      });
+    }
     expect(resolveRegistryPluginModuleLocation).toHaveBeenCalledTimes(2);
     expect(resolveRegistryPluginModuleLocation).toHaveBeenNthCalledWith(
       1,
@@ -261,7 +256,7 @@ describe("plugin-sdk facade runtime", () => {
     const pluginDir = path.join(dir, params.dirName);
     fs.mkdirSync(pluginDir, { recursive: true });
     writePluginPackageJson(pluginDir, params.dirName);
-    fs.writeFileSync(path.join(pluginDir, "api.js"), 'export const marker = "ready";\n', "utf8");
+    writeModule(pluginDir, "api.js", 'export const marker = "ready";');
 
     // Install/reload flows clear the metadata lifecycle memo; only then does
     // the new artifact become visible.
@@ -314,10 +309,7 @@ describe("plugin-sdk facade runtime", () => {
       id: "fixture",
       enabledByDefault: false,
     });
-    fs.writeFileSync(
-      path.join(pluginDir, "runtime-api.js"),
-      'exports.marker = "runtime-api-enabled";\n',
-    );
+    writeModule(pluginDir, "runtime-api.js", 'exports.marker = "runtime-api-enabled";');
     useBundledPluginDirOverrideForTest(dir);
     testing.setFacadeActivationCheckRuntimeForTest(facadeActivationRuntime);
     const load = () =>
@@ -382,89 +374,34 @@ describe("plugin-sdk facade runtime", () => {
     });
   });
 
-  it("keeps the bundled extension runtime-core facade available without plugin activation", () => {
-    setRuntimeConfigSnapshot({});
-
-    expect(
-      resolveActivationCheckBundledPluginPublicSurfaceAccess({
-        dirName: "image-generation-core",
-        artifactBasename: "runtime-api.js",
-        location: null,
-        sourceExtensionsRoot: "",
-      }),
-    ).toEqual({
-      allowed: true,
-      pluginId: "image-generation-core",
-    });
-  });
-
-  it("does not treat the core-owned speech runtime as a bundled extension facade", () => {
-    setRuntimeConfigSnapshot({});
-
-    expect(
-      resolveActivationCheckBundledPluginPublicSurfaceAccess({
-        dirName: "speech-core",
-        artifactBasename: "runtime-api.js",
-        location: null,
-        sourceExtensionsRoot: "",
-      }),
-    ).toEqual({
-      allowed: false,
-      reason: "no bundled plugin manifest found for speech-core",
-    });
-  });
+  it.each([
+    ["image-generation-core", { allowed: true, pluginId: "image-generation-core" }],
+    ["speech-core", { allowed: false, reason: "no bundled plugin manifest found for speech-core" }],
+  ] as const)(
+    "applies runtime-core activation exemption only to bundled extensions: %s",
+    (dirName, access) => {
+      setRuntimeConfigSnapshot({});
+      expect(
+        resolveActivationCheckBundledPluginPublicSurfaceAccess({
+          dirName,
+          artifactBasename: "runtime-api.js",
+          location: null,
+          sourceExtensionsRoot: "",
+        }),
+      ).toEqual(access);
+    },
+  );
 
   it("validates current snapshot against facade boundary config and ignores on mismatch", () => {
     const dir = createTempDirSync("openclaw-facade-snapshot-validate-");
     fs.mkdirSync(path.join(dir, "demo"), { recursive: true });
-    fs.writeFileSync(
-      path.join(dir, "demo", "runtime-api.js"),
-      'export const marker = "snapshot-validate";\n',
-      "utf8",
+    writeModule(
+      path.join(dir, "demo"),
+      "runtime-api.js",
+      'export const marker = "snapshot-validate";',
     );
     // Do NOT write openclaw.plugin.json on disk to force fallback to registry scan
     useBundledPluginDirOverrideForTest(dir);
-
-    function createTestSnapshot(
-      params: {
-        config?: OpenClawConfig;
-        plugins?: SnapshotPluginRecord[];
-      } = {},
-    ): PluginMetadataSnapshot {
-      const policyHash = resolveInstalledPluginIndexPolicyHash(params.config);
-      const index: PluginMetadataSnapshot["index"] = {
-        version: 1,
-        hostContractVersion: "test",
-        compatRegistryVersion: "test",
-        migrationVersion: 1,
-        policyHash,
-        generatedAtMs: 1,
-        installRecords: {},
-        plugins: [],
-        diagnostics: [],
-      };
-      return {
-        policyHash,
-        index,
-        registryIndex: index,
-        registryDiagnostics: [],
-        manifestRegistry: { plugins: params.plugins ?? [], diagnostics: [] },
-        plugins: [],
-        diagnostics: [],
-        byPluginId: new Map(),
-        normalizePluginId: (pluginId) => pluginId,
-        declaredProviderOwners: buildDeclaredProviderOwnerIndex(params.plugins ?? []),
-        owners: makeEmptyPluginMetadataOwners(),
-        metrics: {
-          registrySnapshotMs: 0,
-          manifestRegistryMs: 0,
-          ownerMapsMs: 0,
-          totalMs: 0,
-          indexPluginCount: 0,
-          manifestPluginCount: 0,
-        },
-      };
-    }
 
     const configWithPaths = {
       plugins: {
@@ -475,69 +412,41 @@ describe("plugin-sdk facade runtime", () => {
         },
       },
     } satisfies OpenClawConfig;
-    const matchedSnapshot = createTestSnapshot({
-      config: configWithPaths,
-      plugins: [
-        {
-          id: "demo-snapshot",
-          rootDir: path.join(dir, "demo"),
-          source: path.join(dir, "demo", "runtime-api.js"),
-          manifestPath: path.join(dir, "demo", "openclaw.plugin.json"),
-          channels: ["demo"],
-          providers: [],
-          cliBackends: [],
-          skills: [],
-          hooks: [],
-          origin: "bundled" as const,
-        },
-      ],
-    });
+    const matchedSnapshot = createEmptyPluginMetadataSnapshot();
+    matchedSnapshot.policyHash = resolveInstalledPluginIndexPolicyHash(configWithPaths);
+    matchedSnapshot.index.policyHash = matchedSnapshot.policyHash;
+    matchedSnapshot.manifestRegistry.plugins.push(
+      createPluginManifestRecordFixture({
+        id: "demo-snapshot",
+        rootDir: path.join(dir, "demo"),
+        source: path.join(dir, "demo", "runtime-api.js"),
+        channels: ["demo"],
+      }),
+    );
 
     setCurrentPluginMetadataSnapshot(matchedSnapshot, { config: configWithPaths });
 
-    setRuntimeConfigSnapshot(
-      {
-        plugins: {
-          load: { paths: ["/path/two"] },
-          entries: {
-            "demo-snapshot": { enabled: true },
-            demo: { enabled: true },
-          },
-        },
-      },
-      {
-        plugins: {
-          load: { paths: ["/path/two"] },
-          entries: {
-            "demo-snapshot": { enabled: true },
-            demo: { enabled: true },
-          },
-        },
-      },
-    );
+    const mismatchedConfig = {
+      plugins: { ...configWithPaths.plugins, load: { paths: ["/path/two"] } },
+    };
+    setRuntimeConfigSnapshot(mismatchedConfig, mismatchedConfig);
 
-    expect(
+    const resolveAccess = () =>
       resolveActivationCheckBundledPluginPublicSurfaceAccess({
         dirName: "demo",
         artifactBasename: "runtime-api.js",
         location: null,
         sourceExtensionsRoot: dir,
-      }),
-    ).toEqual({
+      });
+
+    expect(resolveAccess()).toEqual({
       allowed: false,
       reason: "no bundled plugin manifest found for demo",
     });
 
     setRuntimeConfigSnapshot(configWithPaths, configWithPaths);
 
-    expect(
-      resolveActivationCheckBundledPluginPublicSurfaceAccess({
-        dirName: "demo",
-        artifactBasename: "runtime-api.js",
-        location: null,
-        sourceExtensionsRoot: dir,
-      }),
-    ).toEqual({
+    expect(resolveAccess()).toEqual({
       allowed: true,
       pluginId: "demo-snapshot",
     });

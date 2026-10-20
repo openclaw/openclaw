@@ -5,9 +5,6 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import { dispatchGatewayMethod } from "./gateway-method-runtime.js";
-/**
- * Tests gateway method runtime wrappers exposed to plugins.
- */
 import { createPluginRegistryFixture, registerVirtualTestPlugin } from "./plugin-test-contracts.js";
 
 const { dispatchGatewayMethodInProcessRaw } = vi.hoisted(() => ({
@@ -19,52 +16,42 @@ vi.mock("../gateway/server-plugins.js", () => ({
 }));
 
 describe("plugin-sdk/gateway-method-runtime", () => {
-  it("rejects callers without the gateway method dispatch contract", async () => {
-    await expect(
-      withPluginRuntimeGatewayRequestScope(
+  it.each([false, true])(
+    "requires the HTTP route dispatch contract (entitled=%s)",
+    async (entitled) => {
+      dispatchGatewayMethodInProcessRaw.mockReset();
+      dispatchGatewayMethodInProcessRaw.mockResolvedValueOnce({ ok: true, payload: { ok: true } });
+      const result = withPluginRuntimeGatewayRequestScope(
         {
-          pluginId: "plain-plugin",
+          pluginId: "http-rpc",
+          gatewayMethodDispatchAllowed: entitled ? true : undefined,
           client: {
             id: "plugin",
-            connect: { scopes: ["operator.write"] },
+            connect: { scopes: [entitled ? "operator.admin" : "operator.write"] },
           } as never,
           isWebchatConnect: () => false,
         },
-        () => dispatchGatewayMethod("health", {}),
-      ),
-    ).rejects.toThrow(
-      'contracts.gatewayMethodDispatch: ["authenticated-request"] for plugin "plain-plugin"',
-    );
-    expect(dispatchGatewayMethodInProcessRaw).not.toHaveBeenCalled();
-  });
-
-  it("dispatches through the scoped client for entitled plugin HTTP routes", async () => {
-    dispatchGatewayMethodInProcessRaw.mockResolvedValueOnce({ ok: true, payload: { ok: true } });
-
-    const result = await withPluginRuntimeGatewayRequestScope(
-      {
-        pluginId: "admin-http-rpc",
-        gatewayMethodDispatchAllowed: true,
-        client: {
-          id: "plugin",
-          connect: { scopes: ["operator.admin"] },
-        } as never,
-        isWebchatConnect: () => false,
-      },
-      () => dispatchGatewayMethod("health", {}, { timeoutMs: 500 }),
-    );
-
-    expect(result).toEqual({ ok: true, payload: { ok: true } });
-    expect(dispatchGatewayMethodInProcessRaw).toHaveBeenCalledWith(
-      "health",
-      {},
-      {
-        disableSyntheticClient: true,
-        requireScopedClient: true,
-        timeoutMs: 500,
-      },
-    );
-  });
+        () => dispatchGatewayMethod("health", {}, { timeoutMs: 500 }),
+      );
+      if (!entitled) {
+        await expect(result).rejects.toThrow(
+          'contracts.gatewayMethodDispatch: ["authenticated-request"] for plugin "http-rpc"',
+        );
+        expect(dispatchGatewayMethodInProcessRaw).not.toHaveBeenCalled();
+      } else {
+        await expect(result).resolves.toEqual({ ok: true, payload: { ok: true } });
+        expect(dispatchGatewayMethodInProcessRaw).toHaveBeenCalledWith(
+          "health",
+          {},
+          {
+            disableSyntheticClient: true,
+            requireScopedClient: true,
+            timeoutMs: 500,
+          },
+        );
+      }
+    },
+  );
   it.each([
     { entitled: true, client: true },
     { entitled: false, client: true },
@@ -101,23 +88,19 @@ describe("plugin-sdk/gateway-method-runtime", () => {
       if (!handler) {
         throw new Error("Missing registered handler");
       }
+      const scope = {
+        client,
+        context: {} as never,
+        isWebchatConnect: () => false,
+      };
       const invoke = () =>
-        withPluginRuntimeGatewayRequestScope(
-          {
-            client,
-            context: {} as never,
-            isWebchatConnect: () => false,
-            gatewayMethodDispatchAllowed: true,
-          },
-          () =>
-            handler({
-              client,
-              context: {} as never,
-              isWebchatConnect: () => false,
-              params: {},
-              req: { type: "req", id: "reader-test", method: "reader.preview" },
-              respond: vi.fn(),
-            }),
+        withPluginRuntimeGatewayRequestScope({ ...scope, gatewayMethodDispatchAllowed: true }, () =>
+          handler({
+            ...scope,
+            params: {},
+            req: { type: "req", id: "reader-test", method: "reader.preview" },
+            respond: vi.fn(),
+          }),
         );
       if (entitled && hasClient) {
         await invoke();
