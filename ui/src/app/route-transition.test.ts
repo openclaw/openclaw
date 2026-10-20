@@ -110,7 +110,8 @@ describe("navigateWithRouteTransition", () => {
 
   it("cancels a running entrance when another route takes over", async () => {
     const cancel = vi.fn();
-    const animate = vi.fn(() => ({ finished: new Promise(() => {}), cancel }) as Animation);
+    const running: Partial<Animation> = { finished: new Promise(() => {}), cancel };
+    const animate = vi.fn(() => running as Animation);
     const test = testDocumentWithOutlet(animate);
     const transition = navigateWithRouteTransition({
       document: test.document,
