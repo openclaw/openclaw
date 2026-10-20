@@ -21,49 +21,46 @@ function withVoiceProviders(
 afterEach(resetPluginLoaderTestStateForTest);
 afterAll(cleanupPluginLoaderFixturesForTest);
 
+const bothProviders = {
+  "active-voice": { ready: true },
+  "configured-voice": { ready: true },
+};
+function loadActive(cfg: OpenClawConfig) {
+  return loadOpenClawPlugins({
+    config: cfg,
+    onlyPluginIds: ["active-voice"],
+  }).realtimeVoiceProviders.map((entry) => entry.provider);
+}
+
 describe("realtime voice provider discovery", () => {
-  it.each(["configured-voice-alias"])(
-    "discovers %s config ahead of a configured active provider",
-    (configKey) => {
-      withVoiceProviders((cfg) => {
-        const registry = loadOpenClawPlugins({ config: cfg, onlyPluginIds: ["active-voice"] });
-        expect(registry.realtimeVoiceProviders.map((entry) => entry.provider.id)).toEqual([
-          "active-voice",
-        ]);
-
-        const result = resolveConfiguredRealtimeVoiceProvider({
-          cfg,
-          providerConfigs: {
-            "active-voice": { ready: true },
-            [configKey]: { ready: true },
-          },
-        });
-
-        expect(result.provider.id).toBe("configured-voice");
-        expect(result.providerConfig).toEqual({ ready: true, resolved: true });
-        // Per-call discovery must not broaden catalogs or replace active objects.
-        expect(listRealtimeVoiceProviders(cfg)).toEqual(
-          registry.realtimeVoiceProviders.map((entry) => entry.provider),
-        );
+  it("discovers alias config ahead of a configured active provider", () => {
+    withVoiceProviders((cfg) => {
+      const active = loadActive(cfg);
+      expect(active.map((provider) => provider.id)).toEqual(["active-voice"]);
+      const result = resolveConfiguredRealtimeVoiceProvider({
+        cfg,
+        providerConfigs: {
+          "active-voice": { ready: true },
+          "configured-voice-alias": { ready: true },
+        },
       });
-    },
-  );
+      expect(result.provider.id).toBe("configured-voice");
+      expect(result.providerConfig).toEqual({ ready: true, resolved: true });
+      // Per-call discovery must not broaden catalogs or replace active objects.
+      expect(listRealtimeVoiceProviders(cfg)).toEqual(active);
+    });
+  });
 
-  it.each([
-    { configKey: "configured-voice-alias", configuredProviderId: "configured-voice-alias" },
-  ])(
-    "selects cold $configKey config with explicit selection $configuredProviderId",
-    ({ configuredProviderId, configKey }) => {
-      withVoiceProviders((cfg) => {
-        const result = resolveConfiguredRealtimeVoiceProvider({
-          cfg,
-          configuredProviderId,
-          providerConfigs: { [configKey]: { ready: true } },
-        });
-        expect(result.provider.id).toBe("configured-voice");
+  it("selects cold alias config with explicit alias selection", () => {
+    withVoiceProviders((cfg) => {
+      const result = resolveConfiguredRealtimeVoiceProvider({
+        cfg,
+        configuredProviderId: "configured-voice-alias",
+        providerConfigs: { "configured-voice-alias": { ready: true } },
       });
-    },
-  );
+      expect(result.provider.id).toBe("configured-voice");
+    });
+  });
 
   it.each([
     { label: "disabled", policy: { entries: { "configured-voice": { enabled: false } } } },
@@ -71,13 +68,10 @@ describe("realtime voice provider discovery", () => {
     { label: "not allowed", policy: { allow: ["active-voice"] } },
   ])("does not auto-select a $label configured owner", ({ policy }) => {
     withVoiceProviders((cfg) => {
-      loadOpenClawPlugins({ config: cfg, onlyPluginIds: ["active-voice"] });
+      loadActive(cfg);
       const result = resolveConfiguredRealtimeVoiceProvider({
         cfg,
-        providerConfigs: {
-          "active-voice": { ready: true },
-          "configured-voice": { ready: true },
-        },
+        providerConfigs: bothProviders,
       });
       expect(result.provider.id).toBe("active-voice");
     }, policy);
@@ -99,14 +93,10 @@ describe("realtime voice provider discovery", () => {
 
   it("keeps a caller-supplied provider list authoritative", () => {
     withVoiceProviders((cfg) => {
-      const registry = loadOpenClawPlugins({ config: cfg, onlyPluginIds: ["active-voice"] });
       const result = resolveConfiguredRealtimeVoiceProvider({
         cfg,
-        providers: registry.realtimeVoiceProviders.map((entry) => entry.provider),
-        providerConfigs: {
-          "active-voice": { ready: true },
-          "configured-voice": { ready: true },
-        },
+        providers: loadActive(cfg),
+        providerConfigs: bothProviders,
       });
       expect(result.provider.id).toBe("active-voice");
     });

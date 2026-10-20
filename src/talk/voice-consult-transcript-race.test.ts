@@ -5,31 +5,26 @@ import { SessionManager } from "../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
 import {
   appendTranscriptMessage,
-  loadTranscriptEventsSync,
+  loadTranscriptEventsSync as loadEvents,
 } from "../config/sessions/session-accessor.js";
 import { runWithSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { ensureClientVoiceAgentSessionEntry } from "./client-voice-session-write.js";
 import {
-  appendRelayVoiceTranscript,
-  createOrResumeClientVoiceSession,
+  appendRelayVoiceTranscript as appendRelay,
+  createOrResumeClientVoiceSession as createVoiceSession,
 } from "./client-voice-session.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
 const agentId = "main";
 const CONSULT_REPLY = "Two meetings tomorrow.";
+const QUESTION = "what is on the calendar tomorrow?";
 
-function readMessageTexts(scope: {
-  agentId: string;
-  sessionId: string;
-  sessionKey: string;
-  storePath: string;
-}): string[] {
-  return loadTranscriptEventsSync(scope).flatMap((event) => {
-    const message = (event as { message?: { content?: unknown } } | null)?.message;
-    const content = message?.content;
+function readMessageTexts(scope: Parameters<typeof loadEvents>[0]): string[] {
+  return loadEvents(scope).flatMap((event) => {
+    const content = (event as { message?: { content?: unknown } } | null)?.message?.content;
     if (typeof content === "string") {
       return [content];
     }
@@ -53,22 +48,17 @@ async function prepareConsultTurn(label: string) {
   const scope = { agentId, sessionId, sessionKey, storePath };
   const manager = SessionManager.open(scope, dir);
   manager.appendMessage({ role: "user", content: "earlier question", timestamp: 1 });
-  const admission = manager.appendMessageWithTranscriptAnchor({
+  const { anchor } = manager.appendMessageWithTranscriptAnchor({
     role: "user",
-    content: "what is on the calendar tomorrow?",
+    content: QUESTION,
     timestamp: 2,
   });
-  const anchor = admission.anchor;
   if (!anchor) {
     throw new Error("missing current-turn anchor");
   }
   const appendConsultReply = () =>
     runWithSessionTranscriptReadFence({ ...anchor, logicalTurnId: label, role: "user" }, () =>
-      SessionManager.openBounded(scope, {
-        cwd: dir,
-        maxBytes: 8192,
-        maxEvents: 16,
-      }).appendMessage(
+      SessionManager.openBounded(scope, { cwd: dir, maxBytes: 8192, maxEvents: 16 }).appendMessage(
         makeAgentAssistantMessage({
           content: [{ type: "text", text: CONSULT_REPLY }],
           timestamp: 5,
@@ -93,7 +83,7 @@ afterEach(async () => {
 it("keeps the voice transcript from failing an in-flight agent consult", async () => {
   const { appendConsultReply, scope, sessionKey, storePath } =
     await prepareConsultTurn("voice-consult-relay");
-  const voiceSessionId = await createOrResumeClientVoiceSession({
+  const voiceSessionId = await createVoiceSession({
     agentId,
     sessionKey,
     origin: "relay",
@@ -105,25 +95,18 @@ it("keeps the voice transcript from failing an in-flight agent consult", async (
     sessionTarget: { sessionKey, storePath },
     voiceSessionId,
   };
-  await appendRelayVoiceTranscript({
-    ...target,
-    entryId: "utterance-1",
-    role: "user",
-    text: "what is on the calendar tomorrow?",
-  });
-  await appendRelayVoiceTranscript({
+  await appendRelay({ ...target, entryId: "utterance-1", role: "user", text: QUESTION });
+  await appendRelay({
     ...target,
     entryId: "filler-1",
     role: "assistant",
     text: "I'll check that request.",
   });
-
   expect(() => appendConsultReply()).not.toThrow();
-
   expect(readMessageTexts(scope)).toEqual([
     "earlier question",
-    "what is on the calendar tomorrow?",
-    "what is on the calendar tomorrow?",
+    QUESTION,
+    QUESTION,
     "I'll check that request.",
     CONSULT_REPLY,
   ]);

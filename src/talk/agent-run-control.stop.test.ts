@@ -2,8 +2,8 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import {
-  detachActiveEmbeddedRun,
-  attachActiveEmbeddedRun,
+  detachActiveEmbeddedRun as detachEmbeddedRun,
+  attachActiveEmbeddedRun as attachEmbeddedRun,
 } from "../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../agents/embedded-agent-runner/runs.test-support.js";
 import { registerChatAbortController } from "../gateway/chat-abort.js";
@@ -12,10 +12,35 @@ import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import type { ReplyOperation } from "../sessions/session-controller.contracts.js";
 import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
 import { testing as replyTesting } from "../sessions/session-controller.test-support.js";
-import { controlRealtimeVoiceAgentRun } from "./agent-run-control.js";
+import { controlRealtimeVoiceAgentRun as controlRun } from "./agent-run-control.js";
 
 const sessionKey = "agent:main:discord-voice";
 const turn = { sessionKey, sessionId: "voice-session", agentId: "main", storePath: "/tmp/talk" };
+
+function attachRun(operation: ReplyOperation, handle: Parameters<typeof attachEmbeddedRun>[1]) {
+  const attachment = attachEmbeddedRun(
+    turn.sessionId,
+    handle,
+    sessionKey,
+    undefined,
+    turn.agentId,
+    operation,
+  );
+  return () =>
+    detachEmbeddedRun(turn.sessionId, handle, undefined, undefined, undefined, attachment);
+}
+
+function withVoiceTurn(
+  run: (operation: ReplyOperation) => Promise<void>,
+  storePath = turn.storePath,
+) {
+  return withSessionTurn({ ...turn, storePath }, async (operation) => {
+    if (!operation) {
+      throw new Error("expected an admitted voice turn");
+    }
+    await run(operation);
+  });
+}
 
 afterEach(() => {
   replyTesting.resetSessionControllerForTest();
@@ -24,24 +49,14 @@ afterEach(() => {
 it.each(["current", "aborted", "revoked"] as const)(
   "controls an exact native run with a separate caller lifetime (%s)",
   async (lifetime) => {
-    await withSessionTurn(turn, async (operation) => {
-      if (!operation) {
-        throw new Error("expected an admitted voice turn");
-      }
+    await withVoiceTurn(async (operation) => {
       const cancel = vi.fn();
       const handle = {
         ...createEmbeddedRunHandle({ runId: "external-voice-run" }),
         kind: "embedded" as const,
         cancel,
       };
-      const attachment = attachActiveEmbeddedRun(
-        turn.sessionId,
-        handle,
-        sessionKey,
-        undefined,
-        turn.agentId,
-        operation,
-      );
+      const detach = attachRun(operation, handle);
       const caller = new AbortController();
       if (lifetime === "aborted") {
         caller.abort();
@@ -54,47 +69,35 @@ it.each(["current", "aborted", "revoked"] as const)(
       };
       const active = lifetime === "current";
       try {
-        expect(
-          await controlRealtimeVoiceAgentRun({ sessionKey, runTarget, text: "status" }),
-        ).toMatchObject({ ok: true, mode: "status", active });
-        expect(
-          await controlRealtimeVoiceAgentRun({ sessionKey, runTarget, text: "cancel" }),
-        ).toMatchObject({ ok: active, mode: "cancel", active, aborted: active });
+        expect(await controlRun({ sessionKey, runTarget, text: "status" })).toMatchObject({
+          ok: true,
+          mode: "status",
+          active,
+        });
+        expect(await controlRun({ sessionKey, runTarget, text: "cancel" })).toMatchObject({
+          ok: active,
+          mode: "cancel",
+          active,
+          aborted: active,
+        });
         expect(cancel).toHaveBeenCalledTimes(active ? 1 : 0);
         if (active) {
           expect(cancel).toHaveBeenCalledWith("user_abort");
         }
         expect(operation.abortSignal.aborted).toBe(active);
       } finally {
-        detachActiveEmbeddedRun(
-          turn.sessionId,
-          handle,
-          undefined,
-          undefined,
-          undefined,
-          attachment,
-        );
+        detach();
       }
     });
   },
 );
 
 it("does not redirect an unclaimed RPC source to a matching native run ID", async () => {
-  await withSessionTurn(turn, async (operation) => {
-    if (!operation) {
-      throw new Error("expected an admitted voice turn");
-    }
+  await withVoiceTurn(async (operation) => {
     const runId = "unclaimed-voice-run";
     const abort = vi.fn();
     const handle = createEmbeddedRunHandle({ runId, abort });
-    const attachment = attachActiveEmbeddedRun(
-      turn.sessionId,
-      handle,
-      sessionKey,
-      undefined,
-      turn.agentId,
-      operation,
-    );
+    const detach = attachRun(operation, handle);
     const registration = registerChatAbortController({
       ...turn,
       runId,
@@ -109,7 +112,7 @@ it("does not redirect an unclaimed RPC source to a matching native run ID", asyn
     try {
       expect(registration.registered).toBe(true);
       expect(
-        await controlRealtimeVoiceAgentRun({
+        await controlRun({
           sessionKey,
           text: "cancel",
           runTarget: { runId, signal: registration.controller.signal, isCurrent: () => true },
@@ -119,7 +122,7 @@ it("does not redirect an unclaimed RPC source to a matching native run ID", asyn
       expect(operation.abortSignal.aborted).toBe(false);
     } finally {
       registration.cleanup();
-      detachActiveEmbeddedRun(turn.sessionId, handle, undefined, undefined, undefined, attachment);
+      detach();
     }
   });
 });
@@ -129,17 +132,14 @@ it.each(["owner fallback", "callback refusal"] as const)(
   async (route) => {
     const started = createDeferred<AbortSignal>();
     const finish = createDeferred();
-    const active = withSessionTurn(turn, async (operation) => {
-      if (!operation) {
-        throw new Error("expected an admitted voice turn");
-      }
+    const active = withVoiceTurn(async (operation) => {
       started.resolve(operation.abortSignal);
       await finish.promise;
     });
     const signal = await started.promise;
     const cancelRun = route === "callback refusal" ? vi.fn(async () => false) : undefined;
     try {
-      const result = await controlRealtimeVoiceAgentRun({
+      const result = await controlRun({
         sessionKey,
         text: "stop",
         mode: "cancel",
@@ -187,7 +187,7 @@ it("aborts the active turn, keeps waiting inputs, and fires command:stop once", 
   const waiting = withSessionTurn(turn, async () => waitingRan());
 
   try {
-    const result = await controlRealtimeVoiceAgentRun({ sessionKey, text: "stop", mode: "cancel" });
+    const result = await controlRun({ sessionKey, text: "stop", mode: "cancel" });
 
     expect(result).toMatchObject({ ok: true, mode: "cancel", aborted: true });
     await expect(active).rejects.toBeDefined();
@@ -213,10 +213,7 @@ it.each(["controller signal", "native run"] as const)(
     const secondMessages: string[] = [];
     const start = (storePath: string, runId: string, messages: string[]) => {
       const ready = createDeferred<ReplyOperation>();
-      const running = withSessionTurn({ ...turn, storePath }, async (operation) => {
-        if (!operation) {
-          throw new Error("expected an admitted voice turn");
-        }
+      const running = withVoiceTurn(async (operation) => {
         await operation.bindToolAuthoritySnapshotAsync({
           fingerprint: () => "voice-policy",
           fingerprintAsync: async () => "voice-policy",
@@ -235,17 +232,7 @@ it.each(["controller signal", "native run"] as const)(
           kind: "embedded" as const,
           cancel: () => {},
         };
-        const attachment =
-          selection === "native run"
-            ? attachActiveEmbeddedRun(
-                turn.sessionId,
-                handle,
-                sessionKey,
-                undefined,
-                turn.agentId,
-                operation,
-              )
-            : undefined;
+        const detach = selection === "native run" ? attachRun(operation, handle) : undefined;
         if (selection === "controller signal") {
           operation.attachBackend(handle);
         }
@@ -254,18 +241,9 @@ it.each(["controller signal", "native run"] as const)(
         try {
           await finish.promise;
         } finally {
-          if (attachment) {
-            detachActiveEmbeddedRun(
-              turn.sessionId,
-              handle,
-              undefined,
-              undefined,
-              undefined,
-              attachment,
-            );
-          }
+          detach?.();
         }
-      });
+      }, storePath);
       return {
         ready: awaitGateBeforeSettlement(
           ready.promise,
@@ -285,7 +263,7 @@ it.each(["controller signal", "native run"] as const)(
           selection === "native run" ? new AbortController().signal : firstOperation.abortSignal,
         isCurrent: () => !firstOperation.abortSignal.aborted,
       };
-      const steered = await controlRealtimeVoiceAgentRun({
+      const steered = await controlRun({
         sessionKey,
         runTarget,
         mode: "steer",
@@ -304,12 +282,7 @@ it.each(["controller signal", "native run"] as const)(
       expect(firstMessages).toEqual(["Use the requested owner only"]);
       expect(secondMessages).toEqual([]);
       await expect(
-        controlRealtimeVoiceAgentRun({
-          sessionKey,
-          runTarget,
-          mode: "cancel",
-          text: "stop",
-        }),
+        controlRun({ sessionKey, runTarget, mode: "cancel", text: "stop" }),
       ).resolves.toMatchObject({ ok: true, aborted: true });
       expect(firstOperation.abortSignal.aborted).toBe(true);
       expect(secondOperation.abortSignal.aborted).toBe(false);
