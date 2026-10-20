@@ -181,6 +181,64 @@ maintenance host. URL-encode special characters in credentials and paths.
 `sslmode=disable` disables TLS; reserve it for a deliberately local connection.
 Keep DSNs out of shell history, diagnostic captures, and logs.
 
+### TLS and exec connection qualification
+
+| Connection surface | PostgreSQL 17 support | Qualified behavior                                                                                                                                                                                                             |
+| ------------------ | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| TLS DSN            | Supported             | `sslmode=verify-full&sslrootcert=<absolute-CA-file>` verifies the certificate chain and hostname in CLI, Gateway, and database workers. Wrong CA, hostname mismatch, and untrusted self-signed certificates refuse connection. |
+| Exec SecretRef     | Supported             | The host resolves the reference before CLI or Gateway database access and passes the captured DSN to workers. Provider failure or empty output refuses startup without SQLite fallback.                                        |
+
+For a private CA, install its certificate on every host that runs the Gateway or
+maintenance commands. Use an absolute `sslrootcert` path: the driver opens that
+file in the process making the connection. The server certificate must include
+the DSN hostname in its subject alternative names. To require encryption on the
+server, use a `pg_hba.conf` rule such as this, without a matching plaintext
+`host` rule:
+
+```text
+hostssl openclaw openclaw_runtime 127.0.0.1/32 scram-sha-256
+```
+
+Enable `ssl = on` and configure the server's certificate and private key in
+`postgresql.conf`. A client using `sslmode=disable` then receives a `pg_hba.conf`
+refusal with `no encryption`; it cannot silently use plaintext.
+
+A resolver that prints only the DSN needs `jsonOnly: false`:
+
+```json5
+{
+  secrets: {
+    providers: {
+      postgres: {
+        source: "exec",
+        command: "/usr/local/libexec/openclaw-postgres-dsn",
+        jsonOnly: false,
+      },
+    },
+  },
+  database: {
+    engine: "postgres",
+    postgres: {
+      connection: { source: "exec", provider: "postgres", id: "database-dsn" },
+    },
+  },
+}
+```
+
+The executable must satisfy the [exec provider trust rules](/gateway/secrets/secretref-contract#exec-provider).
+Alternatively, retain `jsonOnly: true` and return the documented protocol-v1
+response. Keep the DSN out of command arguments and provider configuration;
+retrieve it from the secret manager inside the executable.
+
+The PostgreSQL conformance suite exercises [CLI onboarding and Doctor](https://github.com/openclaw/openclaw/blob/main/src/infra/database-engine/cli-oneshot.postgres.test.ts)
+with an exec connection and [Gateway bootstrap, workers, and restart](https://github.com/openclaw/openclaw/blob/main/src/gateway/server-database-engine.postgres.test.ts)
+with the same provider contract. Run it against a TLS-only PostgreSQL server to
+exercise those paths with certificate verification:
+
+```bash
+node scripts/test-database-conformance.mjs --engine postgres --connection "$OPENCLAW_DATABASE_DSN"
+```
+
 ## Set up a fresh installation
 
 1. Provision the database, role, extensions, and connection secret above.

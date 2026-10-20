@@ -60,6 +60,15 @@ The host resolves the secret and passes the connection to
 database workers; workers do not resolve SecretRefs. Treat the DSN as a credential
 and do not put it in logs or diagnostic captures.
 
+The following connection surfaces are qualified on PostgreSQL 17. See the
+[connection qualification and setup](/gateway/postgresql#tls-and-exec-connection-qualification)
+for the server and provider configuration.
+
+| Connection surface | Support   | Verified configuration                                                                                                                                                |
+| ------------------ | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| TLS DSN            | Supported | `sslmode=verify-full` with an absolute `sslrootcert` path; certificate-chain and hostname verification, invalid-certificate refusal, and TLS-only server enforcement. |
+| Exec SecretRef     | Supported | CLI and Gateway host resolution, worker propagation, no DSN persistence in config or diagnostics, and refusal on provider failure or empty output.                    |
+
 Restart the Gateway after changing the engine, then run `openclaw doctor` to see
 the default, override, and effective engine for each family. These are configured
 choices, not evidence that a store has opened. Doctor warns when any effective
