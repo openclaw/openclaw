@@ -60,23 +60,36 @@ it("reuses concurrent Git readers across polling intervals and releases them whe
   expect(starts() - before).toBe(4);
 });
 
+const cwd = "/private/checkouts/diagnostic-fixture";
+const branchFacts = {
+  type: "pull-request.branch-facts",
+  input: {
+    root: cwd,
+    branch: "fixture",
+    mergedHeads: [],
+    refreshIndex: true,
+    comparison: { statsBase: null, creatable: true, equalPushedTips: false, complete: true },
+  },
+} as const;
+const checkoutDiff = { type: "checkout.diff", input: { cwd, summaryOnly: true } } as const;
+
 it.each([
   [
-    "pull-request.branch-facts",
+    branchFacts,
     ["--no-lazy-fetch", "-c", "diff.private=secret", "diff", "--shortstat"],
     "diff",
     "--shortstat",
   ],
-  ["pull-request.branch-facts", ["diff", "--patch", "--no-index"], "diff", "--no-index"],
-  ["pull-request.branch-facts", ["private-command"], "other", undefined],
-  ["checkout.diff", ["diff", "--raw"], "diff", "--raw"],
+  [branchFacts, ["diff", "--patch", "--no-index"], "diff", "--no-index"],
+  [branchFacts, ["private-command"], "other", undefined],
+  [checkoutDiff, ["diff", "--raw"], "diff", "--raw"],
 ] as const)(
-  "prints %s attribution and a %j %s %s timeout in the journal message",
-  async (operation, slowArgs, command, diffMode) => {
+  "prints %j attribution and a %j %s %s timeout in the journal message",
+  async (request, slowArgs, command, diffMode) => {
+    const operation = request.type;
     let clock = 1_000_000;
     vi.spyOn(performance, "now").mockImplementation(() => clock);
     vi.spyOn(diagnostics, "areDiagnosticsEnabledForProcess").mockReturnValue(true);
-    const cwd = "/private/checkouts/diagnostic-fixture";
     const privateRef = "refs/heads/private-branch";
     const value =
       operation === "checkout.diff"
@@ -119,29 +132,7 @@ it.each([
       return { ok: true, value };
     });
     await expect(
-      runGitWorkerOperation(
-        operation === "checkout.diff"
-          ? {
-              type: "checkout.diff",
-              input: { cwd, summaryOnly: true },
-            }
-          : {
-              type: "pull-request.branch-facts",
-              input: {
-                root: cwd,
-                branch: "fixture",
-                mergedHeads: [],
-                refreshIndex: true,
-                comparison: {
-                  statsBase: null,
-                  creatable: true,
-                  equalPushedTips: false,
-                  complete: true,
-                },
-              },
-            },
-        { git: { text: run, buffered: run } },
-      ),
+      runGitWorkerOperation(request, { git: { text: run, buffered: run } }),
     ).resolves.toEqual(value);
 
     expect(logs.info).toHaveBeenCalledOnce();

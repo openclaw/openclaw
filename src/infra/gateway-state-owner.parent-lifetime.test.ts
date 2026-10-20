@@ -9,6 +9,7 @@ import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { stateNativeProcessEntrypoints } from "../state/native-process-runtime.test-support.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import { killPidIfAlive } from "../test-utils/process-tree.js";
 import { acquireGatewayStateOwner } from "./gateway-state-owner.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 
@@ -95,17 +96,14 @@ it.for(["independent", "preload", "env"] as const)(
       );
       acquireGatewayStateOwner({ databasePath }).release();
     } finally {
-      if (ownerPid !== undefined) {
-        try {
-          process.kill(ownerPid, "SIGKILL");
-        } catch {
-          /* Already exited. */
+      try {
+        killPidIfAlive(ownerPid);
+      } finally {
+        if (launcher.exitCode === null && launcher.signalCode === null) {
+          launcher.kill("SIGKILL");
         }
+        await closed;
       }
-      if (launcher.exitCode === null && launcher.signalCode === null) {
-        launcher.kill("SIGKILL");
-      }
-      await closed;
     }
   },
 );

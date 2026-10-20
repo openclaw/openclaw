@@ -32,14 +32,9 @@ function scriptFixture(entry: string, packageName = "openclaw") {
 }
 
 it("parses proc arguments without retaining empty entries", () => {
-  const cases: Array<[string, string[]]> = [
-    [" node \0 gateway \0\0 --port \0 18789 \0", ["node", "gateway", "--port", "18789"]],
-    [" gateway ", ["gateway"]],
-    [" \0\t\0 ", []],
-  ];
-  for (const [raw, expected] of cases) {
-    expect(parseProcCmdline(raw)).toStrictEqual(expected);
-  }
+  expect(
+    [" node \0 gateway \0\0 --port \0 18789 \0", " gateway ", " \0\t\0 "].map(parseProcCmdline),
+  ).toStrictEqual([["node", "gateway", "--port", "18789"], ["gateway"], []]);
 });
 
 it("classifies executable identities and the requested command, excluding argument values", () => {
