@@ -1,21 +1,22 @@
-/**
- * Tests runtime store singleton behavior.
- */
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, test } from "vitest";
 import { clearNamedPluginRuntimeStoresForTest } from "./runtime-store-registry.js";
 import { createPluginRuntimeStore } from "./runtime-store.js";
 
+const options = (pluginId: string) => ({ pluginId, errorMessage: "runtime not initialized" });
+const namedStore = (pluginId: string) =>
+  createPluginRuntimeStore<{ value: string }>(options(pluginId));
+const legacyStore = () => createPluginRuntimeStore<{ value: string }>("legacy not initialized");
+const customStore = () =>
+  createPluginRuntimeStore<{ value: string }>({
+    key: "custom-runtime-key",
+    errorMessage: "custom runtime not initialized",
+  });
+
 describe("createPluginRuntimeStore", () => {
   test("shares runtime slots for the same plugin id", () => {
-    const firstStore = createPluginRuntimeStore<{ value: string }>({
-      pluginId: "shared-plugin",
-      errorMessage: "shared plugin runtime not initialized",
-    });
-    const secondStore = createPluginRuntimeStore<{ value: string }>({
-      pluginId: "shared-plugin",
-      errorMessage: "shared plugin runtime not initialized",
-    });
+    const firstStore = namedStore("shared-plugin");
+    const secondStore = namedStore("shared-plugin");
 
     firstStore.clearRuntime();
     firstStore.setRuntime({ value: "ok" });
@@ -27,14 +28,8 @@ describe("createPluginRuntimeStore", () => {
   });
 
   test("keeps different plugin ids isolated", () => {
-    const leftStore = createPluginRuntimeStore<{ value: string }>({
-      pluginId: "left-plugin",
-      errorMessage: "left runtime not initialized",
-    });
-    const rightStore = createPluginRuntimeStore<{ value: string }>({
-      pluginId: "right-plugin",
-      errorMessage: "right runtime not initialized",
-    });
+    const leftStore = namedStore("left-plugin");
+    const rightStore = namedStore("right-plugin");
 
     leftStore.clearRuntime();
     rightStore.clearRuntime();
@@ -45,12 +40,8 @@ describe("createPluginRuntimeStore", () => {
   });
 
   test("keeps legacy string callers isolated per store", () => {
-    const firstStore = createPluginRuntimeStore<{ value: string }>(
-      "legacy runtime not initialized",
-    );
-    const secondStore = createPluginRuntimeStore<{ value: string }>(
-      "legacy runtime not initialized",
-    );
+    const firstStore = legacyStore();
+    const secondStore = legacyStore();
 
     firstStore.clearRuntime();
     firstStore.setRuntime({ value: "legacy" });
@@ -60,14 +51,8 @@ describe("createPluginRuntimeStore", () => {
   });
 
   test("still supports explicit custom store keys", () => {
-    const firstStore = createPluginRuntimeStore<{ value: string }>({
-      key: "custom-runtime-key",
-      errorMessage: "custom runtime not initialized",
-    });
-    const secondStore = createPluginRuntimeStore<{ value: string }>({
-      key: "custom-runtime-key",
-      errorMessage: "custom runtime not initialized",
-    });
+    const firstStore = customStore();
+    const secondStore = customStore();
 
     firstStore.clearRuntime();
     firstStore.setRuntime({ value: "custom" });
@@ -76,12 +61,7 @@ describe("createPluginRuntimeStore", () => {
   });
 
   test("rejects empty plugin ids", () => {
-    expect(() =>
-      createPluginRuntimeStore({
-        pluginId: "   ",
-        errorMessage: "runtime not initialized",
-      }),
-    ).toThrow("pluginId must not be empty");
+    expect(() => namedStore("   ")).toThrow("pluginId must not be empty");
   });
 
   test("treats falsy runtime values as initialized", () => {
@@ -105,14 +85,12 @@ describe("createPluginRuntimeStore", () => {
       import.meta.url,
       "./runtime-store.js?scope=runtime-store-b",
     );
-    const firstStore = firstModule.createPluginRuntimeStore<{ value: string }>({
-      pluginId: "duplicate-module-plugin",
-      errorMessage: "duplicate module runtime not initialized",
-    });
-    const secondStore = secondModule.createPluginRuntimeStore<{ value: string }>({
-      pluginId: "duplicate-module-plugin",
-      errorMessage: "duplicate module runtime not initialized",
-    });
+    const firstStore = firstModule.createPluginRuntimeStore<{ value: string }>(
+      options("duplicate-module-plugin"),
+    );
+    const secondStore = secondModule.createPluginRuntimeStore<{ value: string }>(
+      options("duplicate-module-plugin"),
+    );
 
     firstStore.clearRuntime();
     firstStore.setRuntime({ value: "shared" });
@@ -121,32 +99,21 @@ describe("createPluginRuntimeStore", () => {
   });
 
   test("clears and detaches every named runtime slot without changing legacy stores", () => {
-    const firstNamedStore = createPluginRuntimeStore<{ value: string }>({
-      pluginId: "first-reset-plugin",
-      errorMessage: "first runtime not initialized",
-    });
-    const secondNamedStore = createPluginRuntimeStore<{ value: string }>({
-      pluginId: "second-reset-plugin",
-      errorMessage: "second runtime not initialized",
-    });
-    const legacyStore = createPluginRuntimeStore<{ value: string }>(
-      "legacy runtime not initialized",
-    );
+    const firstNamedStore = namedStore("first-reset-plugin");
+    const secondNamedStore = namedStore("second-reset-plugin");
+    const legacy = legacyStore();
 
     firstNamedStore.setRuntime({ value: "first" });
     secondNamedStore.setRuntime({ value: "second" });
-    legacyStore.setRuntime({ value: "legacy" });
+    legacy.setRuntime({ value: "legacy" });
 
     clearNamedPluginRuntimeStoresForTest();
 
     expect(firstNamedStore.tryGetRuntime()).toBeNull();
     expect(secondNamedStore.tryGetRuntime()).toBeNull();
-    expect(legacyStore.getRuntime()).toEqual({ value: "legacy" });
+    expect(legacy.getRuntime()).toEqual({ value: "legacy" });
 
-    const replacementStore = createPluginRuntimeStore<{ value: string }>({
-      pluginId: "first-reset-plugin",
-      errorMessage: "replacement runtime not initialized",
-    });
+    const replacementStore = namedStore("first-reset-plugin");
     firstNamedStore.setRuntime({ value: "stale" });
     expect(replacementStore.tryGetRuntime()).toBeNull();
   });

@@ -13,7 +13,10 @@ import {
   appendTranscriptMessageSync,
   withTranscriptWriteLock,
 } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
-import type { SessionTranscriptWriteLockAccessorContext } from "../config/sessions/session-accessor.types.js";
+import type {
+  LockedTranscriptMessageAppendOptions,
+  SessionTranscriptWriteLockAccessorContext,
+} from "../config/sessions/session-accessor.types.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withSessionTranscriptWriteLock } from "./session-transcript-runtime.js";
@@ -112,58 +115,45 @@ it("skips async preparation on replay and rejects a stale fresh preparation", as
         },
       },
     };
-    await withSessionTranscriptWriteLock(scope, (locked) =>
-      locked.appendMessage({
-        eventId: "original",
-        message: original,
-        prepareMessageAfterIdempotencyCheck: ({ custom: _custom, ...message }) => {
-          expect(database.db.isTransaction).toBe(true);
-          return message;
-        },
-      }),
-    );
+    const append = <TMessage>(options: LockedTranscriptMessageAppendOptions<TMessage>) =>
+      withSessionTranscriptWriteLock(scope, (locked) => locked.appendMessage(options));
+    await append({
+      eventId: "original",
+      message: original,
+      prepareMessageAfterIdempotencyCheck: ({ custom: _custom, ...message }) => {
+        expect(database.db.isTransaction).toBe(true);
+        return message;
+      },
+    });
     const prepare = vi.fn(async () => {
       throw new Error("Replay must not prepare");
     });
     await expect(
-      withSessionTranscriptWriteLock(scope, (locked) =>
-        locked.appendMessage({
-          message: original,
-          prepareMessageAfterIdempotencyCheckAsync: prepare,
-        }),
-      ),
+      append({ message: original, prepareMessageAfterIdempotencyCheckAsync: prepare }),
     ).resolves.toMatchObject({ appended: false, messageId: "original" });
     expect(prepare).not.toHaveBeenCalled();
     await expect(
-      withSessionTranscriptWriteLock(scope, (locked) =>
-        locked.appendMessage({
-          message: { ...original, idempotencyKey: "suppressed" },
-          prepareMessageAfterIdempotencyCheckAsync: async () => undefined,
-        }),
-      ),
+      append({
+        message: { ...original, idempotencyKey: "suppressed" },
+        prepareMessageAfterIdempotencyCheckAsync: async () => undefined,
+      }),
     ).resolves.toBeUndefined();
+    await expect(append({ message: undefined })).resolves.toBeUndefined();
     await expect(
-      withSessionTranscriptWriteLock(scope, (locked) =>
-        locked.appendMessage({ message: undefined }),
-      ),
-    ).resolves.toBeUndefined();
-    await expect(
-      withSessionTranscriptWriteLock(scope, (locked) =>
-        locked.appendMessage({
-          eventId: "stale",
-          message: { role: "assistant", content: "stale" },
-          prepareMessageAfterIdempotencyCheckAsync: async (message) => {
-            expect(database.db.isTransaction).toBe(false);
-            expect(
-              appendTranscriptMessageSync(scope, {
-                eventId: "concurrent",
-                message: { role: "assistant", content: "concurrent" },
-              }).ok,
-            ).toBe(true);
-            return message;
-          },
-        }),
-      ),
+      append({
+        eventId: "stale",
+        message: { role: "assistant", content: "stale" },
+        prepareMessageAfterIdempotencyCheckAsync: async (message) => {
+          expect(database.db.isTransaction).toBe(false);
+          expect(
+            appendTranscriptMessageSync(scope, {
+              eventId: "concurrent",
+              message: { role: "assistant", content: "concurrent" },
+            }).ok,
+          ).toBe(true);
+          return message;
+        },
+      }),
     ).rejects.toThrow("SQLite transcript changed while preparing rewrite");
     expect(
       loadTranscriptEventsSync(scope)

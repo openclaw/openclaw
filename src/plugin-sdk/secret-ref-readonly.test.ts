@@ -4,6 +4,19 @@ import { resolveReadOnlyEnvSecretRef } from "./secret-ref-readonly.js";
 
 type SecretProvider = NonNullable<NonNullable<OpenClawConfig["secrets"]>["providers"]>[string];
 const collisionProvider = { source: "file", path: "/unused" } satisfies SecretProvider;
+const normalize = (value: unknown) =>
+  typeof value === "string" ? value.trim() || undefined : undefined;
+const resolve = (params: Partial<Parameters<typeof resolveReadOnlyEnvSecretRef>[0]>) =>
+  resolveReadOnlyEnvSecretRef({
+    value: { source: "env", provider: "selected", id: "EXPECTED_API_KEY" },
+    path: "plugins.entries.example.config.apiKey",
+    expectedEnvId: "EXPECTED_API_KEY",
+    normalizeValue: normalize,
+    ...params,
+  });
+const configured = (provider: SecretProvider): OpenClawConfig => ({
+  secrets: { defaults: { env: "selected" }, providers: { selected: provider } },
+});
 
 describe("resolveReadOnlyEnvSecretRef", () => {
   afterEach(() => {
@@ -14,12 +27,12 @@ describe("resolveReadOnlyEnvSecretRef", () => {
     ...["default", "selected"].map((provider) => ({
       name: `${provider} env default shadows file`,
       provider,
-      cfg: {
-        secrets: {
-          defaults: provider === "selected" ? { env: provider } : undefined,
-          providers: { [provider]: collisionProvider },
-        },
-      },
+      cfg:
+        provider === "selected"
+          ? configured(collisionProvider)
+          : {
+              secrets: { providers: { default: collisionProvider } },
+            },
       expected: "available",
     })),
     { name: "implicit env default", provider: "default", cfg: {}, expected: "available" },
@@ -50,29 +63,15 @@ describe("resolveReadOnlyEnvSecretRef", () => {
     ].map(({ allowlist, expected }) => ({
       name: `matching env declaration with allowlist ${JSON.stringify(allowlist)}`,
       provider: "selected",
-      cfg: {
-        secrets: {
-          defaults: { env: "selected" },
-          providers: { selected: { source: "env" as const, allowlist } },
-        },
-      },
+      cfg: configured({ source: "env", allowlist }),
       expected,
     })),
   ])("enforces provider policy: $name", ({ provider, cfg, expected }) => {
     vi.stubEnv("EXPECTED_API_KEY", " synthetic-value ");
-    const normalizeValue = vi.fn((value: unknown) =>
-      typeof value === "string" && value.trim() ? value.trim() : undefined,
-    );
+    const normalizeValue = vi.fn(normalize);
 
-    expect(
-      resolveReadOnlyEnvSecretRef({
-        value: { source: "env", provider, id: "EXPECTED_API_KEY" },
-        path: "plugins.entries.example.config.apiKey",
-        cfg,
-        expectedEnvId: "EXPECTED_API_KEY",
-        normalizeValue,
-      }),
-    ).toEqual(
+    const value = { source: "env", provider, id: "EXPECTED_API_KEY" };
+    expect(resolve({ value, cfg, normalizeValue })).toEqual(
       expected === "available"
         ? { status: "available", value: "synthetic-value" }
         : { status: "blocked" },
@@ -89,15 +88,9 @@ describe("resolveReadOnlyEnvSecretRef", () => {
     vi.stubEnv("EXPECTED_API_KEY", "synthetic-value");
     vi.stubEnv("OTHER_API_KEY", "other-synthetic-value");
     const normalizeValue = vi.fn(() => "must-not-be-used");
-    expect(
-      resolveReadOnlyEnvSecretRef({
-        value: { source, provider: "default", id },
-        path: "plugins.entries.example.config.apiKey",
-        cfg: { secrets: { providers: { default: { source: "file", path: "/unused" } } } },
-        expectedEnvId: "EXPECTED_API_KEY",
-        normalizeValue,
-      }),
-    ).toEqual({ status: "blocked" });
+    const value = { source, provider: "default", id };
+    const cfg = { secrets: { providers: { default: collisionProvider } } };
+    expect(resolve({ value, cfg, normalizeValue })).toEqual({ status: "blocked" });
     expect(normalizeValue).not.toHaveBeenCalled();
   });
 
@@ -106,34 +99,14 @@ describe("resolveReadOnlyEnvSecretRef", () => {
     { value: "   ", source: "exec" },
   ])("blocks missing selected env value $value with a $source declaration", ({ value, source }) => {
     vi.stubEnv("EXPECTED_API_KEY", value);
-    expect(
-      resolveReadOnlyEnvSecretRef({
-        value: { source: "env", provider: "selected", id: "EXPECTED_API_KEY" },
-        path: "plugins.entries.example.config.apiKey",
-        cfg: {
-          secrets: {
-            defaults: { env: "selected" },
-            providers: {
-              selected:
-                source === "env" ? { source: "env" } : { source: "exec", command: "/unused" },
-            },
-          },
-        },
-        expectedEnvId: "EXPECTED_API_KEY",
-        normalizeValue: (input) =>
-          typeof input === "string" ? input.trim() || undefined : undefined,
-      }),
-    ).toEqual({ status: "blocked" });
+    const cfg = configured(
+      source === "env" ? { source: "env" } : { source: "exec", command: "/unused" },
+    );
+    expect(resolve({ cfg })).toEqual({ status: "blocked" });
   });
 
   it("keeps an absent credential missing so callers can apply their fallback", () => {
-    expect(
-      resolveReadOnlyEnvSecretRef({
-        value: undefined,
-        path: "plugins.entries.example.config.apiKey",
-        expectedEnvId: "EXPECTED_API_KEY",
-        normalizeValue: (value) => (typeof value === "string" ? value : undefined),
-      }),
-    ).toEqual({ status: "missing" });
+    const normalizeValue = (value: unknown) => (typeof value === "string" ? value : undefined);
+    expect(resolve({ value: undefined, normalizeValue })).toEqual({ status: "missing" });
   });
 });
