@@ -854,7 +854,7 @@ extensions/twitch/src/token.ts	3
 extensions/twitch/src/twitch-ingress.ts	3
 extensions/venice/models.ts	1
 extensions/vllm/stream.ts	1
-extensions/voice-call/index.ts	2
+extensions/voice-call/index.ts	1
 extensions/voice-call/src/manager/outbound.ts	2
 extensions/voice-call/src/media-stream.ts	1
 extensions/voice-call/src/providers/shared/guarded-json-api.ts	2
@@ -2054,7 +2054,6 @@ src/infra/tailscale.ts	4
 src/infra/tmp-openclaw-dir.ts	1
 src/infra/update-check-package-target.ts	2
 src/infra/update-global.ts	2
-src/infra/update-package-manager.ts	1
 src/infra/warning-filter.ts	4
 src/infra/windows-gateway-firewall-diagnostics.ts	2
 src/infra/windows-port-pids.ts	2

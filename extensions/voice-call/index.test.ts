@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { VoiceCallRuntime } from "./runtime-entry.js";
 import { normalizeVoiceCallConfig } from "./src/config.js";
@@ -621,6 +622,25 @@ it("starts and polls delegated gateway continue operations", async () => {
   expectCliGatewayCall("voicecall.continue.result", { operationId: "op-1" }, "5000");
   expect(createVoiceCallRuntime).not.toHaveBeenCalled();
   expect(output).toContain('"transcript": "gateway hello"');
+});
+
+it("caps gateway continue poll timeouts from voice and TTS configuration", async () => {
+  const continuation = createDeferred<{ success: true; transcript: string }>();
+  runtimeStub.manager.continueCall = vi.fn(async () => await continuation.promise);
+  const { methods } = await setupActive({ provider: "mock" });
+  runtimeStub.config.transcriptTimeoutMs = Number.MAX_SAFE_INTEGER;
+  runtimeStub.config.tts = { timeoutMs: Number.MAX_SAFE_INTEGER };
+  try {
+    const [ok, payload] = await invokeGateway(methods, "voicecall.continue.start", {
+      callId: "call-1",
+      message: "Hello",
+    });
+    expect(ok).toBe(true);
+    expect(payload?.pollTimeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
+  } finally {
+    continuation.resolve({ success: true, transcript: "finished" });
+    await continuation.promise;
+  }
 });
 
 it("gateway continue operations return pending, completed, and failed results", async () => {
