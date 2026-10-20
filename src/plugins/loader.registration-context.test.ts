@@ -19,10 +19,21 @@ import {
 afterEach(resetPluginLoaderTestStateForTest);
 afterAll(cleanupPluginLoaderFixturesForTest);
 
+function fixture() {
+  const root = makePluginLoaderTempDir();
+  return {
+    root,
+    env: {
+      OPENCLAW_STATE_DIR: path.join(root, "state"),
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    },
+  };
+}
+
 it.each([false, true])(
   "binds the supplied inventory to scoped facts (empty scope=%s)",
   async (empty) => {
-    const root = makePluginLoaderTempDir();
+    const { root, env } = fixture();
     const id = "scoped-inventory";
     const plugin = writePlugin({
       id,
@@ -30,10 +41,6 @@ it.each([false, true])(
       filename: "index.cjs",
       registration: `api.registerProvider({ id: "${id}", label: "${id}", auth: [] });`,
     });
-    const env = {
-      OPENCLAW_STATE_DIR: path.join(root, "state"),
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-    };
     const workspaceDir = path.join(root, "workspace");
     const config: OpenClawConfig = {
       plugins: {
@@ -46,16 +53,10 @@ it.each([false, true])(
     await using cache = createPluginCache();
     await withEnvAsync(env, () =>
       withPluginCache(cache, async () => {
-        const metadataSnapshot = loadPluginMetadataSnapshot({
-          config,
-          env,
-          workspaceDir,
-          allowCurrent: false,
-        });
+        const context = { config, env, workspaceDir };
+        const metadataSnapshot = loadPluginMetadataSnapshot({ ...context, allowCurrent: false });
         const options = {
-          config,
-          env,
-          workspaceDir,
+          ...context,
           metadataSnapshot,
           onlyPluginIds: empty ? [] : [id],
           activate: false,
@@ -65,12 +66,7 @@ it.each([false, true])(
         // Catalog workers reuse these facts instead of rerunning setup auto-enable.
         expect(getPluginRuntimeLoadContext(registry)?.metadataSnapshot).toBe(metadataSnapshot);
         expect(
-          getReusablePluginRuntimeActivation(registry, {
-            config,
-            env,
-            workspaceDir,
-            metadataSnapshot,
-          }),
+          getReusablePluginRuntimeActivation(registry, { ...context, metadataSnapshot }),
         ).toBeDefined();
         if (!empty) {
           expect(loadOpenClawPlugins(options)).toBe(registry);
@@ -84,22 +80,16 @@ it.each([false, true])(
 );
 
 it("pins supplied inventory without relabeling a conflicting explicit source", async () => {
-  const root = makePluginLoaderTempDir();
+  const { root, env } = fixture();
   const id = "inventory-owner";
   const sources = ["A", "B"].map((label) =>
     writePlugin({
       id,
       dir: path.join(root, label),
       filename: "index.cjs",
-      body: `module.exports = { id: "inventory-owner", register(api) {
-      api.registerProvider({ id: "inventory-owner", label: ${JSON.stringify(label)}, auth: [] });
-    } };`,
+      registration: `api.registerProvider({ id: "inventory-owner", label: ${JSON.stringify(label)}, auth: [] });`,
     }),
   );
-  const env = {
-    OPENCLAW_STATE_DIR: path.join(root, "state"),
-    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-  };
   const config: OpenClawConfig = { plugins: { allow: [id], slots: { memory: "none" } } };
   await using cache = createPluginCache();
   await withEnvAsync(env, () =>

@@ -22,45 +22,15 @@ afterAll(cleanupPluginLoaderFixturesForTest);
 const hostVersion = "2026.10.2";
 
 it.each([
-  {
-    name: "below-floor official runtime",
-    packageName: "@openclaw/codex",
-    version: "2026.9.6",
-    incompatible: true,
-  },
-  {
-    name: "official runtime at the compatibility floor",
-    packageName: "@openclaw/codex",
-    version: "2026.9.7",
-    incompatible: false,
-  },
-  {
-    name: "compatible official runtime older than the host",
-    packageName: "@openclaw/codex",
-    version: "2026.10.1",
-    incompatible: false,
-  },
-  {
-    name: "matching official runtime",
-    packageName: "@openclaw/codex",
-    version: hostVersion,
-    incompatible: false,
-  },
-  {
-    name: "newer official runtime",
-    packageName: "@openclaw/codex",
-    version: "2099.1.1",
-    incompatible: false,
-  },
-  {
-    name: "independent runtime",
-    packageName: "@example/codex",
-    version: "2026.9.5",
-    incompatible: false,
-  },
-])(
-  "admits $name according to its release owner",
-  async ({ packageName, version, incompatible }) => {
+  ["below-floor official runtime", "@openclaw/codex", "2026.9.6", true],
+  ["official runtime at the compatibility floor", "@openclaw/codex", "2026.9.7", false],
+  ["compatible official runtime older than the host", "@openclaw/codex", "2026.10.1", false],
+  ["matching official runtime", "@openclaw/codex", hostVersion, false],
+  ["newer official runtime", "@openclaw/codex", "2099.1.1", false],
+  ["independent runtime", "@example/codex", "2026.9.5", false],
+] as const)(
+  "admits %s according to its release owner",
+  async (_name, packageName, version, incompatible) => {
     useNoBundledPlugins();
     vi.stubEnv("OPENCLAW_COMPATIBILITY_HOST_VERSION", hostVersion);
     const plugin = writePlugin({
