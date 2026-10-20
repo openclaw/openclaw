@@ -1,16 +1,11 @@
-// Tests final media delivery through the run-reply-agent path.
 import path from "node:path";
 import { assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createReplyOperation } from "../../sessions/session-controller.js";
-import type { TemplateContext } from "../templating.js";
-import type { FollowupRun, QueueSettings } from "./queue.js";
 import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
 
 const executeAgentTurnMock = vi.fn();
 const resolveOutboundAttachmentFromUrlMock = vi.fn();
 const enqueueFollowupRunMock = vi.fn();
-const refreshQueuedFollowupSessionMock = vi.fn();
-const scheduleFollowupDrainMock = vi.fn();
 
 vi.mock("../../agents/context.js", () => ({
   resolveContextTokensForModel: () => 200_000,
@@ -70,8 +65,8 @@ vi.mock("./agent-runner-utils.js", async (importOriginal) => ({
 vi.mock("./queue.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./queue.js")>()),
   enqueueFollowupRun: (...args: unknown[]) => enqueueFollowupRunMock(...args),
-  refreshQueuedFollowupSession: (...args: unknown[]) => refreshQueuedFollowupSessionMock(...args),
-  scheduleFollowupDrain: (...args: unknown[]) => scheduleFollowupDrainMock(...args),
+  refreshQueuedFollowupSession: vi.fn(),
+  scheduleFollowupDrain: vi.fn(),
 }));
 
 vi.mock("./session-updates.js", () => ({
@@ -86,10 +81,9 @@ type AgentTurnExecutionResult = Awaited<
 type AgentTurnParams = Parameters<typeof import("./agent-runner-execution.js").executeAgentTurn>[0];
 
 function makeRunReplyAgentParams(
-  overrides: Partial<Parameters<typeof runReplyAgent>[0]> = {},
+  blockStreamingEnabled = false,
 ): Parameters<typeof runReplyAgent>[0] {
   const provider = "telegram";
-  const workspaceDir = "/tmp/workspace";
   const prompt = "generate chart";
   const replyOperation = createReplyOperation({
     sessionKey: "main",
@@ -102,10 +96,10 @@ function makeRunReplyAgentParams(
     commandBody: prompt,
     followupRun: createMockFollowupRun({
       prompt,
-      run: { agentId: "main", agentDir: "/tmp/agent", messageProvider: provider, workspaceDir },
-    }) as unknown as FollowupRun,
+      run: { agentDir: "/tmp/agent", messageProvider: provider, workspaceDir: "/tmp/workspace" },
+    }),
     queueKey: "main",
-    resolvedQueue: { mode: "interrupt" } as QueueSettings,
+    resolvedQueue: { mode: "interrupt" },
     shouldSteer: false,
     shouldFollowup: false,
     isActive: false,
@@ -117,16 +111,16 @@ function makeRunReplyAgentParams(
       OriginatingTo: "chat-1",
       AccountId: "default",
       MessageSid: "msg-1",
-    } as unknown as TemplateContext,
+    },
     defaultModel: "anthropic/claude",
     resolvedVerboseLevel: "off",
     isNewSession: false,
-    blockStreamingEnabled: false,
+    blockStreamingEnabled,
     resolvedBlockStreamingBreak: "message_end",
     shouldInjectGroupIntro: false,
     typingMode: "instant",
     replyOperation,
-    ...overrides,
+    ...(blockStreamingEnabled ? { opts: { onBlockReply: vi.fn(async () => {}) } } : {}),
   };
 }
 
@@ -136,8 +130,6 @@ describe("runReplyAgent final MEDIA replies", () => {
     executeAgentTurnMock.mockReset();
     resolveOutboundAttachmentFromUrlMock.mockReset();
     enqueueFollowupRunMock.mockReset();
-    refreshQueuedFollowupSessionMock.mockReset();
-    scheduleFollowupDrainMock.mockReset();
 
     resolveOutboundAttachmentFromUrlMock.mockImplementation(async (mediaUrl: string) => ({
       path: path.join("/tmp/outbound-media", path.basename(mediaUrl)),
@@ -154,10 +146,7 @@ describe("runReplyAgent final MEDIA replies", () => {
         kind: "settled",
         status: "ok",
         result: {
-          payloads: [
-            { text: "Unsent confirmation" },
-            { text: "Unsent media caption", mediaUrl, audioAsVoice },
-          ],
+          payloads: [{ text: "Unsent" }, { text: "Caption", mediaUrl, audioAsVoice }],
           meta: {
             durationMs: 0,
             finalAssistantRawText: "NO_REPLY",
@@ -172,8 +161,7 @@ describe("runReplyAgent final MEDIA replies", () => {
 
     const result = await runReplyAgent(makeRunReplyAgentParams());
     const payloads = Array.isArray(result) ? result : result ? [result] : [];
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]).toMatchObject({ mediaUrl, audioAsVoice });
+    expect(payloads).toMatchObject([{ mediaUrl, audioAsVoice }]);
     expect(payloads[0]?.text).toBeUndefined();
     expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
   });
@@ -181,9 +169,8 @@ describe("runReplyAgent final MEDIA replies", () => {
   it("uses one runReplyAgent media context for block and final MEDIA replies", async () => {
     let stagedIndex = 0;
     resolveOutboundAttachmentFromUrlMock.mockImplementation(async (mediaUrl: string) => {
-      stagedIndex += 1;
       return {
-        path: path.join("/tmp/outbound-media", `${stagedIndex}-${path.basename(mediaUrl)}`),
+        path: path.join("/tmp/outbound-media", `${++stagedIndex}-${path.basename(mediaUrl)}`),
       };
     });
     executeAgentTurnMock.mockImplementationOnce(async (params: AgentTurnParams) => {
@@ -197,12 +184,6 @@ describe("runReplyAgent final MEDIA replies", () => {
         blockStreamingEnabled: false,
         blockReplyPipeline: null,
         replyToMode: "all" as const,
-        replyToChannel: "telegram" as const,
-        currentMessageId: "msg-1",
-        messageProvider: "telegram",
-        originatingChannel: "telegram" as const,
-        originatingTo: "chat-1",
-        accountId: "default",
         normalizeMediaPaths,
       };
       const blockPayloads = await buildReplyPayloads({
@@ -225,14 +206,8 @@ describe("runReplyAgent final MEDIA replies", () => {
       } satisfies AgentTurnExecutionResult;
     });
 
-    const result = await runReplyAgent(
-      makeRunReplyAgentParams({
-        blockStreamingEnabled: true,
-        opts: { onBlockReply: vi.fn(async () => {}) },
-      }),
-    );
+    const result = await runReplyAgent(makeRunReplyAgentParams(true));
 
-    expect(Array.isArray(result)).toBe(false);
     assert(result && !Array.isArray(result), "expected single reply payload");
     expect(result).toMatchObject({
       text: "final",

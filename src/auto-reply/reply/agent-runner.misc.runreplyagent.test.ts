@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-// Tests miscellaneous run-reply-agent behaviors and artifact output.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
@@ -19,8 +18,7 @@ import {
   runInitialModelFallbackAttempt,
   type TestModelFallbackRunnerParams,
 } from "../../agents/test-helpers/model-fallback-runner.test-support.js";
-import { setRuntimeConfigSnapshot } from "../../config/config.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import { setRuntimeConfigSnapshot, type OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-completion.js";
@@ -82,15 +80,21 @@ function sessionState(sessionKey: string, sessionEntry: SessionEntry) {
   return { sessionKey, sessionEntry, sessionStore: { [sessionKey]: sessionEntry } };
 }
 
+function replyResult<T extends Record<string, unknown>>(text: string, meta: T) {
+  return { payloads: [{ text }], meta };
+}
+
+function replyText(result: Awaited<ReturnType<typeof runReplyAgent>>) {
+  return (Array.isArray(result) ? result : [result])
+    .map((payload) => payload?.text ?? "")
+    .join("\n");
+}
+
 function expectReplyText(result: unknown, text: string): void {
   expect(requireRecord(result, "reply result")).toMatchObject({ text });
 }
 
-type MockCallSource = {
-  mock: {
-    calls: ReadonlyArray<ReadonlyArray<unknown>>;
-  };
-};
+type MockCallSource = { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } };
 
 function firstMockCallArg(mock: MockCallSource, label: string): unknown {
   return expectDefined(mock.mock.calls[0], `expected ${label} to have at least one call`)[0];
@@ -104,80 +108,65 @@ const { runReplyAgent } = await import("./agent-runner-run.js");
 
 setupAgentRunnerTestHooks();
 
-describe("runReplyAgent pending operator input", () => {
-  it("refuses an unbound question without falling through to active-run queueing", async () => {
-    const gatewayCall = vi.fn(async () => ({ status: "answered" }));
-    const reservation = registerPendingAgentQuestion({
-      questionId: "ask_direct_cli_answer",
-      sessionKey: "main",
-      questions: [
-        {
-          id: "color",
-          header: "Color",
-          question: "Which color?",
-          options: [{ label: "Blue" }, { label: "Green" }],
-        },
-      ],
-      gatewayCall,
-      answer: Promise.resolve({ status: "pending" }),
-    });
-    reservation.attachRegistration(Promise.resolve({ id: "ask_direct_cli_answer" }));
-    const replyOperationRunState = {};
-    const testRun = createBaseRun({
-      context: { agentText: "Green" },
-      followup: { transcriptPrompt: "Green" },
-      reply: {
-        commandBody: "Green",
-        transcriptCommandBody: "Green",
-        sessionKey: "main",
-        isActive: true,
-        shouldSteer: true,
-        opts: { [REPLY_OPERATION_RUN_STATE]: replyOperationRunState },
+it("refuses an unbound question without falling through to active-run queueing", async () => {
+  const gatewayCall = vi.fn(async () => ({ status: "answered" }));
+  const reservation = registerPendingAgentQuestion({
+    questionId: "ask_direct_cli_answer",
+    sessionKey: "main",
+    questions: [
+      {
+        id: "color",
+        header: "Color",
+        question: "Which color?",
+        options: [{ label: "Blue" }, { label: "Green" }],
       },
-    });
-
-    try {
-      await expect(testRun.run()).resolves.toEqual({
-        text: expect.stringContaining("pending question has no prepared creator authority"),
-        isError: true,
-      });
-      expect(gatewayCall).not.toHaveBeenCalled();
-      expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
-      expect(runCliAgentMock).not.toHaveBeenCalled();
-      expect(testRun.typing.cleanup).toHaveBeenCalledOnce();
-    } finally {
-      reservation.dispose();
-    }
+    ],
+    gatewayCall,
+    answer: Promise.resolve({ status: "pending" }),
   });
+  reservation.attachRegistration(Promise.resolve({ id: "ask_direct_cli_answer" }));
+  const replyOperationRunState = {};
+  const testRun = createBaseRun({
+    context: { agentText: "Green" },
+    followup: { transcriptPrompt: "Green" },
+    reply: {
+      commandBody: "Green",
+      transcriptCommandBody: "Green",
+      sessionKey: "main",
+      isActive: true,
+      shouldSteer: true,
+      opts: { [REPLY_OPERATION_RUN_STATE]: replyOperationRunState },
+    },
+  });
+
+  try {
+    await expect(testRun.run()).resolves.toEqual({
+      text: expect.stringContaining("pending question has no prepared creator authority"),
+      isError: true,
+    });
+    expect(gatewayCall).not.toHaveBeenCalled();
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(runCliAgentMock).not.toHaveBeenCalled();
+    expect(testRun.typing.cleanup).toHaveBeenCalledOnce();
+  } finally {
+    reservation.dispose();
+  }
 });
 
 describe("runReplyAgent auto-compaction token update", () => {
-  async function seedSessionStore(params: {
-    storePath: string;
-    sessionKey: string;
-    entry: SessionEntry;
-  }) {
-    await fs.mkdir(path.dirname(params.storePath), { recursive: true });
-    await replaceSessionEntry(
-      { storePath: params.storePath, sessionKey: params.sessionKey },
-      params.entry,
-    );
-  }
-
   it("updates totalTokens from lastCallUsage even without compaction", async () => {
     const storePath = path.join(tempDirs.make("openclaw-usage-last-"), "sessions.json");
     const sessionKey = "main";
     const sessionEntry = sessionFixture({ totalTokens: 50_000 });
-    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
-    runEmbeddedAgentMock.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: {
+    await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
+    runEmbeddedAgentMock.mockResolvedValue(
+      replyResult("ok", {
         agentMeta: {
           usage: { input: 75_000, output: 5_000, total: 80_000 },
           lastCallUsage: { input: 55_000, output: 2_000, total: 57_000 },
         },
-      },
-    });
+      }),
+    );
     await createBaseRun({
       run: { agentId: "main", agentDir: path.join(rootDir, "agent"), reasoningLevel: "on" },
       reply: { ...sessionState(sessionKey, sessionEntry), storePath },
@@ -186,15 +175,14 @@ describe("runReplyAgent auto-compaction token update", () => {
   }, 180_000);
 
   it("keeps an unarmed preflight drain visible instead of dropping the reply", async () => {
-    const tmp = tempDirs.make("openclaw-preflight-drain-");
-    const storePath = path.join(tmp, "sessions.json");
+    const storePath = path.join(tempDirs.make("openclaw-preflight-drain-"), "sessions.json");
     const sessionKey = "agent:main:main";
     const sessionEntry = sessionFixture({
       totalTokens: 200_000,
       totalTokensFresh: true,
       totalTokensVersion: 1 as const,
     });
-    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+    await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
     compactState.compactEmbeddedAgentSessionMock.mockRejectedValueOnce(new GatewayDrainingError());
 
     const result = await createBaseRun({
@@ -316,18 +304,15 @@ describe("runReplyAgent auto-compaction token update", () => {
         expect(params.prompt).toContain(prompt);
         params.onSuccessfulAuthProfile?.(undefined);
         params.onCompactionRequestBudget?.(requestBudget);
-        return {
-          payloads: [{ text: "Two plus two is four." }],
-          meta: {
-            agentMeta: {
-              sessionId: "session",
-              agentHarnessId: "openclaw",
-              provider: "anthropic",
-              model: "claude-opus-4-6",
-              lastCallUsage: { input: compactAfterFlush ? 26_000 : 10_920, output: 10 },
-            },
+        return replyResult("Two plus two is four.", {
+          agentMeta: {
+            sessionId: "session",
+            agentHarnessId: "openclaw",
+            provider: "anthropic",
+            model: "claude-opus-4-6",
+            lastCallUsage: { input: compactAfterFlush ? 26_000 : 10_920, output: 10 },
           },
-        };
+        });
       });
       try {
         // Memory-flush persistence reads runtime config again; share its authoritative source
@@ -447,13 +432,13 @@ describe("runReplyAgent auto-compaction token update", () => {
     );
     const sessionKey = "main";
     const sessionEntry = sessionFixture({ totalTokens: 50_000 });
-    runEmbeddedAgentMock.mockImplementationOnce(async (params) => {
-      const onAgentEvent = requireRecord(params, "embedded agent params").onAgentEvent;
-      if (typeof onAgentEvent === "function") {
-        await onAgentEvent({ stream: "compaction", data: { phase: "start" } });
-        await onAgentEvent({ stream: "compaction", data: { phase: "end", completed: true } });
-      }
-      return { payloads: [{ text: "ok" }], meta: { agentMeta: {} } };
+    runEmbeddedAgentMock.mockImplementationOnce(async (params: RunEmbeddedAgentInternalParams) => {
+      await params.onAgentEvent?.({ stream: "compaction", data: { phase: "start" } });
+      await params.onAgentEvent?.({
+        stream: "compaction",
+        data: { phase: "end", completed: true },
+      });
+      return replyResult("ok", { agentMeta: {} });
     });
 
     vi.mocked(scheduleFollowupDrain).mockImplementation((key) => {
@@ -490,7 +475,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       resetTriggered: false,
     });
     const deliveryOrder: string[] = [];
-    runEmbeddedAgentMock.mockResolvedValue({ payloads: [{ text: "ok" }], meta: { agentMeta: {} } });
+    runEmbeddedAgentMock.mockResolvedValue(replyResult("ok", { agentMeta: {} }));
 
     vi.mocked(scheduleFollowupDrain).mockImplementation((key) => {
       expect(key).toBe(sessionKey);
@@ -536,7 +521,7 @@ describe("runReplyAgent auto-compaction token update", () => {
         compactionCount: 3,
         totalTokens: 50_000,
       };
-      await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+      await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
       const onReplyOperationOwned = vi.fn<(operation: ReplyOperation) => boolean>(() => true);
       const candidateSettled = createDeferred();
       const fallbackRelease = createDeferred();
@@ -555,10 +540,9 @@ describe("runReplyAgent auto-compaction token update", () => {
               activeWriterRunId: undefined,
             },
           });
-          return {
-            payloads: [{ text: "late reply" }],
-            meta: { agentMeta: { compactionCount: 1, compactionTokensAfter: 40 } },
-          };
+          return replyResult("late reply", {
+            agentMeta: { compactionCount: 1, compactionTokensAfter: 40 },
+          });
         },
       );
       runWithModelFallbackMock.mockImplementationOnce(
@@ -578,7 +562,6 @@ describe("runReplyAgent auto-compaction token update", () => {
           reasoningLevel: "on",
         },
         reply: {
-          queueKey: sessionKey,
           ...sessionState(sessionKey, sessionEntry),
           storePath,
           opts: { abortSignal: upstreamAbort.signal, onReplyOperationOwned },
@@ -658,17 +641,15 @@ describe("runReplyAgent block streaming", () => {
       const block = params.onBlockReply as ((payload: { text?: string }) => void) | undefined;
       block?.({ text: "Hello" });
       block?.({ text: "Hello" });
-      return { payloads: [{ text: "Final message" }], meta: {} };
+      return replyResult("Final message", {});
     });
 
     const result = await runBlockStreaming({ onBlockReply });
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
     expect((firstMockCallArg(onBlockReply, "block reply") as { text?: string }).text).toBe("Hello");
-    // The block pipeline streamed "Hello" but never sent "Final message",
-    // so the unsent text-only final is preserved (not dropped).
-    expect(result).toBeDefined();
-    expect((result as { text?: string }).text).toBe("Final message");
+    // The unsent final survives the different text already streamed by the block pipeline.
+    expectReplyText(result, "Final message");
   });
 
   it("returns the final payload when onBlockReply times out", async () => {
@@ -693,7 +674,7 @@ describe("runReplyAgent block streaming", () => {
     runEmbeddedAgentMock.mockImplementationOnce(async (params) => {
       const block = params.onBlockReply as ((payload: { text?: string }) => void) | undefined;
       block?.({ text: "Chunk" });
-      return { payloads: [{ text: "Final message" }], meta: {} };
+      return replyResult("Final message", {});
     });
 
     const resultPromise = runBlockStreaming({ onBlockReply, blockReplyTimeoutMs: 1 });
@@ -707,44 +688,40 @@ describe("runReplyAgent block streaming", () => {
   });
 });
 
-describe("runReplyAgent inline tool verbosity", () => {
-  it("delivers tool progress with inline on over stored full", async () => {
-    const stored = "full";
-    const override = "on";
-    const storePath = path.join(rootDir, "sessions.json");
-    const sessionKey = "main";
-    const sessionEntry = sessionFixture({ verboseLevel: stored });
-    await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
-    const onToolResult = vi.fn(async (_payload: ReplyPayload) => {});
-    const onRunVerbosityResolved = vi.fn();
-    runEmbeddedAgentMock.mockImplementationOnce(async (params: RunEmbeddedAgentInternalParams) => {
-      expect(onRunVerbosityResolved).toHaveBeenCalledExactlyOnceWith({
-        verboseLevelOverride: override,
-        resolvedVerboseLevel: override,
-      });
-      if (params.shouldEmitToolResult?.()) {
-        await params.onToolResult?.({ text: "Tool summary" });
-      }
-      if (params.shouldEmitToolOutput?.()) {
-        await params.onToolResult?.({ text: "Tool output" });
-      }
-      return { payloads: [{ text: "Done" }], meta: {} };
+it("delivers tool progress with inline on over stored full", async () => {
+  const stored = "full";
+  const override = "on";
+  const storePath = path.join(rootDir, "sessions.json");
+  const sessionKey = "main";
+  const sessionEntry = sessionFixture({ verboseLevel: stored });
+  await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
+  const onToolResult = vi.fn(async (_payload: ReplyPayload) => {});
+  const onRunVerbosityResolved = vi.fn();
+  runEmbeddedAgentMock.mockImplementationOnce(async (params: RunEmbeddedAgentInternalParams) => {
+    expect(onRunVerbosityResolved).toHaveBeenCalledExactlyOnceWith({
+      verboseLevelOverride: override,
+      resolvedVerboseLevel: override,
     });
-    const result = await createBaseRun({
-      run: { sessionKey, verboseLevel: override, verboseLevelOverride: override },
-      reply: {
-        sessionKey,
-        storePath,
-        sessionEntry,
-        sessionStore: { [sessionKey]: sessionEntry },
-        resolvedVerboseLevel: override,
-        opts: { onToolResult, onRunVerbosityResolved },
-      },
-    }).run();
-    expect(onToolResult.mock.calls.map(([payload]) => payload.text)).toEqual(["Tool summary"]);
-    expect(loadSessionEntry({ storePath, sessionKey })?.verboseLevel).toBe(stored);
-    expectReplyText(result, "Done");
+    if (params.shouldEmitToolResult?.()) {
+      await params.onToolResult?.({ text: "Tool summary" });
+    }
+    if (params.shouldEmitToolOutput?.()) {
+      await params.onToolResult?.({ text: "Tool output" });
+    }
+    return replyResult("Done", {});
   });
+  const result = await createBaseRun({
+    run: { sessionKey, verboseLevel: override, verboseLevelOverride: override },
+    reply: {
+      ...sessionState(sessionKey, sessionEntry),
+      storePath,
+      resolvedVerboseLevel: override,
+      opts: { onToolResult, onRunVerbosityResolved },
+    },
+  }).run();
+  expect(onToolResult.mock.calls.map(([payload]) => payload.text)).toEqual(["Tool summary"]);
+  expect(loadSessionEntry({ storePath, sessionKey })?.verboseLevel).toBe(stored);
+  expectReplyText(result, "Done");
 });
 
 describe("runReplyAgent Active Memory inline debug", () => {
@@ -822,8 +799,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
       resolvedVerboseLevel?: VerboseLevel;
     } = {},
   ) {
-    const tmp = tempDirs.make("openclaw-active-memory-inline-");
-    const storePath = path.join(tmp, "sessions.json");
+    const storePath = path.join(tempDirs.make("openclaw-active-memory-inline-"), "sessions.json");
     const sessionKey = "main";
     const resolvedVerboseLevel =
       options.resolvedVerboseLevel ?? normalizeVerboseLevel(sessionEntry.verboseLevel) ?? "off";
@@ -845,10 +821,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
           ],
         },
       );
-      return {
-        payloads: [{ text: "Normal reply" }],
-        meta: { requestShaping: { trace: sessionEntry.traceLevel } },
-      };
+      return replyResult("Normal reply", { requestShaping: { trace: sessionEntry.traceLevel } });
     });
     const result = await createBaseRun({
       context: {
@@ -867,7 +840,6 @@ describe("runReplyAgent Active Memory inline debug", () => {
         ...options.run,
       },
       reply: {
-        queueKey: sessionKey,
         ...sessionState(sessionKey, sessionEntry),
         storePath,
         resolvedVerboseLevel,
@@ -883,9 +855,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
     const result = await runActiveMemoryDebugCase(sessionFixture({ traceLevel: "raw" }), {
       run: { traceLevelOverride: "raw", traceAuthorized: false },
     });
-    const text = (Array.isArray(result) ? result : [result])
-      .map((payload) => payload?.text)
-      .join("\n");
+    const text = replyText(result);
     expect(text).toContain("Normal reply");
     expect(text).not.toContain("Active Memory Debug:");
     expect(text).not.toContain("Model Input (User Role)");
@@ -903,9 +873,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
         { sessionId: "session", updatedAt: Date.now(), traceLevel: stored },
         { run: { traceLevelOverride: override }, liveTraceLevel: live },
       );
-      const text = (Array.isArray(result) ? result : [result])
-        .map((payload) => payload?.text)
-        .join("\n");
+      const text = replyText(result);
       expect(text.includes("Active Memory Debug:")).toBe(trace);
     },
   );
@@ -915,23 +883,20 @@ describe("runReplyAgent Active Memory inline debug", () => {
       sessionFixture({ verboseLevel: "on", traceLevel: "raw" }),
       { resolvedVerboseLevel: "off", run: { verboseLevelOverride: "off" } },
     );
-    const text = (Array.isArray(result) ? result : [result])
-      .map((payload) => payload?.text)
-      .join("\n");
+    const text = replyText(result);
     expect(text).not.toContain("🧩 Active Memory: status=ok");
     expect(text).toContain("Model Input (User Role)");
   });
 
-  function runRawTraceCase(params: {
-    commandBody: string;
-    reasoningLevel?: "off" | "on";
-    senderIsOwner?: boolean;
-    sessionEntry: SessionEntry;
-    sessionFile: string;
-    storePath: string;
-    thinkLevel: "low" | "off";
-    traceAuthorized: boolean;
-  }) {
+  function runRawTraceCase(
+    scope: {
+      sessionEntry: SessionEntry;
+      sessionFile: string;
+      storePath: string;
+    },
+    run: BaseRunOptions["run"],
+    commandBody: string,
+  ) {
     const sessionKey = "main";
     return createBaseRun({
       context: {
@@ -939,24 +904,18 @@ describe("runReplyAgent Active Memory inline debug", () => {
         OriginatingTo: "chat:1",
         AccountId: "primary",
         MessageSid: "msg",
-        CommandBody: params.commandBody,
+        CommandBody: commandBody,
       },
       run: {
         agentId: "main",
         sessionKey,
         messageProvider: "telegram",
-        sessionFile: params.sessionFile,
-        ...(params.senderIsOwner === undefined ? {} : { senderIsOwner: params.senderIsOwner }),
-        traceAuthorized: params.traceAuthorized,
-        thinkLevel: params.thinkLevel,
-        ...(params.reasoningLevel ? { reasoningLevel: params.reasoningLevel } : {}),
+        sessionFile: scope.sessionFile,
+        ...run,
       },
       reply: {
-        queueKey: sessionKey,
-        sessionEntry: params.sessionEntry,
-        sessionStore: { [sessionKey]: params.sessionEntry },
-        sessionKey,
-        storePath: params.storePath,
+        ...sessionState(sessionKey, scope.sessionEntry),
+        storePath: scope.storePath,
       },
     }).run();
   }
@@ -1017,63 +976,56 @@ describe("runReplyAgent Active Memory inline debug", () => {
           activeWriterRunId: undefined,
         },
       });
-      return {
-        payloads: [{ text: "Visible reply" }],
-        meta: {
-          finalPromptText:
-            "Context:\n<active_memory_plugin>\nPrefer from/to failover logs.\n</active_memory_plugin>\n\n/trace raw show me everything",
-          finalAssistantVisibleText: "Visible reply",
-          finalAssistantRawText: "<final>Visible reply</final>",
-          executionTrace: {
-            winnerProvider: "anthropic",
-            winnerModel: "claude",
-            runner: "embedded",
-            fallbackUsed: false,
-            attempts: [
-              {
-                provider: "anthropic",
-                model: "claude",
-                result: "success",
-                stage: "assistant",
-                elapsedMs: 4200,
-              },
-            ],
-          },
-          toolSummary: {
-            calls: 2,
-            tools: ["active-memory", "github-search"],
-            failures: 0,
-            totalToolTimeMs: 481,
-          },
-          completion: { finishReason: "stop", stopReason: "end_turn", refusal: false },
-          agentMeta: {
-            sessionId: "session",
-            provider: "anthropic",
-            model: "claude",
-            usage: { input: 1200, output: 45, cacheRead: 800, cacheWrite: 200, total: 2245 },
-            lastCallUsage: {
-              input: 1000,
-              output: 45,
-              cacheRead: 750,
-              cacheWrite: 150,
-              total: 1945,
+      return replyResult("Visible reply", {
+        finalPromptText:
+          "Context:\n<active_memory_plugin>\nPrefer from/to failover logs.\n</active_memory_plugin>\n\n/trace raw show me everything",
+        finalAssistantVisibleText: "Visible reply",
+        finalAssistantRawText: "<final>Visible reply</final>",
+        executionTrace: {
+          winnerProvider: "anthropic",
+          winnerModel: "claude",
+          runner: "embedded",
+          fallbackUsed: false,
+          attempts: [
+            {
+              provider: "anthropic",
+              model: "claude",
+              result: "success",
+              stage: "assistant",
+              elapsedMs: 4200,
             },
-            promptTokens: 1250,
-            compactionCount: 1,
-          },
+          ],
         },
-      };
+        toolSummary: {
+          calls: 2,
+          tools: ["active-memory", "github-search"],
+          failures: 0,
+          totalToolTimeMs: 481,
+        },
+        completion: { finishReason: "stop", stopReason: "end_turn", refusal: false },
+        agentMeta: {
+          sessionId: "session",
+          provider: "anthropic",
+          model: "claude",
+          usage: { input: 1200, output: 45, cacheRead: 800, cacheWrite: 200, total: 2245 },
+          lastCallUsage: {
+            input: 1000,
+            output: 45,
+            cacheRead: 750,
+            cacheWrite: 150,
+            total: 1945,
+          },
+          promptTokens: 1250,
+          compactionCount: 1,
+        },
+      });
     });
 
-    const result = await runRawTraceCase({
-      commandBody: "/trace raw show me everything",
-      reasoningLevel: "on",
-      sessionEntry,
-      sessionFile: sessionKey,
-      storePath,
-      thinkLevel: "low",
-      traceAuthorized: true,
-    });
+    const result = await runRawTraceCase(
+      { sessionEntry, sessionFile: sessionKey, storePath },
+      { reasoningLevel: "on", thinkLevel: "low", traceAuthorized: true },
+      "/trace raw show me everything",
+    );
 
     expect(Array.isArray(result)).toBe(true);
     expect((result as { text?: string }[])[0]?.text).toBe("Visible reply");
@@ -1134,165 +1086,119 @@ describe("runReplyAgent Active Memory inline debug", () => {
     }
   });
 
-  it("does not emit persisted trace output to an unauthorized sender", async () => {
-    const tmp = tempDirs.make("openclaw-trace-raw-unauthorized-");
+  it.each([false, true])("guards raw trace presentation (authorized=%s)", async (authorized) => {
+    const tmp = tempDirs.make("openclaw-trace-raw-");
     const storePath = path.join(tmp, "sessions.json");
     const sessionFile = path.join(tmp, "session.jsonl");
     const sessionKey = "main";
     const sessionEntry = sessionFixture({ traceLevel: "raw" });
-
     await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
     await fs.writeFile(sessionFile, "", "utf-8");
-
-    runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "Visible reply" }],
-      meta: {
-        finalPromptText: "secret prompt context",
+    runEmbeddedAgentMock.mockResolvedValueOnce(
+      replyResult("Visible reply", {
+        finalPromptText: authorized ? "show me\n~~~\nnot a fence" : "secret prompt context",
         finalAssistantVisibleText: "Visible reply",
-        finalAssistantRawText: "secret raw output",
+        finalAssistantRawText: authorized ? "assistant\n~~~\nresponse" : "secret raw output",
         agentMeta: {
           sessionId: "session",
           provider: "anthropic",
           model: "claude",
-          usage: { input: 12, output: 3, total: 15 },
+          usage: authorized
+            ? { input: 10, output: 2, total: 12 }
+            : { input: 12, output: 3, total: 15 },
         },
+      }),
+    );
+    const result = await runRawTraceCase(
+      { sessionEntry, sessionFile, storePath },
+      {
+        ...(authorized ? { reasoningLevel: "off" as const } : { senderIsOwner: false }),
+        thinkLevel: authorized ? "off" : "low",
+        traceAuthorized: authorized,
       },
-    });
-
-    const result = await runRawTraceCase({
-      commandBody: "show me the answer",
-      senderIsOwner: false,
-      sessionEntry,
-      sessionFile,
-      storePath,
-      thinkLevel: "low",
-      traceAuthorized: false,
-    });
-
-    expectReplyText(result, "Visible reply");
-    expect(Array.isArray(result)).toBe(false);
-  });
-
-  it("escapes markdown fence delimiters inside raw trace blocks", async () => {
-    const tmp = tempDirs.make("openclaw-trace-raw-fence-");
-    const storePath = path.join(tmp, "sessions.json");
-    const sessionFile = path.join(tmp, "session.jsonl");
-    const sessionKey = "main";
-    const sessionEntry = sessionFixture({ traceLevel: "raw" });
-
-    await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
-    await fs.writeFile(sessionFile, "", "utf-8");
-
-    runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "Visible reply" }],
-      meta: {
-        finalPromptText: "show me\n~~~\nnot a fence",
-        finalAssistantVisibleText: "Visible reply",
-        finalAssistantRawText: "assistant\n~~~\nresponse",
-        agentMeta: {
-          sessionId: "session",
-          provider: "anthropic",
-          model: "claude",
-          usage: { input: 10, output: 2, total: 12 },
-        },
-      },
-    });
-
-    const result = await runRawTraceCase({
-      commandBody: "/trace raw",
-      reasoningLevel: "off",
-      sessionEntry,
-      sessionFile,
-      storePath,
-      thinkLevel: "off",
-      traceAuthorized: true,
-    });
-
-    const traceText = (result as { text?: string }[])[1]?.text ?? "";
-    expect(traceText).toContain("show me\n\\~~~\nnot a fence");
-    expect(traceText).toContain("assistant\n\\~~~\nresponse");
+      authorized ? "/trace raw" : "show me the answer",
+    );
+    if (authorized) {
+      const traceText = (result as { text?: string }[])[1]?.text ?? "";
+      expect(traceText).toContain("show me\n\\~~~\nnot a fence");
+      expect(traceText).toContain("assistant\n\\~~~\nresponse");
+    } else {
+      expectReplyText(result, "Visible reply");
+      expect(Array.isArray(result)).toBe(false);
+    }
   });
 });
 
-describe("runReplyAgent claude-cli routing", () => {
-  it("does not leak hook-blocked CLI input in raw trace payloads", async () => {
-    runCliAgentMock.mockResolvedValueOnce({
-      payloads: [
-        {
-          text: "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
-          isError: true,
-        },
-      ],
-      meta: {
-        error: {
-          kind: "hook_block",
-          message:
-            "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
-        },
-        agentMeta: { provider: "claude-cli", model: "opus-4.5" },
-        executionTrace: {
-          winnerProvider: "claude-cli",
-          winnerModel: "opus-4.5",
-          attempts: [
-            {
-              provider: "claude-cli",
-              model: "opus-4.5",
-              result: "error",
-              reason: "before_agent_run blocked the run",
-            },
-          ],
-          fallbackUsed: false,
-          runner: "cli",
-        },
+it("does not leak hook-blocked CLI input in raw trace payloads", async () => {
+  runCliAgentMock.mockResolvedValueOnce({
+    payloads: [
+      {
+        text: "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
+        isError: true,
       },
-    });
-
-    const sessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-      traceLevel: "raw",
-    } as SessionEntry;
-    const result = await createBaseRun({
-      context: {
-        Provider: "webchat",
-        OriginatingTo: "session:1",
-        AccountId: "primary",
-        MessageSid: "msg",
-        CommandBody: "secret hitl prompt",
-        RawBody: "secret hitl prompt",
-        BodyForAgent: "secret hitl prompt",
-        Body: "secret hitl prompt",
+    ],
+    meta: {
+      error: {
+        kind: "hook_block",
+        message:
+          "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
       },
-      followup: { prompt: "secret hitl prompt", summaryLine: "secret hitl prompt" },
-      run: {
-        agentId: "main",
-        messageProvider: "webchat",
-        config: {},
-        traceAuthorized: true,
-        provider: "claude-cli",
-        model: "opus-4.5",
-        thinkLevel: "low",
+      agentMeta: { provider: "claude-cli", model: "opus-4.5" },
+      executionTrace: {
+        winnerProvider: "claude-cli",
+        winnerModel: "opus-4.5",
+        attempts: [
+          {
+            provider: "claude-cli",
+            model: "opus-4.5",
+            result: "error",
+            reason: "before_agent_run blocked the run",
+          },
+        ],
+        fallbackUsed: false,
+        runner: "cli",
       },
-      reply: {
-        commandBody: "secret hitl prompt",
-        sessionEntry,
-        sessionStore: { main: sessionEntry },
-        defaultModel: "claude-cli/opus-4.5",
-      },
-    }).run();
-
-    const texts = Array.isArray(result)
-      ? result.map((payload) => payload.text ?? "").join("\n")
-      : (result?.text ?? "");
-    expect(texts).toContain(
-      "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
-    );
-    expect(texts).toContain("Summary: fallback=no attempts=1");
-    expect(texts).not.toContain("winner=");
-    expect(texts).toContain("Model Input (User Role):\n~~~text\n<empty>\n~~~");
-    expect(texts).toContain("Model Output (Assistant Role):\n~~~text\n<empty>\n~~~");
-    expect(texts).not.toContain("secret hitl prompt");
+    },
   });
+
+  const sessionEntry = sessionFixture({ traceLevel: "raw" });
+  const result = await createBaseRun({
+    context: {
+      Provider: "webchat",
+      OriginatingTo: "session:1",
+      AccountId: "primary",
+      MessageSid: "msg",
+      CommandBody: "secret hitl prompt",
+      RawBody: "secret hitl prompt",
+      BodyForAgent: "secret hitl prompt",
+      Body: "secret hitl prompt",
+    },
+    followup: { prompt: "secret hitl prompt", summaryLine: "secret hitl prompt" },
+    run: {
+      agentId: "main",
+      messageProvider: "webchat",
+      traceAuthorized: true,
+      provider: "claude-cli",
+      model: "opus-4.5",
+      thinkLevel: "low",
+    },
+    reply: {
+      commandBody: "secret hitl prompt",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      defaultModel: "claude-cli/opus-4.5",
+    },
+  }).run();
+
+  const texts = replyText(result);
+  expect(texts).toContain(
+    "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
+  );
+  expect(texts).toContain("Summary: fallback=no attempts=1");
+  expect(texts).not.toContain("winner=");
+  expect(texts).toContain("Model Input (User Role):\n~~~text\n<empty>\n~~~");
+  expect(texts).toContain("Model Output (Assistant Role):\n~~~text\n<empty>\n~~~");
+  expect(texts).not.toContain("secret hitl prompt");
 });
 
 describe("runReplyAgent messaging tool dedupe", () => {
@@ -1359,60 +1265,55 @@ describe("runReplyAgent messaging tool dedupe", () => {
   );
 });
 
-describe("runReplyAgent reminder commitment guard", () => {
-  it.each([
-    ["unrelated cron jobs", "I'll remind you tomorrow morning.", false],
-    ["a failed cron store read", "I'll remind you after lunch.", true],
-  ] as const)("appends a guard note with %s", async (_label, text, readFailed) => {
-    if (readFailed) {
-      loadCronStoreMock.mockRejectedValueOnce(new Error("store read failed"));
-    } else {
-      loadCronStoreMock.mockResolvedValueOnce({
-        version: 1,
-        jobs: [
-          {
-            id: "unrelated-job",
-            name: "daily-news",
-            enabled: true,
-            sessionKey: "other-session",
-            createdAtMs: Date.now() - 60_000,
-            updatedAtMs: Date.now() - 60_000,
-          },
-        ],
-      });
-    }
-    runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text }],
-      meta: {},
-      successfulCronAdds: 0,
+it.each([
+  ["unrelated cron jobs", "I'll remind you tomorrow morning.", false],
+  ["a failed cron store read", "I'll remind you after lunch.", true],
+] as const)("appends a guard note with %s", async (_label, text, readFailed) => {
+  if (readFailed) {
+    loadCronStoreMock.mockRejectedValueOnce(new Error("store read failed"));
+  } else {
+    loadCronStoreMock.mockResolvedValueOnce({
+      version: 1,
+      jobs: [
+        {
+          id: "unrelated-job",
+          name: "daily-news",
+          enabled: true,
+          sessionKey: "other-session",
+          createdAtMs: Date.now() - 60_000,
+          updatedAtMs: Date.now() - 60_000,
+        },
+      ],
     });
-    const result = await createBaseRun({
-      context: {
-        Provider: "telegram",
-        OriginatingTo: "chat",
-        AccountId: "primary",
-        MessageSid: "msg",
-        Surface: "telegram",
-      },
-      run: { messageProvider: "telegram", config: {}, thinkLevel: "low" },
-      reply: { sessionKey: "main" },
-    }).run();
-    expectReplyText(
-      result,
-      text +
-        "\n\nNote: I did not schedule a reminder in this turn, so this will not trigger automatically.",
-    );
+  }
+  runEmbeddedAgentMock.mockResolvedValueOnce({
+    payloads: [{ text }],
+    meta: {},
+    successfulCronAdds: 0,
   });
+  const result = await createBaseRun({
+    context: {
+      Provider: "telegram",
+      OriginatingTo: "chat",
+      AccountId: "primary",
+      MessageSid: "msg",
+      Surface: "telegram",
+    },
+    run: { messageProvider: "telegram", config: {}, thinkLevel: "low" },
+    reply: { sessionKey: "main" },
+  }).run();
+  expectReplyText(
+    result,
+    text +
+      "\n\nNote: I did not schedule a reminder in this turn, so this will not trigger automatically.",
+  );
 });
 
 describe("runReplyAgent fallback reasoning tags", () => {
-  type EmbeddedAgentParams = {
-    enforceFinalTag?: boolean;
-    prompt?: string;
-  };
+  type EmbeddedAgentParams = { enforceFinalTag?: boolean; prompt?: string };
 
   it("enforces <final> when the fallback provider requires reasoning tags", async () => {
-    runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [{ text: "ok" }], meta: {} });
+    runEmbeddedAgentMock.mockResolvedValueOnce(replyResult("ok", {}));
     runWithModelFallbackMock.mockImplementationOnce(async (params: RunWithModelFallbackParams) => ({
       result: await runFallbackModelAttempt(params, "google", "gemini-2.5-pro", "unknown"),
       provider: "google",
@@ -1424,8 +1325,6 @@ describe("runReplyAgent fallback reasoning tags", () => {
       run: {
         agentId: "main",
         agentDir: path.join(rootDir, "agent"),
-        sessionKey: "main",
-        config: {},
       },
       reply: { queueKey: "main", sessionEntry: undefined, sessionKey: "main" },
     }).run();
@@ -1459,7 +1358,7 @@ describe("runReplyAgent fallback reasoning tags", () => {
       relativePath: "memory/active.md",
     }));
     runEmbeddedAgentMock.mockResolvedValue({ payloads: [], meta: {} });
-    runCliAgentMock.mockResolvedValueOnce({ payloads: [{ text: "ok" }], meta: {} });
+    runCliAgentMock.mockResolvedValueOnce(replyResult("ok", {}));
     runWithModelFallbackMock.mockImplementation(async (params: RunWithModelFallbackParams) => ({
       result: await runFallbackModelAttempt(params, "google-gemini-cli", "gemini-3", "unknown"),
       provider: "google-gemini-cli",
@@ -1478,7 +1377,6 @@ describe("runReplyAgent fallback reasoning tags", () => {
         agentDir: path.join(root, "agent"),
         sessionKey,
         workspaceDir: root,
-        config: {},
       },
       reply: { queueKey: sessionKey, ...sessionState(sessionKey, sessionEntry), storePath },
     }).run();
@@ -1498,14 +1396,13 @@ describe("runReplyAgent response usage footer", () => {
     responseUsage: "tokens" | "full",
     usage: ReturnType<typeof parseCliOutput>["usage"],
     bedrock = true,
-    replyText = "ok",
+    text = "ok",
   ) {
     const provider = bedrock ? "amazon-bedrock" : "anthropic";
     const model = bedrock ? "us.anthropic.claude-sonnet-4-6" : "claude";
-    runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: replyText }],
-      meta: { agentMeta: { provider, model, usage } },
-    });
+    runEmbeddedAgentMock.mockResolvedValueOnce(
+      replyResult(text, { agentMeta: { provider, model, usage } }),
+    );
     const sessionKey = "agent:main:whatsapp:dm:+1000";
     const result = await createBaseRun({
       run: {
@@ -1630,83 +1527,81 @@ describe("runReplyAgent provider failures", () => {
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 
-describe("runReplyAgent visible work delivery", () => {
-  it.each(["completed", "failed", "hidden"] as const)(
-    "reports accepted visible work before final dispatch for a %s run",
-    async (outcome) => {
-      const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
-      const { createReplyDispatcher } = await import("./reply-dispatcher.js");
-      const order: string[] = [];
-      const visibleWork: VisibleWorkSession[][] = [];
-      const visible = {
-        runId: "visible-run",
-        childSessionKey: "agent:main:dashboard:visible-work",
-        sessionUrl: "https://openclaw.example/chat/main/visible-work",
-        label: "Review",
-      };
-      runEmbeddedAgentMock.mockResolvedValueOnce({
-        payloads: [{ text: "Finished", ...(outcome === "failed" ? { isError: true } : {}) }],
-        acceptedSessionSpawns: [
-          { runId: "hidden-run", childSessionKey: "agent:main:subagent:hidden" },
-          ...(outcome === "hidden" ? [] : [visible, { ...visible, runId: "duplicate-run" }]),
-        ],
-        meta: outcome === "failed" ? { error: { kind: "unknown", message: "Run failed" } } : {},
-      });
-      const storePath = path.join(rootDir, "sessions.sqlite");
-      const cfg: OpenClawConfig = {
-        agents: { defaults: { workspace: rootDir } },
-        session: { store: storePath },
-        plugins: { enabled: false },
-      };
-      const sessionEntry = sessionFixture();
-      await replaceSessionEntry({ storePath, sessionKey: "agent:main:main" }, sessionEntry);
-      const ctx = buildTestCtx({
-        Body: "Start visible work",
-        SessionKey: "agent:main:main",
-        MessageSid: `visible-work-${outcome}`,
-      });
-      const dispatcher = createReplyDispatcher({
-        deliver: async (_payload, info) => {
-          order.push(info.kind);
-        },
-      });
-      try {
-        await dispatchReplyFromConfig({
-          ctx,
-          cfg,
-          dispatcher,
-          replyOptions: {
-            onVisibleWorkSessions: (sessions) => {
-              visibleWork.push([...sessions]);
-              order.push("visible-work");
-            },
+it.each(["completed", "failed", "hidden"] as const)(
+  "reports accepted visible work before final dispatch for a %s run",
+  async (outcome) => {
+    const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
+    const { createReplyDispatcher } = await import("./reply-dispatcher.js");
+    const order: string[] = [];
+    const visibleWork: VisibleWorkSession[][] = [];
+    const visible = {
+      runId: "visible-run",
+      childSessionKey: "agent:main:dashboard:visible-work",
+      sessionUrl: "https://openclaw.example/chat/main/visible-work",
+      label: "Review",
+    };
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "Finished", ...(outcome === "failed" ? { isError: true } : {}) }],
+      acceptedSessionSpawns: [
+        { runId: "hidden-run", childSessionKey: "agent:main:subagent:hidden" },
+        ...(outcome === "hidden" ? [] : [visible, { ...visible, runId: "duplicate-run" }]),
+      ],
+      meta: outcome === "failed" ? { error: { kind: "unknown", message: "Run failed" } } : {},
+    });
+    const storePath = path.join(rootDir, "sessions.sqlite");
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { workspace: rootDir } },
+      session: { store: storePath },
+      plugins: { enabled: false },
+    };
+    const sessionEntry = sessionFixture();
+    await replaceSessionEntry({ storePath, sessionKey: "agent:main:main" }, sessionEntry);
+    const ctx = buildTestCtx({
+      Body: "Start visible work",
+      SessionKey: "agent:main:main",
+      MessageSid: `visible-work-${outcome}`,
+    });
+    const dispatcher = createReplyDispatcher({
+      deliver: async (_payload, info) => {
+        order.push(info.kind);
+      },
+    });
+    try {
+      await dispatchReplyFromConfig({
+        ctx,
+        cfg,
+        dispatcher,
+        replyOptions: {
+          onVisibleWorkSessions: (sessions) => {
+            visibleWork.push([...sessions]);
+            order.push("visible-work");
           },
-          replyResolver: async (_ctx, opts) =>
-            createBaseRun({
-              context: ctx,
-              run: { config: cfg, sessionKey: ctx.SessionKey },
-              reply: {
-                opts,
-                replyOperation: opts?.replyOperation,
-                queueKey: ctx.SessionKey,
-                sessionKey: ctx.SessionKey,
-                storePath,
-                sessionEntry,
-                sessionStore: { "agent:main:main": sessionEntry },
-              },
-            }).run(),
-        });
-      } finally {
-        dispatcher.markComplete();
-        await dispatcher.waitForIdle();
-      }
+        },
+        replyResolver: async (_ctx, opts) =>
+          createBaseRun({
+            context: ctx,
+            run: { config: cfg, sessionKey: ctx.SessionKey },
+            reply: {
+              opts,
+              replyOperation: opts?.replyOperation,
+              queueKey: ctx.SessionKey,
+              sessionKey: ctx.SessionKey,
+              storePath,
+              sessionEntry,
+              sessionStore: { "agent:main:main": sessionEntry },
+            },
+          }).run(),
+      });
+    } finally {
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+    }
 
-      expect(visibleWork).toEqual(
-        outcome === "hidden"
-          ? []
-          : [[{ sessionKey: visible.childSessionKey, url: visible.sessionUrl, label: "Review" }]],
-      );
-      expect(order).toEqual(outcome === "hidden" ? ["final"] : ["visible-work", "final"]);
-    },
-  );
-});
+    expect(visibleWork).toEqual(
+      outcome === "hidden"
+        ? []
+        : [[{ sessionKey: visible.childSessionKey, url: visible.sessionUrl, label: "Review" }]],
+    );
+    expect(order).toEqual(outcome === "hidden" ? ["final"] : ["visible-work", "final"]);
+  },
+);
