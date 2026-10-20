@@ -2,16 +2,15 @@
 // oxfmt-ignore
 import { createPublicationActionFixture as fixture } from "./github-publication-actions.test-support.js";
 import { createHash, randomUUID } from "node:crypto";
-import type { LookupAddress, LookupAllOptions, LookupOneOptions, LookupOptions } from "node:dns";
-import { lookup as dnsLookup } from "node:dns/promises";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createSandboxFsBridge } from "../agents/sandbox/fs-bridge.js";
 import { createSandboxTestContext } from "../agents/sandbox/test-fixtures.js";
 import { setRuntimeConfigSnapshot, writeConfigFile } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { addSessionMember } from "../config/sessions/session-sharing-store.native.js";
+import type { LookupFn } from "../infra/net/ssrf.js";
 import { encodePngRgb } from "../media/png-encode.js";
 import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
 import { guestScopes } from "./github-publication-requester.test-support.js";
@@ -28,11 +27,18 @@ import { prepareGatewayConnectOperatorAccess } from "./server/ws-connection/conn
 import { resolveSessionMutationAuthorizationAsync } from "./session-sharing-authorization-async.js";
 
 const mocks = githubPublicationTestMocks();
-vi.mock("node:dns/promises", { spy: true });
+const lookup = vi.hoisted(() => vi.fn<LookupFn>());
+const publicAddress = { address: "93.184.216.34", family: 4 };
+const inspected = (filename: string, bytes: Buffer) => ({
+  path: filename,
+  sha256: createHash("sha256").update(bytes).digest("hex"),
+  sizeBytes: bytes.length,
+});
+const response = (body: unknown, status = 201) =>
+  new Response(typeof body === "string" ? body : JSON.stringify(body), { status });
 // Mocked fetch normally skips DNS. Retain real guarded preflight with the isolated lookup.
 vi.mock("../infra/net/fetch-guard.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/net/fetch-guard.js")>();
-  const { lookup } = await import("node:dns/promises");
   return {
     ...actual,
     fetchWithSsrFGuard: (params: Parameters<typeof actual.fetchWithSsrFGuard>[0]) =>
@@ -76,11 +82,7 @@ async function evidenceFixture() {
       },
     },
   });
-  const evidence = {
-    path: "proof.png",
-    sha256: createHash("sha256").update(bytes).digest("hex"),
-    sizeBytes: bytes.length,
-  };
+  const evidence = inspected("proof.png", bytes);
   const profileId = `ghp_${"1".repeat(32)}`;
   mocks.prepareIdentity.mockResolvedValue({
     source: "system-configured",
@@ -100,26 +102,11 @@ async function evidenceFixture() {
       ? commandResult("12345")
       : previous(argv, options),
   );
-  let beforeLookup: (() => Promise<void>) | undefined;
-  function lookup(_hostname: string, options: LookupAllOptions): Promise<LookupAddress[]>;
-  function lookup(_hostname: string, options?: LookupOneOptions | number): Promise<LookupAddress>;
-  async function lookup(_hostname: string, options?: LookupOptions | number) {
-    const pending = beforeLookup;
-    beforeLookup = undefined;
-    await pending?.();
-    const address = { address: "93.184.216.34", family: 4 };
-    return typeof options === "object" && options.all ? [address] : address;
-  }
-  vi.mocked(dnsLookup).mockImplementation(lookup);
+  lookup.mockReset().mockResolvedValue([publicAddress]);
   const url = "https://github.com/user-attachments/assets/10000000-0000-4000-8000-000000000001";
-  const fetch = vi.fn(
-    async (_url: string, _init?: RequestInit) =>
-      new Response(JSON.stringify({ url }), { status: 201 }),
-  );
+  const fetch = vi.fn(async (_url: string, _init?: RequestInit) => response({ url }));
   vi.stubGlobal("fetch", fetch);
-  onTestFinished(() => {
-    vi.unstubAllGlobals();
-  });
+  onTestFinished(vi.unstubAllGlobals);
   const upload = (input: Record<string, unknown> = {}, client?: typeof f.guestSource.client) =>
     f.invoke(
       "guest",
@@ -127,10 +114,8 @@ async function evidenceFixture() {
       SESSION_KEY,
       { client, sandbox },
     );
-  const uploadEvidence = (overrides: Record<string, unknown>) =>
-    upload({ evidence: { ...evidence, ...overrides } });
-  async function denyUpload(message?: string) {
-    await expect(upload()).rejects.toThrow(message);
+  async function denyUpload(message?: string, input: Record<string, unknown> = {}) {
+    await expect(upload(input)).rejects.toThrow(message);
     expect(fetch).not.toHaveBeenCalled();
   }
   return {
@@ -141,19 +126,24 @@ async function evidenceFixture() {
     url,
     fetch,
     upload,
-    uploadEvidence,
+    denyEvidence: (overrides: Record<string, unknown>, message?: string) =>
+      denyUpload(message, { evidence: { ...evidence, ...overrides } }),
     denyUpload,
     config,
     async deselectPublisher() {
-      const next = await updateGitHubToolIdentityConfig({
-        scope: "system",
-        agentId: "main",
-        expectedIdentity: config.tools.github,
-      });
-      setRuntimeConfigSnapshot(next);
+      setRuntimeConfigSnapshot(
+        await updateGitHubToolIdentityConfig({
+          scope: "system",
+          agentId: "main",
+          expectedIdentity: config.tools.github,
+        }),
+      );
     },
     onLookup(callback: () => Promise<void>) {
-      beforeLookup = callback;
+      lookup.mockImplementationOnce(async () => {
+        await callback();
+        return [publicAddress];
+      });
     },
   };
 }
@@ -164,9 +154,12 @@ describe("workspace evidence through the guest tool and registered publication a
     sandbox: "required",
     realWorktree: true,
   });
+  let f: Awaited<ReturnType<typeof evidenceFixture>>;
+  beforeEach(async () => {
+    f = await evidenceFixture();
+  });
 
   it("uploads inspected guest workspace bytes and associates the reference only through metadata editing", async () => {
-    const f = await evidenceFixture();
     const body = f.state.body;
     expect((await f.upload()).details).toMatchObject({
       evidence: {
@@ -199,7 +192,6 @@ describe("workspace evidence through the guest tool and registered publication a
   });
 
   it("rejects foreign paths, altered bytes, unsafe media and unrelated publication selectors before upload", async () => {
-    const f = await evidenceFixture();
     for (const filename of [
       "../foreign.png",
       "/workspace/proof.png",
@@ -207,59 +199,51 @@ describe("workspace evidence through the guest tool and registered publication a
       "unsafe\nname.png",
       "proof.txt",
     ]) {
-      await expect(f.uploadEvidence({ path: filename })).rejects.toThrow();
+      await f.denyEvidence({ path: filename });
     }
-    await expect(f.uploadEvidence({ sha256: "f".repeat(64) })).rejects.toThrow("bytes changed");
-    await expect(f.uploadEvidence({ sizeBytes: f.bytes.length - 1 })).rejects.toThrow();
-    await expect(f.uploadEvidence({ sizeBytes: 10_000_001 })).rejects.toThrow();
-    await fs.writeFile(path.join(f.local!.cwd, "fake.png"), "<html>private content</html>");
+    await f.denyEvidence({ sha256: "f".repeat(64) }, "bytes changed");
+    for (const sizeBytes of [f.bytes.length - 1, 10_000_001]) {
+      await f.denyEvidence({ sizeBytes });
+    }
     const fake = Buffer.from("<html>private content</html>");
-    await expect(
-      f.upload({
-        evidence: {
-          path: "fake.png",
-          sha256: createHash("sha256").update(fake).digest("hex"),
-          sizeBytes: fake.length,
-        },
-      }),
-    ).rejects.toThrow("do not match");
+    await fs.writeFile(path.join(f.local!.cwd, "fake.png"), fake);
+    await f.denyEvidence(inspected("fake.png", fake), "do not match");
     const foreign = path.join(path.dirname(f.local!.cwd), "foreign.png");
     await fs.writeFile(foreign, f.bytes);
     await fs.symlink(foreign, path.join(f.local!.cwd, "foreign.png"));
-    const foreignUpload = f.uploadEvidence({ path: "foreign.png" });
+    const foreignUpload = f.upload({ evidence: { ...f.evidence, path: "foreign.png" } });
     await expect(foreignUpload).rejects.toThrow(
       "Evidence could not be read from this conversation's workspace; no upload was attempted.",
     );
-    await expect(foreignUpload).rejects.not.toThrow(f.local!.cwd);
-    await expect(foreignUpload).rejects.not.toThrow(path.dirname(f.local!.cwd));
-    await expect(f.upload({ publishingSessionKey: "agent:main:foreign" })).rejects.toThrow();
-    await expect(f.upload({ requestId: randomUUID() })).rejects.toThrow("publication changed");
-    await expect(f.uploadEvidence({ repository: "foreign/repo" })).rejects.toThrow();
-    expect(f.fetch).not.toHaveBeenCalled();
+    for (const privatePath of [f.local!.cwd, path.dirname(f.local!.cwd)]) {
+      await expect(foreignUpload).rejects.not.toThrow(privatePath);
+    }
+    await f.denyUpload(undefined, { publishingSessionKey: "agent:main:foreign" });
+    await f.denyUpload("publication changed", { requestId: randomUUID() });
+    await f.denyEvidence({ repository: "foreign/repo" });
   });
 
   it("does not follow redirects or repeat an uncertain evidence write", async () => {
-    const f = await evidenceFixture();
-    for (const response of [
+    for (const outcome of [
       new Response(null, { status: 302, headers: { location: "https://foreign.example/upload" } }),
-      new Response("not JSON", { status: 201 }),
-      new Response(JSON.stringify({ url: "https://foreign.example/asset" }), { status: 201 }),
-      new Response("x".repeat(16 * 1024 + 1), { status: 201 }),
+      response("not JSON"),
+      response({ url: "https://foreign.example/asset" }),
+      response("x".repeat(16 * 1024 + 1)),
+      new Error("response lost after write"),
     ]) {
       f.fetch.mockClear();
-      f.fetch.mockResolvedValueOnce(response);
+      if (outcome instanceof Error) {
+        f.fetch.mockRejectedValueOnce(outcome);
+      } else {
+        f.fetch.mockResolvedValueOnce(outcome);
+      }
       expect((await f.upload()).details).toMatchObject({ evidence: { status: "unconfirmed" } });
       expect(f.fetch).toHaveBeenCalledOnce();
     }
-    f.fetch.mockClear();
-    f.fetch.mockRejectedValueOnce(new Error("response lost after write"));
-    expect((await f.upload()).details).toMatchObject({ evidence: { status: "unconfirmed" } });
-    expect(f.fetch).toHaveBeenCalledOnce();
     expect(f.writes).toEqual([]);
   });
 
   it("rechecks the real publisher selection after transport preparation before sending evidence", async () => {
-    const f = await evidenceFixture();
     await writeConfigFile(f.config);
     let deselected = false;
     f.onLookup(async () => {
@@ -271,28 +255,23 @@ describe("workspace evidence through the guest tool and registered publication a
   });
 
   it("warns about an uncertain write when publisher authority is lost after dispatch", async () => {
-    const f = await evidenceFixture();
     await writeConfigFile(f.config);
     f.fetch.mockImplementationOnce(async () => {
       await f.deselectPublisher();
-      return new Response(JSON.stringify({ url: f.url }), { status: 201 });
+      return response({ url: f.url });
     });
     await expect(f.upload()).rejects.toThrow("GitHub may have created the attachment");
     expect(f.fetch).toHaveBeenCalledOnce();
   });
 
   it("denies evidence publication to an admitted shared-session participant who is not its creator", async () => {
-    const f = await evidenceFixture();
     const participant = await ensureCanonicalUserProfileForEmail(
       "publication-evidence-peer@example.test",
     );
     const client = createOperatorWsClient({ connId: participant.id, scopes: [...guestScopes] });
     client.authenticatedUserProfile = {
+      ...f.guestSource.client.authenticatedUserProfile!,
       profileId: participant.id,
-      displayName: null,
-      avatarRevision: "fixture",
-      hasAvatar: false,
-      updatedAt: 1,
     };
     prepareGatewayConnectOperatorAccess(client);
     const scope = { agentId: "main", sessionKey: SESSION_KEY };
@@ -318,7 +297,6 @@ describe("workspace evidence through the guest tool and registered publication a
   });
 
   it("rechecks PR head and the guest's current role after evidence preparation", async () => {
-    const f = await evidenceFixture();
     let reads = 0;
     f.onRead(async () => {
       if (++reads === 2) {
@@ -337,7 +315,6 @@ describe("workspace evidence through the guest tool and registered publication a
   });
 
   it("retains session authority across the actual workspace byte read", async () => {
-    const f = await evidenceFixture();
     const bridge = f.sandbox.fsBridge!;
     const read = bridge.readFileWithSource!.bind(bridge);
     const readSpy = vi

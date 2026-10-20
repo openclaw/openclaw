@@ -10,15 +10,7 @@ import type {
 } from "./github-publication.test-support.js";
 
 /** Real local Git/index with synthetic remote effects; no credential helper reaches a subprocess. */
-export async function createRealPublicationWorkspace({
-  root,
-  branch,
-  sessionKey,
-  realWorktree,
-  mocks,
-  commandResult,
-  interruptAt,
-}: {
+export async function createRealPublicationWorkspace(params: {
   root: string;
   branch: string;
   sessionKey: string;
@@ -27,6 +19,8 @@ export async function createRealPublicationWorkspace({
   commandResult: typeof publicationCommandResult;
   interruptAt?: "push" | "observe" | "index" | "create";
 }) {
+  const { root, branch, sessionKey, realWorktree, mocks, commandResult, interruptAt } = params;
+  const json = (value: unknown) => commandResult(JSON.stringify(value));
   const { runCommandBuffered } =
     await vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");
   const { updateGitHubPublicationBranchAndIndex } = await vi.importActual<
@@ -139,20 +133,18 @@ export async function createRealPublicationWorkspace({
           git("show", "-s", "--format=%P", commit),
           git("show", "-s", "--format=%B", commit),
         ]);
-        return commandResult(
-          JSON.stringify({
-            sha: commit,
-            tree: { sha: tree },
-            parents: parents
-              .split(" ")
-              .filter(Boolean)
-              .map((sha) => ({ sha })),
-            message,
-          }),
-        );
+        return json({
+          sha: commit,
+          tree: { sha: tree },
+          parents: parents
+            .split(" ")
+            .filter(Boolean)
+            .map((sha) => ({ sha })),
+          message,
+        });
       }
       if (argv.some((arg) => arg.startsWith("repos/openclaw/openclaw/git/ref/heads/"))) {
-        return commandResult(JSON.stringify({ ref: "refs/heads/main", sha: baseHead }));
+        return json({ ref: "refs/heads/main", sha: baseHead });
       }
       if (argv.includes("POST")) {
         effects.push("pull_request");

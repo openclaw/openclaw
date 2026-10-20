@@ -43,8 +43,6 @@ function projectionFixture(binding: WorkspaceBinding = { repositoryWorkspaceId: 
     entry: { sessionId: session.sessionId, updatedAt: 1, ...binding },
   };
   const projection = {
-    ensureMaterialized: async () => {},
-    selectEntries: () => [row],
     onSelectionChange: (next: SelectionListener) => {
       listener = next;
     },
@@ -71,6 +69,22 @@ describe("GitHub publication discovery", () => {
     vi.mocked(prepareGitHubPublicationFact).mockReturnValueOnce(gate.promise);
     return gate;
   };
+  const fact = (expected: PreparedFact = published) =>
+    expect(readGitHubPublicationFact(session)).toEqual(expected);
+  const start = (binding: WorkspaceBinding = { repositoryWorkspaceId: "workspace-1" }) => {
+    const fixture = projectionFixture(binding);
+    owner = startGitHubPublicationDiscovery({ scheduler, projection: fixture.projection });
+    return fixture;
+  };
+  const discover = async () => {
+    readGitHubPublicationFact(session);
+    await clock.wake();
+    fact();
+  };
+  const invalidateAll = () => {
+    clearNativeGitHubTokenCache();
+    sessionChanges.emit({ all: true, scope: "config" });
+  };
 
   beforeEach(() => {
     clock = createGatewaySchedulerClock(1_000);
@@ -89,8 +103,7 @@ describe("GitHub publication discovery", () => {
   });
 
   it("does no discovery for a hydrated corpus until a session requests its publication hint", async () => {
-    const { projection, observe } = projectionFixture();
-    owner = startGitHubPublicationDiscovery({ scheduler, projection });
+    const { observe } = start();
     for (let index = 0; index < 300; index++) {
       observe({
         key: `agent:main:idle-${index}`,
@@ -115,15 +128,13 @@ describe("GitHub publication discovery", () => {
       binding: { worktree: { id: "worktree-1", repoRoot: "/synthetic/repo", branch: "session-1" } },
     },
   ])("waits for demand after an unobserved row acquires a $kind binding", async ({ binding }) => {
-    const { projection, rebind } = projectionFixture({});
-    owner = startGitHubPublicationDiscovery({ scheduler, projection });
+    const { rebind } = start({});
     await clock.wake();
     await clock.wake();
     expect(prepareGitHubPublicationFact).not.toHaveBeenCalled();
 
     rebind({});
-    clearNativeGitHubTokenCache();
-    sessionChanges.emit({ all: true, scope: "config" });
+    invalidateAll();
     await clock.wake();
     expect(prepareGitHubPublicationFact).not.toHaveBeenCalled();
     expect(clock.armedAtMs).toBeNull();
@@ -143,14 +154,12 @@ describe("GitHub publication discovery", () => {
   });
 
   it("revokes a removed binding before its queued preparation starts", async () => {
-    const { projection, rebind } = projectionFixture();
-    owner = startGitHubPublicationDiscovery({ scheduler, projection });
+    const { rebind } = start();
     readGitHubPublicationFact(session);
     expect(prepareGitHubPublicationFact).not.toHaveBeenCalled();
 
     rebind({});
-    clearNativeGitHubTokenCache();
-    sessionChanges.emit({ all: true, scope: "config" });
+    invalidateAll();
     vi.mocked(prepareGitHubPublicationFact).mockImplementationOnce(async (params) => {
       // The preparation owner checks this live guard before performing I/O.
       expect(params.assertCurrent?.()).toBe(false);
@@ -163,11 +172,8 @@ describe("GitHub publication discovery", () => {
   });
 
   it("retires removed bindings without reviving them on identity or config changes", async () => {
-    const { projection, rebind } = projectionFixture();
-    owner = startGitHubPublicationDiscovery({ scheduler, projection });
-    readGitHubPublicationFact(session);
-    await clock.wake();
-    expect(readGitHubPublicationFact(session)).toEqual(published);
+    const { rebind } = start();
+    await discover();
 
     const stale = holdPreparation();
     clearNativeGitHubTokenCache();
@@ -176,15 +182,13 @@ describe("GitHub publication discovery", () => {
     expect(oldPreparation.assertCurrent?.()).toBe(true);
     rebind({});
     expect(oldPreparation.assertCurrent?.()).toBe(false);
-    clearNativeGitHubTokenCache();
-    sessionChanges.emit({ all: true, scope: "config" });
+    invalidateAll();
     await clock.wake();
     expect(prepareGitHubPublicationFact).toHaveBeenCalledTimes(2);
 
     stale.resolve(published);
     await oldRefresh;
     expect(clock.armedAtMs).toBeNull();
-    // Explicit demand still returns immediately and can prepare a previously unknown target.
     expect(readGitHubPublicationFact(session)).toEqual({ available: false });
     rebind();
     const replacement = {
@@ -217,56 +221,38 @@ describe("GitHub publication discovery", () => {
   it.each([
     { change: "identity", invalidate: () => clearNativeGitHubTokenCache() },
     { change: "config", invalidate: () => sessionChanges.emit({ all: true, scope: "config" }) },
+    { change: "expiry", invalidate: () => clock.advanceBy(5 * 60_000) },
   ])(
     "retains visibility but retires credentials while $change changes refresh asynchronously",
-    async ({ invalidate }) => {
+    async ({ change, invalidate }) => {
       owner = startGitHubPublicationDiscovery({ scheduler });
-      readGitHubPublicationFact(session);
-      await clock.wake();
-      expect(readGitHubPublicationFact(session)).toEqual(published);
+      await discover();
+      expect(clock.armedAtMs).toBeNull();
 
       const gate = holdPreparation();
-      invalidate();
-      expect(readGitHubPublicationFact(session)).toEqual({ available: true });
+      await invalidate();
+      expect(prepareGitHubPublicationFact).toHaveBeenCalledOnce();
+      if (change === "expiry") {
+        expect(clock.armedAtMs).toBeNull();
+      }
+      fact({ available: true });
       const refresh = clock.wake();
-      expect(readGitHubPublicationFact(session)).toEqual({ available: true });
-      gate.resolve(undefined);
+      fact({ available: true });
+      expect(prepareGitHubPublicationFact).toHaveBeenCalledTimes(2);
+      const replacement = {
+        ...published,
+        github: { ...published.github, token: "synthetic-refreshed-token" },
+      };
+      gate.resolve(change === "expiry" ? replacement : undefined);
       await refresh;
-      expect(readGitHubPublicationFact(session)).toEqual({ available: false });
+      fact(change === "expiry" ? replacement : { available: false });
+      expect(clock.armedAtMs).toBeNull();
     },
   );
 
-  it("sleeps while idle and retires expired credentials on the next read", async () => {
-    owner = startGitHubPublicationDiscovery({ scheduler });
-    readGitHubPublicationFact(session);
-    await clock.wake();
-    expect(readGitHubPublicationFact(session)).toEqual(published);
-    expect(clock.armedAtMs).toBeNull();
-
-    await clock.advanceBy(5 * 60_000);
-    expect(prepareGitHubPublicationFact).toHaveBeenCalledOnce();
-    expect(clock.armedAtMs).toBeNull();
-
-    const gate = holdPreparation();
-    expect(readGitHubPublicationFact(session)).toEqual({ available: true });
-    const refresh = clock.wake();
-    expect(readGitHubPublicationFact(session)).toEqual({ available: true });
-    expect(prepareGitHubPublicationFact).toHaveBeenCalledTimes(2);
-
-    const replacement = {
-      ...published,
-      github: { ...published.github, token: "synthetic-refreshed-token" },
-    };
-    gate.resolve(replacement);
-    await refresh;
-    expect(readGitHubPublicationFact(session)).toEqual(replacement);
-    expect(clock.armedAtMs).toBeNull();
-  });
-
   it("discards a late result after the session workspace binding changes", async () => {
-    const { projection, rebind } = projectionFixture();
+    const { rebind } = start();
     const stale = holdPreparation();
-    owner = startGitHubPublicationDiscovery({ scheduler, projection });
     readGitHubPublicationFact(session);
     const oldRefresh = clock.wake();
     const oldPreparation = vi.mocked(prepareGitHubPublicationFact).mock.calls[0]![0];
@@ -296,8 +282,7 @@ describe("GitHub publication discovery", () => {
     expect(preparation.assertCurrent?.()).toBe(false);
     expect(readGitHubPublicationFact(session)).toEqual({ available: false });
 
-    clearNativeGitHubTokenCache();
-    sessionChanges.emit({ all: true, scope: "config" });
+    invalidateAll();
     gate.resolve(published);
     await Promise.all([refresh, stopped]);
     await clock.advanceBy(60_000);
