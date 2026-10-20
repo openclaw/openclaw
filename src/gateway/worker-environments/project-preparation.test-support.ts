@@ -1,5 +1,4 @@
-import * as childProcess from "node:child_process";
-import { execFileSync } from "node:child_process";
+import * as cp from "node:child_process";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import * as os from "node:os";
@@ -21,8 +20,8 @@ export async function runProjectScriptWithGitProbe(
   home: string,
   probe: (
     args: string[],
-    options: childProcess.SpawnSyncOptionsWithStringEncoding,
-  ) => childProcess.SpawnSyncReturns<string> | undefined,
+    options: cp.SpawnSyncOptionsWithStringEncoding,
+  ) => cp.SpawnSyncReturns<string> | undefined,
 ): Promise<string> {
   let stdout = "";
   let stderr = "";
@@ -51,14 +50,14 @@ export async function runProjectScriptWithGitProbe(
       }
       if (id === "node:child_process") {
         return {
-          ...childProcess,
+          ...cp,
           spawnSync: (
             command: string,
             args: string[],
-            options: childProcess.SpawnSyncOptionsWithStringEncoding,
+            options: cp.SpawnSyncOptionsWithStringEncoding,
           ) =>
             (command === "git" ? probe(args, options) : undefined) ??
-            childProcess.spawnSync(command, args, options),
+            cp.spawnSync(command, args, options),
         };
       }
       return requireModule(id);
@@ -79,27 +78,27 @@ export async function createProjectPreparationFixture(
   const root = await fs.realpath(directory);
   const repository = path.join(root, "repository");
   const home = path.join(root, "worker-home");
+  const write = async (relative: string, content: string, mode?: number) => {
+    const file = path.join(repository, relative);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, content, { mode });
+  };
   await fs.mkdir(repository);
   await fs.mkdir(home);
   await requireGit(repository, ["init", "--quiet"]);
   await requireGit(repository, ["config", "user.name", "Project Test"]);
   await requireGit(repository, ["config", "user.email", "project@example.invalid"]);
   await requireGit(repository, ["config", "commit.gpgsign", "false"]);
-  await fs.writeFile(path.join(repository, "input.txt"), "prepared base\n");
+  await write("input.txt", "prepared base\n");
   if (symlink) {
     await fs.symlink("input.txt", path.join(repository, "linked-input"));
   }
   if (setup) {
-    await fs.mkdir(path.join(repository, ".openclaw"));
-    await fs.writeFile(path.join(repository, ".openclaw", "worktree-setup.sh"), setup, {
-      mode: 0o755,
-    });
-    await fs.writeFile(path.join(repository, ".gitignore"), "build/\n");
+    await write(".openclaw/worktree-setup.sh", setup, 0o755);
+    await write(".gitignore", "build/\n");
   }
   for (const [relative, content] of Object.entries(files)) {
-    const file = path.join(repository, relative);
-    await fs.mkdir(path.dirname(file), { recursive: true });
-    await fs.writeFile(file, content);
+    await write(relative, content);
   }
   await requireGit(repository, ["add", "."]);
   await requireGit(repository, ["commit", "--quiet", "-m", "base"]);
@@ -108,7 +107,7 @@ export async function createProjectPreparationFixture(
     namespace: "gateway",
   }))!;
   const runScript = vi.fn(async (script: string) =>
-    execFileSync("sh", ["-c", script], {
+    cp.execFileSync("sh", ["-c", script], {
       env: { ...process.env, HOME: home, PREPARATION_UNRELATED_ENV: "must-not-forward" },
       encoding: "utf8",
       timeout: 30_000,
@@ -122,13 +121,8 @@ export async function createProjectPreparationFixture(
   const uploadBytes: number[] = [];
   const operation = (requireCurrent = () => {}) =>
     createWorkerProjectPreparation({ project, namespace: "gateway", requireCurrent });
-  const seed = path.join(
-    home,
-    ".openclaw-worker",
-    "git-seeds",
-    "gateway",
-    workerProjectSeedKey(project),
-  );
+  const seedKey = workerProjectSeedKey(project);
+  const seed = path.join(home, ".openclaw-worker", "git-seeds", "gateway", seedKey);
   const preparedOperation = async (
     requireCurrent = () => {},
     options: { project?: typeof project; key?: string; cacheKey?: string } = {},

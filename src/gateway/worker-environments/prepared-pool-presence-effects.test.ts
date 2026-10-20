@@ -102,23 +102,13 @@ it("uses the real provider lifecycle and authorized private Git transport for pr
     resolvePreparationTarget: () => PREPARATION_TARGET,
     prepareProvision: async (_profile, _operationId, options) => async () => allocate(options!),
   };
-  const warnings: string[] = [];
-  const diagnostics = () =>
-    JSON.stringify({
-      warnings,
-      reserves: pool.reserves().map(({ state, lastError, destroyRequestedAtMs }) => ({
-        state,
-        lastError,
-        destroyRequestedAtMs,
-      })),
-    });
   let demand: PreparedPoolPresenceDemand | undefined;
   const unexpected = async () => {
     throw new Error("Fixture must not install, bootstrap, or enroll a node");
   };
   pool.service = createWorkerEnvironmentService({
     scheduler: createTestGatewayScheduler(),
-    logger: { warn: (message) => warnings.push(message) },
+    logger: { warn: vi.fn() },
     store: pool.store,
     getConfig: () => pool.config,
     resolveProvider: () => pool.provider,
@@ -148,12 +138,11 @@ it("uses the real provider lifecycle and authorized private Git transport for pr
   const preparation = pool.service.setHumanPresence(true);
   try {
     await preparation;
-    expect(allocate, diagnostics()).toHaveBeenCalledOnce();
+    expect(allocate).toHaveBeenCalledOnce();
     expect(upload).toHaveBeenCalledOnce();
     expect(git.requests.length).toBeGreaterThan(0);
     expect(git.requests.every((value) => value === AUTHORIZATION)).toBe(true);
-    expect(git.fetches).toHaveLength(1);
-    expect(git.fetches[0]?.settled).toBe(true);
+    expect(git.fetches).toMatchObject([{ settled: true }]);
     await assertNoCredentialFiles(git.home);
     expect(git.scripts.join("\n")).not.toContain(TOKEN);
   } finally {

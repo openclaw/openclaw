@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { assert, expect, it } from "vitest";
 import { requireGit, runGit } from "../../agents/worktrees/git.js";
 import { ManagedWorktreeService } from "../../agents/worktrees/service.js";
 import { readWorkerProjectPreparation } from "./preparation-identity.schema.js";
@@ -12,122 +12,115 @@ import {
 import { readWorkerProjectSnapshot } from "./project-preparation.js";
 import { createWorkerProviderIntent } from "./provider-intent.js";
 
-const fixture = usePreparedPoolFixture();
+const f = usePreparedPoolFixture();
 
 it("refills the pinned preparation after its managed seed checkout is removed and the store reopens", async () => {
-  const repository = path.join(fixture.root, "project");
+  const repo = path.join(f.root, "project");
   const commit = async (root: string, content: string, message: string) => {
     await fs.writeFile(path.join(root, "input.txt"), content);
     await requireGit(root, ["add", "."]);
     await requireGit(root, ["commit", "--quiet", "-m", message]);
     return requireGit(root, ["rev-parse", "HEAD"]);
   };
-  await fs.mkdir(repository);
-  await requireGit(repository, ["init", "--quiet", "-b", "main"]);
-  await requireGit(repository, ["config", "user.name", "Prepared Project Test"]);
-  await requireGit(repository, ["config", "user.email", "prepared@example.invalid"]);
-  await requireGit(repository, ["config", "commit.gpgsign", "false"]);
-  const commonCommit = await commit(repository, "shared base\n", "shared base");
+  await fs.mkdir(repo);
+  await requireGit(repo, ["init", "--quiet", "-b", "main"]);
+  await requireGit(repo, ["config", "user.name", "Prepared Project Test"]);
+  await requireGit(repo, ["config", "user.email", "prepared@example.invalid"]);
+  await requireGit(repo, ["config", "commit.gpgsign", "false"]);
+  const base = await commit(repo, "shared base\n", "shared base");
   const worktrees = new ManagedWorktreeService({
-    env: { OPENCLAW_STATE_DIR: fixture.root },
-    getConfig: () => ({ worktreeRoot: path.join(fixture.root, "managed-worktrees") }),
+    env: { OPENCLAW_STATE_DIR: f.root },
+    getConfig: () => ({ worktreeRoot: path.join(f.root, "managed-worktrees") }),
   });
   const seed = await worktrees.create({
-    repoRoot: repository,
+    repoRoot: repo,
     name: "prepared-seed",
     baseRef: "main",
-    checkoutCommit: commonCommit,
+    checkoutCommit: base,
     ownerKind: "session",
     ownerId: "prepared-seed-session",
     runSetupScript: false,
   });
-  const pinnedCommit = await commit(seed.path, "pinned seed\n", "seed-only commit");
-  const primaryCommit = await commit(repository, "new primary HEAD\n", "advance primary");
-  expect(primaryCommit).not.toBe(pinnedCommit);
-  expect(
-    (await runGit(repository, ["merge-base", "--is-ancestor", pinnedCommit, primaryCommit])).code,
-  ).toBe(1);
-  expect(await requireGit(seed.path, ["rev-parse", "HEAD"])).toBe(pinnedCommit);
+  const pinned = await commit(seed.path, "pinned seed\n", "seed-only commit");
+  const primary = await commit(repo, "new primary HEAD\n", "advance primary");
+  expect(primary).not.toBe(pinned);
+  expect((await runGit(repo, ["merge-base", "--is-ancestor", pinned, primary])).code).toBe(1);
+  expect(await requireGit(seed.path, ["rev-parse", "HEAD"])).toBe(pinned);
 
-  fixture.provider = {
-    ...fixture.provider,
+  f.provider = {
+    ...f.provider,
     requiresNodeEnrollment: true,
     supportsProjectPreparation: () => true,
     resolvePreparationTarget: () => PREPARATION_TARGET,
   };
   const createIntentOwner = () =>
     createWorkerProviderIntent({
-      store: fixture.store,
-      getConfig: () => fixture.config,
+      store: f.store,
+      getConfig: () => f.config,
       projectNamespace: "prepared-pool-test",
-      providerFor: () => fixture.provider,
+      providerFor: () => f.provider,
       prepareNodeArtifacts: async () => ({
         artifacts: createPreparationArtifacts(),
         assertCurrent: () => {},
       }),
-      resumeProvision: async (record) => await fixture.ready(record),
+      resumeProvision: async (record) => await f.ready(record),
       isStopping: () => false,
       withLock: async (_environmentId, task) => task(),
     });
   const createPool = (intentOwner: ReturnType<typeof createIntentOwner>) =>
-    fixture.pool({
+    f.pool({
       prepareIntent: intentOwner.prepareIntent,
       prepareRetention: intentOwner.prepareRetention,
       assertIntentCurrent: intentOwner.assertPreparedIntentCurrent,
       reconcile: async (record, _signal, beforeReconcile) => {
         beforeReconcile();
         if (record.state === "requested" && record.destroyRequestedAtMs === null) {
-          await fixture.ready(record);
+          await f.ready(record);
         }
       },
     });
   const intentOwner = createIntentOwner();
-  const source = await fixture.attach(
+  const source = await f.attach(
     await intentOwner.createWithProfile("development", "seed-allocation", {
       projectPath: seed.path,
       executionMode: "worker-turn",
     }),
   );
-  const admittedProject = readWorkerProjectSnapshot(source.profileSnapshot.project)!;
-  const admittedPreparation = readWorkerProjectPreparation(source.profileSnapshot.project)!;
-  expect(admittedProject.baseCommit).toBe(pinnedCommit);
-  await fixture.schedule(createPool(intentOwner));
-  const spare = fixture.reserves().find((record) => record.state === "ready")!;
+  const project = readWorkerProjectSnapshot(source.profileSnapshot.project)!;
+  const preparation = readWorkerProjectPreparation(source.profileSnapshot.project)!;
+  expect(project.baseCommit).toBe(pinned);
+  await f.schedule(createPool(intentOwner));
+  const spare = f.reserves().find((record) => record.state === "ready")!;
   expect(spare).toBeDefined();
-  expect(readWorkerProjectSnapshot(spare.profileSnapshot.project)?.baseCommit).toBe(pinnedCommit);
-  expect(spare.preparation?.key).toBe(admittedPreparation.key);
+  expect(readWorkerProjectSnapshot(spare.profileSnapshot.project)?.baseCommit).toBe(pinned);
+  expect(spare.preparation?.key).toBe(preparation.key);
 
-  fixture.nowMs += 100;
-  const consumed = await fixture.attach(spare);
-  expect(consumed.preparation?.consumedAtMs).toBe(fixture.nowMs);
-  await fixture.teardown(source);
+  f.nowMs += 100;
+  const consumed = await f.attach(spare);
+  expect(consumed.preparation?.consumedAtMs).toBe(f.nowMs);
+  await f.teardown(source);
   const archived = await worktrees.remove({ id: seed.id, reason: "session-archive" });
   expect(archived).toMatchObject({ removed: true });
   await expect(fs.access(seed.path)).rejects.toMatchObject({ code: "ENOENT" });
-  if (!archived.snapshotRef) {
-    throw new Error("Managed archive did not retain its snapshot");
-  }
+  assert(archived.snapshotRef, "Managed archive did not retain its snapshot");
   // The archive snapshot retains the seed commit even under immediate Git pruning.
-  await requireGit(repository, ["-c", "gc.autoDetach=false", "gc", "--prune=now"]);
-  await requireGit(repository, ["merge-base", "--is-ancestor", pinnedCommit, archived.snapshotRef]);
+  await requireGit(repo, ["-c", "gc.autoDetach=false", "gc", "--prune=now"]);
+  await requireGit(repo, ["merge-base", "--is-ancestor", pinned, archived.snapshotRef]);
 
-  await fixture.reopenStore();
-  await fixture.schedule(createPool(createIntentOwner()));
-  const available = fixture
+  await f.reopenStore();
+  await f.schedule(createPool(createIntentOwner()));
+  const available = f
     .reserves()
     .filter((record) => record.state === "ready" && record.preparation?.consumedAtMs === null);
   expect(available).toHaveLength(1);
   const refill = available[0]!;
   expect(refill.environmentId).not.toBe(spare.environmentId);
-  expect(refill.preparation?.key).toBe(admittedPreparation.key);
+  expect(refill.preparation?.key).toBe(preparation.key);
   const refilledProject = readWorkerProjectSnapshot(refill.profileSnapshot.project)!;
-  expect(refilledProject).toMatchObject({ key: admittedProject.key, baseCommit: pinnedCommit });
-  expect("root" in refilledProject).toBe(true);
-  if (!("root" in refilledProject)) {
-    throw new Error("Expected the retained local Git project");
-  }
-  expect(await requireGit(refilledProject.root, ["show", `${pinnedCommit}:input.txt`])).toBe(
+  expect(refilledProject).toMatchObject({ key: project.key, baseCommit: pinned });
+  assert("root" in refilledProject, "Expected the retained local Git project");
+  expect(await requireGit(refilledProject.root, ["show", `${pinned}:input.txt`])).toBe(
     "pinned seed",
   );
-  expect(await requireGit(repository, ["rev-parse", "HEAD"])).toBe(primaryCommit);
+  expect(await requireGit(repo, ["rev-parse", "HEAD"])).toBe(primary);
 });
