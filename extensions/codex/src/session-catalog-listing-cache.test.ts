@@ -115,6 +115,16 @@ it.each(["resolve", "reject"] as const)(
         );
       }
       expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledOnce();
+      if (outcome === "reject") {
+        commandRpcMocks.codexControlRequest.mockResolvedValue({
+          data: [idleThread({ id: "thread-recovered", source: "cli" })],
+        });
+        await control.initialize();
+        await expect(control.listPage({ limit: 25 })).resolves.toMatchObject({
+          sessions: [{ threadId: "thread-recovered" }],
+        });
+        expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(2);
+      }
     } finally {
       held.resolve({ data: [] });
       await Promise.all([initialized, listed]);

@@ -155,9 +155,11 @@ export async function listModels(params: ListModelsParams) {
     agentId,
     params: {
       view: params.view ?? "all",
-      includeDefaultModels: params.includeDefaultModels,
-      refresh: params.refresh,
-      preparedOnly: params.preparedOnly,
+      ...(params.includeDefaultModels !== undefined
+        ? { includeDefaultModels: params.includeDefaultModels }
+        : {}),
+      ...(params.refresh !== undefined ? { refresh: params.refresh } : {}),
+      ...(params.preparedOnly !== undefined ? { preparedOnly: params.preparedOnly } : {}),
     },
     preloadedCatalog: params.discoveryModes ? { agentId: "main", config, snapshot } : undefined,
     catalogProjector: params.discoveryModes

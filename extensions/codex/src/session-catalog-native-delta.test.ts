@@ -7,8 +7,16 @@ import type { CodexSessionCatalogSession } from "./session-catalog-types.js";
 import { commandRpcMocks, idleThread } from "./session-catalog.test-helpers.js";
 
 const rpc = commandRpcMocks.codexControlRequest;
+const factories = new Set<ReturnType<typeof catalogFactory>>();
 beforeEach(() => vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] }));
-afterEach(() => vi.useRealTimers());
+afterEach(async () => {
+  try {
+    await Promise.all([...factories].map((factory) => factory.stop()));
+  } finally {
+    factories.clear();
+    vi.useRealTimers();
+  }
+});
 const thread = (id: string, fields: Partial<CodexThread> = {}) =>
   idleThread({ id, source: "cli", updatedAt: 100, recencyAt: 100, ...fields });
 
@@ -32,6 +40,7 @@ async function fixture(rows: () => CodexThread[], remote = true, pageSize?: numb
     return { data, nextCursor };
   });
   const factory = remote ? remoteCatalogFactory("native-delta") : catalogFactory();
+  factories.add(factory);
   const source = (await factory.homesForAgent("main"))[0]!;
   const control = factory.forRequest("main", source);
   const idle = () => vi.waitFor(() => expect(factory.hasActiveWork()).toBe(false));
