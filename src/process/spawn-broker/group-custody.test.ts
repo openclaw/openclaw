@@ -1,26 +1,21 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it, onTestFinished } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
-import { captureEnv } from "../../test-utils/env.js";
-import { createSpawnBrokerHost } from "./host.js";
+import { signalFixturePid, startPreloadedBroker } from "./broker-fixture.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-const skipBrokerTests = process.platform === "win32";
-
-describe.skipIf(skipBrokerTests)("spawn broker process-group custody", () => {
-  it.each(["native", "execa"] as const)(
-    "cleans an unpublished non-detached %s child after broker death",
-    async (transport) => {
-      const directory = tempDirs.make("openclaw-broker-group-");
-      const marker = path.join(directory, "child.json");
-      const preload = path.join(directory, "crash.mjs");
-      await writeFile(
-        preload,
-        `
+it.skipIf(process.platform === "win32").each(["native", "execa"] as const)(
+  "cleans an unpublished non-detached %s child after broker death",
+  async (transport) => {
+    const directory = tempDirs.make("openclaw-broker-group-");
+    const marker = path.join(directory, "child.json");
+    const preload = path.join(directory, "crash.mjs");
+    await writeFile(
+      preload,
+      `
         import childProcess from 'node:child_process';
         import {writeFileSync} from 'node:fs';
         import {syncBuiltinESMExports} from 'node:module';
@@ -46,52 +41,30 @@ describe.skipIf(skipBrokerTests)("spawn broker process-group custody", () => {
           syncBuiltinESMExports();
         }
       `,
-      );
-      const environment = captureEnv(["NODE_OPTIONS"]);
-      process.env.NODE_OPTIONS = `${process.env.NODE_OPTIONS ?? ""} --import=${pathToFileURL(preload).href}`;
-      const host = createSpawnBrokerHost();
-      let childPid: number | undefined;
-      try {
-        try {
-          await host.ready();
-        } finally {
-          environment.restore();
-        }
-        const child =
-          transport === "native"
-            ? host.spawn("/bin/sleep", ["30"], {
-                detached: false,
-                stdio: "ignore",
-                env: { PATH: "/usr/bin:/bin" },
-              })
-            : host.spawnExeca(["/bin/sleep", "30"], {
-                detached: false,
-                stdio: "ignore",
-                reject: false,
-                env: { PATH: "/usr/bin:/bin" },
-              }).child;
-        const failure = await child.ready().then(
-          () => undefined,
-          (error: unknown) => error,
-        );
-        const recorded = JSON.parse(await readFile(marker, "utf8"));
-        childPid = recorded.childPid;
-        expect(childPid).toBeTypeOf("number");
-        expect(recorded.childPgid).toBe(recorded.brokerPgid);
-        expect(child.pid).toBeUndefined();
-        expect(failure).toMatchObject({ code: "ERR_SPAWN_BROKER_UNAVAILABLE" });
-        await host.close();
-        expect(isPidDefinitelyDead(childPid!)).toBe(true);
-        expect(recorded.brokerPgid).toBe(recorded.brokerPid);
-      } finally {
-        environment.restore();
-        if (childPid && !isPidDefinitelyDead(childPid)) {
-          try {
-            process.kill(childPid, "SIGKILL");
-          } catch {}
-        }
-        await host.close();
+    );
+    const host = await startPreloadedBroker(preload);
+    const options = { detached: false, stdio: "ignore", env: { PATH: "/usr/bin:/bin" } } as const;
+    const child =
+      transport === "native"
+        ? host.spawn("/bin/sleep", ["30"], options)
+        : host.spawnExeca(["/bin/sleep", "30"], { ...options, reject: false }).child;
+    const failure = await child.ready().then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    const recorded = JSON.parse(await readFile(marker, "utf8"));
+    const childPid: number | undefined = recorded.childPid;
+    onTestFinished(() => {
+      if (childPid && !isPidDefinitelyDead(childPid)) {
+        signalFixturePid(childPid);
       }
-    },
-  );
-});
+    });
+    expect(childPid).toBeTypeOf("number");
+    expect(recorded.childPgid).toBe(recorded.brokerPgid);
+    expect(child.pid).toBeUndefined();
+    expect(failure).toMatchObject({ code: "ERR_SPAWN_BROKER_UNAVAILABLE" });
+    await host.close();
+    expect(isPidDefinitelyDead(childPid!)).toBe(true);
+    expect(recorded.brokerPgid).toBe(recorded.brokerPid);
+  },
+);

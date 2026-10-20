@@ -13,6 +13,7 @@ import {
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
+import { signalFixturePid } from "./broker-fixture.test-support.js";
 import { createSpawnBrokerHost } from "./host.js";
 import { supportsSpawnBrokerCommandTransport } from "./pipe.js";
 
@@ -121,11 +122,7 @@ fixtureReceiptSocket.end();`,
       expect(isPidDefinitelyDead(pid!)).toBe(true);
     } finally {
       for (const candidate of [stoppedBroker, pid]) {
-        if (candidate) {
-          try {
-            process.kill(candidate, "SIGKILL");
-          } catch {}
-        }
+        signalFixturePid(candidate);
       }
       await (closeOutcome ?? host.close());
     }

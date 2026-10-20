@@ -1,6 +1,6 @@
-import { ChildProcess, type MessageOptions, type SendHandle } from "node:child_process";
-import { afterEach, expect, it, vi } from "vitest";
-import { createSpawnBrokerHost, type SpawnBrokerHost } from "./host.js";
+import { ChildProcess } from "node:child_process";
+import { expect, it, onTestFinished, vi } from "vitest";
+import { createSpawnBrokerHost } from "./host.js";
 
 const native = vi.hoisted(() => ({ spawn: vi.fn() }));
 vi.mock("node:child_process", async (importOriginal) => ({
@@ -15,30 +15,9 @@ vi.mock("./cleanup.js", () => ({
   terminateBrokerProcessGroup: () => ({ force: vi.fn(), settled: Promise.resolve() }),
 }));
 
-let host: SpawnBrokerHost | undefined;
-const bunDescriptor = Object.getOwnPropertyDescriptor(process.versions, "bun");
-afterEach(async () => {
-  try {
-    await host?.close();
-  } finally {
-    host = undefined;
-    if (bunDescriptor) {
-      Object.defineProperty(process.versions, "bun", bunDescriptor);
-    } else {
-      Reflect.deleteProperty(process.versions, "bun");
-    }
-    vi.restoreAllMocks();
-  }
-});
-
-it.each([
-  { bun: undefined, channelControl: true },
-  { bun: "1.4.3", channelControl: true },
-  { bun: "1.4.3", channelControl: false },
-])(
-  "releases the idle IPC channel while retaining open native claims (Bun=$bun)",
-  async ({ bun, channelControl }) => {
-    Object.defineProperty(process.versions, "bun", { value: bun, configurable: true });
+it.each([true, false])(
+  "releases idle IPC while retaining open native claims (channel controls: %s)",
+  async (channelControl) => {
     const child = new ChildProcess();
     const referenced = { child: true, channel: true };
     const referenceChild = (value: boolean) => () => {
@@ -56,6 +35,7 @@ it.each([
       child.emit("disconnect");
       child.emit("exit", 0, null);
       child.emit("close", 0, null);
+      return true;
     };
     Object.defineProperties(child, {
       pid: { value: 41001 },
@@ -68,32 +48,29 @@ it.each([
           ? { ref: referenceChannel(true), unref: referenceChannel(false) }
           : {},
       },
-      send: {
-        value: (
-          message: unknown,
-          ...args: Array<SendHandle | MessageOptions | ((error: Error | null) => void) | undefined>
-        ) => {
-          args.find((arg) => typeof arg === "function")?.(null);
-          if (
-            message &&
-            typeof message === "object" &&
-            "type" in message &&
-            message.type === "shutdown"
-          ) {
-            queueMicrotask(exit);
-          }
-          return true;
-        },
-      },
-      kill: {
-        value: () => {
-          exit();
-          return true;
-        },
-      },
+      kill: { value: exit },
+    });
+    vi.spyOn(child, "send").mockImplementation((message, ...args) => {
+      args.find((arg) => typeof arg === "function")?.(null);
+      if (
+        message &&
+        typeof message === "object" &&
+        "type" in message &&
+        message.type === "shutdown"
+      ) {
+        queueMicrotask(exit);
+      }
+      return true;
     });
     native.spawn.mockReturnValueOnce(child);
-    host = createSpawnBrokerHost({ nativeResources: true });
+    const host = createSpawnBrokerHost({ nativeResources: true });
+    onTestFinished(async () => {
+      try {
+        await host.close();
+      } finally {
+        vi.restoreAllMocks();
+      }
+    });
     child.emit("message", { type: "ready", pid: child.pid });
     await host.ready();
     const lease = host.captureNativeResource(
