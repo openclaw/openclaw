@@ -47,7 +47,16 @@ it.each([false, true])(
 
     expect(prepare.mock.calls).toEqual(
       recover
-        ? [[expect.objectContaining({ ...REQUEST, assertCurrent: expect.any(Function) })]]
+        ? [
+            [
+              expect.objectContaining({
+                sessionId: REQUEST.sessionId,
+                sessionKey: REQUEST.sessionKey,
+                agentId: REQUEST.agentId,
+                assertCurrent: expect.any(Function),
+              }),
+            ],
+          ]
         : [],
     );
     await store.releaseTurn(await claimLocal("recovered"));

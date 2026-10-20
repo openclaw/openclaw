@@ -78,17 +78,18 @@ export function pendingPortalTransport(params: {
     }
     return await pending.promise;
   });
+  const transport: NodeWorkerSupervisorTransport = {
+    async getCurrentNode(nodeId) {
+      return (await this.listCurrentNodes()).find((node) => node.nodeId === nodeId);
+    },
+    listCurrentNodes: async () => [params.proof],
+    hasCurrentRunner: (nodeId) => nodeId === params.proof.nodeId && params.isProofCurrent(),
+    isCurrent: () => params.isProofCurrent(),
+    invoke,
+  };
   return {
     invoke,
-    transport: {
-      async getCurrentNode(nodeId) {
-        return (await this.listCurrentNodes()).find((node) => node.nodeId === nodeId);
-      },
-      listCurrentNodes: async () => [params.proof],
-      hasCurrentRunner: (nodeId) => nodeId === params.proof.nodeId && params.isProofCurrent(),
-      isCurrent: () => params.isProofCurrent(),
-      invoke,
-    } satisfies NodeWorkerSupervisorTransport,
+    transport,
     dropNext() {
       const complete = expectDefined(completions.shift(), "active portal invocation");
       complete({ ok: false, error: { code: "DISCONNECTED", message: "node disconnected" } });

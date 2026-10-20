@@ -26,7 +26,9 @@ export function registerCopilotCleanupTests({
     try {
       if (stage === "auth") {
         const auth = { useLoggedInUser: false, gitHubToken: "synthetic-token" };
-        await expect(copilot.runCopilotAttempt({ ...base, auth }, { pool })).rejects.toThrow(
+        const invalidAuth = { ...base, auth } satisfies Params &
+          Pick<import("./attempt-types.js").AttemptParamsLike, "auth">;
+        await expect(copilot.runCopilotAttempt(invalidAuth, { pool })).rejects.toThrow(
           "gitHubToken auth requires profileId+profileVersion",
         );
       } else {

@@ -30,11 +30,14 @@ const input: Omit<Parameters<typeof createWorkerPreparationIdentity>[0], "projec
   setupRecipe: "f".repeat(40),
 };
 const { project: _project, setupRecipe: _setupRecipe, ...runtime } = input;
-type InputChange = {
-  [K in keyof typeof input]?: (typeof input)[K] extends object
-    ? Partial<(typeof input)[K]>
-    : (typeof input)[K];
-};
+type InputChange = Omit<
+  {
+    [K in keyof typeof input]?: (typeof input)[K] extends object
+      ? Partial<(typeof input)[K]>
+      : (typeof input)[K];
+  },
+  "profileSnapshot"
+> & { profileSnapshot?: (typeof input)["profileSnapshot"] };
 const makeInput = (change: InputChange) => ({
   ...input,
   ...change,

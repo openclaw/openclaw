@@ -35,7 +35,7 @@ it.each([0, 1])("buffers tool text around thinking at content index %s", async (
       : [...toolEvents, "thinking_delta"]),
     "done",
   ]);
-  const thinkingEvent = events[thinkingIndex === 0 ? 1 : 4];
+  const thinkingEvent = record(events[thinkingIndex === 0 ? 1 : 4], "thinking event");
   expect(thinkingEvent.contentIndex).toBe(thinkingIndex);
   const promoted = expect.objectContaining({
     type: "toolCall",

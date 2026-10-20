@@ -1,4 +1,4 @@
-import { afterEach, expect, it } from "vitest";
+import { expect, it, onTestFinished } from "vitest";
 import { configureExecutionDecisionWorkSink } from "../audit/execution-decision-work.js";
 import type { ExecutionDecisionWork } from "../audit/execution-decision-work.types.js";
 import {
@@ -17,10 +17,11 @@ const route = {
 
 function captureWork() {
   const captured: ExecutionDecisionWork[] = [];
-  configureExecutionDecisionWorkSink((work) => {
+  const restore = configureExecutionDecisionWorkSink((work) => {
     captured.push(work);
     return true;
   });
+  onTestFinished(restore);
   return captured;
 }
 
@@ -35,8 +36,6 @@ function prepareRoutingAdmission(runId: string) {
     },
   });
 }
-
-afterEach(() => configureExecutionDecisionWorkSink(() => false)());
 
 it("keeps a selected credential raw only in the private work ref", async () => {
   const captured = captureWork();

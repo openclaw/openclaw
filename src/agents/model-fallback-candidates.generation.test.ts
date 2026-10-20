@@ -51,7 +51,7 @@ function configuredModels(provider: string, ids: string[]) {
   const api = "openai-completions" as const;
   return {
     baseUrl,
-    models: ids.map((id) => makeProviderModelFixture({ id, provider, api, baseUrl })),
+    models: ids.map((id) => makeProviderModelFixture<typeof api>({ id, provider, api, baseUrl })),
   };
 }
 

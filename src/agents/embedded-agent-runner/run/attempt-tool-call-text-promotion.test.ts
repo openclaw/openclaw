@@ -102,7 +102,9 @@ it("preserves intervening thinking when promoting multiple text blocks", async (
     "toolcall_end",
     "done",
   ]);
-  expect([events[1], events[4], events[5]].map((event) => event.contentIndex)).toEqual([0, 1, 2]);
+  expect(
+    [events[1], events[4], events[5]].map((event) => record(event, "indexed event").contentIndex),
+  ).toEqual([0, 1, 2]);
   expect(result.content).toEqual([
     expect.objectContaining({ type: "toolCall", name: "exec", arguments: { command: "pwd" } }),
     expect.objectContaining({ type: "thinking" }),

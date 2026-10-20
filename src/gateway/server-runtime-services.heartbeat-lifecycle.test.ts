@@ -31,7 +31,7 @@ afterEach(() => {
   resetGatewayWorkAdmission();
 });
 
-it.sequential.each(["stop", "replace"] as const)(
+it.each(["stop", "replace"] as const)(
   "settles a wake when the service lifecycle chooses to %s during loading",
   async (action) => {
     const loading = createDeferredCore();

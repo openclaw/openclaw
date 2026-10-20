@@ -172,10 +172,19 @@ describe("Copilot canonical session persistence", () => {
           });
           const roles = rows.map((row) => row.message.role);
           expect(roles).toEqual(["user", "assistant", "toolResult", "assistant"]);
-          expect(rows.slice(1, 3).map((row) => row.message.idempotencyKey)).toEqual([
-            "copilot-sdk:sess-1:assistant-boundary",
-            "copilot-sdk:sess-1:result-boundary",
-          ]);
+          expect(rows[1]?.message).toMatchObject({
+            idempotencyKey: "copilot-sdk:sess-1:assistant-boundary",
+            content: [
+              { type: "text", text: "checking" },
+              { type: "toolCall", id: "call-boundary", name: "read", arguments: {} },
+            ],
+          });
+          expect(rows[2]?.message).toMatchObject({
+            idempotencyKey: "copilot-sdk:sess-1:result-boundary",
+            toolCallId: "call-boundary",
+            toolName: "read",
+            content: [{ type: "text", text: "result" }],
+          });
           expect(result.messagesSnapshot).toEqual(rows.map((row) => row.message));
         } else {
           expect(rows).toEqual(prefix);

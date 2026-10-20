@@ -64,7 +64,7 @@ it("suppresses zero-argument XML text over the byte cap instead of flushing it",
   const result = record(await stream.result(), "result message");
 
   expect(events.map((event) => event.type)).toEqual(["start", "thinking_delta", "done"]);
-  const thinkingEvent = events[1];
+  const thinkingEvent = record(events[1], "thinking event");
   expect(record(thinkingEvent.partial, "thinking partial").content).toEqual([
     { type: "text", text: "" },
     { type: "thinking", thinking: "still thinking" },
