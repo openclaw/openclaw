@@ -14,6 +14,11 @@ import { replaceSessionEntry } from "./session-accessor.js";
 const sessionKey = "agent:main:delivery-fallback";
 const deliveryContext = { channel: "telegram", to: "telegram:123456", accountId: "default" };
 const expected = { deliveryContext, threadId: undefined };
+const missing = { deliveryContext: undefined, threadId: undefined };
+async function expectDelivery(cfg: OpenClawConfig, result: typeof expected | typeof missing) {
+  expect(await extractDeliveryInfo(sessionKey, { cfg })).toEqual(result);
+  expect(await extractDeliveryInfoBatch([{ sessionKey }], { cfg })).toEqual([result]);
+}
 
 async function seedFallback(state: OpenClawTestState) {
   setRuntimeConfigSnapshot({});
@@ -37,11 +42,8 @@ it("recovers a same-agent route past an empty absent primary", async () => {
   await withOpenClawTestState({ label: "delivery-missing-primary" }, async (state) => {
     const { cfg, primaryPath } = await seedFallback(state);
 
-    const scalar = await extractDeliveryInfo(sessionKey, { cfg });
-    const batch = await extractDeliveryInfoBatch([{ sessionKey }], { cfg });
-
+    await expectDelivery(cfg, expected);
     expect(fs.existsSync(primaryPath)).toBe(false);
-    expect({ scalar, batch }).toEqual({ scalar: expected, batch: [expected] });
   });
 });
 
@@ -57,13 +59,7 @@ it.each(["uninitialized", "corrupt"] as const)(
         fs.writeFileSync(primaryPath, "not a SQLite database");
       }
       const before = fs.readFileSync(primaryPath);
-      expect(await extractDeliveryInfo(sessionKey, { cfg })).toEqual({
-        deliveryContext: undefined,
-        threadId: undefined,
-      });
-      expect(await extractDeliveryInfoBatch([{ sessionKey }], { cfg })).toEqual([
-        { deliveryContext: undefined, threadId: undefined },
-      ]);
+      await expectDelivery(cfg, missing);
       expect(fs.readFileSync(primaryPath)).toEqual(before);
     });
   },
@@ -94,7 +90,6 @@ it("keeps explicit delivery ownership through alias lookup and rejects conflicti
         },
       );
     }
-    const missing = { deliveryContext: undefined, threadId: undefined };
     const selected = { deliveryContext: routes.ops, threadId: undefined };
     expect(await extractDeliveryInfo("global", { cfg })).toEqual({
       deliveryContext: routes.main,

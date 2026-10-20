@@ -30,16 +30,17 @@ vi.mock("./store-maintenance-runtime.js", async (importOriginal) => ({
 
 it("preserves receipt and manifest sources without canonical entries during enforced cleanup", async () => {
   await withOpenClawTestState({ label: "cleanup-deferred-sources" }, async (state) => {
-    const storePath = path.join(state.sessionsDir("main"), "sessions.json");
+    const sessionPath = (name: string) => path.join(state.sessionsDir("main"), name);
+    const storePath = sessionPath("sessions.json");
     fs.mkdirSync(path.dirname(storePath), { recursive: true });
     replaceSessionEntrySync(
       { agentId: "main", sessionKey: "agent:main:current", storePath },
       { sessionId: "current", updatedAt: Date.now() },
     );
     fs.writeFileSync(storePath, "{}");
-    const sourcePath = path.join(path.dirname(storePath), "retained.jsonl");
-    const pointerPath = path.join(path.dirname(storePath), "retained.trajectory-path.json");
-    const orphanPath = path.join(path.dirname(storePath), "orphan.jsonl");
+    const sourcePath = sessionPath("retained.jsonl");
+    const pointerPath = sessionPath("retained.trajectory-path.json");
+    const orphanPath = sessionPath("orphan.jsonl");
     const sourceBytes = '{"type":"message","message":{"role":"user","content":"retained"}}\n';
     fs.writeFileSync(sourcePath, sourceBytes);
     fs.writeFileSync(pointerPath, '{"runtimeFile":"archived.trajectory.jsonl"}');
@@ -64,9 +65,9 @@ it("preserves receipt and manifest sources without canonical entries during enfo
     });
     const migrationTarget = { ...target, sqlitePath };
     const run = createSessionSqliteMigrationRun(state.env, [migrationTarget]);
-    const pendingPath = path.join(path.dirname(storePath), "pending.jsonl");
-    const dependencyPath = path.join(path.dirname(storePath), "pending.trajectory-path.json");
-    const disposedPath = path.join(path.dirname(storePath), "disposed.jsonl");
+    const pendingPath = sessionPath("pending.jsonl");
+    const dependencyPath = sessionPath("pending.trajectory-path.json");
+    const disposedPath = sessionPath("disposed.jsonl");
     for (const file of [pendingPath, dependencyPath, disposedPath]) {
       fs.writeFileSync(file, "manifest source");
       fs.utimesSync(file, old, old);
@@ -108,10 +109,8 @@ it("preserves receipt and manifest sources without canonical entries during enfo
     });
     expect(applied.appliedSummaries[0]?.unreferencedArtifacts.removedFiles).toBe(2);
     expect(fs.readFileSync(sourcePath, "utf8")).toBe(sourceBytes);
-    expect(fs.existsSync(pointerPath)).toBe(true);
-    expect(fs.existsSync(pendingPath)).toBe(true);
-    expect(fs.existsSync(dependencyPath)).toBe(true);
-    expect(fs.existsSync(orphanPath)).toBe(false);
-    expect(fs.existsSync(disposedPath)).toBe(false);
+    expect(
+      [pointerPath, pendingPath, dependencyPath, orphanPath, disposedPath].map(fs.existsSync),
+    ).toEqual([true, true, true, false, false]);
   });
 });

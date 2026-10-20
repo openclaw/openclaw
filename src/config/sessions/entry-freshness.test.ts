@@ -15,8 +15,17 @@ import {
   replaceSessionEntry,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
+import type { SessionEntry } from "./types.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const now = Date.parse("2026-01-02T12:00:00Z");
+const freshEntry = (sessionId: string, overrides: Partial<SessionEntry> = {}) => ({
+  sessionId,
+  updatedAt: now,
+  sessionStartedAt: now,
+  lastInteractionAt: now,
+  ...overrides,
+});
 
 describe("resolveSessionEntryResetFreshness", () => {
   let tempDirs: string[] = [];
@@ -36,16 +45,18 @@ describe("resolveSessionEntryResetFreshness", () => {
     cleanupTempDirs(tempDirs);
   });
 
+  const params = (sessionKey: string) => ({
+    sessionKey,
+    storePath,
+    sessionCfg: {},
+    resetType: "thread" as const,
+    now,
+  });
+
   it.each([resolveSessionEntryResetFreshness, resolveSessionEntryResetFreshnessAsync])(
     "returns missing state with a resolved reset policy for absent entries (%s)",
     async (resolveFreshness) => {
-      const result = await resolveFreshness({
-        sessionKey: "agent:main:missing:thread:100.000",
-        storePath,
-        sessionCfg: {},
-        resetType: "thread",
-        now: new Date("2026-01-02T12:00:00Z").getTime(),
-      });
+      const result = await resolveFreshness(params("agent:main:missing:thread:100.000"));
 
       expect(result).toMatchObject({
         state: "missing",
@@ -62,71 +73,45 @@ describe("resolveSessionEntryResetFreshness", () => {
 
   it("uses the configured default agent for an unqualified session key", async () => {
     const sessionKey = "global";
-    const now = new Date("2026-01-02T12:00:00Z").getTime();
     await upsertSessionEntryCore(
       { agentId: "ops", defaultAgentId: "ops", sessionKey, storePath },
-      {
-        sessionId: "session-global-ops",
-        updatedAt: now,
-        sessionStartedAt: now,
-        lastInteractionAt: now,
-      },
+      freshEntry("session-global-ops"),
     );
 
     const result = resolveSessionEntryResetFreshness({
+      ...params(sessionKey),
       defaultAgentId: "ops",
-      sessionKey,
-      storePath,
-      sessionCfg: {},
       resetType: "direct",
-      now,
     });
 
-    expect(result.state).toBe("fresh");
-    expect(result.entry?.sessionId).toBe("session-global-ops");
+    expect(result).toMatchObject({ state: "fresh", entry: { sessionId: "session-global-ops" } });
   });
 
   it("keeps provider-owned sessions fresh when reset policy is implicit", async () => {
     const sessionKey = "agent:main:main:thread:provider-owned";
-    const now = new Date("2026-01-02T12:00:00Z").getTime();
     await upsertSessionEntryCore(
       { sessionKey, storePath },
-      {
-        sessionId: "session-provider-owned",
-        updatedAt: now,
+      freshEntry("session-provider-owned", {
         sessionStartedAt: now - 2 * DAY_MS,
         lastInteractionAt: now - 2 * DAY_MS,
         providerOverride: "claude-cli",
         cliSessionBindings: {
           "claude-cli": { sessionId: "cli-session-provider-owned" },
         },
-      },
+      }),
     );
 
-    const result = resolveSessionEntryResetFreshness({
-      sessionKey,
-      storePath,
-      sessionCfg: {},
-      resetType: "thread",
-      now,
-    });
+    const result = resolveSessionEntryResetFreshness(params(sessionKey));
 
-    expect(result.state).toBe("fresh");
-    expect(result.freshness).toMatchObject({ fresh: true });
+    expect(result).toMatchObject({ state: "fresh", freshness: { fresh: true } });
   });
 
   it("resolves the store path from session config", async () => {
     const sessionKey = "agent:main:main:thread:configured-store";
-    const now = new Date("2026-01-02T12:00:00Z").getTime();
     const configuredStorePath = path.join(tempDir, "configured-sessions.json");
     await upsertSessionEntryCore(
       { sessionKey, storePath: configuredStorePath },
-      {
-        sessionId: "session-configured-store",
-        updatedAt: now,
-        sessionStartedAt: now,
-        lastInteractionAt: now - 60 * 60 * 1000,
-      },
+      freshEntry("session-configured-store", { lastInteractionAt: now - 60 * 60 * 1000 }),
     );
 
     const result = resolveSessionEntryResetFreshness({
@@ -136,15 +121,11 @@ describe("resolveSessionEntryResetFreshness", () => {
       now,
     });
 
-    expect(result.state).toBe("stale");
-    expect(result.entry?.sessionId).toBe("session-configured-store");
-    expect(result.resetPolicy).toMatchObject({
-      mode: "idle",
-      idleMinutes: 30,
-    });
-    expect(result.freshness).toMatchObject({
-      fresh: false,
-      staleReason: "idle",
+    expect(result).toMatchObject({
+      state: "stale",
+      entry: { sessionId: "session-configured-store" },
+      resetPolicy: { mode: "idle", idleMinutes: 30 },
+      freshness: { fresh: false, staleReason: "idle" },
     });
   });
 
@@ -153,7 +134,6 @@ describe("resolveSessionEntryResetFreshness", () => {
     async (resolveFreshness) => {
       const sessionKey = "agent:main:main:thread:header";
       const sessionId = "session-header-fallback";
-      const now = new Date("2026-01-02T12:00:00Z").getTime();
       const headerTimestamp = new Date(now - 2 * DAY_MS).toISOString();
       const target = { agentId: "main", sessionId, sessionKey, storePath };
       const entry = await replaceSessionEntry(target, { sessionId, updatedAt: now });
@@ -167,16 +147,15 @@ describe("resolveSessionEntryResetFreshness", () => {
       });
 
       const result = await resolveFreshness({
-        sessionKey,
-        storePath,
+        ...params(sessionKey),
         sessionCfg: { reset: { mode: "daily" } },
-        resetType: "thread",
-        now,
       });
 
-      expect(result.state).toBe("stale");
-      expect(result.lifecycleTimestamps.sessionStartedAt).toBe(Date.parse(headerTimestamp));
-      expect(result.freshness).toMatchObject({ fresh: false, staleReason: "daily" });
+      expect(result).toMatchObject({
+        state: "stale",
+        lifecycleTimestamps: { sessionStartedAt: Date.parse(headerTimestamp) },
+        freshness: { fresh: false, staleReason: "daily" },
+      });
     },
   );
 });

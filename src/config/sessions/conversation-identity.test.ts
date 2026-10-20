@@ -15,14 +15,16 @@ type LegacyDeliveryFixture = SessionEntry & {
   lastChannel?: string;
 };
 
-function conversationIdentityFromSessionEntry(entry: LegacyDeliveryFixture) {
-  return conversationIdentityFromCanonicalSessionEntry(normalizeLegacySessionEntryDelivery(entry));
+function conversationIdentityFromSessionEntry(
+  entry: Omit<LegacyDeliveryFixture, "sessionId" | "updatedAt">,
+) {
+  return conversationIdentityFromCanonicalSessionEntry(
+    normalizeLegacySessionEntryDelivery({ sessionId: "session-main", updatedAt: 100, ...entry }),
+  );
 }
 
 function directEntry(peer: string) {
   return {
-    sessionId: "session-main",
-    updatedAt: 100,
     chatType: "direct" as const,
     deliveryContext: {
       channel: "reef",
@@ -41,8 +43,6 @@ describe("conversation identity", () => {
   it("does not present a stripped peer id as an exact delivery target", () => {
     expect(
       conversationIdentityFromSessionEntry({
-        sessionId: "session-1",
-        updatedAt: 1,
         chatType: "channel",
         channel: "discord",
         groupId: "ops-room",
@@ -52,8 +52,6 @@ describe("conversation identity", () => {
 
   it("keeps a paired canonical outbound peer separate from its delivery alias", () => {
     const identity = conversationIdentityFromSessionEntry({
-      sessionId: "session-main",
-      updatedAt: 100,
       chatType: "direct",
       deliveryContext: {
         channel: "discord",
@@ -71,18 +69,16 @@ describe("conversation identity", () => {
     });
 
     expect(identity).toMatchObject({
+      conversationRef: "conv_a97f28e8d3dd98471fb5d4127b1e8635",
       channel: "discord",
       deliveryTarget: "user:delivery-alias-456",
       nativeDirectUserId: "canonical-peer-123",
       peerId: "canonical-peer-123",
     });
-    expect(identity?.conversationRef).toBe("conv_a97f28e8d3dd98471fb5d4127b1e8635");
   });
 
   it("keeps fallback origin targets paired with their origin channel", () => {
     const identity = conversationIdentityFromSessionEntry({
-      sessionId: "session-main",
-      updatedAt: 100,
       chatType: "direct",
       channel: "discord",
       origin: {
@@ -121,36 +117,31 @@ describe("conversation identity", () => {
     );
   });
 
-  it.each(["heartbeat"] as const)(
-    "binds synthetic %s metadata to its originating direct route, not its execution sender",
-    (source) => {
-      const identity = conversationIdentityFromMsgContext({
-        ctx: {
-          Provider: "reef",
-          ChatType: "direct",
-          From: "reef:owner",
-          To: "reef:owner",
-          InternalTurnSource: source,
-          OriginatingChannel: "reef",
-          OriginatingTo: "reef:peer-b",
-          AccountId: "work",
-          MessageThreadId: "thread-b",
-        },
-      });
-      expect(identity).toMatchObject({
-        kind: "direct",
-        accountId: "work",
-        deliveryTarget: "reef:peer-b",
-        peerId: "peer-b",
-        threadId: "thread-b",
-      });
-    },
-  );
+  it("binds synthetic heartbeat metadata to its originating direct route, not its execution sender", () => {
+    const identity = conversationIdentityFromMsgContext({
+      ctx: {
+        Provider: "reef",
+        ChatType: "direct",
+        From: "reef:owner",
+        To: "reef:owner",
+        InternalTurnSource: "heartbeat",
+        OriginatingChannel: "reef",
+        OriginatingTo: "reef:peer-b",
+        AccountId: "work",
+        MessageThreadId: "thread-b",
+      },
+    });
+    expect(identity).toMatchObject({
+      kind: "direct",
+      accountId: "work",
+      deliveryTarget: "reef:peer-b",
+      peerId: "peer-b",
+      threadId: "thread-b",
+    });
+  });
 
   it("derives the same threaded address from live and persisted route facts", () => {
     const persisted = conversationIdentityFromSessionEntry({
-      sessionId: "thread-session",
-      updatedAt: 100,
       chatType: "channel",
       groupId: "ops-room",
       deliveryContext: {
