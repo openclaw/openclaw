@@ -1,5 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { expect, it } from "vitest";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   mockedBuildAgentRuntimePlan,
@@ -10,84 +9,67 @@ import {
 } from "./run.overflow-compaction.harness.js";
 import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
 
-let state: OpenClawTestState;
-let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
+it("keeps latest physical-attempt metadata on retry exhaustion", async ({ onTestFinished }) => {
+  const runEmbeddedAgent = await loadSharedRunIntegrationHarness();
+  resetSharedRunIntegrationHarnessMocks();
+  const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
+  const state = await createOpenClawTestState({ label: "run.retry-limit" });
+  onTestFinished(() => state.cleanup());
+  const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+  setRuntimeConfigSnapshot({});
+  useOpenAIPlatformAuthFixture();
+  const credentialSource = {
+    kind: "direct",
+    evidence: "environment",
+    authorization: "ambient",
+  } as const;
+  let physicalAttempt = 0;
+  mockedBuildAgentRuntimePlan.mockImplementation(() => {
+    physicalAttempt += 1;
+    return {
+      resolvedRef: { provider: "openai", modelId: "gpt-5.6-luna" },
+      auth: {
+        authProfileProviderForAuth: "openai",
+        providerForAuth: "openai",
+        credentialSource: physicalAttempt === 32 ? { ...credentialSource } : { kind: "profile" },
+      },
+      observability: {
+        resolvedRef: "openai/gpt-5.6-luna",
+        provider: "openai",
+        modelId: "gpt-5.6-luna",
+        harnessId: "codex",
+      },
+    } as never;
+  });
+  const accepted = {
+    runId: "collector-before-retry",
+    childSessionKey: "agent:main:subagent:collector",
+    expectsCompletionMessage: false,
+  };
+  mockedRunEmbeddedAttempt.mockImplementation(async () =>
+    makeAttemptResult({
+      acceptedSessionSpawns: physicalAttempt === 1 ? [accepted] : [],
+      preflightRecovery: {
+        route: "truncate_tool_results_only",
+        source: "mid-turn",
+        handled: true,
+        truncatedCount: 0,
+      },
+    }),
+  );
 
-describe("runEmbeddedAgent retry-limit metadata", () => {
-  beforeAll(async () => {
-    runEmbeddedAgent = await loadSharedRunIntegrationHarness();
+  const result = await runEmbeddedAgent({
+    ...createOverflowRunParams(state),
+    provider: "openai",
+    model: "gpt-5.6-luna",
+    runId: "run-retry-limit-physical-attempt-meta",
   });
 
-  beforeEach(async () => {
-    resetSharedRunIntegrationHarnessMocks();
-    const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
-    state = await createOpenClawTestState({ label: "run.retry-limit" });
-    const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
-    setRuntimeConfigSnapshot({});
-    useOpenAIPlatformAuthFixture();
+  expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(32);
+  expect(result.acceptedSessionSpawns).toEqual([accepted]);
+  expect(result.meta).toMatchObject({
+    error: { kind: "retry_limit" },
+    agentMeta: { provider: "openai", model: "gpt-5.6-luna" },
   });
-
-  afterEach(async () => {
-    await state?.cleanup();
-  });
-
-  it("reports the latest physical attempt after ordinary retry-budget exhaustion", async () => {
-    const credentialSource = {
-      kind: "direct",
-      evidence: "environment",
-      authorization: "ambient",
-    } as const;
-    let physicalAttempt = 0;
-    mockedBuildAgentRuntimePlan.mockImplementation(() => {
-      physicalAttempt += 1;
-      const isLatestAttempt = physicalAttempt === 32;
-      return {
-        resolvedRef: { provider: "openai", modelId: "gpt-5.6-luna" },
-        auth: {
-          authProfileProviderForAuth: "openai",
-          providerForAuth: "openai",
-          credentialSource: isLatestAttempt ? credentialSource : { kind: "profile" },
-        },
-        observability: {
-          resolvedRef: "openai/gpt-5.6-luna",
-          provider: "openai",
-          modelId: "gpt-5.6-luna",
-          harnessId: "codex",
-        },
-      } as never;
-    });
-    const accepted = {
-      runId: "collector-before-retry",
-      childSessionKey: "agent:main:subagent:collector",
-      expectsCompletionMessage: false,
-    };
-    mockedRunEmbeddedAttempt.mockImplementation(async () =>
-      makeAttemptResult({
-        acceptedSessionSpawns: physicalAttempt === 1 ? [accepted] : [],
-        preflightRecovery: {
-          route: "truncate_tool_results_only",
-          source: "mid-turn",
-          handled: true,
-          truncatedCount: 0,
-        },
-      }),
-    );
-
-    const result = await runEmbeddedAgent({
-      ...createOverflowRunParams(state),
-      provider: "openai",
-      model: "gpt-5.6-luna",
-      runId: "run-retry-limit-physical-attempt-meta",
-    });
-
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(32);
-    expect(result.meta.error?.kind).toBe("retry_limit");
-    expect(result.acceptedSessionSpawns).toEqual([accepted]);
-    expect(result.meta.agentMeta).toMatchObject({ provider: "openai", model: "gpt-5.6-luna" });
-    expect(result.meta.agentMeta?.credentialSource).toEqual({
-      kind: "direct",
-      evidence: "environment",
-      authorization: "ambient",
-    });
-  });
+  expect(result.meta.agentMeta?.credentialSource).toEqual(credentialSource);
 });
