@@ -57,6 +57,8 @@ const { values } = parseArgs({
     allocations: { type: "boolean", default: false },
     diagnostics: { type: "boolean", default: false },
     "cpu-profile": { type: "boolean", default: false },
+    "workload-cpu-profile": { type: "boolean", default: false },
+    "capture-responses": { type: "boolean", default: false },
     "trace-gc": { type: "boolean", default: false },
     "stress-tools": { type: "boolean", default: false },
     "mixed-rpc": { type: "boolean", default: false },
@@ -137,11 +139,12 @@ const turnScenario =
 if (
   !values.allocations &&
   !values["stream-start-allocations"] &&
+  !values["workload-cpu-profile"] &&
   scenario !== "transcript-broadcast" &&
   !retentionScenario &&
   !soakScenario
 ) {
-  throw new Error("--scenario requires --allocations");
+  throw new Error("--scenario requires --allocations or --workload-cpu-profile");
 }
 const operations = integer(
   values.operations ??
@@ -216,6 +219,20 @@ if (recapBurstRepeats && (!values["activity-summaries"] || !turnScenario)) {
 }
 if ((values["cpu-profile"] || values["stream-start-diagnostics"]) && !turnScenario) {
   throw new Error("--cpu-profile and --stream-start-diagnostics require a turn scenario");
+}
+if (values["workload-cpu-profile"] && values["cpu-profile"]) {
+  throw new Error("--workload-cpu-profile and --cpu-profile cannot capture CPU simultaneously");
+}
+if (
+  values["workload-cpu-profile"] &&
+  (values.allocations ||
+    values["trace-gc"] ||
+    values["stream-start-allocations"] ||
+    (soakScenario && retainedProfileMs > 0))
+) {
+  throw new Error(
+    "--workload-cpu-profile needs a separate pass without --allocations, --trace-gc, --stream-start-allocations, or memory-soak retained heap capture (--retained-profile-ms 0)",
+  );
 }
 if (values["stream-start-allocations"] && (!turnScenario || values.allocations)) {
   throw new Error("--stream-start-allocations requires a turn scenario without --allocations");
@@ -719,7 +736,12 @@ const responseFrameBytes = new WeakMap<
   ReturnType<typeof createGatewayWsClient>,
   Map<string, number>
 >();
-const rpcMeasurements = new Map<string, { latenciesMs: number[]; responseBytes: number }>();
+type RpcMeasurement = {
+  latenciesMs: number[];
+  responseBytes: number;
+  representativeResponse?: { payload: unknown };
+};
+const rpcMeasurements = new Map<string, RpcMeasurement>();
 const handshakeLatenciesMs: number[] = [];
 const reconnectStorms: Array<{
   clients: number;
@@ -967,10 +989,16 @@ async function rpc(
     );
   }
   if (measuring) {
-    const measured = rpcMeasurements.get(method) ?? { latenciesMs: [], responseBytes: 0 };
+    const measured: RpcMeasurement = rpcMeasurements.get(method) ?? {
+      latenciesMs: [],
+      responseBytes: 0,
+    };
     const bytes = responseFrameBytes.get(client)?.get(response.id);
     if (bytes === undefined) {
       throw new Error(`missing wire response size for ${method}`);
+    }
+    if (values["capture-responses"] && measured.latenciesMs.length === 0) {
+      measured.representativeResponse = { payload: response.payload };
     }
     measured.latenciesMs.push(rpcDurationMs);
     measured.responseBytes += bytes;
@@ -1938,7 +1966,10 @@ try {
       ? startGatewayBenchDiagnostics()
       : undefined;
     const before = await readGatewayCpuUsage(gateway);
-    measuring = true;
+    const workloadCpuProfilePath = values["workload-cpu-profile"]
+      ? path.join(output, `workload-${round}.cpuprofile`)
+      : undefined;
+    measuring = !workloadCpuProfilePath;
     const rpcLatencies: Record<string, number[]> = {
       "sessions.list": [],
       "chat.history": [],
@@ -2091,17 +2122,29 @@ try {
         await listWork;
       }
     };
+    const measuredWorkload = workloadCpuProfilePath
+      ? async () => {
+          await controlGatewayProfile(measuredGateway, "cpu", "start", workloadCpuProfilePath);
+          measuring = true;
+          try {
+            await workload();
+          } finally {
+            measuring = false;
+            await controlGatewayProfile(measuredGateway, "cpu", "stop", workloadCpuProfilePath);
+          }
+        }
+      : workload;
     const allocation =
       values.allocations && !soakScenario
         ? await measureGatewayAllocations(
             gateway,
             path.join(output, `allocation-${round}.heapprofile`),
             turnScenario ? runCount : operations,
-            workload,
+            measuredWorkload,
           )
         : undefined;
     if (!values.allocations || soakScenario) {
-      await workload();
+      await measuredWorkload();
     }
     if (values["mixed-rpc"] && Object.values(rpcLatencies).some((latencies) => !latencies.length)) {
       throw new Error("mixed RPC workload must observe every method; increase cohort duration");
@@ -2189,6 +2232,9 @@ try {
       round,
       scenario,
       allocation,
+      ...(workloadCpuProfilePath
+        ? { workloadCpuProfile: summarizeCpuProfile(workloadCpuProfilePath) }
+        : {}),
       rpc: Object.fromEntries(
         [...rpcMeasurements].map(([method, measurements]) => [
           method,
@@ -2197,6 +2243,9 @@ try {
             callsPerMinute: (measurements.latenciesMs.length / cpu.wallMs) * 60_000,
             responseBytes: measurements.responseBytes,
             responseBytesPerCall: measurements.responseBytes / measurements.latenciesMs.length,
+            ...(measurements.representativeResponse
+              ? { representativeResponse: measurements.representativeResponse }
+              : {}),
           },
         ]),
       ),
@@ -2279,7 +2328,11 @@ try {
       sessionEventsPerSecond: (sourceEvents / cpu.wallMs) * 1000,
     };
     samples.push(sample);
-    console.log(JSON.stringify(sample));
+    console.log(
+      JSON.stringify(sample, (key, value) =>
+        key === "representativeResponse" ? undefined : value,
+      ),
+    );
     if (soakScenario) {
       if (Date.now() - (memorySamples.at(-1)?.atEpochMs ?? 0) >= memoryIntervalMs) {
         await sampleMemory();
@@ -2437,6 +2490,8 @@ try {
     pollSeed: values["poll-seed"] ?? null,
     diagnostics: values.diagnostics,
     cpuProfile: values["cpu-profile"],
+    workloadCpuProfile: values["workload-cpu-profile"],
+    captureResponses: values["capture-responses"],
     traceGc: values["trace-gc"] || values.allocations || values["stream-start-allocations"],
     streamStartDiagnostics: values["stream-start-diagnostics"],
     streamStartAllocations: values["stream-start-allocations"],

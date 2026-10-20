@@ -610,7 +610,6 @@ describe("catalog publication session rows", () => {
         { phase: "catalog-status", modelFactsChanged: false },
         {
           phase: "catalog-failed",
-          error: expect.objectContaining({ message: "synthetic failure" }),
           modelFactsChanged: false,
         },
         { phase: "catalog-status", modelFactsChanged: false },

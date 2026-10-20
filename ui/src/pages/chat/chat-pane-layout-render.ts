@@ -8,6 +8,8 @@ import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { resolveSessionWorkspace } from "../../lib/sessions/workspace.ts";
+import { clawCreatorFlow } from "../claws/creator-flow.ts";
+import { canCreateClawDraft } from "../claws/draft-navigation.ts";
 import { PaneOutboxRecovery } from "./chat-outbox-recovery.tsx";
 import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
@@ -346,6 +348,10 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
         ),
       connected: state.connected,
       onClearCompanion: () => void this.clearSessionCompanion(),
+      onCreateClaw:
+        currentAgentId && canCreateClawDraft(this.context)
+          ? () => void clawCreatorFlow(this.context).start(currentAgentId)
+          : undefined,
       discussion,
       discussionAvailable,
       discussionOpenUrl: discussion?.openUrl ?? null,

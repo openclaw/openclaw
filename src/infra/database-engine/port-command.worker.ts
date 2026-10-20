@@ -87,14 +87,22 @@ async function inspectSqliteImage(
   descriptor: PortDescriptor,
   allowMigration = false,
 ) {
-  const { version, migrationRequired, pendingColumns } = descriptor.inspectSqliteSource?.(db) ?? {
+  const {
+    version,
+    migrationRequired: schemaMigrationRequired,
+    pendingColumns,
+  } = descriptor.inspectSqliteSource?.(db) ?? {
     version: (await import("../sqlite-user-version.js")).readSqliteUserVersion(db),
     migrationRequired: false,
     pendingColumns: {},
   };
+  // Port preparation also fills first-use columns that the live store may omit.
+  const migrationRequired =
+    schemaMigrationRequired || Object.values(pendingColumns).some((columns) => columns.length > 0);
   if (allowMigration && migrationRequired) {
-    // The family owner validates its historical shape before the private migration.
-    if (!descriptor.migrateSqliteSource) {
+    // Historical repairs use family admission; current first-use repairs still
+    // need the port's complete layout before preparing a private copy.
+    if (!schemaMigrationRequired || !descriptor.migrateSqliteSource) {
       inspectSqlitePortSchema(db, descriptor, pendingColumns);
     }
     return { version, migrationRequired };

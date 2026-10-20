@@ -932,6 +932,7 @@ src/infra/diagnostic-tool-execution-liveness.ts
 src/infra/diagnostic-trace-context.ts
 src/infra/diagnostic-trace-propagation.ts
 src/infra/diagnostics-timeline.ts
+src/infra/diff-read-timing.ts
 src/infra/directory-durability.ts
 src/infra/directory-watch-host.ts
 src/infra/disk-space.ts

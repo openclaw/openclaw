@@ -1282,7 +1282,6 @@ src/agents/sandbox/container-engine.ts	1
 src/agents/sandbox/podman-runtime.ts	1
 src/agents/sandbox/test-args.ts	1
 src/agents/session-activity-notes.ts	1
-src/agents/session-dirs.ts	2
 src/agents/session-model-auto-revert.ts	1
 src/agents/session-placement-admission.ts	1
 src/agents/session-suspension.ts	1
@@ -1608,7 +1607,6 @@ src/commands/doctor-session-transcript-labels.ts	1
 src/commands/doctor-session-transcripts.ts	1
 src/commands/doctor-skills.ts	1
 src/commands/doctor-sqlite-compact.ts	1
-src/commands/doctor-sqlite-maintenance-lock.ts	1
 src/commands/doctor-telegram-general-topic-conversations.ts	2
 src/commands/doctor-tools-md-migration.ts	5
 src/commands/doctor-workspace.ts	1
@@ -1774,7 +1772,7 @@ src/flows/channel-setup.status.ts	2
 src/flows/channel-setup.ts	3
 src/flows/doctor-health-contributions-final.ts	1
 src/flows/doctor-health-contributions.ts	1
-src/flows/doctor-removed-workspaces-state-check.ts	2
+src/flows/doctor-removed-workspaces-state-check.ts	1
 src/flows/search-setup.ts	1
 src/gateway/agent-runtime-identity-token.ts	1
 src/gateway/agent-turn/agent-dedupe.ts	3
@@ -2347,7 +2345,6 @@ src/shared/store-writer-queue.ts	1
 src/shared/worker-bundle-archive.ts	1
 src/skills/lifecycle/clawhub-install-core.ts	1
 src/skills/lifecycle/clawhub-store.ts	4
-src/skills/lifecycle/workspace-skill-write.ts	1
 src/skills/loading/frontmatter.ts	1
 src/skills/loading/workspace-skill-sync.runtime.ts	1
 src/skills/runtime/remote-probe-utils.ts	2

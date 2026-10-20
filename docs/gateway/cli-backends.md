@@ -362,6 +362,10 @@ openclaw models auth paste-token --provider anthropic
 
 A native login alone is an opaque CLI login for saved-history recovery: OpenClaw sees no account identity for it, and `--method cli` saves no auth profile. When a chat on it needs a fresh Claude session (an invalidated binding or a missing native transcript), OpenClaw logs `cli session history refused across auth boundary: reason=auth-unknown` and the new session receives only the metadata notice about earlier messages, not the saved transcript. Native resume of the same Claude session is unaffected. A saved subscription token is a resolved static credential, so chats started while it is selected recover their saved history in a fresh Claude session. See [History account boundaries](#history-account-boundaries).
 
+`auth-unknown` describes saved-history recovery, not a failed native login or a tool approval denial. Native tool approvals retain the originating turn and recheck its authority before allowing execution. A separate `approval-request-failed` exec denial means the approval decision could not be retrieved; inspect the Gateway's approval error rather than changing the history boundary.
+
+Native login makes the Claude CLI route available; it does not supply an Anthropic HTTP API key. If an HTTP caller selects that login, OpenClaw refuses the request before sending its discovery marker and reports that native authentication belongs to the `claude-cli` runtime. Select that runtime or configure an API credential for HTTP access.
+
 New sessions select saved subscription credentials through the configured account
 order and forward them to the CLI through a protected file descriptor. Existing
 sessions keep their account until you select another or remove its saved profile.

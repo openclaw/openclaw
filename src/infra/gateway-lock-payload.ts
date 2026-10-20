@@ -16,7 +16,9 @@ const host = z.string().min(1);
 export const GatewayProcessNamespaceSchema = z.discriminatedUnion("platform", [
   uuidBoot.extend({ host, platform: z.literal("linux"), pidNsInode: z.string().min(1) }),
   uuidBoot.extend({ host, platform: z.literal("darwin") }),
-  windowsBoot.extend({ host }),
+  // Windows uses host-scoped PIDs and absolute process-start identity. Keep
+  // accepting recorded boot timestamps, but do not require an unused CIM probe.
+  windowsBoot.extend({ host, identity: windowsBoot.shape.identity.optional() }),
   freebsdBoot.extend({ host }),
 ]);
 type ProcessNamespace = z.infer<typeof GatewayProcessNamespaceSchema>;
@@ -31,7 +33,10 @@ export function readGatewayLockProcessNamespace(): ProcessNamespace | null {
     return processNamespace.value;
   }
   try {
-    const boot = createManagedHandoffBootIdentityReader(process.env)();
+    const boot =
+      process.platform === "win32"
+        ? { platform: "win32" as const }
+        : createManagedHandoffBootIdentityReader(process.env)();
     const value = GatewayProcessNamespaceSchema.parse({
       host: os.hostname(),
       ...boot,

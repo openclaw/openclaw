@@ -20,7 +20,7 @@ import { makeAssistantMessageFixture } from "../../test-helpers/assistant-messag
 import { getCoreTtsAttemptResultMediaUrls } from "../../tools/tts-tool-result-provenance.js";
 import { recordEmbeddedToolReceipt } from "../tool-send-receipts.js";
 import { completeEmbeddedAttemptResult, createAttemptCarryover } from "./attempt-result.js";
-import { resolveSettledToolTerminalContinuationInstruction } from "./incomplete-turn-recovery.js";
+import { resolveSettledToolTerminalContinuation } from "./incomplete-turn-recovery.js";
 import { buildPayloads } from "./payloads.test-helpers.js";
 import { normalizeEmbeddedRunAttemptResult } from "./run-attempt-result.js";
 import type { EmbeddedRunAttemptResult, EmbeddedRunAttemptTrajectoryRecorder } from "./types.js";
@@ -788,7 +788,7 @@ describe("trailing source progress at runtime settlement", () => {
     subscription.unsubscribe();
     return {
       result,
-      finalizerInstruction: resolveSettledToolTerminalContinuationInstruction({
+      finalizerInstruction: resolveSettledToolTerminalContinuation({
         executionContract: "strict-agentic",
         allowEmptyStopContinuation: true,
         replyDeliveryState: result.sourceReplyDeliveryState ?? "missing",
@@ -813,8 +813,8 @@ describe("trailing source progress at runtime settlement", () => {
     if (delivered) {
       expect(finalizerInstruction).toBeNull();
     } else {
-      expect(finalizerInstruction).toContain("Your turn ended without a final reply.");
-      expect(finalizerInstruction).toContain("answer exactly NO_REPLY");
+      expect(finalizerInstruction?.instruction).toContain("Your turn ended without a final reply.");
+      expect(finalizerInstruction?.instruction).toContain("answer exactly NO_REPLY");
     }
   });
 });

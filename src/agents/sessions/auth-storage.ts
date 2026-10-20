@@ -742,7 +742,7 @@ export class AuthStorage {
     }
     const resolved = (apiKey: string | undefined) => ({ apiKey, source });
 
-    if (cred?.type === "api_key") {
+    if (cred?.type === "api_key" && !cred.nativeAuth) {
       return resolved(resolveConfigValue(cred.key));
     }
 

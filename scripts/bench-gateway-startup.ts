@@ -15,6 +15,9 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { PROTOCOL_VERSION } from "../packages/gateway-protocol/src/version.ts";
+import { isRecord } from "../packages/normalization-core/src/record-coerce.ts";
+import type { OpenClawConfig } from "../src/config/types.openclaw.js";
+import { validateConfigObjectRaw } from "../src/config/validation-core.js";
 import { writeBenchmarkJson } from "./lib/benchmark-harness.mts";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
 import { delay, stopChild } from "./lib/gateway-bench-child.ts";
@@ -59,6 +62,7 @@ import { createGatewayWsClient } from "./lib/gateway-ws-client.ts";
 
 type GatewayBenchCase = {
   agentTopology?: "incident-scale" | "single" | "shared-eleven-plus-distinct-one";
+  bundledPluginFixture?: OpenClawConfig;
   completionTracePhase?: string;
   config: Record<string, unknown>;
   env?: Record<string, string>;
@@ -131,6 +135,7 @@ const DEFAULT_RUNS = 5;
 const DEFAULT_WARMUP = 1;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_ENTRY = "dist/entry.js";
+const TEAM_BOOT_AUTH_TOKEN = "synthetic-startup-benchmark-token";
 const INCIDENT_COMBINED_HEALTHZ_P95_MAX_MS = 30_000;
 const INCIDENT_COMBINED_READYZ_P95_MAX_MS = 60_000;
 const BOOLEAN_FLAGS = new Set([
@@ -157,6 +162,7 @@ const VALUE_FLAGS = new Set([
   "--agent-database-mib",
   "--agent-gate-delay-ms",
   "--start-at",
+  "--bundled-plugin-fixture",
 ]);
 
 const BASE_CONFIG = BASE_GATEWAY_BENCH_CONFIG;
@@ -206,6 +212,7 @@ const GATEWAY_CASES: readonly GatewayBenchCase[] = [
     env: { OPENCLAW_SKIP_CHANNELS: "1" },
     config: {
       ...BASE_CONFIG,
+      gateway: { ...BASE_CONFIG.gateway, auth: { mode: "token", token: TEAM_BOOT_AUTH_TOKEN } },
       cron: { enabled: false },
       agents: { defaults: { heartbeat: { every: "0m" } } },
     },
@@ -406,9 +413,45 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
       throw new CliArgumentError("--installed-cohort requires --output");
     }
   }
+  let cases = installedCohort ? [] : resolveCases(flags.get("--case") ?? []);
+  const bundledPluginFixturePath = flags.get("--bundled-plugin-fixture")?.[0];
+  if (bundledPluginFixturePath !== undefined) {
+    if (cases.length !== 1 || cases[0]?.id !== "teamBoot") {
+      throw new CliArgumentError("--bundled-plugin-fixture requires --case teamBoot only");
+    }
+    const value: unknown = JSON.parse(readFileSync(bundledPluginFixturePath, "utf8"));
+    if (
+      !isRecord(value) ||
+      Object.keys(value).some((key) => !["plugins", "models", "tools", "channels"].includes(key))
+    ) {
+      throw new CliArgumentError(
+        "--bundled-plugin-fixture may configure only plugins, models, tools, and channels",
+      );
+    }
+    const validated = validateConfigObjectRaw(value);
+    if (!validated.ok) {
+      throw new CliArgumentError(
+        `--bundled-plugin-fixture has invalid config: ${validated.issues.map((issue) => issue.path).join(", ")}`,
+      );
+    }
+    const bundledPluginIds = validated.config.plugins?.allow ?? [];
+    if (
+      bundledPluginIds.length === 0 ||
+      bundledPluginIds.length > cases[0].pluginCount! ||
+      bundledPluginIds.some((id) => !id.trim()) ||
+      new Set(bundledPluginIds).size !== bundledPluginIds.length ||
+      validated.config.plugins?.load !== undefined
+    ) {
+      throw new CliArgumentError(
+        "--bundled-plugin-fixture requires 1–44 unique plugins.allow IDs and no plugins.load paths",
+      );
+    }
+    const { plugins, models, tools, channels } = validated.config;
+    cases = [{ ...cases[0], bundledPluginFixture: { plugins, models, tools, channels } }];
+  }
   return {
     ...parseGatewayBenchRuntimeOptions(flags),
-    cases: installedCohort ? [] : resolveCases(flags.get("--case") ?? []),
+    cases,
     cpuProfDir: flags.get("--cpu-prof-dir")?.[0],
     entry: resolveGatewayBenchEntry(flags.get("--entry")?.[0], DEFAULT_ENTRY),
     heapProfDir: flags.get("--heap-prof-dir")?.[0],
@@ -462,6 +505,7 @@ Options:
   --help, -h           Show this text
   --fixture-root <path> Prepared teamBoot or slowAgentDatabase fixture (requires --runs 1 --warmup 0)
   --seed-only         Create a new --fixture-root without launching a Gateway
+  --bundled-plugin-fixture <path> Synthetic plugins/models/tools/channels config for teamBoot
   --agent-database-mib <n> Synthetic slow-agent cache payload (default: 512)
   --agent-gate-delay-ms <n> Benchmark-only delay before the real integrity scan (default: 10000)
   --start-at <epoch-ms> Synchronize prepared fixture startup with a concurrent comparison
@@ -480,6 +524,12 @@ function summarizeCase(benchCase: GatewayBenchCase, samples: GatewaySample[]) {
   return {
     id: benchCase.id,
     name: benchCase.name,
+    ...(benchCase.id === "teamBoot"
+      ? {
+          expectedPluginCount: benchCase.pluginCount ?? 44,
+          bundledPluginIds: benchCase.bundledPluginFixture?.plugins?.allow ?? [],
+        }
+      : {}),
     samples,
     summary: {
       completionMs: summarize((sample) => sample.completionMs),
@@ -538,6 +588,24 @@ function collectResultFailures(results: CaseResult[]): BenchmarkFailure[] {
           sampleIndex: index + 1,
         });
         return;
+      }
+      if (result.expectedPluginCount !== undefined) {
+        const inventory = /http server listening \((\d+) plugins?: ([^;)]+)/u.exec(
+          sample.httpListenLogLine ?? "",
+        );
+        const loadedIds = new Set(inventory?.[2]?.split(", ") ?? []);
+        const missingBundled = result.bundledPluginIds?.filter((id) => !loadedIds.has(id)) ?? [];
+        if (
+          Number(inventory?.[1]) !== result.expectedPluginCount ||
+          loadedIds.size !== result.expectedPluginCount ||
+          missingBundled.length > 0
+        ) {
+          failures.push({
+            id: result.id,
+            reason: `plugin inventory mismatch: expected ${result.expectedPluginCount}, observed ${inventory?.[1] ?? "unreported"}; missing bundled: ${missingBundled.join(", ") || "none"}`,
+            sampleIndex: index + 1,
+          });
+        }
       }
       if (result.id === "slowAgentDatabase") {
         const gatePassed = sample.integrityGateMs!["gate-passed"]!;
@@ -839,10 +907,14 @@ async function withGatewayBenchRoot<T>(run: (root: string) => Promise<T>): Promi
 }
 
 function writeConfig(root: string, benchCase: GatewayBenchCase): string {
+  const fixture = benchCase.bundledPluginFixture;
+  const bundledPluginIds = fixture?.plugins?.allow ?? [];
   const hasCatalogFixture =
     benchCase.providerCatalogStallMs !== undefined ||
     benchCase.providerStaticCatalogStallMs !== undefined;
-  const pluginCount = hasCatalogFixture ? 1 : benchCase.pluginCount;
+  const pluginCount = hasCatalogFixture
+    ? 1
+    : (benchCase.pluginCount ?? 0) - bundledPluginIds.length;
   const pluginFixtures = pluginCount
     ? writePluginFixtures(root, {
         activationOnStartup: hasCatalogFixture ? true : benchCase.pluginActivationOnStartup,
@@ -856,7 +928,28 @@ function writeConfig(root: string, benchCase: GatewayBenchCase): string {
     benchCase.id === "slowAgentDatabase"
       ? SLOW_DATABASE_AGENT_IDS.map((id) => ({ id, workspace: path.join(root, "workspace", id) }))
       : buildBenchAgentList(root, benchCase.agentTopology);
-  return writeGatewayBenchConfig(root, benchCase.config, { agentList, pluginFixtures });
+  const plugins = benchCase.config.plugins as OpenClawConfig["plugins"];
+  const config = fixture
+    ? {
+        ...benchCase.config,
+        ...fixture,
+        plugins: {
+          ...plugins,
+          ...fixture.plugins,
+          entries: {
+            ...plugins?.entries,
+            ...fixture.plugins?.entries,
+            ...Object.fromEntries(
+              bundledPluginIds.map((id) => [
+                id,
+                { ...fixture.plugins?.entries?.[id], enabled: true },
+              ]),
+            ),
+          },
+        },
+      }
+    : benchCase.config;
+  return writeGatewayBenchConfig(root, config, { agentList, pluginFixtures });
 }
 
 const SLOW_DATABASE_AGENT_IDS = [
@@ -867,9 +960,8 @@ const SLOW_DATABASE_AGENT_IDS = [
   "bench-slow",
 ] as const;
 
-async function seedTeamBootFixture(root: string): Promise<void> {
+async function seedTeamBootFixture(root: string, benchCase: GatewayBenchCase): Promise<void> {
   mkdirSync(root);
-  const benchCase = GATEWAY_CASES.find((entry) => entry.id === "teamBoot")!;
   const configPath = writeConfig(root, benchCase);
   const env = createGatewayBenchEnv(root, configPath, { caseEnv: benchCase.env });
   const previousEnv = process.env;
@@ -936,6 +1028,8 @@ async function seedTeamBootFixture(root: string): Promise<void> {
     writeBenchmarkJson(
       {
         pluginCount: 44,
+        bundledPluginFixture: benchCase.bundledPluginFixture ?? {},
+        externalPluginCount: 44 - (benchCase.bundledPluginFixture?.plugins?.allow?.length ?? 0),
         agentCount: agents.length,
         sessionCount: agents.length * 512,
         stateDatabaseBytes: statSync(statePath).size,
@@ -1112,6 +1206,7 @@ async function waitForFirstSessionRpc(params: {
   deadlineAt: number;
   isDone: () => boolean;
   requireSeededSession: boolean;
+  authToken?: string;
 }): Promise<GatewaySample["firstSessionRpc"]> {
   let attempts = 0;
   let lastError: string | null = null;
@@ -1138,6 +1233,7 @@ async function waitForFirstSessionRpc(params: {
             mode: "backend",
           },
           role: "operator",
+          ...(params.authToken ? { auth: { token: params.authToken } } : {}),
           scopes: ["operator.read"],
           caps: [],
         },
@@ -1277,7 +1373,12 @@ async function runGatewaySample(
           : []),
         ...(options.heapProfDir ? ["--heap-prof", "--heap-prof-dir", options.heapProfDir] : []),
       ];
-      const childArgs = buildGatewayBenchChildArgs(options.entry, port, nodeOptions);
+      const childArgs = buildGatewayBenchChildArgs(
+        options.entry,
+        port,
+        nodeOptions,
+        options.benchCase.id === "teamBoot" ? "token" : "none",
+      );
       const command = buildGatewayBenchCommand(childArgs, options);
       child = spawn(command.command, command.args, {
         cwd: process.cwd(),
@@ -1362,6 +1463,7 @@ async function runGatewaySample(
                 deadlineAt,
                 isDone: () => childExited,
                 requireSeededSession: options.benchCase.id === "teamBoot",
+                ...(options.benchCase.id === "teamBoot" ? { authToken: TEAM_BOOT_AUTH_TOKEN } : {}),
               })
             : { ms: null, attempts: 0, lastError: "Gateway never became healthy" },
         ),
@@ -1537,7 +1639,7 @@ async function main() {
     }
     if (options.seedOnly) {
       if (teamBoot) {
-        await seedTeamBootFixture(path.resolve(options.fixtureRoot));
+        await seedTeamBootFixture(path.resolve(options.fixtureRoot), options.cases[0]!);
         return;
       }
       await seedSlowAgentFixture(
@@ -1556,6 +1658,17 @@ async function main() {
       )
     ) {
       throw new CliArgumentError("--fixture-root must first be prepared with --seed-only");
+    }
+    if (teamBoot) {
+      const fixture = JSON.parse(
+        readFileSync(path.join(options.fixtureRoot, "team-boot-fixture.json"), "utf8"),
+      ) as { bundledPluginFixture?: OpenClawConfig };
+      if (
+        JSON.stringify(fixture.bundledPluginFixture ?? {}) !==
+        JSON.stringify(options.cases[0]?.bundledPluginFixture ?? {})
+      ) {
+        throw new CliArgumentError("--bundled-plugin-fixture must match the prepared fixture");
+      }
     }
   }
   if (

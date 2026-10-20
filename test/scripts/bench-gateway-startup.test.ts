@@ -166,6 +166,8 @@ const { WebSocketServer } = createRequire(${JSON.stringify(path.resolve("package
 const counter = ${JSON.stringify(counter)};
 const teamBootFixture = process.env.OPENCLAW_HOME + "/team-boot-fixture.json";
 const teamBoot = existsSync(teamBootFixture);
+const gatewayConfig = JSON.parse(readFileSync(process.env.OPENCLAW_CONFIG_PATH, "utf8"));
+if (teamBoot && process.argv[process.argv.indexOf("--auth") + 1] !== "token") throw new Error("expected teamBoot token auth");
 const shutdownExitCode = teamBoot ? JSON.parse(readFileSync(teamBootFixture, "utf8")).shutdownExitCode ?? 0 : 0;
 const record = (phase, extra = {}) => appendFileSync(${JSON.stringify(eventsPath)}, JSON.stringify({ phase, pid: process.pid, ...extra }) + "\\n");
 const sample = (existsSync(counter) ? JSON.parse(readFileSync(counter, "utf8")) : 0) + 1;
@@ -184,7 +186,9 @@ const sockets = new WebSocketServer({ server });
 sockets.on("connection", (socket) => {
   socket.on("message", (data) => {
     const request = JSON.parse(String(data));
-    const ok = request.method === "connect" || ++sessionRequests > 1;
+    const ok = request.method === "connect"
+      ? !teamBoot || request.params.auth?.token === gatewayConfig.gateway.auth.token
+      : ++sessionRequests > 1;
     const sessions = teamBoot && sessionRequests >= 3
       ? [{ key: sessionRequests === 3 ? "unrelated-session" : "agent:incident-agent-01:bench-0" }]
       : [];
@@ -205,7 +209,8 @@ process.on("SIGTERM", () => stop("signal"));
 process.stdin.on("end", () => stop("stdin-eof"));
 process.stdin.resume();
 server.listen(port, "127.0.0.1", () => {
-  console.log("[gateway] http server listening (0 plugins, 0.0s)");
+  const ids = teamBoot ? gatewayConfig.plugins.allow : [];
+  console.log("[gateway] http server listening (" + (ids.length ? ids.length + " plugins: " + ids.join(", ") + "; 0.0s" : "0 plugins, 0.0s") + ")");
   console.log("[gateway] ready (0 plugins, 0.0s)");
   console.log("startup trace: sidecars.model-runtime-build agentCount=" + (10 + sample) + " workspaceGroupCount=" + sample + " workspaceFactsMs=2.5");
   console.log("startup trace: memory.ready rssMb=32.5 heapUsedMb=16.25 externalMb=2");
@@ -291,6 +296,9 @@ server.listen(port, "127.0.0.1", () => {
         // This fake Gateway tests the driver protocol, not the heavyweight seed generator.
         const teamRoot = path.join(root, "prepared-team-boot");
         fs.mkdirSync(teamRoot);
+        const bundledPluginFixture = { plugins: { allow: ["openai", "google"] } };
+        const bundledPluginFixturePath = path.join(root, "bundled-plugins.json");
+        fs.writeFileSync(bundledPluginFixturePath, JSON.stringify(bundledPluginFixture));
         const runPopulated = () =>
           runNodeScript(
             [
@@ -301,6 +309,8 @@ server.listen(port, "127.0.0.1", () => {
               entry,
               "--case",
               "teamBoot",
+              "--bundled-plugin-fixture",
+              bundledPluginFixturePath,
               "--fixture-root",
               teamRoot,
               "--runs",
@@ -317,7 +327,11 @@ server.listen(port, "127.0.0.1", () => {
         for (const shutdownExitCode of [0, 23]) {
           fs.writeFileSync(
             path.join(teamRoot, "team-boot-fixture.json"),
-            JSON.stringify({ shutdownExitCode }),
+            JSON.stringify({
+              shutdownExitCode,
+              bundledPluginFixture,
+              externalPluginCount: 42,
+            }),
           );
           const populated = await runPopulated();
           expect(populated.error).toBeUndefined();
@@ -326,6 +340,10 @@ server.listen(port, "127.0.0.1", () => {
             expect(populated.stderr).toContain("unclean shutdown");
           }
           const populatedReport = JSON.parse(fs.readFileSync(reportPath, "utf8"));
+          expect(populatedReport.fixture).toMatchObject({
+            bundledPluginFixture,
+            externalPluginCount: 42,
+          });
           expect(populatedReport.results[0].samples[0]).toMatchObject({
             exitCode: shutdownExitCode,
             shutdownForced: false,
@@ -843,24 +861,134 @@ server.listen(port, "127.0.0.1", () => {
     expect(config.plugins?.allow).toEqual(["openai", "google", "minimax"]);
   });
 
-  it("builds the opt-in eight-agent boot case with 44 startup-active synthetic plugins", () => {
-    expect(testing.parseOptions([]).cases.some((entry) => entry.id === "teamBoot")).toBe(false);
-    const benchCase = testing.parseOptions(["--case", "teamBoot"]).cases[0]!;
-    const root = tempDirs.make("openclaw-team-boot-config-test-");
-    const config = JSON.parse(
-      fs.readFileSync(testing.writeConfig(root, benchCase), "utf8"),
-    ) as OpenClawConfig;
-    expect(validateConfigObject(config)).toMatchObject({ ok: true });
-    expect(Object.keys(config.agents?.entries ?? {})).toHaveLength(8);
-    expect(config.plugins?.allow).toHaveLength(44);
-    expect(config.cron?.enabled).toBe(false);
-    for (const pluginId of config.plugins?.allow ?? []) {
-      const manifest = JSON.parse(
-        fs.readFileSync(path.join(root, "plugins", pluginId, "openclaw.plugin.json"), "utf8"),
-      );
-      expect(manifest.activation).toEqual({ onStartup: true });
-    }
+  it.each([false, true])(
+    "builds the opt-in eight-agent boot case with 44 plugins (bundled fixture=%s)",
+    (withBundledFixture) => {
+      expect(testing.parseOptions([]).cases.some((entry) => entry.id === "teamBoot")).toBe(false);
+      const root = tempDirs.make("openclaw-team-boot-config-test-");
+      const bundledPluginFixture: OpenClawConfig = withBundledFixture
+        ? {
+            plugins: {
+              allow: ["fixture-required", "fixture-defaults"],
+              entries: {
+                "fixture-required": {
+                  config: { token: "synthetic-only", scheduler: { enabled: false } },
+                },
+              },
+            },
+            models: {
+              providers: {
+                "fixture-provider": {
+                  baseUrl: "http://127.0.0.1:1/v1",
+                  models: [],
+                  agentRuntime: { id: "fixture-runtime" },
+                },
+              },
+            },
+            tools: { web: { search: { provider: "fixture-search" } } },
+            channels: { "fixture-channel": { enabled: true } },
+          }
+        : {};
+      const bundledPluginIds = bundledPluginFixture.plugins?.allow ?? [];
+      const fixturePath = path.join(root, "bundled-plugins.json");
+      fs.writeFileSync(fixturePath, JSON.stringify(bundledPluginFixture));
+      const benchCase = testing.parseOptions([
+        "--case",
+        "teamBoot",
+        ...(withBundledFixture ? ["--bundled-plugin-fixture", fixturePath] : []),
+      ]).cases[0]!;
+      const config = JSON.parse(
+        fs.readFileSync(testing.writeConfig(root, benchCase), "utf8"),
+      ) as OpenClawConfig;
+      expect(validateConfigObject(config)).toMatchObject({ ok: true });
+      expect(Object.keys(config.agents?.entries ?? {})).toHaveLength(8);
+      expect(config.plugins?.allow).toHaveLength(44);
+      expect(config.cron?.enabled).toBe(false);
+      expect(config.gateway?.auth).toEqual({
+        mode: "token",
+        token: "synthetic-startup-benchmark-token",
+      });
+      expect(config.agents?.defaults?.heartbeat?.every).toBe("0m");
+      expect(config.models).toEqual(bundledPluginFixture.models);
+      expect(config.channels).toEqual(bundledPluginFixture.channels);
+      expect(config.tools).toEqual(bundledPluginFixture.tools);
+      expect(config.plugins?.entries?.browser).toEqual({ enabled: false });
+      expect(
+        testing.parseOptions(["--case", "teamBoot"]).cases[0]?.bundledPluginFixture,
+      ).toBeUndefined();
+      for (const pluginId of config.plugins?.allow ?? []) {
+        if (bundledPluginIds.includes(pluginId)) {
+          expect(config.plugins?.entries?.[pluginId]).toEqual({
+            ...bundledPluginFixture.plugins?.entries?.[pluginId],
+            enabled: true,
+          });
+          expect(fs.existsSync(path.join(root, "plugins", pluginId))).toBe(false);
+          continue;
+        }
+        const manifest = JSON.parse(
+          fs.readFileSync(path.join(root, "plugins", pluginId, "openclaw.plugin.json"), "utf8"),
+        );
+        expect(manifest.activation).toEqual({ onStartup: true });
+      }
+      expect(fs.readdirSync(path.join(root, "plugins"))).toHaveLength(44 - bundledPluginIds.length);
+    },
+  );
+
+  it.for([[], ["--case", "default"]])("rejects a bundled fixture outside teamBoot (%j)", (args) => {
+    expect(() =>
+      testing.parseOptions([...args, "--bundled-plugin-fixture", "plugins.json"]),
+    ).toThrow("--bundled-plugin-fixture requires --case teamBoot only");
   });
+
+  it.for([
+    null,
+    [],
+    {},
+    "invalid",
+    { plugins: { allow: [""] } },
+    { plugins: { allow: ["openai", "openai"] } },
+    { plugins: { allow: ["openai"], entries: { openai: null } } },
+    { plugins: { allow: ["openai"], load: { paths: ["/unrelated"] } } },
+    { plugins: { allow: ["openai"] }, gateway: { auth: { mode: "none" } } },
+    { plugins: { allow: Array.from({ length: 45 }, (_, index) => `plugin-${index}`) } },
+  ])("rejects invalid bundled plugin configuration %j", (value) => {
+    const root = tempDirs.make("openclaw-invalid-plugin-fixture-test-");
+    const fixturePath = path.join(root, "plugins.json");
+    fs.writeFileSync(fixturePath, JSON.stringify(value));
+    expect(() =>
+      testing.parseOptions(["--case", "teamBoot", "--bundled-plugin-fixture", fixturePath]),
+    ).toThrow("--bundled-plugin-fixture");
+  });
+
+  it.each([
+    { count: 44, includesRequested: true, valid: true },
+    { count: 38, includesRequested: true, valid: false },
+    { count: 44, includesRequested: false, valid: false },
+  ])(
+    "validates the loaded plugin inventory ($count, requested=$includesRequested)",
+    ({ count, includesRequested, valid }) => {
+      const ids = [
+        includesRequested ? "required-plugin" : "unrequested-plugin",
+        ...Array.from({ length: count - 1 }, (_, index) => `fixture-${index}`),
+      ];
+      const result = testing.summarizeCase(
+        {
+          id: "teamBoot",
+          name: "mixed boot",
+          config: {},
+          pluginCount: 44,
+          bundledPluginFixture: { plugins: { allow: ["required-plugin"] } },
+        },
+        [
+          gatewaySample({
+            exitCode: 0,
+            httpListenLogLine: `[gateway] http server listening (${count} plugins: ${ids.join(", ")}; 0.1s)`,
+          }),
+        ],
+      );
+      expect(testing.collectResultFailures([result]).length === 0).toBe(valid);
+    },
+  );
 
   it.each([
     { id: "preparedRuntimeScaleOne", agentCount: 1, sharedCount: 1, owner: "main" },

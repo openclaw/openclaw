@@ -52,6 +52,8 @@ export type ClawHubClawCatalogEntry = {
   official: boolean;
   ownerHandle: string;
   downloads: number;
+  installs: number;
+  featuredAt?: number;
   updatedAtMs: number;
 };
 export type ClawHubClawCatalogDetail = ClawHubClawCatalogEntry & {
@@ -151,6 +153,7 @@ function requireExactVersion(version: string): void {
 
 function projectCatalogEntry(pkg: OwnedClawPackage): ClawHubClawCatalogEntry {
   const downloads = pkg.stats?.downloads;
+  const installs = pkg.stats?.installs;
   return {
     packageName: pkg.name,
     displayName: pkg.displayName,
@@ -161,12 +164,18 @@ function projectCatalogEntry(pkg: OwnedClawPackage): ClawHubClawCatalogEntry {
     ownerHandle: pkg.ownerHandle,
     downloads:
       typeof downloads === "number" && Number.isFinite(downloads) ? Math.max(0, downloads) : 0,
+    installs: typeof installs === "number" && Number.isFinite(installs) ? Math.max(0, installs) : 0,
+    ...(typeof pkg.featuredAt === "number" ? { featuredAt: pkg.featuredAt } : {}),
     updatedAtMs: Math.max(0, pkg.updatedAt),
   };
 }
 
 function projectPublicEntries(packages: unknown[]): ClawHubClawCatalogEntry[] {
   return packages.filter(isPublicClawListItem).map(projectCatalogEntry);
+}
+
+function rankByInstalls(left: ClawHubClawCatalogEntry, right: ClawHubClawCatalogEntry): number {
+  return right.installs - left.installs || left.packageName.localeCompare(right.packageName);
 }
 
 function readExactClawArtifact(
@@ -235,16 +244,23 @@ function readExactClawArtifact(
 }
 
 export async function listClawHubClaws(
-  params: ClawHubFetchOptions & { limit?: number } = {},
+  params: ClawHubFetchOptions & { limit?: number; category?: string; featured?: boolean } = {},
 ): Promise<ClawHubClawCatalogEntry[]> {
   const entries = new Map<string, ClawHubClawCatalogEntry>();
+  const finish = () => {
+    const result = [...entries.values()];
+    return params.category && !params.featured ? result.toSorted(rankByInstalls) : result;
+  };
   const seenCursors = new Set<string>();
-  const requestedLimit = params.limit && params.limit > 0 ? params.limit : undefined;
+  const requestedLimit =
+    !params.category && params.limit && params.limit > 0 ? params.limit : undefined;
   let cursor: string | undefined;
   for (let page = 0; page < MAX_CATALOG_PAGES; page += 1) {
     const result = await listClawHubPackages({
       ...params,
       family: "claw",
+      category: params.category,
+      featured: params.featured,
       limit: Math.min(
         CATALOG_PAGE_SIZE,
         requestedLimit ? requestedLimit - entries.size : CATALOG_PAGE_SIZE,
@@ -254,11 +270,11 @@ export async function listClawHubClaws(
     for (const entry of projectPublicEntries(result.items)) {
       entries.set(entry.packageName, entry);
       if (requestedLimit && entries.size >= requestedLimit) {
-        return [...entries.values()];
+        return finish();
       }
     }
     if (result.nextCursor === null) {
-      return [...entries.values()];
+      return finish();
     }
     if (!result.nextCursor || seenCursors.has(result.nextCursor)) {
       throw new ClawHubSourceError(
@@ -276,7 +292,7 @@ export async function listClawHubClaws(
 }
 
 export async function searchClawHubClaws(
-  params: ClawHubFetchOptions & { query: string; limit?: number },
+  params: ClawHubFetchOptions & { query: string; limit?: number; category?: string },
 ): Promise<ClawHubClawCatalogEntry[]> {
   const query = params.query.trim();
   if (!query) {
@@ -286,9 +302,11 @@ export async function searchClawHubClaws(
     ...params,
     query,
     family: "claw",
+    category: params.category,
     limit: params.limit ?? CATALOG_PAGE_SIZE,
   });
-  return projectPublicEntries(results.map((result) => result.package));
+  const entries = projectPublicEntries(results.map((result) => result.package));
+  return params.category ? entries.toSorted(rankByInstalls) : entries;
 }
 
 export async function readClawHubClawDetail(
@@ -324,8 +342,8 @@ export async function readClawHubClawDetail(
   return {
     ...projectCatalogEntry(pkg),
     version,
-    ...(summary.agent.name ? { agentName: summary.agent.name } : {}),
-    ...(summary.agent.description ? { agentDescription: summary.agent.description } : {}),
+    ...(summary.name ? { agentName: summary.name } : {}),
+    ...(summary.description ? { agentDescription: summary.description } : {}),
     workspaceFiles: contents.instructions.length,
     skills: contents.skills.length,
     plugins: contents.integrations.filter((item) => item.kind === "plugin").length,

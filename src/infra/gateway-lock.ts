@@ -15,6 +15,7 @@ import {
   createOpenClawDatabaseMaintenanceScope,
   getOpenClawDatabaseMaintenanceScope,
 } from "../state/openclaw-state-db-async-lifecycle.js";
+import { ensureOpenClawStatePermissions } from "../state/openclaw-state-db-permissions.js";
 import { acquireWithWait } from "./acquire-with-wait.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { sha256HexPrefixCore } from "./crypto-digest.js";
@@ -87,6 +88,7 @@ export class GatewayLockError extends Error {
   constructor(
     message: string,
     public override readonly cause?: unknown,
+    public readonly databasePath?: string,
   ) {
     super(message);
     this.name = "GatewayLockError";
@@ -462,6 +464,7 @@ export async function acquireGatewayLock(
     parentMaintenance.assertAdmission();
     borrowedOwner = tryBorrowGatewayStateOwner(databasePath);
   }
+  let databaseFailure: { error: unknown } | undefined;
   let waited = false;
   let projection: GatewayStateProjection | undefined;
   let stateOwner: ReturnType<typeof acquireGatewayStateOwner>;
@@ -474,6 +477,7 @@ export async function acquireGatewayLock(
         now,
         sleep: opts.sleep,
         acquire: async () => {
+          databaseFailure = undefined;
           opts.assertCurrent?.();
           payload.createdAt = resolveTimestampMsToIsoString(Date.now());
           const owner = acquireGatewayStateOwner({
@@ -493,9 +497,18 @@ export async function acquireGatewayLock(
             }
             await assertHistoricalGatewayOwnerStopped(paths, opts);
             if (!opts.databasePortRecovery && opts.databaseAccess !== "none") {
-              await owner.run(() =>
-                assertGatewayOwnerLeaseStopped(env, owner, role === "sqlite-maintenance"),
-              );
+              try {
+                await owner.run(() => {
+                  // Offline maintenance must refuse newer schemas before changing source files.
+                  if (role === "gateway") {
+                    ensureOpenClawStatePermissions(databasePath, env, { createDirectory: true });
+                  }
+                  return assertGatewayOwnerLeaseStopped(env, owner, role === "sqlite-maintenance");
+                });
+              } catch (error) {
+                databaseFailure = { error };
+                throw error;
+              }
             }
             return owner;
           } catch (error) {
@@ -546,7 +559,11 @@ export async function acquireGatewayLock(
           : error instanceof DatabasePortRecoveryError
             ? `${message}: ${error.message}`
             : message;
-    throw new GatewayLockError(detail, error);
+    throw new GatewayLockError(
+      detail,
+      error,
+      databaseFailure && databaseFailure.error === error ? databasePath : undefined,
+    );
   }
   if (waited && role === "gateway") {
     log.info(`Gateway state ownership acquired after ${((now() - startedAt) / 1000).toFixed(1)} s`);
@@ -611,20 +628,29 @@ export async function acquireGatewayLock(
     }
     assertStateOwnerCurrent();
     if (role === "gateway" && opts.listenerMode && opts.port) {
-      ownerLease = acquireGatewayOwnerLease({
-        env,
-        port: opts.port,
-        mode: opts.listenerMode,
-        supervisor: opts.supervisor ?? null,
-        owner: payload.ownerId,
-      });
-      await ownerLease.ready;
+      try {
+        ownerLease = acquireGatewayOwnerLease({
+          env,
+          port: opts.port,
+          mode: opts.listenerMode,
+          supervisor: opts.supervisor ?? null,
+          owner: payload.ownerId,
+        });
+        await ownerLease.ready;
+      } catch (error) {
+        databaseFailure = { error };
+        throw error;
+      }
     }
   } catch (error) {
     await ownerLease?.release();
     projection?.release();
     stateOwner.release();
-    throw new GatewayLockError("failed to acquire gateway state ownership", error);
+    throw new GatewayLockError(
+      "failed to acquire gateway state ownership",
+      error,
+      databaseFailure && databaseFailure.error === error ? databasePath : undefined,
+    );
   }
   let released: Promise<void> | undefined;
   return {

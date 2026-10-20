@@ -761,14 +761,6 @@ public final class OpenClawNativeStateSQLiteStatement {
         }
     }
 
-    public func bindNull(at index: Int32) throws {
-        try self.connection.withConnectionLock {
-            guard sqlite3_bind_null(self.statement, index) == SQLITE_OK else {
-                throw self.connection.databaseError(operation: "bind SQLite null")
-            }
-        }
-    }
-
     public func bindDouble(_ value: Double, at index: Int32) throws {
         try self.connection.withConnectionLock {
             guard sqlite3_bind_double(self.statement, index, value) == SQLITE_OK else {

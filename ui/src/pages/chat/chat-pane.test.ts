@@ -666,7 +666,6 @@ describe("chat pane initialization", () => {
             agentId: "main",
             avatar: null,
             avatarReason: null,
-            avatarSource: null,
             avatarStatus: null,
             name: "Assistant",
           },

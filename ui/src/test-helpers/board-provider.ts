@@ -178,7 +178,7 @@ class MockBoardProvider implements BoardProvider {
   async refreshWidgetFrame(_name: string): Promise<void> {}
 
   async widgetAppView(_name: string, _revision: number): Promise<BoardWidgetAppViewState> {
-    return { status: "stale", error: "MCP App mock view unavailable" };
+    return { status: "stale" };
   }
 
   async refreshWidgetAppView(name: string, revision: number): Promise<BoardWidgetAppViewState> {

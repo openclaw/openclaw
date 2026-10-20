@@ -86,9 +86,9 @@ describe("agent roster activity", () => {
     );
 
     expect(cards).toMatchObject([
-      { id: "beta", lastActiveAt: 7, preview: "First beta", activeNow: false, unreadCount: 0 },
-      { id: "alpha", lastActiveAt: 10, preview: "Canonical", activeNow: true, unreadCount: 1 },
-      { id: "empty", lastActiveAt: 0, preview: undefined, activeNow: false, unreadCount: 0 },
+      { id: "beta", lastActiveAt: 7, preview: "First beta", activeNow: false },
+      { id: "alpha", lastActiveAt: 10, preview: "Canonical", activeNow: true },
+      { id: "empty", lastActiveAt: 0, preview: undefined, activeNow: false },
     ]);
     expect(identities).toEqual(["beta", "alpha", "empty"]);
     expect(rows).toEqual(before);

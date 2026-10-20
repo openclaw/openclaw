@@ -23,7 +23,9 @@ registerEnglishCatalog(registerNewSessionSetupEnglish);
 const NewSessionSubmission = lazy(() => import("./draft-submission-view.tsx"), {
   export: "NewSessionSubmission",
 });
-export const preloadNewSessionSubmission = () => void NewSessionSubmission.preload();
+// Solid drops a rejected load, so the submit render retries a failed speculative fetch.
+export const preloadNewSessionSubmission = () =>
+  void NewSessionSubmission.preload().catch(() => undefined);
 
 type DraftAction = { label: string; onClick: () => void; disabled?: boolean };
 export type DraftErrorProps = { message: string; action?: DraftAction };

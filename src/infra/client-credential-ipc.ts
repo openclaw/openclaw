@@ -7,7 +7,7 @@ import type {
   ClientCredentialOperation,
   ClientCredentialResult,
 } from "./client-credential-store.js";
-import { hasErrnoCode } from "./errno.js";
+import { ignoreMissingPath } from "./errno.js";
 import { resolveRequiredOsHomeDir } from "./home-dir.js";
 import { requestJsonlSocket } from "./jsonl-socket.js";
 import { resolveDatabasePathKey } from "./sqlite-worker-identity.js";
@@ -81,12 +81,7 @@ export async function requestClientCredentialsFromApp(
   const tokenPath = path.join(directory, "mac-control.token");
   const handle = await fs
     .open(tokenPath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW)
-    .catch((error: unknown) => {
-      if (hasErrnoCode(error, "ENOENT")) {
-        return undefined;
-      }
-      throw error;
-    });
+    .catch(ignoreMissingPath);
   if (!handle) {
     return undefined;
   }

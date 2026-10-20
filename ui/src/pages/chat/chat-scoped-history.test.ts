@@ -1,9 +1,8 @@
 /* @vitest-environment jsdom */
-import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createRequireRecord } from "../../../../test/helpers/record.js";
-import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import {
   createGatewayHarness,
   createTestSessionCapability,
@@ -21,6 +20,20 @@ import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
 
 const requireRecord = createRequireRecord("object", "expected-label");
+function sessionRow(name: string, extra: Partial<GatewaySessionRow> = {}): GatewaySessionRow {
+  return {
+    key: "global",
+    kind: "global",
+    updatedAt: 10,
+    modelProvider: "test",
+    hasActiveRun: false,
+    status: "done",
+    sessionId: `${name === "main" ? "main" : "work"}-incarnation`,
+    label: name,
+    model: `model-${name}`,
+    ...extra,
+  };
+}
 
 beforeEach(() => {
   installOutboxBrowserStorage();
@@ -33,165 +46,102 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("scoped chat history defaults and row ordering", () => {
-  it.each([
-    {
-      name: "same-owner equal timestamp control",
-      moveRoster: false,
-      workRefresh: "updated",
-    },
-    {
-      name: "different-owner equal timestamp regression",
-      moveRoster: true,
-      workRefresh: "updated",
-    },
-    {
-      name: "missing Work row remains admissible",
-      moveRoster: true,
-      workRefresh: "missing",
-    },
-    {
-      name: "Main-only publication does not freeze Work history",
-      moveRoster: true,
-      workRefresh: "none",
-    },
-  ])("$name", async ({ moveRoster, workRefresh }) => {
-    const pendingHistory = createDeferred<ChatHistoryResult>();
-    const initialWork: GatewaySessionRow = {
-      key: "global",
-      kind: "global",
-      sessionId: "work-incarnation",
-      updatedAt: 10,
-      label: "Original Work label",
-      modelProvider: "test",
-      model: "model-old",
-      contextTokens: 1000,
-      totalTokens: 10,
-      hasActiveRun: false,
-      status: "done",
-    };
-    const newerWork: GatewaySessionRow = {
-      ...initialWork,
-      label: "Newer Work label",
-      model: "model-new",
-      contextTokens: 2000,
-    };
-    const mainRow: GatewaySessionRow = {
-      key: "global",
-      kind: "global",
-      sessionId: "main-incarnation",
-      updatedAt: 10,
-      label: "Main stays Main",
-      modelProvider: "test",
-      model: "model-main",
-      hasActiveRun: false,
-      status: "done",
-    };
-    let workListCount = 0;
-    const request = vi.fn(async (method: string, params?: unknown) => {
-      if (method === "chat.history") {
-        expect(params).toMatchObject({ sessionKey: "agent:work:main", agentId: "work" });
-        return pendingHistory.promise;
-      }
-      if (method === "sessions.list") {
-        const agentId = requireRecord(params, "session list params").agentId;
-        if (agentId === "work") {
-          workListCount += 1;
-          return sessionListFixture(
-            workListCount === 1 ? [initialWork] : workRefresh === "missing" ? [] : [newerWork],
-            workListCount,
-          );
-        }
-        if (agentId === "main") {
-          return sessionListFixture([mainRow], 3);
-        }
-      }
-      throw new Error(`Unexpected RPC ${method}: ${JSON.stringify(params)}`);
-    });
-    const client = createTestGatewayClient(request);
-    const harness = createGatewayHarness(client);
-    const sessions = createTestSessionCapability(harness.gateway);
-    const { pane, state } = createTestChatPane({ client, sessions });
-    state.sessionKey = "agent:work:main";
-    state.assistantAgentId = "work";
-    state.agentsList = {
-      defaultId: "main",
-      mainKey: "main",
-      scope: "global",
-      agents: [{ id: "main" }, { id: "work" }],
-    };
-    state.sessionsResult = null;
-    state.sessionsResultAgentId = null;
-    state.chatMessagesBySession = new Map();
-    pane.presented = false;
-    const release = sessions.subscribe(pane.applySessionsState.bind(pane));
-    try {
-      await refreshCurrentChatSessionList(state);
-      expect(selectedChatSessionRow(state)).toMatchObject(initialWork);
-      const previousSessionsResult = state.sessionsResult;
-      const issuedRevision = sessions.canonicalListRevision;
-      const refreshOptions = {
-        awaitHistory: true,
-        deferBranches: true,
-        scheduleScroll: false,
-      };
-      const refresh = refreshPageChat(state, refreshOptions);
-      const historyLoad = loadChatHistory(state, { deferBranches: true });
-      expect(getChatHistoryLoadState(state).phase).toBe("in-flight");
-      if (workRefresh !== "none") {
-        await refreshCurrentChatSessionList(state);
-        expect(state.sessionsResult).not.toBe(previousSessionsResult);
-      }
-      if (workRefresh === "updated") {
-        expect(selectedChatSessionRow(state)).toMatchObject(newerWork);
-      }
-      if (workRefresh === "missing") {
-        expect(selectedChatSessionRow(state)).toBeUndefined();
-      }
-      const publishedWorkProjection = state.sessionsResult;
-      if (moveRoster) {
-        await sessions.refresh({ agentId: "main", force: true });
-        expect(sessions.state.agentId).toBe("main");
-        expect(state.sessionsResult).toBe(publishedWorkProjection);
-        expect(state.sessionsResultAgentId).toBe("work");
-      }
-      const primaryDefaults = sessions.state.result?.defaults;
-      const historyRow = {
-        ...initialWork,
-        ...(workRefresh === "none" ? { contextTokens: 1500, label: "History Work label" } : {}),
-      };
-      pendingHistory.resolve({
-        defaults: {
-          contextTokens: null,
-          model: "model-old",
-          modelProvider: "test",
-          modelSelectionTarget: "agent",
-        },
-        messages: [{ role: "assistant", content: "History really applied" }],
-        sessionInfo: historyRow,
-      });
-      await historyLoad;
-      await refresh;
-      const afterResolution = selectedChatSessionRow(state);
-      expect(getChatHistoryLoadState(state).phase).toBe("committed");
-      expect(state.chatMessages).toEqual([
-        { role: "assistant", content: "History really applied" },
-      ]);
-      expect(request.mock.calls.filter(([method]) => method === "chat.history")).toHaveLength(1);
-      expect(sessions.canonicalListRevision).toBeGreaterThan(issuedRevision);
-      if (moveRoster) {
-        expect(sessions.state.result?.sessions[0]).toEqual(mainRow);
-        expect(sessions.state.result?.defaults).toEqual(primaryDefaults);
-        expect(
-          expectDefined<SessionsListResult>(state.sessionsResult, "work session result").defaults
-            .modelSelectionTarget,
-        ).toBe("agent");
-      }
-      expect(afterResolution).toMatchObject(workRefresh === "updated" ? newerWork : historyRow);
-    } finally {
-      release();
-      pane.disconnectedCallback();
-      sessions.dispose();
+it.each([
+  ["same-owner equal timestamp control", false, "updated"],
+  ["different-owner equal timestamp regression", true, "updated"],
+  ["missing Work row remains admissible", true, "missing"],
+  ["Main-only publication does not freeze Work history", true, "none"],
+] as const)("%s", async (_name, moveRoster, workRefresh) => {
+  const pendingHistory = createDeferred<ChatHistoryResult>();
+  const initialWork = sessionRow("old", { contextTokens: 1000, totalTokens: 10 });
+  const newerWork = sessionRow("new", { contextTokens: 2000, totalTokens: 10 });
+  const mainRow = sessionRow("main");
+  let workListCount = 0;
+  const request = vi.fn(async (method: string, params?: unknown) => {
+    if (method === "chat.history") {
+      expect(params).toMatchObject({ sessionKey: "agent:work:main", agentId: "work" });
+      return pendingHistory.promise;
     }
+    const agentId =
+      method === "sessions.list" && requireRecord(params, "session list params").agentId;
+    if (agentId === "work") {
+      return sessionListFixture(
+        ++workListCount === 1 ? [initialWork] : workRefresh === "missing" ? [] : [newerWork],
+        workListCount,
+      );
+    }
+    if (agentId === "main") {
+      return sessionListFixture([mainRow], 3);
+    }
+    throw new Error(`Unexpected RPC ${method}: ${JSON.stringify(params)}`);
   });
+  const client = createTestGatewayClient(request);
+  const sessions = createTestSessionCapability(createGatewayHarness(client).gateway);
+  const { pane, state } = createTestChatPane({ client, sessions });
+  state.sessionKey = "agent:work:main";
+  state.assistantAgentId = "work";
+  state.agentsList = {
+    defaultId: "main",
+    mainKey: "main",
+    scope: "global",
+    agents: [{ id: "main" }, { id: "work" }],
+  };
+  pane.presented = false;
+  const release = sessions.subscribe(pane.applySessionsState.bind(pane));
+  try {
+    await refreshCurrentChatSessionList(state);
+    expect(selectedChatSessionRow(state)).toMatchObject(initialWork);
+    const previousSessionsResult = state.sessionsResult;
+    const issuedRevision = sessions.canonicalListRevision;
+    const refreshOptions = { awaitHistory: true, deferBranches: true, scheduleScroll: false };
+    const refresh = refreshPageChat(state, refreshOptions);
+    const historyLoad = loadChatHistory(state, { deferBranches: true });
+    expect(getChatHistoryLoadState(state).phase).toBe("in-flight");
+    if (workRefresh !== "none") {
+      await refreshCurrentChatSessionList(state);
+      expect(state.sessionsResult).not.toBe(previousSessionsResult);
+      expect(selectedChatSessionRow(state)).toEqual(
+        workRefresh === "missing" ? undefined : expect.objectContaining(newerWork),
+      );
+    }
+    const publishedWorkProjection = state.sessionsResult;
+    if (moveRoster) {
+      await sessions.refresh({ agentId: "main", force: true });
+      expect(sessions.state.agentId).toBe("main");
+      expect(state.sessionsResult).toBe(publishedWorkProjection);
+      expect(state.sessionsResultAgentId).toBe("work");
+    }
+    const primaryDefaults = sessions.state.result?.defaults;
+    const historyRow = {
+      ...initialWork,
+      ...(workRefresh === "none" ? { contextTokens: 1500, label: "History Work label" } : {}),
+    };
+    pendingHistory.resolve({
+      defaults: {
+        contextTokens: null,
+        model: "model-old",
+        modelProvider: "test",
+        modelSelectionTarget: "agent",
+      },
+      messages: [{ role: "assistant", content: "History really applied" }],
+      sessionInfo: historyRow,
+    });
+    await Promise.all([historyLoad, refresh]);
+    expect(getChatHistoryLoadState(state).phase).toBe("committed");
+    expect(state.chatMessages).toEqual([{ role: "assistant", content: "History really applied" }]);
+    expect(request.mock.calls.filter(([method]) => method === "chat.history")).toHaveLength(1);
+    expect(sessions.canonicalListRevision).toBeGreaterThan(issuedRevision);
+    if (moveRoster) {
+      expect(sessions.state.result?.sessions[0]).toEqual(mainRow);
+      expect(sessions.state.result?.defaults).toEqual(primaryDefaults);
+      expect(state.sessionsResult?.defaults.modelSelectionTarget).toBe("agent");
+    }
+    expect(selectedChatSessionRow(state)).toMatchObject(
+      workRefresh === "updated" ? newerWork : historyRow,
+    );
+  } finally {
+    release();
+    pane.disconnectedCallback();
+    sessions.dispose();
+  }
 });

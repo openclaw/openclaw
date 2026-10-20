@@ -50,7 +50,7 @@ const CreationComposer = lazy(() => import("./creation-composer-render.tsx"), {
 });
 const preloadSubmissionViews = () => {
   preloadNewSessionSubmission();
-  void CreationComposer.preload();
+  void CreationComposer.preload().catch(() => undefined);
 };
 
 export function NewSessionRoute(props: SolidRouteProps<NewSessionRouteData>) {
