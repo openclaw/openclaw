@@ -38,6 +38,7 @@ import {
   closeOpenClawAgentDatabaseByPathAsync,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
+import { isSameOpenClawAgentDatabasePath } from "../state/openclaw-agent-db.paths.js";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
@@ -475,8 +476,8 @@ function resolveSharedAuthStoreMigrationSources(
     resolveLegacyInheritedAuthAgentDir(config, env),
     "openclaw-agent.sqlite",
   );
-  // An owner whose agentDir is main's directory reads the same store.
-  return path.resolve(sourcePath) === path.resolve(mainPath)
+  // An owner whose agentDir is main's directory, directly or through a link, reads the same store.
+  return isSameOpenClawAgentDatabasePath(sourcePath, mainPath)
     ? { mainPath }
     : { mainPath, owner: { ownerId, sourcePath } };
 }
@@ -531,6 +532,28 @@ function selectSharedAuthStoreMigrationSource(
     : owner;
 }
 
+function isRetainedSharedAuthSource(env: NodeJS.ProcessEnv, sourcePath: string, ownerId: string) {
+  return (
+    fs.existsSync(sourcePath) &&
+    withArtifactPreservingStateReads(() =>
+      createRetainedAgentDatabaseMatcher(env, () => [])(sourcePath, ownerId),
+    )
+  );
+}
+
+function heldSharedAuthSourceMessages(
+  detected: SharedAuthStoreMigrationDetection,
+): MigrationMessages {
+  return {
+    changes: [],
+    warnings: [
+      `Shared auth migration skipped: store held for agent ${detected.ownerId ?? LEGACY_IMPLICIT_AGENT_ID} at ${sanitizeForLog(detected.sourcePath)}; run openclaw doctor --fix after restoring the agent.`,
+    ],
+    outcome: "skipped",
+    warningDisposition: "recoverable",
+  };
+}
+
 /** Detect relocation or unfinished cleanup only in the explicit Doctor repair path. */
 export function detectSharedAuthStoreMigration(params: {
   stateDir: string;
@@ -547,15 +570,7 @@ export function detectSharedAuthStoreMigration(params: {
   }
   const source = selectSharedAuthStoreMigrationSource(env, sources, params);
   const { sourcePath } = source;
-  if (
-    fs.existsSync(sourcePath) &&
-    withArtifactPreservingStateReads(() =>
-      createRetainedAgentDatabaseMatcher(env, () => [])(
-        sourcePath,
-        source.ownerId ?? LEGACY_IMPLICIT_AGENT_ID,
-      ),
-    )
-  ) {
+  if (isRetainedSharedAuthSource(env, sourcePath, source.ownerId ?? LEGACY_IMPLICIT_AGENT_ID)) {
     return { ...source, hasLegacy: true, held: true };
   }
   const ownership = params.artifactPreservingReadOnly
@@ -593,14 +608,7 @@ export async function migrateSharedAuthStore(params: {
     };
   }
   if (params.detected.held) {
-    return {
-      changes: [],
-      warnings: [
-        `Shared auth migration skipped: store held for agent ${params.detected.ownerId ?? LEGACY_IMPLICIT_AGENT_ID} at ${sanitizeForLog(params.detected.sourcePath)}; run openclaw doctor --fix after restoring the agent.`,
-      ],
-      outcome: "skipped",
-      warningDisposition: "recoverable",
-    };
+    return heldSharedAuthSourceMessages(params.detected);
   }
   return await withLegacyMigrationStateLock({
     stateDir: params.stateDir,
@@ -620,6 +628,11 @@ export async function migrateSharedAuthStore(params: {
       }
     },
     run: async (env) => {
+      // The source agent can be deleted with its database retained after detection; never move a retired store.
+      const ownerId = params.detected.ownerId ?? LEGACY_IMPLICIT_AGENT_ID;
+      if (isRetainedSharedAuthSource(env, params.detected.sourcePath, ownerId)) {
+        return heldSharedAuthSourceMessages(params.detected);
+      }
       const now = params.now?.() ?? Date.now();
       const source = await readSourceSnapshot({
         env,

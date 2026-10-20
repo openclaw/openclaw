@@ -261,6 +261,63 @@ describe("Doctor with a deleted agent database", () => {
     );
   });
 
+  it.each(["retired after detection", "owned by another agent"] as const)(
+    "never relocates an inheritance owner store %s",
+    async (scenario) => {
+      const ownerDir = path.join(stateDir, "agents", "ops", "agent");
+      const sourcePath = legacyDatabase({
+        agentId: scenario === "owned by another agent" ? "other" : "ops",
+        path: path.join(ownerDir, "openclaw-agent.sqlite"),
+      });
+      const source = new DatabaseSync(sourcePath);
+      source
+        .prepare(
+          "INSERT INTO auth_profile_store(store_key,store_json,updated_at) VALUES('primary',?,1)",
+        )
+        .run(JSON.stringify(profile("synthetic-owner-key")));
+      source.close();
+      const config: OpenClawConfig = {
+        agents: {
+          ownership: "explicit",
+          defaults: { authInheritance: { agentId: "ops" } },
+          entries: { ops: {}, dev: {} },
+        },
+      };
+      const detected = detectSharedAuthStoreMigration({
+        stateDir,
+        env,
+        config,
+        doctorOnlyStateMigrations: true,
+      });
+      expect(detected).toEqual({ sourcePath, hasLegacy: true, ownerId: "ops" });
+      if (scenario === "retired after detection") {
+        deleteAgent("ops", ownerDir, "delete-inheritance-owner");
+      }
+      const bytes = fs.readFileSync(sourcePath);
+
+      const result = await migrateSharedAuthStore({ detected, stateDir, env });
+
+      expect(result.changes).toEqual([]);
+      expect(result.warnings.join("\n")).toContain(
+        scenario === "retired after detection" ? "store held for agent ops" : "agent other",
+      );
+      expect(fs.readFileSync(sourcePath)).toEqual(bytes);
+      // Nothing may claim or receive the owner's credentials; a missing state database also proves that.
+      const statePath = resolveOpenClawStateSqlitePath(env);
+      if (fs.existsSync(statePath)) {
+        const state = new DatabaseSync(statePath, { readOnly: true });
+        expect(
+          state
+            .prepare(
+              "SELECT state_key FROM config_machine_state WHERE state_key IN ('auth.sharedStore', 'authProfiles.store')",
+            )
+            .all(),
+        ).toEqual([]);
+        state.close();
+      }
+    },
+  );
+
   it("records shared auth as held for deleted main even with a surviving physical registration", async () => {
     const sourcePath = legacyDatabase({
       agentId: "alive",

@@ -446,21 +446,32 @@ it("keeps legacy ownership when main and a non-main inheritance owner both hold 
   expect(sharedAuth(fixture.env)).toEqual(localAuth(path.dirname(fixture.sourcePath)));
 });
 
-it("treats an inheritance owner stored in main's directory as main", async () => {
-  const fixture = await createEmptyFixture(false);
-  const mainAgentDir = path.dirname(fixture.sourcePath);
-  const cfg = {
-    agents: {
-      ownership: "explicit" as const,
-      defaults: { authInheritance: { agentId: "ops" } },
-      entries: { ops: { agentDir: mainAgentDir } },
-    },
-  };
-  sqlite.writePersistedAuthProfileStoreRaw(makeStore("openai:ops", "ops-key"), mainAgentDir);
+it.each(["direct", "symlinked"] as const)(
+  "treats an inheritance owner stored in main's directory as main (%s)",
+  async (link) => {
+    const fixture = await createEmptyFixture(false);
+    const mainAgentDir = path.dirname(fixture.sourcePath);
+    fs.mkdirSync(mainAgentDir, { recursive: true });
+    const ownerDir =
+      link === "direct"
+        ? mainAgentDir
+        : path.join(tempDirs.make("openclaw-shared-auth-link-"), "ops");
+    if (link === "symlinked") {
+      fs.symlinkSync(mainAgentDir, ownerDir, process.platform === "win32" ? "junction" : "dir");
+    }
+    const cfg = {
+      agents: {
+        ownership: "explicit" as const,
+        defaults: { authInheritance: { agentId: "ops" } },
+        entries: { ops: { agentDir: ownerDir } },
+      },
+    };
+    sqlite.writePersistedAuthProfileStoreRaw(makeStore("openai:ops", "ops-key"), mainAgentDir);
 
-  const detected = await detectLegacy(fixture.env, undefined, cfg);
-  expect(detected.sharedAuthStore).toEqual({ sourcePath: fixture.sourcePath, hasLegacy: true });
-});
+    const detected = await detectLegacy(fixture.env, undefined, cfg);
+    expect(detected.sharedAuthStore).toEqual({ sourcePath: fixture.sourcePath, hasLegacy: true });
+  },
+);
 
 it("relocates main's credentials when a non-main inheritance owner holds none", async () => {
   const fixture = await createInheritanceOwnerFixture();
