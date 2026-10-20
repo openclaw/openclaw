@@ -73,7 +73,6 @@ function classifyProcessArtifactCustody(
   command: ProcessCommand | undefined,
   pid: number,
   cwd: string | undefined,
-  parentCommand: ProcessCommand | undefined,
 ): ArtifactCustody {
   if (!command) {
     return { kind: "unknown", reason: "process command is unavailable" };
@@ -122,15 +121,13 @@ function classifyProcessArtifactCustody(
       ? identity.reason
       : undefined;
   if (!cwd || !path.isAbsolute(cwd)) {
-    const inspectorUid = process.getuid?.();
+    // Unrelated commands do not own runtimes merely because cwd is unreadable.
+    // Explicit artifact references above still preserve their custody.
     if (
-      cwd === undefined &&
       identity.kind === "other" &&
       typeof position !== "number" &&
       position.kind === "not-runtime" &&
-      (command.owner === "different" ||
-        (command.uid !== undefined && inspectorUid !== undefined && command.uid !== inspectorUid) ||
-        isStandardSystemdLoginProcess(command, parentCommand, inspectorUid))
+      references.length === 0
     ) {
       return { kind: "not-holder" };
     }
@@ -420,12 +417,7 @@ export function inspectOtherOpenClawProcesses(references?: HandoffReferences | s
         }
         continue;
       }
-      const custody = classifyProcessArtifactCustody(
-        command,
-        pid,
-        directories.get(pid),
-        byPid.get(command?.ppid ?? 0)?.command,
-      );
+      const custody = classifyProcessArtifactCustody(command, pid, directories.get(pid));
       if (custody.kind === "not-holder") {
         continue;
       }
