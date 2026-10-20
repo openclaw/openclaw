@@ -404,7 +404,7 @@
   max-width: min(360px, 100%);
   justify-self: center;
   /* Symmetric gutters keep the pill centered on the chat column while leaving
-     room for the hover-revealed settings button beside it. */
+     room for it to grow rightward when hover reveals settings. */
   padding-inline: 32px;
   box-sizing: border-box;
 }
@@ -423,22 +423,34 @@
   grid-column: 1 / -1;
 }
 
+/* The pill surface wraps the context trigger and the settings button so the
+   hover reveal grows the pill itself. */
 .chat-pane__agent-identity {
+  /* Settings width minus the trigger's trailing padding it replaces. */
+  --chat-agent-settings-reveal: 20px;
   position: relative;
+  display: flex;
+  align-items: center;
   min-width: 0;
   max-width: 100%;
+  min-height: 36px;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--secondary);
 }
 
 .chat-pane__agent-identity > button:not(.chat-pane__agent-settings) {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
   max-width: 100%;
-  min-height: 36px;
-  padding: 4px 12px 4px 4px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--secondary);
+  min-height: 34px;
+  padding: 3px 12px 3px 3px;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
   color: var(--text);
   font: inherit;
   font-size: 13px;
@@ -460,19 +472,19 @@
   white-space: nowrap;
 }
 
-/* Settings sits outside the pill so revealing it never resizes or recenters it. */
+/* Collapsed until hover; it stays in the tab order so keyboard focus can
+   reveal it. */
 .chat-pane__agent-settings {
-  position: absolute;
-  top: 50%;
-  left: 100%;
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  width: 28px;
+  width: 0;
   height: 28px;
   padding: 0;
-  transform: translateY(-50%);
+  overflow: hidden;
   border: 0;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
   cursor: var(--cursor-action);
@@ -481,14 +493,9 @@
 }
 
 .chat-pane__agent-settings svg {
+  flex: 0 0 16px;
   width: 16px;
   height: 16px;
-}
-
-/* Keyboard focus reveals it too; a mouse click alone must not pin it visible. */
-.chat-pane__agent-identity:is(:hover, :has(:focus-visible)) > .chat-pane__agent-settings {
-  opacity: 1;
-  pointer-events: auto;
 }
 
 .chat-pane__agent-settings:is(:hover, :focus-visible) {
@@ -496,9 +503,35 @@
   color: var(--text);
 }
 
-/* Touch has no hover, so settings stays visible. */
+/* Keyboard focus reveals it too; a mouse click alone must not pin it visible.
+   The negative end margin keeps the pill's layout width unchanged, so it grows
+   rightward instead of recentering and shifting the avatar and name. */
+@media (hover: hover) {
+  .chat-pane__agent-identity:is(:hover, :has(:focus-visible)) {
+    max-width: calc(100% + var(--chat-agent-settings-reveal));
+    margin-inline-end: calc(0px - var(--chat-agent-settings-reveal));
+  }
+
+  .chat-pane__agent-identity:is(:hover, :has(:focus-visible))
+    > button:not(.chat-pane__agent-settings) {
+    padding-right: 4px;
+  }
+
+  .chat-pane__agent-identity:is(:hover, :has(:focus-visible)) > .chat-pane__agent-settings {
+    width: 28px;
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+/* Touch has no hover, so the pill always includes settings and stays centered. */
 @media (hover: none) {
+  .chat-pane__agent-identity > button:not(.chat-pane__agent-settings) {
+    padding-right: 4px;
+  }
+
   .chat-pane__agent-settings {
+    width: 28px;
     opacity: 1;
     pointer-events: auto;
   }
