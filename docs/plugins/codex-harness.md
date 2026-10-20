@@ -20,6 +20,14 @@ their final response automatically to the caller. The `message` tool needs an
 explicit `target` for sends from these turns; it cannot post progress to a
 current conversation.
 
+## Final replies
+
+After a confirmed final source reply, OpenClaw gives Codex up to ten seconds to
+complete its native turn. Natural completion preserves the successful tool result
+without adding a false interruption marker to native history. Cancellation and
+`sessions_yield` keep their existing interruption behavior; a turn that does not
+finish within the grace period still uses the interrupt fallback.
+
 Managed inference proxy restarts do not replace an otherwise reusable native
 thread. Thread identity uses the proxy's upstream provider and routing policy, not
 its temporary loopback address. Upstream, authentication-profile, and creation-time

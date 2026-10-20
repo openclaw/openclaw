@@ -250,36 +250,39 @@ describe("Codex terminal dynamic-tool release", () => {
   );
 
   it.each(["reply", "sibling"] as const)(
-    "completes a delivered final reply after a failed sibling when %s settles first",
+    "bounds native completion after a delivered final reply and failed sibling when %s settles first",
     async (first) => {
-      await using harness = createTerminalReleaseHarness();
-      await harness.observeResponse(["reply", "sibling"]);
-      harness.pendingOpenClawDynamicToolCompletionIds.add("reply");
-      harness.pendingOpenClawDynamicToolCompletionIds.add("sibling");
-      const results = {
-        reply: dynamicToolResult("reply", {
-          success: false,
-          terminate: true,
-          finalSourceReplyDelivered: true,
-        }),
-        sibling: dynamicToolResult("sibling", { success: false }),
-      };
-      for (const name of [first, first === "reply" ? "sibling" : "reply"] as const) {
-        harness.pendingOpenClawDynamicToolCompletionIds.delete(name);
-        harness.controller.recordDynamicToolResult(results[name]);
-        harness.controller.scheduleTerminalDynamicToolReleaseCheck();
-        await yieldImmediate();
-        expect(harness.state.completed).toBe(
-          harness.pendingOpenClawDynamicToolCompletionIds.size === 0,
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        await using harness = createTerminalReleaseHarness();
+        await harness.observeResponse(["reply", "sibling"]);
+        harness.pendingOpenClawDynamicToolCompletionIds.add("reply").add("sibling");
+        const results = {
+          reply: dynamicToolResult("reply", {
+            success: false,
+            terminate: true,
+            finalSourceReplyDelivered: true,
+          }),
+          sibling: dynamicToolResult("sibling", { success: false }),
+        };
+        for (const name of [first, first === "reply" ? "sibling" : "reply"] as const) {
+          harness.pendingOpenClawDynamicToolCompletionIds.delete(name);
+          harness.controller.recordDynamicToolResult(results[name]);
+          harness.controller.scheduleTerminalDynamicToolReleaseCheck();
+          await yieldImmediate();
+          expect(harness.request).not.toHaveBeenCalled();
+        }
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(harness.request).toHaveBeenCalledWith(
+          "turn/interrupt",
+          { threadId: "thread-1", turnId: "turn-1" },
+          expect.anything(),
         );
+        expect(harness.resolveCompletion).toHaveBeenCalledOnce();
+        expect(harness.sourceReplies).toEqual([]);
+      } finally {
+        vi.useRealTimers();
       }
-      expect(harness.request).toHaveBeenCalledWith(
-        "turn/interrupt",
-        { threadId: "thread-1", turnId: "turn-1" },
-        expect.anything(),
-      );
-      expect(harness.resolveCompletion).toHaveBeenCalledOnce();
-      expect(harness.sourceReplies).toEqual([]);
     },
   );
 
