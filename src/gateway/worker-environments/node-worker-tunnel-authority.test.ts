@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { NodeWorkerWorkspaceExecInput } from "../../worker/node-workspace-protocol.js";
-import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import {
   createManager,
   environment,
@@ -13,30 +12,28 @@ import {
   workspaceTransfer,
 } from "./node-worker-tunnel.test-support.js";
 
+function pendingWorkspaceBinding(record = environment(), transfer = workspaceTransfer()) {
+  const binding = createDeferred<undefined>();
+  const resolving = createDeferred();
+  const manager = createManager(record, { workspaceTransfer: transfer });
+  const resolveBinding = vi.fn(async () => {
+    resolving.resolve();
+    return await binding.promise;
+  });
+  manager.bindWorkspaceBindingResolver(resolveBinding);
+  return { manager, binding, resolving, resolveBinding };
+}
+
 describe("node worker tunnel source authority", () => {
   it.each(["start", "session-command", "aborted-session-command"] as const)(
     "does not expose a tunnel after %s authority closes during workspace binding",
     async (operation) => {
       const record = { ...environment(), sharedHost: false };
-      const binding = createDeferred<undefined>();
-      const transfer = workspaceTransfer();
       const prepareSync = vi.fn();
-      transfer.prepareSync = prepareSync;
-      const manager = createNodeWorkerTunnelManager({
-        gatewayDeviceId: "gateway-device-1",
-        getEnvironment: () => record,
-        listEnvironments: () => [record],
-        getTransport: transport,
-        launchNodeWorker: vi.fn(),
-        validateWorkerTurn: () => true,
-        workspaceTransfer: transfer,
-      });
-      const resolving = createDeferred();
-      const resolveBinding = vi.fn(async () => {
-        resolving.resolve();
-        return await binding.promise;
-      });
-      manager.bindWorkspaceBindingResolver(resolveBinding);
+      const { manager, binding, resolving } = pendingWorkspaceBinding(
+        record,
+        workspaceTransfer({ prepareSync }),
+      );
       let authorized = true;
       const controller = new AbortController();
       const authorize = () => {
@@ -78,22 +75,7 @@ describe("node worker tunnel source authority", () => {
 
   it("joins same-owner starts while workspace binding resolution is pending", async () => {
     const record = environment();
-    const workspaceBinding = createDeferred<undefined>();
-    const resolving = createDeferred();
-    const resolveWorkspaceBinding = vi.fn(async () => {
-      resolving.resolve();
-      return await workspaceBinding.promise;
-    });
-    const manager = createNodeWorkerTunnelManager({
-      gatewayDeviceId: "gateway-device-1",
-      getEnvironment: () => record,
-      listEnvironments: () => [record],
-      getTransport: transport,
-      launchNodeWorker: vi.fn(),
-      validateWorkerTurn: () => true,
-      workspaceTransfer: workspaceTransfer(),
-    });
-    manager.bindWorkspaceBindingResolver(resolveWorkspaceBinding);
+    const { manager, binding, resolving, resolveBinding } = pendingWorkspaceBinding(record);
 
     const first = manager.start(startRequest());
     await resolving.promise;
@@ -108,12 +90,12 @@ describe("node worker tunnel source authority", () => {
     const joining = manager.start({ ...startRequest(), authorize });
     const rejected = expect(joining).rejects.toBe(closed);
     authorized = false;
-    workspaceBinding.resolve(undefined);
+    binding.resolve(undefined);
 
     try {
       const [firstHandle, secondHandle] = await Promise.all([first, second]);
       await rejected;
-      expect(resolveWorkspaceBinding).toHaveBeenCalledOnce();
+      expect(resolveBinding).toHaveBeenCalledOnce();
       expect(secondHandle).toBe(firstHandle);
       await expect(manager.start({ ...startRequest(), authorize })).rejects.toBe(closed);
       expect(manager.status(record.environmentId)).toBe("connected");

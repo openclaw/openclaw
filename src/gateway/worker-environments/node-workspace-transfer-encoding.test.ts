@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { buffer } from "node:stream/consumers";
 import { gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -34,30 +35,20 @@ describe("workspace manifest HTTP negotiation", () => {
         localPath,
         isAuthorized: () => true,
       });
-      const request = {
-        gatewayUrl: server.gatewayUrl,
-        routePath: nodeWorkspaceTransferManifestPath("environment", snapshot.manifestRef),
-        method: "GET" as const,
-        token,
-      };
       const requestManifest = async (header?: string, requestToken = token) =>
         await withNodeWorkerTransferHttpRequest(
           {
-            ...request,
+            gatewayUrl: server.gatewayUrl,
+            routePath: nodeWorkspaceTransferManifestPath("environment", snapshot.manifestRef),
+            method: "GET",
             token: requestToken,
             headers: header ? { "accept-encoding": header } : undefined,
           },
-          async (response) => {
-            const chunks: Buffer[] = [];
-            for await (const chunk of response) {
-              chunks.push(Buffer.from(chunk));
-            }
-            return {
-              statusCode: response.statusCode,
-              headers: response.headers,
-              bytes: Buffer.concat(chunks),
-            };
-          },
+          async (response) => ({
+            statusCode: response.statusCode,
+            headers: response.headers,
+            bytes: await buffer(response),
+          }),
         );
       for (const { header, encoding, code } of [
         { header: "gzip", encoding: "gzip", code: 200 },

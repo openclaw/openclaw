@@ -4,7 +4,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
-import { workspaceTransfer } from "./node-worker-tunnel.test-support.js";
+import { workspaceCommandResult, workspaceTransfer } from "./node-worker-tunnel.test-support.js";
 import { createNodeWorkerWorkspaceActions } from "./node-worker-workspace-actions.js";
 
 describe("node workspace preparation", () => {
@@ -26,6 +26,8 @@ describe("node workspace preparation", () => {
         expect(uploadSettled).toBe(true);
       });
       const manifestRef = "sha256:" + "a".repeat(64);
+      const source = { kind: "local" as const, path: "/gateway/workspace" };
+      const remoteWorkspaceDir = "/worker/workspace";
       const actions = createNodeWorkerWorkspaceActions({
         environmentId: "environment-1",
         ownerEpoch: 1,
@@ -33,8 +35,8 @@ describe("node workspace preparation", () => {
         ownerSignal: new AbortController().signal,
         isOwnerCurrent: () => true,
         restoredWorkspace: {
-          source: { kind: "local", path: "/gateway/workspace" },
-          remoteWorkspaceDir: "/worker/workspace",
+          source,
+          remoteWorkspaceDir,
           manifestRef,
         },
         workspaceTransfer: workspaceTransfer({
@@ -46,26 +48,17 @@ describe("node workspace preparation", () => {
           uploadStarted.resolve();
           try {
             await upload.promise;
-            return {
-              workspaceDir: "/worker/workspace",
-              code: 0,
-              stdout: "",
-              stderr: "",
-              signal: null,
-              killed: false,
-              termination: "exit",
-            };
+            return workspaceCommandResult(remoteWorkspaceDir);
           } finally {
             uploadSettled = true;
           }
         },
       });
       const operation = actions.reconcileWorkspace({
-        remoteWorkspaceDir: "/worker/workspace",
+        remoteWorkspaceDir,
         baseManifestRef: manifestRef,
         source: {
-          kind: "local",
-          path: "/gateway/workspace",
+          ...source,
           assertCurrent: () => {
             if (!current) {
               throw failure;
