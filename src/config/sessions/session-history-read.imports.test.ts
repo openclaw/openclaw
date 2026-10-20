@@ -23,6 +23,18 @@ it("keeps transcript title and topology workers independent of host config loadi
   ).toEqual([]);
 });
 
+it("keeps memory snapshot rendering independent of host source discovery", () => {
+  expect(
+    findSourceImportBackedges("src/config/sessions/session-memory-entry.worker.ts", [
+      "packages/memory-host-sdk/src/host/session-files.ts",
+      "packages/memory-host-sdk/src/host/openclaw-runtime-session.ts",
+      "src/config/sessions/session-accessor.ts",
+      "src/config/io.ts",
+      "src/config/io.runtime.ts",
+    ]),
+  ).toEqual([]);
+});
+
 const readOwners = [
   "src/config/sessions/session-transcript.worker.ts",
   "src/config/sessions/session-accessor.sqlite-branches.ts",

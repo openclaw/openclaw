@@ -144,3 +144,43 @@ it("keeps repeated sessions isolated by their admitted input bounds", async () =
     }
   });
 });
+
+it.each([
+  { sessionKey: "agent:main:chat:snapshot", content: "User: Captured preference." },
+  { sessionKey: "agent:main:cron:job:run:snapshot", content: "", generatedByCronRun: true },
+  {
+    sessionKey: "agent:main:dreaming-narrative-snapshot",
+    content: "",
+    generatedByDreamingNarrative: true,
+  },
+])("classifies an export from its captured session key: $sessionKey", async (expected) => {
+  await withOpenClawTestState(
+    { label: "session-memory-snapshot-classification" },
+    async (state) => {
+      const scope = {
+        agentId: "main",
+        sessionId: "snapshot",
+        sessionKey: expected.sessionKey,
+        storePath: path.join(state.sessionsDir(), "sessions.json"),
+      };
+      replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      expect(
+        replaceTranscriptEventsSync(scope, [
+          {
+            type: "message",
+            id: "preference",
+            message: { role: "user", content: "Captured preference." },
+          },
+        ]),
+      ).toBe(true);
+      const { sessionKey, ...options } = scope;
+      const [result] = await prepareSessionMemoryEntries([{ absPath: sessionKey, options }]);
+      expect(result).toMatchObject({ entry: { content: expected.content } });
+      if (!result || "cold" in result || !result.entry) {
+        throw new Error("Expected a captured memory entry");
+      }
+      expect(result.entry.generatedByCronRun).toBe(expected.generatedByCronRun);
+      expect(result.entry.generatedByDreamingNarrative).toBe(expected.generatedByDreamingNarrative);
+    },
+  );
+});

@@ -1,8 +1,8 @@
-import { projectSessionEntryRecord } from "../../../packages/memory-host-sdk/src/host/session-entry-projection.js";
 import {
-  buildSessionEntryInProcess,
+  projectSessionEntryRecord,
   readSessionEntryResetRecallCutoff,
-} from "../../../packages/memory-host-sdk/src/host/session-files.js";
+} from "../../../packages/memory-host-sdk/src/host/session-entry-projection.js";
+import { renderSessionEntrySnapshot } from "../../../packages/memory-host-sdk/src/host/session-entry-render.js";
 import { LruCache } from "../../infra/lru-cache.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { prepareAssistantTranscriptText } from "../../shared/chat-message-content.js";
@@ -130,7 +130,7 @@ export async function prepareSessionMemoryEntries(
       }
       retainSnapshot(snapshotKey(request), snapshot);
       const entry = snapshot
-        ? await buildSessionEntryInProcess(request.absPath, request.options, snapshot)
+        ? await renderSessionEntrySnapshot(request.absPath, request.options, snapshot)
         : null;
       return {
         entry,

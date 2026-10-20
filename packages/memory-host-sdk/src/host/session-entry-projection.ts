@@ -5,6 +5,7 @@ import {
 } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
+import type { SessionFileEntry } from "./session-files.js";
 import type { SessionResetRecallCutoff } from "./session-reset-recall.js";
 import type { MemoryEntryProvenance } from "./types.js";
 
@@ -173,4 +174,35 @@ export function parseSessionTimestampMs(
     }
   }
   return 0;
+}
+
+const SESSION_RESET_RECALL_CUTOFF = Symbol.for("openclaw.memory.sessionResetRecallCutoff");
+
+export function readSessionEntryResetRecallCutoff(
+  entry: SessionFileEntry,
+): SessionResetRecallCutoff {
+  const value: unknown = Object.getOwnPropertyDescriptor(entry, SESSION_RESET_RECALL_CUTOFF)?.value;
+  if (!value || typeof value !== "object" || !("state" in value)) {
+    return { state: "invalid" };
+  }
+  if (value.state === "absent" || value.state === "invalid") {
+    return { state: value.state };
+  }
+  if (value.state === "valid" && "cutoffLine" in value && typeof value.cutoffLine === "number") {
+    return { state: "valid", cutoffLine: value.cutoffLine };
+  }
+  return { state: "invalid" };
+}
+
+export function attachSessionEntryResetRecallCutoff(
+  entry: SessionFileEntry,
+  cutoff: SessionResetRecallCutoff,
+): SessionFileEntry {
+  Object.defineProperty(entry, SESSION_RESET_RECALL_CUTOFF, {
+    configurable: false,
+    enumerable: false,
+    value: cutoff,
+    writable: false,
+  });
+  return entry;
 }
