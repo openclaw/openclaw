@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 
@@ -18,10 +18,10 @@ vi.mock("../config/config.js", async () => {
     resolveGatewayPort: () => 18789,
   };
 });
-function getSessionsHistoryTool(options?: { sandboxed?: boolean }) {
+function history(sandboxed?: boolean) {
   return createSessionsHistoryTool({
     agentSessionKey: "main",
-    sandboxed: options?.sandboxed,
+    sandboxed,
     config: mockConfig as never,
     callGateway: (opts: unknown) => callGatewayMock(opts),
   });
@@ -30,7 +30,6 @@ function getSessionsHistoryTool(options?: { sandboxed?: boolean }) {
 function mockGatewayWithHistory(
   extra?: (req: { method?: string; params?: Record<string, unknown> }) => unknown,
 ) {
-  // Most visibility tests need chat.history plus optional session resolution/listing.
   callGatewayMock.mockClear();
   callGatewayMock.mockImplementation(async (opts: unknown) => {
     const req = opts as { method?: string; params?: Record<string, unknown> };
@@ -46,10 +45,6 @@ function mockGatewayWithHistory(
 }
 
 describe("sessions tools visibility", () => {
-  beforeEach(() => {
-    callGatewayMock.mockClear();
-  });
-
   it("keeps same-agent history accessible but denies cross-agent history when a2a is explicitly disabled", async () => {
     mockConfig = {
       session: { mainKey: "main", scope: "per-sender" },
@@ -59,14 +54,9 @@ describe("sessions tools visibility", () => {
       req.method === "sessions.resolve" ? { key: req.params?.key } : undefined,
     );
 
-    const tool = getSessionsHistoryTool();
-
-    const sibling = await tool.execute("call1", {
-      sessionKey: "agent:main:quietchat:direct:someone-else",
-    });
-    expect(sibling.details).toMatchObject({
-      sessionKey: "agent:main:quietchat:direct:someone-else",
-    });
+    const tool = history();
+    const sessionKey = "agent:main:quietchat:direct:someone-else";
+    expect((await tool.execute("call1", { sessionKey })).details).toMatchObject({ sessionKey });
 
     const denied = await tool.execute("call-cross-agent", { sessionKey: "agent:other:main" });
     expect(denied.details).toEqual({
@@ -99,7 +89,7 @@ describe("sessions tools visibility", () => {
       sessions: [{ key: sessionKey, agentId: "other" }],
     });
 
-    const result = await getSessionsHistoryTool().execute("call3", { sessionKey });
+    const result = await history().execute("call3", { sessionKey });
     expect(result.details).toMatchObject({
       sessionKey,
       messages: [{ role: "assistant", content: [{ type: "text", text: "ok" }] }],
@@ -119,11 +109,7 @@ describe("sessions tools visibility", () => {
       return undefined;
     });
 
-    const tool = getSessionsHistoryTool({ sandboxed: true });
-
-    const denied = await tool.execute("call4", {
-      sessionKey: "agent:other:main",
-    });
+    const denied = await history(true).execute("call4", { sessionKey: "agent:other:main" });
     expect(denied.details).toMatchObject({ status: "forbidden" });
   });
 });

@@ -1,8 +1,4 @@
 import { randomUUID } from "node:crypto";
-/**
- * Regression coverage for plugin tool context and delivery metadata.
- * Verifies requester metadata, workspace selection, and delivery routing.
- */
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { resolveMemoryAudienceFromEntry } from "../plugins/memory-audience.js";
@@ -52,31 +48,25 @@ describe("openclaw plugin tool context", () => {
     );
   });
 
-  it("forwards runtime-owned active model metadata", () => {
-    const result = resolve({
-      modelProvider: " local-provider ",
-      modelId: " local-model ",
-    });
-
-    expect(result.context.activeModel).toStrictEqual({
-      provider: "local-provider",
-      modelId: "local-model",
-      modelRef: "local-provider/local-model",
-    });
-  });
-
-  it("does not duplicate provider-qualified active model refs", () => {
-    const result = resolve({
-      modelProvider: "openrouter",
-      modelId: "openrouter/auto",
-    });
-
-    expect(result.context.activeModel).toStrictEqual({
-      provider: "openrouter",
-      modelId: "openrouter/auto",
-      modelRef: "openrouter/auto",
-    });
-  });
+  it.each([
+    [
+      " local-provider ",
+      " local-model ",
+      "local-provider",
+      "local-model",
+      "local-provider/local-model",
+    ],
+    ["openrouter", "openrouter/auto", "openrouter", "openrouter/auto", "openrouter/auto"],
+  ])(
+    "normalizes active model metadata for %s/%s",
+    (modelProvider, inputId, provider, modelId, modelRef) => {
+      expect(resolve({ modelProvider, modelId: inputId }).context.activeModel).toStrictEqual({
+        provider,
+        modelId,
+        modelRef,
+      });
+    },
+  );
 
   it("uses requester agent override for synthetic embedded session keys", () => {
     const recallWorkspace = path.join(process.cwd(), "tmp-recall-workspace");
@@ -95,8 +85,7 @@ describe("openclaw plugin tool context", () => {
       resolvedConfig: config,
     });
 
-    expect(result.context.agentId).toBe("recall");
-    expect(result.context.workspaceDir).toBe(recallWorkspace);
+    expect(result.context).toMatchObject({ agentId: "recall", workspaceDir: recallWorkspace });
   });
 
   it("keeps the routable conversation target ahead of the native channel id", () => {
@@ -109,15 +98,10 @@ describe("openclaw plugin tool context", () => {
     expect(result.context.deliveryContext?.to).toBe("user:U123");
   });
 
-  it("carries the host-selected approval reviewer into plugin tools", () => {
-    const result = resolve({ approvalReviewerDeviceIds: ["device-reviewer"] });
-
-    expect(result.context.approvalReviewerDeviceIds).toEqual(["device-reviewer"]);
-  });
-
-  it("maps a single host-selected approval reviewer into plugin tools", () => {
-    const result = resolve({ approvalReviewerDeviceId: "device-reviewer" });
-
-    expect(result.context.approvalReviewerDeviceIds).toEqual(["device-reviewer"]);
+  it.each([
+    { approvalReviewerDeviceIds: ["device-reviewer"] },
+    { approvalReviewerDeviceId: "device-reviewer" },
+  ])("carries host-selected approval reviewers into plugin tools: %j", (options) => {
+    expect(resolve(options).context.approvalReviewerDeviceIds).toEqual(["device-reviewer"]);
   });
 });

@@ -169,15 +169,64 @@ function mockGatewayReply(
 function agentParams(call: GatewayCall): AgentCallParams {
   return (call.params ?? {}) as AgentCallParams;
 }
-function send(requesterKey: string, targetKey: string, timeoutSeconds = 1) {
+function sendTool(requesterKey: string, requesterTurnRunId?: string) {
   return createSessionsSendTool({
     agentSessionKey: requesterKey,
+    requesterTurnRunId,
     config,
     callGateway: callGatewayMock,
-  }).execute("coordination", {
+  });
+}
+function send(requesterKey: string, targetKey: string, timeoutSeconds = 1) {
+  return sendTool(requesterKey).execute("coordination", {
     sessionKey: targetKey,
     message: "Return the requested result",
     timeoutSeconds,
+  });
+}
+function yieldTool(
+  sessionId: string,
+  requesterSessionKey: string,
+  requesterTurnRunId: string,
+  onYield = () => {},
+) {
+  return createSessionsYieldTool({
+    sessionId,
+    onYield,
+    claimYield: createRequesterYieldCallback({
+      requesterSessionKey,
+      requesterAgentId: "main",
+      requesterTurnRunId,
+    }),
+  });
+}
+function deliveredReply(text: string) {
+  return {
+    status: "ok",
+    inputProcessingCompleted: true,
+    result: {
+      payloads: [{ text }],
+      deliveryStatus: { status: "sent", resultCount: 1 },
+    },
+  };
+}
+function requesterCalls(requesterSessionKey: string) {
+  return calls.filter(
+    (call) => call.method === "agent" && call.params?.sessionKey === requesterSessionKey,
+  );
+}
+async function writePair(
+  requesterSessionKey: string,
+  requesterId: string,
+  childSessionKey: string,
+  sessionId: string,
+) {
+  await writeEntry(requesterSessionKey, { sessionId: requesterId, updatedAt: 1 });
+  await writeEntry(childSessionKey, {
+    sessionId,
+    updatedAt: 1,
+    spawnedBy: requesterSessionKey,
+    spawnDepth: 1,
   });
 }
 function expectCoordination(
@@ -295,13 +344,7 @@ describe("sessions_send child coordination", () => {
       const childSessionKey = "agent:main:dashboard:steer-child";
       const sessionId = "steer-child";
       const requesterTurnRunId = "steer-requester-turn";
-      await writeEntry(requesterSessionKey, { sessionId: "steer-requester", updatedAt: 1 });
-      await writeEntry(childSessionKey, {
-        sessionId,
-        updatedAt: 1,
-        spawnedBy: requesterSessionKey,
-        spawnDepth: 1,
-      });
+      await writePair(requesterSessionKey, "steer-requester", childSessionKey, sessionId);
       await resetSubagentRegistryForTests();
       const seed = (runId: string, generation: number) =>
         addSubagentRunForTests({
@@ -390,12 +433,7 @@ describe("sessions_send child coordination", () => {
         const sent = await withGatewayToolCallerIdentity(
           createSessionsSendTestCaller(requesterSessionKey),
           () =>
-            createSessionsSendTool({
-              agentSessionKey: requesterSessionKey,
-              requesterTurnRunId,
-              config,
-              callGateway: callGatewayMock,
-            }).execute("watched-steer", {
+            sendTool(requesterSessionKey, requesterTurnRunId).execute("watched-steer", {
               sessionKey: childSessionKey,
               message: "Continue this task",
               mode: "steer",
@@ -426,15 +464,11 @@ describe("sessions_send child coordination", () => {
         expect(queueA).not.toHaveBeenCalled();
         expect(getSubagentRunByRunId("steer-B")?.requesterTurnRunId).toBe(requesterTurnRunId);
         expect(previous().requesterTurnRunId).toBeUndefined();
-        const yielded = await createSessionsYieldTool({
-          sessionId: "steer-requester",
-          onYield: () => {},
-          claimYield: createRequesterYieldCallback({
-            requesterSessionKey,
-            requesterAgentId: "main",
-            requesterTurnRunId,
-          }),
-        }).execute("yield-steered", {});
+        const yielded = await yieldTool(
+          "steer-requester",
+          requesterSessionKey,
+          requesterTurnRunId,
+        ).execute("yield-steered", {});
         expect(yielded.details).toEqual({ status: "yielded" });
       } finally {
         admission.mockRestore();
@@ -455,13 +489,7 @@ describe("sessions_send child coordination", () => {
       const childSessionKey = "agent:main:dashboard:existing-child";
       const requesterTurnRunId = "followup-requester-turn";
       const runId = "coordination-followup";
-      await writeEntry(requesterSessionKey, { sessionId: "requester", updatedAt: 1 });
-      await writeEntry(childSessionKey, {
-        sessionId: "existing-child",
-        updatedAt: 1,
-        spawnedBy: requesterSessionKey,
-        spawnDepth: 1,
-      });
+      await writePair(requesterSessionKey, "requester", childSessionKey, "existing-child");
       await resetSubagentRegistryForTests();
       await addSubagentRunForTests({
         runId: "original-child-run",
@@ -481,10 +509,7 @@ describe("sessions_send child coordination", () => {
         requesterTurnRunId: undefined,
         requesterSettleWake: undefined,
       });
-      let finishChild = () => {};
-      const childPending = new Promise<void>((resolve) => {
-        finishChild = resolve;
-      });
+      const childPending = createDeferredCore();
       callGatewayMock.mockImplementation(async (request: GatewayCall) => {
         calls.push(request);
         if (request.method === "agent" && request.params?.sessionKey === childSessionKey) {
@@ -496,7 +521,7 @@ describe("sessions_send child coordination", () => {
           return receipt;
         }
         if (request.method === "agent.wait" && request.params?.runId === runId) {
-          await childPending;
+          await childPending.promise;
           await writeFinal(childSessionKey, runId, "Follow-up result");
           return {
             runId,
@@ -507,26 +532,14 @@ describe("sessions_send child coordination", () => {
           };
         }
         if (request.method === "agent") {
-          return {
-            status: "ok",
-            inputProcessingCompleted: true,
-            result: {
-              payloads: [{ text: "Follow-up reached the requester" }],
-              deliveryStatus: { status: "sent", resultCount: 1 },
-            },
-          };
+          return deliveredReply("Follow-up reached the requester");
         }
         return {};
       });
       announceTesting.setDepsForTest({ callGateway: callGatewayMock });
       let stopObserving = () => {};
       try {
-        const result = await createSessionsSendTool({
-          agentSessionKey: requesterSessionKey,
-          requesterTurnRunId,
-          config,
-          callGateway: callGatewayMock,
-        }).execute("followup", {
+        const result = await sendTool(requesterSessionKey, requesterTurnRunId).execute("followup", {
           sessionKey: childSessionKey,
           mode: "followup",
           ...(watch === undefined ? {} : { watch }),
@@ -541,15 +554,12 @@ describe("sessions_send child coordination", () => {
           delivery: { status: "pending" },
         });
         const onYield = vi.fn();
-        const yielded = await createSessionsYieldTool({
-          sessionId: "requester",
-          claimYield: createRequesterYieldCallback({
-            requesterSessionKey,
-            requesterAgentId: "main",
-            requesterTurnRunId,
-          }),
+        const yielded = await yieldTool(
+          "requester",
+          requesterSessionKey,
+          requesterTurnRunId,
           onYield,
-        }).execute("yield-followup", {});
+        ).execute("yield-followup", {});
         expect(yielded.details).toEqual({ status: "yielded" });
         expect(onYield).toHaveBeenCalledOnce();
         expect(
@@ -561,11 +571,7 @@ describe("sessions_send child coordination", () => {
             acceptedSessionSpawns: [{ runId, childSessionKey, expectsCompletionMessage: true }],
           }),
         ).toBe(true);
-        const requesterCalls = () =>
-          calls.filter(
-            (call) => call.method === "agent" && call.params?.sessionKey === requesterSessionKey,
-          );
-        expect(requesterCalls()).toHaveLength(0);
+        expect(requesterCalls(requesterSessionKey)).toHaveLength(0);
         const settled = new Promise<void>((resolve) => {
           stopObserving = subscribeSubagentRunChanges("persistence", () => {
             const child = getSubagentRunByRunId(runId);
@@ -581,13 +587,13 @@ describe("sessions_send child coordination", () => {
             }
           });
         });
-        finishChild();
+        childPending.resolve();
         await settled;
         await settleSessionWork();
         expect(getSubagentRunByRunId(runId)).toMatchObject({ delivery: { status: "delivered" } });
         expect(getSubagentRunByRunId(runId)?.requesterSettleWake).toBeUndefined();
-        expect(requesterCalls()).toHaveLength(1);
-        expect(requesterCalls()[0]?.params).toMatchObject({
+        expect(requesterCalls(requesterSessionKey)).toHaveLength(1);
+        expect(requesterCalls(requesterSessionKey)[0]?.params).toMatchObject({
           message: expect.stringContaining("Follow-up result"),
           inputProvenance: { sourceTool: "subagent_settle" },
         });
@@ -602,9 +608,9 @@ describe("sessions_send child coordination", () => {
           },
         });
         await settleSessionWork();
-        expect(requesterCalls()).toHaveLength(1);
+        expect(requesterCalls(requesterSessionKey)).toHaveLength(1);
       } finally {
-        finishChild();
+        childPending.resolve();
         stopObserving();
         await settleSessionWork();
         await resetSubagentRegistryForTests();
@@ -617,13 +623,7 @@ describe("sessions_send child coordination", () => {
     const requesterSessionKey = "agent:main:dashboard:race-parent";
     const childSessionKey = "agent:main:dashboard:race-child";
     const requesterTurnRunId = "race-parent-turn";
-    await writeEntry(requesterSessionKey, { sessionId: "race-parent", updatedAt: 1 });
-    await writeEntry(childSessionKey, {
-      sessionId: "race-child",
-      updatedAt: 1,
-      spawnedBy: requesterSessionKey,
-      spawnDepth: 1,
-    });
+    await writePair(requesterSessionKey, "race-parent", childSessionKey, "race-child");
     await resetSubagentRegistryForTests();
     const replies = [createDeferredCore(), createDeferredCore()];
     const runIds = ["race-followup-1", "race-followup-2"];
@@ -646,14 +646,7 @@ describe("sessions_send child coordination", () => {
           };
         }
       }
-      return {
-        status: "ok",
-        inputProcessingCompleted: true,
-        result: {
-          payloads: [{ text: "Both replies reviewed" }],
-          deliveryStatus: { status: "sent", resultCount: 1 },
-        },
-      };
+      return deliveredReply("Both replies reviewed");
     });
     announceTesting.setDepsForTest({ callGateway: callGatewayMock });
     const enteredPreparation = createDeferredCore();
@@ -679,12 +672,7 @@ describe("sessions_send child coordination", () => {
       });
     let stopObserving = () => {};
     try {
-      const tool = createSessionsSendTool({
-        agentSessionKey: requesterSessionKey,
-        requesterTurnRunId,
-        config,
-        callGateway: callGatewayMock,
-      });
+      const tool = sendTool(requesterSessionKey, requesterTurnRunId);
       for (const runId of runIds) {
         expect(
           (
@@ -699,15 +687,12 @@ describe("sessions_send child coordination", () => {
         ).toMatchObject({ status: "accepted", runId, watched: true });
       }
       const onYield = vi.fn();
-      const yielded = createSessionsYieldTool({
-        sessionId: "race-parent",
+      const yielded = yieldTool(
+        "race-parent",
+        requesterSessionKey,
+        requesterTurnRunId,
         onYield,
-        claimYield: createRequesterYieldCallback({
-          requesterSessionKey,
-          requesterAgentId: "main",
-          requesterTurnRunId,
-        }),
-      }).execute("yield-raced-followups", {});
+      ).execute("yield-raced-followups", {});
       void yielded.catch(() => {});
       await enteredPreparation.promise;
       const settled = createDeferredCore();
@@ -776,6 +761,11 @@ describe("sessions_send child coordination", () => {
     calls,
     writeEntry,
     writeFinal,
+    writePair,
+    sendTool,
+    yieldTool,
+    deliveredReply,
+    requesterCalls,
     settleSessionWork,
     drainRootWork: () => settleRootWork(true),
   });

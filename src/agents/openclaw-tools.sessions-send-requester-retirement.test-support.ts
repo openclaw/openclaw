@@ -23,7 +23,6 @@ import {
   clearTestEmbeddedRun as clearActiveEmbeddedRun,
   createEmbeddedRunHandle,
 } from "./embedded-agent-runner/runs.test-support.js";
-import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
 import {
   createSessionsSendTestCaller,
   setSessionsSendTestActiveRun,
@@ -58,6 +57,11 @@ export function registerSessionsSendRequesterRetirementTests({
   calls,
   writeEntry,
   writeFinal,
+  writePair,
+  sendTool,
+  yieldTool,
+  deliveredReply,
+  requesterCalls,
   settleSessionWork,
   drainRootWork,
 }: {
@@ -67,6 +71,21 @@ export function registerSessionsSendRequesterRetirementTests({
   calls: GatewayCall[];
   writeEntry: (sessionKey: string, entry: SessionEntry, storePath?: string) => Promise<void>;
   writeFinal: (sessionKey: string, runId: string, text: string) => Promise<void>;
+  writePair: (
+    requesterKey: string,
+    requesterId: string,
+    childKey: string,
+    childId: string,
+  ) => Promise<void>;
+  sendTool: (requesterKey: string, runId?: string) => ReturnType<typeof createSessionsSendTool>;
+  yieldTool: (
+    sessionId: string,
+    requesterKey: string,
+    runId: string,
+    onYield?: () => void,
+  ) => ReturnType<typeof createSessionsYieldTool>;
+  deliveredReply: (text: string) => unknown;
+  requesterCalls: (sessionKey: string) => GatewayCall[];
   settleSessionWork: () => Promise<void>;
   drainRootWork: () => Promise<void>;
 }) {
@@ -84,13 +103,7 @@ export function registerSessionsSendRequesterRetirementTests({
       const requesterTurnRunId = "retiring-requester-turn";
       const childSessionId = "retiring-child";
       const runId = "retired-requester-child-run";
-      await writeEntry(requesterSessionKey, { sessionId: "retiring-requester", updatedAt: 1 });
-      await writeEntry(childSessionKey, {
-        sessionId: childSessionId,
-        updatedAt: 1,
-        spawnedBy: requesterSessionKey,
-        spawnDepth: 1,
-      });
+      await writePair(requesterSessionKey, "retiring-requester", childSessionKey, childSessionId);
       await resetSubagentRegistryForTests();
       const childPending = createDeferredCore();
       const fullReply = "Result after requester retirement";
@@ -111,14 +124,7 @@ export function registerSessionsSendRequesterRetirementTests({
           return { runId, status: "ok", startedAt: 1, endedAt: Date.now(), terminalReply };
         }
         if (request.method === "agent") {
-          return {
-            status: "ok",
-            inputProcessingCompleted: true,
-            result: {
-              payloads: [{ text: "Retired requester's child result delivered" }],
-              deliveryStatus: { status: "sent", resultCount: 1 },
-            },
-          };
+          return deliveredReply("Retired requester's child result delivered");
         }
         return {};
       });
@@ -130,17 +136,12 @@ export function registerSessionsSendRequesterRetirementTests({
           }
         },
       );
-      const handle: EmbeddedAgentQueueHandle = {
-        ...createEmbeddedRunHandle({ runId, queueMessage, supportsTranscriptCommitWait: true }),
-        messageInjectionV2: {
-          version: 2,
-          isAvailable: () => true,
-          queueMessage: async (text, options, assertCurrent) => {
-            assertCurrent?.();
-            await queueMessage(text, options);
-          },
-        },
-      };
+      const handle = createEmbeddedRunHandle({
+        runId,
+        queueMessage,
+        supportsTranscriptCommitWait: true,
+        guarded: true,
+      });
       if (mode === "steer") {
         await registerSubagentRun({
           runId,
@@ -235,12 +236,7 @@ export function registerSessionsSendRequesterRetirementTests({
                 requesterOrigin: createSessionsSendTestCaller(requesterSessionKey).requesterOrigin,
               }),
               () =>
-                createSessionsSendTool({
-                  agentSessionKey: requesterSessionKey,
-                  requesterTurnRunId,
-                  config,
-                  callGateway: callGatewayMock,
-                }).execute("retiring-watched-send", {
+                sendTool(requesterSessionKey, requesterTurnRunId).execute("retiring-watched-send", {
                   sessionKey: childSessionKey,
                   mode,
                   watch: true,
@@ -255,11 +251,7 @@ export function registerSessionsSendRequesterRetirementTests({
         if (mode === "steer") {
           expect(queueMessage).toHaveBeenCalledOnce();
         }
-        const requesterCalls = () =>
-          calls.filter(
-            (call) => call.method === "agent" && call.params?.sessionKey === requesterSessionKey,
-          );
-        expect(requesterCalls()).toHaveLength(0);
+        expect(requesterCalls(requesterSessionKey)).toHaveLength(0);
         const delivered = createDeferredCore();
         stopObserving = subscribeSubagentRunChanges("persistence", () => {
           const child = getSubagentRunByRunId(runId);
@@ -271,8 +263,8 @@ export function registerSessionsSendRequesterRetirementTests({
         childPending.resolve();
         await delivered.promise;
         await settleSessionWork();
-        expect(requesterCalls()).toHaveLength(1);
-        expect(requesterCalls()[0]?.params).toMatchObject({
+        expect(requesterCalls(requesterSessionKey)).toHaveLength(1);
+        expect(requesterCalls(requesterSessionKey)[0]?.params).toMatchObject({
           message: "Continue the OpenClaw runtime event.",
           internalEvents: [
             {
@@ -290,7 +282,7 @@ export function registerSessionsSendRequesterRetirementTests({
           data: { phase: "end", endedAt: Date.now(), terminalReply },
         });
         await settleSessionWork();
-        expect(requesterCalls()).toHaveLength(1);
+        expect(requesterCalls(requesterSessionKey)).toHaveLength(1);
       } finally {
         stopRetiring();
         retireBeforePublication.mockRestore();
@@ -381,14 +373,7 @@ export function registerSessionsSendRequesterRetirementTests({
         };
       }
       if (request.method === "agent" && sessionKey === requesterSessionKey) {
-        return {
-          status: "ok",
-          inputProcessingCompleted: true,
-          result: {
-            payloads: [{ text: "Both watched results reached the requester" }],
-            deliveryStatus: { status: "sent", resultCount: 1 },
-          },
-        };
+        return deliveredReply("Both watched results reached the requester");
       }
       return {};
     });
@@ -431,12 +416,7 @@ export function registerSessionsSendRequesterRetirementTests({
     const send = (sessionKey: string) =>
       withCaller(
         () =>
-          createSessionsSendTool({
-            agentSessionKey: requesterSessionKey,
-            requesterTurnRunId,
-            config,
-            callGateway: callGatewayMock,
-          }).execute("watched-send", {
+          sendTool(requesterSessionKey, requesterTurnRunId).execute("watched-send", {
             sessionKey,
             mode: "followup",
             watch: true,
@@ -483,15 +463,10 @@ export function registerSessionsSendRequesterRetirementTests({
       );
       if (!finish) {
         const yielded = await withCaller(() =>
-          createSessionsYieldTool({
-            sessionId: "active-requester",
-            claimYield: createRequesterYieldCallback({
-              requesterSessionKey,
-              requesterAgentId: "main",
-              requesterTurnRunId,
-            }),
-            onYield: vi.fn(),
-          }).execute("yield-existing-claims", {}),
+          yieldTool("active-requester", requesterSessionKey, requesterTurnRunId, vi.fn()).execute(
+            "yield-existing-claims",
+            {},
+          ),
         );
         expect(yielded.details).toEqual({ status: "yielded" });
         for (const { runId } of children) {
@@ -541,21 +516,15 @@ export function registerSessionsSendRequesterRetirementTests({
         "The first accepted result must retain its completion owner",
       ).toBeDefined();
       await drainRootWork();
-      expect(
-        calls.filter(
-          (call) => call.method === "agent" && call.params?.sessionKey === requesterSessionKey,
-        ),
-      ).toHaveLength(0);
+      expect(requesterCalls(requesterSessionKey)).toHaveLength(0);
       childrenPending[1 - firstIndex]!.resolve();
       // The wait receipt must publish completion before its newly admitted roots can be drained.
       await withinTest(resultsDelivered.promise, signal);
       await settleSessionWork();
-      const requesterCalls = calls.filter(
-        (call) => call.method === "agent" && call.params?.sessionKey === requesterSessionKey,
-      );
-      expect(requesterCalls).toHaveLength(1);
+      const deliveredCalls = requesterCalls(requesterSessionKey);
+      expect(deliveredCalls).toHaveLength(1);
       for (const { runId } of children) {
-        expect(requesterCalls[0]?.params?.message).toContain(`Watched child result ${runId}`);
+        expect(deliveredCalls[0]?.params?.message).toContain(`Watched child result ${runId}`);
         expect(getSubagentRunByRunId(runId)?.delivery?.status).toBe("delivered");
         expect(getSubagentRunByRunId(runId)?.requesterSettleWake).toBeUndefined();
         emitAgentEvent({
@@ -565,11 +534,7 @@ export function registerSessionsSendRequesterRetirementTests({
         });
       }
       await settleSessionWork();
-      expect(
-        calls.filter(
-          (call) => call.method === "agent" && call.params?.sessionKey === requesterSessionKey,
-        ),
-      ).toHaveLength(1);
+      expect(requesterCalls(requesterSessionKey)).toHaveLength(1);
     } finally {
       stopRetiringTool();
       admission.close();
