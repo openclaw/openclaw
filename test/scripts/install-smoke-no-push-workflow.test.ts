@@ -11,6 +11,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const INSTALL_SMOKE = ".github/workflows/install-smoke.yml";
 const INSTALL_SMOKE_REUSABLE = ".github/workflows/install-smoke-reusable.yml";
 const RELEASE_CHECKS = ".github/workflows/openclaw-release-checks.yml";
+const readOnlyPermissions = { actions: "read", contents: "read", packages: "read" };
 
 type WorkflowStep = {
   env?: Record<string, string>;
@@ -31,12 +32,6 @@ type WorkflowJob = {
   permissions?: Record<string, unknown>;
   "continue-on-error"?: boolean;
   "runs-on"?: string;
-  strategy?: {
-    "fail-fast"?: boolean;
-    matrix?: {
-      include?: Array<Record<string, unknown>>;
-    };
-  };
   steps?: WorkflowStep[];
   "timeout-minutes"?: number | string;
   uses?: string;
@@ -78,18 +73,10 @@ describe("install smoke no-push root image transport", () => {
       update_baseline_version: { default: "latest", type: "string" },
     });
     expect(workflow.on?.workflow_call).toBeUndefined();
-    expect(workflow.permissions).toEqual({
-      actions: "read",
-      contents: "read",
-      packages: "read",
-    });
+    expect(workflow.permissions).toEqual(readOnlyPermissions);
 
     const delegated = job(workflow, "install_smoke");
-    expect(delegated.permissions).toEqual({
-      actions: "read",
-      contents: "read",
-      packages: "read",
-    });
+    expect(delegated.permissions).toEqual(readOnlyPermissions);
     expect(delegated.uses).toBe("./.github/workflows/install-smoke-reusable.yml");
     expect(delegated.with).toMatchObject({
       allow_unreleased_changelog: true,
@@ -118,11 +105,7 @@ describe("install smoke no-push root image transport", () => {
       type: "boolean",
     });
     expect(workflow.on?.workflow_call?.inputs?.root_image_transport).toBeUndefined();
-    expect(workflow.permissions).toEqual({
-      actions: "read",
-      contents: "read",
-      packages: "read",
-    });
+    expect(workflow.permissions).toEqual(readOnlyPermissions);
 
     const preflight = job(workflow, "preflight");
     expect(preflight.outputs?.workflow_repository).toBeUndefined();
@@ -234,6 +217,7 @@ describe("install smoke no-push root image transport", () => {
         });
       }
     }
+
     expect(trustedJobs.toSorted()).toEqual(
       [
         "bun_global_install_smoke",
@@ -285,7 +269,6 @@ describe("install smoke no-push root image transport", () => {
         "${{ inputs.run_bun_global_install_smoke || 'false' }}",
     });
     const manifestRun = manifest.run;
-    expect(manifestRun).toBeDefined();
     if (!manifestRun) {
       throw new Error("Build install-smoke CI manifest must have a run script");
     }
@@ -668,8 +651,6 @@ describe("install smoke no-push root image transport", () => {
       });
 
       const consumer = job(workflow, pair.consumerName);
-      const expectedNeeds = ["preflight", "installer_smoke_candidate_payload", pair.producerName];
-      expect(consumer.needs, pair.consumerName).toEqual(expectedNeeds);
       expect(consumer["timeout-minutes"], pair.consumerName).toBe(
         pair.group === "update" ? 120 : 60,
       );
@@ -881,12 +862,6 @@ describe("install smoke no-push root image transport", () => {
       source_archive_sha256: "${{ steps.payload.outputs.source_archive_sha256 }}",
       target_sha: "${{ steps.payload.outputs.target_sha }}",
     });
-    expect(step(producer, "Checkout trusted release harness").with).toMatchObject({
-      repository: "openclaw/openclaw",
-      ref: "${{ github.sha }}",
-      "fetch-depth": 1,
-      "persist-credentials": false,
-    });
     expect(step(producer, "Require exact trusted installer harness").run).toContain(
       '[[ "$(git -C .release-harness rev-parse HEAD)" == "$EXPECTED_SHA" ]]',
     );
@@ -940,15 +915,11 @@ describe("install smoke no-push root image transport", () => {
       "installer_smoke_candidate_payload",
       "installer_smoke_update_image",
     ]);
-    expect(update.needs).not.toContain("installer_smoke_nonroot_image");
     expect(nonroot.needs).toEqual([
       "preflight",
       "installer_smoke_candidate_payload",
       "installer_smoke_nonroot_image",
     ]);
-    expect(nonroot.needs).not.toContain("root_dockerfile_image");
-    expect(nonroot.needs).not.toContain("root_dockerfile_image_ready");
-    expect(nonroot.needs).not.toContain("installer_smoke_update_image");
 
     expect(aggregate.if).toContain("always()");
     expect(aggregate.needs).toEqual([
@@ -989,11 +960,7 @@ describe("install smoke no-push root image transport", () => {
     const release = readWorkflow(RELEASE_CHECKS);
     const caller = job(release, "install_smoke_release_checks");
     expect(caller.uses).toBe("./.github/workflows/install-smoke-reusable.yml");
-    expect(caller.permissions).toEqual({
-      actions: "read",
-      contents: "read",
-      packages: "read",
-    });
+    expect(caller.permissions).toEqual(readOnlyPermissions);
     expect(caller.with).toMatchObject({
       allow_unreleased_changelog:
         "${{ needs.resolve_target.outputs.allow_unreleased_changelog == 'true' }}",

@@ -83,28 +83,25 @@ exit ${fixtureStop}
 
 describe.each(["e2e", "smoke"])("%s installer upgrade baseline", (runner) => {
   it.each([
-    { target: "2026.7.1-2", previous: "2026.7.1-1" },
-    { target: "2026.7.1-beta.2", previous: "2026.7.1-beta.1" },
-    { target: "2026.7.1", previous: "2026.7.1-beta.2" },
-  ])(
-    "preinstalls the predecessor of $target despite newer publications",
-    ({ target, previous }) => {
-      const result = runInstallerVersionSelection(runner, {
-        target,
-        versions: [
-          "2026.7.1-1",
-          "2026.7.1-2",
-          "2026.7.1-beta.1",
-          "2026.7.1-beta.2",
-          "2026.7.1",
-          "2026.8.1-beta.3",
-          "2026.8.1-beta.4",
-        ],
-      });
-      expect(result.status, result.stderr).toBe(fixtureStop);
-      expect(result.calls).toContainEqual(["install", "-g", `openclaw@${previous}`]);
-    },
-  );
+    ["2026.7.1-2", "2026.7.1-1"],
+    ["2026.7.1-beta.2", "2026.7.1-beta.1"],
+    ["2026.7.1", "2026.7.1-beta.2"],
+  ])("preinstalls the predecessor of %s despite newer publications", (target, previous) => {
+    const result = runInstallerVersionSelection(runner, {
+      target,
+      versions: [
+        "2026.7.1-1",
+        "2026.7.1-2",
+        "2026.7.1-beta.1",
+        "2026.7.1-beta.2",
+        "2026.7.1",
+        "2026.8.1-beta.3",
+        "2026.8.1-beta.4",
+      ],
+    });
+    expect(result.status, result.stderr).toBe(fixtureStop);
+    expect(result.calls).toContainEqual(["install", "-g", `openclaw@${previous}`]);
+  });
 
   it.each([
     { target: "2026.7.1", versions: ["2026.7.1", "2026.8.1"] },

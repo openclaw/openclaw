@@ -120,42 +120,30 @@ describe("published 9.4 installer warning after verified 9.5 update", () => {
     expect(result.stderr).toContain(historicalWarning);
   });
 
-  const negatives: Array<{ name: string; fixture: Fixture }> = [
-    { name: "stale PATH executable", fixture: { freshVersion: "2026.9.4" } },
-    { name: "foreign PATH executable with matching version", fixture: { foreignPath: true } },
-    { name: "stale global package", fixture: { manifestVersion: "2026.9.4" } },
-    { name: "fresh process failure", fixture: { freshExit: 4 } },
-    {
-      name: "fresh process future-config warning",
-      fixture: {
-        freshWarning:
-          "Your OpenClaw config was written by version 2026.9.6, but this command is running 2026.9.5.",
-      },
+  const negatives: Record<string, Fixture> = {
+    "stale PATH executable": { freshVersion: "2026.9.4" },
+    "foreign PATH executable with matching version": { foreignPath: true },
+    "stale global package": { manifestVersion: "2026.9.4" },
+    "fresh process failure": { freshExit: 4 },
+    "fresh process future-config warning": {
+      freshWarning:
+        "Your OpenClaw config was written by version 2026.9.6, but this command is running 2026.9.5.",
     },
-    { name: "nonzero updater exit", fixture: { updateExit: 7 } },
-    { name: "failed global update step", fixture: { globalExit: 1 } },
-    { name: "wrong JSON after version", fixture: { afterVersion: "2026.9.4" } },
-    { name: "wrong JSON before version", fixture: { beforeVersion: "2026.9.3" } },
-    {
-      name: "unproved historical baseline",
-      fixture: {
-        baseline: "2026.9.3",
-        beforeVersion: "2026.9.3",
-        updateWarning: historicalWarning.replace("running 2026.9.4", "running 2026.9.3"),
-      },
+    "nonzero updater exit": { updateExit: 7 },
+    "failed global update step": { globalExit: 1 },
+    "wrong JSON after version": { afterVersion: "2026.9.4" },
+    "wrong JSON before version": { beforeVersion: "2026.9.3" },
+    "unproved historical baseline": {
+      baseline: "2026.9.3",
+      beforeVersion: "2026.9.3",
+      updateWarning: historicalWarning.replace("running 2026.9.4", "running 2026.9.3"),
     },
-    {
-      name: "additional future-config warning",
-      fixture: {
-        updateWarning: `${historicalWarning}\nYour OpenClaw config was written by version 2026.9.6, but this command is running 2026.9.4.`,
-      },
+    "additional future-config warning": {
+      updateWarning: `${historicalWarning}\nYour OpenClaw config was written by version 2026.9.6, but this command is running 2026.9.4.`,
     },
-    {
-      name: "duplicate warning",
-      fixture: { updateWarning: `${historicalWarning}\n${historicalWarning}` },
-    },
-  ];
-  posixIt.each(negatives)("rejects $name", ({ fixture }) => {
+    "duplicate warning": { updateWarning: `${historicalWarning}\n${historicalWarning}` },
+  };
+  posixIt.each(Object.entries(negatives))("rejects %s", (_name, fixture) => {
     const result = runFixture(fixture);
     expect(result.status).not.toBe(0);
     expect(result.stderr).not.toContain("fresh PATH and global install verified");

@@ -1,6 +1,5 @@
 import { spawnSync } from "node:child_process";
 import {
-  chmodSync,
   copyFileSync,
   mkdirSync,
   readFileSync,
@@ -14,12 +13,6 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function writeExecutable(file: string, content: string) {
-  mkdirSync(path.dirname(file), { recursive: true });
-  writeFileSync(file, content);
-  chmodSync(file, 0o755);
-}
-
 describe("GenerateGatewayProtocol SwiftPM plugin", () => {
   it.runIf(process.platform === "darwin")(
     "resolves supported Node shims and reports failed probe reasons",
@@ -28,14 +21,19 @@ describe("GenerateGatewayProtocol SwiftPM plugin", () => {
       const root = tempDirs.make("openclaw-protocol-plugin-");
       const node = realpathSync(process.execPath);
       const pkg = path.join(root, "apps/shared/OpenClawKit");
+      const write = (file: string, content: string, mode = 0o644) => {
+        const target = path.join(root, file);
+        mkdirSync(path.dirname(target), { recursive: true });
+        writeFileSync(target, content, { mode });
+      };
       copyFileSync("node-version.mjs", path.join(root, "node-version.mjs"));
       mkdirSync(path.join(pkg, "Plugins/GenerateGatewayProtocol"), { recursive: true });
       copyFileSync(
         "apps/shared/OpenClawKit/Plugins/GenerateGatewayProtocol/plugin.swift",
         path.join(pkg, "Plugins/GenerateGatewayProtocol/plugin.swift"),
       );
-      writeFileSync(
-        path.join(pkg, "Package.swift"),
+      write(
+        "apps/shared/OpenClawKit/Package.swift",
         `// swift-tools-version: 6.0
 import PackageDescription
 
@@ -48,33 +46,32 @@ let package = Package(
     ])
 `,
       );
-      mkdirSync(path.join(pkg, "Sources/OpenClawProtocol"), { recursive: true });
-      writeFileSync(
-        path.join(pkg, "Sources/OpenClawProtocol/Consumer.swift"),
+      write(
+        "apps/shared/OpenClawKit/Sources/OpenClawProtocol/Consumer.swift",
         "public let generatorRuntime = generatedBy\n",
       );
-      writeExecutable(
-        path.join(root, "scripts/prepare-native-protocol.mjs"),
+      write(
+        "scripts/prepare-native-protocol.mjs",
         `import { mkdirSync, writeFileSync } from "node:fs";
 const out = process.argv[process.argv.indexOf("--out") + 1];
 mkdirSync(out, { recursive: true });
 const runtime = JSON.stringify(process.execPath + " " + process.version);
 writeFileSync(out + "/GatewayModels.swift", "public let generatedBy = " + runtime + "\\n");
 `,
+        0o755,
       );
       // An unsupported Node binary comes first and must be skipped.
-      writeFileSync(
-        path.join(root, "old-node.mjs"),
-        'Object.defineProperty(process, "version", { value: "v22.0.0" });\n',
-      );
-      writeExecutable(
-        path.join(root, "old/node"),
+      write("old-node.mjs", 'Object.defineProperty(process, "version", { value: "v22.0.0" });\n');
+      write(
+        "old/node",
         `#!/bin/sh\nexec "${node}" --import "${path.join(root, "old-node.mjs")}" "$@"\n`,
+        0o755,
       );
       // Like mise and asdf shims, this one needs the caller's environment to find Node.
-      writeExecutable(
-        path.join(root, "shims/node"),
+      write(
+        "shims/node",
         '#!/bin/sh\n[ -n "$FIXTURE_NODE" ] || { echo "No version is set for shim: node" >&2; exit 1; }\nexec "$FIXTURE_NODE" "$@"\n',
+        0o755,
       );
       const env: NodeJS.ProcessEnv = {
         ...process.env,
@@ -118,10 +115,7 @@ writeFileSync(out + "/GatewayModels.swift", "public let generatedBy = " + runtim
         `public let generatedBy = ${JSON.stringify(`${node} ${process.version}`)}\n`,
       );
 
-      writeFileSync(
-        path.join(root, "node-version.mjs"),
-        'throw new Error("fixture Node probe import failed");\n',
-      );
+      write("node-version.mjs", 'throw new Error("fixture Node probe import failed");\n');
       // A different configuration replans the build while reusing the compiled plugin.
       const failed = build("release");
       const diagnostic = `${failed.stdout}\n${failed.stderr}`;

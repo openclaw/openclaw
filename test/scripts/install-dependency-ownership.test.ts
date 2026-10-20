@@ -28,6 +28,17 @@ function run(checkout: string, env: NodeJS.ProcessEnv = {}) {
   return spawnSync(process.execPath, [guard], { cwd: checkout, env, encoding: "utf8" });
 }
 
+function expectRefused(checkout: string, donor: string, env: NodeJS.ProcessEnv) {
+  const before = fs.statSync(donor);
+  const result = run(checkout, env);
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("Refusing to reconcile dependencies");
+  expect(fs.statSync(donor)).toMatchObject({ ino: before.ino, mtimeMs: before.mtimeMs });
+  expect(fs.readFileSync(path.join(donor, "sentinel"), "utf8")).toBe(
+    "another task owns these bytes",
+  );
+}
+
 it.each(["absent", "physical"])(
   "admits %s owned dependencies without changing the checkout",
   (kind) => {
@@ -61,15 +72,7 @@ it.each(["modules", "virtual-store", "unrelated-config", "empty-uppercase"])(
       env.PNPM_CONFIG_MODULES_DIR = "";
       env.pnpm_config_modules_dir = donor;
     }
-    const before = fs.statSync(donor);
-    const result = run(checkout, env);
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("Refusing to reconcile dependencies");
-    expect(fs.statSync(donor).ino).toBe(before.ino);
-    expect(fs.statSync(donor).mtimeMs).toBe(before.mtimeMs);
-    expect(fs.readFileSync(path.join(donor, "sentinel"), "utf8")).toBe(
-      "another task owns these bytes",
-    );
+    expectRefused(checkout, donor, env);
   },
 );
 
@@ -100,15 +103,7 @@ it.each(["PNPM_CONFIG_MODULES_DIR", "pnpm_config_modules_dir", "npm_config_modul
     const { checkout, donor } = fixture();
     const custom = path.join(checkout, "custom_modules");
     link(donor, custom);
-    const before = fs.statSync(donor);
-    const result = run(checkout, { [key]: "custom_modules" });
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("Refusing to reconcile dependencies");
+    expectRefused(checkout, donor, { [key]: "custom_modules" });
     expect(fs.realpathSync(custom)).toBe(donor);
-    expect(fs.statSync(donor).ino).toBe(before.ino);
-    expect(fs.statSync(donor).mtimeMs).toBe(before.mtimeMs);
-    expect(fs.readFileSync(path.join(donor, "sentinel"), "utf8")).toBe(
-      "another task owns these bytes",
-    );
   },
 );

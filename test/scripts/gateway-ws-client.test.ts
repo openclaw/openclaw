@@ -12,26 +12,17 @@ afterEach(async () => {
   for (const client of wss?.clients ?? []) {
     client.terminate();
   }
-  await new Promise<void>((resolve) => {
-    wss?.close(() => resolve());
-    if (!wss) {
-      resolve();
-    }
-  });
-  wss = undefined;
-
-  await new Promise<void>((resolve, reject) => {
-    server?.close((error) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve();
+  if (wss) {
+    await new Promise<void>((resolve) => {
+      wss!.close(() => resolve());
     });
-    if (!server) {
-      resolve();
-    }
-  });
+  }
+  wss = undefined;
+  if (server) {
+    await new Promise<void>((resolve, reject) => {
+      server!.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
   server = undefined;
 });
 
@@ -39,14 +30,24 @@ async function listen(handler: (ws: WebSocket) => void): Promise<string> {
   server = createServer();
   wss = new WebSocketServer({ server });
   wss.on("connection", handler);
+  return listenServer(server);
+}
+
+async function listenServer(httpServer: Server): Promise<string> {
   await new Promise<void>((resolve) => {
-    server?.listen(0, "127.0.0.1", resolve);
+    httpServer.listen(0, "127.0.0.1", resolve);
   });
-  const address = server.address();
+  const address = httpServer.address();
   if (!address || typeof address === "string") {
     throw new Error("test websocket server did not get a TCP address");
   }
   return `ws://127.0.0.1:${address.port}`;
+}
+
+async function openClient(handler: (ws: WebSocket) => void = () => {}) {
+  const client = createGatewayWsClient({ url: await listen(handler) });
+  await client.waitOpen();
+  return client;
 }
 
 async function listenStalledUpgrade(): Promise<{ close: () => Promise<void>; url: string }> {
@@ -69,13 +70,7 @@ async function listenStalledUpgrade(): Promise<{ close: () => Promise<void>; url
       socket.destroy();
     }
   });
-  await new Promise<void>((resolve) => {
-    stalledServer.listen(0, "127.0.0.1", resolve);
-  });
-  const address = stalledServer.address();
-  if (!address || typeof address === "string") {
-    throw new Error("test websocket server did not get a TCP address");
-  }
+  const url = await listenServer(stalledServer);
   return {
     close: async () => {
       closing = true;
@@ -86,15 +81,13 @@ async function listenStalledUpgrade(): Promise<{ close: () => Promise<void>; url
         stalledServer.close((error) => (error ? reject(error) : resolve()));
       });
     },
-    url: `ws://127.0.0.1:${address.port}`,
+    url,
   };
 }
 
 describe("createGatewayWsClient", () => {
   it("rejects pending RPC requests when the client closes", async () => {
-    const url = await listen(() => {});
-    const client = createGatewayWsClient({ url });
-    await client.waitOpen();
+    const client = await openClient();
 
     const pending = client.request("health", {}, 1000);
     client.close();
@@ -103,13 +96,11 @@ describe("createGatewayWsClient", () => {
   });
 
   it("rejects pending RPC requests when the gateway closes the socket", async () => {
-    const url = await listen((ws) => {
+    const client = await openClient((ws) => {
       ws.on("message", () => {
         ws.close(1011, "boom");
       });
     });
-    const client = createGatewayWsClient({ url });
-    await client.waitOpen();
 
     await expect(client.request("health", {}, 1000)).rejects.toThrow(
       "gateway websocket closed (1011): boom",
@@ -118,9 +109,7 @@ describe("createGatewayWsClient", () => {
   });
 
   it("rejects pending RPC requests when the socket errors", async () => {
-    const url = await listen(() => {});
-    const client = createGatewayWsClient({ url });
-    await client.waitOpen();
+    const client = await openClient();
 
     const pending = client.request("health", {}, 1000);
     client.ws.emit("error", new Error("socket exploded"));
