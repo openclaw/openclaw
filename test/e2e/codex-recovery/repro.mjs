@@ -957,7 +957,7 @@ try {
         cli.kill("SIGTERM");
         resolve({ timeout: true });
       },
-      liveSlack ? 1200000 : recoveryRepo ? 420000 : 240000,
+      liveSlack ? 2400000 : recoveryRepo ? 420000 : 240000,
     );
     const onExit = (code, signal) => {
       if (upgradeRequested) {
