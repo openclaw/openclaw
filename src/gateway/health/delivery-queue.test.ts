@@ -1,4 +1,3 @@
-// Delivery queue health tests cover independent inbound and outbound diagnostic reads.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as deliveryQueueState from "../../infra/delivery-queue-sqlite.js";
 
@@ -6,18 +5,15 @@ const countOutbound = vi.fn();
 const countIngress = vi.fn();
 
 vi.mock("../../infra/delivery-queue-sqlite.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../infra/delivery-queue-sqlite.js")>();
   return {
-    ...actual,
+    ...(await importOriginal<typeof import("../../infra/delivery-queue-sqlite.js")>()),
     countFailedDeliveryQueueEntries: () => countOutbound(),
   };
 });
 
 vi.mock("../../channels/message/ingress-queue-health.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../channels/message/ingress-queue-health.js")>();
   return {
-    ...actual,
+    ...(await importOriginal<typeof import("../../channels/message/ingress-queue-health.js")>()),
     countChannelIngressQueueHealth: () => countIngress(),
   };
 });
@@ -46,46 +42,41 @@ describe("buildDeliveryQueueHealthSummary", () => {
   });
 
   it.each([
-    {
-      name: "outbound failures when the ingress dead-letter read fails",
-      arrange: () => {
-        countOutbound.mockResolvedValue(outboundFailed);
-        countIngress.mockRejectedValue(new Error("ingress database unavailable"));
-      },
-      expected: { failed: outboundFailed },
-    },
-    {
-      name: "ingress failures when the outbound read fails",
-      arrange: () => {
-        countOutbound.mockRejectedValue(new Error("outbound database unavailable"));
-        countIngress.mockResolvedValue({ failed: ingressFailed, pressure: [] });
-      },
-      expected: { failed: [], ingressFailed },
-    },
-    {
-      name: "dead letters when the ingress pressure read fails",
-      arrange: () => {
-        countIngress.mockResolvedValue({
-          failed: ingressFailed,
-          pressure: [],
-          errors: { pressure: "ingress pressure read unavailable" },
-        });
-      },
-      expected: { failed: [], ingressFailed },
-    },
-    {
-      name: "ingress pressure when the dead-letter read fails",
-      arrange: () => {
-        countIngress.mockResolvedValue({
-          failed: [],
-          pressure: ingressPressure,
-          errors: { failed: "ingress failed read unavailable" },
-        });
-      },
-      expected: { failed: [], ingressPressure },
-    },
-  ])("preserves $name", async ({ arrange, expected }) => {
-    arrange();
+    [
+      "outbound failures on ingress rejection",
+      outboundFailed,
+      new Error("ingress unavailable"),
+      { failed: outboundFailed },
+    ],
+    [
+      "ingress failures on outbound rejection",
+      new Error("outbound unavailable"),
+      { failed: ingressFailed, pressure: [] },
+      { failed: [], ingressFailed },
+    ],
+    [
+      "dead letters on pressure failure",
+      [],
+      { failed: ingressFailed, pressure: [], errors: { pressure: "unavailable" } },
+      { failed: [], ingressFailed },
+    ],
+    [
+      "pressure on dead-letter failure",
+      [],
+      { failed: [], pressure: ingressPressure, errors: { failed: "unavailable" } },
+      { failed: [], ingressPressure },
+    ],
+  ])("preserves %s", async (_name, outbound, ingress, expected) => {
+    for (const [mock, value] of [
+      [countOutbound, outbound],
+      [countIngress, ingress],
+    ] as const) {
+      if (value instanceof Error) {
+        mock.mockRejectedValue(value);
+      } else {
+        mock.mockResolvedValue(value);
+      }
+    }
     expect(await buildDeliveryQueueHealthSummary()).toEqual(expected);
   });
 

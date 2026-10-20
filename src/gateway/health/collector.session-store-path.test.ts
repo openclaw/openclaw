@@ -34,7 +34,10 @@ import {
 import { prepareStatusSessionStores } from "../../status/session-stores.js";
 import { beginAgentDeletionJournal } from "../../test-utils/agent-deletion-journal.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import * as gatewayCall from "../call.js";
 import {
@@ -72,6 +75,49 @@ async function summarizeStore(storePath: string, agentId: string) {
 
 async function readStatusSessionStores(...args: Parameters<typeof prepareStatusSessionStores>) {
   return (await prepareStatusSessionStores(...args)).publish();
+}
+
+function deleteAgent(state: OpenClawTestState, operationId: string) {
+  beginAgentDeletionJournal({
+    agentId: "deleting",
+    operationId,
+    agentDir: state.agentDir("deleting"),
+    sessionsDir: state.sessionsDir("deleting"),
+    workspaceDir: state.workspaceDir,
+    deleteFiles: true,
+  });
+}
+
+async function seedAgents(cfg: OpenClawConfig, updatedAt = 1) {
+  setRuntimeConfigSnapshot(cfg);
+  for (const { id: agentId } of resolveHealthAgentOrder(cfg).ordered) {
+    await sessionAccessor.upsertSessionEntryCore(
+      { agentId, sessionKey: `agent:${agentId}:main`, storePath: cfg.session?.store },
+      { sessionId: `${agentId}-session`, updatedAt },
+    );
+  }
+}
+
+function deletionConfig(withDefault = false): OpenClawConfig {
+  return {
+    agents: {
+      ownership: "explicit",
+      entries: { deleting: {}, survivor: {} },
+      ...(withDefault ? { defaults: { systemAgent: { agentId: "deleting" } } } : {}),
+    },
+  };
+}
+
+function expectStatusSessions(
+  status: Awaited<ReturnType<typeof readStatusSessionStores>>,
+  ids: string[],
+  shared: boolean,
+) {
+  expect(status.byAgent.map(({ agent }) => agent.id)).toEqual(ids);
+  expect(status.count).toBe(ids.length + (shared ? 1 : 0));
+  expect(status.recent.map(({ sessionKey }) => sessionKey).toSorted()).toEqual(
+    [...ids.map((id) => `agent:${id}:main`), ...(shared ? ["agent:retired:main"] : [])].toSorted(),
+  );
 }
 
 async function prepareDeletionStatusOverview(
@@ -260,14 +306,8 @@ describe("health session store paths", () => {
           },
           ...(shared ? { session: { store: state.statePath("shared.sqlite") } } : {}),
         };
-        setRuntimeConfigSnapshot(cfg);
+        await seedAgents(cfg, 10);
         const { ordered } = resolveHealthAgentOrder(cfg);
-        for (const { id } of ordered) {
-          await sessionAccessor.upsertSessionEntryCore(
-            { agentId: id, sessionKey: `agent:${id}:main`, storePath: cfg.session?.store },
-            { sessionId: `${id}-session`, updatedAt: 10 },
-          );
-        }
         if (shared) {
           await sessionAccessor.upsertSessionEntryCore(
             { agentId: "retired", sessionKey: "agent:retired:main", storePath: cfg.session?.store },
@@ -320,31 +360,14 @@ describe("health session store paths", () => {
               "Summary settled before the deletion gate",
             );
           }
-          beginAgentDeletionJournal({
-            agentId: "deleting",
-            operationId: "health-deletion",
-            agentDir: state.agentDir("deleting"),
-            sessionsDir: state.sessionsDir("deleting"),
-            workspaceDir: state.workspaceDir,
-            deleteFiles: true,
-          });
+          deleteAgent(state, "health-deletion");
           await withAgentDatabaseCloseFence(
             { agentId: "deleting", rootPath: path.dirname(state.agentDir("deleting")) },
             async () => {
               release.resolve();
               const expectedIds = timing === "only-agent" ? [] : ["survivor"];
-              const expectedCount = expectedIds.length + (shared ? 1 : 0);
-              const expectedRecent = [
-                ...expectedIds.map((id) => `agent:${id}:main`),
-                ...(shared ? ["agent:retired:main"] : []),
-              ];
               if (pendingStatus) {
-                const status = await pendingStatus;
-                expect(status.byAgent.map(({ agent }) => agent.id)).toEqual(expectedIds);
-                expect(status.count).toBe(expectedCount);
-                expect(status.recent.map(({ sessionKey }) => sessionKey).toSorted()).toEqual(
-                  expectedRecent.toSorted(),
-                );
+                expectStatusSessions(await pendingStatus, expectedIds, shared);
               }
               if (pendingHealth) {
                 const health = await pendingHealth;
@@ -391,11 +414,10 @@ describe("health session store paths", () => {
               const health = await collect();
               expect(health.agents.map((agent) => agent.agentId)).toEqual(expectedIds);
               expect(health.sessions.count).toBe(expectedIds.length);
-              const status = await readStatusSessionStores(cfg, ordered, 10);
-              expect(status.byAgent.map(({ agent }) => agent.id)).toEqual(expectedIds);
-              expect(status.count).toBe(expectedCount);
-              expect(status.recent.map(({ sessionKey }) => sessionKey).toSorted()).toEqual(
-                expectedRecent.toSorted(),
+              expectStatusSessions(
+                await readStatusSessionStores(cfg, ordered, 10),
+                expectedIds,
+                shared,
               );
             },
           );
@@ -413,20 +435,8 @@ describe("health session store paths", () => {
     "publishes status after deletion during the final %s preparation",
     async (phase) => {
       await withOpenClawTestState({ label: "status-final-publication" }, async (state) => {
-        const cfg: OpenClawConfig = {
-          agents: {
-            ownership: "explicit",
-            entries: { deleting: {}, survivor: {} },
-            ...(phase === "desktop" ? { defaults: { systemAgent: { agentId: "deleting" } } } : {}),
-          },
-        };
-        setRuntimeConfigSnapshot(cfg);
-        for (const id of ["deleting", "survivor"]) {
-          await sessionAccessor.upsertSessionEntryCore(
-            { agentId: id, sessionKey: `agent:${id}:main` },
-            { sessionId: `${id}-session`, updatedAt: 1 },
-          );
-        }
+        const cfg = deletionConfig(phase === "desktop");
+        await seedAgents(cfg);
         const desktop = await import("../desktop/host-source.js");
         const certificate = await import("../../secrets/egress-proxy/registry.js");
         const { getStatusSummary } = await import("../../status/summary.js");
@@ -460,14 +470,7 @@ describe("health session store paths", () => {
             pending,
             "Status skipped final preparation",
           );
-          beginAgentDeletionJournal({
-            agentId: "deleting",
-            operationId: "status-publication",
-            agentDir: state.agentDir("deleting"),
-            sessionsDir: state.sessionsDir("deleting"),
-            workspaceDir: state.workspaceDir,
-            deleteFiles: true,
-          });
+          deleteAgent(state, "status-publication");
           release.resolve();
           const summary = await pending;
           expect(summary.sessions.byAgent.map(({ agentId }) => agentId)).toEqual(["survivor"]);
@@ -494,20 +497,8 @@ describe("health session store paths", () => {
     "publishes local %s status after final backup preparation",
     async (format) => {
       await withOpenClawTestState({ label: `status-${format}-publication` }, async (state) => {
-        const cfg: OpenClawConfig = {
-          agents: {
-            ownership: "explicit",
-            entries: { deleting: {}, survivor: {} },
-            defaults: { systemAgent: { agentId: "deleting" } },
-          },
-        };
-        setRuntimeConfigSnapshot(cfg);
-        for (const agentId of ["deleting", "survivor"]) {
-          await sessionAccessor.upsertSessionEntryCore(
-            { agentId, sessionKey: `agent:${agentId}:main` },
-            { sessionId: `${agentId}-session`, updatedAt: 1 },
-          );
-        }
+        const cfg = deletionConfig(true);
+        await seedAgents(cfg);
         const { executeStatusScanFromOverview } =
           await import("../../commands/status.scan-execute.ts");
         const scan = await executeStatusScanFromOverview({
@@ -568,14 +559,7 @@ describe("health session store paths", () => {
               });
         try {
           await awaitGateBeforeSettlement(entered.promise, pending, "Status skipped backup read");
-          beginAgentDeletionJournal({
-            agentId: "deleting",
-            operationId: `status-${format}-publication`,
-            agentDir: state.agentDir("deleting"),
-            sessionsDir: state.sessionsDir("deleting"),
-            workspaceDir: state.workspaceDir,
-            deleteFiles: true,
-          });
+          deleteAgent(state, `status-${format}-publication`);
           release.resolve();
           const result = await pending;
           if (Array.isArray(result)) {
@@ -601,16 +585,8 @@ describe("health session store paths", () => {
     "publishes status --all after deletion during %s preparation",
     async (phase) => {
       await withOpenClawTestState({ label: `status-all-${phase}-publication` }, async (state) => {
-        const cfg: OpenClawConfig = {
-          agents: { ownership: "explicit", entries: { deleting: {}, survivor: {} } },
-        };
-        setRuntimeConfigSnapshot(cfg);
-        for (const agentId of ["deleting", "survivor"]) {
-          await sessionAccessor.upsertSessionEntryCore(
-            { agentId, sessionKey: `agent:${agentId}:main` },
-            { sessionId: `${agentId}-session`, updatedAt: 1 },
-          );
-        }
+        const cfg = deletionConfig();
+        await seedAgents(cfg);
         const overview = await prepareDeletionStatusOverview(cfg);
         const scan = await import("../../commands/status.scan-overview.ts");
         const runtime = await import("../../commands/status-runtime-shared.ts");
@@ -670,14 +646,7 @@ describe("health session store paths", () => {
             pending,
             `Status --all skipped ${phase} preparation`,
           );
-          beginAgentDeletionJournal({
-            agentId: "deleting",
-            operationId: `status-all-${phase}-publication`,
-            agentDir: state.agentDir("deleting"),
-            sessionsDir: state.sessionsDir("deleting"),
-            workspaceDir: state.workspaceDir,
-            deleteFiles: true,
-          });
+          deleteAgent(state, `status-all-${phase}-publication`);
           release.resolve();
           await pending;
           const published = expectDefined(renderedRows.mock.calls[0], "rendered overview")[0];
@@ -722,14 +691,7 @@ describe("health session store paths", () => {
             );
           }
         }
-        beginAgentDeletionJournal({
-          agentId: "deleting",
-          operationId: "shared-publication",
-          agentDir: state.agentDir("deleting"),
-          sessionsDir: state.sessionsDir("deleting"),
-          workspaceDir: state.workspaceDir,
-          deleteFiles: true,
-        });
+        deleteAgent(state, "shared-publication");
         const result = await readStatusSessionStores(cfg, resolveHealthAgentOrder(cfg).ordered, 10);
         expect(result.byAgent.map(({ agent }) => agent.id)).toEqual(["survivor"]);
         expect(result.count).toBe(24);
@@ -775,14 +737,7 @@ describe("health session store paths", () => {
         const pending = readStatusSessionStores(cfg, resolveHealthAgentOrder(cfg).ordered, 10);
         try {
           await awaitGateBeforeSettlement(entered.promise, pending, "Summary skipped the store");
-          beginAgentDeletionJournal({
-            agentId: "deleting",
-            operationId: "shared-sole-reader",
-            agentDir: state.agentDir("deleting"),
-            sessionsDir: state.sessionsDir("deleting"),
-            workspaceDir: state.workspaceDir,
-            deleteFiles: true,
-          });
+          deleteAgent(state, "shared-sole-reader");
           release.resolve();
           if (outcome === "read-error") {
             await expect(pending).rejects.toBe(failure);

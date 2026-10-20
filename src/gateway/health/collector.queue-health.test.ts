@@ -1,9 +1,9 @@
-// Queue health collector tests cover real SQLite dead letters and active ingress pressure.
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as ingressHealth from "../../channels/message/ingress-queue-health.js";
 import * as deliveryQueueState from "../../infra/delivery-queue-sqlite.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: () => ({ session: { store: "/tmp/queue-health-sessions" } }),
@@ -34,6 +34,7 @@ const collectHealth = () =>
   collector.collectGatewayHealthSnapshot({ audience: "admin", probe: false });
 
 describe("queue health collector", () => {
+  afterEach(() => vi.restoreAllMocks());
   beforeEach(() => {
     pluginRuntime.setActivePluginRegistry(createEmptyPluginRegistry());
     degradedState.setActiveDegradedPlugins([]);
@@ -52,32 +53,22 @@ describe("queue health collector", () => {
       });
     const countOutbound = vi.spyOn(deliveryQueueState, "countFailedDeliveryQueueEntries");
     const failed = [{ channelId: "telegram", accountId: "ops", count: 1 }];
-    const countIngress = vi
-      .spyOn(ingressHealth, "countChannelIngressQueueHealth")
-      .mockResolvedValue({ failed, pressure: [] });
-    try {
-      const pending = collectHealth();
-      expect(capture).toHaveBeenCalledTimes(1);
-      const snapshot = await pending;
-      expect(snapshot).toMatchObject({
-        channels: {},
-        deliveryQueues: { failed: [], ingressFailed: failed },
-      });
-      expect(capture).toHaveBeenCalledTimes(1);
-      expect(countOutbound).not.toHaveBeenCalled();
-    } finally {
-      capture.mockRestore();
-      countOutbound.mockRestore();
-      countIngress.mockRestore();
-    }
+    vi.spyOn(ingressHealth, "countChannelIngressQueueHealth").mockResolvedValue({
+      failed,
+      pressure: [],
+    });
+    const pending = collectHealth();
+    expect(capture).toHaveBeenCalledTimes(1);
+    expect(await pending).toMatchObject({
+      channels: {},
+      deliveryQueues: { failed: [], ingressFailed: failed },
+    });
+    expect(capture).toHaveBeenCalledTimes(1);
+    expect(countOutbound).not.toHaveBeenCalled();
   });
 
   it("surfaces a retry-floor ingress lane with 55 blocked followers", async () => {
-    const openClawState = await createOpenClawTestState({
-      layout: "state-only",
-      prefix: "openclaw-health-ingress-pressure-",
-    });
-    try {
+    await withOpenClawTestState({ layout: "state-only" }, async () => {
       const { createChannelIngressQueue } = await import("../../channels/message/ingress-queue.js");
       const { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } =
         await import("../../channels/message/ingress-retry-policy.js");
@@ -87,54 +78,32 @@ describe("queue health collector", () => {
         accountId: "ops",
         now: () => now,
       });
-      await ingressQueue.enqueue(
-        "retry-head-private",
-        { text: "private payload" },
-        { laneKey: "private-lane", receivedAt: now - 60_000 },
-      );
+      const enqueue = (id: string, text: string, laneKey: string, age: number) =>
+        ingressQueue.enqueue(id, { text }, { laneKey, receivedAt: now - age });
+      const claim = async (id: string) =>
+        expectDefined(await ingressQueue.claim(id, { ownerId: "private-owner" }), "queue claim");
+      await enqueue("retry-head-private", "private payload", "private-lane", 60_000);
       for (let attempt = 0; attempt < DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS; attempt += 1) {
-        const claim = await ingressQueue.claim("retry-head-private", { ownerId: "private-owner" });
-        if (!claim) {
-          throw new Error("Expected retry head claim");
-        }
-        await ingressQueue.release(claim, {
+        await ingressQueue.release(await claim("retry-head-private"), {
           lastError: "private handler error",
           releasedAt: now,
         });
       }
       for (let index = 0; index < 55; index += 1) {
-        await ingressQueue.enqueue(
+        await enqueue(
           `follower-private-${index}`,
-          { text: `private follower ${index}` },
-          { laneKey: "private-lane", receivedAt: now - 59_000 + index },
+          `private follower ${index}`,
+          "private-lane",
+          59_000 - index,
         );
       }
-      await ingressQueue.enqueue(
-        "ordinary-retry-private",
-        { text: "ordinary retry" },
-        { laneKey: "ordinary-private-lane", receivedAt: now - 30_000 },
-      );
-      const ordinaryClaim = await ingressQueue.claim("ordinary-retry-private", {
-        ownerId: "private-owner",
-      });
-      if (!ordinaryClaim) {
-        throw new Error("Expected ordinary retry claim");
-      }
-      await ingressQueue.release(ordinaryClaim, {
+      await enqueue("ordinary-retry-private", "ordinary retry", "ordinary-private-lane", 30_000);
+      await ingressQueue.release(await claim("ordinary-retry-private"), {
         lastError: "first attempt",
         releasedAt: now,
       });
-      await ingressQueue.enqueue(
-        "fresh-claim-private",
-        { text: "fresh claim" },
-        { laneKey: "fresh-private-lane", receivedAt: now - 10_000 },
-      );
-      const freshClaim = await ingressQueue.claim("fresh-claim-private", {
-        ownerId: "private-owner",
-      });
-      if (!freshClaim) {
-        throw new Error("Expected fresh claim");
-      }
+      await enqueue("fresh-claim-private", "fresh claim", "fresh-private-lane", 10_000);
+      await claim("fresh-claim-private");
 
       const snap = await collectHealth();
       expect(snap.deliveryQueues).toEqual({
@@ -154,8 +123,6 @@ describe("queue health collector", () => {
       expect(JSON.stringify(snap.deliveryQueues)).not.toMatch(
         /private-lane|private-owner|private payload|private handler error|retry-head-private/,
       );
-    } finally {
-      await openClawState.cleanup();
-    }
+    });
   });
 });

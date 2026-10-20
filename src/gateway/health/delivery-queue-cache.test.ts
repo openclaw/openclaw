@@ -10,6 +10,17 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { buildDeliveryQueueHealthSummary } from "./delivery-queue.js";
 
+const failedIngress = (oldestFailedAt: number) => [
+  { channelId: "telegram", accountId: "ops", count: 1, oldestFailedAt },
+];
+const createIngress = (stateDir: string, now?: () => number) =>
+  createChannelIngressQueue<{ text: string }>({
+    channelId: "telegram",
+    accountId: "ops",
+    stateDir,
+    now,
+  });
+
 describe("delivery queue health write receipts", () => {
   afterEach(() => vi.restoreAllMocks());
 
@@ -23,12 +34,15 @@ describe("delivery queue health write receipts", () => {
           outboundReads.mock.calls.filter((args) => args[2].type === "deliveryQueue.countFailed")
             .length;
         const ingressReads = vi.spyOn(stateRead, "executeExistingOpenClawStateRead");
-        const readCount = (type: string) =>
-          ingressReads.mock.calls.filter(([, command]) => command.type === type).length;
+        const readCounts = () => [
+          outboundReadCount(),
+          ingressReads.mock.calls.filter(([, command]) => command.type === "channelIngress.health")
+            .length,
+        ];
+        const failed = [{ queueName: "outbound", count: 1, oldestFailedAt: expect.any(Number) }];
         expect(await buildDeliveryQueueHealthSummary()).toBeUndefined();
         expect(await buildDeliveryQueueHealthSummary()).toBeUndefined();
-        expect(outboundReadCount()).toBe(1);
-        expect(readCount("channelIngress.health")).toBe(1);
+        expect(readCounts()).toEqual([1, 1]);
         expect(ingressReads).toHaveBeenCalledTimes(1);
 
         seedDeliveryQueueEntry({
@@ -37,29 +51,19 @@ describe("delivery queue health write receipts", () => {
           status: "failed",
           stateDir,
         });
-        expect(await buildDeliveryQueueHealthSummary()).toEqual({
-          failed: [{ queueName: "outbound", count: 1, oldestFailedAt: expect.any(Number) }],
-        });
-        expect(outboundReadCount()).toBe(2);
-        expect(readCount("channelIngress.health")).toBe(1);
+        expect(await buildDeliveryQueueHealthSummary()).toEqual({ failed });
+        expect(readCounts()).toEqual([2, 1]);
 
-        const ingress = createChannelIngressQueue<{ text: string }>({
-          channelId: "telegram",
-          accountId: "ops",
-          stateDir,
-        });
+        const ingress = createIngress(stateDir);
         await ingress.enqueue("failed-inbound", { text: "synthetic failure" });
         await ingress.fail("failed-inbound", { reason: "rejected", failedAt: 2_000 });
         const updated = await buildDeliveryQueueHealthSummary();
         expect(updated).toEqual({
-          failed: [{ queueName: "outbound", count: 1, oldestFailedAt: expect.any(Number) }],
-          ingressFailed: [
-            { channelId: "telegram", accountId: "ops", count: 1, oldestFailedAt: 2_000 },
-          ],
+          failed,
+          ingressFailed: failedIngress(2_000),
         });
         expect(await buildDeliveryQueueHealthSummary()).toEqual(updated);
-        expect(outboundReadCount()).toBe(2);
-        expect(readCount("channelIngress.health")).toBe(2);
+        expect(readCounts()).toEqual([2, 2]);
       },
     );
   });
@@ -67,12 +71,7 @@ describe("delivery queue health write receipts", () => {
   it("refreshes pressure at claim expiry after sleep and reloads after restart", async () => {
     await withOpenClawTestState({ layout: "state-only" }, async ({ stateDir }) => {
       const clock = vi.spyOn(Date, "now").mockReturnValue(100_000);
-      const ingress = createChannelIngressQueue<{ text: string }>({
-        channelId: "telegram",
-        accountId: "ops",
-        stateDir,
-        now: () => Date.now(),
-      });
+      const ingress = createIngress(stateDir, () => Date.now());
       await ingress.enqueue("leased", { text: "synthetic" }, { laneKey: "lane" });
       const claim = await ingress.claim("leased", { ownerId: "test" });
       expect(claim).not.toBeNull();
@@ -80,9 +79,7 @@ describe("delivery queue health write receipts", () => {
       await ingress.fail("failed", { reason: "rejected", failedAt: 100_000 });
       const failedOnly = {
         failed: [],
-        ingressFailed: [
-          { channelId: "telegram", accountId: "ops", count: 1, oldestFailedAt: 100_000 },
-        ],
+        ingressFailed: failedIngress(100_000),
       };
       const reads = vi.spyOn(stateRead, "executeExistingOpenClawStateRead");
       expect(await buildDeliveryQueueHealthSummary()).toEqual(failedOnly);
@@ -122,12 +119,7 @@ describe("delivery queue health write receipts", () => {
     "keeps a %s queue invalidation received during a health read",
     async (healthKind) => {
       await withOpenClawTestState({ layout: "state-only" }, async ({ stateDir }) => {
-        const ingress = createChannelIngressQueue<{ text: string }>({
-          channelId: "telegram",
-          accountId: "ops",
-          stateDir,
-          now: () => 1_000,
-        });
+        const ingress = createIngress(stateDir, () => 1_000);
         await ingress.enqueue("late", { text: "synthetic" }, { laneKey: "lane" });
         const original = stateRead.executeExistingOpenClawStateRead;
         const readFinished = createDeferredCore();
@@ -155,9 +147,7 @@ describe("delivery queue health write receipts", () => {
         await pending;
         const updated = await buildDeliveryQueueHealthSummary();
         if (healthKind === "failed") {
-          expect(updated?.ingressFailed).toEqual([
-            { channelId: "telegram", accountId: "ops", count: 1, oldestFailedAt: 2_000 },
-          ]);
+          expect(updated?.ingressFailed).toEqual(failedIngress(2_000));
         } else {
           expect(updated?.ingressPressure).toMatchObject([{ laneCount: 1, claimedCount: 1 }]);
         }
