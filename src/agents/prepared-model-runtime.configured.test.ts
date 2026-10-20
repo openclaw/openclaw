@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  collectPreparedModelRuntimeConfiguredRefs,
-  collectPreparedModelRuntimeProviderIds,
+  collectPreparedModelRuntimeConfiguredRefs as collectRefs,
+  collectPreparedModelRuntimeProviderIds as providerIds,
 } from "./prepared-model-runtime.configured.js";
 
 describe("configured runtime provider discovery", () => {
@@ -10,7 +10,7 @@ describe("configured runtime provider discovery", () => {
     "prepares configured Decision identity without a chat selection (%s)",
     (decisionModel) => {
       const config: OpenClawConfig = { agents: { defaults: { decisionModel } } };
-      const refs = collectPreparedModelRuntimeConfiguredRefs(config, "worker");
+      const refs = collectRefs(config, "worker");
       expect(refs).toEqual([
         {
           path: "agents.defaults.decisionModel",
@@ -19,7 +19,7 @@ describe("configured runtime provider discovery", () => {
           capability: "decision",
         },
       ]);
-      expect(collectPreparedModelRuntimeProviderIds(config, {}, false, refs)).toEqual(["fixture"]);
+      expect(providerIds(config, {}, false, refs)).toEqual(["fixture"]);
       expect(config.agents?.defaults?.decisionModel).toBe(decisionModel);
     },
   );
@@ -37,9 +37,7 @@ describe("configured runtime provider discovery", () => {
       },
       channels: { modelByChannel: { fixture: { decisionModel: "fixture/channel@profile" } } },
     };
-    expect(
-      collectPreparedModelRuntimeConfiguredRefs(config, "worker").map(({ value }) => value),
-    ).toEqual([
+    expect(collectRefs(config, "worker").map(({ value }) => value)).toEqual([
       "fixture/decision@20261018@iq4_xs",
       "fixture/literal@variant",
       "fixture/channel@profile",
@@ -61,15 +59,14 @@ describe("configured runtime provider discovery", () => {
           },
         },
       };
-      const refs = collectPreparedModelRuntimeConfiguredRefs(config, "worker");
-      expect(collectPreparedModelRuntimeProviderIds(config, {}, false, refs)).toEqual(
+      const refs = collectRefs(config, "worker");
+      expect(providerIds(config, {}, false, refs)).toEqual(
         field === "decisionModel" ? ["fixture"] : ["fixture", "fixture-harness"],
       );
     },
   );
 
   it("includes literal session selections in provider preparation", () => {
-    const agentId = "worker";
     const config: OpenClawConfig = {
       agents: {
         defaults: {
@@ -86,23 +83,18 @@ describe("configured runtime provider discovery", () => {
       Object.freeze({ provider: "fixture", modelId: "Reader@variant" }),
       Object.freeze({ provider: "fixture", modelId: "reader@variant" }),
     ]);
-    const configured = collectPreparedModelRuntimeConfiguredRefs(config, agentId);
-    const refs = collectPreparedModelRuntimeConfiguredRefs(config, agentId, selections);
+    const configured = collectRefs(config, "worker");
+    const refs = collectRefs(config, "worker", selections);
 
     expect(refs.slice(0, configured.length)).toEqual(configured);
     expect(refs.slice(configured.length).map(({ value, kind }) => ({ value, kind }))).toEqual([
       { value: "fixture/Reader@variant", kind: "literal" },
       { value: "fixture/reader@variant", kind: "literal" },
     ]);
-    expect(
-      collectPreparedModelRuntimeProviderIds(
-        config,
-        {},
-        false,
-        refs.slice(configured.length),
-        agentId,
-      ),
-    ).toEqual(["fixture", "fixture-harness"]);
+    expect(providerIds(config, {}, false, refs.slice(configured.length), "worker")).toEqual([
+      "fixture",
+      "fixture-harness",
+    ]);
     expect(config).toEqual(before);
   });
 });

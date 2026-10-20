@@ -3,6 +3,10 @@ import { getAiTransportHost, runWithAiTransportHost } from "@openclaw/ai";
 import { createOpenAIResponsesTransportStreamFn } from "@openclaw/ai/transports";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { streamOpenAICodexResponses } from "../../packages/ai/src/providers/openai-chatgpt-responses.js";
+import {
+  closeHttpServer,
+  listenLoopback,
+} from "../../test/helpers/gateway-integration-fixtures.js";
 import "../llm/ai-transport-host.js";
 import { attachProviderAuthAuthority } from "../plugins/provider-auth-authority.js";
 import { makeResponsesModel } from "./openai-transport-stream.test-harness.js";
@@ -47,15 +51,8 @@ describe("plugin credential authority at native WebSocket selection", () => {
         response.end(`data: ${JSON.stringify(event)}\n\n`);
       });
     });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
+    const origin = await listenLoopback(server);
     try {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Missing loopback server address");
-      }
-      const origin = `http://127.0.0.1:${address.port}`;
       let current = true;
       const model = attachProviderAuthAuthority(makeResponsesModel({ api }), () => {
         if (!current) {
@@ -104,10 +101,7 @@ describe("plugin credential authority at native WebSocket selection", () => {
       expect(credentials).toEqual(revoke ? [] : [`Bearer ${apiKey}`]);
       expect(result.stopReason).toBe(revoke ? "error" : "stop");
     } finally {
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await closeHttpServer(server);
     }
   });
 });

@@ -59,86 +59,75 @@ describe("configured model runtime refresh inputs", () => {
     });
   });
 
-  it.each(["entries"] as const)(
-    "resolves a %s fleet with bounded roster work and fresh configuration",
-    async () => {
-      await withOpenClawTestState({ label: "model-refresh-roster" }, async (state) => {
-        const count = 64;
-        const entries = Array.from({ length: count }, (_, index) => ({
-          id: `agent-${index}`,
-          agentDir: state.agentDir(`agent-${index}`),
-          workspace: state.path(`workspace-${index}`),
-          model: `fixture/model-${index}`,
-        }));
-        let reads = 0;
-        const observe = <T extends object>(roster: T): T =>
-          new Proxy(roster, {
-            get(target, key, receiver) {
-              if (typeof key === "string" && Object.hasOwn(target, key) && key !== "length") {
-                reads += 1;
-              }
-              return Reflect.get(target, key, receiver);
-            },
-          });
-        const config: OpenClawConfig = {
-          plugins: { enabled: false },
-          agents: {
-            entries: observe(Object.fromEntries(entries.map(({ id, ...entry }) => [id, entry]))),
+  it("resolves an entries fleet with bounded roster work and fresh configuration", async () => {
+    await withOpenClawTestState({ label: "model-refresh-roster" }, async (state) => {
+      const count = 64;
+      const entries = Array.from({ length: count }, (_, index) => ({
+        id: `agent-${index}`,
+        agentDir: state.agentDir(`agent-${index}`),
+        workspace: state.path(`workspace-${index}`),
+        model: `fixture/model-${index}`,
+      }));
+      let reads = 0;
+      const observe = <T extends object>(roster: T): T =>
+        new Proxy(roster, {
+          get(target, key, receiver) {
+            if (typeof key === "string" && Object.hasOwn(target, key) && key !== "length") {
+              reads += 1;
+            }
+            return Reflect.get(target, key, receiver);
           },
-        };
-        const preservedWorkspace = state.path("startup-selected-workspace");
-        const owners = new Map([
-          [
-            "published",
-            prepareModelRuntimeOwner(
-              {
-                config,
-                agentId: entries[0]!.id,
-                agentDir: entries[0]!.agentDir,
-                workspaceDir: preservedWorkspace,
-                preserveWorkspaceDirOnRefresh: true,
-              },
-              "configured",
-              "static",
-            ),
-          ],
-        ]);
-        const options = { allowGatewaySubagentBinding: true };
-        reads = 0;
-        const inputs = listConfiguredRefreshInputs(config, options, owners);
-        const resolutionReads = reads;
-        expect(
-          inputs.map(({ agentId, agentDir, workspaceDir }) => ({
-            agentId,
-            agentDir,
-            workspaceDir,
-          })),
-        ).toEqual(
-          entries.map((entry) => ({
-            agentId: entry.id,
-            agentDir: path.resolve(entry.agentDir),
-            workspaceDir: entry.workspace,
-          })),
-        );
-        expect(inputs.every((input) => input.allowGatewaySubagentBinding === true)).toBe(true);
-        expect(inputs[0]?.preserveWorkspaceDirOnRefresh).not.toBe(true);
-        expect(
-          inputs.map((input) =>
-            input.runtimePluginSelections?.map(({ provider, modelId }) => ({ provider, modelId })),
+        });
+      const config: OpenClawConfig = {
+        plugins: { enabled: false },
+        agents: {
+          entries: observe(Object.fromEntries(entries.map(({ id, ...entry }) => [id, entry]))),
+        },
+      };
+      const preservedWorkspace = state.path("startup-selected-workspace");
+      const owners = new Map([
+        [
+          "published",
+          prepareModelRuntimeOwner(
+            {
+              config,
+              agentId: entries[0]!.id,
+              agentDir: entries[0]!.agentDir,
+              workspaceDir: preservedWorkspace,
+              preserveWorkspaceDirOnRefresh: true,
+            },
+            "configured",
+            "static",
           ),
-        ).toEqual(entries.map((_, index) => [{ provider: "fixture", modelId: `model-${index}` }]));
-        expect(resolutionReads).toBeLessThanOrEqual(count * 32);
+        ],
+      ]);
+      const options = { allowGatewaySubagentBinding: true };
+      reads = 0;
+      const inputs = listConfiguredRefreshInputs(config, options, owners);
+      const resolutionReads = reads;
+      expect(
+        inputs.map(({ agentId, agentDir, workspaceDir }) => [agentId, agentDir, workspaceDir]),
+      ).toEqual(
+        entries.map(({ id, agentDir, workspace }) => [id, path.resolve(agentDir), workspace]),
+      );
+      expect(inputs.every((input) => input.allowGatewaySubagentBinding === true)).toBe(true);
+      expect(inputs[0]?.preserveWorkspaceDirOnRefresh).not.toBe(true);
+      expect(
+        inputs.map((input) =>
+          input.runtimePluginSelections?.map(({ provider, modelId }) => ({ provider, modelId })),
+        ),
+      ).toEqual(entries.map((_, index) => [{ provider: "fixture", modelId: `model-${index}` }]));
+      expect(resolutionReads).toBeLessThanOrEqual(count * 32);
 
-        const changed = config.agents!.entries![entries[1]!.id]!;
-        changed.workspace = state.path("replacement-workspace");
-        changed.model = "fixture/replacement-model";
-        const refreshed = listConfiguredRefreshInputs(config, options, owners);
-        expect(refreshed[1]?.workspaceDir).toBe(changed.workspace);
-        expect(refreshed[1]?.runtimePluginSelections).toEqual([
-          expect.objectContaining({ provider: "fixture", modelId: "replacement-model" }),
-        ]);
-        expect(refreshed[0]?.workspaceDir).toBe(entries[0]?.workspace);
-      });
-    },
-  );
+      const changed = config.agents!.entries![entries[1]!.id]!;
+      changed.workspace = state.path("replacement-workspace");
+      changed.model = "fixture/replacement-model";
+      const refreshed = listConfiguredRefreshInputs(config, options, owners);
+      expect(refreshed[1]?.workspaceDir).toBe(changed.workspace);
+      expect(refreshed[1]?.runtimePluginSelections).toEqual([
+        expect.objectContaining({ provider: "fixture", modelId: "replacement-model" }),
+      ]);
+      expect(refreshed[0]?.workspaceDir).toBe(entries[0]?.workspace);
+    });
+  });
 });

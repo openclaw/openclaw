@@ -12,11 +12,10 @@ type AuthoredModelRow = Pick<ModelDefinitionConfig, "id" | "name"> &
     cost?: Partial<ModelDefinitionConfig["cost"]>;
   };
 
-type ProducerCase = {
-  name: string;
-  rows: AuthoredModelRow[];
-  expected: Pick<ModelDefinitionConfig, "name" | "reasoning" | "input" | "contextWindow" | "cost">;
-};
+type ExpectedModel = Pick<
+  ModelDefinitionConfig,
+  "name" | "reasoning" | "input" | "contextWindow" | "cost"
+>;
 
 const metadata = createPluginMetadataSnapshotFixture({
   plugins: [
@@ -37,7 +36,7 @@ const alias: AuthoredModelRow = {
   input: ["text", "image"],
 };
 const exact = { id: "selected", name: "Exact", contextWindow: 96_000 };
-const expectedDefaults: ProducerCase["expected"] = {
+const expectedDefaults: ExpectedModel = {
   name: "Exact",
   reasoning: false,
   input: ["text"],
@@ -46,15 +45,11 @@ const expectedDefaults: ProducerCase["expected"] = {
 };
 
 describe("prepared inline row defaults", () => {
-  it.each<ProducerCase>([
-    {
-      name: "sparse exact after alias",
-      rows: [alias, exact],
-      expected: expectedDefaults,
-    },
-    {
-      name: "same-spelling cost and capability omissions",
-      rows: [
+  it.each<[string, AuthoredModelRow[], ExpectedModel]>([
+    ["sparse exact after alias", [alias, exact], expectedDefaults],
+    [
+      "same-spelling cost and capability omissions",
+      [
         { ...exact, cost: { input: 7 } },
         {
           ...exact,
@@ -65,14 +60,14 @@ describe("prepared inline row defaults", () => {
           cost: { input: 9, output: 8, cacheRead: 0.5 },
         },
       ],
-      expected: {
+      {
         ...expectedDefaults,
         reasoning: true,
         input: ["image"],
         cost: { input: 7, output: 8, cacheRead: 0.5, cacheWrite: 0 },
       },
-    },
-  ])("selects $name before capabilities become runtime defaults", ({ rows, expected }) => {
+    ],
+  ])("selects %s before capabilities become runtime defaults", (_name, rows, expected) => {
     const parsed = validateConfigObjectRaw({
       models: {
         providers: {
