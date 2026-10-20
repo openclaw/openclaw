@@ -48,6 +48,11 @@ function session() {
   });
 }
 
+function runWorker() {
+  const worker = session();
+  return worker.run("fixture", { mode: "staging-create" }).finally(() => worker.close());
+}
+
 function readinessChecker() {
   return createReadinessChecker({
     startedAt: Date.now(),
@@ -71,11 +76,9 @@ it
         // Admit the request before exiting so the control observes a worker crash, not EPIPE.
         `${diagnostic(kind, true)}\ndd bs=1 count=1 <&3 >/dev/null 2>&1\nexit ${ordinaryExit}`,
     );
-    const crashed = session();
-    await expect(crashed.run("fixture", { mode: "staging-create" })).rejects.toThrow(
+    await expect(runWorker()).rejects.toThrow(
       `SQLite read-only worker exited with code ${ordinaryExit}`,
     );
-    await crashed.close();
     expect([readChildRuntimeViability().available, readiness().ready]).toEqual([true, true]);
 
     const brokenExit = kind === "symbol" || kind === "musl" ? 127 : kind === "version" ? 1 : 134;
@@ -85,12 +88,10 @@ it
     } else if (kind === "permission") {
       await fs.chmod(executable, 0o600);
     }
-    const broken = session();
-    await expect(broken.run("fixture", { mode: "staging-create" })).rejects.toMatchObject({
+    await expect(runWorker()).rejects.toMatchObject({
       code: "NODE_RUNTIME_UNAVAILABLE",
       message: `The Node.js runtime this Gateway started with (${executable}) can no longer start worker processes, likely because it was upgraded or removed. Restart the Gateway.`,
     });
-    await broken.close();
     expect(readChildRuntimeViability()).toEqual({ execPath: executable, available: false });
     expect(readiness()).toMatchObject({ ready: false, failing: ["child-runtime"] });
     expect(() => session()).toThrow("Restart the Gateway.");
@@ -102,16 +103,13 @@ it("publishes a removed runtime observed by readiness before another worker spaw
   const executable = await runtime("echo v26.12.0");
   const recover = vi.fn(async () => ({ status: "report-only" as const, reason: "test service" }));
   const release = registerChildRuntimeRecovery(recover);
+  using _ = { [Symbol.dispose]: release };
   const readiness = readinessChecker();
-  try {
-    expect(readiness().ready).toBe(true);
-    await fs.unlink(executable);
-    expect(readiness()).toMatchObject({ ready: false, failing: ["child-runtime"] });
-    expect(readiness().ready).toBe(false);
-    await Promise.resolve();
-    expect(recover).toHaveBeenCalledTimes(1);
-    expect(() => session()).toThrow("Restart the Gateway.");
-  } finally {
-    release();
-  }
+  expect(readiness().ready).toBe(true);
+  await fs.unlink(executable);
+  expect(readiness()).toMatchObject({ ready: false, failing: ["child-runtime"] });
+  expect(readiness().ready).toBe(false);
+  await Promise.resolve();
+  expect(recover).toHaveBeenCalledTimes(1);
+  expect(() => session()).toThrow("Restart the Gateway.");
 });

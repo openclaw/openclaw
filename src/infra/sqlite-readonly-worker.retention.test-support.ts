@@ -34,12 +34,9 @@ const state = { lastGood: { fixture: "fixture:default" } };
     ["store", store],
     ["state", state],
   ] as const) {
-    database.exec(
-      `CREATE TABLE auth_profile_${table} (${table}_key TEXT PRIMARY KEY, ${table}_json TEXT)`,
-    );
-    database
-      .prepare(`INSERT INTO auth_profile_${table} VALUES (?, ?)`)
-      .run("primary", JSON.stringify(raw));
+    const name = `auth_profile_${table}`;
+    database.exec(`CREATE TABLE ${name} (${table}_key TEXT PRIMARY KEY, ${table}_json TEXT)`);
+    database.prepare(`INSERT INTO ${name} VALUES (?, ?)`).run("primary", JSON.stringify(raw));
   }
 }
 const expected = {
@@ -80,51 +77,48 @@ if (broker) {
   };
 }
 
-async function completedRead(label: string) {
-  const caller = { label, prompt: Buffer.alloc(1024 * 1024, label) };
+async function trackedRead(label: string, cancelled = false) {
+  const caller = { prompt: Buffer.alloc(1024 * 1024, label) };
   const references = [new WeakRef<object>(caller), new WeakRef<object>(caller.prompt)];
   await callerContext.run(caller, async () => {
-    const result = await read();
-    assert.deepEqual(result, expected);
-    assert.equal(callerContext.getStore(), caller, "Request context must survive its own read");
-    references.push(new WeakRef(result));
+    if (cancelled) {
+      const queuedScope = createSqliteReadOnlyWorkerScope();
+      const queued = runWithSpawnBroker(broker, () =>
+        queuedScope.run(() => runSqliteReadOnlyWorker(source, readOptions)),
+      );
+      const rejected = assert.rejects(queued, /scope closed/);
+      await queuedScope.close();
+      await rejected;
+    } else {
+      const result = await read();
+      assert.deepEqual(result, expected);
+      assert.equal(callerContext.getStore(), caller, "Request context must survive its own read");
+      references.push(new WeakRef(result));
+    }
   });
   return references;
 }
 
-async function cancelledQueuedCaller() {
-  const caller = { prompt: Buffer.alloc(1024 * 1024, "cancelled queue") };
-  const references = [new WeakRef<object>(caller), new WeakRef<object>(caller.prompt)];
-  await callerContext.run(caller, async () => {
-    const queuedScope = createSqliteReadOnlyWorkerScope();
-    const queued = runWithSpawnBroker(broker, () =>
-      queuedScope.run(() => runSqliteReadOnlyWorker(source, readOptions)),
-    );
-    const rejected = assert.rejects(queued, /scope closed/);
-    await queuedScope.close();
-    await rejected;
-  });
-  return references;
-}
-
-try {
-  await broker?.ready();
-  const first = await completedRead("first");
-  const worker = children[0];
-  assert.ok(worker, "The first read must create the real scoped worker");
-  const second = await completedRead("second");
-  assert.equal(children.length, 1, "Unrelated requests must reuse the same worker");
-  const control = new WeakRef({ unowned: true });
-  for (let pass = 0; pass < 8; pass += 1) {
+const assertCollected = async (references: WeakRef<object>[]) => {
+  for (let pass = 0; pass < 8; pass++) {
     await setImmediate();
     gc();
   }
-  assert.equal(control.deref(), undefined, "Unowned control must collect");
   assert.deepEqual(
-    [...first, ...second].map((ref) => ref.deref()),
-    [undefined, undefined, undefined, undefined, undefined, undefined],
-    "The live SQLite worker retained completed caller state",
+    references.map((ref) => ref.deref()),
+    references.map(() => undefined),
   );
+};
+
+try {
+  await broker?.ready();
+  const first = await trackedRead("first");
+  const worker = children[0];
+  assert.ok(worker, "The first read must create the real scoped worker");
+  const second = await trackedRead("second");
+  assert.equal(children.length, 1, "Unrelated requests must reuse the same worker");
+  const control = new WeakRef({ unowned: true });
+  await assertCollected([control, ...first, ...second]);
   assert.equal(worker.exitCode, null, "Collection must happen before worker retirement");
   assert.deepEqual(await read(), expected);
   assert.equal(children.length, 1, "The collected callers must leave the same worker reusable");
@@ -149,16 +143,7 @@ try {
   const active = read();
   const release = await paused.promise;
   try {
-    const cancelled = await cancelledQueuedCaller();
-    for (let pass = 0; pass < 8; pass++) {
-      await setImmediate();
-      gc();
-    }
-    assert.deepEqual(
-      cancelled.map((reference) => reference.deref()),
-      [undefined, undefined],
-      "An unrelated paused read retained the cancelled caller",
-    );
+    await assertCollected(await trackedRead("cancelled queue", true));
     assert.equal(worker.exitCode, null, "Queued cancellation must leave the active child alive");
   } finally {
     release();

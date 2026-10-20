@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
@@ -41,27 +40,6 @@ function fixture(autoVacuum = 0) {
   return { directory, sourcePath, targetPath, sqlite, source, options };
 }
 
-function observeVerification(sqlite: ReturnType<typeof requireNodeSqlite>) {
-  const statements: string[] = [];
-  // oxlint-disable-next-line typescript/unbound-method -- call preserves the native database receiver.
-  const prepare = sqlite.DatabaseSync.prototype.prepare;
-  const spy = vi.spyOn(sqlite.DatabaseSync.prototype, "prepare").mockImplementation(function (
-    this: DatabaseSync,
-    sql,
-  ) {
-    if (/^PRAGMA (integrity_check;|foreign_key_check;|user_version)$/u.test(sql)) {
-      statements.push(sql);
-    }
-    return prepare.call(this, sql);
-  });
-  return {
-    finish: () => {
-      spy.mockRestore();
-      return statements;
-    },
-  };
-}
-
 function familyBytes(sourcePath: string) {
   return ["", "-wal", "-shm"].map((suffix) => fs.readFileSync(`${sourcePath}${suffix}`));
 }
@@ -82,8 +60,8 @@ it.each([
     using _ = source;
     expect(fs.statSync(`${sourcePath}-wal`).size).toBeGreaterThan(0);
     const before = familyBytes(sourcePath);
-    const labels: string[] = [];
-    const observed = observeVerification(sqlite);
+    const validate = vi.fn();
+    const observed = vi.spyOn(sqlite.DatabaseSync.prototype, "prepare");
     const result = await createVerifiedSqliteSnapshot({
       ...options,
       preserveRowIds: operation !== "vacuum",
@@ -91,23 +69,20 @@ it.each([
         acquisition === "worker"
           ? undefined
           : { ...options.sourceAcquisition, preserveSourceArtifacts: acquisition === "artifacts" },
-      ...(operation === "transform"
-        ? { transform: (db: DatabaseSync) => db.exec("PRAGMA user_version = 8;") }
-        : {}),
-      ...(operation === "validator"
-        ? {
-            validate: (_db: DatabaseSync, label: string) => {
-              labels.push(label);
-            },
-          }
-        : {}),
+      transform:
+        operation === "transform" ? (db) => db.exec("PRAGMA user_version = 8;") : undefined,
+      validate: operation === "validator" ? validate : undefined,
     });
-    expect(observed.finish()).toEqual([
+    const verification = observed.mock.calls
+      .map(([sql]) => sql)
+      .filter((sql) => /^PRAGMA (integrity_check;|foreign_key_check;|user_version)$/u.test(sql));
+    expect(verification).toEqual([
       ...(checks === 2 ? fullChecks : []),
       "PRAGMA user_version",
       ...fullChecks,
       ...(acquisition === "worker" && operation === "none" ? ["PRAGMA user_version"] : []),
     ]);
+    vi.restoreAllMocks();
     expect(result).toMatchObject({
       path: targetPath,
       userVersion: operation === "transform" ? 8 : 7,
@@ -125,42 +100,37 @@ it.each([
       expect(fs.readdirSync(directory).toSorted()).toEqual(["snapshot.sqlite", ...sourceFiles]);
     }
     if (operation === "validator") {
-      expect(labels).toEqual([sourcePath, targetPath]);
+      expect(validate.mock.calls.map(([, label]) => label)).toEqual([sourcePath, targetPath]);
     }
   },
 );
 
-function corruptIndex(source: DatabaseSync) {
-  source.enableDefensive?.(false);
-  source.exec(`
-    PRAGMA writable_schema = ON;
-    UPDATE sqlite_schema SET sql = 'CREATE INDEX records_value ON records(alternate)' WHERE name = 'records_value';
-    PRAGMA writable_schema = OFF;
-  `);
-  const version = Number(source.prepare("PRAGMA schema_version").get()?.schema_version);
-  source.exec(`PRAGMA schema_version = ${version + 1};`);
-}
-
 it.each([
-  { corruption: "index", callback: undefined },
-  { corruption: "foreign-key", callback: undefined },
-  { corruption: "catalog", callback: undefined },
-  { corruption: "index", callback: "transform" },
-  { corruption: "index", callback: "validate" },
+  ["index", undefined],
+  ["foreign-key", undefined],
+  ["catalog", undefined],
+  ["index", "transform"],
+  ["index", "validate"],
 ] as const)(
-  "refuses private WAL $corruption corruption before $callback, preserving source artifacts",
-  async ({ corruption, callback }) => {
-    const { directory, sourcePath, targetPath, source, options } = fixture();
+  "refuses private WAL %s corruption before %s, preserving source artifacts",
+  async (corruption, callback) => {
+    const { directory, sourcePath, source, options } = fixture();
     using _ = source;
-    if (corruption === "index") {
-      corruptIndex(source);
-    } else if (corruption === "foreign-key") {
+    if (corruption === "foreign-key") {
       source.exec("PRAGMA foreign_keys = OFF; INSERT INTO children VALUES (99);");
     } else {
       source.enableDefensive?.(false);
-      source.exec(
-        "PRAGMA writable_schema = ON; UPDATE sqlite_schema SET sql = 'invalid sql' WHERE name = 'records'; PRAGMA writable_schema = OFF;",
-      );
+      const [name, sql] =
+        corruption === "index"
+          ? ["records_value", "CREATE INDEX records_value ON records(alternate)"]
+          : ["records", "invalid sql"];
+      source.exec(`PRAGMA writable_schema = ON;
+        UPDATE sqlite_schema SET sql = '${sql}' WHERE name = '${name}';
+        PRAGMA writable_schema = OFF;`);
+      if (corruption === "index") {
+        const version = Number(source.prepare("PRAGMA schema_version").get()?.schema_version);
+        source.exec(`PRAGMA schema_version = ${version + 1};`);
+      }
     }
     const before = familyBytes(sourcePath);
     const invoked = vi.fn();
@@ -178,7 +148,6 @@ it.each([
       expect(invoked).not.toHaveBeenCalled();
     }
     expect(familyBytes(sourcePath)).toEqual(before);
-    expect(fs.existsSync(targetPath)).toBe(false);
     expect(fs.readdirSync(directory).toSorted()).toEqual(sourceFiles);
   },
 );

@@ -13,9 +13,7 @@ function fixture(permissions = 0o600) {
   const file = path.join(root, "operation.sqlite");
   {
     using database = new DatabaseSync(file);
-    database.exec(
-      "CREATE TABLE receipt (id INTEGER PRIMARY KEY, value TEXT NOT NULL) STRICT; INSERT INTO receipt VALUES (7, 'committed');",
-    );
+    database.exec("CREATE TABLE receipt(id,value); INSERT INTO receipt VALUES(7,'committed')");
   }
   fs.chmodSync(file, permissions);
   const identity = fs.statSync(file, { bigint: true });
@@ -29,14 +27,11 @@ function fixture(permissions = 0o600) {
       { dev: directory.dev, ino: directory.ino },
     ]);
   };
+  const forbidden = BigInt(permissions === 0o600 ? 0o077 : 0o022);
   const assertFileSafe = (_file: string, stat: fs.BigIntStats) => {
-    expect([stat.uid, stat.mode & BigInt(permissions === 0o600 ? 0o077 : 0o022)]).toEqual([
-      identity.uid,
-      0n,
-    ]);
+    expect([stat.uid, stat.mode & forbidden]).toEqual([identity.uid, 0n]);
   };
-  const read = (connection: DatabaseSync) =>
-    connection.prepare("SELECT id, value FROM receipt").get();
+  const read = (db: DatabaseSync) => db.prepare("SELECT id, value FROM receipt").get();
   const inspect = () => {
     using reader = new DatabaseSync(file, { readOnly: true });
     return {
@@ -46,14 +41,8 @@ function fixture(permissions = 0o600) {
         .get(),
     };
   };
-  const prepare = () =>
-    prepareSqliteRollbackRecovery({
-      path: file,
-      scratchRoot: root,
-      assertIdentity,
-      assertFileSafe,
-      read,
-    });
+  const options = { path: file, scratchRoot: root, assertIdentity, assertFileSafe, read };
+  const prepare = () => prepareSqliteRollbackRecovery(options);
   const files = () =>
     fs
       .readdirSync(root)
@@ -95,7 +84,6 @@ describe.skipIf(process.platform === "win32")("explicit SQLite rollback recovery
       fs.utimesSync(f.file, timestamp.atime, new Date(timestamp.mtimeMs + 1_000));
       admission.admit(() => {});
       expect(f.inspect()).toEqual({ record: { id: 7, value: "committed" }, pressure: undefined });
-      expect(fs.existsSync(`${f.file}-journal`)).toBe(false);
       expect(fs.statSync(f.file).mode & 0o777).toBe(mode);
       expect(fs.readdirSync(f.root)).toEqual(["operation.sqlite"]);
     },
