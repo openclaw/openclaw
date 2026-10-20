@@ -21,10 +21,8 @@ beforeEach(() => {
 });
 afterEach(() => clearRuntimeConfigSnapshot());
 
-async function document(
-  options: NonNullable<Parameters<typeof handleControlUiHttpRequest>[2]> = {},
-  gzip = false,
-) {
+type DocumentOptions = NonNullable<Parameters<typeof handleControlUiHttpRequest>[2]>;
+async function document(options: DocumentOptions = {}, gzip = false) {
   const response = createResponse();
   const handled = await handleControlUiHttpRequest(
     createRequest({

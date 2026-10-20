@@ -14,9 +14,8 @@ vi.mock("./control-ui-public-session-locales.js", async (importOriginal) => ({
       copyToClipboard: "Copier le code",
       upToDate: "À jour",
       unavailableTitle: "Conversation indisponible",
-      toolOther: "Outils exécutés : {count}",
     },
-    ar: { top: "أعلى", refreshNow: "تحديث" },
+    ar: { top: "أعلى" },
     de: { top: "</script><img src=x onerror=alert(1)>" },
   },
 }));
@@ -29,7 +28,7 @@ const messages = [
   { role: "user", content: "Keep this original request" },
   {
     role: "assistant",
-    content: "Original answer\n\n\u0060\u0060\u0060js\nconst value = 1;\n\u0060\u0060\u0060",
+    content: "Original answer\n\n```js\nconst value = 1;\n```",
   },
 ];
 function render(unavailable = false) {
@@ -74,7 +73,8 @@ function open(language: string, preference?: string, blockedStorage = false) {
     clearTimeout,
     DOMParser: dom.window.DOMParser,
   });
-  return { document, fetch, localStorage };
+  const find = (selector: string) => document.querySelector<HTMLElement>(selector);
+  return { document, fetch, localStorage, find };
 }
 
 describe("public reader language", () => {
@@ -91,40 +91,37 @@ describe("public reader language", () => {
   ])(
     "selects %s with preference %s (blocked storage: %s)",
     (language, preference, blocked, locale, direction, top) => {
-      const f = open(language!, preference, blocked!);
-      expect(f.document.documentElement.lang).toBe(locale);
-      expect(f.document.documentElement.dir).toBe(direction);
-      expect(f.document.querySelector("[data-public-top]")?.textContent).toContain(top);
-      expect(f.document.title).toBe("Original title · OpenClaw");
-      expect(f.document.querySelector(".content")?.textContent).toBe(
-        "Keep this original request\n",
-      );
-      expect(f.document.querySelector("code")?.textContent).toBe("const value = 1;\n");
-      expect(f.document.querySelector(".content")?.getAttribute("dir")).toBe("auto");
-      expect(f.localStorage.getItem("openclaw.i18n.locale")).toBe(preference ?? null);
+      const { document, find, localStorage } = open(language!, preference, blocked!);
+      expect(document.documentElement).toMatchObject({ lang: locale, dir: direction });
+      expect(find("[data-public-top]")?.textContent).toContain(top);
+      expect(document.title).toBe("Original title · OpenClaw");
+      expect(find(".content")?.textContent).toBe("Keep this original request\n");
+      expect(find(".content")?.getAttribute("dir")).toBe("auto");
+      expect(find("code")?.textContent).toBe("const value = 1;\n");
+      expect(localStorage.getItem("openclaw.i18n.locale")).toBe(preference ?? null);
     },
   );
   it("retains localized chrome and copy controls across refresh and revocation", async () => {
-    const f = open("fr-FR");
-    expect(f.document.querySelector(".copy")?.getAttribute("aria-label")).toBe("Copier le code");
-    f.document.querySelector<HTMLAnchorElement>("[data-public-refresh-now]")!.click();
+    const { document, fetch, find } = open("fr-FR");
+    expect(find(".copy")?.getAttribute("aria-label")).toBe("Copier le code");
+    find("[data-public-refresh-now]")!.click();
     await vi.advanceTimersByTimeAsync(0);
-    expect(f.fetch).toHaveBeenCalledTimes(1);
-    expect(f.document.querySelector(".copy")?.getAttribute("title")).toBe("Copier");
-    expect(f.document.querySelector("[data-public-refresh-status]")?.textContent).toBe("À jour");
-    expect(f.document.querySelector("footer a")?.textContent).toBe("Actualiser");
-    f.fetch.mockImplementation(async () => new Response(render(true), { status: 404 }));
-    f.document.querySelector<HTMLAnchorElement>("[data-public-refresh-now]")!.click();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(find(".copy")?.getAttribute("title")).toBe("Copier");
+    expect(find("[data-public-refresh-status]")?.textContent).toBe("À jour");
+    expect(find("footer a")?.textContent).toBe("Actualiser");
+    fetch.mockImplementation(async () => new Response(render(true), { status: 404 }));
+    find("[data-public-refresh-now]")!.click();
     await vi.advanceTimersByTimeAsync(0);
-    expect(f.document.title).toBe("Conversation indisponible · OpenClaw");
-    expect(f.document.querySelector(".transcript")).toBeNull();
+    expect(document.title).toBe("Conversation indisponible · OpenClaw");
+    expect(find(".transcript")).toBeNull();
   });
   it("keeps catalog strings inert inside the CSP-bound inline script and DOM", () => {
-    const f = open("de-DE");
-    expect(f.document.querySelectorAll("script")).toHaveLength(1);
-    expect(f.document.querySelector("[data-public-top]")?.textContent).toContain(
+    const { document, find } = open("de-DE");
+    expect(document.querySelectorAll("script")).toHaveLength(1);
+    expect(find("[data-public-top]")?.textContent).toContain(
       "</script><img src=x onerror=alert(1)>",
     );
-    expect(f.document.querySelector("img[src=x]")).toBeNull();
+    expect(find("img[src=x]")).toBeNull();
   });
 });

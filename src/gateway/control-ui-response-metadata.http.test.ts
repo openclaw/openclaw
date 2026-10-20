@@ -1,5 +1,5 @@
 import { createServer, type Server } from "node:http";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, expect, it } from "vitest";
 import {
   closeHttpServer,
   listenLoopback,
@@ -9,11 +9,12 @@ import { respondControlUiNotAcceptable } from "./control-ui-static.js";
 import { handleControlUiHttpRequest } from "./control-ui.js";
 import type { ControlUiRootState } from "./server-control-ui-root.js";
 
-type RootResponseCase = {
+type ResponseCase = {
   body: string;
   path: string;
   root?: ControlUiRootState;
   headers?: Record<string, string>;
+  statusCode?: number;
 };
 
 let server: Server;
@@ -35,7 +36,7 @@ beforeAll(async () => {
       return;
     }
 
-    const root = ROOT_RESPONSE_CASES.find((entry) => entry.path === pathname)?.root;
+    const root = RESPONSE_CASES.find((entry) => entry.path === pathname)?.root;
     void handleControlUiHttpRequest(req, res, root ? { root } : undefined).catch(
       (error: unknown) => {
         res.statusCode = 500;
@@ -48,28 +49,15 @@ beforeAll(async () => {
 
 afterAll(() => closeHttpServer(server));
 
-async function expectRepresentation(
-  path: string,
-  status: number,
-  expected: { body: string; headers?: Record<string, string>; missingHeaders?: string[] },
-) {
-  for (const method of ["GET", "HEAD"]) {
-    const response = await fetch(`${baseUrl}${path}`, { method });
-    expect(response.status).toBe(status);
-    const body = Buffer.from(await response.arrayBuffer());
-    expect(body).toEqual(Buffer.from(method === "GET" ? expected.body : ""));
-    expect(response.headers.get("content-type")).toBe("text/plain; charset=utf-8");
-    expect(response.headers.get("content-length")).toBe(String(Buffer.byteLength(expected.body)));
-    for (const [name, value] of Object.entries(expected.headers ?? {})) {
-      expect(response.headers.get(name)).toBe(value);
-    }
-    for (const name of expected.missingHeaders ?? []) {
-      expect(response.headers.get(name)).toBeNull();
-    }
-  }
-}
-
-const ROOT_RESPONSE_CASES: RootResponseCase[] = [
+const RESPONSE_CASES: ResponseCase[] = [
+  { path: "/plain-not-found", statusCode: 404, body: "Not Found" },
+  { path: "/no-content", statusCode: 204, body: "" },
+  {
+    path: "/not-acceptable",
+    statusCode: 406,
+    body: "Not Acceptable",
+    headers: { "cache-control": "no-store", vary: "Accept-Encoding" },
+  },
   {
     path: "/root-invalid",
     root: { kind: "invalid", path: "/missing/界" },
@@ -98,34 +86,24 @@ const ROOT_RESPONSE_CASES: RootResponseCase[] = [
   },
 ];
 
-describe("Control UI plain-text response metadata", () => {
-  it("preserves byte length while Node suppresses the HEAD body", async () => {
-    await expectRepresentation("/plain-not-found", 404, { body: "Not Found" });
-  });
-
-  it("keeps 406 cache negotiation headers on GET and HEAD", async () => {
-    await expectRepresentation("/not-acceptable", 406, {
-      body: "Not Acceptable",
-      headers: { "cache-control": "no-store", vary: "Accept-Encoding" },
-    });
-  });
-
-  it.each(ROOT_RESPONSE_CASES)(
-    "keeps 503 metadata and HEAD suppression for $path",
-    async ({ path, ...expected }) => {
-      await expectRepresentation(path, 503, {
-        ...expected,
-        missingHeaders: expected.headers ? [] : ["retry-after"],
-      });
-    },
-  );
-
-  it("omits Content-Length and bodies for 204", async () => {
-    for (const method of ["GET", "HEAD"] as const) {
-      const response = await fetch(`${baseUrl}/no-content`, { method });
-      expect(response.status).toBe(204);
-      expect((await response.arrayBuffer()).byteLength).toBe(0);
-      expect(response.headers.get("content-length")).toBeNull();
+it.each(RESPONSE_CASES)(
+  "preserves plain-text metadata and HEAD suppression for $path",
+  async ({ path, statusCode = 503, body, headers }) => {
+    for (const method of ["GET", "HEAD"]) {
+      const response = await fetch(`${baseUrl}${path}`, { method });
+      expect(response.status).toBe(statusCode);
+      expect(Buffer.from(await response.arrayBuffer())).toEqual(
+        Buffer.from(method === "GET" ? body : ""),
+      );
+      const expectedHeaders = {
+        "content-type": "text/plain; charset=utf-8",
+        "content-length": statusCode === 204 ? null : String(Buffer.byteLength(body)),
+        ...(statusCode === 503 ? { "retry-after": null } : {}),
+        ...headers,
+      };
+      for (const [name, value] of Object.entries(expectedHeaders)) {
+        expect(response.headers.get(name)).toBe(value);
+      }
     }
-  });
-});
+  },
+);

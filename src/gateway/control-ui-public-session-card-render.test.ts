@@ -30,99 +30,82 @@ const CARD: PublicSessionCard = {
   host: "example.test",
 };
 
-function renderSvg(card: PublicSessionCard): string {
+function render(card: PublicSessionCard) {
   rasterizerInput.mockClear();
   renderPublicSessionCardPng(card);
   expect(rasterizerInput).toHaveBeenCalledOnce();
-  return rasterizerInput.mock.calls[0]![0];
-}
-
-function parse(card: PublicSessionCard) {
-  return new DOMParser().parseFromString(renderSvg(card), "image/svg+xml");
+  const svg = rasterizerInput.mock.calls[0]![0];
+  const document = new DOMParser().parseFromString(svg, "image/svg+xml");
+  return { svg, document, text: document.documentElement.textContent };
 }
 
 describe("public session preview card", () => {
   it("uses the headline until a recorded worktree has changes", () => {
     for (const worktree of [undefined, { branch: "main", additions: 0, deletions: 0, files: 0 }]) {
-      const document = parse({ ...CARD, worktree });
-      expect(document.documentElement.textContent).toContain(CARD.quote);
-      expect(document.documentElement.textContent).toContain("Done");
-      expect(document.documentElement.textContent).not.toContain("Changes");
+      const { text } = render({ ...CARD, worktree });
+      expect(text).toContain(CARD.quote);
+      expect(text).toContain("Done");
+      expect(text).not.toContain("Changes");
     }
-    const document = parse({
+    const { text } = render({
       ...CARD,
-      repoSlug: "openclaw/example",
+      repoSlug: "org/repo",
       durationMinutes: 12,
-      worktree: {
-        branch: "feat/previews",
-        additions: 34,
-        deletions: 8,
-        files: 3,
-        prState: "Merged",
-      },
+      worktree: { branch: "fix", additions: 1, deletions: 2, files: 3, prState: "Merged" },
     });
-    expect(document.documentElement.textContent).toContain("Changes+34−83 files");
-    expect(document.documentElement.textContent).toContain("18 messages · 12 min");
-    expect(document.documentElement.textContent).toContain("openclaw/example · feat/previews");
-    expect(document.documentElement.textContent).toContain("Merged");
-    expect(document.documentElement.textContent).not.toContain("Checks");
+    for (const part of ["Changes+1−23 files", "18 messages · 12 min", "org/repo · fix", "Merged"]) {
+      expect(text).toContain(part);
+    }
+    expect(text).not.toContain("Checks");
   });
 
   it("omits unknown optional facts and includes only recorded checks", () => {
     const card = { title: "A short session", host: "example.test", messageCount: 2 };
-    expect(parse(card).documentElement.textContent).toBe(
+    expect(render(card).text).toBe(
       "OpenClaw · Public sessionA short session2 messagesexample.test",
     );
-    const text = parse({
+    const { text } = render({
       ...card,
       worktree: { branch: "feature", files: 1, checks: "All 4 checks passed" },
-    }).documentElement.textContent;
+    });
     expect(text).toContain("ChecksAll 4 checks passed");
     expect(text).not.toMatch(/undefined|Merged| min|by /u);
   });
 
   it("keeps untrusted text inert in every card field", () => {
-    const injection = '<script href="bad">&</script>';
-    const card = {
-      ...CARD,
-      title: injection,
-      quote: injection,
-      agentName: injection,
-      host: injection,
-    };
-    for (const worktree of [undefined, { branch: injection, files: 1, checks: injection }]) {
-      const document = parse({ ...card, repoSlug: injection, worktree });
+    const input = '<script href="bad">&</script>';
+    const card = { ...CARD, title: input, quote: input, agentName: input, host: input };
+    for (const worktree of [undefined, { branch: input, files: 1, checks: input }]) {
+      const { document, text, svg } = render({ ...card, repoSlug: input, worktree });
       expect(document.querySelector("script, image, foreignObject, a")).toBeNull();
-      expect(document.documentElement.textContent).toContain(injection);
-      expect(renderSvg({ ...card, worktree })).toContain("&lt;script");
+      expect(text).toContain(input);
+      expect(svg).toContain("&lt;script");
     }
   });
 
   it("bounds long text and breaks unspaced text into at most three title and quote lines", () => {
-    const document = parse({
+    const { document, text } = render({
       ...CARD,
       title: `${"W".repeat(2_000)}TITLE_END`,
       quote: `${"W".repeat(2_000)}QUOTE_END`,
     });
     const titles = [...document.querySelectorAll('text[font-size="56"]')];
     const quotes = [...document.querySelectorAll('text[font-family="Instrument Serif"]')];
-    expect(titles).toHaveLength(3);
-    expect(quotes).toHaveLength(3);
-    expect(titles.at(-1)?.textContent).toMatch(/…$/u);
-    expect(quotes.at(-1)?.textContent).toMatch(/…$/u);
-    expect(document.documentElement.textContent).not.toMatch(/TITLE_END|QUOTE_END/u);
-    expect(document.documentElement.textContent?.length).toBeLessThan(500);
+    for (const lines of [titles, quotes]) {
+      expect(lines).toHaveLength(3);
+      expect(lines.at(-1)?.textContent).toMatch(/…$/u);
+    }
+    expect(text).not.toMatch(/TITLE_END|QUOTE_END/u);
+    expect(text?.length).toBeLessThan(500);
   });
 
   it("keeps the opening quote directly below the title", () => {
-    const document = parse({ ...CARD, title: "A very long title ".repeat(30) });
-    const titleLines = [...document.querySelectorAll('text[font-size="56"]')];
-    const lastTitleY = Number(titleLines.at(-1)?.getAttribute("y"));
-    const quoteY = Number(
-      document.querySelector('text[font-family="Instrument Serif"]')?.getAttribute("y"),
-    );
-    expect(quoteY - lastTitleY).toBeGreaterThan(50);
-    expect(quoteY - lastTitleY).toBeLessThan(80);
+    const { document } = render({ ...CARD, title: "A very long title ".repeat(30) });
+    const title = [...document.querySelectorAll('text[font-size="56"]')].at(-1);
+    const quote = document.querySelector('text[font-family="Instrument Serif"]');
+    const gap = Number(quote?.getAttribute("y")) - Number(title?.getAttribute("y"));
+    expect(gap).toBeGreaterThan(50);
+    expect(gap).toBeLessThan(80);
   });
 
   it("renders bundled fonts into a 1200 by 630 PNG through the worker", async () => {
