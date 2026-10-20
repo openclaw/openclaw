@@ -24,7 +24,8 @@ const sendSingleTextMessageMatrixMock = vi.hoisted(() =>
 );
 const reactMatrixMessageMock = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => {}));
 
-vi.mock("../send.js", () => ({
+vi.mock("../send.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../send.js")>()),
   editMessageMatrix: editMessageMatrixMock,
   prepareMatrixSingleText: vi.fn((text: string) => ({
     trimmedText: text.trim(),
@@ -210,8 +211,12 @@ describe("matrix monitor handler reply presentation", () => {
       const reasoning: ReplyPayload = { text: "Reasoning:\nCheck the inputs", isReasoning: true };
       await options.onBlockReplyQueued?.(reasoning, { assistantMessageIndex: 0 });
       await deliver(reasoning, { kind: "block" });
-      expect(deliverMatrixRepliesMock).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ replies: [reasoning] }),
+      expect(sendMessageMatrixMock).toHaveBeenCalledExactlyOnceWith(
+        "!room:example.org",
+        reasoning.text,
+        expect.objectContaining({
+          extraContent: { msgtype: "m.notice", "m.mentions": {} },
+        }),
       );
       expect(editMessageMatrixMock).not.toHaveBeenCalled();
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
@@ -234,7 +239,7 @@ describe("matrix monitor handler reply presentation", () => {
         answer,
         expect.objectContaining({ live: false }),
       );
-      expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
+      expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
     } finally {
       runGate.resolve();
       await handlerDone;
@@ -281,8 +286,10 @@ describe("matrix monitor handler reply presentation", () => {
         createMatrixTextMessageEvent({ eventId: "$visibility", body: "Answer normally" }),
       );
 
-      expect(deliverMatrixRepliesMock).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ replies: [{ text: "Visible answer" }] }),
+      expect(sendMessageMatrixMock).toHaveBeenCalledExactlyOnceWith(
+        "!room:example.org",
+        "Visible answer",
+        expect.anything(),
       );
       expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
     },

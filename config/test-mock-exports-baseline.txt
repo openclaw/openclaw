@@ -551,7 +551,6 @@
 ["extensions/matrix/src/matrix/draft-stream.test.ts","./send.js","267e9a22a930a46741c68076ec29a430666f468b176c40d185fc2252d0b70157",1]
 ["extensions/matrix/src/matrix/monitor/handler-draft-controller.visibility.test.ts","./handler-runtime.js","e1ac8c6629caf7de0ece7455d52ff1ea69408d401ceb09cc2a3cf765dc9e4497",1]
 ["extensions/matrix/src/matrix/monitor/handler.binding-route.test.ts","openclaw/plugin-sdk/acp-binding-runtime","c467feacdeebc7624acb5dbe001920f673368c76ed5534e3e1acce49e4b9f8b5",1]
-["extensions/matrix/src/matrix/monitor/handler.reply-presentation.test.ts","../send.js","22f9cc6b6ace13d75792b3ab08e4666f2d42b54aca59131399f77ec9875de6af",1]
 ["extensions/matrix/src/matrix/monitor/index.test-helpers.ts","../../resolve-targets.js","b1ec6d19f264f6eff3bec62f9c1f52177aac52429ed80877f6f3ce2a60d61305",1]
 ["extensions/matrix/src/matrix/monitor/index.test-helpers.ts","../../runtime.js","6bfd54c739bb832b2848fab9f72ab5ac8d723005ee12333a287a561d75bd9b0e",1]
 ["extensions/matrix/src/matrix/monitor/index.test-helpers.ts","../client.js","0a0f38a0d184e02f6296013d4907a46d1b408a591e9baefbd335779d8aa5a021",1]
