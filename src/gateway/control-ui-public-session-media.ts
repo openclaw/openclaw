@@ -3,8 +3,12 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { detectMime } from "@openclaw/media-core/mime";
 import { parseControlUiPublicSessionShareUrl } from "@openclaw/session-url-contract/public-share";
+import { isCoreCanvasHostEnabled } from "../canvas/config.js";
+import { CANVAS_DOCUMENTS_PATH } from "../canvas/constants.js";
+import { parseCanvasDocumentHttpPath, readCanvasDocumentHtmlSource } from "../canvas/documents.js";
 import { resolveGatewayPublicOrigin } from "../config/gateway-public-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { buildBoardWidgetContentSecurityPolicy } from "./board-sandbox.js";
 import type { ControlUiPublicSessionRequestGate } from "./control-ui-public-session-admission.js";
 import {
   getPublicSessionEntryId,
@@ -14,6 +18,7 @@ import { isSecurePublicSessionIngress } from "./control-ui-public-session-ingres
 import {
   isPublicSessionShareActive,
   readPublicSessionMessage,
+  readPublicSessionWidget,
 } from "./control-ui-public-session-read.js";
 import { resolvePublicSessionShareToken } from "./control-ui-public-session-token.js";
 import { resolveControlUiShareOrigin } from "./control-ui-share.js";
@@ -56,6 +61,8 @@ export async function serveControlUiPublicSessionMedia(params: {
   const url = new URL(req.url ?? "/", "http://localhost");
   const entryId = url.searchParams.get("entry") ?? "";
   const attachmentId = url.searchParams.get("attachment") ?? "";
+  const widgetId = url.searchParams.get("widget");
+  const queryKeys = widgetId === null ? ["token", "entry", "attachment"] : ["token", "widget"];
   const tokenUrl = new URL(`${basePath}/share/session`, url.origin);
   tokenUrl.searchParams.set("token", url.searchParams.get("token") ?? "");
   const share = parseControlUiPublicSessionShareUrl(tokenUrl, basePath);
@@ -63,11 +70,16 @@ export async function serveControlUiPublicSessionMedia(params: {
   if (
     !share ||
     url.href.length > 16384 ||
-    ["token", "entry", "attachment"].some((key) => url.searchParams.getAll(key).length !== 1) ||
-    [...url.searchParams.keys()].some((key) => !["token", "entry", "attachment"].includes(key)) ||
-    entryId.length === 0 ||
-    entryId.length > 1024 ||
-    !/^(?:content|media)-(?:0|[1-9][0-9]{0,5})$/u.test(attachmentId) ||
+    queryKeys.some((key) => url.searchParams.getAll(key).length !== 1) ||
+    [...url.searchParams.keys()].some((key) => !queryKeys.includes(key)) ||
+    (widgetId === null
+      ? entryId.length === 0 ||
+        entryId.length > 1024 ||
+        !/^(?:content|media)-(?:0|[1-9][0-9]{0,5})$/u.test(attachmentId)
+      : widgetId.length === 0 ||
+        widgetId.length > 128 ||
+        parseCanvasDocumentHttpPath(`${CANVAS_DOCUMENTS_PATH}/${widgetId}/index.html`)
+          ?.documentId !== widgetId) ||
     (req.method !== "GET" && req.method !== "HEAD") ||
     !resolveControlUiShareOrigin(req, publicOrigin) ||
     !isSecurePublicSessionIngress(req, params.ingress, publicOrigin)
@@ -93,18 +105,32 @@ export async function serveControlUiPublicSessionMedia(params: {
     if (!projection) {
       return unavailable(503);
     }
+    const tokenDigest = createHash("sha256").update(share.token).digest("base64url");
     const result = await gate.run({
       kind: "transcript",
       publicationKey: locator.shareId,
       sessionKey: locator.sessionKey,
       config,
-      requestKey: JSON.stringify([
-        "media",
-        createHash("sha256").update(share.token).digest("base64url"),
-        entryId,
-        attachmentId,
-      ]),
+      requestKey: JSON.stringify(
+        widgetId === null
+          ? ["media", tokenDigest, entryId, attachmentId]
+          : ["widget", tokenDigest, widgetId],
+      ),
       work: async () => {
+        if (widgetId !== null) {
+          if (
+            !isCoreCanvasHostEnabled(config) ||
+            !(await readPublicSessionWidget(config, locator, { docId: widgetId, projection }))
+          ) {
+            return null;
+          }
+          try {
+            const document = await readCanvasDocumentHtmlSource(widgetId);
+            return document.cspSandbox === "scripts" ? document.html : null;
+          } catch {
+            return null;
+          }
+        }
         const message = await readPublicSessionMessage(config, locator, { entryId, projection });
         if (!message || getPublicSessionEntryId(message) !== entryId) {
           return null;
@@ -121,9 +147,13 @@ export async function serveControlUiPublicSessionMedia(params: {
     const representation = result.value;
     const body = representation?.body;
     const mime =
-      Buffer.isBuffer(body) && body.byteLength <= MAX_IMAGE_BYTES
-        ? await detectMime({ buffer: body })
-        : undefined;
+      widgetId !== null
+        ? typeof body === "string" && isCoreCanvasHostEnabled(config)
+          ? "text/html; charset=utf-8"
+          : undefined
+        : Buffer.isBuffer(body) && body.byteLength <= MAX_IMAGE_BYTES
+          ? await detectMime({ buffer: body })
+          : undefined;
     return withReadySessionRows(
       projection,
       () => [{ key: locator.sessionKey, agentId: locator.agentId }],
@@ -131,7 +161,7 @@ export async function serveControlUiPublicSessionMedia(params: {
         if (
           !isPublicSessionShareActive(config, locator, projection) ||
           !mime ||
-          !PUBLIC_IMAGE_TYPES.has(mime)
+          (widgetId === null && !PUBLIC_IMAGE_TYPES.has(mime))
         ) {
           return unavailable(404);
         }
@@ -140,6 +170,12 @@ export async function serveControlUiPublicSessionMedia(params: {
         }
         res.setHeader("Content-Disposition", "inline");
         res.setHeader("Content-Type", mime);
+        if (widgetId !== null) {
+          res.setHeader(
+            "Content-Security-Policy",
+            `${buildBoardWidgetContentSecurityPolicy({ grantState: "none" })}; frame-ancestors 'self'`,
+          );
+        }
         res.setHeader("ETag", representation.etag);
         if (req.headers["if-none-match"] === representation.etag) {
           res.statusCode = 304;

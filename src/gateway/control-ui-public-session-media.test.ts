@@ -1,5 +1,6 @@
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createCanvasDocument } from "../canvas/documents.js";
 import { saveMediaBuffer } from "../media/store.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createControlUiPublicSessionRequestGate } from "./control-ui-public-session-admission.js";
@@ -8,14 +9,16 @@ import { serveControlUiPublicSessionMedia } from "./control-ui-public-session-me
 import { createRequest, createResponse } from "./server-http.test-harness.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 
-const { readMessage, active, resolveToken } = vi.hoisted(() => ({
+const { readMessage, readWidget, active, resolveToken } = vi.hoisted(() => ({
   readMessage: vi.fn(),
+  readWidget: vi.fn(),
   active: vi.fn(),
   resolveToken: vi.fn(),
 }));
 // mock-isolation: Public publication state is controlled while exercising real media bytes and admission.
 vi.mock("./control-ui-public-session-read.js", () => ({
   readPublicSessionMessage: readMessage,
+  readPublicSessionWidget: readWidget,
   isPublicSessionShareActive: active,
 }));
 // mock-isolation: Token cryptography is covered by its owner; this suite exercises the resolved publication boundary.
@@ -88,6 +91,7 @@ beforeEach(() => {
   resolveToken.mockReset().mockResolvedValue(locator);
   active.mockReset().mockReturnValue(true);
   readMessage.mockReset().mockResolvedValue(message());
+  readWidget.mockReset().mockResolvedValue(true);
 });
 afterEach(() => {
   for (const gate of gates.splice(0)) {
@@ -96,6 +100,77 @@ afterEach(() => {
 });
 
 describe("public session media", () => {
+  it("serves saved script-only widgets with an opaque sandbox and conditional responses", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const html = "<!doctype html><p>Shared chart</p><script>document.title = 'Chart'</script>";
+      const document = await createCanvasDocument({ html, cspSandbox: "scripts" });
+      const gate = createControlUiPublicSessionRequestGate();
+      gates.push(gate);
+      const query = `token=v1.YWJj&widget=${document.id}`;
+      const response = await request({ query, gate });
+      expect(response.res.statusCode).toBe(200);
+      expect(response.getBody()).toBe(html);
+      expect(response.setHeader).toHaveBeenCalledWith("Content-Type", "text/html; charset=utf-8");
+      expect(response.setHeader).toHaveBeenCalledWith("Referrer-Policy", "no-referrer");
+      expect(response.setHeader).toHaveBeenCalledWith("Cache-Control", "no-store");
+      expect(response.setHeader).toHaveBeenCalledWith("X-Robots-Tag", "noindex, nofollow");
+      expect(response.setHeader).toHaveBeenCalledWith("X-Content-Type-Options", "nosniff");
+      const policy = response.setHeader.mock.calls.find(
+        ([name]) => name === "Content-Security-Policy",
+      )?.[1];
+      // The opaque sandbox, closed network, and same-origin embedding are the public contract.
+      for (const directive of [
+        "default-src 'none'",
+        "connect-src 'none'",
+        "frame-src 'none'",
+        "sandbox allow-scripts",
+        "frame-ancestors 'self'",
+      ]) {
+        expect(String(policy).split("; ")).toContain(directive);
+      }
+      expect(String(policy)).not.toContain("allow-same-origin");
+      const etag = response.setHeader.mock.calls.find(([name]) => name === "ETag")?.[1];
+      expect(etag).toEqual(expect.any(String));
+      const unchanged = await request({ query, gate, headers: { "if-none-match": etag } });
+      expect(unchanged.res.statusCode).toBe(304);
+      expect(unchanged.getBody()).toBe("");
+      active.mockReturnValue(false);
+      expect((await request({ query, gate })).res.statusCode).toBe(404);
+    });
+  });
+
+  it("requires a publication receipt and script-only document even for an existing widget", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const document = await createCanvasDocument({ html: "<p>Private chart</p>" });
+      const query = `token=v1.YWJj&widget=${document.id}`;
+      expect((await request({ query })).res.statusCode).toBe(404);
+      await createCanvasDocument({
+        id: document.id,
+        html: "<p>Private chart</p>",
+        cspSandbox: "scripts",
+      });
+      readWidget.mockResolvedValue(false);
+      expect((await request({ query })).res.statusCode).toBe(404);
+      readWidget.mockResolvedValue(true);
+      expect((await request({ query: "token=v1.YWJj&widget=missing" })).res.statusCode).toBe(404);
+    });
+  });
+
+  it.each([
+    "widget=chart&entry=entry-1&attachment=content-0",
+    "widget=chart&extra=1",
+    "widget=chart&widget=other",
+    "widget=chart&token=v1.ZGVm",
+    "widget=..",
+    "widget=%2Fchart",
+    `widget=${"x".repeat(129)}`,
+    "entry=entry-1&attachment=content-0&extra=1",
+  ])("rejects ambiguous or invalid public media query: %s", async (query) => {
+    expect((await request({ query: `token=v1.YWJj&${query}` })).res.statusCode).toBe(404);
+    expect(readWidget).not.toHaveBeenCalled();
+    expect(readMessage).not.toHaveBeenCalled();
+  });
+
   it("serves exact entry images with sniffed type, inline disposition, and private cache policy", async () => {
     readMessage.mockResolvedValue({ ...message(), role: "toolResult", toolCallId: "tool-1" });
     const response = await request();

@@ -3,6 +3,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { resolveSessionPublicShare } from "../config/sessions/session-public-share.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
+import { findTranscriptEvent } from "../config/sessions/session-transcript-match.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
@@ -376,5 +377,44 @@ export async function readPublicSessionMessage(
       !selected.oversized
       ? (asOptionalRecord(selected.message) ?? null)
       : null;
+  });
+}
+
+/** A saved inline receipt grants document disclosure only for its published generation. */
+export async function readPublicSessionWidget(
+  cfg: OpenClawConfig,
+  locator: PublicSessionShareLocator,
+  options: { docId: string; projection: SessionRowProjection },
+): Promise<boolean> {
+  const { projection } = options;
+  if (isIncognitoSessionKey(locator.sessionKey) || !listAgentIds(cfg).includes(locator.agentId)) {
+    return false;
+  }
+  const queries = () => [{ key: locator.sessionKey, agentId: locator.agentId }];
+  const initial = await withReadySessionRows(projection, queries, () =>
+    readAuthorizedTarget(cfg, locator, projection),
+  );
+  if (!initial) {
+    return false;
+  }
+  const selected = await findTranscriptEvent(
+    {
+      agentId: initial.source.agentId,
+      sessionKey: locator.sessionKey,
+      sessionId: locator.sessionId,
+      storePath: initial.source.path,
+      sessionEntry: initial.target.entry,
+    },
+    { kind: "canvas-widget", docId: options.docId },
+  );
+  return withReadySessionRows(projection, queries, () => {
+    const current = readAuthorizedTarget(cfg, locator, projection);
+    return Boolean(
+      selected &&
+      current &&
+      current.source.path === initial.source.path &&
+      current.source.databaseIdentity === initial.source.databaseIdentity &&
+      current.source.databaseBirthtime === initial.source.databaseBirthtime,
+    );
   });
 }

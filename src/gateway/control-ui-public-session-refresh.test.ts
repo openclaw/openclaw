@@ -76,7 +76,11 @@ function fixture(
         : render(
             body === "revoked"
               ? { title: "Conversation unavailable", unavailable: true, messages: [] }
-              : { ...overrides, title: body, messages: [...messages, message(body)] },
+              : {
+                  ...overrides,
+                  title: body,
+                  messages: [...(overrides.messages ?? messages), message(body)],
+                },
           ),
       { status, headers: { ETag: etag } },
     );
@@ -124,6 +128,25 @@ function fixture(
     },
   };
 }
+
+it("carries each widget's measured height across live refresh", async () => {
+  const f = fixture({
+    messages: [
+      { role: "assistant", content: '[embed ref="cv_first" /] [embed ref="cv_second" /]' },
+    ],
+    mediaBaseUrl: "/share/session/media?token=v1.opaque",
+  });
+  const frames = f.document.querySelectorAll("iframe");
+  frames[0]!.style.height = "730px";
+  frames[1]!.style.height = "280px";
+  f.event("online");
+  await vi.advanceTimersByTimeAsync(0);
+  expect(f.replaceWith).toHaveBeenCalledOnce();
+  expect(Array.from(f.document.querySelectorAll("iframe"), (frame) => frame.style.height)).toEqual([
+    "730px",
+    "280px",
+  ]);
+});
 
 it("jitters conditional reads, retains ETag manually, and catches up only when visible", async () => {
   const f = fixture();

@@ -10,8 +10,10 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSessionPublicShare } from "../config/sessions/session-public-share.js";
+import * as transcriptMatch from "../config/sessions/session-transcript-match.js";
 import * as historyReaders from "../config/sessions/session-transcript-worker-readers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -23,6 +25,7 @@ import { projectPublicSessionItems } from "./control-ui-public-session-project.j
 import {
   isPublicSessionShareActive as readActive,
   readPublicSessionMessage,
+  readPublicSessionWidget,
   readPublicSessionShare as readShare,
 } from "./control-ui-public-session-read.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
@@ -183,6 +186,63 @@ describe("anonymous published session reader", () => {
         },
       );
       expect(await read("message-1")).toBeNull();
+    });
+  });
+
+  it("authorizes nested and top-level widget receipts only in the published generation", async () => {
+    await withPublicTestState(async () => {
+      const details = (id: string) => ({
+        kind: "canvas",
+        presentation: { target: "assistant_message" },
+        view: { id, url: `/__openclaw__/canvas/documents/${id}/index.html` },
+      });
+      await seed([
+        {
+          role: "toolResult",
+          toolName: "show_widget",
+          toolCallId: "inline-chart",
+          details: details("top-level-chart"),
+        },
+        createNestedToolActivity({
+          runId: "chart-run",
+          scopeId: "chart-scope",
+          afterEntryId: null,
+          startOrder: 0,
+          parentToolCallId: "exec-chart",
+          toolCallId: "nested-chart",
+          toolName: "show_widget",
+          input: {},
+          result: { content: [], details: details("nested-chart") },
+          isError: false,
+          startedAt: 1,
+          timestamp: 2,
+        }),
+      ]);
+      const other = { ...locator, sessionKey: "agent:main:other", sessionId: "other-generation" };
+      await upsertSessionEntryCore(other, { sessionId: other.sessionId, updatedAt: 1 });
+      await replaceTranscriptEvents(other, [
+        {
+          type: "message",
+          id: "private-widget",
+          message: { role: "toolResult", toolName: "show_widget", details: details("other-chart") },
+        },
+      ]);
+      const read = (docId: string, target = locator) =>
+        readPublicSessionWidget(cfg, target, { docId, projection: currentProjection() });
+      expect(await read("top-level-chart")).toBe(true);
+      expect(await read("nested-chart")).toBe(true);
+      expect(await read("other-chart")).toBe(false);
+      expect(await read("top-level-chart", { ...locator, sessionId: "old-generation" })).toBe(
+        false,
+      );
+      const find = transcriptMatch.findTranscriptEvent;
+      vi.spyOn(transcriptMatch, "findTranscriptEvent").mockImplementationOnce(async (...args) => {
+        const result = await find(...args);
+        await patchSessionEntryCore(locator, () => ({ publicShare: undefined }));
+        return result;
+      });
+      expect(await read("top-level-chart")).toBe(false);
+      expect(await read("nested-chart")).toBe(false);
     });
   });
 
