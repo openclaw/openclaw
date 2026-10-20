@@ -1,13 +1,10 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type {
-  ProviderAuthMethod,
-  ProviderPreparedRuntimeAuth,
-  ProviderPrepareRuntimeAuthContext,
-} from "openclaw/plugin-sdk/core";
+import type { ProviderPrepareRuntimeAuthContext } from "openclaw/plugin-sdk/core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import type {
@@ -15,7 +12,7 @@ import type {
   ModelDefinitionConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { resolveTestNodeExecPath } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { execAz, getAccessTokenResultAsync } from "./cli.js";
 import plugin from "./index.js";
 import {
@@ -36,11 +33,7 @@ import {
 } from "./shared.js";
 const execFileMock = vi.hoisted(() => vi.fn());
 const execFileSyncMock = vi.hoisted(() => vi.fn());
-const ensureAuthProfileStoreMock = vi.hoisted(() =>
-  vi.fn(() => ({
-    profiles: {},
-  })),
-);
+const ensureAuthProfileStoreMock = vi.hoisted(() => vi.fn(() => ({ profiles: {} })));
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -58,20 +51,14 @@ vi.mock("node:child_process", async () => {
 
 vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>();
-  return {
-    ...actual,
-    runExec: execFileMock,
-  };
+  return { ...actual, runExec: execFileMock };
 });
 
 vi.mock("openclaw/plugin-sdk/provider-auth", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/provider-auth")>(
     "openclaw/plugin-sdk/provider-auth",
   );
-  return {
-    ...actual,
-    ensureAuthProfileStoreAsync: ensureAuthProfileStoreMock,
-  };
+  return { ...actual, ensureAuthProfileStoreAsync: ensureAuthProfileStoreMock };
 });
 
 function registerProvider() {
@@ -79,34 +66,29 @@ function registerProvider() {
   plugin.register(createTestPluginApi({ registerProvider: register }));
   expect(register).toHaveBeenCalledTimes(1);
   const provider = register.mock.calls[0]?.[0];
-  if (!provider) {
-    throw new Error("expected Microsoft Foundry provider");
-  }
+  assert(provider, "expected Microsoft Foundry provider");
   return provider;
 }
 
-type FoundryProvider = ReturnType<typeof registerProvider>;
-
 function prepareAuth(provider = registerProvider()) {
   const prepare = provider.prepareRuntimeAuth;
-  if (!prepare) {
-    throw new Error("expected Microsoft Foundry runtime auth hook");
-  }
-  return prepare;
-}
-
-function authResult(result: ProviderPreparedRuntimeAuth | null | undefined) {
-  if (!result) {
-    throw new Error("expected Microsoft Foundry runtime auth result");
-  }
-  return result;
+  assert(prepare, "expected Microsoft Foundry runtime auth hook");
+  return async (overrides: Partial<ProviderPrepareRuntimeAuthContext> = {}) => {
+    const result = await prepare(authContext(overrides));
+    assert(result, "expected Microsoft Foundry runtime auth result");
+    return result;
+  };
 }
 
 function providerPatch(result: ReturnType<typeof buildFoundryAuthResult>) {
   const provider = result.configPatch?.models?.providers?.["microsoft-foundry"];
-  if (!provider) {
-    throw new Error("expected Microsoft Foundry provider config patch");
-  }
+  assert(provider, "expected Microsoft Foundry provider config patch");
+  return provider;
+}
+
+function configuredProvider(config: OpenClawConfig) {
+  const provider = config.models?.providers?.[providerId];
+  assert(provider, "expected configured Microsoft Foundry provider");
   return provider;
 }
 
@@ -118,7 +100,6 @@ const profileId = "microsoft-foundry:entra";
 const agentDir = "/tmp/test-agent";
 const loginError = "Please run 'az login' to setup account.";
 const foundryTokenCacheMaxEntries = 128;
-let runRealExec: typeof import("openclaw/plugin-sdk/process-runtime").runExec;
 let runtimeAuthTestSequence = 0;
 let runtimeAuthTestTenantId = "tenant-0";
 
@@ -142,34 +123,32 @@ function makeModel(
   };
 }
 
-function makeConfig(params?: {
+function makeConfig({
+  profileIds = [],
+  orderedProfileIds,
+  ...provider
+}: {
   profileIds?: string[];
   orderedProfileIds?: string[];
   models?: ModelDefinitionConfig[];
   baseUrl?: string;
   api?: FoundryProviderApi;
-}) {
-  const profileIds = params?.profileIds ?? [];
-  const orderedProfileIds = params?.orderedProfileIds;
+  timeoutSeconds?: number;
+} = {}) {
   return {
     auth: {
       profiles: Object.fromEntries(
-        profileIds.map((id) => [
-          id,
-          {
-            provider: providerId,
-            mode: "api_key" as const,
-          },
-        ]),
+        profileIds.map((id) => [id, { provider: providerId, mode: "api_key" as const }]),
       ),
       ...(orderedProfileIds ? { order: { [providerId]: orderedProfileIds } } : {}),
     },
     models: {
       providers: {
         [providerId]: {
-          baseUrl: params?.baseUrl ?? baseUrl,
-          api: params?.api ?? "openai-responses",
-          models: params?.models ?? [makeModel()],
+          baseUrl,
+          api: "openai-responses" as const,
+          models: [makeModel()],
+          ...provider,
         },
       },
     },
@@ -229,33 +208,19 @@ function tokenResponse(accessToken: string, expiresInMs = 60 * 60_000) {
   };
 }
 
-function mockAzureCliToken(params: {
-  accessToken: string;
-  expiresInMs: number;
-  response?: Promise<void>;
-  started?: () => void;
-}) {
-  execFileMock.mockImplementationOnce(async () => {
-    params.started?.();
-    if (params.response) {
-      await params.response;
-    }
-    return tokenResponse(params.accessToken, params.expiresInMs);
-  });
+function mockAzureCliToken(accessToken: string, expiresInMs = 60_000) {
+  execFileMock.mockImplementationOnce(async () => tokenResponse(accessToken, expiresInMs));
 }
 
-function mockAzureCliTokenRaw(stdout: string) {
-  execFileMock.mockResolvedValueOnce({ stdout, stderr: "" });
-}
-
-function mockAzureCliLoginFailure(response?: Promise<void>, started?: () => void) {
+function deferredCliResponse(result: () => ReturnType<typeof tokenResponse>) {
+  const started = createDeferred<void>();
+  const release = createDeferred<void>();
   execFileMock.mockImplementationOnce(async () => {
-    started?.();
-    if (response) {
-      await response;
-    }
-    throw Object.assign(new Error("az failed"), { stderr: loginError, stdout: "" });
+    started.resolve();
+    await release.promise;
+    return result();
   });
+  return { started: started.promise, release: release.resolve };
 }
 
 type FoundryAuthParams = Parameters<typeof buildFoundryAuthResult>[0];
@@ -322,11 +287,12 @@ function prepareForTenants(prefix: string) {
     ensureAuthProfileStoreMock.mockReturnValueOnce(
       entraStore({ tenantId: `${prefix}-${runtimeAuthTestTenantId}-${index}` }),
     );
-    return authResult(await prepare(authContext()));
+    return prepare();
   };
 }
 
-async function selectModel(provider: FoundryProvider, config: OpenClawConfig, modelId: string) {
+async function selectModel(config: OpenClawConfig, modelId: string) {
+  const provider = registerProvider();
   await provider.onModelSelected?.({
     config,
     model: `microsoft-foundry/${modelId}`,
@@ -335,20 +301,35 @@ async function selectModel(provider: FoundryProvider, config: OpenClawConfig, mo
   });
 }
 
-describe("microsoft-foundry plugin", () => {
-  beforeAll(async () => {
-    ({ runExec: runRealExec } = await vi.importActual<
-      typeof import("openclaw/plugin-sdk/process-runtime")
-    >("openclaw/plugin-sdk/process-runtime"));
-  });
+function findAuthMethod(id: string) {
+  const method = registerProvider().auth.find((entry) => entry.id === id);
+  assert(method, `expected Foundry ${id} auth method`);
+  return method;
+}
 
+function authPrompt(modelId: string) {
+  return vi.fn().mockResolvedValueOnce(endpoint).mockResolvedValueOnce(modelId);
+}
+
+function authSetup(prompter: Record<string, unknown>) {
+  return {
+    config: {},
+    agentDir,
+    prompter: {
+      confirm: vi.fn(async () => true),
+      note: vi.fn(async () => undefined),
+      ...prompter,
+    },
+  };
+}
+
+describe("microsoft-foundry plugin", () => {
   beforeEach(() => {
     runtimeAuthTestSequence += 1;
     runtimeAuthTestTenantId = `tenant-${runtimeAuthTestSequence}`;
     execFileMock.mockReset();
     execFileSyncMock.mockReset();
-    ensureAuthProfileStoreMock.mockReset();
-    ensureAuthProfileStoreMock.mockReturnValue({ profiles: {} });
+    ensureAuthProfileStoreMock.mockReset().mockReturnValue({ profiles: {} });
   });
 
   afterEach(() => {
@@ -356,39 +337,21 @@ describe("microsoft-foundry plugin", () => {
   });
 
   it("keeps the API key profile bound when multiple auth profiles exist without explicit order", async () => {
-    const provider = registerProvider();
     const config = makeConfig({
       profileIds: ["microsoft-foundry:default", "microsoft-foundry:entra"],
     });
-
-    await selectModel(provider, config, "gpt-5.4");
-
+    await selectModel(config, "gpt-5.4");
     expect(config.auth?.order?.["microsoft-foundry"]).toBeUndefined();
   });
 
   it("tolerates timeout-only provider overlays when selecting a Foundry model", async () => {
-    const provider = registerProvider();
-    const config = {
-      models: {
-        providers: {
-          "microsoft-foundry": {
-            baseUrl: "",
-            models: [],
-            timeoutSeconds: 120,
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    await selectModel(provider, config, "gpt-5.4");
-
-    expect(config.models?.providers?.["microsoft-foundry"]?.models).toEqual([]);
-    expect(config.models?.providers?.["microsoft-foundry"]?.timeoutSeconds).toBe(120);
+    const config = makeConfig({ baseUrl: "", models: [], timeoutSeconds: 120 });
+    await selectModel(config, "gpt-5.4");
+    expect(configuredProvider(config)).toMatchObject({ models: [], timeoutSeconds: 120 });
   });
 
   it("reports malformed Azure CLI token JSON with an owned error", async () => {
-    mockAzureCliTokenRaw("{not json");
-
+    execFileMock.mockResolvedValueOnce({ stdout: "{not json", stderr: "" });
     await expect(getAccessTokenResultAsync()).rejects.toThrow(
       "Azure CLI returned malformed access token JSON.",
     );
@@ -397,7 +360,6 @@ describe("microsoft-foundry plugin", () => {
   it("hard-stops a synchronous Azure CLI command at its timeout", () => {
     execFileSyncMock.mockReturnValue("ok");
     execAz(["version", "--output", "none"]);
-
     expect(execFileSyncMock).toHaveBeenCalledWith(
       "az",
       ["version", "--output", "none"],
@@ -406,37 +368,19 @@ describe("microsoft-foundry plugin", () => {
   });
 
   it("fails clearly when the selected Azure subscription is not in the enabled list", async () => {
-    const provider = registerProvider();
     mockAzureAccount(["sub-one", "sub-two"]);
-    const entraAuth = provider.auth.find((method: { id: string }) => method.id === "entra-id");
-
     await expect(
-      entraAuth?.run({
-        config: {},
-        agentDir,
-        opts: {},
-        prompter: {
-          confirm: vi.fn(async () => true),
-          select: vi.fn(async () => "missing-subscription"),
-          note: vi.fn(async () => undefined),
-        },
-      } as never),
+      findAuthMethod("entra-id").run(
+        authSetup({ select: vi.fn(async () => "missing-subscription") }) as never,
+      ),
     ).rejects.toThrow("Selected subscription not found: missing-subscription");
   });
 
   it("falls back to Entra metadata when a configured Foundry endpoint is malformed", async () => {
     const prepareRuntimeAuth = prepareAuth();
-    mockAzureCliToken({ accessToken: "test-token-placeholder", expiresInMs: 60_000 });
+    mockAzureCliToken("test-token-placeholder");
     ensureAuthProfileStoreMock.mockReturnValueOnce(entraStore());
-
-    const prepared = authResult(
-      await prepareRuntimeAuth(
-        authContext({
-          model: makeModel({ baseUrl: "not a url" }),
-        }),
-      ),
-    );
-
+    const prepared = await prepareRuntimeAuth({ model: makeModel({ baseUrl: "not a url" }) });
     expect(extractFoundryEndpoint("not a url")).toBeUndefined();
     expect(prepared).toMatchObject({
       baseUrl,
@@ -449,17 +393,11 @@ describe("microsoft-foundry plugin", () => {
     ["anthropic-messages", "x-api-key"],
   ] as const)("binds %s API-key auth to the active profile", async (api, headerName) => {
     const prepareRuntimeAuth = prepareAuth();
-
-    const prepared = authResult(
-      await prepareRuntimeAuth(
-        authContext({
-          apiKey: "profile-api-key",
-          profileId: "microsoft-foundry:default",
-          model: makeModel({ api }),
-        }),
-      ),
-    );
-
+    const prepared = await prepareRuntimeAuth({
+      apiKey: "profile-api-key",
+      profileId: "microsoft-foundry:default",
+      model: makeModel({ api }),
+    });
     expect(prepared).toEqual({
       apiKey: "profile-api-key",
       request: {
@@ -471,27 +409,19 @@ describe("microsoft-foundry plugin", () => {
 
   it("does not reuse OpenAI Entra tokens for Anthropic Foundry deployments", async () => {
     const prepareRuntimeAuth = prepareAuth();
-    mockAzureCliToken({ accessToken: "gpt-token", expiresInMs: 60_000 });
-    mockAzureCliToken({ accessToken: "claude-token", expiresInMs: 60_000 });
+    mockAzureCliToken("gpt-token");
+    mockAzureCliToken("claude-token");
     ensureAuthProfileStoreMock.mockReturnValue(entraStore({ modelId: "deployment-gpt5" }));
-
-    const gptPrepared = authResult(
-      await prepareRuntimeAuth(authContext({ modelId: "deployment-gpt5" })),
-    );
-    const claudePrepared = authResult(
-      await prepareRuntimeAuth(
-        authContext({
-          modelId: "deployment-fable",
-          model: makeModel({
-            id: "deployment-fable",
-            name: "claude-fable-5",
-            api: "anthropic-messages",
-            baseUrl: `${endpoint}/anthropic`,
-          }),
-        }),
-      ),
-    );
-
+    const gptPrepared = await prepareRuntimeAuth({ modelId: "deployment-gpt5" });
+    const claudePrepared = await prepareRuntimeAuth({
+      modelId: "deployment-fable",
+      model: makeModel({
+        id: "deployment-fable",
+        name: "claude-fable-5",
+        api: "anthropic-messages",
+        baseUrl: `${endpoint}/anthropic`,
+      }),
+    });
     expect(gptPrepared).toMatchObject({
       baseUrl,
       apiKey: "gpt-token",
@@ -518,7 +448,7 @@ describe("microsoft-foundry plugin", () => {
     for (let index = 0; index < foundryTokenCacheMaxEntries - 1; index++) {
       await prepareForTenant(index);
     }
-    mockAzureCliToken({ accessToken: "synthetic-short-token", expiresInMs: 6 * 60_000 });
+    mockAzureCliToken("synthetic-short-token", 6 * 60_000);
     await prepareForTenant(foundryTokenCacheMaxEntries - 1);
     clock.mockReturnValue(now + 7 * 60_000);
     await prepareForTenant(foundryTokenCacheMaxEntries);
@@ -545,7 +475,7 @@ describe("microsoft-foundry plugin", () => {
       expect(execFileMock).toHaveBeenCalledTimes(foundryTokenCacheMaxEntries + 2);
       release.resolve();
       const results = await Promise.all(pending);
-      expect(results.map((result) => authResult(result).apiKey)).toEqual([
+      expect(results.map((result) => result.apiKey)).toEqual([
         "synthetic-held-token",
         "synthetic-held-token",
       ]);
@@ -558,6 +488,9 @@ describe("microsoft-foundry plugin", () => {
   });
 
   it("refreshes an evicted account through an Azure CLI subprocess", async ({ signal }) => {
+    const { runExec: runRealExec } = await vi.importActual<
+      typeof import("openclaw/plugin-sdk/process-runtime")
+    >("openclaw/plugin-sdk/process-runtime");
     const nodeExecPath = resolveTestNodeExecPath();
     const proofDir = await fs.mkdtemp(path.join(os.tmpdir(), "foundry-cache-proof-"));
     try {
@@ -583,7 +516,6 @@ describe("microsoft-foundry plugin", () => {
         await fs.chmod(fakeAz, 0o700);
         await fs.symlink(fakeAz, path.join(binDir, "az"));
       }
-
       const tenant = (index: number) => `boundary-${runtimeAuthTestTenantId}-${index}`;
       const prepareForTenant = prepareForTenants("boundary");
       execFileMock.mockResolvedValue(tokenResponse("synthetic-seed-token"));
@@ -612,7 +544,6 @@ describe("microsoft-foundry plugin", () => {
             },
           }),
       );
-
       const refreshed = await prepareForTenant(0);
       expect(refreshed).toMatchObject({
         apiKey: `synthetic-cli-${tenant(0)}`,
@@ -641,55 +572,43 @@ describe("microsoft-foundry plugin", () => {
 
   it("clears failed refresh state so later concurrent retries succeed", async () => {
     const prepareRuntimeAuth = prepareAuth();
-    const failedResponse = createDeferred<void>();
-    const recoveryResponse = createDeferred<void>();
-    const failedStarted = createDeferred<void>();
-    const recoveryStarted = createDeferred<void>();
-    mockAzureCliLoginFailure(failedResponse.promise, failedStarted.resolve);
-    mockAzureCliToken({
-      accessToken: "recovered-token",
-      expiresInMs: 10 * 60_000,
-      response: recoveryResponse.promise,
-      started: recoveryStarted.resolve,
+    const failed = deferredCliResponse(() => {
+      throw Object.assign(new Error("az failed"), { stderr: loginError, stdout: "" });
     });
+    const recovery = deferredCliResponse(() => tokenResponse("recovered-token", 10 * 60_000));
     ensureAuthProfileStoreMock.mockReturnValue(entraStore());
-
     const runtimeContext = authContext();
     const pending = [prepareRuntimeAuth(runtimeContext), prepareRuntimeAuth(runtimeContext)];
     let settled = Promise.allSettled(pending);
     try {
-      await failedStarted.promise;
+      await failed.started;
       expect(execFileMock).toHaveBeenCalledTimes(1);
-      failedResponse.resolve();
-      const failed = await settled;
-      for (const result of failed) {
+      failed.release();
+      for (const result of await settled) {
         expect(result).toMatchObject({
           status: "rejected",
           reason: { message: expect.stringContaining("Azure CLI is not logged in") },
         });
       }
       expect(execFileMock).toHaveBeenCalledTimes(1);
-
       const retries = [prepareRuntimeAuth(runtimeContext), prepareRuntimeAuth(runtimeContext)];
       pending.push(...retries);
       settled = Promise.allSettled(pending);
-      await recoveryStarted.promise;
+      await recovery.started;
       expect(execFileMock).toHaveBeenCalledTimes(2);
-      recoveryResponse.resolve();
+      recovery.release();
       const [first, second] = await Promise.all(retries);
       expect(execFileMock).toHaveBeenCalledTimes(2);
-      expect(authResult(first).apiKey).toBe("recovered-token");
-      expect(authResult(second).apiKey).toBe("recovered-token");
+      expect([first.apiKey, second.apiKey]).toEqual(["recovered-token", "recovered-token"]);
     } finally {
       // Broken dedupe can consume the recovery response in the first pair.
-      failedResponse.resolve();
-      recoveryResponse.resolve();
+      failed.release();
+      recovery.release();
       await settled;
     }
   });
 
   it("keeps other configured Foundry models when switching the selected model", async () => {
-    const provider = registerProvider();
     const config = makeConfig({
       profileIds: ["microsoft-foundry:default"],
       orderedProfileIds: ["microsoft-foundry:default"],
@@ -698,52 +617,41 @@ describe("microsoft-foundry plugin", () => {
         { ...makeModel({ id: "alias-two", name: "gpt-4o" }), api: undefined, baseUrl: undefined },
       ],
     });
-
-    await selectModel(provider, config, "alias-one");
-
-    expect(
-      config.models?.providers?.["microsoft-foundry"]?.models.map((model) => model.id),
-    ).toEqual(["alias-one", "alias-two"]);
-    expect(config.models?.providers?.["microsoft-foundry"]?.models[0]?.input).toEqual([
-      "text",
-      "image",
+    await selectModel(config, "alias-one");
+    expect(configuredProvider(config).models).toMatchObject([
+      { id: "alias-one", input: ["text", "image"] },
+      { id: "alias-two" },
     ]);
   });
 
   it("preserves an explicit per-model Foundry endpoint when switching models", async () => {
-    const provider = registerProvider();
+    const claudeEndpoint = "https://claude-resource.services.ai.azure.com/anthropic";
     const config = makeConfig({
       models: [
         makeModel({
           id: "prod-fable",
           name: "claude-fable-5",
           api: "anthropic-messages",
-          baseUrl: "https://claude-resource.services.ai.azure.com/anthropic",
+          baseUrl: claudeEndpoint,
           reasoning: true,
           input: ["text", "image"],
         }),
       ],
     });
-
-    await selectModel(provider, config, "prod-fable");
-
-    const providerConfig = config.models?.providers?.["microsoft-foundry"];
-    expect(providerConfig?.baseUrl).toBe("https://claude-resource.services.ai.azure.com/anthropic");
-    expect(providerConfig?.models[0]?.baseUrl).toBe(
-      "https://claude-resource.services.ai.azure.com/anthropic",
-    );
+    await selectModel(config, "prod-fable");
+    expect(configuredProvider(config)).toMatchObject({
+      baseUrl: claudeEndpoint,
+      models: [{ baseUrl: claudeEndpoint }],
+    });
   });
 
   it("infers OpenAI routing when adding a GPT deployment from a Claude-configured provider", async () => {
-    const provider = registerProvider();
     const config = makeConfig({
       baseUrl: `${endpoint}/anthropic`,
       api: "anthropic-messages",
       models: [],
     });
-
-    await selectModel(provider, config, "gpt-5.4");
-
+    await selectModel(config, "gpt-5.4");
     expect(config.models.providers[providerId]).toMatchObject({
       api: "openai-responses",
       baseUrl,
@@ -786,7 +694,6 @@ describe("microsoft-foundry plugin", () => {
       modelNameHint: "MAI-DS-R1",
       api: "openai-completions",
     });
-
     expect(model).toMatchObject({
       api: "openai-completions",
       reasoning: true,
@@ -799,28 +706,13 @@ describe("microsoft-foundry plugin", () => {
 
   it("skips chat connection probes for MAI image deployments", async () => {
     mockAzureAccount([]);
-    const provider = registerProvider();
-    const authMethod = provider.auth.find((method: ProviderAuthMethod) => method.id === "entra-id");
-    if (!authMethod) {
-      throw new Error("expected Microsoft Foundry Entra auth method");
-    }
-    const text = vi.fn().mockResolvedValueOnce(endpoint).mockResolvedValueOnce("prod-image");
     const select = vi
       .fn()
       .mockResolvedValueOnce("mai-image")
       .mockResolvedValueOnce("MAI-Image-2.5");
-
-    const result = await authMethod.run({
-      config: {},
-      agentDir,
-      prompter: {
-        confirm: vi.fn(async () => true),
-        note: vi.fn(async () => undefined),
-        text,
-        select,
-      },
-    } as never);
-
+    const result = await findAuthMethod("entra-id").run(
+      authSetup({ text: authPrompt("prod-image"), select }) as never,
+    );
     expect(
       execFileSyncMock.mock.calls.some((call) => {
         const args = call[1];
@@ -836,7 +728,6 @@ describe("microsoft-foundry plugin", () => {
   });
 
   it("does not reuse stale API-key model metadata when selecting a different deployment", async () => {
-    const provider = registerProvider();
     ensureAuthProfileStoreMock.mockReturnValueOnce({
       profiles: {
         "microsoft-foundry:default": {
@@ -852,19 +743,12 @@ describe("microsoft-foundry plugin", () => {
         },
       },
     });
-    const text = vi.fn().mockResolvedValueOnce(endpoint).mockResolvedValueOnce("prod-gpt");
     const select = vi.fn(async (params: { initialValue?: string }) => params.initialValue);
-
-    const apiKeyAuth = provider.auth.find((method: { id: string }) => method.id === "api-key");
-
-    const result = await apiKeyAuth?.run({
-      config: {},
+    const result = await findAuthMethod("api-key").run({
+      ...authSetup({ text: authPrompt("prod-gpt"), select }),
       opts: { azureOpenaiApiKey: "test-api-key" },
-      prompter: { text, select },
-      agentDir,
       secretInputMode: "plaintext",
     } as never);
-
     expect(select.mock.calls.map(([params]) => params.initialValue)).toEqual([
       "other-chat",
       "openai-completions",
@@ -895,17 +779,13 @@ describe("microsoft-foundry plugin", () => {
   ])(
     "validates Entra-only Claude models during $auth setup",
     async ({ prompt, modelNameHint, error }) => {
-      const text = vi
-        .fn()
-        .mockResolvedValueOnce(endpoint)
-        .mockResolvedValueOnce("prod-mythos")
-        .mockImplementationOnce(
-          async (params: { validate?: (value: string) => string | undefined }) => {
-            expect(params.validate?.("claude-fable-5")).toBeUndefined();
-            expect(params.validate?.("claude-mythos-preview")).toEqual(error);
-            return modelNameHint;
-          },
-        );
+      const text = authPrompt("prod-mythos").mockImplementationOnce(
+        async (params: { validate?: (value: string) => string | undefined }) => {
+          expect(params.validate?.("claude-fable-5")).toBeUndefined();
+          expect(params.validate?.("claude-mythos-preview")).toEqual(error);
+          return modelNameHint;
+        },
+      );
       const selection = await prompt({
         prompter: { text, select: vi.fn(async () => "claude") },
       } as never);
@@ -943,7 +823,6 @@ describe("microsoft-foundry plugin", () => {
         ?.replayResponsesItemIds;
       return {} as never;
     };
-
     const wrappedStreamFn = provider.wrapStreamFn?.({
       streamFn: baseStreamFn,
       modelId: "gpt-5.4",
@@ -952,17 +831,14 @@ describe("microsoft-foundry plugin", () => {
       config: {},
       agentDir,
     } as never);
-
     expect(wrappedStreamFn).toBeTypeOf("function");
     await wrappedStreamFn?.(model as never, { systemPrompt: "system", messages: [] } as never, {});
-
     expect(capturedReplayIds).toBe(true);
   });
 
   it("leaves Foundry chat completions streams unwrapped by Responses defaults", () => {
     const provider = registerProvider();
     const baseStreamFn: StreamFn = () => ({}) as never;
-
     expect(
       provider.wrapStreamFn?.({
         streamFn: baseStreamFn,
@@ -980,47 +856,26 @@ describe("microsoft-foundry plugin", () => {
   });
 
   it.each([
-    ["gpt-5.6-sol", 1_050_000, 128_000],
-    ["gpt-5.4-pro", 1_050_000, 128_000],
-    ["gpt-5.4-mini", 400_000, 128_000],
-    ["gpt-4o-mini", 128_000, 16_384],
+    ["gpt-5.6-sol", "openai-responses", "api-key", 1_050_000, 128_000],
+    ["gpt-5.4-pro", "openai-responses", "api-key", 1_050_000, 128_000],
+    ["gpt-5.4-mini", "openai-responses", "api-key", 400_000, 128_000],
+    ["gpt-4o-mini", "openai-completions", "api-key", 128_000, 16_384],
+    ["claude-opus-5", "anthropic-messages", "entra-id", 1_000_000, 128_000],
+    ["claude-sonnet-4.6", "anthropic-messages", "entra-id", 1_000_000, 128_000],
+    ["claude-sonnet-4.5", "anthropic-messages", "entra-id", 200_000, 64_000],
+    ["claude-opus-4.1", "anthropic-messages", "entra-id", 200_000, 32_000],
   ] as const)(
-    "uses Foundry-native token limits for %s",
-    (modelNameHint, contextWindow, maxTokens) => {
+    "uses native limits for %s",
+    (modelNameHint, api, authMethod, contextWindow, maxTokens) => {
       const model = builtModel({
         modelId: `prod-${modelNameHint}`,
         modelNameHint,
-        api: modelNameHint.startsWith("gpt-5") ? "openai-responses" : "openai-completions",
-        authMethod: "api-key",
+        api,
+        authMethod,
       });
-
-      expect(model).toMatchObject({
-        name: modelNameHint,
-        contextWindow,
-        maxTokens,
-      });
+      expect(model).toMatchObject({ name: modelNameHint, api, contextWindow, maxTokens });
     },
   );
-
-  it.each([
-    ["claude-opus-5", 128_000],
-    ["claude-sonnet-4.6", 128_000],
-    ["claude-sonnet-4.5", 64_000],
-    ["claude-opus-4.1", 32_000],
-  ] as const)("preserves Foundry Claude token limits for %s", (modelNameHint, maxTokens) => {
-    const model = builtModel({
-      modelId: `prod-${modelNameHint.replaceAll(".", "-")}`,
-      modelNameHint,
-      api: "anthropic-messages",
-    });
-
-    expect(model).toMatchObject({
-      name: modelNameHint,
-      api: "anthropic-messages",
-      contextWindow: maxTokens === 128_000 ? 1_000_000 : 200_000,
-      maxTokens,
-    });
-  });
 
   it("keeps older Foundry Claude deployments out of Fable-class thinking limits", () => {
     const model = builtModel({
@@ -1028,7 +883,6 @@ describe("microsoft-foundry plugin", () => {
       modelNameHint: "claude-3.5-sonnet",
       api: "anthropic-messages",
     });
-
     expect(model).toMatchObject({
       id: "prod-claude-35",
       name: "claude-3.5-sonnet",
@@ -1079,64 +933,67 @@ describe("microsoft-foundry plugin", () => {
     });
   });
 
-  it("records model-name reasoning effort limits for Foundry deployment aliases", () => {
-    const model = builtChatModel("deployment-codex-mini", "gpt-5.1-codex-mini");
-
-    expect(model).toMatchObject({
-      reasoning: true,
-      compat: {
-        supportsReasoningEffort: true,
-        supportedReasoningEfforts: ["none", "low", "medium", "high"],
-        maxTokensField: "max_completion_tokens",
+  it.each([
+    [
+      "deployment-codex-mini",
+      "gpt-5.1-codex-mini",
+      {
+        reasoning: true,
+        compat: {
+          supportsReasoningEffort: true,
+          supportedReasoningEfforts: ["none", "low", "medium", "high"],
+          maxTokensField: "max_completion_tokens",
+        },
       },
-    });
-    // Persisted thinking maps must use schema level keys (openclaw#91011).
-    expect(model?.thinkingLevelMap).toEqual({
-      off: "none",
-      minimal: null,
-      low: "low",
-      medium: "medium",
-      high: "high",
-      xhigh: null,
-      max: null,
-    });
-  });
-
-  it("omits minimal from Foundry GPT-5 Codex reasoning effort metadata", () => {
-    const model = builtChatModel("gpt-5-codex");
-
-    expect(model).toMatchObject({
-      thinkingLevelMap: { minimal: null },
-      compat: { supportedReasoningEfforts: ["low", "medium", "high"] },
-    });
-  });
-
-  it("keeps Foundry gpt-5-chat deployments non-reasoning while using max_completion_tokens", () => {
-    const model = builtChatModel("gpt-5-chat");
-
-    expect(model).toMatchObject({
-      reasoning: false,
-      contextWindow: 128_000,
-      maxTokens: 16_384,
-      compat: { supportsReasoningEffort: false, maxTokensField: "max_completion_tokens" },
-    });
+      {
+        off: "none",
+        minimal: null,
+        low: "low",
+        medium: "medium",
+        high: "high",
+        xhigh: null,
+        max: null,
+      },
+    ],
+    [
+      "gpt-5-codex",
+      "gpt-5-codex",
+      {
+        thinkingLevelMap: { minimal: null },
+        compat: { supportedReasoningEfforts: ["low", "medium", "high"] },
+      },
+      undefined,
+    ],
+    [
+      "gpt-5-chat",
+      "gpt-5-chat",
+      {
+        reasoning: false,
+        contextWindow: 128_000,
+        maxTokens: 16_384,
+        compat: { supportsReasoningEffort: false, maxTokensField: "max_completion_tokens" },
+      },
+      undefined,
+    ],
+  ] as const)("records reasoning metadata for %s", (modelId, modelNameHint, expected, thinking) => {
+    const model = builtChatModel(modelId, modelNameHint);
+    expect(model).toMatchObject(expected);
+    // Persisted maps use schema level keys (openclaw#91011).
+    if (thinking) {
+      expect(model?.thinkingLevelMap).toEqual(thinking);
+    }
   });
 
   it("preserves project-scoped endpoint prefixes when extracting the Foundry endpoint", async () => {
-    const provider = registerProvider();
-    mockAzureCliToken({ accessToken: "test-token-placeholder", expiresInMs: 60_000 });
+    mockAzureCliToken("test-token-placeholder");
     ensureAuthProfileStoreMock.mockReturnValueOnce({ profiles: {} });
-
-    const prepared = await provider.prepareRuntimeAuth?.(
-      authContext({
-        modelId: "deployment-gpt5",
-        model: makeModel({
-          id: "deployment-gpt5",
-          baseUrl: "https://example.services.ai.azure.com/api/projects/demo/openai/v1/responses",
-        }),
+    const prepared = await prepareAuth()({
+      modelId: "deployment-gpt5",
+      model: makeModel({
+        id: "deployment-gpt5",
+        baseUrl: "https://example.services.ai.azure.com/api/projects/demo/openai/v1/responses",
       }),
-    );
-
+    });
     expect(prepared?.baseUrl).toBe(
       "https://example.services.ai.azure.com/api/projects/demo/openai/v1",
     );
@@ -1147,31 +1004,22 @@ describe("microsoft-foundry plugin", () => {
     execFileMock.mockRejectedValueOnce(
       Object.assign(new Error("az failed"), { stderr: `${prefix}😀tail`, stdout: "" }),
     );
-
     await expect(getAccessTokenResultAsync()).rejects.toMatchObject({
       message: `az failed: ${prefix}`,
     });
   });
 
   it("deletes legacy provider-level secret refs", () => {
-    const secretRef = {
-      source: "env" as const,
-      provider: "default",
-      id: "AZURE_OPENAI_API_KEY",
-    };
     const result = buildAuthResult({
-      apiKey: secretRef,
+      apiKey: { source: "env", provider: "default", id: "AZURE_OPENAI_API_KEY" },
       modelId: "gpt-4o",
       authMethod: "api-key",
     });
-
     const provider = providerPatch(result);
-    expect(provider.apiKey).toBeUndefined();
-    expect(provider.authHeader).toBeUndefined();
-    expect(provider.headers).toBeUndefined();
-    expect(Object.hasOwn(provider, "apiKey")).toBe(true);
-    expect(Object.hasOwn(provider, "authHeader")).toBe(true);
-    expect(Object.hasOwn(provider, "headers")).toBe(true);
+    for (const key of ["apiKey", "authHeader", "headers"] as const) {
+      expect(provider[key]).toBeUndefined();
+      expect(Object.hasOwn(provider, key)).toBe(true);
+    }
   });
 
   it("moves the selected Foundry auth profile to the front of auth.order", () => {
@@ -1179,9 +1027,8 @@ describe("microsoft-foundry plugin", () => {
       modelId: "gpt-5.4",
       currentProviderProfileIds: ["microsoft-foundry:default", "microsoft-foundry:entra"],
     });
-
-    expect(result.configPatch?.auth?.order?.["microsoft-foundry"]).toEqual([
-      "microsoft-foundry:entra",
+    expect(result.configPatch?.auth?.order?.[providerId]).toEqual([
+      profileId,
       "microsoft-foundry:default",
     ]);
   });
@@ -1196,22 +1043,17 @@ describe("microsoft-foundry plugin", () => {
         { name: "deployment-fable", modelName: "claude-fable-5", api: "anthropic-messages" },
       ],
     });
-
-    const provider = result.configPatch?.models?.providers?.["microsoft-foundry"];
-    expect(provider?.models.map((model) => model.id)).toEqual([
-      "deployment-gpt5",
-      "deployment-gpt4o",
-      "deployment-fable",
-    ]);
+    const provider = providerPatch(result);
     expect(provider?.models.map((model) => [model.id, model.baseUrl])).toEqual([
       ["deployment-gpt5", baseUrl],
       ["deployment-gpt4o", baseUrl],
       ["deployment-fable", `${endpoint}/anthropic`],
     ]);
     expect(result.defaultModel).toBe("microsoft-foundry/deployment-gpt5");
-    expect(provider?.models[0]?.input).toEqual(["text", "image"]);
-    expect(provider?.models[0]?.compat?.supportsStore).toBe(false);
-    expect(provider?.models[0]?.compat?.maxTokensField).toBe("max_completion_tokens");
+    expect(provider.models[0]).toMatchObject({
+      input: ["text", "image"],
+      compat: { supportsStore: false, maxTokensField: "max_completion_tokens" },
+    });
   });
 });
 
@@ -1236,24 +1078,16 @@ describe("selectFoundryDeployment", () => {
 
   it("offers and returns Claude deployments alongside GPT resources", async () => {
     const { ctx, select, note } = makeCtx({ selectValue: "prod-mini" });
+    const names = ["prod-gpt", "prod-claude", "prod-mini"];
     const result = await selectFoundryDeployment(ctx, fakeResource, [
       { name: "prod-gpt", modelName: "gpt-5.4", state: "Succeeded" },
       { name: "prod-claude", modelName: "claude-opus-4-6", state: "Succeeded" },
       { name: "prod-mini", modelName: "gpt-4o-mini", state: "Succeeded" },
     ]);
-
-    expect(result.supported.map((deployment) => deployment.name)).toEqual([
-      "prod-gpt",
-      "prod-claude",
-      "prod-mini",
-    ]);
+    expect(result.supported.map((deployment) => deployment.name)).toEqual(names);
     expect(result.selected.name).toBe("prod-mini");
     expect(select).toHaveBeenCalledTimes(1);
-    expect(select.mock.calls[0]?.[0].options.map((option) => option.value)).toEqual([
-      "prod-gpt",
-      "prod-claude",
-      "prod-mini",
-    ]);
+    expect(select.mock.calls[0]?.[0].options.map((option) => option.value)).toEqual(names);
     expect(note.mock.calls.some(([, title]) => title === "Unsupported Deployments")).toBe(false);
   });
 

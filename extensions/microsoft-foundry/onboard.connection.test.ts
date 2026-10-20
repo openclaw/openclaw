@@ -4,9 +4,7 @@ import * as cli from "./cli.js";
 import { promptTenantId, testFoundryConnection } from "./onboard.js";
 import { ANTHROPIC_MESSAGES_API, DEFAULT_API, DEFAULT_GPT5_API } from "./shared.js";
 
-const hoisted = vi.hoisted(() => ({
-  fetchWithSsrFGuard: vi.fn(),
-}));
+const hoisted = vi.hoisted(() => ({ fetchWithSsrFGuard: vi.fn() }));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: hoisted.fetchWithSsrFGuard,
@@ -46,36 +44,30 @@ describe("testFoundryConnection", () => {
   it.each([
     [
       DEFAULT_GPT5_API,
-      endpoint,
-      "gpt-5.4",
-      "gpt-5.4",
       "/openai/v1/responses",
       { model: "gpt-5.4", input: "hi", max_output_tokens: 16 },
       {},
+      { endpoint, modelNameHint: "gpt-5.4" },
     ],
     [
       DEFAULT_API,
-      endpoint,
-      "FW-GLM-5",
-      "FW-GLM-5",
       "/openai/v1/chat/completions",
       { model: "FW-GLM-5", messages, max_tokens: 1 },
       {},
+      { endpoint, modelNameHint: "FW-GLM-5" },
     ],
     [
       ANTHROPIC_MESSAGES_API,
-      `${endpoint}/openai/v1`,
-      "prod-fable",
-      "claude-fable-5",
       "/anthropic/v1/messages",
       { model: "prod-fable", messages, max_tokens: 1, thinking: { type: "adaptive" } },
       { "anthropic-version": "2023-06-01" },
+      { endpoint: `${endpoint}/openai/v1`, modelNameHint: "claude-fable-5" },
     ],
   ] as const)(
     "sends the %s connection request through the guarded transport",
-    async (api, inputEndpoint, modelId, modelNameHint, urlPath, body, headers) => {
+    async (api, urlPath, body, headers, params) => {
       const release = respond(new Response(null, { status: 200 }));
-      await connect(vi.fn(), { endpoint: inputEndpoint, modelId, modelNameHint, api });
+      await connect(vi.fn(), { ...params, modelId: body.model, api });
 
       const request = hoisted.fetchWithSsrFGuard.mock.calls[0]?.[0];
       expect(request).toMatchObject({
@@ -103,7 +95,6 @@ describe("testFoundryConnection", () => {
     const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
     respond(tracked.response);
     await connect(note);
-
     expect(textSpy).not.toHaveBeenCalled();
     expect(tracked.wasCanceled()).toBe(true);
     expect(note).toHaveBeenCalledWith(
