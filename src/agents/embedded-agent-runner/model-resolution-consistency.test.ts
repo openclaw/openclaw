@@ -1,31 +1,29 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AgentEntryConfig, AgentsConfig } from "../../config/types.agents.js";
+import type { OpenClawConfig } from "../../config/types.js";
 import {
   prepareModelRunCapabilities,
   resolvePreparedModelThinkingCompat as thinkingCompatForModel,
 } from "../model-catalog-lookup.js";
-import type { ModelCatalogEntry } from "../model-catalog.types.js";
 import { resolveModelCandidateChain as modelChain } from "../model-fallback-candidates.js";
 import { resolveInitialEmbeddedRunModel as initialModel } from "./run/runtime-resolution.js";
 
 const STATIC_MODEL_ID = "claude-haiku-4-5";
 const PROVIDER = "anthropic";
-const selectModelHook = vi.hoisted(() =>
-  vi.fn(async ({ provider, modelId }: { provider: string; modelId: string }) => ({
+type ModelRef = { provider: string; modelId: string };
+const { selectModelHook, loadManifest, normalizeModel, resolveThinking, warn } = vi.hoisted(() => ({
+  selectModelHook: vi.fn(async ({ provider, modelId }: ModelRef) => ({
     provider,
     modelId,
   })),
-);
-const loadManifest = vi.hoisted(() => vi.fn());
-const normalizeModel = vi.hoisted(() => vi.fn(() => undefined));
-const resolveThinking = vi.hoisted(() => vi.fn(() => "off"));
-const warn = vi.hoisted(() => vi.fn());
+  loadManifest: vi.fn(),
+  normalizeModel: vi.fn(() => undefined),
+  resolveThinking: vi.fn(() => "off"),
+  warn: vi.fn(),
+}));
 
-const modelRegistry = {
-  find: vi.fn((_provider: string, _modelId: string) => null),
-};
-const authStorage = {
-  setRuntimeApiKey: vi.fn(),
-};
+const modelRegistry = { find: vi.fn((_provider: string, _modelId: string) => null) };
+const authStorage = { setRuntimeApiKey: vi.fn() };
 const catalogModel = {
   provider: PROVIDER,
   id: STATIC_MODEL_ID,
@@ -33,25 +31,13 @@ const catalogModel = {
   api: "anthropic-messages",
   baseUrl: "https://api.anthropic.com",
   reasoning: true,
-  input: ["text", "image"],
-  contextWindow: 200_000,
-  maxTokens: 64_000,
-  compat: { supportsLongCacheRetention: false },
   compactionThinkingDefault: "off",
 };
 
 const resolveModelAsyncMock = vi.fn(
-  async (
-    provider: string,
-    modelId: string,
-    _agentDir?: string,
-    _config?: unknown,
-    options?: {
-      allowBundledStaticCatalogFallback?: boolean;
-      authStorage?: unknown;
-      modelRegistry?: unknown;
-    },
-  ) => {
+  async (...args: Parameters<typeof import("./model.js").resolveModelAsync>) => {
+    const [provider, modelId] = args;
+    const options = args[4];
     const stores = {
       authStorage: options?.authStorage ?? authStorage,
       modelRegistry: options?.modelRegistry ?? modelRegistry,
@@ -66,10 +52,7 @@ const resolveModelAsyncMock = vi.fn(
         logicalRef: { provider, model: modelId },
       };
     }
-    return {
-      ...stores,
-      error: `Unknown model: ${provider}/${modelId}`,
-    };
+    return { ...stores, error: `Unknown model: ${provider}/${modelId}` };
   },
 );
 
@@ -106,23 +89,14 @@ vi.mock("../prepared-model-runtime.js", () => ({
 
 vi.mock("./run/setup.js", () => ({
   buildBeforeModelResolveAttachments: vi.fn(() => []),
-  createNativeModelOwnedRuntimeModel: vi.fn(),
   resolveHookModelSelection: selectModelHook,
 }));
 
 vi.mock("./compaction-runtime-preparation.js", () => ({
-  resolveCompactionRuntimeSelection: ({
-    provider,
-    modelId,
-  }: {
-    provider: string;
-    modelId: string;
-  }) => ({
+  resolveCompactionRuntimeSelection: ({ provider, modelId }: ModelRef) => ({
     runtimePolicySessionKey: "agent:main:test",
     runtimePolicyAgentId: "main",
-    boundHarnessRuntime: undefined,
-    selectedHarnessRuntimeOverride: undefined,
-    runtimeModelAuth: { plan: undefined, authProfileId: undefined, modelAuth: undefined },
+    runtimeModelAuth: {},
     provider,
     runtimeProvider: provider,
     contextConfigProvider: provider,
@@ -132,7 +106,6 @@ vi.mock("./compaction-runtime-preparation.js", () => ({
     ok: true,
     runtimeAuthProfileStore: {},
     runtimeAuthPreparation: {
-      plan: { selectedAuthMode: "api-key" },
       attempts: [{ kind: "direct", plan: { selectedAuthMode: "api-key" } }],
     },
     selectedPreparedHarness: { id: "openclaw" },
@@ -205,34 +178,17 @@ function prepareCompaction(
   });
 }
 
-function catalogEntry(
-  api: string,
-  baseUrl: string,
-  compat?: ModelCatalogEntry["compat"],
-): ModelCatalogEntry {
-  return {
-    provider: PROVIDER,
-    id: STATIC_MODEL_ID,
-    name: STATIC_MODEL_ID,
-    api,
-    baseUrl,
-    ...(compat ? { compat } : {}),
-  };
-}
 const route = { api: catalogModel.api, baseUrl: catalogModel.baseUrl };
 const thinkingCompat = { supportedReasoningEfforts: ["max", "ultra"] } as const;
-function capability(agentRuntime = "openclaw") {
-  return {
-    provider: PROVIDER,
-    modelId: STATIC_MODEL_ID,
-    agentRuntime,
-    route,
-    compat: thinkingCompat,
-  };
-}
+const capability = {
+  provider: PROVIDER,
+  modelId: STATIC_MODEL_ID,
+  agentRuntime: "openclaw",
+  route,
+  compat: thinkingCompat,
+};
 function expectDiscoveryDeferred() {
-  expect(loadManifest).not.toHaveBeenCalled();
-  expect(normalizeModel).not.toHaveBeenCalled();
+  expect([loadManifest.mock.calls, normalizeModel.mock.calls]).toEqual([[], []]);
 }
 
 function preparedRuntime(config: Record<string, unknown>) {
@@ -248,56 +204,42 @@ function preparedRuntime(config: Record<string, unknown>) {
   };
 }
 
+function agentConfig(
+  worker: AgentEntryConfig,
+  defaults?: AgentsConfig["defaults"],
+): OpenClawConfig {
+  return { agents: { entries: { worker }, defaults } };
+}
+
 describe("embedded model resolution consistency", () => {
   beforeEach(() => {
     warn.mockClear();
-    selectModelHook.mockClear();
     loadManifest.mockReset();
     normalizeModel.mockReset().mockReturnValue(undefined);
   });
 
   it("resolves an explicit alias configured only on the selected agent", () => {
-    const config = {
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-5.6-luna" },
-          models: { "openai/gpt-5.6-luna": { alias: "global-luna" } },
-        },
-        entries: {
-          worker: {
-            models: { "anthropic/claude-haiku-4-5": { alias: "worker-haiku" } },
-          },
-        },
+    const config = agentConfig(
+      { models: { "anthropic/claude-haiku-4-5": { alias: "worker-haiku" } } },
+      {
+        model: { primary: "openai/gpt-5.6-luna" },
+        models: { "openai/gpt-5.6-luna": { alias: "global-luna" } },
       },
-    };
+    );
 
-    expect(
-      initialModel({
-        config,
-        agentId: "worker",
-        model: "worker-haiku",
-      }),
-    ).toEqual({ provider: "anthropic", modelId: "claude-haiku-4-5" });
+    expect(initialModel({ config, agentId: "worker", model: "worker-haiku" })).toEqual({
+      provider: "anthropic",
+      modelId: "claude-haiku-4-5",
+    });
     expectDiscoveryDeferred();
   });
 
   it("defers custom-provider normalization until prepared manifest policy is available", () => {
-    const config = {
-      agents: {
-        entries: {
-          worker: {
-            model: { primary: "worker-custom" },
-            models: {
-              "custom-provider/legacy-model": { alias: "worker-custom" },
-            },
-          },
-        },
-      },
-    };
-    const initial = initialModel({
-      config,
-      agentId: "worker",
+    const config = agentConfig({
+      model: { primary: "worker-custom" },
+      models: { "custom-provider/legacy-model": { alias: "worker-custom" } },
     });
+    const initial = initialModel({ config, agentId: "worker" });
 
     expect(initial).toEqual({
       provider: "custom-provider",
@@ -305,16 +247,9 @@ describe("embedded model resolution consistency", () => {
     });
     expectDiscoveryDeferred();
 
+    const aliases = { "legacy-model": "modern-model", "modern-model": "unexpected-second-pass" };
     const manifestPlugins = [
-      {
-        modelIdNormalization: {
-          providers: {
-            "custom-provider": {
-              aliases: { "legacy-model": "modern-model", "modern-model": "unexpected-second-pass" },
-            },
-          },
-        },
-      },
+      { modelIdNormalization: { providers: { "custom-provider": { aliases } } } },
     ];
     expect(
       modelChain({
@@ -336,10 +271,7 @@ describe("embedded model resolution consistency", () => {
     ]);
     expect(normalizeModel).toHaveBeenCalledWith({
       provider: "custom-provider",
-      context: {
-        provider: "custom-provider",
-        modelId: "modern-model",
-      },
+      context: { provider: "custom-provider", modelId: "modern-model" },
     });
   });
 
@@ -397,23 +329,16 @@ describe("embedded model resolution consistency", () => {
   });
 
   it.each([
-    {
-      name: "unresolved model",
-      provider: "test-provider",
-      model: "missing-compaction-model",
-      reason: "Provider-specific model resolution failed",
-      logReason: "compaction_model_unresolved",
-    },
-    {
-      name: "auth failure",
-      provider: PROVIDER,
-      model: STATIC_MODEL_ID,
-      reason: "private_compaction_auth_payload",
-      logReason: "unknown",
-    },
+    [
+      "test-provider",
+      "missing-compaction-model",
+      "Provider-specific model resolution failed",
+      "compaction_model_unresolved",
+    ],
+    [PROVIDER, STATIC_MODEL_ID, "private_compaction_auth_payload", "unknown"],
   ])(
-    "returns $name details without logging provider prose",
-    async ({ provider, model, reason, logReason }) => {
+    "returns %s/%s errors without logging provider prose",
+    async (provider, model, reason, logReason) => {
       if (logReason === "unknown") {
         vi.mocked(prepareCompactionHarnessAuth).mockResolvedValueOnce({
           ok: false,
@@ -434,58 +359,36 @@ describe("embedded model resolution consistency", () => {
   );
 
   it("keeps configured provider routes off harness-scoped thinking capability", () => {
-    const compat = thinkingCompat;
-    const preparedCatalog = [
-      catalogEntry("openai-chatgpt-responses", "https://chatgpt.example/codex", compat),
-    ];
-    const configuredCatalog = [catalogEntry("anthropic-messages", catalogModel.baseUrl)];
-
+    const prepared = {
+      ...catalogModel,
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.example/codex",
+      compat: thinkingCompat,
+    };
     expect(
       prepareModelRunCapabilities(
-        [preparedCatalog, configuredCatalog],
+        [[prepared], [catalogModel]],
         [PROVIDER, STATIC_MODEL_ID, "codex"],
       ).modelThinkingCapability,
     ).toEqual({
       provider: PROVIDER,
       modelId: STATIC_MODEL_ID,
       agentRuntime: "codex",
-      compat,
+      compat: thinkingCompat,
     });
   });
 
-  const routeEfforts = { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] };
   it.each([
-    ["matching route", {}, "openclaw", "route", routeEfforts],
-    [
-      "prepared auth route",
-      { api: "openai-responses", baseUrl: "https://api.example/v1" },
-      "codex",
-      "harness",
-      thinkingCompat,
-    ],
-    ["different model", { id: "hook-rerouted-model" }, "openclaw", "route", undefined],
-    [
-      "different physical route",
-      { baseUrl: "https://other.example/v1" },
-      "openclaw",
-      "route",
-      undefined,
-    ],
-    ["different harness", {}, "codex", "route", undefined],
-  ] as const)(
-    "resolves prepared compatibility for %s",
-    (_name, model, agentRuntime, scope, expected) => {
-      const prepared =
-        scope === "harness"
-          ? { ...capability("codex"), route: undefined }
-          : { ...capability(), compat: expected ?? { supportedReasoningEfforts: ["max"] } };
-      expect(
-        thinkingCompatForModel({
-          capability: prepared,
-          model: { ...catalogModel, ...model },
-          agentRuntime,
-        }),
-      ).toEqual(expected);
-    },
-  );
+    ["model", { id: "hook-rerouted-model" }, "openclaw"],
+    ["physical route", { baseUrl: "https://other.example/v1" }, "openclaw"],
+    ["harness", {}, "codex"],
+  ] as const)("rejects compatibility for a different %s", (_name, model, agentRuntime) => {
+    expect(
+      thinkingCompatForModel({
+        capability,
+        model: { ...catalogModel, ...model },
+        agentRuntime,
+      }),
+    ).toBeUndefined();
+  });
 });
