@@ -150,6 +150,18 @@ describe("parseClawManifest", () => {
     },
   );
 
+  it.each(["subagents", "groupChat", "sandbox", "tools", "memory", "heartbeat", "humanDelay"])(
+    "keeps harness-specific %s out of the portable agent object",
+    (field) => {
+      expect(
+        parseClawManifest({
+          schemaVersion: 1,
+          agent: { id: "worker", [field]: {} },
+        }).ok,
+      ).toBe(false);
+    },
+  );
+
   it("rejects non-v1 package fields and connector packages", () => {
     function rejectPackage(pkg: unknown, path = "$.packages[0]") {
       const result = parseClawManifest({ ...baseManifest, packages: [pkg] });
