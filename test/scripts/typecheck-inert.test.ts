@@ -50,12 +50,7 @@ it("ignores only ordinary trivia with unchanged token and line-break boundaries"
     ["return.ts", "function f() { return x; }", "function f() { return\nx; }", false],
     edit("block.ts", returnValue, "/* a */", "/*\n*/"),
     edit("unicode.ts", returnValue, "/* a */", "/*\u2028*/"),
-    edit(
-      "rescan.ts",
-      "declare let a: any, b: any, c: any;\nexport const r = a < b >= c;",
-      ">=",
-      "> =",
-    ),
+    edit("rescan.ts", "export const r = a < b >= c;", ">=", "> ="),
     ["adjacent.ts", "let x = a+b;", "let x = a + b;", false],
     ["adjacent-comment.ts", "let x = a+b;", "let x = a/* c */+b;", false],
     ["string.ts", 'let x = "a";', 'let x = "b";', false],

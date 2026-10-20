@@ -36,6 +36,7 @@ import {
   overrideNativeFixtureExecutable,
 } from "./native-boundary-fixture.js";
 import { preparedScriptWrapperEnv } from "./prepared-script-wrapper.test-support.js";
+import { fixtureFiles } from "./script-fixture-files.test-support.js";
 import { toolingMtsEntrypoints } from "./tooling-mts-runtime.test-support.mts";
 
 describe("tsgo core test shards", () => {
@@ -269,6 +270,17 @@ describe("changed core test graph selection", () => {
 
 // The compiler owns dependency reachability; test root partitions alone cannot prove it.
 const lifetime = createFixtureLifetime();
+function compilerFixture(prefix: string, scripts: string[]) {
+  const root = fs.realpathSync(lifetime.createTempDir(prefix));
+  const f = fixtureFiles(root);
+  f.json("package.json", { type: "module" });
+  f.write("pnpm-workspace.yaml", "packages: []\n");
+  for (const name of scripts) {
+    f.write(`scripts/${name}`, fs.readFileSync(`scripts/${name}`, "utf8"));
+  }
+  fs.symlinkSync(path.resolve("scripts/lib"), f.file("scripts/lib"), "dir");
+  return f;
+}
 let fixtureReceipts: FixtureReceiptChannel;
 beforeAll(async () => {
   fixtureReceipts = await openFixtureReceiptChannel();
@@ -286,17 +298,14 @@ it.runIf(process.platform !== "win32").each([
   "executes assigned root partitions serially through %s",
   async (_label, args, indices) => {
     await lifetime.run(async () => {
-      const root = fs.realpathSync(lifetime.createTempDir("openclaw-root-shards-"));
-      fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
-      fs.writeFileSync(path.join(root, "pnpm-workspace.yaml"), "packages: []\n");
-      fs.mkdirSync(path.join(root, "scripts"));
-      const driver = path.join(root, "scripts/run-tsgo-core-test-shards.mts");
-      fs.copyFileSync(path.resolve("scripts/run-tsgo-core-test-shards.mts"), driver);
-      fs.symlinkSync(path.resolve("scripts/lib"), path.join(root, "scripts/lib"), "dir");
+      const { root, file, write, read } = compilerFixture("openclaw-root-shards-", [
+        "run-tsgo-core-test-shards.mts",
+      ]);
+      const driver = file("scripts/run-tsgo-core-test-shards.mts");
       // Exercise the CLI and evidence owner with a compiler stub that rejects
       // overlap. Native cold graph checks separately prove the actual partitions.
-      fs.writeFileSync(
-        path.join(root, "scripts/run-tsgo.mts"),
+      write(
+        "scripts/run-tsgo.mts",
         `import fs from "node:fs";
 export function prepareTsgoCommand(args) { return args; }
 export async function runPreparedTsgoCommand(args, options) {
@@ -321,7 +330,7 @@ export async function runPreparedTsgoCommand(args, options) {
         [137, true],
         [2, false],
       ] as const) {
-        fs.writeFileSync(path.join(root, "calls.jsonl"), "");
+        write("calls.jsonl", "");
         const result = await lifetime.track(
           runNodeScript(
             [
@@ -348,8 +357,7 @@ export async function runPreparedTsgoCommand(args, options) {
         const failureIndex = selected.findIndex((graph) => graph.name === "test-root-scripts");
         const fails = exitCode !== 0 && failureIndex >= 0;
         expect(result.status, result.stderr).toBe(_label === "mixed CI" ? 2 : fails ? exitCode : 0);
-        const calls = fs
-          .readFileSync(path.join(root, "calls.jsonl"), "utf8")
+        const calls = read("calls.jsonl")
           .trim()
           .split("\n")
           .map((line) => JSON.parse(line));
@@ -384,24 +392,12 @@ it.runIf(process.platform !== "win32")(
   ({ signal }) =>
     lifetime.run(async () => {
       const sourceRoot = process.cwd();
-      const root = fs.realpathSync(lifetime.createTempDir("openclaw-changed-types-"));
-      const native = materializeNativeCompiler(root);
-      const write = (name: string, content: string) => {
-        const file = path.join(root, name);
-        fs.mkdirSync(path.dirname(file), { recursive: true });
-        fs.writeFileSync(file, content);
-        return file;
-      };
-      write("package.json", '{"type":"module"}');
-      write("pnpm-workspace.yaml", "packages: []\n");
-      for (const name of [
+      const { root, file, write, read, json } = compilerFixture("openclaw-changed-types-", [
         "check-tsgo-core-boundary.mts",
         "run-tsgo-core-test-shards.mts",
         "run-tsgo.mts",
-      ]) {
-        write(`scripts/${name}`, fs.readFileSync(path.join(sourceRoot, "scripts", name), "utf8"));
-      }
-      fs.symlinkSync(path.join(sourceRoot, "scripts/lib"), path.join(root, "scripts/lib"), "dir");
+      ]);
+      const native = materializeNativeCompiler(root);
       const leaf = "src/agents/nested/leaf.test.ts";
       const consumer = "src/agents/tools/consumer.test.ts";
       const helper = "test/helpers/value.ts";
@@ -422,24 +418,21 @@ it.runIf(process.platform !== "win32")(
               : name === "core-test-agents-tools"
                 ? [consumer]
                 : ["src/empty.ts"];
-        write(
-          config,
-          JSON.stringify({
-            compilerOptions: {
-              noEmit: true,
-              strict: true,
-              types: [],
-              lib: ["es5"],
-              module: "nodenext",
-              target: "es2022",
-              incremental: true,
-              tsBuildInfoFile: path.join(root, `.artifacts/${name}.tsbuildinfo`),
-            },
-            files: files.map((file) => path.join(root, file)),
-          }),
-        );
+        json(config, {
+          compilerOptions: {
+            noEmit: true,
+            strict: true,
+            types: [],
+            lib: ["es5"],
+            module: "nodenext",
+            target: "es2022",
+            incremental: true,
+            tsBuildInfoFile: file(`.artifacts/${name}.tsbuildinfo`),
+          },
+          files: files.map(file),
+        });
       }
-      fs.unlinkSync(path.join(root, "node_modules/.bin/tsgo"));
+      fs.unlinkSync(file("node_modules/.bin/tsgo"));
       // Every boundary pass queries each graph config serially. Record and exec so
       // each query stays one native process, as the production resolver launches it.
       const compiler = write(
@@ -454,12 +447,11 @@ exec ${JSON.stringify(native)} "$@"
       fs.chmodSync(compiler, 0o755);
       overrideNativeFixtureExecutable(root, compiler);
       const compilerEvents = () =>
-        fs
-          .readFileSync(path.join(root, "compiler-events.tsv"), "utf8")
+        read("compiler-events.tsv")
           .split("\n")
           .filter(Boolean)
           .map((line) => line.split("\t"));
-      const driver = path.join(root, "scripts/run-tsgo-core-test-shards.mts");
+      const driver = file("scripts/run-tsgo-core-test-shards.mts");
       const preparedDriver = resolveRuntimeWorkerUrl(toolingMtsEntrypoints.tsgoCoreTestShards);
       const env = preparedScriptWrapperEnv(
         (
@@ -469,7 +461,7 @@ exec ${JSON.stringify(native)} "$@"
             ["run-tsgo.mts", toolingMtsEntrypoints.tsgo],
           ] as const
         ).map(([name, entry]): readonly [URL, URL] => {
-          const source = pathToFileURL(path.join(root, "scripts", name));
+          const source = pathToFileURL(file(`scripts/${name}`));
           const prepared = resolveRuntimeWorkerUrl(entry);
           return [source, prepared.pathname.endsWith(".mts") ? source : prepared];
         }),
@@ -532,20 +524,17 @@ exec ${JSON.stringify(native)} "$@"
         "export type { ExtensionValue } from '../extensions/example/value.js';\n",
       );
       for (const graph of expandTsgoExecutionGraphs(TSGO_CI_ADDITIONAL_GRAPHS)) {
-        write(
-          graph.config,
-          JSON.stringify({
-            compilerOptions: {
-              noEmit: true,
-              strict: true,
-              types: [],
-              lib: ["es5"],
-              module: "nodenext",
-              target: "es2022",
-            },
-            files: [path.join(root, noncoreConsumer)],
-          }),
-        );
+        json(graph.config, {
+          compilerOptions: {
+            noEmit: true,
+            strict: true,
+            types: [],
+            lib: ["es5"],
+            module: "nodenext",
+            target: "es2022",
+          },
+          files: [file(noncoreConsumer)],
+        });
       }
       const plannerDriver = write(
         "scripts/extension-plan-fixture.mts",
@@ -574,14 +563,14 @@ if (process.argv[2] === "boundary") {
         "extensions/active-memory/control-ui.presentation.json",
         "extensions/memory-wiki/control-ui.presentation.json",
       ];
-      for (const file of presentationPaths) {
-        write(file, '{"label":"Memory add-on"}\n');
+      for (const presentation of presentationPaths) {
+        write(presentation, '{"label":"Memory add-on"}\n');
       }
       const uiConsumer = "ui/src/presentation.ts";
       const presentationImports = presentationPaths
         .map(
-          (file, index) =>
-            `import presentation${index} from '../../${file}' with { type: 'json' };`,
+          (presentation, index) =>
+            `import presentation${index} from '../../${presentation}' with { type: 'json' };`,
         )
         .join("\n");
       write(uiConsumer, `${presentationImports}\n`);
@@ -592,14 +581,14 @@ if (process.argv[2] === "boundary") {
       const originalConfigs = new Map(
         [...uiGraphs.map(({ config }) => config), coreConfig].map((config) => [
           config,
-          fs.readFileSync(path.join(root, config), "utf8"),
+          read(config),
         ]),
       );
       const addGraphFiles = (config: string, files: string[]) => {
         const value = JSON.parse(originalConfigs.get(config)!);
         value.compilerOptions.resolveJsonModule = true;
-        value.files.push(...files.map((file) => path.join(root, file)));
-        write(config, JSON.stringify(value));
+        value.files.push(...files.map(file));
+        json(config, value);
       };
       for (const { config } of uiGraphs) {
         addGraphFiles(config, [uiConsumer]);
@@ -772,7 +761,7 @@ if (process.argv[2] === "boundary") {
           completed: 2,
           leaves: leaves.map(({ id: leafId }) => leafId),
         });
-        expect(fs.readdirSync(path.join(root, ".artifacts/dist-artifacts.lock"))).toEqual([]);
+        expect(fs.readdirSync(file(".artifacts/dist-artifacts.lock"))).toEqual([]);
       }
       // Target only the boundary owner PID; its managed compiler must forward and join its group.
       const receiptClient = write(
@@ -810,10 +799,10 @@ setInterval(()=>{},1000);
       try {
         const readPids = () => {
           const readPid = (name: string) => {
-            const file = path.join(root, name);
-            const pid = fs.existsSync(file) ? Number(fs.readFileSync(file, "utf8")) : Number.NaN;
+            const target = file(name);
+            const pid = fs.existsSync(target) ? Number(read(name)) : Number.NaN;
             if (!Number.isInteger(pid) || pid <= 0) {
-              throw new Error(`timeout waiting for pid in ${file}`);
+              throw new Error(`timeout waiting for pid in ${target}`);
             }
             return pid;
           };
@@ -831,13 +820,13 @@ setInterval(()=>{},1000);
         expect(ownerPid).toBeDefined();
         process.kill(ownerPid!, "SIGTERM");
         const canceled = await withinTest(running, signal);
-        expect(canceled.error).toBeUndefined();
-        expect(canceled.status).toBe(143);
-        expect(canceled.stderr).toContain("interrupted by SIGTERM");
-        expect(fs.readFileSync(path.join(root, "compiler.signal"), "utf8")).toBe("SIGTERM");
-        expect(fs.readFileSync(path.join(root, "compiler.joined"), "utf8")).toBe("joined");
-        expect(isProcessAlive(compilerPid)).toBe(false);
-        expect(isProcessAlive(descendantPid)).toBe(false);
+        expect(canceled).toMatchObject({
+          error: undefined,
+          status: 143,
+          stderr: expect.stringContaining("interrupted by SIGTERM"),
+        });
+        expect([read("compiler.signal"), read("compiler.joined")]).toEqual(["SIGTERM", "joined"]);
+        expect([compilerPid, descendantPid].map(isProcessAlive)).toEqual([false, false]);
         expect(() => process.kill(-compilerPid, 0)).toThrow();
       } finally {
         cancel.abort();
