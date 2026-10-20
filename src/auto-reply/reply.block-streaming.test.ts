@@ -19,25 +19,15 @@ const mocks = vi.hoisted(() => ({
   runPreparedReply: vi.fn(),
 }));
 
-vi.mock("../agents/agent-scope.js", async () => {
-  const actual = await vi.importActual<typeof import("../agents/agent-scope.js")>(
-    "../agents/agent-scope.js",
-  );
-  return {
-    ...actual,
-    resolveSessionAgentId: vi.fn(() => "main"),
-    resolveAgentSkillsFilter: vi.fn(() => undefined),
-  };
-});
-vi.mock("../agents/model-selection.js", async () => {
-  const actual = await vi.importActual<typeof import("../agents/model-selection.js")>(
-    "../agents/model-selection.js",
-  );
-  return {
-    ...actual,
-    resolveModelRefFromString: vi.fn(() => null),
-  };
-});
+vi.mock("../agents/agent-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/agent-scope.js")>()),
+  resolveSessionAgentId: vi.fn(() => "main"),
+  resolveAgentSkillsFilter: vi.fn(() => undefined),
+}));
+vi.mock("../agents/model-selection.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/model-selection.js")>()),
+  resolveModelRefFromString: vi.fn(() => null),
+}));
 vi.mock("../agents/timeout.js", () => ({
   resolveAgentTimeoutMs: vi.fn(() => 60_000),
 }));
@@ -86,12 +76,6 @@ vi.mock("./reply/get-reply-run.js", () => ({
 let getReplyFromConfig: typeof import("./reply/get-reply.js").getReplyFromConfig;
 let resolveAgentWorkspaceDirMock: typeof import("../agents/agent-scope.js").resolveAgentWorkspaceDir;
 
-async function loadFreshGetReplyModuleForTest() {
-  ({ getReplyFromConfig } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
-  ({ resolveAgentWorkspaceDir: resolveAgentWorkspaceDirMock } =
-    await import("../agents/agent-scope.js"));
-}
-
 function createTelegramMessage(messageSid: string): MsgContext {
   return {
     Body: "ping",
@@ -124,7 +108,9 @@ function createReplyConfig(state: OpenClawTestState, streamMode?: "block"): Open
 
 describe("block streaming", () => {
   beforeAll(async () => {
-    await loadFreshGetReplyModuleForTest();
+    ({ getReplyFromConfig } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
+    ({ resolveAgentWorkspaceDir: resolveAgentWorkspaceDirMock } =
+      await import("../agents/agent-scope.js"));
   });
 
   beforeEach(() => {
@@ -157,11 +143,7 @@ describe("block streaming", () => {
 
         const res = await getReplyFromConfig(
           createTelegramMessage("msg-123"),
-          {
-            onReplyStart,
-            onBlockReply,
-            disableBlockStreaming: false,
-          },
+          { onReplyStart, onBlockReply, disableBlockStreaming: false },
           cfg,
         );
 
@@ -175,9 +157,7 @@ describe("block streaming", () => {
 
         const resStreamMode = await getReplyFromConfig(
           createTelegramMessage("msg-127"),
-          {
-            onBlockReply: onBlockReplyStreamMode,
-          },
+          { onBlockReply: onBlockReplyStreamMode },
           streamModeCfg,
         );
 

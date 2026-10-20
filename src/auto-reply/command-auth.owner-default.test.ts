@@ -10,17 +10,33 @@ import { installDiscordRegistryHooks } from "./test-helpers/command-auth-registr
 
 installDiscordRegistryHooks();
 
+const discordConfig = (owners?: string[]): OpenClawConfig => ({
+  channels: { discord: {} },
+  ...(owners && { commands: { ownerAllowFrom: owners } }),
+});
+const sender = (id: string, extra: Partial<MsgContext> = {}): MsgContext => ({
+  Provider: "discord",
+  Surface: "discord",
+  From: `discord:${id}`,
+  SenderId: id,
+  ...extra,
+});
+const telegramSender = (extra: Partial<MsgContext> = {}): MsgContext => ({
+  Provider: "telegram",
+  Surface: "telegram",
+  ChatType: "group",
+  From: "telegram:group:-100123",
+  SenderId: "200482621",
+  CommandSource: "native",
+  ...extra,
+});
+
 describe("senderIsOwner only reflects explicit owner authorization", () => {
   it.each([{ allowFrom: ["*"] }, { allowFrom: ["456"] }])(
     "suppresses command access without revoking owner identity for allowFrom $allowFrom",
     async ({ allowFrom }) => {
       const cfg = { commands: { ownerAllowFrom: ["456"], allowFrom: { "*": allowFrom } } };
-      const ctx = {
-        Provider: "discord",
-        Surface: "discord",
-        SenderId: "456",
-        CommandInterpretationSuppressed: true,
-      };
+      const ctx = sender("456", { From: undefined, CommandInterpretationSuppressed: true });
       const params = { ctx, cfg, commandAuthorized: true };
 
       expect(resolveCommandAuthorization(params)).toMatchObject({
@@ -43,70 +59,48 @@ describe("senderIsOwner only reflects explicit owner authorization", () => {
   }>([
     ...(["direct", "group"] as const).map((chatType) => ({
       name: `does not treat ${chatType} senders as owners without ownerAllowFrom`,
-      cfg: { channels: { discord: {} } },
-      ctx: {
-        Provider: "discord",
-        Surface: "discord",
-        ChatType: chatType,
-        From: "discord:123",
-        SenderId: "123",
-      },
+      cfg: discordConfig(),
+      ctx: sender("123", { ChatType: chatType }),
       expected: { senderIsOwner: false, isAuthorizedSender: true },
     })),
     {
       name: "keeps channel-validated native group commands authorized without owner status",
       cfg: { channels: { telegram: {} } },
-      ctx: {
-        Provider: "telegram",
-        Surface: "telegram",
-        ChatType: "group",
-        From: "telegram:group:-100123",
-        SenderId: "200482621",
-        CommandSource: "native",
-      },
+      ctx: telegramSender(),
       expected: { senderIsOwner: false, isAuthorizedSender: true },
     },
     {
       name: "keeps channel allowlist senders authorized without owner status",
       cfg: { channels: { telegram: { allowFrom: ["200482621"] } } },
-      ctx: {
-        Provider: "telegram",
-        Surface: "telegram",
+      ctx: telegramSender({
         ChatType: "direct",
         From: "telegram:200482621",
-        SenderId: "200482621",
-      },
+        CommandSource: undefined,
+      }),
       expected: { ownerList: [], senderIsOwner: false, isAuthorizedSender: true },
     },
     {
       name: "denies owner identity when an explicit allowlist does not match",
-      cfg: { channels: { discord: {} }, commands: { ownerAllowFrom: ["456"] } },
-      ctx: { Provider: "discord", Surface: "discord", From: "discord:789", SenderId: "789" },
+      cfg: discordConfig(["456"]),
+      ctx: sender("789"),
       expected: { senderIsOwner: false },
     },
     {
       name: "does not let native command authorization bypass explicit owner allowlists",
       cfg: { channels: { telegram: {} }, commands: { ownerAllowFrom: ["456"] } },
-      ctx: {
-        Provider: "telegram",
-        Surface: "telegram",
-        ChatType: "group",
-        From: "telegram:group:-100123",
-        SenderId: "200482621",
-        CommandSource: "native",
-      },
+      ctx: telegramSender(),
       expected: { senderIsOwner: false, isAuthorizedSender: false },
     },
     {
       name: "grants owner identity when ownerAllowFrom matches sender",
-      cfg: { channels: { discord: {} }, commands: { ownerAllowFrom: ["456"] } },
-      ctx: { Provider: "discord", Surface: "discord", From: "discord:456", SenderId: "456" },
+      cfg: discordConfig(["456"]),
+      ctx: sender("456"),
       expected: { senderIsOwner: true },
     },
     {
       name: "ignores ownerAllowFrom wildcards",
-      cfg: { channels: { discord: {} }, commands: { ownerAllowFrom: ["*"] } },
-      ctx: { Provider: "discord", Surface: "discord", From: "discord:anyone", SenderId: "anyone" },
+      cfg: discordConfig(["*"]),
+      ctx: sender("anyone"),
       expected: { ownerList: [], senderIsOwner: false, isAuthorizedSender: true },
     },
     {
@@ -130,18 +124,13 @@ describe("senderIsOwner only reflects explicit owner authorization", () => {
       channels: { discord: {} },
       commands: { ownerAllowFrom: ownerIds.map((ownerId) => `discord:${ownerId}`) },
     } as OpenClawConfig;
-    const context = {
-      Provider: "discord",
-      Surface: "discord",
+    const context = sender(currentOwnerId, {
       ChatType: "direct",
-      From: `discord:${currentOwnerId}`,
       SenderId: `<@!${currentOwnerId}>`,
-    } as MsgContext;
-    const auth = resolveCommandAuthorization({
-      cfg,
-      commandAuthorized: true,
-      ctx: context,
     });
+    const authorize = () =>
+      resolveCommandAuthorization({ cfg, commandAuthorized: true, ctx: context });
+    const auth = authorize();
 
     expect(auth.ownerList).toHaveLength(ownerIds.length);
     expect(auth.senderId).toBe(currentOwnerId);
@@ -170,13 +159,8 @@ describe("senderIsOwner only reflects explicit owner authorization", () => {
     expect(hashedPrompt).not.toContain(currentOwnerId);
 
     cfg.commands?.ownerAllowFrom?.pop();
-    const revoked = resolveCommandAuthorization({
-      cfg,
-      commandAuthorized: true,
-      ctx: context,
-    });
+    const revoked = authorize();
     expect(revoked.ownerList).toHaveLength(ownerIds.length - 1);
-    expect(revoked.senderIsOwner).toBe(false);
-    expect(revoked.isAuthorizedSender).toBe(false);
+    expect(revoked).toMatchObject({ senderIsOwner: false, isAuthorizedSender: false });
   });
 });

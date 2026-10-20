@@ -27,9 +27,18 @@ describe("native verbose menu status", () => {
   beforeEach(async () => {
     state = await createOpenClawTestState({ label: "verbose-menu" });
   });
-  afterEach(async () => {
-    await state.cleanup();
-  });
+  afterEach(() => state.cleanup());
+
+  const store = (
+    target: typeof session,
+    verboseLevel: VerboseLevel,
+    updatedAt = 1,
+    sessionId = `${target.agentId}-session`,
+  ) => replaceSessionEntry(target, { sessionId, updatedAt, verboseLevel });
+  const menuFor = async (cfg: OpenClawConfig) =>
+    expectDefined(await resolveCommandArgMenuAsync({ command, cfg, session }), "verbose menu");
+  const title = (level: VerboseLevel) =>
+    `Current verbose level: ${level}.\nChoose on, off, or full for /verbose.`;
 
   it.each<{
     name: string;
@@ -52,29 +61,14 @@ describe("native verbose menu status", () => {
     };
     await state.writeConfig(cfg);
     setRuntimeConfigSnapshot(cfg);
-    await replaceSessionEntry(
-      { agentId: "other", sessionKey: session.sessionKey },
-      { sessionId: "other-session", updatedAt: 1, verboseLevel: "on" },
-    );
-    await replaceSessionEntry(
-      { ...session, sessionKey: "agent:target:unrelated" },
-      { sessionId: "unrelated-session", updatedAt: 1, verboseLevel: "on" },
-    );
+    await store({ agentId: "other", sessionKey: session.sessionKey }, "on");
+    await store({ ...session, sessionKey: "agent:target:unrelated" }, "on", 1, "unrelated-session");
     if (testCase.storedLevel) {
-      await replaceSessionEntry(session, {
-        sessionId: "target-session",
-        updatedAt: 1,
-        verboseLevel: testCase.storedLevel,
-      });
+      await store(session, testCase.storedLevel);
     }
     const before = loadSessionEntryReadOnly(session);
-    const menu = expectDefined(
-      await resolveCommandArgMenuAsync({ command, cfg, session }),
-      "verbose menu",
-    );
-    expect(formatCommandArgMenuTitle({ command, menu })).toBe(
-      `Current verbose level: ${testCase.expected}.\nChoose on, off, or full for /verbose.`,
-    );
+    const menu = await menuFor(cfg);
+    expect(formatCommandArgMenuTitle({ command, menu })).toBe(title(testCase.expected));
     expect(
       menu.choices.map((choice) =>
         buildCommandTextFromArgs(command, { values: { [menu.arg.name]: choice.value } }),
@@ -82,17 +76,9 @@ describe("native verbose menu status", () => {
     ).toEqual(["/verbose on", "/verbose off", "/verbose full"]);
     expect(loadSessionEntryReadOnly(session)).toEqual(before);
     const changedLevel = testCase.expected === "full" ? "off" : "full";
-    await replaceSessionEntry(session, {
-      sessionId: "target-session",
-      updatedAt: 2,
-      verboseLevel: changedLevel,
-    });
-    const changedMenu = expectDefined(
-      await resolveCommandArgMenuAsync({ command, cfg, session }),
-      "updated verbose menu",
-    );
-    expect(formatCommandArgMenuTitle({ command, menu: changedMenu })).toBe(
-      `Current verbose level: ${changedLevel}.\nChoose on, off, or full for /verbose.`,
+    await store(session, changedLevel, 2);
+    expect(formatCommandArgMenuTitle({ command, menu: await menuFor(cfg) })).toBe(
+      title(changedLevel),
     );
   });
 

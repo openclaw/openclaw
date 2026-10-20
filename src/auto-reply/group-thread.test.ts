@@ -77,6 +77,8 @@ function config(
   return { agents: roster, broadcast: { "telegram:-100123": entry } };
 }
 
+const continuationConfig = () => config({ agents: ["alice", "bob"], maxRounds: 2, maxTurns: 4 });
+
 function dispatch(
   params: {
     cfg?: OpenClawConfig;
@@ -174,7 +176,7 @@ describe("agent group thread dispatch", () => {
       replyHooks.rewriteText = publicFinal;
       const deliveryFinalization = createDeferred<{ visibleReplySent: true }>();
       const run = dispatch({
-        cfg: config({ agents: ["alice", "bob"], maxRounds: 2, maxTurns: 4 }),
+        cfg: continuationConfig(),
         enableHooks: true,
         prepared,
         deliveryFinalization: deliveryFinalization.promise,
@@ -293,7 +295,7 @@ describe("agent group thread dispatch", () => {
 
   it("continues from delivered streamed answers without sharing supplemental blocks", async () => {
     const run = dispatch({
-      cfg: config({ agents: ["alice", "bob"], maxRounds: 2, maxTurns: 4 }),
+      cfg: continuationConfig(),
       reply: (turn, index) => {
         if (index === 0) {
           turn.dispatcher.sendBlockReply({ text: "Private reasoning", isReasoning: true });
@@ -311,49 +313,46 @@ describe("agent group thread dispatch", () => {
     expect(digest).not.toContain("Working on it");
   });
 
-  it.each([undefined])(
-    "keeps continuation reply targets physical and transcript identities distinct (full ID: %s)",
-    async (fullMessageId) => {
-      const context: Partial<MsgContext> = {
-        AccountId: "work",
-        MessageThreadId: 7,
-        MessageSidFull: fullMessageId,
-        MessageSidFirst: "physical-first",
-        MessageSidLast: "physical-last",
-      };
-      const originalSourceId = buildChannelSourceTurnId({
-        provider: "telegram",
-        accountId: "work",
-        conversationId: "telegram:-100123",
-        messageId: fullMessageId ?? "physical-1",
-      });
-      setChannelSourceTurnId(context, originalSourceId);
-      const run = dispatch({
-        cfg: config({ agents: ["alice", "bob"], maxRounds: 2, maxTurns: 4 }),
-        context,
-      });
-      await run.done;
-      const continuations = run.turns.slice(2).map((turn) => turn.ctx);
-      expect(continuations).toHaveLength(2);
-      for (const ctx of continuations) {
-        expect(
-          buildThreadingToolContext({
-            sessionCtx: ctx,
-            config: undefined,
-            hasRepliedRef: undefined,
-          }).currentMessageId,
-        ).toBe(fullMessageId ?? "physical-1");
-        expect(ctx.MessageSid).not.toBe("physical-1");
-        expect(ctx.MessageSidFirst).toBe("physical-first");
-        expect(ctx.MessageSidLast).toBe("physical-last");
-      }
-      expect(new Set(continuations.map((ctx) => ctx.MessageSid)).size).toBe(2);
-      const sourceIds = continuations.map(readChannelSourceTurnId);
-      expect(sourceIds.every(Boolean)).toBe(true);
-      expect(sourceIds).not.toContain(originalSourceId);
-      expect(new Set(sourceIds).size).toBe(2);
-    },
-  );
+  it("keeps continuation reply targets physical and transcript identities distinct", async () => {
+    const context: Partial<MsgContext> = {
+      AccountId: "work",
+      MessageThreadId: 7,
+      MessageSidFull: undefined,
+      MessageSidFirst: "physical-first",
+      MessageSidLast: "physical-last",
+    };
+    const originalSourceId = buildChannelSourceTurnId({
+      provider: "telegram",
+      accountId: "work",
+      conversationId: "telegram:-100123",
+      messageId: "physical-1",
+    });
+    setChannelSourceTurnId(context, originalSourceId);
+    const run = dispatch({
+      cfg: continuationConfig(),
+      context,
+    });
+    await run.done;
+    const continuations = run.turns.slice(2).map((turn) => turn.ctx);
+    expect(continuations).toHaveLength(2);
+    for (const ctx of continuations) {
+      expect(
+        buildThreadingToolContext({
+          sessionCtx: ctx,
+          config: undefined,
+          hasRepliedRef: undefined,
+        }).currentMessageId,
+      ).toBe("physical-1");
+      expect(ctx.MessageSid).not.toBe("physical-1");
+      expect(ctx.MessageSidFirst).toBe("physical-first");
+      expect(ctx.MessageSidLast).toBe("physical-last");
+    }
+    expect(new Set(continuations.map((ctx) => ctx.MessageSid)).size).toBe(2);
+    const sourceIds = continuations.map(readChannelSourceTurnId);
+    expect(sourceIds.every(Boolean)).toBe(true);
+    expect(sourceIds).not.toContain(originalSourceId);
+    expect(new Set(sourceIds).size).toBe(2);
+  });
 
   it.each([2, 4])(
     "reserves maxTurns=%i before parallel launch without counting physical replies",
@@ -585,31 +584,25 @@ describe("agent group thread dispatch", () => {
     expect(run.delivered).toHaveLength(0);
   });
 
-  it.each(["throw"])(
-    "reports a %s participant failure while still delivering its sibling's reply",
-    async (failure) => {
-      const run = dispatch({
-        reply: ({ ctx }) => {
-          if (ctx.AgentId === "alice") {
-            if (failure === "throw") {
-              throw new Error("Participant run failed.");
-            }
-            return ["NO_REPLY"];
-          }
-          return ["Bob completed the review."];
-        },
-        result: ({ ctx }, result) =>
-          recordAgentRunTerminalOutcome(result, ctx.AgentId === "alice" ? "failed" : "completed"),
-      });
-      const result = await run.done;
-      expect(readAgentRunTerminalOutcome(result)).toBe("failed");
-      expect(result.queuedFinal).toBe(true);
-      expect(run.turns).toHaveLength(2);
-      expect(run.delivered).toEqual([
-        { text: "Bob completed the review.", participant: { agentId: "bob", name: "Bob" } },
-      ]);
-    },
-  );
+  it("reports a participant failure while still delivering its sibling's reply", async () => {
+    const run = dispatch({
+      reply: ({ ctx }) => {
+        if (ctx.AgentId === "alice") {
+          throw new Error("Participant run failed.");
+        }
+        return ["Bob completed the review."];
+      },
+      result: ({ ctx }, result) =>
+        recordAgentRunTerminalOutcome(result, ctx.AgentId === "alice" ? "failed" : "completed"),
+    });
+    const result = await run.done;
+    expect(readAgentRunTerminalOutcome(result)).toBe("failed");
+    expect(result.queuedFinal).toBe(true);
+    expect(run.turns).toHaveLength(2);
+    expect(run.delivered).toEqual([
+      { text: "Bob completed the review.", participant: { agentId: "bob", name: "Bob" } },
+    ]);
+  });
 });
 
 describe("group thread entry compatibility", () => {
