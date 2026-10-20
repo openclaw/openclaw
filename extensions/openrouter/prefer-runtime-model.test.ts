@@ -1,7 +1,7 @@
 import type { ProviderDefaultThinkingPolicyContext } from "openclaw/plugin-sdk/plugin-entry";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type * as ProviderStreamFamily from "openclaw/plugin-sdk/provider-stream-family";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, expect, it, vi } from "vitest";
 import openrouterPlugin from "./index.js";
 
 type Capabilities = {
@@ -47,51 +47,49 @@ function resolveLevels(route: Partial<ProviderDefaultThinkingPolicyContext> = {}
     ?.levels.map((level) => level.id);
 }
 
-describe("OpenRouter configured model capability ownership", () => {
-  it.each([
-    ["normalized provider key", baseUrl, {}, true],
-    ["legacy endpoint", "https://openrouter.ai/v1/", {}, false],
-    ["custom model endpoint", baseUrl, { baseUrl: "https://private.example.invalid/v1" }, false],
-    ["custom model API", baseUrl, { api: "openai-responses" as const }, false],
-  ] as const)("prefers catalog metadata for %s", (_name, url, model, preferred) => {
-    expect(
-      provider.preferRuntimeResolvedModel?.({
-        provider: "openrouter",
-        modelId,
-        config: {
-          models: {
-            providers: {
-              OpenRouter: {
-                baseUrl: url,
-                models: [{ ...configuredModel, input: ["text"], ...model }],
-              },
+it.each([
+  ["normalized provider key", baseUrl, {}, true],
+  ["legacy endpoint", "https://openrouter.ai/v1/", {}, false],
+  ["custom model endpoint", baseUrl, { baseUrl: "https://private.example.invalid/v1" }, false],
+  ["custom model API", baseUrl, { api: "openai-responses" as const }, false],
+] as const)("prefers catalog metadata for %s", (_name, url, model, preferred) => {
+  expect(
+    provider.preferRuntimeResolvedModel?.({
+      provider: "openrouter",
+      modelId,
+      config: {
+        models: {
+          providers: {
+            OpenRouter: {
+              baseUrl: url,
+              models: [{ ...configuredModel, input: ["text"], ...model }],
             },
           },
         },
-      }),
-    ).toBe(preferred);
-  });
+      },
+    }),
+  ).toBe(preferred);
+});
 
-  it.each<[string, Partial<ProviderDefaultThinkingPolicyContext>, string[] | undefined]>([
-    ["custom route", { baseUrl: "https://private.example.invalid/v1" }, undefined],
-    [
-      "declared route efforts",
-      { compat: { supportedReasoningEfforts: ["low", "high"] } },
-      ["off", "low", "high"],
-    ],
-  ])("resolves thinking levels for the %s", (_name, route, levels) => {
-    loadedCapabilities.set(modelId, opusCapabilities);
-    expect(resolveLevels(route)).toEqual(levels);
-  });
+it.each<[string, Partial<ProviderDefaultThinkingPolicyContext>, string[] | undefined]>([
+  ["custom route", { baseUrl: "https://private.example.invalid/v1" }, undefined],
+  [
+    "declared route efforts",
+    { compat: { supportedReasoningEfforts: ["low", "high"] } },
+    ["off", "low", "high"],
+  ],
+])("resolves thinking levels for the %s", (_name, route, levels) => {
+  loadedCapabilities.set(modelId, opusCapabilities);
+  expect(resolveLevels(route)).toEqual(levels);
+});
 
-  it("follows the loaded catalog from a cold start through refreshes", () => {
-    expect(resolveLevels()).toBeUndefined();
-    loadedCapabilities.set(modelId, opusCapabilities);
-    expect(resolveLevels()).toEqual(["low", "medium", "high", "xhigh", "max"]);
-    loadedCapabilities.set(modelId, {
-      ...opusCapabilities,
-      compat: { supportedReasoningEfforts: ["high", "medium", "low"] },
-    });
-    expect(resolveLevels()).toEqual(["low", "medium", "high"]);
+it("follows the loaded catalog from a cold start through refreshes", () => {
+  expect(resolveLevels()).toBeUndefined();
+  loadedCapabilities.set(modelId, opusCapabilities);
+  expect(resolveLevels()).toEqual(["low", "medium", "high", "xhigh", "max"]);
+  loadedCapabilities.set(modelId, {
+    ...opusCapabilities,
+    compat: { supportedReasoningEfforts: ["high", "medium", "low"] },
   });
+  expect(resolveLevels()).toEqual(["low", "medium", "high"]);
 });
