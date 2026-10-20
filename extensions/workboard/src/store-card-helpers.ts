@@ -13,7 +13,6 @@ import {
 } from "@openclaw/workboard-contract";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { definedFields } from "../record-fields.js";
 import {
   BLOCKED_TOO_LONG_MS,
   MAX_CARD_ATTEMPTS,
@@ -25,13 +24,7 @@ import {
   RUNNING_HEARTBEAT_STALE_MS,
 } from "./store-constants.js";
 import type { WorkboardMutationScope } from "./store-inputs.js";
-import {
-  capText,
-  metadataIsEmpty,
-  normalizeEvents,
-  normalizeTimestamp,
-  removeUndefinedMetadataFields,
-} from "./store-normalizers.js";
+import { capText, normalizeTimestamp, removeUndefinedMetadataFields } from "./store-normalizers.js";
 
 export function compareCards(left: WorkboardCard, right: WorkboardCard): number {
   if (left.status !== right.status) {
@@ -74,15 +67,16 @@ export function syncExecutionAttemptMetadata(
   }
   const attemptStatus = executionAttemptStatus(execution);
   const attempts = [...(metadata.attempts ?? [])];
-  const key = execution.runId ?? execution.sessionKey ?? execution.id;
-  const existingIndex = attempts.findIndex(
-    (attempt) =>
-      (execution.runId && attempt.runId === execution.runId) ||
-      (!execution.runId && attempt.id === key),
+  const existingIndex = attempts.findIndex((attempt) =>
+    execution.runId
+      ? attempt.runId === execution.runId
+      : execution.sessionKey
+        ? !attempt.runId && attempt.sessionKey === execution.sessionKey
+        : !attempt.runId && !attempt.sessionKey,
   );
   const existingAttempt = existingIndex >= 0 ? attempts[existingIndex] : undefined;
   const nextAttempt: WorkboardRunAttempt = {
-    id: existingAttempt?.id ?? key,
+    id: existingAttempt?.id ?? randomUUID(),
     status: attemptStatus,
     startedAt: existingAttempt?.startedAt ?? execution.startedAt,
     mode: execution.mode,
@@ -123,7 +117,7 @@ export function appendEvent(
   at = Date.now(),
 ): WorkboardEvent[] {
   return [
-    ...normalizeEvents(card.events),
+    ...(card.events ?? []),
     {
       id: randomUUID(),
       at,
@@ -179,9 +173,7 @@ function latestStatusTransitionAt(card: WorkboardCard): number | undefined {
       (event?.kind === "moved" || event?.kind === "created") &&
       ((event.kind === "created" && card.status !== "todo") ||
         (event.kind === "moved" && event.fromStatus !== event.toStatus)) &&
-      event.toStatus === card.status &&
-      typeof event.at === "number" &&
-      Number.isFinite(event.at)
+      event.toStatus === card.status
     ) {
       return event.at;
     }
@@ -315,14 +307,6 @@ export function updateEvent(
     return { kind: "stale" };
   }
   return { kind: "edited" };
-}
-
-export function removeUndefinedCardFields(card: WorkboardCard): WorkboardCard {
-  const next = definedFields({ ...card });
-  if (metadataIsEmpty(next.metadata)) {
-    delete next.metadata;
-  }
-  return next;
 }
 
 export function assertCanMutateClaimedCard(
@@ -670,18 +654,12 @@ export function closeRunningAttempts(
   );
 }
 
-export function notificationSequence(event: WorkboardNotification): number | undefined {
-  return typeof event.sequence === "number" && Number.isFinite(event.sequence)
-    ? Math.trunc(event.sequence)
-    : undefined;
-}
-
 export function compareNotifications(a: WorkboardNotification, b: WorkboardNotification): number {
   if (a.createdAt !== b.createdAt) {
     return a.createdAt - b.createdAt;
   }
-  const aSequence = notificationSequence(a);
-  const bSequence = notificationSequence(b);
+  const aSequence = a.sequence;
+  const bSequence = b.sequence;
   if (aSequence !== undefined && bSequence !== undefined) {
     return aSequence - bSequence || a.id.localeCompare(b.id);
   }

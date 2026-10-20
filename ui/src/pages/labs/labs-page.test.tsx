@@ -121,6 +121,37 @@ function codeModeToggle(page: LabsPageElement) {
 }
 
 describe("LabsPage", () => {
+  it("defaults predictions off with Utility and saves each model without enabling the lab", async () => {
+    const { page, runtimeConfig } = await mountPage({});
+    const toggle = labToggle(page, "Composer predictions");
+    expect(toggle.checked).toBe(false);
+    const select = page.querySelector<HTMLSelectElement>('select[aria-label="Prediction model"]')!;
+    expect(select.closest(".settings-row--nested")).not.toBeNull();
+    expect(select.value).toBe("utility");
+    for (const model of ["conversation", "default", "utility"]) {
+      runtimeConfig.patch.mockClear();
+      select.value = model;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+      await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+      expect(runtimeConfig.patch).toHaveBeenCalledWith({
+        raw: { gateway: { controlUi: { experimental: { composerPredictions: { model } } } } },
+        note: "labs: update predictionModel",
+      });
+      await waitForSolid(() => expect(select.disabled).toBe(false));
+      expect(toggle.checked).toBe(false);
+    }
+    runtimeConfig.patch.mockClear();
+    toggle.click();
+    await waitForSolid(() =>
+      expect(runtimeConfig.patch).toHaveBeenCalledWith({
+        raw: {
+          gateway: { controlUi: { experimental: { composerPredictions: { enabled: true } } } },
+        },
+        note: "labs: update composerPredictions",
+      }),
+    );
+  });
+
   beforeEach(async () => {
     await i18n.setLocale("en");
   });
@@ -153,6 +184,7 @@ describe("LabsPage", () => {
     const { page, runtimeConfig } = await mountPage({ tools: { codeMode: config } });
     const select = page.querySelector<HTMLSelectElement>('select[aria-label="Code Mode executor"]');
     expect(select).not.toBeNull();
+    expect(select?.closest(".settings-row--nested")).not.toBeNull();
     select!.value = executor;
     select!.dispatchEvent(new Event("change", { bubbles: true }));
 
@@ -169,6 +201,18 @@ describe("LabsPage", () => {
       sourceConfig: { tools: { codeMode: { enabled: true } } },
       expectedPatch: { tools: { codeMode: { enabled: null } } },
       note: "labs: update codeMode",
+    },
+    {
+      label: "Custom plugin UI",
+      sourceConfig: { gateway: { controlUi: { experimental: { customPlugins: true } } } },
+      expectedPatch: { gateway: { controlUi: { experimental: { customPlugins: null } } } },
+      note: "labs: update customPluginUi",
+    },
+    {
+      label: "Claws",
+      sourceConfig: { gateway: { controlUi: { experimental: { claws: true } } } },
+      expectedPatch: { gateway: { controlUi: { experimental: { claws: null } } } },
+      note: "labs: update claws",
     },
     {
       label: "Host Desktop",
@@ -255,6 +299,12 @@ describe("LabsPage", () => {
       sourceConfig: {},
       expectedPatch: { gateway: { controlUi: { experimental: { customPlugins: true } } } },
       note: "labs: update customPluginUi",
+    },
+    {
+      label: "Claws",
+      sourceConfig: {},
+      expectedPatch: { gateway: { controlUi: { experimental: { claws: true } } } },
+      note: "labs: update claws",
     },
     {
       label: "Host Desktop",

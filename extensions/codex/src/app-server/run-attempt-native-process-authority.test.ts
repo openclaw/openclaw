@@ -685,20 +685,15 @@ describe("native background process source authority", () => {
           expect(owner.terminal.alive).toBe(true);
         }
         lease.release.resolve();
-        if (custody === "active") {
-          expect(readAttemptTerminal(await completion).aborted).toBe(false);
-        } else {
-          await expect(completion).rejects.toMatchObject({
-            name: "AgentHarnessSessionSupersededError",
-          });
-        }
-        expect(hasCodexAppServerLiveThread(f.harness.client, f.threadId)).toBe(
-          custody !== "settled",
-        );
+        // Existing processes keep cleanup custody, never reusable session authority.
+        await expect(completion).rejects.toMatchObject({
+          name: "AgentHarnessSessionSupersededError",
+        });
+        expect(hasCodexAppServerLiveThread(f.harness.client, f.threadId)).toBe(Boolean(peer));
+        await expect(
+          consumeCodexAppServerLiveThread(f.harness.client, f.threadId),
+        ).resolves.toBeUndefined();
         if (peer) {
-          await expect(
-            consumeCodexAppServerLiveThread(f.harness.client, f.threadId),
-          ).resolves.toBeUndefined();
           expect(peer.terminal.alive).toBe(true);
           expect(f.harness.client.getCloseError()).toBeUndefined();
           expect(

@@ -20,10 +20,7 @@ suite.define(() => {
         await page.clock.setFixedTime(now);
         await page.addInitScript(
           ({ key }) => {
-            localStorage.setItem(
-              key,
-              JSON.stringify({ sidebarAgentsMode: "roster", navWidth: 320 }),
-            );
+            localStorage.setItem(key, JSON.stringify({ sidebarAgentsMode: "chip", navWidth: 320 }));
             localStorage.setItem(
               "openclaw:control-ui:community-invite:v2",
               JSON.stringify({ dismissedAtMs: Date.now() }),

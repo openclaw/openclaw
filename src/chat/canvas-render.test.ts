@@ -86,6 +86,21 @@ describe("extractCanvasFromText", () => {
 });
 
 describe("extractCanvasShortcodes", () => {
+  it("extracts only selected previews while preserving other embeds and code examples", () => {
+    const selected = '[embed ref="cv_owned" /]';
+    const other = '[embed ref="cv_other" /]';
+    const literal = `\`${selected}\``;
+    expect(
+      extractCanvasShortcodes(
+        `Before ${selected} between ${other} after ${literal}`,
+        (preview) => preview.viewId === "cv_owned",
+      ),
+    ).toMatchObject({
+      text: `Before  between ${other} after ${literal}`,
+      previews: [{ viewId: "cv_owned" }],
+    });
+  });
+
   it("does not let a self-closing embed start a greedy block match", () => {
     // Regression: the block regex used to greedily swallow the span from a
     // self-closing "[embed ... /]" open tag up to a later stray "[/embed]",

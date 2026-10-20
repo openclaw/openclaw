@@ -46,7 +46,7 @@ For the full key index and the other top-level config domains, see [Configuratio
       },
       remote: { cdpUrl: "http://10.0.0.42:9222" },
     },
-    // headless: false,
+    // headless: true, // default; set false for a visible managed browser
     // noSandbox: false,
     // extraArgs: [],
     // executablePath: "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
@@ -113,7 +113,13 @@ For the full key index and the other top-level config domains, see [Configuratio
 - Local managed profiles can set `executablePath` to override the global
   `browser.executablePath` for that profile. Use this to run one profile in
   Chrome and another in Brave.
-- Auto-detect order: default browser if Chromium-based → Chrome → Brave → Edge → Chromium → Chrome Canary.
+- Managed browsers are headless by default. Explicit global or per-profile
+  `headless: false` keeps headed mode; externally owned browsers are unchanged.
+- Auto-detect order: default browser if Chromium-based → Chrome → Brave → Edge → Chromium → Chrome Canary → installed Playwright browser cache.
+  Cache discovery selects full Chromium only. On Linux and macOS, use an explicit
+  per-profile `executablePath` for headless shell and keep it in a separate profile;
+  switching an existing full-Chromium profile to shell can discard localStorage.
+  Managed shell launches are unsupported on Windows.
 - `browser.executablePath` and `browser.profiles.<name>.executablePath` both
   accept `~` and `~/...` for your OS home directory before Chromium launch.
   Per-profile `userDataDir` on `existing-session` profiles is also tilde-expanded.
@@ -190,7 +196,10 @@ Desktop without restarting the Gateway; the desktop becomes available on the
 same connection. Gateway administrator access is required. Detection does not
 expose the desktop or change system permissions. Existing managed Linux desktops
 can be enabled from the same view. **Settings → Labs → Host Desktop** remains
-available to turn access off or manage it separately.
+available to turn access off or manage it separately. When a chat session's
+Desktop panel targets the Gateway host and Host Desktop is off, the panel shows
+the same check, setup steps, and enable action, then re-checks and connects once
+Host Desktop is available.
 
 Enabling macOS Screen Sharing, a paired node's Desktop sharing, or screenshot
 capture alone does not enable the Gateway's desktop. On macOS, Remote Management

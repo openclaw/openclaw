@@ -1,14 +1,19 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
-import { runSubagentStateWorkerOperation, useSubagentControlFixture } from "./subagent-control.test-support.js";
+import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 import { afterEach, beforeEach, expect, it, vi, type Mock } from "vitest";
 import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../../config/config.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions.js";
+import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { abortControlledSubagents } from "../../../gateway/server-methods/chat-abort-descendants.js";
 import { emitAgentEvent } from "../../../infra/agent-events.js";
 import { resetSystemEventsForTest } from "../../../infra/system-events.js";
-import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "../../embedded-agent-runner/runs.js";
-import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
-import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
+import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
+import {
+  clearTestEmbeddedRun as detachRun,
+  registerTestEmbeddedRun as attachRun,
+  createEmbeddedRunHandle,
+} from "../../embedded-agent-runner/runs.test-support.js";
 import {
   setSubagentAnnounceDeliveryDepsForTest,
   type SubagentAnnounceDeliveryTestDeps,
@@ -22,9 +27,7 @@ import {
 } from "./subagent-progress-draft.test-support.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { adoptPausedSubagentRunForFollowUp } from "./subagent-registry.js";
-import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import { testing as registryTesting } from "./subagent-registry.test-helpers.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const fixture = useSubagentControlFixture();
 beforeEach(async () => {
@@ -33,6 +36,8 @@ beforeEach(async () => {
 const yieldCohort = useSubagentProgressCohort(fixture);
 
 const CHILD_RESULT = "Private child result marker.";
+const DONE = "Done.";
+const stops = { killSessionSubagentRuns, abortControlledSubagents };
 
 type Dispatch = SubagentAnnounceDeliveryTestDeps["dispatchGatewayMethodInProcess"];
 type DispatchParams = Parameters<Dispatch>[1];
@@ -41,30 +46,6 @@ afterEach(() => {
   setSubagentAnnounceDeliveryDepsForTest();
   resetSystemEventsForTest();
 });
-
-function rejectRegistryWrites(reject: (row: SubagentRunRecord) => boolean, message: string) {
-  fixture.worker.mockImplementation((context, operation, options) =>
-    runSubagentStateWorkerOperation(
-      context,
-      (scope) =>
-        operation({
-          execute: async (command, executeOptions) => {
-            if (
-              isSubagentRegistryWriteCommand(command) &&
-              command.input.values.some((value) => {
-                const row = rowToSubagentRunRecord(value);
-                return row !== null && reject(row);
-              })
-            ) {
-              throw new Error(message);
-            }
-            return scope.execute(command, executeOptions);
-          },
-        }),
-      options,
-    ),
-  );
-}
 
 async function endRun(runId: string, data: Record<string, unknown> = {}) {
   fixture.capture.mockResolvedValue(CHILD_RESULT);
@@ -99,10 +80,22 @@ function answerWakes(
     if (wakes.length === 1) {
       await onWake?.(params);
     }
+    const terminal = prepareAgentRunTerminalReply({ rawText: replies[wakes.length - 1] ?? "" });
     return {
       status: "ok",
       inputProcessingCompleted: true,
-      result: { payloads: [{ text: replies[wakes.length - 1] }], meta: {} },
+      result: {
+        payloads: terminal.text ? [{ text: terminal.text }] : [],
+        meta: { terminalReply: terminal.terminalReply },
+        ...(terminal.terminalReply.disposition === "silent" && {
+          deliveryStatus: {
+            status: "suppressed",
+            succeeded: true,
+            reason: "no_visible_payload",
+            resultCount: 0,
+          },
+        }),
+      },
     } as T;
   };
   setSubagentAnnounceDeliveryDepsForTest({ dispatchGatewayMethodInProcess: dispatch });
@@ -112,59 +105,108 @@ function answerWakes(
 type TestDraft = { push: Mock; retire: Mock };
 const newDraft = (): TestDraft => ({ push: vi.fn(), retire: vi.fn() });
 
-function expectNoChildResultPushed(draft: TestDraft) {
+async function adoptCohort(children = ["a", "b"], origin?: Parameters<typeof yieldCohort>[2]) {
+  const spawns = await yieldCohort("parent-turn", children, origin);
+  const draft = newDraft();
+  expect(adoptSubagentProgressDraft(spawns, draft)).toBe(true);
+  return draft;
+}
+
+const stopParams = () => ({ cfg: getRuntimeConfig(), sessionKey: requesterKey, agentId: "main" });
+const storePath = () =>
+  resolveSessionStorePathCore(getRuntimeConfig().session?.store, { agentId: "main" });
+
+function expectCard(draft: TestDraft, retireCount = 1) {
+  expect(draft.retire).toHaveBeenCalledTimes(retireCount);
   expect(JSON.stringify(draft.push.mock.calls)).not.toContain(CHILD_RESULT);
 }
 
 it.each([
-  ["a visible answer", ["The delegated work is done."]],
-  ["a silent attempt and a visible retry", ["NO_REPLY", "The delegated work is done."]],
-  ["exhausted silent attempts", ["NO_REPLY", "NO_REPLY", "NO_REPLY"]],
-] as const)(
-  "retires the card once, after the cohort's requester wake settles through %s",
-  async (_name, replies) => {
-    const spawns = await yieldCohort("parent-turn", ["a", "b"]);
-    const draft = newDraft();
-    expect(adoptSubagentProgressDraft(spawns, draft)).toBe(true);
-    const wakes = answerWakes(draft, replies);
-
-    await endRun("a");
-    expect(wakes).toEqual([]);
-    expect(draft.retire).not.toHaveBeenCalled();
-
-    await endRun("b");
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    try {
-      // A yielded requester owes a visible answer, so silence retries the same wake.
-      for (const retryDelayMs of [30_000, 120_000].slice(0, replies.length - 1)) {
-        expect(draft.retire).not.toHaveBeenCalled();
-        await vi.advanceTimersByTimeAsync(retryDelayMs);
-        await registryTesting.sweepOnceForTests();
-        await fixture.settle();
-      }
-    } finally {
-      vi.useRealTimers();
-    }
-    expect(wakes.map(({ retiredBefore }) => retiredBefore)).toEqual(replies.map(() => 0));
-    expect(draft.retire).toHaveBeenCalledOnce();
-    expect(draft.push).toHaveBeenCalledWith(
-      expect.objectContaining({ itemId: "b", kind: "subagent", status: "completed" }),
+  ["a visible answer", [DONE], true],
+  ["intentional external silence", ["NO_REPLY"], true],
+  ["required internal result", ["NO_REPLY"], false],
+] as const)("settles the progress card according to %s", async (name, replies, retired) => {
+  const requesterOrigin =
+    name === "intentional external silence"
+      ? { channel: "telegram", to: "12345", accountId: "default" }
+      : undefined;
+  if (requesterOrigin) {
+    const { channel, to, accountId } = requesterOrigin;
+    await upsertSessionEntryCore(
+      { storePath: storePath(), sessionKey: requesterKey },
+      {
+        delivery: {
+          kind: "external",
+          route: { channel, accountId, target: { to } },
+          context: requesterOrigin,
+          origin: { provider: channel, to, accountId },
+        },
+      },
     );
-    expectNoChildResultPushed(draft);
-  },
-);
+  }
+  const draft = await adoptCohort(["a", "b"], requesterOrigin);
+  const wakes = answerWakes(draft, replies);
 
-it("does not adopt a card for a cohort whose completion was already delivered", async () => {
+  await endRun("a");
+  expect(wakes).toEqual([]);
+  expect(draft.retire).not.toHaveBeenCalled();
+
+  await endRun("b");
+  expect(wakes.map(({ retiredBefore }) => retiredBefore)).toEqual(replies.map(() => 0));
+  expectCard(draft, retired ? 1 : 0);
+  expect(draft.push).toHaveBeenCalledWith(
+    expect.objectContaining({ itemId: "b", kind: "subagent", status: "completed" }),
+  );
+});
+
+it("rejects a delivered cohort without any prior card", async () => {
   const spawns = await yieldCohort("parent-turn", ["a", "b"]);
-  answerWakes(newDraft(), ["The delegated work is done."]);
+  answerWakes(newDraft(), [DONE]);
   await endRun("a");
   await endRun("b");
   expect(subagentRuns.get("b")?.requesterSettleWake).toBeUndefined();
-
   const stale = newDraft();
   expect(adoptSubagentProgressDraft(spawns, stale)).toBe(false);
   expect(stale.push).not.toHaveBeenCalled();
 });
+
+it.each(["visible result", "exhausted"] as const)(
+  "recovers a known missing required result through periodic admission: %s",
+  async (outcome) => {
+    const draft = await adoptCohort(["a"]);
+    const wakes = answerWakes(draft, [
+      "NO_REPLY",
+      outcome === "visible result" ? DONE : "NO_REPLY",
+      "NO_REPLY",
+    ]);
+    await endRun("a");
+    expect(wakes).toHaveLength(1);
+    expect(draft.retire).not.toHaveBeenCalled();
+    expect(subagentRuns.get("a")?.requesterSettleWake).toMatchObject({
+      status: "pending",
+      attemptCount: 1,
+    });
+    await registryTesting.sweepOnceForTests();
+    await fixture.settle();
+    expect(wakes).toHaveLength(1);
+
+    using clock = vi.spyOn(Date, "now");
+    for (let attempt = 1; attempt < (outcome === "visible result" ? 2 : 3); attempt++) {
+      const due = subagentRuns.get("a")?.requesterSettleWake?.nextAttemptAt;
+      expect(due).toBeTypeOf("number");
+      clock.mockReturnValue(due!);
+      await registryTesting.sweepOnceForTests();
+      await fixture.settle();
+      expect(wakes).toHaveLength(attempt + 1);
+      expect(wakes[attempt]?.runId).toBe(`${wakes[0]!.runId}:retry-${attempt}`);
+    }
+    expect(draft.retire).toHaveBeenCalledOnce();
+    expect(subagentRuns.get("a")?.requesterSettleWake).toBeUndefined();
+    await registryTesting.sweepOnceForTests();
+    await fixture.settle();
+    expect(wakes).toHaveLength(outcome === "visible result" ? 2 : 3);
+  },
+);
 
 it.each([
   ["killSessionSubagentRuns", "running", "committed"],
@@ -174,9 +216,7 @@ it.each([
 ] as const)(
   "retires the card only when %s commits stop of a completed and a %s child (%s)",
   async (stop, sibling, write) => {
-    const spawns = await yieldCohort("parent-turn", ["a", "b"]);
-    const draft = newDraft();
-    expect(adoptSubagentProgressDraft(spawns, draft)).toBe(true);
+    const draft = await adoptCohort();
     // Completed children still owe their pending requester wake when Stop arrives.
     fixture.wake.mockResolvedValue(false);
     await endRun("a");
@@ -185,66 +225,46 @@ it.each([
     }
     expect(subagentRuns.get("a")?.requesterSettleWake?.status).toBe("pending");
     if (write === "rejected") {
-      rejectRegistryWrites(
+      fixture.rejectRegistryWrites(
         (row) => Boolean(row.killIntent) || row.suppressCompletionDelivery === true,
         "stop write rejected",
       );
     }
 
-    const params = { cfg: getRuntimeConfig(), sessionKey: requesterKey, agentId: "main" };
-    const result =
-      stop === "killSessionSubagentRuns"
-        ? await killSessionSubagentRuns(params)
-        : await abortControlledSubagents(params);
+    const result = await stops[stop](stopParams());
     await fixture.settle();
 
     expect(result?.status).toBe(write === "rejected" ? "error" : "ok");
-    if (write === "rejected") {
-      expect(draft.retire).not.toHaveBeenCalled();
-    } else {
-      expect(draft.retire).toHaveBeenCalledOnce();
-    }
-    expectNoChildResultPushed(draft);
+    expectCard(draft, write === "rejected" ? 0 : 1);
   },
 );
 
-it("keeps the card when stop cannot interrupt a child that is still finishing", async () => {
-  const spawns = await yieldCohort("parent-turn", ["a"]);
-  const draft = newDraft();
-  expect(adoptSubagentProgressDraft(spawns, draft)).toBe(true);
-  const handle = createEmbeddedRunHandle({
-    runId: "a",
-    isAbortable: false,
+it("keeps the card until an uninterruptible child finishes", async () => {
+  const draft = await adoptCohort(["a"]);
+  const handle = createEmbeddedRunHandle({ runId: "a", isAbortable: false });
+  attachRun("a-session", handle, childKey("a"), undefined, "main", undefined, undefined, {
+    storeScope: storePath(),
   });
-  setActiveEmbeddedRun("a-session", handle, childKey("a"), undefined, "main");
   try {
-    await killSessionSubagentRuns({
-      cfg: getRuntimeConfig(),
-      sessionKey: requesterKey,
-      agentId: "main",
-    });
+    await killSessionSubagentRuns(stopParams());
     await fixture.settle();
 
     const child = subagentRuns.get("a");
-    expect(child?.killIntent).toBeUndefined();
-    expect(child?.execution.status).toBe("running");
+    expect(child).toMatchObject({ killIntent: undefined, execution: { status: "running" } });
     expect(child?.requesterSettleWake).toBeDefined();
     expect(draft.retire).not.toHaveBeenCalled();
   } finally {
-    clearActiveEmbeddedRun("a-session", handle, childKey("a"));
+    detachRun("a-session", handle, childKey("a"));
   }
-  answerWakes(draft, ["The delegated work is done."]);
+  answerWakes(draft, [DONE]);
   await endRun("a");
   expect(draft.retire).toHaveBeenCalledOnce();
 });
 
-it("follows a child's resumed execution and retires after the replacement settles", async () => {
-  const spawns = await yieldCohort("parent-turn", ["a", "b"]);
-  const draft = newDraft();
-  expect(adoptSubagentProgressDraft(spawns, draft)).toBe(true);
-  const wakes = answerWakes(draft, ["The delegated work is done."]);
+it("follows replacement execution until it settles", async () => {
+  const draft = await adoptCohort();
+  const wakes = answerWakes(draft, [DONE]);
 
-  // The child yields to its own children and is resumed as a new execution of the same task.
   await endRun("a", { yielded: true, terminalReply: undefined });
   expect(
     await adoptPausedSubagentRunForFollowUp({
@@ -275,14 +295,11 @@ it("follows a child's resumed execution and retires after the replacement settle
   await endRun("a-resumed");
   await endRun("b");
   expect(wakes).toEqual([{ runId: expect.any(String), retiredBefore: 0 }]);
-  expect(draft.retire).toHaveBeenCalledOnce();
-  expectNoChildResultPushed(draft);
+  expectCard(draft);
 });
 
-it("keeps the card for the resumed requester's re-yield cohort until that cohort settles", async () => {
-  const spawns = await yieldCohort("parent-turn", ["a", "b"]);
-  const draft = newDraft();
-  expect(adoptSubagentProgressDraft(spawns, draft)).toBe(true);
+it("keeps the card through requester re-yield", async () => {
+  const draft = await adoptCohort();
   const wakes = answerWakes(
     draft,
     ["Waiting for the follow-up checks.", "Everything is verified."],
@@ -306,6 +323,5 @@ it("keeps the card for the resumed requester's re-yield cohort until that cohort
   expect(wakes).toHaveLength(2);
   expect(wakes[1]).toEqual({ runId: expect.any(String), retiredBefore: 0 });
   expect(wakes[1]!.runId).not.toBe(wakes[0]!.runId);
-  expect(draft.retire).toHaveBeenCalledOnce();
-  expectNoChildResultPushed(draft);
+  expectCard(draft);
 });

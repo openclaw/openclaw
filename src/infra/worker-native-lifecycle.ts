@@ -19,6 +19,11 @@ import {
   type RuntimeWorkerGeneration,
 } from "./runtime-worker-generation.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
+import {
+  captureSqliteDatabaseAdmissions,
+  createSqliteDatabaseAdmissionCursor,
+  type SqliteDatabaseAdmissionCursor,
+} from "./sqlite-database-admission.js";
 import { createCpuTrackedWorker, receiveWorkerMemoryPort } from "./worker-cpu.js";
 import { observeWorkerMessage, workerMessagePayloadBytes } from "./worker-message-metrics.js";
 import { NativeWorker } from "./worker-native-handle.js";
@@ -33,6 +38,7 @@ import type {
 import { nativePortIsOpen } from "./worker-native-port.js";
 
 type NativeRuntime = NativeWorkerRuntime & {
+  databaseAdmissionCursor: SqliteDatabaseAdmissionCursor;
   handles: Map<number, NativeWorker>;
   close(): Promise<void>;
 };
@@ -114,6 +120,8 @@ function nativeRuntime(source: NativeSource): NativeRuntime {
   return runInDetachedAsyncContext(() => {
     const { port1, port2 } = new MessageChannel();
     const url = source.moduleUrl;
+    const databaseAdmissionCursor = createSqliteDatabaseAdmissionCursor();
+    captureSqliteDatabaseAdmissions(databaseAdmissionCursor);
     let worker: Worker;
     try {
       worker = createCpuTrackedWorker(url, {
@@ -149,6 +157,7 @@ function nativeRuntime(source: NativeSource): NativeRuntime {
       handles.get(reply.id)?.receive(reply);
     };
     const runtime: NativeRuntime = {
+      databaseAdmissionCursor,
       handles,
       service() {
         for (;;) {
@@ -393,6 +402,7 @@ function startNativeWorker(
   const id = ++lifetime.nextId;
   let resourceConnection: NativeWorkerResourceConnection | undefined;
   let handle: NativeWorker | undefined;
+  let capturedAdmissions = false;
   try {
     resourceConnection = resource?.connect?.();
     handle = new NativeWorker(
@@ -407,12 +417,14 @@ function startNativeWorker(
     const { env, transferList = [], ...captured } = options;
     runtime.handles.set(id, handle);
     const retainedResource = resource ? handle.attachResource(resource) : undefined;
+    const databaseAdmissions = captureSqliteDatabaseAdmissions(runtime.databaseAdmissionCursor);
+    capturedAdmissions = true;
     runtime.post(
       {
         type: "create",
         id,
         filename: { kind: filename instanceof URL ? "url" : "path", value: String(filename) },
-        environmentData: captureSqliteWorkerEnvironmentData(),
+        environmentData: captureSqliteWorkerEnvironmentData(databaseAdmissions),
         options: {
           ...captured,
           environment: { ...(env === SHARE_ENV ? process.env : (env ?? process.env)) },
@@ -425,6 +437,9 @@ function startNativeWorker(
       taskPorts ? [...transferList, taskPorts.worker] : transferList,
     );
   } catch (error) {
+    if (capturedAdmissions) {
+      runtime.databaseAdmissionCursor = createSqliteDatabaseAdmissionCursor();
+    }
     runtime.handles.delete(id);
     runtime.refreshReference();
     if (handle) {

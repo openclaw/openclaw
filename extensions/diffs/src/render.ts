@@ -2,7 +2,6 @@ import type { FileContents, FileDiffMetadata } from "@pierre/diffs";
 import { parsePatchFiles } from "@pierre/diffs";
 import { preloadDiffHTML, type PreloadDiffOptions } from "@pierre/diffs/ssr";
 import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
-import { normalizeDiffFontSize, normalizeDiffLineSpacing } from "./config.js";
 import {
   collectDiffPayloadLanguageHints,
   isBaseDiffViewerLanguage,
@@ -24,10 +23,10 @@ const MAX_PATCH_TOTAL_LINES = 120_000;
 const VIEWER_LOADER_DOCUMENT_PATH = "../../assets/viewer.js";
 const LANGUAGE_PACK_VIEWER_LOADER_DOCUMENT_PATH = "../../../diffs-language-pack/assets/viewer.js";
 
-export class DiffRenderInputError extends Error {
+export class DiffInputError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = "DiffRenderInputError";
+    this.name = "ToolInputError";
   }
 }
 
@@ -50,8 +49,7 @@ function buildDiffTitle(input: DiffInput): string {
 }
 
 function resolveDiffTypography(presentation: DiffRenderOptions["presentation"]) {
-  const fontSize = normalizeDiffFontSize(presentation.fontSize);
-  const lineSpacing = normalizeDiffLineSpacing(presentation.lineSpacing);
+  const { fontSize, lineSpacing } = presentation;
   const lineHeight = Math.max(20, Math.round(fontSize * lineSpacing));
   return { fontSize, lineHeight };
 }
@@ -149,7 +147,7 @@ function buildImageRenderOptions(options: DiffRenderOptions): DiffRenderOptions 
     ...options,
     presentation: {
       ...options.presentation,
-      fontSize: Math.max(16, normalizeDiffFontSize(options.presentation.fontSize)),
+      fontSize: Math.max(16, options.presentation.fontSize),
     },
   };
 }
@@ -244,35 +242,147 @@ function renderFileSummaryNav(entries: ReadonlyArray<FileNavEntry>): string {
   </nav>`;
 }
 
-function buildHtmlDocument(params: {
-  title: string;
-  bodyHtml: string;
-  theme: DiffRenderOptions["presentation"]["theme"];
-  imageMaxWidth: number;
-  imageTypography: ReturnType<typeof resolveDiffTypography>;
-  runtimeMode: "viewer" | "image";
-  viewerRuntime: "base" | "language-pack";
-}): string {
-  const viewerLoaderPath =
-    params.viewerRuntime === "language-pack"
-      ? LANGUAGE_PACK_VIEWER_LOADER_DOCUMENT_PATH
-      : VIEWER_LOADER_DOCUMENT_PATH;
-  const imageTypographyCss =
-    params.runtimeMode === "image"
-      ? `
+async function renderSection(
+  input: { oldFile: FileContents; newFile: FileContents } | { fileDiff: FileDiffMetadata },
+  { viewerOptions, imageOptions, preloadOptions }: ReturnType<typeof buildRenderVariants>,
+  languagePackAvailable: boolean,
+  anchorId?: string,
+) {
+  const prerenderedHTML = await preloadDiffHTMLWithFallback({ ...input, options: preloadOptions });
+  const payload = await normalizeDiffViewerPayloadLanguages(
+    {
+      prerenderedHTML,
+      ...input,
+      options: preloadOptions,
+      langs: collectDiffPayloadLanguageHints(input),
+    },
+    { languagePackAvailable },
+  );
+  return {
+    ...(viewerOptions
+      ? { viewer: renderDiffCard({ ...payload, options: viewerOptions }, anchorId) }
+      : {}),
+    ...(imageOptions
+      ? { image: renderDiffCard({ ...payload, options: imageOptions }, anchorId) }
+      : {}),
+    usesLanguagePack: payload.langs.some((lang) => !isBaseDiffViewerLanguage(lang)),
+  };
+}
+
+async function renderBeforeAfterDiff(
+  input: Extract<DiffInput, { kind: "before_after" }>,
+  options: DiffRenderOptions,
+  target: DiffRenderTarget,
+) {
+  const languagePackAvailable = options.languagePackAvailable === true;
+  const lang = await normalizeSupportedLanguageHint(input.lang, { languagePackAvailable });
+  const fileName =
+    input.path?.trim() ||
+    (lang && lang !== "text" ? `diff.${lang.replace(/^\.+/, "")}` : DEFAULT_FILE_NAME);
+  const oldFile: FileContents = {
+    name: fileName,
+    contents: input.before,
+    ...(lang ? { lang } : {}),
+  };
+  const newFile: FileContents = {
+    name: fileName,
+    contents: input.after,
+    ...(lang ? { lang } : {}),
+  };
+  const section = await renderSection(
+    { oldFile, newFile },
+    buildRenderVariants(options, target),
+    languagePackAvailable,
+  );
+
+  return { sections: [section], leadingHtml: undefined };
+}
+
+async function renderPatchDiff(
+  input: Extract<DiffInput, { kind: "patch" }>,
+  options: DiffRenderOptions,
+  target: DiffRenderTarget,
+) {
+  const languagePackAvailable = options.languagePackAvailable === true;
+  const files = parsePatchFiles(input.patch).flatMap((entry) => entry.files ?? []);
+  if (files.length === 0) {
+    throw new DiffInputError("Patch input did not contain any file diffs.");
+  }
+  if (files.length > MAX_PATCH_FILE_COUNT) {
+    throw new DiffInputError(`Patch input contains too many files (max ${MAX_PATCH_FILE_COUNT}).`);
+  }
+  const totalLines = files.reduce((sum, fileDiff) => {
+    const splitLines = Number.isFinite(fileDiff.splitLineCount) ? fileDiff.splitLineCount : 0;
+    const unifiedLines = Number.isFinite(fileDiff.unifiedLineCount) ? fileDiff.unifiedLineCount : 0;
+    return sum + Math.max(splitLines, unifiedLines, 0);
+  }, 0);
+  if (totalLines > MAX_PATCH_TOTAL_LINES) {
+    throw new DiffInputError(
+      `Patch input is too large to render (max ${MAX_PATCH_TOTAL_LINES} lines).`,
+    );
+  }
+
+  const variants = buildRenderVariants(options, target);
+  const navEntries: FileNavEntry[] = files.map((fileDiff, index) => ({
+    anchorId: `oc-diff-file-${index + 1}`,
+    fileDiff,
+    stats: computeFileDiffStats(fileDiff),
+  }));
+  const sections = await Promise.all(
+    files.map((fileDiff, index) =>
+      renderSection({ fileDiff }, variants, languagePackAvailable, navEntries[index]?.anchorId),
+    ),
+  );
+  // Single-file patches skip the summary card; one file needs no navigation.
+  const navHtml = files.length > 1 ? renderFileSummaryNav(navEntries) : undefined;
+
+  return { sections, leadingHtml: navHtml };
+}
+
+export async function renderDiffDocument(
+  input: DiffInput,
+  options: DiffRenderOptions,
+  target: DiffRenderTarget = "both",
+): Promise<RenderedDiffDocument> {
+  const title = buildDiffTitle(input);
+  const { sections, leadingHtml } =
+    input.kind === "before_after"
+      ? await renderBeforeAfterDiff(input, options, target)
+      : await renderPatchDiff(input, options, target);
+  const lead = leadingHtml ? [leadingHtml] : [];
+  const viewerSections = sections.flatMap((section) => (section.viewer ? [section.viewer] : []));
+  const imageSections = sections.flatMap((section) => (section.image ? [section.image] : []));
+  const viewerBodyHtml = viewerSections.length
+    ? [...lead, ...viewerSections].join("\n")
+    : undefined;
+  const imageBodyHtml = imageSections.length ? [...lead, ...imageSections].join("\n") : undefined;
+  const viewerRuntime = sections.some((section) => section.usesLanguagePack)
+    ? "language-pack"
+    : "base";
+  const imageTypography = resolveDiffTypography(buildImageRenderOptions(options).presentation);
+  const document = (bodyHtml: string, runtimeMode: "viewer" | "image") => {
+    const theme = options.presentation.theme;
+    const imageMaxWidth = options.image.maxWidth;
+    const viewerLoaderPath =
+      viewerRuntime === "language-pack"
+        ? LANGUAGE_PACK_VIEWER_LOADER_DOCUMENT_PATH
+        : VIEWER_LOADER_DOCUMENT_PATH;
+    const imageTypographyCss =
+      runtimeMode === "image"
+        ? `
       .oc-frame[data-render-mode="image"] .oc-diff-host {
-        --diffs-font-size: ${params.imageTypography.fontSize}px;
-        --diffs-line-height: ${params.imageTypography.lineHeight}px;
+        --diffs-font-size: ${imageTypography.fontSize}px;
+        --diffs-line-height: ${imageTypography.lineHeight}px;
       }
 `
-      : "";
-  return `<!doctype html>
+        : "";
+    return `<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="dark light" />
-    <title>${escapeHtml(params.title)}</title>
+    <title>${escapeHtml(title)}</title>
     <style>
       * {
         box-sizing: border-box;
@@ -319,7 +429,7 @@ function buildHtmlDocument(params: {
       }
 
       .oc-frame[data-render-mode="image"] {
-        max-width: ${Math.max(640, Math.round(params.imageMaxWidth))}px;
+        max-width: ${Math.max(640, Math.round(imageMaxWidth))}px;
       }
 ${imageTypographyCss}
 
@@ -445,147 +555,16 @@ ${imageTypographyCss}
       }
     </style>
   </head>
-  <body data-theme="${params.theme}">
-    <main class="oc-frame" data-render-mode="${params.runtimeMode}">
+  <body data-theme="${theme}">
+    <main class="oc-frame" data-render-mode="${runtimeMode}">
       <div data-openclaw-diff-root>
-        ${params.bodyHtml}
+        ${bodyHtml}
       </div>
     </main>
     <script type="module" src="${viewerLoaderPath}"></script>
   </body>
 </html>`;
-}
-
-async function renderSection(
-  input: { oldFile: FileContents; newFile: FileContents } | { fileDiff: FileDiffMetadata },
-  { viewerOptions, imageOptions, preloadOptions }: ReturnType<typeof buildRenderVariants>,
-  languagePackAvailable: boolean,
-  anchorId?: string,
-) {
-  const prerenderedHTML = await preloadDiffHTMLWithFallback({ ...input, options: preloadOptions });
-  const payload = await normalizeDiffViewerPayloadLanguages(
-    {
-      prerenderedHTML,
-      ...input,
-      options: preloadOptions,
-      langs: collectDiffPayloadLanguageHints(input),
-    },
-    { languagePackAvailable },
-  );
-  return {
-    ...(viewerOptions
-      ? { viewer: renderDiffCard({ ...payload, options: viewerOptions }, anchorId) }
-      : {}),
-    ...(imageOptions
-      ? { image: renderDiffCard({ ...payload, options: imageOptions }, anchorId) }
-      : {}),
-    usesLanguagePack: payload.langs.some((lang) => !isBaseDiffViewerLanguage(lang)),
   };
-}
-
-async function renderBeforeAfterDiff(
-  input: Extract<DiffInput, { kind: "before_after" }>,
-  options: DiffRenderOptions,
-  target: DiffRenderTarget,
-) {
-  const languagePackAvailable = options.languagePackAvailable === true;
-  const lang = await normalizeSupportedLanguageHint(input.lang, { languagePackAvailable });
-  const fileName =
-    input.path?.trim() ||
-    (lang && lang !== "text" ? `diff.${lang.replace(/^\.+/, "")}` : DEFAULT_FILE_NAME);
-  const oldFile: FileContents = {
-    name: fileName,
-    contents: input.before,
-    ...(lang ? { lang } : {}),
-  };
-  const newFile: FileContents = {
-    name: fileName,
-    contents: input.after,
-    ...(lang ? { lang } : {}),
-  };
-  const section = await renderSection(
-    { oldFile, newFile },
-    buildRenderVariants(options, target),
-    languagePackAvailable,
-  );
-
-  return { sections: [section], leadingHtml: undefined };
-}
-
-async function renderPatchDiff(
-  input: Extract<DiffInput, { kind: "patch" }>,
-  options: DiffRenderOptions,
-  target: DiffRenderTarget,
-) {
-  const languagePackAvailable = options.languagePackAvailable === true;
-  const files = parsePatchFiles(input.patch).flatMap((entry) => entry.files ?? []);
-  if (files.length === 0) {
-    throw new DiffRenderInputError("Patch input did not contain any file diffs.");
-  }
-  if (files.length > MAX_PATCH_FILE_COUNT) {
-    throw new DiffRenderInputError(
-      `Patch input contains too many files (max ${MAX_PATCH_FILE_COUNT}).`,
-    );
-  }
-  const totalLines = files.reduce((sum, fileDiff) => {
-    const splitLines = Number.isFinite(fileDiff.splitLineCount) ? fileDiff.splitLineCount : 0;
-    const unifiedLines = Number.isFinite(fileDiff.unifiedLineCount) ? fileDiff.unifiedLineCount : 0;
-    return sum + Math.max(splitLines, unifiedLines, 0);
-  }, 0);
-  if (totalLines > MAX_PATCH_TOTAL_LINES) {
-    throw new DiffRenderInputError(
-      `Patch input is too large to render (max ${MAX_PATCH_TOTAL_LINES} lines).`,
-    );
-  }
-
-  const variants = buildRenderVariants(options, target);
-  const navEntries: FileNavEntry[] = files.map((fileDiff, index) => ({
-    anchorId: `oc-diff-file-${index + 1}`,
-    fileDiff,
-    stats: computeFileDiffStats(fileDiff),
-  }));
-  const sections = await Promise.all(
-    files.map((fileDiff, index) =>
-      renderSection({ fileDiff }, variants, languagePackAvailable, navEntries[index]?.anchorId),
-    ),
-  );
-  // Single-file patches skip the summary card; one file needs no navigation.
-  const navHtml = files.length > 1 ? renderFileSummaryNav(navEntries) : undefined;
-
-  return { sections, leadingHtml: navHtml };
-}
-
-export async function renderDiffDocument(
-  input: DiffInput,
-  options: DiffRenderOptions,
-  target: DiffRenderTarget = "both",
-): Promise<RenderedDiffDocument> {
-  const title = buildDiffTitle(input);
-  const { sections, leadingHtml } =
-    input.kind === "before_after"
-      ? await renderBeforeAfterDiff(input, options, target)
-      : await renderPatchDiff(input, options, target);
-  const lead = leadingHtml ? [leadingHtml] : [];
-  const viewerSections = sections.flatMap((section) => (section.viewer ? [section.viewer] : []));
-  const imageSections = sections.flatMap((section) => (section.image ? [section.image] : []));
-  const viewerBodyHtml = viewerSections.length
-    ? [...lead, ...viewerSections].join("\n")
-    : undefined;
-  const imageBodyHtml = imageSections.length ? [...lead, ...imageSections].join("\n") : undefined;
-  const viewerRuntime = sections.some((section) => section.usesLanguagePack)
-    ? "language-pack"
-    : "base";
-  const imageTypography = resolveDiffTypography(buildImageRenderOptions(options).presentation);
-  const document = (bodyHtml: string, runtimeMode: "viewer" | "image") =>
-    buildHtmlDocument({
-      title,
-      bodyHtml,
-      theme: options.presentation.theme,
-      imageMaxWidth: options.image.maxWidth,
-      imageTypography,
-      runtimeMode,
-      viewerRuntime,
-    });
 
   return {
     ...(viewerBodyHtml ? { html: document(viewerBodyHtml, "viewer") } : {}),

@@ -1,8 +1,10 @@
+import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
+import { openOpenClawAgentDatabaseReadOnly } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
@@ -11,7 +13,11 @@ import {
   openNodeSqliteDatabase,
   openOpenClawAgentDatabase,
 } from "openclaw/plugin-sdk/sqlite-runtime";
-import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  requireNativeSqliteDatabase,
+  closeOpenClawAgentDatabasesAsync,
+  observeHostDataSql,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, it } from "vitest";
 import { readMemoryDatabaseRevision } from "./manager-db-kernel.js";
@@ -26,6 +32,27 @@ const state = {
   vector: { enabled: true, available: true },
 };
 
+function expectRetainedAgentAdmission(databasePath: string) {
+  const queries: string[] = [];
+  const observed = observeHostDataSql((sql) => queries.push(sql));
+  try {
+    const reader = openOpenClawAgentDatabaseReadOnly({ agentId: "main", path: databasePath });
+    expect(reader.found).toBe(true);
+    if (reader.found) {
+      reader.database.close();
+    }
+    expect
+      .soft(
+        queries.filter((sql) =>
+          /sqlite_(?:schema|master)|pragma_table|FROM\s+"?schema_meta/i.test(sql),
+        ),
+      )
+      .toEqual([]);
+  } finally {
+    observed.restore();
+  }
+}
+
 async function admit(
   db: DatabaseSync,
   databasePath: string,
@@ -37,8 +64,11 @@ async function admit(
     admit: () => {},
   });
   expect(backend.execute({ type: "schema.admit", input: schema })).toMatchObject({ ok: true });
+  if ("kind" in connection) {
+    expectRetainedAgentAdmission(databasePath);
+  }
   const prepare = { type: "vector.prepare", input: { state } } as const;
-  await backend.prepare(prepare);
+  await backend.prepare?.(prepare);
   expect(backend.execute(prepare)).toMatchObject({ ok: true });
   return backend;
 }
@@ -49,7 +79,7 @@ it.each(["clean", "unclean"])(
     await withOpenClawTestState({ scenario: "minimal" }, async (fixture) => {
       const options = { agentId: "main", path: path.join(fixture.stateDir, "agent.sqlite") };
       const target = openOpenClawAgentDatabase(options);
-      const backend = await admit(target.db, target.path);
+      const backend = await admit(requireNativeSqliteDatabase(target.db), target.path);
       const sourcePath = path.join(fixture.stateDir, "shadow.sqlite");
       using source = openNodeSqliteDatabase(sourcePath, { allowExtension: true });
       const sourceBackend = await admit(source, sourcePath, {
@@ -64,8 +94,15 @@ it.each(["clean", "unclean"])(
           ).toMatchObject({ ok: true });
         }
         expect(
-          sourceBackend.execute({ type: "vector.ensure", input: { dimensions: 3, state } }),
+          sourceBackend.execute({ type: "vector.ensure", input: { dimensions: 2, state } }),
         ).toMatchObject({ ok: true });
+        const resized = sourceBackend.execute({
+          type: "vector.ensure",
+          input: { dimensions: 3, state },
+        });
+        assert.ok(resized && typeof resized === "object" && "ok" in resized && resized.ok);
+        assert.ok(resized.searchSchema);
+        expect(resized.searchSchema.vector).toContain("FLOAT[3]");
         source.exec(`
           INSERT INTO memory_index_sources (path, source, hash, mtime, size)
             VALUES ('memory/reindexed.md', 'memory', 'new', 1, 1);
@@ -82,13 +119,14 @@ it.each(["clean", "unclean"])(
               sourcePath,
               sourceIdentity: readMemoryShadowIdentity(sourcePath),
               metaKey: "memory_index_meta_v1",
-              expectedRevision: readMemoryDatabaseRevision(target.db),
-              sourceHasVectors: true,
+              expectedRevision: readMemoryDatabaseRevision(requireNativeSqliteDatabase(target.db)),
+              sourceSchema: resized.searchSchema,
               vectorIndexComplete: true,
               state,
             },
           }),
         ).toMatchObject({ ok: true });
+        expectRetainedAgentAdmission(target.path);
         expect(
           target.db
             .prepare(

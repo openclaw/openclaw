@@ -43,9 +43,6 @@ type HarnessOptions = {
   platform?: NodeJS.Platform;
   resolveExecutable?: typeof import("./executables.js").resolveExecutable;
   runCommand?: (argv: string[], options: CommandOptions) => Promise<SpawnResult>;
-  readFile?: (filePath: string) => Promise<Buffer>;
-  statFile?: (filePath: string) => Promise<{ size: number }>;
-  now?: Date;
 };
 
 const maxMediaRawBytes = Math.floor((25 * 1024 * 1024 - 64 * 1024) / 4) * 3;
@@ -77,7 +74,7 @@ function createHarness(overrides: HarnessOptions = {}) {
     value: overrides.platform ?? "linux",
   });
   vi.stubEnv("PATH", "/usr/bin");
-  vi.setSystemTime(overrides.now ?? new Date("2026-07-13T12:00:10.000Z"));
+  vi.setSystemTime(new Date("2026-07-13T12:00:10.000Z"));
   boundary.resolveExecutable.mockImplementation(
     overrides.resolveExecutable ?? ((command) => `/usr/bin/${command}`),
   );
@@ -85,16 +82,13 @@ function createHarness(overrides: HarnessOptions = {}) {
   boundary.readFile.mockImplementation(async (filePath) =>
     filePath.startsWith("/sys/")
       ? "Test Camera\n"
-      : overrides.readFile
-        ? await overrides.readFile(filePath)
-        : filePath.endsWith(".jpg")
-          ? jpeg640x480
-          : Buffer.from("mp4"),
+      : filePath.endsWith(".jpg")
+        ? jpeg640x480
+        : Buffer.from("mp4"),
   );
-  boundary.stat.mockImplementation(
-    overrides.statFile ??
-      (async (filePath) => ({ size: filePath.endsWith(".jpg") ? jpeg640x480.length : 3 })),
-  );
+  boundary.stat.mockImplementation(async (filePath) => ({
+    size: filePath.endsWith(".jpg") ? jpeg640x480.length : 3,
+  }));
   boundary.runCommand.mockImplementation(async (argv, options) =>
     argv.includes("-list_formats")
       ? success("[video4linux2,v4l2] Raw : yuyv422 : YUYV 4:2:2")
@@ -113,6 +107,14 @@ function createHarness(overrides: HarnessOptions = {}) {
   return { command, invoke, runCommand };
 }
 
+async function expectLocationError(
+  runCommand: NonNullable<HarnessOptions["runCommand"]>,
+  error: string,
+) {
+  const { invoke } = createHarness({ runCommand });
+  await expect(invoke("location.get")).rejects.toThrow(error);
+}
+
 describe("linux-node commands", () => {
   beforeEach(() => vi.useFakeTimers({ toFake: ["Date"] }));
 
@@ -122,6 +124,29 @@ describe("linux-node commands", () => {
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
     vi.clearAllMocks();
+  });
+
+  it.each(["camera.list", "camera.snap", "camera.clip"])(
+    "surfaces failed device enumeration for %s without starting FFmpeg",
+    async (name) => {
+      const { command } = createHarness();
+      const error = Object.assign(new Error("device enumeration denied"), { code: "EACCES" });
+      boundary.readdir.mockRejectedValueOnce(error);
+
+      await expect(command(name).handle()).rejects.toBe(error);
+      expect(boundary.runCommand).not.toHaveBeenCalled();
+    },
+  );
+
+  it("distinguishes successful empty enumeration from a failed device read", async () => {
+    const { command } = createHarness();
+    boundary.readdir.mockResolvedValue([]);
+
+    await expect(command("camera.list").handle()).resolves.toBe('{"devices":[]}');
+    await expect(command("camera.snap").handle()).rejects.toThrow(
+      "CAMERA_UNAVAILABLE: no V4L2 camera devices found",
+    );
+    expect(boundary.runCommand).not.toHaveBeenCalled();
   });
 
   it("lists only V4L2 nodes that expose capture formats through FFmpeg", async () => {
@@ -136,18 +161,12 @@ describe("linux-node commands", () => {
     boundary.readdir.mockResolvedValue(["video1", "media0", "video0"]);
     boundary.readFile.mockResolvedValue("Integrated Camera\n");
     boundary.runCommand.mockImplementation(runCommand);
-    await expect(command("camera.list").handle()).resolves.toBe(
-      JSON.stringify({
-        devices: [
-          {
-            id: "/dev/video0",
-            name: "Integrated Camera",
-            position: "unknown",
-            deviceType: "v4l2",
-          },
-        ],
-      }),
-    );
+    const payload = {
+      devices: [
+        { id: "/dev/video0", name: "Integrated Camera", position: "unknown", deviceType: "v4l2" },
+      ],
+    };
+    await expect(command("camera.list").handle()).resolves.toBe(JSON.stringify(payload));
     expect(runCommand).toHaveBeenCalledTimes(2);
   });
 
@@ -175,43 +194,26 @@ describe("linux-node commands", () => {
 
   it("maps notification priority and ignores sound and delivery", async () => {
     const { command, runCommand } = createHarness();
-    await expect(
-      command("system.notify").handle(
-        JSON.stringify({
-          title: "Build complete",
-          body: "All checks passed",
-          priority: "timeSensitive",
-          sound: "default",
-          delivery: "system",
-        }),
-      ),
-    ).resolves.toBe('{"ok":true}');
+    const title = "Build complete";
+    const body = "All checks passed";
+    const params = { title, body, priority: "timeSensitive", sound: "default", delivery: "system" };
+    await expect(command("system.notify").handle(JSON.stringify(params))).resolves.toBe(
+      '{"ok":true}',
+    );
     expect(runCommand).toHaveBeenCalledWith(
-      [
-        "/usr/bin/notify-send",
-        "--urgency",
-        "critical",
-        "--",
-        "Build complete",
-        "All checks passed",
-      ],
+      ["/usr/bin/notify-send", "--urgency", "critical", "--", title, body],
       { timeoutMs: 10_000 },
     );
   });
 
   it("accepts either notification field but rejects an empty notification", async () => {
     const { command, runCommand } = createHarness();
-    await expect(
-      command("system.notify").handle(JSON.stringify({ title: "Status", body: "" })),
-    ).resolves.toBe('{"ok":true}');
-    expect(runCommand.mock.calls[0]?.[0]).toEqual([
-      "/usr/bin/notify-send",
-      "--urgency",
-      "normal",
-      "--",
-      "Status",
-      "",
-    ]);
+    const params = { title: "Status", body: "" };
+    await expect(command("system.notify").handle(JSON.stringify(params))).resolves.toBe(
+      '{"ok":true}',
+    );
+    const argv = ["/usr/bin/notify-send", "--urgency", "normal", "--", "Status", ""];
+    expect(runCommand.mock.calls[0]?.[0]).toEqual(argv);
     await expect(command("system.notify").handle("{}")).rejects.toThrow(
       "INVALID_REQUEST: empty notification",
     );
@@ -309,9 +311,9 @@ describe("linux-node commands", () => {
   it("accounts for GeoClue second precision when maxAgeMs is zero", async () => {
     const output = `\nNew location:\nLatitude: 48\nLongitude: 16\nAccuracy: 25 meters\nTimestamp: now (1783944010 seconds since the Epoch)\n`;
     const harness = createHarness({
-      now: new Date("2026-07-13T12:00:10.900Z"),
       runCommand: async () => success(output),
     });
+    vi.setSystemTime(new Date("2026-07-13T12:00:10.900Z"));
 
     await expect(
       harness.command("location.get").handle(JSON.stringify({ maxAgeMs: 0 })),
@@ -319,36 +321,21 @@ describe("linux-node commands", () => {
   });
 
   it("returns stable location timeout and unavailable errors", async () => {
-    const timeout = createHarness({ runCommand: async () => success("") });
-    await expect(timeout.command("location.get").handle()).rejects.toThrow(
-      "LOCATION_TIMEOUT: no fix in time",
-    );
-
-    const unavailable = createHarness({
-      runCommand: async () => ({ ...success(), code: 1, stderr: "GeoClue service unavailable" }),
-    });
-    await expect(unavailable.command("location.get").handle()).rejects.toThrow(
+    await expectLocationError(async () => success(""), "LOCATION_TIMEOUT: no fix in time");
+    await expectLocationError(
+      async () => ({ ...success(), code: 1, stderr: "GeoClue service unavailable" }),
       "LOCATION_UNAVAILABLE: GeoClue service unavailable",
     );
-
-    const disabled = createHarness({
-      runCommand: async () => success("Geolocation disabled. Quitting..\n"),
-    });
-    await expect(disabled.command("location.get").handle()).rejects.toThrow(
+    await expectLocationError(
+      async () => success("Geolocation disabled. Quitting..\n"),
       "LOCATION_DISABLED: GeoClue location services are disabled",
     );
-
     const revokedOutput =
       "New location:\nLatitude: 48\nLongitude: 16\nAccuracy: 25 meters\nAccessDenied: Geolocation disabled for UID 1000\n";
-    const revoked = createHarness({
-      runCommand: async (_argv, options) => {
-        expect(options.onOutputChunk?.(Buffer.from(revokedOutput), "stdout")).toBe(false);
-        return success(revokedOutput);
-      },
-    });
-    await expect(revoked.command("location.get").handle()).rejects.toThrow(
-      "LOCATION_DISABLED: GeoClue location services are disabled",
-    );
+    await expectLocationError(async (_argv, options) => {
+      expect(options.onOutputChunk?.(Buffer.from(revokedOutput), "stdout")).toBe(false);
+      return success(revokedOutput);
+    }, "LOCATION_DISABLED: GeoClue location services are disabled");
   });
 
   it("gates handlers even when invoked without advertisement", async () => {
@@ -364,11 +351,12 @@ describe("linux-node commands", () => {
   });
 
   it("rejects media beyond the 25 MB base64 budget", async () => {
+    const { command } = createHarness();
     const readFile = vi.fn(async () => Buffer.alloc(maxMediaRawBytes + 1));
-    const { command } = createHarness({
-      readFile,
-      statFile: async () => ({ size: maxMediaRawBytes + 1 }),
-    });
+    boundary.stat.mockResolvedValue({ size: maxMediaRawBytes + 1 });
+    boundary.readFile.mockImplementation(async (filePath) =>
+      filePath.startsWith("/sys/") ? "Test Camera\n" : await readFile(),
+    );
     await expect(command("camera.clip").handle()).rejects.toThrow("PAYLOAD_TOO_LARGE");
     expect(readFile).not.toHaveBeenCalled();
   });

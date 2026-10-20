@@ -30,12 +30,17 @@ import {
   projectExistingAgentDatabaseTargets,
   resolveTargetSqliteOptions,
 } from "../infra/session-sqlite-migration-readers.js";
+import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import { normalizeMainKey } from "../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import {
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
+import {
+  createOpenClawAgentDatabasePathMatcher,
+  isSameOpenClawAgentDatabasePath,
+} from "../state/openclaw-agent-db.paths.js";
 import {
   collectCanonicalSessionRepairGroups,
   resolveCanonicalSessionDestination,
@@ -130,16 +135,7 @@ function hydrateCanonicalSessionCandidates(
     CanonicalSessionCandidateFact,
     ReturnType<typeof loadCanonicalSessionRepairEntries>[number]
   >();
-  const byStore = new Map<string, CanonicalSessionCandidateFact[]>();
-  for (const fact of facts) {
-    const key = `${fact.agentId}\0${fact.storePath}`;
-    const grouped = byStore.get(key);
-    if (grouped) {
-      grouped.push(fact);
-    } else {
-      byStore.set(key, [fact]);
-    }
-  }
+  const byStore = groupRecords(facts, (fact) => `${fact.agentId}\0${fact.storePath}`);
   for (const group of byStore.values()) {
     const first = group[0]!;
     const entries = loadCanonicalSessionRepairEntries(
@@ -167,7 +163,8 @@ function mergeCanonicalSessionEntryCandidates(
         ? winner.entry.updatedAt
         : 0;
     const incomingPreferred =
-      candidate.sqlitePath === destinationPath && candidate.sessionKey === candidate.canonicalKey;
+      isSameOpenClawAgentDatabasePath(candidate.sqlitePath, destinationPath) &&
+      candidate.sessionKey === candidate.canonicalKey;
     if (
       !winner ||
       incomingUpdatedAt > selectedUpdatedAt ||
@@ -184,7 +181,7 @@ function mergeCanonicalSessionEntryCandidates(
       preferred = incomingPreferred;
     }
   }
-  return winner ? { entry: structuredClone(winner.entry), winner } : undefined;
+  return winner ? { entry: winner.entry, winner } : undefined;
 }
 
 function selectCanonicalSessionCandidate(
@@ -221,7 +218,7 @@ function selectCanonicalSessionCandidate(
   const authoritativeStamp =
     requiredCandidates.find(
       (candidate) =>
-        candidate.sqlitePath === destination.sqlitePath &&
+        isSameOpenClawAgentDatabasePath(candidate.sqlitePath, destination.sqlitePath) &&
         candidate.sessionKey === candidate.canonicalKey,
     )?.entry ??
     mergeCanonicalSessionEntryCandidates(requiredCandidates, destination.sqlitePath)?.entry;
@@ -244,8 +241,10 @@ function resolveSingleDatabaseCanonicalRepairGroup(
   const selected = selectCanonicalSessionCandidate(candidates, params);
   if (
     !selected ||
-    selected.winner.sqlitePath !== selected.destination.sqlitePath ||
-    candidates.some((candidate) => candidate.sqlitePath !== selected.destination.sqlitePath)
+    candidates.some(
+      (candidate) =>
+        !isSameOpenClawAgentDatabasePath(candidate.sqlitePath, selected.destination.sqlitePath),
+    )
   ) {
     return undefined;
   }
@@ -383,16 +382,14 @@ async function repairCanonicalSessionGroup(
   await ensureTranscriptGenerationsForCanonicalRepair(candidates);
   const winner = selected.winner;
   const destination = selected.destination;
-  const byDatabase = new Map<string, CanonicalSessionCandidate[]>();
-  for (const candidate of candidates) {
-    const group = byDatabase.get(candidate.sqlitePath) ?? [];
-    group.push(candidate);
-    byDatabase.set(candidate.sqlitePath, group);
-  }
+  const isSameDatabasePath = createOpenClawAgentDatabasePathMatcher();
+  const databaseKey = isSameDatabasePath.createIndex();
+  const byDatabase = groupRecords(candidates, (candidate) => databaseKey(candidate.sqlitePath));
 
-  const destinationStore = byDatabase.get(destination.sqlitePath) ?? [];
+  const destinationStore = byDatabase.get(databaseKey(destination.sqlitePath)) ?? [];
   const archivedDirectories = new Set<string>();
-  if (winner.sqlitePath !== destination.sqlitePath) {
+  const winnerInDestination = isSameDatabasePath(winner.sqlitePath, destination.sqlitePath);
+  if (!winnerInDestination) {
     const generationIds = new Set([
       ...listSessionGenerationIdsForCanonicalRepair({
         agentId: winner.agentId,
@@ -453,13 +450,13 @@ async function repairCanonicalSessionGroup(
     allowCanonicalRepair: true,
     afterUpsertsInTransaction: (destinationDatabase) => {
       applyCanonicalDestinationArtifacts({
-        copyWinnerAlias: winner.sqlitePath === destination.sqlitePath,
+        copyWinnerAlias: winnerInDestination,
         database: destinationDatabase,
         destinationStore,
         rehomeDeliveries: true,
         winner,
       });
-      if (winner.sqlitePath !== destination.sqlitePath) {
+      if (!winnerInDestination) {
         copySessionOwnedStateForCanonicalRepair({
           canonicalKey: winner.canonicalKey,
           destinationDatabase,
@@ -481,7 +478,7 @@ async function repairCanonicalSessionGroup(
   }
 
   for (const [sqlitePath, storeCandidates] of byDatabase) {
-    if (sqlitePath === destination.sqlitePath) {
+    if (isSameDatabasePath(sqlitePath, destination.sqlitePath)) {
       continue;
     }
     const storeCandidate = storeCandidates[0]!;
@@ -571,8 +568,10 @@ export async function repairCanonicalSessionKeys(params: {
           );
           if (
             !nextSingleDatabaseGroup ||
-            nextSingleDatabaseGroup.selected.destination.sqlitePath !==
-              singleDatabaseGroup.selected.destination.sqlitePath
+            !isSameOpenClawAgentDatabasePath(
+              nextSingleDatabaseGroup.selected.destination.sqlitePath,
+              singleDatabaseGroup.selected.destination.sqlitePath,
+            )
           ) {
             break;
           }

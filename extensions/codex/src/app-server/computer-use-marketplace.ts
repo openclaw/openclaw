@@ -40,6 +40,8 @@ export async function ensureCodexManagedBundledMarketplace(params: {
   ownershipCandidates?: readonly MacOSDesktopCodexAppPathCandidate[];
   computerUsePluginName?: string;
   computerUseMcpServerName?: string;
+  desktopFingerprint?: string;
+  forceRefresh?: boolean;
   assertCurrent?: () => void;
 }): Promise<string | undefined> {
   const candidates = params.candidates ?? resolveMacOSDesktopCodexAppPathCandidates();
@@ -52,6 +54,7 @@ export async function ensureCodexManagedBundledMarketplace(params: {
     params.codexHome,
     params.computerUsePluginName,
     params.computerUseMcpServerName,
+    params.desktopFingerprint,
   );
   const parentPath = path.dirname(resolveCodexManagedBundledMarketplacePath(params.codexHome));
   const targetPath = path.join(parentPath, MARKETPLACE_NAME);
@@ -75,6 +78,7 @@ export async function ensureCodexManagedBundledMarketplace(params: {
     unifiedRuntime,
     ownershipCandidates: params.ownershipCandidates ?? candidates,
     assertCurrent: params.assertCurrent,
+    forceRefresh: params.forceRefresh,
   });
   activeInstalls.set(physicalTargetPath, install);
   try {
@@ -92,11 +96,13 @@ async function publishManagedWrapper(params: {
   unifiedRuntime?: CodexUnifiedComputerUseRuntime;
   ownershipCandidates: readonly MacOSDesktopCodexAppPathCandidate[];
   assertCurrent?: () => void;
+  forceRefresh?: boolean;
 }): Promise<string> {
   const { parent, physicalTargetPath, targetPath, source, ownershipCandidates, assertCurrent } =
     params;
   if (
-    await wrapperMatches(physicalTargetPath, source.bundledMarketplacePath, params.unifiedRuntime)
+    !params.forceRefresh &&
+    (await wrapperMatches(physicalTargetPath, source.bundledMarketplacePath, params.unifiedRuntime))
   ) {
     return targetPath;
   }
@@ -146,18 +152,18 @@ async function publishManagedWrapper(params: {
       );
     }
     if (existing) {
-      await assertDirectoryIdentityStable(parent, "managed bundled marketplace parent");
+      assertDirectoryIdentityStable(parent, "managed bundled marketplace parent");
       assertCurrent?.();
       // The wrapper is generated from the desktop bundle. If publication fails
       // after removal, the next acquisition rebuilds it without a rollback tree.
       await fs.rm(physicalTargetPath, { recursive: true });
     }
-    await assertDirectoryIdentityStable(parent, "managed bundled marketplace parent");
+    assertDirectoryIdentityStable(parent, "managed bundled marketplace parent");
     assertCurrent?.();
     await fs.rename(stagingPath, physicalTargetPath);
     return targetPath;
   } finally {
-    if (await directoryIdentityIsStable(parent)) {
+    if (directoryIdentityIsStable(parent)) {
       await fs.rm(stagingPath, { recursive: true, force: true });
     }
   }

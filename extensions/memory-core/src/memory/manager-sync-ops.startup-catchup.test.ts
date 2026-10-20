@@ -1,9 +1,8 @@
-// Memory Core tests cover manager sync ops.startup-catchup plugin behavior.
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import { buildSessionEntry } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
+import * as memoryFoundation from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import * as memorySessions from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   captureRuntimeConfigAsyncReader,
@@ -16,19 +15,20 @@ import {
   publishSessionTranscriptUpdateByIdentity,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
-import { observeHostDataSql } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  requireNativeSqliteDatabase,
+  observeHostDataSql,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ensureMemorySessionTombstones,
   recordMemorySessionTombstonesInDatabase,
 } from "../memory-session-tombstones.js";
 import * as cpuRuntime from "./manager-cpu-worker-runtime.js";
 import {
-  SessionStartupCatchupHarness,
-  emitSessionTranscriptUpdate,
+  SessionStartupCatchupHarness as Harness,
   startupHarnessDatabases,
-  resetTranscriptUpdateListener,
 } from "./manager-sync-ops.startup-catchup.test-support.js";
 
 describe("session startup catch-up", () => {
@@ -42,13 +42,11 @@ describe("session startup catch-up", () => {
     });
     await captureRuntimeConfigAsyncReader()();
     stateDir = testState.stateDir;
-    resetTranscriptUpdateListener();
   });
 
   afterEach(async () => {
     vi.clearAllTimers();
     vi.useRealTimers();
-    resetTranscriptUpdateListener();
     for (const database of startupHarnessDatabases) {
       await database.closeShadow();
     }
@@ -65,7 +63,7 @@ describe("session startup catch-up", () => {
     content = "startup catchup",
     timestamp?: string,
   ): Promise<{ filePath: string; size: number; mtimeMs: number }> {
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
+    const sessionsDir = memoryFoundation.resolveSessionTranscriptsDirForAgent("main");
     await fs.mkdir(sessionsDir, { recursive: true });
     const filePath = path.join(sessionsDir, name);
     await fs.writeFile(
@@ -89,89 +87,111 @@ describe("session startup catch-up", () => {
     await captureRuntimeConfigAsyncReader()();
   }
 
+  type TranscriptMessage = {
+    role: "user" | "assistant";
+    content: string;
+    provenance?: { kind: "internal_system"; sourceTool: string };
+  };
+
   async function writeSqliteSession(
     params: {
       storePath?: string;
       sessionId?: string;
       sessionKey?: string;
       content?: string;
-      role?: "assistant" | "user";
+      message?: TranscriptMessage;
       updatedAt?: number;
     } = {},
-  ): Promise<{
-    storePath: string;
-    sessionId: string;
-    sessionKey: string;
-    corpusPath: string;
-  }> {
+  ) {
     const storePath =
       params.storePath ?? path.join(stateDir, "agents", "main", "sessions", "sessions.json");
     const sessionId = params.sessionId ?? "thread";
     const sessionKey = params.sessionKey ?? `agent:main:chat:${sessionId}`;
+    const identity = { agentId: "main", sessionId, sessionKey, storePath };
     await configureTestSessionStore(storePath);
     await upsertSessionEntry({
       agentId: "main",
       sessionKey,
       storePath,
-      entry: {
-        sessionId,
-        updatedAt: params.updatedAt ?? 10,
-      },
+      entry: { sessionId, updatedAt: params.updatedAt ?? 10 },
     });
-    await appendSessionTranscriptMessageByIdentity({
-      agentId: "main",
-      sessionId,
-      sessionKey,
-      storePath,
-      cwd: stateDir,
-      message: {
-        role: params.role ?? "user",
-        content: params.content ?? "startup catchup",
-      },
-    });
-    return {
-      storePath,
-      sessionId,
-      sessionKey,
-      corpusPath: `sessions/main/${sessionId}.jsonl`,
-    };
+    await append(identity, params.message ?? params.content ?? "startup catchup");
+    return { storePath, sessionId, sessionKey, corpusPath: `sessions/main/${sessionId}.jsonl` };
   }
 
-  it("excludes system-only cron-base sessions but catches later user content", async () => {
-    const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
-    const sessionId = "cron-base";
-    const sessionKey = "agent:main:cron:synthetic-job";
-    await configureTestSessionStore(storePath);
-    await upsertSessionEntry({
+  const append = (
+    session: { sessionId: string; sessionKey: string; storePath: string },
+    content: string | TranscriptMessage,
+    role: "user" | "assistant" = "user",
+  ) =>
+    appendSessionTranscriptMessageByIdentity({
       agentId: "main",
-      storePath,
-      sessionKey,
-      entry: { sessionId, updatedAt: 10 },
+      sessionId: session.sessionId,
+      sessionKey: session.sessionKey,
+      storePath: session.storePath,
+      cwd: stateDir,
+      message: typeof content === "string" ? { role, content } : content,
     });
-    const identity = { agentId: "main", sessionId, sessionKey, storePath, cwd: stateDir };
-    await appendSessionTranscriptMessageByIdentity({
-      ...identity,
+
+  async function readEntry(...args: Parameters<typeof memorySessions.buildSessionEntry>) {
+    const entry = await memorySessions.buildSessionEntry(...args);
+    assert.isNotNull(entry, "Expected a transcript entry");
+    return entry;
+  }
+
+  const sourceRow = (entry: memorySessions.SessionFileEntry, mtime = entry.mtimeMs) => ({
+    path: entry.path,
+    hash: entry.hash,
+    mtime,
+    size: entry.size,
+  });
+  async function flushSessionSync(harness: Harness, ms = 30_000) {
+    await vi.advanceTimersByTimeAsync(ms);
+    await harness.waitForSessionSync();
+  }
+
+  it("defers startup parsing while excluding system-only sessions and catching later user content", async () => {
+    const session = await writeSqliteSession({
+      sessionId: "cron-base",
+      sessionKey: "agent:main:cron:synthetic-job",
+      // Keep the synthetic session recent so retention cannot prune it.
+      updatedAt: Date.now(),
       message: {
         role: "user",
         content: "Scheduled internal maintenance reminder.",
         provenance: { kind: "internal_system", sourceTool: "cron" },
       },
     });
-    const harness = await SessionStartupCatchupHarness.create([]);
-    await expect(harness.markStartupDirtyFiles()).resolves.toEqual([]);
-    expect(harness.isSessionsDirty()).toBe(false);
+    const harness = await Harness.create([], true);
+    const parse = vi.spyOn(memorySessions, "buildSessionEntries");
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    try {
+      await expect(harness.markStartupDirtyFiles(true)).resolves.toEqual([]);
+      expect(harness.isSessionsDirty()).toBe(false);
+      expect(parse).toHaveBeenCalledOnce();
+      parse.mockClear();
+      await harness.catchUp();
+      expect(parse).not.toHaveBeenCalled();
+      expect(harness.indexedPaths).toEqual([]);
+      await flushSessionSync(harness);
+      expect(harness.indexedPaths).toEqual([]);
 
-    await appendSessionTranscriptMessageByIdentity({
-      ...identity,
-      message: { role: "user", content: "Remember my favorite fruit is mango." },
-    });
-    await expect(harness.markStartupDirtyFiles()).resolves.toEqual([sessionKey]);
-    expect(harness.isSessionsDirty()).toBe(true);
+      await append(session, "Remember my favorite fruit is mango.");
+      await expect(harness.markStartupDirtyFiles(true)).resolves.toEqual([session.sessionKey]);
+      parse.mockClear();
+      await harness.catchUp();
+      expect(parse).not.toHaveBeenCalled();
+      await flushSessionSync(harness);
+      expect(harness.indexedPaths).toEqual([session.corpusPath]);
+      expect(harness.indexedContents[0]).toContain("Remember my favorite fruit is mango.");
+    } finally {
+      parse.mockRestore();
+    }
   });
 
   it("prunes indexed sessions that are absent from the live corpus", async () => {
     const stalePath = "sessions/main/deleted.jsonl";
-    const harness = await SessionStartupCatchupHarness.create(
+    const harness = await Harness.create(
       [{ path: stalePath, hash: "stale-hash", mtime: 10, size: 20 }],
       true,
     );
@@ -179,8 +199,7 @@ describe("session startup catch-up", () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     await expect(harness.catchUp()).resolves.toEqual([]);
     expect(harness.syncCalls).toEqual([]);
-    await vi.advanceTimersByTimeAsync(30_000);
-    await harness.waitForSessionSync();
+    await flushSessionSync(harness);
 
     expect(harness.syncCalls).toEqual([{ reason: "session-startup-catchup" }]);
     expect(harness.deletedSources).toEqual([
@@ -189,92 +208,55 @@ describe("session startup catch-up", () => {
     expect(harness.getIndexedSourceState(stalePath)).toBeUndefined();
   });
 
-  it("indexes a same-size file transcript whose mtime rolled back", async () => {
-    const archiveName = "thread.jsonl.deleted.2026-08-01T10-00-00.000Z";
-    const original = await writeSessionFile(archiveName, "version before");
-    const originalEntry = await buildSessionEntry(original.filePath);
-    if (!originalEntry) {
-      throw new Error("expected original file transcript entry");
-    }
-    const replacement = await writeSessionFile(archiveName, "version after!");
-    expect(replacement.size).toBe(original.size);
-    const rolledBackMtime = new Date(Math.max(1, original.mtimeMs - 60_000));
-    await fs.utimes(replacement.filePath, rolledBackMtime, rolledBackMtime);
-    const rolledBack = await fs.stat(replacement.filePath);
-    expect(rolledBack.mtimeMs).toBeLessThan(original.mtimeMs);
-
-    const harness = await SessionStartupCatchupHarness.create(
-      [
-        {
-          path: originalEntry.path,
-          hash: originalEntry.hash,
-          mtime: original.mtimeMs,
-          size: original.size,
-        },
-      ],
-      true,
-    );
-
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    await expect(harness.catchUp()).resolves.toEqual([replacement.filePath]);
-    await vi.advanceTimersByTimeAsync(30_000);
-    await harness.waitForSessionSync();
-
-    expect(harness.syncCalls).toEqual([{ reason: "session-startup-catchup" }]);
-    expect(harness.indexedPaths).toEqual([`sessions/main/${archiveName}`]);
-    expect(harness.indexedContents).toEqual(["User: version after!"]);
-  });
-
-  it("converges an unchanged file mtime rollback after direct session sync", async () => {
-    const archiveName = "thread.jsonl.deleted.2026-08-01T11-00-00.000Z";
-    const messageTimestamp = "2026-08-01T10:30:00.000Z";
-    const original = await writeSessionFile(archiveName, "unchanged content", messageTimestamp);
-    const originalEntry = await buildSessionEntry(original.filePath);
-    if (!originalEntry) {
-      throw new Error("expected original file transcript entry");
-    }
-    const rolledBackMtime = new Date(Math.max(1, original.mtimeMs - 60_000));
-    await fs.utimes(original.filePath, rolledBackMtime, rolledBackMtime);
-    const restoredEntry = await buildSessionEntry(original.filePath);
-    if (!restoredEntry) {
-      throw new Error("expected restored file transcript entry");
-    }
-    expect(restoredEntry.hash).toBe(originalEntry.hash);
-
-    const harness = await SessionStartupCatchupHarness.create(
-      [
-        {
-          path: originalEntry.path,
-          hash: originalEntry.hash,
-          mtime: original.mtimeMs,
-          size: original.size,
-        },
-      ],
-      true,
-    );
-
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    await expect(harness.catchUp()).resolves.toEqual([original.filePath]);
-    await vi.advanceTimersByTimeAsync(30_000);
-    await harness.waitForSessionSync();
-    expect(harness.indexedPaths).toEqual([]);
-    expect(harness.getIndexedSourceState(originalEntry.path)).toEqual({
-      path: originalEntry.path,
-      hash: originalEntry.hash,
-      mtime: restoredEntry.mtimeMs,
-      size: restoredEntry.size,
-    });
-    expect(harness.getSourceMetadataUpdateCount()).toBe(1);
-
-    const restarted = harness.restartForStartup();
-    await expect(restarted.catchUp()).resolves.toEqual([]);
-    expect(restarted.syncCalls).toEqual([]);
-    expect(restarted.indexedPaths).toEqual([]);
-  });
+  it.each([true, false])(
+    "converges a file mtime rollback (changed content: %s)",
+    async (changed) => {
+      const archiveName = "thread.jsonl.deleted.2026-08-01T11-00-00.000Z";
+      const timestamp = changed ? undefined : "2026-08-01T10:30:00.000Z";
+      const original = await writeSessionFile(
+        archiveName,
+        changed ? "version before" : "unchanged content",
+        timestamp,
+      );
+      const originalEntry = await readEntry(original.filePath);
+      const replacement = changed
+        ? await writeSessionFile(archiveName, "version after!")
+        : original;
+      if (changed) {
+        expect(replacement.size).toBe(original.size);
+      }
+      const rollback = new Date(Math.max(1, original.mtimeMs - 60_000));
+      await fs.utimes(replacement.filePath, rollback, rollback);
+      const restored = changed ? null : await readEntry(replacement.filePath);
+      expect((await fs.stat(replacement.filePath)).mtimeMs).toBeLessThan(original.mtimeMs);
+      if (restored) {
+        expect(restored.hash).toBe(originalEntry.hash);
+      }
+      const harness = await Harness.create([sourceRow(originalEntry, original.mtimeMs)], true);
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      await expect(harness.catchUp()).resolves.toEqual([replacement.filePath]);
+      await flushSessionSync(harness);
+      if (changed) {
+        expect([harness.syncCalls, harness.indexedPaths, harness.indexedContents]).toEqual([
+          [{ reason: "session-startup-catchup" }],
+          [`sessions/main/${archiveName}`],
+          ["User: version after!"],
+        ]);
+      } else {
+        assert.isNotNull(restored);
+        expect(harness.indexedPaths).toEqual([]);
+        expect(harness.getIndexedSourceState(originalEntry.path)).toEqual(sourceRow(restored));
+        expect(harness.getSourceMetadataUpdateCount()).toBe(1);
+        const restarted = harness.restartForStartup();
+        await expect(restarted.catchUp()).resolves.toEqual([]);
+        expect(restarted).toMatchObject({ syncCalls: [], indexedPaths: [] });
+      }
+    },
+  );
 
   it("converges a legacy SQLite activity fingerprint without reindexing unchanged text", async () => {
     const session = await writeSqliteSession({ updatedAt: 10 });
-    const entry = await buildSessionEntry(session.sessionKey, {
+    const entry = await readEntry(session.sessionKey, {
       agentId: "main",
       sessionId: session.sessionId,
       storePath: session.storePath,
@@ -282,48 +264,16 @@ describe("session startup catch-up", () => {
       updatedAtMs: 10,
       sessionKind: "interactive",
     });
-    if (!entry) {
-      throw new Error("expected SQLite transcript entry");
-    }
-    const harness = await SessionStartupCatchupHarness.create(
-      [
-        {
-          path: entry.path,
-          hash: entry.hash,
-          mtime: 20,
-          size: entry.size,
-        },
-      ],
-      true,
-      false,
-    );
+    const harness = await Harness.create([sourceRow(entry, 20)], true);
 
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const observed = observeHostDataSql();
-    const cpuStart = process.threadCpuUsage();
-    const started = performance.now();
     try {
       await expect(harness.catchUp()).resolves.toEqual([session.sessionKey]);
-      await vi.advanceTimersByTimeAsync(30_000);
-      await harness.waitForSessionSync();
+      await flushSessionSync(harness);
       const sourceSql = observed.queries.filter((sql) =>
         /\b(?:from|update)\s+["`]?memory_index_sources\b/i.test(sql),
       );
-      if (process.env.OPENCLAW_MEMORY_RETRIEVAL_BENCH === "1") {
-        const cpu = process.threadCpuUsage(cpuStart);
-        console.log(
-          "MEMORY_PUBLICATION_BENCH",
-          JSON.stringify({
-            operation: "source-refresh",
-            cohortSqlObservations: sourceSql.length,
-            wholeMainSqlCalls: observed.calls
-              .slice(1)
-              .reduce((total, call) => total + call.mock.calls.length, 0),
-            wholeMainCpuMs: (cpu.user + cpu.system) / 1000,
-            endToEndMs: performance.now() - started,
-          }),
-        );
-      }
       expect(sourceSql).toEqual([]);
     } finally {
       observed.restore();
@@ -349,7 +299,7 @@ describe("session startup catch-up", () => {
   });
 
   it("skips corpus preflight when an ordinary sync has no session work", async () => {
-    const harness = await SessionStartupCatchupHarness.create([]);
+    const harness = await Harness.create([]);
 
     await harness.runSyncForTest({ reason: "session-delta" });
 
@@ -366,7 +316,7 @@ describe("session startup catch-up", () => {
     });
     const forgotten = await writeSqliteSession({ storePath, sessionId: "forgotten-thread" });
     await writeSqliteSession({ storePath, sessionId: "unrelated-thread" });
-    const harness = await SessionStartupCatchupHarness.create([], true, false, {
+    const harness = await Harness.create([], true, {
       session: { store: storePath },
     });
     harness.addPendingSessionTarget({
@@ -375,15 +325,8 @@ describe("session startup catch-up", () => {
       sessionKey: "agent:main:chat:custom",
     });
     harness.addPendingSessionTarget({ agentId: "main", sessionId: forgotten.sessionId });
-    await appendSessionTranscriptMessageByIdentity({
-      agentId: "main",
-      sessionId: session.sessionId,
-      sessionKey: session.sessionKey,
-      storePath,
-      cwd: stateDir,
-      message: { role: "user", content: "appended after queuing" },
-    });
-    const { db } = openOpenClawAgentDatabase({ agentId: "main" });
+    await append(session, "appended after queuing");
+    const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
     ensureMemorySessionTombstones(db);
     recordMemorySessionTombstonesInDatabase(db, {
       agentId: "main",
@@ -417,6 +360,60 @@ describe("session startup catch-up", () => {
     }
   });
 
+  const recallRun = {
+    sessionId: "active-memory-mabc123-1a2b3c4d",
+    sessionKey: "agent:main:explicit:chat-1:active-memory:0123456789ab",
+  };
+
+  it("excludes Active Memory recall runs from targeted indexing", async () => {
+    const session = await writeSqliteSession({
+      ...recallRun,
+      content: "Recall prompt that must stay out.",
+    });
+    const harness = await Harness.create([]);
+
+    await harness.runSyncForTest({
+      reason: "queued-sessions",
+      sessions: [{ agentId: "main", sessionId: session.sessionId, sessionKey: session.sessionKey }],
+    });
+
+    expect(harness.indexedPaths).toEqual([]);
+    expect(harness.indexedContents).toEqual([]);
+  });
+
+  it("excludes Active Memory recall transcripts that have no session store entry", async () => {
+    const suffix = ".jsonl.deleted.2026-08-09T00-00-00.000Z";
+    await writeSessionFile(`thread${suffix}`, "ordinary archived conversation");
+    await writeSessionFile(`${recallRun.sessionId}${suffix}`, "Recall prompt that must stay out.");
+    const harness = await Harness.create([], true);
+
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    await harness.catchUp();
+    await flushSessionSync(harness);
+
+    expect(harness.indexedPaths).toEqual([`sessions/main/thread${suffix}`]);
+  });
+
+  it("prunes Active Memory recall runs indexed by earlier versions", async () => {
+    const session = await writeSqliteSession({
+      ...recallRun,
+      content: "Recall prompt indexed by an older version.",
+    });
+    const harness = await Harness.create(
+      [{ path: session.corpusPath, hash: "old-hash", mtime: 10, size: 10 }],
+      true,
+    );
+
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    await harness.catchUp();
+    await flushSessionSync(harness);
+
+    expect(harness.indexedPaths).toEqual([]);
+    expect(harness.deletedSources).toEqual([
+      { path: session.corpusPath, source: "sessions", expectedHash: "old-hash" },
+    ]);
+  });
+
   it("keeps targeted indexing on the SQLite store resolved by its corpus snapshot", async () => {
     const session = await writeSqliteSession({
       storePath: path.join(stateDir, "custom-sessions", "sessions.json"),
@@ -431,7 +428,7 @@ describe("session startup catch-up", () => {
       content: "replacement store target",
     });
     await configureTestSessionStore(session.storePath);
-    const harness = await SessionStartupCatchupHarness.create([], false, false, {
+    const harness = await Harness.create([], false, {
       session: { store: session.storePath },
     });
     harness.afterNextCorpusListForTest(async () => {
@@ -440,13 +437,7 @@ describe("session startup catch-up", () => {
 
     await harness.runSyncForTest({
       reason: "queued-sessions",
-      sessions: [
-        {
-          agentId: "main",
-          sessionId: session.sessionId,
-          sessionKey: session.sessionKey,
-        },
-      ],
+      sessions: [{ agentId: "main", sessionId: session.sessionId, sessionKey: session.sessionKey }],
     });
 
     expect(harness.corpusListCalls).toBe(1);
@@ -458,7 +449,7 @@ describe("session startup catch-up", () => {
   it("indexes a persisted SQLite append through the real transcript listener", async () => {
     vi.useFakeTimers();
     const session = await writeSqliteSession();
-    const harness = await SessionStartupCatchupHarness.create([], true, true);
+    const harness = await Harness.create([], true);
     const turnContext = new AsyncLocalStorage<string>();
     const pendingInputContext = new AsyncLocalStorage<string>();
     turnContext.run("opening turn", () => harness.startTranscriptListener());
@@ -477,14 +468,7 @@ describe("session startup catch-up", () => {
     try {
       await turnContext.run("later turn", () =>
         pendingInputContext.run("later input", async () => {
-          await appendSessionTranscriptMessageByIdentity({
-            agentId: "main",
-            sessionId: session.sessionId,
-            sessionKey: session.sessionKey,
-            storePath: session.storePath,
-            cwd: stateDir,
-            message: { role: "assistant", content: "persisted listener update" },
-          });
+          await append(session, "persisted listener update", "assistant");
           await publishSessionTranscriptUpdateByIdentity(session);
           expect(turnContext.getStore()).toBe("later turn");
           expect(pendingInputContext.getStore()).toBe("later input");
@@ -500,6 +484,28 @@ describe("session startup catch-up", () => {
       expect(harness.indexedContents).toEqual([
         "User: startup catchup\nAssistant: persisted listener update",
       ]);
+
+      const sibling = await Harness.create([], true);
+      const restarted = harness.restartForStartup();
+      sibling.startTranscriptListener();
+      restarted.startTranscriptListener();
+      try {
+        // Retiring one subscriber must leave both independent native listeners attached.
+        harness.stopTranscriptListener();
+        await append(session, "after restart", "assistant");
+        await publishSessionTranscriptUpdateByIdentity(session);
+        await vi.advanceTimersByTimeAsync(31_000);
+        await Promise.all([sibling.waitForSessionSync(), restarted.waitForSessionSync()]);
+        expect(harness.syncCalls).toHaveLength(1);
+        const contents = [
+          "User: startup catchup\nAssistant: persisted listener update\nAssistant: after restart",
+        ];
+        expect(sibling.indexedContents).toEqual(contents);
+        expect(restarted.indexedContents).toEqual(contents);
+      } finally {
+        sibling.stopTranscriptListener();
+        restarted.stopTranscriptListener();
+      }
     } finally {
       harness.stopTranscriptListener();
       timerObserver.mockRestore();
@@ -509,7 +515,7 @@ describe("session startup catch-up", () => {
   it("indexes a real SQLite delete archive through the transcript listener", async () => {
     vi.useFakeTimers();
     const session = await writeSqliteSession({ content: "lifecycle archive memory" });
-    const harness = await SessionStartupCatchupHarness.create([], true, true);
+    const harness = await Harness.create([], true);
     harness.startTranscriptListener();
 
     try {
@@ -525,8 +531,7 @@ describe("session startup catch-up", () => {
       await harness.waitForCorpusList();
       expect(harness.getPendingArchiveFiles()).toHaveLength(1);
 
-      await vi.advanceTimersByTimeAsync(31_000);
-      await harness.waitForSessionSync();
+      await flushSessionSync(harness, 31_000);
 
       expect(harness.indexedPaths).toHaveLength(1);
       expect(harness.indexedPaths[0]).toMatch(
@@ -543,14 +548,22 @@ describe("session startup catch-up", () => {
     async (fileName) => {
       vi.useFakeTimers();
       const session = await writeSessionFile(fileName);
-      const harness = await SessionStartupCatchupHarness.create([], true);
-      harness.startTranscriptListener();
+      const harness = await Harness.create([], true);
+      const subscribe = memoryFoundation.onInternalSessionTranscriptUpdate;
+      let listener: Parameters<typeof subscribe>[0] | undefined;
+      const subscription = vi
+        .spyOn(memoryFoundation, "onInternalSessionTranscriptUpdate")
+        .mockImplementation((receive) => {
+          listener = receive;
+          return subscribe(receive);
+        });
 
       try {
-        emitSessionTranscriptUpdate({ sessionFile: session.filePath });
+        harness.startTranscriptListener();
+        assert.isDefined(listener);
+        listener({ sessionFile: session.filePath });
         await harness.waitForCorpusList();
-        await vi.advanceTimersByTimeAsync(31_000);
-        await harness.waitForSessionSync();
+        await flushSessionSync(harness, 31_000);
 
         expect([harness.getPendingArchiveFiles(), harness.getDirtyArchiveFiles()]).toEqual([
           [],
@@ -559,6 +572,7 @@ describe("session startup catch-up", () => {
         expect([harness.syncCalls, harness.indexedPaths]).toEqual([[], []]);
       } finally {
         harness.stopTranscriptListener();
+        subscription.mockRestore();
       }
     },
   );

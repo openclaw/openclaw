@@ -18,7 +18,6 @@ import {
   sanitizeAssistantVisibleText,
   stripMarkdown,
 } from "openclaw/plugin-sdk/text-chunking";
-import type { MetricEvent } from "./metrics.js";
 import { startNostrBus, type NostrBusHandle } from "./nostr-bus.js";
 import { normalizePubkey } from "./nostr-key-utils.js";
 import { getNostrRuntime } from "./runtime.js";
@@ -55,6 +54,25 @@ function normalizeNostrSenderPubkey(value: string): string | null {
   } catch {
     return null;
   }
+}
+
+function resolveAdmissionPubkeys(account: ResolvedNostrAccount): string[] | undefined {
+  if (account.config.dmPolicy !== "allowlist" || !account.config.allowFrom?.length) {
+    return undefined;
+  }
+  const pubkeys: string[] = [];
+  for (const entry of account.config.allowFrom) {
+    if (typeof entry !== "string") {
+      return undefined;
+    }
+    const normalized = normalizeNostrAllowEntry(entry);
+    // Dynamic, wildcard, and invalid entries must keep the full canonical policy path.
+    if (!normalized || !/^[0-9a-f]{64}$/.test(normalized)) {
+      return undefined;
+    }
+    pubkeys.push(normalized);
+  }
+  return [...new Set(pubkeys)];
 }
 
 const nostrIngressIdentity = {
@@ -161,6 +179,7 @@ export async function startNostrGatewayAccount(
         privateKey: account.privateKey,
         relays: account.relays,
         authorizeSender,
+        admissionPubkeys: resolveAdmissionPubkeys(account),
         onMessage: async (senderPubkey, text, reply, meta, lifecycle) => {
           const resolvedAccess = await resolveInboundAccess(senderPubkey, text);
           if (resolvedAccess.senderAccess.decision !== "allow") {
@@ -257,21 +276,14 @@ export async function startNostrGatewayAccount(
         onEose: (relays) => {
           ctx.log?.debug?.(`[${account.accountId}] EOSE received from relays: ${relays}`);
         },
-        onMetric: (event: MetricEvent) => {
-          if (event.name.startsWith("event.rejected.")) {
-            ctx.log?.debug?.(
-              `[${account.accountId}] Metric: ${event.name} ${JSON.stringify(event.labels)}`,
-            );
-          } else if (event.name === "relay.circuit_breaker.open") {
-            ctx.log?.warn?.(
-              `[${account.accountId}] Circuit breaker opened for relay: ${event.labels?.relay}`,
-            );
-          } else if (event.name === "relay.circuit_breaker.close") {
-            ctx.log?.info?.(
-              `[${account.accountId}] Circuit breaker closed for relay: ${event.labels?.relay}`,
-            );
-          } else if (event.name === "relay.error") {
-            ctx.log?.debug?.(`[${account.accountId}] Relay error: ${event.labels?.relay}`);
+        onRejected: (reason) => {
+          ctx.log?.debug?.(`[${account.accountId}] Event rejected: ${reason}`);
+        },
+        onCircuitBreakerChange: (relay, state) => {
+          if (state === "open") {
+            ctx.log?.warn?.(`[${account.accountId}] Circuit breaker opened for relay: ${relay}`);
+          } else {
+            ctx.log?.info?.(`[${account.accountId}] Circuit breaker closed for relay: ${relay}`);
           }
         },
       });
@@ -319,10 +331,12 @@ export const nostrPairingTextAdapter = {
     message: string;
     accountId?: string;
   }) => {
-    const bus = activeBuses.get(accountId ?? resolveDefaultNostrAccountId(cfg));
-    if (bus) {
-      await bus.sendDm(id, message);
+    const aid = accountId ?? resolveDefaultNostrAccountId(cfg);
+    const bus = activeBuses.get(aid);
+    if (!bus) {
+      throw new Error(`Nostr bus not running for account ${aid}`);
     }
+    await bus.sendDm(id, message);
   },
 };
 
@@ -374,6 +388,6 @@ export const nostrOutboundAdapter = {
   },
 } satisfies ChannelOutboundAdapter;
 
-export function getActiveNostrBuses(): Map<string, NostrBusHandle> {
-  return new Map(activeBuses);
+export function getActiveNostrBuses(): ReadonlyMap<string, NostrBusHandle> {
+  return activeBuses;
 }

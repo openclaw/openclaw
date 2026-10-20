@@ -1,7 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createSignal, flush } from "solid-js";
 import type { ChannelsPairingListResult, ChannelsStatusSnapshot } from "../../api/types.ts";
-import type { ChannelsState } from "../../lib/channels/index.ts";
+import type { ChannelCapability } from "../../lib/channels/index.ts";
 import { createInitialConfigState } from "../../lib/config/config-state-model.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import type { ChannelsProps } from "./view.types.ts";
@@ -21,7 +21,7 @@ export function createChannelsViewProps(
   overrides: ChannelsViewTestOverrides = {},
 ): ChannelsProps {
   const { channels, config, presentation, wizardHost, ...props } = overrides;
-  const channelState: ChannelsState = {
+  const channelState: ChannelCapability["state"] = {
     client: null,
     connected: true,
     channelsLoading: false,
@@ -49,20 +49,22 @@ export function createChannelsViewProps(
     presentation: {
       pluginCatalog: null,
       pluginIconUrls: {},
+      details: { has: () => false, sync: () => {}, reset: () => {}, attach: () => () => {} },
       ...presentation,
-    } as ChannelsProps["presentation"],
+    },
     wizardHost: {
-      state: { phase: "idle" },
-      multiselect: [],
-      textValue: "",
-      secretVisible: false,
-      blockedByDirtyConfig: false,
+      state: () => ({ phase: "idle" }),
+      draft: { multiselect: [], textValue: "", secretVisible: false },
+      setTextValue: () => {},
+      blockedByDirtyConfig: createSignal(false)[0],
+      whatsappAccountId: () => undefined,
+      startSetup: () => {},
       toggleMultiselect: () => {},
       toggleSecretVisibility: () => {},
       answer: () => {},
       close: () => {},
       ...wizardHost,
-    } as ChannelsProps["wizardHost"],
+    },
     pairingChannelFilter: null,
     pairingAccountFilter: null,
     pairingPrompt: null,
@@ -70,14 +72,13 @@ export function createChannelsViewProps(
     canManagePairing: true,
     canAdmin: true,
     showAdvancedSettings: false,
-    nostrProfileFormState: null,
-    nostrProfileAccountId: null,
     selectedChannel: null,
     onShowDetail: () => {},
     onCloseDetail: () => {},
     onStartSetup: () => {},
     onRefresh: () => {},
     onPairingRefresh: () => {},
+    onPairingRoot: () => {},
     onPairingFilterChange: () => {},
     onPairingReviewAccount: () => {},
     onPairingApprove: () => {},
@@ -87,17 +88,10 @@ export function createChannelsViewProps(
     onPairingPromptConfirm: () => {},
     onWhatsAppStart: () => {},
     onWhatsAppWait: () => {},
-    onWhatsAppLogout: () => {},
     onShowAdvancedSettings: () => {},
     onConfigPatch: () => {},
     onConfigSave: () => {},
     onConfigReload: () => {},
-    onNostrProfileEdit: () => {},
-    onNostrProfileCancel: () => {},
-    onNostrProfileFieldChange: () => {},
-    onNostrProfileSave: () => {},
-    onNostrProfileImport: () => {},
-    onNostrProfileToggleAdvanced: () => {},
     ...props,
   };
 }

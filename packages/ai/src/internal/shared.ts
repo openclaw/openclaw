@@ -1,5 +1,6 @@
 export { readAssistantThinkingAppend } from "@openclaw/llm-core/event-stream";
 export * from "../providers/simple-options.js";
+export { iterateSseFrames } from "../transports/transport-stream-shared.js";
 export { serializeModelRequestBody } from "../transports/model-request-body.js";
 export * from "../providers/tool-result-text.js";
 export { hasMediaPayload, isImageWithMediaPayload } from "../media-payload.js";
@@ -13,3 +14,5 @@ export * from "../utils/sanitize-unicode.js";
 export * from "../utils/system-prompt-cache-boundary.js";
 export * from "../utils/tls-certificate-errors.js";
 export { projectCopilotRequestFacts } from "../providers/github-copilot-request-facts.js";
+
+export { preparedRequestSuffix } from "../provider-options.js";

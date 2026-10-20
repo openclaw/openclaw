@@ -11,6 +11,7 @@ import {
   resolveCliExecutionAuthProfileId,
 } from "../agents/cli-execution-auth.js";
 import { resolveConfiguredSetupModelForAgent } from "../agents/utility-model.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { copyConfigResolutionFacts } from "../config/resolution-facts.js";
 import { createRuntimeConfigReader } from "../config/runtime-snapshot.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
@@ -40,15 +41,8 @@ export type SystemAgentConfiguredRoute = {
 export type SystemAgentConfiguredRouteDeps = {
   /** Explicit role selection for verifying a utility candidate alongside a working primary. */
   modelTarget?: "utility";
-  readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
-  loadAuthProfileStoreForRuntimeAsync?: typeof import("../agents/auth-profiles/store-runtime.js").loadAuthProfileStoreForRuntimeAsync;
   pluginMetadataPlugins?: PluginMetadataSnapshot["plugins"];
 };
-type SystemAgentRouteProjectionDeps = Pick<
-  SystemAgentConfiguredRouteDeps,
-  "loadAuthProfileStoreForRuntimeAsync" | "pluginMetadataPlugins" | "modelTarget"
->;
-
 /** The canonical source and default-materialized view from one authoritative read. */
 export type SystemAgentConfigSnapshot = Pick<
   ConfigFileSnapshot,
@@ -100,7 +94,7 @@ function projectSystemAgentExecutionConfig(
 export async function resolveSystemAgentConfiguredRouteFromConfig(
   runConfig: OpenClawConfig,
   requestedAgentId?: string,
-  deps: SystemAgentRouteProjectionDeps = {},
+  deps: SystemAgentConfiguredRouteDeps = {},
   configSnapshot?: SystemAgentConfigSnapshot,
 ): Promise<SystemAgentConfiguredRoute | null> {
   // Match before adding the reserved execution agent changes the source shape.
@@ -173,18 +167,20 @@ export async function resolveSystemAgentConfiguredRouteFromConfig(
               },
             }
           : {}),
-        ...(deps.loadAuthProfileStoreForRuntimeAsync
-          ? { loadAuthProfileStoreForRuntimeAsync: deps.loadAuthProfileStoreForRuntimeAsync }
-          : {}),
       })
     : undefined;
   const authProfileId = allowCliAuthProfileForwarding ? cliAuthProfileId : selection.profileId;
   const executionConfig = projectSystemAgentExecutionConfig(preparedConfig, modelOwnerAgentId);
+  const modelLabel = modelSelection.resolveConfiguredRouteModelLabel({
+    configuredRef: configuredSelection.modelRef,
+    resolved: { provider: selection.provider, model: selection.modelId },
+    ...(selection.profileId ? { profileId: selection.profileId } : {}),
+  });
   const base = {
     ...(configuredSelection.modelTarget ? { modelTarget: configuredSelection.modelTarget } : {}),
     sourceConfig: runConfig,
     runConfig: executionConfig,
-    modelLabel: `${selection.provider}/${selection.modelId}`,
+    modelLabel,
     provider: executionProvider,
     model: selection.modelId,
     agentDir: selection.agentDir,
@@ -235,7 +231,7 @@ function projectRelevantModelMap(params: {
 export async function projectInferenceRoute(
   config: OpenClawConfig,
   requestedAgentId?: string,
-  deps: SystemAgentRouteProjectionDeps = {},
+  deps: SystemAgentConfiguredRouteDeps = {},
   sourceConfig: OpenClawConfig = config,
 ): Promise<DefaultInferenceRouteProjection> {
   const { resolveProviderIdForAuth } = await import("../agents/provider-auth-aliases.js");
@@ -283,7 +279,8 @@ export async function projectInferenceRoute(
   );
   const rawModel =
     route?.modelTarget === "utility"
-      ? (agent?.utilityModel ?? defaults?.utilityModel)
+      ? (resolveAgentModelPrimaryValue(agent?.utilityModel) ??
+        resolveAgentModelPrimaryValue(defaults?.utilityModel))
       : typeof agent?.model === "string"
         ? agent.model
         : agent?.model?.primary ||

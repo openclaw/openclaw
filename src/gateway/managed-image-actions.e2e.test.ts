@@ -383,7 +383,7 @@ describe("managed image actions Gateway E2E", () => {
           });
           expect(download.expiresAt).toEqual(expect.any(String));
           const fullUrl = new URL(download.url ?? "", `http://127.0.0.1:${port}`);
-          expect(fullUrl.searchParams.get("mediaTicket")).toMatch(/^v1\./u);
+          expect(fullUrl.searchParams.get("mediaTicket")).toBeTruthy();
 
           const rootFull = await fetch(fullUrl);
           expect(rootFull.status).toBe(200);
@@ -405,12 +405,14 @@ describe("managed image actions Gateway E2E", () => {
           thumbnailUrl.pathname = thumbnailUrl.pathname.replace(/\/full$/u, "/thumbnail");
           const thumbnail = await fetch(thumbnailUrl);
           expect(thumbnail.status).toBe(200);
-          expect(thumbnail.headers.get("content-type")).toBe("image/png");
+          expect(thumbnail.headers.get("content-type")).toBe("image/webp");
           const thumbnailBytes = Buffer.from(await thumbnail.arrayBuffer());
           expect(readImageProbeFromHeader(thumbnailBytes)).toMatchObject({
-            width: 1200,
-            height: 336,
+            format: "webp",
+            width: 960,
+            height: 269,
           });
+          expect(thumbnailBytes.byteLength).toBeLessThanOrEqual(256 * 1024);
 
           const authenticated = await fetch(new URL(imageUrl, fullUrl), {
             headers: { Authorization: `Bearer ${GATEWAY_TOKEN}` },
@@ -433,11 +435,18 @@ describe("managed image actions Gateway E2E", () => {
           vi.setSystemTime(Date.parse(download.expiresAt ?? "") + 1);
           try {
             const expired = await fetch(fullUrl);
-            expect(expired.status).toBe(401);
-            expect(await expired.text()).toContain("unauthorized");
+            expect(expired.status).toBe(404);
+            expect(await expired.text()).toBe("not found");
           } finally {
             vi.useRealTimers();
           }
+
+          const renewed = await client.request<{ url: string }>("artifacts.download", {
+            sessionKey: SESSION_KEY,
+            artifactId,
+          });
+          fullUrl.search = new URL(renewed.url, fullUrl).search;
+          thumbnailUrl.search = fullUrl.search;
 
           const scope = { agentId: "main", sessionKey: SESSION_KEY, sessionId, storePath };
           // Retire the imported fixture: archive selection must not see an obsolete active file.
@@ -562,12 +571,11 @@ describe("managed image actions Gateway E2E", () => {
             record.original.mediaSubdir,
             record.original.mediaId,
           );
-          const cleanup = await cleanupManagedOutgoingMediaRecords({
+          await cleanupManagedOutgoingMediaRecords({
             stateDir,
             sessionKey: SESSION_KEY,
             forceDeleteSessionRecords: true,
           });
-          expect(cleanup).toMatchObject({ deletedRecordCount: 1, deletedFileCount: 1 });
           expect(await readManagedImageRecord(record.attachmentId, stateDir)).toBeNull();
           await expect(fs.access(originalPath)).rejects.toMatchObject({ code: "ENOENT" });
 

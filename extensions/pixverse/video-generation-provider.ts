@@ -19,11 +19,12 @@ import {
   asSafeIntegerInRange,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type {
-  VideoGenerationModeCapabilities,
-  VideoGenerationProvider,
-  VideoGenerationRequest,
-  VideoGenerationSourceAsset,
+import {
+  normalizeVideoGenerationDuration,
+  type VideoGenerationModeCapabilities,
+  type VideoGenerationProvider,
+  type VideoGenerationRequest,
+  type VideoGenerationSourceAsset,
 } from "openclaw/plugin-sdk/video-generation";
 import {
   DEFAULT_PIXVERSE_MODEL_ID,
@@ -117,13 +118,6 @@ function resolvePixVerseQuality(req: VideoGenerationRequest): string {
     : DEFAULT_PIXVERSE_QUALITY;
 }
 
-function resolvePixVerseDurationSeconds(value: number | undefined): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return 5;
-  }
-  return Math.max(1, Math.min(MAX_DURATION_SECONDS, Math.round(value)));
-}
-
 function readPixVerseSeed(value: unknown): number | undefined {
   return asSafeIntegerInRange(value, { min: 0, max: PIXVERSE_SEED_MAX });
 }
@@ -187,53 +181,6 @@ function buildUploadImageForm(asset: VideoGenerationSourceAsset): FormData {
   const file = new File([bufferToBlobPart(asset.buffer)], fileName, { type: mimeType });
   form.set("image", file);
   return form;
-}
-
-function buildVideoBody(
-  req: VideoGenerationRequest,
-  model: string,
-  imageId?: number,
-): Record<string, unknown> {
-  const options = req.providerOptions ?? {};
-  const body: Record<string, unknown> = {
-    duration: resolvePixVerseDurationSeconds(req.durationSeconds),
-    model,
-    prompt: req.prompt,
-    quality: resolvePixVerseQuality(req),
-  };
-  if (imageId !== undefined) {
-    body.img_id = imageId;
-    body.motion_mode =
-      normalizeOptionalString(options.motion_mode) ??
-      normalizeOptionalString(options.motionMode) ??
-      "normal";
-  } else {
-    body.aspect_ratio = normalizeOptionalString(req.aspectRatio) ?? "16:9";
-  }
-  const negativePrompt =
-    normalizeOptionalString(options.negative_prompt) ??
-    normalizeOptionalString(options.negativePrompt);
-  if (negativePrompt) {
-    body.negative_prompt = negativePrompt;
-  }
-  const cameraMovement =
-    normalizeOptionalString(options.camera_movement) ??
-    normalizeOptionalString(options.cameraMovement);
-  if (cameraMovement) {
-    body.camera_movement = cameraMovement;
-  }
-  const templateId = asFiniteNumber(options.template_id) ?? asFiniteNumber(options.templateId);
-  if (templateId != null) {
-    body.template_id = templateId;
-  }
-  const seed = readPixVerseSeed(options.seed);
-  if (seed !== undefined) {
-    body.seed = seed;
-  }
-  if (req.audio !== undefined) {
-    body.generate_audio_switch = req.audio;
-  }
-  return body;
 }
 
 function readPixVerseFailureMessage(payload: PixVerseVideoResultResponse): string | undefined {
@@ -361,11 +308,54 @@ export function buildPixVerseVideoGenerationProvider(): VideoGenerationProvider 
         }
       }
 
+      const options = req.providerOptions ?? {};
+      const body: Record<string, unknown> = {
+        duration: Math.min(
+          MAX_DURATION_SECONDS,
+          normalizeVideoGenerationDuration({ durationSeconds: req.durationSeconds }) ?? 5,
+        ),
+        model,
+        prompt: req.prompt,
+        quality: resolvePixVerseQuality(req),
+      };
+      if (imageId !== undefined) {
+        body.img_id = imageId;
+        body.motion_mode =
+          normalizeOptionalString(options.motion_mode) ??
+          normalizeOptionalString(options.motionMode) ??
+          "normal";
+      } else {
+        body.aspect_ratio = normalizeOptionalString(req.aspectRatio) ?? "16:9";
+      }
+      const negativePrompt =
+        normalizeOptionalString(options.negative_prompt) ??
+        normalizeOptionalString(options.negativePrompt);
+      if (negativePrompt) {
+        body.negative_prompt = negativePrompt;
+      }
+      const cameraMovement =
+        normalizeOptionalString(options.camera_movement) ??
+        normalizeOptionalString(options.cameraMovement);
+      if (cameraMovement) {
+        body.camera_movement = cameraMovement;
+      }
+      const templateId = asFiniteNumber(options.template_id) ?? asFiniteNumber(options.templateId);
+      if (templateId != null) {
+        body.template_id = templateId;
+      }
+      const seed = readPixVerseSeed(options.seed);
+      if (seed !== undefined) {
+        body.seed = seed;
+      }
+      if (req.audio !== undefined) {
+        body.generate_audio_switch = req.audio;
+      }
+
       const endpoint = imageId === undefined ? "/video/text/generate" : "/video/img/generate";
       const create = await postJsonRequest({
         url: `${baseUrl}${endpoint}`,
         headers: buildPixVerseHeaders(headers, "application/json"),
-        body: buildVideoBody(req, model, imageId),
+        body,
         timeoutMs: resolveProviderOperationTimeoutMs({
           deadline,
           defaultTimeoutMs: DEFAULT_TIMEOUT_MS,

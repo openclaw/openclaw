@@ -31,13 +31,13 @@ describe("Reef worker outbound composition", () => {
   let audit: ReturnType<typeof openReefAuditStore>;
   let flow: ReefMessageFlow;
 
-  const makeFlow = (reviews = stores.reviews) =>
+  const makeFlow = (reviews = stores.reviews, adapter = classify) =>
     new ReefMessageFlow({
       config: cfg,
       trust: trusted,
       keys,
       transport: new ReefTransportClient(cfg.relayUrl, cfg.handle!, keys, fetcher),
-      guard: classify,
+      guard: adapter,
       audit,
       replay: new MemoryReplayStore(),
       reviews,
@@ -117,6 +117,90 @@ describe("Reef worker outbound composition", () => {
     });
     expect(delivery?.bodyHash).toMatch(/^[a-f0-9]{64}$/u);
     expect(delivery?.textHash).toMatch(/^[a-f0-9]{64}$/u);
+  });
+
+  it("refuses deterministic denial before classification or relay dispatch", async () => {
+    const id = prepareReefMessageId();
+    await expect(
+      flow.send(
+        "alice",
+        "mailto:review@example.org?next=https://github.com/openclaw/openclaw/blob/430f975aacee445525c4663aa88ed1590f2f08b1/README.md",
+        {
+          messageId: id,
+        },
+      ),
+    ).rejects.toMatchObject({ stage: "deterministic" });
+    expect(classify.classify).not.toHaveBeenCalled();
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(await trusted.readOutboundDelivery("alice", id)).toBeUndefined();
+  });
+
+  it.each([
+    [
+      "content denial",
+      allow.model,
+      { ...allow, decision: "deny", category: "confidential" },
+      "confidential",
+    ],
+    ["wrong model", allow.model, { ...allow, model: "other-2026-07-12" }, "guard_failure"],
+    ["floating model", "mock-latest", { ...allow, model: "mock-latest" }, "guard_failure"],
+    ["wrong policy", allow.model, { ...allow, policyVersion: "v2" }, "guard_failure"],
+    // The external guard boundary must reject a structurally invalid adapter result.
+    ["unknown decision", allow.model, { ...allow, decision: "maybe" }, "guard_failure"],
+  ] as const)(
+    "refuses %s before recording delivery or dispatching",
+    async (_name, model, verdict, category) => {
+      const adapter = { ...guard(allow), pinnedModel: model };
+      adapter.classify.mockResolvedValue(verdict as Verdict);
+      const id = prepareReefMessageId();
+      await expect(
+        makeFlow(stores.reviews, adapter).send("alice", "private coordination", { messageId: id }),
+      ).rejects.toMatchObject({ stage: "guard", verdict: { decision: "deny", category } });
+      expect(fetcher).not.toHaveBeenCalled();
+      expect(await trusted.readOutboundDelivery("alice", id)).toBeUndefined();
+    },
+  );
+
+  it("does not reuse a durable approval across recipients", async () => {
+    await trusted.set("carol", peerTrust(generateIdentity()));
+    classify.classify.mockResolvedValue({ ...allow, decision: "review" });
+    const id = prepareReefMessageId();
+    await expect(flow.send("alice", "identical body", { messageId: id })).rejects.toMatchObject({
+      reviewOutcome: "pending",
+    });
+    const [review] = await stores.reviews.list();
+    expect(review).toMatchObject({ id, from: "bob#1", to: "alice#1", direction: "outbound" });
+    await stores.reviews.decide(review!.approvalDigest, true);
+    await expect(flow.send("carol", "identical body", { messageId: id })).rejects.toMatchObject({
+      reviewOutcome: "pending",
+    });
+    const reviews = await stores.reviews.list();
+    const carolReview = reviews.find((entry) => entry.to === "carol#1");
+    expect(carolReview).toMatchObject({ id, direction: "outbound" });
+    expect(carolReview?.approvalDigest).not.toBe(review!.approvalDigest);
+    expect(await stores.reviews.lookupDecision(carolReview!.approvalDigest)).toBe("pending");
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(await trusted.readOutboundDelivery("alice", id)).toBeUndefined();
+    expect(await trusted.readOutboundDelivery("carol", id)).toBeUndefined();
+  });
+
+  it.each([
+    ["wrong model", { ...allow, model: "wrong-2026-07-12" }, "guard_failure"],
+    ["content denial", { ...allow, decision: "deny", category: "confidential" }, "confidential"],
+  ] as const)("admits the post-approval verdict again: %s", async (_name, verdict, category) => {
+    const id = prepareReefMessageId();
+    classify.classify.mockResolvedValueOnce({ ...allow, decision: "review" });
+    await expect(
+      flow.send("alice", "private coordination", { messageId: id }),
+    ).rejects.toMatchObject({ reviewOutcome: "pending" });
+    const [review] = await stores.reviews.list();
+    await stores.reviews.decide(review!.approvalDigest, true);
+    classify.classify.mockResolvedValue(verdict);
+    await expect(
+      flow.send("alice", "private coordination", { messageId: id }),
+    ).rejects.toMatchObject({ stage: "guard", verdict: { decision: "deny", category } });
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(await trusted.readOutboundDelivery("alice", id)).toBeUndefined();
   });
 
   it.each(["denied"] as const)(

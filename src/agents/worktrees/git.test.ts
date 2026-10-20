@@ -272,6 +272,7 @@ describe("Git ref mutation ownership", () => {
 
   it("does not accept an interrupted cached remote HEAD", async () => {
     const root = await repository();
+    await requireGit(root, ["remote", "add", "origin", path.join(root, "missing.git")]);
     const run = processExec.runCommandWithTimeout;
     vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation((argv, options) => {
       const command = argv[argv.indexOf("-C") + 2];
@@ -519,6 +520,10 @@ describe("Git checkout discovery", () => {
     const nested = path.join(root, "packages", "nested");
     await fs.mkdir(path.join(root, ".git"));
     await fs.mkdir(nested, { recursive: true });
+
+    expect(findGitCheckoutRoot(nested)).toBeNull();
+    expect(insideGitCheckout(nested)).toBe(false);
+    await fs.writeFile(path.join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
 
     expect(findGitCheckoutRoot(nested)).toBe(root);
     expect(insideGitCheckout(nested)).toBe(true);

@@ -18,6 +18,39 @@ beforeAll(globalBeforeAll0);
 describe("durable commentary delivery", () => {
   beforeEach(describe0BeforeEach0);
 
+  it("forwards a WebChat progress card while the final result is still required", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = { verboseLevel: "off" };
+    const dispatcher = createDispatcher();
+    const progress: unknown[] = [];
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "webchat",
+        Surface: "webchat",
+        ChatType: "direct",
+        SessionKey: "agent:main:main",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyOptions: {
+        progressRequiresReply: true,
+        suppressDefaultToolProgressMessages: true,
+        onItemEvent: async (event) => {
+          progress.push(event);
+          return true;
+        },
+      },
+      replyResolver: async (_ctx, options) => {
+        await options?.onItemEvent?.({ kind: "tool", name: "read", status: "running" });
+        return { text: "Done." };
+      },
+    });
+    expect(progress).toEqual([{ kind: "tool", name: "read", status: "running" }]);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Done." }),
+    );
+  });
+
   it.each([
     { surface: "telegram", verbose: "on" },
     { surface: "discord", verbose: "on" },

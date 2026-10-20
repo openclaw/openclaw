@@ -1,3 +1,4 @@
+import { MIMEType } from "node:util";
 import { detectMime, isZipContainerMime, mimeTypeFromFilePath, normalizeMimeType } from "./mime.js";
 
 export type AttachmentClass =
@@ -12,7 +13,7 @@ type AttachmentCharset = "utf-16le" | "utf-16be" | "windows-1252";
 export type AttachmentClassification = {
   mime: string | undefined;
   class: AttachmentClass;
-  charset?: AttachmentCharset;
+  charset?: string;
 };
 
 const TEXT_APPLICATION_MIME = /^application\/(?:json|javascript|xml|yaml|x-yaml)$/;
@@ -134,6 +135,22 @@ export async function classifyAttachmentBytes(params: {
     filePath: params.name ?? undefined,
   });
   const detectedClass = attachmentClassFromMime(mime);
+  const mimeHints = [params.declaredMime, ...(params.additionalMimeHints ?? [])];
+  let declaredCharset: string | undefined;
+  for (const hint of mimeHints) {
+    if (!hint) {
+      continue;
+    }
+    try {
+      const charset = new MIMEType(hint).params.get("charset");
+      if (charset !== null) {
+        declaredCharset = charset;
+        break;
+      }
+    } catch {
+      // Invalid metadata still goes through byte classification and MIME allowlists.
+    }
+  }
   const hasUtf16Bom =
     params.buffer.length >= 2 &&
     (params.buffer.readUInt16LE(0) === 0xfeff || params.buffer.readUInt16LE(0) === 0xfffe);
@@ -142,13 +159,14 @@ export async function classifyAttachmentBytes(params: {
     mime?.startsWith("application/vnd.") ||
     (detectedClass !== "binary" && !hasUtf16Bom)
   ) {
-    let charset = detectedClass === "text" ? resolveUtf16Charset(params.buffer) : undefined;
+    let charset =
+      detectedClass === "text"
+        ? (resolveUtf16Charset(params.buffer) ?? declaredCharset)
+        : undefined;
     if (
       detectedClass === "text" &&
       !charset &&
-      ![params.declaredMime, ...(params.additionalMimeHints ?? [])].some((hint) =>
-        /;\s*charset\s*=/i.test(hint ?? ""),
-      ) &&
+      !mimeHints.some((hint) => /;\s*charset\s*=/i.test(hint ?? "")) &&
       sniffTextCharset(params.buffer) === "windows-1252"
     ) {
       // A text filename identifies the MIME, not its encoding. Preserve the same
@@ -183,5 +201,11 @@ export async function classifyAttachmentBytes(params: {
         ? "text/tab-separated-values"
         : "text/plain");
   // Carry the decoder that recognized the bytes; default UTF-8 needs no override.
-  return { mime: textMime, class: "text", ...(charset !== "utf-8" ? { charset } : {}) };
+  const textCharset =
+    charset === "utf-16le" || charset === "utf-16be" ? charset : (declaredCharset ?? charset);
+  return {
+    mime: textMime,
+    class: "text",
+    ...(textCharset !== "utf-8" ? { charset: textCharset } : {}),
+  };
 }

@@ -61,13 +61,14 @@ test("Node to Bun to Node changes only the selected runtime and is idempotent", 
 });
 
 test("wrong pins, writable binaries, and unsupported runtimes fail before activation", linuxRoot, async t => {
-  for (const reason of ["hash", "writable", "version"]) {
+  for (const reason of ["hash", "writable", "1.3.0", "1.4.0", "1.4.1", "1.4.2"]) {
     await t.test(reason, t => {
-      const f = fixture(t, "success", reason === "version" ? "1.3.0" : reason === "writable" ? "1.4.3" : undefined);
+      const f = fixture(t, "success", reason === "hash" ? undefined : reason === "writable" ? "1.4.3" : reason);
       if (reason === "hash") f.target[3] = "0".repeat(64);
       if (reason === "writable") chmodSync(f.bun, 0o777);
       const result = run(f);
       assert.notEqual(result.status, 0);
+      if (reason.startsWith("1.")) assert.match(result.stderr, /Gateway runtime capability probe failed/);
       assert.equal(existsSync(f.runtimeDrop), false);
       assert.equal(existsSync(f.journal), false);
       assert.doesNotMatch(events(f), /service\.system\.(restart|start|stop)/);

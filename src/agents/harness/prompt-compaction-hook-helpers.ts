@@ -17,10 +17,12 @@ const warnHookFailure = (hook: string) => (error: unknown) => {
   return undefined;
 };
 
-/** Prompt/developer-instruction pair after harness prompt-build hooks run. */
 type AgentHarnessPromptBuildResult = {
   prompt: string;
   developerInstructions: string;
+  /** Stable policy and per-turn context for harnesses with separate instruction carriers. */
+  threadDeveloperInstructions?: string;
+  turnDeveloperInstructions?: string;
   /** Optional per-turn tool restriction requested by before_prompt_build hooks. */
   toolsAllow?: string[];
   /** Span within prompt containing the original prompt input. */
@@ -31,7 +33,6 @@ type AgentHarnessDeveloperInstructionBuilder = {
   build: (params: { toolsAllow?: string[]; hasToolRestrictions: boolean }) => string | undefined;
 };
 
-/** Runs before-prompt hooks and returns the adjusted prompt fields. */
 export async function resolveAgentHarnessBeforePromptBuildResult(params: {
   prompt: string;
   currentInboundContext?: CurrentInboundPromptContext;
@@ -73,10 +74,8 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
     (typeof currentUserMessage === "object" ? currentUserMessage.idempotencyKey : undefined);
   const promptEvent = {
     prompt: inputPrompt,
-    ...(typeof currentUserMessageText === "string"
-      ? { currentUserMessage: currentUserMessageText }
-      : {}),
-    ...(typeof currentUserMessageId === "string" ? { currentUserMessageId } : {}),
+    ...(currentUserMessageText !== undefined ? { currentUserMessage: currentUserMessageText } : {}),
+    ...(currentUserMessageId !== undefined ? { currentUserMessageId } : {}),
     messages:
       hasPromptBuildHooks || hookRunner?.hasHooks("agent_turn_prepare")
         ? typeof params.messages === "function"
@@ -151,17 +150,27 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
       : promptPrefix
         ? promptPrefix.length + 2
         : 0;
+  const prependSystemContext = wrapPluginSystemContextSection(
+    promptBuildResult?.prependSystemContext,
+  );
+  const appendSystemContext = wrapPluginSystemContextSection(
+    promptBuildResult?.appendSystemContext,
+  );
+  const turnDeveloperInstructions = joinPresentTextSegments([
+    prependSystemContext,
+    appendSystemContext,
+  ]);
   return {
     prompt,
     ...(promptBuildResult?.toolsAllow !== undefined
       ? { toolsAllow: promptBuildResult.toolsAllow }
       : {}),
     developerInstructions:
-      joinPresentTextSegments([
-        wrapPluginSystemContextSection(promptBuildResult?.prependSystemContext),
-        systemPrompt,
-        wrapPluginSystemContextSection(promptBuildResult?.appendSystemContext),
-      ]) ?? systemPrompt,
+      joinPresentTextSegments([prependSystemContext, systemPrompt, appendSystemContext]) ??
+      systemPrompt,
+    ...(turnDeveloperInstructions
+      ? { threadDeveloperInstructions: systemPrompt, turnDeveloperInstructions }
+      : {}),
     promptInputRange: {
       start: promptInputStart,
       end: promptInputStart + inputPrompt.length,

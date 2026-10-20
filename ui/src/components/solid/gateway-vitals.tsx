@@ -41,7 +41,7 @@ function CpuDetailRow(props: { label: string; value: number | undefined; kind: s
   return (
     <div class="gateway-cpu-detail__thread">
       <dt>
-        <span class={`gateway-cpu-key gateway-cpu-key--${props.kind}`} aria-hidden="true" />
+        <span class={["gateway-cpu-key", `gateway-cpu-key--${props.kind}`]} aria-hidden="true" />
         {props.label}
       </dt>
       <dd>
@@ -80,7 +80,13 @@ export function GatewayCpuVital(props: GatewayVitalsProps) {
     }),
   );
   return (
-    <openclaw-tooltip class="gateway-cpu-tooltip" placement="top-start" open-on-click auto-size>
+    <openclaw-tooltip
+      class="gateway-cpu-tooltip"
+      placement="top-start"
+      open-on-click
+      auto-size
+      prop:pointerThrough={true}
+    >
       <button
         type="button"
         class="gateway-cpu-trigger"

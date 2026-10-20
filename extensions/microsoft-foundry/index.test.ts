@@ -16,7 +16,7 @@ import type {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { resolveTestNodeExecPath } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { azLoginDeviceCodeWithOptions, execAz, getAccessTokenResultAsync } from "./cli.js";
+import { execAz, getAccessTokenResultAsync } from "./cli.js";
 import plugin from "./index.js";
 import {
   promptApiKeyEndpointAndModel,
@@ -36,7 +36,6 @@ import {
 } from "./shared.js";
 const execFileMock = vi.hoisted(() => vi.fn());
 const execFileSyncMock = vi.hoisted(() => vi.fn());
-const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
 const ensureAuthProfileStoreMock = vi.hoisted(() =>
   vi.fn(() => ({
     profiles: {},
@@ -61,7 +60,6 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>();
   return {
     ...actual,
-    runCommandWithTimeout: runCommandWithTimeoutMock,
     runExec: execFileMock,
   };
 });
@@ -693,28 +691,6 @@ describe("microsoft-foundry plugin", () => {
       recoveryResponse.resolve();
       await settled;
     }
-  });
-
-  it("refreshes cached Entra tokens with bounded fallback expiry when the clock is invalid", async () => {
-    const provider = registerProvider();
-    mockAzureCliToken({ accessToken: "cached-token", expiresInMs: 10 * 60_000 });
-    ensureAuthProfileStoreMock.mockReturnValue(entraStore());
-    const runtimeContext = authContext();
-
-    const first = authResult(await provider.prepareRuntimeAuth?.(runtimeContext));
-    expect(first.apiKey).toBe("cached-token");
-
-    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
-    mockAzureCliTokenRaw(
-      JSON.stringify({
-        accessToken: "refreshed-token",
-      }),
-    );
-    const second = authResult(await provider.prepareRuntimeAuth?.(runtimeContext));
-
-    expect(second.apiKey).toBe("refreshed-token");
-    expect(second.expiresAt).toBe(55 * 60 * 1000);
-    expect(execFileMock).toHaveBeenCalledTimes(2);
   });
 
   it("keeps other configured Foundry models when switching the selected model", async () => {
@@ -1423,73 +1399,6 @@ describe("selectFoundryDeployment", () => {
       supported: [{ name: "only-claude", modelName: "claude-3.5-sonnet", state: "Succeeded" }],
     });
     expect(noteCalls.some((call) => call.title === "Unsupported Deployments")).toBe(false);
-  });
-});
-
-describe("azLoginDeviceCodeWithOptions utf-8 chunk boundary", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-    runCommandWithTimeoutMock.mockReset();
-  });
-
-  it("reassembles split-byte UTF-8 across both spawned process streams", async () => {
-    runCommandWithTimeoutMock.mockImplementationOnce(
-      async (
-        _argv: string[],
-        options: {
-          onOutputChunk?: (chunk: Buffer, stream: "stdout" | "stderr") => void;
-        },
-      ) => {
-        const writeSplitUtf8 = (stream: "stdout" | "stderr", text: string) => {
-          const bytes = Buffer.from(text);
-          options.onOutputChunk?.(bytes.subarray(0, 2), stream);
-          options.onOutputChunk?.(bytes.subarray(2), stream);
-        };
-        writeSplitUtf8("stderr", "😊");
-        writeSplitUtf8("stdout", "🚀");
-        return {
-          stdout: "",
-          stderr: "",
-          code: 1,
-          signal: null,
-          killed: false,
-          termination: "exit",
-          noOutputTimedOut: false,
-        };
-      },
-    );
-    const stdoutWriteSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    const stderrWriteSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-
-    const err = await azLoginDeviceCodeWithOptions({}).catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(Error);
-    expect((err as Error).message).toBe("az login exited with code 1: 😊🚀");
-    expect(stdoutWriteSpy).toHaveBeenCalledWith("🚀");
-    expect(stderrWriteSpy).toHaveBeenCalledWith("😊");
-  });
-
-  it("allows post-auth work after the 15-minute device-code lifetime", async () => {
-    runCommandWithTimeoutMock.mockResolvedValueOnce({
-      stdout: "",
-      stderr: "",
-      code: 124,
-      signal: null,
-      killed: true,
-      termination: "timeout",
-      noOutputTimedOut: false,
-    });
-
-    const err = await azLoginDeviceCodeWithOptions({}).catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(Error);
-    expect((err as Error).message).toBe("az login timed out after 20 minutes");
-    expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
-      ["az", "login", "--use-device-code"],
-      expect.objectContaining({
-        killProcessTree: true,
-        outputCapture: "discard",
-        timeoutMs: 20 * 60 * 1000,
-      }),
-    );
   });
 });
 

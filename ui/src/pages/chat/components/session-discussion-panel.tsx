@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, onCleanup } from "solid-js";
+import { Show, createMemo, createSignal, onSettled } from "solid-js";
 import type {
   SessionDiscussionInfo,
   SessionDiscussionState,
@@ -8,12 +8,12 @@ import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import {
   buildWidgetThemeMessage,
   postWidgetTheme,
   registerWidgetThemeFrame,
 } from "../../../lib/widget-theme.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
 
 type SessionDiscussionInfoLoader = (sessionKey: string) => Promise<SessionDiscussionInfo>;
 type SessionDiscussionStateListener = (
@@ -83,7 +83,6 @@ function resolveDiscussionEmbedUrl(value: string | undefined): string | null {
 }
 
 function DiscussionPanel(props: DiscussionProps, host: SolidBridgeElement<DiscussionProps>) {
-  const [state, setState] = createSignal<DiscussionState>({ status: "empty" });
   const request = createMemo(
     () =>
       [
@@ -95,125 +94,136 @@ function DiscussionPanel(props: DiscussionProps, host: SolidBridgeElement<Discus
       ] as const,
     { equals: (before, after) => before.every((value, index) => value === after[index]) },
   );
-  createEffect(request, ([sessionKey, loader, opener, generation, canOpen]) => {
-    let active = true;
-    const isCurrent = () =>
-      active &&
-      host.isConnected &&
-      sessionKey === host.sessionKey.trim() &&
-      loader === host.loadInfo &&
-      opener === host.openDiscussion &&
-      generation === host.sourceGeneration &&
-      canOpen === host.canOpen;
-    if (!loader || !sessionKey) {
-      setState({ status: "empty" });
-      return undefined;
-    }
-    setState({ status: "loading" });
-    void (async () => {
-      try {
-        let info = await loader(sessionKey);
-        if (!isCurrent()) {
-          return;
-        }
-        if (info.state === "available" && canOpen && opener) {
-          setState({ status: "opening" });
-          host.onStateChange?.(sessionKey, info.state, resolveDiscussionUrl(info.openUrl));
+  const renderRequest = ([sessionKey, loader, opener, generation, canOpen]: ReturnType<
+    typeof request
+  >) => {
+    const [state, setState] = createSignal<DiscussionState>({
+      status: loader && sessionKey ? "loading" : "empty",
+    });
+    let releaseTheme: (() => void) | undefined;
+    onSettled(() => {
+      let active = true;
+      const isCurrent = () =>
+        active &&
+        host.isConnected &&
+        sessionKey === host.sessionKey.trim() &&
+        loader === host.loadInfo &&
+        opener === host.openDiscussion &&
+        generation === host.sourceGeneration &&
+        canOpen === host.canOpen;
+      if (!loader || !sessionKey) {
+        return undefined;
+      }
+      void (async () => {
+        try {
+          let info = await loader(sessionKey);
           if (!isCurrent()) {
             return;
           }
-          info = (await opener(sessionKey)) ?? info;
+          if (info.state === "available" && canOpen && opener) {
+            setState({ status: "opening" });
+            host.onStateChange?.(sessionKey, info.state, resolveDiscussionUrl(info.openUrl));
+            if (!isCurrent()) {
+              return;
+            }
+            info = (await opener(sessionKey)) ?? info;
+          }
+          if (!isCurrent()) {
+            return;
+          }
+          setState({ status: "complete", info });
+          host.onStateChange?.(sessionKey, info.state, resolveDiscussionUrl(info.openUrl));
+        } catch (error) {
+          if (isCurrent()) {
+            setState({ status: "error", error });
+          }
         }
-        if (!isCurrent()) {
-          return;
+      })();
+      return () => {
+        active = false;
+        releaseTheme?.();
+      };
+    });
+    const empty = (description: string, openUrl?: string | null) => (
+      <PanelEmptyState
+        icon={<Icon name="messageSquare" />}
+        heading={t("chat.sidePanel.discussion")}
+        description={description}
+        action={
+          openUrl ? (
+            <a class="session-link" href={openUrl} target="_blank" rel="noopener">
+              {t("chat.sessionDiscussion.openExternal")}
+            </a>
+          ) : undefined
         }
-        setState({ status: "complete", info });
-        host.onStateChange?.(sessionKey, info.state, resolveDiscussionUrl(info.openUrl));
-      } catch (error) {
-        if (isCurrent()) {
-          setState({ status: "error", error });
-        }
+      />
+    );
+    const renderState = () => {
+      const current = state();
+      if (current.status === "loading" || current.status === "opening") {
+        return (
+          <PanelLoadingSkeleton
+            variant="discussion"
+            label={t(
+              current.status === "opening"
+                ? "chat.sessionDiscussion.opening"
+                : "chat.sessionDiscussion.loading",
+            )}
+          />
+        );
       }
-    })();
-    return () => {
-      active = false;
-    };
-  });
-  let releaseTheme: (() => void) | undefined;
-  onCleanup(() => releaseTheme?.());
-  const postTheme = (frame: HTMLIFrameElement) => {
-    const origin = new URL(frame.src).origin;
-    postWidgetTheme(frame, origin);
-  };
-  const empty = (description: string, openUrl?: string | null) => (
-    <PanelEmptyState
-      icon={<Icon name="messageSquare" />}
-      heading={t("chat.sidePanel.discussion")}
-      description={description}
-      action={
-        openUrl ? (
-          <a class="session-link" href={openUrl} target="_blank" rel="noopener">
-            {t("chat.sessionDiscussion.openExternal")}
-          </a>
-        ) : undefined
+      if (current.status === "error") {
+        return (
+          <div class="session-discussion__empty">
+            <div class="callout danger">{formatUiError(current.error)}</div>
+          </div>
+        );
       }
-    />
-  );
-  const renderState = () => {
-    const current = state();
-    if (current.status === "loading" || current.status === "opening") {
+      if (current.status !== "complete" || current.info.state === "none") {
+        return null;
+      }
+      if (current.info.state === "available") {
+        return empty(
+          t(
+            props.canOpen
+              ? "chat.sessionDiscussion.unavailable"
+              : "chat.sessionDiscussion.requiresWriteAccess",
+          ),
+        );
+      }
+      const embedUrl = resolveDiscussionEmbedUrl(current.info.embedUrl);
       return (
-        <PanelLoadingSkeleton
-          variant="discussion"
-          label={t(
-            state().status === "opening"
-              ? "chat.sessionDiscussion.opening"
-              : "chat.sessionDiscussion.loading",
+        <div class="session-discussion__open">
+          {embedUrl ? (
+            <iframe
+              class="session-discussion__frame"
+              ref={(frame) => {
+                releaseTheme?.();
+                releaseTheme = registerWidgetThemeFrame(frame, new URL(embedUrl).origin);
+              }}
+              src={embedUrl}
+              title={t("chat.sessionDiscussion.frameTitle")}
+              sandbox="allow-forms allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts"
+              onLoad={(event) =>
+                postWidgetTheme(event.currentTarget, new URL(event.currentTarget.src).origin)
+              }
+            />
+          ) : (
+            empty(
+              t("chat.sessionDiscussion.unavailable"),
+              resolveDiscussionUrl(current.info.openUrl),
+            )
           )}
-        />
-      );
-    }
-    if (current.status === "error") {
-      return (
-        <div class="session-discussion__empty">
-          <div class="callout danger">{formatUiError(current.error)}</div>
         </div>
       );
-    }
-    if (current.status !== "complete" || current.info.state === "none") {
-      return null;
-    }
-    if (current.info.state === "available") {
-      return empty(
-        t(
-          props.canOpen
-            ? "chat.sessionDiscussion.unavailable"
-            : "chat.sessionDiscussion.requiresWriteAccess",
-        ),
-      );
-    }
-    const embedUrl = resolveDiscussionEmbedUrl(current.info.embedUrl);
-    return (
-      <div class="session-discussion__open">
-        {embedUrl ? (
-          <iframe
-            class="session-discussion__frame"
-            ref={(frame) => {
-              releaseTheme?.();
-              releaseTheme = registerWidgetThemeFrame(frame, new URL(embedUrl).origin);
-            }}
-            src={embedUrl}
-            title={t("chat.sessionDiscussion.frameTitle")}
-            sandbox="allow-forms allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts"
-            onLoad={(event) => postTheme(event.currentTarget)}
-          />
-        ) : (
-          empty(t("chat.sessionDiscussion.unavailable"), resolveDiscussionUrl(current.info.openUrl))
-        )}
-      </div>
-    );
+    };
+    return <>{renderState()}</>;
   };
-  return <>{renderState()}</>;
+  return (
+    <Show when={request()} keyed>
+      {renderRequest}
+    </Show>
+  );
 }
 
 export const SessionDiscussionPanel = defineSolidBridge<DiscussionProps>(

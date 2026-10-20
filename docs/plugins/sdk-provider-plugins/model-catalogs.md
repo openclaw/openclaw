@@ -17,6 +17,8 @@ For lightweight model-reference normalization, use
 `openclaw/plugin-sdk/model-ref-parse`. Its `normalizeGooglePreviewModelId`
 and `normalizeAntigravityPreviewModelId` exports share the catalog's alias
 rules without loading provider replay or transport helpers.
+`normalizeOpenRouterModelFamilyId` strips the optional `openrouter/` qualifier
+and leading `~` alias prefix for family detection, without changing the API model ID.
 Use `splitTrailingAuthProfile` to separate a trailing auth profile while preserving
 model-version and local quantization suffixes.
 
@@ -41,6 +43,14 @@ produces no missing-ID warning, and reprojecting retained evidence makes no
 provider requests.
 
 ## Live model discovery
+
+For interactive setup of an OpenAI-compatible custom endpoint, reuse
+`discoverOpenAICompatibleLocalModels` from `openclaw/plugin-sdk/provider-setup`.
+Pass the resolved API key, `rawResult: true`, and `discoverRuntimeContext: false`
+to list models without updating the runtime catalog. The optional
+`configuredProvider: { config, id }` resolves only that provider row's header and
+transport SecretRefs and applies its existing private-network, proxy, and TLS policy.
+The authored configuration keeps its original secret references.
 
 If your provider exposes an OpenAI-compatible `/models` API, opt the
 single-provider helper into shared discovery:
@@ -415,22 +425,30 @@ OpenClaw also filters returned identities to that scope. An absent scope
 means the caller requested the full catalog.
 
 If the upstream provider uses different control tokens than OpenClaw, add a
-small bidirectional text transform instead of replacing the stream path:
+small bidirectional `textTransforms` declaration on that provider instead of replacing the stream path:
 
 ```typescript
-api.registerTextTransforms({
-  input: [
-    { from: /red basket/g, to: "blue basket" },
-    { from: /paper ticket/g, to: "digital ticket" },
-    { from: /left shelf/g, to: "right shelf" },
-  ],
-  output: [
-    { from: /blue basket/g, to: "red basket" },
-    { from: /digital ticket/g, to: "paper ticket" },
-    { from: /right shelf/g, to: "left shelf" },
-  ],
+api.registerProvider({
+  id: "my-provider",
+  label: "My provider",
+  auth: [],
+  textTransforms: {
+    input: [
+      { from: /red basket/g, to: "blue basket" },
+      { from: /paper ticket/g, to: "digital ticket" },
+      { from: /left shelf/g, to: "right shelf" },
+    ],
+    output: [
+      { from: /blue basket/g, to: "red basket" },
+      { from: /digital ticket/g, to: "paper ticket" },
+      { from: /right shelf/g, to: "left shelf" },
+    ],
+  },
 });
 ```
+
+These transforms apply only to this provider. The removed
+`api.registerTextTransforms(...)` global overlay has no equivalent replacement.
 
 `input` rewrites the final system prompt and text message content before
 transport. `output` rewrites assistant text deltas and final text before

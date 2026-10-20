@@ -24,6 +24,7 @@ export async function prepareCronModelResolveInput(
   params: Pick<RunEntryModelResolve, "cwd" | "prompt"> & {
     cronSession: { sessionEntry: Pick<SessionEntry, "modelSelectionLocked"> };
     job: Pick<CronJob, "id">;
+    trigger?: "cron" | "event";
     runSessionKey: string;
     resolvedDelivery: Pick<Parameters<typeof resolveCurrentChannelTarget>[0], "to" | "threadId"> & {
       accountId?: string;
@@ -41,7 +42,7 @@ export async function prepareCronModelResolveInput(
     cwd: params.cwd,
     modelSelectionLocked: params.cronSession.sessionEntry.modelSelectionLocked,
     context: {
-      trigger: "cron",
+      trigger: params.trigger === "event" ? "event" : "cron",
       jobId: params.job.id,
       ...buildAgentHookContextChannelFields({
         sessionKey: params.runSessionKey,

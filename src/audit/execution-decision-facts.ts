@@ -187,16 +187,19 @@ function pruneDecisionFactsAfterInsert(
   if (remaining === 0) {
     return;
   }
-  const retainedIds = kysely
+  // The first overflow tuple bounds a range scan without materializing retained IDs.
+  const overflowBoundary = kysely
     .selectFrom("execution_decision_facts")
-    .select("receipt_id")
+    .select(["occurred_at", "receipt_id"])
     .orderBy("occurred_at", "desc")
     .orderBy("receipt_id", "desc")
-    .limit(limits.maxRows);
+    .offset(limits.maxRows)
+    .limit(1)
+    .$asTuple("occurred_at", "receipt_id");
   const overflowIds = kysely
     .selectFrom("execution_decision_facts")
     .select("receipt_id")
-    .where("receipt_id", "not in", retainedIds)
+    .where((eb) => eb(eb.refTuple("occurred_at", "receipt_id"), "<=", overflowBoundary))
     .orderBy("occurred_at", "asc")
     .orderBy("receipt_id", "asc")
     .limit(remaining);
@@ -230,10 +233,6 @@ export function recordExecutionDecisionFactInDatabase(
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const kysely = decisionDb(db);
-      // The context is the authoritative tuple owner; reread it inside the commit section.
-      if (!hasExactExecutionContext(db, receipt)) {
-        throw new Error("execution decision fact requires an exact retained execution context");
-      }
       const existing = executeSqliteQueryTakeFirstSync(
         db,
         kysely

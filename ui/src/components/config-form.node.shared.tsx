@@ -1,7 +1,8 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo } from "solid-js";
+import { createMemo, onSettled } from "solid-js";
 import { registerSettingsEnglish } from "../i18n/locales/en-settings.ts";
 import { getLocale, registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
+import { createNativeDraft } from "../lib/reactive/native-draft.ts";
 import "../components/tooltip.ts";
 import { configValuesEqual, isSupportedConfigValueValid } from "./config-form.constraints.ts";
 import {
@@ -9,7 +10,6 @@ import {
   formatConfigValueText,
   type SensitiveRenderState,
 } from "./config-form.node.shared.ts";
-import { setControlValidity } from "./config-form.scalar-edit.ts";
 import { configFieldId, type JsonSchema } from "./config-form.shared.ts";
 import { Icon } from "./solid/icon.tsx";
 import { SettingsDefaultDescription, SettingsSegmented } from "./solid/settings-ui.tsx";
@@ -63,6 +63,7 @@ export function FieldRow(props: {
   stacked?: boolean;
   error?: JSX.Element;
   errorId?: string;
+  errorRef?: (element: HTMLSpanElement) => void;
 }): JSX.Element {
   // Collection item metadata belongs to the parent row, so unlabeled item rows
   // do not repeat its help or effective default.
@@ -103,7 +104,13 @@ export function FieldRow(props: {
         <div class="settings-row__control">
           {props.control}
           {props.errorId && (
-            <span id={props.errorId} class="cfg-field__error" role="alert" hidden />
+            <span
+              ref={(element) => props.errorRef?.(element)}
+              id={props.errorId}
+              class="cfg-field__error"
+              role="alert"
+              hidden
+            />
           )}
         </div>
       )}
@@ -111,20 +118,57 @@ export function FieldRow(props: {
   );
 }
 
+export type CollectionRowFocus = {
+  register(button: HTMLButtonElement): () => void;
+  destinations(): Array<HTMLButtonElement | undefined>;
+};
+
+export function createCollectionFocus<Key>(keys: () => readonly Key[]) {
+  let addButton: HTMLButtonElement;
+  const buttons = new Map<Key, HTMLButtonElement>();
+  return {
+    addRef: (button: HTMLButtonElement) => (addButton = button),
+    row(key: () => Key): CollectionRowFocus {
+      return {
+        register(button) {
+          const initialKey = key();
+          buttons.set(initialKey, button);
+          return () => buttons.delete(initialKey);
+        },
+        destinations() {
+          const order = keys();
+          const index = order.indexOf(key());
+          const next = order[index + 1];
+          const previous = order[index - 1];
+          return [
+            next === undefined ? undefined : buttons.get(next),
+            previous === undefined ? undefined : buttons.get(previous),
+            addButton,
+          ];
+        },
+      };
+    },
+  };
+}
+
 export function CollectionRemoveButton(props: {
   label: string;
   disabled: boolean;
   remove: () => boolean;
+  focus: CollectionRowFocus;
 }): JSX.Element {
+  let button!: HTMLButtonElement;
+  onSettled(() => props.focus.register(button));
   return (
     <openclaw-tooltip prop:content={props.label}>
       <button
+        ref={(element) => (button = element)}
         type="button"
         class="btn btn--icon"
         style={{ width: "28px", height: "28px", padding: "0" }}
         aria-label={props.label}
         disabled={props.disabled}
-        onClick={(event) => removeCollectionRow(event, props.remove)}
+        onClick={(event) => removeCollectionRow(event, props.remove, props.focus.destinations())}
       >
         <Icon name="trash" />
       </button>
@@ -133,21 +177,16 @@ export function CollectionRemoveButton(props: {
 }
 
 /** Keep keyboard focus in the collection when its focused Remove button retires. */
-function removeCollectionRow(event: Event, remove: () => boolean) {
+function removeCollectionRow(
+  event: Event,
+  remove: () => boolean,
+  destinations: Array<HTMLButtonElement | undefined>,
+) {
   const control = event.currentTarget;
   if (!(control instanceof HTMLButtonElement) || control !== document.activeElement) {
     remove();
     return;
   }
-  const collection = control.closest(".cfg-array, .cfg-map");
-  const own = (selector: string) =>
-    Array.from(collection?.querySelectorAll<HTMLButtonElement>(selector) ?? []).filter(
-      (button) => button.closest(".cfg-array, .cfg-map") === collection,
-    );
-  const label = control.getAttribute("aria-label");
-  const rows = own("button").filter((button) => button.getAttribute("aria-label") === label);
-  const index = rows.indexOf(control);
-  const destinations = [rows[index + 1], rows[index - 1], own("button[aria-controls]")[0]];
   if (!remove()) {
     return;
   }
@@ -213,14 +252,20 @@ export function JsonTextareaControl(props: {
   onToggleSensitivePath?: (path: Array<string | number>) => void;
   onPatch: (path: Array<string | number>, value: unknown) => boolean | void;
 }): JSX.Element {
-  let textarea!: HTMLTextAreaElement;
-  let previous: { sourceValue: unknown; fallback: string; pathKey: string } | undefined;
   const errorId = createMemo(() => configFieldId(props.path, "json-error"));
   const renderedFallback = createMemo(() =>
     props.sensitiveState.isRedacted ? "" : props.fallback,
   );
-  const setValidity = (target: HTMLTextAreaElement, message: string) =>
-    setControlValidity(target, message, ".cfg-json-editor");
+  const draft = createNativeDraft(
+    () => ({
+      sourceIdentity: props.sourceValue,
+      renderedValue: renderedFallback(),
+      pathKey: JSON.stringify(props.path.filter((segment) => typeof segment === "string")),
+      presentationIdentity: "json",
+    }),
+    // Equal autosave acknowledgments must not erase invalid JSON still being edited.
+    { sourceEquals: configValuesEqual },
+  );
   const updateValidity = (target: HTMLTextAreaElement) => {
     let message = "";
     let candidate: unknown;
@@ -237,30 +282,9 @@ export function JsonTextareaControl(props: {
         message = t("configForm.invalidJson");
       }
     }
-    setValidity(target, message);
+    draft.setValidity(target, message);
     return { valid: !message, candidate };
   };
-  createEffect(
-    () => ({
-      sourceValue: props.sourceValue,
-      fallback: renderedFallback(),
-      pathKey: JSON.stringify(props.path.filter((segment) => typeof segment === "string")),
-    }),
-    (current) => {
-      // Equal autosave acknowledgments must not erase invalid JSON still being edited.
-      if (
-        !previous ||
-        (!Object.is(previous.sourceValue, current.sourceValue) &&
-          !configValuesEqual(previous.sourceValue, current.sourceValue)) ||
-        previous.fallback !== current.fallback ||
-        previous.pathKey !== current.pathKey
-      ) {
-        textarea.value = current.fallback;
-        setValidity(textarea, "");
-      }
-      previous = current;
-    },
-  );
   const commitJsonValue = (target: HTMLTextAreaElement, candidate: unknown) => {
     if (props.onPatch(props.path, candidate) !== false) {
       return true;
@@ -271,9 +295,7 @@ export function JsonTextareaControl(props: {
   };
   const control = (
     <textarea
-      ref={(element) => {
-        textarea = element;
-      }}
+      ref={draft.ref}
       class={["settings-input", { "cfg-redacted": props.sensitiveState.isRedacted }]}
       aria-label={props.ariaLabel}
       aria-describedby={[props.descriptionId, errorId()].filter(Boolean).join(" ") || undefined}
@@ -324,7 +346,7 @@ export function JsonTextareaControl(props: {
       ) : (
         control
       )}
-      <span id={errorId()} class="cfg-field__error" role="alert" hidden />
+      <span ref={draft.errorRef} id={errorId()} class="cfg-field__error" role="alert" hidden />
     </span>
   );
 }

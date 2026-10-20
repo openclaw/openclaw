@@ -27,7 +27,6 @@ const videoTaskStatusOwner = createMediaGenerationTaskStatusOwner({
 });
 
 function makeTask(overrides: Partial<MediaGenerationOperation> = {}): MediaGenerationOperation {
-  const now = Date.now();
   return {
     taskId: "task-1",
     taskKind: "video_generation",
@@ -36,9 +35,6 @@ function makeTask(overrides: Partial<MediaGenerationOperation> = {}): MediaGener
     runId: "run-1",
     task: "generate clip 01",
     status: "running",
-    createdAt: now,
-    startedAt: now,
-    lastEventAt: now,
     ...overrides,
   };
 }
@@ -81,7 +77,7 @@ describe("media generation delivery-phase prompt guard", () => {
     );
   });
 
-  it("keeps a bounded task snapshot stable across registry order and elapsed time", () => {
+  it("keeps a bounded task snapshot stable across registry order", () => {
     const tasks = Array.from({ length: 10 }, (_, index) =>
       makeTask({
         taskId: `task-${index}`,
@@ -108,9 +104,6 @@ describe("media generation delivery-phase prompt guard", () => {
       ].join("\n"),
     );
 
-    for (const task of tasks) {
-      task.lastEventAt = task.createdAt + 60_000;
-    }
     expect(
       buildActiveMediaGenerationTaskPromptContext({
         tasks: tasks.toReversed(),

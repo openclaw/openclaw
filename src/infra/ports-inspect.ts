@@ -5,10 +5,6 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import pMap from "p-map";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { buildPortHints } from "./ports-format.js";
-import {
-  parseLsofListenerRecordsByPort,
-  readLsofListenersForPort,
-} from "./ports-lsof-listeners.js";
 import { resolveLsofCommand } from "./ports-lsof.js";
 import {
   parseTcpEndpoint,
@@ -33,7 +29,6 @@ import {
 
 type SocketReadResult<T extends PortListener> = {
   entries: T[];
-  detail?: string;
   errors: string[];
 };
 
@@ -64,6 +59,69 @@ async function runCommandSafe(argv: string[], signal?: AbortSignal) {
       error: String(err),
     };
   }
+}
+
+function parseLsofListenerRecordsByPort(output: string): Map<number, PortListener[]> {
+  const recordsByPort = new Map<number, PortListener[]>();
+  let processFields: Pick<PortListener, "pid" | "command"> = {};
+  for (const rawLine of output.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) {
+      continue;
+    }
+    if (line.startsWith("p")) {
+      const pid = parseStrictPositiveInteger(line.slice(1));
+      processFields = pid !== undefined ? { pid } : {};
+      continue;
+    }
+    if (line.startsWith("c")) {
+      processFields.command = line.slice(1);
+      continue;
+    }
+    if (line.startsWith("n")) {
+      const listener = { ...processFields, address: line.slice(1) };
+      const port = parseLsofListenerPort(listener.address);
+      if (port !== null) {
+        const records = recordsByPort.get(port) ?? [];
+        records.push(listener);
+        recordsByPort.set(port, records);
+      }
+    }
+  }
+  return recordsByPort;
+}
+
+function parseLsofListenerPort(address: string | undefined): number | null {
+  const normalized = address
+    ?.replace(/^tcp\s+/i, "")
+    .replace(/\s*\([^)]*\)\s*$/i, "")
+    .trim();
+  if (!normalized || normalized.includes("->")) {
+    return null;
+  }
+  return parseTcpEndpoint(normalized)?.port ?? null;
+}
+
+function listenerIdentity(listener: PortListener): string {
+  return `${listener.pid ?? ""}\0${listener.command ?? ""}\0${listener.address ?? ""}`;
+}
+
+function readLsofListenersForPort(
+  recordsByPort: Map<number, PortListener[]>,
+  port: number,
+): PortListener[] {
+  const records = recordsByPort.get(port) ?? [];
+  const seen = new Set<string>();
+  const listeners: PortListener[] = [];
+  for (const record of records) {
+    const key = listenerIdentity(record);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    listeners.push(record);
+  }
+  return listeners;
 }
 
 function parseLsofTcpConnectionAddress(
@@ -170,13 +228,13 @@ function parseSsConnections(output: string, port: number): PortConnection[] {
   return connections;
 }
 
-async function enrichUnixListenerProcessInfo(
+async function enrichListenerProcessInfo(
   listeners: PortListener[],
   signal?: AbortSignal,
 ): Promise<void> {
   const pids = [...new Set(listeners.flatMap(({ pid }) => (pid ? [pid] : [])))];
   const metadata = new Map(
-    await pMap(pids, async (pid) => [pid, await resolveUnixProcessInfo(pid, signal)] as const, {
+    await pMap(pids, async (pid) => [pid, await resolveProcessInfo(pid, signal)] as const, {
       concurrency: PORT_PROCESS_ENRICHMENT_CONCURRENCY,
       signal,
     }),
@@ -220,10 +278,8 @@ async function readUnixSocketEntries<T extends PortListener>(
 ) {
   const result = await readUnixSocketOutput(argv, signal);
   const entries = result.stdout === undefined ? [] : parse(result.stdout);
-  const detail = result.stdout?.trim() || undefined;
   return {
     entries,
-    detail: fallbackErrors && entries.length === 0 ? undefined : detail,
     errors:
       fallbackErrors && entries.length === 0
         ? [...fallbackErrors, ...result.errors]
@@ -251,10 +307,20 @@ async function readUnixEstablishedConnections(
   );
 }
 
-async function resolveUnixProcessInfo(
+async function resolveProcessInfo(
   pid: number,
   signal?: AbortSignal,
-): Promise<Pick<PortListener, "commandLine" | "user" | "ppid">> {
+): Promise<Pick<PortListener, "command" | "commandLine" | "user" | "ppid">> {
+  if (process.platform === "win32") {
+    const [command, commandLine] = await Promise.all([
+      resolveWindowsImageName(pid, signal),
+      resolveWindowsCommandLine(pid, signal),
+    ]);
+    return {
+      ...(command ? { command } : {}),
+      ...(commandLine ? { commandLine } : {}),
+    };
+  }
   // Keep usernames separate: native ps pads them by bytes on macOS and display
   // columns on Linux, and directory-service names can themselves contain spaces.
   const res = await runCommandSafe(
@@ -305,8 +371,8 @@ async function readUnixListeners(
 ): Promise<SocketReadResult<PortListener>> {
   const listenerSnapshot = snapshot ?? (await readUnixListenerSnapshot(port, signal));
   if (!listenerSnapshot.lsofUnavailable) {
-    const { listeners, detail } = readLsofListenersForPort(listenerSnapshot.recordsByPort, port);
-    return { entries: listeners, detail, errors: listenerSnapshot.errors };
+    const listeners = readLsofListenersForPort(listenerSnapshot.recordsByPort, port);
+    return { entries: listeners, errors: listenerSnapshot.errors };
   }
   return await readUnixSocketEntries(
     ["ss", "-H", "-ltnp", `sport = :${port}`],
@@ -421,10 +487,10 @@ async function resolveWindowsCommandLine(
 }
 
 async function readWindowsNetstatEntries<T extends PortListener>(
-  port: number,
+  ports: readonly number[],
   parse: (output: string, port: number) => T[],
   signal?: AbortSignal,
-): Promise<SocketReadResult<T>> {
+): Promise<SocketReadResult<T>[]> {
   signal?.throwIfAborted();
   const errors: string[] = [];
   const res = await runCommandSafe([getWindowsSystem32ExePath("netstat.exe"), "-ano"], signal);
@@ -436,46 +502,24 @@ async function readWindowsNetstatEntries<T extends PortListener>(
     if (detail) {
       errors.push(detail);
     }
-    return { entries: [], errors };
+    return ports.map(() => ({ entries: [], errors }));
   }
 
-  const entries = parse(res.stdout, port);
-  await pMap(
-    entries,
-    async (entry) => {
-      if (!entry.pid) {
-        return;
-      }
-      const [imageName, commandLine] = await Promise.all([
-        resolveWindowsImageName(entry.pid, signal),
-        resolveWindowsCommandLine(entry.pid, signal),
-      ]);
-      if (imageName) {
-        entry.command = imageName;
-      }
-      if (commandLine) {
-        entry.commandLine = commandLine;
-      }
-    },
-    { concurrency: PORT_PROCESS_ENRICHMENT_CONCURRENCY, signal },
-  );
-  return { entries, detail: res.stdout.trim() || undefined, errors };
+  return ports.map((port) => ({ entries: parse(res.stdout, port), errors }));
 }
 
 export async function inspectPortUsage(
   port: number,
-  options?: { probeHosts?: readonly string[]; signal?: AbortSignal },
+  options?: { probeHosts?: readonly string[]; signal?: AbortSignal; deadlineMs?: number },
 ): Promise<PortUsage> {
   const signal = options?.signal;
   signal?.throwIfAborted();
   const result =
     process.platform === "win32"
-      ? await readWindowsNetstatEntries(port, parseWindowsNetstatListeners, signal)
+      ? (await readWindowsNetstatEntries([port], parseWindowsNetstatListeners, signal))[0]!
       : await readUnixListeners(port, undefined, signal);
-  if (process.platform !== "win32") {
-    await enrichUnixListenerProcessInfo(result.entries, signal);
-  }
-  return buildPortUsage(port, result, options?.probeHosts, signal);
+  await enrichListenerProcessInfo(result.entries, signal);
+  return buildPortUsage(port, result, options?.probeHosts, signal, options?.deadlineMs);
 }
 
 async function buildPortUsage(
@@ -483,21 +527,35 @@ async function buildPortUsage(
   result: SocketReadResult<PortListener>,
   probeHosts?: readonly string[],
   signal?: AbortSignal,
+  deadlineMs?: number,
 ): Promise<PortUsage> {
   signal?.throwIfAborted();
   let listeners = result.entries;
   const status: PortUsageStatus = probeHosts
-    ? await probePortUsage(port, probeHosts, signal)
+    ? await probePortUsage(port, probeHosts, signal, deadlineMs)
     : listeners.length > 0
       ? "busy"
-      : await probePortUsage(port, undefined, signal);
+      : await probePortUsage(port, undefined, signal, deadlineMs);
   signal?.throwIfAborted();
   if (status !== "busy") {
     listeners = [];
   } else if (probeHosts) {
-    listeners = listeners.filter((listener) =>
-      isListenerRelevantToProbeHosts(listener, port, probeHosts),
-    );
+    listeners = listeners.filter((listener) => {
+      const endpoint = parseTcpListenerEndpoint(listener.address);
+      if (!endpoint || endpoint.port !== port) {
+        return false;
+      }
+      return probeHosts.some((probeHost) => {
+        const normalizedProbeHost = normalizeLowercaseStringOrEmpty(probeHost);
+        if (isWildcardTcpHost(endpoint.host)) {
+          return isSameTcpAddressFamily(endpoint.host, normalizedProbeHost);
+        }
+        if (isWildcardTcpHost(normalizedProbeHost)) {
+          return isSameTcpAddressFamily(normalizedProbeHost, endpoint.host);
+        }
+        return normalizedProbeHost === endpoint.host;
+      });
+    });
   }
   const hints = buildPortHints(listeners, port);
   if (status === "busy" && listeners.length === 0) {
@@ -511,7 +569,6 @@ async function buildPortUsage(
     status,
     listeners,
     hints,
-    detail: result.detail,
     errors: result.errors.length > 0 ? [...result.errors] : undefined,
   };
 }
@@ -526,48 +583,22 @@ function isSameTcpAddressFamily(leftHost: string, rightHost: string): boolean {
   return leftFamily === 0 || rightFamily === 0 || leftFamily === rightFamily;
 }
 
-function isListenerRelevantToProbeHosts(
-  listener: PortListener,
-  port: number,
-  probeHosts: readonly string[],
-): boolean {
-  const endpoint = parseTcpListenerEndpoint(listener.address);
-  if (!endpoint || endpoint.port !== port) {
-    return false;
-  }
-  return probeHosts.some((probeHost) => {
-    const normalizedProbeHost = normalizeLowercaseStringOrEmpty(probeHost);
-    if (isWildcardTcpHost(endpoint.host)) {
-      return isSameTcpAddressFamily(endpoint.host, normalizedProbeHost);
-    }
-    if (isWildcardTcpHost(normalizedProbeHost)) {
-      return isSameTcpAddressFamily(normalizedProbeHost, endpoint.host);
-    }
-    return normalizedProbeHost === endpoint.host;
-  });
-}
-
 export async function inspectPortUsages(
   ports: readonly number[],
   options?: { probeHostsByPort?: ReadonlyMap<number, readonly string[]> },
 ): Promise<Map<number, PortUsage>> {
   const uniquePorts = Array.from(new Set(ports));
-  if (process.platform === "win32") {
-    const entries = await Promise.all(
-      uniquePorts.map(async (port) => {
-        const probeHosts = options?.probeHostsByPort?.get(port);
-        return [
-          port,
-          await inspectPortUsage(port, probeHosts ? { probeHosts } : undefined),
-        ] as const;
-      }),
-    );
-    return new Map(entries);
+  if (uniquePorts.length === 0) {
+    return new Map();
   }
-
-  const snapshot = await readUnixListenerSnapshot();
-  const results = await Promise.all(uniquePorts.map((port) => readUnixListeners(port, snapshot)));
-  await enrichUnixListenerProcessInfo(results.flatMap(({ entries }) => entries));
+  let results: SocketReadResult<PortListener>[];
+  if (process.platform === "win32") {
+    results = await readWindowsNetstatEntries(uniquePorts, parseWindowsNetstatListeners);
+  } else {
+    const snapshot = await readUnixListenerSnapshot();
+    results = await Promise.all(uniquePorts.map((port) => readUnixListeners(port, snapshot)));
+  }
+  await enrichListenerProcessInfo(results.flatMap(({ entries }) => entries));
   const entries = await Promise.all(
     uniquePorts.map(
       async (port, index) =>
@@ -583,15 +614,11 @@ export async function inspectPortUsages(
 export async function inspectPortConnections(port: number): Promise<PortConnections> {
   const result =
     process.platform === "win32"
-      ? await readWindowsNetstatEntries(port, parseNetstatConnections)
+      ? (await readWindowsNetstatEntries([port], parseNetstatConnections))[0]!
       : await readUnixEstablishedConnections(port);
-  if (process.platform !== "win32") {
-    await enrichUnixListenerProcessInfo(result.entries);
-  }
+  await enrichListenerProcessInfo(result.entries);
   return {
     port,
     connections: result.entries,
-    detail: result.detail,
-    errors: result.errors.length > 0 ? result.errors : undefined,
   };
 }

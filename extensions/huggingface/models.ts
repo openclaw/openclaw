@@ -66,55 +66,6 @@ function displayNameFromApiEntry(entry: HFModelEntry): string {
   return base.replace(/-/g, " ").replace(/\b(\w)/g, (c) => c.toUpperCase());
 }
 
-function readHuggingfaceModelRows(body: unknown): readonly unknown[] {
-  const data = (body as { data?: unknown } | undefined)?.data;
-  if (!Array.isArray(data)) {
-    throw new Error("Hugging Face model discovery response must contain a data array");
-  }
-  return data;
-}
-
-function projectHuggingfaceModels(rows: readonly unknown[]): ModelDefinitionConfig[] {
-  const catalogById = new Map(HUGGINGFACE_MODEL_CATALOG.map((model) => [model.id, model] as const));
-  const seen = new Set<string>();
-  const models: ModelDefinitionConfig[] = [];
-  for (const row of rows) {
-    const entry = row as HFModelEntry | undefined;
-    const id = typeof entry?.id === "string" ? entry.id.trim() : "";
-    if (!entry || !id || seen.has(id)) {
-      continue;
-    }
-    seen.add(id);
-
-    const modalities = entry?.architecture?.input_modalities;
-    const providers = Array.isArray(entry?.providers)
-      ? entry.providers.filter((provider) => provider?.status !== "error")
-      : [];
-    const providerContexts = providers
-      .map((provider) => provider?.context_length)
-      .filter((context): context is number => typeof context === "number" && context > 0);
-    const model: ModelDefinitionConfig = catalogById.get(id) ?? {
-      id,
-      name: displayNameFromApiEntry(entry),
-      reasoning: isReasoningModelHeuristic(id),
-      input:
-        Array.isArray(modalities) && modalities.includes("image") ? ["text", "image"] : ["text"],
-      cost: HUGGINGFACE_DEFAULT_COST,
-      contextWindow: HUGGINGFACE_DEFAULT_CONTEXT_WINDOW,
-      maxTokens: HUGGINGFACE_DEFAULT_MAX_TOKENS,
-    };
-    models.push({
-      ...model,
-      contextWindow:
-        providerContexts.length > 0 ? Math.min(...providerContexts) : model.contextWindow,
-      ...(providers.some((provider) => provider?.supports_tools === false)
-        ? { compat: { ...model.compat, supportsTools: false } }
-        : {}),
-    });
-  }
-  return models;
-}
-
 export async function discoverHuggingfaceModels(
   apiKey: string,
   timeoutMs = HUGGINGFACE_DISCOVERY_TIMEOUT_MS,
@@ -122,21 +73,26 @@ export async function discoverHuggingfaceModels(
 ): Promise<ModelDefinitionConfig[]> {
   const trimmedKey = apiKey?.trim();
   if (!trimmedKey) {
-    return HUGGINGFACE_MODEL_CATALOG.map((model) => Object.assign({}, model));
+    return HUGGINGFACE_MODEL_CATALOG;
   }
 
   const requestTimeoutMs = resolveTimerTimeoutMs(timeoutMs, HUGGINGFACE_DISCOVERY_TIMEOUT_MS);
-  const provider = await buildLiveModelProviderConfig({
+  const providerConfig = await buildLiveModelProviderConfig({
     ...options,
     providerId: "huggingface",
     endpoint: `${HUGGINGFACE_BASE_URL}/models`,
     providerConfig: { baseUrl: HUGGINGFACE_BASE_URL, api: "openai-completions" },
-    models: HUGGINGFACE_MODEL_CATALOG.map((model) => Object.assign({}, model)),
+    models: HUGGINGFACE_MODEL_CATALOG,
     discoveryApiKey: trimmedKey,
-    signal: AbortSignal.timeout(requestTimeoutMs),
     timeoutMs: requestTimeoutMs,
     ttlMs: 0,
-    readRows: readHuggingfaceModelRows,
+    readRows(body): readonly unknown[] {
+      const data = (body as { data?: unknown } | undefined)?.data;
+      if (!Array.isArray(data)) {
+        throw new Error("Hugging Face model discovery response must contain a data array");
+      }
+      return data;
+    },
     buildRequestHeaders: () => ({
       Authorization: `Bearer ${trimmedKey}`,
       "Content-Type": "application/json",
@@ -144,7 +100,50 @@ export async function discoverHuggingfaceModels(
     policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(HUGGINGFACE_BASE_URL),
     auditContext: "huggingface-model-discovery",
     fetchGuard: (params) => fetchWithSsrFGuard(withTrustedEnvProxyGuardedFetchMode(params)),
-    projectRows: projectHuggingfaceModels,
+    projectRows(rows): ModelDefinitionConfig[] {
+      const catalogById = new Map(
+        HUGGINGFACE_MODEL_CATALOG.map((model) => [model.id, model] as const),
+      );
+      const seen = new Set<string>();
+      const models: ModelDefinitionConfig[] = [];
+      for (const row of rows) {
+        const entry = row as HFModelEntry | undefined;
+        const id = typeof entry?.id === "string" ? entry.id.trim() : "";
+        if (!entry || !id || seen.has(id)) {
+          continue;
+        }
+        seen.add(id);
+
+        const modalities = entry?.architecture?.input_modalities;
+        const providers = Array.isArray(entry?.providers)
+          ? entry.providers.filter((provider) => provider?.status !== "error")
+          : [];
+        const providerContexts = providers
+          .map((provider) => provider?.context_length)
+          .filter((context): context is number => typeof context === "number" && context > 0);
+        const model: ModelDefinitionConfig = catalogById.get(id) ?? {
+          id,
+          name: displayNameFromApiEntry(entry),
+          reasoning: isReasoningModelHeuristic(id),
+          input:
+            Array.isArray(modalities) && modalities.includes("image")
+              ? ["text", "image"]
+              : ["text"],
+          cost: HUGGINGFACE_DEFAULT_COST,
+          contextWindow: HUGGINGFACE_DEFAULT_CONTEXT_WINDOW,
+          maxTokens: HUGGINGFACE_DEFAULT_MAX_TOKENS,
+        };
+        models.push({
+          ...model,
+          contextWindow:
+            providerContexts.length > 0 ? Math.min(...providerContexts) : model.contextWindow,
+          ...(providers.some((provider) => provider?.supports_tools === false)
+            ? { compat: { ...model.compat, supportsTools: false } }
+            : {}),
+        });
+      }
+      return models;
+    },
   });
-  return provider.models;
+  return providerConfig.models;
 }

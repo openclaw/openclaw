@@ -1,10 +1,13 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show, createEffect, untrack } from "solid-js";
+import { For, Show, createSignal } from "solid-js";
 import type { SessionGoal } from "../../../api/types.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { useScrollState } from "../../../components/solid/scroll-state.ts";
+import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
 import { registerChatGoalsEnglish } from "../../../i18n/locales/en-chat-goals.ts";
 import type { ChatGoalAction, ChatGoalRecovery } from "../../../lib/chat/chat-types.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { createInterval } from "../../../lib/reactive/timers.ts";
 import {
   formatGoalDetail,
   formatGoalElapsed,
@@ -12,26 +15,16 @@ import {
   formatGoalUsage,
   goalElapsedMs,
 } from "../../../lib/session-goal.ts";
-import { composerScrollStateRef } from "./chat-composer-menu.tsx";
 
 registerEnglishCatalog(registerChatGoalsEnglish);
 
 function GoalIcon() {
   return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="2"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-      aria-hidden="true"
-    >
+    <StrokeIcon aria-hidden="true">
       <path d="M12 13V2l8 4-8 4" />
       <path d="M20.561 10.222a9 9 0 1 1-12.55-5.29" />
       <path d="M8.002 9.997a5 5 0 1 0 8.9 2.02" />
-    </svg>
+    </StrokeIcon>
   );
 }
 
@@ -44,32 +37,18 @@ const goalStatusIcons = {
 } as const;
 
 // Keep the one-second clock local to its span; it must not invalidate the composer.
-function createGoalElapsedRef(goal: () => SessionGoal) {
-  let element: HTMLElement | undefined;
-  const sync = () => {
-    if (element) {
-      element.textContent = formatGoalElapsed(goalElapsedMs(untrack(goal), Date.now()));
-    }
-  };
-  createEffect(
-    () => ({ active: goal().status === "active", elapsed: goalElapsedMs(goal(), Date.now()) }),
-    (clock) => {
-      if (!element) {
-        return undefined;
-      }
-      const bound = element;
-      bound.textContent = formatGoalElapsed(clock.elapsed);
-      if (!clock.active) {
-        return undefined;
-      }
-      const timer = setInterval(sync, 1000);
-      return () => clearInterval(timer);
-    },
+function GoalElapsed(props: { goal: SessionGoal }) {
+  // Resuming samples the current clock before the next interval tick.
+  const [now, setNow] = createSignal(() => (props.goal.status === "active" ? Date.now() : 0));
+  createInterval(
+    () => setNow(Date.now()),
+    () => (props.goal.status === "active" ? 1000 : undefined),
   );
-  return (next: HTMLElement) => {
-    element = next;
-    sync();
-  };
+  return (
+    <span class="agent-chat__goal-elapsed">
+      {formatGoalElapsed(goalElapsedMs(props.goal, now()))}
+    </span>
+  );
 }
 
 type ChatGoalProps = {
@@ -112,7 +91,10 @@ function GoalCard(props: Omit<ChatGoalProps, "goal"> & { goal: SessionGoal }) {
           : true);
   return (
     <div
-      class={`agent-chat__goal agent-chat__goal--${props.resumeRecovery ? "resuming" : props.goal.status}`}
+      class={[
+        "agent-chat__goal",
+        `agent-chat__goal--${props.resumeRecovery ? "resuming" : props.goal.status}`,
+      ]}
       data-expanded={String(props.expanded)}
       role="group"
       aria-label={
@@ -144,7 +126,7 @@ function GoalCard(props: Omit<ChatGoalProps, "goal"> & { goal: SessionGoal }) {
           </openclaw-tooltip>
           <span class="agent-chat__goal-objective">{props.goal.objective}</span>
         </span>
-        <span class="agent-chat__goal-elapsed" ref={createGoalElapsedRef(() => props.goal)} />
+        <GoalElapsed goal={props.goal} />
         <span class="agent-chat__goal-actions">
           <span class="agent-chat__goal-command-actions">
             <Show when={props.resumeRecovery && !props.resumeRecovery.pending}>
@@ -164,7 +146,7 @@ function GoalCard(props: Omit<ChatGoalProps, "goal"> & { goal: SessionGoal }) {
                   {visibleAction(action) ? (
                     <openclaw-tooltip content={t(`chat.goals.${action}`)}>
                       <button
-                        class={`agent-chat__goal-action agent-chat__goal-${action}`}
+                        class={["agent-chat__goal-action", `agent-chat__goal-${action}`]}
                         type="button"
                         aria-label={t(`chat.goals.${action}`)}
                         onClick={() => {
@@ -206,7 +188,7 @@ function GoalCard(props: Omit<ChatGoalProps, "goal"> & { goal: SessionGoal }) {
         <div class="agent-chat__goal-detail-content">
           <div
             class="agent-chat__goal-detail-objective"
-            ref={composerScrollStateRef(() => props.goal.objective)}
+            ref={useScrollState(false, true, { revision: () => props.goal.objective })}
             textContent={props.goal.objective}
           />
           {props.goal.lastStatusNote && !props.resumeRecovery ? (

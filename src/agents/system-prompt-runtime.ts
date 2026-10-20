@@ -31,7 +31,8 @@ export function buildRuntimeLine(
     default_model: runtimeInfo?.defaultModel,
     shell: runtimeInfo?.shell,
     channel: runtimeChannel,
-    capabilities: runtimeChannel && (normalizedRuntimeCapabilities.join(",") || "none"),
+    // Named for the channel so models never read it as this session's tool capabilities.
+    channel_capabilities: runtimeChannel && (normalizedRuntimeCapabilities.join(",") || "none"),
   };
   return `Runtime: ${Object.entries(fields)
     .filter(([, value]) => value)

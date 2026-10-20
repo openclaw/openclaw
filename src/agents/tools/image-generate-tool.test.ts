@@ -1,3 +1,4 @@
+import { findMediaGenerationOperation } from "../media-generation-activity.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../media-generation-activity.test-support.js";
 vi.mock("../media-generation-activity.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../media-generation-activity.js")>();
@@ -20,6 +21,8 @@ import {
 } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ImageGenerationProvider } from "../../image-generation/types.js";
+import { encodePngRgba } from "../../media/png-encode.js";
+import { formatMediaSize } from "../../media/store.shared.js";
 import {
   defineMediaGenerationCancellationTests,
   defineMediaGenerationDuplicateTests,
@@ -77,6 +80,19 @@ function mockGeneratedImage(
 
 function imageAsset(bytes: string, fileName: string, mimeType = "image/png") {
   return { buffer: Buffer.from(bytes), mimeType, fileName };
+}
+
+/** Incompressible RGB noise, so PNG output stays large like a detailed photograph. */
+function noisePng(width: number, height: number) {
+  const rgba = Buffer.alloc(width * height * 4);
+  let seed = 1;
+  for (let index = 0; index < rgba.length; index += 1) {
+    seed ^= seed << 13;
+    seed ^= seed >>> 17;
+    seed ^= seed << 5;
+    rgba[index] = index % 4 === 3 ? 255 : seed & 0xff;
+  }
+  return encodePngRgba(rgba, width, height);
 }
 
 function savedMedia(fileName: string, size: number, contentType = "image/png") {
@@ -702,6 +718,69 @@ describe("createImageGenerateTool", () => {
     expect(text).not.toMatch(/^MEDIA:/m);
   });
 
+  it("re-encodes a generated image over the media cap and keeps its dimensions", async () => {
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      createOpenAIImageProvider(),
+    ]);
+    const png = noisePng(1024, 1024);
+    const maxBytes = 2 * 1024 * 1024;
+    expect(png.byteLength).toBeGreaterThan(maxBytes);
+    mockGeneratedImage({ images: [{ buffer: png, mimeType: "image/png", fileName: "cat.png" }] });
+    const saveMediaBuffer = vi
+      .spyOn(mediaStore, "saveMediaBuffer")
+      .mockImplementation(async (buffer, contentType, _subdir, _maxBytes, fileName) =>
+        savedMedia(`${fileName}---id.jpg`, buffer.byteLength, contentType),
+      );
+    const tool = requireImageGenerateTool(
+      createImageGenerateTool({
+        config: configWithDefaults({
+          mediaMaxMb: 2,
+          mediaModels: { image: { primary: "openai/gpt-image-1" } },
+        }),
+        agentDir: "/tmp/agent",
+      }),
+    );
+
+    const result = await tool.execute("call-over-cap", { prompt: "A detailed market" });
+
+    const [saved, contentType, , cap, fileName] = saveMediaBuffer.mock.calls[0] ?? [];
+    expect(contentType).toBe("image/jpeg");
+    expect(cap).toBe(maxBytes);
+    expect(fileName).toBe("cat.jpg");
+    expect(saved?.byteLength).toBeLessThanOrEqual(maxBytes);
+    expect(imageOps.readImageMetadataFromHeader(saved as Buffer)).toEqual({
+      width: 1024,
+      height: 1024,
+    });
+    expect(resultText(result)).toContain(
+      `Generated image 1 (image/png, ${formatMediaSize(png.byteLength)}) exceeded the 2MB media limit; saved as image/jpeg,`,
+    );
+    expect(resultText(result)).toContain("1024x1024.");
+  });
+
+  it("names the generated image, its size and the cap when no encoding fits", async () => {
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      createOpenAIImageProvider(),
+    ]);
+    const png = noisePng(256, 256);
+    mockGeneratedImage({ images: [{ buffer: png, mimeType: "image/png", fileName: "cat.png" }] });
+    const saveMediaBuffer = vi.spyOn(mediaStore, "saveMediaBuffer");
+    const tool = requireImageGenerateTool(
+      createImageGenerateTool({
+        config: configWithDefaults({
+          mediaMaxMb: 1 / 1024,
+          mediaModels: { image: { primary: "openai/gpt-image-1" } },
+        }),
+        agentDir: "/tmp/agent",
+      }),
+    );
+
+    await expect(tool.execute("call-no-fit", { prompt: "A detailed market" })).rejects.toThrow(
+      /^Generated image 1 \(image\/png, [\d.]+(KB|MB)\) exceeds the 1KB media limit; the smallest re-encoding is [\d.]+KB \(image\/jpeg, 64x64\)$/,
+    );
+    expect(saveMediaBuffer).not.toHaveBeenCalled();
+  });
+
   it("rolls back late image saves after a concurrent persistence failure", async () => {
     vi.stubEnv("OPENAI_API_KEY", "test");
     stubImageGenerationProviders();
@@ -757,8 +836,8 @@ describe("createImageGenerateTool", () => {
     resolveLateSave(lateSavedMedia);
     await expect(execution).rejects.toBe(terminalError);
     expect(deleteMediaBuffer).toHaveBeenCalledTimes(2);
-    expect(deleteMediaBuffer).toHaveBeenNthCalledWith(1, "late.png", "tool-image-generation");
-    expect(deleteMediaBuffer).toHaveBeenNthCalledWith(2, "saved.png", "tool-image-generation");
+    expect(deleteMediaBuffer).toHaveBeenCalledWith("late.png", "tool-image-generation");
+    expect(deleteMediaBuffer).toHaveBeenCalledWith("saved.png", "tool-image-generation");
   });
 
   it("runs explicit deployment refs and preserves timeout-only image defaults", async () => {
@@ -852,7 +931,6 @@ describe("createImageGenerateTool", () => {
       taskId: "task-image-123",
     });
     const scheduled: Array<() => Promise<void>> = [];
-    const onAsyncTaskStarted = vi.fn();
     const tool = requireImageGenerateTool(
       createImageGenerateTool({
         config: configWithDefaults({
@@ -867,7 +945,6 @@ describe("createImageGenerateTool", () => {
         scheduleBackgroundWork: (work) => {
           scheduled.push(work);
         },
-        onAsyncTaskStarted,
       }),
     );
 
@@ -879,10 +956,6 @@ describe("createImageGenerateTool", () => {
 
     expect(generateImage).not.toHaveBeenCalled();
     expect(scheduled).toHaveLength(1);
-    expect(onAsyncTaskStarted).toHaveBeenCalledOnce();
-    expect(onAsyncTaskStarted).toHaveBeenCalledWith(
-      "Image generation started; wait for the generated image completion event.",
-    );
     expect(resultText(result)).toContain("Background task started for image generation");
     const details = resultDetails(result);
     expect(details.async).toBe(true);
@@ -1060,7 +1133,6 @@ describe("createImageGenerateTool", () => {
       taskId: "task-cron-image",
     });
     const scheduled: Array<() => Promise<void>> = [];
-    const onAsyncTaskStarted = vi.fn();
     const tool = requireImageGenerateTool(
       createImageGenerateTool({
         config: configWithDefaults({
@@ -1075,7 +1147,6 @@ describe("createImageGenerateTool", () => {
         scheduleBackgroundWork: (work) => {
           scheduled.push(work);
         },
-        onAsyncTaskStarted,
       }),
     );
 
@@ -1086,7 +1157,6 @@ describe("createImageGenerateTool", () => {
 
     expect(generateImage).not.toHaveBeenCalled();
     expect(scheduled).toHaveLength(1);
-    expect(onAsyncTaskStarted).toHaveBeenCalledOnce();
     expect(resultText(result)).toContain("Background task started for image generation");
     expect(resultDetails(result).async).toBe(true);
     expect(resultDetails(result).runId).toEqual(expect.stringMatching(/^tool:image_generate:/));
@@ -1276,14 +1346,8 @@ describe("createImageGenerateTool", () => {
     const createdTask = mockCallArg(taskRuntimeMocks.createOperation, 0, "createOperation");
     mediaActivityMocks.listOperations.mockReturnValue([
       {
-        taskId: "task-recent-image",
-        runId: createdTask.runId,
-        taskKind: "image_generation",
-        sourceId: "image_generate:openai",
-        requesterSessionKey: "agent:main:discord:direct:123",
-        task: "Already generated proof image",
+        ...findMediaGenerationOperation(String(createdTask.runId)),
         status: "succeeded",
-        createdAt: now - 20_000,
         endedAt: now - 10_000,
         progressSummary: "Generated 1 image",
       },
@@ -1338,14 +1402,8 @@ describe("createImageGenerateTool", () => {
     const firstTask = mockCallArg(taskRuntimeMocks.createOperation, 0, "createOperation");
     mediaActivityMocks.listOperations.mockReturnValue([
       {
-        taskId: "task-first-google-image",
-        runId: firstTask.runId,
-        taskKind: "image_generation",
-        sourceId: "image_generate:google",
-        requesterSessionKey: "agent:main:discord:direct:123",
-        task: "Already generated proof image",
+        ...findMediaGenerationOperation(String(firstTask.runId)),
         status: "succeeded",
-        createdAt: now - 20_000,
         endedAt: now - 10_000,
         progressSummary: "Generated 1 image",
       },
@@ -2002,7 +2060,9 @@ describe("createImageGenerateTool", () => {
         prompt: "Use this reference.",
         image: `data:image/png;base64,${Buffer.alloc(MAX_IMAGE_BYTES + 1).toString("base64")}`,
       }),
-    ).rejects.toThrow("Invalid data URL: payload exceeds size limit.");
+    ).rejects.toThrow(
+      "image reference 1 could not be loaded: Invalid data URL: payload exceeds size limit (6.00MB, limit 6MB).",
+    );
     expect(generateImage).not.toHaveBeenCalled();
   });
 

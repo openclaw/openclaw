@@ -99,7 +99,7 @@ suite.define(() => {
       await page.locator(".agent-chat__composer-combobox textarea").waitFor();
       expect(await page.locator(".header-new-session").count()).toBe(0);
       await capture("chat");
-      await page.locator(".chat-pane__nav-toggle").click();
+      await page.locator(".chat-pane__nav-toggle").tap();
       await waitForMobileSidebarDrawerOpen(page);
       const create = page.getByRole("link", { name: "New conversation", exact: true });
       await create.waitFor();
@@ -142,71 +142,172 @@ suite.define(() => {
     });
   });
 
-  it.each(["chat", "new"] as const)(
-    "keeps the team agent picker reachable from %s",
-    async (route) => {
-      await suite.withPage(mobile, async ({ page }) => {
-        const gateway = await installScenario(page, undefined, true);
-        await page.goto(
-          route === "chat"
-            ? controlUiSessionUrl(suite.server.baseUrl, "agent:research:current")
-            : suite.server.baseUrl + "new?agent=research",
+  it("keeps the mobile welcome with its composer across phone and keyboard viewports", async () => {
+    await suite.withPage(mobile, async ({ page }) => {
+      await installScenario(page, undefined, true);
+      await page.goto(suite.server.baseUrl + "new?agent=research");
+      const composer = page.locator(".new-session-page__message");
+      await composer.fill("Help me plan the next release.");
+      const identity = page.locator(".new-session-page .agent-chat__welcome-identity");
+      const triggers = page.locator(".new-session-page__triggers");
+      const surface = page.locator(".new-session-page__composer");
+      const dir =
+        process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+          ? createControlUiE2eArtifactDir("mobile-composer-layout")
+          : null;
+      for (const state of [
+        { name: "portrait", width: 390, height: 844, theme: "dark" },
+        { name: "wide-phone", width: 430, height: 932, theme: "light" },
+        { name: "small-phone", width: 320, height: 568, theme: "dark" },
+        // A resized content viewport exercises the layout used above a soft keyboard.
+        { name: "keyboard", width: 390, height: 480, theme: "dark" },
+        { name: "landscape", width: 844, height: 390, theme: "dark" },
+      ] as const) {
+        await page.setViewportSize({ width: state.width, height: state.height });
+        await page.emulateMedia({ colorScheme: state.theme });
+        await expect
+          .poll(() => page.locator("html").getAttribute("data-theme-mode"))
+          .toBe(state.theme);
+        const frame = await takeControlUiScreenshotFrame(
+          page,
+          page.locator(".shell"),
+          [identity, triggers, surface],
+          {
+            animations: "disabled",
+          },
         );
-        await page
-          .locator(
-            route === "chat"
-              ? ".agent-chat__composer-combobox textarea"
-              : ".new-session-page__message",
-          )
-          .waitFor();
-        const dir =
-          process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
-            ? createControlUiE2eArtifactDir("mobile-team-" + route)
-            : null;
-        const capture = async (name: string) => {
-          if (!dir) {
-            return;
-          }
-          const frame = await takeControlUiScreenshotFrame(
-            page,
-            page.locator(".shell"),
-            [page.locator(".chat-pane__header:visible, .header-new-session:visible").first()],
-            { animations: "disabled" },
-          );
-          await writeFile(path.join(dir, name + ".png"), frame.png);
-        };
-        await capture("closed");
-        const action = page.getByRole("button", { name: "New conversation", exact: true });
-        expect(await action.count()).toBe(route === "chat" ? 0 : 1);
-        expect(
-          await page.getByRole("link", { name: "New conversation", exact: true }).count(),
-        ).toBe(0);
-        await page
-          .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
-          .first()
-          .click();
-        await waitForMobileSidebarDrawerOpen(page);
-        expect(await page.locator(".header-new-session:visible").count()).toBe(0);
-        expect(await action.count()).toBe(1);
-        if (route === "new") {
-          await page.keyboard.press("Escape");
-          await page.locator(".shell--nav-drawer-open").waitFor({ state: "detached" });
+        if (dir) {
+          await writeFile(path.join(dir, state.name + ".png"), frame.png);
         }
-        await action.tap();
-        const menu = page.locator('.sidebar-new-session-menu [role="menu"]:visible');
-        await menu.locator('[role="menuitem"][data-value="writer"]').waitFor();
+        const heroBox = await identity.boundingBox();
+        const targetBox = await triggers.boundingBox();
+        const composerBox = await surface.boundingBox();
+        expect(heroBox).not.toBeNull();
+        expect(targetBox).not.toBeNull();
+        expect(composerBox).not.toBeNull();
+        expect(targetBox!.y - heroBox!.y - heroBox!.height).toBeGreaterThanOrEqual(0);
+        expect(targetBox!.y - heroBox!.y - heroBox!.height).toBeLessThanOrEqual(24);
+        expect(heroBox!.y).toBeGreaterThanOrEqual(58);
+        const compositionCenter = (heroBox!.y + composerBox!.y + composerBox!.height) / 2;
+        const contentCenter = 58 + (state.height - 58) / 2;
+        expect(Math.abs(compositionCenter - contentCenter)).toBeLessThanOrEqual(48);
+        const local = page.locator("#new-session-where-trigger");
+        expect((await local.boundingBox())!.width).toBeLessThanOrEqual(100);
         expect(
-          await menu
-            .locator('a[role="menuitem"]')
-            .evaluateAll((links) => links.map((link) => link.getAttribute("href"))),
-        ).toEqual(["/new?agent=research", "/new?agent=writer"]);
-        await capture("agent-menu");
-        await menu.locator('[role="menuitem"][data-value="writer"]').click();
-        await waitForControlUiRoute(page, { routeId: "new-session", search: "?agent=writer" });
-        expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-      });
-    },
-  );
+          await page.locator(".new-session-page__select--agent .agent-select__label").isVisible(),
+        ).toBe(true);
+        expect(composerBox!.height).toBeLessThanOrEqual(150);
+        expect(composerBox!.y + composerBox!.height).toBeLessThanOrEqual(state.height);
+        expect(composerBox!.x).toBeGreaterThanOrEqual(0);
+        expect(composerBox!.x + composerBox!.width).toBeLessThanOrEqual(state.width);
+        expect(await composer.inputValue()).toBe("Help me plan the next release.");
+        expect(
+          await page
+            .locator(".new-session-page__scroll")
+            .evaluate((element) => element.scrollWidth <= element.clientWidth),
+        ).toBe(true);
+      }
+      await page.setViewportSize({ width: 390, height: 844 });
+      const capture = async (name: string, content = [identity, triggers, surface]) => {
+        if (dir) {
+          const frame = await takeControlUiScreenshotFrame(page, page.locator(".shell"), content, {
+            animations: "disabled",
+          });
+          await writeFile(path.join(dir, name + ".png"), frame.png);
+        }
+      };
+      await composer.fill("");
+      expect(await page.locator(".new-session-page__start-submit").isDisabled()).toBe(true);
+      await capture("empty");
+      await page.locator("#new-session-where-trigger").tap();
+      const destination = page.locator("#new-session-where-popover");
+      await destination.waitFor();
+      await capture("menu", [destination]);
+      const destinationBox = await destination.boundingBox();
+      expect(destinationBox!.x).toBeGreaterThanOrEqual(0);
+      expect(destinationBox!.x + destinationBox!.width).toBeLessThanOrEqual(390);
+      expect(await page.evaluate(() => window.scrollX)).toBe(0);
+      await page.keyboard.press("Escape");
+      await composer.fill("A detailed plan for the next release.\n".repeat(20));
+      expect(
+        await composer.evaluate((element) => element.scrollHeight > element.clientHeight),
+      ).toBe(true);
+      await capture("long-prompt");
+    });
+  });
+
+  it.each(["chat", "new"] as const)("opens the team composer directly from %s", async (route) => {
+    await suite.withPage(mobile, async ({ page }) => {
+      const gateway = await installScenario(page, undefined, true);
+      const draft = "Help me plan the next release.";
+      await page.goto(
+        route === "chat"
+          ? controlUiSessionUrl(suite.server.baseUrl, "agent:research:current")
+          : suite.server.baseUrl + "new?agent=research",
+      );
+      await page
+        .locator(
+          route === "chat"
+            ? ".agent-chat__composer-combobox textarea"
+            : ".new-session-page__message",
+        )
+        .waitFor();
+      if (route === "new") {
+        await page.locator(".new-session-page__message").fill(draft);
+      }
+      const dir =
+        process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+          ? createControlUiE2eArtifactDir("mobile-team-" + route)
+          : null;
+      const capture = async (name: string) => {
+        if (!dir) {
+          return;
+        }
+        const frame = await takeControlUiScreenshotFrame(
+          page,
+          page.locator(".shell"),
+          [page.locator(".chat-pane__header:visible, .header-new-session:visible").first()],
+          { animations: "disabled" },
+        );
+        await writeFile(path.join(dir, name + ".png"), frame.png);
+      };
+      await capture("closed");
+      const action = page.getByRole("link", { name: "New conversation", exact: true });
+      expect(await action.count()).toBe(route === "chat" ? 0 : 1);
+      // Mouse hover can reveal the sliding drawer's tooltip, which owns the first Escape.
+      await page
+        .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
+        .first()
+        .tap();
+      await waitForMobileSidebarDrawerOpen(page);
+      expect(await page.locator(".header-new-session:visible").count()).toBe(0);
+      expect(await action.count()).toBe(1);
+      if (route === "new") {
+        // The drawer moves focus after rendering; Escape must not reach the departing text field.
+        await page.locator(".shell-nav:focus, .shell-nav :focus").waitFor();
+        await page.keyboard.press("Escape");
+        await page.locator(".shell--nav-drawer-open").waitFor({ state: "detached" });
+      }
+      await action.tap();
+      await waitForControlUiRoute(page, { routeId: "new-session", search: "?agent=research" });
+      const composer = page.locator(".new-session-page__message");
+      await composer.waitFor();
+      if (route === "chat") {
+        await expect
+          .poll(() => composer.evaluate((element) => element === document.activeElement))
+          .toBe(true);
+        await page.keyboard.type(draft);
+      }
+      // Reopening the current composer keeps its draft instead of resetting it.
+      expect(await composer.inputValue()).toBe(draft);
+      await capture("composer");
+      const picker = page.locator(".new-session-page__select--agent openclaw-agent-select");
+      await picker.locator(".agent-select__trigger").tap();
+      await picker.getByRole("menuitemradio", { name: "Scout", exact: true }).tap();
+      await expect.poll(() => picker.locator(".agent-select__label").textContent()).toBe("Scout");
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+    });
+  });
 
   it.each([
     { state: "denied", team: false },
@@ -227,7 +328,7 @@ suite.define(() => {
             : suite.server.baseUrl + "new?agent=research",
         );
         if (state === "denied") {
-          await page.locator(".chat-pane__nav-toggle").click();
+          await page.locator(".chat-pane__nav-toggle").tap();
           await waitForMobileSidebarDrawerOpen(page);
         }
         const create = page.locator(
@@ -240,10 +341,8 @@ suite.define(() => {
         }
         await expect.poll(() => create.isDisabled()).toBe(true);
         expect(await create.getAttribute("href")).toBeNull();
-        if (!team) {
-          expect(await create.getAttribute("aria-disabled")).toBe("true");
-          expect(await create.getAttribute("tabindex")).toBe("-1");
-        }
+        expect(await create.getAttribute("aria-disabled")).toBe("true");
+        expect(await create.getAttribute("tabindex")).toBe("-1");
         const location = page.url();
         await create.click({ force: true });
         expect(page.url()).toBe(location);

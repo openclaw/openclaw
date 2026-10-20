@@ -7,6 +7,14 @@ import { registerSlackInstallationState } from "./installation-identity-state.js
 type SlackConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["slack"]>;
 type SlackPolicy = NonNullable<NonNullable<OpenClawConfig["approvals"]>["plugin"]>["slack"];
 const reviewer = "team:T11111111:user:U11111111";
+const native = capability.nativeAsync;
+const availability = capability.nativeRuntimeAsync?.availability;
+const reviewerDelivery = {
+  enabled: true,
+  preferredSurface: "approver-dm",
+  supportsApproverDmSurface: true,
+  notifyOriginWhenDmOnly: true,
+};
 const installations: Array<ReturnType<typeof registerSlackInstallationState>> = [];
 
 afterEach(() => {
@@ -53,6 +61,14 @@ async function canApprove(params: ReturnType<typeof route>, senderId = reviewer)
     ?.authorized;
 }
 
+async function expectRouting(params: ReturnType<typeof route>, enabled: boolean) {
+  expect(await availability?.shouldHandle(params)).toBe(enabled);
+  expect(await native?.resolveApproverDmTargets?.(params)).toEqual(
+    enabled ? [{ to: reviewer }] : [],
+  );
+  expect(await canApprove(params)).toBe(enabled);
+}
+
 describe("Slack plugin reviewer routing", () => {
   it("delivers tool-selected reviewer U11111111 only to their DM", async () => {
     install();
@@ -63,22 +79,13 @@ describe("Slack plugin reviewer routing", () => {
       },
     });
     const params = route(cfg);
-    expect(await capability.nativeRuntimeAsync?.availability.isConfigured(params)).toBe(true);
-    expect(await capability.nativeRuntimeAsync?.availability.shouldHandle(params)).toBe(true);
-    expect(await capability.nativeAsync?.resolveApproverDmTargets?.(params)).toEqual([
-      { to: reviewer },
-    ]);
-    expect(await canApprove(params)).toBe(true);
+    expect(await availability?.isConfigured(params)).toBe(true);
+    await expectRouting(params, true);
     expect(await canApprove(params, "team:T11111111:user:U22222222")).toBe(false);
-    expect(await capability.nativeAsync?.describeDeliveryCapabilities(params)).toMatchObject({
-      enabled: true,
-      preferredSurface: "approver-dm",
-      supportsApproverDmSurface: true,
-      notifyOriginWhenDmOnly: true,
-    });
+    expect(await native?.describeDeliveryCapabilities(params)).toMatchObject(reviewerDelivery);
     expect(
       (
-        await capability.nativeAsync?.describeDeliveryCapabilities({
+        await native?.describeDeliveryCapabilities({
           ...params,
           approvalKind: "exec",
           request: { ...params.request, approvalKind: "exec", request: { command: "echo hi" } },
@@ -114,13 +121,11 @@ describe("Slack plugin reviewer routing", () => {
   ])("has no route for $name", async ({ policy, request, slack }) => {
     install();
     const params = route(config(policy, slack), pending(request));
-    expect(await capability.nativeRuntimeAsync?.availability.shouldHandle(params)).toBe(false);
-    expect(await capability.nativeAsync?.resolveApproverDmTargets?.(params)).toEqual([]);
+    expect(await availability?.shouldHandle(params)).toBe(false);
+    expect(await native?.resolveApproverDmTargets?.(params)).toEqual([]);
     expect(
       await capability.getActionAvailabilityStateAsync?.({ ...params, action: "approve" }),
-    ).toEqual({
-      kind: "disabled",
-    });
+    ).toEqual({ kind: "disabled" });
   });
 
   it("keeps an unmatched plugin's legacy command route without enabling native delivery", async () => {
@@ -135,10 +140,8 @@ describe("Slack plugin reviewer routing", () => {
     );
     expect(
       await capability.getActionAvailabilityStateAsync?.({ ...params, action: "approve" }),
-    ).toEqual({
-      kind: "enabled",
-    });
-    expect(await capability.nativeRuntimeAsync?.availability.shouldHandle(params)).toBe(false);
+    ).toEqual({ kind: "enabled" });
+    expect(await availability?.shouldHandle(params)).toBe(false);
   });
 
   it("keeps selected reviewers on DMs when generic forwarding selects the session", async () => {
@@ -152,12 +155,7 @@ describe("Slack plugin reviewer routing", () => {
       cfg,
       pending({ turnSourceAccountId: "default", sessionKey: "slack:channel:C11111111:test-run" }),
     );
-    expect(await capability.nativeAsync?.describeDeliveryCapabilities(params)).toMatchObject({
-      enabled: true,
-      preferredSurface: "approver-dm",
-      supportsApproverDmSurface: true,
-      notifyOriginWhenDmOnly: true,
-    });
+    expect(await native?.describeDeliveryCapabilities(params)).toMatchObject(reviewerDelivery);
   });
 
   it("blocks generic forwarding for selected plugin according to the selected policy", () => {
@@ -190,28 +188,15 @@ describe("Slack plugin reviewer account custody", () => {
         },
       );
       const params = route(cfg);
-      expect(await capability.nativeRuntimeAsync?.availability.shouldHandle(params)).toBe(expected);
-      expect(await capability.nativeAsync?.resolveApproverDmTargets?.(params)).toEqual(
-        expected ? [{ to: reviewer }] : [],
-      );
-      expect(await canApprove(params)).toBe(expected);
+      await expectRouting(params, expected);
       const sibling = { ...params, accountId: "ops" };
-      expect(await capability.nativeRuntimeAsync?.availability.shouldHandle(sibling)).toBe(false);
-      expect(await capability.nativeAsync?.resolveApproverDmTargets?.(sibling)).toEqual([]);
-      expect(await canApprove(sibling)).toBe(false);
+      await expectRouting(sibling, false);
 
       if (!expected) {
         const bound = route(cfg, pending({ turnSourceAccountId: "ops" }), "ops");
-        expect(await capability.nativeRuntimeAsync?.availability.shouldHandle(bound)).toBe(true);
-        expect(await capability.nativeAsync?.resolveApproverDmTargets?.(bound)).toEqual([
-          { to: reviewer },
-        ]);
-        expect(
-          await capability.nativeRuntimeAsync?.availability.shouldHandle({
-            ...bound,
-            accountId: "default",
-          }),
-        ).toBe(false);
+        expect(await availability?.shouldHandle(bound)).toBe(true);
+        expect(await native?.resolveApproverDmTargets?.(bound)).toEqual([{ to: reviewer }]);
+        expect(await availability?.shouldHandle({ ...bound, accountId: "default" })).toBe(false);
       }
     },
   );
@@ -222,9 +207,9 @@ describe("Slack plugin reviewer account custody", () => {
       pending({ turnSourceTo: "channel:C11111111" }),
     );
     const state = async () => ({
-      route: await capability.nativeRuntimeAsync?.availability.shouldHandle(params),
-      delivery: (await capability.nativeAsync?.describeDeliveryCapabilities(params))?.enabled,
-      targets: await capability.nativeAsync?.resolveApproverDmTargets?.(params),
+      route: await availability?.shouldHandle(params),
+      delivery: (await native?.describeDeliveryCapabilities(params))?.enabled,
+      targets: await native?.resolveApproverDmTargets?.(params),
       authorized: await canApprove(params),
     });
     const unavailable = { route: false, delivery: false, targets: [], authorized: false };

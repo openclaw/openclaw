@@ -55,23 +55,16 @@ export async function withMemorySessionRows<T>(
         authority,
       )!;
       const { owner } = namespace;
-      const direct =
-        binding &&
-        query.agentId === binding.agentId &&
-        query.key === binding.actor.target.sessionKey;
-      const actor = direct
-        ? binding.actor
-        : await owner?.acquireExisting(query.key, {
-            assertCurrent: () => binding?.actor.assertReadable(),
-            assertReadable: () => binding?.actor.assertReadable(),
-          });
+      // Queued publications outlive the turn handle, but never the session or caller's authority.
+      const actor = await owner?.acquireExisting(query.key, {
+        assertCurrent: () => authority.assertCurrent(),
+        assertReadable: () => authority.assertCurrent(),
+      });
       if (!actor) {
         presentations.push({ ...query, present: () => undefined, relatedRows: {}, durable: [] });
         continue;
       }
-      if (!direct) {
-        releases.push(() => actor.release());
-      }
+      releases.push(() => actor.release());
       const selected = { actor, authority, agentId: namespace.agentId, path: namespace.path };
       const assertCurrent = () => {
         assertActive();
@@ -135,6 +128,7 @@ export async function withMemorySessionRows<T>(
           sessionKey: query.key,
           entry,
           hasBoard: snapshot.hasBoard,
+          transcriptAssistantMessage: "unknown",
           activitySummaryWatermark: readSessionActivitySummary(entry)
             ? snapshot.transcript.watermark
             : undefined,

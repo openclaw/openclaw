@@ -1,7 +1,6 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { scrubDoctorErrorMessage } from "./doctor-error-message.js";
-import { copyHealthChecks, normalizeHealthCheck } from "./health-check-adapter.js";
 import { listHealthChecks } from "./health-check-registry.js";
 import type { DoctorHealthCheck } from "./health-check-runner-types.js";
 import type {
@@ -26,17 +25,13 @@ interface DoctorRepairRunResult {
   readonly warnings: readonly string[];
   readonly diffs: readonly HealthRepairDiff[];
   readonly effects: readonly HealthRepairEffect[];
-  readonly checksRun: number;
-  readonly checksRepaired: number;
-  readonly checksValidated: number;
 }
 
 export async function runDoctorHealthRepairs(
   ctx: HealthRepairContext,
   opts: DoctorRepairRunOptions = {},
 ): Promise<DoctorRepairRunResult> {
-  const inputs = opts.checks ?? copyHealthChecks(listHealthChecks());
-  const checks: readonly DoctorHealthCheck[] = inputs.map(normalizeHealthCheck);
+  const checks = opts.checks ?? listHealthChecks();
   const findings: HealthFinding[] = [];
   const allRemainingFindings: HealthFinding[] = [];
   const changes: string[] = [];
@@ -51,9 +46,6 @@ export async function runDoctorHealthRepairs(
     warnings,
     diffs,
     effects,
-    checksRun: checks.length,
-    checksRepaired: 0,
-    checksValidated: 0,
   };
 
   for (const check of checks) {
@@ -71,7 +63,7 @@ export async function runDoctorHealthRepairs(
       continue;
     }
 
-    let remainingFindings: readonly HealthFinding[] = [...checkFindings];
+    let remainingFindings = checkFindings;
     // Split checks expose detect/repair separately, so repair output must be validated by detect().
     try {
       const result = await check.repair(
@@ -92,7 +84,6 @@ export async function runDoctorHealthRepairs(
       if (result.config !== undefined && opts.dryRun !== true) {
         outcome.config = result.config;
       }
-      outcome.checksRepaired++;
       if (opts.dryRun === true) {
         continue;
       }
@@ -107,7 +98,6 @@ export async function runDoctorHealthRepairs(
           },
         );
         remainingFindings = validationFindings;
-        outcome.checksValidated++;
         if (validationFindings.length > 0) {
           outcome.warnings.push(`${check.id} repair left ${validationFindings.length} finding(s)`);
         }

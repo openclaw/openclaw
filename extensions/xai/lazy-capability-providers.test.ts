@@ -154,4 +154,41 @@ describe("xAI lazy capability providers", () => {
     await reconnectPromise;
     expect(events.at(-1)).toBe("connect-settle");
   });
+
+  it("reconnects after closing an in-flight transcription connection", async () => {
+    const first = createDeferred<void>();
+    const second = createDeferred<void>();
+    const started = createDeferred<void>();
+    runtimeMocks.transcriptionConnect
+      .mockImplementationOnce(() => {
+        started.resolve();
+        return first.promise;
+      })
+      .mockImplementationOnce(() => second.promise);
+    const lazy = await loadLazyProviders();
+    const session = lazy.createLazyXaiRealtimeTranscriptionProvider(capabilityHost).createSession({
+      providerConfig: {},
+    });
+    const connecting = session.connect();
+    await started.promise;
+    session.close();
+    const reconnecting = session.connect();
+    const audio = Buffer.from([0x07]);
+    session.sendAudio(audio);
+    try {
+      await vi.dynamicImportSettled();
+      expect(runtimeMocks.transcriptionConnect).toHaveBeenCalledTimes(2);
+      expect(runtimeMocks.transcriptionSendAudio).toHaveBeenCalledWith(audio);
+      first.resolve();
+      await connecting;
+      const joined = session.connect();
+      expect(runtimeMocks.transcriptionConnect).toHaveBeenCalledTimes(2);
+      second.resolve();
+      await Promise.all([reconnecting, joined]);
+    } finally {
+      first.resolve();
+      second.resolve();
+      await Promise.all([connecting, reconnecting]);
+    }
+  });
 });

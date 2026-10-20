@@ -111,7 +111,7 @@ export function createWorkerEnvironmentSessionAttachments(
     if (!retry.parked) {
       const nextStep =
         record.providerId === "crabbox"
-          ? `Run crabbox stop ${record.leaseId ?? "<lease>"} or crabbox leases list, then retry Stop.`
+          ? `Run crabbox stop ${record.leaseId ?? "<lease>"} or crabbox inspect --id ${record.leaseId ?? "<lease>"} --json, then retry Stop.`
           : "Check the provider lease, then retry Stop.";
       retry.parked = `Conversation environment cleanup parked (${record.leaseId ?? record.environmentId}) after ${retry.attempts} attempts: ${retry.lastError}. ${nextStep}`;
       options.warn(retry.parked);

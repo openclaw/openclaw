@@ -4,13 +4,16 @@ import type {
   OpenClawStateReadRequest,
 } from "./openclaw-state-read.types.js";
 
-const mock = vi.hoisted(() => ({
-  handler: vi.fn<(input: unknown) => Promise<OpenClawStateReadReply>>(),
-  admit: vi.fn<() => void>(),
-  query: vi.fn<() => []>(),
-  settle: vi.fn<(operation: (source: { db: object }) => unknown) => unknown>(),
-  unrelatedHandlerLoaded: false,
-}));
+const mock = vi.hoisted(() => {
+  vi.resetModules();
+  return {
+    handler: vi.fn<(input: unknown) => Promise<OpenClawStateReadReply>>(),
+    admit: vi.fn<() => void>(),
+    query: vi.fn<() => []>(),
+    settle: vi.fn<(operation: (source: { db: object }) => unknown) => unknown>(),
+    unrelatedHandlerLoaded: false,
+  };
+});
 vi.mock("../infra/worker-task-server.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/worker-task-server.js")>()),
   serveOwnedWorkerTasks: (handler: (input: unknown) => Promise<OpenClawStateReadReply>) => {
@@ -102,6 +105,22 @@ it("reads the ownership lease without loading unrelated command handlers", async
     sourceAdmitted: true,
     lease: undefined,
   });
+  expect(mock.unrelatedHandlerLoaded).toBe(false);
+});
+
+it("reads the agent database registry without loading unrelated command handlers", async () => {
+  const reply = await mock.handler({
+    ...request,
+    command: { type: "agentDatabaseRegistry.read" },
+  });
+  expect(reply).toEqual({
+    ok: true,
+    type: "agentDatabaseRegistry.read",
+    sourceAdmitted: true,
+    result: { status: "available", entries: [] },
+  });
+  expect(mock.query).toHaveBeenCalledTimes(1);
+  expect(mock.query).toHaveBeenCalledWith({}, request.databasePath, false);
   expect(mock.unrelatedHandlerLoaded).toBe(false);
 });
 

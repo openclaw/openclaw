@@ -526,7 +526,7 @@ function configAuditEntryKey(record: ConfigAuditRecord): string {
 }
 
 export function sanitizeConfigAuditRecord(record: ConfigAuditRecord): ConfigAuditRecord {
-  const sanitized = structuredClone(record);
+  const sanitized = { ...record };
   if (sanitized.event !== "config.external") {
     sanitized.argv = redactConfigAuditArgv(capArgv(sanitized.argv));
     sanitized.execArgv = redactConfigAuditArgv(capArgv(sanitized.execArgv));

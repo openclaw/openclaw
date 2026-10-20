@@ -8,11 +8,15 @@ import { describe, expect, it, vi } from "vitest";
 import {
   agentRouteFromPath,
   APP_ROUTE_IDS,
+  APP_ROUTE_OFFLINE_PREFIXES,
+  clawCatalogPackageNameFromPath,
   CONTROL_UI_DOCUMENT_ROUTE_PATHS,
+  dynamicRouteFromPath,
   inferBasePathFromPathname,
   memoryTabFromPath,
   pathForMemoryTab,
   pathForAgentPanel,
+  pathForClawCatalogEntry,
   pathForPluginSettings,
   pathForWorkboardBoard,
   pathForTerminalSession,
@@ -138,7 +142,7 @@ describe("Dynamic route startup bridge", () => {
     const context = { ...baseContext, gateway: gateway.gateway };
     const route = router.getRoute("plugin")!;
     const originalComponent = route.component;
-    route.component = async () => ({ render: () => null });
+    route.component = async () => ({ renderSolid: () => null });
     setPluginTabSlugs();
     try {
       await startApplicationRouter(router, history, "/ui", context);
@@ -249,7 +253,7 @@ describe("Dynamic route startup bridge", () => {
       const originalComponent = route.component;
       try {
         route.loader = loader;
-        route.component = async () => ({ render: () => null });
+        route.component = async () => ({ renderSolid: () => null });
 
         await startApplicationRouter(router, history, basePath, createStartupContext(basePath));
 
@@ -305,7 +309,7 @@ describe("Dynamic route startup bridge", () => {
       const originalComponent = route.component;
       try {
         route.loader = loader;
-        route.component = async () => ({ render: () => null });
+        route.component = async () => ({ renderSolid: () => null });
 
         await startApplicationRouter(router, history, "", createStartupContext());
         expect(loader).toHaveBeenCalledOnce();
@@ -348,7 +352,7 @@ describe("Dynamic route startup bridge", () => {
     const originalComponent = route.component;
     try {
       route.loader = () => notFound({ routeId: "chat" });
-      route.component = async () => ({ render: () => null });
+      route.component = async () => ({ renderSolid: () => null });
 
       await expect(
         startApplicationRouter(router, history, "", createStartupContext()),
@@ -390,7 +394,7 @@ describe("Dynamic route startup bridge", () => {
     const originalComponent = route.component;
     try {
       route.loader = loader;
-      route.component = async () => ({ render: () => null });
+      route.component = async () => ({ renderSolid: () => null });
 
       await expect(
         startApplicationRouter(router, history, "", createStartupContext()),
@@ -425,7 +429,7 @@ describe("Dynamic route startup bridge", () => {
       route.loader = () => {
         throw failure;
       };
-      route.component = async () => ({ render: () => null });
+      route.component = async () => ({ renderSolid: () => null });
 
       await expect(
         startApplicationRouter(router, history, "", createStartupContext()),
@@ -471,7 +475,7 @@ describe("Agent panel route paths", () => {
     if (!agentsRoute) {
       throw new Error("Agents route missing");
     }
-    agentsRoute.component = async () => ({ render: () => null });
+    agentsRoute.component = async () => ({ renderSolid: () => null });
     const agentsList = {
       defaultId: "main",
       mainKey: "main",
@@ -540,6 +544,47 @@ describe("Plugin Settings route paths", () => {
   });
 });
 
+describe("Claw detail route paths", () => {
+  it.each(["@openclaw/workflow-operator", "@community/travel-planner", "personal-claw"])(
+    "round trips the public package identity %s",
+    (packageName) => {
+      const pathname = pathForClawCatalogEntry(packageName, "/ui");
+      expect(pathname).toBe(`/ui/agents/claws/packages/${encodeURIComponent(packageName)}`);
+      expect(clawCatalogPackageNameFromPath(pathname, "/ui")).toBe(packageName);
+      expect(routeIdFromPath(pathname, "/ui")).toBe("claws");
+      expect(dynamicRouteFromPath(pathname, "/ui")).toEqual([
+        "claws",
+        "__openclawClawsPath",
+        pathname,
+      ]);
+    },
+  );
+
+  it("preserves existing official detail links", () => {
+    expect(clawCatalogPackageNameFromPath("/agents/claws/workflow-operator")).toBe(
+      "@openclaw/workflow-operator",
+    );
+  });
+
+  it.each(["@maker/../private", "@Maker/claw", "../private", "@maker/claw/extra"])(
+    "rejects invalid package identity %s",
+    (packageName) => {
+      expect(() => pathForClawCatalogEntry(packageName)).toThrow("Invalid Claw package name");
+      expect(
+        clawCatalogPackageNameFromPath(`/agents/claws/packages/${encodeURIComponent(packageName)}`),
+      ).toBeNull();
+    },
+  );
+
+  it("rejects malformed or unencoded package routes", () => {
+    expect(clawCatalogPackageNameFromPath("/agents/claws/@openclaw/workflow-operator")).toBeNull();
+    expect(
+      clawCatalogPackageNameFromPath("/agents/claws/packages/@maker/travel-planner"),
+    ).toBeNull();
+    expect(clawCatalogPackageNameFromPath("/agents/claws/packages/%ZZ")).toBeNull();
+  });
+});
+
 describe("terminal route paths", () => {
   it.each(["/openclaw"])("resolves terminal paths under %s", (basePath) => {
     expect(routeIdFromPath(`${basePath}/terminal`, basePath)).toBe("terminal");
@@ -558,5 +603,13 @@ describe("terminal route paths", () => {
   it("does not consume a different mount's terminal identity", () => {
     expect(terminalSessionIdFromPath("/other/terminal/id", "/openclaw")).toBeNull();
     expect(routeIdFromPath("/other/terminal/id", "/openclaw")).toBeNull();
+  });
+});
+
+describe("offline route admission", () => {
+  it("never claims Gateway-owned plugin HTTP namespaces", () => {
+    expect(APP_ROUTE_OFFLINE_PREFIXES).toContain("/chat/");
+    expect(APP_ROUTE_OFFLINE_PREFIXES).not.toContain("/plugin/");
+    expect(APP_ROUTE_OFFLINE_PREFIXES.some((prefix) => prefix.startsWith("/plugins"))).toBe(false);
   });
 });

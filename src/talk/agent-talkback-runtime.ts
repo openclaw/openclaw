@@ -1,6 +1,4 @@
 /**
- * Debounced realtime voice talkback queue for delegated OpenClaw consults.
- *
  * Transcript fragments can arrive quickly while one consult is already running;
  * this queue batches compatible fragments, runs consults serially, and aborts
  * cleanly when the voice session closes.

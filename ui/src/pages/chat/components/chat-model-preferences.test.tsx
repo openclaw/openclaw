@@ -5,12 +5,12 @@ import { createSignal } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { createSessionsListResult } from "../../../test-helpers/chat-model.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatModelControls } from "./chat-model-controls.tsx";
 
 type Props = Parameters<typeof ChatModelControls>[0];
 
-function controls(overrides: Partial<Props>) {
+async function controls(overrides: Partial<Props>) {
   const sessions = createSessionsListResult({ model: "primary", modelProvider: "example" });
   const selectedSession = {
     ...sessions.sessions[0]!,
@@ -23,14 +23,13 @@ function controls(overrides: Partial<Props>) {
   const onModelSelect = vi.fn(async () => true);
   const onThinkingSelect = vi.fn(async () => true);
   const onFastModeSelect = vi.fn(async () => true);
-  const container = document.createElement("div");
   const props: Props = {
     activeRunId: null,
-    activeRunSessionKey: "main",
     connected: true,
     gatewayAvailable: true,
     loading: false,
     modelSwitching: false,
+    modelPickerOpen: true,
     modelCatalogState: { hasSnapshot: true, status: "ready" },
     sending: false,
     stream: null,
@@ -50,7 +49,14 @@ function controls(overrides: Partial<Props>) {
     ...overrides,
   };
   const [current, setCurrent] = createSignal(props);
-  mountSolid(() => <ChatModelControls {...current()} />, { container });
+  const { container } = mountSolid(() => <ChatModelControls {...current()} />);
+  const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__effort-picker")!;
+  picker.open = true;
+  picker.dispatchEvent(new Event("toggle"));
+  flush();
+  await waitForSolid(() =>
+    expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
+  );
   const update = (next: Partial<Props>) => {
     setCurrent({ ...current(), ...next });
     flush();
@@ -85,7 +91,7 @@ it.each([
   { name: "sending", sending: true },
   { name: "preparing", activeRunId: "active-run" },
   { name: "streaming", stream: "A reply in progress" },
-])("edits model and reasoning preferences while $name without enabling speed", (busy) => {
+])("edits model, reasoning, and speed preferences while $name", async (busy) => {
   const {
     model,
     option,
@@ -95,7 +101,7 @@ it.each([
     onModelSelect,
     onThinkingSelect,
     onFastModeSelect,
-  } = controls(busy);
+  } = await controls(busy);
   expect(model.getAttribute("aria-disabled")).toBe("false");
   expect(effort.getAttribute("aria-disabled")).toBe("false");
   option.click();
@@ -104,9 +110,9 @@ it.each([
   slider.value = "0";
   slider.dispatchEvent(new Event("change", { bubbles: true }));
   expect(onThinkingSelect).toHaveBeenCalledWith("low", "main");
-  expect(speed.disabled).toBe(true);
+  expect(speed.disabled).toBe(false);
   speed.click();
-  expect(onFastModeSelect).not.toHaveBeenCalled();
+  expect(onFastModeSelect).toHaveBeenCalledWith("on", "main");
 });
 
 it.each([
@@ -118,8 +124,8 @@ it.each([
     modelMutationDisabledReason: "Read only",
     effortMutationDisabledReason: "Read only",
   },
-])("retains $name guards during an active response", (guard) => {
-  const { model, option, slider, onModelSelect, onThinkingSelect } = controls({
+])("retains $name guards during an active response", async (guard) => {
+  const { model, option, slider, onModelSelect, onThinkingSelect } = await controls({
     ...guard,
     activeRunId: "active-run",
     stream: "Working",
@@ -133,7 +139,7 @@ it.each([
   expect(onThinkingSelect).not.toHaveBeenCalled();
 });
 
-it("retires and restores an unavailable context-window control with its access guard", () => {
+it("retires and restores an unavailable context-window control with its access guard", async () => {
   const contextWindowTarget = {
     contextWindow: "standard",
     contextWindowDefault: "standard",
@@ -142,7 +148,10 @@ it("retires and restores an unavailable context-window control with its access g
       { id: "extended", label: "Extended", contextWindow: 200_000 },
     ],
   };
-  const view = controls({ contextWindowTarget, contextWindowMutationDisabledReason: "Admin only" });
+  const view = await controls({
+    contextWindowTarget,
+    contextWindowMutationDisabledReason: "Admin only",
+  });
   expect(
     view.container.querySelector<HTMLButtonElement>("[data-chat-context-window-toggle]")?.disabled,
   ).toBe(true);

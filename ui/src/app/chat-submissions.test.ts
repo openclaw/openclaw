@@ -134,18 +134,22 @@ describe("pending create display authority", () => {
     const release = submissions.beginCreate({
       creation: { sessionKey: key, admitted: false },
       message: message("private synthetic draft"),
+      displayName: "Private synthetic title",
       canDisplay: () => authorized,
     });
     expect(submissions.readCreateMessage(key)?.content).toEqual([
       { type: "text", text: "private synthetic draft" },
     ]);
     expect(submissions.readCreateMessage("agent:main:dashboard:other")).toBeNull();
+    expect(submissions.readCreate()?.displayName).toBe("Private synthetic title");
     authorized = false;
+    expect(submissions.readCreate()).toBeUndefined();
     expect(submissions.readCreateMessage(key)).toBeNull();
     const routeCreation = submissions.creation;
     release();
     expect(submissions.readCreateMessage(key)).toBeNull();
     expect(submissions.creation).toBeUndefined();
+    expect(submissions.readCreate()).toBeUndefined();
     expect(routeCreation?.admitted).toBe(false);
   });
 

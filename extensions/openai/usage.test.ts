@@ -149,6 +149,77 @@ describe("OpenAI provider usage", () => {
     }
   });
 
+  it.each([
+    {
+      name: "the documented mixed-modality and cache-write response",
+      // https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/usage/methods/completions
+      usage: {
+        input_tokens: 1_000,
+        input_cached_tokens: 400,
+        input_cache_write_tokens: 75,
+        input_cache_write_12h_tokens: 25,
+        input_uncached_tokens: 500,
+        output_tokens: 500,
+        input_text_tokens: 400,
+        output_text_tokens: 400,
+        input_cached_text_tokens: 300,
+        input_audio_tokens: 50,
+        input_cached_audio_tokens: 50,
+        output_audio_tokens: 50,
+        input_image_tokens: 50,
+        input_cached_image_tokens: 50,
+        output_image_tokens: 50,
+      },
+      expected: {
+        inputTokens: 500,
+        cacheReadTokens: 400,
+        cacheWriteTokens: 100,
+        outputTokens: 500,
+        totalTokens: 1_500,
+      },
+      summary: "5 requests · 1,500 tokens",
+    },
+    {
+      name: "audio totals without optional text or cache breakdowns",
+      usage: {
+        input_tokens: 200,
+        input_audio_tokens: 200,
+        output_tokens: 300,
+        output_audio_tokens: 300,
+      },
+      expected: {
+        inputTokens: 200,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        outputTokens: 300,
+        totalTokens: 500,
+      },
+      summary: "5 requests · 500 tokens",
+    },
+  ])("counts each token once for $name", async ({ usage, expected, summary }) => {
+    const result = await fetchAdminUsage({
+      apiKey: "sk-admin-test",
+      fetchFn: async (input) =>
+        Response.json({
+          data: requestUrl(input).pathname.endsWith("/organization/costs")
+            ? []
+            : [
+                {
+                  start_time: 1_783_296_000,
+                  results: [{ ...usage, num_model_requests: 5, model: "test-model" }],
+                },
+              ],
+          has_more: false,
+        }),
+    });
+
+    expect(result.costHistory?.daily).toEqual([
+      { date: "2026-07-06", amount: 0, requests: 5, ...expected },
+    ]);
+    expect(result.costHistory?.models).toEqual([{ name: "test-model", requests: 5, ...expected }]);
+    expect(result.summary).toBe(summary);
+  });
+
   it("reports when organization usage rejects a non-admin key", async () => {
     const result = await fetchAdminUsage({
       apiKey: "sk-proj-test",

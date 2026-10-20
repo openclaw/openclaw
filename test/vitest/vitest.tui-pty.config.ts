@@ -1,6 +1,10 @@
 // Vitest tui pty config wires the tui pty test shard.
 import { defineConfig } from "vitest/config";
-import { loadPatternListFromEnv, narrowIncludePatternsForCli } from "./vitest.pattern-file.ts";
+import {
+  loadPatternListFromEnv,
+  narrowIncludePatternsForCli,
+  vitestE2eTestGlob,
+} from "./vitest.pattern-file.ts";
 import { resolveRepoRootPath, sharedVitestConfig } from "./vitest.shared.config.ts";
 import { tuiPtyTestFiles } from "./vitest.test-shards.mjs";
 
@@ -15,7 +19,7 @@ function toTuiPtyIncludePatterns(patterns: string[] | null) {
 
 export function createTuiPtyVitestConfig(env?: Record<string, string | undefined>) {
   const baseTest = sharedVitestConfig.test ?? {};
-  const exclude = (baseTest.exclude ?? []).filter((pattern) => pattern !== "**/*.e2e.test.ts");
+  const exclude = (baseTest.exclude ?? []).filter((pattern) => pattern !== vitestE2eTestGlob);
   const configEnv = env ?? process.env;
   const includeLocal = configEnv.OPENCLAW_TUI_PTY_INCLUDE_LOCAL === "1";
   const include = tuiPtyTestFiles

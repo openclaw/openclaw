@@ -28,7 +28,8 @@ export { mocks };
 export { withServiceHome } from "./update-command-service-home.test-support.js";
 export const fixtureGatewayPid = Math.max(process.pid, process.ppid) + 1;
 
-vi.mock("../../daemon/service-process-membership.js", () => ({
+vi.mock("../../daemon/service-process-membership.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/service-process-membership.js")>()),
   inspectServiceProcessMembershipSync: vi.fn(() => "outside"),
 }));
 
@@ -148,7 +149,7 @@ beforeEach(() => {
     pids: new Set([process.pid, process.ppid, 1]),
     complete: true,
   });
-  mocks.prepareStop.mockReset().mockResolvedValue(false);
+  mocks.prepareStop.mockReset().mockResolvedValue({ kind: "unchanged" });
   mocks.drain.mockReset().mockImplementation(async (_params, stop) => await stop());
 });
 afterEach(() => vi.restoreAllMocks());

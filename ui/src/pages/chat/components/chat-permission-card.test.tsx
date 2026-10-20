@@ -6,13 +6,11 @@ import {
   createNativeDeviceSettingsCapability,
   type NativeDeviceSettingsCapability,
 } from "../../../app/native-device-settings.ts";
-import type { SolidBridgeElement } from "../../../lit/solid-bridge.ts";
-import { LitContent } from "../../../lit/solid-content.tsx";
-import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createNativeDeviceSettingsSnapshot } from "../../../test-helpers/native-device-settings.ts";
+import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { renderChatPermissionCard } from "./chat-divider.ts";
+import { ChatPermissionCard } from "./chat-permission-card.tsx";
 
 let capability: NativeDeviceSettingsCapability | null;
 afterEach(() => {
@@ -26,20 +24,18 @@ async function mountPermissionCard(
   onRetry?: (message: string) => void,
   context?: ApplicationContext,
 ) {
-  const container = context
-    ? createApplicationContextProvider(context)
-    : document.createElement("div");
+  const container = document.createElement("div");
   document.body.append(container);
-  const view = mountSolid(() => <LitContent value={renderChatPermissionCard(request, onRetry)} />, {
+  const view = mountSolid(() => <ChatPermissionCard request={request} onRetry={onRetry} />, {
     container,
+    wrapper: context ? createSolidApplicationContextProvider(context).wrapper : undefined,
   });
   onTestFinished(async () => {
     view.unmount();
     container.remove();
     await Promise.resolve();
   });
-  await container.querySelector<SolidBridgeElement<object>>("openclaw-chat-permission-card")!
-    .updateComplete;
+  flush();
   return view;
 }
 

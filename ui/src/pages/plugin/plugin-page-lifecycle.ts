@@ -15,6 +15,7 @@ import {
   scheduleStaleChunkReload,
 } from "../../app/stale-chunk-reload.ts";
 import { uiDevGatewayResourceUrl } from "../../dev-gateway.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { postWidgetTheme, registerWidgetThemeFrame } from "../../lib/widget-theme.ts";
 import type { LogbookProps } from "./logbook-view.tsx";
 import { openPluginFrameSession } from "./plugin-frame-session-navigation.ts";
@@ -26,7 +27,6 @@ import { pluginTabKey } from "./route.ts";
  */
 type BundledPluginTabView = {
   render: (props: LogbookProps) => JSX.Element;
-  stop: (host: object) => void;
 };
 
 type BundledPluginTabViewState =
@@ -60,11 +60,8 @@ const EXTERNAL_AUTH_PROBE_TIMEOUT_MS = 5_000;
 // Keyed by pluginId/tabId: tab ids are only unique within their plugin.
 export const BUNDLED_TAB_VIEWS: Record<string, () => Promise<BundledPluginTabView>> = {
   "logbook/logbook": async () => {
-    const [{ Logbook }, { stopLogbookPolling }] = await Promise.all([
-      import("./logbook-view.tsx"),
-      import("./logbook-controller.ts"),
-    ]);
-    return { render: Logbook, stop: stopLogbookPolling };
+    const { Logbook } = await import("./logbook-view.tsx");
+    return { render: Logbook };
   },
 };
 
@@ -75,13 +72,15 @@ export type PluginPageProps = {
 };
 
 // Auth grants and retired frame epochs must change synchronously at the effect boundary.
-// Solid observes the lifecycle; its deferred signal writes never own these facts.
-export class PluginPageLifecycle {
+// Solid observes the owner; its deferred signal writes never own these facts.
+export class PluginPageOwner {
   private disposed = false;
   bundledViewState: BundledPluginTabViewState = { status: "idle" };
   externalAuthReadyKey: string | null = null;
   externalAuthUnavailableKey: string | null = null;
   pluginFrameGeneration: object = {};
+
+  private readonly stopListeners: (() => void)[];
 
   constructor(
     readonly props: PluginPageProps,
@@ -89,8 +88,10 @@ export class PluginPageLifecycle {
     private readonly host: HTMLElement,
     private readonly notify: () => void,
   ) {
-    document.addEventListener("visibilitychange", this.handleVisibilityChange);
-    window.addEventListener("message", this.handlePluginSessionOpen);
+    this.stopListeners = [
+      listen(document, "visibilitychange", this.handleVisibilityChange),
+      listen(window, "message", this.handlePluginSessionOpen),
+    ];
   }
 
   bundledViewHost: object = {};
@@ -128,8 +129,7 @@ export class PluginPageLifecycle {
 
   dispose() {
     this.disposed = true;
-    document.removeEventListener("visibilitychange", this.handleVisibilityChange);
-    window.removeEventListener("message", this.handlePluginSessionOpen);
+    this.stopListeners.forEach((stop) => stop());
     this.syncPluginThemeFrame(null);
     this.clearExternalTabAuth();
     this.stopBundledView();
@@ -280,7 +280,7 @@ export class PluginPageLifecycle {
         if (timeout) {
           clearTimeout(timeout);
         }
-        window.removeEventListener("message", handleMessage);
+        stopMessage();
         signal.removeEventListener("abort", handleAbort);
         frame.remove();
         resolve(result);
@@ -295,7 +295,7 @@ export class PluginPageLifecycle {
         }
       };
       const handleAbort = () => finish(false);
-      window.addEventListener("message", handleMessage);
+      const stopMessage = listen(window, "message", handleMessage);
       signal.addEventListener("abort", handleAbort, { once: true });
       timeout = setTimeout(() => finish(false), EXTERNAL_AUTH_PROBE_TIMEOUT_MS);
       frame.src = url.toString();
@@ -532,11 +532,7 @@ export class PluginPageLifecycle {
   }
 
   private replaceBundledViewHost() {
-    if (this.bundledViewState.status === "ready") {
-      this.bundledViewState.view.stop(this.bundledViewHost);
-    }
-    // Async controller work is keyed by host. A new host makes every completion
-    // from the retired connection epoch unreachable without coupling plugins to the renderer.
+    // A new key retires the bundled view's owner and all of its pending work.
     this.bundledViewHost = {};
   }
 

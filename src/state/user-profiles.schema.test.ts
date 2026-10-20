@@ -1,7 +1,7 @@
 import { copyFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
@@ -13,6 +13,10 @@ import {
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import {
+  addPreCutoverClientCredentialTablesForTest,
+  withStateMigrationBackupForTest,
+} from "./openclaw-state-schema.test-support.js";
+import {
   linkUserChannelIdentity,
   authorizeUserChannelIdentityInDatabase,
   publishUserChannelPolicyInDatabase,
@@ -20,11 +24,11 @@ import {
   configuredCommandOwnerPolicyFingerprint,
 } from "./user-channel-identities.js";
 import { prepareConfiguredCommandOwnerAuthority } from "./user-channel-identity-operations.js";
+import { readUserProfileEmailBindings } from "./user-profile-identity.read.js";
 import {
+  getUserProfileListItem,
   readUserProfileSnapshotSync,
-  readUserProfileEmailBindings,
-} from "./user-profile-identity.read.js";
-import { getUserProfileListItem } from "./user-profile-list-item.test-support.js";
+} from "./user-profile-list-item.test-support.js";
 import {
   getUserProfileDisplay,
   readResidentUserProfileIdentity,
@@ -93,6 +97,34 @@ function readUserProfileEmailBindingIds(
     })
     .toSorted();
 }
+
+it("creates identity tables once before adding indexes and preserves subsequent profile writes", () => {
+  const options = stateOptions();
+  const { db } = openOpenClawStateDatabase(options);
+  const exec = vi.spyOn(db, "exec");
+  try {
+    const profile = ensureProfileForEmail("new@example.test", options);
+    const ddl = exec.mock.calls.flatMap(([sql]) => sql.split(";"));
+    expect(
+      ddl.filter((sql) => /CREATE TABLE IF NOT EXISTS user_profile_identities\b/.test(sql)),
+    ).toHaveLength(1);
+    expect(
+      db
+        .prepare(
+          "SELECT name FROM sqlite_schema WHERE name LIKE 'idx_user_profile_identities_%' ORDER BY name",
+        )
+        .all(),
+    ).toEqual([
+      { name: "idx_user_profile_identities_authorization" },
+      { name: "idx_user_profile_identities_profile_id" },
+    ]);
+    setUserProfileRole(profile.id, "maintainer", options);
+    expect(getUserProfileListItem(profile.id, options)).toMatchObject({ role: "maintainer" });
+    expect(ensureProfileForEmail("new@example.test", options).id).toBe(profile.id);
+  } finally {
+    exec.mockRestore();
+  }
+});
 
 describe("user profile email binding schema", () => {
   it.each(["outer", "savepoint"] as const)(
@@ -230,6 +262,7 @@ it("upgrades deferred channel links without granting legacy recovery custody", a
   renameSync(options.path, `${options.path}.seed`);
   copyFileSync(`${options.path}.seed`, options.path);
   const legacy = new DatabaseSync(options.path);
+  addPreCutoverClientCredentialTablesForTest(legacy);
   legacy.exec(`
     DROP INDEX idx_user_profile_identities_authorization;
     ALTER TABLE user_profile_identities DROP COLUMN authorization_id;
@@ -239,6 +272,7 @@ it("upgrades deferred channel links without granting legacy recovery custody", a
   `);
   const before = legacy.prepare("SELECT * FROM user_profile_identities").all();
   legacy.close();
+  await withStateMigrationBackupForTest(options, () => openOpenClawStateDatabase(options));
   let db = openOpenClawStateDatabase(options).db;
   expect(db.prepare("SELECT * FROM user_profile_identities").all()).toEqual(
     before.map((row) =>

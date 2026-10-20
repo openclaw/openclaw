@@ -61,13 +61,17 @@ export type SubagentRunMutationOptions<P extends SubagentRunMutation<unknown>> =
 export type SubagentRegistryWorkerWrite<T> = {
   writeId: string;
   assertCurrent: () => void;
-  execute: (scope: DomainScope) => Promise<unknown>;
-  decode: (value: unknown) => T;
 } & (
   | {
       kind: "registry";
+      execute: (scope: DomainScope) => Promise<unknown>;
+      decode: (value: unknown) => T;
       terminalEvents: SubagentRunMutation<unknown>["terminalEvents"];
       acknowledged: () => boolean;
     }
-  | { kind: "completion" }
+  | {
+      kind: "completion";
+      execute: (scope: DomainScope) => Promise<T>;
+      decodeCommitted: (value: unknown) => T;
+    }
 );

@@ -2,6 +2,7 @@ import { theme } from "../../packages/terminal-core/src/theme.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveIsNixMode } from "../config/paths.js";
 import { formatMissingChildRuntimeWarning } from "../infra/child-runtime-viability.js";
+import { formatDatabaseEngineSelection } from "../infra/database-engine/report.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
@@ -13,6 +14,7 @@ import { VERSION } from "../version.js";
 import { buildBackupStatusValue } from "./backup-health.js";
 import type { HealthSummary } from "./health.js";
 import { buildStatusOverviewSurfaceRows } from "./status-all/format.js";
+import { buildStatusDatabaseStoreRows } from "./status-database-engines.js";
 import type { StatusOverviewSurface } from "./status-overview-surface.ts";
 import {
   buildStatusAllAgentsValue,
@@ -38,9 +40,11 @@ type StatusDegradationSummary = Pick<
   | "degradedPlugins"
   | "startupMigrationWarning"
   | "startupRecoveryWarning"
+  | "modelReasoningWarning"
   | "installationReplacementWarning"
   | "childRuntime"
   | "secretEgressProxy"
+  | "pluginReload"
 >;
 
 function buildStatusDegradationRows(
@@ -55,6 +59,7 @@ function buildStatusDegradationRows(
   };
   addWarning("Startup migrations", summary.startupMigrationWarning);
   addWarning("Session recovery", summary.startupRecoveryWarning);
+  addWarning("Model reasoning", summary.modelReasoningWarning);
   addWarning(
     "Gateway runtime",
     summary.childRuntime ? formatMissingChildRuntimeWarning(summary.childRuntime) : undefined,
@@ -82,6 +87,13 @@ function buildStatusDegradationRows(
     addWarning(
       "Degraded plugins",
       `${plugins.length} configured-unavailable · ${plugins.map((plugin) => plugin.pluginId).join(", ")}`,
+    );
+  }
+  const reload = summary.pluginReload;
+  if (reload) {
+    addWarning(
+      "Plugin reload",
+      [`${reload.phase} ${reload.pluginIds.join(", ")}`, reload.reason].filter(Boolean).join(" · "),
     );
   }
   return rows;
@@ -158,6 +170,19 @@ export function buildStatusCommandOverviewRows(params: {
     agentsValue,
     suffixRows: [
       ...(params.updateRows ?? []),
+      ...((params.surface.cfg.database || params.surface.databaseEngines?.stores.length) &&
+      params.surface.databaseEngines?.source !== "unavailable"
+        ? [
+            {
+              Item: "Database engines (configured)",
+              Value: formatDatabaseEngineSelection(
+                params.surface.cfg,
+                params.surface.databaseEngines?.stores,
+              ),
+            },
+          ]
+        : []),
+      ...buildStatusDatabaseStoreRows(params.surface.databaseEngines),
       { Item: "Telemetry", Value: telemetryValue },
       { Item: "Memory", Value: memoryValue },
       {
@@ -237,10 +262,20 @@ export function buildStatusAllOverviewRows(params: {
       { Item: "Security", Value: `Run: ${formatCliCommand("openclaw security audit --deep")}` },
       ...buildStatusDegradationRows(params.summary),
     ],
-    agentsValue: buildStatusAllAgentsValue({
-      agentStatus: params.agentStatus,
-    }),
+    agentsValue: buildStatusAllAgentsValue(params.agentStatus),
     suffixRows: [
+      ...(params.surface.databaseEngines?.source !== "unavailable"
+        ? [
+            {
+              Item: "Database engines (configured)",
+              Value: formatDatabaseEngineSelection(
+                params.surface.cfg,
+                params.surface.databaseEngines?.stores,
+              ),
+            },
+          ]
+        : []),
+      ...buildStatusDatabaseStoreRows(params.surface.databaseEngines),
       {
         Item: "Secrets",
         Value: buildStatusSecretsValue(params.secretDiagnosticsCount),

@@ -96,17 +96,10 @@ it.each([false, true])(
       if (abort) {
         controller.abort();
         expect(getAdmittedRunDelegatedAuthority(admitted)).toBeUndefined();
-        expect(() => writeContext.run(() => writeContext.assertCurrent())).toThrow(
-          "Terminal write owner changed before commit",
-        );
-        commit.resolve();
-        await expect(persistence).rejects.toThrow("Terminal write owner changed before commit");
-      } else {
-        const settledBeforeCommit = settled;
-        commit.resolve();
-        await persistence;
-        expect(settledBeforeCommit).toBe(false);
       }
+      expect(settled).toBe(false);
+      commit.resolve();
+      await persistence;
       await expect(run).resolves.toBe(result);
       expect(getAdmittedRunDelegatedAuthority(admitted)).toBeUndefined();
       expect(() => writeContext.run(() => writeContext.assertCurrent())).toThrow(

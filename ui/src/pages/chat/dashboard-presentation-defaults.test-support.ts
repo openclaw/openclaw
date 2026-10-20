@@ -1,4 +1,3 @@
-import { render } from "lit";
 import { flush } from "solid-js";
 import { expect, vi } from "vitest";
 import type { GatewaySessionRow, SessionsPatchResult } from "../../api/types.ts";
@@ -16,14 +15,12 @@ import {
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import { createPageState } from "./chat-state-page.ts";
+import { renderPaneHeaderInto } from "./components/chat-pane-header.test-support.ts";
 import { isSidebarSlotVisible, type SidebarLayout } from "./sidebar-layout.ts";
 
 type DashboardPane = TestChatPane & {
   visuallyPresented: boolean;
-  pageBoardWidgetMenu: (
-    layout: SidebarLayout,
-    board?: ResolvedBoardView,
-  ) => BoardWidgetPageMenu | undefined;
+  pageBoardWidgetMenu: (layout: SidebarLayout) => BoardWidgetPageMenu | undefined;
   boardProvider: BoardProvider;
   routeFace: "chat" | "dashboard" | undefined;
   dashboardExpanded: boolean;
@@ -36,7 +33,7 @@ type DashboardPane = TestChatPane & {
   handleBoardCommand: (event: BoardCommandEvent) => void;
   saveDashboardDefault: (row: GatewaySessionRow, agentId: string | undefined) => Promise<void>;
 };
-type HeaderMenu = HTMLElement & { updateComplete: Promise<boolean> };
+type HeaderMenu = HTMLElement;
 
 export const key = "agent:main:dashboard-defaults";
 
@@ -51,6 +48,22 @@ export function session(overrides: Partial<GatewaySessionRow> = {}): GatewaySess
     boardPresentation: "split",
     ...overrides,
   };
+}
+
+async function settleLayoutMenu() {
+  flush();
+  await Promise.resolve();
+  flush();
+}
+
+async function openLayoutMenu(menu: HTMLElement) {
+  await settleLayoutMenu();
+  const panel = menu.querySelector<HTMLElement>(".oc-menu")!;
+  if (!panel.matches(":popover-open")) {
+    menu.querySelector<HTMLButtonElement>(".chat-pane__layout-trigger")!.click();
+    await settleLayoutMenu();
+  }
+  expect(panel.matches(":popover-open")).toBe(true);
 }
 
 export function createDashboardHarness(
@@ -93,24 +106,20 @@ export function createDashboardHarness(
   const client = createGatewayBrowserClientFixture({ request });
   const harness = createTestChatPane({ client });
   const pane = harness.pane as DashboardPane;
+  Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
   patchSettings({
     sessionKey: current.key,
     sidebarSessionLayouts: options.savedLayout ? { [current.key]: options.savedLayout } : {},
   });
-  const state = createPageState(
-    pane.context,
-    { invalidate: vi.fn(), afterCommit: () => () => {} },
-    pane,
-  );
+  const state = createPageState(pane.context, { afterCommit: () => () => {} }, pane);
   pane.state = state;
   pane.sessionKey = current.key;
   pane.routeFace = "dashboard";
   pane.dashboardExpanded = options.expandedLink ?? false;
   pane.paneWidth = 1400;
   pane.boardProvider = createMockBoardProvider(current.key);
-  // The detached pane exposes real controller methods without running unrelated
+  // The detached pane exposes real runtime methods without running unrelated
   // connectedCallback polling. Header templates are mounted separately below.
-  vi.spyOn(pane, "requestUpdate").mockImplementation(() => {});
   pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
     ["sessions.patch"],
     options.scopes ?? ["operator.write", "operator.read"],
@@ -121,6 +130,7 @@ export function createDashboardHarness(
   state.hello = pane.context.gateway.snapshot.hello;
   state.sessionKey = current.key;
   state.sessionsResult = options.metadataPending ? null : sessionsResult([current], 10);
+  Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
   const mount = document.body.appendChild(document.createElement("div"));
   const publishRow = (row: GatewaySessionRow) => {
     current = row;
@@ -143,7 +153,7 @@ export function createDashboardHarness(
     pane.commitSidebarPanelResize(state.sidebarLayout, column!.id, 620);
   };
   const header = async () => {
-    render(
+    renderPaneHeaderInto(
       pane.renderPaneHeader(
         createPaneHeaderWorkspaceFixture(state),
         state.sessionsResult?.sessions[0],
@@ -155,11 +165,10 @@ export function createDashboardHarness(
       ),
       mount,
     );
+    await settleLayoutMenu();
     const menu = mount.querySelector<HeaderMenu>(".chat-pane__layout-menu");
     expect(menu).not.toBeNull();
-    menu!.dispatchEvent(new Event("wa-show"));
-    flush();
-    await menu!.updateComplete;
+    await openLayoutMenu(menu!);
     return menu!;
   };
   return {
@@ -181,23 +190,13 @@ export function createDashboardHarness(
   };
 }
 
-export function select(menu: ParentNode, value: string) {
-  const dropdown =
-    menu instanceof Element && menu.matches("wa-dropdown")
-      ? menu
-      : menu.querySelector("wa-dropdown");
-  expect(dropdown).not.toBeNull();
-  dropdown!.dispatchEvent(
-    new CustomEvent("wa-select", {
-      bubbles: true,
-      cancelable: true,
-      composed: true,
-      detail: { item: { value } },
-    }),
-  );
-  if (dropdown!.matches(".chat-pane__layout-menu")) {
-    dropdown!.dispatchEvent(new CustomEvent("wa-after-hide"));
+export async function select(menu: ParentNode, value: string) {
+  if (!(menu instanceof HTMLElement) || !menu.matches(".chat-pane__layout-menu")) {
+    throw new Error("Expected native Layout menu");
   }
+  await openLayoutMenu(menu);
+  menu.querySelector<HTMLButtonElement>(`button[data-value="${value}"]`)?.click();
+  await settleLayoutMenu();
 }
 
 export function expectPresentation(layout: SidebarLayout, expanded: boolean) {

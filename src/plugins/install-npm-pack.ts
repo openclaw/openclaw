@@ -135,23 +135,22 @@ export async function installPluginFromNpmPackArchive(
       packageName,
       prepareDependencySpec: async ({ npmRoot }) => {
         try {
-          return {
-            ok: true,
-            dependencySpec: await stageNpmPackArchiveInManagedRoot({
-              archivePath: metadataResult.archivePath,
-              npmRoot,
-              packageName,
-              version: metadataResult.metadata.version,
-              integrity: metadataResult.metadata.integrity,
-              shasum: metadataResult.metadata.shasum,
-              tarballName: metadataResult.tarballName,
-            }),
-          };
+          return await stageNpmPackArchiveInManagedRoot({
+            archivePath: metadataResult.archivePath,
+            npmRoot,
+            packageName,
+            version: metadataResult.metadata.version,
+            integrity: metadataResult.metadata.integrity,
+            shasum: metadataResult.metadata.shasum,
+            tarballName: metadataResult.tarballName,
+          });
         } catch (error) {
-          return {
-            ok: false,
-            error: `Failed to stage npm pack archive in managed npm root: ${String(error)}`,
-          };
+          throw new Error(
+            `Failed to stage npm pack archive in managed npm root: ${String(error)}`,
+            {
+              cause: error,
+            },
+          );
         }
       },
       displaySpec: metadataResult.archivePath,
@@ -173,7 +172,6 @@ export async function installPluginFromNpmPackArchive(
       onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
       beforePersistentApply: params.beforePersistentApply,
       npmResolution,
-      ...(driftResult.integrityDrift ? { integrityDrift: driftResult.integrityDrift } : {}),
     }),
   );
   emitSuccessfulPluginInstallSecurityEvent(result, {

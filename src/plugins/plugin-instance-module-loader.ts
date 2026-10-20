@@ -41,6 +41,7 @@ import { captureBundledPluginStateOperationModules } from "./plugin-state-operat
 import { bindPluginStateOperationModuleSource } from "./plugin-state-operation-source.js";
 import { getPluginRuntimeLoadContextState } from "./runtime/load-context-state.js";
 import { preparePluginLoaderAliases, isPluginSdkAliasSpecifier } from "./sdk-alias.js";
+import { recordPluginSdkDeprecatedImport } from "./sdk-deprecated-imports.js";
 
 type SourceBuilds = Map<string, PluginSourceBuild>;
 type RetainedNativeEsm = {
@@ -216,8 +217,10 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
   const reusedArtifact = retained?.artifact;
   let artifact: PluginGenerationArtifact;
   try {
+    params.preparedArtifact?.attachModuleSource(moduleSource);
     artifact =
       reusedArtifact ??
+      params.preparedArtifact?.artifact ??
       capturePluginGenerationArtifact(
         params.rootDir,
         params.standalone ? params.source : undefined,
@@ -396,6 +399,8 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
       return build.resolve(filename, mode, nativeFormat);
     });
   };
+  // Captured sources and compiled outputs share this instance's private namespace.
+  const boundaryUrl = pathToFileURL(artifact.boundaryRoot + path.sep).href;
   const hooks = Module.registerHooks({
     resolve(specifier, context, nextResolve) {
       if (retained && !ownsNativeEsmResolution(retained, params.instance)) {
@@ -404,7 +409,7 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
       // Lazy native imports outlive the binding call. Only this graph's importers
       // borrow its SDK alias cache; callbacks may otherwise use a newer registry.
       const parent = context.parentURL;
-      const parentEntry = parent?.startsWith("file:")
+      const parentEntry = parent?.startsWith(boundaryUrl)
         ? sourceForOutput(fileURLToPath(parent))
         : undefined;
       const parentSource = parentEntry?.source;
@@ -585,7 +590,13 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
               }),
             )
           : nextResolve(specifier, nativeContext);
-      if (resolved.url.startsWith("file:")) {
+      if (parentRoot && isPluginSdkAliasSpecifier(specifier)) {
+        recordPluginSdkDeprecatedImport(params.instance.pluginId, specifier);
+      }
+      if (
+        (parentRoot && resolved.url.startsWith("file:")) ||
+        resolved.url.startsWith(boundaryUrl)
+      ) {
         const resolvedFilename = fileURLToPath(resolved.url);
         const entry = sourceForOutput(resolvedFilename);
         const filename = entry.generated ? resolvedFilename : entry.source;

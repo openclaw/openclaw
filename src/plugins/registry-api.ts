@@ -1,9 +1,11 @@
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { hasInvalidLifecycleStartTimestamp } from "../infra/agent-event-lifecycle.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveUserPath } from "../utils.js";
-import { emitPluginAgentEvent } from "./agent-event-emission.js";
 import { buildPluginApi, createUnavailableRuntime } from "./api-builder.js";
 import { resolveCapabilityProviderRegistration } from "./capability-catalog.js";
 import { resolvePromptInjectionAllowed } from "./hook-policy-decisions.js";
@@ -16,6 +18,7 @@ import {
   schedulePluginSessionTurn,
   unschedulePluginSessionTurnsByTag,
 } from "./host-hook-scheduled-turns.js";
+import { isPluginJsonValue } from "./host-hooks.js";
 import { getPluginRuntimeEntrySource } from "./plugin-runtime-artifact-binding.js";
 import {
   capturePluginLifecycleAuthority,
@@ -45,6 +48,21 @@ type BoundRegistrars = {
 const loadAttachments = createLazyRuntimeModule(() => import("./host-hook-attachments.js"));
 const loadHookState = createLazyRuntimeModule(() => import("./host-hook-state.js"));
 const loadSteering = createLazyRuntimeModule(() => import("./host-hook-steering.js"));
+
+const HOST_OWNED_AGENT_EVENT_STREAMS = new Set<string>([
+  "lifecycle",
+  "tool",
+  "assistant",
+  "error",
+  "item",
+  "plan",
+  "approval",
+  "command_output",
+  "patch",
+  "compaction",
+  "thinking",
+  "model",
+]);
 
 function resolvePluginPath(input: string, rootDir: string | undefined): string {
   const trimmed = input.trim();
@@ -116,7 +134,7 @@ export function createPluginApiFactory(
       runtime:
         registrationMode === "cli-metadata"
           ? createUnavailableRuntime(registrationMode, record.id)
-          : resolvePluginRuntime(record),
+          : resolvePluginRuntime(record, registrationMode),
       logger: {
         info: registryParams.logger.info,
         warn: registryParams.logger.warn,
@@ -202,6 +220,7 @@ export function createPluginApiFactory(
                   // SAFETY: The host helper reads the SDK's readonly view of the same config data.
                   cfg: registryParams.runtime.config.current() as OpenClawConfig,
                   pluginId: record.id,
+                  pluginName: record.name,
                   input,
                   assertCurrent,
                 });
@@ -213,12 +232,50 @@ export function createPluginApiFactory(
                 if (!shouldCommitWorkflowSideEffect()) {
                   return { emitted: false, reason: "plugin is not loaded" };
                 }
-                return emitPluginAgentEvent({
-                  pluginId: record.id,
-                  pluginName: record.name,
-                  origin: record.origin,
-                  event,
+                const runId = normalizeOptionalString(event.runId);
+                const sessionKey = normalizeOptionalString(event.sessionKey);
+                const stream = normalizeOptionalString(event.stream);
+                if (!runId || !stream) {
+                  return { emitted: false, reason: "runId and stream are required" };
+                }
+                if (!isPluginJsonValue(event.data)) {
+                  return { emitted: false, reason: "event data must be JSON-compatible" };
+                }
+                if (record.origin !== "bundled" && HOST_OWNED_AGENT_EVENT_STREAMS.has(stream)) {
+                  return {
+                    emitted: false,
+                    reason: `stream ${stream} is reserved for bundled plugins`,
+                  };
+                }
+                if (
+                  record.origin !== "bundled" &&
+                  stream !== record.id &&
+                  !stream.startsWith(`${record.id}.`)
+                ) {
+                  return {
+                    emitted: false,
+                    reason: `stream ${stream} must be scoped to plugin ${record.id}`,
+                  };
+                }
+                if (hasInvalidLifecycleStartTimestamp(stream, event.data)) {
+                  return {
+                    emitted: false,
+                    reason: "lifecycle start requires a finite startedAt timestamp",
+                  };
+                }
+                emitAgentEvent({
+                  runId,
+                  stream,
+                  ...(sessionKey ? { sessionKey } : {}),
+                  data: {
+                    ...(event.data && typeof event.data === "object" && !Array.isArray(event.data)
+                      ? event.data
+                      : { value: event.data }),
+                    pluginId: record.id,
+                    ...(record.name ? { pluginName: record.name } : {}),
+                  },
                 });
+                return { emitted: true, stream };
               },
               setRunContext: (patch) =>
                 shouldAccessRunContext()

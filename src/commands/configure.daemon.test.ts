@@ -4,11 +4,27 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as runtimePaths from "../daemon/runtime-paths.js";
 import { maybeInstallDaemon } from "./configure.daemon.js";
 
+const runtime = vi.hoisted(() => ({ log: vi.fn(), error: vi.fn(), exit: vi.fn() }));
+vi.mock("../runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../runtime.js")>();
+  return {
+    ...actual,
+    defaultRuntime: { ...actual.defaultRuntime, ...runtime },
+  };
+});
+
 const progressSetLabel = vi.hoisted(() => vi.fn());
 const loadConfig = vi.hoisted(() => vi.fn());
 const resolveGatewayInstallToken = vi.hoisted(() => vi.fn());
-const readDaemonRuntimePinForInstall = vi.hoisted(() => vi.fn());
-vi.mock("../daemon/runtime-pin-state.js", () => ({ readDaemonRuntimePinForInstall }));
+const readDaemonRuntimePinForInstall = vi.hoisted(() =>
+  vi.fn<typeof import("../daemon/runtime-pin-state.js").readDaemonRuntimePinForInstall>(),
+);
+// mock-isolation: Service-planning fixtures replace pin admission without opening stores or native locks.
+vi.mock("../daemon/runtime-pin-state.js", () => ({
+  readDaemonRuntimePinForInstall,
+  withDaemonRuntimePinMigration: async <T>(_env: NodeJS.ProcessEnv, read: () => T): Promise<T> =>
+    read(),
+}));
 const runExec = vi.hoisted(() => vi.fn());
 vi.mock("../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../process/exec.js")>()),
@@ -18,6 +34,7 @@ vi.mock("../process/exec.js", async (importOriginal) => ({
 const buildGatewayInstallPlan = vi.hoisted(() => vi.fn());
 const note = vi.hoisted(() => vi.fn());
 const serviceIsLoaded = vi.hoisted(() => vi.fn(async () => false));
+const serviceHasInstalledDefinition = vi.hoisted(() => vi.fn(async () => false));
 const serviceReadCommand = vi.hoisted(() => vi.fn());
 const serviceInstall = vi.hoisted(() => vi.fn(async () => {}));
 const serviceUninstall = vi.hoisted(() => vi.fn(async () => {}));
@@ -61,6 +78,7 @@ vi.mock("../daemon/service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon/service.js")>()),
   resolveGatewayService: vi.fn(() => ({
     isLoaded: serviceIsLoaded,
+    hasInstalledDefinition: serviceHasInstalledDefinition,
     readCommand: serviceReadCommand,
     install: serviceInstall,
     uninstall: serviceUninstall,
@@ -74,7 +92,6 @@ vi.mock("./systemd-linger.js", () => ({
 
 function runInstall(daemonRuntime?: Parameters<typeof maybeInstallDaemon>[0]["daemonRuntime"]) {
   return maybeInstallDaemon({
-    runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
     port: 18789,
     daemonRuntime,
   });
@@ -83,17 +100,19 @@ function runInstall(daemonRuntime?: Parameters<typeof maybeInstallDaemon>[0]["da
 describe("maybeInstallDaemon", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    runtime.exit.mockReset();
     readDaemonRuntimePinForInstall.mockReturnValue({ revision: "empty", stored: false });
     runExec.mockReset().mockResolvedValue({
       stdout: JSON.stringify({
         nodeVersion: "26.8.1",
-        bunVersion: "1.4.2",
+        bunVersion: "1.4.3",
         sqliteVersion: "3.53.4",
         sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
       }),
       stderr: "",
     });
     serviceIsLoaded.mockResolvedValue(false);
+    serviceHasInstalledDefinition.mockResolvedValue(false);
     serviceReadCommand.mockResolvedValue(null);
     serviceInstall.mockResolvedValue(undefined);
     select.mockReset().mockResolvedValue("node");
@@ -141,15 +160,11 @@ describe("maybeInstallDaemon", () => {
       output: new PassThrough(),
     });
     select.mockResolvedValueOnce("reinstall").mockResolvedValueOnce(cancelled);
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(() => {
-        throw new Error("setup cancelled");
-      }),
-    };
+    runtime.exit.mockImplementationOnce(() => {
+      throw new Error("setup cancelled");
+    });
 
-    await expect(maybeInstallDaemon({ runtime, port: 18789 })).rejects.toThrow("setup cancelled");
+    await expect(maybeInstallDaemon({ port: 18789 })).rejects.toThrow("setup cancelled");
 
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(serviceUninstall).not.toHaveBeenCalled();
@@ -162,13 +177,13 @@ describe("maybeInstallDaemon", () => {
       typeof import("./daemon-install-helpers.js")
     >("./daemon-install-helpers.js");
     const bunVersion = Object.getOwnPropertyDescriptor(process.versions, "bun");
-    Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.2" });
+    Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.3" });
     const discoverNode = vi
       .spyOn(runtimePaths, "resolvePreferredNodePath")
       .mockResolvedValue(undefined);
     const probeBun = vi.spyOn(runtimePaths, "resolveBunRuntimeInfo").mockResolvedValue({
       status: "supported",
-      version: "1.4.2",
+      version: "1.4.3",
       sqliteVersion: "3.53.4",
       sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
       nodeSharedSqlite: false,
@@ -235,6 +250,29 @@ describe("maybeInstallDaemon", () => {
     expect(serviceInstall).not.toHaveBeenCalled();
   });
 
+  it("offers the existing-service menu for an installed but disabled unit", async () => {
+    // systemd reports a stopped, disabled unit as not loaded, but its definition remains.
+    serviceHasInstalledDefinition.mockResolvedValue(true);
+    select.mockResolvedValueOnce("skip");
+
+    expect(await runInstall()).toBe("skipped");
+
+    expect(select).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Gateway service already installed" }),
+    );
+    expect(serviceInstall).not.toHaveBeenCalled();
+    expect(serviceRestart).not.toHaveBeenCalled();
+  });
+
+  it("installs without the existing-service menu when no definition exists", async () => {
+    expect(await runInstall()).toBe("succeeded");
+
+    expect(select).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Gateway service already installed" }),
+    );
+    expect(serviceInstall).toHaveBeenCalledTimes(1);
+  });
+
   it("shows restart scheduled when a loaded service defers restart handoff", async () => {
     serviceIsLoaded.mockResolvedValue(true);
     select.mockResolvedValueOnce("restart");
@@ -251,7 +289,7 @@ describe("maybeInstallDaemon", () => {
   it.each([undefined, "node"] as const)(
     "carries installed pin intent through setup (explicit=%s)",
     async (daemonRuntime) => {
-      const pin = { runtime: "bun", path: "/opt/pinned/bun" };
+      const pin = { runtime: "bun", path: "/opt/pinned/bun" } as const;
       const expected = { revision: "installed-pin", stored: true, pin };
       const existingCommand = {
         programArguments: [pin.path, "/app/openclaw.mjs", "gateway"],

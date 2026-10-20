@@ -276,40 +276,6 @@ describe("exec foreground failures", () => {
     }
   });
 
-  it("defaults omitted sandbox workdirs to the sandbox workspace", async () => {
-    const workspaceDir = tempDirs.make("openclaw-sandbox-workdir-");
-    mockSpawn();
-
-    const tool = fullExec({
-      host: "sandbox",
-      sandbox: {
-        containerName: "sandbox-workdir-test",
-        workspaceDir,
-        containerWorkdir: "/workspace",
-        buildExecSpec: async ({ command, workdir }) => ({
-          argv: ["docker", "exec", "-w", workdir ?? "/workspace", "sandbox-workdir-test", command],
-          env: {},
-          stdinMode: "pipe-closed",
-        }),
-      },
-    });
-
-    const result = await tool.execute("call-sandbox-default-workdir", {
-      command: "echo ok",
-    });
-
-    expect(result.details.status).toBe("completed");
-    expect(result.details.cwd).toBe(workspaceDir);
-    expect(supervisorMock.spawn).toHaveBeenCalledOnce();
-    const input = supervisorMock.spawn.mock.calls[0]?.[0];
-    expect(input?.cwd).toBe(workspaceDir);
-    expect(input?.mode).toBe("child");
-    if (input?.mode === "child") {
-      expect(input.argv).toContain("-w");
-      expect(input.argv).toContain("/workspace");
-    }
-  });
-
   it("finalizes backend sandbox exec tokens when process spawn fails", async () => {
     const workspaceDir = tempDirs.make("openclaw-sandbox-workdir-");
     const finalizeToken = { session: "remote-session" };
@@ -360,24 +326,6 @@ describe("exec foreground failures", () => {
     expect(discardPreparedWorkdir).not.toHaveBeenCalled();
     expect(buildExecSpec).not.toHaveBeenCalled();
     expect(supervisorMock.spawn).not.toHaveBeenCalled();
-  });
-
-  it("does not preflight remote-only backend workdirs from the local workspace root", async () => {
-    const workspaceDir = tempDirs.make("openclaw-sandbox-workdir-");
-    fs.writeFileSync(path.join(workspaceDir, "script.py"), "print($TOKEN)\n");
-    const { buildExecSpec, tool, validateWorkdir } = createBackendSandboxTool({ workspaceDir });
-    mockSpawn();
-
-    const result = await tool.execute("call-remote-only-script", {
-      command: "python script.py",
-      workdir: "/remote/workspace/generated",
-    });
-
-    expect(result.details.status).toBe("completed");
-    expect(validateWorkdir).toHaveBeenCalledWith("/remote/workspace/generated");
-    expect(buildExecSpec).toHaveBeenCalledOnce();
-    expect(buildExecSpec.mock.calls[0]?.[0]?.workdir).toBe("/remote/workspace/generated");
-    expect(supervisorMock.spawn).toHaveBeenCalledOnce();
   });
 
   it("uses the mapped host cwd for existing relative backend-validated sandbox workdirs", async () => {

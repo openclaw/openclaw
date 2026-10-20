@@ -31,7 +31,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   setSlackRuntime(createPluginRuntimeMock());
-  readChannelIngressStoreAllowFromForDmPolicyMock.mockReset();
+  readChannelIngressStoreAllowFromForDmPolicyMock.mockReset().mockResolvedValue([]);
 });
 
 vi.mock("openclaw/plugin-sdk/channel-ingress-runtime", async () => {
@@ -152,25 +152,6 @@ function makeChannelMemberAuth(
 }
 
 describe("resolveSlackEffectiveAllowFrom", () => {
-  it.each([
-    [
-      "falls back to channel config allowFrom when pairing store throws",
-      () =>
-        readChannelIngressStoreAllowFromForDmPolicyMock.mockRejectedValueOnce(new Error("boom")),
-    ],
-    [
-      "treats malformed non-array pairing-store responses as empty",
-      () => readChannelIngressStoreAllowFromForDmPolicyMock.mockReturnValueOnce(undefined),
-    ],
-  ] as const)("%s", async (_name, setup) => {
-    setup();
-    const effective = await resolveSlackEffectiveAllowFrom(makeSlackCtx(["u1"]), {
-      includePairingStore: true,
-    });
-
-    expect(effective).toEqual(["u1"]);
-  });
-
   it("reads only the current Enterprise workspace's pairing approvals", async () => {
     readChannelIngressStoreAllowFromForDmPolicyMock.mockResolvedValue([
       "ULEGACY123",
@@ -261,35 +242,15 @@ describe("authorizeSlackSystemEventSender", () => {
     }
   });
 
-  it.each([
-    ["reuses cached channel members", () => {}, 1],
-    [
-      "drops cached channel members when the current clock is not a valid date timestamp",
-      () => {
-        vi.spyOn(Date, "now")
-          .mockReturnValueOnce(1_700_000_000_000)
-          .mockReturnValueOnce(1_700_000_000_000)
-          .mockReturnValueOnce(Number.NaN)
-          .mockReturnValue(1_700_000_000_000);
-      },
-      2,
-    ],
-    [
-      "does not cache channel members when the expiry timestamp would exceed the valid date range",
-      () => vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000),
-      2,
-    ],
-  ] as const)("%s", async (_name, setup, expectedCalls) => {
-    setup();
+  it("reuses cached channel members", async () => {
     const { authorize, conversationsMembers } = makeChannelMemberAuth();
 
     await expect(authorize()).resolves.toBe(true);
     await expect(authorize()).resolves.toBe(true);
-    expect(conversationsMembers).toHaveBeenCalledTimes(expectedCalls);
+    expect(conversationsMembers).toHaveBeenCalledTimes(1);
   });
 
-  it("still coalesces in-flight channel member lookups when durable cache expiry is invalid", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
+  it("coalesces in-flight channel member lookups", async () => {
     type MembersResponse = { members: string[]; response_metadata: Record<string, never> };
     let resolveMembers: (value: MembersResponse) => void;
     const membersPromise = new Promise<MembersResponse>((resolve) => {

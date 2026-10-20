@@ -1,8 +1,47 @@
 import { expect } from "vitest";
 import type WebSocket from "ws";
+import type { CronJobCreate } from "../cron/types.js";
 import { onceMessage, rpcReq } from "./test-helpers.js";
 
-export const CRON_WAIT_TIMEOUT_MS = 10_000;
+const CRON_WAIT_TIMEOUT_MS = 10_000;
+
+export function makeCronJob(name: string, overrides: Partial<CronJobCreate> = {}): CronJobCreate {
+  return {
+    name,
+    enabled: true,
+    schedule: { kind: "every", everyMs: 60_000 },
+    sessionTarget: "main",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "systemEvent", text: "hello" },
+    ...overrides,
+  };
+}
+
+/** Minimal Gateway fixtures need a session consumer before Cron can finish. */
+export async function installCronSystemEventConsumer() {
+  const [{ drainFormattedSystemEvents }, { getRuntimeConfig }, { setHeartbeatWakeHandler }] =
+    await Promise.all([
+      import("../auto-reply/reply/session-system-events.js"),
+      import("../config/config.js"),
+      import("../infra/heartbeat-wake.js"),
+    ]);
+  return setHeartbeatWakeHandler(async ({ source, agentId, sessionKey }) => {
+    if (source !== "cron") {
+      return { status: "skipped", reason: "no-pending-event" };
+    }
+    if (!agentId || !sessionKey) {
+      throw new Error("Cron wake did not resolve its session owner");
+    }
+    await drainFormattedSystemEvents({
+      cfg: getRuntimeConfig(),
+      agentId,
+      sessionKey,
+      isMainSession: true,
+      isNewSession: false,
+    });
+    return { status: "ran", durationMs: 0 };
+  });
+}
 
 export async function waitForCronEvent(
   ws: WebSocket,

@@ -1,17 +1,22 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
-import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   appendTranscriptMessage,
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import {
+  beginSessionEffect,
+  captureSessionTarget,
+} from "../../sessions/session-controller.lifecycle.js";
+import { createReplyOperation } from "../../sessions/session-controller.operation.js";
+import { getRpcSource } from "../../sessions/session-controller.rpc-sources.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { bindInProcessRequestMutationAuthority } from "./session-mutation-guards.js";
 import * as settlementOwner from "./session-run-settlement.js";
 import { sessionCompactHandlers } from "./sessions-compact.js";
 import { sessionRewindHandlers } from "./sessions-rewind.js";
@@ -37,9 +42,17 @@ it.each(["committed", "failed"] as const)(
           message: { role: "user", content, timestamp: 1 },
         });
       }
-      const operation = createReplyOperation({ ...scope, resetTriggered: false });
+      const operation = createReplyOperation({
+        ...scope,
+        target: captureSessionTarget({
+          storeScope: scope.storePath,
+          sessionKey: scope.sessionKey,
+          incarnation: scope.sessionId,
+          agentId: scope.agentId,
+        }),
+        resetTriggered: false,
+      });
       if (outcome === "failed") {
-        operation.retainFailureUntilComplete();
         operation.fail("run_failed");
       } else {
         operation.freezeAbort();
@@ -54,14 +67,20 @@ it.each(["committed", "failed"] as const)(
         },
       );
       const respond = vi.fn();
-      const compact = sessionCompactHandlers["sessions.compact"]!({
-        req: { type: "req", id: "compact", method: "sessions.compact" },
-        params: { key: scope.sessionKey, maxLines: 2 },
-        client: null,
-        isWebchatConnect: () => false,
-        respond,
-        context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
-      });
+      const compact = sessionCompactHandlers["sessions.compact"]!(
+        bindInProcessRequestMutationAuthority(
+          {
+            req: { type: "req", id: "compact", method: "sessions.compact" },
+            params: { key: scope.sessionKey, maxLines: 2 },
+            client: null,
+            isWebchatConnect: () => false,
+            respond,
+            context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
+          },
+          undefined,
+          undefined,
+        ),
+      );
       try {
         await awaitGateBeforeSettlement(
           waiting.promise,
@@ -116,17 +135,22 @@ it.each(["compact", "rewind"] as const)(
       }
       const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
       const terminal = registerChatAbortController({
-        chatAbortControllers: context.chatAbortControllers,
         runId: "older-terminal",
         ...scope,
+        target: captureSessionTarget({
+          storeScope: scope.storePath,
+          sessionKey: scope.sessionKey,
+          incarnation: scope.sessionId,
+          agentId: scope.agentId,
+        }),
         timeoutMs: 60_000,
+        projectSessionActive: false,
       });
       if (!terminal.entry) {
         throw new Error("Missing terminal registration");
       }
-      terminal.entry.projectSessionTerminalObservedAt = Date.now();
-      terminal.entry.projectSessionActive = false;
-      const live = await beginSessionWorkAdmission({
+      terminal.entry.adapter.projectSessionTerminalObservedAt = Date.now();
+      const live = await beginSessionEffect({
         scope: scope.storePath,
         identities: [scope.sessionKey, scope.sessionId],
         assertAllowed: () => {},
@@ -180,7 +204,7 @@ it.each(["compact", "rewind"] as const)(
           }),
         );
         expect(live.isActive()).toBe(true);
-        expect(context.chatAbortControllers.get("older-terminal")).toBe(terminal.entry);
+        expect(getRpcSource("older-terminal")).toBe(terminal.entry);
       } finally {
         terminal.cleanup();
         live.release();

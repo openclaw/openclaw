@@ -16,18 +16,20 @@ import {
   readAuthProfileDatabaseIdentity,
   noteAuthProfileFileWrite,
   refreshAuthProfileFileState,
-  registerAuthProfileFileChangeListener,
+  authProfileFileChanges,
 } from "./file-state.js";
 import { runtimeAuthProfileRowsCache } from "./runtime-persisted-rows.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
+const publishFileChange = authProfileFileChanges.onChange;
 vi.mock("node:worker_threads", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:worker_threads")>()),
   isMainThread: true,
 }));
 
 afterEach(async () => {
+  authProfileFileChanges.onChange = publishFileChange;
   runtimeAuthProfileRowsCache.clear();
   await closeOpenClawStateDatabaseAsync();
   vi.restoreAllMocks();
@@ -56,13 +58,15 @@ it.skipIf(process.platform === "win32")(
       (async () => {
         const { register } = await import(workerData.loader);
         const unregister = register();
-        const files = await import(workerData.files);
-        const snapshots = await import(workerData.snapshots);
-        const { runtimeAuthProfileRowsCache } = await import(workerData.cache);
-        const { acquireAuthProfileReadDatabase } = await import(workerData.pool);
-        const { readAuthProfileRowsReadOnly } = await import(workerData.rows);
-        const { runInDetachedAsyncContext } = await import(workerData.detached);
-        const { closeOpenClawStateDatabaseAsync } = await import(workerData.cleanup);
+        const load = (relative) => import(new URL(relative, workerData.base).href);
+        const files = await load("./file-state.ts");
+        const snapshots = await load("./runtime-snapshots.ts");
+        const { runtimeAuthProfileRowsCache } = await load("./runtime-persisted-rows.ts");
+        const { acquireAuthProfileReadDatabase } = await load("./sqlite-read-pool.ts");
+        const { readAuthProfileRowsReadOnly } = await load("./sqlite-json.ts");
+        const { openSqliteReadOnlyDatabase } = await load("../../infra/sqlite-snapshot-source.ts");
+        const { runInDetachedAsyncContext } = await load("../../shared/detached-async-context.ts");
+        const { closeOpenClawStateDatabaseAsync } = await load("../../state/openclaw-state-db-cache.ts");
         const databasePath = path.join(workerData.directory, "openclaw-agent.sqlite");
         const store = (key) => ({
           version: 1,
@@ -79,9 +83,11 @@ it.skipIf(process.platform === "win32")(
           return db;
         };
         const writer = create(databasePath, "worker-original");
+        const changes = [];
+        const publishChange = files.authProfileFileChanges.onChange;
         try {
           writer.exec("PRAGMA journal_mode=WAL; PRAGMA wal_checkpoint(TRUNCATE)");
-          const acquired = acquireAuthProfileReadDatabase(databasePath);
+          const acquired = acquireAuthProfileReadDatabase(databasePath, openSqliteReadOnlyDatabase);
           assert.equal(acquired.status, "readable");
           const reader = acquired.db;
           const owner = { databasePath, sharedDatabasePath: databasePath, location: "legacy-main" };
@@ -89,33 +95,29 @@ it.skipIf(process.platform === "win32")(
             store("worker-original"), databasePath, workerData.directory, owner
           );
           snapshots.recordRuntimeAuthProfilePersistedStore(databasePath, store("worker-original"));
-          const changes = [];
-          const unsubscribe = files.registerAuthProfileFileChangeListener((change) => changes.push(change));
-          try {
-            writer.prepare("UPDATE auth_profile_state SET state_json = ?").run('{"lastGood":{"fixture":"fixture"}}');
-            assert.ok(fs.statSync(databasePath + "-wal").size > 0);
-            await runInDetachedAsyncContext(files.refreshAuthProfileFileState);
-            assert.equal(spawned, 0, "WAL-only observation must not launch an auth row child");
-            assert.equal(runtimeAuthProfileRowsCache.hasSource(databasePath), false);
-            assert.equal(reader.isOpen, true);
-            assert.deepEqual(snapshots.getRuntimeAuthProfileStoreSnapshotAtDatabasePath(databasePath), store("worker-original"));
+          files.authProfileFileChanges.onChange = async (change) => {
+            await publishChange?.(change);
+            changes.push(change);
+          };
+          writer.prepare("UPDATE auth_profile_state SET state_json = ?").run('{"lastGood":{"fixture":"fixture"}}');
+          assert.ok(fs.statSync(databasePath + "-wal").size > 0);
+          await runInDetachedAsyncContext(files.refreshAuthProfileFileState);
+          assert.equal(spawned, 0, "WAL-only observation must not launch an auth row child");
+          assert.deepEqual([runtimeAuthProfileRowsCache.hasSource(databasePath), reader.isOpen], [false, true]);
+          assert.deepEqual(snapshots.getRuntimeAuthProfileStoreSnapshotAtDatabasePath(databasePath), store("worker-original"));
 
-            writer.close();
-            const replacement = databasePath + ".replacement";
-            create(replacement, "worker-replacement").close();
-            fs.renameSync(replacement, databasePath);
-            await runInDetachedAsyncContext(files.refreshAuthProfileFileState);
-            assert.ok(changes.some((change) => change.identityChanged));
-            assert.equal(reader.isOpen, false);
-            assert.equal(snapshots.getRuntimeAuthProfileStoreSnapshotAtDatabasePath(databasePath), undefined);
-            assert.deepEqual(readAuthProfileRowsReadOnly(databasePath).store, {
-              status: "readable", raw: store("worker-replacement")
-            });
-            assert.equal(spawned, 0);
-          } finally {
-            unsubscribe();
-          }
+          writer.close();
+          const replacement = databasePath + ".replacement";
+          create(replacement, "worker-replacement").close();
+          fs.renameSync(replacement, databasePath);
+          await runInDetachedAsyncContext(files.refreshAuthProfileFileState);
+          assert.ok(changes.some((change) => change.identityChanged));
+          assert.deepEqual([reader.isOpen, snapshots.getRuntimeAuthProfileStoreSnapshotAtDatabasePath(databasePath), spawned], [false, undefined, 0]);
+          assert.deepEqual(readAuthProfileRowsReadOnly(databasePath, openSqliteReadOnlyDatabase).store, {
+            status: "readable", raw: store("worker-replacement")
+          });
         } finally {
+          files.authProfileFileChanges.onChange = publishChange;
           if (writer.isOpen) writer.close();
           snapshots.clearRuntimeAuthProfileStoreSnapshots();
           await closeOpenClawStateDatabaseAsync();
@@ -132,36 +134,86 @@ it.skipIf(process.platform === "win32")(
         workerData: {
           directory,
           loader: import.meta.resolve("tsx/esm/api"),
-          files: new URL("./file-state.ts", import.meta.url).href,
-          snapshots: new URL("./runtime-snapshots.ts", import.meta.url).href,
-          cache: new URL("./runtime-persisted-rows.ts", import.meta.url).href,
-          pool: new URL("./sqlite-read-pool.ts", import.meta.url).href,
-          rows: new URL("./sqlite-json.ts", import.meta.url).href,
-          detached: new URL("../../shared/detached-async-context.ts", import.meta.url).href,
-          cleanup: new URL("../../state/openclaw-state-db-cache.ts", import.meta.url).href,
+          base: import.meta.url,
         },
       },
     );
     try {
       const [[result], [code]] = await Promise.all([once(worker, "message"), once(worker, "exit")]);
-      expect(code).toBe(0);
-      expect(result).toBe("worker observations verified");
+      expect([code, result]).toEqual([0, "worker observations verified"]);
     } finally {
       await worker.terminate();
     }
   },
 );
 
-it("rejects a swapped database before a privileged write even before observation runs", async () => {
-  const directory = temporary.make("auth-file-write-admission-");
+function fixture(options: { timers?: boolean; fallback?: boolean; existing?: boolean } = {}) {
+  if (options.timers) {
+    useObservationTimers();
+  }
+  if (options.fallback) {
+    disableWatcher();
+  }
+  const directory = temporary.make("auth-file-");
   const databasePath = path.join(directory, "openclaw-agent.sqlite");
-  fs.writeFileSync(databasePath, "original synthetic database");
+  if (options.existing) {
+    fs.writeFileSync(databasePath, "synthetic database");
+  }
+  return { directory, databasePath, legacyPath: path.join(directory, "auth.json") };
+}
+function useObservationTimers() {
+  vi.useFakeTimers({
+    toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+  });
+}
+function disableWatcher() {
+  vi.spyOn(fs, "watch").mockImplementation(() => {
+    throw new Error("synthetic unavailable watcher");
+  });
+}
+function nextChange(directory: string) {
+  return new Promise<void>((resolve) => {
+    listen(directory, () => {
+      authProfileFileChanges.onChange = publishFileChange;
+      resolve();
+    });
+  });
+}
+
+function listen(directory: string, listener: NonNullable<typeof authProfileFileChanges.onChange>) {
+  authProfileFileChanges.onChange = async (change) => {
+    await publishFileChange?.(change);
+    if (change.directory === directory) {
+      return listener(change);
+    }
+  };
+}
+
+function replaceFile(databasePath: string) {
+  fs.writeFileSync(`${databasePath}.replacement`, "replacement synthetic database");
+  fs.renameSync(`${databasePath}.replacement`, databasePath);
+}
+
+async function observe(change: Promise<void>) {
+  await vi.advanceTimersByTimeAsync(30_000);
+  await change;
+}
+
+function closeFiles(paths: string[], retainedPaths?: string[]) {
+  return applyAgentDatabaseReaderRequest({
+    kind: "close",
+    candidates: paths.map((pathname) => ({ path: pathname })),
+    retainedPaths,
+    deleted: false,
+  });
+}
+
+it("rejects a swapped database before a privileged write even before observation runs", async () => {
+  const { databasePath } = fixture({ existing: true });
   captureAuthProfileFileIdentity(databasePath);
   const write = vi.fn();
   await runOpenClawAgentPathWriteAdmission(databasePath, async (_identity, assertCurrent) => {
-    const replacement = `${databasePath}.replacement`;
-    fs.writeFileSync(replacement, "replacement synthetic database");
-    fs.renameSync(replacement, databasePath);
+    replaceFile(databasePath);
     await Promise.resolve();
     expect(() => {
       assertCurrent();
@@ -172,27 +224,15 @@ it("rejects a swapped database before a privileged write even before observation
 });
 
 it("publishes a first owner write immediately and keeps same-file writes from revoking identity", async () => {
-  vi.useFakeTimers({
-    toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
-  });
-  const directory = temporary.make("auth-file-write-through-");
-  const databasePath = path.join(directory, "openclaw-agent.sqlite");
+  const { directory, databasePath } = fixture({ timers: true });
   expect(readAuthProfileDatabaseIdentity(databasePath)?.key).toMatch(/^path:/);
   fs.writeFileSync(databasePath, "created synthetic database");
   noteAuthProfileFileWrite(databasePath);
   const captured = captureAuthProfileFileIdentity(databasePath);
   expect(captured.identity?.key).toMatch(/^file:/);
-  const changed = new Promise<void>((resolve) => {
-    const unsubscribe = registerAuthProfileFileChangeListener(({ directory: observed }) => {
-      if (observed === directory) {
-        unsubscribe();
-        resolve();
-      }
-    });
-  });
+  const changed = nextChange(directory);
   fs.writeFileSync(databasePath, "session-only write in the same file");
-  await vi.advanceTimersByTimeAsync(30_000);
-  await changed;
+  await observe(changed);
   expect(() => captured.assertCurrent()).not.toThrow();
 });
 
@@ -206,10 +246,8 @@ it("publishes a first owner write to previously admitted directory aliases", () 
   const aliasPath = path.join(alias, "openclaw-agent.sqlite");
   const before = readAuthProfileDatabaseIdentity(aliasPath);
   expect(before?.key).toMatch(/^path:/);
-
   fs.writeFileSync(databasePath, "created synthetic database");
   noteAuthProfileFileWrite(fs.realpathSync(databasePath));
-
   const current = captureAuthProfileFileIdentity(aliasPath);
   expect(current.identity?.key).toMatch(/^file:/);
   expect(current.identity?.canonicalPath).toBe(before?.canonicalPath);
@@ -217,8 +255,7 @@ it("publishes a first owner write to previously admitted directory aliases", () 
 });
 
 it("keeps first-write authority when publication overtakes an observed file read", async () => {
-  const directory = temporary.make("auth-file-publication-race-");
-  const databasePath = path.join(directory, "openclaw-agent.sqlite");
+  const { databasePath } = fixture();
   readAuthProfileDatabaseIdentity(databasePath);
   const original = fs.promises.stat;
   let published: ReturnType<typeof captureAuthProfileFileIdentity> | undefined;
@@ -239,22 +276,21 @@ it("keeps first-write authority when publication overtakes an observed file read
   }
 });
 
-it("explicitly refreshes absent files without retiring unchanged authority", async () => {
-  vi.useFakeTimers({
-    toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
-  });
-  vi.spyOn(fs, "watch").mockImplementation(() => {
-    throw new Error("synthetic unavailable watcher");
-  });
-  const directory = temporary.make("auth-file-explicit-refresh-");
-  const databasePath = path.join(directory, "openclaw-agent.sqlite");
-  const legacyPath = path.join(directory, "auth.json");
+it("reports first-file creation on explicit refresh without retiring unchanged authority", async () => {
+  const { directory, databasePath, legacyPath } = fixture({ timers: true, fallback: true });
   expect(readAuthProfileDatabaseIdentity(databasePath)?.key).toMatch(/^path:/);
   expect(authProfileSourceExists(legacyPath)).toBe(false);
+  const changes: Array<{ identityChanged: boolean; createdPaths: readonly string[] }> = [];
+  listen(directory, (change) => {
+    changes.push(change);
+  });
 
   fs.writeFileSync(databasePath, "created synthetic database");
   fs.writeFileSync(legacyPath, "{}");
   await refreshAuthProfileFileState();
+  expect(changes).toContainEqual(
+    expect.objectContaining({ identityChanged: false, createdPaths: [databasePath] }),
+  );
 
   const captured = captureAuthProfileFileIdentity(databasePath);
   expect(captured.identity?.key).toMatch(/^file:/);
@@ -264,32 +300,19 @@ it("explicitly refreshes absent files without retiring unchanged authority", asy
 });
 
 it("joins a fallback observation received while a prior refresh is pending", async () => {
-  vi.useFakeTimers({
-    toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
-  });
-  vi.spyOn(fs, "watch").mockImplementation(() => {
-    throw new Error("synthetic unavailable watcher");
-  });
-  const directory = temporary.make("auth-file-coalesced-refresh-");
-  const databasePath = path.join(directory, "openclaw-agent.sqlite");
-  fs.writeFileSync(databasePath, "synthetic database");
+  const { directory, databasePath } = fixture({ timers: true, fallback: true, existing: true });
   readAuthProfileDatabaseIdentity(databasePath);
-  const firstStarted = Promise.withResolvers<void>();
-  const releaseFirst = Promise.withResolvers<void>();
-  const secondStarted = Promise.withResolvers<void>();
-  const releaseSecond = Promise.withResolvers<void>();
+  const gate = () => ({
+    started: Promise.withResolvers<void>(),
+    release: Promise.withResolvers<void>(),
+  });
+  const gates = [gate(), gate()] as const;
   let passes = 0;
-  const unsubscribe = registerAuthProfileFileChangeListener(async (change) => {
-    if (change.directory !== directory) {
-      return;
-    }
-    passes += 1;
-    if (passes === 1) {
-      firstStarted.resolve();
-      await releaseFirst.promise;
-    } else if (passes === 2) {
-      secondStarted.resolve();
-      await releaseSecond.promise;
+  listen(directory, async () => {
+    const current = gates[passes++];
+    if (current) {
+      current.started.resolve();
+      await current.release.promise;
     }
   });
   let completed = false;
@@ -297,59 +320,42 @@ it("joins a fallback observation received while a prior refresh is pending", asy
     completed = true;
   });
   try {
-    await firstStarted.promise;
+    await gates[0].started.promise;
     await vi.advanceTimersByTimeAsync(30_000);
     expect(passes).toBe(1);
-    releaseFirst.resolve();
+    gates[0].release.resolve();
 
     expect(
       await Promise.race([
-        secondStarted.promise.then(() => "second pass"),
+        gates[1].started.promise.then(() => "second pass"),
         pending.then(() => "completed"),
       ]),
     ).toBe("second pass");
     expect(completed).toBe(false);
-    releaseSecond.resolve();
+    gates[1].release.resolve();
     await pending;
     expect(passes).toBe(2);
   } finally {
-    releaseFirst.resolve();
-    releaseSecond.resolve();
+    gates.forEach(({ release }) => release.resolve());
     await pending;
-    unsubscribe();
   }
 });
 
 it("invalidates admitted auth facts after a separate process replaces their files", async () => {
-  vi.useFakeTimers({
-    toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
-  });
-  const directory = temporary.make("auth-file-owner-");
-  const databasePath = path.join(directory, "openclaw-agent.sqlite");
+  const { directory, databasePath } = fixture({ timers: true, existing: true });
   const legacyPath = path.join(directory, "auth-profiles.json");
-  fs.writeFileSync(databasePath, "initial synthetic database");
   const captured = captureAuthProfileFileIdentity(databasePath);
   const before = captured.identity;
   expect(authProfileSourceExists(legacyPath)).toBe(false);
-  const changed = new Promise<void>((resolve) => {
-    const unsubscribe = registerAuthProfileFileChangeListener(({ directory: changedDirectory }) => {
-      if (directory === changedDirectory) {
-        unsubscribe();
-        resolve();
-      }
-    });
-  });
+  const changed = nextChange(directory);
   await promisify(execFile)(process.execPath, [
     "-e",
     'const fs = require("node:fs"); const [db, legacy] = process.argv.slice(1); fs.writeFileSync(db + ".replacement", "replacement synthetic database"); fs.renameSync(db + ".replacement", db); fs.writeFileSync(legacy, "{}");',
     databasePath,
     legacyPath,
   ]);
-  await vi.advanceTimersByTimeAsync(30_000);
-  await changed;
+  await observe(changed);
   expect(() => captured.assertCurrent()).toThrow("database file identity changed");
-  expect(readAuthProfileDatabaseIdentity(databasePath)?.key).not.toBe(before?.key);
-  expect(authProfileSourceExists(legacyPath)).toBe(true);
   const stat = vi.spyOn(fs, "statSync");
   const exists = vi.spyOn(fs, "existsSync");
   expect(readAuthProfileDatabaseIdentity(databasePath)?.key).not.toBe(before?.key);
@@ -359,68 +365,33 @@ it("invalidates admitted auth facts after a separate process replaces their file
 });
 
 it("periodically invalidates when directory events are unavailable", async () => {
-  vi.useFakeTimers({
-    toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
-  });
-  vi.spyOn(fs, "watch").mockImplementation(() => {
-    throw new Error("synthetic unavailable watcher");
-  });
-  const directory = temporary.make("auth-file-fallback-");
-  const legacyPath = path.join(directory, "auth.json");
+  const { directory, legacyPath } = fixture({ timers: true, fallback: true });
   expect(authProfileSourceExists(legacyPath)).toBe(false);
-  const changed = new Promise<void>((resolve) => {
-    const unsubscribe = registerAuthProfileFileChangeListener(({ directory: observed }) => {
-      if (observed === directory) {
-        unsubscribe();
-        resolve();
-      }
-    });
-  });
+  const changed = nextChange(directory);
   fs.writeFileSync(legacyPath, "{}");
-  await vi.advanceTimersByTimeAsync(30_000);
-  await changed;
+  await observe(changed);
   expect(authProfileSourceExists(legacyPath)).toBe(true);
 });
 
 it("keeps an absent database readable as missing after fallback revalidation", async () => {
-  vi.useFakeTimers({
-    toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
-  });
-  const directory = temporary.make("auth-file-still-missing-");
-  const databasePath = path.join(directory, "openclaw-agent.sqlite");
+  const { directory, databasePath } = fixture({ timers: true });
   const captured = captureAuthProfileFileIdentity(databasePath);
-  const changed = new Promise<void>((resolve) => {
-    const unsubscribe = registerAuthProfileFileChangeListener(({ directory: observed }) => {
-      if (observed === directory) {
-        unsubscribe();
-        resolve();
-      }
-    });
-  });
-  await vi.advanceTimersByTimeAsync(30_000);
-  await changed;
+  const changed = nextChange(directory);
+  await observe(changed);
   expect(readAuthProfileDatabaseIdentity(databasePath)).toEqual(captured.identity);
   expect(() => captured.assertCurrent()).not.toThrow();
 });
 
 it("retires observations with the database owner", async () => {
-  const directory = temporary.make("auth-file-retired-");
-  const databasePath = path.join(directory, "openclaw-agent.sqlite");
-  fs.writeFileSync(databasePath, "synthetic database");
+  const { databasePath } = fixture({ existing: true });
   const captured = captureAuthProfileFileIdentity(databasePath);
-  await applyAgentDatabaseReaderRequest({
-    kind: "close",
-    candidates: [{ path: databasePath }],
-    deleted: false,
-  });
+  await closeFiles([databasePath]);
   expect(() => captured.assertCurrent()).toThrow("database file identity changed");
   expect(() => captureAuthProfileFileIdentity(databasePath).assertCurrent()).not.toThrow();
 });
 
 it("keeps physical file authority through logical snapshot reset", async () => {
-  const directory = temporary.make("auth-file-logical-reset-");
-  const databasePath = path.join(directory, "openclaw-agent.sqlite");
-  fs.writeFileSync(databasePath, "synthetic database");
+  const { databasePath } = fixture({ existing: true });
   const captured = captureAuthProfileFileIdentity(databasePath);
   clearRuntimeAuthProfileStoreSnapshots();
   expect(() => captured.assertCurrent()).not.toThrow();
@@ -436,55 +407,20 @@ it("keeps sibling file authority when another database is replaced or retired", 
   fs.writeFileSync(second, "second synthetic database");
   const retained = captureAuthProfileFileIdentity(first);
   const replaced = captureAuthProfileFileIdentity(second);
-  fs.writeFileSync(`${second}.replacement`, "replacement synthetic database");
-  fs.renameSync(`${second}.replacement`, second);
+  replaceFile(second);
   await refreshAuthProfileFileState();
   expect(() => retained.assertCurrent()).not.toThrow();
   expect(() => replaced.assertCurrent()).toThrow("database file identity changed");
   const retired = captureAuthProfileFileIdentity(second);
-  await applyAgentDatabaseReaderRequest({
-    kind: "close",
-    candidates: [{ path: first }, { path: second }],
-    retainedPaths: [first],
-    deleted: false,
-  });
+  await closeFiles([first, second], [first]);
   expect(() => retained.assertCurrent()).not.toThrow();
   expect(() => retired.assertCurrent()).toThrow("database file identity changed");
 });
 
-it("reports a first database file separately from a replaced credential source", async () => {
-  const directory = temporary.make("auth-file-first-session-");
-  const databasePath = path.join(directory, "openclaw-agent.sqlite");
-  readAuthProfileDatabaseIdentity(databasePath);
-  const changes: Array<{ identityChanged: boolean; createdPaths: readonly string[] }> = [];
-  const unsubscribe = registerAuthProfileFileChangeListener((change) => {
-    if (change.directory === directory) {
-      changes.push(change);
-    }
-  });
-  try {
-    fs.writeFileSync(databasePath, "first synthetic database");
-    await refreshAuthProfileFileState();
-    expect(changes).toContainEqual(
-      expect.objectContaining({
-        identityChanged: false,
-        createdPaths: [databasePath],
-      }),
-    );
-  } finally {
-    unsubscribe();
-  }
-});
-
 it("retires legacy source observations when their agent database closes", async () => {
-  const directory = temporary.make("auth-file-presence-retirement-");
-  const legacyPath = path.join(directory, "auth.json");
+  const { databasePath, legacyPath } = fixture();
   expect(authProfileSourceExists(legacyPath)).toBe(false);
-  await applyAgentDatabaseReaderRequest({
-    kind: "close",
-    candidates: [{ path: path.join(directory, "openclaw-agent.sqlite") }],
-    deleted: false,
-  });
+  await closeFiles([databasePath]);
   fs.writeFileSync(legacyPath, "{}");
   expect(authProfileSourceExists(legacyPath)).toBe(true);
 });

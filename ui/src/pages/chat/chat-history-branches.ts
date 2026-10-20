@@ -52,7 +52,9 @@ export async function loadChatBranches(state: ChatState): Promise<void> {
     try {
       const branches = await listBranches.call(sessions, sessionKey, agentParams);
       if (isCurrent()) {
-        state.chatBranches = branches;
+        if (JSON.stringify(state.chatBranches ?? []) !== JSON.stringify(branches)) {
+          state.chatBranches = branches;
+        }
         state.chatBranchesSessionKey = sessionKey;
         state.chatBranchesConnectionEpoch = connectionEpoch;
       }
@@ -62,7 +64,6 @@ export async function loadChatBranches(state: ChatState): Promise<void> {
   })().finally(() => {
     if (requests.branchVersion === version) {
       pendingBranchLoads.delete(state);
-      state.requestUpdate?.();
     }
   });
   pendingBranchLoads.set(state, {

@@ -18,6 +18,7 @@ import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-sta
 import {
   acquireAuthProfileReadDatabase,
   closeAuthProfileReadDatabase,
+  type AuthProfileReadDatabaseOpener,
 } from "./sqlite-read-pool.js";
 import type { AuthProfileRowRead, PersistedAuthProfileStoreInspection } from "./types.js";
 
@@ -68,6 +69,10 @@ function inspectAuthProfileTable(
   target: "store" | "state",
   databaseKind: "agent" | "shared-state",
 ): PersistedAuthProfileStoreInspection | null {
+  // The selected PostgreSQL owner admits the complete generated schema before reads.
+  if (isPostgresSqlConnection(db)) {
+    return null;
+  }
   const tableName = authProfileTableName(target, databaseKind);
   const schema = getAdmittedSqliteSchemaFacts(db);
   if (schema) {
@@ -141,8 +146,9 @@ function inspectAuthProfileJsonText(raw: string | undefined): PersistedAuthProfi
 export function inspectAgentAuthProfileJsonCellReadOnly(
   databasePath: string,
   target: "store" | "state",
+  openReadOnlyDatabase: AuthProfileReadDatabaseOpener,
 ): PersistedAuthProfileStoreInspection {
-  const acquired = acquireAuthProfileReadDatabase(databasePath);
+  const acquired = acquireAuthProfileReadDatabase(databasePath, openReadOnlyDatabase);
   if (acquired.status === "missing") {
     return { status: "missing", reason: "database" };
   }
@@ -160,11 +166,17 @@ export function inspectAgentAuthProfileJsonCellReadOnly(
 /** Reuse the worker-owned reader; each statement observes the latest committed rows. */
 export function readAuthProfileRowsReadOnly(
   databasePath: string,
+  openReadOnlyDatabase: AuthProfileReadDatabaseOpener,
   schema?: SqliteAuthSchema,
   expectedIdentity?: string,
   retainReader = true,
 ): AuthProfileRowRead {
-  const acquired = acquireAuthProfileReadDatabase(databasePath, schema, expectedIdentity);
+  const acquired = acquireAuthProfileReadDatabase(
+    databasePath,
+    openReadOnlyDatabase,
+    schema,
+    expectedIdentity,
+  );
   if (acquired.status !== "readable") {
     const inspection: PersistedAuthProfileStoreInspection =
       acquired.status === "missing"
@@ -212,7 +224,9 @@ export function readAuthProfileRows(
   let schemaObjects: Array<Record<string, unknown>>;
   try {
     const schema = authSchema ? undefined : getAdmittedSqliteSchemaFacts(database);
-    if (authSchema) {
+    if (isPostgresSqlConnection(database)) {
+      schemaObjects = [storeTable, stateTable].map((name) => ({ name, type: "table" }));
+    } else if (authSchema) {
       schemaObjects = [
         { name: storeTable, type: authSchema.store === "missing" ? undefined : authSchema.store },
         { name: stateTable, type: authSchema.state === "missing" ? undefined : authSchema.state },
@@ -319,15 +333,10 @@ export function readAuthProfileRows(
 function inspectAuthProfileRow(
   database: EngineConnection,
   target: "store" | "state",
-  databaseKind: "agent" | "shared-state",
 ): PersistedAuthProfileStoreInspection {
   try {
-    return inspectAuthProfileJsonCell(database, target, databaseKind);
-  } catch (error) {
-    // Shared-state read ownership handles native failures and poisoned-handle eviction.
-    if (databaseKind === "shared-state") {
-      throw error;
-    }
+    return inspectAuthProfileJsonCell(database, target, "agent");
+  } catch {
     // A broken state table must not turn an absent credential row into a present source.
     return { status: "unreadable" };
   }
@@ -335,10 +344,10 @@ function inspectAuthProfileRow(
 
 /** The selected worker returns source presence without transferring credential rows. */
 export function hasAgentAuthProfileSourceInDatabase(database: EngineConnection): boolean {
-  const store = inspectAuthProfileRow(database, "store", "agent");
+  const store = inspectAuthProfileRow(database, "store");
   if (store.status !== "missing") {
     return true;
   }
-  const state = inspectAuthProfileRow(database, "state", "agent");
+  const state = inspectAuthProfileRow(database, "state");
   return state.status === "readable" && Boolean(state.raw);
 }

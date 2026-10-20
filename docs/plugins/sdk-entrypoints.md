@@ -310,6 +310,13 @@ and channel-provided joiner before prompt hooks run. Frame ordinary chat
 with prose section labels so a leading file path cannot become a native slash command. Keep
 one admitted user turn while assigning each provider attempt its own request and reply identity.
 
+The result's `developerInstructions` includes plugin system context. When that
+context is present, `threadDeveloperInstructions` contains the policy without
+the context, and `turnDeveloperInstructions` contains the wrapped context.
+Harnesses with separate persistent and per-turn instruction carriers can use
+these fields to refresh context without reloading their session. Hook
+`systemPrompt` replacements remain part of `threadDeveloperInstructions`.
+
 Host `requestApproval` normalizes the title and description within the shared display bounds
 and preserves full action evidence in `detail`. Its response acknowledges the request with
 an ID. Call `waitForApproval` with
@@ -347,6 +354,12 @@ Gateway `method`, serializable `params`, a diagnostic `target`, and `runLocal`.
 Open databases and load mutation-capable runtime state only inside `runLocal`;
 its scope supplies the admitted config, environment, abort signal, and current
 owner assertion. Close plugin-owned stores before the callback returns.
+
+Commands that use configured database families set `databaseEngine: "configured"`.
+The helper resolves the selected config's engines after acquiring offline ownership,
+before runtime config can write state, and retains that selection through resource
+settlement. Commands routed to a running Gateway use its engines and do not need
+the PostgreSQL credentials in the CLI process.
 
 The helper routes to the local Gateway with its expected owner ID, or retains
 exclusive offline ownership through resource settlement. It never replays an

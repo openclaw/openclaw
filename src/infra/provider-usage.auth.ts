@@ -94,50 +94,6 @@ function resolveProviderApiKeyFromConfig(params: {
   return undefined;
 }
 
-function hasProviderAuthEnvCredentialSource(params: {
-  state: UsageAuthState;
-  providerIds: string[];
-}): boolean {
-  const candidates = resolveProviderAuthEnvVarCandidatesCore({
-    config: params.state.cfg,
-    env: {
-      ...(process.env.VITEST ? process.env : {}),
-      ...params.state.env,
-    },
-  });
-  return normalizeProviderIds(params.providerIds).some((providerId) => {
-    const envVars = Object.hasOwn(candidates, providerId) ? candidates[providerId] : undefined;
-    return (
-      envVars?.some((envVar) => Boolean(normalizeSecretInput(params.state.env[envVar]))) ?? false
-    );
-  });
-}
-
-function hasProviderUsageAuthEnvCredentialSource(params: {
-  state: UsageAuthState;
-  providerIds: string[];
-}): boolean {
-  const providerIds = new Set(normalizeProviderIds(params.providerIds));
-  try {
-    const snapshot = loadManifestMetadataSnapshot({
-      config: params.state.cfg,
-      env: params.state.env,
-    });
-    return snapshot.plugins.some((plugin) => {
-      if (!isUsageProviderManifestEligible({ plugin, state: params.state })) {
-        return false;
-      }
-      return Object.entries(plugin.providerUsageAuthEnvVars ?? {}).some(
-        ([providerId, envVars]) =>
-          providerIds.has(normalizeProviderId(providerId)) &&
-          envVars.some((envVar) => Boolean(normalizeSecretInput(params.state.env[envVar]))),
-      );
-    });
-  } catch {
-    return false;
-  }
-}
-
 type ProviderApiKeyCandidatesParams = {
   state: UsageAuthState;
   providerIds: string[];
@@ -260,36 +216,6 @@ function isUsageProviderManifestEligible(params: {
   });
 }
 
-function resolveUsageCredentialProviderIds(params: {
-  state: UsageAuthState;
-  provider: UsageProviderId;
-}): string[] {
-  const providerIds = new Set(normalizeProviderIds([params.provider]));
-  const providerIdSet = new Set(providerIds);
-  try {
-    const snapshot = loadManifestMetadataSnapshot({
-      config: params.state.cfg,
-      env: params.state.env,
-    });
-    for (const plugin of snapshot.plugins) {
-      const pluginProviderIds = normalizeProviderIds(plugin.providers);
-      if (!pluginProviderIds.some((providerId) => providerIdSet.has(providerId))) {
-        continue;
-      }
-      if (!isUsageProviderManifestEligible({ plugin, state: params.state })) {
-        continue;
-      }
-      for (const providerId of pluginProviderIds) {
-        providerIds.add(providerId);
-      }
-    }
-  } catch {
-    // Credential-source checks are an optimization gate; preserve usage fallback
-    // behavior if manifest discovery is unavailable in a constrained environment.
-  }
-  return [...providerIds];
-}
-
 async function resolveOAuthToken(params: {
   state: UsageAuthState;
   provider: string;
@@ -358,38 +284,6 @@ async function resolveOAuthToken(params: {
   return null;
 }
 
-async function hasAuthProfileCredentialSource(params: {
-  state: UsageAuthState;
-  providerIds: string[];
-}): Promise<boolean> {
-  const store = (params.state.store ??= await (params.state.getStore?.() ??
-    ensureAuthProfileStoreWithoutExternalProfilesAsync(params.state.agentDir, {
-      allowKeychainPrompt: false,
-    })));
-  for (const provider of params.providerIds) {
-    const order = resolveAuthProfileOrder({
-      cfg: params.state.cfg,
-      store,
-      provider,
-    });
-    if (
-      dedupeProfileIds(order).some((profileId) => {
-        const cred = store.profiles[profileId];
-        return (
-          cred?.type === "oauth" ||
-          cred?.type === "token" ||
-          // A provider hook may route an API key to a separate billing endpoint
-          // even when generic usage fallback for the provider stays OAuth-only.
-          cred?.type === "api_key"
-        );
-      })
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
 export async function resolveProviderAuths(params: {
   signal?: AbortSignal;
   providers: UsageProviderId[];
@@ -433,32 +327,110 @@ export async function resolveProviderAuths(params: {
     params.signal?.throwIfAborted();
     try {
       const directCredentialState = { ...stateBase, allowAuthProfileStore: false };
-      const credentialProviderIds = resolveUsageCredentialProviderIds({
-        state: directCredentialState,
-        provider,
-      });
-      const hasDirectCredentialSource =
-        Boolean(
-          resolveProviderApiKeyFromConfig({
-            state: directCredentialState,
-            providerIds: credentialProviderIds,
-          }),
-        ) ||
-        hasProviderAuthEnvCredentialSource({
-          state: directCredentialState,
-          providerIds: credentialProviderIds,
-        }) ||
-        hasProviderUsageAuthEnvCredentialSource({
-          state: directCredentialState,
-          providerIds: credentialProviderIds,
+      const providerIds = new Set(normalizeProviderIds([provider]));
+      const providerIdSet = new Set(providerIds);
+      try {
+        const snapshot = loadManifestMetadataSnapshot({
+          config: directCredentialState.cfg,
+          env: directCredentialState.env,
         });
-      const allowAuthProfileStore =
-        hasDirectCredentialSource ||
-        (hasAuthProfileStoreSource &&
-          (await hasAuthProfileCredentialSource({
-            state: authProfileSourceState,
-            providerIds: credentialProviderIds,
-          })));
+        for (const plugin of snapshot.plugins) {
+          const pluginProviderIds = normalizeProviderIds(plugin.providers);
+          if (!pluginProviderIds.some((providerId) => providerIdSet.has(providerId))) {
+            continue;
+          }
+          if (!isUsageProviderManifestEligible({ plugin, state: directCredentialState })) {
+            continue;
+          }
+          for (const providerId of pluginProviderIds) {
+            providerIds.add(providerId);
+          }
+        }
+      } catch {
+        // Credential-source checks are an optimization gate; preserve usage fallback
+        // behavior if manifest discovery is unavailable in a constrained environment.
+      }
+      const credentialProviderIds = [...providerIds];
+      let hasDirectCredentialSource = Boolean(
+        resolveProviderApiKeyFromConfig({
+          state: directCredentialState,
+          providerIds: credentialProviderIds,
+        }),
+      );
+      if (!hasDirectCredentialSource) {
+        const candidates = resolveProviderAuthEnvVarCandidatesCore({
+          config: directCredentialState.cfg,
+          env: {
+            ...(process.env.VITEST ? process.env : {}),
+            ...directCredentialState.env,
+          },
+        });
+        hasDirectCredentialSource = normalizeProviderIds(credentialProviderIds).some(
+          (providerId) => {
+            const envVars = Object.hasOwn(candidates, providerId)
+              ? candidates[providerId]
+              : undefined;
+            return (
+              envVars?.some((envVar) =>
+                Boolean(normalizeSecretInput(directCredentialState.env[envVar])),
+              ) ?? false
+            );
+          },
+        );
+      }
+      if (!hasDirectCredentialSource) {
+        const usageProviderIds = new Set(normalizeProviderIds(credentialProviderIds));
+        try {
+          const snapshot = loadManifestMetadataSnapshot({
+            config: directCredentialState.cfg,
+            env: directCredentialState.env,
+          });
+          hasDirectCredentialSource = snapshot.plugins.some((plugin) => {
+            if (!isUsageProviderManifestEligible({ plugin, state: directCredentialState })) {
+              return false;
+            }
+            return Object.entries(plugin.providerUsageAuthEnvVars ?? {}).some(
+              ([providerId, envVars]) =>
+                usageProviderIds.has(normalizeProviderId(providerId)) &&
+                envVars.some((envVar) =>
+                  Boolean(normalizeSecretInput(directCredentialState.env[envVar])),
+                ),
+            );
+          });
+        } catch {
+          hasDirectCredentialSource = false;
+        }
+      }
+      let allowAuthProfileStore = hasDirectCredentialSource;
+      if (!allowAuthProfileStore && hasAuthProfileStoreSource) {
+        const store = (authProfileSourceState.store ??=
+          await (authProfileSourceState.getStore?.() ??
+            ensureAuthProfileStoreWithoutExternalProfilesAsync(authProfileSourceState.agentDir, {
+              allowKeychainPrompt: false,
+            })));
+        for (const credentialProvider of credentialProviderIds) {
+          const order = resolveAuthProfileOrder({
+            cfg: authProfileSourceState.cfg,
+            store,
+            provider: credentialProvider,
+          });
+          if (
+            dedupeProfileIds(order).some((profileId) => {
+              const cred = store.profiles[profileId];
+              return (
+                cred?.type === "oauth" ||
+                cred?.type === "token" ||
+                // A provider hook may route an API key to a separate billing endpoint
+                // even when generic usage fallback for the provider stays OAuth-only.
+                cred?.type === "api_key"
+              );
+            })
+          ) {
+            allowAuthProfileStore = true;
+            break;
+          }
+        }
+      }
       const state: UsageAuthState = {
         ...authProfileSourceState,
         allowAuthProfileStore,

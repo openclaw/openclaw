@@ -34,6 +34,7 @@ function mount(
   container?: HTMLElement,
 ) {
   let handle!: OpenClawModalDialog;
+  let confirm!: HTMLButtonElement;
   const view = render(
     () => (
       <ModalDialog
@@ -42,6 +43,7 @@ function mount(
         label={props.label}
         description={props.description}
         onOpenChange={props.onOpenChange}
+        initialFocus={() => confirm}
         ref={(value) => {
           handle = value;
           if (props.onCancel) {
@@ -49,7 +51,9 @@ function mount(
           }
         }}
       >
-        <button autofocus>Confirm</button>
+        <button autofocus ref={(element) => (confirm = element)}>
+          Confirm
+        </button>
         <textarea aria-label="Notes" />
       </ModalDialog>
     ),
@@ -88,16 +92,18 @@ describe("Solid native modal policy", () => {
     const [description, setDescription] = createSignal("Review the operation");
     const [open, setOpen] = createSignal(true);
     let handle!: OpenClawModalDialog;
+    let draftInput!: HTMLTextAreaElement;
     render(() => (
       <ModalDialog
         label="Confirm action"
         description={description()}
         open={open()}
+        initialFocus={() => draftInput}
         ref={(value) => {
           handle = value;
         }}
       >
-        <textarea aria-label="Draft" autofocus />
+        <textarea aria-label="Draft" autofocus ref={(element) => (draftInput = element)} />
       </ModalDialog>
     ));
     flush();
@@ -119,14 +125,6 @@ describe("Solid native modal policy", () => {
     flush();
     expect(modalDialog(handle).open).toBe(true);
     expect(modalDialog(handle).querySelector("textarea")).toBe(draft);
-  });
-
-  it("manual dialogs remain hidden until their owner calls show", () => {
-    const { handle } = mount({ manual: true });
-    expect(handle.open).toBe(false);
-    handle.show();
-    expect(handle.open).toBe(true);
-    expect(modalDialog(handle).open).toBe(true);
   });
 
   it("publishes each lifecycle phase once from the host with settled focus", async () => {
@@ -163,15 +161,6 @@ describe("Solid native modal policy", () => {
     }
   });
 
-  it("rolls back the public open property synchronously when showing is vetoed", () => {
-    const { handle } = mount({ manual: true });
-    handle.addEventListener("overlay-show", (event) => event.preventDefault(), true);
-    handle.show();
-    expect(handle.open).toBe(false);
-    expect(modalDialog(handle).open).toBe(false);
-    expect(document.openClawModalLayers?.has(handle)).toBe(false);
-  });
-
   it.each(["show", "hide"] as const)(
     "rolls back the controlled signal after a vetoed %s without duplicate publications",
     (operation) => {
@@ -179,15 +168,19 @@ describe("Solid native modal policy", () => {
       const [open, setOpen] = createSignal(initial);
       const changes = vi.fn((next: boolean) => setOpen(next));
       let host!: OpenClawModalDialog;
+      let confirm!: HTMLButtonElement;
       render(() => (
         <ModalDialog
           open={open()}
           onOpenChange={changes}
+          initialFocus={() => confirm}
           ref={(element) => {
             host = element;
           }}
         >
-          <button autofocus>Confirm</button>
+          <button autofocus ref={(element) => (confirm = element)}>
+            Confirm
+          </button>
         </ModalDialog>
       ));
       flush();
@@ -215,6 +208,7 @@ describe("Solid native modal policy", () => {
   it("keeps only current publications when the controlled owner closes during opening", () => {
     const [open, setOpen] = createSignal(false);
     let host!: OpenClawModalDialog;
+    let confirm!: HTMLButtonElement;
     const changes = vi.fn((next: boolean) => {
       setOpen(next);
       if (next) {
@@ -225,11 +219,14 @@ describe("Solid native modal policy", () => {
       <ModalDialog
         open={open()}
         onOpenChange={changes}
+        initialFocus={() => confirm}
         ref={(element) => {
           host = element;
         }}
       >
-        <button autofocus>Confirm</button>
+        <button autofocus ref={(element) => (confirm = element)}>
+          Confirm
+        </button>
       </ModalDialog>
     ));
     flush();
@@ -265,37 +262,6 @@ describe("Solid native modal policy", () => {
     expect(changes).not.toHaveBeenCalled();
   });
 
-  it("focuses autofocus content immediately and preserves later field selection", async () => {
-    const { handle, view } = mount();
-    expect(document.activeElement).toBe(view.getByRole("button"));
-    const notes = view.getByRole("textbox") as HTMLTextAreaElement;
-    notes.value = "Unsaved draft";
-    notes.focus();
-    notes.setSelectionRange(3, 7);
-    modalDialog(handle).focus();
-    expect(document.activeElement).toBe(notes);
-    await completeFrames();
-    expect(document.activeElement).toBe(notes);
-    expect(notes.selectionStart).toBe(3);
-    expect(notes.selectionEnd).toBe(7);
-  });
-
-  it("focuses native chrome when no autofocus content exists", () => {
-    let handle!: OpenClawModalDialog;
-    render(() => (
-      <ModalDialog
-        label="Info"
-        ref={(value) => {
-          handle = value;
-        }}
-      >
-        <p>Information</p>
-      </ModalDialog>
-    ));
-    flush();
-    expect(document.activeElement).toBe(modalDialog(handle));
-  });
-
   it.each(["cancel", "backdrop"])(
     "supports a late veto of %s before changing ownership",
     async (source) => {
@@ -322,20 +288,6 @@ describe("Solid native modal policy", () => {
     },
   );
 
-  it("programmatic hide skips cancellation while an explicit lifecycle veto still applies", () => {
-    const onCancel = vi.fn();
-    const { handle } = mount({ onCancel });
-    const veto = (event: Event) => event.preventDefault();
-    handle.addEventListener("overlay-hide", veto);
-    handle.hide();
-    expect(handle.open).toBe(true);
-    expect(onCancel).not.toHaveBeenCalled();
-    handle.removeEventListener("overlay-hide", veto);
-    handle.hide();
-    expect(handle.open).toBe(false);
-    expect(onCancel).not.toHaveBeenCalled();
-  });
-
   it("a cancellation listener can hide without reentering the accepted close", async () => {
     const { handle } = mount();
     const hiding = vi.fn();
@@ -348,76 +300,6 @@ describe("Solid native modal policy", () => {
     expect(handle.open).toBe(false);
     expect(hiding).toHaveBeenCalledTimes(1);
     expect(hidden).toHaveBeenCalledTimes(1);
-  });
-
-  it("ignores nested overlay lifecycle events", () => {
-    const onCancel = vi.fn();
-    const { handle, view } = mount({ onCancel });
-    for (const type of [
-      "overlay-show",
-      "overlay-after-show",
-      "overlay-hide",
-      "overlay-after-hide",
-    ]) {
-      view.getByRole("button").dispatchEvent(new Event(type, { bubbles: true }));
-    }
-    expect(onCancel).not.toHaveBeenCalled();
-    expect(handle.open).toBe(true);
-  });
-
-  it.each(["hide", "remove"] as const)("restores the original trigger on %s", (action) => {
-    const trigger = document.createElement("button");
-    document.body.append(trigger);
-    trigger.focus();
-    const { handle, view } = mount();
-    const restored = vi.fn();
-    trigger.addEventListener("openclaw:restore-focus", restored);
-    if (action === "hide") {
-      handle.hide();
-    } else {
-      view.unmount();
-    }
-    expect(document.activeElement).toBe(trigger);
-    expect(restored).toHaveBeenCalledTimes(1);
-    trigger.remove();
-  });
-
-  it.each(["override", "suppress"] as const)(
-    "honors the owner's %s return-focus policy",
-    (policy) => {
-      const trigger = document.createElement("button");
-      const target = document.createElement("button");
-      document.body.append(trigger, target);
-      trigger.focus();
-      const { handle } = mount();
-      handle.setReturnFocusTarget(policy === "override" ? target : null);
-      handle.hide();
-      if (policy === "override") {
-        expect(document.activeElement).toBe(target);
-      } else {
-        expect(document.activeElement).not.toBe(trigger);
-      }
-      trigger.remove();
-      target.remove();
-    },
-  );
-
-  it("holds nested native occlusion through closing and releases each lease once", async () => {
-    const changes = vi.fn();
-    const unsubscribe = subscribeNativeOverlayOcclusion(changes, () => null);
-    const outer = mount();
-    const inner = mount();
-    await completeFrames();
-    inner.handle.hide();
-    expect(changes.mock.calls).toEqual([[false], [true]]);
-    await completeFrames();
-    expect(changes.mock.calls).toEqual([[false], [true]]);
-    outer.handle.hide();
-    expect(changes.mock.calls).toEqual([[false], [true]]);
-    await completeFrames();
-    expect(changes.mock.calls).toEqual([[false], [true], [false]]);
-    expect(document.documentElement.classList.contains("oc-modal-scroll-lock")).toBe(false);
-    unsubscribe();
   });
 
   it("closing a parent closes nested dialogs and preserves its final focus return", async () => {

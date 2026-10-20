@@ -30,6 +30,19 @@ describe("check-channel-agnostic-boundaries", () => {
     ]);
   });
 
+  it("allows the platform abort utility while retaining Signal directory checks", () => {
+    expect(
+      findChannelAgnosticBoundaryViolations(
+        parseFixture('import { isAbortError } from "../../infra/abort-signal.js";'),
+      ),
+    ).toEqual([]);
+    expect(
+      findChannelAgnosticBoundaryViolations(
+        parseFixture('import "../signal/infra/abort-signal.js";'),
+      ),
+    ).toEqual([{ line: 1, reason: 'imports channel module "../signal/infra/abort-signal.js"' }]);
+  });
+
   it("flags object literals with explicit channel ids", () => {
     const source = `
       const payload = { channel: "telegram" };
@@ -74,6 +87,11 @@ describe("check-channel-agnostic-boundaries", () => {
   });
 
   it.each([
+    {
+      name: "namespace thread-binding import",
+      source: 'import * as bindings from "../discord/monitor/thread-bindings.js";',
+      reason: 'imports channel module "../discord/monitor/thread-bindings.js"',
+    },
     {
       name: "commented dynamic import with attributes",
       source: 'await import /* gap */ ("../discord/private.js", { with: { type: "json" } });',

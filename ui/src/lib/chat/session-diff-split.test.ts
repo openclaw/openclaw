@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { diffLineChangeRanges, pairSessionDiffLines } from "./session-diff-split.ts";
+import {
+  createDiffPairingBudget,
+  diffLineChangeRanges,
+  pairSessionDiffLines,
+} from "./session-diff-split.ts";
 import type { DiffLine } from "./tool-call-diff.ts";
 
 function replacements(oldText: string[], newText: string[]): DiffLine[] {
@@ -58,6 +62,48 @@ describe("pairSessionDiffLines", () => {
       );
     },
   );
+
+  it("bounds long-line comparison work without losing fallback inline highlights", () => {
+    const oldText = Array.from(
+      { length: 64 },
+      (_, i) => "const value" + i + ' = "' + "a".repeat(680) + '";',
+    );
+    const newText = oldText.map((line) => line.replace("value", "updated"));
+    const lines = replacements(oldText, newText);
+    const budget = createDiffPairingBudget();
+    const before = budget.remaining;
+    const rows = pairSessionDiffLines(lines, budget);
+    expect(budget.remaining).toBe(before);
+    expect(rows).toEqual(
+      oldText.map((_, i) => ({ kind: "pair", left: lines[i], right: lines[64 + i] })),
+    );
+    expect(diffLineChangeRanges(rows).get(lines[64]!)).toEqual([{ from: 6, to: 14 }]);
+  });
+
+  it("shares comparison work across hunks and files, not just matrix dimensions", () => {
+    const block = () =>
+      replacements(Array(16).fill("a".repeat(160)), Array(16).fill("b".repeat(160)));
+    const budget = createDiffPairingBudget();
+    expect(pairSessionDiffLines(block(), budget)).toHaveLength(32);
+    const hunks = Array.from({ length: 8 }, (_, i) => [
+      { kind: "skip" as const, text: String(i) },
+      ...block(),
+    ]).flat();
+    const rows = pairSessionDiffLines(hunks, budget);
+    // Later hunks fall back to positional pairs after earlier files use the budget.
+    expect(
+      rows.filter((row) => row.kind === "pair" && row.left && row.right).length,
+    ).toBeGreaterThan(0);
+    expect(budget.remaining).toBeGreaterThanOrEqual(0);
+    expect(rows.flatMap((row) => (row.kind === "pair" && row.left ? [row.left] : []))).toEqual(
+      hunks.filter((line) => line.kind === "del"),
+    );
+    expect(rows.flatMap((row) => (row.kind === "pair" && row.right ? [row.right] : []))).toEqual(
+      hunks.filter((line) => line.kind === "add"),
+    );
+    expect(pairSessionDiffLines(block(), budget)).toHaveLength(16);
+    expect(pairSessionDiffLines(block(), createDiffPairingBudget())).toHaveLength(32);
+  });
 
   it("does not present unrelated replacements as an inline edit", () => {
     const lines = replacements(["abc"], ["XYZ"]);

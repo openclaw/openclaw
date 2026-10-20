@@ -73,6 +73,7 @@ export type SkillsDiscoveryResult = {
   key: string;
   sources: WorkspaceSkillSources;
   fingerprint: string;
+  watchDirectories: string[];
   plan?: WorkspaceSkillSourcePlan;
 };
 

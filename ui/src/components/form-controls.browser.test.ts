@@ -24,6 +24,7 @@ function readUiCss(): string {
     "ui/src/styles/components.css",
     "ui/src/styles/settings-controls.css",
     "ui/src/styles/settings.css",
+    "ui/src/styles/agents.css",
     "ui/src/styles/config.css",
     "ui/src/styles/usage.css",
     "ui/src/styles/chat/startup-layout.css",

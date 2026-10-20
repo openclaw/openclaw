@@ -34,7 +34,9 @@ describe("workspace migration receipt move", () => {
       path.join(path.dirname(storedIdentity.workspacePath), "moved-workspace"),
     );
     fs.renameSync(context.workspaceDir, currentIdentity.workspacePath);
-    const { db } = openOpenClawStateDatabase({ env: context.env });
+    const { db: database } = openOpenClawStateDatabase({ env: context.env });
+    const transact = (write: (db: typeof database) => void) =>
+      runOpenClawStateWriteTransaction(({ db }) => write(db), { env: context.env });
     const storedSetup = {
       version: 1,
       workspace_path: storedIdentity.workspacePath,
@@ -64,31 +66,39 @@ describe("workspace migration receipt move", () => {
         resolution: "inserted",
       }),
     };
-    runOpenClawStateWriteTransaction(
-      ({ db: writeDatabase }) => {
-        recordLegacyMigrationReceipt(writeDatabase, receipt);
-        writeDatabase
-          .prepare("UPDATE migration_sources SET removed_source = 1 WHERE source_key = ?")
-          .run(receipt.sourceKey);
-      },
-      { env: context.env },
-    );
+    transact((db) => {
+      recordLegacyMigrationReceipt(db, receipt);
+      db.prepare("UPDATE migration_sources SET removed_source = 1 WHERE source_key = ?").run(
+        receipt.sourceKey,
+      );
+    });
     const params = {
-      database: db,
+      database,
       storedIdentity,
       currentIdentity,
       storedSetup,
       currentDirectoryPath: currentIdentity.workspacePath,
     };
-    const rows = () => db.prepare("SELECT * FROM migration_sources ORDER BY source_key").all();
-    return { ...context, ...params, db, receipt, params, rows };
+    const rows = () =>
+      database.prepare("SELECT * FROM migration_sources ORDER BY source_key").all();
+    return {
+      ...context,
+      ...params,
+      db: database,
+      receipt,
+      rows,
+      transact,
+      prepare: () => prepareWorkspaceMigrationReceiptMove(params),
+      apply: (plan: Awaited<ReturnType<typeof prepareWorkspaceMigrationReceiptMove>>) =>
+        transact((db) => applyWorkspaceMigrationReceiptMove(db, plan)),
+    };
   }
 
   it.each(["changed", "added", "destination collision"] as const)(
     "refuses %s receipts without applying a partial move",
     async (change) => {
       const value = fixture();
-      const plan = await prepareWorkspaceMigrationReceiptMove(value.params);
+      const plan = await value.prepare();
       if (change === "changed") {
         value.db
           .prepare("UPDATE migration_sources SET removed_source = 0 WHERE source_key = ?")
@@ -99,36 +109,31 @@ describe("workspace migration receipt move", () => {
             ? path.join(value.storedIdentity.workspacePath, ".openclaw", "workspace-state.json")
             : path.join(value.currentIdentity.workspacePath, "openclaw-workspace-state.json");
         const owner = change === "added" ? value.storedIdentity : value.currentIdentity;
-        runOpenClawStateWriteTransaction(
-          ({ db }) =>
-            recordLegacyMigrationReceipt(db, {
-              ...value.receipt,
+        value.transact((db) =>
+          recordLegacyMigrationReceipt(db, {
+            ...value.receipt,
+            sourcePath,
+            sourceKey: resolveLegacyMigrationSourceKey(
+              "workspace-setup",
               sourcePath,
-              sourceKey: resolveLegacyMigrationSourceKey(
-                "workspace-setup",
-                sourcePath,
-                owner.workspaceKey,
-              ),
-              runId: "concurrent-import",
-              reportJson: JSON.stringify({
-                ...JSON.parse(value.receipt.reportJson),
-                workspaceKey: owner.workspaceKey,
-              }),
+              owner.workspaceKey,
+            ),
+            runId: "concurrent-import",
+            reportJson: JSON.stringify({
+              ...JSON.parse(value.receipt.reportJson),
+              workspaceKey: owner.workspaceKey,
             }),
-          { env: value.env },
+          }),
         );
       }
       const before = value.rows();
       expect(() =>
-        runOpenClawStateWriteTransaction(
-          ({ db }) => {
-            db.prepare("UPDATE migration_runs SET status = 'moving' WHERE id = ?").run(
-              value.receipt.runId,
-            );
-            applyWorkspaceMigrationReceiptMove(db, plan);
-          },
-          { env: value.env },
-        ),
+        value.transact((db) => {
+          db.prepare("UPDATE migration_runs SET status = 'moving' WHERE id = ?").run(
+            value.receipt.runId,
+          );
+          applyWorkspaceMigrationReceiptMove(db, plan);
+        }),
       ).toThrow("migration history changed");
       expect(value.rows()).toEqual(before);
       expect(
@@ -158,43 +163,34 @@ describe("workspace migration receipt move", () => {
           },
         ],
       };
-      runOpenClawStateWriteTransaction(
-        ({ db }) => {
-          recordLegacyMigrationReceipt(db, {
-            ...value.receipt,
-            sourceKey,
-            sourcePath: value.storedIdentity.workspacePath,
-            migrationKind: WORKSPACE_CONTENT_RELOCATION_MIGRATION_KIND,
-            runId: "skill-relocation",
-            reportJson: JSON.stringify(report),
-          });
-          db.prepare("UPDATE migration_sources SET status = ? WHERE source_key = ?").run(
-            status,
-            sourceKey,
-          );
-        },
-        { env: value.env },
-      );
+      value.transact((db) => {
+        recordLegacyMigrationReceipt(db, {
+          ...value.receipt,
+          sourceKey,
+          sourcePath: value.storedIdentity.workspacePath,
+          migrationKind: WORKSPACE_CONTENT_RELOCATION_MIGRATION_KIND,
+          runId: "skill-relocation",
+          reportJson: JSON.stringify(report),
+        });
+        db.prepare("UPDATE migration_sources SET status = ? WHERE source_key = ?").run(
+          status,
+          sourceKey,
+        );
+      });
       const before = value.rows();
       const runs = value.db.prepare("SELECT * FROM migration_runs ORDER BY id").all();
       if (status === "prepared") {
-        await expect(prepareWorkspaceMigrationReceiptMove(value.params)).rejects.toThrow(
-          "relocation is still pending",
-        );
+        await expect(value.prepare()).rejects.toThrow("relocation is still pending");
         expect(value.rows()).toEqual(before);
         return;
       }
-      const plan = await prepareWorkspaceMigrationReceiptMove(value.params);
-      runOpenClawStateWriteTransaction(({ db }) => applyWorkspaceMigrationReceiptMove(db, plan), {
-        env: value.env,
-      });
+      value.apply(await value.prepare());
       const moved = value.db
         .prepare(
           "SELECT status, removed_source, report_json FROM migration_sources WHERE migration_kind = ?",
         )
         .get(WORKSPACE_CONTENT_RELOCATION_MIGRATION_KIND)!;
-      expect(moved.status).toBe(status);
-      expect(moved.removed_source).toBe(0);
+      expect(moved).toMatchObject({ status, removed_source: 0 });
       expect(JSON.parse(String(moved.report_json))).toEqual({
         ...report,
         workspaceKey: value.currentIdentity.workspaceKey,
@@ -212,10 +208,7 @@ describe("workspace migration receipt move", () => {
     value.db
       .prepare("UPDATE migration_sources SET report_json = ? WHERE source_key = ?")
       .run(JSON.stringify(historical), value.receipt.sourceKey);
-    const plan = await prepareWorkspaceMigrationReceiptMove(value.params);
-    runOpenClawStateWriteTransaction(({ db }) => applyWorkspaceMigrationReceiptMove(db, plan), {
-      env: value.env,
-    });
+    value.apply(await value.prepare());
     expect(JSON.parse(String(value.rows()[0]!.report_json))).toMatchObject({
       canonicalFingerprint: historical.canonicalFingerprint,
       authoritative: true,
@@ -252,7 +245,7 @@ describe("workspace migration receipt move", () => {
         fs.writeFileSync(`${sourcePath}.doctor-importing`, "retained claim");
       }
       const before = value.rows();
-      await expect(prepareWorkspaceMigrationReceiptMove(value.params)).rejects.toThrow(
+      await expect(value.prepare()).rejects.toThrow(
         "external legacy source has not finished cleanup",
       );
       expect(value.rows()).toEqual(before);

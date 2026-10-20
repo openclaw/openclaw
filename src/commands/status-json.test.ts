@@ -1,5 +1,6 @@
 // Status JSON tests cover command output and runtime JSON writes.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createMockGatewayService } from "../daemon/service.test-helpers.js";
 import { statusJsonCommand } from "./status-json.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -8,8 +9,8 @@ const mocks = vi.hoisted(() => ({
   runSecurityAudit: vi.fn(),
   loadProviderUsageSummary: vi.fn(),
   callGateway: vi.fn(),
-  getDaemonStatusSummary: vi.fn(),
-  getNodeDaemonStatusSummary: vi.fn(),
+  resolveGatewayService: vi.fn(),
+  resolveNodeService: vi.fn(),
   normalizeUpdateChannel: vi.fn((value?: string | null) => value ?? null),
   resolveUpdateChannelDisplay: vi.fn(() => ({
     channel: "stable",
@@ -19,6 +20,17 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./status.scan.fast-json.js", () => ({
   scanStatusJsonFast: mocks.scanStatusJsonFast,
+}));
+
+// mock-isolation: Command policy tests consume a fixed unavailable snapshot without reading stores.
+vi.mock("./status-database-engines.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./status-database-engines.js")>()),
+  resolveStatusDatabaseEngines: async () => ({
+    source: "unavailable",
+    stores: [],
+    reason:
+      "Physical stores unknown: admitted facts unavailable. Run openclaw doctor for recovery steps.",
+  }),
 }));
 
 vi.mock("../security/audit.runtime.js", () => ({
@@ -33,9 +45,17 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
 }));
 
-vi.mock("./status.daemon.js", () => ({
-  getDaemonStatusSummary: mocks.getDaemonStatusSummary,
-  getNodeDaemonStatusSummary: mocks.getNodeDaemonStatusSummary,
+vi.mock("../daemon/service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/service.js")>()),
+  resolveGatewayService: mocks.resolveGatewayService,
+}));
+vi.mock("../daemon/node-service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/node-service.js")>()),
+  resolveNodeService: mocks.resolveNodeService,
+}));
+vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/openclaw-root.js")>()),
+  resolveOpenClawPackageRoot: async () => null,
 }));
 
 vi.mock("../infra/update-channels.js", () => ({
@@ -85,6 +105,30 @@ function createExpectedStatusPayload() {
     updateChannelSource: "config",
     memory: null,
     memoryPlugin: null,
+    databaseEngines: {
+      source: "unavailable",
+      experimental: false,
+      families: [
+        ["state", "Shared state", false],
+        ["agent", "Agent data", false],
+        ["workboard", "Workboard", false],
+        ["logbook", "Logbook", false],
+        ["team-reports", "Team Reports", false],
+        ["quarantine", "Database quarantine", true],
+        ["managed-update", "Managed update handoffs", true],
+        ["package-activation", "Package activation journal", true],
+      ].map(([id, label, fixedLocal]) => ({
+        id,
+        label,
+        default: "sqlite",
+        override: null,
+        fixedLocal,
+        effective: "sqlite",
+      })),
+      stores: [],
+      reason:
+        "Physical stores unknown: admitted facts unavailable. Run openclaw doctor for recovery steps.",
+    },
     gateway: {
       mode: "local",
       url: "ws://127.0.0.1:18789",
@@ -96,8 +140,28 @@ function createExpectedStatusPayload() {
       error: null,
       authWarning: null,
     },
-    gatewayService: { installed: false },
-    nodeService: { installed: false },
+    gatewayService: {
+      label: "LaunchAgent",
+      installed: false,
+      loadState: { status: "not-loaded" },
+      managedByOpenClaw: false,
+      externallyManaged: false,
+      loadedText: "not loaded",
+      runtime: { status: "stopped" },
+      loaded: false,
+      runtimeShort: "stopped",
+    },
+    nodeService: {
+      label: "LaunchAgent",
+      installed: false,
+      loadState: { status: "not-loaded" },
+      managedByOpenClaw: false,
+      externallyManaged: false,
+      loadedText: "not loaded",
+      runtime: { status: "stopped" },
+      loaded: false,
+      runtimeShort: "stopped",
+    },
     agents: [],
     secretDiagnostics: [],
   };
@@ -111,8 +175,8 @@ describe("statusJsonCommand", () => {
       summary: { critical: 1, warn: 0, info: 0 },
       findings: [],
     });
-    mocks.getDaemonStatusSummary.mockResolvedValue({ installed: false });
-    mocks.getNodeDaemonStatusSummary.mockResolvedValue({ installed: false });
+    mocks.resolveGatewayService.mockReturnValue(createMockGatewayService());
+    mocks.resolveNodeService.mockReturnValue(createMockGatewayService());
     mocks.loadProviderUsageSummary.mockResolvedValue({ providers: [] });
     mocks.callGateway.mockResolvedValue({});
   });
@@ -128,6 +192,29 @@ describe("statusJsonCommand", () => {
     expect(payload).toEqual(createExpectedStatusPayload());
     expect(payload).not.toHaveProperty("securityAudit");
   });
+
+  it.each([
+    { engine: "postgres" },
+    { engine: "sqlite", families: { agent: { engine: "postgres" } } },
+  ])(
+    "reports supported PostgreSQL selections without the experimental flag: %j",
+    async (database) => {
+      const { runtime, logs } = createRuntimeCapture();
+      mocks.scanStatusJsonFast.mockResolvedValueOnce({
+        ...createScanResult(),
+        cfg: { database },
+      });
+
+      await statusJsonCommand({}, runtime);
+
+      const payload = JSON.parse(logs[0] ?? "{}");
+      expect(payload.databaseEngines.experimental).toBe(false);
+      expect(payload.databaseEngines.families).toContainEqual(
+        expect.objectContaining({ id: "agent", effective: "postgres" }),
+      );
+      expect(payload.databaseEngines.source).toBe("unavailable");
+    },
+  );
 
   it("includes security audit and plugin compatibility details when --all is requested", async () => {
     const { runtime, logs } = createRuntimeCapture();

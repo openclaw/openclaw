@@ -2,10 +2,11 @@ import fs from "node:fs";
 import { builtinModules, createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import * as ts from "typescript/unstable/ast";
-import { API } from "typescript/unstable/sync";
+import * as ts from "typescript/ast";
+import { API } from "typescript/sync";
 import { collectModuleReferencesFromSource } from "./guard-inventory-utils.mjs";
 import { createRuntimeImportGraph } from "./runtime-import-closure.mts";
+import { resolveSqliteSchemaAssetInputs } from "./sqlite-schema-assets.mts";
 import { STATE_SCHEMA_GENERATOR_INPUTS } from "./state-schema-inline-plugin.mts";
 import { resolveTsxImport } from "./tsx-cli-shim.mjs";
 import { resolveWorkerDeployGeneratorInputs } from "./worker-deploy-build-plugin.mts";
@@ -39,12 +40,18 @@ function dynamicEdgeExpressions(sourceFile: ts.SourceFile) {
   return expressions;
 }
 
-/** Resolve the complete executable and non-module input graph for one declaration writer. */
-export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generatorEntry: string) {
+/** Resolve the complete executable and non-module input graph for one declaration producer. */
+export function resolveTsdownDeclarationGeneratorInputs(
+  rootDir: string,
+  generatorEntry: string,
+  configEntry = "tsdown.config.ts",
+) {
   const root = fs.realpathSync(rootDir);
   const nativeManifest = createRequire(path.join(root, "package.json")).resolve(
     "typescript/package.json",
   );
+  // Producers traverse only their own reachable owners. Every reached computed
+  // import must still match its exact expression and declared targets.
   const dynamicOwners = new Map<string, { expressions: string[]; targets: string[] }>([
     ["scripts/lib/dist-artifact-lock.mts", { expressions: ["script"], targets: [generatorEntry] }],
     [
@@ -92,13 +99,17 @@ export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generat
       },
     ],
   ]);
-  const observedDynamicOwners = new Set<string>();
   using parser: { api?: API; [Symbol.dispose](): void } = {
     [Symbol.dispose]() {
       this.api?.close();
     },
   };
-  const entryFiles = [generatorEntry, "scripts/tsx.mjs", "tsdown.config.ts"];
+  const entryFiles = [
+    generatorEntry,
+    "scripts/tsx.mjs",
+    "scripts/lib/tsdown-declaration-generator-inputs.mts",
+    configEntry,
+  ];
   const explicitSources = [...dynamicOwners.values()]
     .flatMap((owner) => owner.targets)
     .filter((file) => !file.includes("node_modules") && sourceFilePattern.test(file));
@@ -127,7 +138,11 @@ export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generat
     }
     visited.add(id);
     const source = fs.readFileSync(absolute, "utf8");
-    const sourceFile = (parser.api ??= new API({ cwd: root })).createSourceFile(absolute, source);
+    using retainedSource = (parser.api ??= new API({ cwd: root })).createSourceFile(
+      absolute,
+      source,
+    );
+    const sourceFile = retainedSource.sourceFile;
     const expressions = dynamicEdgeExpressions(sourceFile);
     const owner = dynamicOwners.get(id);
     if (
@@ -137,7 +152,6 @@ export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generat
       throw new Error(`Unresolved dynamic module edges in ${id}: ${JSON.stringify(expressions)}`);
     }
     if (owner) {
-      observedDynamicOwners.add(id);
       owner.targets.forEach((target) => visit(target));
     }
     for (const reference of collectModuleReferencesFromSource(sourceFile)) {
@@ -193,11 +207,6 @@ export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generat
   };
 
   entryFiles.forEach((entry) => visit(entry));
-  for (const owner of dynamicOwners.keys()) {
-    if (!observedDynamicOwners.has(owner)) {
-      throw new Error(`Dynamic module owner is outside the generator closure: ${owner}`);
-    }
-  }
   return [
     "package.json",
     "pnpm-lock.yaml",
@@ -206,6 +215,7 @@ export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generat
       .toSorted(([left], [right]) => left.localeCompare(right))
       .map(([, file]) => file),
     ...STATE_SCHEMA_GENERATOR_INPUTS,
+    ...resolveSqliteSchemaAssetInputs(root),
     ...resolveWorkerDeployGeneratorInputs(root),
     fs.realpathSync(path.resolve(root, "node_modules/tree-sitter-bash/LICENSE")),
   ];

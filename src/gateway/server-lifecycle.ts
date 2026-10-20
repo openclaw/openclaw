@@ -1,6 +1,4 @@
 import { closeAuthProfileUsage } from "../agents/auth-profiles/usage-lifecycle.js";
-import { resolveActiveEmbeddedRunSessionId } from "../agents/embedded-agent-runner/active-run-projections.js";
-import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
 import { prepareSandboxRegistryClose } from "../agents/sandbox/registry-lifecycle.js";
 import { fenceSessionSuspensionWritesForGatewayShutdown } from "../agents/session-suspension.js";
 import { prepareWorktreeRunEndClose } from "../agents/worktrees/run-end-lifecycle.js";
@@ -25,7 +23,7 @@ import {
   removeRemoteNodeInfoForConnection,
 } from "../skills/runtime/remote.js";
 import type { RestartRecoveryCandidate } from "./chat-abort.js";
-import { prepareControlUiSessionPrRead } from "./control-ui-session-pr-read.js";
+import { createControlUiSessionPrRead } from "./control-ui-session-pr-read.js";
 import { createControlUiSessionPullRequestSubscriptions } from "./control-ui-session-pr-subscriptions.js";
 import { retireDeviceTokenClients } from "./device-token-client-lifecycle.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-method-policy.js";
@@ -90,8 +88,6 @@ export async function prepareGatewayLifecycle(params: {
     readinessEventLoopHealth,
     browserAuthRateLimiter,
     chatRunState,
-    chatAbortControllers,
-    chatQueuedTurns,
     removeChatRun,
     agentRunSeq,
     listActiveGatewayMethods,
@@ -255,9 +251,11 @@ export async function prepareGatewayLifecycle(params: {
     markSidecarsReady: () => {
       startupState.sidecarsReady = true;
     },
-    unlockStartupMethods: () => {
+    unlockStartupMethods: (options?: { keepChatSendUnavailable?: boolean }) => {
       for (const method of STARTUP_UNAVAILABLE_GATEWAY_METHODS) {
-        unavailableGatewayMethods.delete(method);
+        if (method !== "chat.send" || !options?.keepChatSendUnavailable) {
+          unavailableGatewayMethods.delete(method);
+        }
       }
     },
     publishMethodSurface: (methods: readonly string[]) => {
@@ -335,7 +333,7 @@ export async function prepareGatewayLifecycle(params: {
     prepareRead: async (connId, session) => {
       const client = clients.getByConnectionId(connId);
       return client
-        ? await prepareControlUiSessionPrRead({
+        ? createControlUiSessionPrRead({
             client,
             ...session,
             getRuntimeConfig,
@@ -395,11 +393,8 @@ export async function prepareGatewayLifecycle(params: {
     void closeAuthProfileUsage(params.sdkResourceHost);
     runtime.scheduler.beginClose();
     void runtimeState.maintenance?.stopPeriodicTasks();
-    // Publish the exact cancellation before withdrawing capabilities or running
-    // disposal callbacks; startup can otherwise fail before restart marking.
-    runtime.connectionWork.beginClose(
-      notice.restartExpectedMs !== undefined ? createAgentRunRestartAbortError() : undefined,
-    );
+    // Fence new entry now; the run-shutdown owner records recovery before
+    // canceling admitted work or withdrawing its runtime capabilities.
     requestEntryLifetime.beginClose();
     void mentionInbox.dispose();
     healthWork.beginClose();
@@ -414,8 +409,6 @@ export async function prepareGatewayLifecycle(params: {
     void runtimeState.controlUiSessionPullRequests?.stop();
     runtimeState.sessionViewerPresence?.stop();
     runtime.stopPresencePublications();
-    kernel.setDispatchReady(false);
-    gatewayInstanceRuntimeRef.current?.close();
     cronReconciliation.invalidate();
     return prelude;
   };
@@ -512,8 +505,6 @@ export async function prepareGatewayLifecycle(params: {
         resolveGatewayContext: runtime.resolvePluginGatewayContext,
         preparePluginRegistryClose: () => pluginRuntime.prepareClose(),
         chatRunState,
-        chatAbortControllers,
-        chatQueuedTurns,
         restartRecoveryCandidates,
         removeChatRun,
         agentRunSeq,
@@ -526,12 +517,15 @@ export async function prepareGatewayLifecycle(params: {
         ) => {
           void nodeSendToSession(sessionKey, event, payload, opts);
         },
-        resolveActiveSessionIdForKey: resolveActiveEmbeddedRunSessionId,
         markMainSessionsAbortedForRestart: async (restart) => {
           await shutdownRuntime.markRestartAbortedMainSessions({
             cfg: getRuntimeConfig(),
             ...restart,
           });
+        },
+        cancelReceivedWork: (reason) => {
+          // Entry is fenced; retained principals still need their binding to settle.
+          runtime.connectionWork.beginClose(reason);
         },
         getPendingReplyCount: getTotalPendingReplies,
         disposeAllCodeModeRuns: shutdownRuntime.disposeAllCodeModeRuns,
@@ -544,6 +538,9 @@ export async function prepareGatewayLifecycle(params: {
     // Startup may still publish cleanup owners while received work settles.
     // Resolve their handles only when the caller reaches final teardown.
     return async () => {
+      // The close plan has joined received execution and its finalizers.
+      kernel.setDispatchReady(false);
+      gatewayInstanceRuntimeRef.current?.close();
       const channelIds = listLoadedChannelPluginsForRegistry(pluginRuntime.registry).map(
         (plugin) => plugin.id,
       );
@@ -582,7 +579,6 @@ export async function prepareGatewayLifecycle(params: {
               maintenance: runtimeState.maintenance,
               stopMediaCleanup: stopMediaCleanupForClose,
               agentUnsub: runtimeState.agentUnsub,
-              heartbeatUnsub: runtimeState.heartbeatUnsub,
               transcriptUnsub: runtimeState.transcriptUnsub,
               lifecycleUnsub: runtimeState.lifecycleUnsub,
               chatRunState,

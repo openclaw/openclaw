@@ -23,7 +23,30 @@ function checkPackage(
   return spawnSync(process.execPath, [CHECK_SCRIPT, ...args(root)], { encoding: "utf8" });
 }
 
+function checkImports(sources: Record<string, string>) {
+  return collectPackageDistImportErrors({
+    files: Object.keys(sources),
+    readText: (file) => sources[file]!,
+  });
+}
+function parseImports(source: string, file = "dist/index.js") {
+  return collectPackageDistImports({ files: [file], readText: () => source });
+}
+
 describe("collectPackageDistImportErrors", () => {
+  it("requires executable helpers resolved beside bundled JavaScript", () => {
+    const sources: Record<string, string> = {
+      "dist/worker/worker.mjs":
+        'export const helper = new URL("./windows-security-helper.exe", import.meta.url);',
+    };
+    const check = () => checkImports(sources);
+    expect(check()).toEqual([
+      "dist/worker/worker.mjs imports missing dist/worker/windows-security-helper.exe",
+    ]);
+    sources["dist/worker/windows-security-helper.exe"] = "MZ";
+    expect(check()).toEqual([]);
+  });
+
   it.each([undefined, "commonjs"])(
     "resolves CommonJS files and directory entries with package type %s",
     (type) => {
@@ -53,11 +76,7 @@ describe("collectPackageDistImportErrors", () => {
         "main-missing/package.json": '{"main":"./missing"}',
         "main-missing/index.js": "module.exports = true;",
       };
-      const check = () =>
-        collectPackageDistImportErrors({
-          files: Object.keys(sources),
-          readText: (file) => sources[file]!,
-        });
+      const check = () => checkImports(sources);
 
       expect(check()).toEqual([]);
       delete sources["lib/global.js"];
@@ -96,12 +115,7 @@ describe("collectPackageDistImportErrors", () => {
       errors: Array.from({ length: 3 }, () => `${entry} imports missing leaf`),
     })),
   ])("resolves $name", ({ sources, errors }) => {
-    expect(
-      collectPackageDistImportErrors({
-        files: Object.keys(sources),
-        readText: (file) => sources[file]!,
-      }),
-    ).toEqual(errors);
+    expect(checkImports(sources)).toEqual(errors);
   });
 });
 
@@ -128,12 +142,9 @@ describe("collectPackageDistImports", () => {
         return indexOf.call(this, value, fromIndex);
       });
       try {
-        expect(() =>
-          collectPackageDistImports({
-            files: [`dist/index.${extension}`],
-            readText: () => source,
-          }),
-        ).toThrow("Identifier 'package_binding_0' has already been declared");
+        expect(() => parseImports(source, `dist/index.${extension}`)).toThrow(
+          "Identifier 'package_binding_0' has already been declared",
+        );
       } finally {
         observed.mockRestore();
       }
@@ -151,12 +162,9 @@ describe("collectPackageDistImports", () => {
     expect(
       collectPackageDistImports({ files: ["dist/index.cjs"], readText: () => source }),
     ).toEqual([{ importerPath: "dist/index.cjs", importedPath: "dist/leaf.cjs", kind: "require" }]);
-    expect(() =>
-      collectPackageDistImports({
-        files: ["dist/index.cjs"],
-        readText: () => `"use strict";\n${source}`,
-      }),
-    ).toThrow("Argument name clash");
+    expect(() => parseImports(`"use strict";\n${source}`, "dist/index.cjs")).toThrow(
+      "Argument name clash",
+    );
   });
 
   it("leaves installed dependency modules to their own package scope", () => {
@@ -207,10 +215,7 @@ describe("collectPackageDistImports", () => {
       'new URL("./node_modules/@openclaw/proc-safe/dist/other.js", import.meta.url);',
     ].join("\n");
     for (const importerPath of ["dist/managed-handoff-runtime.mjs", "dist/other.mjs"]) {
-      const imports = collectPackageDistImports({
-        files: [importerPath],
-        readText: () => source,
-      });
+      const imports = parseImports(source, importerPath);
       const expectedNativeEdges = importerPath === "dist/managed-handoff-runtime.mjs" ? 4 : 5;
       expect(imports).toEqual([
         ...Array.from({ length: expectedNativeEdges }, (_, index) => ({
@@ -320,26 +325,20 @@ describe("check-package-dist-imports", () => {
   });
 
   it("ignores import.meta.url probes outside packaged dist", () => {
-    const root = tempDirs.make("openclaw-package-dist-imports-");
-    mkdirSync(join(root, "dist"), { recursive: true });
     const probes = [
       "../../openclaw.mjs",
       "../../scripts/run-node.mjs",
       "../../dist/entry.js",
       "../../dist/entry.mjs",
     ];
-    writeFileSync(
-      join(root, "dist", "index.js"),
-      probes
+    const result = checkPackage({
+      "index.js": probes
         .map(
           (specifier, index) =>
             `const candidate${index} = new URL(${JSON.stringify(specifier)}, import.meta.url);`,
         )
         .join("\n"),
-      "utf8",
-    );
-
-    const result = spawnSync("node", [CHECK_SCRIPT, root], { encoding: "utf8" });
+    });
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain("OpenClaw package dist import closure passed.");

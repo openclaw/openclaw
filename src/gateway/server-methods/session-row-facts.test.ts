@@ -52,7 +52,8 @@ it("prepares current placement facts off the host thread and retries failed refr
       sessionKey: "agent:main:placement-read",
       sessionId: "placement-read",
     };
-    replaceSessionEntrySync(identity, { sessionId: identity.sessionId, updatedAt: 1 });
+    replaceSessionEntrySync(identity, { sessionId: " placement-read ", updatedAt: 1 });
+    expect(loadSessionEntryReadOnly(identity)?.sessionId).toBe(" placement-read ");
     const placements = createWorkerSessionPlacementStore();
     await placements.startDispatch(identity);
     const options = {
@@ -63,31 +64,19 @@ it("prepares current placement facts off the host thread and retries failed refr
     const projection = await createSessionRowProjection(options);
     const refresh = async () => {
       const reads = vi.spyOn(stateDatabase, "openOpenClawStateDatabase");
-      let placementReads = 0;
-      const statements = (["get", "all", "iterate"] as const).map((method) => {
-        const execute = StatementSync.prototype[method];
-        return vi.spyOn(StatementSync.prototype, method).mockImplementation(function (
-          this: StatementSync,
-          ...args: unknown[]
-        ) {
-          if (/\bfrom\s+"?worker_session_placements\b/i.test(this.sourceSQL)) {
-            placementReads++;
-          }
-          return Reflect.apply(execute, this, args);
-        });
-      });
+      const statements = observeSqliteReadSql(StatementSync.prototype);
       try {
         sessionChanges.emit({ agentId: identity.agentId, sessionKey: identity.sessionKey });
         await projection.ensureMaterialized();
         const result = projection.snapshot({ agentId: identity.agentId, key: identity.sessionKey });
         expect(reads).not.toHaveBeenCalled();
-        expect(placementReads).toBe(0);
+        expect(
+          statements.queries.filter((sql) => /\bfrom\s+"?worker_session_placements\b/i.test(sql)),
+        ).toEqual([]);
         return result.row?.placement;
       } finally {
         reads.mockRestore();
-        for (const statement of statements) {
-          statement.mockRestore();
-        }
+        statements.restore();
       }
     };
     try {
@@ -232,6 +221,10 @@ it("refreshes selected placement/environment facts by revision and reuses them w
       }),
     };
     const preparedPlacements = createSessionRowPlacementProjection(placements, () => undefined);
+    const refreshPlacements = async () => {
+      preparedPlacements.invalidate();
+      await preparedPlacements.prepare();
+    };
     preparedPlacements.register(identity.sessionId);
     await preparedPlacements.prepare();
     const facts = readSessionRowFacts({
@@ -303,8 +296,7 @@ it("refreshes selected placement/environment facts by revision and reuses them w
         nodeDeviceId: "replacement-device",
       });
       expect(placementReads).not.toHaveBeenCalled();
-      preparedPlacements.invalidate();
-      await preparedPlacements.prepare();
+      await refreshPlacements();
       expect(facts.present().placement).toMatchObject({
         state: "active",
         machine: { cpu: 8, memoryGb: 32 },
@@ -321,8 +313,7 @@ it("refreshes selected placement/environment facts by revision and reuses them w
         },
         target: { kind: "gateway" },
       });
-      preparedPlacements.invalidate();
-      await preparedPlacements.prepare();
+      await refreshPlacements();
       expect(facts.present()).toMatchObject({
         placement: { state: "draining" },
         placementMove: { target: { kind: "gateway" } },
@@ -338,8 +329,7 @@ it("refreshes selected placement/environment facts by revision and reuses them w
         expectedGeneration: reconciling.generation,
         recoveryError: "Worker stopped",
       });
-      preparedPlacements.invalidate();
-      await preparedPlacements.prepare();
+      await refreshPlacements();
       expect(facts.present().placement).toMatchObject({
         state: "failed",
         recoveryAction: "stop-first",
@@ -400,8 +390,7 @@ it("refreshes selected placement/environment facts by revision and reuses them w
         projection.dispose();
         release();
       }
-      preparedPlacements.invalidate();
-      await preparedPlacements.prepare();
+      await refreshPlacements();
       expect(facts.present().placement).toMatchObject({
         state: "failed",
         recoveryAction: "restart",
@@ -483,16 +472,9 @@ it("prepares board membership and recap freshness from the physical target and r
     ).toBe(false);
     const reads = observeMainThreadReads();
     try {
-      expect(facts.present().activitySummary).toEqual({
-        text: "Prepared recap.",
-        updatedAt: 1,
-        state: "current",
-      });
-      expect(facts.present().activitySummary).toEqual({
-        text: "Prepared recap.",
-        updatedAt: 1,
-        state: "current",
-      });
+      const expected = { text: "Prepared recap.", updatedAt: 1, state: "current" };
+      expect(facts.present().activitySummary).toEqual(expected);
+      expect(facts.present().activitySummary).toEqual(expected);
       reads.expectIdle();
     } finally {
       reads.restore();

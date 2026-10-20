@@ -188,6 +188,11 @@ describe.skipIf(process.platform === "win32")("POSIX anchor retirement", () => {
             prearmedSequence,
           );
         }
+        if (startupFailure) {
+          expect(messages.find((message) => message.type === "startup-error")).toMatchObject({
+            anchorPid: child.pid,
+          });
+        }
         if (forced) {
           expect(result, stderr).toEqual({ code: null, signal: "SIGKILL" });
           if (acknowledgement === "forced-missing") {

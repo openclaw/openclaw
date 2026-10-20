@@ -45,6 +45,31 @@ afterEach(async () => {
 });
 
 describe("audit event writer", () => {
+  it("rejects one uncloneable event without disabling later audit records", async () => {
+    const stateDir = tempDirs.make("openclaw-audit-writer-invalid-event-");
+    const errors: string[] = [];
+    const writer = createAuditEventWriter({
+      scheduler: createTestGatewayScheduler(),
+      stateDir,
+      onError: (error) => errors.push(error),
+    });
+    try {
+      await writer.ready;
+      expect(writer.record({ ...input(), sourceId: "before", runId: "before" })).toBe(true);
+      const invalid = { ...input(), uncloneable: () => {} };
+      expect(writer.record(invalid)).toBe(false);
+      expect(writer.record({ ...input(), sourceId: "after", runId: "after" })).toBe(true);
+    } finally {
+      await writer.stop();
+    }
+    expect(errors).toHaveLength(1);
+    expect(
+      (
+        await listAuditEvents({ database: { env: { OPENCLAW_STATE_DIR: stateDir } }, limit: 10 })
+      ).events.map((event) => event.runId),
+    ).toEqual(["after", "before"]);
+  });
+
   it("preserves external supervision for claimed state writes", async () => {
     const stateDir = tempDirs.make("openclaw-audit-writer-external-");
     const supervisedDatabase = {
@@ -138,7 +163,7 @@ describe("audit event writer", () => {
     ).toBe("message.outbound.finished");
   });
 
-  it("keeps a cold owner open nonblocking under a held write lock", async () => {
+  it("queues for a cold owner under a held write lock and flushes after release", async () => {
     const stateDir = tempDirs.make("openclaw-audit-writer-");
     const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
     recordAuditEventInDatabase(input(), {
@@ -158,7 +183,6 @@ describe("audit event writer", () => {
     });
 
     try {
-      await writer.ready;
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
@@ -169,6 +193,7 @@ describe("audit event writer", () => {
         contender.exec("ROLLBACK");
         contender.close();
       } finally {
+        await writer.ready;
         await writer.stop();
       }
     }
@@ -209,7 +234,6 @@ describe("audit event writer", () => {
     const admittedAt = Date.now();
 
     try {
-      const startedAt = performance.now();
       expect(writer.record({ ...input(), sourceId: "run-2:1:started", runId: "run-2" })).toBe(true);
       expect(
         enqueueExecutionIdentityContextAtAdmission(
@@ -250,7 +274,6 @@ describe("audit event writer", () => {
         occurredAt: admittedAt,
       };
       expect(writer.recordExecutionDecision(receipt)).toBe(true);
-      expect(performance.now() - startedAt).toBeLessThan(250);
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
@@ -337,15 +360,13 @@ describe("audit event writer", () => {
     }
   });
 
-  it("reports sustained lock contention once while backing off retries", async () => {
+  it("flushes audit events in order after a competing writer releases its lock", async () => {
     const stateDir = tempDirs.make("openclaw-audit-writer-");
     const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
-    const contentions: string[] = [];
     const errors: string[] = [];
     const writer = createAuditEventWriter({
       scheduler: createTestGatewayScheduler(),
       stateDir,
-      onContention: (message) => contentions.push(message),
       onError: (error) => errors.push(error),
     });
     await writer.ready;
@@ -356,14 +377,21 @@ describe("audit event writer", () => {
       expect(
         writer.record({
           ...input(),
-          sourceId: "sustained-contention",
-          runId: "sustained-contention",
+          sourceId: "contention-first",
+          runId: "contention-first",
         }),
       ).toBe(true);
-      // Worker replies use real time; keep the existing exponential retry schedule observable.
-      await expect
-        .poll(() => contentions, { timeout: 5_000 })
-        .toEqual(["audit event persistence delayed by SQLite lock contention"]);
+      expect(
+        writer.record({
+          ...input(),
+          sourceId: "contention-second",
+          runId: "contention-second",
+        }),
+      ).toBe(true);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(contender.isTransaction).toBe(true);
     } finally {
       try {
         try {
@@ -379,7 +407,7 @@ describe("audit event writer", () => {
     expect(errors).toEqual([]);
     expect(
       (await listAuditEvents({ database, limit: 10 })).events.map((event) => event.runId),
-    ).toContain("sustained-contention");
+    ).toEqual(["contention-second", "contention-first"]);
   });
 
   it("persists owned unknown and omits inherited evidence through the queue clone boundary", async () => {

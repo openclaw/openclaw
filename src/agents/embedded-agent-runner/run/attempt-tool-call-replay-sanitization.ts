@@ -12,13 +12,13 @@ import {
 } from "../../embedded-agent-helpers/turns.js";
 import type { AgentMessage, StreamFn } from "../../runtime/index.js";
 import {
+  collectFollowingToolResults,
   sanitizeToolUseResultPairing,
   sanitizeToolUseResultPairingForModel,
 } from "../../session-transcript-repair.js";
 import { isThinkingLikeBlock } from "../../thinking-block.js";
 import {
   extractToolCallsFromAssistant,
-  extractToolResultIds,
   hasToolCallInput,
   sanitizeToolCallIdsForCloudCodeAssist,
   type ToolCallIdMode,
@@ -55,35 +55,6 @@ function isReplaySafeThinkingTurn(
     }
   }
   return true;
-}
-
-function collectFollowingToolResults(
-  messages: AgentMessage[],
-  index: number,
-): { ids: Set<string>; displaced: boolean } {
-  const ids = new Set<string>();
-  let sawNonToolResult = false;
-  let displaced = false;
-  for (let nextIndex = index + 1; nextIndex < messages.length; nextIndex += 1) {
-    const message = messages[nextIndex];
-    if (!message || typeof message !== "object") {
-      sawNonToolResult = true;
-      continue;
-    }
-    if (message.role === "assistant" && assistantTurnHasReplayToolCall(message)) {
-      break;
-    }
-    if (message.role === "toolResult") {
-      const resultIds = extractToolResultIds(message);
-      for (const id of resultIds) {
-        ids.add(id);
-      }
-      displaced ||= resultIds.length > 0 && sawNonToolResult;
-      continue;
-    }
-    sawNonToolResult = true;
-  }
-  return { ids, displaced };
 }
 
 function resolveReplayToolCallName(
@@ -132,7 +103,12 @@ function sanitizeReplayToolCallInputs(
     }
     if (allowProviderOwnedThinkingReplay && isSignedThinkingReplayAssistantSpan(message)) {
       const replaySafeToolCalls = extractToolCallsFromAssistant(message);
-      const followingToolResults = collectFollowingToolResults(messages, index);
+      const followingToolResults = collectFollowingToolResults(
+        messages,
+        index,
+        undefined,
+        assistantTurnHasReplayToolCall,
+      );
       if (
         isReplaySafeThinkingTurn(message.content, allowedToolNames, isCompleted) &&
         replaySafeToolCalls.every(
@@ -344,10 +320,7 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
   provider?: string | null,
 ): StreamFn {
   return (model, context, options) => {
-    const messages = context?.messages;
-    if (!Array.isArray(messages)) {
-      return baseFn(model, context, options);
-    }
+    const messages = context.messages;
     const modelApi = model.api;
     const allowProviderOwnedThinkingReplay = shouldAllowProviderOwnedThinkingReplay({
       modelApi,

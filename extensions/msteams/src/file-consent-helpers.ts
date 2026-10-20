@@ -3,7 +3,7 @@ import { buildFileConsentCard } from "./file-consent.js";
 import { storePendingUploadFs } from "./pending-uploads-fs.js";
 import { storePendingUpload, type PendingUpload } from "./pending-uploads.js";
 
-export const FILE_CONSENT_THRESHOLD_BYTES = 4 * 1024 * 1024;
+const FILE_CONSENT_THRESHOLD_BYTES = 4 * 1024 * 1024;
 
 type FileConsentMedia = Pick<PendingUpload, "buffer" | "filename" | "contentType">;
 

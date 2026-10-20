@@ -1,8 +1,10 @@
+import { isMainThread } from "node:worker_threads";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { VERSION } from "../version.js";
 import { runPluginRegistration } from "./api-lifecycle.js";
 import { tryNativeRequireModule } from "./native-module-require.js";
 import { getPluginCache, withPluginCache } from "./plugin-cache.js";
+import { PluginInventoryRetiredError } from "./plugin-instance-error.js";
 import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.js";
 import { getPluginInstance, getPluginValueInstance } from "./plugin-instance-scope.js";
 import { PluginInstance } from "./plugin-instance.js";
@@ -10,6 +12,7 @@ import { withProfile } from "./plugin-load-profile.js";
 import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
 import { installOpenClawPluginSdkNativeResolver } from "./plugin-sdk-native-resolver.js";
 import { getPluginRegistryInspectionResources } from "./registry-inspection-resources.js";
+import { isPluginRegistryRetired } from "./registry-lifecycle.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 import { withPluginRegistrationContext } from "./runtime.js";
 import { prepareGatewayContextBindingOwner } from "./runtime/gateway-context-binding-owner.js";
@@ -137,15 +140,28 @@ export function createPluginModuleLoader(options: {
       ...(captured.tryNative !== undefined ? { tryNative: captured.tryNative } : {}),
     });
   };
-  return (
+  type Owner = {
+    record: PluginRecord;
+    rootDir: string;
+    registry: PluginRegistry;
+    standalone?: boolean;
+  };
+  const binding = (
     modulePath: string,
-    owner?: {
-      record: PluginRecord;
-      rootDir: string;
-      registry: PluginRegistry;
-      standalone?: boolean;
-    },
-  ): unknown =>
+    owner: Owner,
+    instance: Parameters<typeof bindPluginInstanceModuleLoader>[0]["instance"],
+  ) => ({
+    instance,
+    origin: owner.record.origin,
+    source: modulePath,
+    rootDir: owner.rootDir,
+    standalone: owner.standalone,
+    expectedSourceDigest: captured.expectedSourceDigests?.[owner.record.id],
+    devSourceRoot: captured.devSourceRoot,
+    pluginSdkResolution: captured.pluginSdkResolution,
+    createHostModuleLoader: () => createLoaderForModule(modulePath),
+  });
+  const load = (modulePath: string, owner?: Owner): unknown =>
     withPluginCache(cache, () => {
       if (!owner) {
         return createLoaderForModule(modulePath)(toSafeImportPath(modulePath));
@@ -153,17 +169,7 @@ export function createPluginModuleLoader(options: {
       let instance = getPluginInstance(owner.record);
       if (!instance) {
         instance = new PluginInstance(owner.record.id, owner);
-        bindPluginInstanceModuleLoader({
-          instance,
-          origin: owner.record.origin,
-          source: modulePath,
-          rootDir: owner.rootDir,
-          standalone: owner.standalone,
-          expectedSourceDigest: captured.expectedSourceDigests?.[owner.record.id],
-          devSourceRoot: captured.devSourceRoot,
-          pluginSdkResolution: captured.pluginSdkResolution,
-          createHostModuleLoader: () => createLoaderForModule(modulePath),
-        });
+        bindPluginInstanceModuleLoader(binding(modulePath, owner, instance));
       }
       const expected = captured.expectedSourceDigests?.[owner.record.id];
       if (expected !== undefined && instance.sourceDigest !== expected) {
@@ -171,6 +177,45 @@ export function createPluginModuleLoader(options: {
       }
       return instance.loadModule(modulePath);
     });
+  return Object.assign(load, {
+    async prepare(modulePath: string, owner: Owner): Promise<void> {
+      // Compute workers already own retained native-ESM source captures. Keep their
+      // inline acquisition path so a prepared artifact cannot compete with that owner.
+      if (!isMainThread || owner.record.origin === "bundled" || getPluginInstance(owner.record)) {
+        return;
+      }
+      await withPluginCache(cache, async () => {
+        const { preparePluginGenerationArtifact } = await import("./plugin-generation-worker.js");
+        const preparedArtifact = await preparePluginGenerationArtifact({
+          rootDir: owner.rootDir,
+          source: modulePath,
+          standalone: owner.standalone,
+        });
+        if (cache.retirement || isPluginRegistryRetired(owner.registry)) {
+          await preparedArtifact.artifact.disposeAsync();
+          throw new PluginInventoryRetiredError();
+        }
+        try {
+          // Reentrant loading may have installed this exact owner while acquisition
+          // yielded. Never replace its module identity with a second capture.
+          if (getPluginInstance(owner.record)) {
+            await preparedArtifact.artifact.disposeAsync();
+            return;
+          }
+          const instance = new PluginInstance(owner.record.id, owner);
+          instance.run(() =>
+            bindPluginInstanceModuleLoader({
+              ...binding(modulePath, owner, instance),
+              preparedArtifact,
+            }),
+          );
+        } catch (error) {
+          await preparedArtifact.artifact.disposeAsync();
+          throw error;
+        }
+      });
+    },
+  });
 }
 
 function formatPluginRuntimeModuleResolutionError(params: {
@@ -264,7 +309,13 @@ export function createLazyPluginRuntime(params: {
       if (prop === "version") {
         return VERSION;
       }
-      if (prop === "capabilities" || prop === "config" || prop === "state" || prop === "system") {
+      if (
+        prop === "capabilities" ||
+        prop === "config" ||
+        prop === "llm" ||
+        prop === "state" ||
+        prop === "system"
+      ) {
         return base[prop];
       }
     }
@@ -284,8 +335,8 @@ export function createLazyPluginRuntime(params: {
         return getRuntimeProperty(prop);
       },
     };
-    // Policy facets match the runtime's getter-only contract before loading too.
-    if (prop !== "modelAuth" && prop !== "modelConfig") {
+    // Host and policy facets retain their getter-only contract before loading too.
+    if (prop !== "modelAuth" && prop !== "modelConfig" && prop !== "llm") {
       descriptor.set = (value: unknown) => {
         Reflect.set(resolveRuntime() as object, prop, value);
       };

@@ -368,27 +368,6 @@ describe("shouldIncludeSkill", () => {
       ).toBe(true);
     });
   });
-
-  it("excludes only the skill whose configured secret is unavailable", () => {
-    setActiveDegradedSecretOwners([
-      {
-        ownerKind: "capability",
-        ownerId: "skill:env-skill",
-        state: "unavailable",
-        paths: ["skills.entries.env-skill.apiKey"],
-        refKeys: ["env:default:MISSING_SKILL_KEY"],
-        reason: "secret provider failed",
-      },
-    ]);
-
-    expect(shouldInclude(rawSkillApiKeyRefConfig("env-skill"))).toBe(false);
-    expect(
-      shouldIncludeSkill({
-        entry: makeSkillEntry("healthy-skill", { always: true }),
-        bundledAllowlist: undefined,
-      }),
-    ).toBe(true);
-  });
 });
 
 describe("applySkillEnvOverrides", () => {

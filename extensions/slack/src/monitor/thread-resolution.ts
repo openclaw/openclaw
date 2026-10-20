@@ -5,7 +5,7 @@ import {
   WebAPIRateLimitedError,
   WebAPIRequestError,
 } from "@slack/web-api";
-import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import { createStaleWhileRevalidateCache } from "openclaw/plugin-sdk/collection-runtime";
 import {
   collectErrorGraphCandidates,
   extractErrorCode,
@@ -17,11 +17,6 @@ import { normalizeOptionalString as normalizeThreadTs } from "openclaw/plugin-sd
 import { formatSlackError } from "../errors.js";
 import type { SlackMessageEvent } from "../types.js";
 import type { SlackIngressTurnLifecycle } from "./ingress.types.js";
-
-type ThreadTsCacheEntry = {
-  threadTs: string | null;
-  expiresAt: number;
-};
 
 const DEFAULT_THREAD_TS_CACHE_TTL_MS = 60_000;
 const DEFAULT_THREAD_TS_CACHE_MAX = 500;
@@ -82,28 +77,12 @@ async function resolveThreadTsFromHistory(params: {
 }
 
 export function createSlackThreadTsResolver(params: { client: SlackWebClient }) {
-  const cache = new Map<string, ThreadTsCacheEntry>();
-  const inflight = new Map<string, Promise<string | undefined>>();
-
-  const getCached = (key: string, now: number) => {
-    const entry = cache.get(key);
-    if (!entry) {
-      return undefined;
-    }
-    if (entry.expiresAt <= now) {
-      cache.delete(key);
-      return undefined;
-    }
-    cache.delete(key);
-    cache.set(key, entry);
-    return entry.threadTs;
-  };
-
-  const setCached = (key: string, threadTs: string | null, now: number) => {
-    cache.delete(key);
-    cache.set(key, { threadTs, expiresAt: now + DEFAULT_THREAD_TS_CACHE_TTL_MS });
-    pruneMapToMaxSize(cache, DEFAULT_THREAD_TS_CACHE_MAX);
-  };
+  const cache = createStaleWhileRevalidateCache<string | null>({
+    maxEntries: DEFAULT_THREAD_TS_CACHE_MAX,
+    // Preserve caller-owned admission; this cache must not reject an admitted turn.
+    maxPending: Number.POSITIVE_INFINITY,
+    ttlMs: DEFAULT_THREAD_TS_CACHE_TTL_MS,
+  });
 
   return {
     resolve: async (request: {
@@ -112,61 +91,52 @@ export function createSlackThreadTsResolver(params: { client: SlackWebClient }) 
       turnAdoptionLifecycle?: SlackIngressTurnLifecycle;
     }): Promise<SlackMessageEvent> => {
       const { message } = request;
-      if (!message.parent_user_id || message.thread_ts || !message.ts) {
+      const messageTs = message.ts;
+      if (!message.parent_user_id || message.thread_ts || !messageTs) {
         return message;
       }
 
-      const cacheKey = `${message.channel}:${message.ts}`;
-      const now = Date.now();
-      const cached = getCached(cacheKey, now);
-      if (cached !== undefined) {
-        return cached ? { ...message, thread_ts: cached } : markAmbiguousThreadReply(message);
-      }
-
-      if (shouldLogVerbose()) {
-        logVerbose(
-          `slack inbound: missing thread_ts for thread reply channel=${message.channel} ts=${message.ts} source=${request.source}`,
-        );
-      }
-
-      let pending = inflight.get(cacheKey);
-      if (!pending) {
-        pending = resolveThreadTsFromHistory({
-          client: params.client,
-          channelId: message.channel,
-          messageTs: message.ts,
-        });
-        inflight.set(cacheKey, pending);
-      }
-
-      let resolved: string | undefined;
+      const cacheKey = `${message.channel}:${messageTs}`;
+      let resolved: string | null;
       try {
-        resolved = await pending;
+        ({ value: resolved } = await cache.read(
+          cacheKey,
+          async () => {
+            if (shouldLogVerbose()) {
+              logVerbose(
+                `slack inbound: missing thread_ts for thread reply channel=${message.channel} ts=${message.ts} source=${request.source}`,
+              );
+            }
+            try {
+              return (
+                (await resolveThreadTsFromHistory({
+                  client: params.client,
+                  channelId: message.channel,
+                  messageTs,
+                })) ?? null
+              );
+            } catch (err) {
+              if (shouldLogVerbose()) {
+                logVerbose(
+                  `slack inbound: failed to resolve thread_ts via conversations.history for channel=${message.channel} ts=${message.ts}: ${formatSlackError(err)}`,
+                );
+              }
+              if (isTransientSlackThreadLookupError(err)) {
+                throw err;
+              }
+              return null;
+            }
+          },
+          { allowStale: false },
+        ));
       } catch (err) {
-        if (shouldLogVerbose()) {
-          logVerbose(
-            `slack inbound: failed to resolve thread_ts via conversations.history for channel=${message.channel} ts=${message.ts}: ${formatSlackError(err)}`,
-          );
+        if (request.turnAdoptionLifecycle) {
+          // The already-acknowledged durable ingress owner retries without dropping the turn.
+          throw err;
         }
-        if (isTransientSlackThreadLookupError(err)) {
-          if (request.turnAdoptionLifecycle) {
-            // The already-acknowledged durable ingress owner retries without dropping the turn.
-            throw err;
-          }
-          return markAmbiguousThreadReply(message);
-        }
-      } finally {
-        inflight.delete(cacheKey);
+        return markAmbiguousThreadReply(message);
       }
-
-      setCached(cacheKey, resolved ?? null, Date.now());
-
       if (resolved) {
-        if (shouldLogVerbose()) {
-          logVerbose(
-            `slack inbound: resolved missing thread_ts channel=${message.channel} ts=${message.ts} -> thread_ts=${resolved}`,
-          );
-        }
         return { ...message, thread_ts: resolved };
       }
 

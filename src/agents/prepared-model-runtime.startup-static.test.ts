@@ -22,7 +22,9 @@ type CreateStaticCatalogResolver =
   typeof import("./embedded-agent-runner/model.static-catalog.js").createBundledStaticCatalogModelResolver;
 type StaticCatalogResolver = ReturnType<CreateStaticCatalogResolver>;
 
-const mocks = vi.hoisted(() => {
+const mocks = await vi.hoisted(async () => {
+  const { createEmptyPluginMetadataSnapshot } =
+    await import("../plugins/plugin-metadata-empty.test-support.js");
   const model = (provider = "openai", id = "gpt-5.5", name = "GPT-5.5") => ({
     provider,
     id,
@@ -58,37 +60,21 @@ const mocks = vi.hoisted(() => {
     ],
     diagnostics: [],
   };
+  const emptyMetadata = createEmptyPluginMetadataSnapshot();
   const metadataSnapshot = {
+    ...emptyMetadata,
     policyHash: index.policyHash,
-    plugins: [],
     pluginIds: [],
     index,
     registryIndex: index,
-    manifestRegistry: { plugins: [], diagnostics: [] },
-    registryDiagnostics: [],
-    diagnostics: [],
-    byPluginId: new Map(),
     normalizePluginId: (pluginId) => pluginId.trim().toLowerCase(),
     metrics: {
-      registrySnapshotMs: 0,
-      manifestRegistryMs: 0,
-      ownerMapsMs: 0,
-      totalMs: 0,
+      ...emptyMetadata.metrics,
       indexPluginCount: index.plugins.length,
-      manifestPluginCount: 0,
     },
-    declaredProviderOwners: new Map(),
     owners: {
-      channels: new Map(),
-      channelConfigs: new Map(),
+      ...emptyMetadata.owners,
       providers: new Map([["openai", ["openai"]]]),
-      modelCatalogProviders: new Map(),
-      cliBackends: new Map(),
-      setupProviders: new Map(),
-      commandAliases: new Map(),
-      contracts: new Map(),
-      providerAuthContributions: [],
-      modelIdNormalizationPolicies: new Map(),
     },
   } satisfies PluginMetadataSnapshot;
   const authStorage = {
@@ -96,6 +82,7 @@ const mocks = vi.hoisted(() => {
     getOAuthProviders: vi.fn(() => []),
   };
   const modelRegistry = {
+    getProviderMetadataOwners: () => undefined,
     fork: vi.fn((nextAuthStorage: unknown) => ({ authStorage: nextAuthStorage })),
     getAll: vi.fn(() => []),
     find: vi.fn<ModelRegistry["find"]>(() => undefined),
@@ -185,7 +172,8 @@ vi.mock("../plugins/provider-public-artifacts.js", () => ({
   resolveBundledProviderPolicySurface: mocks.resolveProviderPolicySurface,
 }));
 
-vi.mock("./prepared-model-catalog-worker.js", () => ({
+vi.mock("./prepared-model-catalog-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./prepared-model-catalog-worker.js")>()),
   createPreparedModelCatalogWorker: ({
     agentFacts,
   }: Parameters<
@@ -203,7 +191,6 @@ vi.mock("./prepared-model-catalog-worker.js", () => ({
         modelCatalog: catalog,
         runtimeModels: new Map(),
         providerExpiries: new Map(),
-        hookRows: new Map(),
         configuredRuntimeModels: agentFacts.configuredRuntimeModels,
       };
     },
@@ -279,8 +266,11 @@ vi.mock("./models-config.providers.implicit.js", () => ({
   prepareImplicitProviderStaticCatalog: mocks.prepareStaticCatalog,
 }));
 
+// mock-isolation: static catalog fixtures supply registrations without evaluating plugin runtimes.
 vi.mock("./runtime-plugins.js", () => ({
   loadAgentRuntimePluginRegistryHandle: mocks.loadAgentRuntimePluginRegistryHandle,
+  loadAgentRuntimePluginRegistryHandleAsync: async (...args: unknown[]) =>
+    mocks.loadAgentRuntimePluginRegistryHandle(...args),
 }));
 
 vi.mock("./embedded-agent-runner/model.static-catalog.js", async (importOriginal) => ({

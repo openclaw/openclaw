@@ -1,6 +1,7 @@
 // Tests bash command status replies and active-process cancellation.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import * as globals from "../../globals.js";
 import {
   enqueueSystemEventEntry,
   enqueueSystemEventWithReceipt,
@@ -109,6 +110,22 @@ describe("handleBashChatCommand", () => {
     cancelBackgroundExecSessionMock.mockReset();
     cancelBackgroundExecSessionMock.mockReturnValue(true);
     createExecToolMock.mockReset();
+  });
+
+  it("logs the background session without logging its command", async () => {
+    using log = vi.spyOn(globals, "logVerbose").mockImplementation(() => {});
+    const execute = vi.fn().mockResolvedValue(backgroundExecResult("private-job"));
+    createExecToolMock.mockReturnValue({ execute });
+
+    const result = await handleBashChatCommand(buildParams("/bash echo PRIVATE_COMMAND_123"));
+
+    expect(execute).toHaveBeenCalledWith(
+      "chat-bash",
+      expect.objectContaining({ command: "echo PRIVATE_COMMAND_123" }),
+    );
+    expect(result.text).toContain("session private-job");
+    expect(log).toHaveBeenCalledWith("Started bash session private-job");
+    expect(JSON.stringify(log.mock.calls)).not.toContain("PRIVATE_COMMAND_123");
   });
 
   it.each([

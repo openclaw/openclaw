@@ -3,6 +3,7 @@ import type {
   WhatsAppQaDriverSession,
 } from "@openclaw/whatsapp/api.js";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
+import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import type { QaGatewayChild } from "../../gateway-child.js";
 
 export type WhatsAppQaRuntimeEnv = {
@@ -15,7 +16,6 @@ export type WhatsAppQaRuntimeEnv = {
 
 export type WhatsAppQaApprovalDecision = "allow-once" | "deny";
 type WhatsAppQaApprovalDecisionMode = "reaction" | "rpc";
-type WhatsAppQaScenarioPosture = "direct-gateway" | "native-approval" | "user-path";
 
 type WhatsAppQaMessageSendMode =
   | {
@@ -52,10 +52,8 @@ export type WhatsAppQaMessageScenarioContext = {
   gateway: WhatsAppQaGatewayRuntime;
   gatewayTarget: string;
   gatewayWorkspaceDir: string;
-  recordObservedMessage: (message: WhatsAppQaDriverObservedMessage) => void;
   requestStartedAt: Date;
   scenarioId: string;
-  scenarioTitle: string;
   sent: { messageId?: string };
   sutAccountId: string;
   sutPhoneE164: string;
@@ -166,26 +164,17 @@ export type WhatsAppQaConfigOverrides = {
   groupHistoryLimit?: number;
   groupPolicy?: "allowlist" | "disabled" | "open";
   inboundDebounceMs?: number;
-  replyToMode?: "all" | "batched" | "first" | "off";
+  replyToMode?: ReplyToMode;
   statusReactions?: boolean;
 };
 
 export type WhatsAppQaScenarioImplementation = {
   buildRun: () => WhatsAppQaScenarioRun;
   configOverrides?: WhatsAppQaConfigOverrides;
-  posture: WhatsAppQaScenarioPosture;
   requiresGroupJid?: boolean;
 };
 
 export type WhatsAppQaScenarioMetadata = {
   id: string;
   timeoutMs: number;
-  title: string;
 };
-
-export interface WhatsAppObservedMessage extends WhatsAppQaDriverObservedMessage {
-  approvalState?: "pending" | "resolved";
-  matchedScenario?: boolean;
-  scenarioId?: string;
-  scenarioTitle?: string;
-}

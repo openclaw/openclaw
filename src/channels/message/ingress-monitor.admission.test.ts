@@ -518,36 +518,44 @@ describe("channel ingress monitor start capacity", () => {
     }
   });
 
-  it("gives no start-slot discount to a drain that holds its lane on deferral", async () => {
-    const started: string[] = [];
-    const parked = createDeferred();
-    const monitor = createMonitor(
-      async (raw, lifecycle) => {
-        started.push(raw.id);
-        lifecycle.onDeferred();
-        await parked.promise;
-        return { kind: "completed" };
-      },
-      { startLimit: 1 },
-    );
+  it.each([
+    { startLimit: 1, capacity: 1 },
+    { startLimit: undefined, capacity: 32 },
+  ])(
+    "bounds held deliveries across pumps at $capacity while admitting durable input",
+    async ({ startLimit, capacity }) => {
+      const started: string[] = [];
+      const parked = createDeferred();
+      const monitor = createMonitor(
+        async (raw, lifecycle) => {
+          started.push(raw.id);
+          lifecycle.onDeferred();
+          await parked.promise;
+          return { kind: "completed" };
+        },
+        { startLimit },
+      );
 
-    monitor.start();
-    try {
-      await monitor.admit({ id: "event-parked", lane: "a", text: "a" });
-      await monitor.waitForPumpIdle();
-      expect(started).toEqual(["event-parked"]);
+      monitor.start();
+      try {
+        for (let index = 0; index < capacity; index++) {
+          await monitor.admit({ id: `event-parked-${index}`, lane: `${index}`, text: "a" });
+        }
+        await monitor.waitForPumpIdle();
+        expect(started).toHaveLength(capacity);
 
-      await monitor.admit({ id: "event-second-lane", lane: "b", text: "b" });
-      monitor.requestDrain();
-      await monitor.waitForPumpIdle();
-      expect(started).not.toContain("event-second-lane");
+        await monitor.admit({ id: "event-second-lane", lane: "b", text: "b" });
+        monitor.requestDrain();
+        await monitor.waitForPumpIdle();
+        expect(started).not.toContain("event-second-lane");
 
-      parked.resolve();
-      await monitor.waitForIdle();
-      expect(started).toContain("event-second-lane");
-    } finally {
-      parked.resolve();
-      await monitor.stop();
-    }
-  });
+        parked.resolve();
+        await monitor.waitForIdle();
+        expect(started).toContain("event-second-lane");
+      } finally {
+        parked.resolve();
+        await monitor.stop();
+      }
+    },
+  );
 });

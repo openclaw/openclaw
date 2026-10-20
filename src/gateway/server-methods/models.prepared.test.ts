@@ -191,7 +191,10 @@ it("retains the model-list projection until its catalog facts change", async () 
         });
         expect(prepareProjection).toHaveBeenCalledTimes(2);
         current = false;
-        await expect(read()).rejects.toThrow("Model catalog changed while preparing this result");
+        // A retired owner keeps serving its last list until the replacement publishes.
+        expect(await read()).toMatchObject({
+          models: expect.arrayContaining([expect.objectContaining({ id: "first" })]),
+        });
         const replacement = {
           ...createChatMetadataOwner(currentConfig, "second", {}, "test", "openai-completions"),
           pluginRegistry,

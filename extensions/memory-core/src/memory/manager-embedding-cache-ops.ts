@@ -54,7 +54,12 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
         throw new Error("Memory database owner closed or changed before write admission");
       }
     };
-    while (await database.pruneEmbeddingCache(max, assertCurrent)) {
+    const unreferencedFirst = {
+      identities: this.syncProviderGeneration?.identities ?? this.resolveProviderIndexIdentities(),
+    };
+    while (
+      await database.pruneEmbeddingCache({ maxEntries: max, unreferencedFirst }, assertCurrent)
+    ) {
       await yieldToEventLoop();
     }
   }
@@ -194,8 +199,8 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
             embedding.length !== generation.embeddingDimensions,
         )
       ) {
-        // Separate successful batches can disagree. Neither dimension is authoritative;
-        // discard this identity's ambiguous cache so retries can recover after restart.
+        // Conflicting batches cannot share an identity's cache. Discard it so
+        // retries can recover after restart, using the declared size when available.
         await withMemoryWorkspaceLock(this.workspaceDir, async () => {
           try {
             await this.withGeneratedEmbeddingCacheWrite(generation, {
@@ -259,6 +264,7 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
           provider: { id: generation.provider.id, model: generation.provider.model },
           providerKey: generation.providerKey,
           maxEntries: this.cache.maxEntries,
+          unreferencedFirst: { identities: generation.identities },
         },
         entries: accepted,
       });

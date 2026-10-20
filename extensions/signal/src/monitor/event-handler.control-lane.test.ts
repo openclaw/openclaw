@@ -286,6 +286,9 @@ describe("Signal active-run control lane", () => {
   it("does not promote or cancel an unauthorized abort", () => {
     const entry = {
       cfg: {},
+      resolveChannelIngress: async () => {
+        throw new Error("control-lane fixture must not resolve ingress");
+      },
       senderName: "Alice",
       senderDisplay: "+15550001111",
       senderRecipient: "+15550001111",
@@ -310,6 +313,9 @@ describe("Signal active-run control lane", () => {
   it("shares one group control lane without merging normal sender batches", () => {
     const entry = {
       cfg: {},
+      resolveChannelIngress: async () => {
+        throw new Error("control-lane fixture must not resolve ingress");
+      },
       senderName: "Alice",
       senderDisplay: "+15550001111",
       senderRecipient: "+15550001111",
@@ -328,6 +334,42 @@ describe("Signal active-run control lane", () => {
     expect(resolveSignalInboundDebounceKey("default", entry)).not.toBe(
       resolveSignalInboundDebounceKey("default", otherSender),
     );
+  });
+
+  it("cancels each pending sender once and forgets completed entries", () => {
+    const entry = {
+      cfg: {},
+      resolveChannelIngress: async () => {
+        throw new Error("control-lane fixture must not resolve ingress");
+      },
+      senderName: "Alice",
+      senderDisplay: "+15550001111",
+      senderRecipient: "+15550001111",
+      senderPeerId: "+15550001111",
+      groupId: "group-1",
+      isGroup: true,
+      bodyText: "stop",
+      commandBody: "stop",
+      commandAuthorized: true,
+    };
+    const second = { ...entry };
+    const otherSender = { ...entry, senderPeerId: "+15550002222" };
+    const otherGroup = { ...entry, groupId: "group-2" };
+    const registry = createSignalPendingInboundRegistry("default");
+    for (const pending of [entry, entry, second, otherSender, otherGroup]) {
+      registry.track(pending);
+    }
+    registry.complete([entry, entry]);
+    const cancelKey = vi.fn(() => true);
+    registry.cancelPendingOnAbort(entry, cancelKey);
+    expect(cancelKey.mock.calls).toEqual([
+      ["signal:default:group-1:+15550001111"],
+      ["signal:default:group-1:+15550002222"],
+    ]);
+    registry.complete([second, otherSender]);
+    cancelKey.mockClear();
+    registry.cancelPendingOnAbort(entry, cancelKey);
+    expect(cancelKey).not.toHaveBeenCalled();
   });
 
   it.each(["/reset", "/queue status"])(

@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
+import type { testing } from "../../scripts/bench-gateway-concurrency.js";
 import {
   inspectManagedProcessGroup,
   terminateManagedChild,
@@ -14,53 +15,25 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const testNodeExecPath = resolveTestNodeExecPath();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const diagnosticPrivateMarker = "synthetic-private-probe at /private/fixture/probe-content";
+const diagnosticMode = "mock-activity-summary-diagnostics";
 
-type ChildReceipt = {
-  exitCode: number | null;
-  signal: string | null;
-  exitedBeforeTeardown: boolean;
-};
-type ProcessSnapshot = {
-  pid?: number;
-  exitEvent?: { exitCode: number | null; signal: string | null };
-  closeEvent?: { exitCode: number | null; signal: string | null };
-};
-type RunReport = {
-  freshConnection: { ok: boolean } | null;
-  gatewayExit?: ChildReceipt;
-  gatewayProcess?: ProcessSnapshot;
-  history: Array<{ ok: boolean; error: string | null }>;
-  memory: { before: unknown; after: unknown; peakRssMb: number | null };
-  cpuUsage: unknown;
-  pluginMetadataScans?: { count: number; durationMs: unknown; totalDurationMs: number };
-  probeWarmup: { samples: Array<{ sessionsList: { ok: boolean; error: string | null } }> };
-  readyz: Array<{ ok: boolean }>;
-  sessionsList: Array<{ ok: boolean }>;
-  turnAccounting: { launched: number; terminalOk: number; verified: number };
-  turnCount?: number;
-};
-type Report = {
-  mode: string;
-  runs: RunReport[];
-  warmupRuns: RunReport[];
-  failedAttempt: {
-    status: "failure";
-    phase: "measured";
-    index: number;
-    errors: Array<{ phase: "workload" | "diagnostics" | "cleanup"; error: string }>;
-    partialRun: RunReport;
-    cleanup: { rootRemoved: boolean | null };
-    mockProviderExit?: ChildReceipt;
-    mockProviderProcess?: ProcessSnapshot;
-  };
-  summary: { pluginMetadataScanCount: number | null; turnCount: number };
+type Samples = Awaited<ReturnType<typeof testing.runBenchmarkSamples>>;
+type Report = Omit<Samples, "failedAttempt"> & {
+  failedAttempt: NonNullable<Samples["failedAttempt"]>;
+  summary: { turnCount: number };
 };
 type OwnedChild = { role: "gateway" | "mock"; pid: number; startTime: number | null; root: string };
+const failureMessages = {
+  workload: "agent 1 did not complete",
+  history: "all configured chat.history load probes failed",
+  teardown: "Gateway did not exit cleanly",
+  diagnostic: "Activity-summary diagnostic benchmark failed",
+};
+const memorySample = { heapUsedMb: 4, rssMb: 16 };
+const processInspection = { errorPolicy: "indeterminate" } as const;
+type Scenario = keyof typeof failureMessages;
 
-async function withBenchmark(
-  scenario: "workload" | "teardown" | "history" | "diagnostic",
-  check: (report: Report) => void,
-) {
+async function withBenchmark(scenario: Scenario) {
   const root = tempDirs.make("openclaw-concurrency-cli-");
   const tempRoot = path.join(root, "tmp");
   const entry = path.join(root, `${scenario}.mjs`);
@@ -101,19 +74,11 @@ syncBuiltinESMExports();\n`,
         "scripts/bench-gateway-concurrency.ts",
         "--entry",
         entry,
-        "--concurrency",
-        "1",
+        ..."--concurrency 1 --warmup 0 --cadence-ms 10 --timeout-ms 5000 --json".split(" "),
         "--runs",
         scenario === "workload" ? "3" : "1",
-        "--warmup",
-        "0",
-        "--cadence-ms",
-        "10",
-        "--timeout-ms",
-        "5000",
         "--output",
         output,
-        "--json",
         ...(scenario === "history" ? ["--history-clients", "1", "--history-burst", "1"] : []),
         ...(scenario === "diagnostic" ? ["--activity-summary-diagnostics"] : []),
       ],
@@ -130,38 +95,30 @@ syncBuiltinESMExports();\n`,
           .split("\n")
           .map((line) => JSON.parse(line) as OwnedChild)
       : [];
-    expect(result.error).toBeUndefined();
-    expect(result.status, result.stderr).toBe(1);
+    expect([result.error, result.status], result.stderr).toEqual([undefined, 1]);
     expect(result.stderr.trim().split("\n").at(-1)).toBe(
       "[bench-gateway-concurrency] FAILED (exit 1)",
     );
-    expect(result.stderr).toContain(
-      {
-        workload: "agent 1 did not complete",
-        history: "all configured chat.history load probes failed",
-        teardown: "Gateway did not exit cleanly",
-        diagnostic: "Activity-summary diagnostic benchmark failed",
-      }[scenario],
-    );
+    expect(result.stderr).toContain(failureMessages[scenario]);
     expect(existsSync(output), `failed benchmark did not write JSON:\n${result.stderr}`).toBe(true);
     const report = JSON.parse(readFileSync(output, "utf8")) as Report;
     expect(JSON.parse(result.stdout)).toEqual(report);
-    expect(report.mode).toBe(
-      scenario === "diagnostic" ? "mock-activity-summary-diagnostics" : "mock-streaming-agent",
-    );
-    expect(report.warmupRuns).toEqual([]);
-    expect(report.failedAttempt).toMatchObject({
-      status: "failure",
-      phase: "measured",
-      index: scenario === "workload" ? 2 : 1,
-      cleanup: { rootRemoved: true },
+    expect(report).toMatchObject({
+      mode: scenario === "diagnostic" ? diagnosticMode : "mock-streaming-agent",
+      warmupRuns: [],
+      failedAttempt: {
+        status: "failure",
+        phase: "measured",
+        index: scenario === "workload" ? 2 : 1,
+        cleanup: { rootRemoved: true },
+      },
     });
     expect(children.map((child) => child.role)).toEqual(
       scenario === "workload" ? ["mock", "gateway", "mock", "gateway"] : ["mock", "gateway"],
     );
     for (const child of children) {
       expect(child.startTime).not.toBeNull();
-      expect(inspectManagedProcessGroup(child, { errorPolicy: "indeterminate" })).toBe("dead");
+      expect(inspectManagedProcessGroup(child, processInspection)).toBe("dead");
       if (child.role === "gateway") {
         expect(existsSync(child.root)).toBe(false);
       }
@@ -170,13 +127,10 @@ syncBuiltinESMExports();\n`,
     expect(report.failedAttempt.mockProviderExit).toBeDefined();
     expect(report.failedAttempt.mockProviderProcess?.exitEvent).toBeDefined();
     expect(report.failedAttempt.partialRun.gatewayProcess?.closeEvent).toBeDefined();
-    check(report);
+    checkReport(report, scenario);
     if (scenario === "diagnostic") {
       const sidecar = readFileSync(`${output}.failure.json`, "utf8");
-      expect(JSON.parse(sidecar)).toMatchObject({
-        mode: "mock-activity-summary-diagnostics",
-        status: "failed",
-      });
+      expect(JSON.parse(sidecar)).toMatchObject({ mode: diagnosticMode, status: "failed" });
       expect(
         `${readFileSync(output, "utf8")}${result.stdout}${result.stderr}${sidecar}`,
       ).not.toContain(diagnosticPrivateMarker);
@@ -186,121 +140,100 @@ syncBuiltinESMExports();\n`,
   } finally {
     const cleanups = await Promise.allSettled(
       children.map(async (child) => {
-        if (inspectManagedProcessGroup(child, { errorPolicy: "indeterminate" }) !== "dead") {
-          if (
-            child.startTime === null ||
-            getFileLockProcessStartTime(child.pid) !== child.startTime
-          ) {
-            throw new Error("Child identity unavailable or changed; refusing cleanup signal");
-          }
-          terminateManagedChild(
-            { pid: child.pid, kill: (signal) => process.kill(child.pid, signal) },
-            "SIGKILL",
-            { processGroupFallback: "never" },
-          );
-          expect(
-            await waitForManagedProcessGroupExit(child, 5_000, { errorPolicy: "indeterminate" }),
-          ).toBe(true);
+        if (inspectManagedProcessGroup(child, processInspection) === "dead") {
+          return;
         }
+        const { pid, startTime } = child;
+        if (startTime === null || getFileLockProcessStartTime(pid) !== startTime) {
+          throw new Error("Child identity unavailable or changed; refusing cleanup signal");
+        }
+        terminateManagedChild({ pid, kill: (signal) => process.kill(pid, signal) }, "SIGKILL", {
+          processGroupFallback: "never",
+        });
+        expect(await waitForManagedProcessGroupExit(child, 5_000, processInspection)).toBe(true);
       }),
     );
-    for (const cleanup of cleanups) {
-      if (cleanup.status === "rejected") {
-        errors.push(cleanup.reason);
-      }
-    }
+    errors.push(
+      ...cleanups.flatMap((cleanup) => (cleanup.status === "rejected" ? [cleanup.reason] : [])),
+    );
   }
-  if (errors.length === 1) {
-    throw errors[0];
-  }
-  if (errors.length > 1) {
-    throw new AggregateError(errors, "Benchmark validation or cleanup failed");
+  if (errors.length) {
+    throw errors.length === 1
+      ? errors[0]
+      : new AggregateError(errors, "Benchmark validation or cleanup failed");
   }
 }
 
-describe.skipIf(process.platform === "win32")("gateway concurrency CLI failure evidence", () => {
-  it.each(["diagnostic", "workload", "teardown", "history"] as const)(
-    "retains partial evidence and cleans up after %s failure",
-    async (scenario) => {
-      await withBenchmark(scenario, (report) => {
-        const { errors, partialRun } = report.failedAttempt;
-        expect(errors).toContainEqual({
-          phase: scenario === "teardown" ? "diagnostics" : "workload",
-          error: expect.stringContaining(
-            {
-              diagnostic: "raw output omitted",
-              workload: "agent 1 did not complete",
-              teardown: "Gateway did not exit cleanly",
-              history: "all configured chat.history load probes failed",
-            }[scenario],
-          ),
-        });
-        if (scenario === "diagnostic" || scenario === "workload") {
-          expect(partialRun.turnAccounting).toEqual({ launched: 1, terminalOk: 0, verified: 0 });
-        }
-        if (scenario === "diagnostic") {
-          expect(partialRun.probeWarmup.samples[0]?.sessionsList).toMatchObject({
-            ok: false,
-            error: expect.any(String),
-          });
-          expect(partialRun.probeWarmup.samples.some((sample) => sample.sessionsList.ok)).toBe(
-            true,
-          );
-          return;
-        }
-        expect(partialRun.gatewayExit).toEqual({
-          exitCode: scenario === "teardown" ? 23 : 0,
-          signal: null,
-          exitedBeforeTeardown: false,
-        });
-        if (scenario !== "teardown") {
-          expect(partialRun.readyz.some((sample) => sample.ok)).toBe(true);
-        }
-        if (scenario === "workload") {
-          expect(report.runs).toHaveLength(1);
-          const completed = report.runs[0]!;
-          expect(completed).not.toHaveProperty("failures");
-          expect(completed).not.toHaveProperty("cleanup");
-          expect(completed.freshConnection).toMatchObject({ ok: true });
-          expect(completed.memory).toMatchObject({
-            before: { heapUsedMb: 4, rssMb: 16 },
-            after: { heapUsedMb: 4, rssMb: 16 },
-          });
-          expect(completed.pluginMetadataScans).toEqual({
-            count: 0,
-            durationMs: null,
-            totalDurationMs: 0,
-          });
-          expect(report.summary).toMatchObject({ turnCount: 1, pluginMetadataScanCount: 0 });
-          expect(partialRun.sessionsList.some((sample) => sample.ok)).toBe(true);
-          expect(partialRun.memory.before).toMatchObject({ heapUsedMb: 4, rssMb: 16 });
-          return;
-        }
-        expect(report.runs).toEqual([]);
-        expect(report.summary.turnCount).toBe(0);
-        expect(partialRun.memory.after).toMatchObject({ heapUsedMb: 4, rssMb: 16 });
-        if (scenario === "teardown") {
-          expect(partialRun.turnCount).toBe(1);
-          expect(partialRun.freshConnection).toMatchObject({ ok: true });
-          expect(partialRun).not.toHaveProperty("pluginMetadataScans");
-          expect(partialRun.gatewayProcess?.exitEvent).toMatchObject({
-            exitCode: 23,
-            signal: null,
-          });
-          return;
-        }
-        expect(partialRun.history.length).toBeGreaterThan(0);
-        expect(
-          partialRun.history.every(
-            (sample) => !sample.ok && sample.error?.includes("fixture history failure"),
-          ),
-        ).toBe(true);
-        expect(partialRun.cpuUsage).toMatchObject({
-          process: { totalMs: expect.any(Number) },
-          mainThread: { totalMs: expect.any(Number) },
-        });
-        expect(partialRun.pluginMetadataScans).toMatchObject({ count: 1, totalDurationMs: 7 });
-      });
-    },
-  );
-});
+function checkReport(report: Report, scenario: Scenario) {
+  const { errors, partialRun } = report.failedAttempt;
+  expect(errors).toContainEqual({
+    phase: scenario === "teardown" ? "diagnostics" : "workload",
+    error: expect.stringContaining(
+      scenario === "diagnostic" ? "raw output omitted" : failureMessages[scenario],
+    ),
+  });
+  if (scenario === "diagnostic" || scenario === "workload") {
+    expect(partialRun.turnAccounting).toEqual({ launched: 1, terminalOk: 0, verified: 0 });
+  }
+  if (scenario === "diagnostic") {
+    expect(partialRun.probeWarmup.samples[0]?.sessionsList).toMatchObject({
+      ok: false,
+      error: expect.any(String),
+    });
+    expect(partialRun.probeWarmup.samples.some((sample) => sample.sessionsList.ok)).toBe(true);
+    return;
+  }
+  expect(partialRun.gatewayExit).toEqual({
+    exitCode: scenario === "teardown" ? 23 : 0,
+    signal: null,
+    exitedBeforeTeardown: false,
+  });
+  if (scenario !== "teardown") {
+    expect(partialRun.readyz?.some((sample) => sample.ok)).toBe(true);
+  }
+  if (scenario === "workload") {
+    expect(report.runs).toHaveLength(1);
+    const completed = report.runs[0]!;
+    const scans = completed.pluginMetadataScans;
+    expect(completed).not.toHaveProperty("failures");
+    expect(completed).not.toHaveProperty("cleanup");
+    expect(completed).toMatchObject({
+      freshConnection: { ok: true },
+      memory: { before: memorySample, after: memorySample },
+    });
+    expect(scans).toEqual({ count: 0, durationMs: null, totalDurationMs: 0 });
+    expect(report.summary).toMatchObject({ turnCount: 1, pluginMetadataScanCount: 0 });
+    expect(partialRun.sessionsList?.some((sample) => sample.ok)).toBe(true);
+    expect(partialRun.memory.before).toMatchObject(memorySample);
+    return;
+  }
+  expect(report).toMatchObject({ runs: [], summary: { turnCount: 0 } });
+  expect(partialRun.memory.after).toMatchObject(memorySample);
+  if (scenario === "teardown") {
+    expect(partialRun).toMatchObject({
+      turnCount: 1,
+      freshConnection: { ok: true },
+      gatewayProcess: { exitEvent: { exitCode: 23, signal: null } },
+    });
+    expect(partialRun).not.toHaveProperty("pluginMetadataScans");
+    return;
+  }
+  expect(partialRun.history?.length).toBeGreaterThan(0);
+  expect(
+    partialRun.history?.every(
+      (sample) => !sample.ok && sample.error?.includes("fixture history failure"),
+    ),
+  ).toBe(true);
+  expect(partialRun.cpuUsage).toMatchObject({
+    process: { totalMs: expect.any(Number) },
+    mainThread: { totalMs: expect.any(Number) },
+  });
+  expect(partialRun.pluginMetadataScans).toMatchObject({ count: 1, totalDurationMs: 7 });
+}
+
+it
+  .skipIf(process.platform === "win32")
+  .each(["diagnostic", "workload", "teardown", "history"] as const)(
+  "retains partial evidence and cleans up after %s failure",
+  withBenchmark,
+);

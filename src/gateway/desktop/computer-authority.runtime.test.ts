@@ -30,33 +30,36 @@ import type { RespondFn } from "../server-methods/types.js";
 import { SharedGatewaySessionGenerationState } from "../server-shared-auth-generation.js";
 import { createTestRuntimeSecretsActivator } from "../server-startup-config.test-support.js";
 import { createGatewayComputerService } from "./computer-service.js";
+import { computerCapabilities } from "./computer.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function reachGate<T>(gate: Promise<T>, invocation: Promise<unknown>, label: string) {
+  return Promise.race([
+    gate,
+    invocation.then(() => {
+      throw new Error(`${label} native input never reached its gate`);
+    }),
+  ]);
+}
 
 it.each(["direct-run", "parent-closes-scope", "scope-closes"] as const)(
   "cancels %s authority after native input is queued in the real child and before its final effect",
   async (mode) => {
     const state = await createOpenClawTestState({ label: "computer-authority" });
-    const entered = createDeferredCore<http.ServerResponse>();
-    const blockerEntered = createDeferredCore();
-    const revokedQueued = createDeferredCore();
-    const revokedCancelled = createDeferredCore();
+    const gates = {
+      "/gate/allowed": createDeferredCore<http.ServerResponse>(),
+      "/gate/blocker": createDeferredCore<http.ServerResponse>(),
+      "/queued/revoked": createDeferredCore<http.ServerResponse>(),
+      "/cancelled/revoked": createDeferredCore<http.ServerResponse>(),
+    };
     const gate = http.createServer((request, response) => {
-      if (request.url === "/gate/allowed") {
-        entered.resolve(response);
-        return;
+      Object.entries(gates)
+        .find(([route]) => route === request.url)?.[1]
+        .resolve(response);
+      if (request.url !== "/gate/allowed" && request.url !== "/gate/blocker") {
+        response.writeHead(204).end();
       }
-      if (request.url === "/gate/blocker") {
-        blockerEntered.resolve();
-        return;
-      }
-      if (request.url === "/queued/revoked") {
-        revokedQueued.resolve();
-      }
-      if (request.url === "/cancelled/revoked") {
-        revokedCancelled.resolve();
-      }
-      response.writeHead(204).end();
     });
     onTestFinished(async () => {
       gate.closeAllConnections();
@@ -76,6 +79,14 @@ it.each(["direct-run", "parent-closes-scope", "scope-closes"] as const)(
       throw new Error("Native input gate did not acquire a loopback port");
     }
     const pluginId = "fixture-authority-computer";
+    const capabilities = computerCapabilities(
+      {
+        id: pluginId,
+        label: "Synthetic authority computer",
+        generation: "authority-generation",
+      },
+      ["screenshot", "type"],
+    );
     const pluginRoot = state.path("plugin");
     fs.mkdirSync(pluginRoot);
     const fixture = createColdPluginFixture({
@@ -84,9 +95,11 @@ it.each(["direct-run", "parent-closes-scope", "scope-closes"] as const)(
       manifest: { providers: [], channels: [], channelConfigs: {}, providerAuthChoices: [] },
     });
     const events = state.path("native-events.txt");
-    const allowedEffect = state.path("allowed-effect.txt");
-    const revokedEffect = state.path("revoked-effect.txt");
-    const blockerEffect = state.path("blocker-effect.txt");
+    const effects = {
+      allowed: state.path("allowed-effect.txt"),
+      revoked: state.path("revoked-effect.txt"),
+      blocker: state.path("blocker-effect.txt"),
+    };
     fs.writeFileSync(
       fixture.runtimeSource,
       `
@@ -94,7 +107,7 @@ const fs = require("node:fs");
 const http = require("node:http");
 const { registerComputerUseProvider } = require("openclaw/plugin-sdk/computer-use");
 const record = (event) => fs.appendFileSync(${JSON.stringify(events)}, event + "\\n");
-const effects = ${JSON.stringify({ allowed: allowedEffect, revoked: revokedEffect, blocker: blockerEffect })};
+const effects = ${JSON.stringify(effects)};
 const request = (route, signal) => new Promise((resolve, reject) => {
   const req = http.get("http://127.0.0.1:${address.port}/" + route, { signal }, (response) => {
     response.resume();
@@ -109,12 +122,7 @@ module.exports = {
   register(api) {
     registerComputerUseProvider(api, {
       id: ${JSON.stringify(pluginId)}, label: "Synthetic authority computer", isAvailable: () => true,
-      capabilities: () => ({
-        contractVersion: 2,
-        provider: { id: ${JSON.stringify(pluginId)}, label: "Synthetic authority computer", generation: "authority-generation" },
-        actions: ["screenshot", "type"], targets: ["screen"], deliveryModes: ["foreground"], observations: ["image"],
-        features: { recording: false, agentCursor: false, multiDisplay: false },
-      }),
+      capabilities: () => (${JSON.stringify(capabilities)}),
       async openExecution() {
         let tail = Promise.resolve();
         return {
@@ -194,19 +202,7 @@ module.exports = {
         id: pluginId,
         label: "Synthetic authority computer",
         isAvailable: () => true,
-        capabilities: () => ({
-          contractVersion: 2,
-          provider: {
-            id: pluginId,
-            label: "Synthetic authority computer",
-            generation: "authority-generation",
-          },
-          actions: ["screenshot", "type"],
-          targets: ["screen"],
-          deliveryModes: ["foreground"],
-          observations: ["image"],
-          features: { recording: false, agentCursor: false, multiDisplay: false },
-        }),
+        capabilities: () => capabilities,
         openExecution: async () => {
           throw new Error("Native execution must run in the child");
         },
@@ -314,34 +310,19 @@ module.exports = {
       expect(await service.status()).toMatchObject({ configured: true, available: true });
       const allowed = invoke("allowed");
       pending.push(allowed);
-      const releaseAllowed = await Promise.race([
-        entered.promise,
-        allowed.then(() => {
-          throw new Error("Allowed native input never reached its gate");
-        }),
-      ]);
+      const releaseAllowed = await reachGate(gates["/gate/allowed"].promise, allowed, "Allowed");
       releaseAgentRunDelegatedAuthority(unrelated);
       expect(validateAgentRunDelegatedAuthority(authority)).toBe(true);
       releaseAllowed.writeHead(204).end();
       expect((await allowed)[0]).toBe(true);
-      expect(fs.readFileSync(allowedEffect, "utf8")).toBe("applied");
+      expect(fs.readFileSync(effects.allowed, "utf8")).toBe("applied");
 
       const blocker = invoke("blocker");
       pending.push(blocker);
-      await Promise.race([
-        blockerEntered.promise,
-        blocker.then(() => {
-          throw new Error("Blocking native input never reached its gate");
-        }),
-      ]);
+      await reachGate(gates["/gate/blocker"].promise, blocker, "Blocking");
       const revoked = invoke("revoked");
       pending.push(revoked);
-      await Promise.race([
-        revokedQueued.promise,
-        revoked.then(() => {
-          throw new Error("Revoked native input never entered the child queue");
-        }),
-      ]);
+      await reachGate(gates["/queued/revoked"].promise, revoked, "Revoked queued");
       if (mode === "scope-closes") {
         scopeLifetime.abort();
         expect(validateAgentRunDelegatedAuthority(parentAuthority)).toBe(true);
@@ -351,24 +332,21 @@ module.exports = {
       expect(requestLifetime.signal.aborted).toBe(false);
       // Observe native cancellation before explicit cleanup or the 60-second RPC deadline.
       await withTestTimeout(
-        revokedCancelled.promise,
+        gates["/cancelled/revoked"].promise,
         10_000,
         "Run revocation did not cancel queued native input",
       );
       await service.close();
       expect((await blocker)[0]).toBe(false);
       expect((await revoked)[0]).toBe(false);
-      expect(fs.existsSync(blockerEffect)).toBe(false);
-      expect(fs.existsSync(revokedEffect)).toBe(false);
+      expect(fs.existsSync(effects.blocker)).toBe(false);
+      expect(fs.existsSync(effects.revoked)).toBe(false);
       const nativeEvents = fs.readFileSync(events, "utf8");
       expect(nativeEvents).toContain("cancelled:blocker\n");
       expect(nativeEvents).toContain("cancelled:revoked\n");
       expect(nativeEvents).toContain("close:gateway-disconnect\n");
       expect(nativeEvents).toContain("exit:0\n");
       expect(desktopCurrent).toBe(false);
-      console.log(
-        `[computer-authority-proof] ${mode}: live input applied; sibling claim closure preserved owner; revoked queued input cancelled before effect; native child exit joined`,
-      );
     } finally {
       releaseAgentRunDelegatedAuthority(authority);
       releaseAgentRunDelegatedAuthority(parentAuthority);

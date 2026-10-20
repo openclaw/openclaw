@@ -3,7 +3,6 @@ import {
   collectErrorGraphCandidates,
   toErrorObject,
 } from "@openclaw/normalization-core/error-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import {
@@ -45,7 +44,6 @@ import { withSessionCostUsageWorkerDatabases } from "./session-cost-usage-worker
 import {
   UsageCostWorkerReplyError,
   type UsageCostWorkerHostEffects,
-  type UsageCostWorkerHostReply,
   type UsageCostWorkerHostRequest,
   type UsageCostWorkerInput,
   type UsageCostWorkerLocation,
@@ -192,8 +190,7 @@ export function resolveUsageCostWorkerDayBucket(dayBucket?: UsageDailyBucket): U
     : { mode: "time-zone", timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone };
 }
 
-function restoreWorkerFailure(error: unknown, hostErrors: Map<number, unknown>): unknown {
-  const restoredOrigins = new Set<number>();
+function restoreWorkerFailure(error: unknown, hostErrors: Set<Error>): unknown {
   let result = error;
   for (const current of collectErrorGraphCandidates(error, (entry) =>
     entry instanceof Error
@@ -206,17 +203,7 @@ function restoreWorkerFailure(error: unknown, hostErrors: Map<number, unknown>):
       if (failure.error) {
         retainOpenClawStateWorkerErrorPayload(remote, failure.error);
       }
-      let restored: unknown = hydrateOpenClawStateWorkerError(remote, { includeOrdinary: true });
-      if (failure.hostOrigin !== undefined && hostErrors.has(failure.hostOrigin)) {
-        restoredOrigins.add(failure.hostOrigin);
-        const original = hostErrors.get(failure.hostOrigin);
-        restored = failure.hostFailureOnly
-          ? original
-          : withSqliteWorkerCleanupFailure(
-              toErrorObject(original, "Usage cache host effect failed"),
-              restored,
-            );
-      }
+      const restored = hydrateOpenClawStateWorkerError(remote, { includeOrdinary: true });
       result =
         current === error
           ? restored
@@ -226,13 +213,17 @@ function restoreWorkerFailure(error: unknown, hostErrors: Map<number, unknown>):
             );
     }
   }
+  const restoredErrors = new Set(
+    collectErrorGraphCandidates(result, (entry) =>
+      entry instanceof Error
+        ? [entry.cause, ...(entry instanceof AggregateError ? entry.errors : [])]
+        : [],
+    ),
+  );
   // Cancellation can retire the worker before an accepted write returns its failure.
-  for (const [origin, failure] of hostErrors) {
-    if (!restoredOrigins.has(origin)) {
-      result = withSqliteWorkerCleanupFailure(
-        toErrorObject(failure, "Usage cache host effect failed"),
-        result,
-      );
+  for (const failure of hostErrors) {
+    if (!restoredErrors.has(failure)) {
+      result = withSqliteWorkerCleanupFailure(failure, result);
     }
   }
   return result;
@@ -268,9 +259,7 @@ async function runPreparedUsageCostWorker(
   prepared: PreparedUsageCostWorker,
   operation: UsageCostWorkerRequest,
 ): Promise<UsageCostWorkerResult | { kind: "busy" }> {
-  const location = structuredClone(prepared.location);
-  const archiveStorePaths = [...prepared.archiveStorePaths];
-  const stores = structuredClone(prepared.stores);
+  const { location, archiveStorePaths, stores } = prepared;
   const capturedOperation = structuredClone(operation);
   const signal = getAsyncWorkSignal();
   return withSessionCostUsageWorkerDatabases(prepared.databases, async (scope) => {
@@ -323,9 +312,8 @@ async function runPreparedUsageCostWorker(
     const failures = openUsageCostRefreshFailures(location.env);
     const failureKey = (sessionFile: string) =>
       JSON.stringify([location.databasePath, sessionFile]);
-    let activeSessionFile: string | undefined;
-    const hostErrors = new Map<number, unknown>();
-    let errorSequence = 0;
+    const uncommittedSessionFiles = new Set<string>();
+    const hostErrors = new Set<Error>();
     try {
       const failureEntries = lock
         ? await failures.entries().catch((error: unknown) => {
@@ -352,16 +340,12 @@ async function runPreparedUsageCostWorker(
               .length,
           timeoutMs: USAGE_COST_WORKER_TIMEOUT_MS,
           onRequest: async (value, context) => {
-            let reply: UsageCostWorkerHostReply;
             try {
               const assertRequestCurrent = () => {
                 assertCurrent();
                 context.signal.throwIfAborted();
               };
               assertRequestCurrent();
-              if (!isRecord(value) || typeof value.kind !== "string") {
-                throw new Error("Invalid usage worker host request");
-              }
               // SAFETY: The paired worker constructs this union; host effects still check current authority.
               const request = value as UsageCostWorkerHostRequest;
               let output: UsageCostWorkerHostEffects[keyof UsageCostWorkerHostEffects]["output"] =
@@ -369,7 +353,7 @@ async function runPreparedUsageCostWorker(
               switch (request.kind) {
                 case "refresh-session":
                   requireLock("refresh sessions");
-                  activeSessionFile = request.input.sessionFile;
+                  uncommittedSessionFiles.add(request.input.sessionFile);
                   break;
                 case "pricing":
                   output = request.input.map(resolveCost);
@@ -385,13 +369,14 @@ async function runPreparedUsageCostWorker(
                   );
                   break;
                 }
-                case "prune-row":
-                  requireLock("prune cache rows");
-                  pruneRows.push({
-                    key: request.input.key,
-                    valueJson: request.input.value,
-                    updatedAt: request.input.updatedAt,
-                  });
+                case "prune-rows":
+                  for (const row of request.input) {
+                    pruneRows.push({
+                      key: row.key,
+                      valueJson: row.value,
+                      updatedAt: row.updatedAt,
+                    });
+                  }
                   break;
                 case "prune":
                   await requireLock("prune cache rows").pruneRows(pruneRows, context.signal);
@@ -399,20 +384,27 @@ async function runPreparedUsageCostWorker(
                   break;
                 case "write":
                   output = await requireLock("write cache rows").writeRollup(
-                    {
-                      rollupId: request.input.key,
-                      valueJson: request.input.value,
-                      blob: request.input.blob,
-                      updatedAt: request.input.updatedAt,
-                      partitions: request.input.partitions,
-                      removedDates: request.input.removedDates,
-                      replacePartitions: request.input.replacePartitions,
-                    },
+                    request.input.map((row) => ({
+                      rollupId: row.key,
+                      valueJson: row.value,
+                      blob: row.blob,
+                      updatedAt: row.updatedAt,
+                      partitions: row.partitions,
+                      removedDates: row.removedDates,
+                      replacePartitions: row.replacePartitions,
+                    })),
                     context.signal,
                   );
-                  if (output && failedKeys.has(failureKey(request.input.key))) {
+                  for (const row of request.input) {
+                    if (!output) {
+                      continue;
+                    }
+                    uncommittedSessionFiles.delete(row.key);
+                    if (!failedKeys.has(failureKey(row.key))) {
+                      continue;
+                    }
                     await failures
-                      .delete(failureKey(request.input.key), {
+                      .delete(failureKey(row.key), {
                         assertCurrent: assertRequestCurrent,
                         signal: context.signal,
                       })
@@ -420,23 +412,17 @@ async function runPreparedUsageCostWorker(
                         logger.warn("Could not clear usage refresh failure fact", { error });
                       });
                   }
-                  activeSessionFile = undefined;
                   break;
                 default:
                   throw new Error("Unknown usage worker host request");
               }
               assertRequestCurrent();
-              reply = { ok: true, value: output };
+              return { input: output, timeoutMs: USAGE_COST_WORKER_TIMEOUT_MS };
             } catch (error) {
-              const origin = ++errorSequence;
-              hostErrors.set(origin, error);
-              reply = {
-                ok: false,
-                origin,
-                message: toErrorObject(error, "Usage host effect failed").message,
-              };
+              const failure = toErrorObject(error, "Usage host effect failed");
+              hostErrors.add(failure);
+              throw failure;
             }
-            return { input: reply, timeoutMs: USAGE_COST_WORKER_TIMEOUT_MS };
           },
         },
       );
@@ -444,13 +430,13 @@ async function runPreparedUsageCostWorker(
       return result;
     } catch (error) {
       let failure = restoreWorkerFailure(error, hostErrors);
-      if (activeSessionFile && !signal?.aborted) {
+      for (const sessionFile of signal?.aborted ? [] : uncommittedSessionFiles) {
         try {
           await failures.register(
-            failureKey(activeSessionFile),
+            failureKey(sessionFile),
             {
               agentId: location.agentId,
-              sessionFile: activeSessionFile,
+              sessionFile,
               failedAt: Date.now(),
               reason: "Usage refresh failed; cached totals may be incomplete. Check Gateway logs.",
             },

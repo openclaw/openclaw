@@ -324,7 +324,7 @@ export function createDiscordGatewayCaptureFixture(params: {
       expect(entry).toMatchObject({
         captureOnly: true,
         sessionLifecycle: { status: "active" },
-        realtimeLifecycle: { status: "inactive", generation: 0 },
+        realtimeLifecycle: { status: "inactive" },
         route: { agentId: "main", accountId: captureTarget.accountId },
       });
       expect(entry?.transcripts?.isCurrent()).toBe(true);

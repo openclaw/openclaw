@@ -746,8 +746,7 @@ async function normalizeOpenClawTarballModes(
   normalizeModes: boolean,
 ) {
   // npm can retain restrictive source read bits. Normalize those for non-root
-  // installers while preserving the archive's executable intent. pnpm derives
-  // that intent from bin and publishConfig.executableFiles, not source modes.
+  // installers while preserving the archive's executable intent.
   const stageDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-package-modes-"));
   try {
     await runPackageTar("extract", tarballPath, stageDir);
@@ -948,7 +947,7 @@ export async function packOpenClawPackageForDocker(
     releaseSignalExit();
     throw error;
   }
-  let packOutput = "";
+  let packOutput: string;
   let packageError: unknown;
   let packReceiptDir: string | undefined;
   try {

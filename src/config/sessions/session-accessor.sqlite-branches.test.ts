@@ -10,6 +10,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
@@ -44,6 +45,7 @@ import {
   waitForSessionTranscriptIndexReconcilesInStateDir,
   waitForSessionTranscriptProjection,
 } from "./session-transcript-reconcile.js";
+import { maintenanceLane, rotateDatabaseWorkers } from "./session-transcript-worker-resources.js";
 
 const { tempDirs, createSession, createSiblingSession } = useSessionMessageCutFixtures();
 const diagnosticCleanups: Array<() => void> = [];
@@ -57,10 +59,13 @@ afterEach(() => {
 
 function trackFullTranscriptLoads(env: NodeJS.ProcessEnv): () => number {
   const database = openOpenClawAgentDatabase({ agentId, env });
-  const { counts } = trackSqliteStatementExecutions(database.db, ["loads"], (sqlText) =>
-    sqlText.includes('from "transcript_events"') && sqlText.includes('order by "seq" asc')
-      ? "loads"
-      : null,
+  const { counts } = trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(database.db),
+    ["loads"],
+    (sqlText) =>
+      sqlText.includes('from "transcript_events"') && sqlText.includes('order by "seq" asc')
+        ? "loads"
+        : null,
   );
   return () => counts.loads;
 }
@@ -96,6 +101,43 @@ function trackBranchSummaryReads(): () => number {
 }
 
 describe("SQLite session branches", () => {
+  it("retains a cold branch reader across concurrent viewers and transcript writes", async () => {
+    const { env, scope } = await createSession();
+    const sibling = await createSiblingSession({
+      env,
+      sessionId: "branch-reader-sibling",
+      sessionKey: "agent:main:branch-reader-sibling",
+      headline: "Sibling conversation",
+    });
+    await rotateDatabaseWorkers(maintenanceLane);
+    const rotations = vi.spyOn(maintenanceLane.pool, "rotate");
+    const scopes = [scope, sibling];
+    const before = await Promise.all(scopes.map(listSessionBranches));
+    expect(before).toEqual([
+      expect.objectContaining({ status: "ok" }),
+      { status: "ok", branches: [expect.objectContaining({ headline: "Sibling conversation" })] },
+    ]);
+
+    await appendTranscriptMessage(sibling, {
+      eventId: "branch-reader-answer",
+      parentId: "branch-reader-sibling-user",
+      message: { role: "assistant", content: "Updated sibling answer" },
+    });
+    const after = await Promise.all(scopes.map(listSessionBranches));
+    expect(after[0]).toEqual(before[0]);
+    expect(after[1]).toEqual({
+      status: "ok",
+      branches: [
+        expect.objectContaining({
+          headline: "Updated sibling answer",
+          leafEntryId: "branch-reader-answer",
+          messageCount: 2,
+        }),
+      ],
+    });
+    expect(rotations).not.toHaveBeenCalled();
+  });
+
   it("coalesces concurrent viewers and skips restoration for unchanged summaries", async () => {
     const { scope } = await createSession();
     const branchReads = trackBranchSummaryReads();
@@ -115,7 +157,7 @@ describe("SQLite session branches", () => {
     expect(restore).not.toHaveBeenCalled();
   });
 
-  it("carries summaries into fresh readers and invalidates changed transcripts", async () => {
+  it("carries summaries between read snapshots and invalidates changed transcripts", async () => {
     const { env, scope } = await createSession();
     const database = openOpenClawAgentDatabase({ agentId, env });
     const request: SessionBranchSummaryReadRequest = {
@@ -327,8 +369,8 @@ describe("SQLite session branches", () => {
     await expect(listSessionBranches({ agentId, env, sessionKey })).resolves.toEqual(first);
     expect(branchReads()).toBe(2);
     await expect(listSessionBranches({ agentId, env, sessionKey })).resolves.toEqual(first);
-    // Without a host write receipt, a newly admitted read-only database stays uncached.
-    expect(branchReads()).toBe(3);
+    // The retained reader keeps the replacement's admission valid for the host cache.
+    expect(branchReads()).toBe(2);
     expect(isOpenClawAgentDatabaseOpen(database.path)).toBe(false);
   });
 
@@ -342,7 +384,11 @@ describe("SQLite session branches", () => {
     });
     await waitForSessionTranscriptIndexReconcilesInStateDir(env.OPENCLAW_STATE_DIR);
     const database = openOpenClawAgentDatabase({ agentId, env });
-    const tracked = trackSqliteStatementExecutions(database.db, ["statements"], () => "statements");
+    const tracked = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["statements"],
+      () => "statements",
+    );
     diagnosticCleanups.push(tracked.restore);
     const nativeOpen = vi.spyOn(sqliteRuntime, "openNodeSqliteDatabase");
     const branchReads = trackBranchSummaryReads();

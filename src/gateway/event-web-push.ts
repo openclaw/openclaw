@@ -34,6 +34,7 @@ import {
   webPushTargetClient,
   webPushSessionAccess,
 } from "./web-push-authority.js";
+import { currentWebPushAgentIcon, prepareWebPushAgentIcon } from "./web-push-avatar.js";
 
 const EVENT_PUSH_TTL_SECONDS = 5 * 60;
 const defaultLog = createSubsystemLogger("gateway/web-push");
@@ -148,6 +149,9 @@ export function createEventWebPushDelivery(params: {
         opts?.agentId ?? (isRecord(payload) ? payload.agentId : undefined),
       );
       const sessionKeys = opts?.sessionKeys ?? [];
+      const preparedIcon = mention
+        ? undefined
+        : await prepareWebPushAgentIcon(params.getRuntimeConfig(), agentId);
       const groupedResults = await withCurrentWebPushAuthority(
         { ...params, sessionKeys, agentId, preparePublication: mention?.prepare },
         (authority) => {
@@ -182,9 +186,15 @@ export function createEventWebPushDelivery(params: {
             ...(mention ? { visibilityScopes: [ADMIN_SCOPE] } : {}),
           });
           const agentLabel = normalizeWebPushDisplayLabel(agentId);
+          const agentIcon = currentWebPushAgentIcon(cfg, preparedIcon);
           const groups = new Map<
             string,
-            { title: string; body: string; subscriptions: BoundWebPushSubscription[] }
+            {
+              title: string;
+              body: string;
+              icon?: string;
+              subscriptions: BoundWebPushSubscription[];
+            }
           >();
           for (const target of targets) {
             if (mention && target.userProfileId !== recipientProfileId) {
@@ -224,8 +234,9 @@ export function createEventWebPushDelivery(params: {
                 ? notification.body
                 : (notification.identifiedBody ??
                   (agentLabel ? `${agentLabel}: ${notification.body}` : notification.body));
-            const key = JSON.stringify({ title, body });
-            const group = groups.get(key) ?? { title, body, subscriptions: [] };
+            const icon = preferences.detailLevel === "private" ? undefined : agentIcon;
+            const key = JSON.stringify({ title, body, icon });
+            const group = groups.get(key) ?? { title, body, icon, subscriptions: [] };
             group.subscriptions.push(target.subscription);
             groups.set(key, group);
           }
@@ -248,6 +259,7 @@ export function createEventWebPushDelivery(params: {
                     payload: {
                       title: group.title,
                       body: group.body,
+                      ...(group.icon ? { icon: group.icon } : {}),
                       tag: notification.tag,
                       renotify: false,
                       url,

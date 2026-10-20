@@ -7,12 +7,7 @@ import { readSubagentRunsInWorker } from "../agents/subagents/registry/subagent-
 import { readWorkspaceStateSnapshotForDirectoryInDatabase } from "../agents/workspace-state-store.kernel.js";
 import { isChannelIngressReadCommand } from "../channels/message/ingress-queue-read-contract.js";
 import { readChannelIngressInDatabase } from "../channels/message/ingress-queue-read.worker.js";
-import {
-  readClawInstallRecordFromDatabase,
-  readClawInstallRecordsInDatabase,
-  readClawOrphanWorkspaceInDatabase,
-  readClawPackageRefsInDatabase,
-} from "../claws/provenance-read.kernel.js";
+import { readClawStateCommandInDatabase } from "../claws/state-read.kernel.js";
 import {
   isCronStateReadCommand,
   readCronStateCommandInDatabase,
@@ -32,7 +27,7 @@ import {
   lookupCronStandingGrantInDatabase,
 } from "../gateway/operator-approval-standing-grants.worker.js";
 import {
-  hasDueOperatorApprovalsInDatabase,
+  readOperatorApprovalReplayInDatabase,
   readPendingOperatorApprovalsInDatabase,
   listTerminalOperatorApprovalsInDatabase,
 } from "../gateway/operator-approval-store.kernel.worker.js";
@@ -55,7 +50,7 @@ import { readExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
 import { inspectCurrentConversationBindingRecordInDatabase } from "../infra/outbound/current-conversation-bindings.kernel.js";
 import { readOutboundDeliveriesInDatabase } from "../infra/outbound/delivery-queue-storage.kernel.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import {
   readInterruptedUpdateCandidate,
   readUpdateRunStatusInDatabase,
@@ -71,6 +66,8 @@ import {
   pluginBlobLookupInDatabase,
   pluginBlobEntriesInDatabase,
 } from "../plugin-state/plugin-blob-store.sqlite.js";
+import { isPluginStateReadCommand } from "../plugin-state/plugin-state-worker-contract.js";
+import { readPluginStateCommand } from "../plugin-state/plugin-state.worker.js";
 import {
   selectSkillLibraryRevisionMetadataBatch,
   selectSkillLibraryRevisionManifestsBatch,
@@ -85,7 +82,6 @@ import {
 } from "./config-machine-state.js";
 import { readGitHubPublicationSessionLifecycle } from "./github-publication-session-lifecycles.worker.js";
 import { readOnboardingRecommendationsInDatabase } from "./onboarding-recommendations.kernel.js";
-import { readRegisteredAgentDatabaseRows } from "./openclaw-agent-db-registry.read.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
 import {
@@ -93,27 +89,19 @@ import {
   readStateDiagnosticCommand,
 } from "./openclaw-state-read-diagnostics.js";
 import { readMcpOAuthStateCommand } from "./openclaw-state-read-mcp-oauth.js";
-import { stateReadRegistry } from "./openclaw-state-read-operation-registry.js";
+import type { RegisteredStateReadCommand } from "./openclaw-state-read-operation-registry.js";
 import { readStateRegistryCommand } from "./openclaw-state-read-registry.js";
 import { readSessionRowsSharedFacts } from "./openclaw-state-read-session-rows.worker.js";
 import { readStateStream } from "./openclaw-state-read-stream.js";
-import type {
-  OpenClawStateReadRequest,
-  OpenClawStateReadResult,
-} from "./openclaw-state-read.types.js";
+import type { OpenClawStateReadRequest } from "./openclaw-state-read.types.js";
 import { findSessionRepositoryWorkspaceInDatabase } from "./session-repository-workspaces.kernel.js";
 import { readUserBackgroundCommand } from "./user-background.kernel.js";
 import { readUserModelAccountCommand } from "./user-model-accounts.read.worker.js";
-import { selectUserPreferenceValues } from "./user-preferences.store.js";
+import { readUserPreferences, selectUserPreferenceValues } from "./user-preferences.store.js";
 import { readUserProfileCommand } from "./user-profile-read.worker.js";
+import { selectResolvedUserProfileMetadataById } from "./user-profiles-internal.js";
 
-export {
-  prepareAcpSessionMetadataRead,
-  loadSubagentSessionListRunsFromSqlite,
-  readRegisteredAgentDatabaseRows,
-  readStateStream,
-  stateReadRegistry,
-};
+export { prepareAcpSessionMetadataRead, loadSubagentSessionListRunsFromSqlite, readStateStream };
 
 /** Non-metadata query owners load only when the shared worker receives one of their commands. */
 export function readOpenClawStateDatabaseCommand(
@@ -121,34 +109,22 @@ export function readOpenClawStateDatabaseCommand(
   input: OpenClawStateReadRequest,
   command: Exclude<
     OpenClawStateReadRequest["command"],
-    {
-      type:
-        | "admit"
-        | "plugins.metadata.read"
-        | "subagents.restore"
-        | "meetingTranscripts.export"
-        | "gatewayOwnerLease.read"
-        | "agentDatabaseRegistry.read"
-        | "subagents.sessionList";
-    }
+    | RegisteredStateReadCommand
+    | {
+        type:
+          | "admit"
+          | "plugins.metadata.read"
+          | "subagents.restore"
+          | "meetingTranscripts.export"
+          | "gatewayOwnerLease.read"
+          | "agentDatabaseRegistry.read"
+          | "subagents.sessionList";
+      }
   >,
   metadataRead: ReturnType<typeof prepareAcpSessionMetadataRead> | undefined,
-): OpenClawStateReadResult {
-  if (command.type === "claws.packageOwnership") {
-    const install =
-      command.agentId === undefined
-        ? undefined
-        : readClawInstallRecordFromDatabase(db, command.agentId);
-    return {
-      type: command.type,
-      install,
-      installs: command.includeInstalls ? readClawInstallRecordsInDatabase(db) : [],
-      packageRefs: readClawPackageRefsInDatabase(db, { agentId: command.agentId }),
-      orphanWorkspace:
-        command.agentId !== undefined && !install
-          ? readClawOrphanWorkspaceInDatabase(db, command.agentId)
-          : undefined,
-    };
+) {
+  if (command.type === "claws.inventory") {
+    return readClawStateCommandInDatabase(db, command);
   }
   if (command.type === "agentDatabaseDeletion.snapshot") {
     return {
@@ -177,9 +153,6 @@ export function readOpenClawStateDatabaseCommand(
   }
   if (isChannelIngressReadCommand(command)) {
     return readChannelIngressInDatabase(db, command);
-  }
-  if ("input" in command && stateReadRegistry.has(command)) {
-    return stateReadRegistry.execute(command, db);
   }
   if (command.type === "subagents.runs") {
     return readSubagentRunsInWorker(db, command);
@@ -224,6 +197,9 @@ export function readOpenClawStateDatabaseCommand(
     command.type === "devicePairing.bootstrapContext"
   ) {
     return executeDevicePairingRead(db, input.databasePath, command);
+  }
+  if (isPluginStateReadCommand(command)) {
+    return readPluginStateCommand({ db, path: input.databasePath }, command);
   }
   if (command.type === "pluginBlob.lookup") {
     return {
@@ -276,13 +252,13 @@ export function readOpenClawStateDatabaseCommand(
   if (command.type === "updateRuns.status") {
     return {
       type: command.type,
-      status: runSqliteDeferredTransactionSync(db, () => readUpdateRunStatusInDatabase(db)),
+      status: runSqliteReadSnapshotSync(db, () => readUpdateRunStatusInDatabase(db)),
     };
   }
   if (command.type === "updateRuns.historyStatus") {
     return {
       type: command.type,
-      status: runSqliteDeferredTransactionSync(db, () => readUpdateRunHistoryStatusInDatabase(db)),
+      status: runSqliteReadSnapshotSync(db, () => readUpdateRunHistoryStatusInDatabase(db)),
     };
   }
   if (command.type === "updateRuns.interruptedCandidate") {
@@ -322,8 +298,8 @@ export function readOpenClawStateDatabaseCommand(
       pending: readPendingOperatorApprovalsInDatabase(command.input, db),
     };
   }
-  if (command.type === "operatorApprovals.hasDue") {
-    return { type: command.type, hasDue: hasDueOperatorApprovalsInDatabase(command.nowMs, db) };
+  if (command.type === "operatorApprovals.prepareReplay") {
+    return { type: command.type, replay: readOperatorApprovalReplayInDatabase(command.input, db) };
   }
   if (command.type === "operatorApprovals.history") {
     return {
@@ -368,13 +344,12 @@ export function readOpenClawStateDatabaseCommand(
     };
   }
   if (command.type === "githubPublication.sharedObservation") {
-    const { kind, session, selector, entry } = command.input;
+    const { session, selector, entry } = command.input;
     return {
       type: command.type,
       row:
-        kind === "repository"
-          ? readSharedRepositoryGitHubPublicationInDatabase(db, session, selector, entry)
-          : readSharedGitHubPublicationRequestInDatabase(db, session, selector, entry),
+        readSharedRepositoryGitHubPublicationInDatabase(db, session, selector, entry) ??
+        readSharedGitHubPublicationRequestInDatabase(db, session, selector, entry),
     };
   }
   if (command.type === "githubPublication.request") {
@@ -383,21 +358,19 @@ export function readOpenClawStateDatabaseCommand(
       row: readGitHubPublicationRequest(db, { requestId: command.requestId }),
     };
   }
-  if (
-    command.type === "githubPublication.knownPullRequestUrls" ||
-    command.type === "githubRepository.knownPullRequestUrls"
-  ) {
+  if (command.type === "githubPublication.knownPullRequestUrls") {
     return {
       type: command.type,
-      urls:
-        command.type === "githubPublication.knownPullRequestUrls"
-          ? readKnownGitHubPublicationPullRequestUrlsInDatabase(db, command.input)
-          : readKnownRepositoryGitHubPublicationPullRequestUrlsInDatabase(db, command.input),
+      urls: readKnownGitHubPublicationPullRequestUrlsInDatabase(db, command.input),
+    };
+  }
+  if (command.type === "githubRepository.knownPullRequestUrls") {
+    return {
+      type: command.type,
+      urls: readKnownRepositoryGitHubPublicationPullRequestUrlsInDatabase(db, command.input),
     };
   }
   if (
-    command.type === "userProfiles.authority.resolve" ||
-    command.type === "userProfiles.aliases.resolve" ||
     command.type === "userProfiles.catalogIdentity" ||
     command.type === "userProfiles.githubIdentity.cached" ||
     command.type === "userProfiles.githubAttribution.resolve" ||
@@ -406,8 +379,7 @@ export function readOpenClawStateDatabaseCommand(
     command.type === "userProfiles.reconcile" ||
     command.type === "userProfiles.catalog" ||
     command.type === "userProfiles.avatar.inspect" ||
-    command.type === "userProfiles.avatar.read" ||
-    command.type === "userProfiles.email.resolve"
+    command.type === "userProfiles.avatar.read"
   ) {
     return readUserProfileCommand(db, command);
   }
@@ -420,7 +392,26 @@ export function readOpenClawStateDatabaseCommand(
       values: selectUserPreferenceValues(db, command.profileIds, command.key),
     };
   }
+  if (command.type === "userPreferences.read") {
+    return {
+      type: command.type,
+      preferences: runSqliteReadSnapshotSync(db, () => {
+        const profile = tableExists(db, "user_profiles")
+          ? selectResolvedUserProfileMetadataById(db, command.profileId)
+          : undefined;
+        return profile
+          ? {
+              profileId: profile.id,
+              entries: tableExists(db, "user_preferences")
+                ? readUserPreferences(db, profile.id, command.keys)
+                : {},
+            }
+          : undefined;
+      }),
+    };
+  }
   if (
+    command.type === "userModelAccounts.authorization" ||
     command.type === "userModelAccounts.links" ||
     command.type === "userModelAccounts.summary" ||
     command.type === "userModelAccounts.selection" ||
@@ -429,9 +420,12 @@ export function readOpenClawStateDatabaseCommand(
     return readUserModelAccountCommand(db, command);
   }
   if (command.type === "sessionRepositoryWorkspaces.find") {
+    if (command.owners.length === 0 || !tableExists(db, "session_repository_workspaces")) {
+      return { type: command.type, workspaces: [] };
+    }
     return {
       type: command.type,
-      workspaces: runSqliteDeferredTransactionSync(db, () =>
+      workspaces: runSqliteReadSnapshotSync(db, () =>
         command.owners.flatMap((owner) => {
           const workspace = findSessionRepositoryWorkspaceInDatabase(db, owner);
           return workspace ? [workspace] : [];

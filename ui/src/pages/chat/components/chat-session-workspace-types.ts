@@ -10,24 +10,6 @@ import type {
 
 export type SessionWorkspaceFilter = "all" | "changed" | "read" | "artifacts";
 
-export type SessionWorkspaceProps = {
-  filter: SessionWorkspaceFilter;
-  browserPath: string;
-  browserSearch: string;
-  sessionKey: string;
-  list: SessionWorkspaceListResult | null;
-  loading: boolean;
-  error: string | null;
-  activeId: string | null;
-  onBrowsePath: (path: string) => void;
-  onOpenFile: (path: string, origin: "session" | "workspace") => void;
-  onSearch: (search: string) => void;
-  onSetFilter: (filter: SessionWorkspaceFilter) => void;
-  onOpenArtifact: (artifactId: string) => void;
-  /** Opens the session diff panel; absent until a usable checkout is known. */
-  onOpenDiff?: () => void;
-};
-
 export type SessionWorkspacePreview = {
   id: string;
   label: string;
@@ -77,6 +59,5 @@ export type SessionWorkspaceHost = {
   sessionWorkspaceDraftScope?: string;
   sessionWorkspaceDraftContext?: { sessionTitle?: string; paneLabel?: string };
   sidebarContent: SidebarSelection | null;
-  requestUpdate?: () => void;
   handleOpenSidebar: (content: SidebarSelection | null) => void;
 };

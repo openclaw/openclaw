@@ -1,8 +1,14 @@
-// Voice Call tests cover setup-time config migration behavior.
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { describe, expect, it, vi } from "vitest";
+import setup from "../setup-api.js";
 import { migrateVoiceCallLegacyConfigInput } from "./config-migration.js";
-import { VoiceCallConfigSchema } from "./config.js";
+import { normalizeVoiceCallConfig } from "./config.js";
+
+function migrate(value: unknown, configPathPrefix?: string) {
+  return migrateVoiceCallLegacyConfigInput({ value, configPathPrefix });
+}
 
 describe("voice-call config migration", () => {
   it("declares the setup entry needed to migrate installed packages", () => {
@@ -13,18 +19,23 @@ describe("voice-call config migration", () => {
   });
 
   it("maps deprecated provider and twilio.from fields into canonical config", () => {
-    const migration = migrateVoiceCallLegacyConfigInput({
-      value: {
-        enabled: true,
-        provider: "log",
-        twilio: {
-          from: "+15550001234",
-        },
-      },
-    });
+    const migration = migrate({ provider: "log", twilio: { from: "+15550001234" } });
+    expect(migration.config).toMatchObject({ provider: "mock", fromNumber: "+15550001234" });
+  });
 
-    expect(migration.config.provider).toBe("mock");
-    expect(migration.config.fromNumber).toBe("+15550001234");
+  it("migrates through the setup hook without changing its input or sibling plugins", () => {
+    const registerConfigMigration = vi.fn<OpenClawPluginApi["registerConfigMigration"]>();
+    setup.register(createTestPluginApi({ registerConfigMigration }));
+    const other = { config: { nested: { keep: true } } };
+    const pluginConfig = (provider: string) => ({
+      plugins: { entries: { "voice-call": { enabled: true, config: { provider } }, other } },
+    });
+    const config = pluginConfig("log");
+    const before = structuredClone(config);
+    const migration = registerConfigMigration.mock.calls[0]?.[0](config);
+
+    expect(config).toEqual(before);
+    expect(migration?.config).toEqual(pluginConfig("mock"));
   });
 
   it("fills only missing streaming provider fields while preserving canonical values", () => {
@@ -46,20 +57,14 @@ describe("voice-call config migration", () => {
       },
     };
     const before = structuredClone(value);
-    const migration = migrateVoiceCallLegacyConfigInput({ value });
+    const migration = migrate(value);
 
     expect(migration.config.streaming).toEqual({
       enabled: true,
       provider: "openai",
       providers: {
         other: { keep: "other-provider" },
-        openai: {
-          apiKey: { source: "env", provider: "default", id: "SYNTHETIC_VOICE_KEY" },
-          model: "",
-          silenceDurationMs: 700,
-          vadThreshold: 0,
-          keep: "current",
-        },
+        openai: { ...before.streaming.providers.openai, silenceDurationMs: 700 },
       },
     });
     const prefix = "plugins.entries.voice-call.config.streaming";
@@ -71,30 +76,23 @@ describe("voice-call config migration", () => {
       `Removed ${prefix}.vadThreshold (kept ${prefix}.providers.openai.vadThreshold).`,
     ]);
     expect(value).toEqual(before);
-    expect(VoiceCallConfigSchema.safeParse(migration.config).success).toBe(true);
-    expect(migrateVoiceCallLegacyConfigInput({ value: migration.config })).toEqual({
-      config: migration.config,
-      changes: [],
-    });
+    expect(() => normalizeVoiceCallConfig(migration.config)).not.toThrow();
+    expect(migrate(migration.config)).toEqual({ config: migration.config, changes: [] });
   });
 
   it("reports removal of legacy selectors while retaining canonical settings", () => {
-    const migration = migrateVoiceCallLegacyConfigInput({
-      value: {
+    const migration = migrate(
+      {
         fromNumber: "+15550005678",
         twilio: { from: "+15550001234", accountSid: "synthetic-account" },
         streaming: { provider: "other", sttProvider: "openai" },
       },
-      configPathPrefix: "voice-config",
-    });
+      "voice-config",
+    );
 
-    expect(migration.config).toMatchObject({
-      fromNumber: "+15550005678",
-      twilio: { accountSid: "synthetic-account" },
-      streaming: { provider: "other" },
-    });
-    expect(migration.config.twilio).not.toHaveProperty("from");
-    expect(migration.config.streaming).not.toHaveProperty("sttProvider");
+    expect(migration.config.fromNumber).toBe("+15550005678");
+    expect(migration.config.twilio).toEqual({ accountSid: "synthetic-account" });
+    expect(migration.config.streaming).toEqual({ provider: "other" });
     expect(migration.changes).toEqual([
       "Removed voice-config.twilio.from (kept voice-config.fromNumber).",
       "Removed voice-config.streaming.sttProvider (kept voice-config.streaming.provider).",
@@ -102,14 +100,8 @@ describe("voice-call config migration", () => {
   });
 
   it("does not migrate non-finite legacy streaming numbers", () => {
-    const migration = migrateVoiceCallLegacyConfigInput({
-      value: {
-        streaming: {
-          silenceDurationMs: Number.NaN,
-          vadThreshold: Number.POSITIVE_INFINITY,
-        },
-      },
-      configPathPrefix: "plugins.entries.voice-call.config",
+    const migration = migrate({
+      streaming: { silenceDurationMs: Number.NaN, vadThreshold: Number.POSITIVE_INFINITY },
     });
     expect(migration.config.streaming).not.toHaveProperty("providers.openai");
     expect(migration.changes).toEqual([
@@ -119,19 +111,10 @@ describe("voice-call config migration", () => {
   });
 
   it("returns doctor migration change lines", () => {
-    const migration = migrateVoiceCallLegacyConfigInput({
-      value: {
-        provider: "log",
-        streaming: {
-          sttProvider: "openai",
-        },
-        realtime: {
-          agentContext: {
-            includeSystemPrompt: true,
-          },
-        },
-      },
-      configPathPrefix: "plugins.entries.voice-call.config",
+    const migration = migrate({
+      provider: "log",
+      streaming: { sttProvider: "openai" },
+      realtime: { agentContext: { includeSystemPrompt: true } },
     });
 
     expect(migration.changes).toEqual([

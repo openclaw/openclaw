@@ -117,9 +117,7 @@ openclaw-board-view {
   --oc-overlay-distance: 0px;
 
   min-width: 190px;
-  padding: var(--menu-padding);
   border: 1px solid var(--overlay-border);
-  border-radius: var(--menu-radius);
   background: var(--bg-elevated);
   box-shadow: var(--overlay-shadow);
 }
@@ -629,9 +627,14 @@ openclaw-board-widget-cell {
   padding-left: 16px;
 }
 
-/* A lone full-width widget becomes the focused dashboard's page. Keep the
-   regular grid sizing, subtracting only the shell removed from auto heights. */
-:is(.sidebar-region--expanded, .sidebar-region:not(.sidebar-region--open), .board-document__content)
+/* A lone full-width widget stays a page when its main region shares space with
+   Chat. Side dashboards keep their regular grid sizing and widget chrome. */
+:is(
+    .sidebar-region--expanded,
+    .sidebar-region:not(.sidebar-region--open),
+    .sidebar-region [data-region="main"],
+    .board-document__content
+  )
   openclaw-board-view:has(> .board-view--single-full-width) {
   padding: 0;
 

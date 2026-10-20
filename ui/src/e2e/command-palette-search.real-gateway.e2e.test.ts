@@ -22,7 +22,6 @@ import {
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { createRequireRecord } from "../../../test/helpers/record.js";
-import { COMMUNITY_INVITE_KEY } from "../components/community-invite-state.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
@@ -61,6 +60,9 @@ type RpcObservation = {
   resultCount?: number;
   resultKeys?: unknown[];
   sessionKeys?: unknown[];
+  rowsRevision?: unknown;
+  rowsUnchanged?: boolean;
+  rowsDelta?: unknown;
   truncated?: boolean;
   indexing?: boolean;
   archivedTranscriptsExcluded?: number;
@@ -276,8 +278,34 @@ const suite = createControlUiE2eSuite({
 });
 
 function observeSearchTraffic(page: Page, rpc: RpcObservation[]) {
+  const connection = {
+    sockets: 0,
+    challenges: 0,
+    connectRequests: 0,
+    connectReplies: 0,
+    accepted: 0,
+    rejected: 0,
+    unauthorized: 0,
+    invalidRequest: 0,
+    unavailable: 0,
+    unavailableReasons: {
+      startup: 0,
+      restarting: 0,
+      suspending: 0,
+      buildMismatch: 0,
+      profile: 0,
+      other: 0,
+    },
+    pairingRequired: 0,
+    socketErrors: 0,
+    closes: 0,
+    pageErrors: 0,
+  };
+  page.on("pageerror", () => connection.pageErrors++);
   page.on("websocket", (socket) => {
+    connection.sockets++;
     const pending = new Map<string, RpcObservation>();
+    let connectId: string | undefined;
     socket.on("framesent", ({ payload }) => {
       const frame = requireRecord(JSON.parse(payload.toString()));
       if (
@@ -285,6 +313,11 @@ function observeSearchTraffic(page: Page, rpc: RpcObservation[]) {
         typeof frame.id !== "string" ||
         typeof frame.method !== "string"
       ) {
+        return;
+      }
+      if (frame.method === "connect") {
+        connection.connectRequests++;
+        connectId = frame.id;
         return;
       }
       // Never retain connect/auth frames or unrelated RPC payloads.
@@ -310,6 +343,43 @@ function observeSearchTraffic(page: Page, rpc: RpcObservation[]) {
     });
     socket.on("framereceived", ({ payload }) => {
       const frame = requireRecord(JSON.parse(payload.toString()));
+      if (frame.type === "event" && frame.event === "connect.challenge") {
+        connection.challenges++;
+      }
+      if (frame.type === "res" && frame.id === connectId) {
+        connection.connectReplies++;
+        if (frame.ok === true) {
+          connection.accepted++;
+        } else {
+          connection.rejected++;
+          const error = isRecord(frame.error) ? frame.error : {};
+          connection.unauthorized += Number(error.code === "UNAUTHORIZED");
+          connection.invalidRequest += Number(error.code === "INVALID_REQUEST");
+          connection.unavailable += Number(error.code === "UNAVAILABLE");
+          connection.pairingRequired += Number(error.code === "PAIRING_REQUIRED");
+          if (error.code === "UNAVAILABLE") {
+            const details = isRecord(error.details) ? error.details : {};
+            // Retain only known categories, never arbitrary error text or auth frames.
+            if (details.reason === "startup-sidecars") {
+              connection.unavailableReasons.startup++;
+            } else if (details.reason === "gateway-restarting") {
+              connection.unavailableReasons.restarting++;
+            } else if (details.reason === "gateway-suspending") {
+              connection.unavailableReasons.suspending++;
+            } else if (
+              details.code === "PROTOCOL_MISMATCH" ||
+              details.code === "CONTROL_UI_BUILD_MISMATCH"
+            ) {
+              connection.unavailableReasons.buildMismatch++;
+            } else if (details.code === "AUTHENTICATED_PROFILE_UNAVAILABLE") {
+              connection.unavailableReasons.profile++;
+            } else {
+              connection.unavailableReasons.other++;
+            }
+          }
+        }
+        return;
+      }
       const metric =
         frame.type === "res" && typeof frame.id === "string" ? pending.get(frame.id) : undefined;
       if (!metric) {
@@ -326,6 +396,9 @@ function observeSearchTraffic(page: Page, rpc: RpcObservation[]) {
       if (Array.isArray(body.sessions)) {
         metric.sessionKeys = body.sessions.map((row) => (isRecord(row) ? row.key : null));
       }
+      metric.rowsRevision = body.rowsRevision;
+      metric.rowsUnchanged = body.rowsUnchanged === true;
+      metric.rowsDelta = body.rowsDelta;
       metric.truncated = body.truncated === true;
       metric.indexing = body.indexing === true;
       metric.archivedTranscriptsExcluded =
@@ -334,8 +407,13 @@ function observeSearchTraffic(page: Page, rpc: RpcObservation[]) {
         pending.delete(frame.id);
       }
     });
-    socket.on("close", () => pending.clear());
+    socket.on("socketerror", () => connection.socketErrors++);
+    socket.on("close", () => {
+      connection.closes++;
+      pending.clear();
+    });
   });
+  return connection;
 }
 
 suite.define(() => {
@@ -348,6 +426,7 @@ suite.define(() => {
     const queries: QueryObservation[] = [];
     const assets: Array<{ path: string; servedSha256: string; builtSha256: string }> = [];
     const screenshots: string[] = [];
+    let connection: ReturnType<typeof observeSearchTraffic> | undefined;
     let passed = false;
     const artifactDir = suite.artifactDir;
     try {
@@ -358,6 +437,15 @@ suite.define(() => {
         timeoutMs: 60_000,
         onPending: () => console.log("[search-proof] waiting for the preparing UI document"),
       });
+      if (!uiDocument.ready) {
+        console.log(
+          "[search-proof] document readiness failed",
+          JSON.stringify({
+            document: uiDocument,
+            gateway: owner.readiness.map(({ logs: _logs, ...receipt }) => receipt),
+          }),
+        );
+      }
       expect(uiDocument.ready, uiDocument.ready ? "ready" : uiDocument.reason).toBe(true);
       const handoff = await owner.cli(["dashboard", "--json"]);
       const result = requireRecord(JSON.parse(handoff.stdout));
@@ -381,10 +469,7 @@ suite.define(() => {
             : {}),
         },
         async ({ page }) => {
-          await page.addInitScript((key) => {
-            localStorage.setItem(key, JSON.stringify({ dismissedAtMs: 1770000000000 }));
-          }, COMMUNITY_INVITE_KEY);
-          observeSearchTraffic(page, rpc);
+          connection = observeSearchTraffic(page, rpc);
           expect((await page.goto(url.href))?.status()).toBe(404);
           await enterControlUiSession(page);
           await waitForControlUiGatewayReady(page);
@@ -446,6 +531,7 @@ suite.define(() => {
           const results = palette.locator(".cmd-palette__results");
           const emptyState = palette.locator(".cmd-palette__no-results");
           await input.waitFor();
+          const metadataReceipts = new Map<string, { revision: string; keys: string[] }>();
           const search = async (
             query: string,
             expectedHits: number,
@@ -500,15 +586,49 @@ suite.define(() => {
             // The query owns one bounded metadata lookup. The scoped transcript
             // request above cannot be limited by any background roster window.
             expect(metadata).toHaveLength(1);
-            expect(metadata[0]?.params).toEqual({
+            const metadataResponse = metadata[0]!;
+            const previous = metadataReceipts.get(query);
+            const { ifRowsRevision: requestedRevision, ...metadataParams } =
+              metadataResponse.params;
+            // Eviction may require a full read; reuse must name this query's last receipt.
+            expect(["", ...(previous ? [`delta:${previous.revision}`] : [])]).toContain(
+              requestedRevision,
+            );
+            expect(metadataParams).toEqual({
               ...scope,
               search: query,
               limit: 10,
               rowMode: "compact",
               source: "command-palette",
             });
-            expect(metadata[0]?.ok).toBe(true);
-            expect(metadata[0]?.sessionKeys).toEqual(metadataKeys);
+            expect(metadataResponse.ok).toBe(true);
+            const revision = metadataResponse.rowsRevision;
+            expect.assert(typeof revision === "string");
+            expect(revision).toMatch(/\S/u);
+            let returnedKeys = metadataResponse.sessionKeys;
+            if (metadataResponse.rowsUnchanged || isRecord(metadataResponse.rowsDelta)) {
+              expect.assert(previous);
+              expect(requestedRevision).toBe(`delta:${previous.revision}`);
+              if (metadataResponse.rowsUnchanged) {
+                expect(revision).toBe(previous.revision);
+                returnedKeys = previous.keys;
+              } else if (isRecord(metadataResponse.rowsDelta)) {
+                const delta = metadataResponse.rowsDelta;
+                expect(delta.baseRevision).toBe(previous.revision);
+                expect(Array.isArray(delta.order)).toBe(true);
+                if (Array.isArray(delta.order)) {
+                  const keys = [...previous.keys, ...(returnedKeys ?? [])];
+                  returnedKeys = delta.order.map((index: unknown) =>
+                    typeof index === "number" ? keys[index] : undefined,
+                  );
+                }
+              }
+            }
+            expect(returnedKeys).toEqual(metadataKeys);
+            metadataReceipts.set(query, {
+              revision,
+              keys: metadataKeys,
+            });
             expect(notices).toEqual(noMatches ? [expect.stringContaining("No results found")] : []);
             expect(
               await palette
@@ -748,6 +868,8 @@ suite.define(() => {
       passed = true;
     } finally {
       if (!passed) {
+        // CI retains console output; keep only counts and allowlisted error categories.
+        console.error("[search-proof] connection", JSON.stringify(connection));
         await writeFile(
           path.join(artifactDir, "gateway-failure.log"),
           owner

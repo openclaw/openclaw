@@ -15,9 +15,9 @@ export function createRelayAgentConfig(agentId: "main" | "ops"): OpenClawConfig 
   };
 }
 
-export function makeRelayTransport<
-  Overrides extends Partial<RealtimeVoiceBridge> = Record<never, never>,
->(overrides: Overrides = {} as Overrides) {
+export function makeRelayTransport<Overrides extends Partial<RealtimeVoiceBridge> = object>(
+  overrides: Overrides = {} as Overrides,
+) {
   return {
     connect: vi.fn(async () => undefined),
     sendAudio: vi.fn(),

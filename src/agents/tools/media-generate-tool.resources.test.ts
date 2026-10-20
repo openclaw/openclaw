@@ -388,7 +388,7 @@ describe.each(["image", "music", "video"] as const)(
       }
     });
     it.each(["request lookup", "duplicate lookup", "reference loading"] as const)(
-      "refuses preflight work when the prepared owner releases during %s",
+      "refuses generation when the prepared owner releases during %s",
       async (pause) => {
         const fixture = createNativeFixture(kind, true);
         const preflightPaused = createDeferredCore();
@@ -472,11 +472,11 @@ describe.each(["image", "music", "video"] as const)(
               expect(result.value).toBeUndefined();
               if (pause !== "reference loading") {
                 expect(reference).not.toHaveBeenCalled();
+                expect(createTask).not.toHaveBeenCalled();
               }
               if (pause === "request lookup") {
                 expect(lookups).toBe(1);
               }
-              expect(createTask).not.toHaveBeenCalled();
               expect(schedule).not.toHaveBeenCalled();
               expect(fixture.connections[0]!.generated).toBe(0);
               expect(fixture.connections[0]!.database.isOpen).toBe(false);
@@ -538,7 +538,7 @@ describe.each(["image", "music", "video"] as const)(
             vi.spyOn(lifecycle, "recordTaskProgress").mockImplementation(() => {});
             const completed = vi.spyOn(lifecycle, "completeTaskRun").mockImplementation(() => {});
             const failed = vi.spyOn(lifecycle, "failTaskRun").mockImplementation(() => {});
-            vi.spyOn(lifecycle, "wakeTaskCompletion").mockResolvedValue({
+            const wake = vi.spyOn(lifecycle, "wakeTaskCompletion").mockResolvedValue({
               status: "delivered",
             });
             const save = mediaStore.saveMediaBuffer;
@@ -637,11 +637,11 @@ describe.each(["image", "music", "video"] as const)(
             expect(connection.disposals).toBe(1);
             expect(fixture.connections[1]!.database.isOpen).toBe(true);
             if (phase === "rollback") {
-              expect(failed).toHaveBeenCalledWith(
+              expect(failed).toHaveBeenCalledOnce();
+              expect(wake).toHaveBeenCalledWith(
                 expect.objectContaining({
-                  error: expect.objectContaining({
-                    message: "synthetic first media persistence failure",
-                  }),
+                  status: "error",
+                  result: expect.stringContaining("synthetic first media persistence failure"),
                 }),
               );
               expect(completed).not.toHaveBeenCalled();

@@ -12,7 +12,6 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { SetupInferenceDetection } from "../system-agent/setup-inference.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { t } from "../wizard/i18n/index.js";
-import type { WizardPrompter } from "../wizard/prompts.js";
 import {
   resolveOnboardingAgentTarget,
   resolveSystemAgentOnboardingTarget,
@@ -37,10 +36,8 @@ import type { OnboardOptions } from "./onboard-types.js";
 export type GuidedOnboardingDeps = GuidedOnboardingHandoffDeps & {
   detect?: typeof import("../system-agent/setup-inference.js").detectSetupInference;
   activate?: typeof import("../system-agent/setup-inference.js").activateSetupInference;
-  createPrompter?: () => WizardPrompter | Promise<WizardPrompter>;
   persistRiskAcknowledgement?: (config: OpenClawConfig) => Promise<string | void>;
   persistAccessMode?: (mode: GuidedAccessMode) => Promise<void>;
-  listManualOptions?: typeof import("../system-agent/setup-inference.js").listManualSetupInferenceOptions;
   /**
    * "hatch" (default) runs the local custodian flow: discovery consent,
    * explicit provider selection, deterministic setup apply, then the agent TUI.
@@ -48,13 +45,7 @@ export type GuidedOnboardingDeps = GuidedOnboardingHandoffDeps & {
    * remote-gateway onboarding requires it because setup must apply remotely.
    */
   handoffMode?: "hatch" | "chat";
-  applySetup?: typeof import("../system-agent/setup-apply.js").applySystemAgentSetup;
   runSetupMemoryImportStep?: typeof import("../wizard/setup.memory-import.js").runSetupMemoryImportStep;
-  runMemorySetupFlow?: typeof import("../flows/memory-setup.js").runMemorySetupFlow;
-  runAppRecommendations?: typeof import("../wizard/setup.app-recommendations.js").setupAppRecommendations;
-  /** Browser-first local hatch handoff. Tests inject this to avoid real browser/Gateway work. */
-  runBrowserHandoff?: typeof import("./onboard-browser-handoff.js").runBrowserHatchHandoff;
-  platform?: NodeJS.Platform;
 };
 
 async function runGuidedOnboardingFlow(
@@ -63,8 +54,8 @@ async function runGuidedOnboardingFlow(
   deps: GuidedOnboardingDeps,
 ): Promise<GuidedOnboardingHandoff | null> {
   const onboardHelpers = await import("./onboard-helpers.js");
-  const prompter = await (deps.createPrompter?.() ??
-    import("../wizard/clack-prompter.js").then(({ createClackPrompter }) => createClackPrompter()));
+  const { createClackPrompter } = await import("../wizard/clack-prompter.js");
+  const prompter = createClackPrompter();
   await onboardHelpers.printWizardHeader(runtime);
   await prompter.intro(t("wizard.guided.custodianIntro"));
   await prompter.note(t("wizard.guided.escapeHatches"), t("wizard.guided.welcomeTitle"));
@@ -387,15 +378,13 @@ async function runGuidedOnboardingFlow(
     }
   } else {
     // Declined discovery: build the manual picker from config/manifests only.
-    const listManualOptions =
-      deps.listManualOptions ??
-      (await import("../system-agent/setup-inference.js")).listManualSetupInferenceOptions;
+    const { listManualSetupInferenceOptions } = await import("../system-agent/setup-inference.js");
     detection = {
       candidates: [],
       unavailableCandidates: [],
       // Install suggestions come from scanning; a declined scan offers none.
       recommendedInstalls: [],
-      ...(await listManualOptions()),
+      ...(await listManualSetupInferenceOptions()),
     };
   }
 
@@ -519,12 +508,11 @@ async function runGuidedOnboardingFlow(
         }
         assertLocalSetupOwner(ownerSnapshot.sourceConfig ?? ownerSnapshot.config);
       }
-      const applySetup =
-        deps.applySetup ?? (await import("../system-agent/setup-apply.js")).applySystemAgentSetup;
+      const { applySystemAgentSetup } = await import("../system-agent/setup-apply.js");
       // Inference can materialize a roster before setup applies the workspace;
       // the pending receipt remains the authority for that approved write.
       const applied = await withConsoleSubsystemsSuppressed(() =>
-        applySetup(
+        applySystemAgentSetup(
           {
             workspace,
             ...(firstAgent ? { firstAgent } : {}),
@@ -613,9 +601,8 @@ async function runGuidedOnboardingFlow(
     await prompter.outro(t("wizard.guided.setupDone"));
     return null;
   }
-  const runMemorySetup =
-    deps.runMemorySetupFlow ?? (await import("../flows/memory-setup.js")).runMemorySetupFlow;
-  const memoryConfig = await runMemorySetup(persistedConfig, prompter, {
+  const { runMemorySetupFlow } = await import("../flows/memory-setup.js");
+  const memoryConfig = await runMemorySetupFlow(persistedConfig, prompter, {
     agentDir: resolveOnboardingAgentTarget(persistedConfig, handoffAgentId).agentDir,
     secretInputMode: opts.secretInputMode,
   });
@@ -644,10 +631,8 @@ async function runGuidedOnboardingFlow(
     // Import destinations come from the final persisted agent workspace. Importing
     // before setup apply strands memories when first run specifies --workspace.
     await importMemories();
-    const runAppRecommendations =
-      deps.runAppRecommendations ??
-      (await import("../wizard/setup.app-recommendations.js")).setupAppRecommendations;
-    const recommendationOutcome = await runAppRecommendations({
+    const { setupAppRecommendations } = await import("../wizard/setup.app-recommendations.js");
+    const recommendationOutcome = await setupAppRecommendations({
       config: persistedConfig,
       prompter,
       runtime,
@@ -686,16 +671,14 @@ async function runGuidedOnboardingFlow(
     return null;
   }
   if (opts.tui !== true) {
-    const runBrowserHandoff =
-      deps.runBrowserHandoff ??
-      (await import("./onboard-browser-handoff.js")).runBrowserHatchHandoff;
-    const handoff = await runBrowserHandoff({
+    const { runBrowserHatchHandoff } = await import("./onboard-browser-handoff.js");
+    const handoff = await runBrowserHatchHandoff({
       config: persistedConfig,
       prompter,
       ...(handoffAgentId ? { agentId: handoffAgentId } : {}),
       ...(opts.suppressGatewayTokenOutput ? { suppressTokenOutput: true } : {}),
     });
-    if (handoff.handedOff) {
+    if (handoff) {
       await prompter.outro(t("wizard.guided.browserHandoffReady"));
       return { workspace: hatchWorkspace, next: "browser" };
     }

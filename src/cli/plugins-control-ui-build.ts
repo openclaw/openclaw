@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
@@ -8,7 +7,9 @@ import {
   CONTROL_UI_PLUGIN_MAX_ASSETS,
   CONTROL_UI_PLUGIN_MAX_BUILD_BYTES,
   isPluginControlUiAssetPath,
+  pluginControlUiGenerationHash,
 } from "../plugins/control-ui-assets.js";
+import { normalizeManifestControlUi } from "../plugins/manifest-control-ui.js";
 import type { PluginManifestControlUi } from "../plugins/manifest-types.js";
 import { PLUGIN_MANIFEST_FILENAME } from "../plugins/manifest.js";
 import { buildPluginLoaderAliasMap } from "../plugins/sdk-alias.js";
@@ -40,6 +41,22 @@ export async function buildPluginControlUi(params: {
   check?: boolean;
 }): Promise<PluginManifestControlUi> {
   const rootDir = await fs.realpath(params.rootDir);
+  const manifestText = await fs
+    .readFile(path.join(rootDir, PLUGIN_MANIFEST_FILENAME), "utf8")
+    .catch((error: unknown) => {
+      if (isRecord(error) && error.code === "ENOENT") {
+        return "{}";
+      }
+      throw error;
+    });
+  const authored: unknown = JSON.parse(manifestText);
+  const presentation = normalizeManifestControlUi(
+    isRecord(authored) ? authored.controlUi : undefined,
+    isRecord(authored) ? authored.channels : undefined,
+  );
+  if (!presentation.ok) {
+    throw new Error(presentation.error);
+  }
   const entry = await fs.realpath(path.resolve(rootDir, params.source));
   const relative = path.relative(rootDir, entry);
   if (relative.startsWith(`..${path.sep}`) || relative === ".." || path.isAbsolute(relative)) {
@@ -77,13 +94,13 @@ export async function buildPluginControlUi(params: {
   validateControlUiFiles(rawFiles);
   const files = nameControlUiChunks(rawFiles);
   validateControlUiFiles(files);
-  const hash = createHash("sha256");
-  for (const file of files) {
-    hash.update(`${file.name}\0${file.contents.length}\0`).update(file.contents);
-  }
-  const output = `dist/control-ui/${hash.digest("hex")}`;
+  const output = `dist/control-ui/${pluginControlUiGenerationHash(files)}`;
   const outputDir = path.join(rootDir, output);
   const declaration = {
+    ...(presentation.value?.activation ? { activation: presentation.value.activation } : {}),
+    ...(presentation.value?.settingsViews
+      ? { settingsViews: presentation.value.settingsViews }
+      : {}),
     entry: `${output}/index.js`,
     ...(files.some((file) => file.name === "index.css") ? { styles: [`${output}/index.css`] } : {}),
   };

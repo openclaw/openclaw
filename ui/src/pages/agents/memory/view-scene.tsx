@@ -33,7 +33,7 @@ export function renderScene(props: DreamingProps, dreamText: () => string) {
   const look = createMemo(() => createLobsterPetLook(lobsterPetSeed(props.selectedAgentId)));
   const style = () => `--lob-shell:${look().palette.shell};--lob-claw:${look().palette.claw}`;
   return (
-    <section class={`dreams ${!props.active ? "dreams--idle" : ""}`}>
+    <section class={["dreams", { "dreams--idle": !props.active }]}>
       <For each={STARS}>
         {(s) => (
           <div
@@ -98,7 +98,7 @@ export function renderScene(props: DreamingProps, dreamText: () => string) {
       <div class="dreams__phases">
         <For each={DREAM_PHASES}>
           {(phaseId) => {
-            const phase = createMemo(() => props.phases?.[phaseId]);
+            const phase = () => props.phases?.[phaseId];
             const enabled = () => phase()?.enabled === true;
             const status = () => {
               const current = phase();

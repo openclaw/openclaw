@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import * as querystring from "node:querystring";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import { writeJsonWithoutCharset as respondJson } from "openclaw/plugin-sdk/http-response-runtime";
 import {
   asOptionalRecord,
   normalizeLowercaseStringOrEmpty,
@@ -250,11 +251,6 @@ function parsePayload(
 const SYNOLOGY_WEBHOOK_ACCEPTED_HEADER = "x-openclaw-delivery-accepted";
 const SYNOLOGY_WEBHOOK_ACCEPTED_VALUE = "durable";
 
-function respondJson(res: ServerResponse, statusCode: number, body: Record<string, unknown>) {
-  res.writeHead(statusCode, { "Content-Type": "application/json" });
-  res.end(JSON.stringify(body));
-}
-
 export interface WebhookHandlerDeps {
   account: ResolvedSynologyChatAccount;
   receive: SynologyIngressMonitor["receive"];
@@ -463,14 +459,11 @@ export async function processSynologyWebhookIngressEvent(params: {
   await params.deliver(
     {
       body,
-      channelIngress,
       resolveChannelIngress,
       messageId: payload.post_id,
       from: authorizedWebhookUserId,
       senderName: payload.username,
-      provider: "synology-chat",
       chatType: "direct",
-      accountId: params.account.accountId,
       commandAuthorized: channelIngress.senderAccess.allowed,
       chatUserId: deliveryUserId,
     },

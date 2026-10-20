@@ -23,8 +23,11 @@ export type AgentSchemaMigration = {
 
 export type OpenClawDatabaseMaintenanceScope = {
   readonly ownsSchemaMaintenance: boolean;
+  /** SQLite admission coverage for this offline Doctor operation; absent at runtime. */
+  readonly sqliteIntegrityCheck?: "quick" | "full";
   assertOwnerCurrent(this: void, access?: "read"): void;
   assertDatabaseAccess(this: void, databasePath: string): void;
+  assertCleanupDatabaseAccess(this: void, databasePath: string): void;
   assertAdmission(this: void): void;
   assertReadAdmission(this: void): void;
   addAgentSchemaMigrationCheck(check: (migration: AgentSchemaMigration) => void): void;

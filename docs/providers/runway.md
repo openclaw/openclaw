@@ -13,7 +13,7 @@ OpenClaw ships a bundled `runway` provider for hosted video generation, enabled 
 | --------------- | ----------------------------------------------------------------- |
 | Provider id     | `runway`                                                          |
 | Plugin          | bundled, `enabledByDefault: true`                                 |
-| Auth env vars   | `RUNWAYML_API_SECRET` (canonical) or `RUNWAY_API_KEY`             |
+| Auth env vars   | `RUNWAYML_API_SECRET` (preferred) or `RUNWAY_API_KEY`             |
 | Onboarding flag | `--auth-choice runway-api-key`                                    |
 | Direct CLI flag | `--runway-api-key <key>`                                          |
 | API             | Runway task-based video generation (`GET /v1/tasks/{id}` polling) |
@@ -82,7 +82,7 @@ Local image and video references are supported via data URIs.
 
 <AccordionGroup>
   <Accordion title="Environment variable aliases">
-    OpenClaw recognizes both `RUNWAYML_API_SECRET` (canonical) and `RUNWAY_API_KEY`.
+    OpenClaw recognizes both `RUNWAYML_API_SECRET` (preferred) and `RUNWAY_API_KEY`.
     Either variable authenticates the Runway provider.
   </Accordion>
 

@@ -11,7 +11,7 @@ const require = process.getBuiltinModule("module").createRequire(import.meta.url
 const { builtinEnvironments }: typeof import("vitest/runtime") = require("vitest/runtime");
 
 describe("jsdom native API boundary", () => {
-  it("adapts the package-local Vitest environment before creating object URLs", () => {
+  it("defers DOM loading until use and adapts package-local windows and object URLs", () => {
     const result = spawnSync(
       process.execPath,
       [
@@ -21,9 +21,23 @@ describe("jsdom native API boundary", () => {
         "--input-type=module",
         "--eval",
         `
+          import assert from "node:assert/strict";
           import { createRequire } from "node:module";
           const require = createRequire(process.argv[1]);
           const { builtinEnvironments } = require("vitest/runtime");
+          assert.ok(!require.cache[require.resolve("jsdom")], "preload must leave jsdom unloaded");
+          const { JSDOM } = require("jsdom");
+          const direct = new JSDOM("<iframe></iframe>");
+          try {
+            const received = [];
+            for (const target of [direct.window, direct.window.document.querySelector("iframe").contentWindow]) {
+              target.addEventListener("probe", () => received.push("probe"));
+              target.dispatchEvent(new target.Event("probe"));
+            }
+            assert.deepEqual(received, ["probe", "probe"]);
+          } finally {
+            direct.window.close();
+          }
           const environment = await builtinEnvironments.jsdom.setup(globalThis, {});
           try {
             const url = URL.createObjectURL(new Blob(["complete asset"], { type: "image/png" }));

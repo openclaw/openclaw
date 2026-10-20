@@ -9,7 +9,6 @@ import type {
   CronRunStatus,
   CronRunScope,
   CronRunLogEntry,
-  CronRunsStatusFilter,
   CronRunsStatusValue,
   CronSortDir,
   CronStatus,
@@ -30,6 +29,10 @@ export type CronFormState = {
   // Process-backed schedules are read-only because the form cannot edit their commands.
   // Preserve their schedule verbatim on save instead of rebuilding it.
   scheduleKind: CronJob["schedule"]["kind"];
+  eventServer: string;
+  eventName: string;
+  eventArguments: string;
+  eventSource: string;
   scheduleAt: string;
   everyAmount: string;
   everyUnit: "seconds" | "minutes" | "hours" | "days";
@@ -71,6 +74,9 @@ export type CronFormState = {
 
 export type CronFieldKey =
   | "name"
+  | "eventServer"
+  | "eventName"
+  | "eventArguments"
   | "scheduleAt"
   | "everyAmount"
   | "cronExpr"
@@ -86,8 +92,6 @@ export type CronFieldKey =
   | "failureAlertCooldownSeconds";
 
 export type CronFieldErrors = Partial<Record<CronFieldKey, string>>;
-
-export type CronJobsLastStatusFilter = "all" | CronRunStatus | "unknown";
 
 export type CronJobsState<Row = CronJob> = {
   // Read admission belongs to the page; accepted mutation chains remain independent.
@@ -108,7 +112,7 @@ export type CronJobsState<Row = CronJob> = {
   cronJobsQuery: string;
   cronJobsEnabledFilter: CronJobsEnabledFilter;
   cronJobsScheduleKindFilter: CronJobsScheduleKindFilter;
-  cronJobsLastStatusFilter: CronJobsLastStatusFilter;
+  cronJobsLastStatusFilter: "all" | CronRunStatus | "unknown";
   cronJobsTriggerFilter: CronJobsTriggerFilter;
   cronJobsSortBy: CronJobsSortBy;
   cronJobsSortDir: CronSortDir;
@@ -135,14 +139,12 @@ export type CronState<Row = CronJob> = CronJobsState<Row> & {
   cronRunsRunId?: string | null;
   cronRunsLoadingMore: boolean;
   cronRuns: CronRunLogEntry[];
-  cronRunsTotal: number;
   cronRunsHasMore: boolean;
   cronRunsNextOffset: number | null;
   cronRunsLimit: number;
   cronRunsScope: CronRunScope;
   cronRunsStatuses: CronRunsStatusValue[];
   cronRunsDeliveryStatuses: CronDeliveryStatus[];
-  cronRunsStatusFilter: CronRunsStatusFilter;
   cronRunsQuery: string;
   cronRunsSortDir: CronSortDir;
   cronBusy: boolean;

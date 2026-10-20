@@ -31,12 +31,12 @@ export async function admitSourceUpdateArtifacts(
 export async function recordInspectedGitTarget(
   target: Parameters<BeforeGitMutation>[0],
   recordPhase: ReturnType<typeof createUpdateCommandExecutionGuards>["recordPhase"],
-  assertCurrent: () => void,
+  assertCurrent: () => void | Promise<void>,
 ): Promise<void> {
-  assertCurrent();
+  await assertCurrent();
   await recordPhase("staging", {
     target: { kind: "git", sha: target.sha, version: target.version },
   });
-  assertCurrent();
+  await assertCurrent();
   assertReadableGitMetadata(target.metadataUnreadable);
 }

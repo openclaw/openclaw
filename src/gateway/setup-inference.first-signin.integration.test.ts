@@ -1,6 +1,13 @@
+import { X509Certificate } from "node:crypto";
 import { afterEach, expect, it, vi } from "vitest";
+import { createAnthropicResponse } from "../../packages/ai/src/provider-transport-parity.test-support.js";
 import type { WizardNextResult } from "../../packages/gateway-protocol/src/index.js";
+import {
+  GATEWAY_OWNER_PROFILE_ID,
+  type UsersSelfResult,
+} from "../../packages/gateway-protocol/src/schema/users.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
 import * as catalogRefresh from "../agents/prepared-model-runtime.refresh-scope.js";
@@ -14,7 +21,9 @@ import { rotateDeviceToken } from "../infra/device-pairing-tokens.js";
 import { requestDevicePairing } from "../infra/device-pairing.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { resetGatewayTestState } from "./gateway.test-support.js";
+import type { OperatorScope } from "./operator-scopes.js";
 import * as setupAdmission from "./server-methods/setup-admission.js";
 import type { GatewayRequestOptions } from "./server-methods/types.js";
 import {
@@ -35,13 +44,9 @@ vi.mock(
       >();
     return {
       ...actual,
-      handleGatewayRequest: async (...args: Parameters<typeof actual.handleGatewayRequest>) => {
+      handleGatewayRequest: (...args: Parameters<typeof actual.handleGatewayRequest>) => {
         const settled = observation.settled;
-        try {
-          return await actual.handleGatewayRequest(...args);
-        } finally {
-          settled(args[0]);
-        }
+        return actual.handleGatewayRequest(...args).finally(() => settled(args[0]));
       },
     };
   },
@@ -54,84 +59,67 @@ afterEach(() => {
 });
 
 it(
-  "replaces same-owner device sign-in, preserves other owners, and fences revoked retries through WebSocket",
+  "replaces same-owner sign-in, preserves other owners, and fences revoked retries through WebSocket",
   { timeout: 90_000 },
   async ({ signal }) => {
+    const join = <T>(work: PromiseLike<T>) => withinTest(work, signal);
     const requests: string[] = [];
     // Inventory refresh runs in another thread; the setup probe owns this test's transport.
     vi.spyOn(catalogRefresh, "refreshCommittedProviderCatalogs").mockImplementation(() => {});
+    const responses: Record<string, unknown> = {
+      "https://github.com/login/device/code": {
+        device_code: "synthetic-device-code",
+        user_code: "TEST-CODE",
+        verification_uri: "https://github.com/login/device",
+        expires_in: 600,
+        interval: 1,
+      },
+      "https://github.com/login/oauth/access_token": {
+        access_token: "synthetic-device-token",
+      },
+      "https://api.github.com/copilot_internal/user": {
+        endpoints: { api: "https://api.individual.githubcopilot.com" },
+      },
+      "https://api.individual.githubcopilot.com/models": {
+        data: [
+          {
+            id: "claude-sonnet-5",
+            model_picker_enabled: true,
+            capabilities: { supports: { tool_calls: true } },
+          },
+        ],
+      },
+    };
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = new URL(input instanceof Request ? input.url : input);
-      requests.push(`${url.origin}${url.pathname}`);
-      switch (`${url.origin}${url.pathname}`) {
-        case "https://github.com/login/device/code":
-          return Response.json({
-            device_code: "synthetic-device-code",
-            user_code: "TEST-CODE",
-            verification_uri: "https://github.com/login/device",
-            expires_in: 600,
-            interval: 1,
-          });
-        case "https://github.com/login/oauth/access_token":
-          return Response.json({
-            access_token: "synthetic-device-token",
-            token_type: "bearer",
-            scope: "read:user",
-          });
-        case "https://api.github.com/copilot_internal/user":
-          return Response.json({ endpoints: { api: "https://api.individual.githubcopilot.com" } });
-        case "https://api.individual.githubcopilot.com/models":
-          return Response.json({
-            data: [
-              {
-                id: "claude-sonnet-5",
-                name: "Synthetic chat model",
-                object: "model",
-                vendor: "Anthropic",
-                model_picker_enabled: true,
-                capabilities: {
-                  type: "chat",
-                  limits: { max_context_window_tokens: 128_000, max_output_tokens: 4096 },
-                  supports: { tool_calls: true },
-                },
-              },
-            ],
-          });
-        case "https://api.individual.githubcopilot.com/v1/messages": {
-          const events = [
-            {
-              type: "message_start",
-              message: {
-                id: "synthetic-message",
-                type: "message",
-                role: "assistant",
-                model: "claude-sonnet-5",
-                content: [],
-                stop_reason: null,
-                stop_sequence: null,
-                usage: { input_tokens: 5, output_tokens: 0 },
-              },
-            },
-            { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
-            { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "OK" } },
-            { type: "content_block_stop", index: 0 },
-            {
-              type: "message_delta",
-              delta: { stop_reason: "end_turn", stop_sequence: null },
-              usage: { output_tokens: 1 },
-            },
-            { type: "message_stop" },
-          ];
-          return new Response(
-            events
-              .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
-              .join(""),
-            { headers: { "content-type": "text/event-stream" } },
-          );
-        }
-        default:
-          throw new Error(`Unexpected setup request: ${url.origin}${url.pathname}`);
+      const endpoint = `${url.origin}${url.pathname}`;
+      requests.push(endpoint);
+      if (Object.hasOwn(responses, endpoint)) {
+        return Response.json(responses[endpoint]);
       }
+      if (endpoint === "https://api.individual.githubcopilot.com/v1/messages") {
+        const events = [
+          {
+            type: "message_start",
+            message: {
+              id: "synthetic-message",
+              model: "claude-sonnet-5",
+              usage: { input_tokens: 5, output_tokens: 0 },
+            },
+          },
+          { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+          { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "OK" } },
+          { type: "content_block_stop", index: 0 },
+          {
+            type: "message_delta",
+            delta: { stop_reason: "end_turn" },
+            usage: { output_tokens: 1 },
+          },
+          { type: "message_stop" },
+        ];
+        return createAnthropicResponse(events);
+      }
+      throw new Error(`Unexpected setup request: ${endpoint}`);
     });
     await withOpenClawTestState(
       {
@@ -147,18 +135,46 @@ it(
         },
       },
       async (state) => {
+        const scopes: OperatorScope[] = ["operator.admin"];
         const recoveryRestart = vi.fn(() => {
           throw new Error("Setup must complete without a recovery restart");
         });
+        const origin = "https://setup.example.test";
+        const authConfig = {
+          mode: "trusted-proxy" as const,
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+            requiredHeaders: ["x-forwarded-proto"],
+            allowLoopback: true,
+            deviceAutoApprove: { enabled: true, scopes },
+          },
+          identityScopes: { "other-owner@example.test": scopes },
+        };
+        const tlsFingerprint = new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256;
+        const certPath = await state.writeText("tls/cert.pem", TEST_TLS_CERT_PEM);
+        const keyPath = await state.writeText("tls/key.pem", TEST_TLS_KEY_PEM);
         const { client, server, port } = await startGatewayWithClient({
           configPath: state.configPath,
-          token: "synthetic-gateway-token",
-          scopes: ["operator.admin"],
+          auth: authConfig,
+          secure: true,
+          tlsFingerprint,
+          clientName: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+          mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+          origin,
+          edgeAuthHeaders: {
+            "x-forwarded-for": "203.0.113.50",
+            "x-forwarded-proto": "https",
+            "x-forwarded-user": "other-owner@example.test",
+          },
+          scopes,
           hotReloadRecovery: recoveryRestart,
           cfg: {
             gateway: {
               mode: "local",
-              auth: { mode: "token", token: "synthetic-gateway-token" },
+              auth: authConfig,
+              trustedProxies: ["127.0.0.1"],
+              controlUi: { allowedOrigins: [origin] },
+              tls: { enabled: true, autoGenerate: false, certPath, keyPath },
             },
             agents: { defaults: { workspace: state.workspaceDir, skipBootstrap: true } },
             plugins: {
@@ -171,36 +187,40 @@ it(
           },
         });
         let owner: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
+        let sameOwner: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
         try {
           await server.startupSettled;
-          const identity = loadOrCreateDeviceIdentity({ path: state.path("setup-owner.sqlite") });
-          const pending = await requestDevicePairing({
-            deviceId: identity.deviceId,
-            publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
-            clientId: "test",
-            clientMode: "backend",
-            role: "operator",
-            scopes: ["operator.admin"],
-          });
-          await approveDevicePairing(pending.request.requestId, {
-            callerScopes: ["operator.admin"],
-          });
-          const rotated = await rotateDeviceToken({
-            deviceId: identity.deviceId,
-            role: "operator",
-            scopes: ["operator.admin"],
-          });
-          if (!rotated.ok) {
-            throw new Error("Expected setup owner device token");
-          }
-          // Backend clients keep device ownership; the admin client uses the Gateway owner profile.
-          owner = await connectGatewayClient({
-            mode: "backend",
-            url: `ws://127.0.0.1:${port}`,
-            deviceIdentity: identity,
-            deviceToken: rotated.entry.token,
-            scopes: ["operator.admin"],
-          });
+          const connectOwner = async (label: string) => {
+            const identity = loadOrCreateDeviceIdentity({
+              path: state.path(label, "client", "credentials.sqlite"),
+            });
+            const device = { deviceId: identity.deviceId, role: "operator", scopes };
+            const pending = await requestDevicePairing({
+              ...device,
+              publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+              clientId: "test",
+              clientMode: "backend",
+            });
+            await approveDevicePairing(pending.request.requestId, { callerScopes: scopes });
+            const rotated = await rotateDeviceToken(device);
+            if (!rotated.ok) {
+              throw new Error("Expected setup owner device token");
+            }
+            const actor = await connectGatewayClient({
+              mode: "backend",
+              url: `wss://127.0.0.1:${port}`,
+              tlsFingerprint,
+              deviceIdentity: identity,
+              deviceToken: rotated.entry.token,
+              scopes,
+            });
+            return { actor, device };
+          };
+          // Paired backend devices share the Gateway owner; the proxy authenticates a person.
+          const initialOwner = await connectOwner("setup-owner");
+          owner = initialOwner.actor;
+          const { device } = initialOwner;
+          sameOwner = (await connectOwner("replacement-owner")).actor;
           const auth = {
             agentId: "main",
             authChoice: "github-copilot",
@@ -208,25 +228,54 @@ it(
           };
           const readProfiles = () =>
             loadAuthProfileStoreWithoutExternalProfiles(state.agentDir()).profiles;
-          await owner.request("openclaw.setup.auth.start", {
-            ...auth,
-            sessionId: "abandoned-signin",
-          });
-          const abandoned = await owner.request<WizardNextResult>("wizard.next", {
-            sessionId: "abandoned-signin",
-          });
-          expect(abandoned).toMatchObject({ done: false, step: { id: expect.any(String) } });
-          await expect(
-            client.request("openclaw.setup.auth.start", { ...auth, sessionId: "different-owner" }),
-          ).rejects.toThrow("OpenClaw setup is already in progress");
+          const setupOwner = owner;
+          for (const actor of [setupOwner, sameOwner]) {
+            const self = await actor.request<UsersSelfResult>("users.self", {});
+            expect(self.profile.id).toBe(GATEWAY_OWNER_PROFILE_ID);
+          }
+          const otherSelf = await client.request<UsersSelfResult>("users.self", {});
+          expect(otherSelf.profile.id).not.toBe(GATEWAY_OWNER_PROFILE_ID);
+          const start = (sessionId: string, actor = setupOwner) =>
+            actor.request("openclaw.setup.auth.start", { ...auth, sessionId });
+          const startSignIn = async (sessionId: string, actor = setupOwner) => {
+            await start(sessionId, actor);
+            return await actor.request<WizardNextResult>("wizard.next", { sessionId });
+          };
+          const expectPending = (result: WizardNextResult) =>
+            expect(result).toMatchObject({ done: false, step: { id: expect.any(String) } });
+          const abandoned = await startSignIn("abandoned-signin");
+          expectPending(abandoned);
           expect(await owner.request("wizard.next", { sessionId: "abandoned-signin" })).toEqual(
             abandoned,
           );
           expect(readProfiles()).toEqual({});
 
+          const beforeForeignStart = [...requests];
+          for (const [foreignSessionId, message] of [
+            [
+              "different-owner",
+              "OpenClaw setup is already in progress; try again when it finishes.",
+            ],
+            ["abandoned-signin", "wizard session already exists"],
+          ] as const) {
+            const foreignSettled = createDeferredCore<string[]>();
+            observation.settled = (options) => {
+              if (options.req.method === "openclaw.setup.auth.start") {
+                foreignSettled.resolve([...options.context.wizardSessions.keys()]);
+              }
+            };
+            await expect(start(foreignSessionId, client)).rejects.toThrow(message);
+            expect(await join(foreignSettled.promise)).toEqual(["abandoned-signin"]);
+            expect(await owner.request("wizard.next", { sessionId: "abandoned-signin" })).toEqual(
+              abandoned,
+            );
+            expect(requests).toEqual(beforeForeignStart);
+            expect(readProfiles()).toEqual({});
+          }
+          observation.settled = () => {};
+
           const sessionId = "replacement-signin";
-          await owner.request("openclaw.setup.auth.start", { ...auth, sessionId });
-          let result = await owner.request<WizardNextResult>("wizard.next", { sessionId });
+          let result = await startSignIn(sessionId, sameOwner);
           while (!result.done) {
             const step = result.step;
             if (!step) {
@@ -241,14 +290,12 @@ it(
             status: "done",
             modelActivation: { modelRef: "github-copilot/claude-sonnet-5" },
           });
-          expect(
-            requests.filter((url) => url === "https://github.com/login/oauth/access_token"),
-          ).toHaveLength(1);
-          expect(
-            requests.filter(
-              (url) => url === "https://api.individual.githubcopilot.com/v1/messages",
-            ),
-          ).toHaveLength(1);
+          for (const endpoint of [
+            "https://github.com/login/oauth/access_token",
+            "https://api.individual.githubcopilot.com/v1/messages",
+          ]) {
+            expect(requests.filter((url) => url === endpoint)).toHaveLength(1);
+          }
           const savedProfiles = readProfiles();
           const profiles = Object.entries(savedProfiles);
           expect(profiles).toHaveLength(1);
@@ -259,20 +306,15 @@ it(
             tokenRef: { source: "store" },
           });
           expect(credential).not.toHaveProperty("setup");
-          expect(recoveryRestart).not.toHaveBeenCalled();
-          expect(resolveAgentEffectiveModelPrimary(getRuntimeConfig(), "main")).toBe(
-            `github-copilot/claude-sonnet-5@${profileId}`,
-          );
-
-          await owner.request("openclaw.setup.auth.start", {
-            ...auth,
-            sessionId: "before-revocation",
-          });
-          const waiting = await owner.request<WizardNextResult>("wizard.next", {
-            sessionId: "before-revocation",
-          });
+          const expectActivation = () => {
+            expect(recoveryRestart).not.toHaveBeenCalled();
+            expect(resolveAgentEffectiveModelPrimary(getRuntimeConfig(), "main")).toBe(
+              `github-copilot/claude-sonnet-5@${profileId}`,
+            );
+          };
+          expectActivation();
           // Cancellation requires a pending prompt, not a provider-specific prompt sequence.
-          expect(waiting).toMatchObject({ done: false, step: { id: expect.any(String) } });
+          expectPending(await startSignIn("before-revocation"));
           const beforeRevocation = [...requests];
           const reached = createDeferredCore();
           const release = createDeferredCore();
@@ -291,40 +333,37 @@ it(
               finished.resolve([...options.context.wizardSessions.keys()]);
             }
           };
-          const reply = owner
-            .request("openclaw.setup.auth.start", { ...auth, sessionId: "revoked-retry" })
-            .then(
-              (value) => ({ result: value }),
-              (error: unknown) => ({ error }),
-            );
+          const reply = start("revoked-retry").then(
+            (value) => ({ result: value }),
+            (error: unknown) => ({ error }),
+          );
           try {
-            await withinTest(
+            await join(
               awaitGateBeforeSettlement(
                 reached.promise,
                 finished.promise,
                 "Retry finished before settlement barrier",
               ),
-              signal,
             );
             await client.request("device.token.revoke", {
-              deviceId: identity.deviceId,
-              role: "operator",
+              deviceId: device.deviceId,
+              role: device.role,
             });
             release.resolve();
-            const sessions = await withinTest(finished.promise, signal);
+            const sessions = await join(finished.promise);
             expect(await reply).toHaveProperty("error");
             expect(sessions).not.toContain("revoked-retry");
             expect(requests).toEqual(beforeRevocation);
             expect(readProfiles()).toEqual(savedProfiles);
-            expect(resolveAgentEffectiveModelPrimary(getRuntimeConfig(), "main")).toBe(
-              `github-copilot/claude-sonnet-5@${profileId}`,
-            );
-            expect(recoveryRestart).not.toHaveBeenCalled();
+            expectActivation();
           } finally {
             release.resolve();
-            await withinTest(Promise.all([finished.promise, reply]), signal);
+            await join(Promise.all([finished.promise, reply]));
           }
         } finally {
+          if (sameOwner) {
+            await disconnectGatewayClient(sameOwner);
+          }
           if (owner) {
             await disconnectGatewayClient(owner);
           }

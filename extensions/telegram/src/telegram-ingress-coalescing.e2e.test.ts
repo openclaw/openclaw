@@ -106,18 +106,9 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("./bot-handlers.agent.runtime.js", () => ({
+vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-runtime")>()),
   resolveAgentDir: vi.fn(() => "/tmp/agent"),
-  resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
-  resolveDefaultModelForAgent: vi.fn(() => ({ provider: "openai", model: "gpt-test" })),
-}));
-
-vi.mock("./bot-message-dispatch.agent.runtime.js", () => ({
-  findModelInCatalog: vi.fn(() => undefined),
-  loadPreparedModelCatalog: vi.fn(async () => []),
-  modelSupportsVision: vi.fn(() => false),
-  resolveAgentDir: vi.fn(() => "/tmp/agent"),
-  resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
   resolveDefaultModelForAgent: vi.fn(() => ({ provider: "openai", model: "gpt-test" })),
   resolveHumanDelayConfig: vi.fn(() => undefined),
 }));
@@ -191,6 +182,98 @@ describe("Telegram durable ingress coalescing", () => {
     activeResources.push(resources);
     return resources;
   }
+
+  it("keeps a timed-out update retryable while its original middleware is still waiting", async ({
+    signal,
+  }) => {
+    // The monitor captures Date.now at construction, so install the clock first.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const enteredBlocker = createDeferred<void>();
+    const finishBlocker = createDeferred<void>();
+    downstreamTurns.mockImplementationOnce(async () => {
+      enteredBlocker.resolve();
+      await finishBlocker.promise;
+      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+    });
+    const { monitor, bot } = await createMonitor({
+      adoptionStallTimeoutMs: 300_000,
+      pollIntervalMs: 60_000,
+      onRuntimeError: vi.fn(),
+    });
+    const blocker = bot.handleUpdate(
+      textUpdate({ updateId: 801, messageId: 1, text: "busy turn" }),
+    );
+    try {
+      await withinTest(enteredBlocker.promise, signal);
+      const handleUpdate = vi.spyOn(bot, "handleUpdate");
+      const queued = textUpdate({ updateId: 802, messageId: 2, text: "deliver this later" });
+      const tail = textUpdate({ updateId: 803, messageId: 3, text: "deliver after the retry" });
+      const eventId = telegramQueueEventId(802);
+      const queue = openTelegramIngressQueue({ stateDir });
+      monitor.start();
+
+      await withinTest(monitor.admit(queued), signal);
+      await withinTest(
+        vi.waitFor(() => expect(handleUpdate).toHaveBeenCalledTimes(1)),
+        signal,
+      );
+      await withinTest(vi.advanceTimersByTimeAsync(300_000), signal);
+      await withinTest(
+        vi.waitFor(async () => {
+          expect(await queue.listPending({ limit: "all" })).toMatchObject([
+            { id: eventId, attempts: 1, lastError: expect.stringContaining("handler-timeout") },
+          ]);
+        }),
+        signal,
+      );
+
+      await withinTest(monitor.admit(tail), signal);
+      await withinTest(vi.advanceTimersByTimeAsync(1_000), signal);
+      monitor.requestDrain();
+      await withinTest(
+        vi.waitFor(() => {
+          expect(
+            handleUpdate.mock.calls.filter(([update]) => update.update_id === 802),
+          ).toHaveLength(2);
+        }),
+        signal,
+      );
+      // A pending duplicate must not let its same-lane follower overtake it.
+      await withinTest(
+        vi.waitFor(async () => {
+          expect(await queue.listPending({ limit: "all" })).toMatchObject([
+            { id: eventId, attempts: 2, payload: { update: queued } },
+            { id: telegramQueueEventId(803), attempts: 0 },
+          ]);
+        }),
+        signal,
+      );
+      expect(downstreamTurns).toHaveBeenCalledTimes(1);
+
+      finishBlocker.resolve();
+      await blocker;
+      await monitor.waitForIdle();
+      await vi.advanceTimersByTimeAsync(2_000);
+      monitor.requestDrain();
+      await monitor.waitForIdle();
+      expect(downstreamTurns).toHaveBeenCalledTimes(3);
+      expect(downstreamTurns.mock.calls.map(([ctx]) => ctx.RawBody)).toEqual([
+        "busy turn",
+        "deliver this later",
+        "deliver after the retry",
+      ]);
+      await assertSpoolTombstoned({ stateDir, updateIds: [802, 803] });
+      const duplicate = await processingOutcome.runWithTelegramUpdateProcessingFrame(() =>
+        bot.handleUpdate(queued),
+      );
+      expect(duplicate.result).toEqual({ kind: "skipped" });
+      expect(downstreamTurns).toHaveBeenCalledTimes(3);
+    } finally {
+      finishBlocker.resolve();
+      await blocker;
+      await monitor.stop();
+    }
+  });
 
   it("coalesces album members admitted across separate drain passes", async () => {
     const albumTimers = holdTelegramMediaTimeouts(40);
@@ -935,49 +1018,81 @@ describe("Telegram durable ingress coalescing", () => {
     }
   });
 
-  it("bounds repeated session-start conflicts and drains the next Telegram update", async () => {
-    const poison = textUpdate({ updateId: 801, messageId: 1, text: "poison" });
-    const after = textUpdate({ updateId: 802, messageId: 2, text: "after" });
-    const poisonId = telegramQueueEventId(poison.update_id);
-    const sessionError = Object.assign(
-      new Error('Session "agent:main:telegram:direct:111" changed while starting work. Retry.'),
-      { code: "SESSION_WORK_START_CHANGED" },
-    );
-    downstreamTurns.mockImplementation(async (turn) => {
-      if ((turn.BodyForAgent ?? turn.Body ?? "").includes("poison")) {
-        throw sessionError;
-      }
-      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
-    });
-    await writeTelegramSpooledUpdate({ stateDir, update: poison });
-    await writeTelegramSpooledUpdate({ stateDir, update: after });
-    const queue = openTelegramIngressQueue({ stateDir });
-    for (let attempt = 1; attempt < DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS; attempt += 1) {
-      const claim = await queue.claim(poisonId, { ownerId: `proof:${attempt}` });
-      if (!claim) {
-        throw new Error(`Expected setup claim ${attempt}`);
-      }
-      await queue.release(claim, {
-        lastError: sessionError.message,
-        releasedAt: Date.now() - 60 * 60 * 1_000,
+  it.each(["young", "aged"] as const)(
+    "preserves retry policy and ordering for a %s session-start conflict",
+    async (age) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const poison = textUpdate({ updateId: 801, messageId: 1, text: "poison" });
+      const after = textUpdate({ updateId: 802, messageId: 2, text: "after" });
+      const poisonId = telegramQueueEventId(poison.update_id);
+      const sessionError = Object.assign(
+        new Error('Session "agent:main:telegram:direct:111" changed while starting work. Retry.'),
+        { code: "SESSION_WORK_START_CHANGED" },
+      );
+      let conflictPending = true;
+      downstreamTurns.mockImplementation(async (turn) => {
+        if (conflictPending && (turn.BodyForAgent ?? turn.Body ?? "").includes("poison")) {
+          throw sessionError;
+        }
+        return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
       });
-    }
-    const runtimeError = vi.fn();
-    const { monitor, telegramTransport } = await createMonitor({ onRuntimeError: runtimeError });
+      await writeTelegramSpooledUpdate({
+        stateDir,
+        update: poison,
+        now: Date.now() - (age === "aged" ? 24 * 60 * 60 * 1_000 : 0),
+      });
+      await writeTelegramSpooledUpdate({ stateDir, update: after });
+      const queue = openTelegramIngressQueue({ stateDir });
+      for (let attempt = 1; attempt < DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS; attempt += 1) {
+        const claim = await queue.claim(poisonId, { ownerId: `proof:${attempt}` });
+        if (!claim) {
+          throw new Error(`Expected setup claim ${attempt}`);
+        }
+        await queue.release(claim, {
+          lastError: sessionError.message,
+          releasedAt: Date.now() - 60 * 60 * 1_000,
+        });
+      }
+      const runtimeError = vi.fn();
+      const { monitor, telegramTransport } = await createMonitor({ onRuntimeError: runtimeError });
 
-    monitor.start();
-    await monitor.waitForIdle();
-    expect(await queue.listFailed?.({ limit: "all" })).toEqual([
-      expect.objectContaining({ id: poisonId, reason: "session-start-conflict-retry-limit" }),
-    ]);
-    expect(await queue.listPending({ limit: "all" })).toEqual([]);
-    expect(
-      downstreamTurns.mock.calls.some(([turn]) =>
-        (turn.BodyForAgent ?? turn.Body ?? "").includes("after"),
-      ),
-    ).toBe(true);
+      monitor.start();
+      await monitor.waitForIdle();
+      if (age === "young") {
+        expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
+        expect(await queue.listPending({ limit: "all" })).toMatchObject([
+          { id: poisonId, attempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS },
+          { id: telegramQueueEventId(after.update_id), attempts: 0 },
+        ]);
+        expect(downstreamTurns).toHaveBeenCalledOnce();
 
-    await monitor.stop();
-    await telegramTransport.close();
-  });
+        conflictPending = false;
+        vi.setSystemTime(Date.now() + 3 * 60 * 1_000);
+        monitor.requestDrain();
+        await monitor.waitForIdle();
+        await assertSpoolTombstoned({ stateDir, updateIds: [801, 802] });
+        expect(downstreamTurns.mock.calls.map(([turn]) => turn.RawBody)).toEqual([
+          "poison",
+          "poison",
+          "after",
+        ]);
+        await monitor.admit(poison);
+        await monitor.waitForIdle();
+        expect(downstreamTurns).toHaveBeenCalledTimes(3);
+      } else {
+        expect(await queue.listFailed?.({ limit: "all" })).toEqual([
+          expect.objectContaining({ id: poisonId, reason: "retry-limit-exceeded" }),
+        ]);
+      }
+      expect(await queue.listPending({ limit: "all" })).toEqual([]);
+      expect(
+        downstreamTurns.mock.calls.some(([turn]) =>
+          (turn.BodyForAgent ?? turn.Body ?? "").includes("after"),
+        ),
+      ).toBe(true);
+
+      await monitor.stop();
+      await telegramTransport.close();
+    },
+  );
 });

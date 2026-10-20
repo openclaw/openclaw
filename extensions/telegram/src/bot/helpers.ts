@@ -17,6 +17,7 @@ import {
   resolveTelegramEffectiveDmPolicy,
   type NormalizedAllowFrom,
 } from "../bot-access.js";
+import type { TelegramGroupConfigResolver } from "../group-config-helpers.js";
 import type { TelegramThreadSpec } from "../thread-spec.js";
 import { buildTelegramConversationId } from "../topic-conversation.js";
 import {
@@ -41,11 +42,7 @@ import type { TelegramGetChat } from "./types.js";
 export { resolveTelegramPreviewStreamMode as resolveTelegramStreamMode } from "../preview-streaming.js";
 export { normalizeTelegramReplyToMessageId as resolveTelegramReplyId } from "../outbound-params.js";
 
-export type {
-  TelegramForwardedContext,
-  TelegramMediaKind,
-  TelegramTextEntity,
-} from "./body-helpers.js";
+export type { TelegramForwardedContext, TelegramTextEntity } from "./body-helpers.js";
 export type { TelegramThreadSpec } from "../thread-spec.js";
 export {
   buildSenderLabel,
@@ -204,14 +201,7 @@ export async function resolveTelegramGroupAllowFromContext(params: {
   // the decision. Lets command auth survive transient store I/O failures.
   skipPairingStoreRead?: boolean;
   readChannelAllowFromStore?: typeof readChannelAllowFromStore;
-  resolveTelegramGroupConfig: (
-    chatId: string | number,
-    messageThreadId: number | undefined,
-    cfg: OpenClawConfig,
-  ) => {
-    groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
-    topicConfig?: TelegramTopicConfig;
-  };
+  resolveTelegramGroupConfig: TelegramGroupConfigResolver;
 }): Promise<{
   threadSpec: TelegramThreadSpec;
   resolvedThreadId?: number;

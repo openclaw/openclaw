@@ -1,7 +1,6 @@
 import path from "node:path";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { getSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
-import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
 import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
@@ -19,15 +18,13 @@ import type { PreparedSqliteReadOnlyLocation } from "../infra/sqlite-readonly-lo
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { acquireSqliteSnapshotReadToken } from "../infra/sqlite-snapshot-staging.js";
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
-import {
-  registerSqliteCacheExitClose,
-  runInSqliteMaintenanceContext,
-} from "../infra/sqlite-wal.js";
+import { registerSqliteCacheExitClose } from "../infra/sqlite-wal.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
   type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { observeOpenClawDatabaseMaintenanceResource } from "./openclaw-state-db-async-lifecycle.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import {
@@ -37,7 +34,7 @@ import {
 import {
   assertStateFileSnapshotAllowed,
   isStatePostgres,
-  openStatePostgresReadConnection,
+  openExistingStatePostgresConnection,
 } from "./openclaw-state-db-engine.js";
 import { openTrackedStateDatabaseResult } from "./openclaw-state-db-handle.js";
 import {
@@ -50,6 +47,7 @@ import {
   admitStateSchemaFacts,
   type StateSchemaContentVersionRowReader,
 } from "./openclaw-state-db-schema-version.js";
+import { postgresStateReadSnapshot } from "./openclaw-state-postgres-snapshot-context.js";
 import type { OpenClawStateReadOnlyDatabase } from "./openclaw-state-read.types.js";
 
 export type OpenClawStateReadConnection = {
@@ -58,8 +56,7 @@ export type OpenClawStateReadConnection = {
     retain(): {
       location: string;
       cleanupRoot?: string;
-      assertCurrent(): void;
-      release(): void;
+      release(): Promise<void>;
     };
   };
   close: (retain?: boolean) => boolean;
@@ -99,7 +96,7 @@ function scheduleReaderRetirement(reader: RetainedReader): void {
     return;
   }
   clearTimeout(reader.idleTimer);
-  reader.idleTimer = runInSqliteMaintenanceContext(() =>
+  reader.idleTimer = runInDetachedAsyncContext(() =>
     setTimeout(() => {
       try {
         retireReader(reader);
@@ -261,10 +258,7 @@ export function readOpenClawStateReadOnlyLocation<T>(
   let closeAdmission: (() => void) | undefined;
   let result!: OpenClawStateSettledRead<T>;
   try {
-    if (openStateSchemaReadAdmission) {
-      if (isPostgresSqlConnection(opened.database.db)) {
-        requireNativeDatabaseFile("postgres", "repair");
-      }
+    if (openStateSchemaReadAdmission && !isPostgresSqlConnection(opened.database.db)) {
       closeAdmission = openStateSchemaReadAdmission(opened.database.db);
     }
     // Scope and path policy are authority, not ordinary schema SQL failure.
@@ -285,7 +279,20 @@ export function readOpenClawStateReadOnlyLocation<T>(
       result = {
         status: "available",
         value: isPostgresSqlConnection(opened.database.db)
-          ? opened.database.db.runTransaction(read, undefined, true)
+          ? opened.database.db.runTransaction(
+              () => {
+                const snapshot = postgresStateReadSnapshot.getStore();
+                if (snapshot?.path === pathname) {
+                  // sqlite-allow-raw: PostgreSQL imports the retained worker's MVCC snapshot before any read.
+                  opened.database.db.exec(
+                    `SET TRANSACTION SNAPSHOT '${snapshot.snapshot.replaceAll("'", "''")}'`,
+                  );
+                }
+                return read();
+              },
+              undefined,
+              true,
+            )
           : read(),
       };
     } catch (error) {
@@ -423,7 +430,7 @@ function openStateReadConnectionResult(
       if (checkSchemaPolicy) {
         isExistingOpenClawStateSchema(pathname);
       }
-      const postgres = openStatePostgresReadConnection(pathname, expectedIdentity);
+      const postgres = openExistingStatePostgresConnection(pathname, expectedIdentity);
       if (postgres) {
         return { status: "available", value: postgres };
       }
@@ -455,12 +462,13 @@ function openStateReadConnectionResult(
   const db = native.database;
   let closed = false;
   let closing = false;
+  let snapshotReaders = 0;
   const database = {
     db,
     path: pathname,
     afterClose: (): undefined => {
       releaseToken?.();
-      if (snapshot && !snapshot.cleanup()) {
+      if (snapshot && snapshotReaders === 0 && !snapshot.cleanup()) {
         throw new SnapshotCleanupIncompleteError("Shared-state snapshot cleanup is incomplete.");
       }
       return undefined;
@@ -471,19 +479,30 @@ function openStateReadConnectionResult(
     snapshotSource: snapshot
       ? {
           retain() {
-            const assertCurrent = () => {
-              if (closing || closed) {
-                throw new Error("Shared-state snapshot source is closing or closed");
-              }
-            };
-            assertCurrent();
+            if (closing || closed) {
+              throw new Error("Shared-state snapshot source is closing or closed");
+            }
+            const release = retainSnapshotTempDirectory(
+              snapshot.cleanupRoot ?? path.dirname(snapshot.location),
+            );
+            snapshotReaders++;
+            let released = false;
             return {
               location: snapshot.location,
               cleanupRoot: snapshot.cleanupRoot,
-              assertCurrent,
-              release: retainSnapshotTempDirectory(
-                snapshot.cleanupRoot ?? path.dirname(snapshot.location),
-              ),
+              async release() {
+                if (!released) {
+                  released = true;
+                  release();
+                  snapshotReaders--;
+                }
+                // The synchronous reader closes first; its last async child removes the bytes.
+                if (closed && snapshotReaders === 0 && !(await snapshot.cleanupAsync())) {
+                  throw new SnapshotCleanupIncompleteError(
+                    "Shared-state snapshot cleanup is incomplete.",
+                  );
+                }
+              },
             };
           },
         }

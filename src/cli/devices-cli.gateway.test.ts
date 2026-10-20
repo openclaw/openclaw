@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 // Real CLI scope selection, Gateway handlers, and token storage with in-process transport.
 // Authentication mode is supplied by the fixture; device scope grants use the real verifier.
 import { expectDefined } from "@openclaw/normalization-core";
@@ -9,6 +10,7 @@ import { authorizeOperatorScopesForMethod } from "../gateway/method-scopes.js";
 import { deviceHandlers } from "../gateway/server-methods/devices.js";
 import type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
+import { resetDatabaseEngineSelectionForTest } from "../infra/database-engine/context.test-support.js";
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import {
   revokeDeviceToken,
@@ -24,6 +26,7 @@ import type { GatewayLockIdentity } from "../infra/gateway-lock.js";
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { registerDevicesCli } from "./devices-cli.js";
 
 const transport = vi.hoisted(() => ({
@@ -286,6 +289,46 @@ it("does not attempt rotation when listing fails", async () => {
   );
   expect(transport.request.mock.calls.map(([, method]) => method)).toEqual(["device.pair.list"]);
   expect(transport.runtime.writeJson).not.toHaveBeenCalled();
+});
+
+it("resolves PostgreSQL before a device-list fallback can open local state", async () => {
+  await withOpenClawTestState({ label: "devices-pg-fallback" }, async (state) => {
+    await state.writeConfig({
+      database: {
+        engine: "postgres",
+        postgres: {
+          connection: { source: "env", provider: "default", id: "MISSING_DEVICE_DSN" },
+        },
+      },
+      plugins: { enabled: false },
+    });
+    resetDatabaseEngineSelectionForTest();
+    transport.request.mockRejectedValue(
+      new GatewayTransportError({
+        kind: "closed",
+        connectionDetails: {
+          url: "ws://127.0.0.1:18789",
+          urlSource: "local loopback",
+          message: "",
+        },
+        message: "Gateway not reachable",
+      }),
+    );
+    try {
+      const program = new Command();
+      registerDevicesCli(program);
+      await expect(
+        program.parseAsync(["devices", "list", "--json"], { from: "user" }),
+      ).rejects.toThrow("SecretRef is unresolved");
+      expect(
+        (await fs.readdir(state.stateDir, { recursive: true })).filter((file) =>
+          file.endsWith(".sqlite"),
+        ),
+      ).toEqual([]);
+    } finally {
+      resetDatabaseEngineSelectionForTest();
+    }
+  });
 });
 
 it.each(["live", "offline", "uncertain"] as const)(

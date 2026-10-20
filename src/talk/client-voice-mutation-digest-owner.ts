@@ -32,7 +32,6 @@ const loadMessageRuntime = createLazyRuntimeModule(() => import("../channels/mes
 
 export const CLIENT_VOICE_MUTATION_DIGEST_POLICY = {
   maxRetainedIntents: 64,
-  maxRetainedIdentityBytes: 64 * 1024,
   maxConcurrentAttempts: 2,
   maxAttemptFailures: 3,
   attemptAbortAfterMs: 30_000,
@@ -190,7 +189,6 @@ type MutationDigestIntent<TContext> = {
   agentId: string;
   voiceSessionId: string;
   context: TContext;
-  identityBytes: number;
   failedAttempts: number;
   retryBlocked?: true;
   failureExpiry?: ReturnType<typeof setTimeout>;
@@ -222,7 +220,6 @@ export class ClientVoiceMutationDigestOwner<TContext> {
   private readonly pendingKeys = new Set<string>();
   private readonly retryAfterActiveKeys = new Set<string>();
   private readonly activeAttempts = new Map<string, AbortController>();
-  private retainedIdentityBytes = 0;
   private readonly policy = CLIENT_VOICE_MUTATION_DIGEST_POLICY;
 
   constructor(private readonly options: MutationDigestOptions<TContext>) {}
@@ -239,29 +236,16 @@ export class ClientVoiceMutationDigestOwner<TContext> {
       this.retry(params);
       return;
     }
-    const identityBytes =
-      Buffer.byteLength(params.agentId, "utf8") +
-      Buffer.byteLength(params.voiceSessionId, "utf8") +
-      1;
-    if (identityBytes > this.policy.maxRetainedIdentityBytes) {
-      this.options.warn("voice mutation digest identity exceeds the retry owner byte limit");
-      return;
-    }
-    if (
-      this.intents.size >= this.policy.maxRetainedIntents ||
-      this.retainedIdentityBytes + identityBytes > this.policy.maxRetainedIdentityBytes
-    ) {
+    if (this.intents.size >= this.policy.maxRetainedIntents) {
       this.options.warn("voice mutation digest retry owner is full");
       return;
     }
     const intent = {
       ...params,
-      identityBytes,
       failedAttempts: 0,
       queuedSettlement: this.options.captureAttempt?.(params.context),
     };
     this.intents.set(key, intent);
-    this.retainedIdentityBytes += identityBytes;
     this.pendingKeys.add(key);
     this.pump();
   }
@@ -296,20 +280,6 @@ export class ClientVoiceMutationDigestOwner<TContext> {
     }
   }
 
-  snapshot(): {
-    active: number;
-    pending: number;
-    retained: number;
-    retainedIdentityBytes: number;
-  } {
-    return {
-      active: this.activeAttempts.size,
-      pending: this.pendingKeys.size,
-      retained: this.intents.size,
-      retainedIdentityBytes: this.retainedIdentityBytes,
-    };
-  }
-
   clear(): void {
     for (const attempt of this.activeAttempts.values()) {
       attempt.abort(new Error("voice mutation digest delivery owner reset"));
@@ -324,7 +294,6 @@ export class ClientVoiceMutationDigestOwner<TContext> {
     this.pendingKeys.clear();
     this.retryAfterActiveKeys.clear();
     this.activeAttempts.clear();
-    this.retainedIdentityBytes = 0;
   }
 
   private deleteIntent(key: string, expected?: MutationDigestIntent<TContext>): void {
@@ -339,7 +308,6 @@ export class ClientVoiceMutationDigestOwner<TContext> {
     if (current.failureExpiry) {
       clearTimeout(current.failureExpiry);
     }
-    this.retainedIdentityBytes -= current.identityBytes;
   }
 
   private blockRetry(key: string, intent: MutationDigestIntent<TContext>): void {

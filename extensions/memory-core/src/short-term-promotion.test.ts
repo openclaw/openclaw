@@ -6,7 +6,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import {
+  createPluginStateKeyedStoreForTests,
+  openOpenClawStateDatabase,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import { afterAll, afterEach, beforeAll, describe, expect, it as baseIt, vi } from "vitest";
 import { deriveConceptTags } from "./concept-vocabulary.js";
@@ -25,7 +28,6 @@ import {
   SHORT_TERM_LOCK_MAX_ENTRIES,
   SHORT_TERM_LOCK_NAMESPACE,
   SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
-  SHORT_TERM_RECALL_NAMESPACE,
 } from "./dreaming-state.js";
 import {
   deleteShortTermLockEntryIfCurrent,
@@ -2189,7 +2191,7 @@ describe("short-term promotion", () => {
     expect(await testing.readRecallStore(workspaceDir, nowIso)).toEqual(recallBefore);
   });
 
-  it("converges on retry when the recall write fails after phase cleanup", async (workspaceDir) => {
+  it("converges on retry when recall and phase cleanup rolls back", async (workspaceDir) => {
     await writeDailyMemoryNote(workspaceDir, "2026-04-01", ["Live source note."]);
     await testing.writeRawRecallStore(workspaceDir, {
       version: 1,
@@ -2208,25 +2210,22 @@ describe("short-term promotion", () => {
       },
     });
 
-    const env = { ...process.env };
-    configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) => {
-      const store = createPluginStateKeyedStoreForTests<T>("memory-core", { ...options, env });
-      if (options.namespace !== SHORT_TERM_RECALL_NAMESPACE) {
-        return store;
-      }
-      return {
-        ...store,
-        register: async () => {
-          throw new Error("recall write unavailable");
-        },
-      };
-    });
+    const db = openOpenClawStateDatabase().db;
+    const workspaceKey = memoryCoreWorkspaceStateKey(workspaceDir);
+    db.exec(`
+      CREATE TRIGGER abort_recall_prune BEFORE DELETE ON plugin_state_entries
+      WHEN OLD.plugin_id = 'memory-core'
+        AND OLD.namespace = '${SHORT_TERM_PHASE_SIGNAL_NAMESPACE}'
+        AND json_extract(OLD.value_json, '$.workspaceKey') = '${workspaceKey}'
+        AND json_extract(OLD.value_json, '$.key') = 'missing'
+      BEGIN SELECT RAISE(ABORT, 'phase cleanup unavailable'); END;
+    `);
     try {
-      await expect(repairShortTermPromotionArtifacts({ workspaceDir })).rejects.toThrow(
-        "recall write unavailable",
-      );
+      await expect(repairShortTermPromotionArtifacts({ workspaceDir })).rejects.toMatchObject({
+        cause: { message: "phase cleanup unavailable" },
+      });
     } finally {
-      await configureMemoryCoreDreamingStateForTests();
+      db.exec("DROP TRIGGER abort_recall_prune");
     }
 
     expect(Object.keys(await readRecallStoreEntries(workspaceDir))).toEqual(["live", "missing"]);
@@ -2234,7 +2233,7 @@ describe("short-term promotion", () => {
       Object.keys(
         (await testing.readPhaseSignalStore(workspaceDir, new Date().toISOString())).entries,
       ),
-    ).toEqual(["live"]);
+    ).toEqual(["live", "missing"]);
 
     await expect(repairShortTermPromotionArtifacts({ workspaceDir })).resolves.toMatchObject({
       changed: true,

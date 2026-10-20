@@ -49,9 +49,6 @@ export {
   serializeSessionCleanupResult,
   SessionsCleanupFailureError,
   type SessionCleanupSummary,
-  type SessionsCleanupFailure,
-  type SessionsCleanupPartialErrorDetail,
-  type SessionsCleanupPartialResult,
   type SessionsCleanupResult,
 } from "./cleanup-result.js";
 export { resolveSessionCleanupAction } from "./cleanup-action.js";
@@ -232,7 +229,7 @@ async function previewStoreCleanup(params: {
     },
   });
   const archived = totalArchived - capArchived;
-  const entryCleanupArtifactPaths = new Set<string>();
+  const entryCleanupArtifactPaths = new Set(params.snapshot.retainedArtifactPaths);
   for (const keys of [modelRunPrunedKeys, staleKeys, cappedKeys, dmScopeRetiredKeys]) {
     addEntryArtifactPathsToSet({
       paths: entryCleanupArtifactPaths,
@@ -415,6 +412,7 @@ export async function runSessionsCleanup(params: {
             );
             await yieldToEventLoop();
             owner.assertCurrent();
+            const retainedArtifactPaths = new Set<string>();
             const unreferencedArtifacts =
               mode === "warn"
                 ? {
@@ -424,10 +422,17 @@ export async function runSessionsCleanup(params: {
                     olderThanMs: maintenance.pruneAfterMs,
                   }
                 : await pruneUnreferencedSessionArtifacts({
-                    store: async () => (await owner.read()).store,
+                    store: async () => {
+                      const snapshot = await owner.read();
+                      for (const artifactPath of snapshot.retainedArtifactPaths) {
+                        retainedArtifactPaths.add(artifactPath);
+                      }
+                      return snapshot.store;
+                    },
                     storePath: target.storePath,
                     olderThanMs: maintenance.pruneAfterMs,
                     dryRun: false,
+                    excludeCanonicalPaths: retainedArtifactPaths,
                   });
             owner.assertCurrent();
             const removedSessionKeys = new Set(lifecycleResult.removedSessionKeys);

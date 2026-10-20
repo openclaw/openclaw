@@ -1,9 +1,7 @@
 import type { ProgressCard, ProgressCardStep, SessionRunStatus } from "@openclaw/gateway-protocol";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import { pruneMapToMaxSize } from "../../../src/infra/map-size.ts";
-import { i18n, t } from "../i18n/index.ts";
+import { t } from "../i18n/index.ts";
 import type { SessionProgressCardRefreshState } from "../lib/session-progress-cards.ts";
-import { toSanitizedMarkdownHtml } from "./markdown.ts";
 
 export const REFRESH_STATUS_LABEL_KEYS: Record<
   SessionProgressCardRefreshState,
@@ -21,27 +19,6 @@ export type SessionProgressCardRefreshAction = {
 };
 
 export type PresentedProgressStepStatus = ProgressCardStep["status"] | "paused";
-
-const PROGRESS_MARKDOWN_CACHE_LIMIT = 16;
-const PROGRESS_MARKDOWN_CACHE_MAX_CHARS = 140_000;
-const progressMarkdownCache = new Map<string, string>();
-
-export function sanitizedProgressMarkdown(markdown: string): string {
-  if (markdown.length > PROGRESS_MARKDOWN_CACHE_MAX_CHARS) {
-    return toSanitizedMarkdownHtml(markdown, { progressBars: true });
-  }
-  const key = `${i18n.getLocale()}\0${markdown}`;
-  const cached = progressMarkdownCache.get(key);
-  if (cached !== undefined) {
-    progressMarkdownCache.delete(key);
-    progressMarkdownCache.set(key, cached);
-    return cached;
-  }
-  const sanitized = toSanitizedMarkdownHtml(markdown, { progressBars: true });
-  progressMarkdownCache.set(key, sanitized);
-  pruneMapToMaxSize(progressMarkdownCache, PROGRESS_MARKDOWN_CACHE_LIMIT);
-  return sanitized;
-}
 
 export const STATUS_LABEL_KEYS: Record<ProgressCardStep["status"], Parameters<typeof t>[0]> = {
   completed: "sessionProgressCard.status.completed",
@@ -217,7 +194,6 @@ export function progressCardPresentation(
     effectiveSessionStatus,
     activityTimestamp,
     activityKey,
-    currentStep,
     currentPosition,
     complete,
     stepLabel,

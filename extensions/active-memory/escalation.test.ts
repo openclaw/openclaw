@@ -2,6 +2,12 @@ import { describe, expect, it } from "vitest";
 import { hasRecallIntent, resolveRecallEscalationDecision } from "./escalation.js";
 
 describe("active-memory escalation", () => {
+  const decide = (
+    mode: Parameters<typeof resolveRecallEscalationDecision>[0]["mode"],
+    message: string,
+    hasStrongLaneOneHit = false,
+  ) => resolveRecallEscalationDecision({ mode, message, hasStrongLaneOneHit });
+
   it.each([
     "Do you remember what we decided to deploy tomorrow?",
     "What did we discuss last time?",
@@ -54,6 +60,37 @@ describe("active-memory escalation", () => {
     "O que decidimos da ultima vez?",
     "Você recorda o que combinamos na semana passada?",
     "Lembra o que discutimos para a proxima semana?",
+    "Tu te souviens de ce qu'on a décidé pour le serveur ?",
+    "Tu te rappelles ce que je t'ai dit sur mon genou ?",
+    "Te souviens-tu du restaurant dont on a parlé ?",
+    "Vous vous souvenez de ce que nous avions convenu ?",
+    "Tu t’en souviens ?",
+    "Rappelle-moi ce qu'on avait décidé pour le PC",
+    "Rappelle-moi de quoi on a parlé hier",
+    "Qu'est-ce qu'on a décidé pour le budget ?",
+    "On a décidé quoi pour le modèle ?",
+    "On avait dit quoi pour novembre ?",
+    "De quoi avons-nous parlé la semaine dernière ?",
+    "Qu'avons-nous décidé ?",
+    "On en a déjà parlé, non ?",
+    "Je t'ai déjà dit que je préfère les chats",
+    "Comme je te l'avais dit, le budget est serré",
+    "Tu m'as conseillé un livre, c'était lequel ?",
+    "La dernière fois qu'on a parlé de Kyoto, tu m'as suggéré un parc",
+    "L'autre jour on a discuté du serveur",
+    "Il y a deux semaines on a choisi un hébergeur",
+    "Tu te souviens de ce qu'on a décidé pour demain ?",
+    "Hier je t'ai dit que je partais demain",
+    "tu te souviens de ce quon a decide la semaine derniere ?",
+    "Qu’est-ce qu’on a dit pour Kyoto ?",
+    "Tu te souviens d'avoir parlé de Kyoto ?",
+    "Tu te souviens de notre voyage à Kyoto ?",
+    "Tu te souviens de Pierre ?",
+    "Tu te souviens de Roger ?",
+    "Te souviens-tu de Xavier ?",
+    "Vous vous rappelez de Gauthier ?",
+    "Tu te souviens d'Olivier ?",
+    "Tu te souviens d'envoyer le rapport ?",
   ])("recognizes recall intent in %j", (message) => {
     expect(hasRecallIntent(message)).toBe(true);
   });
@@ -121,48 +158,35 @@ describe("active-memory escalation", () => {
     "Lembra o que fazer hoje a noite?",
     "Lembra o que fazer amanha?",
     "Esse arquivo relembra como configurar o serviço.",
+    "Rappelle-moi de sortir les poubelles demain",
+    "Tu te souviens d'envoyer le rapport demain ?",
+    "Je te rappelle que j'ai un chat",
+    "On a décidé d'aller au cinéma ce soir.",
+    "On a choisi un restaurant pour samedi.",
+    "J'ai parlé à mon patron aujourd'hui.",
+    "Il fait beau aujourd'hui",
+    "Souvenirs de vacances : idées d'album photo",
+    "Je pense acheter un mini PC la semaine prochaine",
+    "Dans deux semaines on décidera du budget",
+    "Rappelle-moi dans une heure de rappeler Ting",
+    "Qu'est-ce qu'on mange ce soir ?",
+    "Hier il a plu toute la journée",
+    "Hier j'ai payé à crédit.",
+    "Hier on a fait un audit.",
+    "J'ai dit que mon cahier était plein.",
   ])("does not mistake ordinary or future-facing %j for recall intent", (message) => {
     expect(hasRecallIntent(message)).toBe(false);
   });
 
   it("requires recall intent and a weak deterministic lane in escalate mode", () => {
-    expect(
-      resolveRecallEscalationDecision({
-        mode: "escalate",
-        message: "What did we decide last time?",
-        hasStrongLaneOneHit: false,
-      }),
-    ).toBe("recall");
-    expect(
-      resolveRecallEscalationDecision({
-        mode: "escalate",
-        message: "What did we decide last time?",
-        hasStrongLaneOneHit: true,
-      }),
-    ).toBe("strong-lane-one-hit");
-    expect(
-      resolveRecallEscalationDecision({
-        mode: "escalate",
-        message: "Explain the current configuration",
-        hasStrongLaneOneHit: false,
-      }),
-    ).toBe("no-recall-intent");
+    const message = "What did we decide last time?";
+    expect(decide("escalate", message)).toBe("recall");
+    expect(decide("escalate", message, true)).toBe("strong-lane-one-hit");
+    expect(decide("escalate", "Explain the current configuration")).toBe("no-recall-intent");
   });
 
   it("preserves always mode and disables escalation in off mode", () => {
-    expect(
-      resolveRecallEscalationDecision({
-        mode: "always",
-        message: "No recall phrasing here",
-        hasStrongLaneOneHit: true,
-      }),
-    ).toBe("recall");
-    expect(
-      resolveRecallEscalationDecision({
-        mode: "off",
-        message: "Do you remember this?",
-        hasStrongLaneOneHit: false,
-      }),
-    ).toBe("mode-off");
+    expect(decide("always", "No recall phrasing here", true)).toBe("recall");
+    expect(decide("off", "Do you remember this?")).toBe("mode-off");
   });
 });

@@ -263,13 +263,12 @@ export function withInProcessGatewayRead<T>(
 
 /** Local session input retains its operation's authorization and commit fences. */
 export async function runWithInProcessGatewaySessionMutation<T>(
-  method: "agent" | "sessions.send",
   params: { sessionKey: string; agentId?: string },
   run: (assertCurrent: () => void) => Promise<T> | T,
 ): Promise<T> {
+  const method = "sessions.send";
   const assertCallerCurrent = captureGatewayToolCallerAssertion();
-  const requestParams =
-    method === "sessions.send" ? { key: params.sessionKey, agentId: params.agentId } : params;
+  const requestParams = { key: params.sessionKey, agentId: params.agentId };
   return await withInProcessGatewayDispatch(
     method,
     requestParams,
@@ -306,10 +305,7 @@ export async function runWithInProcessGatewaySessionMutation<T>(
             });
           }
           // Unlike the public send RPC, local notifications cannot create a session.
-          if (
-            method === "sessions.send" &&
-            !authorization.sessionMutationAuthorization?.admittedTarget
-          ) {
+          if (!authorization.sessionMutationAuthorization?.admittedTarget) {
             throw new Error("Session target is unavailable for notification.");
           }
           authorization.sessionMutationAuthorization?.assertCurrent();
@@ -423,16 +419,19 @@ export async function dispatchGatewayMethodInProcess<T>(
       });
       return method === "agent"
         ? await facade.dispatch<T>(params as AgentRunRequest, {
+            controllerInput: options?.controllerInput,
             prepareDispatchCurrent: options?.prepareDispatchCurrent,
             assertAdmissionCurrent: composeSessionSourceAssertion([
               resolved.assertInvocationCurrent,
               captureExternalSessionCommitGuard(options?.sessionMutationCommitGuard),
             ]),
             privateCompletion: options?.privateCompletion,
+            replyExpectation: options?.replyExpectation,
             settleWakeReplay: options?.settleWakeReplay,
             cancelOnDeadline: options?.cancelOnDeadline,
             expectFinal: options?.expectFinal,
             onAccepted: options?.onAccepted,
+            onStartOwner: options?.onStartOwner,
             onExecutionStarted: options?.onExecutionStarted,
             onSignalAbort: options?.onSignalAbort,
             signal: options?.signal,

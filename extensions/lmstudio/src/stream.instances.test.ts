@@ -1,3 +1,6 @@
+// This suite owns serialized preload context checks. Cancellation, concurrent
+// preload ownership, backoff and plugin wrapper composition stay as separate
+// cases in stream.test.ts.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { afterEach, expect, it, vi } from "vitest";
@@ -5,22 +8,15 @@ import { wrapLmstudioInferencePreload } from "./stream.js";
 
 const loadTimeouts = vi.hoisted(() => [] as number[]);
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
-  fetchWithSsrFGuard: async ({
-    url,
-    init,
-    timeoutMs,
-  }: {
-    url: string;
-    init?: RequestInit;
-    timeoutMs: number;
-  }) => {
-    if (url.endsWith("/load")) {
-      loadTimeouts.push(timeoutMs);
-    }
-    return { response: await fetch(url, init), release: async () => undefined };
-  },
+vi.mock("openclaw/plugin-sdk/provider-transport-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-transport-runtime")>()),
+  buildGuardedModelFetch:
+    (_model: unknown, timeoutMs: number) => async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/load")) {
+        loadTimeouts.push(timeoutMs);
+      }
+      return await fetch(url, init);
+    },
 }));
 
 // mock-isolation: Keep credential resolution outside this instance-routing fixture.
@@ -124,7 +120,7 @@ it.each([
       const clock = vi.spyOn(Date, "now").mockReturnValue(now);
       for (let attempt = 0; attempt < 3; attempt++) {
         if (attempt === 2) {
-          clock.mockReturnValue(now + 5_001);
+          clock.mockReturnValue(now + 60_001);
           discoveryUnavailable = true;
         }
         const events = [];

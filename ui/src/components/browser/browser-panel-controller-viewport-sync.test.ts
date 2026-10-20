@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { resizeBrowserViewport } from "./browser-client.ts";
 import {
   createBrowserClient,
   createBrowserPanelTestController,
@@ -8,7 +9,6 @@ import {
   TestBrowserPanelHost,
   type BrowserRequestEnvelope,
 } from "./browser-panel-controller-test-support.ts";
-import { BrowserPanelController } from "./browser-panel-controller.ts";
 
 setupBrowserPanelTestCleanup();
 
@@ -18,12 +18,73 @@ function actionRequests(request: ReturnType<typeof createBrowserClient>["request
     .filter((envelope) => envelope.path === "/act" && envelope.body?.kind === kind);
 }
 
-describe("BrowserPanelController viewport sync", () => {
+describe("BrowserPanel viewport sync", () => {
+  it.each([false, true, undefined])(
+    "only auto-fits a browser whose owner allows it (canAutoResizeViewport=%s)",
+    async (canAutoResizeViewport) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      stubScreenshotMedia();
+      const { client, request } = createBrowserClient(async (envelope) => {
+        if (envelope.path === "/tabs") {
+          return {
+            running: true,
+            canAutoResizeViewport,
+            tabs: [{ targetId: "tab-a", title: "A", url: "https://example.test/a" }],
+          };
+        }
+        if (envelope.path === "/screenshot") {
+          return { path: "/fresh.png", targetId: "tab-a", url: "https://example.test/a" };
+        }
+        if (envelope.path === "/act" && envelope.body?.kind === "evaluate") {
+          return {
+            result: { cssWidth: 1200, cssHeight: 800, title: "A", url: "https://example.test/a" },
+          };
+        }
+        if (
+          envelope.path === "/act" &&
+          (envelope.body?.kind === "resize" || envelope.body?.kind === "clickCoords")
+        ) {
+          return { ok: true };
+        }
+        throw new Error(`Unexpected browser route: ${envelope.path}`);
+      });
+      const host = new TestBrowserPanelHost(client);
+      const controller = host.createPanel();
+      controller.handleViewportResize(600, 400);
+      await controller.refreshAll();
+      await vi.advanceTimersByTimeAsync(300);
+      expect(controller.view?.metrics).toMatchObject({ cssWidth: 1200, cssHeight: 800 });
+      expect(actionRequests(request, "resize")).toHaveLength(canAutoResizeViewport ? 1 : 0);
+
+      controller.handleViewportResize(300, 200);
+      await vi.advanceTimersByTimeAsync(300);
+      expect(actionRequests(request, "resize")).toHaveLength(canAutoResizeViewport ? 2 : 0);
+
+      // Local scaling still maps a quarter-frame click to the original CSS viewport.
+      const stage = host.renderRoot.querySelector<HTMLElement>(".bp-stage")!;
+      vi.spyOn(stage, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 300, 200));
+      controller.input.handleStageClick(new MouseEvent("click", { clientX: 75, clientY: 50 }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(actionRequests(request, "clickCoords").map((envelope) => envelope.body)).toEqual([
+        { kind: "clickCoords", targetId: "tab-a", x: 300, y: 200 },
+      ]);
+
+      // The preview policy must not suppress an intentional resize command.
+      request.mockClear();
+      await resizeBrowserViewport(client, { targetId: "tab-a", width: 900, height: 600 });
+      expect(actionRequests(request, "resize").map((envelope) => envelope.body)).toEqual([
+        { kind: "resize", targetId: "tab-a", width: 900, height: 600 },
+      ]);
+      controller.suspendView();
+    },
+  );
+
   it("drops a debounced resize when the dock closes before it fires", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const { client, request } = createBrowserClient(async () => ({ ok: true }));
     const host = new TestBrowserPanelHost(client);
-    const controller = new BrowserPanelController(host);
+    const controller = host.createPanel();
+    controller.canAutoResizeViewport = true;
     controller.activeTargetId = "tab-a";
     controller.view = createView("tab-a");
 
@@ -62,6 +123,7 @@ describe("BrowserPanelController viewport sync", () => {
       throw new Error(`Unexpected browser route: ${envelope.path}`);
     });
     const controller = createBrowserPanelTestController(client, "tab-a");
+    controller.canAutoResizeViewport = true;
 
     controller.handleViewportResize(700, 500);
     await vi.advanceTimersByTimeAsync(300);

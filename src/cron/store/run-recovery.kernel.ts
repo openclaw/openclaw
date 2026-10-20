@@ -1,16 +1,21 @@
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
+import { resolveCronJobConfigRevision } from "../config-revision.js";
+import { STARTUP_INTERRUPTED_ERROR } from "../execution-error-constants.js";
 import { cronRunLogEntryToDetail } from "../run-history-detail.js";
 import { createCronExecutionId } from "../run-id.js";
 import { failureNotificationDeliveryFromJobState } from "../service/failure-alerts.js";
-import { isJobEnabled, recomputeJobNextRunAtMs } from "../service/jobs-scheduling.js";
+import {
+  isJobEnabled,
+  recomputeJobNextRunAtMs,
+  resolveCronRestartRetryAtMs,
+} from "../service/jobs-scheduling.js";
 import { resolveForcePreservedOneShotAtMs } from "../service/one-shot-schedule.js";
 import { findCronRunRecoveryInDatabase } from "../service/run-history-recovery.js";
 import { resolveCronRunReceiptTerminalStatus } from "../service/run-receipts.js";
 import {
   markInterruptedStartupRun,
   restoreFinalizedStartupRun,
-  STARTUP_INTERRUPTED_ERROR,
 } from "../service/startup-run-repair.js";
 import type { CronJobPolicyContext, DeferredCronNotifications } from "../service/state.js";
 import type { CronJob } from "../types.js";
@@ -207,7 +212,14 @@ export function recoverCronJobInDatabase(
       runningAtMs,
       preservedOccurrenceAtMs,
       nowMs,
-      deferredNotifications: notifications,
+      restartRetryAtMs:
+        receipt &&
+        parseCronScheduledRunId(receipt.receiptId) &&
+        receipt.deliveryNotStarted === true &&
+        receipt.configRevision === resolveCronJobConfigRevision(job) &&
+        !job.state.runningScheduleChangeId
+          ? resolveCronRestartRetryAtMs(job, runningAtMs, nowMs)
+          : undefined,
     });
     if (job.enabled && job.state.nextRunAtMs === undefined) {
       recomputeJobNextRunAtMs({ state, job, nowMs, deferredNotifications: notifications });

@@ -26,15 +26,13 @@ import {
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import {
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
-  type PreparedAgentRunAdmission,
-} from "../admitted-run-context.js";
 import { createAgentHarnessHostCapabilities } from "./host-capability.js";
+import { admissionFixture } from "./host-capability.shard.test-support.js";
 
-type HostAttempt = Parameters<typeof createAgentHarnessHostCapabilities>[0]["attempt"];
-const admissions: PreparedAgentRunAdmission[] = [];
+const { admittedAttempt, closeAdmissions } = admissionFixture(
+  { permissionMode: "full" },
+  "host-capability-node-authority-test",
+);
 
 function assertWithoutHostSql(assertCurrent: () => void) {
   const sql = observeHostDataSql();
@@ -49,43 +47,8 @@ function assertWithoutHostSql(assertCurrent: () => void) {
   }
 }
 
-async function admittedAttempt(
-  runId: string,
-  overrides: Omit<Partial<HostAttempt>, "admittedRunContext" | "runId"> = {},
-): Promise<{ attempt: HostAttempt; admission: PreparedAgentRunAdmission }> {
-  const admission = prepareAgentRunAdmission({
-    cfg: {},
-    facts: {
-      runId,
-      agentId: "main",
-      ingress: {
-        kind: "system",
-        boundary: "host-capability-node-authority-test",
-        state: "present",
-      },
-    },
-    operationalRunInstance: createOperationalRunInstanceRef(runId),
-  });
-  admissions.push(admission);
-  const admittedRunContext = await admission.admit("plugin-harness", `harness-${runId}`);
-  return {
-    admission,
-    attempt: {
-      agentId: "main",
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      runId,
-      permissionMode: "full",
-      ...overrides,
-      admittedRunContext,
-    },
-  };
-}
-
 afterEach(() => {
-  for (const admission of admissions.splice(0)) {
-    admission.close();
-  }
+  closeAdmissions();
   resetAgentRunRegistryForTest();
   resetPluginRuntimeStateForTest();
 });

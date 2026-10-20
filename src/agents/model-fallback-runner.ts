@@ -116,6 +116,7 @@ type RunWithModelFallbackParams<T> = ModelFallbackRuntimeContext & {
     attempt: Parameters<ModelFallbackErrorHandler>[0],
   ) => boolean | Promise<boolean>;
   mergeExhaustedResult?: (params: { latestResult: T; preferredResult: T }) => T;
+  /** The attempt owner admits its runtime and selects credentials. */
   skipAuthProfileRuntime?: boolean;
   abortSignal?: AbortSignal;
   operatorAuthority?: AdmittedRunOperatorAuthority;
@@ -288,6 +289,7 @@ async function runWithModelFallbackInternal<T>(
       sessionKey: params.sessionKey,
       resolveAgentHarnessRuntimeOverride: params.resolveAgentHarnessRuntimeOverride,
       prepareAgentHarnessRuntime: params.prepareAgentHarnessRuntime,
+      skipAuthProfileRuntime: params.skipAuthProfileRuntime,
       ...candidate,
     });
     const isPrimary = candidate.routeOrigin === "requested";

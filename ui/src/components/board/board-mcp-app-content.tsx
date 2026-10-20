@@ -1,8 +1,11 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createEffect, createSignal, onCleanup, Show, untrack } from "solid-js";
+import { createEffect, createSignal, onCleanup, Show } from "solid-js";
+import { registerBoardEnglish } from "../../i18n/locales/en-board.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import type { BoardWidgetAppViewState } from "../../lib/board/view-types.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+
+registerEnglishCatalog(registerBoardEnglish);
 
 type ReadyAppView = Extract<BoardWidgetAppViewState, { status: "ready" }>;
 type RetiringAppView = HTMLElement & {
@@ -23,6 +26,7 @@ export function BoardMcpAppContent(props: {
   remove: () => void;
   retry: () => void;
   retired?: () => void;
+  viewRef: (element: HTMLElementTagNameMap["mcp-app-view"] | undefined) => void;
 }) {
   let element: RetiringAppView | undefined;
   let generation = 0;
@@ -50,19 +54,20 @@ export function BoardMcpAppContent(props: {
         void retirement.then(() => {
           if (current === generation) {
             setPresented(undefined);
-            untrack(() => props.retired?.());
+            props.retired?.();
           } else {
             element?.restartAfterTeardown?.();
           }
         });
       } else {
         setPresented(undefined);
-        untrack(() => props.retired?.());
+        props.retired?.();
       }
     },
   );
   onCleanup(() => {
     generation += 1;
+    props.viewRef(undefined);
   });
   const Loading = () => (
     <div class="board-widget__app-loading" data-test-id="board-mcp-app-loading">
@@ -108,6 +113,7 @@ export function BoardMcpAppContent(props: {
           <mcp-app-view
             ref={(node) => {
               element = node;
+              props.viewRef(node);
             }}
             class="board-widget__mcp-app-view"
             prop:sessionKey={props.sessionKey}
@@ -127,7 +133,9 @@ declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
       "mcp-app-view": HTMLAttributes<HTMLElementTagNameMap["mcp-app-view"]> &
-        Properties<HTMLElementTagNameMap["mcp-app-view"]>;
+        Properties<HTMLElementTagNameMap["mcp-app-view"]> & {
+          "prop:onHeightChange"?: HTMLElementTagNameMap["mcp-app-view"]["onHeightChange"];
+        };
     }
   }
 }

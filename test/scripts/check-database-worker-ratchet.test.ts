@@ -4,10 +4,55 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { main } from "../../scripts/check-database-worker-ratchet.mts";
 import { inventory } from "../../scripts/database-worker-inventory.mjs";
+import * as databaseWorkerCompat from "../../scripts/lib/database-worker-compat.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
+
+it("reuses the historical inventory while keeping head analysis fresh and invalidating changed bases", () => {
+  const root = tempDirs.make("openclaw-sqlite-cached-ratchet-");
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", ...args], {
+      cwd: root,
+      stdio: "pipe",
+    });
+  fs.mkdirSync(path.join(root, "src"));
+  const file = path.join(root, "src/runtime.ts");
+  const source = "executeSqliteQuerySync(query);\n";
+  fs.writeFileSync(file, source);
+  git("init");
+  git("add", "src");
+  git("commit", "-m", "base");
+  const inspect = vi.spyOn(databaseWorkerCompat, "inspectDatabaseWorkerBoundaries");
+  vi.spyOn(console, "log").mockImplementation(() => {});
+  vi.spyOn(console, "error").mockImplementation(() => {});
+
+  expect(main(root, ["--base", "HEAD"])).toBe(0);
+  fs.writeFileSync(file, source.repeat(2));
+  expect(main(root, ["--base", "HEAD"])).toBe(1);
+  expect(inspect).toHaveBeenCalledTimes(3);
+
+  git("add", "src");
+  git("commit", "-m", "changed base");
+  expect(main(root, ["--base", "HEAD"])).toBe(0);
+  expect(inspect).toHaveBeenCalledTimes(5);
+
+  // Simulate an edit after module load without changing the running test's source files.
+  const analyzerFile = path.resolve("scripts/lib/database-worker-compat.mts");
+  const readFile = fs.readFileSync;
+  vi.spyOn(fs, "readFileSync").mockImplementation((filePath, options) => {
+    const bytes = readFile(filePath, options);
+    return filePath !== analyzerFile
+      ? bytes
+      : typeof bytes === "string"
+        ? `${bytes}\n`
+        : Buffer.concat([bytes, Buffer.from("\n")]);
+  });
+  expect(main(root, ["--base", "HEAD"])).toBe(0);
+  expect(main(root, ["--base", "HEAD"])).toBe(0);
+  expect(inspect).toHaveBeenCalledTimes(9);
+});
 
 it("excludes the reviewed Vitest suite without exempting arbitrary suite-named runtime files", () => {
   const root = tempDirs.make("openclaw-sqlite-suite-ratchet-");
@@ -50,6 +95,33 @@ it("does not exempt a kernel through an unregistered worker-named runtime wrappe
   expect(inventory(root).find((row) => row.file === relative)).toMatchObject({
     tier: "T1",
     calls: [expect.objectContaining({ operation: "writeUnreviewedStateMetadata" })],
+  });
+});
+
+it("classifies only the synchronous Doctor enrollment branch as one-shot", () => {
+  const root = tempDirs.make("openclaw-sqlite-doctor-enrollment-");
+  const relative = "src/agents/auth-profiles/authorization-enrollment-runtime.ts";
+  const file = path.join(root, relative);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(
+    file,
+    `export function enrollOwnedAuthProfileAuthorization(params) {
+      if (params.context.maintenanceScope?.ownsSchemaMaintenance) {
+        runOpenClawAgentWriteTransaction(callback);
+        return () => runOpenClawAgentWriteTransaction(callback);
+      } else {
+        runOpenClawAgentWriteTransaction(callback);
+      }
+    }`,
+  );
+  const rows = inventory(root);
+  expect(rows.map(({ tier, calls }) => [tier, calls.length])).toEqual([
+    ["T1", 2],
+    ["T3", 1],
+  ]);
+  expect(rows.find(({ tier }) => tier === "T3")?.calls[0]).toMatchObject({
+    operation: "enrollOwnedAuthProfileAuthorization",
+    guards: ["params.context.maintenanceScope?.ownsSchemaMaintenance"],
   });
 });
 
@@ -175,7 +247,7 @@ function anotherFactory() {
   fs.mkdirSync(path.dirname(eventFile), { recursive: true });
   const eventSource = `
 import { executeSqliteQuerySync as query } from "./queries.js";
-function recordSessionStateEventInDatabase() {
+function recordSessionStateEventsInDatabase() {
   query(sql);
   const registeredWatcherKeys = notify
     ? query(sql).rows.map(() => query(sql))
@@ -201,7 +273,7 @@ function anotherRecorder() {
     operation: "createPlacementTurnClaimOps.releaseTurn",
   });
   expect(rows.find((row) => row.file === eventRelative && row.tier === "W")?.calls).toEqual(
-    Array(4).fill(expect.objectContaining({ operation: "recordSessionStateEventInDatabase" })),
+    Array(4).fill(expect.objectContaining({ operation: "recordSessionStateEventsInDatabase" })),
   );
   expect(
     rows.find((row) => row.file === eventRelative && row.tier === "T1")?.calls[0],
@@ -258,4 +330,38 @@ export function hasAnyMatrixAuth(database, query) {
   );
   expect(main(root, ["--base", "HEAD"])).toBe(1);
   expect(errors).toHaveBeenCalledWith(expect.stringContaining("src/runtime.ts"));
+});
+
+it("validates credential writers in current and staged sources while comparing historical counts", () => {
+  const root = tempDirs.make("openclaw-sqlite-writer-ratchet-");
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", ...args], {
+      cwd: root,
+      stdio: "pipe",
+    });
+  fs.mkdirSync(path.join(root, "src"));
+  const file = path.join(root, "src/writer.ts");
+  const unreviewed = "export function write() { scope.execute({ type: 'machineState.write' }); }";
+  fs.writeFileSync(file, unreviewed);
+  git("init");
+  git("add", ".");
+  git("commit", "-m", "historical writer");
+  vi.spyOn(console, "log").mockImplementation(() => {});
+  const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+  fs.writeFileSync(file, "export function read() {} ");
+  expect(main(root, ["--base", "HEAD"])).toBe(0);
+  expect(main(root, ["--base", "HEAD", "--staged"])).toBe(1);
+  expect(errors).toHaveBeenCalledWith(
+    expect.stringContaining(
+      "machineState.write credential writes require the host publication adapter",
+    ),
+  );
+  errors.mockClear();
+  fs.writeFileSync(file, unreviewed);
+  expect(main(root, ["--base", "HEAD"])).toBe(1);
+  expect(errors).toHaveBeenCalledWith(
+    expect.stringContaining(
+      "machineState.write credential writes require the host publication adapter",
+    ),
+  );
 });

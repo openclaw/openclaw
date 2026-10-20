@@ -46,6 +46,7 @@ export {
   sqliteStringSet,
 } from "../infra/kysely-sync.js";
 export { resolveExistingSqliteFileUri } from "../infra/node-sqlite.js";
+export { withSqliteReadOnlyInspection } from "../infra/sqlite-maintenance-inspection.js";
 export {
   prepareSqliteReadOnlyLocation,
   prepareSqliteReadOnlyLocationSync,

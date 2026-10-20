@@ -1,11 +1,9 @@
 import { ChannelType } from "discord-api-types/v10";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { RequestClient } from "../internal/rest.js";
-import * as discordRequestClient from "../proxy-request-client.js";
+import * as discordRest from "../internal/rest.js";
 import * as discordSend from "../send.js";
 import { createDiscordSendReceipt } from "../send.receipt.js";
 import {
-  isDiscordThreadGoneError,
   maybeSendBindingMessage,
   resolveChannelIdForBinding,
 } from "./thread-bindings.discord-api.js";
@@ -34,12 +32,14 @@ const sent = {
   }),
 };
 function fixture() {
-  const rest = new RequestClient("synthetic-token", {
+  const rest = new discordRest.RequestClient("synthetic-token", {
     fetch: async () => {
       throw new Error("Unexpected network request");
     },
   });
-  vi.spyOn(discordRequestClient, "createDiscordRequestClient").mockReturnValue(rest);
+  vi.spyOn(discordRest, "RequestClient").mockImplementation(function () {
+    return rest;
+  });
   return {
     get: vi.spyOn(rest, "get"),
     bot: vi.spyOn(discordSend, "sendMessageDiscord").mockResolvedValue(sent),
@@ -75,12 +75,6 @@ it("keeps a forum id instead of its parent category", async () => {
   expect(await resolveChannelIdForBinding({ cfg, accountId: "default", threadId: "forum-1" })).toBe(
     "forum-1",
   );
-});
-
-it("rejects fractional Discord status values", () => {
-  expect(isDiscordThreadGoneError({ status: 403.5 })).toBe(false);
-  expect(isDiscordThreadGoneError({ statusCode: "404.5" })).toBe(false);
-  expect(isDiscordThreadGoneError({ statusCode: "+404" })).toBe(true);
 });
 
 it.each([false, true])("blocks revoked binding notices (webhook=%s)", async (webhook) => {

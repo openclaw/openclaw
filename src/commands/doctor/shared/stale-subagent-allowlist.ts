@@ -1,5 +1,6 @@
 import { listAgentEntries, listAgentIds } from "../../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { groupPluginRecords as groupRecords } from "../../../plugins/record-groups.js";
 import { normalizeAgentId, normalizeOptionalAgentId } from "../../../routing/session-key.js";
 import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
 
@@ -113,10 +114,7 @@ export function maybeRepairStaleSubagentAllowlists(cfg: OpenClawConfig): {
   }
 
   const next = structuredClone(cfg);
-  const hitsByPath = new Map<string, StaleSubagentAllowlistHit[]>();
-  for (const hit of hits) {
-    hitsByPath.set(hit.pathLabel, [...(hitsByPath.get(hit.pathLabel) ?? []), hit]);
-  }
+  const hitsByPath = groupRecords(hits, (hit) => hit.pathLabel);
 
   for (const { subagents, pathLabel } of listSubagentAllowlists(next)) {
     const pathHits = hitsByPath.get(pathLabel);

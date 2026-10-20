@@ -18,7 +18,14 @@ type CuaDriverSdk = Pick<
   | "createTrustedSession"
 >;
 
-export type CuaToolResult = import("@trycua/cua-driver").ToolResult;
+export type CuaToolResult = import("@trycua/cua-driver").ToolResult & {
+  structuredContent?: Record<string, unknown>;
+};
+
+export type CuaSessionState = Pick<
+  import("@trycua/cua-driver").SessionStateOutput,
+  "captureScope" | "effectiveScope" | "desktopUnlocked"
+>;
 
 // These numeric values are part of the pinned SDK contract. Keeping
 // them local avoids loading the native library while OpenClaw is only
@@ -119,9 +126,7 @@ class DirectCuaDriverSession {
       try {
         await start;
       } catch (error) {
-        if (this.startPromise === start) {
-          this.startPromise = undefined;
-        }
+        this.startPromise = undefined;
         throw error;
       }
       return;
@@ -154,7 +159,7 @@ class DirectCuaDriverSession {
       this.session.getCursorPosition({ session: this.publicSession }, asyncOptions(signal)),
     );
   }
-  async getSessionState(signal?: AbortSignal) {
+  async getSessionState(signal?: AbortSignal): Promise<CuaSessionState> {
     return await this.invoke(signal, () =>
       this.session.getSessionState({ session: this.publicSession }, asyncOptions(signal)),
     );
@@ -335,9 +340,7 @@ class LazyCuaDriverSession implements CuaDriverSession {
         throw error;
       })
       .finally(() => {
-        if (this.loadPromise === loadPromise) {
-          this.loadPromise = undefined;
-        }
+        this.loadPromise = undefined;
       });
     this.loadPromise = loadPromise;
     // Availability is synchronous, so the first probe starts the ESM import

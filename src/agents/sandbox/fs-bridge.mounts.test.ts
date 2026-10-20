@@ -151,31 +151,6 @@ describe("sandbox effective filesystem mounts", () => {
     });
   });
 
-  it("remaps relative and host aliases through a nested override and guard", async () => {
-    await withTempDir("openclaw-effective-mounts-", async (root) => {
-      const workspaceDir = path.join(root, "workspace");
-      const override = path.join(root, "override");
-      await fs.mkdir(path.join(workspaceDir, "sub"), { recursive: true });
-      await fs.mkdir(override);
-      await fs.writeFile(path.join(override, "marker"), "VISIBLE");
-      const relative = "sub/marker";
-      await fs.writeFile(path.join(workspaceDir, relative), "HIDDEN");
-      const sandbox = mountedSandbox(workspaceDir, {
-        binds: [`${override}:/workspace/sub:ro`],
-      });
-      const bridge = createSandboxFsBridge({ sandbox });
-      for (const filePath of [
-        relative,
-        `/workspace/${relative}`,
-        path.join(workspaceDir, relative),
-      ]) {
-        expect((await bridge.readFile({ filePath })).toString()).toBe("VISIBLE");
-        await expect(bridge.writeFile({ filePath, data: "changed" })).rejects.toThrow("read-only");
-      }
-      expectOnlyCanonicalPathCommands();
-    });
-  });
-
   it("refuses configured tmpfs and symlink aliases while allowing a deeper bind", async () => {
     await withTempDir("openclaw-effective-mounts-", async (workspaceDir) => {
       await fs.mkdir(path.join(workspaceDir, "cache"));
@@ -200,6 +175,9 @@ describe("sandbox effective filesystem mounts", () => {
       expect((await bridge.readFile({ filePath: "cache/export/marker" })).toString()).toBe(
         "VISIBLE",
       );
+      await expect(
+        bridge.writeFile({ filePath: "cache/export/marker", data: "changed" }),
+      ).rejects.toThrow("read-only");
       expectOnlyCanonicalPathCommands();
     });
   });

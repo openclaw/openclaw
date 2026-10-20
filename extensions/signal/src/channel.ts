@@ -18,8 +18,11 @@ import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
-import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
-import { chunkText, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
+import {
+  chunkText,
+  resolveChunkMode,
+  resolveTextChunkLimit,
+} from "openclaw/plugin-sdk/reply-chunking";
 import { buildOutboundBaseSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   buildBaseChannelStatusSummary,
@@ -266,6 +269,7 @@ async function sendFormattedSignalText(
   });
   let chunks = markdownToSignalTextChunks(ctx.text, limit ?? Number.POSITIVE_INFINITY, {
     tableMode,
+    chunkMode: ctx.formatting?.chunkMode ?? resolveChunkMode(ctx.cfg, "signal", ctx.accountId),
   });
   if (chunks.length === 0 && ctx.text) {
     chunks = [{ text: ctx.text, styles: [] }];
@@ -341,9 +345,9 @@ async function registerDeliveredSignalApprovalPayloadForReactions(
   if (!targetAuthor && !targetAuthorUuid) {
     return;
   }
-  const { registerSignalReactionTargetsForDeliveredPayload } =
-    await import("./reaction-targets.js");
-  await registerSignalReactionTargetsForDeliveredPayload({
+  const { registerSignalApprovalReactionTargetForDeliveredPayload } =
+    await loadSignalApprovalReactionsModule();
+  await registerSignalApprovalReactionTargetForDeliveredPayload({
     cfg: params.cfg,
     target: { ...params.target, accountId: account.accountId },
     payload: params.payload,
@@ -368,13 +372,6 @@ async function renderSignalApprovalPayloadForReactions(
   const { addSignalApprovalReactionHintToStructuredPayload } =
     await loadSignalApprovalReactionsModule();
   const payload = materializeSignalPresentationFallback(params.payload, params.presentation);
-  const questionPayload = questionGatewayRuntime.prepareReactionPayloadForDelivery({
-    payload: params.payload,
-    presentation: params.presentation,
-  });
-  if (questionPayload) {
-    return questionPayload;
-  }
   return addSignalApprovalReactionHintToStructuredPayload({
     cfg: params.ctx.cfg,
     accountId: params.ctx.accountId ?? undefined,

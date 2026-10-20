@@ -5,15 +5,15 @@ import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-sha
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { coerce as coerceSemver } from "semver";
 
-const QA_ALWAYS_STAGE_RUNTIME_PLUGIN_IDS = Object.freeze(["image-generation-core"]);
+const QA_ALWAYS_STAGE_RUNTIME_PLUGIN_IDS: readonly string[] = ["image-generation-core"];
 const QA_OPENAI_PLUGIN_ID = "openai";
 const QA_BUNDLED_PLUGIN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-const QA_CLI_METADATA_ENTRY_BASENAMES = Object.freeze([
+const QA_CLI_METADATA_ENTRY_BASENAMES: readonly string[] = [
   "cli-metadata.ts",
   "cli-metadata.js",
   "cli-metadata.mjs",
   "cli-metadata.cjs",
-]);
+];
 
 function isQaOpenAiResponsesProviderConfig(config: ModelProviderConfig) {
   return (
@@ -227,35 +227,6 @@ async function seedQaStagedBuiltTreeRoots(params: {
   }
 }
 
-export async function resolveQaRuntimeHostVersion(params: {
-  repoRoot: string;
-  allowedPluginIds: readonly string[];
-}) {
-  const rootPackageRaw = await fs.readFile(path.join(params.repoRoot, "package.json"), "utf8");
-  const rootPackage = JSON.parse(rootPackageRaw) as { version?: string };
-  let selected = coerceSemver(rootPackage.version);
-  for (const { sourceDir } of collectQaBundledPluginSources(params).values()) {
-    const packagePath = path.join(sourceDir, "package.json");
-    if (!existsSync(packagePath)) {
-      continue;
-    }
-    const packageRaw = await fs.readFile(packagePath, "utf8");
-    const packageJson = JSON.parse(packageRaw) as {
-      openclaw?: {
-        install?: {
-          minHostVersion?: string;
-        };
-      };
-    };
-    const candidate = coerceSemver(packageJson.openclaw?.install?.minHostVersion);
-    if (candidate && (!selected || candidate.compare(selected) > 0)) {
-      selected = candidate;
-    }
-  }
-
-  return selected?.version;
-}
-
 export function resolveQaStagedBundledPluginsRoot(params: { repoRoot: string; tempRoot: string }) {
   return path.join(params.repoRoot, ".artifacts", "qa-runtime", path.basename(params.tempRoot));
 }
@@ -273,6 +244,9 @@ export async function createQaBundledPluginsDir(params: {
     path.join(params.repoRoot, "package.json"),
     path.join(stagedRoot, "package.json"),
   );
+  const rootPackageRaw = await fs.readFile(path.join(params.repoRoot, "package.json"), "utf8");
+  const rootPackage = JSON.parse(rootPackageRaw) as { version?: string };
+  let hostVersion = coerceSemver(rootPackage.version);
   await seedQaStagedNodeModules({
     repoRoot: params.repoRoot,
     stagedRoot,
@@ -318,6 +292,22 @@ export async function createQaBundledPluginsDir(params: {
     if (manifestPath) {
       await fs.copyFile(manifestPath, path.join(targetDir, "openclaw.plugin.json"));
     }
+    const packagePath = path.join(sourceDir, "package.json");
+    if (!existsSync(packagePath)) {
+      continue;
+    }
+    const packageRaw = await fs.readFile(packagePath, "utf8");
+    const packageJson = JSON.parse(packageRaw) as {
+      openclaw?: {
+        install?: {
+          minHostVersion?: string;
+        };
+      };
+    };
+    const candidate = coerceSemver(packageJson.openclaw?.install?.minHostVersion);
+    if (candidate && (!hostVersion || candidate.compare(hostVersion) > 0)) {
+      hostVersion = candidate;
+    }
   }
   await symlinkQaStagedDirEntry(
     path.join(stagedRoot, "dist"),
@@ -326,6 +316,6 @@ export async function createQaBundledPluginsDir(params: {
   );
   return {
     bundledPluginsDir,
-    stagedRoot,
+    runtimeHostVersion: hostVersion?.version,
   };
 }

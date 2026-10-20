@@ -121,7 +121,7 @@ registry diagnostics and each plugin's `dependencyStatus` (whether declared
 `dependencies`/`optionalDependencies` resolve on disk).
 
 `plugins search` queries ClawHub for installable plugin packages and prints
-an install hint (`openclaw plugins install clawhub:<package>`) per result.
+an install hint (`openclaw plugins install <package>`) per result.
 
 ## Enable and disable plugins
 
@@ -189,7 +189,7 @@ retry setup. Noninteractive plugin install, update, and enable commands also
 require the explicit flag when consent is needed:
 
 ```bash
-openclaw plugins install clawhub:<package> --accept-capabilities
+openclaw plugins install <package> --accept-capabilities
 openclaw plugins update <plugin-id> --accept-capabilities
 openclaw plugins enable <plugin-id> --accept-capabilities
 ```
@@ -204,7 +204,7 @@ required, review the capabilities in the reply, then rerun the same command
 with `--accept-capabilities`:
 
 ```text
-/plugins install clawhub:<package> --accept-capabilities
+/plugins install <package> --accept-capabilities
 /plugins install npm:<package> --force --accept-capabilities
 /plugins enable <plugin-id> --accept-capabilities
 ```
@@ -227,9 +227,9 @@ Linking does not grant trust for hook agent turns or Gateway scope elevation.
 openclaw plugins search "calendar"
 
 # Install from ClawHub.
-openclaw plugins install clawhub:<package>
-openclaw plugins install clawhub:<package>@1.2.3
-openclaw plugins install clawhub:<package>@beta
+openclaw plugins install <package>
+openclaw plugins install <package>@1.2.3
+openclaw plugins install <package>@beta
 
 # Install from npm.
 openclaw plugins install npm:<package>
@@ -245,9 +245,9 @@ openclaw plugins install ./my-plugin
 openclaw plugins install --link ./my-plugin
 ```
 
-Bare package specs install from npm, unless the name matches a bundled or
-official plugin id, in which case OpenClaw uses
-that local/official copy instead. Use `clawhub:`, `npm:`, `git:`, or
+Package specs, including `@openclaw/*`, install from ClawHub by default. Only
+bare plugin ids without a version or tag can select a bundled copy or official
+catalog entry. Use `clawhub:`, `npm:`, `git:`, or
 `npm-pack:` to select the source explicitly. OpenClaw's bundled and official
 catalog packages are trusted alongside ClawHub packages. New arbitrary npm,
 git, local path/archive, `npm-pack:`, or marketplace sources require
@@ -427,11 +427,9 @@ managed install directory is removed once unless you pass `--keep-files`. With a
 running Gateway, ordinary uninstall waits for the package's runtime owners to
 stop before removing files and returns after the new inventory is applied.
 
-If an installed Claw references the plugin, preview and uninstall print the
-affected Claw package names. Ordinary plugin uninstall can still proceed and
-may break those Claws; use `openclaw claws status` to review ownership first.
-Removing a Claw releases its plugin reference but retains the process-wide
-plugin by default.
+Claw Add installs plugins as shared dependencies. Deleting an agent created by
+Add does not uninstall its plugins. Before uninstalling a plugin, check which
+agents use it; uninstall may break those agents.
 
 In Nix mode (`OPENCLAW_NIX_MODE=1`), plugin install, update, uninstall,
 enable, and disable are all disabled; manage those choices in the Nix source
@@ -441,7 +439,7 @@ for the install instead.
 
 | Source      | Use when                                                                    | Example                                                        |
 | ----------- | --------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| ClawHub     | You want OpenClaw-native discovery, scan summaries, versions, and hints     | `openclaw plugins install clawhub:<package>`                   |
+| ClawHub     | You want OpenClaw-native discovery, scan summaries, versions, and hints     | `openclaw plugins install <package>`                           |
 | git         | You want a branch, tag, or commit from a repository                         | `openclaw plugins install git:github.com/<owner>/<repo>@<ref>` |
 | local path  | You are developing or testing a plugin on the same machine                  | `openclaw plugins install --link ./my-plugin`                  |
 | marketplace | You are installing a Claude-compatible marketplace plugin                   | `openclaw plugins install <plugin> --marketplace <source>`     |
@@ -498,8 +496,9 @@ page as the publishing reference:
 - [Plugin manifest](/plugins/manifest) defines native plugin manifest
   fields.
 
-If the same package is available on both ClawHub and npm, use the explicit
-`clawhub:` or `npm:` prefix to force one source.
+Package specs use ClawHub by default, with bare plugin-id shortcuts
+described in [Install plugins](/cli/plugins/install). Use `npm:`
+to install from npm, or `clawhub:` to select ClawHub explicitly.
 
 ## Related
 

@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { render, type LitElement } from "lit";
 import { expect, onTestFinished, vi } from "vitest";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import * as attachmentPayloadStore from "./attachment-payload-store.ts";
 import { renderChatView } from "./chat-view.test-helpers.ts";
@@ -14,7 +14,7 @@ export function createAttachmentSidebarHarness() {
     if (content.kind !== "attachment") {
       throw new Error("Expected an attachment side panel");
     }
-    render(content.renderActions?.(), container);
+    mountSolid(() => content.renderActions?.(), { container });
   });
   return { container, open };
 }
@@ -24,6 +24,7 @@ export function renderAttachmentHarness(
   onAttachmentsChange: (attachments: ChatAttachment[]) => void,
 ) {
   return renderChatView({
+    draft: "Review the attached text",
     attachments: getAttachments(),
     getAttachments,
     onAttachmentsChange,
@@ -36,23 +37,19 @@ export async function renderSettledPastedTextAttachment(
   const read = vi.spyOn(attachmentTextReader, "readAttachmentText");
   try {
     const container = renderChatView(overrides);
-    const chip = await waitForSolid(() =>
-      expectDefined(
-        container.querySelector<LitElement>("openclaw-chat-pasted-text"),
-        "pasted text attachment",
-      ),
+    await waitForSolid(() =>
+      expectDefined(container.querySelector("openclaw-chat-pasted-text"), "pasted text attachment"),
     );
-    await chip.updateComplete;
+    flush();
     expect(read).toHaveBeenCalledOnce();
     const result = expectDefined(read.mock.results[0], "pasted text read");
     if (result.type !== "return") {
       throw result.value;
     }
-    // The excerpt owns a real body read followed by a lazy parser import and a Lit update.
-    // Await those operations instead of racing cold transforms against a polling budget.
+    // Await the body read and lazy parser before flushing the excerpt's Solid update.
     await result.value;
     await vi.dynamicImportSettled();
-    await chip.updateComplete;
+    flush();
     return container;
   } finally {
     read.mockRestore();
@@ -67,24 +64,31 @@ export function selectFile(input: HTMLInputElement, file: File) {
   input.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
-export function getAttachmentMenuOption(container: Element, label: string) {
-  container.querySelector(".agent-chat__attach-menu")?.dispatchEvent(new Event("wa-show"));
-  flush();
-  return Array.from(
-    container.querySelectorAll<HTMLButtonElement>(".agent-chat__attach-menu-option"),
-  ).find((button) => button.textContent?.trim() === label);
+export async function getAttachmentMenuOption(container: Element, label: string) {
+  const trigger = await waitForSolid(() =>
+    expectDefined(
+      container.querySelector<HTMLButtonElement>(".agent-chat__attach-menu .oc-menu-trigger"),
+      "attachment menu trigger",
+    ),
+  );
+  trigger.click();
+  await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
+  // Join the first open's content load before checking its rendered option.
+  await import("./components/chat-composer-plus-menu-content.tsx");
+  return waitForSolid(() =>
+    expectDefined(
+      Array.from(
+        container.querySelectorAll<HTMLButtonElement>(".agent-chat__attach-menu-option"),
+      ).find((button) => button.textContent?.trim() === label),
+      `attachment menu option: ${label}`,
+    ),
+  );
 }
 
 export function selectAttachmentMenuOption(button: HTMLButtonElement | undefined) {
-  button
-    ?.closest("wa-dropdown")
-    ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: button }, bubbles: true }));
+  button?.click();
 }
 
 export function requireAttachmentInput(container: Element, selector: string, label: string) {
-  const input = container.querySelector<HTMLInputElement>(selector);
-  if (input === null) {
-    throw new Error(`expected ${label}`);
-  }
-  return input;
+  return expectDefined(container.querySelector<HTMLInputElement>(selector), label);
 }

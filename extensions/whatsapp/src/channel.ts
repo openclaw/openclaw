@@ -1,7 +1,11 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
-import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import {
+  buildChannelOutboundSessionRoute,
+  createChatChannelPlugin,
+  type ChannelPlugin,
+} from "openclaw/plugin-sdk/channel-core";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   createComputedAccountStatusAdapter,
@@ -9,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/status-helpers";
 import { resolveWhatsAppAccount, type ResolvedWhatsAppAccount } from "./accounts.js";
 import { whatsappApprovalCapability } from "./approval-native.js";
+import { readWebAuthExistsForDecision, WHATSAPP_AUTH_UNSTABLE_CODE } from "./auth-store.js";
 import type { WebChannelStatus } from "./auto-reply/types.js";
 import {
   describeWhatsAppMessageActions,
@@ -18,7 +23,7 @@ import { whatsappChannelOutbound, whatsappMessageAdapter } from "./channel-outbo
 import { loadWhatsAppChannelRuntime } from "./channel-runtime-loader.js";
 import { whatsappCommandPolicy } from "./command-policy.js";
 import { resolveWhatsAppMentionStripRegexes } from "./group-intro.js";
-import { checkWhatsAppHeartbeatReady } from "./heartbeat.js";
+import { resolveWhatsAppGroupSessionKey } from "./group-session-key.js";
 import type { WhatsAppSelfIdentity } from "./identity.js";
 import {
   isWhatsAppGroupJid,
@@ -31,7 +36,6 @@ import {
 } from "./normalize-target.js";
 import { getWhatsAppRuntime } from "./runtime.js";
 import { sendTypingWhatsApp } from "./send.js";
-import { resolveWhatsAppOutboundSessionRoute } from "./session-route.js";
 import { createWhatsAppPluginBase } from "./shared.js";
 import { collectWhatsAppStatusIssues } from "./status-issues.js";
 
@@ -56,7 +60,7 @@ function projectWhatsAppRuntimeStatus(runtime?: ChannelAccountSnapshot) {
     lastEventAt: runtime?.lastEventAt ?? null,
     busy: runtime?.busy ?? false,
     lastRunActivityAt: runtime?.lastRunActivityAt ?? null,
-    healthState: runtime?.healthState ?? undefined,
+    healthState: runtime?.healthState,
     ...(runtime?.terminalDisconnect ? { terminalDisconnect: runtime.terminalDisconnect } : {}),
   };
 }
@@ -119,7 +123,38 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
       messaging: {
         targetPrefixes: ["whatsapp"],
         normalizeTarget: normalizeWhatsAppMessagingTarget,
-        resolveOutboundSessionRoute: resolveWhatsAppOutboundSessionRoute,
+        resolveOutboundSessionRoute: (params) => {
+          const normalized = normalizeWhatsAppTarget(params.target);
+          if (!normalized) {
+            return null;
+          }
+          const isGroup = normalized.endsWith("@g.us");
+          const isNewsletter = normalized.endsWith("@newsletter");
+          const chatType = isGroup ? "group" : isNewsletter ? "channel" : "direct";
+          const route = buildChannelOutboundSessionRoute({
+            cfg: params.cfg,
+            agentId: params.agentId,
+            channel: "whatsapp",
+            accountId: params.accountId,
+            recipientSessionExact: true,
+            peer: {
+              kind: chatType,
+              id: normalized,
+            },
+            chatType,
+            from: normalized,
+            to: normalized,
+          });
+          return isGroup
+            ? {
+                ...route,
+                sessionKey: resolveWhatsAppGroupSessionKey({
+                  sessionKey: route.sessionKey,
+                  accountId: params.accountId,
+                }),
+              }
+            : route;
+        },
         inferTargetChatType: ({ to }) => {
           const normalized = normalizeWhatsAppTarget(to);
           return !normalized
@@ -187,8 +222,26 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
         },
       },
       heartbeat: {
-        checkReady: async ({ cfg, accountId, deps }) =>
-          await checkWhatsAppHeartbeatReady({ cfg, accountId: accountId ?? undefined, deps }),
+        checkReady: async ({ cfg, accountId, deps }) => {
+          if (cfg.channels?.whatsapp?.enabled === false) {
+            return { ok: false as const, reason: "whatsapp-disabled" as const };
+          }
+          const account = resolveWhatsAppAccount({ cfg, accountId: accountId ?? undefined });
+          const authState = await readWebAuthExistsForDecision(account.authDir);
+          if (authState.outcome === "unstable") {
+            return { ok: false as const, reason: WHATSAPP_AUTH_UNSTABLE_CODE };
+          }
+          if (!authState.exists) {
+            return { ok: false as const, reason: "whatsapp-not-linked" as const };
+          }
+          const listenerActive = deps?.hasActiveWebListener
+            ? deps.hasActiveWebListener(account.accountId)
+            : Boolean((await loadWhatsAppChannelRuntime()).getActiveWebListener(account.accountId));
+          if (!listenerActive) {
+            return { ok: false as const, reason: "whatsapp-not-running" as const };
+          }
+          return { ok: true as const, reason: "ok" as const };
+        },
         sendTyping: async ({ cfg, to, accountId }) => {
           await sendTypingWhatsApp(to, {
             cfg,
@@ -307,15 +360,8 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
             },
           );
         },
-        loginWithQrStart: async ({ accountId, force, timeoutMs, verbose }) =>
-          await (
-            await loadWhatsAppChannelRuntime()
-          ).startWebLoginWithQr({
-            accountId,
-            force,
-            timeoutMs,
-            verbose,
-          }),
+        loginWithQrStart: async (params) =>
+          await (await loadWhatsAppChannelRuntime()).startWebLoginWithQr(params),
         loginWithQrWait: async ({ accountId, timeoutMs, currentQrDataUrl }) =>
           await (
             await loadWhatsAppChannelRuntime()

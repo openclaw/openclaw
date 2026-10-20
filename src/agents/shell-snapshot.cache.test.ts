@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { spawnProcess } from "../process/spawn-utils.js";
 import { maybeWrapCommandWithShellSnapshot } from "./shell-snapshot.js";
 
 vi.mock("node:fs", () => ({ statSync: vi.fn(() => ({ mtimeMs: 0, size: 0 })) }));
@@ -62,5 +63,7 @@ describe.skipIf(process.platform === "win32")("shell snapshot cache", () => {
       }
     }
     expect(retained).toBe(128);
+    // Evicted entries reuse the owner's already validated, fresh disk artifacts.
+    expect(vi.mocked(spawnProcess).mock.calls.length).toBe(0);
   });
 });

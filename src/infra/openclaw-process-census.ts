@@ -21,24 +21,20 @@ import {
 } from "./gateway-process-argv.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { readWindowsProcessCensus } from "./windows-process-census.js";
+import { readWindowsUserSid } from "./windows-user-sid.js";
 
 const workerEntrypoints = Object.values(runtimeProcessEntrypoints).flatMap((entry) => [
   path.posix.normalize(`src/infra/${entry.sourceWorkerName}.ts`),
   `dist/${entry.distWorkerPath}`,
 ]);
 
-type ProcessArtifactCustody =
-  | { kind: "holder" }
-  | { kind: "non-holder" }
-  | { kind: "unresolved"; reason: string };
-
 function isStandardSystemdUserManager(command: ProcessCommand | undefined): boolean {
+  const argv = command && "argv" in command ? command.argv : [];
   return (
-    command !== undefined &&
-    "argv" in command &&
-    command.argv.length === 2 &&
-    command.argv[1] === "--user" &&
-    (command.argv[0] === "/usr/lib/systemd/systemd" || command.argv[0] === "/lib/systemd/systemd")
+    argv.length <= 3 &&
+    argv[1] === "--user" &&
+    argv.slice(2).every((arg) => /^--deserialize=\d+$/u.test(arg)) &&
+    (argv[0] === "/usr/lib/systemd/systemd" || argv[0] === "/lib/systemd/systemd")
   );
 }
 
@@ -68,107 +64,197 @@ function isStandardSystemdLoginProcess(
   );
 }
 
+type ArtifactCustody =
+  | { kind: "not-holder" }
+  | { kind: "holder"; paths?: string[] }
+  | { kind: "unknown"; reason: string };
+
 function classifyProcessArtifactCustody(
   command: ProcessCommand | undefined,
   pid: number,
   cwd: string | undefined,
-  parentCommand: ProcessCommand | undefined,
-): ProcessArtifactCustody {
-  try {
-    const argv = command && "argv" in command ? command.argv : [];
-    if ([...argv, cwd ?? ""].some(referencesRetainedArtifact)) {
+): ArtifactCustody {
+  if (!command) {
+    return { kind: "unknown", reason: "process command is unavailable" };
+  }
+  const argv = "argv" in command ? command.argv : [];
+  const references = [
+    ...argv.map((value) => value.replace(/^--[^=]+=/u, "").replace(/^-r(?=.)/u, "")),
+    cwd ?? "",
+    "executable" in command ? (command.executable ?? "") : "",
+  ].filter(referencesRetainedArtifact);
+  if ("argvUnavailable" in command || argv.length === 0) {
+    return references.length ? { kind: "holder" } : { kind: "not-holder" };
+  }
+  const { position, operands } = resolveRuntimeScriptPosition(argv);
+  const options = {
+    pid,
+    cwd: cwd ?? "",
+    serviceMarker: command.serviceMarker,
+    additionalEntrypoints: workerEntrypoints,
+    inspectPackage: true,
+  };
+  let unknown: string | undefined;
+  const paths = references.flatMap((reference) => {
+    const evidence = classifyOpenClawEntrypointPath(reference, options);
+    if (evidence.kind === "openclaw" && evidence.artifactPath) {
+      return [evidence.artifactPath];
+    }
+    unknown ??= evidence.kind === "unclassified" ? evidence.reason : "runtime path is unresolved";
+    return [];
+  });
+  if (references.length && operands.length === 0) {
+    return unknown ? { kind: "unknown", reason: unknown } : { kind: "holder", paths };
+  }
+  const identity = classifyOpenClawArgv(argv, options);
+  if (identity.kind === "openclaw") {
+    if (!identity.artifactPath) {
       return { kind: "holder" };
     }
-    if (!command) {
-      throw new Error("process command is unavailable");
+    paths.push(identity.artifactPath);
+  }
+  let holder: Extract<ArtifactCustody, { kind: "holder" }> | undefined = paths.length
+    ? { kind: "holder", paths }
+    : undefined;
+  unknown ??=
+    identity.kind === "unclassified" && identity.cause !== "runtime-syntax"
+      ? identity.reason
+      : undefined;
+  if (!cwd || !path.isAbsolute(cwd)) {
+    // Unrelated commands do not own runtimes merely because cwd is unreadable.
+    // Explicit artifact references above still preserve their custody.
+    if (
+      identity.kind === "other" &&
+      typeof position !== "number" &&
+      position.kind === "not-runtime" &&
+      references.length === 0
+    ) {
+      return { kind: "not-holder" };
     }
-    // The command reader admits these only for observed foreign UIDs or kernel/dead processes.
-    if ("argvUnavailable" in command || command.argv.length === 0) {
-      return { kind: "non-holder" };
-    }
-    const { serviceMarker } = command;
-    const options = {
-      pid,
-      cwd: cwd ?? "",
-      serviceMarker,
-      additionalEntrypoints: workerEntrypoints,
-      inspectPackage: true,
-    };
-    const identity = classifyOpenClawArgv(argv, options);
-    if (identity.kind === "openclaw") {
-      return { kind: "holder" };
-    }
-    if (identity.kind === "unclassified" && identity.cause !== "runtime-syntax") {
-      throw new Error(identity.reason);
-    }
-    const { position, operands } = resolveRuntimeScriptPosition(argv);
-    if (!cwd || !path.isAbsolute(cwd)) {
-      const inspectorUid = process.getuid?.();
-      if (
-        cwd === undefined &&
-        identity.kind === "other" &&
-        typeof position !== "number" &&
-        position.kind === "not-runtime" &&
-        command.uid !== undefined &&
-        inspectorUid !== undefined &&
-        (command.uid !== inspectorUid ||
-          isStandardSystemdLoginProcess(command, parentCommand, inspectorUid))
-      ) {
-        return { kind: "non-holder" };
-      }
-      throw new Error("working directory is unavailable");
-    }
-    if (typeof position !== "number" && position.kind === "not-runtime") {
-      return { kind: "non-holder" };
-    }
-    let scripts: Record<string, unknown> = {};
-    if (typeof position !== "number") {
-      const pkg = readProcessPackageIdentity(cwd, true);
-      if (pkg.name === "openclaw") {
-        return { kind: "holder" };
-      }
-      scripts = pkg.scripts;
-    }
-    for (const { value, module } of operands) {
-      let candidate = value;
-      if (module) {
-        if (value.startsWith("file:")) {
+    return { kind: "unknown", reason: unknown ?? "working directory is unavailable" };
+  }
+  const pkg =
+    typeof position !== "number" && position.kind !== "not-runtime"
+      ? readProcessPackageIdentity(cwd, true)
+      : undefined;
+  if (pkg?.kind === "package" && pkg.name === "openclaw") {
+    holder = { kind: "holder" };
+  }
+  const scripts = pkg?.kind === "package" ? pkg.scripts : {};
+  if (pkg?.kind === "unknown") {
+    unknown ??= pkg.reason;
+  }
+  for (const { value, module } of operands) {
+    let candidate = value;
+    if (module) {
+      if (value.startsWith("file:")) {
+        try {
           candidate = fileURLToPath(value);
-        } else if (!path.isAbsolute(value) && !value.startsWith("./") && !value.startsWith("../")) {
-          throw new Error("runtime module package identity is unavailable");
+        } catch (error) {
+          unknown ??= String(error);
+          continue;
         }
-      } else if (
-        isBunRuntime(argv[0] ?? "") &&
-        !/[\\/]/u.test(value) &&
-        !path.extname(value) &&
-        typeof scripts[value] === "string" &&
-        scripts[value].trim()
-      ) {
-        // Bun package tasks take precedence over a same-named file.
+      } else if (!path.isAbsolute(value) && !value.startsWith("./") && !value.startsWith("../")) {
+        unknown ??= "runtime module package identity is unavailable";
         continue;
       }
-      const evidence = classifyOpenClawEntrypointPath(candidate, options);
-      if (evidence.kind === "unclassified") {
-        throw new Error(evidence.reason);
-      }
-      if (evidence.kind === "openclaw") {
-        return { kind: "holder" };
-      }
+    } else if (
+      isBunRuntime(argv[0] ?? "") &&
+      !/[\\/]/u.test(value) &&
+      !path.extname(value) &&
+      typeof scripts[value] === "string" &&
+      scripts[value].trim()
+    ) {
+      continue;
     }
-    return { kind: "non-holder" };
-  } catch (error) {
-    return { kind: "unresolved", reason: error instanceof Error ? error.message : String(error) };
+    const evidence = classifyOpenClawEntrypointPath(candidate, options);
+    if (evidence.kind === "unclassified") {
+      unknown ??= evidence.reason;
+    } else if (evidence.kind === "openclaw") {
+      holder =
+        evidence.artifactPath && (!holder || holder.paths)
+          ? { kind: "holder", paths: [...(holder?.paths ?? []), evidence.artifactPath] }
+          : { kind: "holder" };
+    }
   }
+  return unknown ? { kind: "unknown", reason: unknown } : (holder ?? { kind: "not-holder" });
 }
 
-type HandoffReferences = { runId: string; artifactPaths: readonly string[] };
-type CensusResult = { matchingPids: number[]; unverifiedPids: number[]; error?: string };
-type CensusProcess = { pid: number; state: string; command?: { ppid: number } & ProcessCommand };
+type HandoffReferences = {
+  runId: string;
+  artifactPaths: readonly string[];
+  windowsUserSid?: string;
+  drivers?: readonly { pid: number; startIdentity: string }[];
+  familyExited?: boolean;
+};
+type CensusResult = {
+  matchingPids: number[];
+  unverifiedPids: number[];
+  warnings?: string[];
+  error?: string;
+};
+type CensusProcess = {
+  pid: number;
+  ppid?: number;
+  state: string;
+  command?: { ppid: number } & ProcessCommand;
+};
+
+function classifyWindowsHandoffAncestry(
+  process: ReturnType<typeof readWindowsProcessCensus>[number],
+  byPid: ReadonlyMap<number, ReturnType<typeof readWindowsProcessCensus>[number]>,
+  drivers: NonNullable<HandoffReferences["drivers"]>,
+): "descendant" | "unrelated" | "unknown" {
+  const startedAt = process.startIdentity;
+  if (
+    startedAt &&
+    drivers.length &&
+    drivers.every(
+      ({ startIdentity }) =>
+        /^\d+$/.test(startIdentity) && BigInt(startIdentity) > BigInt(startedAt),
+    )
+  ) {
+    return "unrelated";
+  }
+  const visited = new Set<number>();
+  let child = process;
+  while (child.startIdentity && !visited.has(child.pid)) {
+    const childStart = child.startIdentity;
+    visited.add(child.pid);
+    // Recorded parentage survives a replacement in the live PID table.
+    if (
+      drivers.some(
+        ({ pid, startIdentity }) =>
+          (pid === child.pid && startIdentity === childStart) ||
+          (pid === child.parentPid &&
+            /^\d+$/.test(startIdentity) &&
+            BigInt(startIdentity) <= BigInt(childStart)),
+      )
+    ) {
+      return "descendant";
+    }
+    if (child.parentPid === 0 || child.parentPid === 4) {
+      return "unrelated";
+    }
+    const parent = byPid.get(child.parentPid ?? 0);
+    // A missing or reused intermediate parent cannot disprove surviving descendants.
+    if (!parent?.startIdentity || BigInt(parent.startIdentity) > BigInt(childStart)) {
+      break;
+    }
+    child = parent;
+  }
+  return "unknown";
+}
 
 /** Default custody decisions stay conservative; reference inspection also reports partial evidence. */
 export function inspectOtherOpenClawProcesses(references: HandoffReferences): CensusResult;
-export function inspectOtherOpenClawProcesses(): { pids: number[] } | { error: string };
-export function inspectOtherOpenClawProcesses(handoff?: HandoffReferences) {
+export function inspectOtherOpenClawProcesses(
+  runtimeDirectory?: string,
+): { pids: number[]; warnings?: string[] } | { error: string };
+export function inspectOtherOpenClawProcesses(references?: HandoffReferences | string) {
+  const handoff = typeof references === "object" ? references : undefined;
+  const runtimeDirectory = typeof references === "string" ? references : undefined;
+  const warnings: string[] = [];
   const result: CensusResult = { matchingPids: [], unverifiedPids: [] };
   try {
     if (process.platform === "linux" && isContainerEnvironment()) {
@@ -180,6 +266,10 @@ export function inspectOtherOpenClawProcesses(handoff?: HandoffReferences) {
     const deadline = Date.now() + (handoff ? 15_000 : 1_000);
     const native = windows && handoff ? [...readWindowsProcessCensus(15_000)] : undefined;
     const nativeByPid = new Map(native?.map((entry) => [entry.pid, entry]));
+    const sameWindowsUser =
+      windows &&
+      handoff?.windowsUserSid !== undefined &&
+      readWindowsUserSid() === handoff.windowsUserSid;
     const processes: CensusProcess[] = native?.map(({ pid, parentPid, commandLine }) => {
       const argv = commandLine ? parseWindowsNativeCommandLine(commandLine) : null;
       return {
@@ -189,7 +279,11 @@ export function inspectOtherOpenClawProcesses(handoff?: HandoffReferences) {
       };
     }) ?? [
       ...readProcessGroupMembers(handoff ? 15_000 : 1_000, {
-        readDarwinCommand: readDarwinProcessCommand,
+        // Handoff matches read argv and cwd only; a launcher needs an argv entrypoint,
+        // so the service marker cannot change the outcome. Skip that environment read.
+        readDarwinCommand: handoff
+          ? (pid, owner) => readDarwinProcessCommand(pid, owner, { serviceMarker: false })
+          : readDarwinProcessCommand,
       }),
     ];
     const byPid = new Map(processes.map((entry) => [entry.pid, entry]));
@@ -197,9 +291,9 @@ export function inspectOtherOpenClawProcesses(handoff?: HandoffReferences) {
     if (
       !current ||
       (!handoff &&
-        processes.some(
-          (entry) => !entry.command || (process.platform === "linux" && !("argv" in entry.command)),
-        ))
+        ((!current.command && process.platform !== "darwin") ||
+          (process.platform === "linux" &&
+            processes.some((entry) => entry.command && !("argv" in entry.command)))))
     ) {
       throw new Error("OpenClaw process census is incomplete.");
     }
@@ -209,11 +303,12 @@ export function inspectOtherOpenClawProcesses(handoff?: HandoffReferences) {
     const launchers = new Set<number>();
     const ancestors = new Set<number>([process.pid]);
     let child = current;
-    let parentPid = current.command?.ppid ?? 0;
+    let parentPid = current.command?.ppid ?? current.ppid ?? 0;
     while (parentPid > 0) {
       const parent = byPid.get(parentPid);
       if (!parent?.command || ancestors.has(parentPid)) {
-        if (handoff) {
+        // An observed process with unavailable argv remains unknown custody below.
+        if (handoff || (parent && !parent.command)) {
           break;
         }
         throw new Error("OpenClaw process ancestry is incomplete.");
@@ -254,14 +349,12 @@ export function inspectOtherOpenClawProcesses(handoff?: HandoffReferences) {
             .replace(/\/{2,}/g, "/")
             .toLowerCase()
         : value;
-    const paths =
-      handoff?.artifactPaths.flatMap((value) => [
-        value.replace(/[\\/]+$/, ""),
-        pathToFileURL(value, { windows }).href,
-      ]) ?? [];
+    const paths = (handoff?.artifactPaths ?? (runtimeDirectory ? [runtimeDirectory] : [])).flatMap(
+      (value) => [value.replace(/[\\/]+$/, ""), pathToFileURL(value, { windows }).href],
+    );
     const literal = (value: string) => escapeRegExp(normalize(value));
     const matches = new RegExp(
-      `(?:^|[^\\w-])(?:${literal(handoff?.runId ?? "")}(?=$|[^\\w-])|(?:${paths.map(literal).join("|") || "(?!)"})(?=$|[/\\s"'\x60);,\\]]))`,
+      `(?:^|[^\\w-])(?:${handoff ? literal(handoff.runId) : "(?!)"}(?=$|[^\\w-])|(?:${paths.map(literal).join("|") || "(?!)"})(?=$|[/\\s"'\x60);,\\]]))`,
     );
     for (const { pid, state, command } of processes) {
       if (handoff && Date.now() >= deadline) {
@@ -280,14 +373,40 @@ export function inspectOtherOpenClawProcesses(handoff?: HandoffReferences) {
         }
         const observation = nativeByPid.get(pid);
         const cwd = directories.get(pid);
-        const texts = [...(argv ?? []), observation?.commandLine ?? "", cwd ?? ""];
-        if (texts.some((value) => matches.test(normalize(value)))) {
+        const texts = [
+          ...(argv ?? []),
+          observation?.commandLine ?? "",
+          observation?.executable ?? "",
+          cwd ?? "",
+        ];
+        const identity = classifyOpenClawArgv(argv ?? [observation?.executable ?? ""], {
+          pid,
+          cwd: cwd ?? "",
+          serviceMarker: command && "argv" in command ? command.serviceMarker : undefined,
+          additionalEntrypoints: workerEntrypoints,
+        });
+        if (texts.some((value) => matches.test(normalize(value))) || identity.kind === "openclaw") {
           result.matchingPids.push(pid);
+          continue;
+        }
+        const ancestry = handoff.familyExited
+          ? "unrelated"
+          : observation &&
+            classifyWindowsHandoffAncestry(observation, nativeByPid, handoff.drivers ?? []);
+        if (ancestry === "descendant") {
+          result.matchingPids.push(pid);
+          continue;
+        }
+        // Handoff spawn never elevates or changes accounts. A denied process
+        // cannot be its child when inspecting from the recorded launching SID.
+        // Missing intermediate parents still leave surviving work unverified.
+        if (ancestry === "unrelated" || (sameWindowsUser && observation?.accessDenied)) {
           continue;
         }
         const inspectorUid = process.getuid?.();
         const foreign =
           observation?.foreignOwner ||
+          command?.owner === "different" ||
           (command?.uid !== undefined &&
             inspectorUid !== undefined &&
             command.uid !== inspectorUid);
@@ -301,23 +420,28 @@ export function inspectOtherOpenClawProcesses(handoff?: HandoffReferences) {
           )
         ) {
           result.unverifiedPids.push(pid);
-          if (windows) {
-            result.error = "Retry update repair as Administrator using the same Windows account.";
-          }
+          const image = observation?.executable ?? argv?.[0];
+          warnings.push(
+            `Could not verify handoff ancestry for PID ${pid} (${image ? (windows ? path.win32 : path).basename(image) : "image unavailable"}).`,
+          );
         }
         continue;
       }
-      const custody = classifyProcessArtifactCustody(
-        command,
-        pid,
-        directories.get(pid),
-        byPid.get(command?.ppid ?? 0)?.command,
-      );
-      if (custody.kind === "unresolved") {
-        throw new Error(`Could not classify PID ${pid}: ${custody.reason}`);
+      const custody = classifyProcessArtifactCustody(command, pid, directories.get(pid));
+      if (custody.kind === "not-holder") {
+        continue;
       }
-      if (custody.kind === "holder") {
-        result.matchingPids.push(pid);
+      if (
+        custody.kind === "holder" &&
+        runtimeDirectory &&
+        custody.paths &&
+        !custody.paths.some((value) => matches.test(normalize(value)))
+      ) {
+        continue;
+      }
+      result.matchingPids.push(pid);
+      if (custody.kind === "unknown") {
+        warnings.push(`Could not verify runtime custody for PID ${pid}: ${custody.reason}`);
       }
     }
   } catch (error) {
@@ -331,5 +455,12 @@ export function inspectOtherOpenClawProcesses(handoff?: HandoffReferences) {
         ? "Host process census is unavailable under Rosetta; run openclaw update repair with native arm64 Node.js."
         : "Host process census is incomplete; verify process-inspection permissions and retry update repair.";
   }
-  return handoff ? result : result.error ? { error: result.error } : { pids: result.matchingPids };
+  return handoff
+    ? { ...result, ...(warnings.length ? { warnings } : {}) }
+    : result.error
+      ? { error: result.error }
+      : {
+          pids: result.matchingPids,
+          ...(warnings.length ? { warnings } : {}),
+        };
 }

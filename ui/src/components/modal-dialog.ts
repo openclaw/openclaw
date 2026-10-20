@@ -1,8 +1,10 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createComponent, createEffect, onSettled, untrack } from "solid-js";
+import { createComponent, onSettled } from "solid-js";
 import { acquireNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
 import { composedParent } from "../lib/navigation-click.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { listen } from "../lib/reactive/listener.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
+import { activeElement, isHtmlElement, tabbableElements } from "./focus-navigation.ts";
 import { createOverlay, findOverlayParent } from "./overlay-lifecycle.ts";
 import { containsComposed } from "./overlay-registry.ts";
 import { ModalDialogContent } from "./solid/modal-dialog.tsx";
@@ -16,6 +18,7 @@ export type ModalDialogProperties = {
   manual: boolean;
   label: string;
   description: string;
+  initialFocus?: () => HTMLElement | null;
   onOpenChange: ((open: boolean) => void) | undefined;
 };
 
@@ -32,6 +35,8 @@ type ModalDialogAttributes = SolidJSX.HTMLAttributes<OpenClawModalDialog> & {
   label: string;
   manual?: boolean;
   description?: string;
+  "prop:onOpenChange"?: ModalDialogProperties["onOpenChange"];
+  "prop:initialFocus"?: ModalDialogProperties["initialFocus"];
   "onModal-cancel"?: (event: Event) => void;
 };
 
@@ -100,28 +105,6 @@ function acquirePresentation(host: HTMLElement): () => void {
   };
 }
 
-function isHtmlElement(value: EventTarget | null): value is HTMLElement {
-  // Namespace survives document adoption; realm-specific constructors do not.
-  return (
-    value !== null &&
-    "namespaceURI" in value &&
-    value.namespaceURI === "http://www.w3.org/1999/xhtml"
-  );
-}
-
-function activeElement(host: HTMLElement): HTMLElement | null {
-  const view = host.ownerDocument.defaultView;
-  const root = host.getRootNode();
-  let active =
-    (root instanceof ShadowRoot || (view && root instanceof view.ShadowRoot)
-      ? root.activeElement
-      : null) ?? host.ownerDocument.activeElement;
-  while (isHtmlElement(active) && active.shadowRoot?.activeElement) {
-    active = active.shadowRoot.activeElement;
-  }
-  return isHtmlElement(active) ? active : null;
-}
-
 function restoreFocus(target: HTMLElement) {
   target.focus({ preventScroll: true });
   target.dispatchEvent(new Event("openclaw:restore-focus"));
@@ -146,7 +129,7 @@ type ModalPolicy = {
   disconnect(): void;
 };
 
-function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperties): ModalPolicy {
+function createModalPolicy(host: OpenClawModalDialog): ModalPolicy {
   let dialog!: HTMLDialogElement;
   let mounted = false;
   let disposed = false;
@@ -165,15 +148,19 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
   let publication = 0;
   let focusReturnVersion = 0;
 
+  const isFocusGuard = (element: HTMLElement) =>
+    element.parentElement === dialog && element.hasAttribute("data-modal-focus-edge");
+
   const focusInitialContent = (initial = false) => {
     if (!host.isConnected || !dialog.open) {
       return;
     }
     const active = activeElement(host);
-    const autofocus = dialog.querySelector<HTMLElement>("[autofocus]");
+    const autofocus = host.initialFocus?.();
     if (
       active &&
       active !== dialog &&
+      !isFocusGuard(active) &&
       containsComposed(dialog, active) &&
       (!initial || active === autofocus)
     ) {
@@ -314,13 +301,16 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
     if (detaching || disposed || !host.isConnected) {
       return;
     }
-    host.open = open;
-    if (!force && reportedOpen === open) {
-      return;
+    const changed = force || reportedOpen !== open;
+    if (changed) {
+      reportedOpen = open;
+      publication += 1;
     }
-    reportedOpen = open;
-    publication += 1;
-    untrack(() => props.onOpenChange?.(open));
+    // Host writes reenter request(); commit the publication before that callback.
+    host.open = open;
+    if (changed) {
+      host.onOpenChange?.(open);
+    }
   };
 
   const request = (next: boolean, controlled = true) => {
@@ -384,15 +374,6 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
   const state = stateFor(host);
   state.policy = policy;
 
-  createEffect(
-    () => props.open,
-    (open) => {
-      if (mounted) {
-        request(open);
-      }
-    },
-  );
-
   const cancel = (event: Event) => {
     if (event.target === dialog) {
       event.preventDefault();
@@ -413,18 +394,51 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
       request(false, false);
     }
   };
-  const keydown = () => {
+  const keydown = (event: KeyboardEvent) => {
     if (initialFocusPending) {
       openingInteraction = true;
     }
+    if (
+      event.key === "Tab" &&
+      !event.defaultPrevented &&
+      event.target === dialog &&
+      tabbableElements(dialog.children).next().done
+    ) {
+      event.preventDefault();
+    }
   };
   const focusin = (event: FocusEvent) => {
+    if (isHtmlElement(event.target) && isFocusGuard(event.target)) {
+      const eligible = [...tabbableElements(dialog.children)];
+      const tabbable = eligible.filter((element) => {
+        if (!(element instanceof HTMLInputElement) || element.type !== "radio" || !element.name) {
+          return true;
+        }
+        const group = eligible.filter(
+          (candidate): candidate is HTMLInputElement =>
+            candidate instanceof HTMLInputElement &&
+            candidate.type === "radio" &&
+            candidate.name === element.name &&
+            candidate.form === element.form &&
+            candidate.getRootNode() === element.getRootNode(),
+        );
+        return element === (group.find((radio) => radio.checked) ?? group[0]);
+      });
+      const backwards =
+        event.target.dataset.modalFocusEdge === "start" &&
+        (!initialFocusPending || openingInteraction);
+      const target = backwards ? tabbable.at(-1) : tabbable[0];
+      (target ?? dialog).focus({ preventScroll: true });
+      return;
+    }
     if (event.target === dialog) {
       if (initialFocusPending && !openingInteraction) {
         return;
       }
       focusBeforeChrome =
-        isHtmlElement(event.relatedTarget) && containsComposed(dialog, event.relatedTarget)
+        isHtmlElement(event.relatedTarget) &&
+        !isFocusGuard(event.relatedTarget) &&
+        containsComposed(dialog, event.relatedTarget)
           ? event.relatedTarget
           : null;
       focusInitialContent();
@@ -432,13 +446,16 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
   };
   onSettled(() => {
     mounted = true;
-    dialog.addEventListener("cancel", cancel);
-    dialog.addEventListener("pointerdown", pointerdown, true);
-    dialog.addEventListener("mousedown", mousedown, true);
-    dialog.addEventListener("keydown", keydown, true);
-    dialog.addEventListener("focusin", focusin);
+    const stopListeners = [
+      listen(dialog, "cancel", cancel),
+      listen(dialog, "pointerdown", pointerdown, true),
+      listen(dialog, "mousedown", { handleEvent: mousedown }, true),
+      listen(dialog, "keydown", { handleEvent: keydown }, true),
+      listen(dialog, "focusin", { handleEvent: focusin }),
+    ];
     overlay.bindSurface(dialog);
     overlay.setParent(findOverlayParent(host));
+    // Modal layering and return focus settle with the accepted transition, before completion events.
     overlay.subscribe((open) => {
       setModalLayer(host, open && host.isConnected);
       if (!open) {
@@ -459,11 +476,7 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
       overlay.dispose();
       setModalLayer(host, false);
       restoreReturnFocus();
-      dialog.removeEventListener("cancel", cancel);
-      dialog.removeEventListener("pointerdown", pointerdown, true);
-      dialog.removeEventListener("mousedown", mousedown, true);
-      dialog.removeEventListener("keydown", keydown, true);
-      dialog.removeEventListener("focusin", focusin);
+      stopListeners.forEach((stop) => stop());
       if (state.policy === policy) {
         state.policy = undefined;
       }
@@ -476,7 +489,7 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
 export const ModalDialog = defineSolidBridge<ModalDialogProperties, ModalDialogMethods>(
   "openclaw-modal-dialog",
   (props, host) => {
-    const policy = createModalPolicy(host, props);
+    const policy = createModalPolicy(host);
     return createComponent(ModalDialogContent, {
       bindDialog: policy.bindDialog,
       bindOverlayContainer: policy.bindOverlayContainer,
@@ -497,7 +510,13 @@ export const ModalDialog = defineSolidBridge<ModalDialogProperties, ModalDialogM
       manual: { default: false, type: Boolean, reflect: true },
       label: { default: "", type: String },
       description: { default: "", type: String },
+      initialFocus: { default: undefined, attribute: false },
       onOpenChange: { default: undefined, attribute: false },
+    },
+    propertyChanged(host, key) {
+      if (key === "open") {
+        states.get(host)?.policy?.request(host.open);
+      }
     },
     connected(host) {
       if (host.manual) {

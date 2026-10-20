@@ -348,7 +348,6 @@ function makeTraceAccount(scenario: DeliveryTraceScenarioName): ResolvedFeishuAc
   traceState.setupCount += 1;
   return {
     accountId: "main",
-    selectionSource: "fallback",
     enabled: true,
     configured: true,
     // Run-unique app id busts the module-level CardKit token cache so every
@@ -394,7 +393,7 @@ function setupFeishuTrace(recorder: WireRecorder, scenario: DeliveryTraceScenari
         await created.delivery.deliver({ text: step.text }, { kind: "block" });
         break;
       case "tool-progress":
-        created.replyOptions.onItemEvent?.({
+        await created.replyOptions.onItemEvent?.({
           itemId: `tool:${step.name}`,
           kind: "tool",
           name: step.name,

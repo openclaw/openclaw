@@ -7,11 +7,10 @@ import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime"
 import { resolveChunkMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { createChannelMessage, createThread } from "./internal/discord.js";
+import { createChannelMessage, createThread } from "./internal/api.messages.js";
 import { withDiscordRequestAuthority } from "./internal/request-authority.js";
 import { rewriteDiscordKnownMentions } from "./mentions.js";
 import { prepareDiscordOutboundText } from "./outbound-text.js";
-import { parseAndResolveChannelRecipient } from "./recipient-resolution.js";
 import {
   createReusableDiscordReplyReference,
   type DiscordReplyReference,
@@ -42,6 +41,7 @@ import type {
   DiscordReactOpts,
   DiscordSendResult,
 } from "./send.types.js";
+import { parseAndResolveDiscordTarget } from "./target-resolver.js";
 type DiscordSendOpts = Omit<DiscordReactOpts, "signal" | "timeoutMs"> &
   DiscordOutboundMediaOpts & {
     mediaUrl?: string;
@@ -72,7 +72,6 @@ const DISCORD_FORUM_REQUIRE_TAG_FLAG = 1 << 4;
 /** Discord thread names are capped at 100 characters. */
 const DISCORD_THREAD_NAME_LIMIT = 100;
 
-/** Derive a thread title from the first non-empty line of the message text. */
 function deriveForumThreadName(text: string): string {
   const firstLine =
     normalizeOptionalString(text.split("\n").find((line) => normalizeOptionalString(line))) ?? "";
@@ -113,7 +112,11 @@ export async function sendMessageDiscord(
       tableMode: opts.tableMode,
       textLimit: opts.textLimit,
     });
-    const recipient = await parseAndResolveChannelRecipient(to, cfg, accountInfo.accountId);
+    const recipient = await parseAndResolveDiscordTarget(
+      to,
+      { cfg, accountId: accountInfo.accountId },
+      { defaultKind: "channel" },
+    );
     const { channelId } = await resolveChannelId(rest, recipient, request);
 
     // Forum/Media channels reject POST /messages; auto-create a thread post instead.
@@ -328,7 +331,11 @@ async function sendDiscordStructuredMessage(
   return withDiscordRequestAuthority(opts.assertPlatformSendAuthorized, async () => {
     const cfg = requireRuntimeConfig(opts.cfg, "Discord structured send");
     const { rest, request, account } = createDiscordClient({ ...opts, cfg });
-    const recipient = await parseAndResolveChannelRecipient(to, cfg, account.accountId);
+    const recipient = await parseAndResolveDiscordTarget(
+      to,
+      { cfg, accountId: account.accountId },
+      { defaultKind: "channel" },
+    );
     const { channelId } = await resolveChannelId(rest, recipient, request);
     const content = opts.content?.trim()
       ? rewriteDiscordKnownMentions(opts.content, {

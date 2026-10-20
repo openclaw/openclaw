@@ -1,18 +1,23 @@
 import path from "node:path";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
 import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { tryReadJson } from "../../infra/json-files.js";
 import { readPackageName } from "../../infra/package-json.js";
 import { checkGlobalPackageUpdateAdmission } from "../../infra/package-update-manager-preflight.js";
+import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import {
-  readUpdateStateSchemaVersions,
   resolveUpdateStateContentVersion,
-} from "../../infra/update-candidate-state.js";
+  resolveUpdateStateTargetVersion,
+} from "../../infra/update-candidate-state.versions.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import type { DevUpdateTarget } from "../../infra/update-dev-target.js";
+import type { UpdateFailureFact } from "../../infra/update-failure-facts.js";
 import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
-import { recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
+import { getUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
+import { defaultRuntime } from "../../runtime.js";
+import type { UpdateRecoveryStep } from "../../shared/update-outcome.js";
 import { UPDATE_GLOBAL_PERMISSION_REASON } from "../../shared/update-outcome.js";
 import type { OpenClawDatabaseSchemaPreflight } from "../../state/openclaw-database-preflight.js";
 import {
@@ -21,6 +26,7 @@ import {
 } from "../../state/openclaw-schema-versions.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { formatCliCommand } from "../command-format.js";
+import { printResult } from "./progress.js";
 import {
   assertReadableGitMetadata,
   checkTargetDatabaseSchemasForContexts,
@@ -34,11 +40,6 @@ import {
   UpdatePreMutationError,
   type UpdateCommandOptions,
 } from "./shared.js";
-import {
-  handleDryRunPreflightError,
-  printUpdateDryRun,
-  type UpdateDryRunFailure,
-} from "./update-command-dry-run.js";
 import type { RefuseUpdate } from "./update-command-result.js";
 import type { prepareUpdateCommand } from "./update-command-run.js";
 import { resolvePackageRuntimePreflight } from "./update-command-runtime-preflight.js";
@@ -47,6 +48,13 @@ import type {
   PreManagedServiceStop,
 } from "./update-command-service-context-types.js";
 import type { resolveUpdateCommandTarget } from "./update-command-target.js";
+
+type UpdateDryRunFailure = {
+  recoverySteps?: readonly UpdateRecoveryStep[];
+  reason: string;
+  message: string;
+  failureFacts?: readonly UpdateFailureFact[];
+};
 
 /** Render prepared preview facts without initializing runtime state. */
 export async function previewUpdateCommand(params: {
@@ -105,19 +113,144 @@ export async function previewUpdateCommand(params: {
         preflight.preflightNotes.push(`Would refuse update: ${admission.stderrTail}`);
       }
     }
-    await printUpdateDryRun({
-      ...target,
-      ...preflight,
+    const mode =
+      target.updateInstallKind === "git"
+        ? "git"
+        : (target.packageInstallTarget?.manager ?? "unknown");
+
+    const actions: string[] = [];
+    if (prepared.requestedChannel && prepared.requestedChannel !== target.storedChannel) {
+      actions.push(`Persist update.channel=${prepared.requestedChannel} in config`);
+    }
+    if (target.switchToGit) {
+      actions.push("Switch install mode from package to git checkout (dev channel)");
+    } else if (target.switchToPackage) {
+      actions.push(`Switch install mode from git to package manager (${mode})`);
+    } else if (target.updateInstallKind === "git") {
+      actions.push(`Run git update flow on channel ${target.channel} (fetch/rebase/build/doctor)`);
+    } else if (target.packageAlreadyCurrent) {
+      actions.push(
+        `Refresh package install with spec ${target.packageInstallSpec ?? target.tag}; current version already matches ${target.targetVersion}`,
+      );
+    } else {
+      actions.push(
+        `Run global package manager update with spec ${target.packageInstallSpec ?? target.tag}`,
+      );
+    }
+    actions.push("Run plugin update sync after core update");
+    actions.push("Refresh shell completion cache (if needed)");
+    actions.push(
+      prepared.shouldRestart
+        ? "Restart gateway service and run doctor checks"
+        : "Skip restart (because --no-restart is set)",
+    );
+
+    const notes: string[] = [...(preflight.preflightNotes ?? [])];
+    if (opts.tag && target.updateInstallKind === "git") {
+      notes.push("--tag applies to npm installs only; git updates ignore it.");
+    }
+    if (target.fallbackToLatest) {
+      notes.push("Beta channel resolves to latest for this run (fallback).");
+    }
+    if (target.managedServiceRoot) {
+      actions.push(
+        `Rebind the managed Gateway from ${target.managedServiceRoot} to ${target.root} after verification.`,
+      );
+    }
+    if (target.managedServiceRootRedirect) {
+      notes.push(
+        `Package update targets managed service root ${target.managedServiceRootRedirect.root} instead of invoking root ${target.managedServiceRootRedirect.previousRoot}.`,
+      );
+    }
+    if (target.explicitTag && !canResolveRegistryVersionForPackageTarget(target.tag)) {
+      notes.push("Non-registry package specs skip npm version lookup and downgrade previews.");
+    }
+    if (hasSchemaRefusal(preflight.packageSchemaPreflight)) {
+      notes.push(...formatSchemaRefusalLines(preflight.packageSchemaPreflight, true));
+    }
+    if (target.updateInstallKind === "git") {
+      notes.push(
+        "Git preview does not execute target scripts or select a build-tested development fallback. The real update repeats database admission before executing each update.",
+      );
+    }
+
+    const run = getUpdateRun(params.runId, { env: opts.run?.env });
+    const targetVersionReason = target.targetVersion
+      ? undefined
+      : target.updateInstallKind === "git"
+        ? "Git dry-runs do not select a build-tested target version."
+        : canResolveRegistryVersionForPackageTarget(target.packageInstallSpec ?? target.tag)
+          ? "The package target version could not be resolved."
+          : "The package artifact is not staged during a dry-run.";
+    const preview = {
       runId: params.runId,
+      run,
+      dryRun: true,
+      root: target.root,
       installKind: prepared.installKind,
-      mode:
-        target.updateInstallKind === "git"
-          ? "git"
-          : (target.packageInstallTarget?.manager ?? "unknown"),
-      shouldRestart: prepared.shouldRestart,
+      mode,
+      updateInstallKind: target.updateInstallKind,
+      switchToGit: target.switchToGit,
+      switchToPackage: target.switchToPackage,
+      restart: prepared.shouldRestart,
       requestedChannel: prepared.requestedChannel,
-      opts,
-    });
+      storedChannel: target.storedChannel,
+      effectiveChannel: target.channel,
+      tag: target.packageInstallSpec ?? target.tag,
+      currentVersion: run?.before?.version ?? target.currentVersion,
+      targetVersion: target.targetVersion,
+      ...(targetVersionReason ? { targetVersionReason } : {}),
+      downgradeRisk: target.downgradeRisk,
+      actions,
+      notes,
+      ...(preflight.preflightFailures?.length ? { failures: preflight.preflightFailures } : {}),
+    };
+    if (opts.json) {
+      defaultRuntime.writeJson(preview);
+    } else {
+      defaultRuntime.log(theme.heading("Update dry-run"));
+      defaultRuntime.log(theme.muted("No changes were applied."));
+      defaultRuntime.log("");
+      defaultRuntime.log(`  Root: ${theme.muted(preview.root)}`);
+      defaultRuntime.log(`  Install kind: ${theme.muted(preview.installKind)}`);
+      defaultRuntime.log(`  Mode: ${theme.muted(preview.mode)}`);
+      defaultRuntime.log(`  Channel: ${theme.muted(preview.effectiveChannel)}`);
+      defaultRuntime.log(`  Tag/spec: ${theme.muted(preview.tag)}`);
+      if (preview.currentVersion) {
+        defaultRuntime.log(`  Current version: ${theme.muted(preview.currentVersion)}`);
+      }
+      if (preview.targetVersion) {
+        defaultRuntime.log(`  Target version: ${theme.muted(preview.targetVersion)}`);
+      } else if (preview.targetVersionReason) {
+        defaultRuntime.log(`  Target version: unresolved (${preview.targetVersionReason})`);
+      }
+      if (preview.downgradeRisk) {
+        defaultRuntime.log(theme.warn("  Downgrade confirmation would be required in a real run."));
+      }
+
+      const printSection = (heading: string, lines: string[], format = (line: string) => line) => {
+        defaultRuntime.log("");
+        defaultRuntime.log(theme.heading(heading));
+        for (const line of lines) {
+          defaultRuntime.log(`  - ${format(line)}`);
+        }
+      };
+      printSection("Planned actions:", preview.actions);
+      if (preview.notes.length > 0) {
+        printSection("Notes:", preview.notes, theme.muted);
+      }
+      await printResult(
+        {
+          runId: params.runId,
+          status: "skipped",
+          mode,
+          reason: "dry-run",
+          steps: [],
+          durationMs: 0,
+        },
+        opts,
+      );
+    }
   }
 }
 
@@ -293,11 +426,21 @@ export async function preflightUpdateCommandSchemas(params: {
         }
         throw error;
       }
-      packageSchemaPreflight = await handleDryRunPreflightError(
-        error,
-        preflightNotes,
-        refuseUpdate,
-      );
+      if (!(error instanceof UpdatePreMutationError)) {
+        throw error;
+      }
+      if (
+        error.reason === "database-schema-preflight" ||
+        error.reason === "target-metadata-preflight" ||
+        error.reason === "invalid-config" ||
+        error.reason === "config-read-failed"
+      ) {
+        // A best-effort preview reports incomplete admission; it never authorizes mutation.
+        preflightNotes.push(error.message.replace(/^Update refused:/u, "Would refuse update:"));
+      } else {
+        await refuseUpdate(error.reason, error.message, error.failureFacts, error.recoverySteps);
+      }
+      packageSchemaPreflight = { incompatible: [], indeterminate: [] };
       if (error instanceof UpdatePreMutationError && error.reason === "target-metadata-preflight") {
         preflightFailures.push({
           reason: error.reason,
@@ -349,7 +492,11 @@ export async function captureUpdateActivationSchemas(params: {
         const version = resolveUpdateStateContentVersion(entry);
         return (
           version !== null &&
-          version !== candidateSchemaVersions[entry.path === sharedPath ? "state" : "agent"]
+          version !==
+            resolveUpdateStateTargetVersion(entry.path, {
+              sharedPath,
+              candidateSchemaVersions,
+            })
         );
       })
     ) {

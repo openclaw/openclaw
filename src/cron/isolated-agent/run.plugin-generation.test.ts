@@ -1,7 +1,7 @@
 // Proves isolated cron/hook runs carry the published Gateway plugin generation
 // into embedded execution instead of rebuilding metadata per run (#125596 family).
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
   getPreparedModelRuntimePluginGeneration,
   getPreparedModelRuntimeBorrowedSnapshot,
@@ -35,8 +35,13 @@ const { PreparedModelRuntimeOwnerNotPublishedError } = await vi.importActual<
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 
+function runTurn(overrides?: Record<string, unknown>) {
+  return runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture(overrides));
+}
+
 async function setupPublishedGeneration(withAuth = false) {
   const config = {
+    session: { store: "/tmp/store.json" },
     ...(withAuth
       ? { auth: { profiles: { test: { provider: "openai", mode: "api_key" as const } } } }
       : {}),
@@ -98,10 +103,8 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
       verboseDefault: "on" as const,
     };
     const config = {
-      agents: {
-        defaults: { model: "anthropic/claude-opus-4-6" },
-        entries: { main: agent },
-      },
+      session: { store: "/tmp/store.json" },
+      agents: { defaults: { model: "anthropic/claude-opus-4-6" }, entries: { main: agent } },
     };
     const admittedConfig = structuredClone(config);
     const selected = { provider: "google", model: "gemini-2.0-flash" };
@@ -123,9 +126,7 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
       return { payloads: [{ text: "summary done" }], meta: { agentMeta: {} } };
     });
 
-    const result = await runCronIsolatedAgentTurn(
-      makeIsolatedAgentParamsFixture({ cfg: config, agentId: "main" }),
-    );
+    const result = await runTurn({ cfg: config, agentId: "main" });
 
     expect(result.status).toBe("ok");
     expect(acquirePreparedModelRuntimeMock.mock.calls[0]?.[0].config).toBe(config);
@@ -153,10 +154,7 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
       onRuntimeLease?.(dispatchLease);
       return { ...dispatchRuntime, readFullModelCatalog };
     });
-    const selectedGeneration = {
-      ...pluginGeneration,
-      pluginRegistry: createEmptyPluginRegistry(),
-    };
+    const selectedGeneration = { ...pluginGeneration, pluginRegistry: createEmptyPluginRegistry() };
     const afterPreparation = createDeferred();
     let borrowedAfterPreparation: Promise<unknown> | undefined;
     acquirePreparedModelRuntimeMock.mockImplementation(async () => {
@@ -188,19 +186,15 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
       return { payloads: [{ text: "test output" }], meta: { agentMeta: {} } };
     });
 
-    const result = await runCronIsolatedAgentTurn(
-      makeIsolatedAgentParamsFixture({ cfg: config, agentId: "default" }),
-    );
+    const result = await runTurn({ cfg: config, agentId: "default" });
     expect(result.error).toBeUndefined();
     expect(result.status).toBe("ok");
-    const dispatchAdmission = loadPublishedReplyDispatchRuntimeMock.mock.calls[0]?.[0] as {
-      abortSignal: AbortSignal;
-    };
+    const dispatchAdmission = loadPublishedReplyDispatchRuntimeMock.mock.calls[0]?.[0];
     expect(dispatchAdmission).toMatchObject({ agentId: "default", abortSignal: expect.anything() });
     expect(acquirePreparedModelRuntimeMock.mock.calls[0]?.[1]).toEqual({
       catalogMode: "static",
       pluginGeneration,
-      abortSignal: dispatchAdmission.abortSignal,
+      abortSignal: expect.any(AbortSignal),
     });
     expect(embeddedRunGeneration).toBe(selectedGeneration);
     expect(readFullModelCatalog).toHaveBeenCalledOnce();
@@ -209,6 +203,61 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
     afterRun.resolve();
     await expect(borrowedAfterClose).resolves.toBeUndefined();
     expect(getPreparedModelRuntimePluginGeneration()).toBeUndefined();
+  });
+
+  it("cancels prepared runtime acquisition and releases its published dispatch lease", async () => {
+    const fixture = await setupPublishedGeneration();
+    const releaseDispatch = vi.fn(async () => {});
+    loadPublishedReplyDispatchRuntimeMock.mockImplementation(async ({ onRuntimeLease }) => {
+      onRuntimeLease?.({
+        snapshot: fixture.owner,
+        pluginGeneration: fixture.pluginGeneration,
+        [Symbol.asyncDispose]: releaseDispatch,
+      });
+      return fixture.dispatchRuntime;
+    });
+    const acquisitionStarted = createDeferred<AbortSignal>();
+    const releaseAcquisition = createDeferred();
+    acquirePreparedModelRuntimeMock.mockImplementation(
+      async (_input, options: { abortSignal?: AbortSignal }) => {
+        const signal = options.abortSignal;
+        if (!signal) {
+          throw new Error("Prepared runtime acquisition requires cancellation");
+        }
+        acquisitionStarted.resolve(signal);
+        await releaseAcquisition.promise;
+        signal.throwIfAborted();
+        throw new Error("Prepared runtime acquisition did not receive cancellation");
+      },
+    );
+    const controller = new AbortController();
+    const reason = new Error("Scheduled run cancelled during runtime acquisition");
+    const pending = runTurn({
+      cfg: fixture.config,
+      agentId: "default",
+      abortSignal: controller.signal,
+    });
+    const settled = pending.catch((error: unknown) => error);
+    try {
+      const signal = await awaitGateBeforeSettlement(
+        acquisitionStarted.promise,
+        pending,
+        "Scheduled run settled before runtime acquisition",
+      );
+      expect(signal.aborted).toBe(false);
+      expect(releaseDispatch).not.toHaveBeenCalled();
+      controller.abort(reason);
+      expect(signal.aborted).toBe(true);
+      expect(signal.reason).toBe(reason);
+      releaseAcquisition.resolve();
+      await expect(settled).resolves.toBe(reason);
+      expect(releaseDispatch).toHaveBeenCalledOnce();
+      expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    } finally {
+      controller.abort(reason);
+      releaseAcquisition.resolve();
+      await settled;
+    }
   });
 
   it("retains the admitted runtime when a generation publishes during auth preparation", async () => {
@@ -239,9 +288,9 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
       };
     });
 
-    await expect(
-      runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture({ cfg: config, agentId: "default" })),
-    ).resolves.toMatchObject({ status: "ok" });
+    await expect(runTurn({ cfg: config, agentId: "default" })).resolves.toMatchObject({
+      status: "ok",
+    });
     expect(resolveSessionAuthSelectionMock).toHaveBeenCalledOnce();
     expect(loadPublishedReplyDispatchRuntimeMock).toHaveBeenCalledOnce();
     expect(acquirePreparedModelRuntimeMock.mock.calls[0]?.[1]).toMatchObject({
@@ -252,6 +301,7 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
 
   it("keeps the execution owner's model pricing through finalization", async () => {
     const config = {
+      session: { store: "/tmp/store.json" },
       models: {
         providers: {
           fixture: {
@@ -315,7 +365,7 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
       },
     });
     const result = await withPluginRuntimeGenerationScope({ metadataSnapshot: ambient }, () =>
-      runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture({ cfg: config })),
+      runTurn({ cfg: config }),
     );
     expect(result.status).toBe("ok");
     expect(cronSession.sessionEntry.estimatedCostUsd).toBe(3);
@@ -349,9 +399,7 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
       [Symbol.asyncDispose]: release,
     });
     try {
-      await expect(runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture())).rejects.toThrow(
-        "continuation fixture failed",
-      );
+      await expect(runTurn()).rejects.toThrow("continuation fixture failed");
       expect(release).toHaveBeenCalledOnce();
       expect(releaseDispatch).toHaveBeenCalledOnce();
     } finally {

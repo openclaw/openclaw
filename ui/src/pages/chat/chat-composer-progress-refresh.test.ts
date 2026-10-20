@@ -1,9 +1,11 @@
 /* @vitest-environment jsdom */
-import { html, render } from "lit";
+
+import { flush } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   renderComposerFixture as renderComposer,
   resetComposerFixture,
+  disposeComposer,
 } from "./chat-composer.test-support.ts";
 afterEach(() => resetComposerFixture());
 
@@ -14,7 +16,7 @@ describe("progress card refresh admission", () => {
     { connected: true, canSend: false, visible: false },
   ])(
     "shows refresh only for writable connected composers: %j",
-    ({ connected, canSend, visible }) => {
+    async ({ connected, canSend, visible }) => {
       const onRefresh = vi.fn();
       const card = {
         sessionKey: "agent:main:work",
@@ -28,9 +30,20 @@ describe("progress card refresh admission", () => {
         progressCard: card,
         progressCardRefresh: { onRefresh },
       });
+      document.body.append(view.container);
       onTestFinished(() => {
-        render(html``, view.container);
+        disposeComposer(view.container);
+        view.container.remove();
       });
+      await Promise.resolve();
+      const options = view.container.querySelector<HTMLButtonElement>(
+        ".session-progress-card__options",
+      );
+      options?.click();
+      flush();
+      if (options) {
+        await vi.waitFor(() => expect(options.getAttribute("aria-expanded")).toBe("true"));
+      }
       const refresh = view.container.querySelector<HTMLButtonElement>(
         ".session-progress-card__refresh",
       );

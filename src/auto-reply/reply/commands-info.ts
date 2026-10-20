@@ -172,10 +172,7 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
         accountId: effectiveAccountId,
         currentChannelId: threadingContext.currentChannelId,
         currentThreadTs:
-          typeof params.ctx.MessageThreadId === "string" ||
-          typeof params.ctx.MessageThreadId === "number"
-            ? String(params.ctx.MessageThreadId)
-            : undefined,
+          params.ctx.MessageThreadId !== undefined ? String(params.ctx.MessageThreadId) : undefined,
         currentMessageId: threadingContext.currentMessageId,
         groupId: targetSessionEntry?.groupId ?? extractExplicitGroupId(params.ctx.From),
         groupChannel:

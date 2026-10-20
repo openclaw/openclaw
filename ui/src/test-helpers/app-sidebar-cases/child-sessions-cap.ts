@@ -59,7 +59,7 @@ describe("AppSidebar spawned session cap", () => {
     const sidebar = await mountChildSessions();
 
     const toggle = sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]");
-    toggle?.click();
+    expect(toggle?.getAttribute("aria-expanded")).toBe("true");
     await waitForFast(() =>
       expect(sidebar.querySelectorAll(".sidebar-recent-session--child")).toHaveLength(4),
     );
@@ -98,9 +98,11 @@ describe("AppSidebar spawned session cap", () => {
       },
     ]);
 
-    sidebar
-      .querySelector<HTMLButtonElement>('[data-child-session-toggle="agent:main:parent"]')
-      ?.click();
+    expect(
+      sidebar
+        .querySelector('[data-child-session-toggle="agent:main:parent"]')
+        ?.getAttribute("aria-expanded"),
+    ).toBe("true");
     await waitForFast(() =>
       expect(
         sidebar.querySelector('[data-session-key="agent:main:dashboard:child-6"]'),

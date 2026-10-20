@@ -1,7 +1,5 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
-import { readStringValue } from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   emitAgentActivityEvent,
   projectAgentToolActivity,
@@ -11,11 +9,6 @@ import { emitAgentEvent } from "../infra/agent-events.js";
 import { isAgentPlanProgressToolName } from "../session-cards/progress-card-input.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel-normalize.js";
 import { resolveCompletedActivityWrappers } from "./agent-activity-presentation.js";
-import {
-  missingRequiredParamLabels,
-  REQUIRED_PARAM_GROUPS,
-  type RequiredParamGroup,
-} from "./agent-tools.params.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import type {
@@ -35,12 +28,6 @@ import {
 } from "./tools/ask-user-tool.js";
 import { sendQuestionToolPrompt } from "./tools/question-prompt-send.js";
 import { normalizeSecretsRequestParams } from "./tools/secrets-tool.js";
-
-const TRACE_REQUIRED_PARAM_GROUPS = {
-  read: [{ keys: ["path", "file_path"], label: "path" }],
-  write: REQUIRED_PARAM_GROUPS.write,
-  edit: REQUIRED_PARAM_GROUPS.edit,
-} satisfies Record<string, readonly RequiredParamGroup[]>;
 
 function reserveQuestionPromptDelivery(
   toolName: "ask_user" | "secrets",
@@ -65,53 +52,6 @@ function reserveQuestionPromptDelivery(
     // Argument validation owns malformed calls; do not deliver an unusable prompt first.
     return undefined;
   }
-}
-
-function traceToolExecutionStart(params: {
-  ctx: ToolHandlerContext;
-  toolName: string;
-  toolCallId: string;
-  args: unknown;
-}) {
-  if (!params.ctx.log.trace || params.ctx.log.isEnabled?.("trace") !== true) {
-    return;
-  }
-  const args = params.args;
-  const argsType = Array.isArray(args) ? "array" : typeof args;
-  const argsKeys =
-    args && typeof args === "object" && !Array.isArray(args)
-      ? Object.keys(args as Record<string, unknown>).toSorted()
-      : undefined;
-  const groups =
-    TRACE_REQUIRED_PARAM_GROUPS[params.toolName as keyof typeof TRACE_REQUIRED_PARAM_GROUPS];
-  const record = args && typeof args === "object" ? (args as Record<string, unknown>) : undefined;
-  const requiredParamsMissing = groups?.length ? missingRequiredParamLabels(record, groups) : [];
-  params.ctx.log.trace("embedded run tool start", {
-    event: "embedded_tool_execution_start",
-    tags: ["tool_start", "embedded", "trace"],
-    runId: params.ctx.params.runId,
-    toolName: params.toolName,
-    toolCallId: params.toolCallId,
-    argsType,
-    ...(argsKeys?.length ? { argsKeys } : {}),
-    ...(params.ctx.params.sessionKey ? { sessionKey: params.ctx.params.sessionKey } : {}),
-    ...(params.ctx.params.sessionId ? { sessionId: params.ctx.params.sessionId } : {}),
-    ...(params.ctx.params.agentId ? { agentId: params.ctx.params.agentId } : {}),
-    ...(requiredParamsMissing.length ? { requiredParamsMissing } : {}),
-  });
-}
-
-const TOOL_START_WARNING_PREVIEW_MAX_CHARS = 200;
-
-function buildToolStartWarningArgsPreview(rawArgsPreview: string | undefined): string | undefined {
-  if (rawArgsPreview == null) {
-    return undefined;
-  }
-  // Bound before regex normalization so malformed tool args cannot make warning work unbounded.
-  const wasTruncated = rawArgsPreview.length > TOOL_START_WARNING_PREVIEW_MAX_CHARS;
-  const bounded = truncateUtf16Safe(rawArgsPreview, TOOL_START_WARNING_PREVIEW_MAX_CHARS);
-  const preview = sanitizeForConsole(bounded, TOOL_START_WARNING_PREVIEW_MAX_CHARS);
-  return wasTruncated && preview ? `${preview}…` : preview;
 }
 
 type ToolStartRecord = {
@@ -167,7 +107,6 @@ export function buildToolCallSummary(
     meta,
     commandBearing: isCommandBearingToolCall(toolName, args),
     instanceReplaySafe,
-    mutatingAction: mutation.mutatingAction,
     ...(ownerKey ? { ownerKey } : {}),
     replaySafe:
       (instanceReplaySafe && !mutation.mutatingAction) ||
@@ -195,9 +134,6 @@ export function emitTrackedItemEvent(
   if (itemData.phase === "start") {
     ctx.state.itemActiveIds.add(itemData.itemId);
     ctx.state.itemStartedCount += 1;
-  } else if (itemData.phase === "end") {
-    ctx.state.itemActiveIds.delete(itemData.itemId);
-    ctx.state.itemCompletedCount += 1;
   }
   // Reply liveness and channel delivery still consume every original callback.
   if (itemData.phase !== "update" || emitLiveUpdate) {
@@ -374,7 +310,6 @@ export function handleToolExecutionStart(
         ? { hasRepliedRef: { value: ctx.params.hasRepliedRef.value } }
         : {}),
     });
-    traceToolExecutionStart({ ctx, toolName, toolCallId, args });
 
     if (toolName === "read") {
       const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
@@ -387,8 +322,6 @@ export function handleToolExecutionStart(
       const filePath = filePathValue.trim();
       if (!filePath) {
         const argsType = typeof args;
-        const rawArgsPreview = readStringValue(args);
-        const argsPreview = buildToolStartWarningArgsPreview(rawArgsPreview);
         const safeRunId = sanitizeForConsole(runId) ?? "-";
         const safeSessionKey = sanitizeForConsole(ctx.params.sessionKey);
         const safeSessionId = sanitizeForConsole(ctx.params.sessionId);
@@ -408,13 +341,8 @@ export function handleToolExecutionStart(
         if (safeAgentId) {
           consoleMessageParts.push(`agentId=${safeAgentId}`);
         }
-        if (argsPreview) {
-          consoleMessageParts.push(`argsPreview=${argsPreview}`);
-        }
         const consoleMessage = consoleMessageParts.join(" ");
-        const message = `read tool called without path: toolCallId=${toolCallId} argsType=${argsType}${
-          argsPreview ? ` argsPreview=${argsPreview}` : ""
-        }`;
+        const message = `read tool called without path: toolCallId=${toolCallId} argsType=${argsType}`;
         ctx.log.warn(message, {
           event: "embedded_read_tool_start_warning",
           tags: ["tool_start", "read", "embedded", "validation"],
@@ -424,7 +352,6 @@ export function handleToolExecutionStart(
           ...(safeSessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
           ...(safeSessionId ? { sessionId: ctx.params.sessionId } : {}),
           ...(safeAgentId ? { agentId: ctx.params.agentId } : {}),
-          ...(argsPreview ? { argsPreview } : {}),
           consoleMessage,
         });
       }
@@ -450,9 +377,6 @@ export function handleToolExecutionStart(
       false,
     );
     ctx.state.toolMetaById.set(toolCallId, callSummary);
-    ctx.log.debug(
-      `embedded run tool start: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
-    );
 
     const shouldEmitToolEvents = ctx.shouldEmitToolResult();
     const itemData = {

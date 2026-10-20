@@ -222,10 +222,6 @@ export async function resolveSlackThreadContextData(params: {
           prependUnavailable: true,
         });
       }
-      if (threadStarterMedia) {
-        const starterPlaceholders = threadStarterMedia.map((item) => item.placeholder).join(", ");
-        logVerbose(`slack: hydrated thread starter file ${starterPlaceholders} from root message`);
-      }
     }
   } else {
     threadLabel = `Slack thread ${params.roomLabel}`;
@@ -244,7 +240,6 @@ export async function resolveSlackThreadContextData(params: {
   } else if (includeBotStarterAsRootContext) {
     const snippet = formatSlackThreadLabelSnippet(starter?.text ?? "").trim();
     threadLabel = `Slack thread ${params.roomLabel}${snippet ? ` (assistant root): ${snippet}` : ""}`;
-    logVerbose("slack: retained current-bot thread starter as assistant root context");
   }
 
   const threadInitialHistoryLimit = Math.min(
@@ -291,42 +286,39 @@ export async function resolveSlackThreadContextData(params: {
       starter && threadStarterBody && threadStarterBody !== starter.text
         ? { ...starter, text: threadStarterBody, ts: currentBotRootTs }
         : null;
-    const threadHistoryWithEnrichedRoot =
-      enrichedStarter && !threadHistory.some((entry) => entry.ts === currentBotRootTs)
+    const rootContext =
+      enrichedStarter ??
+      (includeBotStarterAsRootContext && starter ? { ...starter, ts: currentBotRootTs } : null);
+    const threadHistoryWithRoot =
+      rootContext && !threadHistory.some((entry) => entry.ts === currentBotRootTs)
         ? [
-            enrichedStarter,
-            ...(threadHistory.length >= threadInitialHistoryLimit
+            rootContext,
+            ...(enrichedStarter && threadHistory.length >= threadInitialHistoryLimit
               ? threadHistory.slice(1)
               : threadHistory),
           ]
         : threadHistory;
-    const threadHistoryWithBotRoot =
-      includeBotStarterAsRootContext &&
-      starter &&
-      !threadHistoryWithEnrichedRoot.some((entry) => entry.ts === currentBotRootTs)
-        ? [{ ...starter, ts: currentBotRootTs }, ...threadHistoryWithEnrichedRoot]
-        : threadHistoryWithEnrichedRoot;
 
-    if (threadHistoryWithBotRoot.length > 0) {
+    if (threadHistoryWithRoot.length > 0) {
       // MPIM roots stay on the flat group session. Outbound delivery may create
       // the reply-thread session before its first inbound turn, so recover its replies.
       const retainCurrentBotHistory =
         params.isGroupDm && (isMissingThreadSession || isOutboundOnlyThreadSession);
-      const threadHistoryWithoutCurrentBot = threadHistoryWithBotRoot.filter(
+      const threadHistoryWithoutCurrentBot = threadHistoryWithRoot.filter(
         (entry) =>
           !isCurrentBotAuthor(entry) ||
           retainCurrentBotHistory ||
           (includeBotStarterAsRootContext && entry.ts === currentBotRootTs),
       );
       const omittedCurrentBotHistoryCount =
-        threadHistoryWithBotRoot.length - threadHistoryWithoutCurrentBot.length;
+        threadHistoryWithRoot.length - threadHistoryWithoutCurrentBot.length;
 
       const userMapForFilter =
         params.contextVisibilityMode !== "all" &&
         params.allowNameMatching &&
         params.allowFromLower.length > 0
           ? await resolveThreadUserMap(threadHistoryWithoutCurrentBot)
-          : new Map<string, { name?: string }>();
+          : undefined;
       params.assertHistoryCurrent?.();
       const { items: filteredThreadHistory, omitted: omittedHistoryCount } =
         params.contextVisibilityMode === "all"
@@ -339,7 +331,7 @@ export async function resolveSlackThreadContextData(params: {
                 if (isCurrentBotAuthor(historyMsg)) {
                   return true;
                 }
-                const msgUser = historyMsg.userId ? userMapForFilter.get(historyMsg.userId) : null;
+                const msgUser = historyMsg.userId ? userMapForFilter?.get(historyMsg.userId) : null;
                 return resolveSlackUserAllowed({
                   allowList: params.allowFromLower,
                   teamId: params.eventScope?.teamId ?? params.ctx.teamId,
@@ -349,7 +341,7 @@ export async function resolveSlackThreadContextData(params: {
                 });
               },
             });
-      const userMap = await resolveThreadUserMap(filteredThreadHistory);
+      const userMap = userMapForFilter ?? (await resolveThreadUserMap(filteredThreadHistory));
       params.assertHistoryCurrent?.();
       if (omittedHistoryCount > 0 || omittedCurrentBotHistoryCount > 0) {
         logVerbose(
@@ -383,9 +375,6 @@ export async function resolveSlackThreadContextData(params: {
       }
       if (historyParts.length > 0) {
         threadHistoryBody = historyParts.join("\n\n");
-        logVerbose(
-          `slack: populated thread history with ${filteredThreadHistory.length} messages for new session`,
-        );
       }
     }
   }

@@ -4,7 +4,7 @@ import {
   skipHorizontalWhitespace,
   skipWhitespace,
 } from "../../../packages/tool-call-repair/src/grammar.js";
-import { findCodeRegions, isInsideCode } from "./code-regions.js";
+import { findCodeRegions, isInsideCode, isInsideSettledBlockCode } from "./code-regions.js";
 import { isGlmArgPayload } from "./glm-arg-key-payload.js";
 import { createConditionalTextProjector, type TextFilter } from "./text-projection.js";
 import { createQuotedStringScanner, parseXmlTagAt, type ParsedToolCallTag } from "./xml-tag-at.js";
@@ -293,8 +293,12 @@ function stripToolCallXmlTagsInternal(
   ) {
     return text;
   }
-
   const codeRegions = resolveCodeRegions(text);
+  // A lone transport opener is scaffolding unless Markdown owns it as code.
+  if (/^\s*<tool_call>\s*$/i.test(text) && !isInsideCode(text.indexOf("<"), codeRegions)) {
+    return "";
+  }
+
   let result = "";
   let lastIndex = 0;
   let isInsidePayloadQuote: ((end: number) => boolean) | undefined;
@@ -468,15 +472,7 @@ export function toolCallXmlTextFilter(
           }
           for (let start = text.indexOf("<", scannedThrough); start !== -1;) {
             codeRegions ??= findCodeRegions(text);
-            // Appends cannot revoke block code after its opening line is complete.
-            // Inline code can still change ownership through tables and references.
-            const protectedBlock = codeRegions.some(
-              (region) =>
-                region.block &&
-                region.start <= start &&
-                start < region.end &&
-                /[\r\n]/.test(text.slice(region.start, start)),
-            );
+            const protectedBlock = isInsideSettledBlockCode(start, text, codeRegions);
             const next = text.indexOf("<", start + 1);
             const candidate = text.slice(start, next === -1 ? text.length : next);
             if (!protectedBlock && TOOL_CALL_QUICK_RE.test(candidate)) {

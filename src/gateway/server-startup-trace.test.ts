@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { measureCliCommandStartup } from "../cli/command-startup-timing.js";
 import { createGatewayDispatchStartupTrace } from "../cli/startup-trace.js";
 import { measureDoctorConfigPreflightStep } from "../commands/doctor-config-preflight-measure.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const eventLoopDelay = vi.hoisted(() => ({
   instances: [] as Array<{
@@ -44,6 +45,137 @@ describe("gateway startup trace", () => {
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
+
+  it.each([
+    { enabled: "0", fail: false },
+    { enabled: "0", fail: true },
+    { enabled: "1", fail: false },
+  ])(
+    "summarizes recovery once at phase end ($enabled, failure=$fail)",
+    async ({ enabled, fail }) => {
+      vi.stubEnv("OPENCLAW_GATEWAY_STARTUP_TRACE", enabled);
+      let now = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => now);
+      const log = createSubsystemLogger("gateway-startup-test");
+      const info = vi.spyOn(log, "info").mockImplementation(() => {});
+      const trace = createGatewayStartupTrace(log, 0);
+      const step = (name: string, ms: number) =>
+        trace.measure(name, () => {
+          now += ms;
+        });
+      const failure = new Error("synthetic private recovery payload");
+      try {
+        trace.mark("ready");
+        info.mockClear();
+        const recovery = trace.measure("sidecars.subagent-recovery", async () => {
+          await step("sidecars.recovery-readers", 100);
+          await trace.measure("sidecars.delivery-recovery", async () => {
+            await step("sidecars.delivery-discovery", 10);
+            await step("sidecars.delivery-entries", 20);
+            await step("sidecars.delivery-history", 30);
+            await step("sidecars.delivery-replay", 15);
+            await step("sidecars.delivery-replay", 25);
+            await step("sidecars.delivery-notices", 200);
+            await step("sidecars.delivery-notices", 300);
+            await step("sidecars.delivery-retry-wait", 1_000);
+          });
+          await step("sidecars.exec-recovery", 20);
+          await step("sidecars.subagent-load", 30);
+          await trace.measure("sidecars.subagent-activation", async () => {
+            await step("sidecars.subagent-bind", 10);
+            trace.detail("sidecars.subagent-activation", [
+              ["registryActivationAuthorityRestoreMs", 6],
+              ["registryActivationPublishMs", 2],
+              ["registryActivationYieldMs", 1],
+              ["registryActivationRuns", 6],
+              ["registryActivationActiveRuns", 2],
+              ["registryActivationRecoveredRuns", 1],
+              ["registryActivationPublishedRuns", 5],
+            ]);
+            await step("sidecars.subagent-requesters", 5);
+            await trace.measure("sidecars.subagent-resume", async () => {
+              await step("sidecars.subagent-reserve", 3);
+              now += 17;
+              trace.detail("sidecars.subagent-activation", [
+                ["registryActivationSessionReadMs", 7],
+                ["registryActivationYieldMs", 2],
+              ]);
+            });
+            await trace.measure("sidecars.subagent-interrupted", () => {
+              now += 5;
+              if (fail) {
+                throw failure;
+              }
+            });
+          });
+        });
+        if (fail) {
+          await expect(recovery).rejects.toBe(failure);
+        } else {
+          await recovery;
+        }
+        const messages = info.mock.calls.map(([message]) => message);
+        const summary = messages.filter((message) => message.includes("readersMs="));
+        expect(summary).toEqual([
+          `startup ${enabled === "1" ? "trace" : "phase"}: sidecars.subagent-recovery 1790.0ms total=1790.0ms ${enabled === "1" ? "eventLoopMax=0.0ms " : ""}readersMs=100.0 execMs=20.0 registryLoadMs=30.0 registryActivationMs=40.0 registryActivationBindMs=10.0 registryActivationRequestersMs=5.0 registryActivationReserveMs=3.0 registryActivationResumeMs=20.0 registryActivationInterruptedMs=5.0 registryActivationAuthorityRestoreMs=6.0 registryActivationPublishMs=2.0 registryActivationSessionReadMs=7.0 registryActivationYieldMs=3.0 registryActivationRuns=6.0 registryActivationActiveRuns=2.0 registryActivationRecoveredRuns=1.0 registryActivationPublishedRuns=5.0 outcome=${fail ? "failure" : "success"}`,
+        ]);
+        if (enabled === "0") {
+          expect(messages).toHaveLength(2);
+        }
+        expect(messages.join("\n")).not.toContain(failure.message);
+
+        info.mockClear();
+        await trace.measure("sidecars.subagent-recovery", () => {});
+        expect(info.mock.calls.at(-1)?.[0]).toContain(
+          "readersMs=0.0 execMs=0.0 registryLoadMs=0.0 registryActivationMs=0.0 registryActivationBindMs=0.0 registryActivationRequestersMs=0.0 registryActivationReserveMs=0.0 registryActivationResumeMs=0.0 registryActivationInterruptedMs=0.0 registryActivationAuthorityRestoreMs=0.0 registryActivationPublishMs=0.0 registryActivationSessionReadMs=0.0 registryActivationYieldMs=0.0 registryActivationRuns=0.0 registryActivationActiveRuns=0.0 registryActivationRecoveredRuns=0.0 registryActivationPublishedRuns=0.0 outcome=success",
+        );
+      } finally {
+        trace.close();
+      }
+    },
+  );
+
+  it.each([
+    { trace: "0", duration: 249, fail: false, nested: false, visible: false },
+    { trace: undefined, duration: 250, fail: false, nested: false, visible: true },
+    { trace: "0", duration: 500, fail: true, nested: false, visible: true },
+    { trace: "1", duration: 500, fail: false, nested: false, visible: true },
+    { trace: "0", duration: 500, fail: false, nested: true, visible: false },
+  ])(
+    "reports slow service startup once without payloads ($trace, $duration ms, failure=$fail, nested=$nested)",
+    async ({ trace: enabled, duration, fail, nested, visible }) => {
+      vi.stubEnv("OPENCLAW_GATEWAY_STARTUP_TRACE", enabled);
+      let now = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => now);
+      const log = createSubsystemLogger("gateway-startup-test");
+      const info = vi.spyOn(log, "info").mockImplementation(() => {});
+      const trace = createGatewayStartupTrace(log, 0);
+      const name = `sidecars.plugin-services.plugin-a.service-a${nested ? ".remote-request" : ""}`;
+      const failure = new Error("synthetic sensitive service payload");
+      try {
+        const measured = trace.measure(name, () => {
+          now += duration;
+          if (fail) {
+            throw failure;
+          }
+        });
+        if (fail) {
+          await expect(measured).rejects.toBe(failure);
+        } else {
+          await measured;
+        }
+        expect(info.mock.calls.map(([message]) => message)).toEqual(
+          visible
+            ? [
+                `startup trace: ${name} ${duration.toFixed(1)}ms total=${duration.toFixed(1)}ms eventLoopMax=0.0ms outcome=${fail ? "failure" : "success"}`,
+              ]
+            : [],
+        );
+      } finally {
+        trace.close();
+      }
+    },
+  );
 
   it.each([
     { updateCanary: false, markers: 2 },

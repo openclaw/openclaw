@@ -1,5 +1,3 @@
-// Covers attempt-execution helper behavior around retries, Claude CLI
-// transcripts, and ACP visible text accumulation.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -10,6 +8,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import type { ClaudeCliFallbackSeed } from "../../gateway/cli-session-history.claude.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { buildAssistantMessage, buildUsageWithNoCost } from "../stream-message-shared.js";
@@ -37,105 +36,78 @@ import {
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 
 function formatClaudeCliFallbackPrelude(
-  seed: NonNullable<
-    Awaited<
-      ReturnType<
-        typeof import("../../gateway/cli-session-history.claude.js").readClaudeCliFallbackSeed
-      >
-    >
-  >,
+  seed: ClaudeCliFallbackSeed,
   options?: { charBudget?: number },
 ) {
   mocks.readClaudeCliFallbackSeed.mockReturnValue(seed);
   return buildClaudeCliFallbackContextPrelude({ cliSessionId: "fixture-session", ...options });
 }
+const turn = (role: "user" | "assistant", content: unknown) => ({ role, content });
+const summaryPrelude = (summaryText: string, charBudget: number) =>
+  formatClaudeCliFallbackPrelude({ summaryText, recentTurns: [] }, { charBudget });
 
-describe("resolveFallbackRetryPrompt", () => {
+it("emits the retry prompt with prelude even when sessionHasHistory is false (claude-cli case)", () => {
   const originalBody = "Summarize the quarterly earnings report and highlight key trends.";
-
-  it("emits the retry prompt with prelude even when sessionHasHistory is false (claude-cli case)", () => {
-    const prelude = "## Prior session context (from claude-cli)\nuser: prior question";
-    const result = resolveFallbackRetryPrompt({
-      body: originalBody,
-      isFallbackRetry: true,
-      sessionHasHistory: false,
-      priorContextPrelude: prelude,
-    });
-    expect(result).toBe(
-      `${prelude}\n\n[Retry after the previous model attempt failed or timed out]\n\n${originalBody}`,
-    );
+  const prelude = "## Prior session context (from claude-cli)\nuser: prior question";
+  const result = resolveFallbackRetryPrompt({
+    body: originalBody,
+    isFallbackRetry: true,
+    sessionHasHistory: false,
+    priorContextPrelude: prelude,
   });
+  expect(result).toBe(
+    `${prelude}\n\n[Retry after the previous model attempt failed or timed out]\n\n${originalBody}`,
+  );
 });
 
 describe("formatClaudeCliFallbackPrelude", () => {
   it("formats user/assistant turns and tags tool blocks with compact hints", async () => {
-    // Tool-use blocks are represented as compact hints because fallback prompts
-    // should preserve intent without replaying full tool schemas or outputs.
     const out = await formatClaudeCliFallbackPrelude({
       summaryText: "Earlier summary",
       recentTurns: [
-        {
-          role: "user",
-          content: "Earlier user question",
-        },
-        {
-          role: "assistant",
-          content: [
-            { type: "text", text: "Earlier assistant reply" },
-            { type: "toolcall", name: "Bash" },
-          ],
-        },
-        {
-          role: "user",
-          content: [
-            {
-              type: "tool_result",
-              tool_use_id: "toolu_x",
-              content: "Earlier tool output",
-            },
-          ],
-        },
+        turn("user", "Earlier user question"),
+        turn("assistant", [
+          { type: "text", text: "Earlier assistant reply" },
+          { type: "toolcall", name: "Bash" },
+        ]),
+        turn("user", [
+          { type: "tool_result", tool_use_id: "toolu_x", content: "Earlier tool output" },
+        ]),
       ],
     });
-    expect(out).toContain("## Prior session context (from claude-cli)");
-    expect(out).toContain("Summary of earlier conversation:\nEarlier summary");
-    expect(out).toContain("Recent turns:");
-    expect(out).toContain("user: Earlier user question");
-    expect(out).toContain("assistant: Earlier assistant reply");
-    expect(out).toContain("(tool call: Bash)");
-    expect(out).toContain("(tool result: Earlier tool output)");
+    for (const fragment of [
+      "## Prior session context (from claude-cli)",
+      "Summary of earlier conversation:\nEarlier summary",
+      "Recent turns:",
+      "user: Earlier user question",
+      "assistant: Earlier assistant reply",
+      "(tool call: Bash)",
+      "(tool result: Earlier tool output)",
+    ]) {
+      expect(out).toContain(fragment);
+    }
   });
 
   it("truncates an oversized summary instead of dropping it silently", async () => {
     const huge = "x ".repeat(10_000).trim();
-    const out = await formatClaudeCliFallbackPrelude(
-      { summaryText: huge, recentTurns: [] },
-      { charBudget: 600 },
-    );
+    const out = await summaryPrelude(huge, 600);
     expect(out).toContain("Summary of earlier conversation (truncated):");
     expect(out.length).toBeLessThan(800);
     expect(out).toMatch(/…$/);
   });
 
-  it.each([["a surrogate boundary", `${"x".repeat(21)}😀${"y".repeat(100)}`, "x".repeat(21)]])(
-    "preserves %s when truncating an oversized summary",
-    async (_label, summaryText, expected) => {
-      const out = await formatClaudeCliFallbackPrelude(
-        { summaryText, recentTurns: [] },
-        { charBudget: 128 },
-      );
-
-      expect(out).toContain(`Summary of earlier conversation (truncated):\n${expected} …`);
-    },
-  );
+  it("preserves a surrogate boundary when truncating an oversized summary", async () => {
+    const out = await summaryPrelude(`${"x".repeat(21)}😀${"y".repeat(100)}`, 128);
+    expect(out).toContain(`Summary of earlier conversation (truncated):\n${"x".repeat(21)} …`);
+  });
 
   it("keeps the recent turn window contiguous when an adjacent turn is oversized", async () => {
     const out = await formatClaudeCliFallbackPrelude(
       {
         recentTurns: [
-          { role: "user", content: "older small turn" },
-          { role: "assistant", content: `oversized adjacent turn ${"x".repeat(500)}` },
-          { role: "user", content: "newest small turn" },
+          turn("user", "older small turn"),
+          turn("assistant", `oversized adjacent turn ${"x".repeat(500)}`),
+          turn("user", "newest small turn"),
         ],
       },
       { charBudget: 260 },
@@ -147,36 +119,20 @@ describe("formatClaudeCliFallbackPrelude", () => {
   });
 });
 
-describe("buildClaudeCliFallbackContextPrelude", () => {
-  beforeEach(() => {
-    mocks.readClaudeCliFallbackSeed.mockReset();
-  });
-
-  it("returns empty string when the Claude session loader finds no seed", async () => {
-    mocks.readClaudeCliFallbackSeed.mockReturnValue(undefined);
-
-    expect(
-      await buildClaudeCliFallbackContextPrelude({
-        cliSessionId: "missing-session",
-        homeDir: "/tmp/test-home",
-      }),
-    ).toBe("");
-    expect(mocks.readClaudeCliFallbackSeed).toHaveBeenCalledWith({
-      cliSessionId: "missing-session",
-      homeDir: "/tmp/test-home",
-    });
-  });
+it("returns empty string when the Claude session loader finds no seed", async () => {
+  mocks.readClaudeCliFallbackSeed.mockReset();
+  const params = {
+    cliSessionId: "missing-session",
+    homeDir: "/tmp/test-home",
+  };
+  expect(await buildClaudeCliFallbackContextPrelude(params)).toBe("");
+  expect(mocks.readClaudeCliFallbackSeed).toHaveBeenCalledWith(params);
 });
 
 describe("sessionTranscriptHasContent", () => {
   const sessionDirs = useSessionStoreTempDirs(afterAll, "oc-transcript-probe-");
   let tmpDir: string;
-  let target: {
-    agentId: string;
-    sessionId: string;
-    sessionKey: string;
-    storePath: string;
-  };
+  let target: NonNullable<Parameters<typeof sessionTranscriptHasContent>[0]>;
 
   beforeEach(async () => {
     tmpDir = sessionDirs.make();
@@ -190,9 +146,7 @@ describe("sessionTranscriptHasContent", () => {
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
   });
 
-  afterEach(() => {
-    clearRuntimeConfigSnapshot();
-  });
+  afterEach(clearRuntimeConfigSnapshot);
 
   const assistantMessage = () =>
     buildAssistantMessage({
@@ -239,29 +193,39 @@ describe("sessionTranscriptHasContent", () => {
   });
 });
 
-describe("claudeCliSessionTranscriptHasContent", () => {
+describe("Claude CLI transcript probes", () => {
   let tmpDir: string;
+  let workspaceDir: string;
 
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "oc-claude-session-test-"));
+    workspaceDir = await fs.mkdtemp(path.join(tmpDir, "ws-"));
   });
 
   afterEach(async () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  async function makeWorkspace() {
-    const workspaceDir = await fs.mkdtemp(path.join(tmpDir, "ws-"));
-    return workspaceDir;
-  }
+  const message = (role: "user" | "assistant", content: unknown, isSidechain = false) => ({
+    type: role,
+    message: { role, content },
+    ...(isSidechain ? { isSidechain: true } : {}),
+  });
 
-  async function writeClaudeProjectFile(workspaceDir: string, sessionId: string, content: string) {
+  async function writeJsonlSession(sessionId: string, lines: object[]) {
     const projectDir = resolveClaudeCliProjectDirForWorkspace({ workspaceDir, homeDir: tmpDir });
     await fs.mkdir(projectDir, { recursive: true });
     const file = path.join(projectDir, `${sessionId}.jsonl`);
-    await fs.writeFile(file, content, "utf-8");
+    await fs.writeFile(file, lines.map((line) => JSON.stringify(line)).join("\n") + "\n", "utf-8");
     return file;
   }
+
+  const probe = (sessionId: string, orphan = false) =>
+    (orphan ? claudeCliSessionTranscriptHasOrphanedToolUse : claudeCliSessionTranscriptHasContent)({
+      sessionId,
+      workspaceDir,
+      homeDir: tmpDir,
+    });
 
   const GRACE_MS = 250;
 
@@ -276,16 +240,10 @@ describe("claudeCliSessionTranscriptHasContent", () => {
   });
 
   it("returns true on the second scan when the assistant message lands during the grace window", async () => {
-    const workspaceDir = await makeWorkspace();
     const sessionId = "fs-flush-latency";
-    const file = await writeClaudeProjectFile(
-      workspaceDir,
-      sessionId,
-      `${JSON.stringify({
-        type: "user",
-        message: { role: "user", content: [{ type: "text", text: "hi" }] },
-      })}\n`,
-    );
+    const file = await writeJsonlSession(sessionId, [
+      message("user", [{ type: "text", text: "hi" }]),
+    ]);
 
     const graceStarted = createDeferred();
     const releaseGrace = createDeferred();
@@ -305,181 +263,129 @@ describe("claudeCliSessionTranscriptHasContent", () => {
           void releaseGrace.promise.then(() => handler(...args));
         }, delay);
       });
-    const probe = claudeCliSessionTranscriptHasContent({
-      sessionId,
-      workspaceDir,
-      homeDir: tmpDir,
-    });
+    const pending = probe(sessionId);
     try {
-      await Promise.race([graceStarted.promise, probe]);
+      await Promise.race([graceStarted.promise, pending]);
       expect(graceFires).toBe(1);
       await fs.appendFile(
         file,
-        `${JSON.stringify({
-          type: "assistant",
-          message: { role: "assistant", content: [{ type: "text", text: "ack" }] },
-        })}\n`,
+        `${JSON.stringify(message("assistant", [{ type: "text", text: "ack" }]))}\n`,
         "utf-8",
       );
       releaseGrace.resolve();
-      expect(await probe).toBe(true);
+      expect(await pending).toBe(true);
     } finally {
       setTimeoutSpy.mockRestore();
       releaseGrace.resolve();
-      await probe;
+      await pending;
     }
-  });
-});
-
-describe("claudeCliSessionTranscriptHasOrphanedToolUse", () => {
-  let tmpDir: string;
-  let workspaceDir: string;
-
-  beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "oc-claude-orphan-test-"));
-    workspaceDir = await fs.mkdtemp(path.join(tmpDir, "ws-"));
-  });
-
-  afterEach(async () => {
-    await fs.rm(tmpDir, { recursive: true, force: true });
-  });
-
-  async function writeJsonlSession(sessionId: string, lines: object[]) {
-    const projectDir = resolveClaudeCliProjectDirForWorkspace({
-      workspaceDir,
-      homeDir: tmpDir,
-    });
-    await fs.mkdir(projectDir, { recursive: true });
-    const file = path.join(projectDir, `${sessionId}.jsonl`);
-    await fs.writeFile(file, lines.map((l) => JSON.stringify(l)).join("\n") + "\n", "utf-8");
-    return file;
-  }
-
-  const message = (role: "user" | "assistant", content: unknown, isSidechain = false) => ({
-    type: role,
-    message: { role, content },
-    ...(isSidechain ? { isSidechain: true } : {}),
   });
   const tool = (id: string, type = "tool_use") => ({ type, id, name: "Bash", input: {} });
   const result = (id: string, type = "tool_result") => ({ type, tool_use_id: id, content: "ok" });
   const longPrefix = Array.from({ length: 600 }, (_, i) => message("user", `ping ${i}`));
 
   it.each([
-    {
-      name: "hosted results inside the assistant message",
-      expected: false,
-      lines: [
+    [
+      "hosted results inside the assistant message",
+      false,
+      [
         message("assistant", [
           tool("server", "server_tool_use"),
           result("server", "web_search_tool_result"),
           { type: "text", text: "found it" },
         ]),
       ],
-    },
-    {
-      name: "a string assistant superseding an orphan past record 500",
-      expected: false,
-      lines: [
-        message("assistant", [tool("old")]),
-        ...longPrefix,
-        message("assistant", "moving on"),
+    ],
+    [
+      "a string assistant superseding an orphan past record 500",
+      false,
+      [message("assistant", [tool("old")]), ...longPrefix, message("assistant", "moving on")],
+    ],
+    [
+      "answered calls repeated by a request echo before the final reply",
+      false,
+      [
+        message("assistant", [tool("spawn")]),
+        message("user", [result("spawn")]),
+        { type: "api-request-blob", message: { role: "assistant", content: [tool("spawn")] } },
+        { type: "api-request" },
       ],
-    },
-    {
-      name: "main-conversation orphans with sidechain results",
-      expected: true,
-      lines: [message("assistant", [tool("main")]), message("user", [result("main")], true)],
-    },
-    {
-      name: "a trailing orphan past record 500",
-      expected: true,
-      lines: [
+    ],
+    [
+      "an orphan followed only by a request echo",
+      true,
+      [
+        message("assistant", [tool("orphan")]),
+        { type: "api-request-blob", message: { role: "user", content: [result("orphan")] } },
+      ],
+    ],
+    [
+      "main-conversation orphans with sidechain results",
+      true,
+      [message("assistant", [tool("main")]), message("user", [result("main")], true)],
+    ],
+    [
+      "a trailing orphan past record 500",
+      true,
+      [
         ...longPrefix,
         message("assistant", [tool("resolved")]),
         message("user", [result("resolved")]),
         message("assistant", [tool("orphan")]),
       ],
-    },
-  ])("detects $name", async ({ lines, expected }) => {
+    ],
+  ] satisfies [string, boolean, object[]][])("detects %s", async (_name, expected, lines) => {
     await writeJsonlSession("fixture", lines);
-    expect(
-      await claudeCliSessionTranscriptHasOrphanedToolUse({
-        sessionId: "fixture",
-        workspaceDir,
-        homeDir: tmpDir,
-      }),
-    ).toBe(expected);
+    expect(await probe("fixture", true)).toBe(expected);
   });
 
   it("rejects path-like session ids instead of escaping the Claude projects tree", async () => {
     await writeJsonlSession("safe", []);
-    expect(
-      await claudeCliSessionTranscriptHasOrphanedToolUse({
-        sessionId: "../safe",
-        workspaceDir,
-        homeDir: tmpDir,
-      }),
-    ).toBe(false);
+    expect(await probe("../safe", true)).toBe(false);
   });
 });
 
 describe("createAcpVisibleTextAccumulator", () => {
-  it("preserves cumulative raw snapshots after stripping a glued NO_REPLY prefix", () => {
+  const visible = (text: string, delta = text) => ({ text, delta });
+  it.each(["snapshot", "delta"])("preserves %s text containing an attached sentinel", (mode) => {
     const acc = createAcpVisibleTextAccumulator();
-
-    expect(acc.consume("NO_REPLYThe user")).toEqual({
-      text: "The user",
-      delta: "The user",
-    });
-
-    expect(acc.consume("NO_REPLYThe user is saying")).toEqual({
-      text: "The user is saying",
-      delta: " is saying",
-    });
-
-    expect(acc.finalize()).toBe("The user is saying");
-    expect(acc.finalizeRaw()).toBe("The user is saying");
+    expect(acc.consume("NO_REPLYThe user")).toEqual(visible("NO_REPLYThe user"));
+    expect(acc.consume(mode === "snapshot" ? "NO_REPLYThe user is saying" : " is saying")).toEqual(
+      visible("NO_REPLYThe user is saying", " is saying"),
+    );
+    expect(acc.finalize()).toBe("NO_REPLYThe user is saying");
+    expect(acc.finalizeRaw()).toBe("NO_REPLYThe user is saying");
     expect(acc.finalizeReplySnapshot()).toEqual({
       disposition: "visible",
-      text: "The user is saying",
+      text: "NO_REPLYThe user is saying",
     });
   });
 
-  it("keeps append-only deltas working after stripping a glued NO_REPLY prefix", () => {
-    const acc = createAcpVisibleTextAccumulator();
+  it.each(["NO_REPLY", "no_reply", "No_Reply"])(
+    "buffers chunked %s prefixes before emitting visible text",
+    (token) => {
+      const acc = createAcpVisibleTextAccumulator();
 
-    expect(acc.consume("NO_REPLYThe user")).toEqual({
-      text: "The user",
-      delta: "The user",
-    });
-
-    expect(acc.consume(" is saying")).toEqual({
-      text: "The user is saying",
-      delta: " is saying",
-    });
-  });
-
-  it("buffers chunked NO_REPLY prefixes before emitting visible text", () => {
-    const acc = createAcpVisibleTextAccumulator();
-
-    expect(acc.consume("NO")).toBeNull();
-    expect(acc.consume("NO_")).toBeNull();
-    expect(acc.consume("NO_RE")).toBeNull();
-    expect(acc.consume("NO_REPLY")).toBeNull();
-    expect(acc.consume("Actual answer")).toEqual({
-      text: "Actual answer",
-      delta: "Actual answer",
-    });
-  });
+      expect(acc.consume(token.slice(0, 2))).toBeNull();
+      expect(acc.consume(token.slice(0, 3))).toBeNull();
+      expect(acc.consume(token.slice(0, 5))).toBeNull();
+      expect(acc.consume(token)).toBeNull();
+      expect(acc.consume("\nActual answer")).toEqual(visible("Actual answer"));
+    },
+  );
 
   it.each([
-    { name: "exact silence", chunks: ["NO_REPLY"], expected: { disposition: "silent" } },
-    { name: "partial control prefix", chunks: ["NO_RE"], expected: { disposition: "empty" } },
-  ])("classifies $name at ACP finalization", ({ chunks, expected }) => {
+    ["NO_REPLY", { disposition: "silent" }],
+    [" \tNO_REPLY\r\n", { disposition: "silent" }],
+    ["no_reply", { disposition: "silent" }],
+    ...["NO_REPLY.", '"NO_REPLY"', '{"action":"NO_REPLY"}', "No response needed."].map(
+      (text) => [text, { disposition: "visible", text }] as const,
+    ),
+    ["NO_REPLY\nNO_REPLY", { disposition: "visible", text: "NO_REPLY" }],
+    ["NO_RE", { disposition: "visible", text: "NO_RE" }],
+  ] as const)("classifies %s at ACP finalization", (text, expected) => {
     const acc = createAcpVisibleTextAccumulator();
-    for (const chunk of chunks) {
-      acc.consume(chunk);
-    }
+    acc.consume(text);
     expect(acc.finalizeReplySnapshot()).toEqual(expected);
   });
 });

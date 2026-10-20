@@ -89,6 +89,88 @@ describe("projectSessionDisplayMessage", () => {
   });
 
   test.each([
+    ["NO_REPLY.", "NO_REPLY."],
+    ['"NO_REPLY"', '"NO_REPLY"'],
+    ['{"action":"NO_REPLY"}', '{"action":"NO_REPLY"}'],
+    ["no_reply\nREADY", "READY"],
+    ["READY\nNo_Reply", "READY"],
+    ["no_reply\nNo_Reply", "No_Reply"],
+    ["Done\nNO_REPLY", "Done"],
+    ["NO_REPLY\nREADY", "READY"],
+    ["NO_REPLY\nNO_REPLY", "NO_REPLY"],
+    ["NO_REPLY\nNO_REPLY\nREADY", "NO_REPLY\nREADY"],
+    [" NO_REPLY\nREADY", "NO_REPLY\nREADY"],
+    ["NO_REPLY\r\nREADY", "NO_REPLY\r\nREADY"],
+  ])("prepares raw assistant text once: %s", (content, text) => {
+    expect(projectSessionDisplayMessage({ role: "assistant", content })).toEqual({
+      role: "assistant",
+      text,
+    });
+  });
+
+  test.each(["NO_REPLY", "no_reply", "No_Reply"])("hides raw %s assistant history", (content) => {
+    expect(projectSessionDisplayMessage({ role: "assistant", content })).toBeNull();
+  });
+
+  test("preserves user text and explicit visible or final source replies", () => {
+    for (const message of [
+      { role: "user", content: "NO_REPLY" },
+      { role: "assistant", content: "NO_REPLY", display: true },
+      {
+        role: "assistant",
+        content: "NO_REPLY",
+        openclawDeliveryMirror: {
+          kind: "message-tool-source-reply",
+          final: true,
+          sourceTurnId: "source-run",
+        },
+      },
+    ]) {
+      expect(projectSessionDisplayMessage(message)).toEqual({
+        role: message.role,
+        text: "NO_REPLY",
+      });
+    }
+  });
+
+  test("omits heartbeat acknowledgements without hiding alerts, forwarded text, or model context", () => {
+    for (const message of [
+      { role: "assistant", content: "HEARTBEAT_OK" },
+      { role: "ASSISTANT", text: "**HEARTBEAT_OK**" },
+      {
+        role: "assistant",
+        content: [
+          { type: "reasoning", text: "Checking the monitor" },
+          { type: "text", text: "HEARTBEAT_OK" },
+        ],
+      },
+    ]) {
+      expect(projectSessionDisplayMessage(message)).toBeNull();
+      expect(projectSessionDisplayMessage(message, { view: "model-context" })?.text).toContain(
+        "HEARTBEAT_OK",
+      );
+    }
+    for (const text of ["Disk usage crossed 95 percent.", "no_r"]) {
+      expect(projectSessionDisplayMessage({ role: "assistant", content: text })?.text).toBe(text);
+    }
+    expect(
+      projectSessionDisplayMessage({
+        role: "assistant",
+        content: "HEARTBEAT_OK",
+        provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+      })?.text,
+    ).toBe("HEARTBEAT_OK");
+  });
+
+  test("bounds previews without splitting surrogate pairs", () => {
+    const longReply = `${"a".repeat(SESSION_LAST_MESSAGE_PREVIEW_DEFAULT_CHARS - 2)}😊tail`;
+    const preview = projectSessionDisplayMessage({ role: "assistant", content: longReply });
+
+    expect(preview?.text).toHaveLength(SESSION_LAST_MESSAGE_PREVIEW_DEFAULT_CHARS);
+    expect(preview?.text).toBe(`${"a".repeat(SESSION_LAST_MESSAGE_PREVIEW_DEFAULT_CHARS - 3)}...`);
+  });
+
+  test.each([
     ["pending", pendingMediaReply],
     ["rewritten", managedMediaReply],
   ])("keeps authored assistant media text in %s model-context previews", (_state, message) => {

@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createSignal, onCleanup, Show, For } from "solid-js";
+import { createMemo, createSignal, onCleanup, onSettled, Show, For } from "solid-js";
 import type { CapabilityConsentErrorDetails } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import {
   PLUGIN_DECLARED_SURFACE_GROUPS,
@@ -45,6 +45,7 @@ export type PluginConsentState = {
 };
 
 type PluginConsentDialogProps = {
+  registerIcon?: (readId: () => string) => () => void;
   consent: PluginConsentState;
   inspection: PluginsInspectResult | null;
   loading: boolean;
@@ -60,6 +61,7 @@ type PluginConsentDialogProps = {
 };
 
 type ArtTileProps = {
+  registerIcon?: (readId: () => string) => () => void;
   slug: string;
   name: string;
   iconUrl?: string;
@@ -71,6 +73,8 @@ type ArtTileProps = {
 };
 
 export function PluginArtTile(props: ArtTileProps): JSX.Element {
+  const slug = () => props.slug;
+  onSettled(() => props.registerIcon?.(slug));
   type ImageState = { source: string | undefined; status: "loading" | "ready" | "failed" };
   const [packageImage, setPackageImage] = createSignal<ImageState>((previous) => {
     const source = props.iconUrl;
@@ -88,6 +92,8 @@ export function PluginArtTile(props: ArtTileProps): JSX.Element {
     packageImage().source && packageImage().status !== "failed"
       ? { state: packageImage(), update: setPackageImage, package: true }
       : { state: authorImage(), update: setAuthorImage, package: false };
+  const gradient = () => pluginFallbackGradient(slug());
+  const monogram = createMemo(() => pluginMonogram(props.name));
   const source = () =>
     currentImage().state.status === "failed" ? undefined : currentImage().state.source;
   const pending = () =>
@@ -112,7 +118,7 @@ export function PluginArtTile(props: ArtTileProps): JSX.Element {
             className(),
             { "plugins-tile--white": props.whiteBackground, skeleton: pending() },
           ]}
-          data-plugin-icon-id={props.slug}
+          data-plugin-icon-id={slug()}
           aria-hidden="true"
         >
           <Show when={source()} keyed>
@@ -133,18 +139,14 @@ export function PluginArtTile(props: ArtTileProps): JSX.Element {
       ) : (
         <span
           class={[className(), `${className()}--fallback`]}
-          data-plugin-icon-id={props.slug}
+          data-plugin-icon-id={slug()}
           style={{
-            "--plugins-art-a": pluginFallbackGradient(props.slug)[0],
-            "--plugins-art-b": pluginFallbackGradient(props.slug)[1],
+            "--plugins-art-a": gradient()[0],
+            "--plugins-art-b": gradient()[1],
           }}
           aria-hidden="true"
         >
-          {pluginMonogram(props.name) ? (
-            <span>{pluginMonogram(props.name)}</span>
-          ) : (
-            <Icon name="plug" />
-          )}
+          {monogram() ? <span>{monogram()}</span> : <Icon name="plug" />}
         </span>
       )}
     </>
@@ -154,12 +156,10 @@ export function PluginArtTile(props: ArtTileProps): JSX.Element {
 function renderPluginMetaRow(label: string, value: JSX.Element | string, warning = false) {
   return (
     <SettingsRow
-      {...{
-        title: label,
-        control: <span class={warning ? "plugins-consent__row--warning" : ""}> {value}</span>,
-        stackedOnNarrow: true,
-        carapace: true,
-      }}
+      title={label}
+      control={<span class={{ "plugins-consent__row--warning": warning }}> {value}</span>}
+      stackedOnNarrow
+      carapace
     />
   );
 }
@@ -200,31 +200,21 @@ function renderPluginDeclaredCapabilities(declared: PluginDeclaredSurface): JSX.
   const rows = renderCapabilityRows(declared);
   return (
     <SettingsSection
-      {...{
-        title: t("pluginConsent.declaredTitle"),
-        description: t("pluginConsent.declaredDescription"),
-        carapace: true,
-      }}
+      title={t("pluginConsent.declaredTitle")}
+      description={t("pluginConsent.declaredDescription")}
+      carapace
     >
-      {
-        <>
-          {rows.length ? (
-            rows
-          ) : (
-            <SettingsRow {...{ title: t("pluginConsent.declaredEmpty"), carapace: true }} />
-          )}
-          {declared.hooks.length === 0
-            ? renderPluginMetaRow(t("pluginConsent.hooks"), t("pluginConsent.runtimeHooks"))
-            : undefined}
-          {declared.dangerousConfigFlags.length > 0
-            ? renderPluginMetaRow(
-                t("pluginConsent.dangerousFlags"),
-                renderCapabilityItems(declared.dangerousConfigFlags),
-                true,
-              )
-            : undefined}
-        </>
-      }
+      {rows.length ? rows : <SettingsRow title={t("pluginConsent.declaredEmpty")} carapace />}
+      {declared.hooks.length === 0
+        ? renderPluginMetaRow(t("pluginConsent.hooks"), t("pluginConsent.runtimeHooks"))
+        : undefined}
+      {declared.dangerousConfigFlags.length > 0
+        ? renderPluginMetaRow(
+            t("pluginConsent.dangerousFlags"),
+            renderCapabilityItems(declared.dangerousConfigFlags),
+            true,
+          )
+        : undefined}
     </SettingsSection>
   );
 }
@@ -290,50 +280,44 @@ function renderPluginGrants(grants: PluginOperatorGrants, origin?: string): JSX.
   const conversation = grants.hooks.allowConversationAccess;
   return (
     <SettingsSection
-      {...{
-        title: t("pluginConsent.grantsTitle"),
-        description: t("pluginConsent.grantsDescription"),
-        carapace: true,
-      }}
+      title={t("pluginConsent.grantsTitle")}
+      description={t("pluginConsent.grantsDescription")}
+      carapace
     >
-      {
+      {renderPluginMetaRow(
+        t("pluginConsent.promptInjection"),
+        grantValue(
+          grants.hooks.allowPromptInjection,
+          "pluginConsent.allowed",
+          "pluginConsent.blocked",
+        ),
+      )}
+      {renderPluginMetaRow(
+        t("pluginConsent.conversationAccess"),
         <>
-          {renderPluginMetaRow(
-            t("pluginConsent.promptInjection"),
-            grantValue(
-              grants.hooks.allowPromptInjection,
-              "pluginConsent.allowed",
-              "pluginConsent.blocked",
-            ),
-          )}
-          {renderPluginMetaRow(
-            t("pluginConsent.conversationAccess"),
-            <>
-              {grantValue(conversation, "pluginConsent.on", "pluginConsent.off")}
-              {!conversation.effective &&
-              conversation.configured === undefined &&
-              origin !== "bundled" ? (
-                <span class="plugins-consent__hint">{t("pluginConsent.externalAccessHint")}</span>
-              ) : undefined}
-            </>,
-          )}
-          <For each={["llm", "subagent"] as const}>
-            {(key) => {
-              const overrides = grants[key];
-              return overrides
-                ? renderPluginMetaRow(
-                    t(
-                      key === "llm"
-                        ? "pluginConsent.modelOverrides"
-                        : "pluginConsent.subagentModelOverrides",
-                    ),
-                    modelOverrideSummary(overrides),
-                  )
-                : undefined;
-            }}
-          </For>
-        </>
-      }
+          {grantValue(conversation, "pluginConsent.on", "pluginConsent.off")}
+          {!conversation.effective &&
+          conversation.configured === undefined &&
+          origin !== "bundled" ? (
+            <span class="plugins-consent__hint">{t("pluginConsent.externalAccessHint")}</span>
+          ) : undefined}
+        </>,
+      )}
+      <For each={["llm", "subagent"] as const}>
+        {(key) => {
+          const overrides = grants[key];
+          return overrides
+            ? renderPluginMetaRow(
+                t(
+                  key === "llm"
+                    ? "pluginConsent.modelOverrides"
+                    : "pluginConsent.subagentModelOverrides",
+                ),
+                modelOverrideSummary(overrides),
+              )
+            : undefined;
+        }}
+      </For>
     </SettingsSection>
   );
 }
@@ -416,7 +400,7 @@ function renderTrust(trust: PluginsInspectResult["trust"]) {
     trust.disposition === "clean" ? "ok" : trust.disposition === "blocked" ? "danger" : "warn";
   return (
     <section class="plugins-consent__trust">
-      {<SettingsStatus {...{ kind, label, carapace: true }} />}
+      <SettingsStatus kind={kind} label={label} carapace />
       {trust.reasons?.length ? (
         <ul>
           <For each={trust.reasons}>{(reason) => <li>{reason}</li>}</For>
@@ -472,6 +456,7 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): JSX.
       <section class="plugins-consent oc-card" data-plugin-consent={consent().intent.kind}>
         <header class="plugins-consent__header">
           <PluginArtTile
+            registerIcon={props.registerIcon}
             slug={slug()}
             name={name()}
             iconUrl={props.iconUrl}
@@ -510,7 +495,7 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): JSX.
         ) : (
           <p class="plugins-consent__description">{t("pluginConsent.fallback")}</p>
         )}
-        <footer class="plugins-consent__actions">
+        <openclaw-modal-actions class="plugins-consent__actions">
           <button
             type="button"
             class="btn oc-action oc-action-secondary"
@@ -521,7 +506,7 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): JSX.
           <ReasonedDisabledControl reason={props.mutationBlockedReason}>
             {confirm}
           </ReasonedDisabledControl>
-        </footer>
+        </openclaw-modal-actions>
       </section>
     </openclaw-modal-dialog>
   );

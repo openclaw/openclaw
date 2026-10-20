@@ -1,4 +1,7 @@
 export {
+  SessionGitHubActionParamsSchema,
+  SessionGitHubBaseRefreshResultSchema,
+  SessionGitHubActionResultSchema,
   SessionGitHubPublicationResultSchema,
   SessionGitHubPublishParamsSchema,
   SessionGitHubOptionsParamsSchema,

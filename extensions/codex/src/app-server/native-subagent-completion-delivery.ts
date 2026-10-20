@@ -1,6 +1,9 @@
 import { isDurableAgentHarnessCompletionDelivery } from "openclaw/plugin-sdk/agent-harness-completion";
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { readCodexNativeSubagentRunId } from "./native-subagent-assignment.js";
+import {
+  codexNativeSubagentRunId,
+  readCodexNativeSubagentRunId,
+} from "./native-subagent-assignment.js";
 import { assertHistoryOwnerMatchesRegistration } from "./native-subagent-history-owner.js";
 import type {
   ChildState,
@@ -11,29 +14,21 @@ import { delayForAttempt } from "./native-subagent-retry.js";
 
 type CompletionDeliveryDependencies = {
   deliver: NativeSubagentMonitorRuntime["deliverAgentHarnessCompletion"];
-  retryDelaysMs?: readonly number[];
-  maxRetries?: number;
   children: ReadonlyMap<string, ChildState>;
   parents: ReadonlyMap<string, ParentState>;
   retiredParents: Pick<WeakSet<ParentState>, "has">;
   unregisterChild: (child: ChildState) => void;
+  abandon: (state: ParentState, child: ChildState, assertCurrent: () => void) => Promise<void>;
   releaseClientRetentionIfIdle: () => void;
 };
 
-const DEFAULT_COMPLETION_DELIVERY_RETRY_DELAYS_MS = [
-  5_000, 15_000, 30_000, 60_000, 120_000, 300_000,
-];
+const COMPLETION_DELIVERY_RETRY_DELAYS_MS = [5_000, 15_000, 30_000, 60_000, 120_000, 300_000];
 const completionDeliveryOwners = new Map<string, ChildState>();
 
 export class CodexNativeSubagentCompletionDelivery {
-  private readonly retryDelaysMs: readonly number[];
-  private readonly maxRetries: number;
   private readonly attempts = new Map<ChildState, Promise<void>>();
 
-  constructor(private readonly dependencies: CompletionDeliveryDependencies) {
-    this.retryDelaysMs = dependencies.retryDelaysMs ?? DEFAULT_COMPLETION_DELIVERY_RETRY_DELAYS_MS;
-    this.maxRetries = dependencies.maxRetries ?? this.retryDelaysMs.length;
-  }
+  constructor(private readonly dependencies: CompletionDeliveryDependencies) {}
 
   deliverPending(state: ParentState, childState: ChildState): Promise<void> {
     const existing = this.attempts.get(childState);
@@ -44,9 +39,7 @@ export class CodexNativeSubagentCompletionDelivery {
     const attempt = Promise.resolve().then(() => this.deliverAttempt(state, childState));
     this.attempts.set(childState, attempt);
     const release = () => {
-      if (this.attempts.get(childState) === attempt) {
-        this.attempts.delete(childState);
-      }
+      this.attempts.delete(childState);
     };
     void attempt.then(release, release);
     return attempt;
@@ -66,14 +59,15 @@ export class CodexNativeSubagentCompletionDelivery {
     }
     let deferredToForeground = false;
     try {
-      if (
-        childState.cancellationRequested &&
-        childState.pendingCompletion?.status === "cancelled"
-      ) {
+      if (childState.cancellationRequested && completion.status === "cancelled") {
         // Stop owns durable cancellation acknowledgement before releasing this child.
         return;
       }
       if (!this.prepareDelivery(state, childState)) {
+        return;
+      }
+      if (childState.completionDeliveryAbandoned) {
+        await this.abandon(state, childState);
         return;
       }
       // Foreground parents receive native completion input. Only wake a detached
@@ -119,8 +113,12 @@ export class CodexNativeSubagentCompletionDelivery {
         this.prepareDelivery(state, childState);
         return;
       }
-      if (!this.claim(state, childState) || delivery.recoveryBlocked) {
+      if (!this.claim(state, childState)) {
         this.dependencies.unregisterChild(childState);
+        return;
+      }
+      if (delivery.recoveryBlocked) {
+        await this.abandon(state, childState);
         return;
       }
       const recoveryPending = delivery.recoveryPending;
@@ -129,7 +127,7 @@ export class CodexNativeSubagentCompletionDelivery {
         (recoveryPending
           ? "requester recovery owns completion"
           : "completion delivery did not produce a parent response");
-      this.scheduleRetry(childState, error, !recoveryPending);
+      await this.scheduleRetry(state, childState, error, !recoveryPending);
     } catch (error) {
       if (!this.isCurrent(state, childState)) {
         return;
@@ -139,7 +137,7 @@ export class CodexNativeSubagentCompletionDelivery {
         return;
       }
       const message = formatErrorMessage(error);
-      this.scheduleRetry(childState, message);
+      await this.scheduleRetry(state, childState, message, !childState.completionDeliveryAbandoned);
       embeddedAgentLog.warn("Failed to deliver Codex native subagent completion", {
         parentThreadId: state.parentThreadId,
         childThreadId: completion.childThreadId,
@@ -246,7 +244,39 @@ export class CodexNativeSubagentCompletionDelivery {
     return true;
   }
 
-  private scheduleRetry(childState: ChildState, error: string, chargeAttempt = true): void {
+  private async abandon(state: ParentState, child: ChildState): Promise<void> {
+    child.completionDeliveryAbandoned = true;
+    try {
+      await this.dependencies.abandon(state, child, () => {
+        if (
+          child.nativeCompletionDelivered ||
+          !this.isCurrent(state, child) ||
+          (child.completionCustody && !child.completionCustody.isCurrent()) ||
+          (child.deliveryOwnerKey && completionDeliveryOwners.get(child.deliveryOwnerKey) !== child)
+        ) {
+          throw new Error("Native completion retirement is no longer current.");
+        }
+      });
+      this.dependencies.unregisterChild(child);
+    } catch (error) {
+      if (this.isCurrent(state, child) && child.nativeCompletionDelivered) {
+        this.prepareDelivery(state, child);
+        return;
+      }
+      embeddedAgentLog.warn("Native completion retirement remains pending", {
+        childThreadId: child.childThreadId,
+        error: formatErrorMessage(error),
+      });
+      await this.scheduleRetry(state, child, formatErrorMessage(error), false);
+    }
+  }
+
+  private async scheduleRetry(
+    state: ParentState,
+    childState: ChildState,
+    error: string,
+    chargeAttempt = true,
+  ): Promise<void> {
     if (
       !childState.pendingCompletion ||
       childState.completionDeliveryTimer ||
@@ -254,16 +284,19 @@ export class CodexNativeSubagentCompletionDelivery {
     ) {
       return;
     }
-    if (chargeAttempt && childState.completionDeliveryAttempt >= this.maxRetries) {
+    if (
+      chargeAttempt &&
+      childState.completionDeliveryAttempt >= COMPLETION_DELIVERY_RETRY_DELAYS_MS.length
+    ) {
       embeddedAgentLog.warn("Native subagent completion retries exhausted", {
         childThreadId: childState.childThreadId,
         error,
       });
-      this.dependencies.unregisterChild(childState);
+      await this.abandon(state, childState);
       return;
     }
     const delayMs = delayForAttempt(
-      this.retryDelaysMs,
+      COMPLETION_DELIVERY_RETRY_DELAYS_MS,
       chargeAttempt ? childState.completionDeliveryAttempt++ : childState.completionDeliveryAttempt,
     );
     childState.completionDeliveryTimer = setTimeout(() => {
@@ -271,9 +304,9 @@ export class CodexNativeSubagentCompletionDelivery {
       if (this.dependencies.children.get(childState.runId) !== childState) {
         return;
       }
-      const state = this.dependencies.parents.get(childState.parentThreadId);
-      if (state) {
-        void this.deliverPending(state, childState);
+      const currentParent = this.dependencies.parents.get(childState.parentThreadId);
+      if (currentParent) {
+        void this.deliverPending(currentParent, childState);
       }
     }, delayMs);
     childState.completionDeliveryTimer.unref();
@@ -287,7 +320,9 @@ export class CodexNativeSubagentCompletionDelivery {
     if (!requesterSessionKey) {
       return true;
     }
-    const key = `${requesterSessionKey}\0${childState.runId}`;
+    const key =
+      childState.deliveryOwnerKey ??
+      `${requesterSessionKey}\0${childState.nativeTurnId ? codexNativeSubagentRunId(childState.childThreadId, childState.nativeTurnId) : childState.runId}`;
     try {
       state.assignmentStore?.assertCurrent();
       assertHistoryOwnerMatchesRegistration(

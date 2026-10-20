@@ -6,7 +6,7 @@ import type {
   DiagnosticEventPrivateData,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeOtelContentValue } from "./service-content-normalization.js";
+import { assignOtelContentAttr } from "./service-content-normalization.js";
 import {
   assignGenAiSpanIdentityAttrs,
   assignPositiveNumberAttr,
@@ -31,6 +31,8 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
         "openclaw.agent": normalizeDiagnosticValue(evt.agentId),
         "openclaw.provider": evt.provider ?? "unknown",
         "openclaw.model": evt.model ?? "unknown",
+        ...(evt.purpose ? { "openclaw.purpose": evt.purpose } : {}),
+        ...(evt.runtimeKind ? { "openclaw.runtime.kind": evt.runtimeKind } : {}),
       };
       const genAiAttrs: Record<string, string> = {
         "gen_ai.operation.name": "chat",
@@ -226,17 +228,9 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
       if (evt.reason) {
         spanAttrs["openclaw.reason"] = normalizeDiagnosticValue(evt.reason, "unknown");
       }
-      const inputValue = runtime.captureContent
-        ? normalizeOtelContentValue(privateData.messageContent?.userPrompt)
-        : undefined;
-      if (inputValue) {
-        spanAttrs["input.value"] = inputValue;
-      }
-      const outputValue = runtime.captureContent
-        ? normalizeOtelContentValue(privateData.messageContent?.finalResponse)
-        : undefined;
-      if (outputValue) {
-        spanAttrs["output.value"] = outputValue;
+      if (runtime.captureContent) {
+        assignOtelContentAttr(spanAttrs, "input.value", privateData.messageContent?.userPrompt);
+        assignOtelContentAttr(spanAttrs, "output.value", privateData.messageContent?.finalResponse);
       }
       const trackedSpan = runtime.getTrackedInternalOrTrustedSpan(evt, metadata);
       const span =
@@ -303,7 +297,7 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
       }
       const spanAttrs: Record<string, string | number | boolean> = {};
       runtime.addRunAttrs(spanAttrs, evt);
-      const span = runtime.trackTrustedSpan(
+      const span = runtime.trackInternalOrTrustedSpan(
         evt,
         metadata,
         runtime.spanWithDuration("openclaw.run", spanAttrs, undefined, {

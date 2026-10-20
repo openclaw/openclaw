@@ -56,6 +56,7 @@ export type UsageCostWorkerOperation =
       endMs?: number;
       includeUntimestamped?: boolean;
       reportBudgetBytes?: number;
+      committedOnly?: boolean;
       dayBucket: UsageDailyBucket;
     }
   | {
@@ -104,19 +105,7 @@ export type UsageCostWorkerResult =
 export type UsageCostWorkerFailure = {
   message: string;
   error?: OpenClawStateWorkerErrorPayload;
-  hostOrigin?: number;
-  hostFailureOnly?: boolean;
 };
-
-export class UsageCostHostEffectError extends Error {
-  constructor(
-    readonly origin: number,
-    message: string,
-  ) {
-    super(message);
-    this.name = "UsageCostHostEffectError";
-  }
-}
 
 /** Retain the domain failure while the pool proves native retirement. */
 export class UsageCostWorkerReplyError extends Error {
@@ -142,7 +131,7 @@ type UsageCostPreparedRollup = {
 
 type UsageCostPruneRow = {
   key: string;
-  value: Uint8Array;
+  value: Uint8Array<ArrayBuffer>;
   updatedAt: number;
 };
 
@@ -153,9 +142,9 @@ export type UsageCostWorkerHostEffects = {
     output: Array<ModelCostConfig | undefined>;
   };
   restore: { input: SqliteSessionFileMarker; output: void };
-  "prune-row": { input: UsageCostPruneRow; output: void };
+  "prune-rows": { input: UsageCostPruneRow[]; output: void };
   prune: { input: Record<string, never>; output: void };
-  write: { input: UsageCostPreparedRollup; output: boolean };
+  write: { input: UsageCostPreparedRollup[]; output: boolean };
 };
 
 export type UsageCostWorkerHostRequest = {
@@ -164,7 +153,3 @@ export type UsageCostWorkerHostRequest = {
     input: UsageCostWorkerHostEffects[Kind]["input"];
   };
 }[keyof UsageCostWorkerHostEffects];
-
-export type UsageCostWorkerHostReply =
-  | { ok: true; value: UsageCostWorkerHostEffects[keyof UsageCostWorkerHostEffects]["output"] }
-  | { ok: false; origin: number; message: string };

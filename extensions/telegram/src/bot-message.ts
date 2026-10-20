@@ -1,16 +1,23 @@
+import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
+import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  recordInboundSession,
+  upsertChannelPairingRequest,
+} from "openclaw/plugin-sdk/conversation-runtime";
 import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
-import {
-  createSubsystemLogger,
-  danger,
-  logVerbose,
-  shouldLogVerbose,
-  sleepWithAbort,
-} from "openclaw/plugin-sdk/runtime-env";
+import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
+import { danger, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import type { TelegramBotDeps } from "./bot-deps.js";
+import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
+import {
+  readSessionUpdatedAtAsync,
+  readAmbientTranscriptWatermarkAsync,
+  resolveAmbientTranscriptWatermarkKey,
+  resolveStorePath,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import { createTelegramDirectAvatarResolver } from "./bot-message-avatar.js";
 import {
@@ -34,8 +41,6 @@ import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
 import { TELEGRAM_RICH_TEXT_LIMIT } from "./rich-message.js";
 import { resolveTelegramRichMessages } from "./rich-messages-config.js";
 import { resolveSpooledUpdatePersistenceRetryDelayMs } from "./telegram-ingress-spool.js";
-
-const telegramInboundLog = createSubsystemLogger("gateway/channels/telegram").child("inbound");
 
 function abortedProcessingResult(
   signal: AbortSignal,
@@ -61,7 +66,6 @@ type TelegramMessageProcessorDeps = Omit<
   | "ackReactionScope"
 > & {
   runtime: RuntimeEnv;
-  telegramDeps: TelegramBotDeps;
   buildContext?: typeof import("openclaw/plugin-sdk/channel-inbound").buildChannelInboundEventContext;
   telegramTransport?: TelegramTransport;
   opts: Pick<
@@ -121,36 +125,17 @@ export function resolveTelegramMessageTurnSettings(params: {
 export const createTelegramMessageProcessor = (
   deps: TelegramMessageProcessorDeps,
 ): RegisterTelegramHandlerParams["processMessage"] => {
-  const { runtime, telegramDeps, buildContext, opts, ...contextOptions } = deps;
+  const { runtime, buildContext, opts, ...contextOptions } = deps;
   const { bot, account } = contextOptions;
   const sessionRuntime = {
-    ...((buildContext ?? telegramDeps.buildChannelInboundEventContext)
-      ? {
-          buildChannelInboundEventContext:
-            buildContext ?? telegramDeps.buildChannelInboundEventContext,
-        }
-      : {}),
-    ...(telegramDeps.readSessionUpdatedAtAsync
-      ? { readSessionUpdatedAtAsync: telegramDeps.readSessionUpdatedAtAsync }
-      : {}),
-    ...(telegramDeps.readAmbientTranscriptWatermarkAsync
-      ? { readAmbientTranscriptWatermarkAsync: telegramDeps.readAmbientTranscriptWatermarkAsync }
-      : {}),
-    ...(telegramDeps.recordInboundSession
-      ? { recordInboundSession: telegramDeps.recordInboundSession }
-      : {}),
-    ...(telegramDeps.resolveAmbientTranscriptWatermarkKey
-      ? { resolveAmbientTranscriptWatermarkKey: telegramDeps.resolveAmbientTranscriptWatermarkKey }
-      : {}),
-    ...(telegramDeps.resolveInboundLastRouteSessionKey
-      ? { resolveInboundLastRouteSessionKey: telegramDeps.resolveInboundLastRouteSessionKey }
-      : {}),
-    ...(telegramDeps.resolvePinnedMainDmOwnerFromAllowlist
-      ? {
-          resolvePinnedMainDmOwnerFromAllowlist: telegramDeps.resolvePinnedMainDmOwnerFromAllowlist,
-        }
-      : {}),
-    resolveStorePath: telegramDeps.resolveStorePath,
+    buildChannelInboundEventContext: buildContext ?? buildChannelInboundEventContext,
+    readSessionUpdatedAtAsync,
+    readAmbientTranscriptWatermarkAsync,
+    recordInboundSession,
+    resolveAmbientTranscriptWatermarkKey,
+    resolveInboundLastRouteSessionKey,
+    resolvePinnedMainDmOwnerFromAllowlist,
+    resolveStorePath,
   };
   const resolveDirectAvatar = createTelegramDirectAvatarResolver({
     api: bot.api,
@@ -159,9 +144,7 @@ export const createTelegramMessageProcessor = (
     token: opts.token,
     transport: deps.telegramTransport,
   });
-  const contextRuntime = telegramDeps.recordChannelActivity
-    ? { recordChannelActivity: telegramDeps.recordChannelActivity }
-    : undefined;
+  const contextRuntime = { recordChannelActivity };
 
   return async ({
     ctx: primaryCtx,
@@ -182,12 +165,6 @@ export const createTelegramMessageProcessor = (
       telegramCfg: turnTelegramCfg,
       opts,
     });
-    const ingressReceivedAtMs =
-      typeof options?.receivedAtMs === "number" && Number.isFinite(options.receivedAtMs)
-        ? options.receivedAtMs
-        : undefined;
-    const ingressDebugEnabled = shouldLogVerbose();
-    const ingressContextStartMs = ingressReceivedAtMs ? Date.now() : undefined;
     const context = await buildTelegramMessageContext({
       ...contextOptions,
       resolveDirectAvatar,
@@ -204,40 +181,11 @@ export const createTelegramMessageProcessor = (
       ...turnSettings,
       runtime: contextRuntime,
       sessionRuntime,
-      upsertPairingRequest: telegramDeps.upsertChannelPairingRequest,
+      upsertPairingRequest: upsertChannelPairingRequest,
     });
     if (!context) {
-      if (ingressDebugEnabled && ingressReceivedAtMs && ingressContextStartMs) {
-        logVerbose(
-          `telegram ingress: chatId=${primaryCtx.message.chat.id} dropped after ${Date.now() - ingressReceivedAtMs}ms` +
-            (options?.ingressBuffer ? ` buffer=${options.ingressBuffer}` : ""),
-        );
-      }
       return { kind: "skipped" };
     }
-    if (ingressDebugEnabled && ingressReceivedAtMs && ingressContextStartMs) {
-      logVerbose(
-        `telegram ingress: chatId=${context.chatId} contextReadyMs=${Date.now() - ingressReceivedAtMs}` +
-          ` preDispatchMs=${Date.now() - ingressContextStartMs}` +
-          (options?.ingressBuffer ? ` buffer=${options.ingressBuffer}` : ""),
-      );
-    }
-    if (
-      context.ctxPayload.InboundEventKind !== "room_event" &&
-      context.initialTypingCueSent !== true
-    ) {
-      void context.sendTyping().catch((err: unknown) => {
-        logVerbose(`telegram early typing cue failed for chat ${context.chatId}: ${String(err)}`);
-      });
-    }
-    const logTo = context.primaryCtx.me?.username
-      ? `@${context.primaryCtx.me.username}`
-      : context.ctxPayload.To;
-    const mediaType = allMedia[0]?.contentType ?? allMedia[0]?.kind;
-    const kindLabel = mediaType ? `, ${mediaType}` : "";
-    telegramInboundLog.info(
-      `Inbound message ${context.ctxPayload.From} -> ${logTo} (${context.ctxPayload.ChatType}${kindLabel}, ${context.ctxPayload.RawBody.length} chars)`,
-    );
     const spooledReplay =
       options?.spooledReplay === true || isTelegramSpooledReplayUpdate(primaryCtx.update);
     if (!spooledReplay) {
@@ -256,7 +204,6 @@ export const createTelegramMessageProcessor = (
           streamMode: turnSettings.streamMode,
           textLimit: turnSettings.textLimit,
           telegramCfg: turnTelegramCfg,
-          telegramDeps,
           opts,
           retryDispatchErrors: spooledReplay,
           suppressFailureFallback: spooledReplay,
@@ -267,12 +214,6 @@ export const createTelegramMessageProcessor = (
             kind: "failed-retryable",
             error: dispatchResult.error,
           };
-        }
-        if (ingressDebugEnabled && ingressReceivedAtMs) {
-          logVerbose(
-            `telegram ingress: chatId=${context.chatId} dispatchCompleteMs=${Date.now() - ingressReceivedAtMs}` +
-              (options?.ingressBuffer ? ` buffer=${options.ingressBuffer}` : ""),
-          );
         }
         return { kind: "completed" };
       } catch (err) {

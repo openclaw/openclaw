@@ -4,8 +4,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveContextEngineCapabilities } from "../../agents/embedded-agent-runner/context-engine-capabilities.js";
 import { runContextEngineMaintenance } from "../../agents/embedded-agent-runner/context-engine-maintenance.js";
 import { buildAfterTurnRuntimeContext } from "../../agents/embedded-agent-runner/run/attempt-prompt-helpers.js";
+import {
+  PreparedModelRuntimeOwnerNotPublishedError,
+  PreparedModelRuntimePluginGenerationRetiredError,
+} from "../../agents/prepared-model-runtime.errors.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginEntryConfig } from "../../config/types.plugins.js";
+import { AsyncWorkScopeClosedError } from "../../shared/async-work-scope.js";
+import { PluginInventoryRetiredError } from "../plugin-instance-error.js";
 import { withPluginRuntimePluginScope } from "./gateway-request-scope.js";
 import { createRuntimeLlm } from "./runtime-llm.runtime.js";
 import type { RuntimeLogger } from "./types-core.js";
@@ -207,6 +213,48 @@ describe("runtime.llm.complete", () => {
       purpose: "memory-maintenance",
       sessionKey: "agent:ada:session:abc",
     });
+  });
+
+  it.each([
+    new PreparedModelRuntimeOwnerNotPublishedError(
+      "Model runtime replacement is in progress; admitted plugin work cannot wait for the reload. Retry after the plugin reload completes.",
+      { admissionBlocked: true },
+    ),
+    new PreparedModelRuntimePluginGenerationRetiredError("plugin generation retired"),
+    new PluginInventoryRetiredError(),
+    new AsyncWorkScopeClosedError(),
+  ])("codes host lifecycle refusals so callers can retry later: $message", async (refusal) => {
+    hoisted.acquireSimpleCompletionModelForAgent.mockRejectedValue(refusal);
+    const runtimeContext = resolveContextEngineCapabilities({
+      config: cfg,
+      sessionKey: "agent:main:session:abc",
+      purpose: "context-engine.compaction",
+    });
+
+    const error = await runtimeContext
+      .llm!.complete({ messages: [{ role: "user", content: "summarize" }] })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      name: "LlmCompleteError",
+      code: "LLM_RUNTIME_LIFECYCLE",
+      message: refusal.message,
+      cause: refusal,
+    });
+  });
+
+  it("keeps a missing published owner a completion failure", async () => {
+    const missingOwner = new PreparedModelRuntimeOwnerNotPublishedError(
+      "owner was never published",
+    );
+    hoisted.acquireSimpleCompletionModelForAgent.mockRejectedValue(missingOwner);
+    const llm = createRuntimeLlm({ getConfig: () => cfg });
+
+    const error = await llm
+      .complete({ messages: [{ role: "user", content: "summarize" }] })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBe(missingOwner);
   });
 
   it("does not trust a fallback-derived agent in the after-turn caller", async () => {

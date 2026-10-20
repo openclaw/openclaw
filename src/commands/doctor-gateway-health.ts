@@ -1,5 +1,6 @@
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { GatewayProtocolRequestTimeoutError } from "../../packages/gateway-client/src/protocol-request.js";
+import { readMissingScopeError } from "../../packages/gateway-protocol/src/gateway-error-details.js";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -29,7 +30,7 @@ import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
 import { formatMissingChildRuntimeWarning } from "../infra/child-runtime-viability.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatDurationSeconds } from "../infra/format-time/format-duration.js";
-import { readGatewayLastInstallationReplacement } from "../infra/gateway-boot-lifecycle.js";
+import { readGatewayLastInstallationReplacementAsync } from "../infra/gateway-boot-lifecycle.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { StatusSummary } from "../status/summary.js";
 import { VERSION } from "../version.js";
@@ -54,15 +55,27 @@ function formatGatewayHealthDiagnostic(value: unknown): string {
   return scrubDoctorErrorMessage(sanitizeTerminalText(redactSensitiveUrlLikeString(raw)));
 }
 
-function readLocalInstallationReplacement(
+async function readLocalInstallationReplacement(
   cfg: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
-): string | undefined {
-  const replacement =
-    cfg.gateway?.mode === "remote" ? undefined : readGatewayLastInstallationReplacement(env);
-  return replacement
-    ? `Previous installation replacement (${new Date(replacement.completedAtMs).toISOString()}): ${formatGatewayHealthDiagnostic(replacement.reason)}`
-    : undefined;
+): Promise<Pick<HealthFinding, "severity" | "message"> | undefined> {
+  if (cfg.gateway?.mode === "remote") {
+    return undefined;
+  }
+  try {
+    const replacement = await readGatewayLastInstallationReplacementAsync(env);
+    return replacement
+      ? {
+          severity: "info",
+          message: `Previous installation replacement (${new Date(replacement.completedAtMs).toISOString()}): ${formatGatewayHealthDiagnostic(replacement.reason)}`,
+        }
+      : undefined;
+  } catch (error) {
+    return {
+      severity: "warning",
+      message: `Previous installation replacement unavailable: ${formatGatewayHealthDiagnostic(error)}`,
+    };
+  }
 }
 
 export async function collectGatewayHealthFindings(
@@ -70,13 +83,12 @@ export async function collectGatewayHealthFindings(
 ): Promise<readonly HealthFinding[]> {
   const mode = ctx.cfg.gateway?.mode === "remote" ? "remote" : "local";
   const gatewayPath = mode === "remote" ? "gateway.remote.url" : "gateway.mode";
-  const replacement = readLocalInstallationReplacement(ctx.cfg, ctx.env);
+  const replacement = await readLocalInstallationReplacement(ctx.cfg, ctx.env);
   const historyFindings: HealthFinding[] = replacement
     ? [
         {
           checkId: "core/doctor/gateway-health",
-          severity: "info",
-          message: replacement,
+          ...replacement,
           path: "gateway.mode",
         },
       ]
@@ -132,6 +144,14 @@ export async function collectGatewayHealthFindings(
       }),
     );
     const sqliteWalWarning = formatSqliteWalHealthWarning(status.sqliteWal);
+    if (status.modelReasoningWarning) {
+      findings.push(
+        warning(
+          formatGatewayHealthDiagnostic(status.modelReasoningWarning),
+          "Set reasoning: true on the configured model, or choose a non-thinking model.",
+        ),
+      );
+    }
     if (sqliteWalWarning) {
       findings.push(
         warning(`SQLite WAL: ${sqliteWalWarning}`, "Inspect openclaw status --deep output."),
@@ -197,7 +217,11 @@ function resolveGatewayDiagnosticsTimeouts(timeoutMs: number, statusElapsedMs: n
 }
 
 function isGatewayHealthAuthUnavailableError(error: unknown): boolean {
-  return isGatewayCredentialsRequiredError(error) || isGatewaySecretRefUnavailableError(error);
+  return (
+    isGatewayCredentialsRequiredError(error) ||
+    isGatewaySecretRefUnavailableError(error) ||
+    readMissingScopeError(error) !== null
+  );
 }
 
 function noteCliGatewayVersionSkew(status: StatusSummary | undefined): void {
@@ -232,7 +256,7 @@ function noteGatewayStateDirectory(
   });
   if (comparison.kind === "warn") {
     note(
-      `${comparison.message}\nRun plugin inspection and doctor --fix with the Gateway's OPENCLAW_STATE_DIR and OPENCLAW_CONFIG_PATH. To change the managed service, run \`openclaw gateway install --force\` from the intended profile and review operator-owned service overrides.`,
+      `${comparison.message}\nAfter moving or renaming the state directory, the running Gateway still uses the paths it started with. A full restart is required: \`openclaw gateway restart\` (not a reload). Then rerun \`openclaw doctor\`.\nRun plugin inspection and doctor --fix with the Gateway's OPENCLAW_STATE_DIR and OPENCLAW_CONFIG_PATH. To change the managed service, run \`openclaw gateway install --force\` from the intended profile and review operator-owned service overrides.`,
       "Gateway state directory mismatch",
     );
   }
@@ -270,9 +294,9 @@ export async function checkGatewayHealth(params: {
   cfg: OpenClawConfig;
   timeoutMs?: number;
 }): Promise<{ healthOk: boolean; authenticated: boolean; status?: StatusSummary }> {
-  const replacement = readLocalInstallationReplacement(params.cfg);
+  const replacement = await readLocalInstallationReplacement(params.cfg);
   if (replacement) {
-    note(replacement, "Previous Gateway installation replacement");
+    note(replacement.message, "Previous Gateway installation replacement");
   }
   const { bindAgentToolGatewayRequest } = await import("../agents/tools/in-process-gateway.js");
   const requestGateway = bindAgentToolGatewayRequest({ hostedOnly: true });
@@ -300,6 +324,7 @@ export async function checkGatewayHealth(params: {
       method: "status",
       params: { includeChannelSummary: false },
       timeoutMs: remainingMs,
+      sharedStateMode: "read-only",
       config: params.cfg,
       onHelloOk: ({ snapshot }: GatewayHello) => {
         gatewaySnapshot = snapshot;
@@ -326,6 +351,7 @@ export async function checkGatewayHealth(params: {
       note(sqliteWalWarning, "SQLite WAL");
     }
     noteWarning(status.startupRecoveryWarning, "Startup session recovery");
+    noteWarning(status.modelReasoningWarning, "Model reasoning");
     const childRuntimeWarning = status.childRuntime
       ? formatMissingChildRuntimeWarning(status.childRuntime)
       : undefined;
@@ -356,12 +382,14 @@ export async function checkGatewayHealth(params: {
         method: "channels.status",
         params: { probe: true, timeoutMs: channelProbeTimeoutMs },
         timeoutMs: diagnosticsTimeoutMs,
+        sharedStateMode: "read-only",
         config: params.cfg,
       }),
       requestGateway({
         method: "diagnostics.stability",
         params: { type: "telemetry.exporter", limit: 1000 },
         timeoutMs: diagnosticsTimeoutMs,
+        sharedStateMode: "read-only",
         config: params.cfg,
       }),
     ]);
@@ -476,6 +504,7 @@ export async function probeGatewayMemoryStatus(params: {
       method: "doctor.memory.status",
       params: { probe: false },
       timeoutMs,
+      sharedStateMode: "read-only",
       config: params.cfg,
     });
     if (payload.health) {

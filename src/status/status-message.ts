@@ -22,7 +22,7 @@ import {
 } from "../agents/model-runtime-aliases.js";
 import { buildModelAliasIndex, resolveModelRefFromString } from "../agents/model-selection.js";
 import { resolveOpenAITextVerbosity } from "../agents/openai-text-verbosity.js";
-import { resolveSandboxRuntimeStatus } from "../agents/sandbox.js";
+import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
 import type { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
 import { formatCompactionStatus } from "../auto-reply/reply/compaction-notice.js";
 import type {
@@ -240,7 +240,7 @@ const formatQueueDetails = (queue?: QueueStatus) => {
   if (!queue) {
     return "";
   }
-  const depth = typeof queue.depth === "number" ? `depth ${queue.depth}` : null;
+  const depth = queue.depth !== undefined ? `depth ${queue.depth}` : null;
   if (!queue.showDetails) {
     return depth ? ` (${depth})` : "";
   }
@@ -248,13 +248,13 @@ const formatQueueDetails = (queue?: QueueStatus) => {
   if (depth) {
     detailParts.push(depth);
   }
-  if (typeof queue.debounceMs === "number") {
+  if (queue.debounceMs !== undefined) {
     const ms = Math.max(0, Math.round(queue.debounceMs));
     const label =
       ms >= 1000 ? `${ms % 1000 === 0 ? ms / 1000 : (ms / 1000).toFixed(1)}s` : `${ms}ms`;
     detailParts.push(`debounce ${label}`);
   }
-  if (typeof queue.cap === "number") {
+  if (queue.cap !== undefined) {
     detailParts.push(`cap ${queue.cap}`);
   }
   if (queue.dropPolicy) {
@@ -561,10 +561,10 @@ export function buildStatusMessageParts(args: StatusArgs) {
         if (!outputTokens) {
           outputTokens = logUsage.output;
         }
-        if (typeof cacheRead !== "number" || cacheRead <= 0) {
+        if (cacheRead === undefined || cacheRead <= 0) {
           cacheRead = logUsage.cacheRead ?? cacheRead;
         }
-        if (typeof cacheWrite !== "number" || cacheWrite <= 0) {
+        if (cacheWrite === undefined || cacheWrite <= 0) {
           cacheWrite = logUsage.cacheWrite ?? cacheWrite;
         }
       }
@@ -689,13 +689,13 @@ export function buildStatusMessageParts(args: StatusArgs) {
   const updatedAt = entry?.updatedAt;
   const sessionStartedAt = resolveTimestamp(args.sessionStartedAt ?? entry?.sessionStartedAt);
   const sessionDuration =
-    typeof sessionStartedAt === "number"
+    sessionStartedAt !== undefined
       ? formatDurationCompact(now - sessionStartedAt, { spaced: true })
       : undefined;
   const sessionValue = [
     args.sessionKey ?? "unknown",
     sessionDuration ? `duration ${sessionDuration}` : null,
-    typeof updatedAt === "number" ? `updated ${formatTimeAgo(now - updatedAt)}` : "no activity",
+    updatedAt !== undefined ? `updated ${formatTimeAgo(now - updatedAt)}` : "no activity",
   ]
     .filter(Boolean)
     .join(" • ");
@@ -791,10 +791,10 @@ export function buildStatusMessageParts(args: StatusArgs) {
     state: entry,
   });
   const hasUsage =
-    typeof inputTokens === "number" ||
-    typeof outputTokens === "number" ||
-    typeof cacheRead === "number" ||
-    typeof cacheWrite === "number";
+    inputTokens !== undefined ||
+    outputTokens !== undefined ||
+    cacheRead !== undefined ||
+    cacheWrite !== undefined;
   const costConfig = hasUsage
     ? resolveModelCostConfig({
         provider: activeProvider,
@@ -810,10 +810,10 @@ export function buildStatusMessageParts(args: StatusArgs) {
         (hasUsage
           ? estimateAggregateUsageCost({
               usage: {
-                input: inputTokens ?? undefined,
-                output: outputTokens ?? undefined,
-                cacheRead: cacheRead ?? undefined,
-                cacheWrite: cacheWrite ?? undefined,
+                input: inputTokens,
+                output: outputTokens,
+                cacheRead,
+                cacheWrite,
               },
               cost: costConfig,
             })
@@ -846,7 +846,7 @@ export function buildStatusMessageParts(args: StatusArgs) {
     : undefined;
   const configuredFallbacks = (() => {
     const modelConfig = args.agent?.model;
-    if (typeof modelConfig === "object" && modelConfig && Array.isArray(modelConfig.fallbacks)) {
+    if (typeof modelConfig === "object" && modelConfig) {
       return sessionHasPersistedModelSelection ? undefined : modelConfig.fallbacks;
     }
     return undefined;
@@ -876,7 +876,7 @@ export function buildStatusMessageParts(args: StatusArgs) {
   const queueHasSignal = (args.queue?.depth ?? 0) > 0 || args.queue?.showDetails === true;
   const compactionValue = formatCompactionStatus(entry);
   const contextPct =
-    typeof totalTokens === "number" && totalTokens > 0 && contextTokens != null && contextTokens > 0
+    totalTokens !== undefined && totalTokens > 0 && contextTokens != null && contextTokens > 0
       ? Math.min(999, Math.round((totalTokens / contextTokens) * 100))
       : null;
   const filled = Math.min(10, Math.max(0, Math.round((contextPct ?? 0) / 10)));
@@ -928,8 +928,8 @@ export function buildStatusMessageParts(args: StatusArgs) {
     .join("\n\n");
 
   const statusRows: MessagePresentationTableCell[][] = [];
-  const pushStatusRow = (label: string, value: string | number | null | undefined) => {
-    const cell = typeof value === "number" ? String(value) : (value?.trim() ?? "");
+  const pushStatusRow = (label: string, value: string | null | undefined) => {
+    const cell = value?.trim() ?? "";
     if (cell) {
       statusRows.push([label, cell]);
     }

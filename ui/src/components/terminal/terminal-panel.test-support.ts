@@ -1,36 +1,47 @@
-import type { Mock } from "vitest";
+import type { CreateGhosttyTerminalOptions } from "@openclaw/libterminal/browser";
+import { vi, type Mock } from "vitest";
 import { createTerminalController } from "./terminal-controller.test-support.ts";
 export { createTerminalController } from "./terminal-controller.test-support.ts";
-import { defineTerminalPanelElement } from "./terminal-panel-registration.ts";
-import type { TerminalPanelSessionController } from "./terminal-panel-session-controller.ts";
-import { TerminalPanelController, type OpenClawTerminalPanel } from "./terminal-panel.ts";
+import { TerminalPanelHost } from "./terminal-panel-registration.ts";
+import type { OpenClawTerminalPanel } from "./terminal-panel.ts";
 
-const controllers = new WeakMap<HTMLElement, TerminalPanelController>();
 const factories = new Map<string, CreateGhosttyTerminalMock>();
+const viewportFactories = new WeakMap<HTMLElement, CreateGhosttyTerminalMock>();
+
+// mock-isolation: Panel lifecycle tests replace WASM emulation at its module boundary.
+vi.mock("./terminal-runtime.ts", () => ({
+  async createIsolatedGhosttyTerminal(
+    options: CreateGhosttyTerminalOptions,
+    shouldFocusOnOpen?: () => boolean,
+  ) {
+    for (
+      let container = options.parent.parentElement;
+      container;
+      container = container.parentElement
+    ) {
+      const factory = viewportFactories.get(container) ?? factories.get(container.localName);
+      if (factory) {
+        return factory(options, shouldFocusOnOpen);
+      }
+    }
+    throw new Error("Terminal fixture has not been registered");
+  },
+}));
+
+/** Direct session-boot fixtures can own a viewport outside a mounted panel. */
+export function registerTestTerminalViewport(
+  viewport: HTMLElement,
+  factory: CreateGhosttyTerminalMock,
+): void {
+  viewportFactories.set(viewport, factory);
+}
 
 export function createTestTerminalPanel(tagName: string): OpenClawTerminalPanel {
-  const factory = factories.get(tagName);
-  if (!factory) {
+  if (!factories.has(tagName)) {
     throw new Error(`Terminal fixture ${tagName} has not been registered`);
   }
-  const element = document.createElement(tagName) as OpenClawTerminalPanel;
-  element.createTerminalController =
-    factory as unknown as OpenClawTerminalPanel["createTerminalController"];
-  return element;
-}
-
-export function terminalPanelControllerForTest(element: HTMLElement): TerminalPanelController {
-  const controller = controllers.get(element);
-  if (!controller) {
-    throw new Error("Terminal panel fixture is not mounted");
-  }
-  return controller;
-}
-
-export function terminalSessionsForTest(element: HTMLElement): TerminalPanelSessionController {
-  const controller = terminalPanelControllerForTest(element);
-  return (controller as unknown as { terminalSessions: TerminalPanelSessionController })
-    .terminalSessions;
+  // SAFETY: defineTestTerminalPanelElement registers the real terminal bridge under this tag.
+  return document.createElement(tagName) as OpenClawTerminalPanel;
 }
 
 export type CreateOptions = {
@@ -46,7 +57,10 @@ export type CreateOptions = {
 };
 
 export type CreateGhosttyTerminalMock = Mock<
-  (options: CreateOptions) => Promise<ReturnType<typeof createTerminalController>>
+  (
+    options: CreateOptions,
+    shouldFocusOnOpen?: () => boolean,
+  ) => Promise<ReturnType<typeof createTerminalController>>
 >;
 
 export function terminalOpenResult(sessionId: string) {
@@ -61,13 +75,12 @@ export function terminalOpenResult(sessionId: string) {
 
 export function defineTestTerminalPanelElement(
   createGhosttyTerminalMock: CreateGhosttyTerminalMock,
-  tagName = `test-openclaw-terminal-panel-${crypto.randomUUID()}`,
+  tagName = "openclaw-terminal-panel",
 ): string {
   factories.set(tagName, createGhosttyTerminalMock);
-  defineTerminalPanelElement(tagName, (element) => {
-    const controller = new TerminalPanelController(element);
-    controllers.set(element, controller);
-    return controller;
-  });
+  if (tagName !== "openclaw-terminal-panel") {
+    const Element: CustomElementConstructor = TerminalPanelHost.Element;
+    customElements.define(tagName, class extends Element {});
+  }
   return tagName;
 }

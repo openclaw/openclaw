@@ -1,6 +1,5 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import { AsyncWorkScope, runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -14,7 +13,10 @@ import type { PluginSourceCacheRecord } from "./plugin-cache-artifacts.js";
 import type { PluginCacheFact } from "./plugin-cache-management.js";
 import { createPluginCacheSdk } from "./plugin-cache-sdk.js";
 import type { PluginCache, PluginRootCacheRecord } from "./plugin-cache.types.js";
-import { PluginInstanceDrainTimeoutError } from "./plugin-instance-error.js";
+import {
+  PluginInstanceDrainTimeoutError,
+  PluginInventoryRetiredError,
+} from "./plugin-instance-error.js";
 import {
   createPluginExecutionFrame,
   getPluginExecutionFrame,
@@ -24,18 +26,6 @@ import {
 import type { PluginInstanceResource } from "./plugin-instance.types.js";
 
 export type { PluginCache } from "./plugin-cache.types.js";
-
-const PLUGIN_CACHE_FACT_INVALIDATED = "PLUGIN_CACHE_FACT_INVALIDATED";
-
-/** Read-scope invalidation cancels its preparation. */
-export class PluginCacheFactInvalidatedError extends Error {
-  readonly code = PLUGIN_CACHE_FACT_INVALIDATED;
-}
-
-export function isPluginCacheFactInvalidatedError(error: unknown): boolean {
-  // Shared fact promises can originate in another source/require module graph.
-  return extractErrorCode(error) === PLUGIN_CACHE_FACT_INVALIDATED;
-}
 
 const state = resolveGlobalSingleton<{
   current?: PluginCache;
@@ -123,7 +113,7 @@ export function getPluginCacheRetirementSignal(cache: PluginCache): AbortSignal 
 export function retainPluginCache(cache: PluginCache): () => void {
   const retained = getPluginCacheRetainers(cache);
   if (cache.retirement || retained.retirement) {
-    throw new Error("Plugin inventory has retired; begin a new plugin operation.");
+    throw new PluginInventoryRetiredError();
   }
   if (retained.references.size === 0) {
     retained.settled = createDeferredCore();
@@ -151,7 +141,6 @@ function createPluginMetadataCache(): PluginCache["metadata"] {
       agentWorkspaceFingerprint: undefined,
       envFingerprint: undefined,
       defaultDiscoveryCompatible: false,
-      compatiblePolicyHashes: undefined,
       compatibleConfigFingerprints: undefined,
       revision: Symbol("plugin-metadata-snapshot"),
       configIdentities: new WeakSet(),
@@ -248,6 +237,10 @@ export function getPluginCache(): PluginCache {
 
 export function withPluginCache<T>(cache: PluginCache, run: () => T): T {
   const current = getPluginExecutionFrame();
+  if (current?.cacheScope?.cache === cache) {
+    // Re-entering the innermost cache would only duplicate it in the scope chain.
+    return run();
+  }
   return runWithPluginExecutionFrame(
     createPluginExecutionFrame(
       { ...current, cacheScope: { cache, parent: current?.cacheScope } },
@@ -268,14 +261,7 @@ export async function preparePluginCacheFact<T>(
   signal.throwIfAborted();
   let current = facts.get(key);
   if (!current) {
-    const release = retainPluginCache(owner);
-    let reading: Promise<T>;
-    try {
-      reading = read();
-    } catch (error) {
-      release();
-      throw error;
-    }
+    const reading = read();
     const pending: { pending: Promise<{ value: T }> } = {
       pending: reading
         .then((value) => {
@@ -295,8 +281,7 @@ export async function preparePluginCacheFact<T>(
             facts.delete(key);
           }
           throw error;
-        })
-        .finally(release),
+        }),
     };
     facts.set(key, pending);
     current = pending;

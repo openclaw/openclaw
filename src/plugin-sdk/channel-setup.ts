@@ -20,16 +20,7 @@ export {
 } from "./setup.js";
 
 /** Metadata used to advertise an optional channel plugin during setup flows. */
-type OptionalChannelSetupParams = {
-  /** Channel id shown in setup status and wizard routing. */
-  channel: string;
-  /** Human-readable plugin name used in install guidance. */
-  label: string;
-  /** Package spec operators should install to enable the optional channel. */
-  npmSpec?: string;
-  /** Docs path linked from setup validation and wizard hints. */
-  docsPath?: string;
-};
+type OptionalChannelSetupParams = Parameters<typeof createOptionalChannelSetupAdapter>[0];
 
 /** Paired setup adapter + setup wizard for channels that may not be installed yet. */
 export type OptionalChannelSetupSurface = {

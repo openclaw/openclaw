@@ -6,6 +6,11 @@ import type {
 } from "../../../packages/gateway-protocol/src/schema/plugins.js";
 import { CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS } from "../../../src/gateway/control-ui-plugin-frame-contract.js";
 import type {
+  ControlUiSettingsPlacement,
+  ControlUiChannelSettingsView,
+  ControlUiSettingsView,
+} from "../../../src/plugin-sdk/control-ui-settings.js";
+import type {
   ControlUiDisposer,
   ControlUiHost,
   ControlUiReplacement,
@@ -19,6 +24,8 @@ import { formatUiError } from "../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import {
   controlUiPluginAssetGrantError,
+  controlUiPluginDeliveryIdentity,
+  controlUiPluginDistribution,
   ControlUiPluginAssetPreloads,
 } from "./control-ui-assets.ts";
 import type {
@@ -29,6 +36,7 @@ import type {
 
 export type ControlUiPluginOwner = {
   descriptor: PluginControlUiModule;
+  deliveryIdentity?: string;
   client: GatewayBrowserClient;
   abort: AbortController;
   disposers: Set<ControlUiDisposer>;
@@ -71,6 +79,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
   private connectionId: string | null = null;
   private refreshGeneration = 0;
   private disposed = false;
+  private readonly settingsLifetimes = new Set<AbortController>();
   private firstConnection = true;
   private diagnostics: PluginControlUiDiagnostic[] = [];
   private grantTimer: ReturnType<typeof setInterval> | null = null;
@@ -95,6 +104,22 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
         })),
     );
     return [...this.diagnostics, ...warnings];
+  }
+
+  loadSettingsView(
+    placement: ControlUiSettingsView["placement"],
+    signal: AbortSignal,
+  ): Promise<{ view: ControlUiSettingsView; signal: AbortSignal; dispose: () => void }>;
+  loadSettingsView(
+    placement: ControlUiChannelSettingsView["placement"],
+    signal: AbortSignal,
+  ): Promise<{ view: ControlUiChannelSettingsView; signal: AbortSignal; dispose: () => void }>;
+  async loadSettingsView(placement: ControlUiSettingsPlacement, signal: AbortSignal) {
+    const { loadPackagedSettingsView } = await import("./control-ui-settings-view.ts");
+    if (this.disposed) {
+      throw new Error("The plugin UI runtime has ended.");
+    }
+    return loadPackagedSettingsView(placement, signal, this.settingsLifetimes);
   }
 
   get hasPlugins(): boolean {
@@ -161,6 +186,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
       this.preloads.sync(context.config.current, context.resourceBasePath, (id, error) =>
         this.reportError(id, error),
       );
+    // Owner publications drive asset preloads and revoke obsolete plugin activations synchronously.
     this.stops.push(
       context.config.subscribe(preload),
       context.gateway.subscribe(() => this.syncConnection()),
@@ -229,7 +255,11 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
       const installed = new Set(catalog.plugins.map((plugin) => plugin.pluginId));
       this.loadingCatalog = installed;
       for (const [id, owner] of this.owners) {
-        if (!installed.has(id)) {
+        const next = catalog.plugins.find((descriptor) => descriptor.pluginId === id);
+        if (
+          !next ||
+          (owner.deliveryIdentity ?? "gateway") !== controlUiPluginDeliveryIdentity(next)
+        ) {
           this.owners.delete(id);
           this.disposeOwner(owner);
         }
@@ -238,28 +268,19 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
       if (catalog.plugins.length) {
         const gatewayUrl = new URL(client.gatewayUrl, window.location.href);
         gatewayUrl.protocol = gatewayUrl.protocol.replace(/^ws/u, "http");
-        if (!sameOrigin) {
-          this.loadingCatalog = null;
-          const error = new Error(
-            `Native plugin UI requires the Control UI served by the connected Gateway. Open ${gatewayUrl.origin} and reconnect there.`,
-          );
-          await Promise.all(
-            catalog.plugins.map((descriptor) => {
-              this.reportError(descriptor.pluginId, error);
-              return this.reportActivation(descriptor, client, current, "failed", error);
-            }),
-          );
-          return;
-        }
-        if (!bootstrap) {
-          throw new Error("Could not authenticate native plugin assets. Reconnect and retry.");
-        }
         for (const descriptor of catalog.plugins) {
-          const grantError = controlUiPluginAssetGrantError(
-            descriptor,
-            bootstrap,
-            this.getContext().resourceBasePath,
-          );
+          if (controlUiPluginDistribution(descriptor)) {
+            continue;
+          }
+          const grantError = !sameOrigin
+            ? `Native plugin UI requires the Control UI served by the connected Gateway. Open ${gatewayUrl.origin} and reconnect there.`
+            : !bootstrap
+              ? "Could not authenticate native plugin assets. Reconnect and retry."
+              : controlUiPluginAssetGrantError(
+                  descriptor,
+                  bootstrap,
+                  this.getContext().resourceBasePath,
+                );
           if (grantError) {
             installed.delete(descriptor.pluginId);
             const error = new Error(grantError);
@@ -270,7 +291,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
             }
           }
         }
-        if (bootstrap.pluginAssetsRequireAuth) {
+        if (bootstrap?.pluginAssetsRequireAuth) {
           this.startGrantRenewal();
         }
       }
@@ -322,6 +343,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
     const abort = new AbortController();
     const owner: Omit<ControlUiPluginOwner, "host"> = {
       descriptor,
+      deliveryIdentity: controlUiPluginDeliveryIdentity(descriptor),
       client,
       abort,
       disposers: new Set<ControlUiDisposer>(),
@@ -609,6 +631,9 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
 
   dispose(): void {
     this.disposed = true;
+    for (const owner of this.settingsLifetimes) {
+      owner.abort();
+    }
     this.preloads.dispose();
     this.retireOwners();
     for (const stop of this.stops) {

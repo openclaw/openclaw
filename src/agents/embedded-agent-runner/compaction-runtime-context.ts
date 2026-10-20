@@ -1,4 +1,7 @@
-import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  asFiniteNumber,
+  floorPositiveFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ThinkLevel, ThinkingCatalogEntry } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -17,12 +20,11 @@ import {
   inferUniqueProviderFromConfiguredModels,
   listModelAliasCandidates,
 } from "../model-selection-shared.js";
-import { resolveSelectedOpenAIRuntimeProvider } from "../openai-routing.js";
+import { readModelServingContextWindow } from "../model-serving-context.js";
 import { agentRuntimeAuthPlanMatchesTarget } from "../runtime-plan/prepare-auth.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 import { resolveCandidateThinkingLevel } from "../thinking-runtime.js";
 import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
-import { normalizeContextTokenBudget } from "./utils.js";
 
 type NullableCompactionContextKey =
   | "sessionKey"
@@ -101,8 +103,6 @@ export function resolveEmbeddedCompactionTarget(params: {
   manifestPlugins?: ModelManifestNormalizationContext["manifestPlugins"];
 }): {
   provider: string | undefined;
-  runtimeProvider?: string;
-  contextProvider?: string;
   nativeHarnessCompaction?: boolean;
   model: string | undefined;
   authProfileId: string | undefined;
@@ -183,13 +183,7 @@ export function resolveCompactionTargetRuntime(
   // Provider defaults choose new runs; they cannot move an existing transcript.
   const useNativeHarnessRuntime =
     selectedHarnessRuntime !== "openclaw" && !isDefaultAgentRuntimeId(selectedHarnessRuntime);
-  const runtimeProvider = resolveSelectedOpenAIRuntimeProvider({ provider });
-  const routedRuntimeProvider = runtimeProvider === provider ? undefined : runtimeProvider;
-  return {
-    runtimeProvider: routedRuntimeProvider,
-    contextProvider: useNativeHarnessRuntime ? routedRuntimeProvider : undefined,
-    ...(useNativeHarnessRuntime ? { nativeHarnessCompaction: true } : {}),
-  };
+  return useNativeHarnessRuntime ? { nativeHarnessCompaction: true } : {};
 }
 
 function hasBareConfiguredModelForProvider(params: {
@@ -262,19 +256,22 @@ export function resolveCompactionContextTokenBudget(params: {
 }) {
   // Caller budgets stay bounded by the selected model ceiling.
   const resolvedBudget =
-    normalizeContextTokenBudget(
+    floorPositiveFiniteNumber(
       resolveContextWindowInfo({
         cfg: params.config,
         provider: params.provider,
         modelId: params.modelId,
         modelContextTokens: asFiniteNumber(params.model?.contextTokens),
+        modelServingContextWindow: params.model
+          ? readModelServingContextWindow(params.model)
+          : undefined,
         modelContextWindow: params.model?.contextWindow,
         defaultTokens: DEFAULT_CONTEXT_TOKENS,
       }).tokens,
     ) ?? DEFAULT_CONTEXT_TOKENS;
   return Math.min(
-    normalizeContextTokenBudget(params.requestedTokenBudget) ??
-      normalizeContextTokenBudget(params.fallbackTokenBudget) ??
+    floorPositiveFiniteNumber(params.requestedTokenBudget) ??
+      floorPositiveFiniteNumber(params.fallbackTokenBudget) ??
       resolvedBudget,
     resolvedBudget,
   );
@@ -337,7 +334,6 @@ export function buildEmbeddedCompactionRuntimeContext(
     senderIsOwner: profile === "full" ? params.senderIsOwner : undefined,
     senderId: params.senderId ?? undefined,
     provider: resolved.provider,
-    runtimeProvider: resolved.runtimeProvider,
     model: resolved.model,
     modelCallUrgency: params.modelCallUrgency,
     modelFallbacksOverride: afterTurn ? undefined : params.modelFallbacksOverride,

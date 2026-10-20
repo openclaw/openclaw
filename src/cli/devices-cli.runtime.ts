@@ -47,6 +47,7 @@ import {
 } from "./devices-cli-fallback.js";
 import { ExpectedCliError } from "./failure-output.js";
 import { callGatewayFromCliWithTransport } from "./gateway-rpc.js";
+import { prepareCliGatewayStateAccess } from "./gateway-rpc.runtime.js";
 import { runWithLocalStateOwner } from "./local-state-owner.js";
 import { formatConnectionFlagReminder } from "./nodes-cli/cli-utils.js";
 import { formatPairingApproveCommand } from "./pairing-command-format.js";
@@ -186,6 +187,7 @@ async function listPairingWithFallback(opts: DevicesRpcOpts): Promise<DevicePair
     if (!fallback) {
       throw error;
     }
+    await prepareCliGatewayStateAccess();
     const local = await listDevicePairing();
     const list = {
       pending: local.pending as PendingDevice[],
@@ -239,6 +241,7 @@ async function approvePairingWithFallback(
       method: "device.pair.approve",
       params: { requestId },
       target: requestId,
+      databaseEngine: "configured",
       onForeignOwner: "refuse",
       runLocal: async ({ env, assertCurrent }) => {
         const gatewayRequestId = normalizeOptionalString(fallback.details.requestId);

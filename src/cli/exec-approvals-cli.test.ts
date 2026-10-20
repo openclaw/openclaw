@@ -7,7 +7,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { SESSION_EXEC_OVERRIDES_NOTE } from "../infra/exec-approvals-effective.js";
 import * as execApprovals from "../infra/exec-approvals.js";
-import { testing } from "./exec-approvals-cli.js";
 
 const {
   callGatewayFromCli,
@@ -18,15 +17,8 @@ const {
   resetExecApprovalsCliMocks,
   runApprovalsCommand,
   runtimeErrors,
+  setLocalSocket,
 } = await import("./exec-approvals-cli.test-support.js");
-
-describe("exec approvals CLI error formatting", () => {
-  it("keeps the bounded first line UTF-16 well-formed", () => {
-    const message = testing.formatCliError(`${"x".repeat(299)}🚀tail\nignored`);
-
-    expect(message).toBe(`${"x".repeat(299)}...`);
-  });
-});
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -124,6 +116,20 @@ describe("exec approvals CLI", () => {
     expect(runtimeErrors).toHaveLength(0);
   });
 
+  it.each([
+    ["get", ["approvals", "get"]],
+    ["allowlist add", ["approvals", "allowlist", "add", "/usr/bin/uname"]],
+  ] as const)(
+    "%s rejects --gateway combined with --node instead of silently routing to the gateway",
+    async (_label, baseArgs) => {
+      await expect(
+        runApprovalsCommand([...baseArgs, "--gateway", "--node", "macbook"]),
+      ).rejects.toThrow("__exit__:1");
+      expect(runtimeErrors.join("\n")).toContain("Pass only one of --gateway or --node.");
+      expect(callGatewayFromCli).not.toHaveBeenCalled();
+    },
+  );
+
   it("renders an unstored fresh-install policy as defaults instead of absent", async () => {
     localSnapshot.exists = false;
 
@@ -137,6 +143,7 @@ describe("exec approvals CLI", () => {
 
   it("sanitizes stored allowlist patterns in human output without changing JSON", async () => {
     const pattern = "/tmp/safe\u001b[31mred\u001b[0m\u001b]0;pwned\u0007\nnext\trow\rback\bspace🦞";
+    setLocalSocket("/tmp/local-exec-approvals.sock", "fixture-token");
     localSnapshot.file = {
       version: 1,
       agents: { "*": { allowlist: [{ pattern }] } },
@@ -161,88 +168,18 @@ describe("exec approvals CLI", () => {
     await runApprovalsCommand(["approvals", "get", "--json"]);
 
     const file = requireRecord(writtenJson().file, "JSON approvals file");
+    expect(file.socket).toEqual({ path: "/tmp/local-exec-approvals.sock" });
+    expect(JSON.stringify(writtenJson())).not.toContain('"token"');
     const agents = requireRecord(file.agents, "JSON approvals agents");
     const wildcard = requireRecord(agents["*"], "JSON wildcard agent");
     const allowlist = requireArray(wildcard.allowlist, "JSON wildcard allowlist");
     expect(requireRecord(allowlist[0], "JSON allowlist entry").pattern).toBe(pattern);
   });
 
-  it("keeps grant scopes distinct in a 40-column terminal", async () => {
-    const columns = 40;
-    const originalColumns = process.stdout.columns;
-    Object.defineProperty(process.stdout, "columns", { configurable: true, value: columns });
-    try {
-      const pattern = "/usr/bin/git";
-      const lastUsedAt = 1;
-      localSnapshot.file = {
-        version: 1,
-        agents: {
-          main: {
-            allowlist: [
-              { pattern, lastUsedAt },
-              { pattern, argPattern: "^status$", lastUsedAt },
-              {
-                pattern,
-                source: "allow-always",
-                argPattern: execApprovals.buildCwdBoundHashedArgPattern(
-                  [pattern, "status"],
-                  "/workspace",
-                ),
-                lastUsedAt,
-              },
-              { pattern, source: "allow-always", lastUsedAt },
-              { pattern: "=command:manual0000000000", lastUsedAt },
-              { pattern: "=command:generated00000", source: "allow-always", lastUsedAt },
-              { pattern, argPattern: "sha256:argv:obsolete", lastUsedAt },
-            ],
-          },
-        },
-      };
-      await runApprovalsCommand(["approvals", "get"]);
-      const rows = loggedOutput()
-        .split("\n")
-        .filter((line) => line.startsWith("│ local"));
-      expect(rows).toHaveLength(7);
-      expect(new Set(rows.slice(0, 4)).size).toBe(4);
-      for (const [index, scope] of [
-        "any args",
-        "argv",
-        "argv+cwd",
-        "inactive",
-        "any args",
-        "command text",
-        "inactive",
-      ].entries()) {
-        expect(rows[index]).toContain(scope);
-      }
-      expect(rows[6]).not.toMatch(/\bargv\b/);
-    } finally {
-      Object.defineProperty(process.stdout, "columns", {
-        configurable: true,
-        value: originalColumns,
-      });
-    }
-  });
-
-  it("redacts the socket token from local get JSON while preserving its path", async () => {
-    localSnapshot.file = {
-      version: 1,
-      socket: { path: "/tmp/local-exec-approvals.sock", token: "fixture-token" },
-      agents: {},
-    };
-
-    await runApprovalsCommand(["approvals", "get", "--json"]);
-
-    const output = writtenJson();
-    const file = requireRecord(output.file, "JSON approvals file");
-    expect(file.socket).toEqual({ path: "/tmp/local-exec-approvals.sock" });
-    expect(JSON.stringify(output)).not.toContain('"token"');
-  });
-
   it("redacts the socket token from local write JSON while preserving its path", async () => {
+    setLocalSocket("/tmp/local-exec-approvals.sock", "fixture-token");
     localSnapshot.file = {
       version: 1,
-      socket: { path: "/tmp/local-exec-approvals.sock", token: "fixture-token" },
       agents: {},
     };
 
@@ -253,6 +190,8 @@ describe("exec approvals CLI", () => {
     expect(file.socket).toEqual({ path: "/tmp/local-exec-approvals.sock" });
     expect(output.raw).toBeUndefined();
     expect(JSON.stringify(output)).not.toContain('"token"');
+    expect(localSnapshot.file.socket).toBeUndefined();
+    expect(localSnapshot.raw).not.toContain("fixture-token");
     expect(defaultRuntime.writeJson).toHaveBeenCalledTimes(1);
     expect(loggedOutput()).not.toContain("Writing approvals for this state root.");
   });
@@ -614,12 +553,40 @@ describe("exec approvals CLI", () => {
     );
   });
 
-  it("bounds approvals JSON read from stdin", async () => {
-    await expect(testing.readStdin(Readable.from(["12345"]), 5)).resolves.toBe("12345");
-    await expect(testing.readStdin(Readable.from(["12345", "6"]), 5)).rejects.toThrow(
-      "Exec approvals stdin exceeds 5 bytes.",
-    );
-  });
+  it.each([0, 1])(
+    "enforces the stdin byte cap with %i excess bytes before saving",
+    async (excessBytes) => {
+      const originalStdin = Object.getOwnPropertyDescriptor(process, "stdin");
+      if (!originalStdin) {
+        throw new Error("Expected process.stdin");
+      }
+      const input = '{defaults:{security:"deny"}}';
+      const stream = Readable.from([
+        input,
+        Buffer.alloc(1024 * 1024 - Buffer.byteLength(input) + excessBytes, " "),
+      ]);
+      const updateExecApprovals = vi.mocked(execApprovals.updateExecApprovals).mockClear();
+      Object.defineProperty(process, "stdin", { configurable: true, value: stream });
+      try {
+        const command = runApprovalsCommand(["approvals", "set", "--stdin", "--json"]);
+        if (excessBytes) {
+          await expect(command).rejects.toThrow("Exec approvals stdin exceeds 1048576 bytes.");
+          expect(updateExecApprovals).not.toHaveBeenCalled();
+          expect(localSnapshot.file).toEqual({ version: 1, agents: {} });
+          expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+        } else {
+          await command;
+          expect(updateExecApprovals).toHaveBeenCalledTimes(1);
+          expect(localSnapshot.file.defaults).toEqual({ security: "deny" });
+          expect(requireRecord(writtenJson().file, "JSON approvals file").defaults).toEqual({
+            security: "deny",
+          });
+        }
+      } finally {
+        Object.defineProperty(process, "stdin", originalStdin);
+      }
+    },
+  );
 
   it("rejects a file that grows past the limit after opening", async () => {
     const dir = tempDirs.make("openclaw-approvals-file-growth-");
@@ -657,9 +624,9 @@ describe("exec approvals allowlist JSON no-ops", () => {
     async (_target, args, method) => {
       for (const operation of ["add", "remove"] as const) {
         const socketPath = "/tmp/noop-exec-approvals.sock";
+        setLocalSocket(socketPath, "fixture-noop-token");
         localSnapshot.file = {
           version: 1,
-          socket: { path: socketPath, token: "fixture-noop-token" },
           ...(operation === "add"
             ? { agents: { "*": { allowlist: [{ pattern: "/usr/bin/uptime", lastUsedAt: 123 }] } } }
             : {}),
@@ -668,7 +635,10 @@ describe("exec approvals allowlist JSON no-ops", () => {
           path: localSnapshot.path,
           exists: localSnapshot.exists,
           hash: localSnapshot.hash,
-          file: localSnapshot.file,
+          file: {
+            ...localSnapshot.file,
+            socket: { path: socketPath, token: "fixture-noop-token" },
+          },
         };
         const before = structuredClone(snapshot);
         const updateExecApprovals = vi.mocked(execApprovals.updateExecApprovals);

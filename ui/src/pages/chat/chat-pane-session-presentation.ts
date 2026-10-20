@@ -1,12 +1,35 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { readPresenceEntries, resolveCurrentSelfUser } from "../../app/user-profile.ts";
+import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { collectKnownSessionGroups } from "../../lib/sessions/grouping.ts";
+import { resolveSessionKey } from "../../lib/sessions/index.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
 import { resolveChatPaneParentSession } from "./components/chat-pane-header.ts";
+
+export function chatSessionPresentationTitle(
+  state: Pick<ChatPageHost, "sessions" | "sessionKey" | "hello"> | undefined,
+  row?: GatewaySessionRow,
+  sessionKey = "",
+  pending = false,
+): string {
+  const key = state
+    ? resolveSessionKey(state.sessionKey, state.hello) || state.sessionKey
+    : sessionKey;
+  const presentation = state?.sessions.presentation.result?.sessions.find((candidate) =>
+    areUiSessionKeysEquivalent(candidate.key, key),
+  );
+  // The roster owns accepted titles; pane metadata fills absent cross-agent rows.
+  const source = presentation ?? row;
+  if (!source && pending) {
+    return "";
+  }
+  return presentation
+    ? resolveSessionDisplayName(key, presentation)
+    : resolveSessionDisplayName(row?.key ?? key, row);
+}
 
 /** Capture rendered roster facts without retaining a mutable row as the previous value. */
 export function chatSessionPresentationKey(
@@ -30,6 +53,7 @@ export function chatSessionPresentationKey(
     state.sessionsLoading,
     state.sessionsError,
     selected,
+    chatSessionPresentationTitle(state),
     resolveChatPaneParentSession(selected, rows),
     result?.defaults,
     result?.owners,
@@ -46,25 +70,4 @@ export function chatSessionPresentationKey(
     // Empty chat renders recent sessions from the whole roster.
     state.chatMessages.length === 0 ? rows : undefined,
   ]);
-}
-
-export function resolveChatPaneUserPresentation(params: {
-  gatewaySnapshot: ApplicationContext["gateway"]["snapshot"];
-  presencePayload: Parameters<typeof readPresenceEntries>[0];
-  previousUserId: string | null;
-  state: Pick<ChatPageHost, "userName" | "userAvatar">;
-  selectedSession: GatewaySessionRow | null | undefined;
-}) {
-  const selfUser = resolveCurrentSelfUser({
-    snapshotUser: params.gatewaySnapshot.selfUser,
-    presenceEntries: readPresenceEntries(params.presencePayload),
-    presenceInstanceId: params.gatewaySnapshot.client?.instanceId,
-  });
-  return {
-    selfUser,
-    userId: selfUser?.identity?.type === "profile" ? selfUser.identity.id : params.previousUserId,
-    userName: selfUser?.name ?? params.state.userName,
-    userAvatar: selfUser?.avatarUrl ?? params.state.userAvatar,
-    channelAvatar: params.selectedSession ?? undefined,
-  };
 }

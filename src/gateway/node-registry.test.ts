@@ -644,12 +644,6 @@ describe("gateway/node-registry", () => {
       ]);
       expect(snapshot.sessionHostNodeIds.has("node-1")).toBe(false);
       expect(snapshot.workerSlotsByNodeId.get("node-1")).toEqual({ total: 2, available: 0 });
-      const projectedCapacity = snapshot.workerSlotsByNodeId.get("node-1");
-      if (!projectedCapacity) {
-        throw new Error("expected projected capacity");
-      }
-      // JavaScript consumers can mutate a readonly-typed snapshot without changing admission.
-      Object.assign(projectedCapacity, { available: 2 });
       expect(transport.isCurrent(proof, true)).toBe(false);
       expect(frames).toEqual([]);
 

@@ -12,16 +12,18 @@ import {
   resolveDefaultPluginExtensionsDir,
   resolveDefaultPluginNpmDir,
 } from "../../../plugins/install-paths.js";
-import { listManagedPluginNpmRoots } from "../../../plugins/npm-project-roots.js";
+import { listManagedPluginNpmRootsForInstallRecords } from "../../../plugins/installed-plugin-npm-roots.js";
 import type { PluginPayloadSmokeFailure } from "../../../plugins/payload-verification.js";
 import { withPluginLifecycleLease } from "../../../plugins/plugin-lifecycle-lease.js";
 import {
   reconcileRegisteredOpenClawHostLinks,
   relinkOpenClawPeerDependenciesInManagedNpmRoot,
 } from "../../../plugins/plugin-peer-link.js";
+import { detectPluginVersionDrift } from "../../../plugins/plugin-version-drift.js";
 import { pruneStaleLocalBundledPluginInstallRecords } from "../../../plugins/stale-local-bundled-plugin-install-records.js";
 import type { PluginUpdateOutcome } from "../../../plugins/update.js";
 import { resolveUserPath } from "../../../utils.js";
+import { resolveCompatibilityHostVersion } from "../../../version.js";
 // Link mandatory repairs before a package swap can remove this updater's old chunks.
 import { maybeRepairStaleManagedNpmBundledPlugins } from "../../doctor-plugin-registry.js";
 import {
@@ -29,7 +31,7 @@ import {
   type InstalledPluginIdRecovery,
 } from "./installed-plugin-id-recovery.js";
 import { repairMissingConfiguredPluginInstalls } from "./missing-configured-plugin-install.js";
-import { resolvePostCoreConvergenceEnv } from "./update-phase.js";
+import { isPostCoreConvergencePass, resolvePostCoreConvergenceEnv } from "./update-phase.js";
 
 type PostCoreConvergenceWarning = {
   kind?: "load" | "repair";
@@ -103,7 +105,11 @@ async function repairInstalledOpenClawHostLinks(params: {
     packageReadFailures.push({ error, packageDir });
   };
   try {
-    const npmRoots = await listManagedPluginNpmRoots(resolveDefaultPluginNpmDir(params.env));
+    const npmRoots = listManagedPluginNpmRootsForInstallRecords({
+      npmRoot: resolveDefaultPluginNpmDir(params.env),
+      installRecords: params.installRecords,
+      env: params.env,
+    });
     const results = await Promise.allSettled(
       npmRoots.map((npmRoot) =>
         relinkOpenClawPeerDependenciesInManagedNpmRoot({
@@ -209,6 +215,7 @@ async function runPostCorePluginConvergenceWithLease(
   params: Parameters<typeof runPostCorePluginConvergence>[0],
 ): Promise<PostCoreConvergenceResult> {
   const env = resolvePostCoreConvergenceEnv(params.env, params.compatibilityHostVersion);
+  const repairVersionDrift = isPostCoreConvergencePass(params.env);
   // Retire obsolete managed shadows before relinking or smoke-checking them. A package that
   // became bundled with the new core must not survive into the next startup's contract graph.
   params.beforePersistentEffect?.();
@@ -230,6 +237,8 @@ async function runPostCorePluginConvergenceWithLease(
   const warnings: PostCoreConvergenceWarning[] = [];
   const repair = await repairMissingConfiguredPluginInstalls({
     cfg: params.cfg,
+    // App-owned activation reaches this pass before plugin migrations, without CLI cohort sync.
+    repairVersionDrift,
     timeoutMs: params.timeoutMs,
     workTimeoutMs: params.workTimeoutMs,
     env,
@@ -276,6 +285,24 @@ async function runPostCorePluginConvergenceWithLease(
     env,
   });
   const smokeRecords = filterRecordsToActive({ cfg: recovered.config, records, env });
+  if (repairVersionDrift) {
+    for (const drift of detectPluginVersionDrift({
+      gatewayVersion: resolveCompatibilityHostVersion(env),
+      installRecords: smokeRecords,
+      config: recovered.config,
+    }).drifts) {
+      if (drift.source !== "npm") {
+        continue;
+      }
+      warnings.push({
+        kind: "repair",
+        pluginId: drift.pluginId,
+        reason: "plugin-version-mismatch",
+        message: `Plugin "${drift.pluginId}" remains at ${drift.installedVersion} after the core update to ${drift.gatewayVersion}.`,
+        guidance: [REPAIR_GUIDANCE],
+      });
+    }
+  }
   const resolveInstallRecordPaths = (
     installRecords: Record<string, PluginInstallRecord>,
   ): Set<string> =>

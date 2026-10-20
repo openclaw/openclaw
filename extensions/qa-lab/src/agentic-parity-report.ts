@@ -228,36 +228,19 @@ function verifySummaryLabelMatch(params: {
   ) {
     return;
   }
-  throw new QaParityLabelMismatchError({
-    role: params.role,
-    label: params.label,
-    runProvider,
-    runModel,
-  });
-}
-
-class QaParityLabelMismatchError extends Error {
-  readonly role: "candidate" | "baseline";
-  readonly label: string;
-  readonly runProvider: string;
-  readonly runModel: string;
-
-  constructor(params: {
-    role: "candidate" | "baseline";
-    label: string;
-    runProvider: string;
-    runModel: string;
-  }) {
-    super(
-      `${params.role} summary run.primaryProvider=${params.runProvider} and run.primaryModel=${params.runModel} do not match --${params.role}-label=${params.label}. ` +
+  throw Object.assign(
+    new Error(
+      `${params.role} summary run.primaryProvider=${runProvider} and run.primaryModel=${runModel} do not match --${params.role}-label=${params.label}. ` +
         `Check that the --candidate-summary / --baseline-summary paths weren't swapped.`,
-    );
-    this.name = "QaParityLabelMismatchError";
-    this.role = params.role;
-    this.label = params.label;
-    this.runProvider = params.runProvider;
-    this.runModel = params.runModel;
-  }
+    ),
+    {
+      name: "QaParityLabelMismatchError",
+      role: params.role,
+      label: params.label,
+      runProvider,
+      runModel,
+    },
+  );
 }
 
 export function buildQaAgenticParityComparison(params: {

@@ -10,7 +10,7 @@ import {
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getPluginServiceSchedulerBinding } from "../../plugins/service-scheduler-binding.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
-import { getAgentDatabaseStartupAdmission } from "../../state/agent-database-startup.js";
+import { waitForAgentDatabaseWriteAdmission } from "../../state/agent-database-preparation-context.js";
 import { isRecentOutboundMessageIdentity } from "../message/outbound-echo.js";
 import { recordChannelBotPairLoopAndCheckSuppression } from "./bot-loop-protection.js";
 import {
@@ -236,9 +236,22 @@ async function runPreparedChannelTurnCoreInTrace<
       const agentId =
         params.ctxPayload.AgentId ?? parseAgentSessionKey(params.routeSessionKey)?.agentId;
       if (agentId) {
-        await getAgentDatabaseStartupAdmission()?.waitForAgentPreparation(agentId, {
+        const preparation = waitForAgentDatabaseWriteAdmission(agentId, {
           signal: getPluginServiceSchedulerBinding()?.().signal,
         });
+        if (preparation) {
+          log.info("channel message waiting for agent database preparation", {
+            agentId,
+            channel: params.channel,
+            accountId: params.accountId,
+          });
+          emit(params, {
+            stage: "record",
+            event: "start",
+            reason: "agent-database-preparation-pending",
+          });
+          await preparation;
+        }
       }
       if (params.ctxPayload.SessionTranscriptContext) {
         const { mergeSessionTranscriptContext } =

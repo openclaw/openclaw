@@ -90,38 +90,38 @@ export async function flushObserver(): Promise<void> {
 }
 
 export function createObserverTimerTracker() {
-  // Gateway workers share a fake clock; disposal owns only this observer's handles.
+  // Install after unrelated timers: these controlled fixtures schedule only observer work.
+  const nativeSetTimeout = setTimeout;
+  const nativeClearTimeout = clearTimeout;
   const ownedTimers = new Set<ReturnType<typeof setTimeout>>();
   const setTimeoutFn = Object.assign((callback: () => void, delay?: number) => {
-    const timer = setTimeout(() => {
+    const timer = nativeSetTimeout(() => {
       ownedTimers.delete(timer);
       callback();
     }, delay);
     ownedTimers.add(timer);
     return timer;
-  }, setTimeout);
+  }, nativeSetTimeout);
   const clearTimeoutFn: typeof clearTimeout = (timer) => {
     if (timer && typeof timer === "object") {
       ownedTimers.delete(timer);
     }
-    clearTimeout(timer);
+    nativeClearTimeout(timer);
   };
-  return { ownedTimers, setTimeoutFn, clearTimeoutFn };
+  vi.spyOn(globalThis, "setTimeout").mockImplementation(setTimeoutFn);
+  vi.spyOn(globalThis, "clearTimeout").mockImplementation(clearTimeoutFn);
+  return { ownedTimers };
 }
 
 export function createHarness(options?: {
-  setTimeoutFn?: SessionObserverDeps["setTimeoutFn"];
-  clearTimeoutFn?: SessionObserverDeps["clearTimeoutFn"];
   subscribe?: boolean;
   broadSubscribe?: boolean;
   visible?: boolean;
   completeModel?: ReturnType<typeof vi.fn>;
   prepareModel?: ReturnType<typeof vi.fn>;
-  persistDigest?: ReturnType<typeof vi.fn>;
+  persistDigest?: ReturnType<typeof vi.fn<(params: PersistDigestParams) => Promise<unknown>>>;
   readSession?: ReturnType<typeof vi.fn>;
   config?: OpenClawConfig;
-  utilityModelRef?: string | null;
-  resolveUtilityModelRef?: ReturnType<typeof vi.fn>;
 }) {
   const subscribers = createSessionMessageSubscriberRegistry();
   const sessionEventSubscribers = createSessionEventSubscriberRegistry();
@@ -146,17 +146,10 @@ export function createHarness(options?: {
   const readSession =
     options?.readSession ?? vi.fn(() => ({ sessionId: "session-id", updatedAt: 0 }));
   const observer = createSessionObserver({
-    setTimeoutFn: options?.setTimeoutFn,
-    clearTimeoutFn: options?.clearTimeoutFn,
     getConfig: () => options?.config ?? cfg,
     subscribers,
     sessionEventSubscribers,
     broadcastToConnIds,
-    resolveUtilityModelRef: (options?.resolveUtilityModelRef ??
-      (() =>
-        options?.utilityModelRef === null
-          ? undefined
-          : (options?.utilityModelRef ?? "openai/gpt-test"))) as never,
     prepareModel: prepareModel as never,
     completeModel: completeModel as never,
     readSession: readSession as never,
@@ -184,15 +177,17 @@ export function declareObserverVisibility(
   observer.setConnectionVisibility(connId, true);
 }
 
-export function startAndAddToolNotes(
+export async function startAndAddToolNotes(
   observer: ReturnType<typeof createSessionObserver>,
   params: { runId?: string; sessionKey?: string; count?: number } = {},
-): void {
+): Promise<void> {
   const runId = params.runId ?? "run-1";
   const sessionKey = params.sessionKey ?? "agent:main:session-1";
-  observer.handleEvent(event({ runId, sessionKey, stream: "lifecycle", data: { phase: "start" } }));
+  await observer.handleEventAsync(
+    event({ runId, sessionKey, stream: "lifecycle", data: { phase: "start" } }),
+  );
   for (let index = 0; index < (params.count ?? 3); index += 1) {
-    observer.handleEvent(
+    await observer.handleEventAsync(
       event({
         runId,
         sessionKey,

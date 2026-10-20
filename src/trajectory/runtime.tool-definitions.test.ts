@@ -1,3 +1,4 @@
+import { publishRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 import * as nodeCrypto from "@openclaw/normalization-core/node-crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyLoggingConfig, resetLogger } from "../logging/logger.js";
@@ -39,6 +40,36 @@ describe("trajectory tool definition preparation", () => {
     registerSecretValueForRedaction("synthetic-new-registration");
     expect(project()[0]?.parameters).toMatchObject({ nested: { ordinary: "changed" } });
     expect(digest).toHaveBeenCalledTimes(2);
+  });
+
+  it("reuses published schemas while isolating results and replacement publications", () => {
+    const source = { type: "object", properties: { value: { type: "string" } } };
+    const published = publishRuntimeToolInputSchema(source).schema;
+    const first = projectParameters(published);
+    expect(first).toEqual(source);
+    Object.assign(first ?? {}, { properties: {} });
+    expect(projectParameters(published)).toEqual(source);
+
+    source.properties.value.type = "number";
+    expect(projectParameters(published)).toMatchObject({
+      properties: { value: { type: "string" } },
+    });
+    expect(projectParameters(publishRuntimeToolInputSchema(source).schema)).toEqual(source);
+  });
+
+  it("still bounds published JSON before caching its diagnostic projection", () => {
+    const source = { description: "x".repeat(32_769) };
+    const published = publishRuntimeToolInputSchema(source).schema;
+    for (const parameters of [source, published, source, published]) {
+      expect(projectParameters(parameters)).toEqual({
+        description: {
+          truncated: true,
+          reason: "trajectory-field-size-limit",
+          originalChars: 32_769,
+          limitChars: 32_768,
+        },
+      });
+    }
   });
 
   it("keeps schema text unchanged across secret registrations and log policy changes", async () => {

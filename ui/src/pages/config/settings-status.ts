@@ -1,7 +1,6 @@
-import { createEffect, createMemo, createSignal, onCleanup, untrack } from "solid-js";
+import { createMemo, createSignal, onCleanup, onSettled } from "solid-js";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import type { hasOperatorReadAccess } from "../../app/operator-access.ts";
-import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 
@@ -12,14 +11,13 @@ export function createSettingsStatus<T>(
     method: string;
     access: typeof hasOperatorReadAccess;
     configHash: "hash" | "appliedConfigHash";
-    onConnectionChange?: () => void;
+    onConnectionChange?: (identityChanged: boolean) => void;
     onStatus?: (status: T) => void;
     onError?: () => void;
   },
 ) {
   const gatewayProjection = projectGateway(context.gateway);
   const configProjection = projectRuntimeConfig(context.runtimeConfig);
-  const gateway = createGatewayConnectionLifecycle(context.gateway.snapshot);
   let disposed = false;
   let request: AbortController | undefined;
   const client = () => {
@@ -30,72 +28,81 @@ export function createSettingsStatus<T>(
       ? snapshot.client
       : null;
   };
-  const [state, setState] = createSignal<"idle" | "pending" | "complete" | "error">(
-    untrack(client) ? "pending" : "idle",
+  const stateConnection = createMemo(client);
+  // A connection change retires the local request state; refreshes keep their result.
+  const [state, setState] = createSignal<"idle" | "pending" | "complete" | "error">(() =>
+    stateConnection() ? "pending" : "idle",
   );
   const [error, setError] = createSignal<unknown>();
   const [result, setResult] = createSignal<{ status: T; isCurrent: () => boolean }>();
-  const [revision, setRevision] = createSignal(0);
-  const refresh = () => setRevision((value) => value + 1);
-  let previousHello = context.gateway.snapshot.hello;
-  let previousAuth = previousHello?.auth;
+  let lastRequestKey: ReturnType<typeof requestKey> | undefined;
+  const scheduleRefresh = () => onSettled(refreshIfChanged);
+  const connectionKey = () => {
+    const snapshot = context.gateway.snapshot;
+    return [snapshot.client, snapshot.phase, snapshot.hello, snapshot.hello?.auth] as const;
+  };
+  let connection = connectionKey();
   onCleanup(
+    // Every connection receipt retires requests before a same-turn reconnect can settle them.
     gatewayProjection.subscribe(() => {
-      const snapshot = context.gateway.snapshot;
-      const transition = gateway.transition(snapshot);
-      const identityChanged =
-        previousHello !== snapshot.hello || previousAuth !== snapshot.hello?.auth;
-      if (identityChanged) {
-        gateway.invalidate();
-      }
-      previousHello = snapshot.hello;
-      previousAuth = snapshot.hello?.auth;
-      if (transition || identityChanged) {
+      const next = connectionKey();
+      if (connection.some((value, index) => value !== next[index])) {
+        const identityChanged =
+          connection[0] !== next[0] ||
+          (next[1] === "connected" && !options.access(next[3] ?? null));
+        connection = next;
         request?.abort();
-        options.onConnectionChange?.();
-        refresh();
+        // A same-turn reconnect must replace the retired read even if the final key is equal.
+        lastRequestKey = undefined;
+        if (identityChanged) {
+          setResult(undefined);
+          setError(undefined);
+        }
+        options.onConnectionChange?.(identityChanged);
+        scheduleRefresh();
       }
     }),
   );
   function capture() {
     const owner = context.gateway;
-    const snapshot = owner.snapshot;
-    const currentClient = untrack(client);
-    const scope = gateway.capture();
-    const hello = snapshot.hello;
-    const auth = hello?.auth;
-    return () =>
-      currentClient !== null &&
-      scope !== null &&
-      client() === currentClient &&
-      gateway.isCurrent(scope) &&
-      context.gateway === owner &&
-      owner.snapshot.hello === hello &&
-      hello?.auth === auth;
+    // Mutation authority captures this connection once, then checks it at settlement.
+    const currentClient = client();
+    const captured = connectionKey();
+    return () => {
+      const current = connectionKey();
+      return (
+        currentClient !== null &&
+        client() === currentClient &&
+        context.gateway === owner &&
+        captured.every((value, index) => value === current[index])
+      );
+    };
   }
   const configHash = () => context.runtimeConfig.state.configSnapshot?.[options.configHash];
-  const key = createMemo(
-    () => {
-      const snapshot = gatewayProjection.read().snapshot;
-      configProjection.read();
-      return [
-        client(),
-        configHash(),
-        snapshot.phase,
-        snapshot.hello,
-        snapshot.hello?.auth,
-        revision(),
-      ] as const;
-    },
-    { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
-  );
-  createEffect(key, ([currentClient, hash], previous) => {
+  function requestKey() {
+    const snapshot = context.gateway.snapshot;
+    return [client(), configHash(), snapshot.phase, snapshot.hello, snapshot.hello?.auth] as const;
+  }
+  function refreshIfChanged() {
+    const key = requestKey();
+    if (lastRequestKey?.every((value, index) => value === key[index])) {
+      return;
+    }
+    readStatus(key);
+  }
+  function refresh() {
+    readStatus(requestKey());
+  }
+  function readStatus(key: ReturnType<typeof requestKey>) {
+    if (disposed) {
+      return;
+    }
+    const [currentClient, hash] = key;
+    lastRequestKey = key;
     request?.abort();
     if (!currentClient) {
-      if (previous) {
-        setState("idle");
-      }
-      return undefined;
+      setState("idle");
+      return;
     }
     const controller = new AbortController();
     request = controller;
@@ -103,18 +110,15 @@ export function createSettingsStatus<T>(
     const isConnectionCurrent = () => ownsConnection() && configHash() === hash;
     const isCurrent = () =>
       !controller.signal.aborted && request === controller && isConnectionCurrent();
-    if (previous) {
-      setState("pending");
-    }
+    setState("pending");
     void currentClient.request<T>(options.method, {}, { signal: controller.signal }).then(
-      (status) =>
-        untrack(() => {
-          if (isCurrent()) {
-            setResult({ status, isCurrent: isConnectionCurrent });
-            setState("complete");
-            options.onStatus?.(status);
-          }
-        }),
+      (status) => {
+        if (isCurrent()) {
+          setResult({ status, isCurrent: isConnectionCurrent });
+          setState("complete");
+          options.onStatus?.(status);
+        }
+      },
       (failure: unknown) => {
         if (isCurrent()) {
           setResult(undefined);
@@ -124,12 +128,13 @@ export function createSettingsStatus<T>(
         }
       },
     );
-    return () => controller.abort();
-  });
+  }
+  // Config receipts admit a new status read after the current write has settled.
+  onCleanup(configProjection.subscribe(scheduleRefresh));
+  onSettled(refreshIfChanged);
   onCleanup(() => {
     disposed = true;
     request?.abort();
-    gateway.dispose();
   });
   return { client, state, error, result, refresh, capture, gatewayProjection, configProjection };
 }
