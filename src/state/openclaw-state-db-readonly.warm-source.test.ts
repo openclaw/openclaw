@@ -9,6 +9,8 @@ import * as state from "./openclaw-state-db.js";
 
 const stateKey = "readonly.warm-source.fixture";
 const request = { type: "tui.lastSession.read", stateKey } as const;
+const insert =
+  "INSERT INTO config_machine_state(state_key,value_json,updated_at_ms) VALUES (?,?,?)";
 const valueJson = JSON.stringify({ source: "original native owner" });
 const expectedReply = {
   ok: true,
@@ -16,12 +18,10 @@ const expectedReply = {
   sourceAdmitted: true,
   row: { value_json: valueJson, updated_at_ms: 1 },
 };
-const expectedSnapshotReply = {
-  ...expectedReply,
-  ...(getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources
-    ? {}
-    : { nativeCleanupFailure: { error: undefined } }),
-};
+const expectedSnapshotReply = getSqliteRuntimeCapabilities()
+  .explicitSqliteCloseReleasesNativeResources
+  ? expectedReply
+  : { ...expectedReply, nativeCleanupFailure: { error: undefined } };
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     await state.closeOpenClawStateDatabaseAsync();
@@ -40,11 +40,7 @@ function createSource() {
     env: { OPENCLAW_STATE_DIR: root, OPENCLAW_TEST_FAST: "1" },
   };
   const database = state.openOpenClawStateDatabase(options);
-  database.db
-    .prepare(
-      "INSERT INTO config_machine_state(state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
-    )
-    .run(stateKey, valueJson, 1);
+  database.db.prepare(insert).run(stateKey, valueJson, 1);
   const backup = vi.spyOn(sqliteBackup, "backupNodeSqliteDatabase");
   const read = (preferIndependentWarmRead?: true) =>
     reads.withArtifactPreservingStateReads(() =>
@@ -63,9 +59,8 @@ function createSource() {
   return { options, database, backup, read, verifyRead };
 }
 
-it.each([false, true])(
-  "reads the matching warm owner with independent-read opt-in=%s",
-  (independent) => createSource().verifyRead(independent),
+it.each([false, true])("reads the warm owner (independent=%s)", (independent) =>
+  createSource().verifyRead(independent),
 );
 
 // Windows SQLite handles do not allow renaming the open native database.

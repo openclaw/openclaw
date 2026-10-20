@@ -1,5 +1,5 @@
 import { spawn, type SpawnOptionsWithoutStdio } from "node:child_process";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -66,25 +66,23 @@ it.each([
         termination === "SIGKILL" ? "SIGKILL" : 23,
       );
 
-      let reacquired = false;
+      const operation = vi.fn(async () => {});
       const acquisition = withOpenClawStateLease(
         leaseOptions("process-exit", state.env),
-        async () => {
-          reacquired = true;
-        },
+        operation,
       );
-      if (termination === "SIGKILL" && !processBound) {
+      const blocked = termination === "SIGKILL" && !processBound;
+      if (blocked) {
         await expect(acquisition).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_HELD" });
-        expect(reacquired).toBe(false);
       } else {
         await acquisition;
-        expect(reacquired).toBe(true);
       }
+      expect(operation).toHaveBeenCalledTimes(blocked ? 0 : 1);
     }),
 );
 
 it(
-  "keeps state database exit-cleanup diagnostics off stdout for machine-readable output",
+  "keeps exit-cleanup diagnostics off JSON stdout",
   () =>
     withOpenClawTestState({ label: "core-state-lease-exit-stdout" }, async (state) => {
       const leaseModuleUrl = resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.stateLease);

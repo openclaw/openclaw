@@ -2,9 +2,8 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
-// Mock both import forms: spying on the namespace cannot rebind captured named imports.
+// Reset preloaded helpers and mock both import forms; a namespace spy cannot rebind them.
 const fault = vi.hoisted(() => {
-  // Runtime setup can preload permission helpers before this file's filesystem mock.
   vi.resetModules();
   return {
     error: undefined as Error | undefined,
@@ -36,9 +35,7 @@ const { closeOpenClawStateDatabaseForTest, openOpenClawStateDatabase } =
   await import("./openclaw-state-db.js");
 const { ensureOpenClawStatePermissions } = await import("./openclaw-state-db-permissions.js");
 
-const denied = Object.assign(new Error("EPERM: chmod failed"), { code: "EPERM" });
-
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(() => {
     fault.error = undefined;
     fault.failProbe = true;
@@ -46,8 +43,8 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
     fault.targets = [];
     closeOpenClawStateDatabaseForTest();
     cleanup();
-  });
-});
+  }),
+);
 
 function fixture(initialize = true) {
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-state-chmod-") };
@@ -73,12 +70,11 @@ it.skipIf(process.platform === "win32")("leaves already-private metadata unchang
 it.each([true, false])("handles EPERM with restrictive existing permissions=%s", (restrictive) => {
   const { options, env } = fixture(restrictive);
   if (!restrictive) {
-    // Only the shared database's state/ directory is hardened.
     const directory = join(env.OPENCLAW_STATE_DIR, "state");
     fs.mkdirSync(directory);
     fs.chmodSync(directory, 0o755);
   }
-  fault.error = denied;
+  fault.error = Object.assign(new Error("EPERM: chmod failed"), { code: "EPERM" });
   fault.failProbe = restrictive;
   if (restrictive) {
     expect(openOpenClawStateDatabase(options).db.isOpen).toBe(true);

@@ -19,16 +19,9 @@ it.each([false, true])(
       enableNodeSqliteKyselyStatementCache(database);
     }
     const prepare = vi.spyOn(database, "prepare");
-    const cases = [
-      ["present", true],
-      ["absent", false],
-      ["projection", false],
-      ["present' OR 1=1 --", false],
-    ] as const;
+    const names = ["present", "absent", "projection", "present' OR 1=1 --"];
     for (let repeat = 0; repeat < 8; repeat += 1) {
-      for (const [tableName, expected] of cases) {
-        expect(tableExists(database, tableName)).toBe(expected);
-      }
+      expect(names.map((name) => tableExists(database, name))).toEqual([true, false, false, false]);
     }
     expect(prepare).toHaveBeenCalledTimes(cacheEnabled ? 2 : 32);
   },
