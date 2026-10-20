@@ -1,18 +1,17 @@
 import { expect, it, vi, type Mock } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { EmbeddedTuiBackend } from "./embedded-backend.js";
-import { captureBackendEvents } from "./embedded-backend.stream.test-support.js";
+import {
+  agentResult,
+  startBackend,
+  type EmbeddedAgentResult,
+} from "./embedded-backend.stream.test-support.js";
 import {
   deferred,
   flushMicrotasks,
   localSessionEntry,
   sendMainChat,
 } from "./embedded-backend.test-helpers.js";
-
-type EmbeddedAgentResult = {
-  payloads: Array<{ text: string }>;
-  meta: Record<string, unknown>;
-};
 
 type FollowupTestContext = {
   createBackend: () => EmbeddedTuiBackend;
@@ -62,7 +61,7 @@ export function registerEmbeddedFollowupTests({
     });
     expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
 
-    first.resolve({ payloads: [{ text: "done" }], meta: {} });
+    first.resolve(agentResult("done"));
     await flushMicrotasks();
     await backend.stop();
     const otherBackend = createBackend();
@@ -90,15 +89,13 @@ export function registerEmbeddedFollowupTests({
           return first.promise;
         })
         .mockReturnValueOnce(second.promise)
-        .mockResolvedValueOnce({ payloads: [{ text: "third done" }], meta: {} });
+        .mockResolvedValueOnce(agentResult("third done"));
       const entry = { queueMode: mode, queueDebounceMs: 0 };
       loadSessionEntryMock.mockImplementation((sessionKey, opts) =>
         localSessionEntry(sessionKey, opts, { entry }),
       );
       getSessionControllerOperationMock.mockReturnValue({ sessionId: "active-session" });
-      const backend = createBackend();
-      const events = captureBackendEvents(backend);
-      backend.start();
+      const { backend, events } = startBackend(createBackend);
       try {
         expect(await sendMainChat(backend, "/followup first", "explicit-first")).toEqual({
           runId: "explicit-first",
@@ -136,13 +133,13 @@ export function registerEmbeddedFollowupTests({
         expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
         expect(entry.queueMode).toBe(mode);
         expect(updateSessionStoreMock).not.toHaveBeenCalled();
-        first.resolve({ payloads: [{ text: "first done" }], meta: {} });
+        first.resolve(agentResult("first done"));
         await vi.waitFor(() => expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(2));
         expect(agentCommandFromIngressMock.mock.calls[1]?.[0]).toMatchObject({
           runId: "explicit-second",
           message: "second\n    detail",
         });
-        second.resolve({ payloads: [{ text: "second done" }], meta: {} });
+        second.resolve(agentResult("second done"));
         if (mode === "collect") {
           await vi.waitFor(() => expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(3));
           expect(agentCommandFromIngressMock.mock.calls[2]?.[0]).toMatchObject({
@@ -150,8 +147,8 @@ export function registerEmbeddedFollowupTests({
           });
         }
       } finally {
-        first.resolve({ payloads: [], meta: {} });
-        second.resolve({ payloads: [], meta: {} });
+        first.resolve(agentResult(undefined));
+        second.resolve(agentResult(undefined));
         await backend.stop();
       }
     },
@@ -164,19 +161,17 @@ export function registerEmbeddedFollowupTests({
       agentCommandFromIngressMock
         .mockReturnValueOnce(first.promise)
         .mockReturnValueOnce(second.promise)
-        .mockResolvedValueOnce({ payloads: [{ text: "third done" }], meta: {} });
+        .mockResolvedValueOnce(agentResult("third done"));
       loadSessionEntryMock.mockImplementation((sessionKey, opts) =>
         localSessionEntry(sessionKey, opts, {
           entry: { queueMode: "followup", queueDebounceMs: 10 },
         }),
       );
-      const backend = createBackend();
-      const events = captureBackendEvents(backend);
-      backend.start();
+      const { backend, events } = startBackend(createBackend);
       try {
         await sendMainChat(backend, "first", "backlog-first");
         await sendMainChat(backend, "second", "backlog-second");
-        first.resolve({ payloads: [{ text: "first done" }], meta: {} });
+        first.resolve(agentResult("first done"));
         await vi.advanceTimersByTimeAsync(0);
         expect(events).toContainEqual(
           expect.objectContaining({
@@ -192,13 +187,13 @@ export function registerEmbeddedFollowupTests({
         await vi.advanceTimersByTimeAsync(10);
         expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(2);
         expect(agentCommandFromIngressMock.mock.calls[1]?.[0]).toMatchObject({ message: "second" });
-        second.resolve({ payloads: [{ text: "second done" }], meta: {} });
+        second.resolve(agentResult("second done"));
         await vi.advanceTimersByTimeAsync(10);
         expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(3);
         expect(agentCommandFromIngressMock.mock.calls[2]?.[0]).toMatchObject({ message: "third" });
       } finally {
-        first.resolve({ payloads: [], meta: {} });
-        second.resolve({ payloads: [], meta: {} });
+        first.resolve(agentResult(undefined));
+        second.resolve(agentResult(undefined));
         await backend.stop();
       }
     });
@@ -234,14 +229,12 @@ export function registerEmbeddedQueueCapTest({
     await expect(
       sendMainChat(backend, "/followup must not disappear", "explicit-rejected"),
     ).rejects.toThrow("Your followup was not queued because the session queue is full.");
-    first.resolve({ payloads: [{ text: "first done" }], meta: {} });
-    await vi.waitFor(() => {
-      expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(2);
-    });
+    first.resolve(agentResult("first done"));
+    await vi.waitFor(() => expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(2));
     expect(agentCommandFromIngressMock.mock.calls[1]?.[0]).toEqual(
       expect.objectContaining({ message: "kept followup" }),
     );
-    second.resolve({ payloads: [{ text: "second done" }], meta: {} });
+    second.resolve(agentResult("second done"));
     await flushMicrotasks();
   });
 }
