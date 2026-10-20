@@ -5,6 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
 import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
+import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
 import { resolvePluginSetupRegistry } from "./setup-registry.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
@@ -15,41 +16,31 @@ function setupManifest(
   source: string,
   options: Partial<PluginManifestRegistry["plugins"][number]>,
 ): PluginManifestRegistry {
-  return {
-    plugins: [
-      {
-        id,
-        rootDir,
-        source,
-        origin: "global",
-        manifestPath: path.join(rootDir, "openclaw.plugin.json"),
-        channels: [],
-        providers: [id],
-        cliBackends: [],
-        skills: [],
-        hooks: [],
-        setup: { requiresRuntime: true, providers: [{ id }] },
-        ...options,
-      },
-    ],
-    diagnostics: [],
-  };
+  const plugin = createPluginManifestRecordFixture({
+    id,
+    rootDir,
+    source,
+    origin: "global",
+    providers: [id],
+    setup: { requiresRuntime: true, providers: [{ id }] },
+    ...options,
+  });
+  return { plugins: [plugin], diagnostics: [] };
 }
 
-describe("bundled setup code identity", () => {
-  it.each(["cjs", "mjs"])(
-    "reuses bundled %s setup code while retiring each inventory's callbacks",
-    async (extension) => {
-      const event = `bundled-setup-evaluation-${extension}`;
-      const evaluated = vi.fn();
-      process.on(event, evaluated);
-      const rootDir = temp.make("bundled-setup-identity-");
-      const source = path.join(rootDir, `setup-api.${extension}`);
-      const manifestRegistry = setupManifest("bundled-owner", rootDir, source, {
-        origin: "bundled",
-        setupSource: source,
-      });
-      const definition = `{
+it.each(["cjs", "mjs"])(
+  "reuses bundled %s setup code while retiring each inventory's callbacks",
+  async (extension) => {
+    const event = `bundled-setup-evaluation-${extension}`;
+    const evaluated = vi.fn();
+    process.on(event, evaluated);
+    const rootDir = temp.make("bundled-setup-identity-");
+    const source = path.join(rootDir, `setup-api.${extension}`);
+    const manifestRegistry = setupManifest("bundled-owner", rootDir, source, {
+      origin: "bundled",
+      setupSource: source,
+    });
+    const definition = `{
         register(api) {
           const registration = ++registrations;
           api.registerProvider({ id: "bundled-owner", label: "Bundled setup", auth: [],
@@ -57,63 +48,49 @@ describe("bundled setup code identity", () => {
           });
         }
       }`;
-      fs.writeFileSync(
-        source,
-        `process.emit(${JSON.stringify(event)}); let registrations = 0;
+    fs.writeFileSync(
+      source,
+      `process.emit(${JSON.stringify(event)}); let registrations = 0;
         ${extension === "mjs" ? "export default" : "module.exports ="} ${definition};`,
-      );
-      const caches = Array.from({ length: 3 }, () => createPluginCache());
-      try {
-        let previous:
-          | ReturnType<typeof resolvePluginSetupRegistry>["providers"][number]["provider"]
-          | undefined;
-        for (const [index, cache] of caches.entries()) {
-          const result = withPluginCache(cache, () =>
-            resolvePluginSetupRegistry({ manifestRegistry }),
-          );
-          expect(result.diagnostics).toEqual([]);
-          expect(result.providers).toHaveLength(1);
-          const current = result.providers[0]!.provider;
-          expect(current.resolveConfigApiKey?.({ provider: "bundled-owner", env: {} })).toBe(
-            String(index + 1),
-          );
-          if (index > 0) {
-            await retirePluginCache(caches[index - 1]!);
-            expect(previous).toBeDefined();
-            expect(() =>
-              previous!.resolveConfigApiKey?.({ provider: "bundled-owner", env: {} }),
-            ).toThrow(/reloaded|disabled|retir/);
-            expect(current.resolveConfigApiKey?.({ provider: "bundled-owner", env: {} })).toBe(
-              String(index + 1),
-            );
-          }
-          previous = current;
+    );
+    const caches = Array.from({ length: 3 }, () => createPluginCache());
+    const query = { provider: "bundled-owner", env: {} };
+    try {
+      let previous:
+        | ReturnType<typeof resolvePluginSetupRegistry>["providers"][number]["provider"]
+        | undefined;
+      for (const [index, cache] of caches.entries()) {
+        const result = withPluginCache(cache, () =>
+          resolvePluginSetupRegistry({ manifestRegistry }),
+        );
+        expect(result.diagnostics).toEqual([]);
+        expect(result.providers).toHaveLength(1);
+        const current = result.providers[0]!.provider;
+        if (index > 0) {
+          await retirePluginCache(caches[index - 1]!);
+          expect(() => previous!.resolveConfigApiKey?.(query)).toThrow(/reloaded|disabled|retir/);
         }
-        expect(evaluated).toHaveBeenCalledOnce();
-      } finally {
-        await Promise.all(caches.map((cache) => retirePluginCache(cache)));
-        process.off(event, evaluated);
+        expect(current.resolveConfigApiKey?.(query)).toBe(String(index + 1));
+        previous = current;
       }
-    },
-  );
-});
-
+      expect(evaluated).toHaveBeenCalledOnce();
+    } finally {
+      await Promise.all(caches.map((cache) => retirePluginCache(cache)));
+      process.off(event, evaluated);
+    }
+  },
+);
 describe("installed setup artifacts", () => {
   afterEach(clearPluginMetadataLifecycleCaches);
 
-  it.each<{
-    artifactDir: string;
-    declared: boolean;
-    competingDist?: string;
-    extension: string;
-  }>([
-    { artifactDir: ".", declared: true, extension: "cjs" },
-    { artifactDir: "dist", declared: false, extension: "cjs" },
-    { artifactDir: ".", declared: false, competingDist: "setup-api.ts", extension: "mjs" },
-    { artifactDir: ".", declared: false, competingDist: "setup-api.js", extension: "ts" },
-  ])(
-    "reloads installed $extension $artifactDir setup artifacts (declared: $declared, dist conflict: $competingDist)",
-    ({ artifactDir, declared, competingDist, extension }) => {
+  it.each([
+    [".", true, "cjs", undefined],
+    ["dist", false, "cjs", undefined],
+    [".", false, "mjs", "setup-api.ts"],
+    [".", false, "ts", "setup-api.js"],
+  ] as const)(
+    "reloads %s artifacts (declared=%s, extension=%s, dist conflict=%s)",
+    (artifactDir, declared, extension, competingDist) => {
       const rootDir = temp.make("openclaw-setup-lifecycle-");
       const artifactRoot = path.join(rootDir, artifactDir);
       fs.mkdirSync(artifactRoot, { recursive: true });
@@ -143,17 +120,15 @@ describe("installed setup artifacts", () => {
         declared ? { setupSource } : {},
       );
 
-      writeSetupArtifact("before");
-      expect(resolvePluginSetupRegistry({ manifestRegistry }).providers[0]?.provider.label).toBe(
-        "entry-before:dependency-before",
-      );
-
-      writeSetupArtifact("after");
-      clearPluginMetadataLifecycleCaches();
-
-      expect(resolvePluginSetupRegistry({ manifestRegistry }).providers[0]?.provider.label).toBe(
-        "entry-after:dependency-after",
-      );
+      for (const version of ["before", "after"]) {
+        writeSetupArtifact(version);
+        if (version === "after") {
+          clearPluginMetadataLifecycleCaches();
+        }
+        expect(resolvePluginSetupRegistry({ manifestRegistry }).providers[0]?.provider.label).toBe(
+          `entry-${version}:dependency-${version}`,
+        );
+      }
     },
   );
 });

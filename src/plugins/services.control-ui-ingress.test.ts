@@ -1,5 +1,6 @@
+import assert from "node:assert/strict";
 import { queryObjects } from "node:v8";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
 import { bindGatewayControlUiIngressHost } from "../gateway/remote-control-ui-ingress-host.js";
 import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
@@ -26,9 +27,7 @@ let state: OpenClawTestState;
 beforeAll(async () => {
   state = await createOpenClawTestState({ label: "ingress-capability", layout: "state-only" });
 });
-afterAll(async () => {
-  await state?.cleanup();
-});
+afterAll(() => state?.cleanup());
 
 const services = new Set<PluginServicesHandle>();
 afterEach(async () => {
@@ -49,16 +48,11 @@ async function fixture(recordOptions: Partial<PluginRecord> = {}) {
   const subagent = {} as PluginRuntime["subagent"];
   bindGatewayContextResolver(subagent, resolveContext);
   bindPluginRegistryRuntime(registry, createLazyPluginRuntime({ runtimeOptions: { subagent } }));
+  const token = "synthetic-test-token";
   bindGatewayControlUiIngressHost(resolveContext, {
     controlUiBasePath: "",
-    getResolvedAuth: () => ({
-      mode: "token",
-      token: "synthetic-test-token",
-      allowTailscale: false,
-    }),
-    getRuntimeConfig: () => ({
-      gateway: { auth: { mode: "token", token: "synthetic-test-token" } },
-    }),
+    getResolvedAuth: () => ({ mode: "token", token, allowTailscale: false }),
+    getRuntimeConfig: () => ({ gateway: { auth: { mode: "token", token } } }),
     handleRequest: async (_req, res) => {
       res.setHeader("Content-Type", "text/html");
       res.end("synthetic Control UI");
@@ -87,24 +81,20 @@ async function fixture(recordOptions: Partial<PluginRecord> = {}) {
   });
   const service = await startPluginServices({ registry, config: {} });
   services.add(service);
-  if (!serviceContext) {
-    throw new Error("Service did not start");
-  }
+  assert(serviceContext, "Service did not start");
   return { service, serviceContext, registry, record };
 }
 
-function openOptions(): GatewayControlUiIngressOpenOptionsV2 {
-  return {
-    audienceId: "synthetic-grant",
-    principal: { kind: "owner" },
-    publicOrigin: "https://ui.example.com",
-    sandboxOrigin: "https://sandbox.example.com",
-    frameAncestors: ["https://host.example.com"],
-    operatorScopeCeiling: ["operator.read"],
-    signal: new AbortController().signal,
-    assertCurrent: () => {},
-  };
-}
+const openOptions = (): GatewayControlUiIngressOpenOptionsV2 => ({
+  audienceId: "synthetic-grant",
+  principal: { kind: "owner" },
+  publicOrigin: "https://ui.example.com",
+  sandboxOrigin: "https://sandbox.example.com",
+  frameAncestors: ["https://host.example.com"],
+  operatorScopeCeiling: ["operator.read"],
+  signal: new AbortController().signal,
+  assertCurrent: () => {},
+});
 
 async function readUi(ingress: GatewayControlUiIngressV2) {
   const { response } = await ingress.request({
@@ -117,48 +107,43 @@ async function readUi(ingress: GatewayControlUiIngressV2) {
   return response.text();
 }
 
-describe("service Control UI ingress authority", () => {
-  it.each([
-    { origin: "bundled" as const, available: true },
-    { origin: "global" as const, trustedOfficialInstall: true, available: true },
-    { origin: "global" as const, available: false },
-    { origin: "workspace" as const, available: false },
-  ])(
-    "uses admitted provenance for $origin (available=$available)",
-    async ({ available, ...record }) => {
-      const { serviceContext } = await fixture(record);
-      expect(serviceContext.controlUiIngress !== undefined).toBe(available);
-      expect(serviceContext.controlUiIngress?.capabilityVersion).toBe(available ? 2 : undefined);
-    },
-  );
-
-  it("revokes retained authority without retaining the caller that stopped the service", async () => {
-    class RetiringCaller {
-      stop(service: PluginServicesHandle) {
-        return service.stop();
-      }
+it.each([
+  { origin: "bundled" as const, available: true },
+  { origin: "global" as const, trustedOfficialInstall: true, available: true },
+  { origin: "global" as const, available: false },
+  { origin: "workspace" as const, available: false },
+])(
+  "uses admitted provenance for $origin (available=$available)",
+  async ({ available, ...record }) => {
+    const { serviceContext } = await fixture(record);
+    if (available) {
+      expect(serviceContext.controlUiIngress).toMatchObject({ capabilityVersion: 2 });
+    } else {
+      expect(serviceContext.controlUiIngress).toBeUndefined();
     }
-    const { service, serviceContext } = await fixture();
-    const factory = serviceContext.controlUiIngress!;
-    const ingress = await factory.open(openOptions());
-    const rpc = await factory.bindPrincipal(openOptions());
-    expect(await readUi(ingress)).toBe("synthetic Control UI");
-    await new RetiringCaller().stop(service);
-    // Collect before error matchers can materialize the retained abort reason's stack.
-    expect(queryObjects(RetiringCaller)).toBe(0);
-    await expect(factory.open(openOptions())).rejects.toThrow(/stopped|active|closed/);
-    await expect(rpc.request("users.self", {})).rejects.toThrow(/stopped|active|closed/);
-    await expect(readUi(ingress)).rejects.toThrow(/stopped|active|closed/);
-  });
+  },
+);
 
-  it("refuses retained authority after its plugin record is revoked", async () => {
-    const { serviceContext, registry, record } = await fixture();
-    const factory = serviceContext.controlUiIngress!;
-    const ingress = await factory.open(openOptions());
-    const rpc = await factory.bindPrincipal(openOptions());
+it.each(["stop", "revoke"])("revokes retained ingress authority on %s", async (action) => {
+  class RetiringCaller {
+    stop(service: PluginServicesHandle) {
+      return service.stop();
+    }
+  }
+  const { service, serviceContext, registry, record } = await fixture();
+  const factory = serviceContext.controlUiIngress!;
+  const ingress = await factory.open(openOptions());
+  const rpc = await factory.bindPrincipal(openOptions());
+  expect(await readUi(ingress)).toBe("synthetic Control UI");
+  if (action === "stop") {
+    await new RetiringCaller().stop(service);
+    // Collect before error matchers materialize the abort reason's stack.
+    expect(queryObjects(RetiringCaller)).toBe(0);
+  } else {
     revokePluginRecord(registry, record);
-    await expect(factory.open(openOptions())).rejects.toThrow(/active/);
-    await expect(rpc.request("users.self", {})).rejects.toThrow(/active/);
-    await expect(readUi(ingress)).rejects.toThrow(/active/);
-  });
+  }
+  const reason = action === "stop" ? /stopped|active|closed/ : /active/;
+  await expect(factory.open(openOptions())).rejects.toThrow(reason);
+  await expect(rpc.request("users.self", {})).rejects.toThrow(reason);
+  await expect(readUi(ingress)).rejects.toThrow(reason);
 });

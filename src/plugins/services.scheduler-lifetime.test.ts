@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { expect, it } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
@@ -35,6 +36,7 @@ it("starts service stop before joining scheduled work and preserves sibling sche
   const stopFlush = createDeferredCore();
   const admitted = createDeferredCore<PluginServiceSchedulerV1>();
   let siblingTicks = 0;
+  const tick = { id: "tick", delayMs: 1, everyMs: 1 };
   const registry = createEmptyPluginRegistry();
   registry.services.push(
     registration({
@@ -43,16 +45,13 @@ it("starts service stop before joining scheduled work and preserves sibling sche
       start(context) {
         admitted.resolve(context.scheduler);
         context.scheduler.scope().schedule({
-          id: "tick",
-          delayMs: 1,
-          everyMs: 1,
-          run: () => {
+          ...tick,
+          run: () =>
             void trackAsyncWork(async () => {
               entered.resolve();
               await stopCalled.promise;
               await physicalWork.promise;
-            });
-          },
+            }),
         });
       },
       async stop() {
@@ -65,9 +64,7 @@ it("starts service stop before joining scheduled work and preserves sibling sche
       id: "second",
       start(context) {
         context.scheduler.schedule({
-          id: "tick",
-          delayMs: 1,
-          everyMs: 1,
+          ...tick,
           run: () => {
             siblingTicks += 1;
           },
@@ -111,7 +108,7 @@ it.for([false, true])(
   "retains a tracked child after a strict stop deadline, synchronous hook failure=%s",
   async (failStop, { signal }) => {
     const clock = createGatewaySchedulerClock();
-    const gatewayScheduler = createTestGatewayScheduler(clock.clock);
+    const scheduler = createTestGatewayScheduler(clock.clock);
     const entered = createDeferredCore();
     const release = createDeferredCore();
     const failure = new Error("synchronous stop failed");
@@ -122,17 +119,16 @@ it.for([false, true])(
       registration({
         apiVersion: 2,
         id: "tracked-child",
-        start({ scheduler }) {
-          scheduler.scope().schedule({
+        start({ scheduler: serviceScheduler }) {
+          serviceScheduler.scope().schedule({
             id: "work",
             delayMs: 1,
-            run() {
+            run: () =>
               void trackAsyncWork(async () => {
                 entered.resolve();
                 await release.promise;
                 completed = true;
-              });
-            },
+              }),
           });
         },
         stop() {
@@ -143,11 +139,7 @@ it.for([false, true])(
         },
       }),
     );
-    const services = await startPluginServices({
-      registry,
-      config: {},
-      scheduler: gatewayScheduler,
-    });
+    const services = await startPluginServices({ registry, config: {}, scheduler });
     const ticking = clock.advanceBy(1);
     try {
       await withinTest(entered.promise, signal);
@@ -155,12 +147,8 @@ it.for([false, true])(
         .stop({ strict: true, deadlineAtMs: Date.now() })
         .catch((error: unknown) => error);
       const pending = getPluginServiceCleanupSettlement(outcome);
-      expect(pending).toBeDefined();
-      expect(completed).toBe(false);
-      expect(stopCalls).toBe(1);
-      if (!pending) {
-        throw new Error("Strict stop did not retain its pending cleanup");
-      }
+      assert(pending, "Strict stop did not retain its pending cleanup");
+      expect({ completed, stopCalls }).toEqual({ completed: false, stopCalls: 1 });
       release.resolve();
       const settled = withinTest(pending.settled, signal);
       if (failStop) {
@@ -169,11 +157,10 @@ it.for([false, true])(
         await expect(settled).resolves.toBeUndefined();
       }
       await ticking;
-      expect(completed).toBe(true);
-      expect(stopCalls).toBe(1);
+      expect({ completed, stopCalls }).toEqual({ completed: true, stopCalls: 1 });
     } finally {
       release.resolve();
-      await Promise.allSettled([ticking, services.stop(), gatewayScheduler.stop()]);
+      await Promise.allSettled([ticking, services.stop(), scheduler.stop()]);
     }
   },
 );

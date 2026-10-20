@@ -1,4 +1,7 @@
+import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { once } from "node:events";
+import { setImmediate } from "node:timers/promises";
 import { queryObjects } from "node:v8";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createGatewayMethodRegistry } from "../gateway/methods/registry.js";
@@ -103,9 +106,7 @@ async function startFixture(
   });
   const handle = await startPluginServices({ registry, config: {} });
   handles.add(handle);
-  if (!serviceContext) {
-    throw new Error("Service did not start");
-  }
+  assert(serviceContext, "Service did not start");
   const nodeHandler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { ok: true }));
   context.getGatewayMethodRegistry = () =>
     createGatewayMethodRegistry([
@@ -149,9 +150,7 @@ describe("service-owned node invocation", () => {
         lease: createPluginRuntimeCapabilityLease("retained node capability"),
         isStopping: () => false,
       });
-      if (!invoker) {
-        throw new Error("Node invoker was not created");
-      }
+      assert(invoker, "Node invoker was not created");
       new RetiringCaller().stop(invoker);
       return invoker;
     });
@@ -170,56 +169,50 @@ describe("service-owned node invocation", () => {
     "preserves document read access for a profile-backed=%s reader",
     async (profileBacked) => {
       await withOpenClawTestState({}, async () => {
-        const fixture = await startFixture();
+        const { context, nodeHandler } = await startFixture();
         const profile = ensureProfileForEmail("reader@example.test");
         setUserProfileRole(profile.id, "limited");
+        const authenticatedUserProfile = profileBacked
+          ? { profileId: profile.id, displayName: "reader", hasAvatar: false, updatedAt: 1 }
+          : undefined;
         const reader = createSyntheticPluginRuntimeClient({
           scopes: ["operator.read"],
-          ...(profileBacked
-            ? {
-                authenticatedUserProfile: {
-                  profileId: profile.id,
-                  displayName: "reader",
-                  hasAvatar: false,
-                  updatedAt: 1,
-                },
-              }
-            : {}),
+          authenticatedUserProfile,
         });
-        const run = async () => {
-          await expect(dispatchGatewayMethodInProcess("node.invoke", request)).rejects.toThrow(
+        const expectReadOnly = () =>
+          expect(dispatchGatewayMethodInProcess("node.invoke", request)).rejects.toThrow(
             /scope|permission/i,
           );
+        const run = async () => {
+          await expectReadOnly();
           await expect(
             dispatchGatewayRequestInProcess(
               "agents.files.get",
               {},
               {
                 client: reader,
-                context: fixture.context,
-                methodRegistry: fixture.context.getGatewayMethodRegistry!(),
+                context,
+                methodRegistry: context.getGatewayMethodRegistry!(),
               },
             ),
           ).resolves.toEqual({ ok: true });
-          expect(fixture.nodeHandler).toHaveBeenCalledOnce();
-          const calledClient = fixture.nodeHandler.mock.calls[0]![0].client;
+          expect(nodeHandler).toHaveBeenCalledOnce();
+          const calledClient = nodeHandler.mock.calls[0]![0].client;
           expect(calledClient?.connect.scopes).toEqual(["operator.write"]);
           expect(calledClient?.internal).toMatchObject({
             operatorRoleActor: { kind: "system" },
             pluginRuntimeOwnerId: "files",
           });
           expect(calledClient?.authenticatedUserProfile).toBeUndefined();
-          await expect(dispatchGatewayMethodInProcess("node.invoke", request)).rejects.toThrow(
-            /scope|permission/i,
-          );
+          await expectReadOnly();
         };
         await withPluginRuntimeGatewayRequestScope(
-          { client: reader, context: fixture.context, isWebchatConnect: () => false },
+          { client: reader, context, isWebchatConnect: () => false },
           () =>
             profileBacked
               ? withOperatorToolGatewayAuthority(
                   {
-                    authenticatedUserProfile: reader.authenticatedUserProfile!,
+                    authenticatedUserProfile: authenticatedUserProfile!,
                     scopes: ["operator.read"],
                   },
                   run,
@@ -248,8 +241,10 @@ describe("service-owned node invocation", () => {
           },
           async () => {
             const { serviceContext } = await startFixture({ gateway });
-            expect(serviceContext.invokeNode).toBeUndefined();
-            expect(serviceContext.openNodeDuplex).toBeUndefined();
+            expect(serviceContext).toMatchObject({
+              invokeNode: undefined,
+              openNodeDuplex: undefined,
+            });
             expect(loadRuntime).not.toHaveBeenCalled();
           },
         );
@@ -320,9 +315,7 @@ describe("service-owned node invocation", () => {
     const fixture = await startFixture({ stop: () => cleanup.promise });
     fixture.nodeHandler.mockImplementation(async ({ signal, respond }) => {
       entered.resolve(signal!);
-      await new Promise<void>((resolve) => {
-        signal!.addEventListener("abort", () => resolve(), { once: true });
-      });
+      await once(signal!, "abort");
       respond(false, undefined, { code: "UNAVAILABLE", message: "cancelled" });
     });
     const pending = fixture.serviceContext.invokeNode!(request);
@@ -353,9 +346,7 @@ async function openServiceDuplex(
   const finish = createDeferredCore();
   fixture.nodeHandler.mockImplementation(async (ctx) => {
     dispatched.resolve(ctx);
-    const cancelled = new Promise<void>((resolve) => {
-      ctx.signal?.addEventListener("abort", () => resolve(), { once: true });
-    });
+    const cancelled = once(ctx.signal!, "abort");
     await Promise.race([finish.promise, cancelled]);
     ctx.respond(true, { ok: true });
   });
@@ -377,9 +368,7 @@ async function openServiceDuplex(
   void opening.then(() => {
     ready = true;
   });
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
+  await setImmediate();
   expect(ready).toBe(false);
   stream.onDispatchReady("upload");
   const endpoint = createNodeDuplexEndpoint({

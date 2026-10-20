@@ -6,8 +6,7 @@ import { startPluginServices, type PluginServicesHandle } from "./services.js";
 
 const gc = globalThis.gc;
 assert.ok(gc, "The retention child requires --expose-gc");
-// A released async frame can take several full collections before its WeakRefs clear.
-// The broken owner remains reachable after 100, so this only allows GC convergence.
+// Allow GC convergence; the broken owner remains reachable even after 100 passes.
 const GC_PASSES = 32;
 const scenario = process.argv[2];
 const counts = { starts: 0, stops: 0 };
@@ -21,21 +20,17 @@ function createUnownedControl() {
 
 function createRegistry() {
   const registry = createEmptyPluginRegistry();
-  registry.services.push({
-    pluginId: "retention-probe",
-    origin: "workspace",
-    source: "retention-probe",
-    id: "retention-probe",
-    service: {
-      id: "retention-probe",
-      start() {
-        counts.starts += 1;
-      },
-      stop() {
-        counts.stops += 1;
-      },
+  const id = "retention-probe";
+  const service = {
+    id,
+    start() {
+      counts.starts += 1;
     },
-  });
+    stop() {
+      counts.stops += 1;
+    },
+  };
+  registry.services.push({ pluginId: id, origin: "workspace", source: id, id, service });
   return registry;
 }
 
@@ -55,12 +50,8 @@ async function createGenerations() {
   return { handle, references };
 }
 
-class PublicationPayload {
-  publications = 0;
-}
-
 async function createPublishedHandle() {
-  const payload = new PublicationPayload();
+  const payload = { publications: 0 };
   const reference = new WeakRef(payload);
   const handle = await startPluginServices({
     scheduler,
@@ -94,21 +85,7 @@ try {
   assert.equal(counts.starts, beforeReload.starts + 1, "Newest service must restart");
   assert.equal(counts.stops, beforeReload.stops + 1, "Newest service must stop before restarting");
   assert.equal(counts.starts - counts.stops, 1, "Exactly one service must remain active");
-  console.log(
-    JSON.stringify({
-      scenario,
-      observed: references.length,
-      retained,
-      controlCollected: true,
-      newestReloadUsable: true,
-      counts,
-    }),
-  );
-  assert.deepEqual(
-    retained,
-    [],
-    "Live service handle retained completed generation or publication state",
-  );
+  assert.deepEqual(retained, [], "Completed generation or publication state retained");
 } finally {
   try {
     await handle.stop({ strict: true });
