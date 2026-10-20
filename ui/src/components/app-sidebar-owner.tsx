@@ -16,9 +16,7 @@ import {
   catalogSessionKeyFromSearch,
 } from "../lib/sessions/catalog-key.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
-import "./sidebar-agent-card.tsx";
 import "./sidebar-attention.tsx";
-import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
 import { renderAppSidebarOnline, sidebarOnlineOrder } from "./app-sidebar-online.tsx";
 import { hidePersonalSidebarCatalog } from "./app-sidebar-personal-navigation.ts";
@@ -116,7 +114,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
       this.pinnedSessions.seed(snapshot.pinnedSessions);
     }
     this.sidebarPluginSnapshot =
-      snapshot && this.context?.plugins.registryStatus !== "complete"
+      snapshot && this.context.plugins.registryStatus !== "complete"
         ? { entries: snapshot.entries, plugins: snapshot.plugins }
         : null;
     this.sidebarSnapshot = null;
@@ -136,9 +134,6 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   }
 
   captureSidebarSnapshot(): SidebarSnapshotModel | null {
-    if (!this.context) {
-      return null;
-    }
     const rows = this.selectedAgentSessionRows(this.getSessionNavigationState());
     return captureSidebarSnapshotModel(
       this,
@@ -149,21 +144,21 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   }
 
   sessionGroupDefaults(name: string) {
-    if (this.context?.sessions.groupsStatus() !== "ready") {
+    if (this.context.sessions.groupsStatus() !== "ready") {
       return null;
     }
-    const group = this.context?.sessions.state.groupSettings.find((entry) => entry.name === name);
+    const group = this.context.sessions.state.groupSettings.find((entry) => entry.name === name);
     return group ? { cwd: group.cwd ?? "", worktree: group.worktree === true } : null;
   }
 
   async listSessionGroupFolders(path?: string): Promise<FsListDirResult> {
-    const sessions = this.context?.sessions;
-    const scope = sessions?.captureConnectionScope();
-    if (!sessions || !scope) {
+    const sessions = this.context.sessions;
+    const scope = sessions.captureConnectionScope();
+    if (!scope) {
       throw new Error(t("sessionsView.groupDefaultsStale"));
     }
     const result = await scope.client.request<FsListDirResult>("fs.listDir", path ? { path } : {});
-    if (this.context?.sessions !== sessions || !sessions.isConnectionScopeCurrent(scope)) {
+    if (this.context.sessions !== sessions || !sessions.isConnectionScopeCurrent(scope)) {
       throw new Error(t("sessionsView.groupDefaultsStale"));
     }
     return result;
@@ -174,16 +169,16 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     if (!requestedPath) {
       return "unavailable";
     }
-    const sessions = this.context?.sessions;
-    const scope = sessions?.captureConnectionScope();
-    if (!sessions || !scope) {
+    const sessions = this.context.sessions;
+    const scope = sessions.captureConnectionScope();
+    if (!scope) {
       throw new Error(t("sessionsView.groupDefaultsStale"));
     }
     const result = await scope.client.request<WorktreesBranchesResult>("worktrees.branches", {
       repoRoot: requestedPath,
       includeRepositoryStatus: true,
     });
-    if (this.context?.sessions !== sessions || !sessions.isConnectionScopeCurrent(scope)) {
+    if (this.context.sessions !== sessions || !sessions.isConnectionScopeCurrent(scope)) {
       throw new Error(t("sessionsView.groupDefaultsStale"));
     }
     return result.repositoryStatus === "git" || result.repositoryStatus === "not_git"
@@ -246,7 +241,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
 
   protected override willUpdate() {
     super.willUpdate();
-    if (this.context?.plugins.registryStatus === "complete") {
+    if (this.context.plugins.registryStatus === "complete") {
       this.sidebarPluginSnapshot = null;
     }
     // An open switcher tracks roster/reconnect updates; otherwise only hydrate
@@ -260,7 +255,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
 
   ensureAgentIdentities(agentIds: readonly string[]): void {
     if (this.connected) {
-      void this.context?.agentIdentity.ensure(agentIds);
+      void this.context.agentIdentity.ensure(agentIds);
     }
   }
 
@@ -276,13 +271,13 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   }
 
   narrationSyncInput(): SidebarNarrationSyncInput {
-    const gateway = this.context?.gateway.snapshot;
+    const gateway = this.context.gateway.snapshot;
     const enabled = this.narrationEnabled();
     return {
       enabled,
-      connected: this.connected && gateway?.phase === "connected",
-      connectionIdentity: gateway?.client ?? null,
-      source: this.context?.sessions ?? null,
+      connected: this.connected && gateway.phase === "connected",
+      connectionIdentity: gateway.client,
+      source: this.context.sessions,
       rows: enabled ? this.visibleSessionTreeInOrder() : [],
       openSessionKey: isSessionRouteId(this.activeRouteId) ? this.getRouteSessionKey() : "",
       agentId: this.selectedAgentIdForSessions(),
