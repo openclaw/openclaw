@@ -44,8 +44,10 @@ export const escapeHeavyResolved = {
 
 export const expectedResolvedOmission = { reason: "response_budget_exceeded" } as const;
 
+type Acknowledgement = { content: Array<{ type: string; text?: string }>; details: unknown };
+
 export function expectExactResolvedAcknowledgement(
-  result: { content: Array<{ type: string; text?: string }>; details: unknown },
+  result: Acknowledgement,
   expectedResolved: unknown,
 ) {
   expect((result.details as { resolved?: unknown }).resolved).toEqual(expectedResolved);
@@ -57,18 +59,9 @@ export function expectExactResolvedAcknowledgement(
   expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(3_840);
 }
 
-export function expectOmittedResolvedAcknowledgement(result: {
-  content: Array<{ type: string; text?: string }>;
-  details: unknown;
-}) {
+export function expectOmittedResolvedAcknowledgement(result: Acknowledgement) {
+  expectExactResolvedAcknowledgement(result, undefined);
   expect(result.details).toMatchObject({ resolvedOmitted: expectedResolvedOmission });
-  expect((result.details as { resolved?: unknown }).resolved).toBeUndefined();
-  const text = result.content[0]?.text ?? "";
-  expect(JSON.parse(text)).toEqual(result.details);
-  expect(text).not.toContain('"entry"');
-  expect(text).not.toContain('"path"');
-  expect(text).not.toContain("skillsSnapshot");
-  expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(3_840);
 }
 
 export async function withSessionToolTestCaller<T>(

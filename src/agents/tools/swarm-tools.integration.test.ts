@@ -66,12 +66,20 @@ const config: OpenClawConfig = {
   },
 };
 
-function requestParams(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    return {};
-  }
-  const params = (value as { params?: unknown }).params;
+function requestParams({ params }: Parameters<typeof callGateway>[0]): Record<string, unknown> {
   return params && typeof params === "object" ? (params as Record<string, unknown>) : {};
+}
+
+async function testContextEngine(): Promise<ContextEngine> {
+  return {
+    info: { id: "test", name: "Test", version: "0.0.1" },
+    ingest: vi.fn(async () => ({ ingested: false })),
+    assemble: vi.fn<ContextEngine["assemble"]>(async ({ messages }) => ({
+      messages,
+      estimatedTokens: 0,
+    })),
+    compact: vi.fn(async () => ({ ok: false, compacted: false })),
+  };
 }
 
 describe("swarm tools integration", () => {
@@ -104,8 +112,7 @@ describe("swarm tools integration", () => {
   it("spawns text and structured collectors with explicit collection guidance and drains them in completion order", async () => {
     const settleRootWork = observeRootWork();
     const waitsStarted = createDeferred();
-    const stateDir = tempDirs.make("openclaw-swarm-tools-");
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-swarm-tools-"));
     setRuntimeConfigSnapshot(config);
     const publicToGateway = new Map<string, string>();
     const resultTextByRun = new Map<string, string>();
@@ -113,12 +120,8 @@ describe("swarm tools integration", () => {
     const childGuidance: string[] = [];
     const acceptedNotes: string[] = [];
     let launchCount = 0;
-    const launchGateway = vi.fn(async (request: unknown) => {
-      const method =
-        request && typeof request === "object"
-          ? (request as { method?: unknown }).method
-          : undefined;
-      if (method !== "agent") {
+    const launchGateway = vi.fn(async (request: Parameters<typeof callGateway>[0]) => {
+      if (request.method !== "agent") {
         return {};
       }
       const params = requestParams(request);
@@ -161,15 +164,7 @@ describe("swarm tools integration", () => {
       hasInProcessGatewayContext: () => false,
       ensureContextEnginesInitialized: vi.fn(),
       prepareModelChoice: supportedSpawnModelChoice,
-      resolveContextEngine: vi.fn(async () => ({
-        info: { id: "test", name: "Test", version: "0.0.1" },
-        ingest: vi.fn(async () => ({ ingested: false })),
-        assemble: vi.fn(async ({ messages }: { messages: unknown[] }) => ({
-          messages,
-          estimatedTokens: 0,
-        })),
-        compact: vi.fn(async () => ({ ok: false, compacted: false })),
-      })) as never,
+      resolveContextEngine: vi.fn(testContextEngine),
     });
     vi.mocked(callGateway).mockImplementation(
       async <T>(request: Parameters<typeof callGateway>[0]) => {
@@ -205,15 +200,7 @@ describe("swarm tools integration", () => {
     vi.mocked(runSubagentAnnounceFlow).mockResolvedValue("delivered");
     vi.mocked(ensureContextEnginesInitialized).mockResolvedValue(undefined);
     vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReturnValue(createTestRegistry([]));
-    vi.mocked(resolveContextEngine).mockImplementation(async () => ({
-      info: { id: "test", name: "Test", version: "0.0.1" },
-      ingest: vi.fn(async () => ({ ingested: false })),
-      assemble: vi.fn<ContextEngine["assemble"]>(async ({ messages }) => ({
-        messages,
-        estimatedTokens: 0,
-      })),
-      compact: vi.fn(async () => ({ ok: false, compacted: false })),
-    }));
+    vi.mocked(resolveContextEngine).mockImplementation(testContextEngine);
 
     const spawn = createSessionsSpawnTool({
       agentSessionKey: requesterSessionKey,

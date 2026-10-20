@@ -24,36 +24,27 @@ const definition = createThemeDefinitionFixture({
 describe("theme tool", () => {
   beforeEach(() => callGateway.mockReset());
 
+  const schemas = {
+    list: ThemesListParamsSchema,
+    get: ThemesGetParamsSchema,
+    set: ThemesSetParamsSchema,
+    import: ThemesImportParamsSchema,
+  };
   it.each([
-    { args: { action: "list" }, params: {}, schema: ThemesListParamsSchema },
-    { args: { action: "get" }, params: {}, schema: ThemesGetParamsSchema },
-    {
-      args: { action: "get", id: "space-pack/xenovessel" },
-      params: { id: "space-pack/xenovessel" },
-      schema: ThemesGetParamsSchema,
-    },
-    {
-      args: { action: "set", id: "space-pack/xenovessel", mode: "dark" },
-      params: { id: "space-pack/xenovessel", mode: "dark" },
-      schema: ThemesSetParamsSchema,
-    },
-    {
-      args: { action: "set", id: null, mode: null },
-      params: { id: null, mode: null },
-      schema: ThemesSetParamsSchema,
-    },
-    {
-      args: {
-        action: "import",
-        id: "xenovessel",
-        definition: { ...definition, workingPhrases: [" Building ", "Compiling"] },
-        apply: true,
-        mode: "dark",
-      },
-      params: { id: "xenovessel", definition, apply: true, mode: "dark" },
-      schema: ThemesImportParamsSchema,
-    },
-  ])("executes $args.action through the Gateway theme owner", async ({ args, params, schema }) => {
+    ["list", {}],
+    ["get", {}],
+    ["get", { id: "space-pack/xenovessel" }],
+    ["set", { id: "space-pack/xenovessel", mode: "dark" }],
+    ["set", { id: null, mode: null }],
+    ["import", { id: "xenovessel", definition, apply: true, mode: "dark" }],
+  ] as const)("executes %s through the Gateway theme owner", async (action, params) => {
+    const args = {
+      action,
+      ...params,
+      ...(action === "import"
+        ? { definition: { ...definition, workingPhrases: [" Building ", "Compiling"] } }
+        : {}),
+    };
     const selected: ThemesGetResult = {
       current: {
         id: "user/xenovessel",
@@ -75,9 +66,9 @@ describe("theme tool", () => {
       definition,
     };
     const reply =
-      args.action === "list"
+      action === "list"
         ? { ...selected, themes: [selected.theme] }
-        : args.action === "get"
+        : action === "get"
           ? selected
           : { ...selected, application: "saved" };
     callGateway.mockResolvedValue(reply);
@@ -90,15 +81,15 @@ describe("theme tool", () => {
       signal,
     );
     expect(callGateway).toHaveBeenCalledExactlyOnceWith({
-      method: `themes.${args.action}`,
+      method: `themes.${action}`,
       params,
       signal,
     });
-    expect(Value.Check(schema, callGateway.mock.calls[0]?.[0].params)).toBe(true);
+    expect(Value.Check(schemas[action], callGateway.mock.calls[0]?.[0].params)).toBe(true);
     expect(result.details).toEqual(
-      args.action === "list"
+      action === "list"
         ? { current: selected.current, themes: [selected.theme] }
-        : args.action === "get"
+        : action === "get"
           ? selected
           : { current: selected.current, theme: selected.theme, application: "saved" },
     );

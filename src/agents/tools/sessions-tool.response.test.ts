@@ -5,7 +5,6 @@ import {
   escapeHeavyResolved,
   expectExactResolvedAcknowledgement,
   expectOmittedResolvedAcknowledgement,
-  expectedResolvedOmission,
 } from "./sessions-tool.test-helpers.js";
 
 const gatewayMocks = vi.hoisted(() => ({ callGateway: vi.fn() }));
@@ -18,24 +17,19 @@ beforeEach(() => {
   gatewayMocks.callGateway.mockReset();
 });
 
-function createTool() {
+function createTool(options: Partial<Parameters<typeof createSessionsTool>[0]> = {}) {
   return createSessionsTool({
     agentSessionKey: "agent:main:main",
     config: {},
     hasInProcessGatewayContext: () => true,
+    ...options,
   });
 }
 
 describe("sessions tool responses", () => {
   it("clears its model override when patch requests the default model", async () => {
     const callGateway = vi.fn().mockResolvedValue({});
-    const tool = createSessionsTool({
-      agentSessionKey: "agent:main:main",
-      config: {},
-      callGateway,
-    });
-
-    await tool.execute("reset-model", { action: "patch", model: "default" });
+    await createTool({ callGateway }).execute("reset-model", { action: "patch", model: "default" });
 
     expect(callGateway).toHaveBeenCalledWith({
       method: "sessions.patch",
@@ -67,52 +61,35 @@ describe("sessions tool responses", () => {
     expect(gatewayMocks.callGateway).toHaveBeenCalledTimes(4);
   });
 
-  it("preserves long resolved identifiers and complete catalogs exactly when they fit", async () => {
-    gatewayMocks.callGateway.mockResolvedValue({
-      ok: true,
-      path: `/sessions/${"p".repeat(10_000)}`,
-      key: "agent:main:main",
-      entry: { skillsSnapshot: "s".repeat(47_469) },
-      resolved: adversarialResolved,
-    });
-    const tool = createTool();
+  it.each([
+    { name: "fitting", resolved: adversarialResolved, omitted: false },
+    { name: "oversized", resolved: escapeHeavyResolved, omitted: true },
+  ])(
+    "preserves identifiers or omits metadata for $name resolved payloads",
+    async ({ resolved, omitted }) => {
+      gatewayMocks.callGateway.mockResolvedValue({
+        ok: true,
+        path: `/sessions/${"p".repeat(10_000)}`,
+        key: "agent:main:main",
+        entry: { skillsSnapshot: "s".repeat(47_469) },
+        resolved,
+      });
+      const result = await createTool().execute("patch-model-thinking", {
+        action: "patch",
+        model: "openai/luna",
+        thinkingLevel: "med",
+      });
 
-    const result = await tool.execute("patch-adversarial-model-thinking", {
-      action: "patch",
-      model: "openai/luna",
-      thinkingLevel: "med",
-    });
-
-    expect(result.details).toMatchObject({
-      status: "updated",
-      sessionKey: "agent:main:main",
-      updated: ["model", "thinkingLevel"],
-    });
-    expectExactResolvedAcknowledgement(result, adversarialResolved);
-  });
-
-  it("omits oversized resolved metadata instead of changing authoritative identifiers", async () => {
-    gatewayMocks.callGateway.mockResolvedValue({
-      ok: true,
-      path: `/sessions/${"p".repeat(10_000)}`,
-      key: "agent:main:main",
-      entry: { skillsSnapshot: "s".repeat(47_469) },
-      resolved: escapeHeavyResolved,
-    });
-    const tool = createTool();
-
-    const result = await tool.execute("patch-oversized-model-thinking", {
-      action: "patch",
-      model: "openai/luna",
-      thinkingLevel: "med",
-    });
-
-    expect(result.details).toMatchObject({
-      status: "updated",
-      sessionKey: "agent:main:main",
-      updated: ["model", "thinkingLevel"],
-      resolvedOmitted: expectedResolvedOmission,
-    });
-    expectOmittedResolvedAcknowledgement(result);
-  });
+      expect(result.details).toMatchObject({
+        status: "updated",
+        sessionKey: "agent:main:main",
+        updated: ["model", "thinkingLevel"],
+      });
+      if (omitted) {
+        expectOmittedResolvedAcknowledgement(result);
+      } else {
+        expectExactResolvedAcknowledgement(result, resolved);
+      }
+    },
+  );
 });

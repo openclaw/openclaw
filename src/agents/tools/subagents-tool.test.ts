@@ -84,16 +84,20 @@ function run() {
 function tool() {
   return createSubagentsTool({ config: {}, agentId: "main", agentSessionKey: "agent:main:main" });
 }
+function wait(entry: SubagentRunRecord, timeoutSeconds?: number, signal?: AbortSignal) {
+  return tool().execute("wait", { action: "wait", runIds: [entry.runId], timeoutSeconds }, signal);
+}
+function publish() {
+  owner.listeners.forEach((emit) => emit());
+}
 describe("subagents native run contract", () => {
   it("subscribes before reading and does not consume the completed result's delivery obligation", async () => {
     const entry = run();
     entry.delivery = { status: "pending" };
-    const pending = tool().execute("wait", { action: "wait", runIds: [entry.runId] });
+    const pending = wait(entry);
     expect(owner.listeners.size).toBe(1);
     entry.execution = { status: "terminal", endedAt: 100, outcome: { status: "ok" } };
-    for (const emit of owner.listeners) {
-      emit();
-    }
+    publish();
     expect((await pending).details).toMatchObject({
       reason: "completed",
       completed: [entry.runId],
@@ -104,16 +108,14 @@ describe("subagents native run contract", () => {
   });
   it("rechecks wait ownership without disclosing revoked results and reports suspended delivery", async () => {
     const entry = run();
-    const pending = tool().execute("wait", { action: "wait", runIds: [entry.runId] });
+    const pending = wait(entry);
     entry.requesterSessionKey = "agent:other:main";
     entry.execution = {
       status: "terminal",
       endedAt: 100,
       outcome: { status: "error", error: "FORMER_CHILD_PRIVATE_RESULT" },
     };
-    for (const emit of owner.listeners) {
-      emit();
-    }
+    publish();
     const revoked = await pending;
     expect(revoked.details).toMatchObject({
       reason: "unavailable",
@@ -123,36 +125,21 @@ describe("subagents native run contract", () => {
     expect(JSON.stringify(revoked.details)).not.toContain("FORMER_CHILD_PRIVATE_RESULT");
     entry.requesterSessionKey = "agent:main:main";
     entry.delivery = { status: "suspended" };
-    expect(
-      (
-        await tool().execute("attention", {
-          action: "wait",
-          runIds: [entry.runId],
-          timeoutSeconds: 0,
-        })
-      ).details,
-    ).toMatchObject({ reason: "attention", attention: [entry.runId] });
+    expect((await wait(entry, 0)).details).toMatchObject({
+      reason: "attention",
+      attention: [entry.runId],
+    });
     expect(owner.cancel).not.toHaveBeenCalled();
   });
   it("zero-timeout and abort do not cancel execution", async () => {
     const entry = run();
-    expect(
-      (await tool().execute("wait", { action: "wait", runIds: [entry.runId], timeoutSeconds: 0 }))
-        .details,
-    ).toMatchObject({ reason: "timeout" });
-    expect(tool().parameters).toMatchObject({
-      properties: {
-        timeoutSeconds: {
-          description: expect.stringMatching(/integer.*0–60.*default: 30.*0.*snapshot/),
-        },
-      },
-    });
-    const controller = new AbortController();
-    const pending = tool().execute(
-      "wait",
-      { action: "wait", runIds: [entry.runId] },
-      controller.signal,
+    expect((await wait(entry, 0)).details).toMatchObject({ reason: "timeout" });
+    expect(tool().parameters).toHaveProperty(
+      "properties.timeoutSeconds.description",
+      expect.stringMatching(/integer.*0–60.*default: 30.*0.*snapshot/),
     );
+    const controller = new AbortController();
+    const pending = wait(entry, undefined, controller.signal);
     controller.abort();
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });
     expect(owner.cancel).not.toHaveBeenCalled();
