@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { createServer, request, type Server } from "node:http";
+import { createServer, request, type IncomingMessage, type Server } from "node:http";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -70,27 +70,22 @@ describe.each(["", "/dashboard"])("Control UI artifact names under %j", (basePat
     }
   });
 
-  const read = (pathname: string, method = "GET", encoding = "identity") =>
-    new Promise<{
-      status: number | undefined;
-      headers: import("node:http").IncomingHttpHeaders;
-      body: Buffer;
-    }>((resolve, reject) => {
-      const req = request(
+  const read = async (pathname: string, method = "GET", encoding = "identity") => {
+    const res = await new Promise<IncomingMessage>((resolve, reject) => {
+      request(
         `${origin}${basePath}${pathname}`,
         { method, headers: { "Accept-Encoding": encoding }, agent: false },
-        (res) => {
-          const chunks: Buffer[] = [];
-          res.on("data", (chunk: Buffer) => chunks.push(chunk));
-          res.on("error", reject);
-          res.on("end", () =>
-            resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks) }),
-          );
-        },
-      );
-      req.on("error", reject);
-      req.end();
+        resolve,
+      )
+        .on("error", reject)
+        .end();
     });
+    const chunks: Buffer[] = [];
+    for await (const chunk of res) {
+      chunks.push(chunk);
+    }
+    return { status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks) };
+  };
 
   it.each(Object.entries(files))("decodes %s exactly once for GET and HEAD", async (name, body) => {
     for (const method of ["GET", "HEAD"]) {

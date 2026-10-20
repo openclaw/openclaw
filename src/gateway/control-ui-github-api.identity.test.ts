@@ -3,6 +3,7 @@ import {
   setRuntimeConfigSnapshot,
   clearRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   setActiveDegradedSecretOwners,
   SecretSurfaceUnavailableError,
@@ -17,6 +18,15 @@ afterEach(() => {
   setActiveDegradedSecretOwners([]);
   clearRuntimeConfigSnapshot();
 });
+
+const coldToken = { source: "store", provider: "default", id: "PREVIEW_TOKEN" } as const;
+const enterpriseHost = "ghe.example.test";
+function previewConfig(
+  github: NonNullable<NonNullable<OpenClawConfig["gateway"]>["controlUi"]>["github"],
+  host?: string,
+): OpenClawConfig {
+  return { gateway: { github: { host }, controlUi: { github } } };
+}
 
 describe("Control UI GitHub credential", () => {
   it.each([
@@ -59,29 +69,13 @@ describe("Control UI GitHub credential", () => {
         },
       }),
     ).toBe("preview-service-token");
-    expect(() =>
-      githubApiToken(env, {
-        gateway: {
-          controlUi: {
-            github: {
-              token: { source: "store", provider: "default", id: "PREVIEW_TOKEN" },
-            },
-          },
-        },
-      }),
-    ).toThrow(SecretSurfaceUnavailableError);
+    expect(() => githubApiToken(env, previewConfig({ token: coldToken }))).toThrow(
+      SecretSurfaceUnavailableError,
+    );
   });
 
   it("fails closed for an explicitly configured cold SecretRef owner", () => {
-    const config = {
-      gateway: {
-        controlUi: {
-          github: {
-            token: { source: "store" as const, provider: "default", id: "PREVIEW_TOKEN" },
-          },
-        },
-      },
-    };
+    const config = previewConfig({ token: coldToken });
     setActiveDegradedSecretOwners([
       {
         ownerKind: "capability",
@@ -102,22 +96,16 @@ describe("Control UI GitHub credential", () => {
   });
 
   it("requires the structured service credential to name the selected Enterprise host", () => {
-    const gateway = { github: { host: "ghe.example.test" } };
     expect(() =>
       githubApiToken(
         { GH_TOKEN: "public-token" },
-        { gateway: { ...gateway, controlUi: { github: { token: "public-service-token" } } } },
+        previewConfig({ token: "public-service-token" }, enterpriseHost),
       ),
     ).toThrow(SecretSurfaceUnavailableError);
     expect(
       githubApiToken(
         { GH_TOKEN: "public-token" },
-        {
-          gateway: {
-            ...gateway,
-            controlUi: { github: { host: "ghe.example.test", token: "enterprise-token" } },
-          },
-        },
+        previewConfig({ host: enterpriseHost, token: "enterprise-token" }, enterpriseHost),
       ),
     ).toBe("enterprise-token");
   });

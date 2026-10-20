@@ -27,22 +27,13 @@ function expectClosed() {
 }
 
 describe("pinned Control UI file reads", () => {
+  const large = "x".repeat(512 * 1024 + 19);
   it.each([
-    { name: "empty", body: "", change: "none", expected: "" },
-    {
-      name: "large",
-      body: "x".repeat(512 * 1024 + 19),
-      change: "none",
-      expected: "x".repeat(512 * 1024 + 19),
-    },
-    {
-      name: "short reads of a growing file",
-      body: "a small static response",
-      change: "grow",
-      expected: "a small static response",
-    },
-    { name: "truncated", body: "original longer content", change: "truncate", expected: "short" },
-  ])("reads and closes a $name file within its pinned size", ({ body, change, expected }) => {
+    ["empty", "", "none", ""],
+    ["large", large, "none", large],
+    ["short reads of a growing file", "a small static response", "grow", "a small static response"],
+    ["truncated", "original longer content", "truncate", "short"],
+  ])("reads and closes a %s file within its pinned size", (_name, body, change, expected) => {
     const file = createFile(body);
     if (change !== "none") {
       const read = fs.readSync;

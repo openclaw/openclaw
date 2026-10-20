@@ -1,4 +1,3 @@
-// Control UI assistant media e2e tests verify scoped media-ticket access through gateway HTTP routes.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -26,7 +25,6 @@ describe("Control UI assistant media e2e", () => {
       async ({ port }) => {
         const route = `http://127.0.0.1:${port}/__openclaw__/assistant-media`;
         const sourceParam = encodeURIComponent(filePath);
-
         const metadata = await fetch(`${route}?meta=1&source=${sourceParam}`, {
           headers: { Authorization: `Bearer ${CONTROL_UI_E2E_TOKEN}` },
         });
@@ -39,13 +37,16 @@ describe("Control UI assistant media e2e", () => {
         expect(payload.available).toBe(true);
         expect(payload.mediaTicket).toMatch(/^v1\./);
         expect(Date.parse(payload.mediaTicketExpiresAt ?? "")).not.toBeNaN();
+        const read = (options: RequestInit = {}, source = filePath) =>
+          fetch(
+            `${route}?source=${encodeURIComponent(source)}&mediaTicket=${encodeURIComponent(payload.mediaTicket ?? "")}`,
+            options,
+          );
 
         const withoutTicket = await fetch(`${route}?source=${sourceParam}`);
         expect(withoutTicket.status).toBe(401);
 
-        const ticketed = await fetch(
-          `${route}?source=${sourceParam}&mediaTicket=${encodeURIComponent(payload.mediaTicket ?? "")}`,
-        );
+        const ticketed = await read();
         expect(ticketed.status).toBe(200);
         expect(ticketed.headers.get("content-disposition")).toBe(
           `attachment; filename="__ ticketed (final).txt"; filename*=UTF-8''%E6%B5%8B%E8%AF%95%20ticketed%20%28final%29.txt`,
@@ -59,9 +60,7 @@ describe("Control UI assistant media e2e", () => {
           fileUrl.replace(/^file:\/\//u, "file:"),
           fileUrl.replace(/^file:\/\//u, "FILE:"),
         ]) {
-          const equivalent = await fetch(
-            `${route}?source=${encodeURIComponent(source)}&mediaTicket=${encodeURIComponent(payload.mediaTicket ?? "")}`,
-          );
+          const equivalent = await read({}, source);
           expect(equivalent.status, source).toBe(200);
           expect(await equivalent.text()).toBe("ticketed control ui media\n");
         }
@@ -72,10 +71,7 @@ describe("Control UI assistant media e2e", () => {
           expect(remoteHost.status, source).toBe(404);
         }
 
-        const ranged = await fetch(
-          `${route}?source=${sourceParam}&mediaTicket=${encodeURIComponent(payload.mediaTicket ?? "")}`,
-          { headers: { Range: "bytes=9-15" } },
-        );
+        const ranged = await read({ headers: { Range: "bytes=9-15" } });
         expect(ranged.status).toBe(206);
         expect(ranged.headers.get("accept-ranges")).toBe("bytes");
         expect(ranged.headers.get("content-range")).toBe("bytes 9-15/26");
@@ -84,10 +80,7 @@ describe("Control UI assistant media e2e", () => {
         expect(ranged.headers.get("last-modified")).toBeNull();
         expect(await ranged.text()).toBe("control");
 
-        const head = await fetch(
-          `${route}?source=${sourceParam}&mediaTicket=${encodeURIComponent(payload.mediaTicket ?? "")}`,
-          { method: "HEAD" },
-        );
+        const head = await read({ method: "HEAD" });
         expect(head.status).toBe(200);
         expect(head.headers.get("accept-ranges")).toBe("bytes");
         expect(head.headers.get("content-length")).toBe("26");
@@ -96,26 +89,23 @@ describe("Control UI assistant media e2e", () => {
         expect(await head.text()).toBe("");
 
         for (const method of ["GET", "HEAD"]) {
-          const fresh = await fetch(
-            `${route}?source=${sourceParam}&mediaTicket=${encodeURIComponent(payload.mediaTicket ?? "")}`,
-            {
-              method,
-              headers: {
-                "If-None-Match": 'W/"cached-version"',
-                Range: "bytes=9-15",
-                "If-Range": '"stale"',
-              },
+          const fresh = await read({
+            method,
+            headers: {
+              "If-None-Match": 'W/"cached-version"',
+              Range: "bytes=9-15",
+              "If-Range": '"stale"',
             },
-          );
+          });
           expect(fresh.status).toBe(200);
           expect(fresh.headers.get("etag")).toBeNull();
           expect(fresh.headers.get("content-length")).toBe("26");
           expect(await fresh.text()).toBe(method === "GET" ? "ticketed control ui media\n" : "");
 
-          const exists = await fetch(
-            `${route}?source=${sourceParam}&mediaTicket=${encodeURIComponent(payload.mediaTicket ?? "")}`,
-            { method, headers: { "If-None-Match": "*", Range: "bytes=9-15" } },
-          );
+          const exists = await read({
+            method,
+            headers: { "If-None-Match": "*", Range: "bytes=9-15" },
+          });
           expect(exists.status).toBe(304);
           expect(exists.headers.get("content-length")).toBeNull();
           expect(await exists.text()).toBe("");
@@ -132,9 +122,7 @@ describe("Control UI assistant media e2e", () => {
 
         const otherFilePath = path.join(mediaDir, "other-preview.txt");
         await fs.writeFile(otherFilePath, "other media\n", "utf8");
-        const wrongSource = await fetch(
-          `${route}?source=${encodeURIComponent(otherFilePath)}&mediaTicket=${encodeURIComponent(payload.mediaTicket ?? "")}`,
-        );
+        const wrongSource = await read({}, otherFilePath);
         expect(wrongSource.status).toBe(401);
       },
       {

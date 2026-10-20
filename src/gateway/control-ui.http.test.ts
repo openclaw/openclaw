@@ -4,7 +4,6 @@ import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { performance } from "node:perf_hooks";
 import { brotliCompressSync, gzipSync, gunzipSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createNoisyPngBuffer, createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
@@ -85,6 +84,7 @@ const REAL_PNG = Buffer.from(
 );
 const testTempDirs = useAutoCleanupTempDirTracker(afterEach);
 const tokenAuth = { mode: "token", token: "test-token", allowTailscale: false } as const;
+const sharedAuth = { ...tokenAuth, token: "shared-token" };
 
 beforeEach(() => setRuntimeConfigSnapshot({}));
 
@@ -119,13 +119,17 @@ describe("handleControlUiHttpRequest", () => {
     return JSON.parse(responseBody(end)) as ControlUiBootstrapConfig;
   }
 
+  function expectStatus(result: { handled: boolean; res: ServerResponse }, code = 200) {
+    expect(result.handled).toBe(true);
+    expect(result.res.statusCode).toBe(code);
+  }
+
   function expectNotFoundResponse(params: {
     handled: boolean;
     res: ReturnType<typeof makeMockHttpResponse>["res"];
     end: ReturnType<typeof makeMockHttpResponse>["end"];
   }) {
-    expect(params.handled).toBe(true);
-    expect(params.res.statusCode).toBe(404);
+    expectStatus(params, 404);
     expect(params.end).toHaveBeenCalledWith("Not Found");
   }
 
@@ -232,8 +236,7 @@ describe("handleControlUiHttpRequest", () => {
     res: ReturnType<typeof makeMockHttpResponse>["res"];
     end: ReturnType<typeof makeMockHttpResponse>["end"];
   }) {
-    expect(params.handled).toBe(true);
-    expect(params.res.statusCode).toBe(403);
+    expectStatus(params, 403);
     expect(responseJson(params.end)).toEqual({
       ok: false,
       error: {
@@ -249,8 +252,7 @@ describe("handleControlUiHttpRequest", () => {
   }
 
   function expectRateLimited(result: Awaited<ReturnType<typeof runBootstrapConfigRequest>>) {
-    expect(result.handled).toBe(true);
-    expect(result.res.statusCode).toBe(429);
+    expectStatus(result, 429);
     expect(responseJson(result.end)).toEqual({
       error: {
         message: "Too many failed authentication attempts. Please try again later.",
@@ -558,8 +560,7 @@ describe("handleControlUiHttpRequest", () => {
       url: `/__openclaw__/assistant-media?playback=1&source=${encodeURIComponent(filePath)}&token=test-token`,
     });
 
-    expect(handled).toBe(true);
-    expect(res.statusCode).toBe(202);
+    expectStatus({ handled, res }, 202);
     expect(responseJson(end)).toEqual({ status: "preparing" });
   });
 
@@ -569,8 +570,7 @@ describe("handleControlUiHttpRequest", () => {
     const { res, handled } = await runAssistantMediaRequest({
       url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`,
     });
-    expect(handled).toBe(true);
-    expect(res.statusCode).toBe(200);
+    expectStatus({ handled, res });
     expect(res["setHeader"]).toHaveBeenCalledWith(
       "Content-Disposition",
       `attachment; filename="${"a".repeat(176)}__ 100_ 'draft' (1)__.pdf"; filename*=UTF-8''${"a".repeat(176)}%E6%B5%8B%E8%AF%95%20100%25%20%27draft%27%20%281%29%F0%9F%98%80.pdf`,
@@ -601,8 +601,7 @@ describe("handleControlUiHttpRequest", () => {
       url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`,
     });
 
-    expect(handled).toBe(true);
-    expect(res.statusCode).toBe(200);
+    expectStatus({ handled, res });
     expect(setHeader).toHaveBeenCalledWith("Content-Type", "image/png");
     expect(readSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
@@ -613,8 +612,7 @@ describe("handleControlUiHttpRequest", () => {
     const { res, handled, end } = await runAssistantMediaRequest({
       url: `/__openclaw__/assistant-media?meta=1&source=${encodeURIComponent(filePath)}&token=test-token`,
     });
-    expect(handled).toBe(true);
-    expect(res.statusCode).toBe(200);
+    expectStatus({ handled, res });
     const payload = responseJson(end);
     expect(payload).toMatchObject({ available: true });
     expect(payload).not.toHaveProperty("mediaTicket");
@@ -632,23 +630,20 @@ describe("handleControlUiHttpRequest", () => {
     const payload = responseJson(meta.end) as {
       mediaTicket?: string;
     };
-    expect(meta.handled).toBe(true);
-    expect(meta.res.statusCode).toBe(200);
+    expectStatus(meta);
     expect(payload.mediaTicket).toMatch(/^v1\./);
 
     const media = await runAssistantMediaRequest({
       url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&mediaTicket=${encodeURIComponent(payload.mediaTicket ?? "")}`,
     });
-    expect(media.handled).toBe(true);
-    expect(media.res.statusCode).toBe(200);
+    expectStatus(media);
 
     const shortenedTicket = payload.mediaTicket?.slice(0, -1) ?? "";
     const rejected = await runAssistantMediaRequest({
       url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&mediaTicket=${encodeURIComponent(shortenedTicket)}`,
       auth: { mode: "token", token: "test-auth-token", allowTailscale: false },
     });
-    expect(rejected.handled).toBe(true);
-    expect(rejected.res.statusCode).toBe(401);
+    expectStatus(rejected, 401);
   });
 
   it("does not refresh assistant media tickets without operator auth", async () => {
@@ -666,8 +661,7 @@ describe("handleControlUiHttpRequest", () => {
     const refresh = await runAssistantMediaRequest({
       url: `/__openclaw__/assistant-media?meta=1&source=${encodeURIComponent(filePath)}&mediaTicket=${encodeURIComponent(payload.mediaTicket ?? "")}`,
     });
-    expect(refresh.handled).toBe(true);
-    expect(refresh.res.statusCode).toBe(401);
+    expectStatus(refresh, 401);
     expect(responseBody(refresh.end)).toContain("Unauthorized");
   });
 
@@ -675,8 +669,7 @@ describe("handleControlUiHttpRequest", () => {
     const { res, handled, end } = await runAssistantMediaRequest({
       url: `/__openclaw__/assistant-media?meta=1&source=${encodeURIComponent("/Users/test/Documents/private.pdf")}&token=test-token`,
     });
-    expect(handled).toBe(true);
-    expect(res.statusCode).toBe(200);
+    expectStatus({ handled, res });
     expect(responseJson(end)).toEqual({
       available: false,
       code: "outside-allowed-folders",
@@ -700,8 +693,7 @@ describe("handleControlUiHttpRequest", () => {
         url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=${encodeURIComponent(operatorToken)}`,
         auth,
       });
-      expect(handled).toBe(true);
-      expect(res.statusCode).toBe(200);
+      expectStatus({ handled, res });
     }, issuerGeneration);
   });
 
@@ -713,8 +705,7 @@ describe("handleControlUiHttpRequest", () => {
         origin: "https://evil.example",
       },
     });
-    expect(handled).toBe(true);
-    expect(res.statusCode).toBe(401);
+    expectStatus({ handled, res }, 401);
     expect(responseBody(end)).toContain("Unauthorized");
   });
 
@@ -875,7 +866,7 @@ describe("handleControlUiHttpRequest", () => {
     const avatar = Buffer.concat([REAL_PNG, Buffer.alloc(AVATAR_MAX_BYTES - REAL_PNG.length)]);
     await fs.writeFile(path.join(tmp, "avatar.png"), avatar);
     const config = createAvatarConfig(tmp, "avatar.png");
-    const auth = { mode: "token" as const, token: "test-token", allowTailscale: false };
+    const auth = tokenAuth;
     const headers = { authorization: "Bearer test-token" };
     const request = { rootPath: tmp, basePath, auth, headers, config };
     const { res, end } = await runBootstrapConfigRequest(request);
@@ -955,8 +946,7 @@ describe("handleControlUiHttpRequest", () => {
       method: "HEAD",
       config: createAvatarConfig(tmp, "avatar.png"),
     });
-    expect(handled).toBe(true);
-    expect(res.statusCode).toBe(200);
+    expectStatus({ handled, res });
     expect(end).toHaveBeenCalledOnce();
     expect(responseBody(end)).toBe("");
     expect(readSync).not.toHaveBeenCalled();
@@ -968,13 +958,12 @@ describe("handleControlUiHttpRequest", () => {
       const rateLimiter = createAuthRateLimiterSpy();
       const { res, handled, end } = await runBootstrapConfigRequest({
         rootPath: tmp,
-        auth: { mode: "token", token: "shared-token", allowTailscale: false },
+        auth: sharedAuth,
         headers: { authorization: "Bearer invalid-token" },
         rateLimiter,
       });
 
-      expect(handled).toBe(true);
-      expect(res.statusCode).toBe(401);
+      expectStatus({ handled, res }, 401);
       expect(responseJson(end)).toEqual({
         error: { message: "Unauthorized", type: "unauthorized" },
       });
@@ -1004,8 +993,7 @@ describe("handleControlUiHttpRequest", () => {
       rateLimiter,
     });
 
-    expect(handled).toBe(true);
-    expect(res.statusCode).toBe(401);
+    expectStatus({ handled, res }, 401);
     expect(responseJson(end)).toEqual({
       error: { message: "Unauthorized", type: "unauthorized" },
     });
@@ -1029,7 +1017,7 @@ describe("handleControlUiHttpRequest", () => {
         );
         const response = await runBootstrapConfigRequest({
           rootPath: await createControlUiRoot(),
-          auth: { mode: "token", token: "shared-token", allowTailscale: false },
+          auth: sharedAuth,
           headers: { authorization: "Bearer invalid-token" },
           rateLimiter,
         });
@@ -1084,8 +1072,7 @@ describe("handleControlUiHttpRequest", () => {
       },
     });
 
-    expect(handled).toBe(true);
-    expect(res.statusCode).toBe(200);
+    expectStatus({ handled, res });
     const setCookie = setHeader.mock.calls.find(([name]) => name === "Set-Cookie")?.[1];
     expect(Array.isArray(setCookie)).toBe(true);
     const cookies = Array.isArray(setCookie) ? setCookie : [];
@@ -1145,12 +1132,11 @@ describe("handleControlUiHttpRequest", () => {
       });
       const { res, handled } = await runBootstrapConfigRequest({
         rootPath: tmp,
-        auth: { mode: "token", token: "shared-token", allowTailscale: false },
+        auth: sharedAuth,
         headers: { authorization: `Bearer ${operatorToken}` },
       });
 
-      expect(handled).toBe(true);
-      expect(res.statusCode).toBe(401);
+      expectStatus({ handled, res }, 401);
     });
   });
 
@@ -1165,13 +1151,12 @@ describe("handleControlUiHttpRequest", () => {
       );
       const { res, handled, end } = await runBootstrapConfigRequest({
         rootPath: tmp,
-        auth: { mode: "token", token: "shared-token", allowTailscale: false },
+        auth: sharedAuth,
         headers: { authorization: `Bearer ${operatorToken}` },
         rateLimiter,
       });
 
-      expect(handled).toBe(true);
-      expect(res.statusCode).toBe(200);
+      expectStatus({ handled, res });
       expect(parseBootstrapPayload(end).assistantAgentId).toBeUndefined();
       expect(rateLimiter.check.mock.calls.slice(0, 2)).toEqual([
         ["127.0.0.1", AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET],
@@ -1232,7 +1217,6 @@ describe("handleControlUiHttpRequest", () => {
         return release.promise;
       });
     const avatar = "https://example.com/avatar.png";
-    const started = performance.now();
     const pending = runAvatarRequest({
       url: "/avatar/main?meta=1",
       config: createAvatarConfig("/tmp/avatar-workspace", avatar),
@@ -1244,14 +1228,9 @@ describe("handleControlUiHttpRequest", () => {
         pending.then(() => "response" as const),
         entered.promise.then(() => "workspace-read" as const),
       ]);
-      console.info("configured avatar response boundary", {
-        winner,
-        elapsedMs: performance.now() - started,
-      });
       expect(winner).toBe("response");
       const response = await pending;
-      expect(response.handled).toBe(true);
-      expect(response.res.statusCode).toBe(200);
+      expectStatus(response);
       expect(responseJson(response.end)).toEqual({
         avatarUrl: avatar,
         avatarSource: "remote URL",
@@ -1277,8 +1256,7 @@ describe("handleControlUiHttpRequest", () => {
       headers: { authorization: "Bearer test-token" },
     };
     const head = await runAvatarRequest({ ...params, method: "HEAD" });
-    expect(head.handled).toBe(true);
-    expect(head.res.statusCode).toBe(200);
+    expectStatus(head);
     expect(head.setHeader).toHaveBeenCalledWith("Content-Length", String(body.byteLength));
     expect(head.setHeader).toHaveBeenCalledWith("Content-Type", "image/svg+xml");
     expect(head.setHeader).toHaveBeenCalledWith("Cache-Control", "no-cache");
@@ -1301,8 +1279,7 @@ describe("handleControlUiHttpRequest", () => {
       auth: tokenAuth,
     });
 
-    expect(response.handled).toBe(true);
-    expect(response.res.statusCode).toBe(401);
+    expectStatus(response, 401);
     expect(response.setHeader).not.toHaveBeenCalledWith("Content-Length", expect.anything());
   });
 
@@ -1317,8 +1294,7 @@ describe("handleControlUiHttpRequest", () => {
       url: "/avatar/main?meta=1",
       config,
     });
-    expect(meta.handled).toBe(true);
-    expect(meta.res.statusCode).toBe(200);
+    expectStatus(meta);
     expect(responseJson(meta.end)).toEqual({
       avatarUrl: null,
       avatarSource: "avatar.png",
@@ -1349,8 +1325,7 @@ describe("handleControlUiHttpRequest", () => {
       config: createAvatarConfig("/tmp/workspace", "/Users/test/private/avatar.png"),
     });
 
-    expect(handled).toBe(true);
-    expect(res.statusCode).toBe(200);
+    expectStatus({ handled, res });
     expect(responseJson(end)).toEqual({
       avatarUrl: null,
       avatarSource: null,
@@ -1380,15 +1355,13 @@ describe("handleControlUiHttpRequest", () => {
     const asset = await runControlUiRequest(tmp, "/assets/actual.txt", {
       headers: { accept: "application/json" },
     });
-    expect(asset.handled).toBe(true);
-    expect(asset.res.statusCode).toBe(200);
+    expectStatus(asset);
     expect(responseBody(asset.end)).toBe("inside-ok\n");
 
     const recovery = await runControlUiRequest(tmp, "/settings/plugins", {
       headers: { accept: "application/json" },
     });
-    expect(recovery.handled).toBe(true);
-    expect(recovery.res.statusCode).toBe(200);
+    expectStatus(recovery);
     expect(responseBody(recovery.end)).toContain("plugin-recovery");
   });
 
@@ -1491,8 +1464,7 @@ describe("handleControlUiHttpRequest", () => {
     for (const method of ["GET", "HEAD"] as const) {
       const { res, end, handled } = await runControlUiRequest(tmp, url, { method, basePath });
 
-      expect(handled).toBe(true);
-      expect(res.statusCode).toBe(200);
+      expectStatus({ handled, res });
       if (method === "HEAD") {
         expect(end.mock.calls[0]?.length ?? -1).toBe(0);
       } else {
@@ -1521,8 +1493,7 @@ describe("handleControlUiHttpRequest", () => {
       tmp,
       "/__openclaw__/favicon.svg",
     );
-    expect(handled).toBe(true);
-    expect(res.statusCode).toBe(200);
+    expectStatus({ handled, res });
     expect(setHeader).toHaveBeenCalledWith("Content-Type", "image/svg+xml");
     expect(responseBody(end)).toBe("<svg/>");
   });
