@@ -20,15 +20,18 @@ function cleanupReporting(start?: Error, complete?: Error) {
 const removals = (fixture: ReturnType<typeof createGitAdmissionFixture>) =>
   fixture.calls.filter((args) => args.includes("worktree") && args.includes("remove"));
 
-it.each(["none", "start", "complete"] as const)(
-  "retains post-stop failure and cleans candidate when reporting fails: %s",
+it.each(["none", "start", "complete", "uncertain"] as const)(
+  "retains post-stop failure with %s cleanup reporting",
   async (reportingFails) => {
     const fixture = createGitAdmissionFixture();
     const before = fixture.git(fixture.install, "rev-parse", "HEAD");
     const original = new Error("SYNTHETIC_POST_STOP_FAILURE");
-    const reporting = new Error(
-      'Could not record update step "preflight-cleanup": undergoing offline maintenance',
-    );
+    const reporting =
+      reportingFails === "uncertain"
+        ? new CommandProcessCleanupError()
+        : new Error(
+            'Could not record update step "preflight-cleanup": undergoing offline maintenance',
+          );
     let validated = false;
     const doctor = vi.fn();
     const error = await fixture
@@ -42,13 +45,19 @@ it.each(["none", "start", "complete"] as const)(
         },
         runGitDoctor: doctor,
         progress: cleanupReporting(
-          reportingFails === "start" ? reporting : undefined,
+          reportingFails === "start" || reportingFails === "uncertain" ? reporting : undefined,
           reportingFails === "complete" ? reporting : undefined,
         ),
       })
       .catch((caught: unknown) => caught);
     expect(fixture.git(fixture.install, "rev-parse", "HEAD")).toBe(before);
     expect(doctor).not.toHaveBeenCalled();
+    if (reportingFails === "uncertain") {
+      expect(error).toMatchObject({ cause: original, errors: [original, reporting] });
+      expect(hasCommandProcessCleanupError(error)).toBe(true);
+      expect(removals(fixture)).toEqual([]);
+      return;
+    }
     expect(removals(fixture)).toHaveLength(1);
     if (reportingFails !== "none") {
       expect(error).toMatchObject({ cause: original, errors: [original, reporting] });
@@ -82,21 +91,4 @@ it("keeps a successful update successful when cleanup reporting is unavailable",
       { message: "completion reporting unavailable" },
     ],
   });
-});
-
-it("preserves uncertain process cleanup and the original failure without removing live scratch", async () => {
-  const fixture = createGitAdmissionFixture();
-  const original = new Error("SYNTHETIC_POST_STOP_FAILURE");
-  const uncertain = new CommandProcessCleanupError();
-  const error = await fixture
-    .run({
-      beforeGitMutation: async () => {
-        throw original;
-      },
-      progress: cleanupReporting(uncertain),
-    })
-    .catch((caught: unknown) => caught);
-  expect(error).toMatchObject({ cause: original, errors: [original, uncertain] });
-  expect(hasCommandProcessCleanupError(error)).toBe(true);
-  expect(removals(fixture)).toEqual([]);
 });

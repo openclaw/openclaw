@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -41,7 +41,6 @@ vi.mock("../model-catalog/remote-refresh.js", () => ({
 let clock: ReturnType<typeof createGatewaySchedulerClock>;
 let check: ReturnType<typeof createGatewayUpdateCheck>;
 let config: OpenClawConfig;
-let cleanup: () => Promise<void>;
 const info = vi.fn();
 beforeEach(async () => {
   vi.clearAllMocks();
@@ -61,14 +60,13 @@ beforeEach(async () => {
     isNixMode: false,
     applyRemoteCatalogUpdate: async () => "unchanged",
   });
-  cleanup = async () => {
+  return async () => {
     await Promise.all([check.stop(), scheduler.stop()]);
     resetUpdateAvailableStateForTest(scheduler);
     await closeStateDatabaseForTest();
     await state.cleanup();
   };
 });
-afterEach(async () => cleanup());
 
 it("reports a failed background update check and keeps its next check scheduled", async () => {
   vi.mocked(checkUpdateStatus).mockRejectedValue(new Error("synthetic update discovery failure"));
@@ -89,20 +87,13 @@ it("returns cleanup before slow dev git discovery schedules a campaign", async (
   const entered = createDeferred();
   const remoteFinished = createDeferred();
   config = { update: { channel: "dev", auto: { enabled: true } } };
-  vi.mocked(checkUpdateStatus).mockImplementation(async ({ fetchGit, timeoutMs }) => {
-    const isRemoteFetch = fetchGit === true;
-    const effectiveTimeoutMs = timeoutMs ?? (isRemoteFetch ? 120_000 : 6000);
-    const remoteFetchFinished = isRemoteFetch && effectiveTimeoutMs >= remoteFetchDelayMs;
-    if (isRemoteFetch) {
-      entered.resolve();
-      await remoteFinished.promise;
+  vi.mocked(checkUpdateStatus).mockImplementation(async ({ fetchGit }) => {
+    if (!fetchGit) {
+      return createDevGitStatus({ upstreamSha: null, ahead: null, behind: null, fetchOk: null });
     }
-    return createDevGitStatus({
-      upstreamSha: remoteFetchFinished ? "upstream-sha" : null,
-      ahead: remoteFetchFinished ? 0 : null,
-      behind: remoteFetchFinished ? 2 : null,
-      fetchOk: isRemoteFetch ? remoteFetchFinished : null,
-    });
+    entered.resolve();
+    await remoteFinished.promise;
+    return createDevGitStatus();
   });
   let checking: ReturnType<typeof clock.advanceBy> = undefined;
 
