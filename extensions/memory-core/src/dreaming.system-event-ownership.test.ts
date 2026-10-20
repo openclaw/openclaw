@@ -44,19 +44,16 @@ function createHook(enabled = true) {
   const on = vi.fn<OpenClawPluginApi["on"]>();
   const runtime = createPluginRuntimeMock();
   runtime.config.current = () => config;
-  const api = createTestPluginApi({
-    id: "memory-core",
-    config,
-    on,
-    runtime,
-  });
+  const api = createTestPluginApi({ id: "memory-core", config, on, runtime });
   const error = vi.spyOn(api.logger, "error");
   registerShortTermPromotionDreaming(api);
   const registration = on.mock.calls.find(([name]) => name === "before_agent_reply");
   expect(registration).toBeDefined();
-  return {
-    beforeReply: registration![1] as Parameters<typeof api.on<"before_agent_reply">>[1],
-    error,
+  const beforeReply = registration![1] as Parameters<typeof api.on<"before_agent_reply">>[1];
+  return async (context: Parameters<typeof beforeReply>[1]) => {
+    const result = await beforeReply(event, context);
+    expect(error).not.toHaveBeenCalled();
+    return result;
   };
 }
 
@@ -70,12 +67,12 @@ it.each(
 )(
   "checks $sessionKey against its heartbeat owner, with an event for $queuedAgentId",
   async ({ sessionKey, queuedAgentId }) => {
-    const { beforeReply, error } = createHook();
+    const beforeReply = createHook();
     systemEvents.enqueueSystemEvent(MEMORY_DREAMING_SYSTEM_EVENT_TEXT, {
       sessionKey: `agent:${queuedAgentId}:global`,
       contextKey: "cron:memory-dreaming",
     });
-    const result = await beforeReply(event, {
+    const result = await beforeReply({
       agentId: "research",
       trigger: "heartbeat",
       sessionKey,
@@ -83,46 +80,25 @@ it.each(
       workspaceDir: ".",
     });
     expect(result).toEqual(queuedAgentId === "research" ? handled : undefined);
-    expect(error).not.toHaveBeenCalled();
   },
 );
 
 it.each([
-  {
-    sessionKey: "agent:main:heartbeat",
-    queueKey: undefined,
-    pendingKey: undefined,
-    expected: undefined,
-  },
-  {
-    sessionKey: "agent:main:heartbeat:heartbeat",
-    queueKey: "agent:main:heartbeat",
-    pendingKey: "agent:main:heartbeat",
-    expected: handled,
-  },
-  {
-    sessionKey: "agent:main:main:heartbeat",
-    queueKey: "agent:main:main:heartbeat:heartbeat",
-    pendingKey: "agent:main:main:heartbeat:heartbeat",
-    expected: handled,
-  },
-  {
-    sessionKey: "agent:main:heartbeat",
-    queueKey: undefined,
-    pendingKey: "agent:main:heartbeat",
-    expected: handled,
-  },
-  {
-    sessionKey: "agent:main:main:heartbeat",
-    queueKey: undefined,
-    pendingKey: "agent:main:main",
-    expected: undefined,
-  },
-  { sessionKey: "agent:main", queueKey: undefined, pendingKey: undefined, expected: undefined },
-])(
-  "uses only the supplied queue or current session: $sessionKey / $queueKey",
-  async ({ sessionKey, queueKey, pendingKey, expected }) => {
-    const { beforeReply, error } = createHook();
+  ["agent:main:heartbeat", undefined, undefined, undefined],
+  ["agent:main:heartbeat:heartbeat", "agent:main:heartbeat", "agent:main:heartbeat", handled],
+  [
+    "agent:main:main:heartbeat",
+    "agent:main:main:heartbeat:heartbeat",
+    "agent:main:main:heartbeat:heartbeat",
+    handled,
+  ],
+  ["agent:main:heartbeat", undefined, "agent:main:heartbeat", handled],
+  ["agent:main:main:heartbeat", undefined, "agent:main:main", undefined],
+  ["agent:main", undefined, undefined, undefined],
+] as const)(
+  "uses only the supplied queue or current session: %s / %s",
+  async (sessionKey, queueKey, pendingKey, expected) => {
+    const beforeReply = createHook();
     if (pendingKey) {
       systemEvents.enqueueSystemEvent(MEMORY_DREAMING_SYSTEM_EVENT_TEXT, {
         sessionKey: pendingKey,
@@ -130,7 +106,7 @@ it.each([
       });
     }
     expect(
-      await beforeReply(event, {
+      await beforeReply({
         agentId: "main",
         trigger: "heartbeat",
         sessionKey,
@@ -138,16 +114,15 @@ it.each([
         workspaceDir: ".",
       }),
     ).toEqual(expected);
-    expect(error).not.toHaveBeenCalled();
   },
 );
 
 it.each(["heartbeat", "cron"])(
   "does not inspect queues when dreaming is disabled on %s",
   async (trigger) => {
-    const { beforeReply, error } = createHook(false);
+    const beforeReply = createHook(false);
     const peek = vi.spyOn(systemEvents, "peekSystemEventEntries");
-    const result = await beforeReply(event, {
+    const result = await beforeReply({
       agentId: "main",
       trigger,
       sessionKey: "agent:main:heartbeat",
@@ -158,6 +133,5 @@ it.each(["heartbeat", "cron"])(
         : undefined,
     );
     expect(peek).not.toHaveBeenCalled();
-    expect(error).not.toHaveBeenCalled();
   },
 );
