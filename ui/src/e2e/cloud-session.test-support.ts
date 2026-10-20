@@ -2,13 +2,8 @@ import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 
 type Placement = NonNullable<GatewaySessionRow["placement"]>;
 
-export function cloudSession(
-  key: string,
-  label: string,
-  now: number,
-  placement: Placement,
-): GatewaySessionRow {
-  return { key, kind: "direct", label, updatedAt: now, placement };
+export function cloudSession(key: string, label: string, now: number, placement: Placement) {
+  return { key, kind: "direct", label, updatedAt: now, placement } satisfies GatewaySessionRow;
 }
 
 export function activePlacement(

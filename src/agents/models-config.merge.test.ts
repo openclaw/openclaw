@@ -23,7 +23,10 @@ const provider = (overrides: ProviderOverrides = {}): ExistingProviderConfig => 
   ...overrides,
 });
 type Providers = Record<string, ExistingProviderConfig>;
-function mergeSecrets(nextProviders: Providers, existingProviders: Providers) {
+function mergeSecrets(
+  nextProviders: Parameters<typeof merge.mergeWithExistingProviderSecrets>[0]["nextProviders"],
+  existingProviders: Providers,
+) {
   return merge.mergeWithExistingProviderSecrets({
     nextProviders,
     existingProviders,

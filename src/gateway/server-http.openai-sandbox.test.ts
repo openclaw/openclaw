@@ -10,6 +10,7 @@ import {
   loadSessionEntryReadOnly,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -56,7 +57,7 @@ beforeAll(async () => {
     scenario: "minimal",
     prepareProfileCatalog: true,
   });
-  const ordinaryRole = {
+  const ordinaryRole: GatewayOperatorRoleDefinition = {
     agents: "*" as const,
     scopes: ["operator.read", "operator.write"],
     sessions: { others: "write" as const },

@@ -35,7 +35,7 @@ function withMissingArchiveTable(sql = "") {
   return { options, before: metadata(database) };
 }
 
-function metadata(database: DatabaseSync) {
+function metadata(database: Parameters<typeof ensureArchives>[0]) {
   return {
     version: database.prepare("PRAGMA user_version").get(),
     schema: database

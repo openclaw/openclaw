@@ -79,7 +79,7 @@ it("notifies cold readers only on admission and restricted policy transitions", 
   take().toMatchObject({ retired: true, calls: 1 });
   publish(other).toMatchObject({ retired: false, hasSnapshot: false, calls: 1 });
   publish(other, second).toMatchObject({ calls: 0 });
-  const restricted = {
+  const restricted: ModelCatalogResult = {
     ...second,
     modelSelectionPolicy: { restricted: true, defaultModel: "fixture/second" },
   };

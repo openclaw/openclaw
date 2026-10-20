@@ -160,11 +160,13 @@ export async function withDoctorConfigPreflightHome<T>(
         throw outcome.reason;
       }
       try {
-        await workers
-          .run(() =>
+        try {
+          await workers.run(() =>
             cleanupSessionStateForTest({ stateDir: path.join(home, ".openclaw"), rootPath: home }),
-          )
-          .finally(() => workers.close());
+          );
+        } finally {
+          await workers.close();
+        }
         // Rehearsals put the broker socket under this home; retire it before removal.
         const source = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
         expect(
