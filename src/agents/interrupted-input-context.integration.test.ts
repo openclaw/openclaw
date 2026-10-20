@@ -11,27 +11,18 @@ import { prepareCliTurnPromptContext } from "./cli-runner/prompt-context.js";
 import { prepareEmbeddedAttemptPromptContext } from "./embedded-agent-runner/run/attempt-prompt-build.js";
 import { createToolResultPromptProjectionState } from "./embedded-agent-runner/session-prompt-state.js";
 import { buildInterruptedInputContext } from "./interrupted-input-context.js";
-import type { BoundAgentRunSessionTarget } from "./run-session-target.types.js";
 
 const originalInput = "Repair the synthetic widget and verify its keyboard navigation.";
-function withSession(
-  sessionId: string,
-  run: (
-    target: BoundAgentRunSessionTarget,
-    database: ReturnType<typeof openOpenClawAgentDatabase>,
-  ) => Promise<void>,
-) {
-  return withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const database = openOpenClawAgentDatabase({ agentId: "main" });
-    const target = {
-      agentId: "main",
-      sessionKey: `agent:main:${sessionId}`,
-      sessionId,
-      storePath: database.path,
-    };
-    writeSessionEntry(database, target.sessionKey, { sessionId, updatedAt: 1 });
-    await run(target, database);
-  });
+function createSession(sessionId: string) {
+  const database = openOpenClawAgentDatabase({ agentId: "main" });
+  const target = {
+    agentId: "main",
+    sessionKey: `agent:main:${sessionId}`,
+    sessionId,
+    storePath: database.path,
+  };
+  writeSessionEntry(database, target.sessionKey, { sessionId, updatedAt: 1 });
+  return { target, database };
 }
 
 async function stage(
@@ -62,7 +53,10 @@ async function stage(
 }
 
 it("shows interrupted accepted input to a continuation without replaying or consuming it", async () => {
-  await withSession("interrupted-context", async ({ storePath, ...scope }) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const {
+      target: { storePath, ...scope },
+    } = createSession("interrupted-context");
     const receipt = await stage(scope, "original-request", {
       content: originalInput,
       timestamp: 100,
@@ -128,7 +122,8 @@ it("shows interrupted accepted input to a continuation without replaying or cons
 });
 
 it("bounds quoted interrupted context and excludes queued, cancelled, hidden, and replaced-session input", async () => {
-  await withSession("context-safety", async (target, database) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const { target, database } = createSession("context-safety");
     await stage(target, "oldest-visible");
     await stage(target, "old-visible");
     await stage(target, "recent-visible");

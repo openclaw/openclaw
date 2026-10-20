@@ -2,7 +2,6 @@ import { beforeEach, expect, it, vi } from "vitest";
 import type { applySessionEntryLifecycleMutation } from "../config/sessions/session-accessor.js";
 import { shouldRemoveSessionEntry } from "../config/sessions/session-accessor.sqlite-lifecycle-state.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { removeInternalSessionEffectsSession } from "./internal-session-effects.js";
 
 type LifecycleMutation = Parameters<typeof applySessionEntryLifecycleMutation>[0];
@@ -32,10 +31,7 @@ const target = {
   sessionKey: "agent:main:internal:companion-session",
   storePath: "/synthetic/companion/openclaw-agent.sqlite",
 };
-const owner = {
-  lifecycleRevision: "companion-lifecycle",
-  activeWriterRunId: "companion-writer",
-};
+const owner = { lifecycleRevision: "life", activeWriterRunId: "writer" };
 const ownedEntry = { sessionId: target.sessionId, ...owner, updatedAt: 1 };
 beforeEach(() => {
   state.entry = { ...ownedEntry };
@@ -60,29 +56,15 @@ it.each([
   ["activeWriterRunId", true],
 ] as const)("preserves changed %s (during preparation: %s)", async (field, during) => {
   const replacement = { ...ownedEntry, [field]: "replacement" };
-  const planned = createDeferredCore();
-  const resume = createDeferredCore();
   if (during) {
     state.beforeRemoval = async () => {
-      planned.resolve();
-      await resume.promise;
+      state.entry = replacement;
     };
   } else {
     state.entry = replacement;
   }
-  const cleanup = removeInternalSessionEffectsSession(target, owner);
-  try {
-    if (during) {
-      await planned.promise;
-      state.entry = replacement;
-    }
-    resume.resolve();
-    await cleanup;
-    expect(state.entry).toEqual(replacement);
-  } finally {
-    resume.resolve();
-    await cleanup;
-  }
+  await removeInternalSessionEffectsSession(target, owner);
+  expect(state.entry).toEqual(replacement);
 });
 
 it("removes the original owner after ordinary metadata changes", async () => {

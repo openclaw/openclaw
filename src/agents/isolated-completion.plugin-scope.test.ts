@@ -1,15 +1,7 @@
 import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, expect, it } from "vitest";
-import {
-  isolatedAssistant,
-  isolatedCompletionMocks as mocks,
-  isolatedRequest,
-  preparedModelRuntime,
-  registerIsolatedHarness,
-  resetIsolatedCompletionTestState,
-  runIsolatedCompletion,
-} from "./isolated-completion.test-support.js";
+import * as fixtures from "./isolated-completion.test-support.js";
 import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
 
 // Keep inference/auth synthetic; exercise the real entrypoint's registry plan and loader.
@@ -28,8 +20,9 @@ const { clearActivePluginRegistry, disposePluginRegistryInstances } =
 
 const contextEvaluation = Symbol.for("openclaw.test.isolatedContextEvaluation");
 const { resolveIsolatedCompletionRuntime } = await import("./isolated-completion-route.js");
+const mocks = fixtures.isolatedCompletionMocks;
 
-beforeEach(resetIsolatedCompletionTestState);
+beforeEach(fixtures.resetIsolatedCompletionTestState);
 afterEach(async () => {
   await clearActivePluginRegistry();
   resetPluginLoaderTestStateForTest();
@@ -51,10 +44,9 @@ function unloadedPlugin(id: string) {
 }
 
 function useHarness(text: string) {
-  registerIsolatedHarness({
-    runIsolatedCompletionV2: async () => ({
-      assistant: isolatedAssistant([{ type: "text", text }]),
-    }),
+  const assistant = fixtures.isolatedAssistant([{ type: "text", text }]);
+  fixtures.registerIsolatedHarness({
+    runIsolatedCompletionV2: async () => ({ assistant }),
   });
 }
 
@@ -108,7 +100,7 @@ it("completes without loading configured context/memory or unrelated startup plu
     expect(registry?.contextEngines.size).toBe(0);
     return {
       snapshot: {
-        ...preparedModelRuntime,
+        ...fixtures.preparedModelRuntime,
         config,
         metadataSnapshot: metadata,
         pluginRegistry: registry,
@@ -121,7 +113,9 @@ it("completes without loading configured context/memory or unrelated startup plu
     };
   });
   useHarness("Gateway log rotation");
-  await expect(runIsolatedCompletion({ ...isolatedRequest(), config })).resolves.toMatchObject({
+  await expect(
+    fixtures.runIsolatedCompletion({ ...fixtures.isolatedRequest(), config }),
+  ).resolves.toMatchObject({
     text: "Gateway log rotation",
   });
   expect(Reflect.get(globalThis, contextEvaluation)).toBeUndefined();
@@ -133,10 +127,9 @@ it("keeps isolated registry preparation distinct from an ordinary agent publicat
     ...input,
     runtimePluginPurpose: "isolated-completion",
   };
-  expect(ownerKey(input)).not.toBe(ownerKey(isolated));
-  expect(preparedModelRuntimeWorkspaceFactsKey(input)).not.toBe(
-    preparedModelRuntimeWorkspaceFactsKey(isolated),
-  );
+  for (const key of [ownerKey, preparedModelRuntimeWorkspaceFactsKey]) {
+    expect(key(input)).not.toBe(key(isolated));
+  }
   expect(hasSameLifecycleInput(input, isolated)).toBe(false);
 });
 
@@ -145,18 +138,20 @@ it.each(["cli", "harness"] as const)("reports the %s owner the run dispatches to
   mocks.resolveEmbeddedCliBackendDispatchEligibility.mockReturnValue(
     cli ? { provider: "claude-cli" } : undefined,
   );
-  mocks.runCliAgent.mockResolvedValue({ payloads: [{ text: "Utility result" }] });
+  mocks.runCliAgent.mockResolvedValue({
+    payloads: [{ text: "Utility result" }],
+  });
   useHarness("done");
   const request = cli
     ? {
-        ...isolatedRequest(),
+        ...fixtures.isolatedRequest(),
         provider: "anthropic",
         model: "claude-test",
         agentHarnessRuntimeOverride: undefined,
       }
-    : isolatedRequest();
+    : fixtures.isolatedRequest();
   const status = await resolveIsolatedCompletionRuntime(request);
-  const run = await runIsolatedCompletion(request);
+  const run = await fixtures.runIsolatedCompletion(request);
   expect(run.owner).toEqual({ kind, id: cli ? "claude-cli" : "codex" });
   expect(status).toEqual({ id: run.owner.id, kind, ...(cli ? {} : { harnessLabel: "Codex" }) });
 });
