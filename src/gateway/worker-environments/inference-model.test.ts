@@ -18,6 +18,9 @@ import {
 } from "./inference-runtime.test-support.js";
 import { prepareWorkerTurnModel } from "./worker-turn-model.js";
 
+// Capture the real implementation before setup replaces the module export with a spy.
+const prepareModelWithPolicy = prepareSimpleCompletionModel;
+
 const model: Model = {
   ...logicalModel,
   id: "operator-update-fixture",
@@ -70,7 +73,7 @@ it("forwards current required worker authority through real model preparation", 
   const reached = new Error("admitted selected-model resolver reached");
   const resolver = vi.fn(() => Promise.reject(reached));
   runtime.prepareModel.mockImplementation((input, assertCurrent) =>
-    prepareSimpleCompletionModel({ ...input, modelResolver: resolver }, assertCurrent),
+    prepareModelWithPolicy({ ...input, modelResolver: resolver }, assertCurrent),
   );
   const assertCurrent = vi.fn();
   await expect(fixture.approve({ assertCurrent })).rejects.toBe(reached);

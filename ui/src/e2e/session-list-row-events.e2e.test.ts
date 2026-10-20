@@ -22,13 +22,14 @@ suite.define(() => {
       await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
         const key = "agent:main:row-events";
         const mainKey = "agent:main:main";
+        const initialPreview = "Initial roster preview";
         const row = sessionRow(key, "Initial roster title", Date.now(), {
           agentId: "main",
           parentSessionKey: mainKey,
           childOwnerSessionKeys: [mainKey],
           boardFace: "dashboard",
           hasBoard: true,
-          lastMessagePreview: "Initial roster preview",
+          lastMessagePreview: initialPreview,
           snapshotAt: Date.now(),
         });
         const main = sessionRow(mainKey, "Main conversation", row.updatedAt - 2, {
@@ -93,7 +94,7 @@ suite.define(() => {
         const before = await gateway.getRequests("sessions.list");
         expect(before.length).toBeGreaterThan(0);
         const now = await page.evaluate(() => Date.now());
-        const patch = (title: string, at: number, preview = row.lastMessagePreview) => ({
+        const patch = (title: string, at: number, preview = initialPreview) => ({
           agentId: "main",
           sessionKey: key,
           reason: "patch",

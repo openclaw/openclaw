@@ -54,7 +54,7 @@ async function createFixture(
     openStore,
   });
   return Object.assign(scope, {
-    async run(overrides: Partial<AgentHarnessAttemptParamsV2> = {}) {
+    run: async (overrides: Partial<AgentHarnessAttemptParamsV2> = {}) => {
       const result = await scope.harness.runAttempt({ ...params, ...overrides });
       expect(result).toMatchObject({ terminal: { kind: "ok" } });
       return result;

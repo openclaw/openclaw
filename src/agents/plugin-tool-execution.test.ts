@@ -179,6 +179,15 @@ it.each(["/guest/repo/skills", "/guest/repo/skills/autoreview/scripts"])(
   },
 );
 
+it("rejects a writable workspace alias while preserving a read-only alias", () => {
+  const fixture = sandboxFixture();
+  const source = fixture.sandbox.workspaceDir;
+  fixture.sandbox.docker.binds = [`${source}:/alias:rw`];
+  expect(fixture.installedRoots()).toEqual({});
+  fixture.sandbox.docker.binds = [`${source}:/alias:ro`];
+  expect(fixture.installedRoots()).toEqual({ autoreview: "/guest/repo/skills/autoreview" });
+});
+
 it.each([
   { kind: "retired", error: "retired" },
   { kind: "cancelled", error: "signal" },

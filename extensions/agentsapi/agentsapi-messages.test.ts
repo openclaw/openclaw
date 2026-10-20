@@ -84,7 +84,7 @@ it("replaces matching canonical usage while retaining omitted turns without coun
   ] as const) {
     await projection.observe({
       type: "agent.session.turn.completed",
-      turn: createTurn({ id, usage }),
+      turn: { id, subagent_id: null, usage },
     });
   }
   const canonicalTurn = createTurn({ id: "turn-a", usage: makeUsage(120, 30, 6, 2) });

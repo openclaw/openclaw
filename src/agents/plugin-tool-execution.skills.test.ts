@@ -94,7 +94,7 @@ it.each(
         createFileExclusive: vi.fn(),
         stat: vi.fn(),
       },
-      loadSkills: readWorkspaceSkillSources,
+      loadSkills: async (request) => readWorkspaceSkillSources(request),
     });
     const authority = createAdmittedRunOperatorAuthority({
       profileId: "caller",
