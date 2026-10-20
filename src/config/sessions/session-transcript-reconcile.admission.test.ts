@@ -1,8 +1,7 @@
 import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as sqlite from "../../infra/node-sqlite.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
@@ -32,12 +31,12 @@ vi.mock("node:worker_threads", async () =>
 );
 
 const observer = useReconcileWorkerObserver();
-const roots: string[] = [];
+const roots = createTempDirTracker();
 const realOpen = sqlite.openNodeSqliteDatabase;
 
 afterEach(async () => {
   vi.restoreAllMocks();
-  for (const root of roots) {
+  for (const root of roots.dirs) {
     await waitForSessionTranscriptIndexReconcilesInStateDir(root);
   }
   await closeOpenClawAgentDatabasesAsync();
@@ -45,15 +44,12 @@ afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
   clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
-  for (const root of roots.splice(0)) {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
+  roots.cleanup();
   clearRuntimeConfigSnapshot();
 });
 
 async function fixture() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "reconcile-admission-"));
-  roots.push(root);
+  const root = roots.make("reconcile-admission-");
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   setRuntimeConfigSnapshot({});
   const { options, scope } = fixtures.reconcileScope(root, "cold");
@@ -119,8 +115,7 @@ it.each(["direct", "deferred"] as const)(
   "retains the operation environment before %s admission",
   async (mode) => {
     const { options } = await fixture();
-    const nextRoot = fs.mkdtempSync(path.join(os.tmpdir(), "reconcile-next-owner-"));
-    roots.push(nextRoot);
+    const nextRoot = roots.make("reconcile-next-owner-");
     const original = { ...options, env: { ...options.env } };
     const inputs: SessionTranscriptReconcileWorkerInput[] = [];
     observer.onTask = ({ input }) => inputs.push(input);

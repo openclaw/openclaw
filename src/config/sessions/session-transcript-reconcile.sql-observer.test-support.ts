@@ -28,8 +28,7 @@ export function observeReconcileHostSqlite(paths: { data: string[] }) {
     if (!location || location === ":memory:" || location.startsWith("file:")) {
       return "unknown";
     }
-    const resolved = path.resolve(location);
-    return paths.data.includes(resolved) ? "data" : "unknown";
+    return paths.data.includes(path.resolve(location)) ? "data" : "unknown";
   };
   const record = (method: Boundary, database?: DatabaseSync, sql?: string, opening?: string) => {
     let location = opening ?? (database && locations.get(database));
@@ -56,26 +55,19 @@ export function observeReconcileHostSqlite(paths: { data: string[] }) {
       },
     }),
   });
-  // oxlint-disable-next-line typescript/unbound-method -- The proxy supplies the intercepted database receiver.
-  const originalPrepare = NativeDatabase.prototype.prepare;
   const spies = [
-    vi.spyOn(NativeDatabase.prototype, "prepare").mockImplementation(
-      new Proxy(originalPrepare, {
-        apply(target, database: DatabaseSync, args: [string]) {
-          record("prepare", database, args[0]);
-          const statement = Reflect.apply(target, database, args) as StatementSync;
-          statements.set(statement, database);
-          return statement;
-        },
-      }),
-    ),
-    ...(["exec", "close"] as const).map((method) => {
+    ...(["prepare", "exec", "close"] as const).map((method) => {
+      // oxlint-disable-next-line typescript/unbound-method -- The proxy supplies the intercepted database receiver.
       const original = NativeDatabase.prototype[method];
       return vi.spyOn(NativeDatabase.prototype, method).mockImplementation(
         new Proxy(original, {
           apply(target, database: DatabaseSync, args) {
             record(method, database, typeof args[0] === "string" ? args[0] : undefined);
-            return Reflect.apply(target, database, args);
+            const result = Reflect.apply(target, database, args);
+            if (method === "prepare") {
+              statements.set(result as StatementSync, database);
+            }
+            return result;
           },
         }),
       );
