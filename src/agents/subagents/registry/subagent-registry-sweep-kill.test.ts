@@ -15,6 +15,7 @@ import {
 import { prepareSubagentKillSession } from "./subagent-control-session.js";
 import { reconcileDurableSubagentKillIntent } from "./subagent-registry-sweep-kill.js";
 import {
+  createSubagentSweeperController,
   mockSubagentSweeperChildLookup,
   createSubagentSweeperRun,
 } from "./subagent-registry-sweeper.test-support.js";
@@ -75,20 +76,20 @@ it("bounds durable kill reconciliation when an accepted live source never settle
   const completeSubagentRunWithRecovery = vi.fn(async () => {});
   const warn = vi.fn();
   const result = vi.fn();
+  const controller = createSubagentSweeperController(runs, { retireSupersededRun: vi.fn(), warn });
   const reconciliation = reconcileDurableSubagentKillIntent({
     runId: entry.runId,
     entry,
-    runs,
+    controller,
     getRunsForChildSession: childLookup,
     completeSubagentRunWithRecovery,
-    retireSupersededRun: vi.fn(),
     retireObligations: vi.fn(async () => {}),
-    warn,
   }).then(result);
   onTestFinished(async () => {
     releaseSessionControllerClaim(claim);
     retireSessionControllerInput(source);
     await Promise.all([source.settlement.promise, reconciliation]);
+    controller.clearRuntimeState();
     childLookup.mockRestore();
   });
 

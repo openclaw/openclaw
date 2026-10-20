@@ -14,6 +14,8 @@ import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
+import { createSubagentRegistryCompletionRuntime } from "../registry/subagent-registry-completion-runtime.js";
+import { createSubagentRegistryContextCleanup } from "../registry/subagent-registry-context-cleanup.js";
 import { SubagentLifecycleController } from "../registry/subagent-registry-lifecycle.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { mutateSubagentRuns } from "../registry/subagent-registry-persistence.js";
@@ -142,36 +144,32 @@ export function requesterWakeDriver(inputs: ReturnType<typeof records>[]) {
     warn,
     [Symbol.dispose]: () => controller.clearRuntimeState(),
     async sweep() {
-      const sweeper = createSubagentRegistrySweeper({
+      const contextCleanup = createSubagentRegistryContextCleanup({
+        isEndedHookOwnerCurrent: () => true,
+      });
+      vi.spyOn(contextCleanup, "cleanupCollectorLaunchResources").mockResolvedValue(true);
+      vi.spyOn(contextCleanup, "runContextEngineSubagentEnded").mockResolvedValue(undefined);
+      const completion = createSubagentRegistryCompletionRuntime({
         runs: subagentRuns,
-        resumedRuns: new Set(),
-        clearPendingLifecycleError: vi.fn(),
-        clearPendingLifecycleTimeout: vi.fn(),
-        sweepPendingLifecycle: vi.fn(),
-        completeSubagentRunWithRecovery: vi.fn(),
+        resumed: controller.options.resumedRuns,
+        retryTimers: new Set(),
+        completeSubagentRun: vi.fn(),
+        scheduleSweep: vi.fn(),
+        resumeRun: vi.fn(),
+      });
+      vi.spyOn(completion, "completeSubagentRunWithRecovery").mockResolvedValue(undefined);
+      vi.spyOn(completion, "finalizeInterruptedSubagentRun").mockResolvedValue(0);
+      vi.spyOn(completion.pendingLifecycle, "clearTimeout").mockImplementation(vi.fn());
+      vi.spyOn(completion.pendingLifecycle, "sweepExpired").mockImplementation(vi.fn());
+      const sweeper = createSubagentRegistrySweeper({
+        controller,
+        contextCleanup,
+        completion,
         getGatewayRecoveryRuntime: () => undefined,
-        finalizeInterruptedSubagentRun: vi.fn(async () => 0),
-        startSubagentAnnounceCleanupFlow: controller.startSubagentAnnounceCleanupFlow,
-        completeCleanupBookkeeping: controller.completeCleanupBookkeeping,
-        resumeRequesterSettleWake: controller.resumeRequesterSettleWake,
-        resumePendingRequesterSettlements: controller.resumePendingRequesterSettlements,
-        isCleanupOwnerCurrent: controller.isCleanupOwnerCurrent,
-        isTerminalTailActive: controller.isTerminalTailActive,
-        sessionEffectsHostCurrent: (entry) => controller.sessionEffectsHostCurrent(entry),
-        shouldSuppressSessionEffects: (entry, effects) =>
-          controller.shouldSuppressSessionEffects(entry, effects),
         discardTerminalDelivery: SubagentLifecycleController.discardTerminalDelivery,
-        shouldEmitEndedHookForRun: () => false,
-        emitSubagentEndedHookForRun: vi.fn(async () => {}),
-        callGateway: vi.fn(),
-        cleanupCollectorLaunchResources: vi.fn(async () => true),
-        runContextEngineSubagentEnded: vi.fn(async () => {}),
-        notifyContextEngineSubagentEnded: vi.fn(async () => {}),
-        retireSupersededRun: vi.fn(async () => {}),
         retireObligations: vi.fn(async () => {}),
         getRunsForChildSession: () => [],
         getRunsForCollectorGroup: () => [],
-        warn,
       });
       const settleRootWork = observeRootWork();
       try {
@@ -179,6 +177,8 @@ export function requesterWakeDriver(inputs: ReturnType<typeof records>[]) {
       } finally {
         await settleRootWork();
         await sweeper.reset();
+        completion.pendingLifecycle.clearAll();
+        contextCleanup.reset();
       }
     },
     async run(entry = inputs[0]!.subagent) {

@@ -32,6 +32,7 @@ import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
+import type { SubagentLifecycleCleanupContext } from "./subagent-registry-lifecycle-context.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { getLatestSubagentRunForChild } from "./subagent-registry-queries.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
@@ -63,25 +64,23 @@ function findNextSubagentRunCreatedAt(
 export async function reconcileDurableSubagentKillIntent(params: {
   runId: string;
   entry: SubagentRunRecord;
-  runs: Map<string, SubagentRunRecord>;
-  getRunsForChildSession: (
-    childSessionKey: string,
-    childAgentId?: string,
-  ) => Iterable<SubagentRunRecord>;
+  controller: SubagentLifecycleCleanupContext;
   completeSubagentRunWithRecovery: (
     completion: SubagentCompletionRequest,
     source: string,
   ) => Promise<void>;
-  retireSupersededRun: (runId: string, entry: SubagentRunRecord) => Promise<void>;
+  getRunsForChildSession: (
+    childSessionKey: string,
+    childAgentId?: string,
+  ) => Iterable<SubagentRunRecord>;
   retireObligations: (entry: SubagentRunRecord) => Promise<void>;
-  warn: (message: string, meta?: Record<string, unknown>) => void;
 }): Promise<boolean> {
   const killIntent = params.entry.killIntent;
   const authority = resolveSubagentChildAuthority(params.entry);
   if (!killIntent || authority.status === "mismatch") {
     return false;
   }
-  if (!isSameSubagentRunOwner(params.runs.get(params.runId), params.entry)) {
+  if (!isSameSubagentRunOwner(params.controller.options.runs.get(params.runId), params.entry)) {
     return false;
   }
   const childRuns = () =>
@@ -89,10 +88,10 @@ export async function reconcileDurableSubagentKillIntent(params: {
   const latest = getLatestSubagentRunForChild(childRuns(), params.entry);
   if (!isSameSubagentRunOwner(latest, params.entry)) {
     try {
-      await params.retireSupersededRun(params.runId, params.entry);
+      await params.controller.options.retireSupersededRun(params.runId, params.entry);
       return true;
     } catch (error) {
-      params.warn("failed to retire superseded durable kill intent", {
+      params.controller.options.warn("failed to retire superseded durable kill intent", {
         error,
         runId: params.runId,
         childSessionKey: params.entry.childSessionKey,
@@ -101,8 +100,11 @@ export async function reconcileDurableSubagentKillIntent(params: {
     }
   }
   const ownsCurrentGeneration = () =>
-    isSameSubagentRunOwner(params.runs.get(params.runId), params.entry) &&
-    matchesSubagentKillIntent(params.runs.get(params.runId)?.killIntent, killIntent) &&
+    isSameSubagentRunOwner(params.controller.options.runs.get(params.runId), params.entry) &&
+    matchesSubagentKillIntent(
+      params.controller.options.runs.get(params.runId)?.killIntent,
+      killIntent,
+    ) &&
     killIntent.lifecycleGeneration !== undefined &&
     isAgentEventLifecycleGenerationCurrent(killIntent.lifecycleGeneration) &&
     isSameSubagentRunOwner(getLatestSubagentRunForChild(childRuns(), params.entry), params.entry);
@@ -139,7 +141,7 @@ export async function reconcileDurableSubagentKillIntent(params: {
       },
       retired ? "sweeper-retired-kill-intent" : "sweeper-pending-kill-intent",
     );
-    const killed = params.runs.get(params.runId);
+    const killed = params.controller.options.runs.get(params.runId);
     if (killed && isSameSubagentRunOwner(killed, params.entry)) {
       await params.retireObligations(killed);
     }
@@ -253,7 +255,7 @@ export async function reconcileDurableSubagentKillIntent(params: {
       },
     });
   } catch (error) {
-    params.warn("failed to finish durable subagent kill intent", {
+    params.controller.options.warn("failed to finish durable subagent kill intent", {
       error,
       runId: params.runId,
       childSessionKey: params.entry.childSessionKey,
@@ -268,19 +270,16 @@ type ProvisionalSubagentKillParams = {
   runId: string;
   entry: SubagentRunRecord;
   now: number;
-  runs: Map<string, SubagentRunRecord>;
+  controller: SubagentLifecycleCleanupContext;
   completeSubagentRunWithRecovery: (
     completion: SubagentCompletionRequest,
     source: string,
   ) => Promise<void>;
-  retireSupersededRun: (runId: string, entry: SubagentRunRecord) => Promise<void>;
-  retireObligations: (entry: SubagentRunRecord) => Promise<void>;
-  startSubagentAnnounceCleanupFlow: (entry: SubagentRunRecord) => boolean;
   getRunsForChildSession: (
     childSessionKey: string,
     childAgentId?: string,
   ) => Iterable<SubagentRunRecord>;
-  warn: (message: string, meta?: Record<string, unknown>) => void;
+  retireObligations: (entry: SubagentRunRecord) => Promise<void>;
 };
 
 // Runs with a kill confirmation in flight, and whether another confirmation arrived meanwhile.
@@ -319,7 +318,7 @@ export async function reconcileProvisionalSubagentKill(
       // A request that arrived meanwhile may follow a change this pass already read past,
       // such as its cohort's release, so it supersedes this pass's outcome. Re-evaluate the
       // run's current kill, if one remains.
-      const current = params.runs.get(params.runId);
+      const current = params.controller.options.runs.get(params.runId);
       if (!confirmation.requested || !current?.killReconciliation) {
         if ("error" in pass) {
           throw pass.error;
@@ -338,7 +337,8 @@ export async function reconcileProvisionalSubagentKill(
 async function confirmProvisionalSubagentKill(
   params: ProvisionalSubagentKillParams,
 ): Promise<boolean> {
-  const { entry, now, runId, runs } = params;
+  const { entry, now, runId } = params;
+  const { runs } = params.controller.options;
   const killReconciliation = entry.killReconciliation;
   const authority = resolveSubagentChildAuthority(entry);
   if (!killReconciliation || authority.status === "mismatch") {
@@ -434,7 +434,7 @@ async function confirmProvisionalSubagentKill(
       isSameSubagentRunOwner(runs.get(runId), entry) &&
       runs.get(runId)?.endedReason !== SUBAGENT_ENDED_REASON_KILLED
     ) {
-      await params.retireSupersededRun(runId, entry);
+      await params.controller.options.retireSupersededRun(runId, entry);
       return true;
     }
     if (
@@ -450,7 +450,7 @@ async function confirmProvisionalSubagentKill(
   }
 
   if (findNextRunCreatedAt() !== undefined) {
-    await params.retireSupersededRun(runId, entry);
+    await params.controller.options.retireSupersededRun(runId, entry);
     return true;
   }
   // The kill stands. Retire its obligations unless its kill owner already did; retiring
@@ -497,5 +497,5 @@ async function confirmProvisionalSubagentKill(
   if (!published) {
     return false;
   }
-  return !params.startSubagentAnnounceCleanupFlow(published);
+  return !params.controller.startSubagentAnnounceCleanupFlow(published);
 }
