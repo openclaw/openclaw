@@ -73,7 +73,7 @@ export async function runPublicSettleRecoveryCase(
     getKernel,
     requesterSessionKey,
     requesterSessionId,
-    requesterScope,
+    requesterScope: scope,
     sequence,
     installChild,
     persistChild,
@@ -117,7 +117,6 @@ export async function runPublicSettleRecoveryCase(
   const resumed = createDeferred();
   const resumedRelease = createDeferred();
   let recoveryRunId: string | undefined;
-  const scope = requesterScope;
   const runId = buildAnnounceIdempotencyKey(
     `requester-settle:main:${requesterSessionKey}:${batchRunIds.join(",")}:yield-1`,
   );
@@ -125,6 +124,54 @@ export async function runPublicSettleRecoveryCase(
     interruptedRelease.resolve();
     resumedRelease.resolve();
   };
+  const recover = () =>
+    recoverRestartAbortedMainSessions({
+      cfg: getRuntimeConfig(),
+      stateDir: process.env.OPENCLAW_STATE_DIR!,
+      gatewayRuntime: kernel.gatewayInstanceRuntime.recovery,
+    });
+  const transcript = () => loadTranscriptEventsSync(scope);
+  const assertNoReplay = async () => {
+    const replay = wake(sibling);
+    expect(await replay.result).toBe(false);
+    expect(replay.completeBatch).not.toHaveBeenCalled();
+    expect(agentCommandMock).toHaveBeenCalledTimes(2);
+  };
+  const assertRecoveryIdle = async (
+    before: ReturnType<typeof transcript>,
+    commandCount: number,
+  ) => {
+    await expect(recover()).resolves.toEqual({ started: 0, settled: 0, failed: 0, skipped: 0 });
+    expect(transcript()).toEqual(before);
+    expect(agentCommandMock).toHaveBeenCalledTimes(commandCount);
+  };
+  const assertSettled = (status: "done" | "interrupted") => {
+    const settled = loadSessionEntryReadOnly(scope);
+    expect(settled).toMatchObject({
+      status,
+      abortedLastRun: false,
+      restartRecoveryTerminalRunIds: expect.arrayContaining([runId]),
+    });
+    expect(settled?.mainRestartRecovery).toBeUndefined();
+    expect(settled?.restartRecoveryRuns).toBeUndefined();
+    return settled;
+  };
+  const publishTerminal = (
+    command: AgentCommandOpts,
+    evidence: Parameters<typeof buildRestartRecoveryTerminalDeliveryEvidence>[0],
+    clearRecovery = false,
+  ) =>
+    updateSessionEntry(scope, (entry) => ({
+      ...buildRestartRecoveryClaimCleanupPatch({
+        entry,
+        recordTerminalSource: true,
+        terminalRunId: command.runId,
+        terminalDeliveryEvidence: buildRestartRecoveryTerminalDeliveryEvidence(evidence),
+      }),
+      ...(clearRecovery ? buildMainSessionRecoveryClearPatch(entry) : {}),
+      status: "done",
+      endedAt: Date.now(),
+    }));
   signal.addEventListener("abort", release, { once: true });
   if (reply === "unconsumed revoked cohort") {
     await appendTranscriptMessage(scope, {
@@ -321,9 +368,9 @@ export async function runPublicSettleRecoveryCase(
       expect(await readMainSessionRecoveryCheckpoint(scope)).toMatchObject({
         source: "external_user",
       });
-      const transcript = JSON.stringify(loadTranscriptEventsSync(scope));
-      expect(transcript).toContain(humanWork);
-      expect(transcript).not.toContain(settleRequest);
+      const contents = JSON.stringify(transcript());
+      expect(contents).toContain(humanWork);
+      expect(contents).not.toContain(settleRequest);
     }
     agentCommandMock.mockImplementationOnce(async (input) => {
       const command = input as AgentCommandOpts;
@@ -347,7 +394,7 @@ export async function runPublicSettleRecoveryCase(
         });
         expect(command.message).not.toContain(settleRequest);
       }
-      expect(JSON.stringify(loadTranscriptEventsSync(scope))).toContain(
+      expect(JSON.stringify(transcript())).toContain(
         "Changes verified; the requested landing remains.",
       );
       await markCommandExecutionStarted(command);
@@ -360,50 +407,21 @@ export async function runPublicSettleRecoveryCase(
           };
       // The controlled command uses the same durable final projection and
       // claim cleanup as real command finalization; Gateway admission stays real.
-      await updateSessionEntry(scope, (entry) => ({
-        ...buildRestartRecoveryClaimCleanupPatch({
-          entry,
-          recordTerminalSource: true,
-          terminalRunId: command.runId,
-          terminalDeliveryEvidence: buildRestartRecoveryTerminalDeliveryEvidence(rawEvidence),
-        }),
-        ...buildMainSessionRecoveryClearPatch(entry),
-        status: "done",
-        endedAt: Date.now(),
-      }));
+      await publishTerminal(command, rawEvidence, true);
       return visibleFinal ? finalResult() : { payloads: [], meta: { durationMs: 1 } };
     });
-    recovery = recoverRestartAbortedMainSessions({
-      cfg: getRuntimeConfig(),
-      stateDir: process.env.OPENCLAW_STATE_DIR!,
-      gatewayRuntime: kernel.gatewayInstanceRuntime.recovery,
-    });
+    recovery = recover();
     if (reply === "missing original authority") {
       await expect(recovery).resolves.toMatchObject({ started: 0, settled: 1, failed: 0 });
       expect(agentCommandMock).toHaveBeenCalledTimes(1);
-      const settled = loadSessionEntryReadOnly(scope);
-      expect(settled).toMatchObject({
-        sessionId: requesterSessionId,
-        status: "interrupted",
-        abortedLastRun: false,
-        restartRecoveryTerminalRunIds: expect.arrayContaining([runId]),
-      });
-      expect(settled?.mainRestartRecovery).toBeUndefined();
-      expect(settled?.restartRecoveryRuns).toBeUndefined();
+      const settled = assertSettled("interrupted");
+      expect(settled?.sessionId).toBe(requesterSessionId);
       expect(settled?.restartRecoveryDeliverySourceRunId).toBeUndefined();
-      const transcript = loadTranscriptEventsSync(scope);
-      expect(transcript.at(-1)).toMatchObject({
+      const events = transcript();
+      expect(events.at(-1)).toMatchObject({
         message: { idempotencyKey: `main-session-restart-recovery:${runId}:interrupted` },
       });
-      await expect(
-        recoverRestartAbortedMainSessions({
-          cfg: getRuntimeConfig(),
-          stateDir: process.env.OPENCLAW_STATE_DIR!,
-          gatewayRuntime: kernel.gatewayInstanceRuntime.recovery,
-        }),
-      ).resolves.toEqual({ started: 0, settled: 0, failed: 0, skipped: 0 });
-      expect(loadTranscriptEventsSync(scope)).toEqual(transcript);
-      expect(agentCommandMock).toHaveBeenCalledTimes(1);
+      await assertRecoveryIdle(events, 1);
       return;
     }
     await Promise.race([
@@ -411,10 +429,7 @@ export async function runPublicSettleRecoveryCase(
       recovery.then((result) => expect(result).toMatchObject({ started: 1, failed: 0 })),
     ]);
     expect(agentCommandMock).toHaveBeenCalledTimes(2);
-    const pendingReplay = wake(sibling);
-    expect(await pendingReplay.result).toBe(false);
-    expect(pendingReplay.completeBatch).not.toHaveBeenCalled();
-    expect(agentCommandMock).toHaveBeenCalledTimes(2);
+    await assertNoReplay();
     // Let the real recovery owner settle its startup admission before the
     // controlled command publishes its synthetic terminal claim cleanup.
     await expect(recovery).resolves.toMatchObject({ started: 1, failed: 0 });
@@ -428,34 +443,17 @@ export async function runPublicSettleRecoveryCase(
     ).resolves.toMatchObject({ status: "ok" });
     if (reply === "unconsumed revoked cohort") {
       // The retained human work may recover; the withdrawn completion input may not.
-      const completedReplay = wake(sibling);
-      expect(await completedReplay.result).toBe(false);
-      expect(completedReplay.completeBatch).not.toHaveBeenCalled();
+      await assertNoReplay();
       const persisted = loadSubagentRegistryFromSqlite();
       for (const entry of [child, sibling]) {
         expect(entry.requesterSettleWake).toBeUndefined();
         expect(persisted.get(entry.runId)?.requesterSettleWake).toBeUndefined();
       }
-      const settled = loadSessionEntryReadOnly(scope);
-      expect(settled).toMatchObject({
-        status: "done",
-        abortedLastRun: false,
-        restartRecoveryTerminalRunIds: expect.arrayContaining([runId]),
-      });
-      expect(settled?.mainRestartRecovery).toBeUndefined();
-      expect(settled?.restartRecoveryRuns).toBeUndefined();
-      const transcript = loadTranscriptEventsSync(scope);
-      expect(JSON.stringify(transcript)).toContain(humanWork);
-      expect(JSON.stringify(transcript)).not.toContain(settleRequest);
-      await expect(
-        recoverRestartAbortedMainSessions({
-          cfg: getRuntimeConfig(),
-          stateDir: process.env.OPENCLAW_STATE_DIR!,
-          gatewayRuntime: kernel.gatewayInstanceRuntime.recovery,
-        }),
-      ).resolves.toEqual({ started: 0, settled: 0, failed: 0, skipped: 0 });
-      expect(loadTranscriptEventsSync(scope)).toEqual(transcript);
-      expect(agentCommandMock).toHaveBeenCalledTimes(2);
+      assertSettled("done");
+      const events = transcript();
+      expect(JSON.stringify(events)).toContain(humanWork);
+      expect(JSON.stringify(events)).not.toContain(settleRequest);
+      await assertRecoveryIdle(events, 2);
       return;
     }
     expect(child.requesterSettleWake?.nextAttemptAt).toBeUndefined();
@@ -491,10 +489,7 @@ export async function runPublicSettleRecoveryCase(
       vi.setSystemTime(
         expectDefined(persisted?.requesterSettleWake?.nextAttemptAt, "Public retry deadline") - 1,
       );
-      const early = wake(sibling);
-      expect(await early.result).toBe(false);
-      expect(early.completeBatch).not.toHaveBeenCalled();
-      expect(agentCommandMock).toHaveBeenCalledTimes(2);
+      await assertNoReplay();
       expect(
         loadSessionEntryReadOnly(scope)?.restartRecoveryTerminalDeliveryEvidence?.find(
           (evidence) => evidence.runId === runId,
@@ -524,18 +519,7 @@ export async function runPublicSettleRecoveryCase(
           await command.userTurnTranscriptRecorder!.persistApproved();
           await markCommandExecutionStarted(command);
           const result = { payloads: [], meta: { durationMs: 1 } };
-          await updateSessionEntry(scope, (entry) => ({
-            ...buildRestartRecoveryClaimCleanupPatch({
-              entry,
-              recordTerminalSource: true,
-              terminalRunId: command.runId,
-              terminalDeliveryEvidence: buildRestartRecoveryTerminalDeliveryEvidence({
-                payloads: result.payloads,
-              }),
-            }),
-            status: "done",
-            endedAt: Date.now(),
-          }));
+          await publishTerminal(command, { payloads: result.payloads });
           return result;
         });
         const retry = wake(sibling);

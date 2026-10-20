@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import type { agentCommand } from "../agents/agent-command.js";
 import { createAgentHarnessCompletionScope } from "../agents/agent-harness-completion-scope.js";
 import { buildAnnounceIdempotencyKey } from "../agents/announce-idempotency.js";
 import type { AgentCommandOpts } from "../agents/command/types.js";
@@ -54,6 +55,23 @@ import {
 } from "./test-helpers.js";
 
 type OwnerChange = "live" | "operator-revoked" | "requester-replaced";
+
+async function receiveCompletion(command: AgentCommandOpts): ReturnType<typeof agentCommand> {
+  const recorder = expectDefined(
+    command.userTurnTranscriptRecorder,
+    "Expected completion recorder",
+  );
+  expect(await recorder.persistApproved()).toMatchObject({ appended: true });
+  return {
+    payloads: [{ text: "Child received", mediaUrl: null }],
+    meta: {
+      durationMs: 1,
+      terminalReply: { disposition: "visible", text: "Child received" },
+    },
+  };
+}
+
+const createGate = () => ({ entered: createDeferred(), resume: createDeferred() });
 
 async function createCompletion(context: GatewayRequestContext) {
   const id = randomUUID();
@@ -121,6 +139,8 @@ async function createCompletion(context: GatewayRequestContext) {
     return {
       sessionScope,
       idempotencyKey,
+      transcript: () => sessionAccessor.loadTranscriptEventsSync(sessionScope),
+      pendingTotal: async () => (await listSessionPendingInputs(sessionScope)).total,
       async changeOwner(change: OwnerChange) {
         if (change === "operator-revoked") {
           revoked.abort(new Error("operator completion authority revoked"));
@@ -192,7 +212,6 @@ describe("native completion final-effect authority", () => {
       await prepareGatewayReplyRuntimeForTest();
       const context = kernel.gatewayRequestContext;
       const pair = await createRegisteredCompletionPair(context);
-      const createGate = () => ({ entered: createDeferred(), resume: createDeferred() });
       const gates = [createGate(), createGate()] as const;
       const sources: unknown[] = [];
       const attempts: string[] = [];
@@ -238,18 +257,7 @@ describe("native completion final-effect authority", () => {
             command.runtimeContextFragments,
           ),
         );
-        const recorder = expectDefined(
-          command.userTurnTranscriptRecorder,
-          "Expected real registered completion input recorder",
-        );
-        expect(await recorder.persistApproved()).toMatchObject({ appended: true });
-        return {
-          payloads: [{ text: "Child received", mediaUrl: null }],
-          meta: {
-            durationMs: 1,
-            terminalReply: { disposition: "visible", text: "Child received" },
-          },
-        };
+        return receiveCompletion(command);
       });
       try {
         await pair.complete(0);
@@ -322,9 +330,8 @@ describe("native completion final-effect authority", () => {
       await prepareGatewayReplyRuntimeForTest();
       const context = kernel.gatewayRequestContext;
       using completion = await createCompletion(context);
-      const before = sessionAccessor.loadTranscriptEventsSync(completion.sessionScope);
-      const entered = createDeferred();
-      const resume = createDeferred();
+      const before = completion.transcript();
+      const { entered, resume } = createGate();
       const release = () => resume.resolve();
       signal.addEventListener("abort", release, { once: true });
       const executionModule = await import("./agent-turn/agent-run-execution-phase.js");
@@ -347,19 +354,7 @@ describe("native completion final-effect authority", () => {
         });
       agentCommandMock.mockImplementation(async (input) => {
         // SAFETY: The real Gateway dispatcher supplies AgentCommandOpts at this boundary.
-        const command = input as AgentCommandOpts;
-        const recorder = expectDefined(
-          command.userTurnTranscriptRecorder,
-          "Expected real native completion input recorder",
-        );
-        expect(await recorder.persistApproved()).toMatchObject({ appended: true });
-        return {
-          payloads: [{ text: "Child received", mediaUrl: null }],
-          meta: {
-            durationMs: 1,
-            terminalReply: { disposition: "visible", text: "Child received" },
-          },
-        };
+        return receiveCompletion(input as AgentCommandOpts);
       });
       expect(context.dedupe.has(`agent:${completion.idempotencyKey}`)).toBe(false);
       const delivery = completion.deliver();
@@ -373,8 +368,8 @@ describe("native completion final-effect authority", () => {
         expect(result.delivered).toBe(false);
         expect(execution).not.toHaveBeenCalled();
         expect(agentCommandMock).not.toHaveBeenCalled();
-        expect((await listSessionPendingInputs(completion.sessionScope)).total).toBe(0);
-        expect(sessionAccessor.loadTranscriptEventsSync(completion.sessionScope)).toEqual(before);
+        expect(await completion.pendingTotal()).toBe(0);
+        expect(completion.transcript()).toEqual(before);
         expect(context.dedupe.get(`agent:${completion.idempotencyKey}`)).toBeUndefined();
       } finally {
         release();
@@ -399,10 +394,8 @@ describe("native completion final-effect authority", () => {
       // importActual can share this namespace; capture the function before spyOn replaces it.
       const isSessionRunActive = actualRuns.isSessionRunActive;
       vi.spyOn(sessionQueries, "isSessionRunActive").mockImplementation(isSessionRunActive);
-      const entered = createDeferred();
-      const resume = createDeferred();
-      const compacting = createDeferred();
-      const resumeCompaction = createDeferred();
+      const { entered, resume } = createGate();
+      const { entered: compacting, resume: resumeCompaction } = createGate();
       const modelEntered = createDeferred();
       const queued = createDeferred();
       let finishModel: (() => void) | undefined;
@@ -416,50 +409,32 @@ describe("native completion final-effect authority", () => {
       signal.addEventListener("abort", release, { once: true });
       const sessionManager = SessionManager.open(completion.sessionScope);
       guardSessionManager(sessionManager);
-      await appendHistory(
-        sessionManager,
-        createAssistant(testModel, [{ type: "text", text: "Previous result" }]),
-      );
-      await appendHistory(
-        sessionManager,
-        createAssistant(testModel, [{ type: "text", text: "Latest result" }]),
-      );
+      for (const text of ["Previous result", "Latest result"]) {
+        await appendHistory(sessionManager, createAssistant(testModel, text));
+      }
+      const beforeCompact = async () => {
+        compacting.resolve();
+        await resumeCompaction.promise;
+        // Keep automatic compaction pending while completion authority changes.
+        return { cancel: true };
+      };
       const { session } = await createTestSession({
         sessionManager,
         settingsManager: createAutoCompactionSettings(),
         resourceLoader: createResourceLoader(
-          new Map([
-            [
-              "session_before_compact",
-              [
-                async () => {
-                  compacting.resolve();
-                  await resumeCompaction.promise;
-                  // Keep the prompt in automatic compaction while completion authority changes.
-                  return { cancel: true };
-                },
-              ],
-            ],
-          ]),
+          new Map([["session_before_compact", [beforeCompact]]]),
         ),
       });
       streamMocks.streamSimple.mockImplementation(() => {
         if (finishModel || closing) {
-          return createAssistantResultStream(
-            createAssistant(testModel, [{ type: "text", text: "Child received" }]),
-          );
+          return createAssistantResultStream(createAssistant(testModel, "Child received"));
         }
         const stream = createAssistantMessageEventStream();
         finishModel = () => {
           stream.push({
             type: "done",
             reason: "stop",
-            message: createAssistant(
-              testModel,
-              [{ type: "text", text: "Ready" }],
-              "stop",
-              testModel.contextWindow,
-            ),
+            message: createAssistant(testModel, "Ready", "stop", testModel.contextWindow),
           });
           stream.end();
         };
@@ -515,7 +490,7 @@ describe("native completion final-effect authority", () => {
             finishModel?.();
             await reachBoundary(compacting.promise, prompt);
             expect(prepared.subscription.isCompacting()).toBe(true);
-            const before = sessionAccessor.loadTranscriptEventsSync(completion.sessionScope);
+            const before = completion.transcript();
             delivery = completion.deliver();
             await reachBoundary(entered.promise, delivery);
             expect(inject).not.toHaveBeenCalled();
@@ -543,10 +518,8 @@ describe("native completion final-effect authority", () => {
               await prompt;
               expect(inject).not.toHaveBeenCalled();
               expect(session.getSteeringMessages()).toEqual([]);
-              expect(sessionAccessor.loadTranscriptEventsSync(completion.sessionScope)).toEqual(
-                before,
-              );
-              expect((await listSessionPendingInputs(completion.sessionScope)).total).toBe(0);
+              expect(completion.transcript()).toEqual(before);
+              expect(await completion.pendingTotal()).toBe(0);
             }
             expect(prepared.subscription.isCompacting()).toBe(false);
             expect(agentCommandMock).not.toHaveBeenCalled();

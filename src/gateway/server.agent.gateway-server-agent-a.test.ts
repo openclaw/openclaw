@@ -1,6 +1,3 @@
-/**
- * Gateway server-agent integration tests for agent startup and session dispatch.
- */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -45,33 +42,44 @@ const BASE_IMAGE_PNG =
 type GatewayModelFixture = {
   id: string;
   name: string;
-  provider: string;
   input: Array<"text" | "image">;
 };
 
 const TEXT_ONLY_AGENT_MODEL: GatewayModelFixture = {
   id: "deepseek-v4-pro",
   name: "DeepSeek V4 Pro",
-  provider: "ollama-cloud",
   input: ["text"],
 };
 
 const VISION_AGENT_MODEL: GatewayModelFixture = {
   id: "gemma4:31b",
   name: "Gemma 4 31B",
-  provider: "ollama-cloud",
   input: ["text", "image"],
 };
 
-async function setTestSessionStore(params: {
-  entries: Record<string, Record<string, unknown>>;
-  agentId?: string;
-}) {
+async function setTestSessionStore(
+  entries: Record<string, Record<string, unknown>>,
+  agentId?: string,
+) {
   testState.sessionStorePath = gatewaySuite.sessionStorePath;
-  await writeSessionStore({
-    entries: params.entries,
-    agentId: params.agentId,
-  });
+  await writeSessionStore({ entries, agentId });
+}
+const sessionEntry = (sessionId: string) => ({ sessionId, updatedAt: Date.now() });
+const sessionTarget = (sessionId: string, sessionKey: string) => ({
+  agentId: "main",
+  sessionId,
+  sessionKey,
+  storePath: gatewaySuite.sessionStorePath,
+});
+async function setVisionModel(models = [VISION_AGENT_MODEL]) {
+  testState.agentConfig = { model: { primary: "ollama-cloud/gemma4:31b" } };
+  await setGatewayModelCatalogForTest(models);
+}
+async function setExplicitOwnership() {
+  testState.agentsConfig = { ownership: "explicit", entries: { ops: {}, research: {} } };
+  const { clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/io.js");
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
 }
 
 async function setGatewayModelCatalogForTest(models: GatewayModelFixture[]): Promise<void> {
@@ -83,25 +91,18 @@ async function setGatewayModelCatalogForTest(models: GatewayModelFixture[]): Pro
   ] = await Promise.all([import("../agents/prepared-model-runtime.js"), import("../config/io.js")]);
   await writeConfigFile({
     models: {
-      providers: Object.fromEntries(
-        [...new Set(models.map((model) => model.provider))].map((provider) => [
-          provider,
-          {
-            baseUrl: `https://${provider}.example.test/v1`,
-            models: models
-              .filter((model) => model.provider === provider)
-              .map((model) => ({
-                id: model.id,
-                name: model.name,
-                input: model.input,
-                reasoning: false,
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 128_000,
-                maxTokens: 8_192,
-              })),
-          },
-        ]),
-      ),
+      providers: {
+        "ollama-cloud": {
+          baseUrl: "https://ollama-cloud.example.test/v1",
+          models: models.map((model) => ({
+            ...model,
+            reasoning: false,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 128_000,
+            maxTokens: 8_192,
+          })),
+        },
+      },
     },
   });
   clearRuntimeConfigSnapshot();
@@ -142,15 +143,7 @@ async function runAgentImageRequest(params: {
   attachment?: ReturnType<typeof baseImageAttachment>;
   failureMessage: string;
 }) {
-  await setTestSessionStore({
-    agentId: params.agentId,
-    entries: {
-      main: {
-        sessionId: params.sessionId,
-        updatedAt: Date.now(),
-      },
-    },
-  });
+  await setTestSessionStore({ main: sessionEntry(params.sessionId) }, params.agentId);
 
   const res = await rpcReq(gatewaySuite.ws, "agent", {
     message: "what is in the image?",
@@ -162,14 +155,6 @@ async function runAgentImageRequest(params: {
   expect(res.ok, `${params.failureMessage}: ${JSON.stringify(res)}`).toBe(true);
 
   return await waitForAgentCommandCall(params.idempotencyKey);
-}
-
-function expectBaseImageForwarded(images: unknown) {
-  const forwarded = images as Array<Record<string, unknown>> | undefined;
-  expect(forwarded, "agent command should include one forwarded image attachment").toHaveLength(1);
-  expect(forwarded?.[0]?.type).toBe("image");
-  expect(forwarded?.[0]?.mimeType).toBe("image/png");
-  expect(forwarded?.[0]?.data).toBe(BASE_IMAGE_PNG);
 }
 
 const defaultRegistry = createRegistry([]);
@@ -188,23 +173,9 @@ describe("gateway server agent", () => {
   });
 
   test("agent resolves a bare key through configured fixed-store ownership", async () => {
-    testState.agentsConfig = {
-      ownership: "explicit",
-      entries: { ops: {}, research: {} },
-    };
     testState.agentConfig = { sessionStore: { agentId: "ops" } };
-    const { clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/io.js");
-    clearRuntimeConfigSnapshot();
-    clearConfigCache();
-    await setTestSessionStore({
-      agentId: "ops",
-      entries: {
-        global: {
-          sessionId: "sess-ops-global",
-          updatedAt: Date.now(),
-        },
-      },
-    });
+    await setExplicitOwnership();
+    await setTestSessionStore({ global: sessionEntry("sess-ops-global") }, "ops");
 
     let admittedOwner: { sessionKey?: string; agentId?: string } | undefined;
     agentCommandMock.mockImplementationOnce(async () => {
@@ -222,20 +193,16 @@ describe("gateway server agent", () => {
 
     const call = await waitForAgentCommandCall("idem-agent-owned-global");
     expect(admittedOwner).toEqual({ sessionKey: "global", agentId: "ops" });
-    expect(call.agentId).toBe("ops");
-    expect(call.sessionKey).toBe("global");
-    expect(call.sessionId).toBe("sess-ops-global");
-    expect(call.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(call).toMatchObject({
+      agentId: "ops",
+      sessionKey: "global",
+      sessionId: "sess-ops-global",
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
   });
 
   test("agent rejects an ownerless bare key before session preparation", async () => {
-    testState.agentsConfig = {
-      ownership: "explicit",
-      entries: { ops: {}, research: {} },
-    };
-    const { clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/io.js");
-    clearRuntimeConfigSnapshot();
-    clearConfigCache();
+    await setExplicitOwnership();
 
     const res = await rpcReq(gatewaySuite.ws, "agent", {
       message: "hi",
@@ -262,19 +229,18 @@ describe("gateway server agent", () => {
       testState.sessionConfig = { reset: { mode: "idle", idleMinutes: 1 } };
       const execution = await observeGatewayRunExecution({ method: "agent", runId });
       try {
-        await setTestSessionStore({
-          entries:
-            kind === "expired"
-              ? {
-                  [sessionKey]: {
-                    sessionId: "expired-predecessor",
-                    updatedAt: expiredAt,
-                    sessionStartedAt: expiredAt,
-                    lastInteractionAt: expiredAt,
-                  },
-                }
-              : {},
-        });
+        await setTestSessionStore(
+          kind === "expired"
+            ? {
+                [sessionKey]: {
+                  sessionId: "expired-predecessor",
+                  updatedAt: expiredAt,
+                  sessionStartedAt: expiredAt,
+                  lastInteractionAt: expiredAt,
+                },
+              }
+            : {},
+        );
         agentCommandMock.mockImplementationOnce(async () => ({
           payloads: [],
           meta: { durationMs: 0, terminalReply: { disposition: "empty" } },
@@ -318,8 +284,7 @@ describe("gateway server agent", () => {
   );
 
   test("discards sessionless offloaded media without a transcript owner", async () => {
-    testState.agentConfig = { model: { primary: "ollama-cloud/gemma4:31b" } };
-    await setGatewayModelCatalogForTest([VISION_AGENT_MODEL]);
+    await setVisionModel();
     vi.mocked(agentCommandMock).mockResolvedValueOnce(undefined);
     const inboundBefore = await listInboundMedia();
     const runId = "sessionless-media-success";
@@ -349,11 +314,8 @@ describe("gateway server agent", () => {
   test.each(["completion", "abort"] as const)(
     "prompt-suppressed %s discards each managed offload once without a transcript row",
     async (outcome) => {
-      testState.agentConfig = { model: { primary: "ollama-cloud/gemma4:31b" } };
-      await setGatewayModelCatalogForTest([VISION_AGENT_MODEL]);
-      await setTestSessionStore({
-        entries: { main: { sessionId: "aborted-media-session", updatedAt: Date.now() } },
-      });
+      await setVisionModel();
+      await setTestSessionStore({ main: sessionEntry("aborted-media-session") });
       if (outcome === "abort") {
         vi.mocked(agentCommandMock).mockImplementationOnce(
           async (rawOpts) =>
@@ -392,12 +354,7 @@ describe("gateway server agent", () => {
         await expectNoNewInboundMedia(inboundBefore);
         await expect(
           readSessionMessagesAsync(
-            {
-              agentId: "main",
-              sessionId: "aborted-media-session",
-              sessionKey: String(call.sessionKey),
-              storePath: gatewaySuite.sessionStorePath,
-            },
+            sessionTarget("aborted-media-session", String(call.sessionKey)),
             { mode: "full", reason: "prompt-suppressed media leak reproduction" },
           ),
         ).resolves.toEqual([]);
@@ -426,13 +383,11 @@ describe("gateway server agent", () => {
     expect(res.error?.message).toContain("unknown channel");
     await expectNoNewInboundMedia(inboundBefore);
 
-    const spy = vi.mocked(agentCommandMock);
-    expect(spy).not.toHaveBeenCalled();
+    expect(vi.mocked(agentCommandMock)).not.toHaveBeenCalled();
   });
 
   test("agent retains image offload facts beside the claim-check line", async () => {
-    testState.agentConfig = { model: { primary: "ollama-cloud/gemma4:31b" } };
-    await setGatewayModelCatalogForTest([TEXT_ONLY_AGENT_MODEL, VISION_AGENT_MODEL]);
+    await setVisionModel([TEXT_ONLY_AGENT_MODEL, VISION_AGENT_MODEL]);
     const inboundBefore = await listInboundMedia();
     const call = await runAgentImageRequest({
       idempotencyKey: "idem-agent-offloaded-media",
@@ -446,19 +401,18 @@ describe("gateway server agent", () => {
       | undefined;
     expect(call.images).toEqual([]);
     expect(media).toHaveLength(1);
-    expect(media?.[0]).toMatchObject({ contentType: "image/png" });
-    expect(media?.[0]?.path).toMatch(/\/media\/inbound\//);
-    expect(media?.[0]?.url).toMatch(/^media:\/\/inbound\//);
+    expect(media?.[0]).toMatchObject({
+      contentType: "image/png",
+      path: expect.stringMatching(/\/media\/inbound\//),
+      url: expect.stringMatching(/^media:\/\/inbound\//),
+    });
     expect(call.message).toBe(`what is in the image?\n[media attached: ${media?.[0]?.url}]`);
     await expect(fs.stat(media?.[0]?.path ?? "")).resolves.toMatchObject({
       isFile: expect.any(Function),
     });
-    const pending = await listSessionPendingInputs({
-      agentId: "main",
-      sessionId: "sess-main-offloaded-media",
-      sessionKey: String(call.sessionKey),
-      storePath: gatewaySuite.sessionStorePath,
-    });
+    const pending = await listSessionPendingInputs(
+      sessionTarget("sess-main-offloaded-media", String(call.sessionKey)),
+    );
     expect(pending.items).toHaveLength(1);
     expect(pending.items[0]?.message["__openclaw"]?.media).toEqual(
       expect.arrayContaining([expect.objectContaining({ url: media?.[0]?.url })]),
@@ -486,22 +440,19 @@ describe("gateway server agent", () => {
     });
 
     expect(call.sessionKey).toBe("agent:vision:main");
-    expectBaseImageForwarded(call.images);
+    expect(call.images, "agent command should include one forwarded image attachment").toHaveLength(
+      1,
+    );
+    expect(call.images).toEqual([
+      expect.objectContaining({ type: "image", mimeType: "image/png", data: BASE_IMAGE_PNG }),
+    ]);
   });
 
   test("agent errors when delivery requested and no last channel exists", async () => {
     testState.allowFrom = ["+1555"];
     try {
-      testState.agentConfig = { model: { primary: "ollama-cloud/gemma4:31b" } };
-      await setGatewayModelCatalogForTest([VISION_AGENT_MODEL]);
-      await setTestSessionStore({
-        entries: {
-          main: {
-            sessionId: "sess-main-missing-provider",
-            updatedAt: Date.now(),
-          },
-        },
-      });
+      await setVisionModel();
+      await setTestSessionStore({ main: sessionEntry("sess-main-missing-provider") });
       const inboundBefore = await listInboundMedia();
       const res = await rpcReq(gatewaySuite.ws, "agent", {
         message: "hi",

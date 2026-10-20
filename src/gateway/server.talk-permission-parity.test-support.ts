@@ -23,6 +23,22 @@ import {
   testState,
 } from "./test-helpers.js";
 
+type TalkParityFixture = {
+  context: GatewayRequestContext;
+  client: GatewayClient;
+  sessionKey: string;
+  voiceSessionId: string | undefined;
+  runEmbeddedAgent: MockInstance<typeof import("../agents/embedded-agent.js").runEmbeddedAgent>;
+  waitForDispatchEnd: () => Promise<void>;
+};
+
+function visibleResult(text: string, durationMs = 0) {
+  return {
+    payloads: [{ text }],
+    meta: { durationMs, terminalReply: { disposition: "visible" as const, text } },
+  };
+}
+
 // Reuses the history suite's one Gateway and real ingress/model fixture.
 export async function runTalkNodePermissionParity({
   harness,
@@ -40,21 +56,15 @@ export async function runTalkNodePermissionParity({
   waitForDispatchEnd,
   expectRevokedWriter,
   publicOnly = false,
-}: {
+}: TalkParityFixture & {
   publicOnly?: boolean;
   harness: Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
-  client: GatewayClient;
-  context: GatewayRequestContext;
   agentId: string;
-  sessionKey: string;
   canonicalKey: string;
   sessionId: string;
   storePath: string;
-  voiceSessionId: string | undefined;
   connectionId: string;
-  runEmbeddedAgent: MockInstance<typeof import("../agents/embedded-agent.js").runEmbeddedAgent>;
   rpc: (method: string, params: Record<string, unknown>) => Promise<Record<string, unknown>>;
-  waitForDispatchEnd: () => Promise<void>;
   expectRevokedWriter: (runId: string, isCurrent: () => boolean) => void;
 }) {
   const scope = () => ({ agentId, sessionKey: canonicalKey, sessionId, storePath });
@@ -92,16 +102,14 @@ export async function runTalkNodePermissionParity({
     }
     return send(...args);
   });
-  expect(
-    (
-      await connectReq(reviewer, {
-        deviceIdentityPath: identity.identityPath,
-        scopes: ["operator.read", "operator.write", "operator.admin", "operator.approvals"],
-        caps: ["exec-approvals"],
-        prePairDevice: true,
-      })
-    ).ok,
-  ).toBe(true);
+  await expect(
+    connectReq(reviewer, {
+      deviceIdentityPath: identity.identityPath,
+      scopes: ["operator.read", "operator.write", "operator.admin", "operator.approvals"],
+      caps: ["exec-approvals"],
+      prePairDevice: true,
+    }),
+  ).resolves.toMatchObject({ ok: true });
   observeConnect.mockRestore();
   client.connect = expectDefined(acceptedConnect, "actual host-authenticated connect");
   const commands = [
@@ -180,7 +188,7 @@ export async function runTalkNodePermissionParity({
         throw error;
       });
   const observed: unknown[] = [];
-  const outcomes: unknown[] = [];
+  let completedScenarios = 0;
   try {
     for (const ingress of publicOnly
       ? (["direct"] as const)
@@ -228,6 +236,20 @@ export async function runTalkNodePermissionParity({
         let directVoiceSessionId: string | undefined;
         let activeSignal: AbortSignal | undefined;
         let activeRunId: string | undefined;
+        const dispatch = (
+          method: string,
+          params: Record<string, unknown>,
+          id = key,
+          respond = vi.fn<RespondFn>(),
+        ) =>
+          handleGatewayRequest({
+            req: { type: "req", id, method, params },
+            context,
+            client,
+            respond,
+            isWebchatConnect: () => true,
+            hasCurrentClientAuthority: source.isCurrent,
+          });
         runEmbeddedAgent.mockImplementationOnce(async (params) => {
           const admission = expectDefined(params.preparedRunAdmission, "real ingress admission");
           const admittedRunContext = await admission.admit(
@@ -298,22 +320,10 @@ export async function runTalkNodePermissionParity({
               params.abortSignal,
             );
             finished.resolve(result.details);
-            return {
-              payloads: [{ text: "Native action finished." }],
-              meta: {
-                durationMs: 0,
-                terminalReply: { disposition: "visible", text: "Native action finished." },
-              },
-            };
+            return visibleResult("Native action finished.");
           } catch (error) {
             finished.resolve({ error: String(error) });
-            return {
-              payloads: [{ text: "Native action did not run." }],
-              meta: {
-                durationMs: 0,
-                terminalReply: { disposition: "visible", text: "Native action did not run." },
-              },
-            };
+            return visibleResult("Native action did not run.");
           } finally {
             host.close();
           }
@@ -321,26 +331,19 @@ export async function runTalkNodePermissionParity({
         try {
           if (ingress === "direct") {
             const respond = vi.fn<RespondFn>();
-            await handleGatewayRequest({
-              req: {
-                type: "req",
-                id: key + "-create",
-                method: "talk.client.create",
-                params: {
-                  sessionKey,
-                  provider: "openai",
-                  mode: "realtime",
-                  brain: "agent-consult",
-                  transport: "webrtc",
-                  capabilities: ["voice-transcript"],
-                },
+            await dispatch(
+              "talk.client.create",
+              {
+                sessionKey,
+                provider: "openai",
+                mode: "realtime",
+                brain: "agent-consult",
+                transport: "webrtc",
+                capabilities: ["voice-transcript"],
               },
-              context,
-              client,
+              key + "-create",
               respond,
-              isWebchatConnect: () => true,
-              hasCurrentClientAuthority: source.isCurrent,
-            });
+            );
             const reply = expectDefined(
               respond.mock.calls.at(-1),
               "registered direct create response",
@@ -364,15 +367,7 @@ export async function runTalkNodePermissionParity({
                     name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
                     args: { question: "Carry out the action." },
                   };
-            const respond = vi.fn<RespondFn>();
-            task = handleGatewayRequest({
-              req: { type: "req", id: key, method, params },
-              context,
-              client,
-              respond,
-              isWebchatConnect: () => true,
-              hasCurrentClientAuthority: source.isCurrent,
-            });
+            task = dispatch(method, params);
           }
           void task.catch((error: unknown) => finished.resolve({ error: String(error) }));
           const runId = await started.promise;
@@ -447,21 +442,7 @@ export async function runTalkNodePermissionParity({
             ).toEqual([]);
             expect(cellNative).toEqual([]);
           }
-          outcomes.push({
-            scenario: key,
-            approvals: approvalEvents - eventCount,
-            execDispatches: cellInvocations.filter((frame) => frame.command === "system.run")
-              .length,
-            nodesWhich: cellInvocations.filter((frame) => frame.command === "system.which").length,
-            markerPresent: (await effectText()) !== "",
-            canonicalExecDenial:
-              asOptionalRecord(result)?.error === "Error: exec denied: host=node security=deny",
-            native: cellNative.map(({ result: completion }) => ({
-              pid: completion.pid,
-              code: completion.code,
-              termination: completion.termination,
-            })),
-          });
+          completedScenarios++;
         } finally {
           invalidateGatewayDeviceRevocation(context, identity.identity.deviceId, "operator");
           // Cleanup after a failed assertion must not mask the original revocation result.
@@ -504,9 +485,7 @@ export async function runTalkNodePermissionParity({
     expect(node.invokes.filter((frame) => frame.command === "system.which")).toHaveLength(
       publicOnly ? 1 : 18,
     );
-    expect(outcomes).toHaveLength(publicOnly ? 1 : 18);
-    // Observed, public-safe values only: no identities, transcripts, paths or credentials.
-    console.info("Talk permission parity observed:", JSON.stringify(outcomes));
+    expect(completedScenarios).toBe(publicOnly ? 1 : 18);
   } finally {
     context.getClientConnIds = originalConnections;
     provider.restore();
@@ -524,22 +503,12 @@ export async function runTalkOperatorSourceParity({
   voiceSessionId,
   runEmbeddedAgent,
   waitForDispatchEnd,
-}: {
-  context: GatewayRequestContext;
-  client: GatewayClient;
-  sessionKey: string;
-  voiceSessionId: string | undefined;
-  runEmbeddedAgent: MockInstance<typeof import("../agents/embedded-agent.js").runEmbeddedAgent>;
-  waitForDispatchEnd: () => Promise<void>;
-}) {
+}: TalkParityFixture) {
   let originalSource: object | undefined;
   let admittedSource: object | undefined;
   runEmbeddedAgent.mockImplementationOnce(async (params) => {
     admittedSource = params.preparedRunAdmission?.readOperatorAuthority?.()?.source;
-    return {
-      payloads: [{ text: "Done." }],
-      meta: { durationMs: 1, terminalReply: { disposition: "visible", text: "Done." } },
-    };
+    return visibleResult("Done.", 1);
   });
   const handler = expectDefined(talkClientHandlers["talk.client.toolCall"], "Talk RPC handler");
   const respond = vi.fn<RespondFn>();

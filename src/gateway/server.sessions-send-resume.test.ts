@@ -95,8 +95,10 @@ async function pauseRun(runId: string) {
   return expectDefined(subagentRuns.get(runId), "paused child");
 }
 
-async function arrangeAuthorityProof(name: string) {
-  const root = tempDirs.make(`openclaw-resume-${name}-`);
+async function arrangeAuthorityProof(
+  name: string,
+  root = tempDirs.make(`openclaw-resume-${name}-`),
+) {
   const parent = "agent:main:main";
   const unrelated = `agent:main:dashboard:${name}-unrelated`;
   const child = `agent:main:dashboard:${name}-child`;
@@ -131,30 +133,43 @@ async function arrangeAuthorityProof(name: string) {
   const scope = { agentId: "main", sessionKey: child, sessionId, storePath };
   // The provider can publish success only after real input custody is consumed.
   // Admission, task replacement, and recorder live-owner checks remain production code.
-  agentCommandMock.mockImplementation(async (opts) => {
-    const command = opts as AgentCommandGatewayIngressOpts;
-    const recorder = expectDefined(command.userTurnTranscriptRecorder, "resume input recorder");
-    await recorder.persistApproved();
-    expect(recorder.hasPersisted()).toBe(true);
-    const text = "Unauthorized child final effect.";
+  function mockReply(text: string, beforeReply?: (runId: string) => Promise<void>) {
     const { terminalReply } = prepareAgentRunTerminalReply({ rawText: text });
-    emitAgentEvent({
-      runId: expectDefined(command.runId, "resume execution run id"),
-      stream: "lifecycle",
-      data: {
-        phase: "end",
-        startedAt: Date.now() - 1,
-        endedAt: Date.now(),
-        terminalReply,
-      },
+    agentCommandMock.mockImplementation(async (opts) => {
+      const command = opts as AgentCommandGatewayIngressOpts;
+      const executionRunId = expectDefined(command.runId, "resume execution run id");
+      if (beforeReply) {
+        expect(subagentRuns.get(executionRunId)?.taskRunId).toBe(previousRunId);
+      }
+      const recorder = expectDefined(command.userTurnTranscriptRecorder, "resume input recorder");
+      await recorder.persistApproved();
+      expect(recorder.hasPersisted()).toBe(true);
+      await beforeReply?.(executionRunId);
+      emitAgentEvent({
+        runId: executionRunId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          startedAt: Date.now() - 1,
+          endedAt: Date.now(),
+          terminalReply,
+        },
+      });
+      return { payloads: [{ text, mediaUrl: null }], meta: { durationMs: 1, terminalReply } };
     });
-    return { payloads: [{ text, mediaUrl: null }], meta: { durationMs: 1, terminalReply } };
-  });
-  const send = (caller = parent, approvalSignal?: AbortSignal, mode?: "resume") => {
+    return terminalReply;
+  }
+  mockReply("Unauthorized child final effect.");
+  const send = (
+    caller = parent,
+    approvalSignal?: AbortSignal,
+    options: { mode?: "resume"; timeoutSeconds?: number; watch?: boolean } = {},
+    idempotencyKey: string | null = runId,
+  ) => {
     const tool = createSessionsSendTool({
       agentSessionKey: caller,
       config: { ...getRuntimeConfig(), tools: { sessions: { visibility: "all" } } },
-      idempotencyKey: runId,
+      idempotencyKey: idempotencyKey ?? undefined,
     });
     return withGatewayToolCallerIdentity(
       {
@@ -168,7 +183,7 @@ async function arrangeAuthorityProof(name: string) {
       () =>
         tool.execute(`${name}-proof`, {
           sessionKey: child,
-          ...(mode ? { mode } : {}),
+          ...options,
           message: "The answer is ready; finish the task.",
         }),
     );
@@ -183,7 +198,19 @@ async function arrangeAuthorityProof(name: string) {
     });
     expect(subagentRuns.has(runId)).toBe(false);
   };
+  const expectInputs = async (state: string) => {
+    expect(await listSessionPendingInputs(scope)).toMatchObject({
+      total: 1,
+      items: [{ runId, state }],
+    });
+  };
+  const expectReceipts = async (items: Array<{ state: string; cancelled?: boolean }>) => {
+    expect(await listSessionPendingInputReceipts(scope, { runIds: [runId] })).toEqual(
+      items.map((item) => ({ runId, ...item })),
+    );
+  };
   return {
+    root,
     parent,
     unrelated,
     child,
@@ -192,6 +219,9 @@ async function arrangeAuthorityProof(name: string) {
     scope,
     send,
     expectUnadopted,
+    expectInputs,
+    expectReceipts,
+    mockReply,
   };
 }
 
@@ -209,30 +239,25 @@ it.each([
   try {
     const proof = await arrangeAuthorityProof(scenario);
     if (scenario === "completion-disabled") {
-      await mutateSubagentRuns([proof.previousRunId], (rows) => ({
-        value: undefined,
-        postimages: new Map([
-          [
-            proof.previousRunId,
-            {
-              ...expectDefined(rows.get(proof.previousRunId), "paused child"),
-              expectsCompletionMessage: false,
-            },
-          ],
-        ]),
-      }));
+      await mutateSubagentRuns([proof.previousRunId], (rows) => {
+        const paused = expectDefined(rows.get(proof.previousRunId), "paused child");
+        return {
+          value: undefined,
+          postimages: new Map([
+            [proof.previousRunId, { ...paused, expectsCompletionMessage: false }],
+          ]),
+        };
+      });
     }
     const result = await proof.send(
       scenario === "unrelated-controller" ? proof.unrelated : proof.parent,
       undefined,
-      "resume",
+      { mode: "resume" },
     );
     expect(result.details).toMatchObject({ status: "error", error });
     proof.expectUnadopted();
     expect(await listSessionPendingInputs(proof.scope)).toEqual({ items: [], total: 0 });
-    expect(await listSessionPendingInputReceipts(proof.scope, { runIds: [proof.runId] })).toEqual(
-      [],
-    );
+    await proof.expectReceipts([]);
     expect(agentCommandMock).not.toHaveBeenCalled();
     expect(announce).not.toHaveBeenCalled();
   } finally {
@@ -286,10 +311,7 @@ it.for([
     sending = proof.send(proof.parent, parentAuthority.signal);
     await prepared.promise;
     expect(preparation).toHaveBeenCalledTimes(1);
-    expect(await listSessionPendingInputs(proof.scope)).toMatchObject({
-      total: 1,
-      items: [{ runId: proof.runId, state: "queued" }],
-    });
+    await proof.expectInputs("queued");
     proof.expectUnadopted();
     if (scenario.refuseFinish) {
       refusedFinish = refusePendingInputCommit({
@@ -324,17 +346,10 @@ it.for([
         error: expect.stringContaining("Pending input ownership ended"),
       });
       proof.expectUnadopted();
-      expect(await listSessionPendingInputReceipts(proof.scope, { runIds: [proof.runId] })).toEqual(
-        [{ runId: proof.runId, state: "pending" }],
-      );
+      await proof.expectReceipts([{ state: "pending" }]);
     } else {
-      expect(await listSessionPendingInputs(proof.scope)).toMatchObject({
-        total: 1,
-        items: [{ runId: proof.runId, state: "cancelled" }],
-      });
-      expect(await listSessionPendingInputReceipts(proof.scope, { runIds: [proof.runId] })).toEqual(
-        [{ runId: proof.runId, state: "pending", cancelled: true }],
-      );
+      await proof.expectInputs("cancelled");
+      await proof.expectReceipts([{ state: "pending", cancelled: true }]);
     }
     expect(agentCommandMock).not.toHaveBeenCalled();
     expect(announce).not.toHaveBeenCalled();
@@ -392,10 +407,7 @@ it("fences a cancelled successor after adoption before queued input consumption"
     await adopted.promise;
     expect(subagentRuns.has(proof.previousRunId)).toBe(false);
     expect(subagentRuns.get(proof.runId)).toMatchObject({ taskRunId: proof.previousRunId });
-    expect(await listSessionPendingInputs(proof.scope)).toMatchObject({
-      total: 1,
-      items: [{ runId: proof.runId, state: "queued" }],
-    });
+    await proof.expectInputs("queued");
     // Use registry cancellation without aborting the Gateway signal: the successor
     // ownership fence, not a generic aborted-signal check, must stop dispatch.
     expect(
@@ -418,13 +430,8 @@ it("fences a cancelled successor after adoption before queued input consumption"
       expect.anything(),
     );
     // Custody remains unconsumed even though execution cleanup records interruption.
-    expect(await listSessionPendingInputs(proof.scope)).toMatchObject({
-      total: 1,
-      items: [{ runId: proof.runId, state: "interrupted" }],
-    });
-    expect(await listSessionPendingInputReceipts(proof.scope, { runIds: [proof.runId] })).toEqual([
-      { runId: proof.runId, state: "pending" },
-    ]);
+    await proof.expectInputs("interrupted");
+    await proof.expectReceipts([{ state: "pending" }]);
     expect(agentCommandMock).not.toHaveBeenCalled();
     expect(announce).not.toHaveBeenCalled();
   } finally {
@@ -440,84 +447,24 @@ it.each(["explicit", "automatic"] as const)(
   "resumes a visible child with write-only operator authority (%s)",
   async (mode) => {
     const root = tempDirs.make("openclaw-parent-resume-gateway-");
-    const parent = "agent:main:main";
-    const child = `agent:main:dashboard:resume-proof-${mode}`;
-    const previousRunId = `resume-gateway-${mode}-paused`;
     const release = createDeferred();
     const started = createDeferred();
     const announce = await mockSubagentAnnounce();
-    testState.sessionStorePath = path.join(root, "sessions.json");
     const text = `${"Completed child task detail. ".repeat(200)}Resumed child finished.`;
-    const { terminalReply } = prepareAgentRunTerminalReply({ rawText: text });
     try {
-      await writeSessionStore({
-        entries: {
-          [parent]: { sessionId: `resume-${mode}-parent`, updatedAt: Date.now() },
-          [child]: {
-            sessionId: `resume-${mode}-child`,
-            updatedAt: Date.now(),
-            spawnedBy: parent,
-            spawnDepth: 1,
-          },
-        },
-      });
-      await prepareGatewayReplyRuntimeForTest();
-      publishSystemEventStoreConfig(getRuntimeConfig());
-      // Seed paused native registry state without polling a nonexistent source execution.
-      await registerSubagentRun({
-        runId: previousRunId,
-        childSessionKey: child,
-        childAgentId: "main",
-        sessionEntry: { sessionId: `resume-${mode}-child` },
-        controllerSessionKey: parent,
-        requesterSessionKey: parent,
-        requesterDisplayKey: parent,
-        task: "Wait for the answer",
-        cleanup: "keep",
-        expectsCompletionMessage: true,
-        queued: true,
-      });
-      await pauseRun(previousRunId);
-      agentCommandMock.mockImplementation(async (opts) => {
-        const command = opts as AgentCommandGatewayIngressOpts;
-        const runId = expectDefined(command.runId, "resume execution run id");
-        expect(subagentRuns.get(runId)?.taskRunId).toBe(previousRunId);
-        const recorder = expectDefined(command.userTurnTranscriptRecorder, "resume input recorder");
-        await recorder.persistApproved();
-        expect(recorder.hasPersisted()).toBe(true);
+      const proof = await arrangeAuthorityProof(`resume-gateway-${mode}`, root);
+      const { parent, child, previousRunId } = proof;
+      const terminalReply = proof.mockReply(text, async (runId) => {
         started.resolve();
         await release.promise;
-        await appendTranscriptMessage(
-          {
-            agentId: "main",
-            sessionKey: child,
-            sessionId: `resume-${mode}-child`,
-            storePath: testState.sessionStorePath!,
-          },
-          {
-            message: {
-              role: "assistant",
-              content: text,
-              stopReason: "stop",
-              __openclaw: { runId },
-            },
-          },
-        );
-        emitAgentEvent({
-          runId,
-          stream: "lifecycle",
-          data: {
-            phase: "end",
-            startedAt: Date.now() - 1,
-            endedAt: Date.now(),
-            terminalReply,
+        await appendTranscriptMessage(proof.scope, {
+          message: {
+            role: "assistant",
+            content: text,
+            stopReason: "stop",
+            __openclaw: { runId },
           },
         });
-        return { payloads: [{ text, mediaUrl: null }], meta: { durationMs: 1, terminalReply } };
-      });
-      const tool = createSessionsSendTool({
-        agentSessionKey: parent,
-        config: { ...getRuntimeConfig(), tools: { sessions: { visibility: "all" } } },
       });
       const result = await withPluginRuntimeGatewayRequestScope(
         {
@@ -532,22 +479,11 @@ it.each(["explicit", "automatic"] as const)(
           isWebchatConnect: () => false,
         },
         () =>
-          withGatewayToolCallerIdentity(
-            {
-              agentId: "main",
-              sessionKey: parent,
-              operationalRunInstance: createOperationalRunInstanceRef(
-                `resume-gateway-${mode}-parent-turn`,
-              ),
-              receiptAuthority: () => true,
-              gatewayContextResolver: () => kernel.gatewayRequestContext,
-            },
-            () =>
-              tool.execute("resume-proof", {
-                sessionKey: child,
-                ...(mode === "explicit" ? { mode: "resume" } : { timeoutSeconds: 30, watch: true }),
-                message: "The answer is ready; finish the task.",
-              }),
+          proof.send(
+            parent,
+            undefined,
+            mode === "explicit" ? { mode: "resume" } : { timeoutSeconds: 30, watch: true },
+            null,
           ),
       );
       expect(result.details, JSON.stringify(result.details)).toMatchObject({
