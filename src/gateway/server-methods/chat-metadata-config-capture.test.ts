@@ -13,8 +13,6 @@ import {
   createChatMetadataOwner,
 } from "./chat-metadata-runtime.test-support.js";
 
-// Exercise the metadata runtime and its real model-list/projector composition. Only
-// published inventory, credentials, and the plugin's external support answer are fixtures.
 test.each([1, 32])(
   "bounds source projection work for %i metadata models after neutral reload",
   async (count) => {
@@ -84,14 +82,16 @@ test.each([1, 32])(
     harness.setOwner(owner);
     harness.setAuthStore({
       version: 1,
-      profiles: {
-        "capture-fixture:before": {
-          type: "api_key",
-          provider: "capture-fixture",
-          key: "synthetic",
-        },
-        "capture-fixture:after": { type: "api_key", provider: "capture-fixture", key: "synthetic" },
-      },
+      profiles: Object.fromEntries(
+        ["before", "after"].map((profile) => [
+          `capture-fixture:${profile}`,
+          { type: "api_key" as const, provider: "capture-fixture", key: "synthetic" },
+        ]),
+      ),
+    });
+    const sessionEntry = (profile: string) => ({
+      authProfileOverride: "capture-fixture:" + profile,
+      authProfileOverrideSource: "user" as const,
     });
     const project = vi.spyOn(sourceProjection, "projectRuntimeChangesOntoSource");
     try {
@@ -99,52 +99,34 @@ test.each([1, 32])(
       const read = async (profile: string) => {
         project.mockClear();
         supports.mockClear();
-        const started = performance.now();
-        const result = await harness.runtime.read({
-          agentId: "main",
-          sessionEntry: {
-            authProfileOverride: "capture-fixture:" + profile,
-            authProfileOverrideSource: "user",
-          },
-        });
+        const result = await harness.read({ sessionEntry: sessionEntry(profile) });
         expect(result.models?.map(({ id }) => id).toSorted()).toEqual(
           models.map(({ id }) => id).toSorted(),
         );
-        const stats = {
-          count,
-          profile,
-          projections: project.mock.calls.length,
-          supports: supports.mock.calls.length,
-          ms: performance.now() - started,
-        };
-        console.log(JSON.stringify(stats));
-        return { ...stats, result };
+        return result;
       };
       const before = await read("before");
-      expect(before.supports).toBeGreaterThan(0);
+      expect(supports).toHaveBeenCalled();
       const reloaded = structuredClone(config);
       setRuntimeConfigSnapshot(reloaded, reloaded);
       harness.setConfig(reloaded);
       await harness.runtime.refresh();
       const after = await read("after");
-      expect(after.supports).toBeGreaterThan(0);
-      expect(after.projections).toBeLessThanOrEqual(1);
-      expect(after.result.models).toEqual(before.result.models);
-      expect(after.result.accountSelection).toMatchObject({
+      expect(supports).toHaveBeenCalled();
+      expect(project.mock.calls.length).toBeLessThanOrEqual(1);
+      expect(after.models).toEqual(before.models);
+      expect(after.accountSelection).toMatchObject({
         authProfileId: "capture-fixture:after",
       });
       const retained = await read("after");
-      expect(retained.projections).toBe(0);
-      expect(retained.result).toEqual(after.result);
+      expect(project).not.toHaveBeenCalled();
+      expect(retained).toEqual(after);
       const readyParams = {
         agentId: "main",
         readPolicy: "ready" as const,
-        sessionEntry: {
-          authProfileOverride: "capture-fixture:after",
-          authProfileOverrideSource: "user" as const,
-        },
+        sessionEntry: sessionEntry("after"),
       };
-      await harness.runtime.read({ agentId: "main" });
+      await harness.read();
       expect(await harness.runtime.readStartup(readyParams)).toBeDefined();
       current = false;
       await expect(harness.runtime.readStartup(readyParams)).resolves.toBeUndefined();

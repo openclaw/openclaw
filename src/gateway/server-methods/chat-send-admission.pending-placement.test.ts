@@ -21,14 +21,23 @@ import { stagePlacementTurnClaimWorkerPublication } from "../worker-environments
 import { admitChatSend } from "./chat-send-admission.js";
 import { prepareChatAdmission } from "./chat-send-admission.test-support.js";
 
+const mainAgents = () => ({ ownership: "explicit" as const, entries: { main: {} } });
+function cleanupAdmission(
+  admitted: Awaited<ReturnType<typeof admitChatSend>> | undefined,
+  runId: string,
+) {
+  if (admitted?.ok) {
+    admitted.value.cleanupAdmittedRun();
+  }
+  clearAgentRunContext(runId);
+}
+
 it.each(["restart", "stop"] as const)(
   "preserves client retry only when an unstarted chat admission is interrupted by %s",
   async (reason) => {
     await withOpenClawTestState({ label: "chat-pending-restart" }, async () => {
       await loadOrCreateProcessDeviceIdentityAsync();
-      const cfg: OpenClawConfig = {
-        agents: { ownership: "explicit", entries: { main: {} } },
-      };
+      const cfg: OpenClawConfig = { agents: mainAgents() };
       setRuntimeConfigSnapshot(cfg, cfg);
       const sessionKey = "agent:main:dashboard:pending-restart";
       const runId = "pending-restart-input";
@@ -110,10 +119,7 @@ it.each(["restart", "stop"] as const)(
         release.resolve();
         await blocker;
         await pending;
-        if (retried?.ok) {
-          retried.value.cleanupAdmittedRun();
-        }
-        clearAgentRunContext(runId);
+        cleanupAdmission(retried, runId);
       }
     });
   },
@@ -132,7 +138,7 @@ it.each([
     await withOpenClawTestState({ label: "backend-chat-pending-placement" }, async () => {
       await loadOrCreateProcessDeviceIdentityAsync();
       let cfg: OpenClawConfig = {
-        agents: { ownership: "explicit", entries: { main: {} } },
+        agents: mainAgents(),
         ...(initialRequired ? { cloudWorkers: { requiredProfile: "native" } } : {}),
       };
       setRuntimeConfigSnapshot(cfg, cfg);
@@ -214,51 +220,34 @@ it.each([
         reloadingRead?.mockRestore();
         pending.rollback();
         read.release();
-        if (admitted?.ok) {
-          admitted.value.cleanupAdmittedRun();
-        }
-        clearAgentRunContext(runId);
+        cleanupAdmission(admitted, runId);
       }
     });
   },
 );
 
-it.each<{ name: string; patch: OpenClawConfig; allowed: boolean }>([
-  {
-    name: "unrelated plugin settings",
-    patch: { plugins: { entries: { "memory-core": { config: { dreaming: { enabled: true } } } } } },
-    allowed: true,
-  },
-  {
-    name: "selected model",
-    patch: {
-      agents: {
-        ownership: "explicit",
-        entries: { main: {} },
-        defaults: { model: { primary: "openai/changed" } },
-      },
-    },
-    allowed: false,
-  },
-  { name: "tool policy", patch: { tools: { deny: ["exec"] } }, allowed: false },
-  { name: "global plugin enablement", patch: { plugins: { enabled: false } }, allowed: false },
-  { name: "plugin allowlist", patch: { plugins: { allow: ["memory-core"] } }, allowed: false },
-  { name: "plugin denylist", patch: { plugins: { deny: ["openai"] } }, allowed: false },
-  {
-    name: "harness enablement",
-    patch: { plugins: { entries: { codex: { enabled: false } } } },
-    allowed: false,
-  },
-  {
-    name: "plugin slot",
-    patch: { plugins: { slots: { contextEngine: "other" } } },
-    allowed: false,
-  },
-])("rechecks prepared chat facts across a reload of $name", async ({ patch, allowed }) => {
+it.each<[name: string, patch: OpenClawConfig, allowed: boolean]>([
+  [
+    "unrelated plugin settings",
+    { plugins: { entries: { "memory-core": { config: { dreaming: { enabled: true } } } } } },
+    true,
+  ],
+  [
+    "selected model",
+    { agents: { ...mainAgents(), defaults: { model: { primary: "openai/changed" } } } },
+    false,
+  ],
+  ["tool policy", { tools: { deny: ["exec"] } }, false],
+  ["global plugin enablement", { plugins: { enabled: false } }, false],
+  ["plugin allowlist", { plugins: { allow: ["memory-core"] } }, false],
+  ["plugin denylist", { plugins: { deny: ["openai"] } }, false],
+  ["harness enablement", { plugins: { entries: { codex: { enabled: false } } } }, false],
+  ["plugin slot", { plugins: { slots: { contextEngine: "other" } } }, false],
+])("rechecks prepared chat facts across a reload of %s", async (_name, patch, allowed) => {
   await withOpenClawTestState({ label: "chat-reload-preparation" }, async () => {
     await loadOrCreateProcessDeviceIdentityAsync();
     const cfg: OpenClawConfig = {
-      agents: { ownership: "explicit", entries: { main: {} } },
+      agents: mainAgents(),
       plugins: {
         entries: {
           "memory-core": { config: { dreaming: { enabled: false } } },
@@ -311,10 +300,7 @@ it.each<{ name: string; patch: OpenClawConfig; allowed: boolean }>([
         );
       }
     } finally {
-      if (admitted?.ok) {
-        admitted.value.cleanupAdmittedRun();
-      }
-      clearAgentRunContext(runId);
+      cleanupAdmission(admitted, runId);
     }
   });
 });
