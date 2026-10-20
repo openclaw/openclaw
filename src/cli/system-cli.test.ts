@@ -73,6 +73,13 @@ describe("system-cli", () => {
       expectedError: "--mode must be now or next-heartbeat",
       gatewayCalls: 0,
     },
+    {
+      name: "blank session key",
+      args: ["system", "event", "--text", "hello", "--session-key", "   ", "--json"],
+      gatewayResult: undefined,
+      expectedError: "--session-key must not be blank",
+      gatewayCalls: 0,
+    },
   ])(
     "writes JSON when $name fails",
     async ({ args, gatewayResult, expectedError, gatewayCalls }) => {
@@ -128,6 +135,15 @@ describe("system-cli", () => {
       sessionKey: "agent:main:telegram:dm:42",
     });
     expect(requestOptions).toEqual({ expectFinal: false });
+  });
+
+  it("rejects an explicitly blank --session-key instead of waking without it", async () => {
+    await runCli(["system", "event", "--text", "ping", "--session-key", "   "]);
+
+    expect(callGatewayFromCli).not.toHaveBeenCalled();
+    expect(runtimeLogs).toEqual([]);
+    expect(runtimeErrors[0]).toContain("--session-key must not be blank");
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
   it.each([{ args: ["system", "presence"], method: "system-presence", params: undefined }])(

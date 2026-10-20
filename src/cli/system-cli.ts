@@ -77,7 +77,12 @@ export function registerSystemCli(program: Command) {
         if (mode !== "now" && mode !== "next-heartbeat") {
           throw new Error("--mode must be now or next-heartbeat");
         }
+        // Omission leaves wake unscoped to a session; an explicit blank must not
+        // silently drop --session-key and wake the agent's main session instead.
         const sessionKey = normalizeOptionalString(opts.sessionKey);
+        if (opts.sessionKey !== undefined && !sessionKey) {
+          throw new Error("--session-key must not be blank");
+        }
         const result = await callGatewayFromCli(
           "wake",
           opts,
