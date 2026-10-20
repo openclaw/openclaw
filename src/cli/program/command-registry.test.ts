@@ -50,10 +50,7 @@ vi.mock("./register.setup.js", () => ({
 }));
 
 import { registerCoreCliByName, registerCoreCliCommands } from "./command-registry-core.js";
-import {
-  getCoreCliCommandNamesCore,
-  getCoreCliCommandsWithSubcommands,
-} from "./core-command-descriptors.js";
+import { getCoreCliCommandNamesCore } from "./core-command-descriptors.js";
 
 const testProgramContext: ProgramContext = {
   programVersion: "0.0.0-test",
@@ -88,7 +85,6 @@ describe("command-registry", () => {
   it("exposes Claws without a process opt-in", () => {
     vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "");
     expect(getCoreCliCommandNamesCore()).toContain("claws");
-    expect(getCoreCliCommandsWithSubcommands()).toContain("claws");
 
     vi.unstubAllEnvs();
   });

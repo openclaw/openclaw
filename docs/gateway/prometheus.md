@@ -545,22 +545,31 @@ shapes have separate entries, so there is no key-mismatch reason.
 
 Unavailable revisions use bounded `no-revision-*` reasons where known:
 
-| Suffix                                       | Cause                                                                                   |
-| -------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `environment`                                | Git discovery overrides, a custom runner, or changed worker environment                 |
-| `platform`                                   | Native filesystem revision reads are unavailable on this platform                       |
-| `metadata`                                   | The checkout or its Git directory pointers could not be resolved                        |
-| `git-installation`                           | Git's system config/attributes paths could not be discovered                            |
-| `config`                                     | Indirect, oversized, or nonregular config; includes, filters, or external path settings |
-| `reftable`, `alternates`                     | Ref or object storage needs fresh Git discovery                                         |
-| `symlink`                                    | Git metadata is indirect                                                                |
-| `nested-repository`, `submodule`, `unmerged` | Nested repositories, submodule status, or unmerged status prevents reuse                |
-| `status`                                     | Git status failed or its output could not be represented exactly                        |
-| `permission`, `missing`, `io`                | Filesystem access failed, a path disappeared, or another read failed                    |
+| Suffix                        | Cause                                                                                   |
+| ----------------------------- | --------------------------------------------------------------------------------------- |
+| `environment`                 | Git discovery overrides, a custom runner, or changed worker environment                 |
+| `platform`                    | Native filesystem revision reads are unavailable on this platform                       |
+| `metadata`                    | The checkout or its Git directory pointers could not be resolved                        |
+| `git-installation`            | Git's system config/attributes paths could not be discovered                            |
+| `config`                      | Indirect, oversized, or nonregular config; includes, filters, or external path settings |
+| `reftable`, `alternates`      | Ref or object storage needs fresh Git discovery                                         |
+| `symlink`                     | Git metadata is indirect                                                                |
+| `submodule`, `unmerged`       | Submodule status or unmerged status prevents reuse                                      |
+| `status`                      | Git status failed or its output could not be represented exactly                        |
+| `permission`, `missing`, `io` | Filesystem access failed, a path disappeared, or another read failed                    |
 
 `oversized` retains its existing label for the 10,000-observation metadata budget
-or 1 MiB status-output limit. Oversized summaries retain their existing short
-fallback cache; full diffs can still reuse a bounded changed-file revision.
+or 1 MiB status-output limit. The optional filesystem inventory includes ignored
+files; exceeding it skips that shortcut, while full diffs can still reuse a
+bounded changed-file revision. Shared Git refs and metadata have the same
+observation budget. Oversized summaries retain their ten-second fallback cache
+without repeating revision probes during that window.
+
+`no-revision-missing` means a revision read encountered `ENOENT` or `ENOTDIR`,
+not necessarily that the checkout itself is gone. Only a diff result reporting
+`not_git` receives a one-second retry window, scoped to the request and Git
+environment. Other unavailable results, such as an unknown commit, remain
+immediately retryable.
 No paths, config values, or error text become metric labels.
 
 Diff revisions use Git's changed-file inventory and relevant file metadata.

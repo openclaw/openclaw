@@ -28,21 +28,18 @@ it.each<ProjectionCase>([
       { type: "message", message: { role: "user", content: "large body" } },
       { type: "compaction", summary: "summary", firstKeptEntryId: "parent", tokensBefore: 1 },
       { type: "custom", customType: "plugin.metadata", data: { large: "body" } },
-      {
-        type: "custom_message",
-        customType: "report",
-        content: "large report body",
-        display: true,
-        details: { privateToBody: true },
-      },
     ] as const
-  ).map((entry) =>
-    canonical(
-      { ...base, ...entry },
-      entry.type === "custom_message"
-        ? { ...base, type: entry.type, customType: "report" }
-        : { ...base, type: entry.type },
-    ),
+  ).map((entry) => canonical({ ...base, ...entry }, { ...base, type: entry.type })),
+  canonical(
+    {
+      ...base,
+      type: "custom_message",
+      customType: "report",
+      content: "body",
+      display: true,
+      details: { privateToBody: true },
+    },
+    { ...base, type: "custom_message", customType: "report" },
   ),
   ...["branch label", "", undefined].map((label) =>
     canonical(

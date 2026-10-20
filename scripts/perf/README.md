@@ -1294,6 +1294,18 @@ hit rate on the repaired path, without a material paired latency regression.
 Native Git status used to validate a revision still counts as Git work; cache
 hits do not imply zero subprocesses.
 
+Use `--missing-cwd` with RPC mode and a small fixture to measure a disappeared
+session directory. The driver renames the synthetic `new/` directory after
+session creation, requires `not_git` on every measured response, restores the
+directory, and requires recovery within two seconds. Do not combine it with
+mutation, churn, or extra polling fixtures. The report includes
+`missingRecoveryMs`; both revisions must return identical absent-checkout
+responses. Compare at least two simultaneous pairs with swapped CPU halves.
+RPC reports also include `processCpuMsPerRpc`, the Gateway process's CPU during
+the measured window divided by completed requests. This includes its worker
+threads but excludes child Git processes; compare it with command counts and
+latency, not as total system CPU.
+
 Add `--nested-cwd` to launch each session from the fixture's `new/` subdirectory.
 This exercises checkout discovery through a session's working directory instead
 of supplying the repository root. Compare full diffs under `--churn-ms 1000`

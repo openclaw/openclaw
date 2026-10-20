@@ -5,39 +5,18 @@ import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
-import "./terminal-panel-registration.ts";
+import {
+  createTerminalController,
+  createTestTerminalPanel,
+  defineTestTerminalPanelElement,
+} from "./terminal-panel.test-support.ts";
 import type { OpenClawTerminalPanel } from "./terminal-panel.ts";
-import type { createIsolatedGhosttyTerminal } from "./terminal-runtime.ts";
-
-function createTerminalController() {
-  return {
-    readOnly: false,
-    terminal: {
-      options: { fontFamily: "" },
-      cols: 100,
-      rows: 30,
-      viewportY: 0,
-      write: vi.fn(),
-      focus: vi.fn(),
-      reset: vi.fn(),
-      paste: vi.fn(),
-    },
-    write: vi.fn(),
-    fit: vi.fn(),
-    resize: vi.fn(),
-    setReadOnly: vi.fn(),
-    attach: vi.fn(),
-    dispose: vi.fn(),
-  };
-}
 
 const createTerminal = vi.fn(async () => createTerminalController());
+const panelTag = defineTestTerminalPanelElement(createTerminal);
 
 function createReadinessPanel(): OpenClawTerminalPanel {
-  const panel = document.createElement("openclaw-terminal-panel");
-  panel.createTerminalController =
-    createTerminal as unknown as typeof createIsolatedGhosttyTerminal;
-  return panel;
+  return createTestTerminalPanel(panelTag);
 }
 
 function terminalOpenResult(sessionId: string) {
@@ -119,7 +98,6 @@ describe("terminal panel readiness", () => {
       panel.client = client;
       panel.available = true;
       panel.agentId = "research";
-      panel.catalogReadyTimeoutMs = 1_000;
       const catalog = { catalogId: "anthropic", hostId: "node:mac", threadId: "thread" };
       panel.page = panel.fullscreen = panel.embedded = true;
       panel.routeTarget = { catalog };
@@ -140,7 +118,7 @@ describe("terminal panel readiness", () => {
         siblingOpen.resolve(terminalOpenResult("sibling-terminal"));
         await vi.waitFor(() => expect(panel.querySelector(".is-live")).not.toBeNull());
       }
-      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(30_000);
       await panel.updateComplete;
       expect(panel.querySelector(".tp-error")?.textContent).toContain(
         "Session did not connect within 30 seconds",

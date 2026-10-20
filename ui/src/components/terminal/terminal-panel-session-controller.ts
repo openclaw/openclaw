@@ -736,7 +736,6 @@ export function createTerminalPanelSessions(host: TerminalPanelSessionHost) {
     hasTabs: () => state.tabs.length > 0,
     publish: () => host.publish(),
     setBooting: (booting) => updateState({ booting }),
-    timeoutMs: () => host.inputs.catalogReadyTimeoutMs,
     showTimeout: () => {
       refreshError = api.setError(t("terminal.refreshRequired"));
     },
@@ -748,7 +747,6 @@ export function createTerminalPanelSessions(host: TerminalPanelSessionHost) {
     },
   };
   const ownedReadiness = createTerminalTabReadiness<TerminalPanelSessionTab>({
-    timeoutMs: () => host.inputs.catalogReadyTimeoutMs,
     isCurrent: (tab) => state.tabs.includes(tab),
     onReady: (tab) => {
       delete tab.pendingOpen;

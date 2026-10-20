@@ -116,7 +116,6 @@ export async function validateUpdateCandidateCanary(params: {
   let gatewayRestartCompletion = false;
   let doctorConfigWrites = false;
   let doctorConfigChanges: UpdateDoctorConfigChange[] = [];
-  let listenerIsolation: canaryCmd.CanaryResult["listenerIsolation"];
   const progress: { phase: canaryCmd.CanaryPhase } = { phase: "runtime" };
   const finish = (
     outcome: canaryCmd.CanaryOutcome,
@@ -130,7 +129,6 @@ export async function validateUpdateCandidateCanary(params: {
     gatewayRestartCompletion,
     ...(outcome.status === "ok" && doctorConfigWrites ? { doctorConfigWrites } : {}),
     ...(doctorConfigChanges.length ? { doctorConfigChanges } : {}),
-    listenerIsolation,
     steps,
   });
   const capture = (chunk: Buffer | string) => {
@@ -238,10 +236,6 @@ export async function validateUpdateCandidateCanary(params: {
     env = { ...rehearsal.env };
     const { port, stateDir: copiedStateDir } = rehearsal;
     const doctorResultOptions = { tmpdir: () => copiedStateDir };
-    listenerIsolation = {
-      gateway: { host: "127.0.0.1", port },
-      mcpAppSandbox: "disabled",
-    };
     const commands = canaryCmd.buildUpdateCanaryCommands({
       continuationEntry,
       migrationPolicy: params.migrationPolicy,
