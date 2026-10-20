@@ -4,11 +4,6 @@ vi.mock("../packages/terminal-core/src/progress-line.js", () => ({
   clearActiveProgressLine: vi.fn(),
 }));
 
-vi.mock("../packages/terminal-core/src/restore.js", () => ({
-  restoreTerminalState: vi.fn(),
-}));
-
-import { restoreTerminalState } from "../packages/terminal-core/src/restore.js";
 import { loggingState } from "./logging/state.js";
 import {
   createNonExitingRuntime,
@@ -82,7 +77,6 @@ describe("defaultRuntime terminal restoration", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
-    vi.mocked(restoreTerminalState).mockReset();
     loggingState.forceConsoleToStderr = originalForceConsoleToStderr;
     for (const { stream, isTTY } of streams) {
       if (isTTY) {
@@ -93,11 +87,7 @@ describe("defaultRuntime terminal restoration", () => {
     }
   });
 
-  beforeEach(async () => {
-    const actualRestore = await vi.importActual<
-      typeof import("../packages/terminal-core/src/restore.js")
-    >("../packages/terminal-core/src/restore.js");
-    vi.mocked(restoreTerminalState).mockImplementation(actualRestore.restoreTerminalState);
+  beforeEach(() => {
     for (const { stream, chunks } of streams) {
       Object.defineProperty(stream, "isTTY", { value: true, configurable: true });
       chunks.length = 0;

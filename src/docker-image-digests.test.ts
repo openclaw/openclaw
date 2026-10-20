@@ -59,50 +59,25 @@ function resolveFromImageRef(fromLine: string, argDefaults: Map<string, string>)
   return argDefaults.get(argName) ?? imageRef;
 }
 
-function resolveAllArgBackedFromReferences(
-  dockerfile: string,
-): { stage: string; imageRef: string }[] {
+function digestReferences(dockerfile: string): string[] {
   const argDefaults = resolveArgDefaults(dockerfile);
-  const results: { stage: string; imageRef: string }[] = [];
-  let stageIndex = 0;
-  for (const line of dockerfile.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed.startsWith("FROM ")) {
-      continue;
-    }
-    const imageRef = resolveFromImageRef(trimmed, argDefaults);
-    // Only check FROM lines that use an ARG — literal `FROM scratch` etc. are intentionally unpinned.
-    const usesArg = /FROM\s+\$(?:\{[A-Z0-9_]+\}|[A-Z0-9_]+)/.test(trimmed);
-    if (usesArg) {
-      const stage = trimmed.match(/AS\s+(\S+)/i)?.[1] ?? `stage-${stageIndex}`;
-      results.push({ stage, imageRef });
-    }
-    stageIndex += 1;
-  }
-  return results;
+  const fromLines = dockerfile
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("FROM "));
+  expect(fromLines.length, "Dockerfile should define a FROM line").toBeGreaterThan(0);
+  // Check the base and every ARG-backed stage; later literal stages may be scratch or aliases.
+  return fromLines
+    .filter((line, index) => index === 0 || /FROM\s+\$(?:\{[A-Z0-9_]+\}|[A-Z0-9_]+)/.test(line))
+    .map((line) => resolveFromImageRef(line, argDefaults));
 }
 
 describe("docker base image pinning", () => {
-  it("pins selected Dockerfile FROM lines to immutable sha256 digests", async () => {
+  it("pins the base and every ARG-backed FROM stage to immutable sha256 digests", async () => {
     for (const dockerfilePath of DIGEST_PINNED_DOCKERFILES) {
       const dockerfile = await readFile(resolve(repoRoot, dockerfilePath), "utf8");
-      const fromLine = expectDefined(
-        dockerfile.split(/\r?\n/).find((line) => line.trimStart().startsWith("FROM ")),
-        `${dockerfilePath} should define a FROM line`,
-      );
-      const imageRef = resolveFromImageRef(fromLine, resolveArgDefaults(dockerfile));
-      expect(imageRef, `${dockerfilePath} FROM must be digest-pinned`).toMatch(
-        /^\S+@sha256:[a-f0-9]{64}$/,
-      );
-    }
-  });
-
-  it("pins all ARG-backed FROM stages in selected Dockerfiles to sha256 digests", async () => {
-    for (const dockerfilePath of DIGEST_PINNED_DOCKERFILES) {
-      const dockerfile = await readFile(resolve(repoRoot, dockerfilePath), "utf8");
-      const stages = resolveAllArgBackedFromReferences(dockerfile);
-      for (const { stage, imageRef } of stages) {
-        expect(imageRef, `${dockerfilePath} stage "${stage}" must be digest-pinned`).toMatch(
+      for (const imageRef of digestReferences(dockerfile)) {
+        expect(imageRef, `${dockerfilePath} FROM ${imageRef} must be digest-pinned`).toMatch(
           /^\S+@sha256:[a-f0-9]{64}$/,
         );
       }

@@ -1,14 +1,21 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-const boundary = vi.hoisted(() => ({
-  mode: "flags" as "flags" | "compile-cache" | "none",
-  trace: false,
-  runtimeSupported: true,
+type DiagnosticWriter = (message: string, error?: unknown) => void | Promise<void>;
+const makeBoundary = vi.hoisted(() => () => ({
+  mode: "compile-cache" as "flags" | "compile-cache" | "none",
+  trace: true,
+  runtimeSupported: false,
   events: [] as string[],
   spawnTitle: undefined as string | undefined,
   admissionContext: undefined as string | undefined,
-  writer: undefined as ((message: string, error?: unknown) => void | Promise<void>) | undefined,
+  writer: undefined as DiagnosticWriter | undefined,
+  spawn(writer: DiagnosticWriter | undefined) {
+    this.writer = writer;
+    this.spawnTitle = process.title;
+    this.events.push("spawn");
+  },
 }));
+const boundary = makeBoundary();
 
 vi.mock("./infra/is-main.js", () => ({ isMainModule: () => true }));
 vi.mock("./infra/openclaw-exec-env.js", async (importOriginal) => ({
@@ -38,9 +45,7 @@ vi.mock("./entry.compile-cache.js", () => ({
     if (boundary.mode !== "compile-cache") {
       return false;
     }
-    boundary.writer = await params.prepareWriteError();
-    boundary.spawnTitle = process.title;
-    boundary.events.push("spawn");
+    boundary.spawn(await params.prepareWriteError());
     return true;
   },
 }));
@@ -49,9 +54,7 @@ vi.mock("./entry.respawn.js", async (importOriginal) => ({
   buildCliRespawnPlan: () =>
     boundary.mode === "none" ? null : { command: "node", argv: [], env: {} },
   runCliRespawnPlan: async (_plan: unknown, writer: typeof boundary.writer) => {
-    boundary.writer = writer;
-    boundary.spawnTitle = process.title;
-    boundary.events.push("spawn");
+    boundary.spawn(writer);
   },
 }));
 vi.mock("./entry.version-fast-path.js", () => ({
@@ -85,15 +88,7 @@ async function expectAdmissionExit(events: string[]) {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.resetModules();
-  Object.assign(boundary, {
-    events: [],
-    mode: "compile-cache",
-    trace: true,
-    runtimeSupported: false,
-    writer: undefined,
-    spawnTitle: undefined,
-    admissionContext: undefined,
-  });
+  Object.assign(boundary, makeBoundary());
   process.title = "doctor-launcher-fixture";
 });
 afterEach(() => {
@@ -120,11 +115,7 @@ it.each([
     await launch("doctor", "--fix");
 
     expect([boundary.spawnTitle, process.title]).toEqual([launcherTitle, launcherTitle]);
-    const recoveryEvents = supported ? [] : ["dotenv", "trace formatting"];
-    const beforeDiagnostic = [
-      ...recoveryEvents,
-      ...(trace ? ["dotenv", "trace formatting", "spawn"] : ["spawn"]),
-    ];
+    const beforeDiagnostic = ["dotenv", "trace formatting", "spawn"];
     expect(boundary.events).toEqual(beforeDiagnostic);
     expect(stderr).not.toHaveBeenCalled();
     expect(boundary.writer).toBeTypeOf("function");
@@ -144,18 +135,17 @@ it("names the final executing CLI after startup respawn decisions", async () => 
   boundary.runtimeSupported = true;
   await launch("--version");
 
-  expect(boundary.spawnTitle).toBeUndefined();
-  expect(process.title).toBe("openclaw");
+  expect([boundary.spawnTitle, process.title]).toEqual([undefined, "openclaw"]);
 });
 
 it("runs internal admission with root options before runtime recovery, cache activation, or respawn", async () => {
   const { isUpdateAdmissionAuthorityEnvKey } = await import("./infra/update-admission-contract.js");
-  for (const key of Object.keys(process.env)) {
-    if (isUpdateAdmissionAuthorityEnvKey(key)) {
-      vi.stubEnv(key, undefined);
-    }
-  }
-  for (const key of ["OPENCLAW_PROFILE", "OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]) {
+  for (const key of [
+    ...Object.keys(process.env).filter(isUpdateAdmissionAuthorityEnvKey),
+    "OPENCLAW_PROFILE",
+    "OPENCLAW_STATE_DIR",
+    "OPENCLAW_CONFIG_PATH",
+  ]) {
     vi.stubEnv(key, undefined);
   }
   await launch(
