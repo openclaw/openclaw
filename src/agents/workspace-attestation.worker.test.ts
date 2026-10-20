@@ -18,6 +18,7 @@ import {
 import { ensureAgentWorkspace, WORKSPACE_VANISHED_ERROR_CODE } from "./workspace.js";
 
 const WORKSPACE_ATTESTATION_RECENT_MS = 24 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
 
 let state: OpenClawTestState;
 beforeEach(async () => {
@@ -91,7 +92,7 @@ it.each(["transaction", "commit"] as const)(
   },
 );
 
-it("refreshes unchanged hashes so disappearance protection survives a database restart", async () => {
+it("preserves disappearance protection across a restart within the coalesced refresh window", async () => {
   const startedAt = Date.now() - WORKSPACE_ATTESTATION_RECENT_MS;
   const clock = vi.spyOn(Date, "now").mockReturnValue(startedAt);
   await fs.writeFile(path.join(state.workspaceDir, "AGENTS.md"), "Synthetic instructions.\n");
@@ -105,9 +106,12 @@ it("refreshes unchanged hashes so disappearance protection survives a database r
   const refreshed = (await readWorkspaceStateSnapshot(state.workspaceDir)).attestation!;
   expect(refreshed.generatedHashes).toEqual(original.generatedHashes);
   expect(refreshed.attestedAtMs).toBe(refreshedAt);
+  clock.mockReturnValue(refreshedAt + HOUR_MS / 2);
+  await ensureAgentWorkspace({ dir: state.workspaceDir });
+  expect((await readWorkspaceStateSnapshot(state.workspaceDir)).attestation).toEqual(refreshed);
   await closeOpenClawStateDatabaseAsync();
   await fs.rm(state.workspaceDir, { recursive: true });
-  clock.mockReturnValue(startedAt + WORKSPACE_ATTESTATION_RECENT_MS + 1);
+  clock.mockReturnValue(refreshedAt + (3 * HOUR_MS) / 4);
 
   await expect(ensureAgentWorkspace({ dir: state.workspaceDir })).rejects.toMatchObject({
     code: WORKSPACE_VANISHED_ERROR_CODE,
@@ -115,7 +119,9 @@ it("refreshes unchanged hashes so disappearance protection survives a database r
   await expect(fs.stat(state.workspaceDir)).rejects.toMatchObject({ code: "ENOENT" });
 });
 
-it("retains the published workspace snapshot across populated warm preparations", async () => {
+it("skips all workspace requests on unchanged populated warm turns until the attestation is over an hour old", async () => {
+  const startedAt = Date.now() - 2 * HOUR_MS;
+  const clock = vi.spyOn(Date, "now").mockReturnValue(startedAt);
   await fs.writeFile(path.join(state.workspaceDir, "seed.txt"), "Synthetic workspace content.\n");
   await ensureAgentWorkspace({ dir: state.workspaceDir, ensureBootstrapFiles: false });
   // Populate the read cache after first creation promotes the database identity.
@@ -125,11 +131,36 @@ it("retains the published workspace snapshot across populated warm preparations"
     commands.push(command.type);
     return scope.execute(command, options);
   });
-  for (let turn = 0; turn < 2; turn++) {
+  for (const elapsedMs of [1_000, HOUR_MS, HOUR_MS + 1, HOUR_MS + 2]) {
+    clock.mockReturnValue(startedAt + elapsedMs);
     commands.length = 0;
     await ensureAgentWorkspace({ dir: state.workspaceDir, ensureBootstrapFiles: false });
-    expect(commands).toEqual(["workspace.replaceAttestation"]);
+    expect(commands).toEqual(elapsedMs === HOUR_MS + 1 ? ["workspace.replaceAttestation"] : []);
   }
+  expect(
+    (await readWorkspaceStateSnapshot(state.workspaceDir, { readOnly: true })).attestation
+      ?.attestedAtMs,
+  ).toBe(startedAt + HOUR_MS + 1);
+});
+
+it("persists changed generated hashes immediately within the refresh hour", async () => {
+  const startedAt = Date.now() - HOUR_MS;
+  const clock = vi.spyOn(Date, "now").mockReturnValue(startedAt);
+  await ensureAgentWorkspace({ dir: state.workspaceDir, ensureBootstrapFiles: true });
+  const original = (await readWorkspaceStateSnapshot(state.workspaceDir)).attestation!;
+  expect(original.generatedHashes.has("AGENTS.md")).toBe(true);
+
+  await fs.writeFile(
+    path.join(state.workspaceDir, "AGENTS.md"),
+    "Customized synthetic instructions.\n",
+  );
+  clock.mockReturnValue(startedAt + 1_000);
+  await ensureAgentWorkspace({ dir: state.workspaceDir, ensureBootstrapFiles: false });
+  const updated = (await readWorkspaceStateSnapshot(state.workspaceDir, { readOnly: true }))
+    .attestation!;
+  expect(updated.attestedAtMs).toBe(startedAt + 1_000);
+  expect(updated.generatedHashes.has("AGENTS.md")).toBe(false);
+  expect(updated.generatedHashes.size).toBe(original.generatedHashes.size - 1);
 });
 
 it("does not synchronously inventory skills when a recent attestation prevents expiry", async () => {
