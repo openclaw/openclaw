@@ -1,68 +1,38 @@
 import * as fs from "node:fs";
-import { tmpdir } from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
-import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { dayKeyFor } from "./day.js";
-import { logbookSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { LogbookStore } from "./store.js";
+import {
+  BASE,
+  DAY,
+  batchInput,
+  cardDraft,
+  execSql,
+  frameInput,
+  readRows,
+  useLogbookFixture,
+  withDatabase,
+  workerModuleUrl,
+} from "./test-fixtures.test-support.js";
 import type { LogbookCardDraft } from "./types.js";
 
-const workerModuleUrl = resolveRuntimeWorkerUrl(logbookSqliteBackendEntrypoint);
-const DAY = "2026-07-03";
-const BASE = new Date(`${DAY}T10:00:00`).getTime();
-
-function withDatabase<T>(databasePath: string, run: (db: DatabaseSync) => T, readOnly = false): T {
-  const db = new DatabaseSync(databasePath, { readOnly });
-  try {
-    return run(db);
-  } finally {
-    db.close();
-  }
-}
-const readRows = (file: string, sql: string) =>
-  withDatabase(file, (db) => db.prepare(sql).all(), true);
-const execSql = (file: string, sql: string) => withDatabase(file, (db) => db.exec(sql));
-
-function draft(overrides: Partial<LogbookCardDraft> = {}): LogbookCardDraft {
-  return {
-    day: DAY,
-    startMs: BASE,
-    endMs: BASE + 30 * 60_000,
-    title: "Card",
-    summary: "Summary",
-    detail: "",
-    category: "coding",
-    appPrimary: "github.com",
-    appSecondary: undefined,
-    distractions: [],
-    keyframeId: undefined,
-    ...overrides,
-  };
-}
+const fixture = useLogbookFixture("logbook-store-");
+const draft = (overrides: Partial<LogbookCardDraft> = {}) =>
+  cardDraft({ appPrimary: "github.com", ...overrides });
 
 describe("LogbookStore", () => {
   let dir: string;
   let store: LogbookStore;
 
   beforeEach(async () => {
-    dir = fs.mkdtempSync(path.join(tmpdir(), "logbook-store-"));
-    store = await LogbookStore.open(dir, workerModuleUrl);
+    dir = fixture.makeDir();
+    store = await fixture.open(dir);
   });
 
-  afterEach(async () => {
-    await store.close();
-    fs.rmSync(dir, { recursive: true, force: true });
-  });
-
-  const createBatch = (
-    frameIds: number[],
-    startMs: number,
-    endMs = startMs + 1000,
-    day = dayKeyFor(startMs),
-  ) => store.createBatch({ day, startMs, endMs, frameIds });
+  const createBatch = (ids: number[], start: number, end = start + 1000, day = dayKeyFor(start)) =>
+    store.createBatch(batchInput(ids, start, end, day));
   const replaceCards = (drafts: LogbookCardDraft[]) =>
     store.replaceCardsInWindow(DAY, BASE, BASE + 60_000, drafts);
   const cardTitles = async () => (await store.cardsForDay(DAY)).map(({ title }) => title);
@@ -71,15 +41,15 @@ describe("LogbookStore", () => {
     const filePath = store.frameFilePath(day, capturedAtMs);
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.writeFileSync(filePath, "jpeg-bytes");
-    return await store.insertFrame({
-      capturedAtMs,
-      day,
-      path: filePath,
-      screenIndex: 0,
-      byteSize: 9,
-      contentHash: `hash-${capturedAtMs}`,
-      idle: false,
-    });
+    return await store.insertFrame(
+      frameInput({
+        capturedAtMs,
+        day,
+        path: filePath,
+        byteSize: 9,
+        contentHash: `hash-${capturedAtMs}`,
+      }),
+    );
   };
 
   it("refuses a hardlinked database with another frame root before bootstrapping that root", async () => {
@@ -88,24 +58,16 @@ describe("LogbookStore", () => {
     const otherRoot = path.join(dir, "another-root");
     fs.mkdirSync(otherRoot);
     fs.linkSync(path.join(dir, "logbook.sqlite"), path.join(otherRoot, "logbook.sqlite"));
-    const [result] = await Promise.allSettled([LogbookStore.open(otherRoot, workerModuleUrl)]);
-    try {
-      expect(fs.existsSync(path.join(otherRoot, "frames"))).toBe(false);
-      expect(result).toMatchObject({
-        status: "rejected",
-        reason: { message: "SQLite database already belongs to another worker backend" },
-      });
-      expect(await store.frameById(frameId)).toMatchObject({
-        id: frameId,
-        capturedAtMs,
-        path: store.frameFilePath(dayKeyFor(capturedAtMs), capturedAtMs),
-      });
-      expect(await store.countUnbatchedActiveFrames()).toBe(1);
-    } finally {
-      if (result.status === "fulfilled") {
-        await result.value.close();
-      }
-    }
+    await expect(fixture.open(otherRoot)).rejects.toThrow(
+      "SQLite database already belongs to another worker backend",
+    );
+    expect(fs.existsSync(path.join(otherRoot, "frames"))).toBe(false);
+    expect(await store.frameById(frameId)).toMatchObject({
+      id: frameId,
+      capturedAtMs,
+      path: store.frameFilePath(dayKeyFor(capturedAtMs), capturedAtMs),
+    });
+    expect(await store.countUnbatchedActiveFrames()).toBe(1);
   });
 
   it("rolls back large frame claims with a late missing or duplicate frame", async () => {
@@ -160,11 +122,10 @@ describe("LogbookStore", () => {
   });
 
   it("round-trips distractions and computes day stats", async () => {
-    const base = BASE;
     const distractions = [
-      { startMs: base + 5 * 60_000, endMs: base + 10 * 60_000, title: "Twitter" },
+      { startMs: BASE + 5 * 60_000, endMs: BASE + 10 * 60_000, title: "Twitter" },
     ];
-    await store.replaceCardsInWindow(DAY, base, base + 60 * 60_000, [
+    await store.replaceCardsInWindow(DAY, BASE, BASE + 60 * 60_000, [
       draft({ distractions }),
       draft({ title: "Review", category: "review", appPrimary: undefined, appSecondary: "" }),
     ]);
@@ -236,13 +197,7 @@ describe("LogbookStore", () => {
     }));
     await store.replaceObservations(batchId, DAY, [{ startMs: 1, endMs: 2, text: "replaced" }]);
     await store.replaceObservations(batchId, DAY, segments);
-    expect(
-      (await store.observationsInRange(DAY, 0, 3)).map(({ startMs, endMs, text }) => ({
-        startMs,
-        endMs,
-        text,
-      })),
-    ).toEqual(segments);
+    expect(await store.observationsInRange(DAY, 0, 3)).toMatchObject(segments);
 
     await expect(
       store.replaceObservations(batchId, DAY, [
@@ -250,9 +205,7 @@ describe("LogbookStore", () => {
         { startMs: 1.5, endMs: 2, text: "invalid integer timestamp" },
       ]),
     ).rejects.toThrow();
-    expect((await store.observationsInRange(DAY, 0, 3)).map(({ text }) => text)).toEqual(
-      segments.map(({ text }) => text),
-    );
+    expect(await store.observationsInRange(DAY, 0, 3)).toMatchObject(segments);
 
     await store.replaceObservations(batchId, DAY, []);
     expect(await store.observationsInRange(DAY, 0, 3)).toEqual([]);
@@ -289,36 +242,24 @@ describe("LogbookStore", () => {
       databasePath,
       `
       CREATE TABLE batches (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        day TEXT NOT NULL,
-        start_ms INTEGER NOT NULL,
-        end_ms INTEGER NOT NULL,
-        status TEXT NOT NULL DEFAULT 'pending',
-        error TEXT,
-        frame_count INTEGER NOT NULL DEFAULT 0,
-        model TEXT,
-        created_ms INTEGER NOT NULL,
-        updated_ms INTEGER NOT NULL
+        id INTEGER PRIMARY KEY AUTOINCREMENT, day TEXT NOT NULL,
+        start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending', error TEXT,
+        frame_count INTEGER NOT NULL DEFAULT 0, model TEXT,
+        created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL
       );
       CREATE TABLE frames (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        captured_at_ms INTEGER NOT NULL,
-        day TEXT NOT NULL,
-        path TEXT NOT NULL,
-        screen_index INTEGER NOT NULL DEFAULT 0,
-        width INTEGER,
-        height INTEGER,
-        byte_size INTEGER NOT NULL DEFAULT 0,
-        content_hash TEXT NOT NULL,
-        idle INTEGER NOT NULL DEFAULT 0,
-        batch_id INTEGER
+        id INTEGER PRIMARY KEY AUTOINCREMENT, captured_at_ms INTEGER NOT NULL,
+        day TEXT NOT NULL, path TEXT NOT NULL, screen_index INTEGER NOT NULL DEFAULT 0,
+        width INTEGER, height INTEGER, byte_size INTEGER NOT NULL DEFAULT 0,
+        content_hash TEXT NOT NULL, idle INTEGER NOT NULL DEFAULT 0, batch_id INTEGER
       );
       INSERT INTO batches VALUES (7, '${DAY}', 10, 20, 'pending', NULL, 1, NULL, 10, 10);
       INSERT INTO frames VALUES (11, 10, '${DAY}', '/tmp/frame.jpg', 0, NULL, NULL, 1, 'hash', 0, 7);
     `,
     );
 
-    store = await LogbookStore.open(dir, workerModuleUrl);
+    store = await fixture.open(dir);
 
     expect(readRows(databasePath, "SELECT id, batch_id FROM frames")).toEqual([
       { id: 11, batch_id: 7 },
@@ -330,13 +271,12 @@ describe("LogbookStore", () => {
              WHERE schema = 'main' AND type = 'table' AND name NOT LIKE 'sqlite_%'
              ORDER BY name`,
       ),
-    ).toEqual([
-      { name: "batches", strict: 1 },
-      { name: "cards", strict: 1 },
-      { name: "frames", strict: 1 },
-      { name: "observations", strict: 1 },
-      { name: "standups", strict: 1 },
-    ]);
+    ).toEqual(
+      ["batches", "cards", "frames", "observations", "standups"].map((name) => ({
+        name,
+        strict: 1,
+      })),
+    );
   });
 
   it("refuses a newer schema without changing its stored data", async () => {

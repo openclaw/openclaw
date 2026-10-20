@@ -1,31 +1,10 @@
-import { realpathSync } from "node:fs";
-import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
-import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveLogbookConfig } from "./config.js";
-import { LogbookService } from "./service.js";
-import { logbookSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
+import { expectDefined } from "@openclaw/normalization-core";
+import { describe, expect, it, vi } from "vitest";
+import { dayKeyFor } from "./day.js";
 import { LogbookStore } from "./store.js";
+import { batchInput, quietLogger, useLogbookFixture } from "./test-fixtures.test-support.js";
 
-const workerModuleUrl = resolveRuntimeWorkerUrl(logbookSqliteBackendEntrypoint);
-const services: LogbookService[] = [];
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    try {
-      await Promise.all(services.splice(0).map((service) => service.stop()));
-    } finally {
-      cleanup();
-    }
-  }),
-);
-
-const quietLogger = {
-  info() {},
-  warn() {},
-  error() {},
-  debug() {},
-};
+const fixture = useLogbookFixture("logbook-service-test-");
 const framePayload = {
   payload: { format: "jpeg", base64: Buffer.from("fake-jpeg").toString("base64") },
 };
@@ -37,7 +16,7 @@ async function makeService(params: {
   config?: Record<string, unknown>;
   fullConfig?: Record<string, unknown>;
 }) {
-  const dataDir = realpathSync(tempDirs.make("logbook-service-test-"));
+  const dataDir = fixture.makeDir();
   const warn = vi.fn();
   const invoked: Array<{ nodeId: string; command: string }> = [];
   const runtime = {
@@ -54,19 +33,15 @@ async function makeService(params: {
       },
     },
   };
-  const service = new LogbookService(
-    resolveLogbookConfig({ captureEnabled: true, ...params.config }),
+  const service = await fixture.startService(
+    { captureEnabled: true, ...params.config },
     {
       runtime: runtime as never,
       fullConfig: (params.fullConfig ?? {}) as never,
       logger: { ...quietLogger, warn },
       dataDir,
-      workerModuleUrl,
-      scheduler: createTestPluginServiceScheduler(),
     },
   );
-  services.push(service);
-  await service.start();
   const tick = () =>
     (service as unknown as { captureTick(): Promise<void> }).captureTick.call(service);
   const analyze = () =>
@@ -110,58 +85,42 @@ describe("LogbookService capture node selection", () => {
 });
 
 describe("LogbookService vision model selection", () => {
-  it("warns about a missing model only when analysis work is pending", async () => {
-    const { tick, analyze, warn } = await makeService({});
-
-    await analyze();
-    expect(warn).not.toHaveBeenCalled();
-
-    await tick();
-    await analyze();
-    await analyze();
-    expect(warn).toHaveBeenCalledExactlyOnceWith(missingModelWarning);
-  });
-
-  it("warns when a pending batch has no unbatched frames", async () => {
-    const { service, analyze, warn } = await makeService({
-      nodeIds: [],
-      config: { captureEnabled: false },
-    });
-    const store = (service as unknown as { store: LogbookStore }).store;
-    const capturedAtMs = Date.now();
-    const day = new Date(capturedAtMs).toISOString().slice(0, 10);
-    const frameId = await store.captureFrame({
-      capturedAtMs,
-      day,
-      screenIndex: 0,
-      buffer: Buffer.from("fake-jpeg"),
-    });
-    await store.createBatch({
-      day,
-      startMs: capturedAtMs,
-      endMs: capturedAtMs + 1000,
-      frameIds: [frameId],
-    });
-
-    expect(await store.countUnbatchedActiveFrames()).toBe(0);
-    expect(await store.nextPendingBatch()).not.toBeNull();
-    await analyze();
-    expect(warn).toHaveBeenCalledExactlyOnceWith(missingModelWarning);
-  });
+  it.each([false, true])(
+    "warns only for pending work, with frames batched: %s",
+    async (batched) => {
+      const { service, tick, analyze, warn } = await makeService({});
+      await analyze();
+      expect(warn).not.toHaveBeenCalled();
+      await tick();
+      if (batched) {
+        const store = (service as unknown as { store: LogbookStore }).store;
+        const frame = expectDefined((await store.unbatchedActiveFrames(1))[0], "captured frame");
+        await store.createBatch(
+          batchInput(
+            [frame.id],
+            frame.capturedAtMs,
+            frame.capturedAtMs + 1000,
+            dayKeyFor(frame.capturedAtMs),
+          ),
+        );
+        expect(await store.countUnbatchedActiveFrames()).toBe(0);
+        expect(await store.nextPendingBatch()).not.toBeNull();
+      }
+      await analyze();
+      await analyze();
+      expect(warn).toHaveBeenCalledExactlyOnceWith(missingModelWarning);
+    },
+  );
 
   it("borrows only a media provider with structured extraction", async () => {
+    const models = ["openai", " Codex "].map((provider) => ({
+      provider,
+      model: "gpt-5.5",
+      capabilities: ["image"],
+    }));
     const { service } = await makeService({
       nodeIds: [],
-      fullConfig: {
-        tools: {
-          media: {
-            models: [
-              { provider: "openai", model: "gpt-5.5", capabilities: ["image"] },
-              { provider: " Codex ", model: "gpt-5.5", capabilities: ["image"] },
-            ],
-          },
-        },
-      },
+      fullConfig: { tools: { media: { models } } },
     });
 
     expect(await service.status()).toMatchObject({
