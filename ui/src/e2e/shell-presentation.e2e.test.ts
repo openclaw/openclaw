@@ -1,12 +1,7 @@
 import { expect, it } from "vitest";
-import {
-  controlUiBundledGatewayUrl,
-  installMockGateway,
-  waitForControlUiRoute,
-} from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { seedStorage } from "./sidebar-assertions.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Shell presentation continuity" });
 const variants = [
@@ -16,11 +11,11 @@ const variants = [
   { width: 390, height: 844, colorScheme: "dark" },
 ] as const;
 
-suite.define(() => {
+suite.define(() =>
   it.each(variants)(
-    "keeps one sidebar and the active draft through $width px $colorScheme shell states",
-    async ({ width, height, colorScheme }) => {
-      await suite.withPage(
+    "preserves shell and draft ($width px, $colorScheme)",
+    ({ width, height, colorScheme }) =>
+      suite.withPage(
         {
           viewport: { width, height },
           colorScheme,
@@ -29,26 +24,13 @@ suite.define(() => {
           serviceWorkers: "block",
         },
         async ({ page }) => {
-          const gateway = await installMockGateway(page, {
-            historyMessages: [
-              { role: "assistant", content: "A synthetic conversation for shell presentation." },
-            ],
-          });
-          const gatewayUrl = controlUiBundledGatewayUrl(suite.server.baseUrl);
-          await seedStorage(page, {
-            [`openclaw.control.settings.v1:${gatewayUrl}`]: JSON.stringify({
-              gatewayUrl,
-              theme: "claw",
-              themeMode: colorScheme,
-            }),
-          });
+          const gateway = await installMockGateway(page);
           await page.goto(`${suite.server.baseUrl}new`);
           await waitForControlUiRoute(page, { routeId: "new-session" });
           const shell = page.locator(".shell");
           const sidebar = page.locator("openclaw-app-sidebar");
           expect(await sidebar.count()).toBe(1);
           const sidebarNode = await sidebar.elementHandle();
-          expect(sidebarNode).not.toBeNull();
           const assertSidebarIdentity = async () => {
             expect(await sidebar.count()).toBe(1);
             expect(
@@ -95,14 +77,13 @@ suite.define(() => {
           });
           expect(await composer.inputValue()).toBe(draft);
           await assertSidebarIdentity();
-          await sidebarNode?.dispose();
+          await sidebarNode.dispose();
 
           await page.goto(`${suite.server.baseUrl}new?onboarding=1`);
           await page.locator(".shell--onboarding").waitFor();
           await waitForControlUiRoute(page, { routeId: "new-session" });
           expect(await page.locator(".shell-nav:visible").count()).toBe(0);
         },
-      );
-    },
-  );
-});
+      ),
+  ),
+);

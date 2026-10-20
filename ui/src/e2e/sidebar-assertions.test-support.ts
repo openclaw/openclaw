@@ -5,14 +5,14 @@ import { expect } from "vitest";
 import type { MockGatewayWindow } from "../test-helpers/control-ui-e2e-contract.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 
+type Prefs = Record<string, unknown>;
+
+function hasFocus(element: Element, within: boolean) {
+  return within ? element.matches(":focus-within") : element === document.activeElement;
+}
+
 export function expectFocused(locator: Locator, within = false) {
-  const read = () =>
-    locator.evaluate(
-      (element, subtree) =>
-        subtree ? element.matches(":focus-within") : element === document.activeElement,
-      within,
-    );
-  return expect.poll(read).toBe(true);
+  return expect.poll(() => locator.evaluate(hasFocus, within)).toBe(true);
 }
 
 export async function pressAndExpectFocus(
@@ -48,36 +48,34 @@ export function mockRequests(page: Page, method: string) {
 
 export function installPreferenceServer(
   page: Page,
-  initialEntries: Record<string, unknown>,
+  initialEntries: Prefs,
   persistenceKey?: string,
 ) {
   return page.evaluate(
     ({ initial, storageKey }) => {
       const mock = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
       const saved = storageKey ? sessionStorage.getItem(storageKey) : null;
-      const values: Record<string, unknown> = saved ? JSON.parse(saved) : initial;
+      const values: Prefs = saved ? JSON.parse(saved) : initial;
       mock.setRequestHandler("users.prefs.get", ({ respond }) =>
         respond({ status: "ok", entries: values }),
       );
       mock.setRequestHandler("users.prefs.set", ({ params, respond }) => {
-        const request = params as {
-          entries: Record<string, unknown>;
-          expectedEntries?: Record<string, unknown>;
+        const { entries, expectedEntries } = params as {
+          entries: Prefs;
+          expectedEntries?: Prefs;
         };
-        if (
+        const conflict =
           storageKey &&
-          Object.entries(request.expectedEntries ?? {}).some(
+          Object.entries(expectedEntries ?? {}).some(
             ([key, value]) => JSON.stringify(values[key] ?? null) !== JSON.stringify(value),
-          )
-        ) {
-          respond({ status: "conflict" });
-          return;
+          );
+        if (!conflict) {
+          Object.assign(values, entries);
+          if (storageKey) {
+            sessionStorage.setItem(storageKey, JSON.stringify(values));
+          }
         }
-        Object.assign(values, request.entries);
-        if (storageKey) {
-          sessionStorage.setItem(storageKey, JSON.stringify(values));
-        }
-        respond({ status: "ok" });
+        respond({ status: conflict ? "conflict" : "ok" });
       });
     },
     { initial: initialEntries, storageKey: persistenceKey },
@@ -102,7 +100,7 @@ export function seedStorage(page: Page, entries: Record<string, string>, onceKey
 }
 
 export async function captureFrame(
-  directory: string,
+  dir: string,
   name: string,
   surface: Locator,
   content: Locator[],
@@ -110,7 +108,7 @@ export async function captureFrame(
   const frame = await takeControlUiScreenshotFrame(surface.page(), surface, content, {
     animations: "disabled",
   });
-  await writeFile(path.join(directory, name), frame.png);
+  await writeFile(path.join(dir, name), frame.png);
 }
 
 export function catalogList(

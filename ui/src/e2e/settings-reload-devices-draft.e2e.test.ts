@@ -17,11 +17,11 @@ const snapshot = {
   hash: "persisted-revision",
 };
 
-suite.define(() => {
+suite.define(() =>
   it.each([false, true])(
-    "locks bindings during Reload and resumes edits afterward (read failure: %s)",
-    async (failFirstRead) => {
-      await suite.withPage({ viewport: { width: 1280, height: 1000 } }, async ({ page }) => {
+    "locks and restores bindings during Reload (read failure: %s)",
+    (failFirstRead) =>
+      suite.withPage({ viewport: { width: 1280, height: 1000 } }, async ({ page }) => {
         const gateway = await installMockGateway(page, {
           methodResponses: {
             "config.get": snapshot,
@@ -29,10 +29,7 @@ suite.define(() => {
               nodes: ["disk-node", "new-node"].map((nodeId) => ({
                 nodeId,
                 displayName: nodeId,
-                platform: "linux",
                 commands: ["system.run"],
-                connected: true,
-                paired: true,
               })),
             },
           },
@@ -65,9 +62,7 @@ suite.define(() => {
           await reload.click();
           await gateway.waitForRequest("config.get", { after });
         };
-        await reload.waitFor();
         await startReload();
-        await binding.scrollIntoViewIfNeeded();
         await expectEditor("new-node", true);
         expect(await gateway.getRequests("config.set")).toHaveLength(1);
         if (failFirstRead) {
@@ -95,9 +90,7 @@ suite.define(() => {
         });
         await gateway.resolveDeferred("config.set");
         await expect.poll(() => indicator.textContent()).toContain("Saved");
-        expect(await binding.inputValue()).toBe("new-node");
-        expect(await save.isDisabled()).toBe(true);
-      });
-    },
-  );
-});
+        await expectEditor("new-node", false, true);
+      }),
+  ),
+);

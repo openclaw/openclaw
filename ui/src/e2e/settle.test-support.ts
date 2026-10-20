@@ -4,26 +4,25 @@ import { getControlUiContextHandle } from "../test-helpers/control-ui-e2e-contex
 
 type SettledFormControl = { locator: Locator } & ({ value: string } | { checked: boolean });
 
-async function waitForBrowserRenderBoundary(page: Page): Promise<void> {
+async function waitForStableValue<T>(page: Page, read: () => Promise<T>, expected: T) {
+  // Resolve async probes and require a match on both sides of a render boundary.
+  await expect.poll(read).toEqual(expected);
   await page.evaluate(() => new Promise<number>(requestAnimationFrame));
+  await expect.poll(read).toEqual(expected);
 }
 
 export async function waitForSettledFormControls(
   page: Page,
-  controls: readonly SettledFormControl[],
-): Promise<void> {
-  const expected = controls.map((control) =>
-    "value" in control ? control.value : control.checked,
-  );
+  fields: readonly SettledFormControl[],
+) {
+  const expected = fields.map((control) => ("value" in control ? control.value : control.checked));
   const readControls = () =>
     Promise.all(
-      controls.map((control) =>
+      fields.map((control) =>
         "value" in control ? control.locator.inputValue() : control.locator.isChecked(),
       ),
     );
-  await expect.poll(readControls).toEqual(expected);
-  await waitForBrowserRenderBoundary(page);
-  await expect.poll(readControls).toEqual(expected);
+  await waitForStableValue(page, readControls, expected);
 }
 
 type CommittedStateArgs = Record<string, boolean | null | number | string>;
@@ -33,39 +32,30 @@ export async function waitForCommittedState<Arg>(
   probe: Parameters<typeof page.evaluate<boolean, Arg>>[0],
   arg: Arg,
 ): Promise<void> {
-  // Resolve async probes and require a match on both sides of a render boundary.
-  const readCommittedState = () => page.evaluate(probe, arg);
-  await expect.poll(readCommittedState).toBe(true);
-  await waitForBrowserRenderBoundary(page);
-  await expect.poll(readCommittedState).toBe(true);
+  await waitForStableValue(page, () => page.evaluate(probe, arg), true);
 }
 
-type ComposerDraftContext = {
-  gateway: {
-    connection: { gatewayUrl: string };
-    snapshot: { client: { recoveryScope?: string } | null };
+type DraftProbe = {
+  context: {
+    gateway: {
+      connection: { gatewayUrl: string };
+      snapshot: { client: { recoveryScope?: string } | null };
+    };
   };
+  expected: CommittedStateArgs;
 };
 
-export async function isComposerDraftCommitted({
-  context,
-  expected,
-}: {
-  context: ComposerDraftContext;
-  expected: CommittedStateArgs;
-}): Promise<boolean> {
+export async function isComposerDraftCommitted({ context, expected }: DraftProbe) {
   const gateway = context.gateway;
   const recoveryScope = gateway?.snapshot.client?.recoveryScope;
-  if (
-    !recoveryScope ||
-    !(await indexedDB.databases()).some((db) => db.name === "openclaw-control-ui")
-  ) {
+  const dbName = "openclaw-control-ui";
+  if (!recoveryScope || !(await indexedDB.databases()).some((db) => db.name === dbName)) {
     return false;
   }
   const gatewayOwner = gateway.connection.gatewayUrl.trim() || "default";
   // Serialized probe: read the durable key independently of the renderer.
   const database = await new Promise<IDBDatabase>((resolve, reject) => {
-    const request = indexedDB.open("openclaw-control-ui");
+    const request = indexedDB.open(dbName);
     request.addEventListener("success", () => resolve(request.result), { once: true });
     const fail = () => reject(request.error ?? new Error("IndexedDB open failed"));
     request.addEventListener("error", fail, { once: true });
@@ -80,9 +70,8 @@ export async function isComposerDraftCommitted({
     const key = JSON.stringify([gatewayOwner, recoveryScope, expected.scopeKey]);
     const draft = await new Promise<Draft | undefined>((resolve, reject) => {
       const transaction = database.transaction("composerDrafts", "readonly");
-      const request = transaction.objectStore("composerDrafts").get(key) as IDBRequest<
-        Draft | undefined
-      >;
+      const store = transaction.objectStore("composerDrafts");
+      const request = store.get(key) as IDBRequest<Draft | undefined>;
       transaction.addEventListener("complete", () => resolve(request.result), { once: true });
       const fail = () => reject(transaction.error ?? new Error("IndexedDB read failed or aborted"));
       transaction.addEventListener("abort", fail, { once: true });

@@ -27,9 +27,9 @@ function relativeUrl(page: Page): string {
   return `${url.pathname}${url.search}${url.hash}`;
 }
 
-suite.define(() => {
-  it.each(cases)("preserves Back and Forward through $name", async (scenario) => {
-    await suite.withPage(
+suite.define(() =>
+  it.each(cases)("preserves Back and Forward through $name", (scenario) =>
+    suite.withPage(
       {
         locale: "en-US",
         serviceWorkers: "block",
@@ -42,7 +42,6 @@ suite.define(() => {
             {
               role: "assistant",
               content: [{ type: "text", text: `[${linkLabel}](${scenario.source})` }],
-              timestamp: 1_789_516_800_000,
             },
           ],
         });
@@ -73,6 +72,6 @@ suite.define(() => {
         await expect.poll(() => relativeUrl(page)).toBe(scenario.destination);
         await page.locator(scenario.surface).waitFor();
       },
-    );
-  });
-});
+    ),
+  ),
+);
