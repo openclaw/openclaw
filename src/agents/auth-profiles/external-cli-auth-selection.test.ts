@@ -54,22 +54,13 @@ describe("resolveExternalCliAuthOverlayScopeFromSelection", () => {
     expect(resolveScope({ store })).toEqual(externalScope);
   });
 
-  it("keeps static Anthropic auth on the no-external path", () => {
+  it.each([
+    [apiId, undefined, { ignoreAutoPreferredProfile: false }],
+    [cliId, apiId, { providerIds: ["claude-cli"], ignoreAutoPreferredProfile: false }],
+  ] as const)("resolves ordered %s auth with pin %s", (ordered, pin, expected) => {
     const cfg = {
-      auth: { order: { anthropic: [apiId] }, profiles: authProfiles },
+      auth: { order: { anthropic: [ordered] }, profiles: authProfiles },
     } satisfies OpenClawConfig;
-
-    expect(resolveScope({ cfg })).toEqual({ ignoreAutoPreferredProfile: false });
-  });
-
-  it("loads ordered same-provider CLI fallbacks behind a user pin", () => {
-    const cfg = {
-      auth: { order: { anthropic: [cliId] }, profiles: authProfiles },
-    } satisfies OpenClawConfig;
-
-    expect(resolveScope({ cfg, userPinnedAuthProfileId: apiId })).toEqual({
-      providerIds: ["claude-cli"],
-      ignoreAutoPreferredProfile: false,
-    });
+    expect(resolveScope({ cfg, userPinnedAuthProfileId: pin })).toEqual(expected);
   });
 });

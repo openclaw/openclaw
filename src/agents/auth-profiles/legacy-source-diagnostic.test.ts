@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import {
-  createApiKeyCredential,
+  createApiKeyCredential as apiKey,
   createAuthProfileStoreFixture,
 } from "./credential-fixtures.test-support.js";
 import { refreshAuthProfileFileState } from "./file-state.js";
@@ -26,8 +26,9 @@ async function withProfileDir(run: (dir: string) => Promise<void>): Promise<void
     }
   });
 }
-const canonical = (profiles: Record<string, unknown>) =>
-  JSON.stringify(createAuthProfileStoreFixture(profiles));
+const canonicalEntry = (profile: Record<string, unknown>, id = "anthropic:default") =>
+  JSON.stringify(createAuthProfileStoreFixture({ [id]: profile }));
+const legacyOAuth = { type: "oauth", provider: "openai-codex", access: "a", refresh: "r" };
 
 afterEach(clearAuthProfileMigrationDiagnostics);
 
@@ -56,25 +57,9 @@ describe("assertAuthProfileMigrationReady", () => {
   });
 
   it.each([
-    [
-      "canonical",
-      canonical({ "anthropic:default": createApiKeyCredential("anthropic", "legacy-key") }),
-      true,
-    ],
+    ["canonical", canonicalEntry(apiKey("anthropic", "legacy-key")), true],
     ["flat", JSON.stringify({ anthropic: { apiKey: "legacy-key" } }), true],
-    [
-      "legacy OpenAI provider",
-      canonical({
-        "openai-codex:default": {
-          type: "oauth",
-          provider: "openai-codex",
-          access: "legacy-access",
-          refresh: "legacy-refresh",
-        },
-      }),
-      true,
-      "openai",
-    ],
+    ["legacy OpenAI provider", canonicalEntry(legacyOAuth, "openai-codex:default"), true, "openai"],
     ["malformed JSON", "{broken", false],
     ["metadata-only flat object", '{"metadata":{}}', false],
     ["unknown flat fields", '{"anthropic":{"unknown":"value"},"openai":{"other":true}}', false],
@@ -84,11 +69,7 @@ describe("assertAuthProfileMigrationReady", () => {
       '{"profiles":{"anthropic:default":{"provider":"anthropic","unknown":true}}}',
       false,
     ],
-    [
-      "missing provider",
-      canonical({ "anthropic:default": { type: "api_key", key: "legacy-key" } }),
-      false,
-    ],
+    ["missing provider", canonicalEntry({ type: "api_key", key: "legacy-key" }), false],
   ] as const)(
     "preserves migration safety for %s sources",
     async (_name, raw, scoped, blockedProvider?: string) => {
@@ -134,9 +115,7 @@ describe("assertAuthProfileMigrationReady", () => {
   });
 
   it("clears the requirement once the canonical store holds credentials", async () => {
-    await withProfileDir(async (root) => {
-      const agentDir = path.join(root, "migrated-agent");
-      await fs.mkdir(agentDir, { recursive: true });
+    await withProfileDir(async (agentDir) => {
       await fs.writeFile(path.join(agentDir, "auth.json"), '{"openai":{"key":"not-a-real"}}\n');
 
       expect(() => assertReady(agentDir)).toThrow("requires legacy credential migration");
@@ -144,7 +123,7 @@ describe("assertAuthProfileMigrationReady", () => {
 
       writePersistedAuthProfileStoreRaw(
         createAuthProfileStoreFixture({
-          "openai:default": createApiKeyCredential("openai", "not-a-real"),
+          "openai:default": apiKey("openai", "not-a-real"),
         }),
         agentDir,
       );

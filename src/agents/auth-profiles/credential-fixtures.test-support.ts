@@ -66,50 +66,40 @@ export function createOAuthRefreshCredential(
 }
 
 export function oauthRefreshReplacementCases() {
-  const oidc = (kind: string, sameIdentity: boolean, coldObserver: boolean) => ({
+  const mismatch = oidcIdentity({ sub: "subject-b" });
+  return (
+    [
+      ["account mismatch", { accountId: "acct-a" }, { accountId: "acct-b" }, false, false],
+      ["OIDC match", oidcIdentity(), oidcIdentity(), true, false],
+      ["OIDC cold mismatch", oidcIdentity(), mismatch, false, true],
+      ["OIDC cold observer", oidcIdentity(), oidcIdentity(), true, true],
+    ] as const
+  ).map(([kind, identity, replacementIdentity, sameIdentity, coldObserver]) => ({
     kind,
-    identity: oidcIdentity(),
-    replacementIdentity: oidcIdentity(sameIdentity ? {} : { sub: "subject-b" }),
+    identity,
+    replacementIdentity,
     sameIdentity,
     coldObserver,
-  });
-  return [
-    {
-      kind: "account mismatch",
-      identity: { accountId: "acct-a" },
-      replacementIdentity: { accountId: "acct-b" },
-      sameIdentity: false,
-      coldObserver: false,
-    },
-    oidc("OIDC match", true, false),
-    oidc("OIDC cold mismatch", false, true),
-    oidc("OIDC cold observer", true, true),
-  ];
+  }));
 }
 
 export function oauthRefreshFailureFallbackCases() {
-  const candidate = (access: string, refresh: string) => ({
-    access,
-    refresh,
-    expires: Date.now() + 600_000,
-    accountId: "acct-123",
-  });
-  return [
-    {
-      name: "rejects refresh-only changes",
-      candidate: candidate("failed-access", "new-refresh"),
-      expectedApiKey: undefined,
-    },
-    {
-      name: "adopts access-token changes",
-      candidate: candidate("new-access", "failed-refresh"),
-      expectedApiKey: "new-access",
-    },
-    {
-      name: "preserves the refresh error when adopted-key construction fails",
-      candidate: candidate("new-access", "failed-refresh"),
-      expectedApiKey: undefined,
-      buildError: "fallback key construction failed",
-    },
-  ];
+  return (
+    [
+      ["rejects refresh-only changes", "failed-access", "new-refresh", undefined],
+      ["adopts access-token changes", "new-access", "failed-refresh", "new-access"],
+      [
+        "preserves the refresh error when adopted-key construction fails",
+        "new-access",
+        "failed-refresh",
+        undefined,
+        "fallback key construction failed",
+      ],
+    ] as const
+  ).map(([name, access, refresh, expectedApiKey, buildError]) => ({
+    name,
+    candidate: { access, refresh, expires: Date.now() + 600_000, accountId: "acct-123" },
+    expectedApiKey,
+    buildError,
+  }));
 }

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../../plugin-sdk/file-lock.js";
 import { captureEnv } from "../../test-utils/env.js";
 import "./oauth-external-auth-passthrough.test-support.js";
@@ -38,74 +38,67 @@ vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
   resolveProviderOAuthRefreshCapabilityWithPlugin: async () => ({ status: "available" as const }),
 }));
 
-describe("resolveApiKeyForProfile fallback credential validation", () => {
-  it.each([
-    { name: "returns an accepted fallback", reject: false },
-    { name: "rejects an invalid fallback", reject: true },
-  ])("$name", async ({ reject }) => {
-    const envSnapshot = captureEnv(OAUTH_AGENT_ENV_KEYS);
-    let tempRoot = "";
-
-    try {
-      resetFileLockStateForTest();
-      clearRuntimeAuthProfileStoreSnapshots();
-      refreshCredential.mockReset();
-      tempRoot = await createOAuthTestTempRoot("openclaw-oauth-validator-fallback-");
-      const mainAgentDir = await createOAuthMainAgentDir(tempRoot);
-      const primaryId = "openai:default";
-      const fallbackId = "openai:alternate";
-      const fallback = createCredential({
-        access: "fallback-access",
-        refresh: "fallback-refresh",
-        expires: Date.now() + 600_000,
-        accountId: "fallback-account",
-      });
-      const primary = createCredential({
-        access: "expired-access",
-        refresh: "expired-refresh",
-        expires: Date.now() - 60_000,
-        accountId: "legacy-account",
-      });
-      const store = { version: 1, profiles: { [primaryId]: primary, [fallbackId]: fallback } };
-      saveAuthProfileStore(store, mainAgentDir, { filterExternalAuthProfiles: false });
-      refreshCredential.mockRejectedValueOnce(new Error("primary refresh failed"));
-      const validateOAuthCredential = vi.fn((credential: OAuthCredential) => {
-        if (reject && credential.accountId === fallback.accountId) {
-          throw new Error(`rejected ${credential.accountId}`);
-        }
-      });
-      const { resolveApiKeyForProfile } = await import("./oauth.js");
-      const profile = { provider: "openai", mode: "oauth" } as const;
-      const profiles = { [primaryId]: profile, [fallbackId]: profile };
-
-      const resolution = resolveApiKeyForProfile({
-        cfg: { auth: { profiles } },
-        store: loadStore(mainAgentDir),
-        profileId: primaryId,
-        agentDir: mainAgentDir,
-        validateOAuthCredential,
-      });
-
-      if (reject) {
-        await expect(resolution).rejects.toThrow(
-          "OAuth token refresh failed for openai: primary refresh failed",
-        );
-      } else {
-        expect(await resolution).toMatchObject({
-          apiKey: "fallback-access",
-          provider: "openai",
-          profileId: fallbackId,
-        });
-      }
-      expect(validateOAuthCredential).toHaveBeenNthCalledWith(1, primary);
-      expect(validateOAuthCredential).toHaveBeenLastCalledWith(fallback);
-      expect(refreshCredential).toHaveBeenCalledOnce();
-      expect(loadStore(mainAgentDir).profiles[fallbackId]).toEqual(fallback);
-    } finally {
-      envSnapshot.restore();
-      resetFileLockStateForTest();
-      clearRuntimeAuthProfileStoreSnapshots();
-      await removeOAuthTestTempRoot(tempRoot);
-    }
+const accountCredential = (label: string, expires: number) =>
+  createCredential({
+    access: `${label}-access`,
+    refresh: `${label}-refresh`,
+    expires,
+    accountId: `${label}-account`,
   });
+
+it.each([false, true])("validates fallback credentials (reject=%s)", async (reject) => {
+  const envSnapshot = captureEnv(OAUTH_AGENT_ENV_KEYS);
+  let tempRoot = "";
+
+  try {
+    resetFileLockStateForTest();
+    clearRuntimeAuthProfileStoreSnapshots();
+    refreshCredential.mockReset();
+    tempRoot = await createOAuthTestTempRoot("openclaw-oauth-validator-fallback-");
+    const mainAgentDir = await createOAuthMainAgentDir(tempRoot);
+    const primaryId = "openai:default";
+    const fallbackId = "openai:alternate";
+    const fallback = accountCredential("fallback", Date.now() + 600_000);
+    const primary = accountCredential("expired", Date.now() - 60_000);
+    const store = { version: 1, profiles: { [primaryId]: primary, [fallbackId]: fallback } };
+    saveAuthProfileStore(store, mainAgentDir, { filterExternalAuthProfiles: false });
+    refreshCredential.mockRejectedValueOnce(new Error("primary refresh failed"));
+    const validateOAuthCredential = vi.fn((credential: OAuthCredential) => {
+      if (reject && credential.accountId === fallback.accountId) {
+        throw new Error(`rejected ${credential.accountId}`);
+      }
+    });
+    const { resolveApiKeyForProfile } = await import("./oauth.js");
+    const profile = { provider: "openai", mode: "oauth" } as const;
+    const profiles = { [primaryId]: profile, [fallbackId]: profile };
+
+    const resolution = resolveApiKeyForProfile({
+      cfg: { auth: { profiles } },
+      store: loadStore(mainAgentDir),
+      profileId: primaryId,
+      agentDir: mainAgentDir,
+      validateOAuthCredential,
+    });
+
+    if (reject) {
+      await expect(resolution).rejects.toThrow(
+        "OAuth token refresh failed for openai: primary refresh failed",
+      );
+    } else {
+      expect(await resolution).toMatchObject({
+        apiKey: "fallback-access",
+        provider: "openai",
+        profileId: fallbackId,
+      });
+    }
+    expect(validateOAuthCredential).toHaveBeenNthCalledWith(1, primary);
+    expect(validateOAuthCredential).toHaveBeenLastCalledWith(fallback);
+    expect(refreshCredential).toHaveBeenCalledOnce();
+    expect(loadStore(mainAgentDir).profiles[fallbackId]).toEqual(fallback);
+  } finally {
+    envSnapshot.restore();
+    resetFileLockStateForTest();
+    clearRuntimeAuthProfileStoreSnapshots();
+    await removeOAuthTestTempRoot(tempRoot);
+  }
 });
