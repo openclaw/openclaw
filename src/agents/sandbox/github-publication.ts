@@ -17,5 +17,5 @@ export function canUploadGitHubPublicationEvidence(
 ): sandbox is SandboxContext & {
   fsBridge: SandboxFsBridge & Required<Pick<SandboxFsBridge, "readFileWithSource">>;
 } {
-  return Boolean(sandbox?.enabled && sandbox.fsBridge?.readFileWithSource);
+  return Boolean(sandbox?.enabled && sandbox.fsBridge?.readFileWithSource !== undefined);
 }
