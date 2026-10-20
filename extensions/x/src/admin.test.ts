@@ -521,7 +521,9 @@ describe("X allowlist Gateway methods", () => {
         saveRefreshToken: async () => {},
         fetch: fetcher,
       });
-      getUserByUsername.mockImplementation(api.getUserByUsername);
+      getUserByUsername.mockImplementation((...args: Parameters<typeof api.getUserByUsername>) =>
+        api.getUserByUsername(...args),
+      );
       const { invoke } = gateway();
       let active = true;
       const policy = new AbortController();
