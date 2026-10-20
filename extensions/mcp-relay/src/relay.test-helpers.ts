@@ -16,7 +16,7 @@ import {
   createTestPluginServiceScheduler,
 } from "openclaw/plugin-sdk/plugin-test-api";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { vi } from "vitest";
+import { onTestFinished, vi } from "vitest";
 import { identityFromPrivateKey, RelayError } from "./protocol.js";
 import { RelayService, type RelaySocket } from "./service.js";
 import { RelayState } from "./state.js";
@@ -243,6 +243,8 @@ export async function createTransportFixture(
   const addresses: string[] = [];
   const effects: { connectError?: Error } = {};
   const ingress = createPrincipalIngress();
+  const random = vi.spyOn(Math, "random").mockReturnValue(0.5);
+  onTestFinished(() => random.mockRestore());
   const service = new RelayService({
     config: () => ({}),
     controlUiIngress: ingress.factory,
@@ -253,7 +255,6 @@ export async function createTransportFixture(
     relayUrl: "https://mcp.openclaw.ai",
     gateway: { name: "Synthetic Gateway", version: "2026.10.9" },
     operations,
-    random: () => 0.5,
     socketFactory: (address) => {
       addresses.push(address);
       if (effects.connectError) {

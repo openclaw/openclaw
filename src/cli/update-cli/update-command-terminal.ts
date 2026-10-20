@@ -1,23 +1,26 @@
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { readPackageVersion } from "../../infra/package-json.js";
 import { resolveManagedServiceUpdateFailureExitCode } from "../../infra/update-control-plane-sentinel.js";
 import { createUpdateErrorFact, type UpdateFailureFact } from "../../infra/update-failure-facts.js";
-import { verifyPackageUpdateRecovery } from "../../infra/update-global.js";
-import { getUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
+import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { UpdateRecoveryRequiredError } from "../../infra/update-run-recovery.js";
 import { isUpdateGatewayReadinessPending } from "../../infra/update-run-step.js";
-import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
-import { printResult } from "./progress.js";
-import { parseUpdateTimeoutMs, type UpdateCommandOptions } from "./shared.js";
+import { prepareResult, printResult } from "./progress.js";
+import type { UpdateCommandOptions } from "./shared.js";
 import { UpdateActivationTimeoutError } from "./update-command-activation.js";
+import {
+  prepareUnreportedUpdateAdmissionOutcome,
+  publishUnreportedUpdateAdmissionOutcome,
+  resolveUnreportedUpdateAdmissionReport,
+} from "./update-command-admission-report.js";
+import { registerUpdateCommandTerminalPreparation } from "./update-command-executor-capabilities.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import type { MigratedUpdateFinalizationResult } from "./update-command-migrated-types.js";
 import {
@@ -31,11 +34,9 @@ import {
   createPreMutationUpdateResult,
   createUpdateCommandFailureResult,
   UnreportedUpdateAdmissionOutcome,
-  type UpdateAdmissionReportParams,
   UpdateCommandFailure,
   UpdateCommandFinalizedRecoveryFailure,
   UpdateCommandPendingRecoveryFailure,
-  writeControlPlaneUpdateRestartSentinelBestEffort,
   withUpdateStateRead,
   isUpdateStateReadContention,
 } from "./update-command-result.js";
@@ -52,6 +53,7 @@ type Publisher = (
   onTerminalRecord?: PublishedRecord,
 ) => Promise<UpdateRunResult>;
 const terminalOwners = new WeakMap<Run, { publish?: Publisher }>();
+type PreparedPublisher = (onTerminalRecord?: PublishedRecord) => UpdateRunResult;
 type TerminalOptions = Pick<UpdateCommandOptions, "json" | "onResult"> & {
   /** Internal candidate-worker output, never a serialized continuation grant. */
   onTerminalRecord?: PublishedRecord;
@@ -71,6 +73,41 @@ export function deferUpdateCommandTerminalResult(
     return false;
   }
   owner.publish = publish;
+  return true;
+}
+
+/** Prepare under the live executor; the outer owner emits only after its release. */
+export function deferUpdateCommandTerminalPreparation(
+  run: Run | undefined,
+  prepare: (failure?: unknown) => Promise<PreparedPublisher>,
+  pendingResult: (cause: unknown) => UpdateRunResult,
+): boolean {
+  const owner = run && terminalOwners.get(run);
+  const fence = run?.executorFence;
+  if (!owner || !run || !fence) {
+    return false;
+  }
+  let prepared: PreparedPublisher | undefined;
+  let expectedFailure: unknown;
+  registerUpdateCommandTerminalPreparation(fence, run.runId, async (failure) => {
+    expectedFailure = failure;
+    prepared = await prepare(failure);
+  });
+  // A release/identity failure cannot fall back to reading newer mutable state.
+  const pending = (cause: unknown) =>
+    new UpdateCommandPendingRecoveryFailure(pendingResult(cause), formatErrorMessage(cause), {
+      cause,
+    });
+  owner.publish = async (failure, onTerminalRecord) => {
+    if (!prepared || failure !== expectedFailure) {
+      throw pending(failure ?? new Error("Update terminal preparation did not settle."));
+    }
+    try {
+      return prepared(onTerminalRecord);
+    } catch (cause) {
+      throw pending(cause);
+    }
+  };
   return true;
 }
 
@@ -122,6 +159,53 @@ export async function prepareUnexpectedUpdateCommandFailure(
   opts: UpdateCommandOptions & { run: Run },
   onPublishedRecord?: PublishedRecord,
 ): Promise<UpdateCommandFailure> {
+  try {
+    opts.run.executorFence?.assertCurrent();
+  } catch (cause) {
+    return new UpdateCommandPendingRecoveryFailure(
+      createUpdateCommandFailureResult(unexpectedUpdateFailure(error)),
+      formatErrorMessage(cause),
+      { cause: error },
+    );
+  }
+  if (error instanceof UnreportedUpdateAdmissionOutcome && opts.run.executorFence) {
+    const runId = opts.run.runId;
+    // Release failure may suppress the prepared report, but not the original
+    // run identity or its refusal facts. Rebuild only captured data here.
+    const resultForFailure = (cause: unknown): UpdateRunResult => ({
+      ...createPreMutationUpdateResult(resolveUnreportedUpdateAdmissionReport(cause, error), {
+        status: cause === error && error.skipped ? "skipped" : "error",
+      }),
+      runId,
+    });
+    const result = resultForFailure(error);
+    const fence = opts.run.executorFence;
+    const failure = new UpdateCommandFailure(
+      result,
+      error.skipped?.exitCode ?? resolveManagedServiceUpdateFailureExitCode(result),
+      error.message,
+      { cause: error },
+    );
+    if (
+      !deferUpdateCommandTerminalPreparation(
+        opts.run,
+        async (settlementFailure) =>
+          (
+            await prepareUnreportedUpdateAdmissionOutcome(
+              // Only the original wrapper represents an ordinary refusal. A
+              // later child/cleanup failure must qualify the final report too.
+              settlementFailure === failure ? error : settlementFailure,
+              opts.run,
+              fence.assertCurrent,
+            )
+          ).publish,
+        (cause) => resultForFailure(cause === failure ? error : cause),
+      )
+    ) {
+      return new UpdateCommandPendingRecoveryFailure(result, error.message, { cause: error });
+    }
+    return failure;
+  }
   const failure = unexpectedUpdateFailure(error);
   let fact: UpdateFailureFact;
   try {
@@ -140,6 +224,13 @@ export async function prepareUnexpectedUpdateCommandFailure(
   const result = createUpdateCommandFailureResult({ ...failure, phase: fact.check });
   result.failedStep.failureFacts = [fact];
   const params = { opts, root: result.root ?? "" };
+  const prepare = async (settlementFailure?: unknown) => {
+    opts.run.executorFence?.assertCurrent();
+    const settled = await resolveSettledUpdateCommandResult(params, result, settlementFailure);
+    return prepareUpdateCommandTerminalResult(params, settled.result, { rolledBack: false }, () =>
+      opts.run.executorFence?.assertCurrent(),
+    );
+  };
   const publish: Publisher = async (settlementFailure, onTerminalRecord) => {
     const settled = await resolveSettledUpdateCommandResult(params, result, settlementFailure);
     return publishUpdateCommandTerminalResult(
@@ -149,9 +240,11 @@ export async function prepareUnexpectedUpdateCommandFailure(
       onTerminalRecord,
     );
   };
-  const published = deferUpdateCommandTerminalResult(opts.run, publish)
-    ? result
-    : await publish(undefined, onPublishedRecord);
+  const published =
+    deferUpdateCommandTerminalPreparation(opts.run, prepare, () => result) ||
+    deferUpdateCommandTerminalResult(opts.run, publish)
+      ? result
+      : await publish(undefined, onPublishedRecord);
   return new UpdateCommandFailure(published, 1, fact.message, { cause: error });
 }
 
@@ -247,6 +340,33 @@ async function settleUpdateCommandTerminalResult<T>(
           (error) => error instanceof UpdateActivationTimeoutError,
         )
       : undefined;
+  const admissionOutcome =
+    "error" in outcome && outcome.error instanceof UnreportedUpdateAdmissionOutcome
+      ? outcome.error
+      : undefined;
+  if (
+    run?.executorFence &&
+    !owner.publish &&
+    "error" in outcome &&
+    (activationTimeout || admissionOutcome)
+  ) {
+    // Cancellation custody is not mutation authority, even while a child keeps
+    // the lease retained. Unprepared admitted failures report captured facts only.
+    const result: UpdateRunResult = activationTimeout
+      ? {
+          status: "error",
+          reason: activationTimeout.reason,
+          mode: "unknown",
+          root: activationTimeout.root,
+          runId: run.runId,
+          steps: [],
+          durationMs: activationTimeout.timeoutMs,
+        }
+      : createPreMutationUpdateResult(admissionOutcome!.report, { status: "error" });
+    throw new UpdateCommandPendingRecoveryFailure(result, formatErrorMessage(outcome.error), {
+      cause: outcome.error,
+    });
+  }
   if (run && activationTimeout && !owner.publish) {
     const admittedRun = run;
     owner.publish = async (failure) => {
@@ -351,6 +471,7 @@ async function settleUpdateCommandTerminalResult<T>(
     let failure: UpdateCommandFailure;
     try {
       if (
+        run.executorFence ||
         primaryFailure ||
         admission ||
         causes.some(
@@ -361,8 +482,8 @@ async function settleUpdateCommandTerminalResult<T>(
       ) {
         throw error;
       }
-      // Executor settlement and terminal publication can fail outside the inner unwind.
-      // Re-admit diagnostic writes before triage can offer an empty report.
+      // Only pre-admission failures have no retained executor. An admitted run
+      // must prepare diagnostics before release, never reacquire them here.
       await assertUpdateRecoveryAdmission({ env: run.env });
       failure = await prepareUnexpectedUpdateCommandFailure(
         error,
@@ -560,147 +681,8 @@ export async function recordUpdatePackageCompletion(
   }
 }
 
-function resolveUnreportedUpdateAdmissionReport(
-  error: unknown,
-  outcome: UnreportedUpdateAdmissionOutcome,
-): UpdateAdmissionReportParams {
-  if (error === outcome) {
-    return outcome.report;
-  }
-  return {
-    ...outcome.report,
-    reason: "update-admission-cleanup-failed",
-    failureFacts: outcome.report.failureFacts ?? [
-      {
-        check: outcome.report.reason,
-        code: outcome.report.reason,
-        message: outcome.report.message,
-      },
-    ],
-    stepResult: outcome.report.stepResult ? { steps: outcome.report.stepResult.steps } : undefined,
-    message: collectNestedErrorCandidates(error)
-      .filter((candidate) => candidate instanceof Error)
-      .slice(0, 8)
-      .map((candidate) => formatErrorMessage(candidate).slice(0, 2_000))
-      .join("\n"),
-  };
-}
-
-async function publishUnreportedUpdateAdmissionOutcome(
-  error: unknown,
-  run?: Run,
-): Promise<{ result: UpdateRunResult; exitCode: number }> {
-  const outcome = collectNestedErrorCandidates(error).find(
-    (candidate) => candidate instanceof UnreportedUpdateAdmissionOutcome,
-  );
-  if (!outcome) {
-    throw error;
-  }
-  const cleanupFailed = error !== outcome;
-  const params = resolveUnreportedUpdateAdmissionReport(error, outcome);
-  const result = await publishPreMutationUpdateOutcome(
-    {
-      ...params,
-      ...(run ? { opts: { ...params.opts, run } } : {}),
-    },
-    async () => ({
-      status: !cleanupFailed && outcome.skipped ? "skipped" : "error",
-      ...(cleanupFailed
-        ? { recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" } }
-        : {}),
-    }),
-  );
-  const exitCode =
-    !cleanupFailed && outcome.skipped
-      ? outcome.skipped.exitCode
-      : cleanupFailed
-        ? 1
-        : resolveManagedServiceUpdateFailureExitCode(result);
-  return { result, exitCode };
-}
-
-export async function reportUnreportedUpdateAdmissionOutcome(error: unknown): Promise<never> {
-  const { exitCode } = await publishUnreportedUpdateAdmissionOutcome(error);
-  return exitCliAfterOutput(defaultRuntime, exitCode);
-}
-
-export async function reportPreMutationUpdateResult(
-  params: UpdateAdmissionReportParams & { status?: "error" | "skipped" },
-): Promise<never> {
-  const result = await publishPreMutationUpdateOutcome(params, async () => ({
-    status: params.status ?? "error",
-    ...(params.opts.dryRun !== true && params.status !== "skipped"
-      ? {
-          recovery: await (params.installKind === "git"
-            ? readCurrentGitUpdateRecovery(params.root, parseUpdateTimeoutMs(params.opts.timeout))
-            : verifyPackageUpdateRecovery(params.root)),
-        }
-      : {}),
-  }));
-  if (!params.opts.run && params.opts.dryRun && params.reason === "invalid-dev-target") {
-    return exitCliAfterOutput(defaultRuntime, 1);
-  }
-  throw new UpdateCommandFailure(
-    result,
-    params.status === "skipped" ? 0 : resolveManagedServiceUpdateFailureExitCode(result),
-    params.message,
-  );
-}
-
-async function publishPreMutationUpdateOutcome(
-  params: UpdateAdmissionReportParams,
-  prepareOutcome: () => Promise<Pick<UpdateRunResult, "status" | "recovery">>,
-): Promise<UpdateRunResult> {
-  const run = params.opts.run;
-  const active = run ? getUpdateRun(run.runId, { env: run.env }) : undefined;
-  const nextAction = params.nextAction ?? params.message;
-  if (run && active && nextAction) {
-    recordUpdateRunPhase(
-      run.runId,
-      active.phase,
-      {
-        origin: { nextAction },
-        ...(params.installKind !== "unknown" ? { target: { kind: params.installKind } } : {}),
-      },
-      { env: run.env },
-    );
-  }
-  const outcome = await prepareOutcome();
-  const result = completeUpdateCommandRun(
-    {
-      ...createPreMutationUpdateResult(params, outcome, active?.phase),
-      ...(outcome.status === "skipped"
-        ? { before: { version: await readPackageVersion(params.root) } }
-        : {}),
-    },
-    params.opts.run,
-  );
-  if (params.opts.dryRun !== true) {
-    await writeControlPlaneUpdateRestartSentinelBestEffort({
-      meta: params.controlPlaneUpdateSentinelMeta,
-      result,
-      jsonMode: Boolean(params.opts.json),
-      env: run?.env,
-    });
-  }
-  // Keep legacy dry-run and text-mode refusals on stderr.
-  if (
-    (params.opts.dryRun || (run && !params.opts.json)) &&
-    params.reason === "invalid-dev-target" &&
-    params.message
-  ) {
-    defaultRuntime.error(params.message);
-    return result;
-  }
-  if (params.opts.json && params.message) {
-    defaultRuntime.error(params.message);
-  }
-  await printResult(result, params.opts, { nextAction });
-  return result;
-}
-
 /** Write the terminal ledger and its visible result together after settlement. */
-export async function publishUpdateCommandTerminalResult(
+async function publishUpdateCommandTerminalResult(
   params: Pick<FinishUpdateParams, "opts" | "coreAlreadyCurrent" | "ownedManagedUpdateEnv">,
   input: UpdateRunResult,
   outcome: {
@@ -710,22 +692,46 @@ export async function publishUpdateCommandTerminalResult(
   },
   onTerminalRecord?: PublishedRecord,
 ): Promise<UpdateRunResult> {
-  let record: UpdateCommandTerminalRecord["record"] | undefined;
-  if (outcome.captured) {
+  const prepared = await prepareUpdateCommandTerminalResult(params, input, outcome);
+  return prepared(onTerminalRecord);
+}
+
+/** All state/report effects precede release; the returned closure only emits captured facts. */
+export async function prepareUpdateCommandTerminalResult(
+  params: Pick<FinishUpdateParams, "opts" | "coreAlreadyCurrent" | "ownedManagedUpdateEnv">,
+  input: UpdateRunResult,
+  outcome: {
+    rolledBack: boolean;
+    downtimeMs?: number;
+    captured?: UpdateCommandTerminalRecord;
+  },
+  assertCurrent?: () => void,
+): Promise<PreparedPublisher> {
+  assertCurrent?.();
+  const readCaptured = () => {
     try {
-      // Sentinel delivery may have yielded since settlement checked this identity.
-      record = readUpdateCommandTerminalRecord(params, input, outcome.captured);
+      return outcome.captured
+        ? readUpdateCommandTerminalRecord(params, input, outcome.captured)
+        : undefined;
     } catch (cause) {
       throw new UpdateCommandPendingRecoveryFailure(input, formatErrorMessage(cause), { cause });
     }
-  }
+  };
+  const record = readCaptured();
   const nextAction = recordUpdateResultNextAction(params, input, record);
   const result = record
     ? { ...input, runId: record.runId }
     : completeUpdateCommandRun(input, params.opts.run, outcome);
-  await printResult(result, params.opts, { nextAction, record });
-  if (record) {
-    onTerminalRecord?.(record);
-  }
-  return result;
+  const emit = await prepareResult(result, params.opts, { nextAction, record }, assertCurrent);
+  assertCurrent?.();
+  return (onTerminalRecord) => {
+    if (outcome.captured) {
+      readCaptured();
+    }
+    emit();
+    if (record) {
+      onTerminalRecord?.(record);
+    }
+    return result;
+  };
 }

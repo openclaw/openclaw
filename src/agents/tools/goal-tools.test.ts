@@ -1,7 +1,7 @@
 import path from "node:path";
 import { Value } from "typebox/value";
-import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   loadSessionEntry,
@@ -9,12 +9,36 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { sqliteSchedulerClock } from "../../infra/sqlite-maintenance-fixture.test-support.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { createCreateGoalTool, createGetGoalTool, createUpdateGoalTool } from "./goal-tools.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let clock: ReturnType<typeof sqliteSchedulerClock>;
+beforeAll(() => {
+  clock = sqliteSchedulerClock();
+});
+const tempDirs = useSessionStoreTempDirs(
+  (cleanup) =>
+    afterAll(async () => {
+      try {
+        await cleanup();
+        const observe = observeHostDataSql();
+        try {
+          // A removed fixture must not checkpoint during the next test's SQL-idle window.
+          await clock.advanceBy(10_000);
+          expect(observe.queries).toEqual([]);
+        } finally {
+          observe.restore();
+        }
+      } finally {
+        clock.restore();
+      }
+    }),
+  "openclaw-goal-tools-",
+);
 
 async function createStoreConfig(runSessionKey = "global", entry: Partial<SessionEntry> = {}) {
-  const dir = tempDirs.make("openclaw-goal-tools-");
+  const dir = tempDirs.make();
   const template = path.join(dir, "{agentId}", "sessions.json");
   const config: OpenClawConfig = { session: { store: template } };
   const storePath = resolveSessionStorePathCore(template, {
@@ -136,7 +160,7 @@ describe("goal tools", () => {
   });
 
   it("keeps missing-session failures on the generic error path", async () => {
-    const dir = tempDirs.make("openclaw-goal-tools-missing-");
+    const dir = tempDirs.make();
     const tool = createUpdateGoalTool({
       agentSessionKey: "global",
       sessionAgentId: "research",

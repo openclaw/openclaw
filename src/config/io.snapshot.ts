@@ -4,6 +4,7 @@ import { OpenClawStateOwnershipError } from "../infra/sqlite-lifecycle-errors.js
 import { isSqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { findStartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { getProcessGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import {
   includeContributionOwnsAgentRoster,
@@ -287,7 +288,13 @@ async function readConfigSnapshot(
       resolutionFacts: readResolution.resolutionFacts,
     });
     if (!validated.ok) {
-      const availableSnapshot = pluginMetadata.getSnapshot();
+      // Core schema failures precede metadata loading; reload diagnostics still use boot facts.
+      const availableSnapshot =
+        pluginMetadata.getSnapshot() ??
+        (context.options.pluginValidation !== "core-only" &&
+        options.allowCurrentPluginMetadata !== false
+          ? getProcessGatewayPluginMetadataSnapshot()
+          : undefined);
       const collect = () =>
         context.options.pluginValidation === "core-only"
           ? findLegacyConfigIssues(effectiveConfigRaw, effectiveParsed)
@@ -297,6 +304,7 @@ async function readConfigSnapshot(
           ? withPluginMetadataSnapshotScope(availableSnapshot, collect, {
               config: coerceConfig(effectiveConfigRaw),
               env: deps.env,
+              trustConfigIdentity: true,
             })
           : collect(),
       );

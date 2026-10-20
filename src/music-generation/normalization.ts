@@ -27,7 +27,7 @@ export function resolveMusicGenerationOverrides(params: {
   format?: MusicGenerationOutputFormat;
   inputImages?: MusicGenerationSourceImage[];
 }): ResolvedMusicGenerationOverrides {
-  const { capabilities: caps } = resolveMusicGenerationModeCapabilities({
+  const caps = resolveMusicGenerationModeCapabilities({
     provider: params.provider,
     inputImageCount: params.inputImages?.length ?? 0,
   });

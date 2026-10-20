@@ -88,7 +88,9 @@ it.each([true, false])(
       queueMicrotask(() => { microtaskRan = true; });
       const timer = setTimeout(() => { timerRan = true; }, 0);
       let operation;
+      let joined;
       let prepared;
+      let joinedSource;
       let proof;
       const failures = [];
       let cleanupJoined = false;
@@ -97,7 +99,15 @@ it.each([true, false])(
           preserveSourceArtifacts: ${JSON.stringify(preserveSourceArtifacts)},
           signal: controller.signal,
         });
+        joined = startSqliteReadOnlyLocationAsync(${JSON.stringify(source)}, {
+          preserveSourceArtifacts: ${JSON.stringify(preserveSourceArtifacts)},
+          signal: controller.signal,
+        });
         prepared = serviceToCompletion(operation);
+        joinedSource = serviceToCompletion(joined);
+        assert.equal(joinedSource.location, prepared.location);
+        assert.equal(joinedSource.privateFamily, prepared.privateFamily);
+        assert.equal(Boolean(prepared.privateFamily), ${JSON.stringify(preserveSourceArtifacts)});
         assert.equal(microtaskRan, false);
         assert.equal(timerRan, false);
         assert.equal(fs.existsSync(prepared.location), true);
@@ -113,6 +123,8 @@ it.each([true, false])(
         const row = JSON.parse(reader.stdout);
         assert.deepEqual(row, { value: 'preserved' });
         assert.equal(serviceToCompletion(prepared.startCleanup()), true);
+        assert.equal(fs.existsSync(prepared.cleanupRoot), true);
+        assert.equal(serviceToCompletion(joinedSource.startCleanup()), true);
         assert.equal(fs.existsSync(prepared.cleanupRoot), false);
         assert.equal(microtaskRan, false);
         assert.equal(timerRan, false);
@@ -133,6 +145,9 @@ it.each([true, false])(
         }
         try {
           if (prepared) assert.equal(await prepared.cleanupAsync(), true);
+          if (joinedSource) assert.equal(await joinedSource.cleanupAsync(), true);
+          await operation?.startClose().result;
+          await joined?.startClose().result;
           await cleanupSnapshotOperations();
           cleanupJoined = !prepared || !fs.existsSync(prepared.cleanupRoot);
         } catch (error) {

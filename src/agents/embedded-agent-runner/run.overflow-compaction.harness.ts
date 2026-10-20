@@ -1005,9 +1005,8 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     resolveFailoverStatus: mockedResolveFailoverStatus,
   }));
 
+  // mock-isolation: overflow fixtures pin lane selection without loading lane runtime state.
   vi.doMock("./lanes.js", () => ({
-    resolveSessionLane: vi.fn((key: string) => `session:${key}`),
-    resolveEmbeddedSessionLane: vi.fn((key: string) => `session:${key}`),
     resolveGlobalLane: vi.fn(() => "global-lane"),
   }));
 

@@ -395,6 +395,7 @@ export const mainLanes: DockerE2eLane[] = [
   lane("agent-bundle-mcp-tools", {
     stateScenario: "empty",
   }),
+  serviceLane("mcp-docker-custody", { stateScenario: "empty" }),
   lane("system-agent-rescue", {
     stateScenario: "empty",
   }),

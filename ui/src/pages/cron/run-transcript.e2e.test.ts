@@ -123,9 +123,11 @@ suite.define(() => {
         const socketCount = await gateway.getSocketCount();
         await gateway.closeLatest(1012, "Reconnect run transcript");
         await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
-        await region.waitFor({ state: "detached" });
+        await gateway.waitForRequest("cron.history", { after: 4, match: identity });
+        await region.getByText("Exact retained output", { exact: true }).waitFor();
         await gateway.resolveDeferred("cron.history", history("Stale output"));
         expect(await page.getByText("Stale output", { exact: true }).count()).toBe(0);
+        expect(await region.getByText("Exact retained output", { exact: true }).count()).toBe(1);
       });
     });
   }

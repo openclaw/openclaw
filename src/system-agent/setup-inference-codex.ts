@@ -63,7 +63,7 @@ type PrepareCodexRuntimeParams = {
   automaticSetup?: true;
   modelRef?: string;
   agentId?: string;
-  ensureCodex: typeof import("../commands/codex-runtime-plugin-install.js").ensureCodexRuntimePluginForModelSelection;
+  ensureCodex: typeof import("../commands/runtime-plugin-install.js").ensureCodexRuntimePluginForModelSelection;
 };
 
 async function prepareCodexRuntimePlugin(
@@ -171,7 +171,7 @@ export async function prepareAutomaticSetupCodex(params: {
   const leaseOptions = { signal: params.signal, assertCurrent: params.beforePersistentApply };
   return await withPluginLifecycleLease(leaseOptions, async () => {
     const { ensureCodexRuntimePluginForSupervision } =
-      await import("../commands/codex-runtime-plugin-install.js");
+      await import("../commands/runtime-plugin-install.js");
     const prepared = await prepareCodexRuntimePlugin({
       ...params,
       automaticSetup: true,
@@ -192,7 +192,7 @@ export async function stageCodexCandidate(
   const leaseOptions = { signal: ctx.params.signal, assertCurrent: beforePersistentApply };
   return await withPluginLifecycleLease(leaseOptions, async () => {
     const { ensureCodexRuntimePluginForModelSelection: ensureCodex } =
-      await import("../commands/codex-runtime-plugin-install.js");
+      await import("../commands/runtime-plugin-install.js");
     const prepared = await prepareCodexRuntimePlugin({
       cfg: ctx.cfg,
       runtime: ctx.params.runtime,
@@ -266,9 +266,7 @@ export async function stageCodexCandidate(
       allowKeychainPrompt: true,
     });
     if (!credential) {
-      const choices = (
-        ctx.deps.resolveManifestProviderAuthChoices ?? resolveManifestProviderAuthChoices
-      )({
+      const choices = resolveManifestProviderAuthChoices({
         config,
         workspaceDir: ctx.workspace,
         includeUntrustedWorkspacePlugins: false,

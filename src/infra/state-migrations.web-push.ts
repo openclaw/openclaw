@@ -21,7 +21,6 @@ import {
   claimLegacyMigrationSourceClaims,
   LegacyMigrationSourceClaim,
   legacyMigrationSourceOrClaimMayExist as sourceOrClaimMayExist,
-  legacyMigrationSourceSnapshotsMatch as sourceSnapshotsMatch,
   readLegacyMigrationSourceSnapshot,
   restoreLegacyMigrationSourceClaims,
   type LegacyMigrationSourceSnapshot as LegacySourceSnapshot,
@@ -123,9 +122,7 @@ async function readLegacyState(
 
 async function assertSourcesUnchanged(sources: ParsedLegacyState["sources"]): Promise<void> {
   for (const { claim, snapshot } of sources) {
-    if (!sourceSnapshotsMatch(await claim.read(), snapshot)) {
-      throw new Error("legacy Web Push source changed after doctor loaded it");
-    }
+    await claim.verify(snapshot, "legacy Web Push source changed after doctor loaded it");
   }
 }
 

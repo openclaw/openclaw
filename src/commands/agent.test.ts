@@ -61,7 +61,7 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plug
 import type { RuntimeEnv } from "../runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
-import { interruptSessionWorkAdmissions } from "../sessions/session-lifecycle-admission.js";
+import { interruptSessionControllerEffects } from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveEffectiveAgentSkillFilter } from "../skills/discovery/agent-filter.js";
 import {
@@ -1236,7 +1236,7 @@ describe("agentCommand", () => {
       });
       vi.mocked(runEmbeddedAgent).mockImplementationOnce(async () => {
         await expect(
-          interruptSessionWorkAdmissions({
+          interruptSessionControllerEffects({
             scope: store,
             identities: [sessionKey, sessionId],
             timeoutMs: 5,
@@ -1311,7 +1311,7 @@ describe("agentCommand", () => {
             }),
           ]);
           expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-          await interruptSessionWorkAdmissions({
+          await interruptSessionControllerEffects({
             scope: store,
             identities: [sessionKey, sessionId],
             reason,

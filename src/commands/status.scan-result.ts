@@ -35,6 +35,8 @@ export type StatusScanResult<
   | "agentStatus"
 > &
   StatusScanGatewayResult & {
+    /** Local callers publish again after their final asynchronous preparation. */
+    publish?: () => { summary: StatusSummary; agentStatus: AgentStatus };
     summary: StatusSummary;
     memory: MemoryStatusSnapshot | null;
     memoryPlugin: MemoryPluginStatus;

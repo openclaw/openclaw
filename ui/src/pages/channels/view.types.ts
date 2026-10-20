@@ -52,7 +52,6 @@ export type ChannelsProps = {
   onPairingPromptConfirm: () => void;
   onWhatsAppStart: (force: boolean) => void;
   onWhatsAppWait: () => void;
-  onWhatsAppLogout: () => void;
   onShowAdvancedSettings: (enabled: boolean) => void;
   onConfigPatch: (path: Array<string | number>, value: unknown) => void;
   onConfigSave: () => void;

@@ -3,6 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readNativeTypeScriptConfig } from "../../scripts/lib/native-typescript-config.mts";
+import { createNativeTypeScriptProject } from "../../scripts/lib/native-typescript.mts";
+import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import {
   hashVitestWorkerArtifact,
@@ -15,6 +18,9 @@ import {
   retainVitestWorkerArtifacts,
 } from "../../scripts/lib/vitest-worker-cache.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+vi.mock("../../scripts/lib/native-typescript-config.mts", { spy: true });
+vi.mock("../../scripts/lib/native-typescript.mts", { spy: true });
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
 
@@ -32,6 +38,7 @@ function fixture() {
   write(
     "tsconfig.json",
     JSON.stringify({
+      extends: "./tsconfig.base.json",
       compilerOptions: {
         target: "ES2023",
         module: "NodeNext",
@@ -43,6 +50,7 @@ function fixture() {
       include: ["src/**/*"],
     }),
   );
+  write("tsconfig.base.json", '{"compilerOptions":{"strict":true}}\n');
   write("src/entry.ts", 'import { value } from "./value.js"; console.log(value);\n');
   write("src/value.js", 'export const value = "first";\n');
   write("notes/unrelated.ts", 'export const unrelated = "first";\n');
@@ -56,11 +64,15 @@ function fixture() {
   };
   reserve();
   const cache = async () => {
-    const result = await createVitestWorkerCache(root, directory, compilerInputs);
+    const result = await createVitestWorkerCache(root, directory);
     expect(result, "a reserved local cache slot must be eligible").toBeDefined();
     return result!;
   };
   const prepare = () => {
+    const { configFiles } = readNativeTypeScriptConfig({
+      cwd: root,
+      configFileName: "tsconfig.json",
+    });
     const outputs = {
       "probe.js":
         "#!/usr/bin/env node\n" +
@@ -89,13 +101,14 @@ function fixture() {
       [
         "package.json",
         "pnpm-lock.yaml",
-        "tsconfig.json",
+        ...configFiles,
+        ...compilerInputs,
         "src/entry.ts",
         "src/value.js",
         "node-host-launcher.mjs",
         "cli-invocation.mjs",
       ]
-        .map((name) => path.join(root, name))
+        .map((name) => path.resolve(root, name))
         .toSorted()
         .map((filename) => [filename, hashVitestWorkerArtifact(fs.readFileSync(filename))]),
     );
@@ -268,28 +281,40 @@ describe("compiled worker content cache", () => {
     }
   });
 
-  it("invalidates edited source and then restores the newly compiled worker behavior", async () => {
+  it("opens native projects only on misses and recompiles changed transitive inputs", async () => {
     const f = fixture();
-    await f.seed();
-    f.nextInvocation();
+    const invoke = async () => {
+      vi.mocked(createNativeTypeScriptProject).mockClear();
+      vi.mocked(readNativeTypeScriptConfig).mockClear();
+      const owner = await f.cache();
+      let manifest = await owner.restore();
+      if (!manifest) {
+        collectRuntimeImportClosure(f.root, ["src/entry.ts"]);
+        manifest = f.prepare();
+        manifest.cacheSignature = await owner.seal(manifest);
+      }
+      const value = f.observe().value;
+      await verifyVitestWorkerArtifacts(f.directory, manifest);
+      expect(await retainVitestWorkerArtifacts(f.root, f.directory, manifest)).toBe(true);
+      f.nextInvocation();
+      return value;
+    };
+
+    expect(await invoke()).toBe("first");
+    expect(createNativeTypeScriptProject).toHaveBeenCalledTimes(1);
+    expect(await invoke()).toBe("first");
+    expect(createNativeTypeScriptProject).not.toHaveBeenCalled();
+    expect(readNativeTypeScriptConfig).not.toHaveBeenCalled();
+
     const original = fs.statSync(path.join(f.root, "src/value.js"));
     f.write("src/value.js", 'export const value = "other";\n');
     fs.utimesSync(path.join(f.root, "src/value.js"), original.atime, original.mtime);
-
-    const cache = await f.cache();
-    expect(await cache.restore()).toBeUndefined();
-    expect(fs.existsSync(path.join(f.directory, "dist/probe.js"))).toBe(false);
-    const changed = f.prepare();
-    changed.cacheSignature = await cache.seal(changed);
-    await verifyVitestWorkerArtifacts(f.directory, changed);
-    expect(await retainVitestWorkerArtifacts(f.root, f.directory, changed)).toBe(true);
-    f.nextInvocation();
-
-    expect(await f.restore()).toBeDefined();
-    expect(f.observe().value).toBe("other");
+    expect(await invoke()).toBe("other");
+    expect(createNativeTypeScriptProject).toHaveBeenCalledTimes(1);
   });
 
   it.each([
+    ["extended config", "tsconfig.base.json", '{"compilerOptions":{"strict":false}}\n'],
     ["resolution candidate", "src/value.ts", 'export const value = "shadow";\n'],
     [
       "package resolution metadata",
@@ -351,7 +376,7 @@ describe("compiled worker content cache", () => {
       fs.cpSync(f.root, root, { recursive: true });
     }
     const directory = path.join(root, path.relative(f.root, f.directory));
-    const cache = await createVitestWorkerCache(root, directory, f.compilerInputs);
+    const cache = await createVitestWorkerCache(root, directory);
     expect(cache).toBeDefined();
     expect(await cache!.restore()).toBeUndefined();
     const absent =

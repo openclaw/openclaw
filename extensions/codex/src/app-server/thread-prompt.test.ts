@@ -8,41 +8,32 @@ import {
 } from "./protocol.js";
 import { buildDeveloperInstructions } from "./thread-prompt.js";
 
-const delegationTools: CodexDynamicToolSpec[] = [
-  {
+function tool(
+  name: string,
+  properties: JsonObject = {},
+  deferLoading = false,
+): CodexDynamicToolFunctionSpec {
+  return {
     type: "function",
-    name: "sessions_spawn",
-    description: "Spawn an OpenClaw session",
-    inputSchema: {
-      type: "object",
-      properties: { runtime: { type: "string", enum: ["subagent", "acp"] } },
-    },
-  },
-  {
-    type: "function",
-    name: "sessions_send",
-    description: "Send to an OpenClaw session",
-    inputSchema: { type: "object" },
-  },
-  {
-    type: "function",
-    name: "subagents",
-    description: "List OpenClaw subagents",
-    inputSchema: { type: "object" },
-  },
-  {
-    type: "namespace",
-    name: CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
-    description: "Direct OpenClaw tools",
-    tools: [
-      {
-        type: "function",
-        name: "sessions_yield",
-        description: "Yield for OpenClaw session events",
-        inputSchema: { type: "object" },
-      },
-    ],
-  },
+    name,
+    description: name,
+    inputSchema: { type: "object", properties },
+    deferLoading,
+  };
+}
+
+function namespace(tools: CodexDynamicToolFunctionSpec[], name = "openclaw"): CodexDynamicToolSpec {
+  return { type: "namespace", name, description: "OpenClaw tools", tools };
+}
+
+const spawnTool = tool("sessions_spawn", {
+  runtime: { type: "string", enum: ["subagent", "acp"] },
+});
+const delegationTools = [
+  spawnTool,
+  tool("sessions_send"),
+  tool("subagents"),
+  namespace([tool("sessions_yield")], CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE),
 ];
 
 function createParams(overrides: Partial<EmbeddedRunAttemptParams> = {}): EmbeddedRunAttemptParams {
@@ -66,22 +57,7 @@ describe("buildDeveloperInstructions deferred tool discovery", () => {
   it.each([false, true])("advertises JavaScript discovery only when enabled (%s)", (enabled) => {
     const instructions = buildDeveloperInstructions(createParams(), {
       nativeCodeModeEnabled: enabled,
-      dynamicTools: [
-        {
-          type: "namespace",
-          name: "openclaw",
-          description: "",
-          tools: [
-            {
-              type: "function",
-              name: "dashboard",
-              description: "Dashboard",
-              inputSchema: {},
-              deferLoading: true,
-            },
-          ],
-        },
-      ],
+      dynamicTools: [namespace([tool("dashboard", {}, true)])],
     });
     expect(instructions).toContain("openclaw.dashboard");
     expect(instructions.includes("ALL_TOOLS")).toBe(enabled);
@@ -102,9 +78,7 @@ describe("buildDeveloperInstructions deferred tool discovery", () => {
         }),
         {
           nativeCodeModeEnabled: enabled,
-          dynamicTools: [
-            { type: "function", name: "message", description: "Send", inputSchema: {} },
-          ],
+          dynamicTools: [tool("message")],
         },
       );
       expect(instructions).not.toContain("ALL_TOOLS");
@@ -131,30 +105,7 @@ describe("buildDeveloperInstructions delegation guidance", () => {
       const instructions = buildDeveloperInstructions(
         createParams({ config: { agents: { defaults: { subagents: { delegationMode } } } } }),
         {
-          dynamicTools: [
-            {
-              type: "namespace",
-              name: "openclaw",
-              description: "OpenClaw tools",
-              tools: [
-                {
-                  type: "function",
-                  name: "sessions_spawn",
-                  description: "Spawn a helper",
-                  inputSchema: {
-                    type: "object",
-                    properties: { runtime: { type: "string", enum: ["subagent", "acp"] } },
-                  },
-                },
-                {
-                  type: "function",
-                  name: "sessions_create",
-                  description: "Create a session",
-                  inputSchema: { type: "object" },
-                },
-              ],
-            },
-          ],
+          dynamicTools: [namespace([spawnTool, tool("sessions_create")])],
         },
       );
 
@@ -189,14 +140,7 @@ describe("buildDeveloperInstructions delegation guidance", () => {
     },
   ])("respects the advertised managed runtime schema: %j", ({ properties, expected }) => {
     const instructions = buildDeveloperInstructions(createParams(), {
-      dynamicTools: [
-        {
-          type: "function",
-          name: "sessions_spawn",
-          description: "Spawn a worker",
-          inputSchema: { type: "object", properties },
-        },
-      ],
+      dynamicTools: [tool("sessions_spawn", properties)],
     });
 
     expect(instructions).toContain(expected);
@@ -243,27 +187,10 @@ describe("buildDeveloperInstructions delegation guidance", () => {
         buildDeveloperInstructions(params, {
           dynamicTools: [
             ...delegationTools,
-            {
-              type: "namespace",
-              name: "openclaw",
-              description: "OpenClaw tools",
-              tools: [
-                {
-                  type: "function",
-                  name: createAvailable ? "sessions_create" : "sessions",
-                  description: "Session tool",
-                  deferLoading,
-                  inputSchema: { type: "object" },
-                },
-                {
-                  type: "function",
-                  name: "suggest_task",
-                  description: "Suggest a follow-up",
-                  deferLoading,
-                  inputSchema: { type: "object" },
-                },
-              ],
-            },
+            namespace([
+              tool(createAvailable ? "sessions_create" : "sessions", {}, deferLoading),
+              tool("suggest_task", {}, deferLoading),
+            ]),
           ],
         });
       const instructions = render(true);
@@ -278,79 +205,48 @@ describe("buildDeveloperInstructions delegation guidance", () => {
     },
   );
 
-  it.each([{ name: "prompt mode none", overrides: { promptMode: "none" } }] as const)(
-    "omits the policy for $name",
-    ({ overrides }) => {
-      expect(buildInstructions(overrides)).not.toContain("## Delegation");
-    },
-  );
+  it("omits the policy for prompt mode none", () => {
+    expect(buildInstructions({ promptMode: "none" })).not.toContain("## Delegation");
+  });
 });
 
 describe("buildDeveloperInstructions UI presentation guidance", () => {
-  const uiTools = ["screen", "show_widget", "dashboard", "portal", "message"].map(
-    (name): CodexDynamicToolFunctionSpec => ({
-      type: "function",
-      name,
-      description: `Use ${name}`,
-      inputSchema: { type: "object", properties: name === "message" ? { clawhub: {} } : {} },
-    }),
+  const uiTools = ["screen", "show_widget", "dashboard", "portal", "message"].map((name) =>
+    tool(name, name === "message" ? { clawhub: {} } : {}, true),
   );
 
-  it.each([
-    {
-      name: "namespaced deferred",
-      dynamicTools: [
-        {
-          type: "namespace",
-          name: "openclaw",
-          description: "OpenClaw tools",
-          tools: uiTools.map((tool) => ({ ...tool, deferLoading: true })),
-        },
-      ],
-      prefix: "openclaw.",
-    },
-  ] satisfies { name: string; dynamicTools: CodexDynamicToolSpec[]; prefix: string }[])(
-    "explains the actual $name presentation routes",
-    ({ dynamicTools, prefix }) => {
-      const instructions = buildDeveloperInstructions(createParams(), { dynamicTools });
+  it("explains the actual namespaced deferred presentation routes", () => {
+    const dynamicTools = [namespace(uiTools)];
+    const prefix = "openclaw.";
+    const instructions = buildDeveloperInstructions(createParams(), { dynamicTools });
 
-      expect(instructions).toContain("## UI Presentation");
-      expect(instructions).toContain(`\`${prefix}screen(action="browser_show")\``);
-      expect(instructions).toContain("Do not create or expand a dashboard to open a panel");
-      for (const tool of uiTools) {
-        expect(instructions).toContain(`\`${prefix}${tool.name}\``);
-      }
-      expect(instructions).toContain("pin=true");
-      expect(instructions).toContain("publicUrl");
-      expect(instructions).toContain("result.presentation");
-      expect(instructions).toContain("this turn's schema");
-      expect(instructions).toContain("status=pinned means the widget is on the session dashboard");
-      expect(instructions).toContain('action="focus_tab" with its tabId');
-      expect(instructions).toContain("do not open hosting URLs as browser pages");
-      expect(instructions).toContain(
-        `\`${prefix}message(action="send", clawhub={query:"capability"})\``,
-      );
-      expect(instructions).toContain("Tools/skills first");
-      expect(instructions).toContain(
-        "For explicit plugin/skill search/install or missing capability, use ClawHub",
-      );
-      expect(instructions).toContain("Skip routine tasks, tool errors, permissions");
-    },
-  );
+    expect(instructions).toContain("## UI Presentation");
+    expect(instructions).toContain(`\`${prefix}screen(action="browser_show")\``);
+    expect(instructions).toContain("Do not create or expand a dashboard to open a panel");
+    for (const uiTool of uiTools) {
+      expect(instructions).toContain(`\`${prefix}${uiTool.name}\``);
+    }
+    expect(instructions).toContain("pin=true");
+    expect(instructions).toContain("publicUrl");
+    expect(instructions).toContain("result.presentation");
+    expect(instructions).toContain("this turn's schema");
+    expect(instructions).toContain("status=pinned means the widget is on the session dashboard");
+    expect(instructions).toContain('action="focus_tab" with its tabId');
+    expect(instructions).toContain("do not open hosting URLs as browser pages");
+    expect(instructions).toContain(
+      `\`${prefix}message(action="send", clawhub={query:"capability"})\``,
+    );
+    expect(instructions).toContain("Tools/skills first");
+    expect(instructions).toContain(
+      "For explicit plugin/skill search/install or missing capability, use ClawHub",
+    );
+    expect(instructions).toContain("Skip routine tasks, tool errors, permissions");
+  });
 });
 
 describe("buildDeveloperInstructions delivery-mode stability", () => {
-  it.each([true])("keeps thread policy stable with message available=%s", (available) => {
-    const dynamicTools: CodexDynamicToolSpec[] = available
-      ? [
-          {
-            type: "function",
-            name: "message",
-            description: "Send messages",
-            inputSchema: { type: "object" },
-          },
-        ]
-      : [];
+  it("keeps thread policy stable with message available", () => {
+    const dynamicTools = [tool("message")];
     const instructions = (["automatic", "message_tool_only", "automatic"] as const).map(
       (sourceReplyDeliveryMode) =>
         buildDeveloperInstructions(createParams({ sourceReplyDeliveryMode }), { dynamicTools }),
@@ -358,8 +254,5 @@ describe("buildDeveloperInstructions delivery-mode stability", () => {
 
     expect(instructions[1]).toBe(instructions[0]);
     expect(instructions[2]).toBe(instructions[0]);
-    if (!available) {
-      expect(instructions[0]).not.toContain("message(action=send)");
-    }
   });
 });

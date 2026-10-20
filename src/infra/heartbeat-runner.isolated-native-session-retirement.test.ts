@@ -57,7 +57,7 @@ it.each([
       await expect(
         runHeartbeatOnce({
           cfg,
-          deps: { getReplyFromConfig: replySpy, getQueueSize: () => 0 },
+          deps: { getReplyFromConfig: replySpy },
         }),
       ).resolves.toMatchObject({ status: "ran" });
       expect(replySpy).toHaveBeenCalledOnce();

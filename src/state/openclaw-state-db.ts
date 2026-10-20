@@ -235,7 +235,11 @@ export async function prepareOpenClawStateDatabaseSchema(
 /** Bootstrap fresh/native-only state canonically before startup checkpoint access. */
 export function withOpenClawStateStartupMigrationCheckpointDatabase<T>(
   callback: (db: EngineConnection) => T,
-  options: OpenClawStateDatabaseOptions & { atomic?: boolean; sealOnClose?: boolean } = {},
+  options: OpenClawStateDatabaseOptions & {
+    atomic?: boolean;
+    sealOnClose?: boolean;
+    singleStatement?: true;
+  } = {},
 ): T {
   assertOpenClawStateSchemaRepairAllowed(resolveDatabasePath(options));
   if (isStatePostgres()) {
@@ -268,7 +272,10 @@ export function withOpenClawStateStartupMigrationCheckpointDatabase<T>(
         return callback(db);
       },
       { env: options.env, path: database.path },
-      { operationLabel: "state.startup-checkpoint.write" },
+      {
+        operationLabel: "state.startup-checkpoint.write",
+        singleStatement: options.singleStatement,
+      },
     );
     if (options.sealOnClose) {
       stateDbCache.closeOpenClawStateDatabaseByPath(database.path);

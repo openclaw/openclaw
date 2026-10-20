@@ -74,8 +74,64 @@ describe("CommandPalette lifecycle", () => {
     await palette.updateComplete;
     await settlePalette(palette);
     expect(list).not.toHaveBeenCalled();
+    expect(palette.textContent).toContain("Reconnect to search Gateway content.");
+    expect(palette.querySelector(".cmd-palette__no-results")).toBeNull();
     findPaletteOption(palette, "Plugins", true)!.click();
     expect(palette.onNavigate).toHaveBeenCalledWith("plugins");
+  });
+
+  it("keeps settled search and its query through a blip, then retires them for another Gateway", async () => {
+    const harness = createGateway(true, {
+      methods: ["sessions.search", "plugins.list"],
+      request: async (method) =>
+        method === "sessions.search"
+          ? { results: [], sessions: [] }
+          : method === "plugins.list"
+            ? { plugins: [{ id: "retained-plugin", name: "Retained plugin" }] }
+            : { models: [{ id: "retained-model", provider: "fixture", name: "Retained model" }] },
+    });
+    const refreshed = createDeferred<SessionsListResult | null>();
+    const list = vi
+      .fn<ApplicationContext["sessions"]["list"]>()
+      .mockResolvedValueOnce(createSessionResult("agent:main:old", "Retained chat"))
+      .mockReturnValueOnce(refreshed.promise);
+    const { palette, provider } = await mountPalette(createContext(harness.gateway, list));
+    await enterQuery(palette, "retained");
+    await vi.advanceTimersByTimeAsync(200);
+    await palette.updateComplete;
+    expect(findPaletteOption(palette, "Retained chat")).toBeDefined();
+    expect(findPaletteOption(palette, "Retained model")).toBeDefined();
+    expect(findPaletteOption(palette, "Retained plugin")).toBeDefined();
+
+    harness.setConnected(false);
+    await palette.updateComplete;
+    expect(findPaletteOption(palette, "Retained chat")).toBeDefined();
+    expect(findPaletteOption(palette, "Retained model")).toBeDefined();
+    expect(findPaletteOption(palette, "Retained plugin")).toBeDefined();
+    expect(palette.querySelector<HTMLTextAreaElement>(".cmd-palette__input")?.value).toBe(
+      "retained",
+    );
+    harness.setConnected(true);
+    await vi.advanceTimersByTimeAsync(200);
+    await palette.updateComplete;
+    expect(findPaletteOption(palette, "Retained chat")).toBeDefined();
+    refreshed.resolve(createSessionResult("agent:main:new", "Refreshed retained chat"));
+    await palette.updateComplete;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(findPaletteOption(palette, "Refreshed retained chat")).toBeDefined();
+
+    provider.setContext(
+      createContext(
+        createGateway(true).gateway,
+        vi.fn(async () => null),
+      ),
+    );
+    await palette.updateComplete;
+    expect(palette.isOpen).toBe(false);
+    palette.openPalette();
+    await palette.updateComplete;
+    expect(palette.querySelector<HTMLTextAreaElement>(".cmd-palette__input")?.value).toBe("");
+    expect(findPaletteOption(palette, "Refreshed retained chat")).toBeUndefined();
   });
 
   it.each(["reconnect", "replacement"])(

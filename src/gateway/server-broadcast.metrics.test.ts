@@ -26,7 +26,8 @@ it("batches session frame bytes by reason and exact subscription without changin
   subscribers.subscribe("viewer", "agent:main:global");
   subscribers.subscribe("roster", "agent:main:another-session");
   for (const { client } of [viewer, roster]) {
-    client.socket.recordEventSent = recordGatewayWsEvent;
+    client.socket.recordEventSent = (event, frame, sessionEvent, presenceMode) =>
+      recordGatewayWsEvent(event, frame.byteLength, sessionEvent, presenceMode);
   }
   const { broadcastToConnIds } = createGatewayBroadcaster({
     clients: new GatewayClientRegistry([viewer.client, roster.client]),
@@ -74,7 +75,15 @@ it("batches session frame bytes by reason and exact subscription without changin
         ),
       0,
     );
-    expect(observations.map(({ seq: _seq, ts: _ts, ...event }) => event)).toEqual([
+    expect(
+      observations.map(({ seq: _seq, ts: _ts, ...event }) => {
+        if (event.type === "gateway.ws.event") {
+          const { frameBytes: _frameBytes, ...traffic } = event;
+          return traffic;
+        }
+        return event;
+      }),
+    ).toEqual([
       {
         type: "gateway.ws.event",
         event: "sessions.changed",
@@ -160,7 +169,8 @@ it("batches accepted presence frame counts and UTF-8 bytes by delivery mode", as
   const legacy = makeClient("legacy", "operator", ["operator.read"]);
   capable.client.connect.caps = [GATEWAY_CLIENT_CAPS.PRESENCE_DELTAS];
   for (const { client } of [capable, legacy]) {
-    client.socket.recordEventSent = recordGatewayWsEvent;
+    client.socket.recordEventSent = (event, frame, sessionEvent, presenceMode) =>
+      recordGatewayWsEvent(event, frame.byteLength, sessionEvent, presenceMode);
   }
   const { broadcast } = createGatewayBroadcaster({
     clients: new GatewayClientRegistry([capable.client, legacy.client]),
@@ -182,7 +192,15 @@ it("batches accepted presence frame counts and UTF-8 bytes by delivery mode", as
         (total, index) => total + Buffer.byteLength(peer.socket.send.mock.calls[index]![0]),
         0,
       );
-    expect(observations.map(({ seq: _seq, ts: _ts, ...event }) => event)).toEqual([
+    expect(
+      observations.map(({ seq: _seq, ts: _ts, ...event }) => {
+        if (event.type === "gateway.ws.event") {
+          const { frameBytes: _frameBytes, ...traffic } = event;
+          return traffic;
+        }
+        return event;
+      }),
+    ).toEqual([
       {
         type: "gateway.ws.event",
         event: "presence",

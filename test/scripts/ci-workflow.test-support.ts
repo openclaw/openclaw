@@ -136,6 +136,8 @@ export function evaluateWorkflowExpression(
     ciShape?: "default" | "main";
     ciOnPush?: string;
     includeAndroid?: boolean;
+    inputs?: Record<string, unknown>;
+    runnerTemp?: string;
     runnerEnvironment?: "" | "github-hosted" | "self-hosted";
     runnerProfile?: "blacksmith" | "github" | "hybrid";
     runAttempt: number;
@@ -202,6 +204,8 @@ export function evaluateWorkflowExpression(
       actor: context.actor ?? "",
       event_name: context.eventName,
       repository: context.repository,
+      repository_owner: context.repository.split("/")[0],
+      server_url: "https://github.com",
       ref: context.ref ?? "refs/heads/main",
       run_attempt: context.runAttempt,
       run_id: context.runId,
@@ -245,11 +249,12 @@ export function evaluateWorkflowExpression(
       run_windows_ci: context.runWindowsCi ?? false,
       skip_defender_exclusions: context.skipDefenderExclusions ?? false,
       windows_ci_replay: context.windowsCiReplay ?? "",
+      ...context.inputs,
     },
     env: context.env ?? {},
     secrets: context.secrets ?? {},
     matrix: context.matrix ?? {},
-    runner: { environment: context.runnerEnvironment ?? "" },
+    runner: { environment: context.runnerEnvironment ?? "", temp: context.runnerTemp ?? "" },
     steps: {
       runner_profile: { outputs: { node_runner_backend: "" } },
       qualification_dispatch: { outputs: { eligible: "false" } },

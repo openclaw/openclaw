@@ -21,14 +21,14 @@ scheduled result, while the registry owns the nested orchestrator's continuation
 
 ## Ownership through the handoff
 
-| Phase                | Owner                                         | Required handoff                                                                                                                               |
-| -------------------- | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| Executing requester  | Admitted agent turn                           | Children identify the spawning turn with `requesterTurnRunId`. Progress callbacks use this turn's live authority.                              |
-| Explicit yield       | Registry requester-yield settlement           | Persist yield intent, freeze the child run IDs, advance the batch generation, and clear the old requester-turn binding.                        |
-| Waiting for children | Registry lifecycle and `requesterSettleWake`  | Retain captured completion results and schedule the owed batch. Individual announcements must not start a competing continuation.              |
-| Settlement dispatch  | Requester-settle wake delivery                | Validate the current batch and Gateway owner, dispatch an internal continuation safe to repeat for a nested requester, and record its outcome. |
-| Successor admission  | Gateway task tracking and paused-run adoption | Continue the paused task under the newly admitted run ID, preserving requester lineage and its outstanding settlement obligation.              |
-| Successor completion | Registry completion delivery                  | Deliver the orchestrator's result to its original requester. Cron's existing continuation and delivery policy own the scheduled output.        |
+| Phase                | Owner                                         | Required handoff                                                                                                                                                       |
+| -------------------- | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Executing requester  | Admitted agent turn                           | Children identify the spawning turn with `requesterTurnRunId`. Progress callbacks use this turn's live authority.                                                      |
+| Explicit yield       | Registry requester-yield settlement           | Persist yield intent, freeze the child run IDs, advance the batch generation, and clear the old requester-turn binding.                                                |
+| Waiting for children | Registry lifecycle and `requesterSettleWake`  | Retain captured completion results and schedule the owed batch. Individual announcements must not start a competing continuation.                                      |
+| Settlement dispatch  | Requester session mailbox and delivery owner  | Validate the current batch and Gateway owner, reserve one controller input for the nested requester, and record its outcome. The mailbox decides when that input runs. |
+| Successor admission  | Gateway task tracking and paused-run adoption | Continue the paused task under the newly admitted run ID, preserving requester lineage and its outstanding settlement obligation.                                      |
+| Successor completion | Registry completion delivery                  | Deliver the orchestrator's result to its original requester. Cron's existing continuation and delivery policy own the scheduled output.                                |
 
 The implementation owners are `subagent-registry-requester-yield.ts`,
 `subagent-announce.requester-settle-wake.ts`, and
@@ -56,7 +56,8 @@ through the existing completion owner and keeps the end time the yield recorded.
 An outcome the yield already recorded stays: a collector an earlier version left at
 `ok` settles as done with the reply its yielded turn ended on, the same result a
 collector that yields now gets. Only a run with no recorded outcome settles as an
-`error` that says why. Every other paused run stays continuable however long it has been
+`error` that says why, and its collector completion carries
+`reason: "yielded_without_result"`. Every other paused run stays continuable however long it has been
 paused: a declared message wait, a leaf that an earlier version left paused, and an
 orchestrator waiting on descendants are not bounded by this settlement. A kill
 claim on a paused run is never settled over; cancellation stays with the kill path.
@@ -155,7 +156,7 @@ owner, so callbacks from the closed Gateway cannot settle the recovered wake.
   keep the existing cancellation caller's admission, rather than using the
   revoked target to authorize a new turn. Mixed result/cancellation batches
   require every original source to remain live and compatible. An explicit
-  delivery retry captures its newly admitted caller while live and transfers
+  delivery redrive captures its newly admitted caller while live and transfers
   custody only after the new delivery generation commits; it does not reopen the
   expired source. Restart still admits a
   fresh recovery owner rather than reviving the previous process capability.
@@ -182,26 +183,62 @@ owner, so callbacks from the closed Gateway cannot settle the recovered wake.
   time, completion time, and child session identity as tie-breakers. Superseded
   child rows are excluded. Batch identity includes requester identity, child
   IDs, and yield generation.
-- **Bounded delivery.** Delivery retains three attempts and three ambiguous
-  transport replays. Active descendants resume settlement through completion
-  events, without periodic wake retries or retry-state writes. Terminal descendants
-  with unresolved delivery get one fallback timer, five minutes after the latest
-  recorded completion in the batch's descendant tree. Settlement events can release
-  the wait earlier; restart does not recharge it. The fallback delivers the finished
-  batch with an explicit notice that a descendant result remains undelivered. Delivery bookkeeping for executions that ended
-  before the current batch's earliest child was created cannot block its
-  continuation. Active descendants and delivery settlement overlapping that
-  batch still hold the wake; historical failure records remain available.
-  A private handoff's observation timeout does not
-  cancel the underlying Gateway turn. When the Gateway reports that turn as
+- **One input per obligation.** An individual completion, a settled batch, and a
+  pause notice each reserve exactly one input on the requester session, keyed by a
+  stable reservation ID. The mailbox orders it behind the requester's current
+  turn and other waiting input; the registry never waits for the requester to be
+  idle. `requesterTurnRunId` identifies the spawning cohort. Whether that turn
+  still owns its children is read from the session controller, so a turn that
+  ended without transferring them no longer holds their completions.
+- **Retirement is an event.** Kill, Stop of a paused or queued child, child
+  session deletion, and requester reset or deletion retire the child's owed
+  inputs. A retired member is terminal, so it never holds its siblings'
+  continuation. The parent hears of a retired child exactly once. A yielded
+  cohort resolves into exactly one continuation: when its last member settles or
+  retires, the parent is woken once, and the continuation names each child that
+  ended without a result. Any other child reports its stopped outcome through
+  its own completion, with no output. A kill is confirmed once the killed run's
+  operation settles and its kill owner finishes. A yield claims only children
+  that still owe a completion; with none left, `sessions_yield` reports nothing
+  pending.
+- **The requester that already knows is not woken.** A Stop, reset, or deletion
+  of the parent itself retires its children without a report. So does a kill
+  that lands while the parent's own turn still holds the child. Descendants of a
+  stopped child are retired without a report to that child. The registry does not
+  record who issued a Stop, so a user Stop of a child while its parent's turn still
+  holds it is not reported to that turn either.
+- **Descendant settlement.** Active descendants resume settlement through
+  completion events, without periodic wake retries or retry-state writes.
+  A wave that owes no requester continuation retires before waiting on other
+  descendants. In particular, an individually delivered single child without a
+  yielded continuation does not retain a wake behind running siblings. Delivered
+  members of a grouped or yielded continuation remain owned by that batch.
+  A frozen batch with terminal descendants whose delivery remains unresolved
+  gets one fallback timer, five minutes after the latest recorded completion
+  in the batch's descendant tree. Settlement events can release the wait
+  earlier; restart does not recharge it. The fallback delivers the finished
+  batch with an explicit notice that a descendant result remains undelivered.
+  Historical failure records remain available. This deadline bounds waiting
+  for descendant delivery, not the lifetime of the batch's controller input.
+- **Retained delivery outcome.** A waiting controller input has no separate
+  announcement expiry or retry counter. An unavailable requester, preparation
+  that cannot yet run, or unsettled descendants leave the durable obligation
+  owed; owner lifecycle and readiness events re-evaluate it. Once an attempt has
+  an observed terminal delivery outcome, the registry settles that outcome
+  without resending an ambiguously committed result. If persistence fails, it
+  retains the observed receipt and retries bookkeeping, not the send. The
+  outbound durable delivery queue keeps its own transport retry policy.
+  Delivery bookkeeping for executions that ended before the current batch's
+  earliest child was created cannot block its continuation.
+  A private handoff's observation timeout does not cancel the underlying Gateway
+  turn. When the Gateway reports that turn as
   in flight, settlement observes the same request without spending failure
   attempts or discarding the child results. Gateway admission and execution
   retain their own timeouts; explicit cancellation still stops the turn.
-  Individual private announcements keep their delivery deadline until requester
-  execution starts; the Gateway's requester runtime budget then applies.
   Findings are capped at 4,096 characters, individual
-  results at 512, and route notices at 1,024. Ambiguous replay reuses its attempt
-  key; it does not assert global exactly-once delivery across Gateway restarts.
+  results at 512, and route notices at 1,024. The continuation's idempotency key
+  is stable, so a restart re-reserves the same input; it does not assert global
+  exactly-once delivery across Gateway restarts.
 
 ## Progress after yield
 
@@ -225,8 +262,9 @@ On Telegram and Discord, a confirmed `progress` draft can stay with the yielding
 turn's announcing children instead of the waiting acknowledgment. The channel keeps
 rendering, throttling and deleting it; the native registry only forwards child
 status and prepared operation names (never child prose, commands, arguments or
-results). Public task state remains visible with the detailed tool log disabled;
-`streaming.progress.toolProgress` controls the rolling diagnostic rows. A resumed parent that
+results). Telegram keeps public task state visible with the detailed tool log
+disabled. Discord retains the human-readable work message without lifecycle
+rows unless `streaming.progress.toolProgress` is enabled. A resumed parent that
 yields again keeps the same draft for its new children. The draft is deleted when
 the settle wake completes the last tracked cohort (final, `NO_REPLY` or terminal
 failure) or when stop or reset cancels the children. It is process-local: a

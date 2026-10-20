@@ -1,10 +1,12 @@
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { recomputeSingleJobForMaintenance } from "../service/jobs-scheduling.js";
 import type { CronJobPolicyContext } from "../service/state.js";
 import { applyOutcomeToAuthoritativeJob } from "../service/timer-outcomes.js";
 import { recordCronRunInDatabase } from "./run-history.kernel.js";
+import { hasCronRunDeliveryStartedInDatabase } from "./run-receipt-delivery.js";
 import { finishCronRunReceiptInDatabase } from "./run-receipt-store.js";
 import { isCronRunTriggerStateRetiredInDatabase } from "./run-receipt-trigger-state.js";
 import { cronRunResultHistory } from "./run-result.js";
@@ -48,6 +50,13 @@ export function finalizeCronRunsInWorker(
           for (const [outcomeIndex, completed] of policy.outcomes.entries()) {
             const receipt = completed.runReceipt;
             const storedJob = jobs.get(completed.jobId);
+            const retryAfterRestart =
+              completed.interruptedByRestart === true &&
+              !completed.request &&
+              receipt !== undefined &&
+              storedJob !== undefined &&
+              receipt.configRevision === resolveCronJobConfigRevision(storedJob) &&
+              !hasCronRunDeliveryStartedInDatabase(db, receipt);
             // Retention protects the marker still in storage until this mutation flushes.
             const pendingReceiptId =
               storedJob?.state.runningAtMs === undefined
@@ -65,8 +74,9 @@ export function finalizeCronRunsInWorker(
                 receiptSchema,
                 handle: receipt,
                 pendingReceiptId,
-                status:
-                  completed.status === "ok" && completed.triggerEval?.fired === false
+                status: completed.interruptedByRestart
+                  ? "interrupted"
+                  : completed.status === "ok" && completed.triggerEval?.fired === false
                     ? "skipped"
                     : completed.status,
                 finishedAtMs: completed.endedAt,
@@ -82,11 +92,19 @@ export function finalizeCronRunsInWorker(
               currentJob.state.runningReceiptId === receipt.receiptId;
             const job =
               currentJob && ownsRunningMarker ? currentJob : structuredClone(completed.job);
-            const shouldDelete = applyOutcomeToAuthoritativeJob(state, job, completed, {
-              request: completed.request,
-              deferredNotifications: currentJob && ownsRunningMarker ? outcome.notifications : [],
-              triggerStateRetired,
-            });
+            const shouldDelete = applyOutcomeToAuthoritativeJob(
+              state,
+              job,
+              {
+                ...completed,
+                interruptedByRestart: retryAfterRestart,
+              },
+              {
+                request: completed.request,
+                deferredNotifications: currentJob && ownsRunningMarker ? outcome.notifications : [],
+                triggerStateRetired,
+              },
+            );
             if (currentJob && ownsRunningMarker) {
               if (shouldDelete) {
                 outcome.removedJobs.push(job);

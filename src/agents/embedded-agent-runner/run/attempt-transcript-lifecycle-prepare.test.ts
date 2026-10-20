@@ -12,6 +12,7 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../../../config/sessions/session-actor-memory-owner.js";
 import { isIndexedSessionEntry } from "../../../config/sessions/session-entry-codec.js";
+import { capturePreparedTranscriptModelPromptProjection } from "../../../config/sessions/session-message-rewrite.js";
 import { projectionLane } from "../../../config/sessions/session-transcript-worker-resources.js";
 import { captureSessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
 import {
@@ -22,9 +23,9 @@ import {
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import { getAgentRunLifecycleGeneration } from "../../../infra/agent-run-registry.js";
 import {
-  isSessionWorkAdmissionActive,
-  runExclusiveSessionLifecycleMutation,
-} from "../../../sessions/session-lifecycle-admission.js";
+  isSessionControllerWorkActive,
+  runSessionMutation,
+} from "../../../sessions/session-controller.lifecycle.js";
 import { onSessionIdentityMutation } from "../../../sessions/session-lifecycle-events.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
@@ -46,7 +47,9 @@ import {
   createTestSession,
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
+import { sessionManagerReadMessageAnchor } from "../../sessions/session-manager-message-anchor.js";
 import { SessionMetadataCommittedError } from "../../sessions/session-manager-metadata-error.js";
+import { sessionManagerAppendInitialMetadata } from "../../sessions/session-manager-metadata.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { rewriteTranscriptEntriesInSessionManager } from "../transcript-rewrite.js";
@@ -59,6 +62,7 @@ import { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 
 const userMessage = { role: "user" as const, content: "First user turn", timestamp: 1 };
 const initialWriteKinds = ["message", "model", "thinking"] as const;
+
 function observeCreation(
   sessionId: string,
   listener: Parameters<typeof onSessionIdentityMutation>[0],
@@ -218,7 +222,7 @@ async function withInitialWriter(
     } finally {
       try {
         await prepared?.transcriptLifecycle.dispose();
-        expect(isSessionWorkAdmissionActive(target.storePath, [target.sessionKey])).toBe(false);
+        expect(isSessionControllerWorkActive(target.storePath, [target.sessionKey])).toBe(false);
       } finally {
         for (const owner of admissions) {
           owner.close();
@@ -378,6 +382,46 @@ it.each([false, true])(
       { existing },
     ),
 );
+
+it("appends after an unchanged prompt capture in one actor request without losing either record", () =>
+  withInitialWriter(async ({ manager, openManager, transcript }) => {
+    const userId = await manager.appendMessageAsync(userMessage);
+    const anchor = manager[sessionManagerReadMessageAnchor](userId);
+    if (!anchor) {
+      throw new Error("Expected the committed user message anchor");
+    }
+    await capturePreparedTranscriptModelPromptProjection(anchor, userMessage.content, () => {});
+    const actor = transcript.ownedTranscriptWriteContext.sessionActor!.actor;
+    using append = vi.spyOn(actor, "appendTranscriptEvent");
+    using read = vi.spyOn(actor, "read");
+    const checkpoint = await manager.appendCustomEntryAsync("openclaw.tool-surface", {
+      tools: ["read"],
+    });
+    expect(append).toHaveBeenCalledOnce();
+    expect(read).not.toHaveBeenCalled();
+    const entries = [
+      {
+        id: userId,
+        type: "message",
+        message: userMessage,
+      },
+      {
+        id: checkpoint,
+        parentId: userId,
+        type: "custom",
+        customType: "openclaw.tool-surface",
+        data: { tools: ["read"] },
+      },
+    ];
+    expect(manager.getEntries()).toMatchObject(entries);
+    const persisted = (await openManager()).getEntries();
+    expect(persisted).toMatchObject(entries);
+    expect(persisted[0]).toMatchObject({
+      message: {
+        __openclaw: { modelPromptProjection: { version: 1, text: userMessage.content } },
+      },
+    });
+  }));
 
 it.each([false, true])("acknowledges only persisted tool results (incognito=%s)", (incognito) =>
   withInitialWriter(
@@ -590,12 +634,12 @@ it("retains uncommitted custody beyond bounded teardown without aborting accepte
         });
         await Promise.resolve();
         expect(closed).toBe(false);
-        expect(isSessionWorkAdmissionActive(target.storePath, [target.sessionKey])).toBe(true);
+        expect(isSessionControllerWorkActive(target.storePath, [target.sessionKey])).toBe(true);
         expect(loadSessionEntry(target)).toBeUndefined();
         gate.resolve();
         await write;
         await closing;
-        expect(isSessionWorkAdmissionActive(target.storePath, [target.sessionKey])).toBe(false);
+        expect(isSessionControllerWorkActive(target.storePath, [target.sessionKey])).toBe(true);
         expect(loadSessionEntry(target)?.sessionId).toBe(target.sessionId);
       } finally {
         gate.resolve();
@@ -608,11 +652,11 @@ it("retains uncommitted custody beyond bounded teardown without aborting accepte
 
 it("keeps its uncommitted creator visible inside a same-key lifecycle mutation", () =>
   withInitialWriter(async ({ target }) => {
-    await runExclusiveSessionLifecycleMutation("create", {
+    await runSessionMutation({
       scope: target.storePath,
       identities: [target.sessionKey],
       prepare: async () => {
-        expect(isSessionWorkAdmissionActive(target.storePath, [target.sessionKey])).toBe(true);
+        expect(isSessionControllerWorkActive(target.storePath, [target.sessionKey])).toBe(true);
       },
       run: async () => {
         expect(loadSessionEntry(target)).toBeUndefined();
@@ -623,7 +667,7 @@ it("keeps its uncommitted creator visible inside a same-key lifecycle mutation",
 it("rejects an existing row before reacquiring its enclosing lifecycle mutation", () =>
   withInitialWriter(async ({ manager, runParams, target }) => {
     manager.appendMessage(userMessage);
-    await runExclusiveSessionLifecycleMutation("create", {
+    await runSessionMutation({
       scope: target.storePath,
       identities: [target.sessionKey],
       run: async () => {
@@ -691,7 +735,9 @@ it.each([
     withInitialWriter(
       async ({ manager, promptState, runParams, target }) => {
         expect(Boolean(promptState.sessionWriterFence)).toBe(existing);
-        expect(isSessionWorkAdmissionActive(target.storePath, [target.sessionKey])).toBe(!existing);
+        expect(isSessionControllerWorkActive(target.storePath, [target.sessionKey])).toBe(
+          !existing,
+        );
         await appendInitial(kind, manager);
         const entry = loadSessionEntry({ ...target, readConsistency: "latest" });
         expect(entry).toMatchObject({
@@ -703,7 +749,9 @@ it.each([
           expectedWriterRunId: runParams.runId,
         };
         expect(promptState.sessionWriterFence).toEqual(expectedFence);
-        expect(isSessionWorkAdmissionActive(target.storePath, [target.sessionKey])).toBe(false);
+        expect(isSessionControllerWorkActive(target.storePath, [target.sessionKey])).toBe(
+          !existing,
+        );
         expect(manager.getSessionTarget()).toMatchObject(expectedFence);
         manager.appendMessage(userMessage);
         expect(readEvents(target)).toHaveLength(3);
@@ -761,7 +809,7 @@ it.each(["same-session", "copied-writer", "other-session"] as const)(
       const before = loadSessionEntry(target);
       await expect(appendInitial("message", manager)).rejects.toThrow(WriterReboundError);
       expect(promptState.sessionWriterFence).toBeUndefined();
-      expect(isSessionWorkAdmissionActive(target.storePath, [target.sessionKey])).toBe(true);
+      expect(isSessionControllerWorkActive(target.storePath, [target.sessionKey])).toBe(true);
       expect(loadSessionEntry(target)).toEqual(before);
       expect(readEvents(target)).toEqual([]);
     }),
@@ -787,7 +835,7 @@ it("publishes no initial claim or identity for a rolled-back outer transaction",
       expect(loadSessionEntry(target)).toBeUndefined();
       expect(readEvents(target)).toEqual([]);
       expect(identities).toEqual([]);
-      expect(isSessionWorkAdmissionActive(target.storePath, [target.sessionKey])).toBe(true);
+      expect(isSessionControllerWorkActive(target.storePath, [target.sessionKey])).toBe(true);
 
       (await openManager()).appendMessage(userMessage);
       expect(promptState.sessionWriterFence?.expectedWriterRunId).toBe(runParams.runId);
@@ -798,7 +846,44 @@ it("publishes no initial claim or identity for a rolled-back outer transaction",
     }
   }));
 
-it.each(["message", "model"] as const)(
+it("commits the initial metadata pair in one actor append and adopts later metadata", () =>
+  withInitialWriter(async ({ manager, transcript, admission, target }) => {
+    const actor = transcript.ownedTranscriptWriteContext.sessionActor!.actor;
+    using append = vi.spyOn(actor, "appendTranscriptEvent");
+    const { session } = await createTestSession({
+      model: { ...testModel, reasoning: true },
+      sessionManager: manager,
+      thinkingLevel: "high",
+    });
+    try {
+      expect(append).toHaveBeenCalledOnce();
+      const model = manager.getEntries()[0]?.id;
+      const thinking = manager.getEntries()[1]?.id;
+      expect(manager.getEntries()).toMatchObject([
+        { id: model, type: "model_change", parentId: null },
+        { id: thinking, type: "thinking_level_change", parentId: model, thinkingLevel: "high" },
+      ]);
+      expect(manager.getPersistedEntries()).toEqual(readEvents(target));
+
+      const changed = await manager.appendThinkingLevelChange("low");
+      expect(manager.getEntries().at(-1)).toMatchObject({
+        id: changed,
+        parentId: thinking,
+        thinkingLevel: "low",
+      });
+      expect(manager.getPersistedEntries()).toEqual(readEvents(target));
+      const before = readEvents(target);
+      admission.close();
+      await expect(
+        createTestSession({ sessionManager: manager, thinkingLevel: "off" }),
+      ).rejects.toThrow();
+      expect(readEvents(target)).toEqual(before);
+    } finally {
+      session.dispose();
+    }
+  }));
+
+it.each(["message", "model", "initial metadata"] as const)(
   "captures the committed claim before identity-observer cancellation stops the first %s append",
   (kind) =>
     withInitialWriter(async ({ controller, manager, promptState, runParams, target }) => {
@@ -809,7 +894,11 @@ it.each(["message", "model"] as const)(
         controller.abort(callerError);
       });
       try {
-        const failure = await appendInitial(kind, manager).catch((error: unknown) => error);
+        const failure = await (
+          kind === "initial metadata"
+            ? manager[sessionManagerAppendInitialMetadata]("test-provider", "test-model", "high")
+            : appendInitial(kind, manager)
+        ).catch((error: unknown) => error);
         if (kind === "message") {
           expect(failure).toBe(callerError);
         } else {
@@ -832,6 +921,9 @@ it.each(["message", "model"] as const)(
           expect(events).toMatchObject([
             { type: "session" },
             { type: "model_change", provider: "test-provider", modelId: "test-model" },
+            ...(kind === "initial metadata"
+              ? [{ type: "thinking_level_change", thinkingLevel: "high" }]
+              : []),
           ]);
         }
       } finally {

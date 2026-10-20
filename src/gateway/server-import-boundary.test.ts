@@ -1,7 +1,7 @@
 // Static method policy avoids storage; prepared shutdown avoids runtime session dependencies.
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { afterAll, describe, expect, it } from "vitest";
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 

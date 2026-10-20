@@ -613,6 +613,7 @@ describe("canonical CLI history", () => {
     "orphaned-tool-use",
     "message-policy",
     "system-prompt",
+    "prompt-tools",
     "cwd",
     "mcp",
     "session-expired",

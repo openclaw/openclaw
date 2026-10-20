@@ -176,6 +176,7 @@ export async function createReplyTranscriptFixture(
     scope,
     runId,
     inputId: persistedInput.messageId,
+    userTurnRecorder,
     append,
     appendSync,
     rewriteSync,

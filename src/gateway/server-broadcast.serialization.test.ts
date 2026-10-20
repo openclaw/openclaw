@@ -133,7 +133,6 @@ describe("broadcast serialization failures", () => {
         broadcastToConnIds: connection.broadcastToConnIds,
         sessionEventSubscribers: { getAll: () => recipients },
         sessionMessageSubscribers: { get: () => recipients },
-        chatAbortControllers: new Map(),
         getSessionRowProjection: () => projection,
       });
       for (const order of [peers, peers.toReversed()]) {
@@ -240,7 +239,6 @@ describe("broadcast serialization failures", () => {
         broadcastToConnIds: connection.broadcastToConnIds,
         sessionEventSubscribers: { getAll: () => recipients },
         sessionMessageSubscribers: { get: () => recipients },
-        chatAbortControllers: new Map(),
         getSessionRowProjection: () => projection,
       });
       const update = { target: scope, messageId: "steer", messageSeq: 1, message };

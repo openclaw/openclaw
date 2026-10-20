@@ -74,7 +74,6 @@ export abstract class AgentSessionBase {
   protected contextOverflowRecoveryOwner: "session" | "caller";
   protected resolveCompactionThinkingLevel?: AgentSessionConfig["resolveCompactionThinkingLevel"];
 
-  protected branchSummaryAbortController: AbortController | undefined = undefined;
   private extensionModifiedToolResultIds = new Set<string>();
 
   protected retryAbortController: AbortController | undefined = undefined;
@@ -551,12 +550,7 @@ export abstract class AgentSessionBase {
    */
   dispose(): void {
     notifyListeners(
-      [
-        () => this.abortRetry(),
-        () => this.abortCompaction(),
-        () => this.abortBranchSummary(),
-        () => this.agent.abort(),
-      ],
+      [() => this.abortRetry(), () => this.abortCompaction(), () => this.agent.abort()],
       undefined,
     );
 
@@ -641,12 +635,11 @@ export abstract class AgentSessionBase {
     this.agent.state.systemPrompt = systemPrompt;
   }
 
-  /** Whether compaction or branch summarization is currently running */
+  /** Whether manual or automatic compaction is currently running */
   get isCompacting(): boolean {
     return (
       this.autoCompactionAbortController !== undefined ||
-      this.compactionAbortController !== undefined ||
-      this.branchSummaryAbortController !== undefined
+      this.compactionAbortController !== undefined
     );
   }
 
@@ -726,5 +719,4 @@ export abstract class AgentSessionBase {
   ): Promise<boolean>;
   abstract abortRetry(): void;
   abstract abortCompaction(): void;
-  abstract abortBranchSummary(): void;
 }

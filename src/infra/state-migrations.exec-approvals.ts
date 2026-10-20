@@ -6,6 +6,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err, ok } from "@openclaw/normalization-core/result";
 import { z } from "zod";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { runClientCredentialOperation } from "./client-credential-store.js";
 import {
   normalizeExecApprovalsInternal,
   parseLegacyExecApprovals,
@@ -34,7 +35,6 @@ import {
 import {
   LegacyMigrationSourceClaim,
   legacyMigrationSourceOrClaimMayExist,
-  legacyMigrationSourceSnapshotsMatch as snapshotsMatch,
   readLegacyMigrationSourceSnapshot,
   type LegacyMigrationSourceSnapshot,
 } from "./state-migrations.source-snapshot.js";
@@ -184,6 +184,19 @@ function decideAndRecordMigration(params: {
         decision = "receipt-authoritative";
         removeSource = true;
       } else if (!canonical || !canonicalFile) {
+        // The existing source receipt gates replay; first-writer-wins preserves a
+        // credential already issued by the local owner during an interrupted import.
+        if (legacyFile.socket?.path || legacyFile.socket?.token) {
+          runClientCredentialOperation(params.env, {
+            kind: "socket.ensure",
+            fallback: {
+              socket_key: "current",
+              socket_path: legacyFile.socket.path ?? null,
+              socket_token: legacyFile.socket.token ?? null,
+              updated_at_ms: now,
+            },
+          });
+        }
         writeExecApprovalsConfigRow({
           db,
           file: legacyFile,
@@ -242,7 +255,7 @@ function decideAndRecordMigration(params: {
 
 const decisionMessages: Record<MigrationDecision, string> = {
   "empty-legacy-retired": "Archived empty legacy exec approvals without changing SQLite policy.",
-  "legacy-imported": "Imported legacy exec approvals into shared SQLite state.",
+  "legacy-imported": "Imported legacy exec approvals policy and local socket credentials.",
   "invalid-canonical-repaired":
     "Replaced an invalid SQLite exec approvals row with validated legacy state.",
   "canonical-preserved": "Preserved byte-identical canonical SQLite exec approvals.",
@@ -291,10 +304,7 @@ async function migrateWithExclusiveStateOwnership(params: {
 
   try {
     params.beforeVerify?.();
-    const current = await source.read();
-    if (!snapshotsMatch(current, snapshot)) {
-      throw new Error("legacy exec approvals changed after migration loaded them");
-    }
+    await source.verify(snapshot, "legacy exec approvals changed after migration loaded them");
     await source.claim({
       snapshot,
       mismatchMessage: "legacy exec approvals changed before migration could claim them",

@@ -34,14 +34,24 @@ function fixture(
   const assetDisposers: ReturnType<typeof vi.fn>[] = [];
   const request = vi.fn(async () => "current");
   const navigate = vi.fn();
-  const application = {
-    gateway: {
-      snapshot: {
-        phase: "connected",
-        hello: { auth: { scopes: options.scopes ?? ["operator.read"] } },
-        client: { request },
-      },
+  const gateway = {
+    connectionRevision: 1,
+    snapshot: {
+      phase: "connected",
+      hello: { auth: { scopes: options.scopes ?? ["operator.read"], recoveryScope: "account-a" } },
+      client: { request, recoveryScopeReady: true, offlineRecoveryRetired: false },
+    } as {
+      phase: string;
+      hello: { auth: { scopes: string[]; recoveryScope: string } } | null;
+      client: {
+        request: typeof request;
+        recoveryScopeReady: boolean;
+        offlineRecoveryRetired: boolean;
+      };
     },
+  };
+  const application = {
+    gateway,
     plugins: {
       reportError: vi.fn(),
       async loadSettingsView(_placement: unknown, signal: AbortSignal) {
@@ -78,8 +88,12 @@ function fixture(
       },
     },
   } as unknown as ApplicationContext;
-  function change(patch: Partial<ControlUiSettingsSnapshot>) {
+  function change(
+    patch: Partial<ControlUiSettingsSnapshot>,
+    gatewayPatch: (current: typeof gateway) => void = () => {},
+  ) {
     snapshot = { ...snapshot, ...patch };
+    gatewayPatch(gateway);
     for (const notify of listeners) {
       notify();
     }
@@ -107,6 +121,7 @@ function fixture(
     navigate,
     runtime,
     change,
+    gateway,
   };
 }
 
@@ -154,7 +169,7 @@ it("retires retained callbacks and disposes exactly once on runtime shutdown", a
   expect(f.request).not.toHaveBeenCalled();
   expect(f.navigate).not.toHaveBeenCalled();
 });
-it.each(["agent", "engine", "epoch", "route"])(
+it.each(["agent", "engine", "route"])(
   "rejects a retained callback after %s changes",
   async (kind) => {
     const f = fixture();
@@ -165,9 +180,7 @@ it.each(["agent", "engine", "epoch", "route"])(
         ? { agentId: "writer" }
         : kind === "engine"
           ? { engine: { kind: "pinned", id: "custom-memory", availability: "unknown" } }
-          : kind === "epoch"
-            ? { connectionEpoch: 2 }
-            : { routeIntent: "overview?agent=writer" };
+          : { routeIntent: "overview?agent=writer" };
     f.change(patch);
     await expect(old.request("doctor.memory.status")).rejects.toThrow();
     expect(() => old.navigate("settings")).toThrow();
@@ -180,4 +193,40 @@ it("disposes a view that synchronously retires its authority while mounting", as
   expect(f.viewDisposers[0]).toHaveBeenCalledTimes(1);
   expect(f.assetDisposers[0]).toHaveBeenCalledTimes(1);
   expect(f.contexts[0]!.signal.aborted).toBe(true);
+});
+it.each([
+  [
+    "client replacement",
+    (gateway: ReturnType<typeof fixture>["gateway"]) => {
+      gateway.snapshot.client = { ...gateway.snapshot.client };
+    },
+  ],
+  [
+    "recovery-scope change",
+    (gateway: ReturnType<typeof fixture>["gateway"]) => {
+      gateway.snapshot.hello!.auth.recoveryScope = "account-b";
+    },
+  ],
+  [
+    "retired offline recovery",
+    (gateway: ReturnType<typeof fixture>["gateway"]) => {
+      gateway.snapshot.client.offlineRecoveryRetired = true;
+    },
+  ],
+  [
+    "connect rejection",
+    (gateway: ReturnType<typeof fixture>["gateway"]) => {
+      gateway.snapshot.phase = "reconnecting";
+      gateway.snapshot.hello = null;
+    },
+  ],
+])("disposes the mounted view after %s", async (_cause, retireGateway) => {
+  const f = fixture();
+  await waitForSolid(() => expect(f.contexts).toHaveLength(1));
+  const old = f.contexts[0]!;
+  f.change({}, retireGateway);
+  expect(old.signal.aborted).toBe(true);
+  expect(f.viewDisposers[0]).toHaveBeenCalledTimes(1);
+  await expect(old.request("memory.search")).rejects.toThrow();
+  await waitForSolid(() => expect(f.contexts).toHaveLength(2));
 });

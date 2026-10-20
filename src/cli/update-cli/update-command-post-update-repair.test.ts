@@ -22,6 +22,7 @@ import {
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { defaultRuntime } from "../../runtime.js";
 import { classifyUpdateOutcome } from "../../shared/update-outcome.js";
+import { writeOpenClawPackageFixture } from "./update-cli-package.test-support.js";
 import { registerUnverifiedDefinitionRecoveryTests } from "./update-command-definition-recovery.test-support.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
@@ -63,7 +64,14 @@ vi.mock("../../infra/update-repair-agent.js", async (importOriginal) => ({
   runUpdateRepairLoop: mocks.repair,
 }));
 vi.mock("./update-command-rollback.js", () => ({ rollbackFailedUpdate: mocks.rollback }));
-vi.mock("./progress.js", () => ({ printResult: mocks.print }));
+vi.mock("./progress.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./progress.js")>()),
+  printResult: mocks.print,
+  prepareResult:
+    async (...args: Parameters<typeof import("./progress.js").printResult>) =>
+    () =>
+      mocks.print(...args.slice(0, 3)),
+}));
 vi.mock("./shared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./shared.js")>()),
   tryWriteCompletionCache: async () => {},
@@ -109,10 +117,6 @@ vi.mock("../daemon-cli/restart-health.js", async (importOriginal) => {
     waitForGatewayHttpReadiness: mocks.readyz,
   };
 });
-vi.mock("./update-command-supervisor.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./update-command-supervisor.js")>()),
-  hasLoadedLaunchdKeepAliveSupervisor: async () => false,
-}));
 vi.mock("./update-command-service-revalidation.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-service-revalidation.js")>()),
   revalidateManagedGatewayServiceAfterUpdate: mocks.revalidate,
@@ -143,7 +147,8 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-const fixture = () => createPostUpdateRepairFixture(dirs.make("post-update-repair-"));
+const fixture = (profile?: string) =>
+  createPostUpdateRepairFixture(dirs.make("post-update-repair-"), profile);
 
 describe("post-activation failure settlement without inference", () => {
   beforeEach(async () => {
@@ -151,12 +156,14 @@ describe("post-activation failure settlement without inference", () => {
     vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(
       dirs.make("post-update-repair-native-"),
     );
+    const actualService =
+      await vi.importActual<typeof import("../../daemon/service.js")>("../../daemon/service.js");
     vi.mocked(resolveGatewayService)
       .mockReset()
-      .mockImplementation(
-        (await vi.importActual<typeof import("../../daemon/service.js")>("../../daemon/service.js"))
-          .resolveGatewayService,
-      );
+      .mockImplementation((...args) => ({
+        ...actualService.resolveGatewayService(...args),
+        isLoaded: async () => false,
+      }));
     const verification = await vi.importActual<typeof import("./update-command-verification.js")>(
       "./update-command-verification.js",
     );
@@ -320,10 +327,7 @@ describe("post-activation failure settlement without inference", () => {
     async ({ rollback, restoredHealthy }) => {
       const params = fixture();
       const installedRoot = dirs.make("repair-installed-runtime-");
-      await fs.writeFile(
-        path.join(installedRoot, "package.json"),
-        JSON.stringify({ name: "openclaw", version: "2026.9.3" }),
-      );
+      await writeOpenClawPackageFixture(installedRoot, "2026.9.3");
       params.result.root = installedRoot;
       if (rollback === "unavailable") {
         params.result.mode = "git";
@@ -396,15 +400,7 @@ describe("post-activation failure settlement without inference", () => {
         });
         mocks.stop.mockResolvedValue({
           ...params.preManagedServiceStop!,
-          windowsTaskAutoStartRecovery: {
-            suspended: Promise.resolve(true),
-            beginMutation: () => {},
-            assertRecoveryCurrent: () => {},
-            restore: vi.fn(async () => {}),
-            handoff: () => {},
-            complete: completeRecovery,
-            interrupted: () => false,
-          },
+          windowsTaskAutoStartRecovery: { ...taskRecovery(), complete: completeRecovery },
         });
         params.rollbackBlockedReason = undefined;
         params.previousVerified = true;
@@ -497,10 +493,7 @@ describe("post-activation failure settlement without inference", () => {
       vi.stubEnv("OPENCLAW_WINDOWS_TASK_NAME", "repair-plugin-fixture");
       run.env.OPENCLAW_WINDOWS_TASK_NAME = "repair-plugin-fixture";
       const root = await fs.realpath(dirs.make("repair-plugin-windows-candidate-"));
-      await fs.writeFile(
-        path.join(root, "package.json"),
-        JSON.stringify({ name: "openclaw", version: "2026.9.3" }),
-      );
+      await writeOpenClawPackageFixture(root, "2026.9.3");
       const state: GatewayServiceState = {
         installed: true,
         loadState: { status: "loaded" },
@@ -656,6 +649,9 @@ describe("post-activation failure settlement without inference", () => {
     "migration-verified",
     "migration-incomplete",
     "migration-refused",
+    "migration-local-current",
+    "migration-local-client-newer",
+    "migration-local-daemon-newer",
     "current-core-parked",
     "current-core-rollback-refused",
     "current-core-data-at-risk",
@@ -664,50 +660,40 @@ describe("post-activation failure settlement without inference", () => {
   ] as const)(
     "recovers the installed Gateway only for an owned stop and settled Doctor (%s)",
     async (receipt) => {
-      const params = fixture();
+      const params = fixture("work");
+      const run = params.opts.run!;
+      const stateDir = run.env.OPENCLAW_STATE_DIR!;
       const swap =
-        receipt === "migration-verified"
-          ? await createRetainedPackageSwap(params.opts.run!.env!.OPENCLAW_STATE_DIR!)
-          : undefined;
+        receipt === "migration-verified" ? await createRetainedPackageSwap(stateDir) : undefined;
       mocks.version = swap ? "2.0.0" : "2026.9.7";
-      const root =
-        swap?.packageRoot ?? path.join(params.opts.run!.env!.OPENCLAW_STATE_DIR!, "candidate");
-      await fs.mkdir(root, { recursive: true });
-      await fs.writeFile(
-        path.join(root, "package.json"),
-        JSON.stringify({ name: "openclaw", version: mocks.version }),
-      );
-      await fs.mkdir(path.join(root, "dist"), { recursive: true });
-      await fs.writeFile(path.join(root, "dist/index.js"), "export {};\n");
+      const root = swap?.packageRoot ?? path.join(stateDir, "candidate");
+      await writeOpenClawPackageFixture(root, mocks.version, { entrySource: "export {};\n" });
       const scratch = path.join(root, "tmp");
       await fs.mkdir(scratch);
       vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(scratch);
       params.root = root;
       const migration = receipt.startsWith("migration-");
+      const localVersionOnly = receipt.startsWith("migration-local-");
       const currentCore = receipt.startsWith("current-core-") || receipt.startsWith("operator-");
       const recovered =
         receipt === "settled" ||
         receipt === "migration-required" ||
         receipt === "migration-verified" ||
+        receipt === "migration-local-current" ||
         receipt === "current-core-parked" ||
         receipt === "current-core-rollback-refused";
-      let agentVersion = receipt === "migration-verified" ? 23 : 21;
+      let agentVersion = localVersionOnly || receipt === "migration-verified" ? 23 : 21;
       const doctor = vi.spyOn(freshDoctor, "runUpdateFinalizationDoctorInFreshProcess");
       if (migration) {
         params.candidateSchemaVersions = { state: 18, agent: 23 };
-        vi.spyOn(stateSchemas, "readUpdateStateSchemaVersions").mockImplementation(async () => [
-          {
-            path: path.join(params.opts.run!.env!.OPENCLAW_STATE_DIR!, "state/openclaw.sqlite"),
-            userVersion: 18,
-          },
-          {
-            path: path.join(
-              params.opts.run!.env!.OPENCLAW_STATE_DIR!,
-              "agents/main/agent/openclaw-agent.sqlite",
-            ),
-            userVersion: agentVersion,
-          },
-        ]);
+        vi.spyOn(stateSchemas, "readUpdateStateSchemaVersions").mockImplementation(async () =>
+          Object.entries({
+            "state/openclaw.sqlite": 18,
+            "agents/main/agent/openclaw-agent.sqlite": agentVersion,
+            "client/credentials.sqlite": receipt === "migration-local-client-newer" ? 2 : 1,
+            "control/services.sqlite": receipt === "migration-local-daemon-newer" ? 2 : 1,
+          }).map(([file, userVersion]) => ({ path: path.join(stateDir, file), userVersion })),
+        );
         doctor.mockImplementation(async () => {
           expect(mocks.restartCommand).not.toHaveBeenCalled();
           if (receipt === "migration-refused") {
@@ -814,7 +800,7 @@ describe("post-activation failure settlement without inference", () => {
         });
       }
       if (currentCore) {
-        const oldRun = createUpdateRun({ trigger: "cli" }, { env: params.opts.run!.env });
+        const oldRun = createUpdateRun({ trigger: "cli" }, { env: run.env });
         recordUpdateRunStep(
           oldRun.runId,
           {
@@ -822,7 +808,7 @@ describe("post-activation failure settlement without inference", () => {
             status: "completed",
             endedAtMs: 1,
           },
-          { env: params.opts.run!.env },
+          { env: run.env },
         );
         params.coreAlreadyCurrent = true;
         params.rollbackBlockedReason =
@@ -886,7 +872,7 @@ describe("post-activation failure settlement without inference", () => {
         loadState: { status: "loaded" },
         running: false,
         runtime: { status: "stopped", systemd: { managerUid: process.getuid?.() ?? 501 } },
-        env: params.opts.run!.env!,
+        env: run.env,
         command: {
           programArguments: [process.execPath, path.join(root, "dist/index.js"), "gateway"],
         },
@@ -921,11 +907,21 @@ describe("post-activation failure settlement without inference", () => {
         });
       }
 
-      const run = params.opts.run!;
       await withUpdateCommandExecutor(run.runId, async (executor) => {
         run.executorFence = await executor.enter(root);
         const failure = await finishUpdate(params).catch((error: unknown) => error);
         assert(failure instanceof UpdateCommandFailure);
+        if (localVersionOnly && !recovered) {
+          const refusal = failure.result.steps.findLast(
+            (step) => step.name === "gateway migration recovery",
+          );
+          expect(refusal?.stderrTail).toContain("expected schema 1, found 2");
+          expect(refusal?.stderrTail).toContain(
+            receipt === "migration-local-client-newer"
+              ? path.join("client", "credentials.sqlite")
+              : path.join("control", "services.sqlite"),
+          );
+        }
         expect(
           failure.result.recovery,
           JSON.stringify({
@@ -957,9 +953,11 @@ describe("post-activation failure settlement without inference", () => {
         );
       }
       if (migration) {
-        expect(doctor).toHaveBeenCalledTimes(receipt === "migration-verified" ? 0 : 1);
+        expect(doctor).toHaveBeenCalledTimes(
+          localVersionOnly || receipt === "migration-verified" ? 0 : 1,
+        );
       }
-      const report = getUpdateRun(params.opts.run!.runId, { env: params.opts.run!.env });
+      const report = getUpdateRun(run.runId, { env: run.env });
       expect(report?.verification).toMatchObject({
         serviceRunning: recovered,
         readyz: recovered,
@@ -977,13 +975,22 @@ describe("post-activation failure settlement without inference", () => {
           ).toContainEqual(expect.objectContaining({ code: "authority-check-failed" }));
         }
       }
-      if (migration && !recovered) {
-        expect(rendered).toContain("openclaw doctor --fix");
-        expect(rendered).toContain("openclaw gateway start");
+      if (localVersionOnly && !recovered) {
+        const refusal = report?.steps.findLast(
+          (step) => step.step === "gateway migration recovery",
+        );
+        expect(refusal).toMatchObject({ status: "failed", exitCode: 1 });
       }
-      if (receipt === "settled") {
-        expect(rendered).toContain("openclaw update repair");
-        expect(report?.origin.nextAction).toContain("candidate Gateway is healthy");
+      if (migration && !recovered) {
+        expect(rendered).toContain("openclaw --profile work doctor --fix");
+        expect(rendered).toContain("openclaw --profile work gateway start");
+      }
+      if (recovered) {
+        expect(rendered).toContain("openclaw --profile work update repair");
+        expect(report?.origin.nextAction).toContain("installed Gateway is healthy");
+        expect(report?.origin.nextAction).toContain("running on the retained state");
+        expect(report?.origin.nextAction).toContain("openclaw --profile work gateway stop");
+        expect(report?.origin.nextAction).not.toContain("migrated state");
       }
       if (receipt === "unsettled") {
         expect(mocks.rollback).not.toHaveBeenCalled();

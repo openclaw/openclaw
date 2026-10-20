@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   BASE_GATEWAY_BENCH_CONFIG,
@@ -9,14 +10,15 @@ import {
   formatStats,
   parseGatewayBenchRuntimeOptions,
   writeGatewayBenchConfig,
+  writePluginFixtures,
 } from "../../scripts/lib/gateway-bench-runtime.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { startGatewayDiscovery } from "../../src/gateway/server-discovery-runtime.js";
-import { createGatewayPluginRuntimeGeneration } from "../../src/gateway/server-plugin-runtime-generation.js";
 import {
   resolveWideAreaDiscoveryDomain,
   writeWideAreaGatewayZone,
 } from "../../src/infra/widearea-dns.js";
+import { loadPluginManifest } from "../../src/plugins/manifest.js";
 import { createEmptyPluginRegistry } from "../../src/plugins/registry-empty.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -30,6 +32,24 @@ vi.mock("../../src/infra/widearea-dns.js", async (importOriginal) => {
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it.each([undefined, true, false])(
+  "activates benchmark plugins unless startup activation is disabled (%s)",
+  (activationOnStartup) => {
+    const root = tempDirs.make("gateway-plugin-load-");
+    const { pluginIds, pluginsDir } = writePluginFixtures(root, {
+      count: 2,
+      activationOnStartup,
+    });
+    expect(pluginIds).toHaveLength(2);
+    for (const id of pluginIds) {
+      expect(loadPluginManifest(path.join(pluginsDir, id))).toMatchObject({
+        ok: true,
+        manifest: { id, activation: { onStartup: activationOnStartup !== false } },
+      });
+    }
+  },
+);
 
 describe("gateway benchmark runtime selection", () => {
   it.each([undefined, "0,1,2,3"])(
@@ -144,10 +164,6 @@ describe("gateway benchmark discovery isolation", () => {
     const discovery = await startGatewayDiscovery({
       machineDisplayName: "Benchmark fixture",
       discovery: cfgAtStart.discovery,
-      pluginRuntimeClaim: createGatewayPluginRuntimeGeneration({
-        getServices: () => null,
-        setServices: () => {},
-      }).currentClaim(),
       port: 18789,
       gatewayTls: { enabled: false },
       gatewayDirectReachable: false,

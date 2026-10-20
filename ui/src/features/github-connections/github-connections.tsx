@@ -9,7 +9,7 @@ import {
   SettingsStatus,
   SettingsValue,
 } from "../../components/solid/settings-ui.tsx";
-import { registerGitHubEnglish } from "../../i18n/locales/en-github.ts";
+import { registerGitHubConnectionsEnglish } from "../../i18n/locales/en-github-connections.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { projectGateway, projectAgentSelection } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
@@ -454,4 +454,4 @@ declare module "@solidjs/web" {
     }
   }
 }
-registerGitHubEnglish();
+registerGitHubConnectionsEnglish();

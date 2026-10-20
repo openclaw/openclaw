@@ -1,4 +1,3 @@
-import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   DEFAULT_BACKGROUND_PREFERENCE,
@@ -8,7 +7,10 @@ import type { ApplicationContext, ApplicationTheme } from "../../app/context.ts"
 import { loadSettings } from "../../app/settings.ts";
 import type { SessionBackground } from "../../components/session-background.tsx";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { createApplicationGateway } from "../../test-helpers/solid-application-context.tsx";
+import {
+  createApplicationGateway,
+  createSolidApplicationContextProvider,
+} from "../../test-helpers/solid-application-context.tsx";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { AppearanceBackground } from "./appearance-background.tsx";
@@ -53,13 +55,13 @@ async function mount(preference: Partial<BackgroundPreference> = {}) {
     theme,
     router: { subscribe: subscribe("route") },
   } as ApplicationContext;
-  const [currentContext, setCurrentContext] = createSignal(context);
+  const provider = createSolidApplicationContextProvider(context);
   host.innerHTML = '<div class="config-content"><div class="settings-page"></div></div>';
   const container = host.querySelector<HTMLElement>(".settings-page")!;
-  const { unmount: dispose } = mountSolid(
-    () => <AppearanceBackground context={currentContext()} />,
-    { container },
-  );
+  const { unmount: dispose } = mountSolid(() => <AppearanceBackground />, {
+    container,
+    wrapper: provider.wrapper,
+  });
   flush();
   const element = container.querySelector<HTMLElement>("openclaw-appearance-background")!;
   const range = element.querySelector<HTMLInputElement>('input[type="range"]')!;
@@ -76,7 +78,7 @@ async function mount(preference: Partial<BackgroundPreference> = {}) {
     navigate: () => notify("route"),
     dispose,
     setContext: (next: ApplicationContext) => {
-      setCurrentContext(next);
+      provider.setContext(next);
       flush();
     },
   };

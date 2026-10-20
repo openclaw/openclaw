@@ -126,7 +126,7 @@ it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
   },
 );
 
-it("agentSchemaInspection child retains returned migration failures and their hydrated class", async () => {
+it("agentSchemaInspection carries a Proxy env across IPC and retains typed migration failures", async () => {
   const pathname = path.join(tempDirs.make("agent-schema-migration-"), "source.sqlite");
   const database = sqlite.openNodeSqliteDatabase(pathname);
   database.exec("CREATE TABLE probe(value TEXT); PRAGMA user_version = 1;");
@@ -136,6 +136,8 @@ it("agentSchemaInspection child retains returned migration failures and their hy
   const inspection = await reader.inspect({
     pathname,
     supportedVersion: 21,
+    // Windows config environments are Proxies, which advanced IPC cannot clone.
+    env: new Proxy({ OPENCLAW_STATE_DIR: path.dirname(pathname) }, {}),
     requireStartupMigrationReadiness: true,
   });
   expect(inspection?.version).toBe(1);

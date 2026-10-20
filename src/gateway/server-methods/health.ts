@@ -3,7 +3,7 @@ import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public
 import { readChildRuntimeViability } from "../../infra/child-runtime-viability.js";
 import { formatErrorMessage as formatError } from "../../infra/errors.js";
 import { readGatewayMaintenanceWork } from "../../infra/gateway-active-work.js";
-import { getStatusSummary } from "../../status/summary.js";
+import { prepareStatusSummary } from "../../status/summary.js";
 import { buildContextEngineHealthSummary } from "../health/context-engine.js";
 import { buildDeliveryQueueHealthSummary } from "../health/delivery-queue.js";
 import type { ChannelHealthSummary, HealthSummary } from "../health/types.js";
@@ -129,7 +129,7 @@ export const healthHandlers: GatewayRequestHandlers = {
   status: async ({ respond, client, params, context }) => {
     const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
     const hostDesktopStatus = await context.hostDesktopService?.status();
-    const status = await getStatusSummary({
+    const prepared = await prepareStatusSummary({
       includeSensitive: scopes.includes(ADMIN_SCOPE),
       includeChannelSummary: params.includeChannelSummary !== false,
       includeCliProjection: params.includeCliProjection === true,
@@ -137,6 +137,7 @@ export const healthHandlers: GatewayRequestHandlers = {
       ...(hostDesktopStatus ? { hostDesktopStatus } : {}),
     });
     const workerPools = await readGatewayWorkerPoolFacts();
+    const status = prepared.publish().summary;
     const shutdownBudget = context.hostLifecycle?.getShutdownBudget?.();
     const activeWork = shutdownBudget
       ? readGatewayMaintenanceWork(createGatewayServerActiveWorkInspectors(context))
@@ -159,6 +160,7 @@ export const healthHandlers: GatewayRequestHandlers = {
         pid: process.pid,
         shutdownBudget: shutdownStatus,
         childRuntime: readChildRuntimeViability(),
+        pluginReload: context.getPluginReloadStatus?.(),
       },
       undefined,
     );

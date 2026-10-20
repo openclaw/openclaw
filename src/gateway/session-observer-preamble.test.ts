@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSessionActivityNoteState } from "../agents/session-activity-notes.js";
 import {
   createDormantSessionObserverRun,
@@ -33,16 +33,12 @@ function state(headline: string): SessionObserverState {
 }
 
 function publisherFixture(
-  now: () => number = () => 1_000,
   preparePublication?: Parameters<
     typeof createSessionObserverPreamblePublisher
   >[0]["preparePublication"],
 ) {
   const publish = vi.fn();
   const publisher = createSessionObserverPreamblePublisher({
-    now,
-    setTimeoutFn: setTimeout,
-    clearTimeoutFn: clearTimeout,
     isCurrent: () => true,
     preparePublication,
     publish,
@@ -67,22 +63,26 @@ function preambleEvent(
   };
 }
 
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(1_000);
+});
+
+afterEach(() => vi.useRealTimers());
+
 describe("session observer preamble publisher", () => {
   it("preserves a replacement preamble when an older authority read finishes", async () => {
     const olderRead = Promise.withResolvers<void>();
     const newerRead = Promise.withResolvers<void>();
     const preparations = [olderRead.promise, newerRead.promise];
-    const { publish, publisher } = publisherFixture(
-      () => 1_000,
-      async (_session, consume) => {
-        const prepared = preparations.shift();
-        if (!prepared) {
-          throw new Error("Unexpected preamble preparation");
-        }
-        await prepared;
-        consume();
-      },
-    );
+    const { publish, publisher } = publisherFixture(async (_session, consume) => {
+      const prepared = preparations.shift();
+      if (!prepared) {
+        throw new Error("Unexpected preamble preparation");
+      }
+      await prepared;
+      consume();
+    });
     const session = state("Earlier headline");
     const older = publisher.handle(session, preambleEvent(session, 1, "Older preamble"));
     publisher.clear(session);
@@ -149,10 +149,8 @@ describe("session observer preamble publisher", () => {
   });
 
   it("replays a queued preamble after dormant-state revival", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000);
     const original = state("Earlier headline");
-    const { publish, publisher } = publisherFixture(Date.now);
+    const { publish, publisher } = publisherFixture();
     const preamble = (sequence: number, progressText: string) =>
       preambleEvent(original, sequence, progressText, Date.now());
 
@@ -174,7 +172,6 @@ describe("session observer preamble publisher", () => {
     expect(publish).toHaveBeenCalledTimes(2);
     expect(revived.previousDigest?.headline).toBe("Queued headline");
     publisher.dispose();
-    vi.useRealTimers();
   });
 
   it("preserves duplicate suppression across dormant-state revival", async () => {

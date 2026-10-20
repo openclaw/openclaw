@@ -52,13 +52,10 @@ export function createUpdateProgressWatcher(
           update.updateStatusCheckBanner?.text ?? (banner?.source === "read" ? banner.text : null),
       });
     };
-    const stopOverlays = context.overlays.subscribe(emit);
-    const stopGateway = context.gateway.subscribe(emit);
+    // Deliver ordered progress receipts, including subscribe-time state, to the dialog.
+    const stops = [context.overlays, context.gateway].map((source) => source.subscribe(emit));
     emit();
-    return () => {
-      stopOverlays();
-      stopGateway();
-    };
+    return () => stops.forEach((stop) => stop());
   };
 }
 

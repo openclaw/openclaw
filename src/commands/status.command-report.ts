@@ -25,14 +25,16 @@ import {
   buildStatusSystemEventsTrailer,
   statusHealthColumns,
 } from "./status.command-sections.js";
+import type { StatusScanResult } from "./status.scan-result.ts";
 import { formatUpdateAvailableHint } from "./status.update.js";
 import { shortenText } from "./text-format.js";
 
 export async function buildStatusCommandReportLines(
-  params: Omit<
+  input: Omit<
     Parameters<typeof buildStatusCommandOverviewRows>[0],
     "backupFreshness" | "osLabel"
   > & {
+    publish?: StatusScanResult["publish"];
     opts: { deep?: boolean; verbose?: boolean };
     osSummary: ReturnType<typeof resolveOsSummary>;
     securityAudit?: SecurityAuditReport;
@@ -51,16 +53,20 @@ export async function buildStatusCommandReportLines(
     tableWidth: number;
   },
 ) {
+  const databaseEngines = await resolveStatusDatabaseEngines(
+    input.surface.cfg,
+    input.summary.databaseStores,
+  );
+  const backupFreshness = await readBackupRunFreshness(input.env);
+  const published = input.publish?.();
+  const params = {
+    ...input,
+    ...published,
+    surface: { ...input.surface, ...published, databaseEngines },
+  };
   const overviewRows = buildStatusCommandOverviewRows({
     ...params,
-    surface: {
-      ...params.surface,
-      databaseEngines: await resolveStatusDatabaseEngines(
-        params.surface.cfg,
-        params.summary.databaseStores,
-      ),
-    },
-    backupFreshness: await readBackupRunFreshness(params.env),
+    backupFreshness,
     osLabel: params.osSummary.label,
   });
 
@@ -85,15 +91,11 @@ export async function buildStatusCommandReportLines(
         theme.muted(`Deep check: ${formatCliCommand("openclaw status --deep")}`),
       ];
   const width = params.tableWidth;
-  const pluginCompatibilityLines = buildStatusPluginCompatibilityLines({
-    notices: params.pluginCompatibility,
-  });
+  const pluginCompatibilityLines = buildStatusPluginCompatibilityLines(params.pluginCompatibility);
   const pairingRecoveryLines = buildStatusPairingRecoveryLines({
     pairingRecovery: params.pairingRecovery,
   });
-  const modelSelectionLines = buildStatusModelSelectionLines({
-    recent: params.summary.sessions.recent,
-  });
+  const modelSelectionLines = buildStatusModelSelectionLines(params.summary.sessions.recent);
   const channelsColumns = statusChannelsTableColumns;
   const channelsRows = buildStatusChannelsTableRows({
     rows: params.channels.rows,
@@ -108,12 +110,8 @@ export async function buildStatusCommandReportLines(
     recent: params.summary.sessions.recent,
     verbose: params.opts.verbose,
   });
-  const systemEventsRows = buildStatusSystemEventsRows({
-    queuedSystemEvents: params.summary.queuedSystemEvents,
-  });
-  const systemEventsTrailer = buildStatusSystemEventsTrailer({
-    queuedSystemEvents: params.summary.queuedSystemEvents,
-  });
+  const systemEventsRows = buildStatusSystemEventsRows(params.summary.queuedSystemEvents);
+  const systemEventsTrailer = buildStatusSystemEventsTrailer(params.summary.queuedSystemEvents);
   const healthColumns = params.health ? statusHealthColumns : undefined;
   const healthRows = params.health
     ? buildStatusHealthRows({

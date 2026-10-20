@@ -30,9 +30,7 @@ type OpenAiSpeechResponseFormat = (typeof OPENAI_SPEECH_RESPONSE_FORMATS)[number
 function resolveOpenAISpeechApiKey(
   config: Partial<Pick<ReturnType<typeof normalizeOpenAIProviderConfig>, "apiKey">>,
 ): string | undefined {
-  return (
-    normalizeOptionalString(config.apiKey) ?? normalizeOptionalString(process.env.OPENAI_API_KEY)
-  );
+  return config.apiKey ?? normalizeOptionalString(process.env.OPENAI_API_KEY);
 }
 
 function normalizeOpenAISpeechResponseFormat(
@@ -228,15 +226,16 @@ export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
         responseFormat: responseFormat ?? base.responseFormat,
       };
     },
-    resolveTalkOverrides: ({ params }) => ({
-      ...(normalizeOptionalString(params.voiceId) == null
-        ? {}
-        : { voice: normalizeOptionalString(params.voiceId) }),
-      ...(normalizeOptionalString(params.modelId) == null
-        ? {}
-        : { model: normalizeOptionalString(params.modelId) }),
-      ...(asFiniteNumber(params.speed) == null ? {} : { speed: asFiniteNumber(params.speed) }),
-    }),
+    resolveTalkOverrides: ({ params }) => {
+      const voice = normalizeOptionalString(params.voiceId);
+      const model = normalizeOptionalString(params.modelId);
+      const speed = asFiniteNumber(params.speed);
+      return {
+        ...(voice ? { voice } : {}),
+        ...(model ? { model } : {}),
+        ...(speed == null ? {} : { speed }),
+      };
+    },
     listVoices: async () => OPENAI_TTS_VOICES.map((voice) => ({ id: voice, name: voice })),
     // Retained for synchronous SDK consumers through 2026-12-31.
     isConfigured,

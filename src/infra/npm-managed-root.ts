@@ -8,7 +8,7 @@ import { normalizeOptionalString as readOptionalString } from "@openclaw/normali
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { parse as parseYaml } from "yaml";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { hasErrnoCode } from "./errors.js";
+import { hasErrnoCode, ignoreMissingPath } from "./errno.js";
 import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
 import type { NpmSpecResolution } from "./install-source-utils.js";
 import { JsonFileReadError, readJson, readJsonIfExists, writeJson } from "./json-files.js";
@@ -462,10 +462,7 @@ async function isRequiredPlatformPackageComplete(params: {
       withFileTypes: true,
     });
   } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return false;
-    }
-    throw error;
+    return ignoreMissingPath(error) ?? false;
   }
   const executableFilename =
     process.platform === "win32" ? `${executableName}.exe` : executableName;
@@ -579,17 +576,6 @@ function collectNpmLockPeerDependencyPins(params: {
   );
 }
 
-async function ifPresent<T>(operation: Promise<T>): Promise<T | null> {
-  try {
-    return await operation;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-      return null;
-    }
-    throw err;
-  }
-}
-
 function scrubHostPeerFromLockPackage(value: unknown): boolean {
   if (!isRecord(value)) {
     return false;
@@ -664,14 +650,14 @@ async function collectNpmResolvedManagedNpmRootPeerDependencyPins(params: {
       { trailingNewline: true },
     );
     const tempLockPath = path.join(tempRoot, "package-lock.json");
-    await ifPresent(
-      fs.cp(path.join(params.npmRoot, "package-lock.json"), tempLockPath, { recursive: true }),
-    );
+    await fs
+      .cp(path.join(params.npmRoot, "package-lock.json"), tempLockPath, { recursive: true })
+      .catch(ignoreMissingPath);
     await scrubHostPeerFromTempPackageLock(tempLockPath);
     for (const name of [".npmrc", "_openclaw-pack-archives"]) {
-      await ifPresent(
-        fs.cp(path.join(params.npmRoot, name), path.join(tempRoot, name), { recursive: true }),
-      );
+      await fs
+        .cp(path.join(params.npmRoot, name), path.join(tempRoot, name), { recursive: true })
+        .catch(ignoreMissingPath);
     }
 
     const command = params.runCommand ?? runCommandWithTimeout;
@@ -833,7 +819,9 @@ export async function repairManagedNpmRootOpenClawPeer(params: {
   const hasManifestDependency = "openclaw" in dependencies;
   const hasLockDependency = await managedNpmRootLockfileHasOpenClawPeer(params.npmRoot);
   const hasPackageDir =
-    (await ifPresent(fs.lstat(path.join(params.npmRoot, "node_modules", "openclaw")))) !== null;
+    (await fs
+      .lstat(path.join(params.npmRoot, "node_modules", "openclaw"))
+      .catch(ignoreMissingPath)) !== undefined;
   const preserveActiveHostLink = activeHostState === "linked-active-host";
   if (!hasManifestDependency && !hasLockDependency && (!hasPackageDir || preserveActiveHostLink)) {
     return false;
@@ -906,11 +894,11 @@ async function readManagedNpmRootOpenClawHostState(params: {
 
   const managedOpenClawPackageDir = path.join(params.npmRoot, "node_modules", "openclaw");
   const [hostPackageRoot, managedPackageRoot, managedPackageStat] = await Promise.all([
-    ifPresent(fs.realpath(packageRoot)),
-    ifPresent(fs.realpath(managedOpenClawPackageDir)),
-    ifPresent(fs.lstat(managedOpenClawPackageDir)),
+    fs.realpath(packageRoot).catch(ignoreMissingPath),
+    fs.realpath(managedOpenClawPackageDir).catch(ignoreMissingPath),
+    fs.lstat(managedOpenClawPackageDir).catch(ignoreMissingPath),
   ]);
-  if (hostPackageRoot === null || hostPackageRoot !== managedPackageRoot) {
+  if (hostPackageRoot === undefined || hostPackageRoot !== managedPackageRoot) {
     return "none";
   }
   return managedPackageStat?.isSymbolicLink() ? "linked-active-host" : "managed-active-host";
@@ -935,10 +923,7 @@ async function managedNpmRootLockfileHasOpenClawPeer(npmRoot: string): Promise<b
     const parsed = JSON.parse(await fs.readFile(lockPath, "utf8")) as ManagedNpmRootLockfile;
     return openClawLockEntries(parsed).some(([record, key]) => key in record);
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-      return false;
-    }
-    throw err;
+    return ignoreMissingPath(err) ?? false;
   }
 }
 
@@ -972,13 +957,11 @@ async function scrubManagedNpmRootOpenClawPeer(params: {
       await fs.writeFile(lockPath, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
     }
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw err;
-    }
+    ignoreMissingPath(err);
   }
 
   const openclawPackageDir = path.join(params.npmRoot, "node_modules", "openclaw");
-  if (!params.preservePackageDir && (await ifPresent(fs.lstat(openclawPackageDir)))) {
+  if (!params.preservePackageDir && (await fs.lstat(openclawPackageDir).catch(ignoreMissingPath))) {
     await fs.rm(openclawPackageDir, { recursive: true, force: true });
   }
   const binDir = path.join(params.npmRoot, "node_modules", ".bin");

@@ -13,12 +13,15 @@ import {
 import { waitForSessionTranscriptIndexReconcilesInStateDir } from "../../config/sessions/session-transcript-reconcile.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { getGatewayContextResolver } from "../../plugins/runtime/gateway-context-binding.js";
-import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admission.js";
 import {
-  collectActiveSessionWorkAdmissions,
-  getSessionWorkAdmissionRelease,
-  SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-} from "../../sessions/session-lifecycle-admission.js";
+  getActiveGatewayRootWorkCount,
+  getActiveGatewayRootWorkHolders,
+} from "../../process/gateway-work-admission.js";
+import {
+  collectSessionControllerTargets,
+  captureSessionControllerSettlement,
+  SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
+} from "../../sessions/session-controller.lifecycle.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { unregisterOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
 import {
@@ -52,18 +55,23 @@ const getGatewayServerHarnessModule = createLazyRuntimeModule(
 export async function settleGatewaySessionStoreFixture(dir: string) {
   // Transcript observers outlive session admission; join before config changes can
   // reopen the store. This also runs in suite teardown, outside expect.poll's test context.
-  await vi.waitFor(() => expect(getActiveGatewayRootWorkCount({ excludeCurrent: true })).toBe(0), {
-    timeout: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-  });
+  await vi.waitFor(
+    () =>
+      expect(
+        getActiveGatewayRootWorkCount({ excludeCurrent: true }),
+        `Unsettled Gateway roots: ${getActiveGatewayRootWorkHolders({ excludeCurrent: true }).join(", ")}`,
+      ).toBe(0),
+    { timeout: SESSION_CONTROLLER_DRAIN_TIMEOUT_MS },
+  );
   const root = existsSync(dir) ? realpathSync(dir) : path.resolve(dir);
   const ownsPath = (candidate: string) =>
     isPathInside(root, candidate) || isPathInside(path.resolve(dir), candidate);
   // A recovery ACK can leave its admitted continuation writing after the test returns.
   while (true) {
-    const releases = [...collectActiveSessionWorkAdmissions()]
+    const releases = [...collectSessionControllerTargets()]
       .filter(([scope]) => ownsPath(scope))
       .flatMap(
-        ([scope, identities]) => getSessionWorkAdmissionRelease({ scope, identities }) ?? [],
+        ([scope, identities]) => captureSessionControllerSettlement({ scope, identities }) ?? [],
       );
     if (releases.length === 0) {
       break;
@@ -109,7 +117,8 @@ export async function releaseGatewaySessionStoreFixture(dir: string) {
   await projection?.ensureMaterialized();
   await closeOpenClawAgentDatabasesAsync(root);
 
-  // Client identity fixtures use shared-state SQLite, even with legacy .json names.
+  // Retain shared-state cleanup for every recorded fixture path. Local credential
+  // operations close their bounded owner before returning and retain no handle here.
   // The lifecycle subscription replays the owner's recorded open paths synchronously.
   const sharedDatabasePaths = new Set<string>();
   registerOpenClawStateDatabaseLifecycleListener((event) => {
@@ -120,8 +129,8 @@ export async function releaseGatewaySessionStoreFixture(dir: string) {
   for (const databasePath of sharedDatabasePaths) {
     await withTestTimeout(
       closeOpenClawStateDatabaseByPathAsync(databasePath),
-      SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-      `Timed out closing shared-state fixture database ${JSON.stringify(databasePath)} after ${SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS}ms; retaining fixture directory ${JSON.stringify(dir)}`,
+      SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
+      `Timed out closing shared-state fixture database ${JSON.stringify(databasePath)} after ${SESSION_CONTROLLER_DRAIN_TIMEOUT_MS}ms; retaining fixture directory ${JSON.stringify(dir)}`,
     );
   }
 }

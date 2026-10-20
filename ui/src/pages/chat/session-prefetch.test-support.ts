@@ -8,6 +8,7 @@ import {
   createTestGatewayClient,
   type GatewayRequestHandler,
 } from "../../test-helpers/gateway-client.ts";
+import { registerChatPane } from "./chat-pane-elements.ts";
 import { observeChatCache, type ChatMessageCache } from "./session-message-cache.ts";
 import { createSessionPrefetch } from "./session-prefetch.ts";
 import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
@@ -136,6 +137,7 @@ export function createSessionPrefetchFixture() {
   const shell = document.createElement("openclaw-app-shell");
   shell.append(host);
   document.body.append(shell);
+  let unregisterPanes: (() => void)[] = [];
   let syncPrefetch: () => void;
   let unmountPrefetch: () => void;
   function mountPrefetch(): void {
@@ -152,16 +154,16 @@ export function createSessionPrefetchFixture() {
       client: update.client,
       phase: update.client ? "connected" : "stopped",
     });
-    host.replaceChildren(
-      ...update.openSessionKeys.map((sessionKey) =>
-        Object.assign(document.createElement("openclaw-chat-pane"), {
-          sessionKey,
-          conversationPresented:
-            update.hiddenConversationSessionKeys?.includes(sessionKey) !== true,
-          transcriptLoading: update.loadingSessionKeys?.includes(sessionKey) === true,
-        }),
-      ),
+    unregisterPanes.forEach((unregister) => unregister());
+    const panes = update.openSessionKeys.map((sessionKey) =>
+      Object.assign(document.createElement("openclaw-chat-pane"), {
+        sessionKey,
+        conversationPresented: update.hiddenConversationSessionKeys?.includes(sessionKey) !== true,
+        transcriptLoading: update.loadingSessionKeys?.includes(sessionKey) === true,
+      }),
     );
+    unregisterPanes = panes.map(registerChatPane);
+    host.replaceChildren(...panes);
     syncPrefetch();
   }
 
@@ -185,6 +187,7 @@ export function createSessionPrefetchFixture() {
     },
     dispose: async () => {
       unmountPrefetch();
+      unregisterPanes.forEach((unregister) => unregister());
       shell.remove();
       await store.flush();
       store.disconnect();

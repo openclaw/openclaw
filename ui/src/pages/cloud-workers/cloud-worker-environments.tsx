@@ -1,13 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import {
-  createEffect,
-  createMemo,
-  createSignal,
-  createStore,
-  For,
-  Show,
-  onCleanup,
-} from "solid-js";
+import { createMemo, createSignal, createStore, For, Show, onCleanup, onSettled } from "solid-js";
 import type {
   EnvironmentSummary,
   EnvironmentsListResult,
@@ -31,6 +23,7 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { createTimeout } from "../../lib/reactive/timers.ts";
 import { showToast } from "../../lib/toast.ts";
 import {
   cloudEnvironments,
@@ -83,7 +76,8 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
   let refreshAgain = false;
   let activeLoad: object | undefined;
 
-  let pollTimer: ReturnType<typeof setTimeout> | undefined = undefined;
+  const polling = createTimeout(() => void load(), 10_000);
+  let previousInputs: readonly [string | null | undefined, boolean] | undefined;
 
   let activeConfirmation: AbortController | null = null;
 
@@ -99,7 +93,7 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
   function invalidateRequests() {
     refreshAgain = false;
     activeLoad = undefined;
-    stopPolling();
+    polling.cancel();
     setView((draft) => {
       draft.preparing = false;
       draft.destroying = null;
@@ -124,29 +118,31 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
         invalidateRequests();
         clearPresentation();
       }
+      syncInventoryInputs();
     },
     invalidateRequests,
     ensureInitialData: () => queueMicrotask(() => void load()),
     onPageActivation: () => void load(),
   });
-  // Config receipts and permissions invalidate the Gateway environment inventory.
-  createEffect(
-    () =>
-      [
-        runtime.read().state.configSnapshot?.appliedConfigHash,
-        canCall("crabbox.images.list"),
-      ] as const,
-    (current, previous) => {
-      if (previous?.some((value, index) => value !== current[index])) {
-        queueMicrotask(() => void load());
-      }
-    },
-  );
-
-  onCleanup(() => {
-    stopPolling();
-    activeConfirmation?.abort();
+  function syncInventoryInputs() {
+    const current = [
+      context.runtimeConfig.state.configSnapshot?.appliedConfigHash,
+      canCallGatewayMethod(context.gateway.snapshot, "crabbox.images.list", "operator.admin"),
+    ] as const;
+    const changed = previousInputs?.some((value, index) => value !== current[index]);
+    previousInputs = current;
+    if (changed) {
+      queueMicrotask(() => void load());
+    }
+  }
+  onSettled(() => {
+    // Config and permission receipts invalidate the inventory at their synchronous owners.
+    const stop = runtime.subscribe(syncInventoryInputs);
+    syncInventoryInputs();
+    return stop;
   });
+
+  onCleanup(() => activeConfirmation?.abort());
 
   function canCall(method: string) {
     return canCallGatewayMethod(gateway.snapshot, method, "operator.admin");
@@ -234,7 +230,7 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
         setView((draft) => {
           draft.loading = false;
         });
-        stopPolling();
+        polling.cancel();
         // This native microtask samples settled state once for polling, without subscribing.
         queueMicrotask(() => {
           if (!gateway.isCurrent(scope)) {
@@ -257,16 +253,11 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
               (image) => image.capture && image.capture.phase !== "uncertain",
             )
           ) {
-            pollTimer = setTimeout(() => void load(), 10_000);
+            polling.schedule();
           }
         });
       }
     }
-  }
-
-  function stopPolling() {
-    clearTimeout(pollTimer);
-    pollTimer = undefined;
   }
 
   async function prepare(profileId: string, projectPath: string) {

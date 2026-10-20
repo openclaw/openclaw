@@ -563,6 +563,34 @@ describe("CLI transcript account boundary", () => {
     expect(JSON.stringify(f.manager().getEntries())).toContain("recovered CLI answer");
   });
 
+  it("rejects CLI assistant persistence after its terminal writer claim is revoked", async () => {
+    const f = await fixture();
+    await f.withRun("terminal-cli-writer", async (params) => {
+      const claim = await claimAgentSessionWriter(params);
+      if (!claim) {
+        throw new Error("Missing terminal CLI writer claim");
+      }
+      const before = f.manager().getEntries();
+
+      await expect(claim.revoke()).resolves.toBe(true);
+      const result = await persistCliAssistantTranscript({
+        runParams: {
+          ...params,
+          expectedLifecycleRevision: claim.expectedLifecycleRevision,
+          expectedWriterRunId: claim.expectedWriterRunId,
+          persistAssistantTranscript: true,
+        },
+        text: "late terminal CLI answer",
+        modelId: "test-model",
+        stopReason: "stop",
+      });
+
+      expect(result).toMatchObject({ owned: true });
+      expect(result.terminalAnchor).toBeUndefined();
+      expect(f.manager().getEntries()).toEqual(before);
+    });
+  });
+
   it("rechecks a revived foreign writer after metadata planning yields", async () => {
     const f = await fixture();
     await f.seed();

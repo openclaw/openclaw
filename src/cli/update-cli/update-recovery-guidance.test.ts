@@ -3,6 +3,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { isContainerEnvironment } from "../../infra/container-environment.js";
+import * as diskSpace from "../../infra/disk-space.js";
+import * as gatewayLock from "../../infra/gateway-lock.js";
 import {
   createUpdateRun,
   getUpdateRun,
@@ -13,13 +15,15 @@ import {
   renderUpdateRunReport,
   updateRunReportInputFromResult,
 } from "../../infra/update-run-report.js";
+import { createGitAdmissionFixture } from "../../infra/update-runner-git-admission.test-support.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { verifyUpdateFailureRecovery } from "./update-command-failure-recovery.js";
 import { observeUpdateGatewayReadiness } from "./update-command-readiness.js";
 import { recordUpdateResultNextAction } from "./update-command-result.js";
-import { refuseUnsettledDoctorRecovery } from "./update-command-service-recovery.js";
-import { publishUpdateCommandTerminalResult } from "./update-command-terminal.js";
+import * as serviceRecovery from "./update-command-service-recovery.js";
+import { publishUpdateCommandTerminalResultForTest as publishUpdateCommandTerminalResult } from "./update-command-terminal.test-support.js";
 import { verifyUpdatedGateway } from "./update-command-verification.js";
 import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
 
@@ -88,6 +92,123 @@ afterEach(() => {
 });
 
 describe("update recovery reporting", () => {
+  it("keeps a healthy untouched Gateway serving after Git pack capacity refusal", async () => {
+    const checkout = createGitAdmissionFixture();
+    const beforeSha = checkout.git(checkout.install, "rev-parse", "HEAD");
+    const dist = path.join(checkout.install, "dist");
+    fs.mkdirSync(path.join(dist, "control-ui"), { recursive: true });
+    const runtime = {
+      "entry.js": "export {};\n",
+      "control-ui/index.html": "ready\n",
+      "build-info.json": JSON.stringify({ commit: beforeSha, buildId: "installed-build" }),
+      ".buildstamp": JSON.stringify({ head: beforeSha }),
+      ".runtime-postbuildstamp": JSON.stringify({ head: beforeSha }),
+    };
+    for (const [file, content] of Object.entries(runtime)) {
+      fs.writeFileSync(path.join(dist, file), content);
+    }
+    vi.spyOn(diskSpace, "tryReadDiskSpace").mockReturnValue({
+      targetPath: checkout.install,
+      checkedPath: checkout.install,
+      availableBytes: 0,
+      totalBytes: 1024,
+    });
+    const mutation = vi.fn();
+    const result = await checkout.run({ beforeGitMutation: mutation });
+    expect(result).toMatchObject({
+      status: "error",
+      reason: "snapshot-capacity-insufficient",
+      rollbackOutcome: { status: "not-needed" },
+      recovery: { serviceRestartSafe: true, version: "2026.7.1" },
+    });
+    expect(result.after).toBeUndefined();
+    expect(mutation).not.toHaveBeenCalled();
+    const run = createRun({ profile: "work" });
+    const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    vi.spyOn(gatewayLock, "readActiveGatewayLockPort").mockResolvedValue(19123);
+    const restart = vi.spyOn(serviceRecovery, "maybeRestartServiceAfterFailedMutableUpdate");
+    vi.mocked(observeUpdateGatewayReadiness).mockResolvedValue({
+      health: {
+        runtime: { status: "running", pid: 12345 },
+        portUsage: { port: 19123, status: "busy", listeners: [], hints: [] },
+        healthy: true,
+        staleGatewayPids: [],
+        expectedVersion: "2026.7.1",
+        gatewayVersion: "2026.7.1",
+        gatewayBuildId: "installed-build",
+      },
+      readyz: true,
+      http: { healthz: 200, readyz: 200 },
+      launchAgentRecovery: null,
+    });
+    await verifyUpdateFailureRecovery({
+      result,
+      root: checkout.install,
+      env: run.env,
+      opts: { json: true, run },
+      serviceStopped: false,
+    });
+    await publishUpdateCommandTerminalResult(
+      { opts: { json: true, run }, coreAlreadyCurrent: false },
+      result,
+      { rolledBack: false },
+    );
+    const stored = getUpdateRun(run.runId, { env: run.env });
+    expect(stored).toMatchObject({
+      status: "failed",
+      reason: "snapshot-capacity-insufficient",
+      after: {},
+      verification: {
+        pid: 12345,
+        runningBuildId: "installed-build",
+        recovery: { serviceRestartSafe: true, service: "healthy", version: "2026.7.1" },
+        rollbackOutcome: { status: "not-needed" },
+      },
+    });
+    const action = stored?.origin.nextAction;
+    expect(action).toContain("Your Gateway is still serving 2026.7.1; nothing to restore.");
+    expect(action).toContain("Fix snapshot-capacity-insufficient");
+    expect(action).toContain("openclaw --profile work update");
+    expect(action).not.toMatch(/candidate|migrated|Rollback refused|gateway stop|update repair/i);
+    expect(output.mock.calls[0]?.[0]).toMatchObject({ run: { origin: { nextAction: action } } });
+    expect(stored && renderUpdateRunReport(stored).markdown).toContain(action);
+    expect(restart).not.toHaveBeenCalled();
+    expect(checkout.git(checkout.install, "rev-parse", "HEAD")).toBe(beforeSha);
+    for (const [file, content] of Object.entries(runtime)) {
+      expect(fs.readFileSync(path.join(dist, file), "utf8")).toBe(content);
+    }
+  });
+
+  it.each(["not-needed", "not-attempted", "succeeded", "failed"] as const)(
+    "preserves the recorded %s rollback outcome after installed-runtime recovery admission",
+    (status) => {
+      const action = resolveUpdateResultNextAction({
+        result: failure({
+          recovery: { serviceRestartSafe: true, version: "2.0.0", service: "healthy" },
+          rollbackOutcome: { status, reason: "recorded rollback detail" },
+          steps: [
+            {
+              name: "installed gateway recovery admission",
+              command: "admit installed gateway recovery",
+              cwd: "/fixture",
+              durationMs: 0,
+              exitCode: 0,
+            },
+          ],
+        }),
+        env: {},
+      });
+      expect(action).toContain("installed Gateway is healthy");
+      if (status === "not-attempted" || status === "failed") {
+        expect(action).toContain(
+          `Rollback ${status === "failed" ? "failed" : "not attempted"}: recorded rollback detail.`,
+        );
+      } else {
+        expect(action).not.toContain("Rollback");
+      }
+    },
+  );
+
   it("keeps healthy previous-generation rollback guidance distinct from migrated candidate recovery", () => {
     const action = resolveUpdateResultNextAction({
       result: failure({
@@ -156,7 +277,7 @@ describe("update recovery reporting", () => {
     },
   );
 
-  it.each(["unsettled", "foreign", "settled"] as const)(
+  it.each(["unsettled", "foreign"] as const)(
     "keeps %s Doctor settlement guidance when the target Gateway responds",
     (settlement) => {
       const root = "/fixture/candidate";
@@ -190,7 +311,7 @@ describe("update recovery reporting", () => {
           },
         ],
       };
-      expect(refuseUnsettledDoctorRecovery(result, root, () => {})).toBe(settlement !== "settled");
+      expect(serviceRecovery.refuseUnsettledDoctorRecovery(result, root, () => {})).toBe(true);
       const nextAction = resolveUpdateResultNextAction({
         result,
         env: {},
@@ -209,9 +330,6 @@ describe("update recovery reporting", () => {
       if (settlement === "unsettled") {
         expect(nextAction).toContain("Keep the Gateway stopped: data at risk (active-mutation)");
         expect(report.lines.join("\n")).toContain("doctor-processes-unsettled");
-      } else if (settlement === "settled") {
-        expect(result.recovery).toMatchObject({ serviceRestartSafe: true, service: "healthy" });
-        expect(nextAction).toContain("candidate Gateway is healthy");
       } else {
         expect(result.recovery).toMatchObject({ serviceRestartSafe: false });
         expect(nextAction).toContain("data at risk (active-mutation)");
@@ -298,13 +416,12 @@ describe("update recovery reporting", () => {
     },
   );
 
-  it.each(["stopped", "healthy", "settled", "unsettled", "starting"])(
+  it.each(["stopped", "unsettled", "starting"])(
     "publishes actionable migrated-state recovery with a %s Gateway",
     async (state) => {
       vi.mocked(isContainerEnvironment).mockReturnValue(false);
       const run = createRun({ profile: "work" });
       const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-      const healthy = state === "healthy" || state === "settled";
       const steps: UpdateRunResult["steps"] = [
         {
           name: "finalize-doctor",
@@ -322,13 +439,13 @@ describe("update recovery reporting", () => {
           exitCode: 1,
         },
       ];
-      if (state === "settled" || state === "unsettled") {
+      if (state === "unsettled") {
         steps.push({
           name: "doctor process settlement",
           command: "settle doctor process groups",
           cwd: "/fixture",
           durationMs: 0,
-          exitCode: state === "settled" ? 0 : 1,
+          exitCode: 1,
           stderrTail: "Doctor child PID 12345 remains unsettled.",
         });
       }
@@ -350,15 +467,12 @@ describe("update recovery reporting", () => {
           reason: "state-migrated-no-rollback",
           steps,
           failedStep: steps[0],
-          recovery: healthy
-            ? { serviceRestartSafe: true, version: "2026.9.5", service: "healthy" }
-            : {
-                serviceRestartSafe: false,
-                reason: "state-migration-started",
-                dataAtRisk:
-                  state === "unsettled" ? "active-mutation" : "state-migrated-no-rollback",
-              },
-          verification: { serviceRunning: healthy || state === "starting" },
+          recovery: {
+            serviceRestartSafe: false,
+            reason: "state-migration-started",
+            dataAtRisk: state === "unsettled" ? "active-mutation" : "state-migrated-no-rollback",
+          },
+          verification: { serviceRunning: state === "starting" },
         }),
         { rolledBack: false },
       );

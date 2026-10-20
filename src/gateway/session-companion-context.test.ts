@@ -13,7 +13,10 @@ import {
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { defaultSessionCompanionContextReader } from "./session-companion-context.js";
 import { createSessionCompanion } from "./session-companion.js";
@@ -129,7 +132,7 @@ it.each(
     const scope = await seedScope(`companion-cancel-${cancellation}-${warm}`);
     const run = vi.fn(async () => "Existing answer.");
     const service = createSessionCompanion({
-      scheduler: createTestGatewayScheduler(),
+      scheduler: createTestGatewayScheduler(createGatewaySchedulerClock(123).clock),
       getConfig: () => ({}),
       contextReader: defaultSessionCompanionContextReader,
       sessionObserver: {
@@ -137,7 +140,6 @@ it.each(
       },
       resolveUtilityModelRef: () => "openai/gpt-5.6-luna",
       run,
-      now: () => 123,
     });
     const request = {
       agentId: scope.agentId,

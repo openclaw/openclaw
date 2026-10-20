@@ -16,8 +16,8 @@ const state = vi.hoisted(() => ({
   options: [] as Array<{ maxPayload?: number; handshakeTimeout?: number } | undefined>,
   terminations: 0,
 }));
-vi.mock("./ws-runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./ws-runtime.js")>()),
+vi.mock("openclaw/plugin-sdk/websocket-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/websocket-runtime")>()),
   WebSocket: class extends EventEmitter {
     private flushed = false;
     constructor(url: string | URL, options?: { maxPayload?: number; handshakeTimeout?: number }) {

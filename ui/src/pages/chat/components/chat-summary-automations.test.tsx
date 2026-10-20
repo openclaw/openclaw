@@ -82,8 +82,8 @@ function component(
       }),
     empty: () =>
       waitForSolid(() => expect(element.querySelector(".chat-summary__automations")).toBeNull()),
-    cron: (action = "updated") =>
-      source.publishEvent({ type: "event", event: "cron", payload: { action } }),
+    cron: (action = "updated", payload: Record<string, unknown> = {}) =>
+      source.publishEvent({ type: "event", event: "cron", payload: { ...payload, action } }),
     update: (next: Partial<Props>) => {
       setProps((current) => ({ ...current, ...next }));
       flush();
@@ -123,6 +123,72 @@ it.each([false, true])("coalesces hidden refreshes: %s", async (hiddenEvents) =>
   current.publish(current.gateway.snapshot);
   flush();
   expect(current.request).toHaveBeenCalledTimes(hiddenEvents ? 2 : 3);
+});
+
+it.each([false, true])(
+  "drains one trailing inventory after cron events arrive during a read (hidden=%s)",
+  async (hidden) => {
+    const pending = createDeferred<Page>();
+    const current = component(
+      sequence(page([job()]), pending.promise, page([job({ name: "Current automation" })])),
+    );
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    try {
+      await current.ready();
+      current.cron();
+      current.cron();
+      current.cron();
+      current.cron();
+      expect(current.request).toHaveBeenCalledTimes(2);
+      if (hidden) {
+        visibility.mockReturnValue("hidden");
+        document.dispatchEvent(new Event("visibilitychange"));
+      }
+
+      pending.resolve(page([job({ name: "Older automation" })]));
+      if (hidden) {
+        await current.ready("Older automation");
+        expect(current.request).toHaveBeenCalledTimes(2);
+        visibility.mockReturnValue("visible");
+        document.dispatchEvent(new Event("visibilitychange"));
+      }
+      await current.ready("Current automation");
+      expect(current.request).toHaveBeenCalledTimes(3);
+    } finally {
+      current.unmount();
+      visibility.mockRestore();
+    }
+  },
+);
+
+it("updates a held automation's runtime state without rereading its inventory", async () => {
+  const current = component(sequence(page([job()])).mockResolvedValue(page([job()])));
+  await current.ready();
+  const eventJob = {
+    id: "summary-job",
+    name: "Check the task",
+    agentId: "ops",
+    enabled: true,
+  };
+  current.cron("started", {
+    jobId: "summary-job",
+    job: { ...eventJob, updatedAtMs: 2, state: { runningAtMs: 2 } },
+  });
+  await current.ready("Running");
+  expect(current.request).toHaveBeenCalledTimes(1);
+
+  current.cron("finished", {
+    jobId: "summary-job",
+    job: {
+      ...eventJob,
+      updatedAtMs: 3,
+      state: { lastRunAtMs: 3, lastRunStatus: "ok", nextRunAtMs: 600_003 },
+    },
+  });
+  await current.ready("Every 10m");
+  expect(current.element.textContent).not.toContain("Running");
+  expect(current.request).toHaveBeenCalledTimes(1);
+  current.unmount();
 });
 
 it("admits only presented session-scoped reads and uses the existing automation destination", async () => {
@@ -183,6 +249,13 @@ it("omits confirmed-empty sections and preserves manual collapse until the conte
   await current.ready();
   expect(find("details")).toBe(group);
   expect(group.open).toBe(false);
+  const link = find(".chat-summary__automation");
+  current.update({ presented: false });
+  current.update({ presented: true });
+  await current.ready();
+  expect(find("details")).toBe(group);
+  expect(group.open).toBe(false);
+  expect(find(".chat-summary__automation")).toBe(link);
   current.request.mockResolvedValueOnce(page());
   current.cron("removed");
   await current.empty();

@@ -100,7 +100,6 @@ export async function monitorLineProvider(opts: MonitorLineProviderOptions) {
                 showLoadingAnimation(ctx.userId!, {
                   cfg: turnConfig,
                   accountId: ctx.accountId,
-                  loadingSeconds: 20,
                 }).catch(() => {}),
             })
           : null;

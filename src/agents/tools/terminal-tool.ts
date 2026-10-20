@@ -283,6 +283,7 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
         });
         const decision = await resolveRegisteredExecApprovalDecision({
           approvalId: registration.id,
+          expiresAtMs: registration.expiresAtMs,
           preResolvedDecision: registration.finalDecision,
         });
         if (decision !== "allow-once") {

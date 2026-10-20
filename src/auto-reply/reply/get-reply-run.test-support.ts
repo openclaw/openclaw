@@ -1,4 +1,6 @@
 import { vi } from "vitest";
+import type { SessionEntry } from "../../config/sessions.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { runPreparedReply } from "./get-reply-run.js";
 import { finalizeInboundContextForSdk } from "./inbound-context.js";
 import { prepareReplyConversation } from "./prompt-session-context.js";
@@ -13,6 +15,19 @@ export function createSessionBody<T extends string>(body: T) {
 
 export function createProviderSurface<T extends string>(provider: T) {
   return { Provider: provider, Surface: provider };
+}
+
+export function createTelegramGroupSession(): SessionEntry {
+  return {
+    sessionId: "session-telegram-group",
+    updatedAt: 1,
+    systemSent: true,
+    chatType: "group",
+    delivery: normalizeSessionDeliveryState({
+      context: { channel: "telegram", to: "-100123" },
+      origin: { provider: "telegram", surface: "telegram", chatType: "group", to: "-100123" },
+    }),
+  };
 }
 
 export function createInboundTurn<

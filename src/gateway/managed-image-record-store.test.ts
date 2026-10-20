@@ -66,6 +66,17 @@ function record(overrides: Partial<ManagedImageRecord> = {}): ManagedImageRecord
 
 describe("managed image record SQLite store", () => {
   let stateDir: string;
+  const database = () =>
+    openOpenClawStateDatabase({
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+    });
+  const attach = (attachment: ManagedImageRecord, messageId: string, updatedAt: string) =>
+    attachManagedImageRecordsToMessage({
+      attachments: [attachment],
+      messageId,
+      updatedAt,
+      stateDir,
+    });
 
   beforeEach(async () => {
     stateDir = tempDirs.make("managed-image-record-store-");
@@ -162,12 +173,10 @@ describe("managed image record SQLite store", () => {
     await insertManagedImageRecord(expected, stateDir);
 
     expect(await readManagedImageRecord(expected.attachmentId, stateDir)).toEqual(expected);
-    const database = openOpenClawStateDatabase({
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    });
+    const { db } = database();
     executeSqliteQuerySync(
-      database.db,
-      getNodeSqliteKysely<ManagedImageRecordDatabase>(database.db)
+      db,
+      getNodeSqliteKysely<ManagedImageRecordDatabase>(db)
         .updateTable("managed_outgoing_image_records")
         .set({ record_json: '{"attachmentId":"wrong"}' })
         .where("attachment_id", "=", expected.attachmentId),
@@ -182,14 +191,7 @@ describe("managed image record SQLite store", () => {
 
     expect(await claimManagedImageRecordCleanupIfCurrent(planned, stateDir)).toBe(true);
     expect(await readManagedImageRecord(planned.attachmentId, stateDir)).toBeNull();
-    expect(
-      await attachManagedImageRecordsToMessage({
-        attachments: [planned],
-        messageId: "too-late",
-        updatedAt: "2026-07-15T00:02:00.000Z",
-        stateDir,
-      }),
-    ).toBe(false);
+    expect(await attach(planned, "too-late", "2026-07-15T00:02:00.000Z")).toBe(false);
     expect(await listManagedImageRecordEntries({ stateDir })).toEqual([
       { record: planned, cleanupPending: true },
     ]);
@@ -211,12 +213,7 @@ describe("managed image record SQLite store", () => {
         await release.promise;
         return await run(...args);
       });
-    const attaching = attachManagedImageRecordsToMessage({
-      attachments: [initial],
-      messageId: "message-committed",
-      updatedAt: "2026-07-15T00:02:00.000Z",
-      stateDir,
-    });
+    const attaching = attach(initial, "message-committed", "2026-07-15T00:02:00.000Z");
     let claiming: Promise<boolean> | undefined;
     void attaching.catch(() => {});
     try {
@@ -234,12 +231,10 @@ describe("managed image record SQLite store", () => {
         retentionClass: "history",
         updatedAt: "2026-07-15T00:02:00.000Z",
       });
-      const database = openOpenClawStateDatabase({
-        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-      });
+      const { db } = database();
       const row = executeSqliteQueryTakeFirstSync(
-        database.db,
-        getNodeSqliteKysely<ManagedImageRecordDatabase>(database.db)
+        db,
+        getNodeSqliteKysely<ManagedImageRecordDatabase>(db)
           .selectFrom("managed_outgoing_image_records")
           .select("record_json")
           .where("attachment_id", "=", initial.attachmentId),
@@ -286,14 +281,7 @@ describe("managed image record SQLite store", () => {
       return receive(slot, reply, owner);
     });
     await insertManagedImageRecord(initial, stateDir);
-    expect(
-      await attachManagedImageRecordsToMessage({
-        attachments: [initial],
-        messageId: "committed",
-        updatedAt: initial.createdAt,
-        stateDir,
-      }),
-    ).toBe(true);
+    expect(await attach(initial, "committed", initial.createdAt)).toBe(true);
     const promoted = await readManagedImageRecord(initial.attachmentId, stateDir);
     if (!promoted) {
       throw new Error("Expected native promotion after lost reply");

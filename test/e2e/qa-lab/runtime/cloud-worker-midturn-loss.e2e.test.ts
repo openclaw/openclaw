@@ -184,7 +184,7 @@ it.skipIf(process.platform === "win32")(
         advance("publishing workspace");
         published = await createPublishedWireWorkspace(root);
         const identity = loadOrCreateDeviceIdentity({
-          path: path.join(root, "node-identity.sqlite"),
+          env: { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "node-state") },
         });
         const nodeConfig: OpenClawConfig = {
           models: {

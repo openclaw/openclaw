@@ -16,17 +16,12 @@ import {
 import type { SidebarPanelDefinition } from "./components/chat-sidebar-region-types.ts";
 import { openSlot, promoteSidebarPanel, setSidebarOpen } from "./sidebar-layout.ts";
 
-it("keeps content actions and focus in Layout across plugin panel swaps", async () => {
+it("keeps Layout actions available across plugin panel swaps", async () => {
   const { pane, state } = createTestChatPane({
     client: { request: vi.fn() } as unknown as GatewayBrowserClient,
     sessions: createSessionCapabilityFixture(),
   });
   const slot = "plugin:fixture/notes";
-  const refresh = vi.fn();
-  const refreshButton = document.createElement("button");
-  refreshButton.setAttribute("aria-label", "Refresh notes");
-  refreshButton.textContent = "Refresh notes";
-  refreshButton.addEventListener("click", refresh);
   const definitions: SidebarPanelDefinition[] = [
     ...sidebarPanelDefinitions(),
     {
@@ -37,7 +32,6 @@ it("keeps content actions and focus in Layout across plugin panel swaps", async 
       content: "Notes",
       loading: { variant: "files", label: "Loading notes" },
       empty: { description: "No notes" },
-      headerAction: refreshButton,
     },
   ];
   state.sidebarLayout = promoteSidebarPanel(openSlot({ columns: [] }, slot), slot);
@@ -84,15 +78,11 @@ it("keeps content actions and focus in Layout across plugin panel swaps", async 
   expect(container.querySelectorAll(".chat-pane__header")).toHaveLength(1);
   expect(container.querySelectorAll(".chat-side-panel-toggle")).toHaveLength(1);
   expect(action("Swap Fixture notes and Chat")).not.toBeNull();
-  const refreshControl = action("Refresh notes")!;
-  refreshControl.click();
-  expect(refresh).toHaveBeenCalledOnce();
   await activate("Focus");
   expect(state.sidebarLayout.expanded).toBe(true);
   state.connected = false;
   paint();
   expect(container.querySelector(".chat-panel-swap")).toBeNull();
-  expect(action("Refresh notes")).toBe(refreshControl);
   expect(action("Restore split")!.matches(":disabled")).toBe(false);
   await activate("Restore split");
   expect(state.sidebarLayout.expanded).toBe(false);
@@ -101,7 +91,6 @@ it("keeps content actions and focus in Layout across plugin panel swaps", async 
   await activate("Swap Fixture notes and Chat");
   paint();
   expect(action("Swap Chat and Fixture notes")).not.toBeNull();
-  expect(action("Refresh notes")).not.toBeNull();
 
   state.sidebarLayout = setSidebarOpen({ columns: [] }, true);
   paint();

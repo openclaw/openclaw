@@ -155,7 +155,7 @@ describe("guest session rename through the agent catalog", () => {
           controller.abort(new Error("guest access revoked"));
           await expect(
             tool.execute("revoked", { action: "patch", label: "Revoked rename" }),
-          ).rejects.toThrow("Guest's access changed; ask them again");
+          ).rejects.toThrow("guest access revoked");
           expect(loadSessionEntry(scope)?.label).toBe("Research plan");
         },
       );

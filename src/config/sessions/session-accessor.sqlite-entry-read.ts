@@ -57,15 +57,12 @@ export function parseReadableSessionEntryData(
     projection === "delivery"
       ? parseSqliteSessionEntryRecord(row)
       : parseSessionEntryRow(row, projection);
-  if (parsed) {
-    validateDeliveryCanonicalSessionEntry(row.session_key, parsed);
-  }
   if (row.retained_window_id !== undefined) {
     // The guard and decoded entry share one statement snapshot, including cold handles.
-    validateCanonicalSessionRowEntry(row, parsed, "read");
-    return parsed;
+    return validateCanonicalSessionRowEntry(row, parsed, "read") ?? null;
   }
   if (parsed) {
+    validateDeliveryCanonicalSessionEntry(row.session_key, parsed);
     if (projection === "delivery") {
       const { sessionId, updatedAt, delivery, groupId } = parsed;
       return { sessionId, updatedAt, delivery, groupId };

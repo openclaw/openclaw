@@ -7,6 +7,7 @@ const storage = vi.hoisted(() => ({
   held: false,
   unavailable: false,
   expiresAt: 0,
+  remainingMs: 60_000,
   forbidden: vi.fn(() => {
     throw new Error("Controlled cleanup proof must not open SQLite");
   }),
@@ -48,7 +49,7 @@ vi.mock("./openclaw-state-lease-worker-storage.js", () => ({
     };
     captureSource(context, context.admission.identity);
     storage.held = true;
-    storage.expiresAt = Date.now() + 60_000;
+    storage.expiresAt = Date.now() + storage.remainingMs;
     return { kind: "acquired", expiresAt: storage.expiresAt };
   },
   createOpenClawStateLeaseWorkerStorage: () => ({
@@ -74,9 +75,28 @@ vi.mock("./openclaw-state-lease-storage.js", () => ({
 
 afterEach(async () => {
   storage.unavailable = false;
+  storage.remainingMs = 60_000;
   await closeOpenClawStateDatabaseAsync();
   storage.held = false;
   expect(storage.forbidden).not.toHaveBeenCalled();
+});
+
+it("releases a native acquisition that expires before callback entry", async () => {
+  const options = {
+    scope: "core:plugin-lifecycle",
+    key: "expired-startup",
+    database: { scope: "shared" as const },
+    leaseMs: 60_000,
+    waitMs: 0,
+  };
+  storage.remainingMs = -1;
+  const entered = vi.fn();
+  await expect(withOpenClawStateLease(options, entered)).rejects.toMatchObject({
+    code: "OPENCLAW_STATE_LEASE_LOST",
+  });
+  expect(entered).not.toHaveBeenCalled();
+  storage.remainingMs = 60_000;
+  await expect(withOpenClawStateLease(options, async () => "recovered")).resolves.toBe("recovered");
 });
 
 it("releases a failed native lease cleanup when the shared resource owner closes", async () => {

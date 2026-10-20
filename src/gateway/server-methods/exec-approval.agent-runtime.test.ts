@@ -30,6 +30,7 @@ import { createChatRunState } from "../server-chat-state.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import { advancePlacementFixtureToActive } from "../worker-environments/placement-test-fixtures.js";
 import { bindWorkerTurnOwner } from "../worker-environments/placement-turn-claim-events.js";
+import * as workerRunOwner from "../worker-environments/worker-turn-run-owner.js";
 import { waitForApprovalRequested } from "./approval-request.test-support.js";
 import { createExecApprovalHandlers } from "./exec-approval.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -134,6 +135,92 @@ async function pendingRecord(fixture: ApprovalFixture) {
 }
 
 describe("exec approval signed agent runtime", () => {
+  it("binds the accepted expiry to the worker captured before registration yields", async (testContext) => {
+    let active = true;
+    const fixture = await createPreparedTestApprovalManager(testContext, {
+      validateAgentRuntimeDelegatedAuthority: () => active,
+    });
+    const { manager } = fixture;
+    const runtimeIdentity = identity(false);
+    const turnClaim = {
+      sessionId: "worker-session",
+      claimId: "worker-claim",
+      runId: "run-1",
+      placementGeneration: 1,
+      owner: { kind: "worker" as const, environmentId: "worker-env", ownerEpoch: 1 },
+    };
+    runtimeIdentity.delegatedAuthority = {
+      ...runtimeIdentity.delegatedAuthority,
+      kind: "worker",
+      turnClaim,
+    };
+    const close = vi.fn();
+    const beginApprovalWait = vi.fn<workerRunOwner.WorkerTurnLiveEventOwner["beginApprovalWait"]>(
+      () => ({ close, updateDeadline: vi.fn() }),
+    );
+    const successorWait = vi.fn();
+    const capture = vi.spyOn(workerRunOwner, "captureWorkerTurnLiveEventOwner").mockReturnValue({
+      beginApprovalWait,
+      record: vi.fn(),
+      isCancelled: () => false,
+      isCancelledFinishing: () => false,
+    });
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const register = manager.register.bind(manager);
+    const registration = vi
+      .spyOn(manager, "register")
+      .mockImplementation(async (record, timeoutMs) => {
+        entered.resolve();
+        await release.promise;
+        return await register(record, timeoutMs);
+      });
+    try {
+      await fixture.run(async () => {
+        const opts = requestOptions(runtimeIdentity, () => active);
+        const requested = waitForApprovalRequested(opts.context, "exec.approval.requested", () =>
+          fixture.track(
+            Promise.resolve(createExecApprovalHandlers(manager)["exec.approval.request"]!(opts)),
+          ),
+        );
+        await entered.promise;
+        expect(capture).toHaveBeenCalledExactlyOnceWith({
+          sessionId: turnClaim.sessionId,
+          turnClaim,
+        });
+        expect(beginApprovalWait).not.toHaveBeenCalled();
+        capture.mockReturnValue({
+          beginApprovalWait: successorWait,
+          record: vi.fn(),
+          isCancelled: () => false,
+          isCancelledFinishing: () => false,
+        });
+        release.resolve();
+        const { pending } = await requested;
+        const record = manager.listLocalPendingRecords()[0]!;
+        expect(beginApprovalWait).toHaveBeenCalledExactlyOnceWith(
+          record.expiresAtMs,
+          expect.any(Function),
+        );
+        expect(successorWait).not.toHaveBeenCalled();
+        const isPending = beginApprovalWait.mock.calls[0]![1];
+        expect(isPending()).toBe(true);
+        expect(manager.isPending({ ...record })).toBe(false);
+        active = false;
+        expect(isPending()).toBe(false);
+        active = true;
+        await manager.resolve(record.id, "allow-once", "operator");
+        await pending;
+        expect(isPending()).toBe(false);
+        expect(close).toHaveBeenCalledOnce();
+      });
+    } finally {
+      release.resolve();
+      registration.mockRestore();
+      capture.mockRestore();
+    }
+  });
+
   it.for([false, true])(
     "checks live worker claims without host SQL in a registered approval (revoked: %s)",
     async (revoked, testContext) => {

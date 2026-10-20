@@ -9,16 +9,18 @@ import { projectRuntimeConfig } from "../../../lib/reactive/domain-capabilities.
 import { t } from "../../../lib/reactive/i18n.ts";
 import { GatewaySpeechPlayback, resolveSpeechTextLimit } from "../../../lib/speech-playback.ts";
 
-export function ReadAloud(props: { text: string }) {
+type ReadAloudProps = { text: string; buttonRef?: (element: HTMLButtonElement) => void };
+
+export function ReadAloud(props: ReadAloudProps) {
   const context = useOptionalApplication();
   return (
     <Show when={context}>
-      <ReadAloudControl text={props.text} />
+      <ReadAloudControl text={props.text} buttonRef={(element) => props.buttonRef?.(element)} />
     </Show>
   );
 }
 
-function ReadAloudControl(props: { text: string }) {
+function ReadAloudControl(props: ReadAloudProps) {
   const context = useApplication();
   const gateway = projectGateway(context.gateway);
   const config = projectRuntimeConfig(context.runtimeConfig);
@@ -103,6 +105,7 @@ function ReadAloudControl(props: { text: string }) {
     <Show when={playing() || available()}>
       <openclaw-tooltip prop:content={error() || label()}>
         <button
+          ref={(element) => props.buttonRef?.(element)}
           class="chat-read-aloud-btn"
           type="button"
           aria-label={label()}

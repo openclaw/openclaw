@@ -138,12 +138,19 @@ it("does not preserve a previous attachment when a new rendition fails", async (
   const player = await open("first", { onExpand, onFallbackExpand });
   const failedMedia = media(player)!;
   expect(source(failedMedia)).toBe("https://example.com/first.mp4");
+  const paused = vi.spyOn(failedMedia, "paused", "get").mockReturnValue(false);
+  const pause = vi
+    .spyOn(failedMedia, "pause")
+    .mockImplementation(() => paused.mockReturnValue(true));
 
   const fetchMock = vi.fn<typeof fetch>(async () => new Response(null, { status: 500 }));
   vi.stubGlobal("fetch", fetchMock);
   player.src = "/__openclaw__/assistant-media?source=second.caf&mediaTicket=ticket";
   player.sourceIdentity = "media:second";
   player.playback = "transcode";
+  player.authToken = "new-principal";
+  expect(pause).toHaveBeenCalledOnce();
+  expect(fetchMock).not.toHaveBeenCalled();
   await player.updateComplete;
   expect(media(player)?.hasAttribute("src")).toBe(false);
   await vi.waitFor(() => expect(card(player, "--compact")).not.toBeNull());
@@ -153,6 +160,13 @@ it("does not preserve a previous attachment when a new rendition fails", async (
   expandButton(player).click();
   expect(onFallbackExpand).toHaveBeenCalledOnce();
   expect(onExpand).not.toHaveBeenCalled();
+  expect(fetchMock).toHaveBeenCalledOnce();
+  expect(fetchMock.mock.calls[0]?.[0]).toBe(
+    "/__openclaw__/assistant-media?source=second.caf&mediaTicket=ticket&playback=1",
+  );
+  expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("Authorization")).toBe(
+    "Bearer new-principal",
+  );
 
   Object.assign(player, { label: "a.caf", onMediaLoaded: vi.fn(), mediaWidth: 16, mediaHeight: 9 });
   await player.updateComplete;

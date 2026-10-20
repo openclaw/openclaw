@@ -92,5 +92,5 @@ export function prepareOnboardingRecommendationPending(
 ) {
   const nowMs = params.nowMs ?? Date.now();
   const matches = OnboardingRecommendationMatchesSchema.parse(params.matches);
-  return { matches, expected: structuredClone(params.expected), nowMs };
+  return { matches, expected: params.expected, nowMs };
 }

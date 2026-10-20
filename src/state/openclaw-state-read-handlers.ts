@@ -56,7 +56,7 @@ import { readExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
 import { inspectCurrentConversationBindingRecordInDatabase } from "../infra/outbound/current-conversation-bindings.kernel.js";
 import { readOutboundDeliveriesInDatabase } from "../infra/outbound/delivery-queue-storage.kernel.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import {
   readInterruptedUpdateCandidate,
   readUpdateRunStatusInDatabase,
@@ -88,7 +88,6 @@ import {
 } from "./config-machine-state.js";
 import { readGitHubPublicationSessionLifecycle } from "./github-publication-session-lifecycles.worker.js";
 import { readOnboardingRecommendationsInDatabase } from "./onboarding-recommendations.kernel.js";
-import { readRegisteredAgentDatabaseRows } from "./openclaw-agent-db-registry.read.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
 import {
@@ -111,12 +110,7 @@ import { readUserPreferences, selectUserPreferenceValues } from "./user-preferen
 import { readUserProfileCommand } from "./user-profile-read.worker.js";
 import { selectResolvedUserProfileMetadataById } from "./user-profiles-internal.js";
 
-export {
-  prepareAcpSessionMetadataRead,
-  loadSubagentSessionListRunsFromSqlite,
-  readRegisteredAgentDatabaseRows,
-  readStateStream,
-};
+export { prepareAcpSessionMetadataRead, loadSubagentSessionListRunsFromSqlite, readStateStream };
 
 /** Non-metadata query owners load only when the shared worker receives one of their commands. */
 export function readOpenClawStateDatabaseCommand(
@@ -283,13 +277,13 @@ export function readOpenClawStateDatabaseCommand(
   if (command.type === "updateRuns.status") {
     return {
       type: command.type,
-      status: runSqliteDeferredTransactionSync(db, () => readUpdateRunStatusInDatabase(db)),
+      status: runSqliteReadSnapshotSync(db, () => readUpdateRunStatusInDatabase(db)),
     };
   }
   if (command.type === "updateRuns.historyStatus") {
     return {
       type: command.type,
-      status: runSqliteDeferredTransactionSync(db, () => readUpdateRunHistoryStatusInDatabase(db)),
+      status: runSqliteReadSnapshotSync(db, () => readUpdateRunHistoryStatusInDatabase(db)),
     };
   }
   if (command.type === "updateRuns.interruptedCandidate") {
@@ -426,7 +420,7 @@ export function readOpenClawStateDatabaseCommand(
   if (command.type === "userPreferences.read") {
     return {
       type: command.type,
-      preferences: runSqliteDeferredTransactionSync(db, () => {
+      preferences: runSqliteReadSnapshotSync(db, () => {
         const profile = tableExists(db, "user_profiles")
           ? selectResolvedUserProfileMetadataById(db, command.profileId)
           : undefined;
@@ -453,7 +447,7 @@ export function readOpenClawStateDatabaseCommand(
   if (command.type === "sessionRepositoryWorkspaces.find") {
     return {
       type: command.type,
-      workspaces: runSqliteDeferredTransactionSync(db, () =>
+      workspaces: runSqliteReadSnapshotSync(db, () =>
         command.owners.flatMap((owner) => {
           const workspace = findSessionRepositoryWorkspaceInDatabase(db, owner);
           return workspace ? [workspace] : [];

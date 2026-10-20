@@ -35,8 +35,10 @@ import {
   type ToolExecutionEndEvent,
 } from "./embedded-agent-subscribe.handlers.tools.test-support.js";
 import type { ToolHandlerContext } from "./embedded-agent-subscribe.handlers.types.js";
+import * as questionDispatch from "./harness/gateway-question-dispatch.js";
 import { claimPendingAgentQuestionAnswer } from "./harness/gateway-question.js";
 import { normalizeAskUserParams, reserveAskUserPromptDelivery } from "./tools/ask-user-tool.js";
+import * as gatewayTransport from "./tools/gateway.js";
 import { createSecretsTool } from "./tools/secrets-tool.js";
 import { markCoreTtsToolResult } from "./tools/tts-tool-result-provenance.js";
 
@@ -360,14 +362,19 @@ describe("handleToolExecutionStart read path checks", () => {
         }
         throw new Error(`unexpected method ${method}`);
       });
+      await startTool(ctx, { toolName: "secrets", toolCallId: "secret-call-1", args });
+      const storeTransportSpy = vi
+        .spyOn(gatewayTransport, "callGatewayTool")
+        .mockImplementation(gatewayCall);
+      const questionResolverSpy = vi
+        .spyOn(questionDispatch, "resolveAgentQuestionGatewayCall")
+        .mockReturnValue(gatewayCall);
       const tool = createSecretsTool({
         agentId: ctx.params.agentId,
         sessionKey: ctx.params.sessionKey,
         runId: ctx.params.runId,
-        gatewayCall,
       });
 
-      await startTool(ctx, { toolName: "secrets", toolCallId: "secret-call-1", args });
       // Attach rejection handling before any assertion, and always retire both waits.
       const outcome = tool.execute("secret-call-1", args).then(
         (result) => ({ result }),
@@ -439,10 +446,15 @@ describe("handleToolExecutionStart read path checks", () => {
           );
         }
       } finally {
-        delivered.resolve();
-        answer.resolve({ status: "cancelled" });
-        await outcome;
-        vi.useRealTimers();
+        try {
+          delivered.resolve();
+          answer.resolve({ status: "cancelled" });
+          await outcome;
+        } finally {
+          questionResolverSpy.mockRestore();
+          storeTransportSpy.mockRestore();
+          vi.useRealTimers();
+        }
       }
     },
   );

@@ -551,6 +551,10 @@ export function createSessionWorkspaceProps(
       workspace.filter = filter;
       sessionWorkspaceForHost(state).publish();
     },
+    onRetry: () => {
+      clearWorkspaceTimer(workspace);
+      loadSessionWorkspace(state, workspace, true);
+    },
     onBrowsePath: (path) => {
       clearWorkspaceTimer(workspace);
       workspace.browserPath = path;

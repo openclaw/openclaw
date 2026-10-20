@@ -57,12 +57,13 @@ import {
   type GatewayProtocolSocket,
   type GatewayProtocolSocketHandlers,
 } from "./protocol-client.js";
-import {
-  GatewayProtocolRequestError,
-  GatewayProtocolRequestTimeoutError,
-} from "./protocol-request.js";
+import { GatewayProtocolRequestError } from "./protocol-request.js";
 import { shouldPauseGatewayReconnect } from "./reconnect-policy.js";
-import { GatewayClientRequestError, markGatewayConnectAssemblyError } from "./request-error.js";
+import {
+  GatewayClientRequestError,
+  GatewayClientRequestTimeoutError,
+  markGatewayConnectAssemblyError,
+} from "./request-error.js";
 import {
   DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
   resolveConnectChallengeTimeoutMs,
@@ -148,15 +149,12 @@ export type GatewayReconnectPausedInfo = {
   detailCode: string | null;
 };
 
-export { GatewayClientRequestError, isGatewayConnectAssemblyError } from "./request-error.js";
+export {
+  GatewayClientRequestError,
+  GatewayClientRequestTimeoutError,
+  isGatewayConnectAssemblyError,
+} from "./request-error.js";
 export { isGatewayProtocolResponseError } from "./protocol-request.js";
-
-export class GatewayClientRequestTimeoutError extends GatewayProtocolRequestTimeoutError {
-  constructor(params: { method: string; timeoutMs: number; requestSent: boolean }) {
-    super(params, `gateway request timeout for ${params.method}`);
-    this.name = "GatewayClientRequestTimeoutError";
-  }
-}
 
 class GatewayClientTransportPolicyError extends GatewayWebSocketTransportConfigurationError {}
 
@@ -1274,11 +1272,9 @@ export class GatewayClient {
             ? null
             : this.requestTimeoutMs;
     return this.protocol.request<T>(method, params, {
+      ...opts,
       expectFinal,
       timeoutMs,
-      signal: opts?.signal,
-      onSent: opts?.onSent,
-      onAccepted: opts?.onAccepted,
     });
   }
 }

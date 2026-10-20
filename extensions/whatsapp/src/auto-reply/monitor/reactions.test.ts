@@ -1,4 +1,3 @@
-// Whatsapp tests cover ack reaction plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestWebInboundMessage } from "../../inbound/test-message.test-helper.js";
@@ -20,13 +19,13 @@ vi.mock("./group-activation.js", () => ({
   resolveGroupActivationFor: hoisted.resolveGroupActivationFor,
 }));
 
-type TestMsgOverrides = NonNullable<Parameters<typeof createTestWebInboundMessage>[0]>;
-
 type AckReactionConfig = NonNullable<
   NonNullable<NonNullable<OpenClawConfig["channels"]>["whatsapp"]>["ackReaction"]
 >;
 
-function createMessage(overrides: TestMsgOverrides = {}): AdmittedWebInboundMessage {
+function createMessage(
+  overrides: NonNullable<Parameters<typeof createTestWebInboundMessage>[0]> = {},
+): AdmittedWebInboundMessage {
   return createTestWebInboundMessage({
     event: { id: "msg-1" },
     platform: {
@@ -36,13 +35,8 @@ function createMessage(overrides: TestMsgOverrides = {}): AdmittedWebInboundMess
     },
     admission: {
       accountId: "default",
-      conversation: {
-        kind: "direct",
-        id: "15551234567",
-      },
-      sender: {
-        id: "15551234567",
-      },
+      conversation: { kind: "direct", id: "15551234567" },
+      sender: { id: "15551234567" },
     },
     ...overrides,
   });
@@ -51,27 +45,15 @@ function createMessage(overrides: TestMsgOverrides = {}): AdmittedWebInboundMess
 function createConfig(reactionLevel: "off" | "ack" | "minimal" | "extensive"): OpenClawConfig {
   return {
     messages: { ackReaction: "👀", ackReactionScope: "all" },
-    channels: {
-      whatsapp: {
-        reactionLevel,
-      },
-    },
+    channels: { whatsapp: { reactionLevel } },
   } as OpenClawConfig;
 }
 
 function createAckEmojiConfig(ackReaction?: AckReactionConfig): OpenClawConfig {
-  const cfg = {
-    agents: {
-      entries: { agent: { identity: { emoji: "🔥" } } },
-    },
-    channels: {
-      whatsapp: {},
-    },
+  return {
+    agents: { entries: { agent: { identity: { emoji: "🔥" } } } },
+    channels: { whatsapp: { ackReaction } },
   } as OpenClawConfig;
-  if (ackReaction !== undefined) {
-    cfg.channels!.whatsapp!.ackReaction = ackReaction;
-  }
-  return cfg;
 }
 
 function resolveAckEmoji(cfg: OpenClawConfig) {
@@ -82,20 +64,27 @@ function resolveAckEmoji(cfg: OpenClawConfig) {
   });
 }
 
-function createStatusConfig(): OpenClawConfig {
-  return {
-    messages: {
-      ackReaction: "👀",
-      ackReactionScope: "all",
-      statusReactions: { enabled: true },
+const groupJid = "120363000000000000@g.us";
+const senderLid = "277038292303944@lid";
+const groupSessionKey = `whatsapp:default:${groupJid}`;
+
+function createGroupMessage(): AdmittedWebInboundMessage {
+  return createMessage({
+    platform: { chatJid: groupJid, sender: { jid: null, lid: senderLid } },
+    admission: {
+      conversation: { kind: "group", id: groupJid },
+      sender: { id: senderLid },
     },
-    channels: {
-      whatsapp: {
-        reactionLevel: "ack",
-      },
-    },
-  } as OpenClawConfig;
+  });
 }
+
+const groupReactionCall = (cfg: OpenClawConfig, emoji: string) =>
+  [
+    groupJid,
+    "msg-1",
+    emoji,
+    { verbose: false, fromMe: false, participant: senderLid, accountId: "default", cfg },
+  ] as const;
 
 type AckReactionParams = Parameters<typeof maybeSendAckReaction>[0];
 
@@ -148,90 +137,40 @@ describe("maybeSendAckReaction", () => {
     expect(hoisted.sendReactionWhatsApp).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      name: "skips an unmentioned inactive group message",
-      scope: "group-mentions",
-      activation: "mention",
-      wasMentioned: false,
-      expected: false,
-    },
-  ] as const)("$name", async ({ scope, activation, wasMentioned, expected }) => {
+  it("skips an unmentioned inactive group message", async () => {
     const cfg = createConfig("ack");
-    cfg.messages!.ackReactionScope = scope;
-    hoisted.resolveGroupActivationFor.mockResolvedValue(activation);
+    cfg.messages!.ackReactionScope = "group-mentions";
+    hoisted.resolveGroupActivationFor.mockResolvedValue("mention");
 
     const ackReaction = await runAckReaction({
       cfg,
       msg: createMessage({
-        platform: { chatJid: "120363000000000000@g.us" },
+        platform: { chatJid: groupJid },
         admission: {
-          conversation: { kind: "group", id: "120363000000000000@g.us" },
+          conversation: { kind: "group", id: groupJid },
         },
-        groupMention: { wasMentioned, requireMention: true },
+        groupMention: { wasMentioned: false, requireMention: true },
       }),
-      sessionKey: "whatsapp:default:120363000000000000@g.us",
+      sessionKey: groupSessionKey,
     });
 
-    expect(Boolean(ackReaction)).toBe(expected);
-    if (ackReaction) {
-      await expect(ackReaction.ackReactionPromise).resolves.toBe(true);
-    }
+    expect(ackReaction).toBeNull();
   });
 
   it("uses the sender LID as the group reaction participant when no sender JID is available", async () => {
     const cfg = createConfig("ack");
     const ackReaction = await runAckReaction({
       cfg,
-      msg: createMessage({
-        platform: {
-          chatJid: "120363000000000000@g.us",
-          sender: {
-            jid: null,
-            lid: "277038292303944@lid",
-          },
-        },
-        admission: {
-          conversation: {
-            kind: "group",
-            id: "120363000000000000@g.us",
-          },
-          sender: {
-            id: "277038292303944@lid",
-          },
-        },
-      }),
-      sessionKey: "whatsapp:default:120363000000000000@g.us",
+      msg: createGroupMessage(),
+      sessionKey: groupSessionKey,
     });
 
     await expect(ackReaction?.ackReactionPromise).resolves.toBe(true);
-    expect(hoisted.sendReactionWhatsApp).toHaveBeenCalledWith(
-      "120363000000000000@g.us",
-      "msg-1",
-      "👀",
-      {
-        verbose: false,
-        fromMe: false,
-        participant: "277038292303944@lid",
-        accountId: "default",
-        cfg,
-      },
-    );
+    expect(hoisted.sendReactionWhatsApp).toHaveBeenCalledWith(...groupReactionCall(cfg, "👀"));
 
     await ackReaction?.remove();
 
-    expect(hoisted.sendReactionWhatsApp).toHaveBeenLastCalledWith(
-      "120363000000000000@g.us",
-      "msg-1",
-      "",
-      {
-        verbose: false,
-        fromMe: false,
-        participant: "277038292303944@lid",
-        accountId: "default",
-        cfg,
-      },
-    );
+    expect(hoisted.sendReactionWhatsApp).toHaveBeenLastCalledWith(...groupReactionCall(cfg, ""));
   });
 
   it("records ack send failures on the handle", async () => {
@@ -259,51 +198,21 @@ describe("createWhatsAppStatusReactionController", () => {
   });
 
   it("uses the sender LID as the group reaction participant when no sender JID is available", async () => {
-    const cfg = createStatusConfig();
+    const cfg = createConfig("ack");
+    cfg.messages!.statusReactions = { enabled: true };
     const controller = await createWhatsAppStatusReactionController({
       cfg,
-      msg: createMessage({
-        platform: {
-          chatJid: "120363000000000000@g.us",
-          sender: { jid: null, lid: "277038292303944@lid" },
-        },
-        admission: {
-          conversation: { kind: "group", id: "120363000000000000@g.us" },
-          sender: { id: "277038292303944@lid" },
-        },
-      }),
+      msg: createGroupMessage(),
       agentId: "agent",
-      sessionKey: "whatsapp:default:120363000000000000@g.us",
+      sessionKey: groupSessionKey,
       verbose: false,
     });
 
     void controller?.setQueued();
     await vi.waitFor(() => {
-      expect(hoisted.sendReactionWhatsApp).toHaveBeenCalledWith(
-        "120363000000000000@g.us",
-        "msg-1",
-        "👀",
-        {
-          verbose: false,
-          fromMe: false,
-          participant: "277038292303944@lid",
-          accountId: "default",
-          cfg,
-        },
-      );
+      expect(hoisted.sendReactionWhatsApp).toHaveBeenCalledWith(...groupReactionCall(cfg, "👀"));
     });
     await controller?.clear();
-    expect(hoisted.sendReactionWhatsApp).toHaveBeenLastCalledWith(
-      "120363000000000000@g.us",
-      "msg-1",
-      "",
-      {
-        verbose: false,
-        fromMe: false,
-        participant: "277038292303944@lid",
-        accountId: "default",
-        cfg,
-      },
-    );
+    expect(hoisted.sendReactionWhatsApp).toHaveBeenLastCalledWith(...groupReactionCall(cfg, ""));
   });
 });

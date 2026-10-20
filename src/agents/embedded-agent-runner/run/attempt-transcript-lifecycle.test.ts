@@ -115,6 +115,8 @@ describe("createEmbeddedAttemptTranscriptLifecycle", () => {
     vi.useFakeTimers();
     try {
       const releaseOwner = vi.fn();
+      const callbacksReleased = createDeferredCore();
+      const releaseCallbacks = vi.fn(() => callbacksReleased.resolve());
       const lifecycle = createEmbeddedAttemptTranscriptLifecycle({ onDrained: releaseOwner });
       let releaseWrite = () => {};
       const writeGate = new Promise<void>((resolve) => {
@@ -127,19 +129,25 @@ describe("createEmbeddedAttemptTranscriptLifecycle", () => {
         // write from this callback must still be admitted as a descendant.
         nestedWrite = lifecycle.withTranscriptWrite(() => {
           expect(releaseOwner).not.toHaveBeenCalled();
+          expect(releaseCallbacks).not.toHaveBeenCalled();
           return undefined;
         });
       });
+      const cleanupDone = lifecycle.beginCleanup(releaseCallbacks);
       const disposeDone = lifecycle.dispose();
       await vi.advanceTimersByTimeAsync(30_000); // expire the teardown budget
+      await cleanupDone;
       await disposeDone;
       expect(releaseOwner).not.toHaveBeenCalled();
+      expect(releaseCallbacks).not.toHaveBeenCalled();
       releaseWrite();
       await admitted;
       // Retiring the owner when the budget expires would reject this descendant.
       await expect(nestedWrite).resolves.toBeUndefined();
       await lifecycle.dispose();
+      await callbacksReleased.promise;
       expect(releaseOwner).toHaveBeenCalledOnce();
+      expect(releaseCallbacks).toHaveBeenCalledOnce();
     } finally {
       vi.useRealTimers();
     }

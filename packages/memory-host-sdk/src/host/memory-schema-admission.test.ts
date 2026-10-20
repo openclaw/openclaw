@@ -122,14 +122,49 @@ it.each(["commit", "rollback", "later DDL", "revocation"])(
   },
 );
 
-it("reuses admission across handles while backfilling newly imported rows", () => {
+it("skips fresh-shadow legacy inspection and data repair but backfills later imports", () => {
   const filename = path.join(tempDirs.make("memory-admission-"), "memory.sqlite");
   using sibling = openNodeSqliteDatabase(filename);
   admitSqliteSchema(sibling);
-  using observed = observe();
+  const legacyInspections = {
+    retiredFormat: /PRAGMA main\.table_xinfo\(meta\)/iu,
+    storageShape: /SELECT name, type FROM pragma_table_info/iu,
+    recallColumns: /PRAGMA table_info\(memory_index_chunks\)/iu,
+    sourceIdentity: /PRAGMA main\.table_xinfo\(memory_index_sources\)/iu,
+    retiredIndex: /DROP INDEX IF EXISTS idx_memory_index_chunks_path;/iu,
+  };
+  const legacySql: string[] = [];
+  const dataRepairSql: string[] = [];
+  using observed = observe((sql) => {
+    legacySql.push(sql);
+    if (
+      /\bWITH missing AS MATERIALIZED\b|\bSELECT COUNT\(\*\) FROM memory_index_chunks\b|^\s*(?:DELETE FROM|INSERT INTO) memory_index_(?:chunks_fts|paths_fts)\b/iu.test(
+        sql,
+      )
+    ) {
+      dataRepairSql.push(sql);
+    }
+  });
+  expect(
+    ensureMemoryIndexSchema({
+      db: sibling,
+      cacheEnabled: true,
+      ftsEnabled: true,
+      fresh: true,
+    }),
+  ).toEqual({ ftsAvailable: true });
+  expect(dataRepairSql).toEqual([]);
+  for (const [kind, pattern] of Object.entries(legacyInspections)) {
+    expect
+      .soft(
+        legacySql.filter((sql) => pattern.test(sql)),
+        kind,
+      )
+      .toEqual([]);
+  }
   for (let opening = 0; opening < 2; opening++) {
     using db = openNodeSqliteDatabase(filename);
-    observed.expectAdmission(db, opening > 0);
+    observed.expectAdmission(db);
     insertChunk(db, `import-${opening}`);
     db.exec(`
           INSERT OR IGNORE INTO memory_index_sources (path, source, hash, mtime, size)

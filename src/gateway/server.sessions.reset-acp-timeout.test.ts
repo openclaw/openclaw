@@ -1,5 +1,3 @@
-// ACP reset timeout regressions verify that stuck manager cleanup cannot poison
-// the next runtime session or prevent reset from completing.
 import { afterEach, expect, test, vi } from "vitest";
 import { AcpRuntimeError } from "../acp/runtime/errors.js";
 import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
@@ -13,6 +11,7 @@ import {
   recordSessionStateEventAsync,
   registerSessionStateWatch,
 } from "../sessions/session-state-events.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { onGatewaySessionReset } from "./session-reset-notifications.js";
 import { writeSessionStore } from "./test-helpers.js";
@@ -35,26 +34,45 @@ const {
   resetConfiguredGlobalAgentSessionStore,
 } = setupGatewaySessionsHandlerTestHarness();
 
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-});
+afterEach(closeOpenClawStateDatabaseForTest);
+
+const sessionKey = "agent:main:main";
+const readSession = (storePath: string) => loadSessionEntry({ storePath, sessionKey });
+const readAcp = () => readAcpSessionEntry({ sessionKey })?.acp;
+const ownerRepairError = () =>
+  new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "owner repair required", {
+    detailCode: "SESSION_OWNER_MIGRATION_REQUIRED",
+  });
+type ResetOptions = Parameters<
+  typeof import("./session-reset-service.js").performGatewaySessionReset
+>[0];
+async function resetSession(options: Partial<ResetOptions> = {}) {
+  const { performGatewaySessionReset } = await import("./session-reset-service.js");
+  return performGatewaySessionReset({
+    key: "main",
+    reason: "reset",
+    commandSource: "gateway:sessions.reset",
+    workerPlacementContext: {},
+    ...options,
+  });
+}
 
 function resolvedAcpMeta(): SessionAcpMeta {
   return {
     backend: "acpx",
     agent: "codex",
     runtimeSessionName: "runtime:reset",
-    identity: {
-      state: "resolved",
-      acpxRecordId: "agent:main:main",
-      acpxSessionId: "backend-session-1",
-      source: "status",
-      lastUpdatedAt: Date.now(),
-    },
     mode: "persistent",
     runtimeOptions: { runtimeMode: "auto", timeoutSeconds: 30 },
     cwd: "/tmp/acp-session",
     state: "idle",
+    identity: {
+      state: "resolved",
+      acpxRecordId: sessionKey,
+      acpxSessionId: "backend-session-1",
+      source: "status",
+      lastUpdatedAt: Date.now(),
+    },
     lastActivityAt: Date.now(),
   };
 }
@@ -64,11 +82,11 @@ function expectResetAcpState(acp: SessionAcpMeta | undefined) {
     backend: "acpx",
     agent: "codex",
     runtimeSessionName: "runtime:reset",
-    identity: { state: "pending", acpxRecordId: "agent:main:main" },
     mode: "persistent",
     runtimeOptions: { runtimeMode: "auto", timeoutSeconds: 30 },
     cwd: "/tmp/acp-session",
     state: "idle",
+    identity: { state: "pending", acpxRecordId: sessionKey },
   });
   expect(acp?.identity?.acpxSessionId).toBeUndefined();
 }
@@ -88,10 +106,7 @@ async function seedAcpSession() {
   const { dir, storePath } = await createSessionStoreDir();
   await writeSingleLineSession(dir, "sess-main", "hello");
   await writeSessionStore({ entries: { main: sessionStoreEntry("sess-main") } });
-  seedCanonicalAcpSessionMeta({
-    sessionKey: "agent:main:main",
-    meta: resolvedAcpMeta(),
-  });
+  seedCanonicalAcpSessionMeta({ sessionKey, meta: resolvedAcpMeta() });
   const prepareFreshSession = vi.fn(async () => {});
   acpRuntimeMocks.getAcpRuntimeBackend.mockReturnValue({
     id: "acpx",
@@ -101,25 +116,24 @@ async function seedAcpSession() {
 }
 
 test.each(["source-and-acp", "acp", "committed-callback"])(
-  "settles committed reset actions after %s failure",
+  "settles reset actions after %s failure",
   async (failure) => {
     const { prepareFreshSession, storePath } = await seedAcpSession();
-    const sessionKey = "agent:main:main";
     const childKey = "agent:main:subagent:watched";
-    const previous = loadSessionEntry({ storePath, sessionKey });
+    const previous = readSession(storePath);
     const sourceFails = failure === "source-and-acp";
     const postCommitFails = failure === "acp" || failure === "source-and-acp";
     const committedCallbackFails = failure === "committed-callback";
     const sourceFailure = new Error("project source cleanup failed");
     const committedCallbackFailure = new Error("committed callback failed");
-    const postCommitFailure = new AcpRuntimeError(
-      "ACP_SESSION_INIT_FAILED",
-      "owner repair required",
-      {
-        detailCode: "SESSION_OWNER_MIGRATION_REQUIRED",
-      },
-    );
+    const postCommitFailure = ownerRepairError();
     const events: string[] = [];
+    const step = (name: string, error?: Error) => {
+      events.push(name);
+      if (error) {
+        throw error;
+      }
+    };
     const notified = vi.fn();
     const unsubscribeReset = onGatewaySessionReset(notified);
     const rollback = vi.fn(async () => {});
@@ -131,12 +145,8 @@ test.each(["source-and-acp", "acp", "committed-callback"])(
         actorType: "human",
         summary: "human message via test",
       });
-    expect(
-      await registerSessionStateWatch({
-        watcherSessionKey: sessionKey,
-        targetSessionKey: childKey,
-      }),
-    ).toBe(true);
+    const watch = { watcherSessionKey: sessionKey, targetSessionKey: childKey };
+    expect(await registerSessionStateWatch(watch)).toBe(true);
     await recordChildActivity();
     const drained = drainSystemEventEntries(sessionKey);
     expect(drained).toHaveLength(1);
@@ -144,58 +154,38 @@ test.each(["source-and-acp", "acp", "committed-callback"])(
       { targetSessionKey: childKey, watcherStorePath: drained[0]?.sessionStorePath ?? null },
     ]);
     prepareFreshSession.mockImplementation(async () => {
-      events.push("runtime-preparation");
-      if (postCommitFails) {
-        throw postCommitFailure;
-      }
+      step("runtime-preparation", postCommitFails ? postCommitFailure : undefined);
     });
     beforeResetHookState.hasBeforeResetHook = true;
     if (!postCommitFails) {
       beforeResetHookMocks.runBeforeReset.mockImplementationOnce(async () => {
-        events.push("before-reset");
+        step("before-reset");
       });
     }
-    const { performGatewaySessionReset } = await import("./session-reset-service.js");
-
-    const reset = performGatewaySessionReset({
-      key: "main",
-      reason: "reset",
-      commandSource: "gateway:sessions.reset",
-      workerPlacementContext: {},
-      onCommitted: () => {
-        events.push("committed");
-        if (committedCallbackFails) {
-          throw committedCallbackFailure;
-        }
-      },
+    const reset = resetSession({
+      onCommitted: () =>
+        step("committed", committedCallbackFails ? committedCallbackFailure : undefined),
       prepareLifecycle: async () => ({
         ok: true,
         value: {
           rollback,
           withCommit: async (run) => {
             const result = await run(() => {});
-            events.push("source-closed");
-            if (sourceFails) {
-              throw sourceFailure;
-            }
+            step("source-closed", sourceFails ? sourceFailure : undefined);
             return result;
           },
         },
       }),
     });
     try {
-      if (sourceFails && postCommitFails) {
+      if (sourceFails) {
         await expect(reset).rejects.toMatchObject({
           errors: [sourceFailure, postCommitFailure],
           cause: postCommitFailure,
         });
       } else {
         await expect(reset).rejects.toBe(
-          sourceFails
-            ? sourceFailure
-            : committedCallbackFails
-              ? committedCallbackFailure
-              : postCommitFailure,
+          committedCallbackFails ? committedCallbackFailure : postCommitFailure,
         );
       }
     } finally {
@@ -219,25 +209,20 @@ test.each(["source-and-acp", "acp", "committed-callback"])(
     ]);
     expect(beforeResetHookMocks.runBeforeReset).toHaveBeenCalledTimes(postCommitFails ? 0 : 1);
     expect(rollback).not.toHaveBeenCalled();
-    const current = loadSessionEntry({ storePath, sessionKey });
+    const current = readSession(storePath);
     expect(current?.lifecycleRevision).toEqual(expect.any(String));
     expect(current?.lifecycleRevision).not.toBe(previous?.lifecycleRevision);
-    expectResetAcpState(readAcpSessionEntry({ sessionKey: "agent:main:main" })?.acp);
+    expectResetAcpState(readAcp());
   },
 );
 
 test.each(["cancelSession", "closeSession"] as const)(
-  "sessions.reset force-discards ACP ownership after %s timeout",
+  "discards ACP ownership after %s timeout",
   async (step) => {
     const { prepareFreshSession, storePath } = await seedAcpSession();
-    let release: (() => void) | undefined;
+    const stalled = createDeferredCore();
     const cleanup = acpManagerMocks[step];
-    cleanup.mockImplementation(
-      async () =>
-        await new Promise<void>((resolve) => {
-          release = resolve;
-        }),
-    );
+    cleanup.mockImplementation(async () => await stalled.promise);
     const timeoutSpy = accelerateAcpCleanupTimeout();
 
     try {
@@ -247,71 +232,60 @@ test.each(["cancelSession", "closeSession"] as const)(
       expect(acpManagerMocks.closeSession).toHaveBeenCalledTimes(step === "cancelSession" ? 0 : 1);
       expect(acpManagerMocks.forceDiscardSessionRuntime).toHaveBeenCalledWith({
         cfg: expect.any(Object),
-        sessionKey: "agent:main:main",
+        sessionKey,
         reason: "session-reset",
         agentId: "main",
         isCurrent: expect.any(Function),
         assertCurrent: undefined,
       });
       expect(prepareFreshSession).toHaveBeenCalledWith(
-        expect.objectContaining({ sessionKey: "agent:main:main", agentId: "main" }),
+        expect.objectContaining({ sessionKey, agentId: "main" }),
       );
-      expect(loadSessionEntry({ storePath, sessionKey: "agent:main:main" })).not.toHaveProperty(
-        "acp",
-      );
-      expectResetAcpState(readAcpSessionEntry({ sessionKey: "agent:main:main" })?.acp);
+      expect(readSession(storePath)).not.toHaveProperty("acp");
+      expectResetAcpState(readAcp());
     } finally {
-      release?.();
+      stalled.resolve();
       timeoutSpy.mockRestore();
       cleanup.mockImplementation(async () => {});
     }
   },
 );
 
-test.each([true, false])(
-  "reset binds legacy ACP metadata to the committed canonical row (existing=%s)",
-  async (existing) => {
-    const { storePath } = await createSessionStoreDir();
-    await writeSessionStore({
-      entries: existing ? { main: sessionStoreEntry("legacy-main") } : {},
-    });
-    const { identity: _identity, ...legacyMeta } = resolvedAcpMeta();
-    seedCanonicalAcpSessionMeta({ sessionKey: "agent:main:main", meta: legacyMeta });
-    const reset = await directSessionReq("sessions.reset", { key: "main" });
-    expect(reset.ok).toBe(true);
-    const entry = loadSessionEntry({ storePath, sessionKey: "agent:main:main" });
-    expect(entry?.lifecycleRevision).toEqual(expect.any(String));
-    const meta = readAcpSessionEntry({ sessionKey: "agent:main:main", agentId: "main" })?.acp;
-    expect(meta).toMatchObject({ backend: "acpx", agent: "codex", identity: { state: "pending" } });
-    expect(loadSessionEntry({ storePath, sessionKey: "main" })?.sessionId).toBe(entry?.sessionId);
-  },
-);
+test.each([true, false])("binds legacy ACP to canonical row (existing=%s)", async (existing) => {
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({
+    entries: existing ? { main: sessionStoreEntry("legacy-main") } : {},
+  });
+  const { identity: _identity, ...legacyMeta } = resolvedAcpMeta();
+  seedCanonicalAcpSessionMeta({ sessionKey, meta: legacyMeta });
+  const reset = await directSessionReq("sessions.reset", { key: "main" });
+  expect(reset.ok).toBe(true);
+  const entry = readSession(storePath);
+  expect(entry?.lifecycleRevision).toEqual(expect.any(String));
+  const meta = readAcpSessionEntry({ sessionKey, agentId: "main" })?.acp;
+  expect(meta).toMatchObject({ backend: "acpx", agent: "codex", identity: { state: "pending" } });
+  expect(loadSessionEntry({ storePath, sessionKey: "main" })?.sessionId).toBe(entry?.sessionId);
+});
 
 test.each(["global", "agent:work:main"])(
-  "reset of %s preserves the other agent's ACP owner",
+  "%s reset preserves other agent's ACP owner",
   async (key) => {
     const stores = await createConfiguredGlobalAgentSessionStore({ writePrimeStore: true });
     try {
       const cfg = stores.getRuntimeConfig();
-      const mainMeta = { ...resolvedAcpMeta(), runtimeSessionName: "main-owned" };
-      const workMeta = { ...resolvedAcpMeta(), runtimeSessionName: "work-owned" };
-      seedCanonicalAcpSessionMeta({
-        sessionKey: buildAcpDatabaseSessionKey("global", "main"),
-        meta: mainMeta,
-      });
-      seedCanonicalAcpSessionMeta({
-        sessionKey: buildAcpDatabaseSessionKey("global", "work"),
-        meta: workMeta,
-      });
-      const before = readAcpSessionEntry({ cfg, sessionKey: "global", agentId: "main" })?.acp;
+      for (const agent of ["main", "work"]) {
+        seedCanonicalAcpSessionMeta({
+          sessionKey: buildAcpDatabaseSessionKey("global", agent),
+          meta: { ...resolvedAcpMeta(), runtimeSessionName: `${agent}-owned` },
+        });
+      }
+      const readOwner = (agentId: string) =>
+        readAcpSessionEntry({ cfg, sessionKey: "global", agentId })?.acp;
+      const before = readOwner("main");
       const reset = await directSessionReq("sessions.reset", { key, agentId: "work" });
       expect(reset.ok).toBe(true);
-      expect(readAcpSessionEntry({ cfg, sessionKey: "global", agentId: "main" })?.acp).toEqual(
-        before,
-      );
-      expect(
-        readAcpSessionEntry({ cfg, sessionKey: "global", agentId: "work" })?.acp,
-      ).toMatchObject({
+      expect(readOwner("main")).toEqual(before);
+      expect(readOwner("work")).toMatchObject({
         runtimeSessionName: "work-owned",
         identity: { state: "pending" },
       });
@@ -325,45 +299,30 @@ test.each(["global", "agent:work:main"])(
 );
 
 test.each(["owner-repair", "discard-error"] as const)(
-  "reset does not commit when cleanup fails with %s",
+  "does not commit after %s cleanup failure",
   async (failure) => {
     const { storePath } = await seedAcpSession();
-    const before = loadSessionEntry({ storePath, sessionKey: "agent:main:main" });
+    const before = readSession(storePath);
     const error =
-      failure === "owner-repair"
-        ? new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "owner repair required", {
-            detailCode: "SESSION_OWNER_MIGRATION_REQUIRED",
-          })
-        : new Error("force discard failed");
+      failure === "owner-repair" ? ownerRepairError() : new Error("force discard failed");
     const timeoutSpy = accelerateAcpCleanupTimeout();
-    let release: (() => void) | undefined;
+    const stalled = createDeferredCore();
     try {
       if (failure === "owner-repair") {
         acpManagerMocks.cancelSession.mockRejectedValueOnce(error);
       } else {
-        acpManagerMocks.cancelSession.mockImplementationOnce(
-          () =>
-            new Promise<void>((resolve) => {
-              release = resolve;
-            }),
-        );
+        acpManagerMocks.cancelSession.mockImplementationOnce(() => stalled.promise);
         acpManagerMocks.forceDiscardSessionRuntime.mockRejectedValueOnce(error);
       }
-      const { performGatewaySessionReset } = await import("./session-reset-service.js");
-      const pending = performGatewaySessionReset({
-        key: "main",
-        reason: "reset",
-        commandSource: "gateway:sessions.reset",
-        workerPlacementContext: {},
-      });
+      const pending = resetSession();
       if (failure === "discard-error") {
         await expect(pending).rejects.toThrow("force discard failed");
       } else {
         expect((await pending).ok).toBe(false);
       }
-      expect(loadSessionEntry({ storePath, sessionKey: "agent:main:main" })).toEqual(before);
+      expect(readSession(storePath)).toEqual(before);
     } finally {
-      release?.();
+      stalled.resolve();
       timeoutSpy.mockRestore();
     }
   },

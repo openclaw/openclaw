@@ -1,5 +1,4 @@
-import type { JSX } from "@solidjs/web";
-import { createSignal, lazy, Loading, Show, omit } from "solid-js";
+import { createSignal, lazy, Loading, Show } from "solid-js";
 import { isMarkdownBlockArtText } from "../../../components/markdown-text.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
@@ -18,11 +17,15 @@ export function ExpandedToolCardContent(props: { card: ToolCard; options: ToolRe
   );
 }
 
-export function RawOutputToggle(props: { text: string }) {
+export function RawOutputToggle(props: {
+  text: string;
+  toggleRef?: (element: HTMLButtonElement) => void;
+}) {
   const [open, setOpen] = createSignal(false);
   return (
     <div class="chat-tool-card__raw">
       <button
+        ref={(element) => props.toggleRef?.(element)}
         class="chat-inline-disclosure chat-tool-card__raw-toggle"
         type="button"
         aria-expanded={open() ? "true" : "false"}
@@ -68,41 +71,4 @@ export function ToolOutcome(props: { outcome: ToolCardOutcome; exitCode?: number
           `chat.toolCards.${props.outcome === "succeeded" ? "completed" : props.outcome === "unknown" ? "outcomeUnknown" : props.outcome}`,
         );
   return <div class="chat-tool-card__outcome">{label()}</div>;
-}
-
-export function ChatToolContent(
-  props: {
-    card: ToolCard;
-    options: ToolRenderOptions;
-  } & JSX.HTMLAttributes<HTMLElement>,
-) {
-  const attributes = omit(props, "card", "options", "children");
-  return (
-    <openclaw-chat-tool-content {...attributes}>
-      <ExpandedToolCardContent card={props.card} options={props.options} />
-    </openclaw-chat-tool-content>
-  );
-}
-
-export function ChatToolRawOutput(props: { text: string } & JSX.HTMLAttributes<HTMLElement>) {
-  const attributes = omit(props, "text", "children");
-  return (
-    <openclaw-chat-tool-raw {...attributes}>
-      <RawOutputToggle text={props.text} />
-    </openclaw-chat-tool-raw>
-  );
-}
-
-export function ChatToolOutcome(
-  props: {
-    outcome: ToolCardOutcome;
-    exitCode?: number;
-  } & JSX.HTMLAttributes<HTMLElement>,
-) {
-  const attributes = omit(props, "outcome", "exitCode", "children");
-  return (
-    <openclaw-chat-tool-outcome {...attributes}>
-      <ToolOutcome outcome={props.outcome} exitCode={props.exitCode} />
-    </openclaw-chat-tool-outcome>
-  );
 }

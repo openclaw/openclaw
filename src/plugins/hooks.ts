@@ -28,6 +28,7 @@ import {
   isHookDecision,
 } from "./hook-decision-types.js";
 import { cloneHookIsolationValue, HookIsolationError } from "./hook-isolation.js";
+import { createPluginSystemContextLimiter, mergeAgentTurnPrepare } from "./hook-prompt-context.js";
 import type { GlobalHookRunnerRegistry, HookRunnerRegistry } from "./hook-registry.types.js";
 import { acceptPluginReplyPayload, toPluginReplyPayload } from "./hook-reply-payload.js";
 import type {
@@ -39,9 +40,8 @@ import type {
   VoidHookRunOptions,
 } from "./hook-runner-types.js";
 import { withHookTimeout } from "./hook-timeout.js";
-import { isPluginHookReplyDispatchKind } from "./hook-types.js";
+import { isPluginHookReplyDispatchKind, PLUGIN_HOOK_METADATA } from "./hook-types.js";
 import type {
-  PluginAgentTurnPrepareResult,
   PluginHookAgentContext,
   PluginHookAgentTrigger,
   PluginHookBeforeAgentFinalizeResult,
@@ -84,35 +84,17 @@ import {
 
 export type { VoidHookRunOptions } from "./hook-runner-types.js";
 
-const DEFAULT_VOID_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, number>> = {
-  agent_end: 30_000,
-  channel_pairing_requested: 2_000,
-  // Compaction hooks run on the serialized notification queue. Allow memory
-  // flushes the agent_end budget, then fail open so later notifications proceed.
-  before_compaction: 30_000,
-  after_compaction: 30_000,
-  skill_changed: 30_000,
-  // Shutdown hooks share the Gateway's five-second teardown budget. They fail
-  // open after logging so one plugin cannot consume the process watchdog.
-  gateway_stop: 5_000,
-};
-const DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, number>> = {
-  before_agent_run: 15_000,
-  // Policy hooks fail closed in the global runner. A bounded timeout turns a
-  // stalled policy process into a denial instead of freezing the operation.
-  before_install: 15_000,
-  before_tool_call: 15_000,
-  // Terminal finalization hooks sit on the runner's completion path. A hung
-  // handler must not freeze final delivery or keep compaction retry recovery
-  // unresolved; timeout fail-opens with the original final answer.
-  before_agent_finalize: 15_000,
-  before_prompt_build: 15_000,
-  // Outbound modifying hooks run inside the serialized reply delivery lane.
-  // A hung plugin must fail open so later hooks and queued replies can settle.
-  message_sending: 15_000,
-  reply_payload_sending: 15_000,
-  resolve_exec_env: 15_000,
-};
+const DEFAULT_VOID_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, number>> =
+  Object.fromEntries(
+    Object.entries(PLUGIN_HOOK_METADATA).map(([name, metadata]) => [name, metadata.voidTimeoutMs]),
+  );
+const DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, number>> =
+  Object.fromEntries(
+    Object.entries(PLUGIN_HOOK_METADATA).map(([name, metadata]) => [
+      name,
+      metadata.modifyingTimeoutMs,
+    ]),
+  );
 
 type HookEvent<K extends PluginHookName> = Parameters<PluginHookHandlerMap[K]>[0];
 type HookContext<K extends PluginHookName> = Parameters<PluginHookHandlerMap[K]>[1];
@@ -243,6 +225,7 @@ export function createHookRunner(
   };
   const runtimeDecisionScopeId = randomUUID();
   let runtimeDecisionOrdinal = 0;
+  const limitSystemContext = createPluginSystemContextLimiter(logger);
 
   const shouldCatchHookErrors = (hookName: PluginHookName): boolean =>
     catchErrors && (failurePolicyByHook[hookName] ?? "fail-open") === "fail-open";
@@ -361,7 +344,10 @@ export function createHookRunner(
   const mergeBeforePromptBuild = (
     acc: PluginHookBeforePromptBuildResult | undefined,
     next: PluginHookBeforePromptBuildResult,
+    pluginId: string,
+    ctx: PluginHookAgentContext,
   ): PluginHookBeforePromptBuildResult => {
+    const { prependSystemContext, appendSystemContext } = limitSystemContext(next, pluginId, ctx);
     const toolRestrictions = [
       ...readHookToolsAllowRestrictions(acc?.toolsAllow),
       ...readHookToolsAllowRestrictions(next.toolsAllow),
@@ -383,28 +369,14 @@ export function createHookRunner(
       ...(toolsAllow !== undefined ? { toolsAllow } : {}),
       prependSystemContext: concatOptionalTextSegments({
         left: acc?.prependSystemContext,
-        right: next.prependSystemContext,
+        right: prependSystemContext,
       }),
       appendSystemContext: concatOptionalTextSegments({
         left: acc?.appendSystemContext,
-        right: next.appendSystemContext,
+        right: appendSystemContext,
       }),
     };
   };
-
-  const mergeAgentTurnPrepare = (
-    acc: PluginAgentTurnPrepareResult | undefined,
-    next: PluginAgentTurnPrepareResult,
-  ): PluginAgentTurnPrepareResult => ({
-    prependContext: concatOptionalTextSegments({
-      left: acc?.prependContext,
-      right: next.prependContext,
-    }),
-    appendContext: concatOptionalTextSegments({
-      left: acc?.appendContext,
-      right: next.appendContext,
-    }),
-  });
 
   const mergeBeforeAgentFinalize = (
     acc: BeforeAgentFinalizeResultWithRetryCandidates | undefined,
@@ -806,7 +778,7 @@ export function createHookRunner(
     ctx: PluginHookAgentContext,
   ): Promise<PluginHookBeforePromptBuildResult | undefined> {
     return runModifyingHook("before_prompt_build", event, ctx, {
-      mergeResults: mergeBeforePromptBuild,
+      mergeResults: (acc, next, hook) => mergeBeforePromptBuild(acc, next, hook.pluginId, ctx),
       includeRegistration: (registration) => registration.requiresToolAuthority !== true,
     });
   }
@@ -854,7 +826,7 @@ export function createHookRunner(
         event,
         { ...ctx, toolAuthority: authority },
         {
-          mergeResults: mergeBeforePromptBuild,
+          mergeResults: mergeAgentTurnPrepare,
           includeRegistration: (registration) => registration.requiresToolAuthority === true,
           assertHandlerBoundaryActive: assertActive,
         },

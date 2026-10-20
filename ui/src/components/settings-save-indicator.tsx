@@ -1,6 +1,7 @@
-import { createEffect, createMemo, createSignal, Match, Show, Switch } from "solid-js";
+import { createMemo, createSignal, Match, Show, Switch } from "solid-js";
 import type { ConfigAutoSaveStatus } from "../lib/config/config-state-model.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { createTimeout } from "../lib/reactive/timers.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { Icon } from "./solid/icon.tsx";
 import { ThemeBrandingIcon } from "./theme-brand-icon.tsx";
@@ -48,13 +49,10 @@ function SaveIndicatorContent(input: { props?: SettingsSaveIndicatorProps }) {
   const [saved, setSaved] = createSignal<SaveState>((previous) =>
     previous === "saving" && status() === "saved" ? "saved-visible" : status(),
   );
-  createEffect(saved, (current) => {
-    if (current === "saved-visible") {
-      const timer = globalThis.setTimeout(() => setSaved("saved"), SAVED_VISIBLE_MS);
-      return () => globalThis.clearTimeout(timer);
-    }
-    return undefined;
-  });
+  createTimeout(
+    () => setSaved("saved"),
+    () => (saved() === "saved-visible" ? SAVED_VISIBLE_MS : undefined),
+  );
   const state = createMemo(() => {
     const props = input.props;
     if (!props) {

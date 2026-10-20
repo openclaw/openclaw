@@ -1,3 +1,4 @@
+import "./external-auth.test-support.js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
@@ -6,7 +7,6 @@ import {
   createExternalAuthRuntime,
   syncPersistedExternalCliAuthProfiles,
 } from "./external-auth.js";
-import { testing } from "./external-auth.test-support.js";
 import { isPersistedExternalCliAuthProfile } from "./external-cli-sync.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "./path-resolve.native.js";
 import {
@@ -19,6 +19,8 @@ import { runAuthProfileWriteTransaction } from "./sqlite.js";
 import { withAgentDirEnv } from "./sqlite.test-support.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./store-runtime.js";
 import type { OAuthCredential, RuntimeAuthProfileStore } from "./types.js";
+
+const { testing } = await import("./external-auth.test-support.js");
 
 const readOptions = { allowKeychainPrompt: false, readOnly: true, syncExternalCli: false };
 const minimaxId = "minimax-portal:minimax-cli";

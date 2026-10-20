@@ -81,11 +81,7 @@ export function resolveAcpSessionCwd(meta?: SessionAcpMeta): string | undefined 
 }
 
 /** Renders thread-detail identifier lines plus a backend-specific resume hint when stable. */
-export function resolveAcpThreadSessionDetailLines(params: {
-  sessionKey: string;
-  meta?: SessionAcpMeta;
-}): string[] {
-  const meta = params.meta;
+export function resolveAcpThreadSessionDetailLines(meta?: SessionAcpMeta): string[] {
   const identity = resolveSessionIdentityFromMeta(meta);
   const backend = normalizeText(meta?.backend) ?? "backend";
   const lines = resolveAcpSessionIdentifierLinesFromIdentity({

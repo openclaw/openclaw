@@ -49,17 +49,17 @@ it("forgets an empty successor binding after the original idle disposal settles"
 
     const cfg = { plugins: { enabled: false }, mcp: { servers: {} } };
     await manager.reloadConfig({ cfg });
-    const successor = await manager.acquire({ ...params, cfg });
+    const acquiring = manager.acquire({ ...params, cfg });
+    expect(manager.resolveSessionId(sessionKey)).toBe(params.sessionId);
+    terminate.resolve();
+    await expect(sweep).resolves.toBe(1);
+    const successor = await acquiring;
     try {
       expect((await successor.runtime.getCatalog()).tools).toEqual([]);
     } finally {
       successor.releaseLease();
     }
     expect(manager.listRuntimeKeys()).toEqual([]);
-    expect(manager.resolveSessionId(sessionKey)).toBe(params.sessionId);
-
-    terminate.resolve();
-    await expect(sweep).resolves.toBe(1);
     expect(manager.resolveSessionId(sessionKey)).toBeUndefined();
     expect(server.terminationCount()).toBe(1);
   } finally {

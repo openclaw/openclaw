@@ -3,6 +3,7 @@ import {
   isCodeModeDiagnosticEnabled,
   logCodeModeDiagnostic,
 } from "../../../logging/code-mode-diagnostic.js";
+import { getPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import {
   finalizeAgentToolAvailability,
   gateAgentToolExecution,
@@ -14,16 +15,19 @@ import {
   buildEmptyExplicitToolAllowlistError,
   collectExplicitToolAllowlistSources,
 } from "../../tool-allowlist-guard.js";
+import { createToolPolicyMatcher } from "../../tool-policy-match.js";
 import {
   createToolExecutionMatcher,
   formatToolExecutionGatedMessage,
 } from "../../tool-policy-shared.js";
+import { normalizeToolPolicyName } from "../../tool-policy.js";
 import {
   withRuntimeToolSchemaQuarantine,
   type RuntimeToolSchemaQuarantineRecorder,
 } from "../../tool-schema-quarantine.js";
 import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../../tool-search-types.js";
 import {
+  collectUniqueCatalogToolNames,
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
@@ -31,15 +35,31 @@ import {
 } from "../../tool-search.js";
 import type { AnyAgentTool } from "../../tools/common.js";
 import { log } from "../logger.js";
+import { collectAllowedToolNames } from "../tool-name-allowlist.js";
 import type { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
 import type { EmbeddedAttemptSetup } from "./attempt-setup.js";
 import type { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
-import { buildToolSearchRunPlan } from "./attempt-tool-search-run-plan.js";
 import { wrapEmbeddedAttemptToolWithActivity } from "./tool-activity-heartbeat.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type PreparedToolBase = Awaited<ReturnType<typeof prepareEmbeddedAttemptToolBase>>;
 type PreparedBundleTools = Awaited<ReturnType<typeof prepareEmbeddedAttemptBundleTools>>;
+
+function hasExplicitlyAllowedClientTool(params: {
+  clientTools?: PreparedBundleTools["clientTools"];
+  explicitAllowlistSources: Array<{ entries: string[] }>;
+}): boolean {
+  const names = (params.clientTools ?? [])
+    .map((tool) => tool.function?.name)
+    .filter((name): name is string => Boolean(name?.trim()));
+  if (names.length === 0) {
+    return false;
+  }
+  const matchers = params.explicitAllowlistSources.map((source) =>
+    createToolPolicyMatcher({ allow: source.entries }),
+  );
+  return names.some((name) => matchers.some((matches) => matches(name)));
+}
 
 export async function prepareEmbeddedAttemptToolCatalog(input: {
   attempt: EmbeddedRunAttemptParams;
@@ -140,24 +160,82 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
       { label: "inherited tools.allow", allow: inheritedToolPolicy?.allow },
       { label: "runtime toolsAllow", allow: attempt.toolsAllow, enforceWhenToolsDisabled: true },
     ]);
-    const toolSearchRunPlan = buildToolSearchRunPlan({
-      visibleTools: effectiveTools,
-      uncompactedTools: uncompactedEffectiveTools,
-      catalogCapabilityTools: toolSearch.catalogRegistered ? uncompactedEffectiveTools : undefined,
+    const clientToolsCataloged =
+      toolSearch.catalogRegistered &&
+      (codeModeControlsEnabledForRun || toolSearchConfig.mode !== "directory");
+    const controlsEnabled = toolSearchControlsEnabledForRun || codeModeControlsEnabledForRun;
+    const controlNames = codeModeControlsEnabledForRun
+      ? [CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME]
+      : toolSearchConfig.mode === "directory"
+        ? [TOOL_SEARCH_RAW_TOOL_NAME, TOOL_DESCRIBE_RAW_TOOL_NAME, TOOL_CALL_RAW_TOOL_NAME]
+        : [...TOOL_SEARCH_CONTROL_TOOL_NAMES];
+    // Visible tools use compacted prompt state; replay keeps uncompacted identities.
+    const visibleAllowedToolNames = collectAllowedToolNames({
+      tools: effectiveTools,
+      clientTools: clientToolsCataloged ? undefined : clientTools,
+    });
+    const replayAllowedToolNames = collectAllowedToolNames({
+      tools: uncompactedEffectiveTools,
       clientTools,
-      clientToolsCataloged:
-        toolSearch.catalogRegistered &&
-        (codeModeControlsEnabledForRun || toolSearchConfig.mode !== "directory"),
-      catalogToolCount: toolSearch.catalogToolCount,
-      controlsEnabled: toolSearchControlsEnabledForRun || codeModeControlsEnabledForRun,
-      deferredToolsCallable: deferredDirectoryToolsCallable,
-      controlNames: codeModeControlsEnabledForRun
-        ? [CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME]
-        : toolSearchConfig.mode === "directory"
-          ? [TOOL_SEARCH_RAW_TOOL_NAME, TOOL_DESCRIBE_RAW_TOOL_NAME, TOOL_CALL_RAW_TOOL_NAME]
-          : undefined,
+    });
+    const capabilityToolNames = collectAllowedToolNames({
+      tools: [
+        ...(deferredDirectoryToolsCallable ? uncompactedEffectiveTools : effectiveTools),
+        ...(toolSearch.catalogRegistered ? uncompactedEffectiveTools : []),
+      ].filter((tool) => getPluginToolMeta(tool)?.pluginId !== "bundle-mcp"),
+    });
+    if (controlsEnabled) {
+      // Visible compacted controls must remain allowed during uncompacted replay.
+      for (const controlName of controlNames) {
+        if (visibleAllowedToolNames.has(controlName)) {
+          replayAllowedToolNames.add(controlName);
+        }
+      }
+    }
+    const liveAllowedToolNames = deferredDirectoryToolsCallable
+      ? collectUniqueCatalogToolNames(uncompactedEffectiveTools)
+      : visibleAllowedToolNames;
+    if (deferredDirectoryToolsCallable) {
+      // Hidden Tool Search controls are not deferred catalog entries.
+      for (const controlName of TOOL_SEARCH_CONTROL_TOOL_NAMES) {
+        if (!visibleAllowedToolNames.has(controlName)) {
+          liveAllowedToolNames.delete(controlName);
+          capabilityToolNames.delete(controlName);
+        }
+      }
+      for (const visibleName of visibleAllowedToolNames) {
+        liveAllowedToolNames.add(visibleName);
+      }
+    }
+    const explicitControlAllowlistNames = new Set(
+      explicitToolAllowlistSources.flatMap((source) =>
+        source.entries.map((entry) => normalizeToolPolicyName(entry)),
+      ),
+    );
+    const autoAddedControlNames = new Set(
+      (controlsEnabled ? controlNames : []).filter(
+        (controlName) => !explicitControlAllowlistNames.has(normalizeToolPolicyName(controlName)),
+      ),
+    );
+    const explicitlyAllowedClientTool = hasExplicitlyAllowedClientTool({
+      clientTools,
       explicitAllowlistSources: explicitToolAllowlistSources,
     });
+    const emptyAllowlistVisibleToolNames = deferredDirectoryToolsCallable
+      ? collectAllowedToolNames({ tools: effectiveTools })
+      : visibleAllowedToolNames;
+    // Auto-added controls cannot conceal an explicit allowlist that matched nothing.
+    const hasCallableTools =
+      toolSearch.catalogToolCount > 0 ||
+      ((clientToolsCataloged || deferredDirectoryToolsCallable) && explicitlyAllowedClientTool) ||
+      [...emptyAllowlistVisibleToolNames].some((toolName) => !autoAddedControlNames.has(toolName));
+    const toolSearchRunPlan = {
+      visibleAllowedToolNames,
+      replayAllowedToolNames,
+      liveAllowedToolNames,
+      capabilityToolNames,
+      hasCallableTools,
+    };
     const emptyExplicitToolAllowlistError = attempt.forceRestartSafeTools
       ? null
       : buildEmptyExplicitToolAllowlistError({

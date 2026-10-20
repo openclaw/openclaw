@@ -1,3 +1,4 @@
+import { channel } from "node:diagnostics_channel";
 import { performance } from "node:perf_hooks";
 import { areDiagnosticsEnabledForProcess } from "../infra/diagnostic-events.js";
 import {
@@ -8,6 +9,7 @@ import type { SubsystemLogger } from "../logging/subsystem.js";
 import { createStageTimingTracker } from "../shared/stage-timing.js";
 
 export const SLOW_GATEWAY_REQUEST_MS = 1_000;
+const stages = channel("openclaw.gateway.request.stages");
 
 export type SessionSubscribePhase =
   | "setup"
@@ -28,7 +30,7 @@ export function startSlowRequestDiagnostics<Phase extends string>(
   initialPhase: Phase,
   details?: () => Record<string, unknown>,
 ) {
-  if (!areDiagnosticsEnabledForProcess() || !log.isEnabled("warn")) {
+  if (!stages.hasSubscribers && (!areDiagnosticsEnabledForProcess() || !log.isEnabled("warn"))) {
     return undefined;
   }
   let checkpoint = performance.now();
@@ -46,13 +48,22 @@ export function startSlowRequestDiagnostics<Phase extends string>(
     [Symbol.dispose]() {
       mark(phase);
       const elapsedMs = checkpoint - startedAt;
-      if (elapsedMs < SLOW_GATEWAY_REQUEST_MS || !areDiagnosticsEnabledForProcess()) {
+      const warn =
+        elapsedMs >= SLOW_GATEWAY_REQUEST_MS &&
+        areDiagnosticsEnabledForProcess() &&
+        log.isEnabled("warn");
+      if (!warn && !stages.hasSubscribers) {
         return;
       }
       try {
         const phaseDurationsMs: Record<string, number> = {};
         for (const stage of timing.snapshot().stages) {
           phaseDurationsMs[stage.name] = (phaseDurationsMs[stage.name] ?? 0) + stage.durationMs;
+        }
+        // Numeric stages remain observable below the slow-log threshold, without request data.
+        stages.publish({ operation, elapsedMs, phaseDurationsMs });
+        if (!warn) {
+          return;
         }
         runWithDiagnosticTraceContext(trace, () =>
           log.warn(message, {

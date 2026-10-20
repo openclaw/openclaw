@@ -142,7 +142,7 @@ it.skipIf(process.platform === "win32")(
       async ({ createTempDir }) => {
         const root = await realpath(createTempDir("required-native-same-session-"));
         const identity = loadOrCreateDeviceIdentity({
-          path: path.join(root, "node-identity.sqlite"),
+          env: { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "node-state") },
         });
         await mkdir(path.join(root, "node-state", "node-host"), { recursive: true, mode: 0o700 });
         const remoteAgentWorkspace = path.join(root, "remote-agent-workspace");
@@ -388,7 +388,12 @@ it.skipIf(process.platform === "win32")(
               const placement = event.session?.placement;
               if (event.phase === "error" || event.reason === "chat.dispatch-error") {
                 // Queued follow-up execution IDs are not known until native HTTP entry.
-                throw new Error(`${creation} ${timing} run failed before settlement`);
+                throw new Error(
+                  `${creation} ${timing} run failed before settlement: ${JSON.stringify({
+                    phase: event.phase,
+                    reason: event.reason,
+                  })}\n${gateway.logs().slice(-12_000)}`,
+                );
               }
               if (
                 !placement?.workspaceResultReconciling &&

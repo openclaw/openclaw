@@ -7,6 +7,7 @@ import type { HealthCheck, OpenClawConfig } from "openclaw/plugin-sdk/health";
 import { killProcessTree, resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
+import * as managedBinary from "./app-server/managed-binary.js";
 import { CODEX_APP_SERVER_VERSION } from "./app-server/version.js";
 import { closedStdinDoctorEntrypoint } from "./doctor-closed-stdin-entrypoint.test-support.js";
 import {
@@ -40,6 +41,9 @@ function context(cfg = config(), mode: "lint" | "fix" = "lint") {
 }
 
 function managedDeps(version = CODEX_APP_SERVER_VERSION) {
+  vi.spyOn(managedBinary, "isManagedCodexDesktopCommand").mockImplementation((command) =>
+    command.startsWith("/Applications/"),
+  );
   const resolveNativeCommand = vi.fn(
     (_command: string): string | undefined => "/candidate/plugin/codex-native",
   );
@@ -52,7 +56,6 @@ function managedDeps(version = CODEX_APP_SERVER_VERSION) {
           : "/candidate/plugin/codex",
       commandSource: "resolved-managed" as const,
     })),
-    isDesktopCommand: vi.fn((command: string) => command.startsWith("/Applications/")),
     resolveNativeCommand,
     runVersionCommand: vi.fn(async () => `codex-cli ${version}\n`),
   };
@@ -92,6 +95,7 @@ function expectFinding(findings: unknown, expected: Record<string, unknown>) {
 }
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.restoreAllMocks());
 it.skipIf(process.platform === "win32")(
   "returns successful JSON when a version binary closes stdin immediately",
   async () => {

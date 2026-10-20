@@ -351,7 +351,7 @@ export class TelegramPollingSession {
     let stopTimedOut = false;
     let forceCycleTimer: ReturnType<typeof setTimeout> | undefined;
     const { promise: forceCyclePromise, resolve: forceCycleResolve } = createDeferred();
-    const unsubscribe = worker.onMessage((message) => {
+    worker.onMessage = (message) => {
       const ackSpooledUpdate: NonNullable<typeof worker.ackSpooledUpdate> = (requestId, result) => {
         try {
           worker.ackSpooledUpdate?.(requestId, result);
@@ -448,7 +448,7 @@ export class TelegramPollingSession {
         liveness.noteGetUpdatesActivity();
         ingressMonitor.requestDrain();
       }
-    });
+    };
     const stopOnAbort = () => {
       abortMedia();
       void stopWorker();
@@ -558,7 +558,7 @@ export class TelegramPollingSession {
     } finally {
       clearInterval(watchdog);
       clearForceCycleTimer();
-      unsubscribe();
+      worker.onMessage = undefined;
       this.opts.abortSignal?.removeEventListener("abort", stopOnAbort);
       // End media work before waiting for durable handlers so every interrupted claim can retry.
       abortMedia();

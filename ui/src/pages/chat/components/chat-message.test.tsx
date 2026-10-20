@@ -1143,7 +1143,7 @@ describe("grouped chat rendering", () => {
       return result!;
     });
     image.dispatchEvent(new Event("error"));
-    expect(view.querySelector(".chat-author-avatar")?.classList.contains("is-fallback")).toBe(true);
+    await waitForSolid(() => expect(image.parentElement?.classList).toContain("is-fallback"));
     expect(elementText(".chat-author-avatar__fallback")?.trim()).toBe("A");
   });
 

@@ -1,6 +1,6 @@
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { Show, createMemo, createSignal, onCleanup, untrack } from "solid-js";
+import { Show, createMemo, createSignal, onCleanup } from "solid-js";
 import type {
   WebSearchStatusParams,
   WebSearchStatusResult,
@@ -21,6 +21,7 @@ import {
   SettingsToggleRow,
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
+import { i18n } from "../../i18n/lib/translate.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -53,10 +54,11 @@ export function SearchPage() {
   const [model, setModel] = createSignal("");
   const [setupProvider, setSetupProvider] = createSignal("");
   // The localized default seeds an editable draft; locale changes must not replace user input.
-  const [query, setQuery] = createSignal(untrack(() => t("searchPage.queryDefault")));
+  const initialQuery = i18n.t("searchPage.queryDefault");
+  const [query, setQuery] = createSignal(initialQuery);
   let selectedAgent = "";
   // Capture the initial receipt before the Gateway binding admits its first load.
-  let configRevision = untrack(() => searchConfigRevision(context.runtimeConfig.state));
+  let configRevision = searchConfigRevision(context.runtimeConfig.state);
   let loadingActive = false;
   let testingActive = false;
   let queryInput: HTMLInputElement | undefined;

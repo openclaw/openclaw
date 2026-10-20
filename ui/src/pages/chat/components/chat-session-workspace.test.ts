@@ -302,6 +302,36 @@ describe("session workspace state", () => {
     expect(workspaceProps(state).error).toBeNull();
   });
 
+  it("retries the current query once when its search timer is pending", async () => {
+    vi.useFakeTimers();
+    try {
+      const listFiles = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("temporary failure"))
+        .mockResolvedValue({ sessionKey: "agent:main:current", files: [] });
+      const state = createLoadingHost({ listFiles });
+      workspaceProps(state, { expanded: true });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(workspaceProps(state).error).toBe("temporary failure");
+
+      const props = workspaceProps(state);
+      props.onSearch("checklist");
+      props.onRetry();
+      await vi.advanceTimersByTimeAsync(160);
+
+      expect(listFiles).toHaveBeenCalledTimes(2);
+      expect(listFiles).toHaveBeenLastCalledWith("agent:main:current", {
+        agentId: "main",
+        path: "",
+        search: "checklist",
+      });
+      expect(workspaceProps(state).browserSearch).toBe("checklist");
+      expect(workspaceProps(state).error).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each([
     { label: "Files is closed or inactive", options: { expanded: false }, terminal: true },
     {

@@ -5,7 +5,11 @@ import { expect, it } from "vitest";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e-defaults.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiSessionUrl,
+  installMockGateway,
+  pauseVirtualClock,
+} from "../test-helpers/control-ui-e2e.ts";
 import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installNativeWebChrome } from "./native-nav.test-support.ts";
@@ -191,7 +195,11 @@ suite.define(() => {
         .poll(async () => (await composer.boundingBox())!.x - (await flagRight()))
         .toBeGreaterThanOrEqual(0);
       await page.clock.install();
+      // Keep the four-second reveal window independent of assertion time on slow runners.
+      await pauseVirtualClock(page);
       await gateway.setOnline(false);
+      // Offline presentation waits for the gateway's two-second grace period.
+      await page.clock.runFor(2_001);
       const retainedStatus = page.locator(
         ".sidebar-identity-card[data-connection-status=reconnecting]",
       );
@@ -211,6 +219,7 @@ suite.define(() => {
       expect(await retainedStatus.getAttribute("title")).toBe("");
       await page.clock.runFor(4_001);
       await flag.waitFor({ state: "hidden" });
+      await page.clock.resume();
       await retainedStatus.hover();
       await retry.waitFor({ state: "visible" });
       await page.clock.runFor(200);
@@ -227,6 +236,8 @@ suite.define(() => {
       await captureStatus(page, "collapsed-avatar-flag", flag, [retainedStatus, flag]);
       await page.mouse.move(600, 400);
       await flag.waitFor({ state: "hidden" });
+      await pauseVirtualClock(page);
+      await gateway.closeLatest(1006, "synthetic failed attempt");
       await retainedStatus.focus();
       await retry.waitFor({ state: "visible" });
       await page.keyboard.press("Tab");
@@ -256,7 +267,6 @@ suite.define(() => {
       await page.clock.runFor(200);
       expect(await flag.isVisible()).toBe(false);
       await identityTooltip.waitFor({ state: "visible" });
-      await page.clock.resume();
     });
   });
 
@@ -389,6 +399,7 @@ suite.define(() => {
         expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);
         expect(await footer.textContent()).not.toContain("in outbox");
         const socketCount = await gateway.getSocketCount();
+        await gateway.closeLatest(1006, "synthetic failed attempt");
         await retry.click();
         await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
         await gateway.setOnline(true);

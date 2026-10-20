@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { parseDocument } from "yaml";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
-import { hasErrnoCode } from "./errno.js";
+import { ignoreMissingPath } from "./errno.js";
 import { isFullGitObjectId } from "./update-dev-target.js";
 import { resolvePnpmCandidateEnv } from "./update-package-manager.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
@@ -193,12 +193,7 @@ export async function prepareCandidateCommandEnv(
     candidateEnv.pnpm_config_prefer_offline = "true";
   }
   const workspaceFile = path.join(cwd, "pnpm-workspace.yaml");
-  const original = await fs.readFile(workspaceFile, "utf8").catch((error: unknown) => {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  });
+  const original = await fs.readFile(workspaceFile, "utf8").catch(ignoreMissingPath);
   if (original === undefined) {
     return { env: candidateEnv };
   }

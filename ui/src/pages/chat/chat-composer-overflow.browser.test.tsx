@@ -5,7 +5,7 @@ import type { SessionGoal } from "../../api/types.ts";
 import { ContentPresentation } from "../../lib/solid/presentation.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { mountSolid as mountSolidProps } from "../../test-helpers/solid-render.tsx";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createComposerContainer, createComposerProps } from "./chat-composer.test-support.ts";
 import type { ChatAttachmentControlsProps } from "./components/chat-attachment-controls.types.ts";
 import { AttachmentPreview } from "./components/chat-attachments.tsx";
@@ -150,6 +150,7 @@ describe("composer overflow presentation", () => {
           )!,
         )
         .click();
+      await expect.poll(() => container.querySelector('[data-value="open-skills"]')).not.toBeNull();
       await page
         .elementLocator(container.querySelector<HTMLElement>('[data-value="open-skills"]')!)
         .click();
@@ -264,6 +265,9 @@ describe("composer overflow presentation", () => {
     await afterLayout();
     const strips = container.querySelectorAll<HTMLElement>(".composer-context-strip");
     expect(strips).toHaveLength(3);
+    await waitForSolid(() =>
+      expect(container.querySelector(".chat-attachment-thumb")).not.toBeNull(),
+    );
     const attachmentBox = rail().querySelector(".chat-attachment-thumb")!.getBoundingClientRect();
     const textareaBox = container.querySelector("textarea")!.getBoundingClientRect();
     const composerBox = container.querySelector(".agent-chat__input")!.getBoundingClientRect();

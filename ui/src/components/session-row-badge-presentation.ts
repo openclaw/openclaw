@@ -27,6 +27,7 @@ export type SessionRowBadgesParams = {
   isChild?: boolean;
   incognito?: boolean;
   pullRequest?: SessionCatalogPullRequestSummary;
+  pullRequestCount?: number;
   hasApproval?: boolean;
   outboxAttentionCount?: number;
   hasComposerDraft?: boolean;
@@ -132,12 +133,23 @@ export function resolveSessionRowBadges(
       modifier: "incognito",
     });
   }
-  if (params.pullRequest && pullRequestLabel) {
+  if (params.pullRequest || params.pullRequestCount) {
+    const count = params.pullRequestCount ?? params.pullRequest?.numbers.length ?? 0;
     badges.push({
-      label: pullRequestLabel,
-      icon: sessionPullRequestStateIcons[params.pullRequest.state],
+      label: [
+        count > 1 || !pullRequestLabel
+          ? translate("sessionsView.pullRequestCount", { count: String(count) })
+          : "",
+        pullRequestLabel,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+      icon: params.pullRequest
+        ? sessionPullRequestStateIcons[params.pullRequest.state]
+        : "gitPullRequest",
       modifier: "pull-request",
       pullRequestState,
+      count: count > 1 ? count : undefined,
     });
   }
   if (params.hasApproval) {

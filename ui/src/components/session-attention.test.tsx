@@ -2,16 +2,60 @@ import { createMemo, createSignal, type Setter, Show } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createQuestionPromptState } from "../app/question-prompt.ts";
 import { isSessionSnoozed } from "../lib/sessions/session-snooze.ts";
-import { createContext, createGateway, createSessions } from "../test-helpers/app-sidebar.ts";
+import {
+  createContext,
+  createGateway,
+  createGatewayHarness,
+  createSessions,
+} from "../test-helpers/app-sidebar.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
-import { flush } from "../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import { createSessionAttention } from "./session-attention.ts";
 
 afterEach(() => {
   cleanupSolid();
   vi.useRealTimers();
   vi.restoreAllMocks();
+});
+
+it("refreshes questions only for a changed client and retires the Gateway subscription", async () => {
+  const firstRequest = vi.fn().mockResolvedValue({ questions: [] });
+  const secondRequest = vi.fn().mockResolvedValue({ questions: [] });
+  const thirdRequest = vi.fn().mockResolvedValue({ questions: [] });
+  const gateway = createGatewayHarness(createTestGatewayClient(firstRequest));
+  gateway.publish({ hello: gatewayHelloForMethods(["question.list"]) });
+  const context = createContext(gateway.gateway, createSessions("main", []));
+  const host = document.body.appendChild(document.createElement("section"));
+  const view = mountSolid(
+    () => {
+      const attention = createSessionAttention(
+        context,
+        createQuestionPromptState(() => {}),
+        host,
+        () => true,
+      );
+      return <span>{attention.resolve()({ key: "agent:main:main" }).kind}</span>;
+    },
+    { container: host },
+  );
+  try {
+    await waitForSolid(() => expect(firstRequest).toHaveBeenCalledTimes(1));
+    gateway.publish({ lastError: "Synthetic unrelated notification" });
+    flush();
+    expect(firstRequest).toHaveBeenCalledTimes(1);
+    gateway.publish({ client: createTestGatewayClient(secondRequest), lastError: null });
+    await waitForSolid(() => expect(secondRequest).toHaveBeenCalledTimes(1));
+    expect(firstRequest).toHaveBeenCalledTimes(1);
+    view.unmount();
+    gateway.publish({ client: createTestGatewayClient(thirdRequest) });
+    flush();
+    expect(thirdRequest).not.toHaveBeenCalled();
+  } finally {
+    view.unmount();
+    host.remove();
+  }
 });
 
 function mountSnoozedSession(deadline: number) {

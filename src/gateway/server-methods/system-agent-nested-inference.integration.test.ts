@@ -39,6 +39,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { runSystemAgentTurn } from "../../system-agent/agent-turn.js";
 import { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
+import * as operations from "../../system-agent/operations.js";
 import type { SystemAgentOverview } from "../../system-agent/overview.js";
 import {
   createSystemAgentPluginMetadataTestSnapshot,
@@ -50,6 +51,7 @@ import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent
 import type { GatewayClient } from "./types.js";
 
 const RESPONSE_TEXT = "Synthetic expert response; no action was executed.";
+const nativeExecuteOperation = operations.executeSystemAgentOperation;
 const dispatch = vi.hoisted(() =>
   vi.fn<(params: RunEmbeddedAgentParams) => Promise<EmbeddedAgentRunResult>>(),
 );
@@ -208,19 +210,21 @@ async function createConversation() {
         },
       }),
   );
-  const executeOperation = vi.fn(async () => {
-    throw new Error("external operation");
+  const executeOperation = vi
+    .spyOn(operations, "executeSystemAgentOperation")
+    .mockImplementation((...args) => {
+      if (args[2]?.approved !== true) {
+        return nativeExecuteOperation(...args);
+      }
+      throw new Error("external operation");
+    });
+  const engine = new SystemAgentChatEngine({
+    surface: "gateway",
+    verifiedInference: proof.binding,
+    operatorApprovalOnly: true,
+    deps,
+    runAgentTurn: runSystemAgentTurn,
   });
-  const engine = new SystemAgentChatEngine(
-    {
-      surface: "gateway",
-      verifiedInference: proof.binding,
-      operatorApprovalOnly: true,
-      deps,
-      runAgentTurn: runSystemAgentTurn,
-    },
-    { executeOperation },
-  );
   engines.push(engine);
   const sessionId = "nested-inference-integration-conversation";
   const sessions = new Map<string, SystemAgentChatSession>([

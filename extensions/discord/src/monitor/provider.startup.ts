@@ -68,7 +68,6 @@ export async function createDiscordMonitorClient(params: {
   const voicePlugin = params.voiceEnabled ? new VoicePlugin() : undefined;
 
   const eventQueueOpts = {
-    listenerTimeout: 120_000,
     slowListenerThreshold: 30_000,
   } satisfies DiscordEventQueueOptions;
   const readyDiscordConfig = params.discordConfig;

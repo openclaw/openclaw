@@ -4,48 +4,14 @@ import { registerDreamingEnglish } from "../../../i18n/locales/en-dreaming.ts";
 import { registerSettingsEnglish } from "../../../i18n/locales/en-settings.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import "../../../styles/dreams.css";
+import { DREAM_PHRASE_KEYS, type DreamingViewState } from "./dreaming.ts";
 import { renderAdvancedSection } from "./view-advanced.tsx";
 import { renderDiarySection } from "./view-diary.tsx";
 import { renderScene } from "./view-scene.tsx";
-import type { DreamingProps, DreamingViewState } from "./view-types.ts";
-
-export type { DreamingProps, DreamingViewState } from "./view-types.ts";
+import type { DreamingProps } from "./view-types.ts";
 
 registerSettingsEnglish();
 registerDreamingEnglish();
-
-export const DREAM_PHRASE_KEYS = [
-  "dreaming.phrases.consolidatingMemories",
-  "dreaming.phrases.tidyingKnowledgeGraph",
-  "dreaming.phrases.replayingConversations",
-  "dreaming.phrases.weavingShortTerm",
-  "dreaming.phrases.defragmentingMemoryLane",
-  "dreaming.phrases.filingLooseThoughts",
-  "dreaming.phrases.connectingDots",
-  "dreaming.phrases.compostingContext",
-  "dreaming.phrases.alphabetizingSubconscious",
-  "dreaming.phrases.promotingHunches",
-  "dreaming.phrases.forgettingNoise",
-  "dreaming.phrases.dreamingEmbeddings",
-  "dreaming.phrases.reorganizingAttic",
-  "dreaming.phrases.indexingDay",
-  "dreaming.phrases.nurturingInsights",
-  "dreaming.phrases.simmeringIdeas",
-  "dreaming.phrases.whisperingVectorStore",
-] as const;
-
-export function createDreamingViewState(): DreamingViewState {
-  return {
-    dreamIndex: Math.floor(Math.random() * DREAM_PHRASE_KEYS.length),
-    dreamLastSwap: 0,
-    activeSubTab: "scene",
-    activeDiarySubTab: "dreams",
-    advancedWaitingSort: "recent",
-    expandedInsightCards: {},
-    expandedWikiCards: {},
-    diaryPage: 0,
-  };
-}
 
 export function renderDreaming(props: DreamingProps) {
   const state = () => props.viewState;

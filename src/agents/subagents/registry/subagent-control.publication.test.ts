@@ -6,7 +6,9 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/help
 import { getRuntimeConfig } from "../../../config/config.js";
 import { loadExactSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import { reactivateCompletedSubagentSession } from "../../../gateway/session-subagent-reactivation.js";
+import { beginSessionEffect } from "../../../sessions/session-controller.lifecycle.js";
 import type { AgentWaitResult } from "../../run-wait.js";
+import * as killScopeOwner from "./subagent-control-kill-scope.js";
 import * as killSession from "./subagent-control-session.js";
 import {
   beginControlAdmission,
@@ -61,14 +63,27 @@ it("does not refresh session metadata when an owned abort marker is already pers
   expect(read()).toEqual(before);
 });
 
-it("revalidates the session after held publication preparation permits retirement", async () => {
+it("revalidates the original session after deletion during cancellation result handoff", async () => {
   const { target } = await runs.seed("prepared-publication", {
     childSessionKey: rootKey,
     expectsCompletionMessage: undefined,
   });
+  const withKillScope = killScopeOwner.withSubagentKillScope;
+  using _ = vi
+    .spyOn(killScopeOwner, "withSubagentKillScope")
+    .mockImplementation((params, run, ...publicationCallbacks) =>
+      withKillScope(
+        params,
+        async (scope, trees) => {
+          const result = await run(scope, trees);
+          await removeSubagentSessionEntry(target);
+          return result;
+        },
+        ...publicationCallbacks,
+      ),
+    );
   const onResult = vi.fn();
-  let transitioned = false;
-  const publishSnapshot = vi.fn();
+  const onSnapshot = vi.fn();
   const result = await killSubagentRunAdmin(
     {
       cfg: getRuntimeConfig(),
@@ -77,21 +92,9 @@ it("revalidates the session after held publication preparation permits retiremen
       expectedRunId: "prepared-publication",
       onResult,
     },
-    {
-      assertCurrent: () => {},
-      preparePublication: {
-        async prepare(publish) {
-          if (!transitioned) {
-            transitioned = true;
-            await removeSubagentSessionEntry(target);
-          }
-          return publish();
-        },
-        publishSnapshot,
-      },
-    },
+    { assertCurrent: () => {}, onSnapshot },
   );
-  expect(publishSnapshot).toHaveBeenCalledExactlyOnceWith(result);
+  expect(onSnapshot).toHaveBeenCalledExactlyOnceWith(result);
   expect(onResult).toHaveBeenCalledExactlyOnceWith(result);
   expect(result).toMatchObject({
     found: true,
@@ -204,17 +207,27 @@ it.each([
       await runs.seed(runId, {
         childSessionKey: sessionKey,
         requesterSessionKey: rootKey,
+        requesterTurnRunId: b0.runId,
         collect: true,
         queued: true,
       });
     }
     const entered = createDeferred();
-    const childAdmission = await beginControlAdmission(
-      storePath,
-      childKey,
-      "publication-child-session",
-      () => entered.resolve(),
-    );
+    const childAdmission = await beginSessionEffect({
+      scope: storePath,
+      identities: [childKey, "publication-child-session"],
+      run: {
+        runId: "publication-child",
+        sessionKey: childKey,
+        sessionId: "publication-child-session",
+        agentId: "main",
+      },
+      assertAllowed: () => {},
+      onInterrupt: () => {
+        entered.resolve();
+        return { runId: "publication-child" };
+      },
+    });
     const markerCleared = createDeferred();
     const releaseMarker = createDeferred();
     let markerWaits = 0;

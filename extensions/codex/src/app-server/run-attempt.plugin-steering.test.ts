@@ -79,7 +79,7 @@ describe("plugin steering native admission", () => {
         (call) => call[0] === params.sessionId,
       )?.[1] as Parameters<typeof agentHarnessRuntime.setActiveEmbeddedRun>[1] | undefined;
       assert(handle?.messageInjectionV2);
-      const queued = vi.spyOn(handle.messageInjectionV2, "queueMessage");
+      const queued = vi.spyOn(handle.messageInjectionV2, "queueMessageAsync");
       const admission = createDeferred<void>();
       const resume = createDeferred<void>();
       const requestSpy = vi.spyOn(harness.client, "request");

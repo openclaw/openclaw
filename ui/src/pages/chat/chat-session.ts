@@ -51,7 +51,6 @@ type ChatModelSettingsHost = ChatSessionRefreshHost & {
   chatError?: string | null;
   chatModelCatalog: Parameters<typeof resolveChatModelOverrideValue>[0]["chatModelCatalog"];
   chatModelSwitchPromises?: Record<string, Promise<boolean>>;
-  chatThinkingLevel: string | null;
   sessions: SessionCapability;
   sessionsResult?: SessionsListResult | null;
   sessionsResultAgentId?: string | null;
@@ -189,7 +188,6 @@ async function applyChatSetting(
   captured: ReturnType<typeof captureChatSettingsTarget>,
   patch: Pick<SessionPatch, "thinkingLevel" | "fastMode" | "contextWindow">,
   settingName: "thinking level" | "speed" | "context window",
-  synchronize?: (receipt?: SessionPatchResult | null) => void,
 ): Promise<boolean> {
   const canDispatch = (receipt?: SessionPatchResult | null) =>
     (captured.isCurrent() || Boolean(captured.row(receipt))) &&
@@ -200,12 +198,11 @@ async function applyChatSetting(
       session: captured.row(receipt),
     }).allowed;
   setChatError(host, null);
-  let receipt: SessionPatchResult | null = null;
   try {
     if (!canDispatch()) {
       return false;
     }
-    const pending = patchChatSessionSettings(host, sessionKey, patch, {
+    const receipt = await patchChatSessionSettings(host, sessionKey, patch, {
       ...captured.agentParams,
       expectedSessionId: captured.sessionId,
       canDispatch,
@@ -215,13 +212,9 @@ async function applyChatSetting(
         }
       },
     });
-    synchronize?.();
-    receipt = await pending;
     return receipt !== null;
   } catch {
     return false;
-  } finally {
-    synchronize?.(receipt);
   }
 }
 
@@ -271,19 +264,12 @@ export function switchChatSetting(
   if ((normalizedPrev ?? "") === (normalizedNext ?? "")) {
     return Promise.resolve(true);
   }
-  const synchronizeThinking = (receipt?: SessionPatchResult | null) => {
-    const row = captured.row(receipt);
-    if (row) {
-      host.chatThinkingLevel = row.thinkingLevel ?? null;
-    }
-  };
   return applyChatSetting(
     host,
     targetSessionKey,
     captured,
     { thinkingLevel: normalizedNext ?? null },
     "thinking level",
-    synchronizeThinking,
   );
 }
 

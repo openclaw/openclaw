@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
+import { AgentDatabaseExecutionAdmissionClosedError } from "../../state/agent-database-admission-error.js";
 import { cleanupReplyAgentRun } from "./agent-runner-core.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
-import type { admitFollowupTurn } from "./followup-turn-admission.js";
 import {
   createFollowupTurnTestTypingController,
   createFollowupTurnTestTurn,
@@ -10,22 +11,24 @@ import {
   resetFollowupTurnTestState,
 } from "./followup-turn-execution.test-support.js";
 import {
-  clearFollowupQueueForTest,
   createQueueSettings,
   createQueueTestRun,
+  rejectQueuePreparation,
 } from "./queue.test-helpers.js";
 import { scheduleFollowupDrain } from "./queue/drain.js";
 import { enqueueFollowupRun } from "./queue/enqueue.js";
-import { getExistingFollowupQueue } from "./queue/state.js";
-import { FollowupRunDeferredError } from "./queue/types.js";
-import { createMockReplyOperation } from "./test-helpers.js";
+import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
+import type { FollowupRun } from "./queue/types.js";
+import type { prepareReplyAgentTurn } from "./reply-agent-turn-preparation.js";
 
-const admissionState = vi.hoisted(() => ({ beforeAdmission: vi.fn<() => Promise<void>>() }));
+const admissionState = vi.hoisted(() => ({
+  beforeAdmission: vi.fn<(queued: FollowupRun) => Promise<void>>(),
+}));
 
 // mock-isolation: Keep database admission outside this queue-to-execution ownership proof.
-vi.mock("./followup-turn-admission.js", () => ({
-  admitFollowupTurn: async ({ queued }: Parameters<typeof admitFollowupTurn>[0]) => {
-    await admissionState.beforeAdmission();
+vi.mock("./reply-agent-turn-preparation.js", () => ({
+  prepareReplyAgentTurn: async ({ queued }: Parameters<typeof prepareReplyAgentTurn>[0]) => {
+    await admissionState.beforeAdmission(queued);
     return {
       kind: "admitted",
       turn: createFollowupTurnTestTurn({ runId: "queued-user-run", queued }),
@@ -55,7 +58,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  clearFollowupQueueForTest(key);
+  clearFollowupQueue(key);
   vi.useRealTimers();
 });
 
@@ -64,10 +67,13 @@ it("keeps heartbeat cleanup options out of a deferred queued user turn", async (
   const releaseFirst = createDeferred();
   const settled = createDeferred();
   let retriedExecution: AgentTurnParams | undefined;
-  admissionState.beforeAdmission.mockImplementationOnce(async () => {
+  admissionState.beforeAdmission.mockImplementationOnce(async (queued) => {
     firstStarted.resolve();
     await releaseFirst.promise;
-    throw new FollowupRunDeferredError("reply lane busy");
+    rejectQueuePreparation(
+      queued,
+      new AgentDatabaseExecutionAdmissionClosedError("database is still closing"),
+    );
   });
   state.execute.mockImplementation(async (params: AgentTurnParams) => {
     retriedExecution = params;
@@ -101,20 +107,28 @@ it("keeps heartbeat cleanup options out of a deferred queued user turn", async (
     onAdopted: () => {},
     onSettled: () => settled.resolve(),
   };
-  expect(
-    enqueueFollowupRun(
-      key,
-      run,
-      createQueueSettings({ mode: "followup" }),
-      "none",
-      userRunner,
-      false,
-    ),
-  ).toBe(true);
+  const heartbeatOperation = createReplyOperation({
+    sessionKey: key,
+    sessionId: run.run.sessionId,
+    agentId: run.run.agentId,
+    resetTriggered: false,
+    turnKind: "heartbeat",
+  });
   try {
+    expect(
+      enqueueFollowupRun(
+        key,
+        run,
+        createQueueSettings({ mode: "followup" }),
+        "none",
+        userRunner,
+        false,
+      ),
+    ).toBe(true);
+    heartbeatOperation.complete();
+    await withinTest(heartbeatOperation.ownerSettlement, signal);
     scheduleFollowupDrain(key, userRunner);
     await withinTest(firstStarted.promise, signal);
-    const { replyOperation: heartbeatOperation } = createMockReplyOperation({ key });
     await cleanupReplyAgentRun({
       blockReplyPipeline: null,
       clearRestartRecoveryDeliveryClaim: async () => {},
@@ -150,5 +164,7 @@ it("keeps heartbeat cleanup options out of a deferred queued user turn", async (
     }
   } finally {
     releaseFirst.resolve();
+    heartbeatOperation.complete();
+    await heartbeatOperation.ownerSettlement;
   }
 });

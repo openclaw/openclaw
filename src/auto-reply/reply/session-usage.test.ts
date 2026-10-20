@@ -9,6 +9,7 @@ import * as sessionActors from "../../config/sessions/session-actor.js";
 import { recordSessionParticipantInWorker } from "../../config/sessions/session-sharing-store.async.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createReplyOperation } from "../../sessions/session-controller.operation.js";
 import { runOutsideStoreWriterContext } from "../../shared/store-writer-queue.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -19,7 +20,6 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.paths.js";
 import { withAgentTurnCompletion } from "./agent-runner-completion.js";
-import { createReplyOperation } from "./reply-run-registry.js";
 import { prepareSessionUsageUpdate } from "./session-usage.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -74,6 +74,7 @@ describe("session actor usage accounting", () => {
           );
         } finally {
           operation.complete();
+          await operation.ownerSettlement;
         }
       },
       read,

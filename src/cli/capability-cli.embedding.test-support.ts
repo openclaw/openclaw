@@ -46,6 +46,50 @@ export function registerEmbeddingCapabilityCliTests({
     expect(closeProvider).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps a slash-containing model id under a matching provider prefix", async () => {
+    await runCapability(
+      "embedding",
+      "create",
+      "--text",
+      "hello",
+      "--provider",
+      "deepinfra",
+      "--model",
+      "deepinfra/Qwen/Qwen3-Embedding-8B",
+      "--json",
+    );
+    expect(providerCall()).toMatchObject({
+      provider: "deepinfra",
+      model: "Qwen/Qwen3-Embedding-8B",
+    });
+  });
+
+  it.each([
+    ["deepinfra", "Qwen/Qwen3-Embedding-8B", "Qwen"],
+    ["openai", "gemini/gemini-embedding-001", "gemini"],
+  ])(
+    "rejects --provider %s that conflicts with --model %s before creating a provider",
+    async (provider, model, modelProvider) => {
+      await expect(
+        runCapability(
+          "embedding",
+          "create",
+          "--text",
+          "hello",
+          "--provider",
+          provider,
+          "--model",
+          model,
+          "--json",
+        ),
+      ).rejects.toThrow("exit 1");
+      expect(providerCall()).toBeUndefined();
+      expectError(
+        `Embedding --provider "${provider}" must match the provider "${modelProvider}" in --model.`,
+      );
+    },
+  );
+
   it("shows ordered embedding dimensions and bounded vector previews in text output", async () => {
     embedBatch.mockResolvedValueOnce([
       [0.1, -0.2],

@@ -22,12 +22,6 @@ import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 let config: OpenClawConfig;
 vi.mock("./config-validation.js", () => ({ requireValidConfig: async () => config }));
-vi.mock("./agents.providers.js", () => ({
-  buildProviderStatusIndex: async () => new Map(),
-  buildProviderSummaryMetadataIndex: () => new Map(),
-  listProvidersForAgent: () => [],
-  summarizeBindings: () => [],
-}));
 
 const runtime = {
   ...createTestRuntime(),

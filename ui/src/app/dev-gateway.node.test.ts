@@ -285,10 +285,10 @@ describe("configured UI development Gateway", () => {
         for (const error of events.filter(({ event }) => event.endsWith("-error"))) {
           expect(events.indexOf(error), JSON.stringify(events)).toBeGreaterThan(termination);
           expect(error.phase, JSON.stringify(events)).toBe("upstream-abort");
-          // Closing the transport can cancel queued client writes on macOS.
+          // Closing the transport can cancel queued client writes or destroy their stream.
           const expectedCodes =
             error.event === "client-write-error"
-              ? ["EPIPE", "ECONNRESET", "ECANCELED"]
+              ? ["EPIPE", "ECONNRESET", "ECANCELED", "ERR_STREAM_DESTROYED"]
               : ["EPIPE", "ECONNRESET"];
           expect(expectedCodes, JSON.stringify(events)).toContain(error.code);
         }
@@ -358,9 +358,15 @@ describe("configured UI development Gateway", () => {
 
   it("does not enable the transport in bundled builds or unconfigured development", () => {
     vi.stubEnv("OPENCLAW_UI_DEV_GATEWAY_URL", "http://localhost:18789");
-    expect(controlUiViteConfig({ command: "build" }).server?.proxy).toBeUndefined();
+    vi.stubEnv("NODE_ENV", "development");
+    const bundled = controlUiViteConfig({ command: "build" });
+    expect(bundled.server?.proxy).toBeUndefined();
+    expect(bundled.define?.["globalThis.OPENCLAW_UI_DEV_SERVER"]).toBe("false");
     vi.stubEnv("OPENCLAW_UI_DEV_GATEWAY_URL", "");
-    expect(controlUiViteConfig({ command: "serve" }).server?.proxy).toBeUndefined();
+    vi.stubEnv("NODE_ENV", "production");
+    const development = controlUiViteConfig({ command: "serve" });
+    expect(development.server?.proxy).toBeUndefined();
+    expect(development.define?.["globalThis.OPENCLAW_UI_DEV_SERVER"]).toBe("true");
     vi.stubGlobal("OPENCLAW_UI_DEV_GATEWAY", undefined);
     expect(gatewayWebSocketTransportUrl("ws://localhost:18789")).toBe("ws://localhost:18789");
     expect(uiDevGatewayResourceUrl("/avatar/main")).toBe("/avatar/main");

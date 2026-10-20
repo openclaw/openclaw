@@ -11,7 +11,7 @@ import {
   surface,
   trigger,
 } from "../../test-helpers/solid-menu.tsx";
-import { Menu } from "./menu.tsx";
+import { createMenuControls, Menu } from "./menu.tsx";
 import "../resizable-divider.ts";
 import "../../styles/base.css";
 import "../../styles/layout.css";
@@ -59,17 +59,27 @@ it("keeps submenu icons and details in the visible trigger", async () => {
 
 it("routes arrow navigation from an embedded button through the menu", async () => {
   const activate = vi.fn();
-  mountMenu({
-    items: [
-      { id: "disabled", label: "Unavailable", disabled: true },
-      { id: "first", label: "First" },
-      { id: "last", label: "Last" },
-    ],
-    children: (
-      <button type="button" data-form-control="" autofocus onClick={activate}>
-        About choices
-      </button>
-    ),
+  mountMenu(() => {
+    const controls = createMenuControls();
+    return {
+      controls,
+      items: [
+        { id: "disabled", label: "Unavailable", disabled: true },
+        { id: "first", label: "First" },
+        { id: "last", label: "Last" },
+      ],
+      children: (
+        <button
+          ref={controls.ref()}
+          type="button"
+          data-form-control=""
+          autofocus
+          onClick={activate}
+        >
+          About choices
+        </button>
+      ),
+    };
   });
   await openMenu();
   const info = surface().querySelector<HTMLButtonElement>("[data-form-control]")!;
@@ -88,26 +98,30 @@ it("keeps native embedded controls in the menu keyboard flow", async () => {
   const activate = vi.fn();
   const navigate = vi.fn((event: MouseEvent) => event.preventDefault());
   const select = vi.fn();
-  mountMenu({
-    onSelect: select,
-    items: [
-      { id: "first", label: "First" },
-      { id: "last", label: "Last" },
-      {
-        kind: "content",
-        id: "header-actions",
-        content: (
-          <>
-            <button type="button" onClick={activate}>
-              Clear
-            </button>
-            <a href="#help" onClick={navigate}>
-              Help
-            </a>
-          </>
-        ),
-      },
-    ],
+  mountMenu(() => {
+    const controls = createMenuControls();
+    return {
+      controls,
+      onSelect: select,
+      items: [
+        { id: "first", label: "First" },
+        { id: "last", label: "Last" },
+        {
+          kind: "content",
+          id: "header-actions",
+          content: (
+            <>
+              <button ref={controls.ref()} type="button" onClick={activate}>
+                Clear
+              </button>
+              <a ref={controls.ref()} href="#help" onClick={navigate}>
+                Help
+              </a>
+            </>
+          ),
+        },
+      ],
+    };
   });
   await openMenu();
   expect(document.activeElement).toBe(item("First"));

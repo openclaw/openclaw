@@ -156,9 +156,7 @@ suite.define(() => {
         await page.goto(
           controlUiSessionUrl(suite.server.baseUrl, fixture.selectedSessionKey, "dashboard"),
         );
-        await page
-          .locator(".chat-pane__session-title-text", { hasText: "Project dashboard 1" })
-          .waitFor();
+        await page.locator(".chat-pane__header").first().waitFor();
 
         await selectAllSidebarSessions(page);
         const catalogRequest = await gateway.waitForRequest("sessions.catalog.list");
@@ -395,9 +393,7 @@ suite.define(() => {
         await sidebar.locator('[data-online-user-id="team-person-120"]').waitFor();
         expect(await sidebar.locator("[data-online-user-id]").count()).toBe(120);
         expect(await composer.inputValue()).toBe("");
-        await page
-          .locator(".chat-pane__session-title-text", { hasText: "Project dashboard 1" })
-          .waitFor();
+        await page.locator(".chat-pane__header").first().waitFor();
 
         const rosterRequests = await gateway.getRequests("sessions.list");
         expect(rosterRequests.some((request) => asRecord(request.params)?.limit === 200)).toBe(

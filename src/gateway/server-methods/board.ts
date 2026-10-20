@@ -128,7 +128,6 @@ export function createBoardHandlers(
           : undefined;
         if (sandboxPort === undefined && context.ensureSandboxHostPort) {
           sandboxPort = await context.ensureSandboxHostPort();
-          authority.assertActive();
         }
         authority.assertActive();
         const { ticket } = createBoardViewTicket({

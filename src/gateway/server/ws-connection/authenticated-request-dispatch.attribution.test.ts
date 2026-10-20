@@ -7,6 +7,7 @@ import {
 } from "../../../infra/diagnostic-events.js";
 import { serializeGatewayFrame } from "../../serialized-json.js";
 import type { GatewayRequestHandler } from "../../server-methods/types.js";
+import { captureSessionRowGeneration } from "../../session-row-identity.js";
 import { shareSidebarSessionRows } from "../../session-row-presentation.js";
 import {
   createDispatchTestHarness,
@@ -84,7 +85,9 @@ it.each(["wire", "shared", "internal"] as const)(
       [`delta:${base.rowsRevision}`, "all-rows-changed"],
       ["delta:unknown", "unknown-base"],
     ] as const) {
-      const payload = shareSidebarSessionRows(changed, token, [previous]);
+      const payload = shareSidebarSessionRows(changed, token, [
+        captureSessionRowGeneration(previous),
+      ]);
       expect(Object.keys(payload).toSorted()).toEqual(["rowsRevision", "sessions", "sharedFacts"]);
       const events = await dispatch(
         "sessions.list",
@@ -129,6 +132,21 @@ it.each([
     rowsOutcome: "full-with-base",
   },
   { params: { rowMode: "compact" }, payload: { sessions: [] }, rowsOutcome: "not-sidebar" },
+  {
+    params: { rowMode: "compact", ifRowsRevision: "" },
+    payload: { sessions: [] },
+    rowsOutcome: "full-no-base",
+  },
+  {
+    params: { rowMode: "compact", ifRowsRevision: "private-revision" },
+    payload: { rowsUnchanged: true },
+    rowsOutcome: "unchanged",
+  },
+  {
+    params: { rowMode: "compact", ifRowsRevision: "delta:private-revision" },
+    payload: { rowsDelta: { baseRevision: "private-revision" } },
+    rowsOutcome: "delta",
+  },
 ])(
   "attributes session response bytes as $rowsOutcome",
   async ({ params, payload, rowsOutcome }) => {

@@ -698,6 +698,29 @@ export function ${first}() { return accessPluginState(); }`,
   },
 );
 
+it.each(["runSqliteDeferredTransactionSync", "runSqliteReadSnapshotSync"])(
+  "follows inline callbacks through %s but keeps escaped callbacks live",
+  (scope) => {
+    const transactionFile = "src/infra/sqlite-transaction.ts";
+    const inspectCallback = (callback: string) =>
+      inspect(
+        {
+          [transactionFile]: `export function ${scope}(db, callback) { return callback(); }`,
+          [kernelFile]: kernel,
+          "src/transaction-reader.ts": `import { ${scope} } from './infra/sqlite-transaction.js';
+import { readKernel } from './session-kernel.js';
+export function read() { return ${scope}(db, ${callback}); }`,
+        },
+        `import { read } from '../transaction-reader.js';
+/** @deprecated Use workers. */
+export function ${first}() { return read(); }`,
+      );
+
+    expectClosed(inspectCallback("() => readKernel()"));
+    expect(inspectCallback("() => () => readKernel()").operations.has(kernelFile)).toBe(false);
+  },
+);
+
 it("does not confuse a nested function path with a live top-level namesake", () => {
   const result = inspect({
     [secondFile]: deprecated("wrapper();", "wrapper", "../wrapper.js"),

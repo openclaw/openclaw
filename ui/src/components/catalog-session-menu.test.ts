@@ -118,4 +118,29 @@ describe("catalog session menu", () => {
     expect(document.activeElement).toBe(trigger);
     expect(menu.querySelector('[role="menu"]')?.matches(":popover-open")).toBe(false);
   });
+
+  it("returns focus to a replacement trigger without remounting the open menu", async () => {
+    const original = document.createElement("button");
+    const replacement = document.createElement("button");
+    document.body.append(original, replacement);
+    original.focus();
+    const menu = document.createElement("openclaw-catalog-session-menu");
+    menu.trigger = original;
+    document.body.append(menu);
+    await waitForSolid(() =>
+      expect(document.activeElement).toBe(menu.querySelector('[data-value="viewer"]')),
+    );
+    const item = document.activeElement;
+    original.remove();
+    menu.trigger = replacement;
+    await waitForSolid(() => expect(menu.trigger).toBe(replacement));
+
+    item?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+
+    expect(document.activeElement).toBe(replacement);
+    expect(menu.querySelector('[data-value="viewer"]')).toBe(item);
+    expect(menu.querySelector('[role="menu"]')?.matches(":popover-open")).toBe(false);
+  });
 });

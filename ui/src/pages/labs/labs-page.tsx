@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { For, createEffect, createSignal, untrack } from "solid-js";
+import { For, createSignal, onSettled } from "solid-js";
 import { pathForPluginSettings } from "../../app-route-paths.ts";
 import {
   LearnMoreLink,
@@ -32,8 +32,7 @@ import {
 
 export function LabsPage() {
   const context = useApplication();
-  // The mounted projection is seeded once; source replacement is bound below.
-  const config = projectRuntimeConfig(untrack(() => context.runtimeConfig));
+  const config = projectRuntimeConfig(context.runtimeConfig);
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   let pending: { featureId: string; value: boolean | string } | null = null;
   let saveError: string | null = null;
@@ -54,17 +53,9 @@ export function LabsPage() {
       publish();
     },
   });
-  // Config replacements retire pending saves before reloading and resubscribing.
-  createEffect(
-    () => context.runtimeConfig,
-    (runtimeConfig) => {
-      config.replaceSource(runtimeConfig);
-      pending = null;
-      saveError = null;
-      publish();
-      void runtimeConfig.ensureLoaded();
-    },
-  );
+  onSettled(() => {
+    void context.runtimeConfig.ensureLoaded();
+  });
 
   function editableConfig(): Record<string, unknown> | null {
     return resolveEditableSnapshotConfig(config.read().state.configSnapshot);

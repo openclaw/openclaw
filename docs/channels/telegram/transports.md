@@ -70,6 +70,12 @@ deduplication, not exactly-once processing. See
 
 ### Replay limits
 
+Callback processing failures caused by changed requester authority or an expired
+Telegram callback query are recorded as terminal failures and release the chat
+lane immediately. Transient callback failures keep the normal retry policy.
+An expired acknowledgment alone does not discard the button action: authorization
+and ordered processing still run.
+
 During upgrades, legacy spool updates older than 24 hours become
 `stale-legacy-import` failure tombstones, using their original receipt or message/edit
 date. Fresh updates still dispatch; original source bytes and import receipts stay

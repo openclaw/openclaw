@@ -644,15 +644,13 @@ describe("ChatAudioPlayer", () => {
 
   it("cancels the old source when identity changes during rendition preparation", async () => {
     let resolveFetch: ((response: Response) => void) | undefined;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(
-        async () =>
-          await new Promise<Response>((resolve) => {
-            resolveFetch = resolve;
-          }),
-      ),
+    const fetchMock = vi.fn<typeof fetch>(
+      async () =>
+        await new Promise<Response>((resolve) => {
+          resolveFetch = resolve;
+        }),
     );
+    vi.stubGlobal("fetch", fetchMock);
     const player = await createPlayer("identity-before");
     const media = player.querySelector("audio")!;
     const { play, pause } = mockActivePlayback(media);
@@ -661,9 +659,19 @@ describe("ChatAudioPlayer", () => {
     player.sourceIdentity = "media://identity-after";
     player.label = "after.caf";
     player.playback = "transcode";
+    player.authToken = "new-principal";
+    expect(pause).toHaveBeenCalledOnce();
+    expect(fetchMock).not.toHaveBeenCalled();
     await waitForSolid(() => expect(player.textContent).toContain("Preparing playback…"));
 
     expect(pause).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "/__openclaw__/assistant-media?source=after.caf&mediaTicket=ticket&playback=1",
+    );
+    expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("Authorization")).toBe(
+      "Bearer new-principal",
+    );
     expect(media.hasAttribute("src")).toBe(false);
     resolveFetch?.(new Response(null, { status: 200 }));
     await waitForSolid(() => expect(media.getAttribute("src")).toContain("playback=1"));

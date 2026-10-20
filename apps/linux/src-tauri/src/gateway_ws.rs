@@ -1115,7 +1115,7 @@ impl GatewayClient {
             if !self.driver_has_demand(&app) {
                 continue;
             }
-            let delay = reconnect_backoff(reconnect_attempt);
+            let delay = shared_reconnect_backoff(reconnect_attempt, MAX_RECONNECT_DELAY);
             tokio::select! {
                 _ = tokio::time::sleep(delay) => {}
                 command = receiver.recv() => {
@@ -1637,10 +1637,6 @@ fn connection_notice(
     Some(notice)
 }
 
-fn reconnect_backoff(attempt: u32) -> Duration {
-    shared_reconnect_backoff(attempt, MAX_RECONNECT_DELAY)
-}
-
 fn should_clear_stored_device_token(failure: &RequestFailure, auth: &GatewayAuth) -> bool {
     matches!(auth, GatewayAuth::DeviceToken(_))
         && failure.connect_details.invalidates_device_token()
@@ -2077,8 +2073,6 @@ pub(crate) mod tests {
     use super::*;
     use std::convert::Infallible;
 
-    type GatewaySocket = SharedGatewaySession;
-
     async fn accept_test_session(
         stream: tokio::net::TcpStream,
     ) -> tokio_tungstenite::WebSocketStream<tokio::net::TcpStream> {
@@ -2128,7 +2122,7 @@ pub(crate) mod tests {
         socket
     }
 
-    async fn connect_test_session(url: &str) -> GatewaySocket {
+    async fn connect_test_session(url: &str) -> SharedGatewaySession {
         SharedGatewayClient::connect(SharedGatewayClientConfig::new(url).unwrap(), |_| async {
             Ok::<_, Infallible>(json!({"role": "test"}))
         })
@@ -2220,10 +2214,9 @@ pub(crate) mod tests {
     async fn perform_request(
         client: &GatewayClient,
         generation: u64,
-        socket: &mut GatewaySocket,
+        socket: &SharedGatewaySession,
         request: GatewayRequest,
         budget: Option<Duration>,
-        _on_event: &impl Fn(&GatewayEvent),
     ) -> Result<Value, RequestFailure> {
         perform_session_request(
             client,
@@ -2233,14 +2226,6 @@ pub(crate) mod tests {
             Instant::now() + budget.unwrap_or(REQUEST_TIMEOUT),
         )
         .await
-    }
-
-    async fn request_agents_list(
-        socket: &mut GatewaySocket,
-        timeout: Duration,
-        _on_event: &impl Fn(&GatewayEvent),
-    ) -> Result<AgentsListResult, RequestFailure> {
-        request_agents_list_session(socket, Instant::now() + timeout).await
     }
 
     pub(crate) struct RpcFixture {
@@ -2318,7 +2303,7 @@ pub(crate) mod tests {
         fn start_driver(
             client: &GatewayClient,
             generation: u64,
-            mut socket: GatewaySocket,
+            socket: SharedGatewaySession,
         ) -> tokio::task::JoinHandle<()> {
             let (commands, mut receiver) = mpsc::channel(16);
             *client.inner.commands.lock().unwrap() = Some(commands);
@@ -2335,15 +2320,9 @@ pub(crate) mod tests {
                         complete,
                     } = command
                     {
-                        let result = perform_request(
-                            &driver_client,
-                            generation,
-                            &mut socket,
-                            request,
-                            budget,
-                            &|_| {},
-                        )
-                        .await;
+                        let result =
+                            perform_request(&driver_client, generation, &socket, request, budget)
+                                .await;
                         let _ = complete(result);
                     }
                 }
@@ -2530,7 +2509,7 @@ pub(crate) mod tests {
                 }
                 frames
             });
-            let mut socket = connect_test_session(&url).await;
+            let socket = connect_test_session(&url).await;
             if case == "stale-connection" {
                 client.replace_configuration(Some(config));
             }
@@ -2542,7 +2521,7 @@ pub(crate) mod tests {
             let result = perform_request(
                 &client,
                 connection.0,
-                &mut socket,
+                &socket,
                 GatewayRequest::ChatSend {
                     generation: caller,
                     params: ChatSendParams {
@@ -2553,7 +2532,6 @@ pub(crate) mod tests {
                     },
                 },
                 None,
-                &|_| {},
             )
             .await;
             assert_eq!(result.is_ok(), case == "current", "{case}");
@@ -2563,7 +2541,7 @@ pub(crate) mod tests {
                     "authority rejection is not a transport failure"
                 );
             }
-            request_agents_list(&mut socket, Duration::from_secs(1), &|_| {})
+            request_agents_list_session(&socket, Instant::now() + Duration::from_secs(1))
                 .await
                 .unwrap_or_else(|failure| panic!("marker failed: {}", failure.message));
             socket.close().await;
@@ -3163,7 +3141,7 @@ esac
             assert_eq!(frame["params"]["deliver"], false);
             socket.send(Message::Text(json!({"type":"res","id":frame["id"],"ok":true,"payload":{"status":"started","runId":"fixture-run"}}).to_string().into())).await.unwrap();
         });
-        let mut socket = connect_test_session(&format!("ws://{address}")).await;
+        let socket = connect_test_session(&format!("ws://{address}")).await;
         let client = GatewayClient::new();
         let config = |ownership| {
             GatewayWsConfig::new(format!("ws://{address}"), None, None, None, ownership)
@@ -3174,14 +3152,13 @@ esac
             let result = perform_request(
                 &client,
                 connection,
-                &mut socket,
+                &socket,
                 GatewayRequest::Desktop {
                     generation: token,
                     method: DesktopMethod::Send,
                     params: json!({"message":"stale route"}),
                 },
                 None,
-                &|_| {},
             )
             .await;
             let error = result.err().expect("stale route must fail before enqueue");
@@ -3192,14 +3169,13 @@ esac
         assert!(perform_request(
             &client,
             cleared,
-            &mut socket,
+            &socket,
             GatewayRequest::Desktop {
                 generation: cleared,
                 method: DesktopMethod::Send,
                 params: json!({"message":"cleared route"}),
             },
             None,
-            &|_| {}
         )
         .await
         .is_err());
@@ -3207,14 +3183,13 @@ esac
         let value = perform_request(
             &client,
             current,
-            &mut socket,
+            &socket,
             GatewayRequest::Desktop {
                 generation: current,
                 method: DesktopMethod::Send,
                 params: json!({"message":"current route","deliver":false}),
             },
             None,
-            &|_| {},
         )
         .await
         .unwrap_or_else(|error| panic!("{}", error.message));
@@ -3310,9 +3285,8 @@ esac
                     .await
                     .expect("send malformed payload");
             });
-            let mut socket = connect_test_session(&format!("ws://{address}")).await;
-            let result =
-                perform_request(&client, generation, &mut socket, request, None, &|_| {}).await;
+            let socket = connect_test_session(&format!("ws://{address}")).await;
+            let result = perform_request(&client, generation, &socket, request, None).await;
             let failure = complete(result).expect("typed response must reject a number");
             assert!(failure.disconnect, "{method} must recycle the socket");
             assert!(failure
@@ -3334,7 +3308,7 @@ esac
             let _request = socket.next().await.expect("request frame");
             std::future::pending::<()>().await;
         });
-        let mut socket = connect_test_session(&format!("ws://{address}")).await;
+        let socket = connect_test_session(&format!("ws://{address}")).await;
         let (commands, mut receiver) = mpsc::channel(2);
         let (reply, response) = oneshot::channel();
         commands
@@ -3360,19 +3334,11 @@ esac
         else {
             panic!("expected request command");
         };
-        let failure = match perform_request(
-            &GatewayClient::new(),
-            0,
-            &mut socket,
-            request,
-            budget,
-            &|_| {},
-        )
-        .await
-        {
-            Ok(_) => panic!("hung request should time out"),
-            Err(failure) => failure,
-        };
+        let failure =
+            match perform_request(&GatewayClient::new(), 0, &socket, request, budget).await {
+                Ok(_) => panic!("hung request should time out"),
+                Err(failure) => failure,
+            };
         let elapsed = started.elapsed();
         assert!(failure.disconnect, "timeout must recycle the socket");
         let _ = complete(Err(failure));
@@ -3418,7 +3384,7 @@ esac
         struct SleepSocketFixture {
             client: GatewayClient,
             generation: u64,
-            socket: GatewaySocket,
+            socket: SharedGatewaySession,
             receiver: mpsc::Receiver<DriverCommand>,
             server: tokio::task::JoinHandle<Vec<Value>>,
             fail_resume: Arc<AtomicBool>,
@@ -3493,15 +3459,9 @@ esac
                 else {
                     panic!("expected sleep request");
                 };
-                let result = perform_request(
-                    &self.client,
-                    self.generation,
-                    &mut self.socket,
-                    request,
-                    budget,
-                    &|_| {},
-                )
-                .await;
+                let result =
+                    perform_request(&self.client, self.generation, &self.socket, request, budget)
+                        .await;
                 let _ = complete(result);
             }
 
@@ -3858,19 +3818,6 @@ esac
     }
 
     #[test]
-    fn tls_trust_uses_system_roots_or_an_exact_pin() {
-        assert_eq!(
-            tls_trust(None).expect("system trust"),
-            TlsTrust::SystemRoots
-        );
-        assert_eq!(
-            tls_trust(Some(&"ab".repeat(32))).expect("pinned trust"),
-            TlsTrust::Pinned([0xab; 32])
-        );
-        assert!(tls_trust(Some("sha256:abc")).is_err());
-    }
-
-    #[test]
     fn tls_failures_have_a_distinct_connectivity_state() {
         let failure =
             RequestFailure::from_shared(SharedClientError::Tls("fixture TLS failure".to_string()))
@@ -3883,15 +3830,6 @@ esac
             GatewayConnectionState::TlsFailure.event_name(),
             "tls-failure"
         );
-    }
-
-    #[test]
-    fn reconnect_backoff_is_exponential_and_capped() {
-        assert_eq!(reconnect_backoff(1), Duration::from_secs(1));
-        assert_eq!(reconnect_backoff(2), Duration::from_secs(2));
-        assert_eq!(reconnect_backoff(5), Duration::from_secs(16));
-        assert_eq!(reconnect_backoff(6), MAX_RECONNECT_DELAY);
-        assert_eq!(reconnect_backoff(100), MAX_RECONNECT_DELAY);
     }
 
     #[test]

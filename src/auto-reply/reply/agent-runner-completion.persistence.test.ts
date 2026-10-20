@@ -7,6 +7,7 @@ import { persistSessionTranscriptTurn } from "../../config/sessions/session-acce
 import { drainSessionStoreWriterQueuesForTest } from "../../config/sessions/store-writer-state.test-support.js";
 import { createSessionActivitySummaries } from "../../gateway/session-activity-summaries.js";
 import type { defaultCompleteModel } from "../../gateway/session-observer-model.js";
+import type { ReplyOperation } from "../../sessions/session-controller.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { runOutsideStoreWriterContext } from "../../shared/store-writer-queue.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
@@ -21,7 +22,6 @@ import {
   observeCompletionCommands,
 } from "./agent-runner-result-accounting.persistence.test-support.js";
 import { finalizeReplyAgentRun } from "./agent-runner-result.js";
-import type { ReplyOperation } from "./reply-run-registry.js";
 
 let root: string;
 let storePath: string;

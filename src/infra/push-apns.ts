@@ -2,7 +2,6 @@ import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coerc
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { ChannelApprovalKind } from "./approval-types.js";
-import type { DeviceIdentity } from "./device-identity.js";
 import { toErrorObject } from "./errors.js";
 import { getApnsBearerToken, type ApnsAuthConfig } from "./push-apns-auth.js";
 import {
@@ -26,7 +25,6 @@ import {
 import {
   type ApnsRelayConfig,
   type ApnsRelayPushResponse,
-  type ApnsRelayRequestSender,
   resolveApnsRelayConfigFromEnv,
   sendApnsRelayPush,
 } from "./push-apns.relay.js";
@@ -313,14 +311,11 @@ type DirectApnsTransportParams = ApnsTransportCommonParams & {
   auth: ApnsAuthConfig;
   requestSender?: ApnsRequestSender;
   relayConfig?: never;
-  relayRequestSender?: never;
 };
 
 type RelayApnsTransportParams = ApnsTransportCommonParams & {
   registration: RelayApnsRegistration;
   relayConfig: ApnsRelayConfig;
-  relayRequestSender?: ApnsRelayRequestSender;
-  relayGatewayIdentity?: Pick<DeviceIdentity, "deviceId" | "privateKeyPem">;
   auth?: never;
   requestSender?: never;
 };
@@ -403,8 +398,6 @@ async function sendApnsPush(
       payload: params.payload,
       pushType: params.pushType,
       priority,
-      gatewayIdentity: relayParams.relayGatewayIdentity,
-      requestSender: relayParams.relayRequestSender,
       ...lifecycleControls,
     });
     return toPushResult({ registration, response });

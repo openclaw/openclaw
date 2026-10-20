@@ -24,7 +24,7 @@ import {
   syncToolCardExpansionState,
 } from "../chat-thread.ts";
 import { buildChatArchiveNotice } from "./chat-divider.ts";
-import * as groups from "./chat-message-group-view.tsx";
+import type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
 import { assistantMediaPolicyKey } from "./chat-message-media.ts";
 import type { StreamGroupOptions } from "./chat-message-stream-view.tsx";
 import { projectRealtimeTalkConversation } from "./chat-realtime-controls.ts";
@@ -282,7 +282,6 @@ export function projectChatTranscript(
     recapAttached && key === tailStatusOwner?.key ? (turnRecap ?? undefined) : undefined;
   const resolveReplyPreview = createReplyPreviewResolver(loadedReplySources, props);
   const sharedMessageRenderOptions = {
-    entryRefFor: transcript.entryAnimations.refFor,
     presented,
     onReply: props.onSetReply
       ? (target) => state.transcriptRenderContext.onSetReply?.(target)
@@ -331,6 +330,7 @@ export function projectChatTranscript(
     subagentActivity: subagents.activity.length
       ? {
           rows: subagents.activity,
+          presented,
           turnStartedAt: subagents.wait ? workingIndicator?.request?.askedAt : undefined,
           onOpenSubagent: props.onOpenSubagent,
           onOpenSession: props.onOpenSession,
@@ -405,7 +405,7 @@ export function projectChatTranscript(
       turnRecap: recapForGroup(item.key),
       latestAssistant: item.key === latestAssistantItemKey,
       searchResult: searchFiltering,
-    } satisfies Parameters<typeof groups.renderSolidMessageGroup>[1];
+    } satisfies NativeMessageGroupOptions;
   };
   // Only the working indicator shows live usage and subagent status, so rows
   // without one keep memoizing across usage and child-roster patches.

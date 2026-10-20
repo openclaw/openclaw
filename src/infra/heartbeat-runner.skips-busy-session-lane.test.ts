@@ -1,11 +1,10 @@
+// Covers heartbeat drops decided by the target session's mailbox admission.
+
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { preemptAndDrainEmbeddedHeartbeatRun } from "../agents/embedded-agent-runner/runs.js";
 import {
-  clearActiveEmbeddedRun,
-  isEmbeddedAgentRunActive,
-  preemptAndDrainEmbeddedHeartbeatRun,
-  setActiveEmbeddedRun,
-} from "../agents/embedded-agent-runner/runs.js";
-import {
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
   createEmbeddedRunHandle,
   testing as embeddedRunTesting,
 } from "../agents/embedded-agent-runner/runs.test-support.js";
@@ -16,21 +15,14 @@ import {
 } from "../auto-reply/reply/agent-runner.test-fixtures.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
 import { resolveReplyOperationRunState } from "../auto-reply/reply/reply-operation-run-state.js";
-import {
-  createReplyOperation,
-  waitForReplyRunSuccessorAdmission,
-} from "../auto-reply/reply/reply-run-registry.js";
-import { testing as replyRunRegistryTesting } from "../auto-reply/reply/reply-run-registry.test-support.js";
 import { createMockTypingController } from "../auto-reply/reply/test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  clearCronJobActive,
-  markCronJobActive,
-  markCronJobWaitingForHeartbeat,
-  resetCronActiveJobs,
-} from "../cron/active-jobs.js";
+import { clearCronJobActive, markCronJobActive, resetCronActiveJobs } from "../cron/active-jobs.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
-import { CommandLane } from "../process/lanes.js";
+import { withSessionTurn } from "../sessions/session-controller.admission.js";
+import { createReplyOperation } from "../sessions/session-controller.js";
+import { isSessionRunActive } from "../sessions/session-controller.queries.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { getAgentEventLifecycleGeneration } from "./agent-events.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "./heartbeat-events.js";
@@ -41,10 +33,7 @@ import {
   seedMainSessionStore,
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
-import {
-  HEARTBEAT_SKIP_CRON_IN_PROGRESS,
-  HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
-} from "./heartbeat-wake.js";
+import { HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT } from "./heartbeat-wake.js";
 import { resetSystemEventsForTest, enqueueSystemEvent, peekSystemEvents } from "./system-events.js";
 
 vi.mock("jiti", () => ({ createJiti: () => () => ({}) }));
@@ -75,7 +64,6 @@ beforeEach(() => {
   embeddedRunTesting.resetActiveEmbeddedRuns();
   resetSystemEventsForTest();
   resetCronActiveJobs();
-  replyRunRegistryTesting.resetReplyRunRegistry();
 });
 afterEach(() => resetHeartbeatEventsForTest());
 
@@ -105,7 +93,6 @@ function createCase({ storePath, replySpy }: { storePath: string; replySpy: Hear
         cfg,
         ...overrides,
         deps: {
-          getQueueSize: () => 0,
           nowMs: () => Date.now(),
           getReplyFromConfig: replySpy,
           ...deps,
@@ -135,22 +122,22 @@ function recoveryDelivery(
     restartRecoveryRuns: [{ runId, lifecycleGeneration }],
   };
 }
-function markHeartbeatWaitOwners(...jobIds: string[]) {
-  const markers = jobIds
-    .map((jobId) => markCronJobActive(jobId))
-    .filter((marker): marker is NonNullable<typeof marker> => marker !== undefined);
-  const releases = markers.map((marker) => markCronJobWaitingForHeartbeat(marker));
-  return () => {
-    for (const release of releases) {
-      release();
-    }
-    for (const marker of markers) {
-      clearCronJobActive(marker.jobId, marker);
-    }
-  };
+// Holds a running controller turn; "cron" holds unrelated automation work instead.
+function holdBusy(target: string) {
+  if (target === "cron") {
+    const marker = markCronJobActive("unrelated-job");
+    return () => clearCronJobActive("unrelated-job", marker);
+  }
+  const operation = createReplyOperation({
+    sessionKey: target,
+    sessionId: "busy-session",
+    resetTriggered: false,
+  });
+  operation.setPhase("running");
+  return () => operation.complete();
 }
 
-describe("heartbeat runner busy ownership", () => {
+describe("heartbeat runner skips when target session is busy", () => {
   it(
     "defers scheduled heartbeat while main-session restart recovery owns the session",
     heartbeatCase(async ({ seed, run, replySpy }) => {
@@ -216,65 +203,61 @@ describe("heartbeat runner busy ownership", () => {
   it.each([
     { content: "# Heartbeat scratch\n\n## Tasks\n\n", reason: "empty-heartbeat-file" },
     { content: "- Check status\n", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT },
-  ])("handles scheduled scratch before busy queues: $reason", async ({ content, reason }) =>
+  ])("handles scheduled scratch before busy admission: $reason", async ({ content, reason }) =>
     heartbeatCase(async ({ seed, run, replySpy }) => {
-      await seed();
+      const release = holdBusy(await seed());
       await seedHeartbeatScratchForTest({ content });
-      expectBusy(
-        await run(
-          {
+      try {
+        expectBusy(
+          await run({
             source: "interval",
             intent: "scheduled",
             reason: "interval",
             scheduledEveryMs: 30 * 60_000,
-          },
-          {
-            getQueueSize: (lane) => (lane === CommandLane.Main ? 2 : 0),
-          },
-        ),
-        replySpy,
-        reason,
-      );
+          }),
+          replySpy,
+          reason,
+        );
+      } finally {
+        release();
+      }
     })(),
   );
 
-  it.each([false, true])(
-    "exempts waiting cron owners but blocks unrelated work: %s",
-    async (unrelated) =>
-      heartbeatCase(async ({ seed, run, replySpy }) => {
-        await seed();
-        replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
-        const release = markHeartbeatWaitOwners("report-a", "report-b");
-        if (unrelated) {
-          markCronJobActive("unrelated-job");
-        }
-        try {
-          const result = await run({ source: "cron", reason: "heartbeat-task:report-a" });
-          if (unrelated) {
-            expectBusy(result, replySpy, HEARTBEAT_SKIP_CRON_IN_PROGRESS);
-          } else {
-            expect(result.status).toBe("ran");
-            expect(replySpy).toHaveBeenCalledOnce();
-          }
-        } finally {
-          release();
-        }
-      })(),
-  );
-
-  it(
-    "returns cron-in-progress when cron lanes have queued work",
+  it.each([
+    { busy: "nothing", dropped: false },
+    { busy: "another session of the same agent", dropped: false },
+    { busy: "unrelated automation", dropped: false },
+    { busy: "the target session", dropped: true },
+  ])("drops a scheduled heartbeat only for its own session: $busy", async ({ busy, dropped }) =>
     heartbeatCase(async ({ seed, run, replySpy }) => {
-      await seed();
-      expectBusy(
-        await run({}, { getQueueSize: (lane) => Number(lane === CommandLane.Cron) }),
-        replySpy,
-        HEARTBEAT_SKIP_CRON_IN_PROGRESS,
-      );
-    }),
+      const sessionKey = await seed();
+      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+      const release =
+        busy === "nothing"
+          ? undefined
+          : holdBusy(
+              busy === "unrelated automation"
+                ? "cron"
+                : dropped
+                  ? sessionKey
+                  : "agent:main:telegram:alerts",
+            );
+      try {
+        const result = await run({ intent: "scheduled" });
+        if (dropped) {
+          expectBusy(result, replySpy);
+        } else {
+          expect(result.status).toBe("ran");
+          expect(replySpy).toHaveBeenCalledOnce();
+        }
+      } finally {
+        release?.();
+      }
+    })(),
   );
 
-  it.each(["active-cron", "session", "session-reply", "session-embedded"] as const)(
+  it.each(["another session", "own session"] as const)(
     "delivers targeted exec failure unless its own session is busy: %s",
     async (busy) =>
       heartbeatCase(async ({ cfg, seed, run, replySpy }) => {
@@ -283,65 +266,28 @@ describe("heartbeat runner busy ownership", () => {
         const text = "Exec failed (ci-watch, code 1) :: GitHub connection closed";
         enqueueSystemEvent(text, { sessionKey, contextKey: "exec:ci-watch" });
         replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
-        const activeCron = busy === "active-cron" ? markCronJobActive("unrelated-job") : undefined;
-        const replyOperation =
-          busy === "session-reply"
-            ? createReplyOperation({
-                sessionKey,
-                sessionId: "targeted-busy-reply",
-                resetTriggered: false,
-              })
-            : undefined;
-        replyOperation?.setPhase("running");
-        const embeddedHandle = busy === "session-embedded" ? createEmbeddedRunHandle() : undefined;
-        if (embeddedHandle) {
-          setActiveEmbeddedRun("targeted-busy-embedded", embeddedHandle, sessionKey);
-        }
+        const release = holdBusy(
+          busy === "own session" ? sessionKey : "agent:main:telegram:alerts",
+        );
         try {
-          const result = await run(
-            { source: "exec-event", intent: "event", reason: "exec-event", sessionKey },
-            {
-              getQueueSize: (lane) =>
-                Number(busy === "session" && lane === `session:${sessionKey}`),
-            },
-          );
-          if (busy.startsWith("session")) {
+          const result = await run({
+            source: "exec-event",
+            intent: "event",
+            reason: "exec-event",
+            sessionKey,
+          });
+          if (busy === "own session") {
             expectBusy(result, replySpy);
             expect(peekSystemEvents(sessionKey)).toEqual([text]);
           } else {
             expect(result.status).toBe("ran");
-            expect(replySpy).toHaveBeenCalledOnce();
             expect(replySpy.mock.calls[0]?.[0].Body).toContain(text);
             expect(peekSystemEvents(sessionKey)).toEqual([]);
           }
         } finally {
-          replyOperation?.complete();
-          if (embeddedHandle) {
-            clearActiveEmbeddedRun("targeted-busy-embedded", embeddedHandle, sessionKey);
-          }
-          if (activeCron) {
-            clearCronJobActive(activeCron.jobId, activeCron);
-          }
+          release();
         }
       })(),
-  );
-
-  it(
-    "returns requests-in-flight when a reply run is still active after queues drain",
-    heartbeatCase(async ({ seed, run, replySpy }) => {
-      const sessionKey = await seed();
-      const operation = createReplyOperation({
-        sessionKey,
-        sessionId: "active-reply-session",
-        resetTriggered: false,
-      });
-      operation.setPhase("running");
-      try {
-        expectBusy(await run(), replySpy);
-      } finally {
-        operation.complete();
-      }
-    }),
   );
 
   it(
@@ -380,99 +326,125 @@ describe("heartbeat runner busy ownership", () => {
     }),
   );
 
-  it(
-    "retains exec work when foreground execution wins late admission",
-    heartbeatCase(async ({ cfg, storePath, seed, run, replySpy }) => {
-      const sessionKey = await seed();
-      const text = "Exec completed (late-run, code 0) :: result";
-      enqueueSystemEvent(text, { sessionKey, contextKey: "exec:late-run" });
-      replySpy.mockImplementationOnce(async (ctx, options: InternalGetReplyOptions | undefined) => {
-        const operation = options?.replyOperation;
-        if (!operation) {
-          throw new Error("Expected admitted heartbeat operation");
-        }
-        const handle = createEmbeddedRunHandle();
-        setActiveEmbeddedRun(operation.sessionId, handle, sessionKey);
-        try {
-          const reply = await runReplyAgent({
-            commandBody: text,
-            followupRun: createTestFollowupRun({
-              sessionId: operation.sessionId,
-              sessionKey,
-              config: cfg,
-            }),
-            queueKey: sessionKey,
-            resolvedQueue: createTestQueueSettings(),
-            shouldSteer: false,
-            shouldFollowup: false,
-            isActive: isEmbeddedAgentRunActive(operation.sessionId),
-            opts: options,
-            typing: createMockTypingController(),
-            sessionKey,
-            storePath,
-            defaultModel: "test/model",
-            resolvedVerboseLevel: "off",
-            isNewSession: false,
-            blockStreamingEnabled: false,
-            resolvedBlockStreamingBreak: "message_end",
-            sessionCtx: ctx,
-            shouldInjectGroupIntro: false,
-            typingMode: "never",
-            replyOperation: operation,
-          });
-          expect(resolveReplyOperationRunState(options)?.admission).toEqual({
-            status: "skipped",
-            reason: "active-run",
-          });
-          return reply;
-        } finally {
-          clearActiveEmbeddedRun(operation.sessionId, handle, sessionKey);
-        }
-      });
-      const wake = {
-        source: "exec-event",
-        reason: "exec-event",
-        intent: "event",
-        sessionKey,
-      } as const;
-      const result = await run(wake);
-      expect(replySpy).toHaveBeenCalledOnce();
-      expect(result).toEqual({ status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT });
-      expect(getLastHeartbeatEvent()).toMatchObject(result);
-      expect(peekSystemEvents(sessionKey)).toEqual([text]);
-      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
-      expect((await run(wake)).status).toBe("ran");
-      expect(replySpy).toHaveBeenCalledTimes(2);
-      expect(peekSystemEvents(sessionKey)).toEqual([]);
-    }),
+  it.each([
+    {
+      source: "exec-event" as const,
+      intent: "event" as const,
+      reason: "exec-event",
+      contextKey: "exec:late-run",
+      text: "Exec completed (late-run, code 0) :: result",
+    },
+    {
+      source: "cron" as const,
+      intent: "immediate" as const,
+      reason: "cron:late-run",
+      contextKey: "cron:late-run",
+      text: "Check the scheduled report",
+    },
+  ])(
+    "retains $source work when foreground execution wins late admission",
+    async ({ source, intent, reason, contextKey, text }) =>
+      heartbeatCase(async ({ cfg, storePath, seed, run, replySpy }) => {
+        const sessionKey = await seed();
+        enqueueSystemEvent(text, { sessionKey, contextKey });
+        replySpy.mockImplementationOnce(
+          async (ctx, options: InternalGetReplyOptions | undefined) => {
+            const operation = options?.replyOperation;
+            if (!operation) {
+              throw new Error("Expected admitted heartbeat operation");
+            }
+            // The backend becomes active after monitor preflight and outer dispatch admission.
+            const handle = createEmbeddedRunHandle();
+            setActiveEmbeddedRun(operation.sessionId, handle, sessionKey);
+            try {
+              const reply = await runReplyAgent({
+                commandBody: text,
+                followupRun: createTestFollowupRun({
+                  sessionId: operation.sessionId,
+                  sessionKey,
+                  config: cfg,
+                }),
+                queueKey: sessionKey,
+                resolvedQueue: createTestQueueSettings(),
+                shouldSteer: false,
+                shouldFollowup: false,
+                isActive: isSessionRunActive(operation.sessionId),
+                opts: options,
+                typing: createMockTypingController(),
+                sessionKey,
+                storePath,
+                defaultModel: "test/model",
+                resolvedVerboseLevel: "off",
+                isNewSession: false,
+                blockStreamingEnabled: false,
+                resolvedBlockStreamingBreak: "message_end",
+                sessionCtx: ctx,
+                shouldInjectGroupIntro: false,
+                typingMode: "never",
+                replyOperation: operation,
+              });
+              expect(resolveReplyOperationRunState(options)?.admission).toEqual({
+                status: "skipped",
+                reason: "active-run",
+              });
+              return reply;
+            } finally {
+              clearActiveEmbeddedRun(operation.sessionId, handle, sessionKey);
+            }
+          },
+        );
+        const wake = { source, reason, intent, sessionKey };
+        const result = await run(wake);
+
+        expect(replySpy).toHaveBeenCalledOnce();
+        expect(result).toEqual({ status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT });
+        expect(getLastHeartbeatEvent()).toMatchObject(result);
+        expect(peekSystemEvents(sessionKey)).toEqual([text]);
+
+        replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+        expect((await run(wake)).status).toBe("ran");
+        expect(replySpy).toHaveBeenCalledTimes(2);
+        expect(peekSystemEvents(sessionKey)).toEqual([]);
+      })(),
   );
 
   it(
     "does not infer admission rejection from a replacement run after an empty heartbeat",
     heartbeatCase(async ({ seed, run, replySpy }) => {
       const sessionKey = await seed();
-      let operation: ReturnType<typeof createReplyOperation> | undefined;
+      const heartbeatEntered = createDeferredCore();
+      const replacementQueued = createDeferredCore();
+      const releaseReplacement = createDeferredCore();
       replySpy.mockImplementation(async (_ctx, options: InternalGetReplyOptions | undefined) => {
         const runState = resolveReplyOperationRunState(options);
         if (!runState || !options?.replyOperation) {
           throw new Error("Expected heartbeat reply operation state");
         }
         runState.admission = { status: "owned" };
+        heartbeatEntered.resolve();
+        await replacementQueued.promise;
         options.replyOperation.complete();
-        await waitForReplyRunSuccessorAdmission(sessionKey, null);
-        operation = createReplyOperation({
-          sessionKey,
-          sessionId: "racing-visible-session",
-          resetTriggered: false,
-        });
-        operation.setPhase("running");
         return undefined;
       });
+      const heartbeat = run();
+      await heartbeatEntered.promise;
+      // The replacement queues on the session mailbox like a real visible turn and
+      // takes the slot as soon as the empty heartbeat releases its claim.
+      const replacement = withSessionTurn(
+        { sessionKey, sessionId: "racing-visible-session" },
+        async (operation) => {
+          operation?.setPhase("running");
+          await releaseReplacement.promise;
+        },
+      );
+      replacementQueued.resolve();
       try {
-        expect((await run()).status).toBe("ran");
+        expect((await heartbeat).status).toBe("ran");
+        expect(isSessionRunActive("racing-visible-session")).toBe(true);
         expect(replySpy).toHaveBeenCalledOnce();
       } finally {
-        operation?.complete();
+        releaseReplacement.resolve();
+        await replacement;
       }
     }),
   );

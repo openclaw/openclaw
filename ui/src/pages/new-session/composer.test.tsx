@@ -692,7 +692,7 @@ describe("new-session composer sizing lifecycle", () => {
 });
 
 describe("new-session composer attachment drops", () => {
-  it("rejects native file drops and pastes visibly and keeps restored attachments removable", () => {
+  it("rejects native file drops and pastes visibly and keeps restored attachments removable", async () => {
     const onUnsupportedAttachment = vi.fn();
     const { attachmentDraft, composer, rerender } = renderComposer({
       nativeTerminal: true,
@@ -711,6 +711,10 @@ describe("new-session composer attachment drops", () => {
     expect(attachmentDraft.attachments).toEqual([]);
     attachmentDraft.restore([{ id: "old", fileName: "old.txt", mimeType: "text/plain" }]);
     rerender();
+    await vi.dynamicImportSettled();
+    await waitForSolid(() =>
+      expect(composer.querySelector('[aria-label*="Remove"]')).not.toBeNull(),
+    );
     const remove = composer.querySelector<HTMLButtonElement>('[aria-label*="Remove"]');
     expect(remove?.disabled).toBe(false);
     remove?.click();

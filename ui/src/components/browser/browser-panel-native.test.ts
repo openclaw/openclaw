@@ -522,7 +522,7 @@ describe("native Browser panel ownership", () => {
     let cardRect = new DOMRect(200, 200, 300, 200);
     vi.spyOn(card, "getBoundingClientRect").mockImplementation(() => cardRect);
     document.body.append(card);
-    promoteToPopoverTopLayer(card);
+    promoteToPopoverTopLayer(card, () => [card]);
     flushFrames();
     expect(native.postMessage).not.toHaveBeenCalled();
 

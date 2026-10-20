@@ -428,7 +428,7 @@ describe("ensureLlamaServerInstalled", () => {
     expect(mocks.execFile.mock.calls.filter(([file]) => file === command)).toHaveLength(2);
   });
 
-  it("allows slow version initialization before publication, after publication, and on reuse", async () => {
+  it("allows slow version initialization during staging and on reuse", async () => {
     const { root, asset, runtime } = await createCpuArchive();
     const calls: Array<{ command: string; args: string[]; timeout?: number }> = [];
     mockCommand(async (command, args, options) => {
@@ -458,7 +458,7 @@ describe("ensureLlamaServerInstalled", () => {
         timeout: call.timeout,
       })),
     ).toEqual(
-      [false, false, true, true].map((published) => ({
+      [false, false, true].map((published) => ({
         published,
         args: ["--version"],
         timeout: 120_000,
@@ -611,8 +611,6 @@ describe("ensureLlamaServerInstalled", () => {
           validatedFiles.every((files) => runtime.files.every((file) => files.includes(file))),
         ).toBe(true);
         expect(commandCalls).toEqual([
-          { args: ["--version"], timeout: 120_000 },
-          { args: ["--list-devices"], timeout: 15_000 },
           { args: ["--version"], timeout: 120_000 },
           { args: ["--list-devices"], timeout: 15_000 },
         ]);

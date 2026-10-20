@@ -94,6 +94,7 @@ describe("AppSidebar agent chip", () => {
     expect(harness.list).toHaveBeenCalledWith({
       rowMode: "compact",
       source: "sidebar",
+      ifRowsRevision: "",
       spawnedBy: "agent:main:parent",
       limit: 100,
       includeGlobal: false,

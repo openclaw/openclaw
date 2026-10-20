@@ -1,10 +1,16 @@
 // Tests entrypoint respawn behavior for compile cache and process flags.
-import type { ChildProcess } from "node:child_process";
+import childProcess, { type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CLI_PARENT_BOUND_PRELOAD } from "../cli-parent-lifetime.mjs";
 import { buildCliRespawnPlan, runCliRespawnPlan } from "./entry.respawn.js";
+import { attachChildProcessBridge } from "./process/child-process-bridge.js";
+
+vi.mock("./process/child-process-bridge.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./process/child-process-bridge.js")>()),
+  attachChildProcessBridge: vi.fn(),
+}));
 
 const EXPERIMENTAL_WARNING_FLAG = "--disable-warning=ExperimentalWarning";
 const OPENCLAW_NODE_EXTRA_CA_CERTS_READY = "OPENCLAW_NODE_EXTRA_CA_CERTS_READY";
@@ -242,6 +248,8 @@ describe("runCliRespawnPlan", () => {
   const originalExitCode = process.exitCode;
   afterEach(() => {
     process.exitCode = originalExitCode;
+    vi.restoreAllMocks();
+    vi.mocked(attachChildProcessBridge).mockReset();
   });
   it("spawns the standalone plan without adding runtime flags", async () => {
     vi.stubGlobal("__openclawStandaloneRootUrl", "file:///app/runtime/");
@@ -253,12 +261,9 @@ describe("runCliRespawnPlan", () => {
         }),
       );
       const child = new EventEmitter() as ChildProcess;
-      const spawn = vi.fn(() => child);
-      const completion = runCliRespawnPlan(plan, {
-        spawn: spawn as unknown as typeof import("node:child_process").spawn,
-        attachChildProcessBridge: () => ({ detach: () => {} }),
-        writeError: vi.fn(),
-      });
+      const spawn = vi.spyOn(childProcess, "spawn").mockReturnValue(child);
+      vi.mocked(attachChildProcessBridge).mockReturnValue({ detach: vi.fn() });
+      const completion = runCliRespawnPlan(plan, vi.fn());
       expect(spawn.mock.calls[0]).toEqual([
         process.execPath,
         ["doctor"],
@@ -276,9 +281,9 @@ describe("runCliRespawnPlan", () => {
   it("records status after the respawn child closes", async () => {
     process.exitCode = undefined;
     const child = new EventEmitter() as ChildProcess;
-    const spawn = vi.fn(() => child);
+    const spawn = vi.spyOn(childProcess, "spawn").mockReturnValue(child);
     const detach = vi.fn();
-    const attachChildProcessBridge = vi.fn(() => ({ detach }));
+    vi.mocked(attachChildProcessBridge).mockReturnValue({ detach });
     const writeError = vi.fn();
 
     const completion = runCliRespawnPlan(
@@ -288,11 +293,7 @@ describe("runCliRespawnPlan", () => {
         env: { OPENCLAW_NODE_OPTIONS_READY: "1" },
         detachForProcessTree: true,
       },
-      {
-        spawn: spawn as unknown as typeof import("node:child_process").spawn,
-        attachChildProcessBridge,
-        writeError,
-      },
+      writeError,
     );
 
     expect(spawn).toHaveBeenCalledWith(
@@ -305,12 +306,12 @@ describe("runCliRespawnPlan", () => {
         windowsHide: !(process.stdin.isTTY || process.stdout.isTTY),
       },
     );
-    const [bridgeChild, bridgeOptions] = expectDefined<unknown[]>(
-      attachChildProcessBridge.mock.calls[0],
+    const [bridgeChild, onSignal] = expectDefined<unknown[]>(
+      vi.mocked(attachChildProcessBridge).mock.calls[0],
       "child process bridge attach call",
     );
     expect(bridgeChild).toBe(child);
-    expect(bridgeOptions).toEqual({ onSignal: expect.any(Function) });
+    expect(onSignal).toEqual(expect.any(Function));
 
     child.emit("exit", 7, null);
     expect(process.exitCode).toBeUndefined();

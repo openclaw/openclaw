@@ -87,7 +87,7 @@ const { isTerminalInteractive, offerInvalidConfigRecovery } = mocks;
 const { parkCurrentLaunchAgentForMaintenance, ensureDevGatewayConfig } = mocks;
 const { normalizeStateDirEnv, pinConfigDir, pinRuntimePaths, detectRespawnSupervisor } = mocks;
 const { loadGlobalRuntimeDotEnvFiles, refreshManagedProxy, loadShellEnvFallback } = mocks;
-const { clearShellEnvAppliedKeys, resolveShellEnvExpectedKeys } = mocks;
+const { clearShellEnvAppliedKeys } = mocks;
 const { shouldDeferShellEnvFallback, shouldEnableShellEnvFallback } = mocks;
 // mock-isolation: Record triage requests without running live diagnostics.
 vi.mock("../../commands/triage-failure.js", () => ({
@@ -513,7 +513,7 @@ describe("gateway run option collisions", () => {
     expect(gatewayStartOptions().ambientEnvTriggers).toBe("allow");
   });
 
-  it("loads configured shell env fallback before final proxy refresh and gateway startup", async () => {
+  it.each([false, true])("prepares shell env fallback (%s)", async (changed) => {
     await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: undefined }, async () => {
       const finalConfig = {
         env: {
@@ -527,32 +527,30 @@ describe("gateway run option collisions", () => {
         proxy: { enabled: true, proxyUrl: "http://127.0.0.1:29876" },
       };
       configState.snapshot = configSnapshot(finalConfig, { parsed: finalConfig });
-      readConfigFileSnapshotWithPluginMetadata
-        .mockImplementationOnce(async (options) => {
-          expect(options?.lowerPrecedenceEnv).toBeUndefined();
-          expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
-          return { snapshot: configState.snapshot };
-        })
-        .mockImplementationOnce(async (options) => {
-          expect(options?.lowerPrecedenceEnv).toEqual({
-            OPENCLAW_GATEWAY_TOKEN: "shell-token",
-          });
-          expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBe("shell-token");
-          return {
-            snapshot: {
+      let startupSnapshot = configState.snapshot;
+      readConfigFileSnapshotWithPluginMetadata.mockImplementationOnce(async (options) => {
+        expect(options?.lowerPrecedenceEnv).toBeUndefined();
+        expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
+        return { snapshot: startupSnapshot };
+      });
+      loadShellEnvFallback.mockImplementationOnce(() => {
+        if (changed) {
+          process.env.OPENCLAW_GATEWAY_TOKEN = "shell-token";
+          readConfigFileSnapshotWithPluginMetadata.mockImplementationOnce(async (options) => {
+            expect(options?.lowerPrecedenceEnv).toEqual({
+              OPENCLAW_GATEWAY_TOKEN: "shell-token",
+            });
+            expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBe("shell-token");
+            startupSnapshot = {
               ...configState.snapshot,
               config: {
                 ...finalConfig,
-                gateway: {
-                  ...finalConfig.gateway,
-                  auth: { mode: "token", token: "config-token" },
-                },
+                gateway: { mode: "local", auth: { mode: "token", token: "config-token" } },
               },
-            },
-          };
-        });
-      loadShellEnvFallback.mockImplementationOnce((opts?: unknown) => {
-        (opts as { env: NodeJS.ProcessEnv }).env.OPENCLAW_GATEWAY_TOKEN = "shell-token";
+            };
+            return { snapshot: startupSnapshot };
+          });
+        }
       });
       const uninstall = installGatewayRunRuntimeHooks({ refreshManagedProxy });
       try {
@@ -568,16 +566,15 @@ describe("gateway run option collisions", () => {
         logger: expect.any(Object),
         timeoutMs: 1234,
       });
-      expect(resolveShellEnvExpectedKeys).toHaveBeenCalledWith(
-        expect.objectContaining({ OPENCLAW_GATEWAY_TOKEN: "config-token" }),
-        finalConfig,
-      );
-      expect(readConfigFileSnapshotWithPluginMetadata).toHaveBeenCalledTimes(2);
+      expect(readConfigFileSnapshotWithPluginMetadata).toHaveBeenCalledTimes(changed ? 2 : 1);
+      expect(gatewayStartOptions().startupConfigSnapshotRead?.snapshot).toEqual(startupSnapshot);
       expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBe("config-token");
-      expect(clearShellEnvAppliedKeys).toHaveBeenCalledWith(["OPENCLAW_GATEWAY_TOKEN"]);
       const shellOrder = callOrder(loadShellEnvFallback);
       expect(shellOrder).toBeGreaterThan(callOrder(readConfigFileSnapshotWithPluginMetadata));
-      expect(callOrder(readConfigFileSnapshotWithPluginMetadata, 1)).toBeGreaterThan(shellOrder);
+      if (changed) {
+        expect(clearShellEnvAppliedKeys).toHaveBeenCalledWith(["OPENCLAW_GATEWAY_TOKEN"]);
+        expect(callOrder(readConfigFileSnapshotWithPluginMetadata, 1)).toBeGreaterThan(shellOrder);
+      }
       expect(callOrder(refreshManagedProxy)).toBeGreaterThan(shellOrder);
       expect(callOrder(startGatewayServer)).toBeGreaterThan(callOrder(refreshManagedProxy));
     });

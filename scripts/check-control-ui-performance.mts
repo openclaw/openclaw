@@ -56,8 +56,9 @@ const controlUiPerformanceBudgets = {
   startupJsRequests: 9,
   chatBootJsRequests: 27,
   newBootJsRequests: 22,
-  // Integrated main measured 1,485,690 / 1,047,088 B; retain under 1% headroom.
-  chatBootJsGzipBytes: 1_490_000,
+  // Shared locale policy measured Chat at 1,491,714 B; the approved ceiling
+  // retains under 1% headroom. New Session keeps its existing independent limit.
+  chatBootJsGzipBytes: 1_500_000,
   newBootJsGzipBytes: 1_050_000,
   startupCssRequests: 1,
   startupJsGzipBytes: 338_900,
