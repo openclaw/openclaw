@@ -354,14 +354,14 @@ if (
 if (
   values["compare-bundle-dir"].length &&
   (!values["bundle-dir"] ||
-    !values["warm-reload"] ||
+    (!values["warm-reload"] && !values["streaming-reply"]) ||
     !values.untraced ||
     cpuProfile ||
     values["compare-bundle-dir"].length > 2 ||
     runs % (values["compare-bundle-dir"].length + 1))
 ) {
   throw new Error(
-    "Bundle comparison requires complete cycles of two or three unprofiled warm bundles",
+    "Bundle comparison requires complete cycles of two or three unprofiled warm or streaming bundles",
   );
 }
 if (sidebarRowTransfer === "interleaved" && (runs < 14 || runs % 2 !== 0)) {

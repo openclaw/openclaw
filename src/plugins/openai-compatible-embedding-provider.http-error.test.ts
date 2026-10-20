@@ -86,6 +86,7 @@ describe("OpenAI-compatible embedding HTTP errors", () => {
         config: {},
         provider: "openai-compatible",
         model: "text-embedding-bge-m3",
+        dimensions: 3,
         remote: { baseUrl: `http://127.0.0.1:${address.port}/v1`, apiKey: token },
       });
       if (!result.provider) {

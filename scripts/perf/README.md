@@ -794,8 +794,37 @@ The report includes post-GC resources after initial work and after reopening,
 periodic natural-GC idle samples, idle GC diagnostics/promotion, and each cohort's
 first-turn or reopened-turn latency. Reopened timings include the real agent
 turn and tool round trip, so they are end-to-end reload cost rather than a
-storage-only timer. History digests must remain unchanged across the idle window;
-reopening must append a second exact synthetic answer without rewriting history.
+storage-only timer. After reopening, the pre-idle history digest must match the
+retained prefix, with a second exact synthetic answer appended. No history reads
+warm the workers between the idle wait and the measured reopen.
+Each cohort also reports request-to-provider arrival, time held at the synthetic
+provider's cohort barrier, and request-to-first assistant text in the Gateway.
+The last timestamp comes from the benchmark-only IPC preload, without a message
+subscription or retained message payload. It includes the read-tool round trip
+and excludes subsequent client delivery. Missing samples remain visible as a
+lower count, rather than being counted as zero latency.
+The provider barrier waits for the entire cohort: one slow preparation can delay
+all of its full-turn timings. These synthetic SSE results do not measure external
+provider latency, WebSocket reconnection, or prompt-cache hits. Add `--prep-trace`
+in a separate diagnostic run to capture the existing per-stage preparation logs;
+`--diagnostics` also separates hydration and model-context database reservations.
+
+For long-history reopen measurements, first seed the measured sessions offline:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
+  --state-dir /path/to/fresh-team-shape --scenario session-idle-retention \
+  --sessions 100 --runs 10 --history-turns 163 --seed-history
+```
+
+Run the measurement command above against that fixture with `--history-turns 163`.
+Seeding appends 163 user/tool-call/tool-result/answer cycles through SessionManager,
+plus a header and two settings entries: 655 entries per session. It runs separately
+from measurement, refuses an existing seed, and writes sessions sequentially.
+The measurement preserves these histories and paginates the final integrity checks.
+Without `--history-turns`, measured sessions start empty; the background roster's
+history size does not determine the measured sessions' history depth.
+
 Add `--entry src/entry.ts --session-census` to count live `SessionManager`,
 `AgentSession`, and runtime `Agent` instances at the four forced-GC checkpoints
 without writing snapshots. The source-only census imports the same constructors

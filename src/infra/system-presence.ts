@@ -88,15 +88,6 @@ function initSelfPresence() {
   setPresence(SELF_KEY, selfEntry);
 }
 
-function touchStoredPresence(key: string | symbol): boolean {
-  const existing = entries.get(key)?.presence;
-  if (!existing) {
-    return false;
-  }
-  setPresence(key, { ...existing, ts: Date.now() });
-  return true;
-}
-
 initSelfPresence();
 
 function parsePresence(text: string): SystemPresence {
@@ -107,26 +98,16 @@ function parsePresence(text: string): SystemPresence {
   if (!match) {
     return { text: trimmed, ts: Date.now() };
   }
-  const [, host, ip, version, lastInputStr, mode, reasonRaw] = match;
-  if (
-    host === undefined ||
-    ip === undefined ||
-    version === undefined ||
-    lastInputStr === undefined ||
-    mode === undefined ||
-    reasonRaw === undefined
-  ) {
-    return { text: trimmed, ts: Date.now() };
-  }
-  const lastInputSeconds = Number.parseInt(lastInputStr, 10);
-  const reason = reasonRaw.trim();
+  // Every capture is required by the matched pattern above.
+  const [, host, ip, version, lastInputStr, mode, reason] = match;
+  const lastInputSeconds = Number.parseInt(lastInputStr!, 10);
   return {
-    host: host.trim(),
-    ip: ip.trim(),
-    version: version.trim(),
+    host: host!.trim(),
+    ip: ip!.trim(),
+    version: version!.trim(),
     lastInputSeconds: Number.isFinite(lastInputSeconds) ? lastInputSeconds : undefined,
-    mode: mode.trim(),
-    reason,
+    mode: mode!.trim(),
+    reason: reason!.trim(),
     text: trimmed,
     ts: Date.now(),
   };
@@ -270,13 +251,17 @@ export function touchPresence(key: string): boolean {
   if (!normalizedKey) {
     return false;
   }
-  return touchStoredPresence(normalizedKey);
+  const existing = entries.get(normalizedKey)?.presence;
+  if (!existing) {
+    return false;
+  }
+  setPresence(normalizedKey, { ...existing, ts: Date.now() });
+  return true;
 }
 
 export function listSystemPresence(options?: { includeConnectionId?: string }): SystemPresence[] {
-  if (!touchStoredPresence(SELF_KEY)) {
-    initSelfPresence();
-  }
+  // The private self key is initialized once and excluded from every deletion path.
+  setPresence(SELF_KEY, { ...entries.get(SELF_KEY)!.presence, ts: Date.now() });
   // Presence is ephemeral; clock corrections use best-effort wall-time expiry.
   const now = Date.now();
   for (const [key, entry] of entries) {
