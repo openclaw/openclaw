@@ -35,11 +35,9 @@ it.each(["system-agent", "install-roots", "install-state"] as const)(
     const env = makeEnvironment();
     const at = (...parts: string[]) => path.join(env.HOME, ...parts);
     const ids = ["alpha", "beta"];
+    const entries = Object.fromEntries(ids.map((id) => [id, { workspace: at(id) }]));
     const cfg: OpenClawConfig = {
-      agents: {
-        ownership: "explicit",
-        entries: Object.fromEntries(ids.map((id) => [id, { workspace: at(id) }])),
-      },
+      agents: { ownership: "explicit", entries },
       plugins: { allow: ids },
     };
     for (const id of ids) {
@@ -64,14 +62,13 @@ it.each(["system-agent", "install-roots", "install-state"] as const)(
       }
     }
     const session = createPluginCliLoadSession();
+    const params = { cfg, env, session };
     let previous: Awaited<ReturnType<typeof loadPluginCliRegistrationEntriesWithDefaults>> = [];
     for (const id of ids) {
       const run = async () => {
         const serialized = JSON.stringify([cfg, env]);
-        expect(
-          (await loadPluginCliDescriptors({ cfg, env, session })).map(({ name }) => name),
-        ).toEqual([id]);
-        previous = await loadPluginCliRegistrationEntriesWithDefaults({ cfg, env, session });
+        expect((await loadPluginCliDescriptors(params)).map(({ name }) => name)).toEqual([id]);
+        previous = await loadPluginCliRegistrationEntriesWithDefaults(params);
         const program = new Command();
         await previous[0]!.register(program);
         expect(program.commands.map((command) => command.name())).toEqual([id]);

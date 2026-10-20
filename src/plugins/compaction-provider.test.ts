@@ -62,24 +62,23 @@ it.each(["another registry", "shared duplicate", "distinct duplicate"])(
   "keeps the first provider and its runtime: %s",
   async (registration) => {
     const active = createTestRegistry();
+    const { registry } = active;
     const store = createPluginRuntimeStore<string>("compaction runtime missing");
     const provider = makeProvider("shared", async () => {
-      expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(active.registry);
+      expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(registry);
       return store.getRuntime();
     });
     registerProvider(active, "first-owner", provider, () => store.setRuntime("first runtime"));
-    setActivePluginRegistry(active.registry);
+    setActivePluginRegistry(registry);
     const other = registration === "another registry" ? createTestRegistry() : active;
     const second = registration === "distinct duplicate" ? makeProvider("shared") : provider;
     const otherOwner = registerProvider(other, "second-owner", second, () =>
       store.setRuntime("second runtime"),
     );
-    expect(active.registry.compactionProviders).toEqual([
-      { provider, ownerPluginId: "first-owner" },
-    ]);
-    expect(active.registry.compactionProviders[0]?.provider).toBe(provider);
+    expect(registry.compactionProviders).toEqual([{ provider, ownerPluginId: "first-owner" }]);
+    expect(registry.compactionProviders[0]?.provider).toBe(provider);
     if (other === active) {
-      expect(active.registry.diagnostics).toContainEqual(
+      expect(registry.diagnostics).toContainEqual(
         expect.objectContaining({
           level: "error",
           pluginId: "second-owner",

@@ -40,9 +40,7 @@ type TelegramFacade = Pick<
   "createTelegramThreadBindingManager" | "setTelegramRuntime"
 >;
 
-const telegramConfig = {
-  channels: { telegram: { botToken: "test-token" } },
-};
+const telegramConfig = { channels: { telegram: { botToken: "test-token" } } };
 const conversation = {
   channel: "telegram",
   accountId: "default",
@@ -100,32 +98,28 @@ async function createRegistryRuntimeFixture() {
   onTestFinished(() => markPluginRegistryRetired(builder.registry));
 
   const openedStore: { options?: TelegramStoreOptions } = {};
+  const runtimeState = api.runtime.state;
+  const gatedState: PluginRuntime["state"] = {
+    ...runtimeState,
+    openKeyedStoreV2: <T>(options: TelegramStoreOptions) => {
+      openedStore.options = options;
+      const store = runtimeState.openKeyedStoreV2<T>(options);
+      // Telegram reopens its store on writes; arm only after the seed write.
+      if (gate.armed) {
+        gate.armed = false;
+        const register = store.register.bind(store);
+        vi.spyOn(store, "register").mockImplementationOnce(async (...args) => {
+          gate.entered.resolve();
+          await gate.release.promise;
+          return await register(...args);
+        });
+      }
+      return store;
+    },
+  };
   const gatedRuntime = new Proxy(api.runtime, {
     get(target, property) {
-      const value = Reflect.get(target, property, target);
-      if (property !== "state") {
-        return value;
-      }
-      const runtimeState = value as PluginRuntime["state"];
-      return {
-        ...runtimeState,
-        // SAFETY: This fixture serves only Telegram's thread-binding namespace and record type.
-        openKeyedStoreV2: ((options: TelegramStoreOptions) => {
-          openedStore.options = options;
-          const store = runtimeState.openKeyedStoreV2<StoredBinding>(options);
-          // Telegram reopens its store on writes; arm only after the seed write.
-          if (gate.armed) {
-            gate.armed = false;
-            const register = store.register.bind(store);
-            vi.spyOn(store, "register").mockImplementationOnce(async (...args) => {
-              gate.entered.resolve();
-              await gate.release.promise;
-              return await register(...args);
-            });
-          }
-          return store;
-        }) as PluginRuntime["state"]["openKeyedStoreV2"],
-      };
+      return property === "state" ? gatedState : Reflect.get(target, property, target);
     },
   });
 

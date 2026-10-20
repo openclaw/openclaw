@@ -30,6 +30,7 @@ it("retains the registered CLI owner's scheduler and joins its work before retir
   const api = builder.createApi(record, { config: {} });
   const instance = getPluginInstance(record)!;
   const program = new Command();
+  const registration = { program, parentPath: [], config: {}, logger: api.logger };
   const entered = createDeferredCore();
   const finish = createDeferredCore();
   const events: string[] = [];
@@ -67,14 +68,7 @@ it("retains the registered CLI owner's scheduler and joins its work before retir
     { commands: ["scheduled"] },
   );
   try {
-    await host.run(() =>
-      builder.registry.cliRegistrars[0]!.register({
-        program,
-        parentPath: [],
-        config: {},
-        logger: api.logger,
-      }),
-    );
+    await host.run(() => builder.registry.cliRegistrars[0]!.register(registration));
     expect(() => resolvePluginServiceScheduler()).toThrow("requires a bound");
     const operator = new AbortController();
     await runWithOperatorToolGatewayAuthority(
