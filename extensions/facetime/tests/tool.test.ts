@@ -1,10 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createFaceTimeCallTool, resolveFaceTimeToolApproval } from "../src/tool.js";
 
-function resultDetails(result: unknown): Record<string, unknown> {
-  return (result as { details: Record<string, unknown> }).details;
-}
-
 function createTool() {
   const runtime = {
     status: vi.fn(async () => ({
@@ -52,16 +48,18 @@ function createTool() {
     ensureRuntime,
     getStatus: async () => await runtime.status(),
   });
-  return { runtime, ensureRuntime, tool };
+  return {
+    runtime,
+    ensureRuntime,
+    execute: async (input: Parameters<typeof tool.execute>[1]) =>
+      (await tool.execute("tool-1", input)).details,
+  };
 }
 
 describe("FaceTime agent tool", () => {
   it("returns a compact runtime status", async () => {
-    const { tool, ensureRuntime } = createTool();
-
-    const result = resultDetails(await tool.execute("tool-1", { action: "get_status" }));
-
-    expect(result).toMatchObject({
+    const { execute, ensureRuntime } = createTool();
+    expect(await execute({ action: "get_status" })).toMatchObject({
       ok: true,
       action: "get_status",
       status: {
@@ -93,47 +91,30 @@ describe("FaceTime agent tool", () => {
   });
 
   it("dials an authorized owner target without exposing helper internals", async () => {
-    const { runtime, tool } = createTool();
-
-    const result = resultDetails(
-      await tool.execute("tool-1", {
-        action: "initiate_call",
-        handle: "owner@example.com",
-        mode: "audio",
-      }),
-    );
-
-    expect(runtime.dial).toHaveBeenCalledWith({
-      handle: "owner@example.com",
-      mode: "audio",
-    });
+    const { runtime, execute } = createTool();
+    const target = { handle: "owner@example.com", mode: "audio" };
+    const result = await execute({ action: "initiate_call", ...target });
+    expect(runtime.dial).toHaveBeenCalledWith(target);
     expect(result).toEqual({
       ok: true,
       action: "initiate_call",
       dialID: "dial-1",
       state: "pending",
-      handle: "owner@example.com",
-      mode: "audio",
+      ...target,
     });
   });
 
   it("checks readiness and ends the current call", async () => {
-    const { runtime, tool } = createTool();
-
-    const readiness = resultDetails(await tool.execute("tool-1", { action: "check_readiness" }));
-    const ended = resultDetails(
-      await tool.execute("tool-2", { action: "end_call", callUUID: "call-1" }),
-    );
-
-    expect(readiness).toMatchObject({
+    const { runtime, execute } = createTool();
+    expect(await execute({ action: "check_readiness" })).toMatchObject({
       ok: true,
       status: { helperConnected: true },
     });
-    expect(runtime.hangup).toHaveBeenCalledWith({ callUUID: "call-1" });
-    expect(ended).toEqual({
+    expect(await execute({ action: "end_call", callUUID: "call-1" })).toEqual({
       ok: true,
       action: "end_call",
       callUUID: "call-1",
     });
+    expect(runtime.hangup).toHaveBeenCalledWith({ callUUID: "call-1" });
   });
 });

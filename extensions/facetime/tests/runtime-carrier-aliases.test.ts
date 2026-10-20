@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   completeAbsence,
   completeAction,
+  carrierPeer,
   createRuntime,
   createTalkDriver,
   incomingCall,
@@ -83,12 +84,9 @@ describe("FaceTime runtime carrier aliases", () => {
   });
   it("keeps the latest pending carrier after a cancellation reply without identity", async () => {
     const state = await pendingDialState({ callUUID: "original-call" });
-    let resolveReply!: (result: ReturnType<typeof pendingDialCancellationResult>) => void;
-    const reply = new Promise<ReturnType<typeof pendingDialCancellationResult>>((resolve) => {
-      resolveReply = resolve;
-    });
+    const reply = Promise.withResolvers<ReturnType<typeof pendingDialCancellationResult>>();
     mocks.helper.cancelOutgoingCall.mockResolvedValue(pendingDialCancellationResult());
-    mocks.helper.cancelOutgoingCall.mockImplementationOnce(() => reply);
+    mocks.helper.cancelOutgoingCall.mockImplementationOnce(() => reply.promise);
     const runtime = await createRuntime(state);
     const cancellation = runtime.hangup();
     try {
@@ -98,14 +96,9 @@ describe("FaceTime runtime carrier aliases", () => {
           event: "ft-outbound-call-identified",
           data: { dial_id: "approved-dial", call_uuid: "replacement-call" },
         },
-        {
-          bundleIdentifier: "com.apple.FaceTime",
-          processId: 4321,
-          processStartedAtMs: Date.parse("Tue Nov 14 22:13:20 2023"),
-          connectionGeneration: 1,
-        },
+        { ...carrierPeer, connectionGeneration: 1 },
       );
-      resolveReply(pendingDialCancellationResult());
+      reply.resolve(pendingDialCancellationResult());
       await cancellation;
       expect(await state.lookup("active")).toMatchObject({
         delivery: "cancelling",
@@ -118,7 +111,7 @@ describe("FaceTime runtime carrier aliases", () => {
       );
       expect(mocks.startTalk).not.toHaveBeenCalled();
     } finally {
-      resolveReply(pendingDialCancellationResult());
+      reply.resolve(pendingDialCancellationResult());
       await cancellation;
       await mocks.helperParams?.onMessage({
         event: "ft-call-status-changed",

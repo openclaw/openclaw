@@ -4,26 +4,22 @@ import type { FaceTimeHelperPeer } from "../src/helper-rpc.js";
 import { terminateExactCarrierProcesses } from "../src/runtime-carrier-process.js";
 
 const startedAt = "Tue Nov 14 22:13:20 2023";
-const peers = new Map<number, FaceTimeHelperPeer>([
-  [
-    1001,
-    {
-      processId: 1001,
-      processStartedAtMs: Date.parse(startedAt) + 900,
-      bundleIdentifier: "com.apple.FaceTime",
-      connectionGeneration: 1,
+const peers = new Map<number, FaceTimeHelperPeer>(
+  ["com.apple.FaceTime", "com.apple.mobilephone"].map(
+    (bundleIdentifier, index): [number, FaceTimeHelperPeer] => {
+      const processId = 1001 + index;
+      return [
+        processId,
+        {
+          processId,
+          bundleIdentifier,
+          connectionGeneration: index + 1,
+          processStartedAtMs: Date.parse(startedAt) + 900,
+        },
+      ];
     },
-  ],
-  [
-    1002,
-    {
-      processId: 1002,
-      processStartedAtMs: Date.parse(startedAt) + 900,
-      bundleIdentifier: "com.apple.mobilephone",
-      connectionGeneration: 2,
-    },
-  ],
-]);
+  ),
+);
 type RunCommand = PluginRuntime["system"]["runCommandWithTimeout"];
 type CommandResult = Awaited<ReturnType<RunCommand>>;
 function result(code: number, stdout = "", stderr = ""): CommandResult {
@@ -112,37 +108,12 @@ describe("FaceTime exact carrier process termination", () => {
   });
 
   it.each([
-    {
-      name: "executable inspection error",
-      field: "comm=",
-      response: result(1, "", "ps: permission denied"),
-      afterTerm: false,
-    },
-    {
-      name: "different executable",
-      field: "comm=",
-      response: result(0, "UnrelatedApp"),
-      afterTerm: false,
-    },
-    {
-      name: "adjacent-second PID reuse",
-      field: "lstart=",
-      response: result(0, "Tue Nov 14 22:13:21 2023"),
-      afterTerm: false,
-    },
-    {
-      name: "start inspection failure after TERM",
-      field: "lstart=",
-      response: result(1, "", "ps: permission denied"),
-      afterTerm: true,
-    },
-    {
-      name: "PID reuse after TERM",
-      field: "lstart=",
-      response: result(0, "Tue Nov 14 22:13:30 2023"),
-      afterTerm: true,
-    },
-  ])("stops signalling after $name", async ({ field, response, afterTerm }) => {
+    ["inspection error", "comm=", result(1, "", "ps: permission denied"), false],
+    ["different executable", "comm=", result(0, "UnrelatedApp"), false],
+    ["adjacent-second PID reuse", "lstart=", result(0, "Tue Nov 14 22:13:21 2023"), false],
+    ["inspection failure after TERM", "lstart=", result(1, "", "ps: permission denied"), true],
+    ["PID reuse after TERM", "lstart=", result(0, "Tue Nov 14 22:13:30 2023"), true],
+  ] as const)("stops signalling after %s", async (_name, field, response, afterTerm) => {
     const fixture = processFixture();
     fixture.terminates.clear();
     fixture.intercept((argv, original) =>

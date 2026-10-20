@@ -21,6 +21,17 @@ import { runFaceTimePreflight } from "../src/preflight.js";
 function runtimeWithCommands(runCommandWithTimeout: ReturnType<typeof vi.fn>) {
   return { system: { runCommandWithTimeout } } as never;
 }
+const commandResult = (stdout = "", stderr = "", code = 0) => ({ code, stdout, stderr });
+const checkIds = [
+  "helper-connected",
+  "capture-binary",
+  "call-app-running",
+  "paired-driver-mic",
+  "paired-driver-feed",
+  "physical-output",
+  "process-tap",
+  "realtime-provider",
+];
 
 const defaults = {
   input: { isAggregate: false, name: "Mac Mic", uid: "mic" },
@@ -39,23 +50,19 @@ function preflight({
 } = {}) {
   const runCommandWithTimeout = vi.fn(async (argv: string[]) => {
     if (argv[0] === "/bin/test") {
-      return { code: 0, stdout: "", stderr: "" };
+      return commandResult();
     }
     if (argv[0] === "/usr/bin/pgrep") {
-      return { code: 0, stdout: "123\n", stderr: "" };
+      return commandResult("123\n");
     }
     if (argv[0] === "/usr/sbin/system_profiler") {
-      return {
-        code: 0,
-        stdout: profiler,
-        stderr: "",
-      };
+      return commandResult(profiler);
     }
     if (argv.at(-1) === "--default-devices") {
-      return { code: 0, stdout: JSON.stringify({ ...defaults, output }), stderr: "" };
+      return commandResult(JSON.stringify({ ...defaults, output }));
     }
     if (argv.at(-1) === "--check") {
-      return { code: 0, stdout: "", stderr: "capture ready" };
+      return commandResult("", "capture ready");
     }
     throw new Error(`unexpected command: ${argv.join(" ")}`);
   });
@@ -78,16 +85,9 @@ describe("FaceTime preflight", () => {
     const result = await preflight();
     expect(result.ok).toBe(true);
     expect(result.currentAudioDefaults).toEqual(defaults);
-    expect(result.checks.map((check) => [check.id, check.ok, check.required])).toEqual([
-      ["helper-connected", true, true],
-      ["capture-binary", true, true],
-      ["call-app-running", true, true],
-      ["paired-driver-mic", true, true],
-      ["paired-driver-feed", true, true],
-      ["physical-output", true, true],
-      ["process-tap", true, true],
-      ["realtime-provider", true, true],
-    ]);
+    expect(result.checks.map((check) => [check.id, check.ok, check.required])).toEqual(
+      checkIds.map((id) => [id, true, true]),
+    );
   });
 
   afterEach(() => vi.unstubAllEnvs());
@@ -132,16 +132,7 @@ describe("FaceTime preflight", () => {
     expect(result.ok).toBe(false);
     expect(
       result.checks.filter((check) => check.required && !check.ok).map((check) => check.id),
-    ).toEqual([
-      "helper-connected",
-      "capture-binary",
-      "call-app-running",
-      "paired-driver-mic",
-      "paired-driver-feed",
-      "physical-output",
-      "process-tap",
-      "realtime-provider",
-    ]);
+    ).toEqual(checkIds);
   });
 
   it.each([
