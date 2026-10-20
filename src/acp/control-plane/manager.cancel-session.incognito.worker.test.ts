@@ -30,12 +30,10 @@ it.each([
           throw new Error("Expected canonical global ACP metadata.");
         }
         const actorGate = createGate("Actor ended before gate.");
-        f.getStatus.mockImplementationOnce(async () => {
-          await actorGate.wait();
-          return { summary: "ready" };
-        });
-        const actor = f.manager.getSessionStatus(f.target);
-        const actorResult = Promise.allSettled([actor]);
+        f.getStatus.mockImplementationOnce(() =>
+          actorGate.wait().then(() => ({ summary: "ready" })),
+        );
+        const actorResult = Promise.allSettled([f.manager.getSessionStatus(f.target)]);
         await actorGate.reached(actorResult);
         const mutationGate = createGate("Cancellation ended before mutation gate.");
         const original = stateWorker.runOpenClawStateWorkerOperation;
@@ -47,14 +45,11 @@ it.each([
               context,
               (worker) =>
                 operation({
-                  ...worker,
                   execute: new Proxy(worker.execute, {
-                    apply(execute, receiver, args: Parameters<typeof worker.execute>) {
+                    async apply(execute, receiver, args: Parameters<typeof worker.execute>) {
                       if (!paused && args[0].type === "sessionState.record") {
                         paused = true;
-                        return mutationGate
-                          .wait()
-                          .then(() => Reflect.apply(execute, receiver, args));
+                        await mutationGate.wait();
                       }
                       return Reflect.apply(execute, receiver, args);
                     },
@@ -67,12 +62,9 @@ it.each([
         const runCancellation = () => {
           const turn = startTurn(f, "incognito-parity", {
             text: "private",
-            onEvent: (event) => {
-              events.push(event);
-            },
+            onEvent: (event) => void events.push(event),
           });
-          const cancellation = stopAcpControllerTurns(f.target);
-          return Promise.allSettled([cancellation, turn]);
+          return Promise.allSettled([stopAcpControllerTurns(f.target), turn]);
         };
         const result =
           readScope === "snapshot"
