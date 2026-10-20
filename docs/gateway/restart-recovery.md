@@ -46,7 +46,8 @@ internal inputs: recovery does not inherit a sender's channel delivery rights,
 and a follow-up without an authenticated operator source cannot reconstruct
 authority from its transcript.
 
-An accepted child continuation, including a child created with `sessions_spawn`,
+An accepted child continuation, including a child created with `sessions_spawn`
+or an interrupted child resumed with `sessions_send`,
 keeps the restored operator's current identity and permission checks independently
 of the parent's recovery claim. Completing the parent does not cancel that child.
 Explicitly stopping the parent still cancels its children. Revoking the operator,

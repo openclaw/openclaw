@@ -115,23 +115,12 @@ const {
   isAgentDeletionBlockedMock: vi.fn((_agentId: string) => false),
 }));
 
-function enqueueSystemEvent(text: string, opts?: unknown) {
-  return enqueueSystemEventMock(text, opts);
-}
-
-function enqueueSystemEventWithReceipt(text: string, opts?: unknown) {
-  const result = enqueueSystemEventMock(text, opts);
-  if (result === false || result === null) {
-    return null;
-  }
-  return systemEventReceiptRemoveMock;
-}
-
 // mock-isolation: Keep system events in the fixture; real enqueueing persists and wakes session work.
-vi.mock("../infra/system-events.js", () => ({
-  enqueueSystemEvent,
-  enqueueSystemEventWithReceipt,
-}));
+vi.mock("../infra/system-events.js", async () => {
+  const { createCronSystemEventMocks } =
+    await import("./server-cron.system-event-receipt.test-support.js");
+  return createCronSystemEventMocks(enqueueSystemEventMock, systemEventReceiptRemoveMock);
+});
 
 vi.mock("../infra/heartbeat-wake.js", async () => {
   const actual = await vi.importActual<typeof import("../infra/heartbeat-wake.js")>(

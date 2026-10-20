@@ -87,7 +87,8 @@ function startGateway(
       executablePath: process.execPath,
       argsPrefix: [path.join(repoRoot, "openclaw.mjs")],
       cwd: repoRoot,
-      usePackagedPlugins: true,
+      // Repository fixtures stage auth directly; packaged bootstrap has dedicated coverage.
+      usePackagedPlugins: false,
     },
     providerMode: "mock-openai",
     providerBaseUrl,

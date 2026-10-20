@@ -141,7 +141,10 @@ export function extractSocket(row: ApprovalRow | undefined) {
     return { socket: undefined, policy: undefined };
   }
   const invalid = () =>
-    new Error("Client credential migration found invalid socket credentials or projections.");
+    Object.assign(
+      new Error("Client credential migration found invalid socket credentials or projections."),
+      { code: "CLIENT_CREDENTIAL_SOCKET_INVALID" },
+    );
   let policy: unknown;
   try {
     policy = JSON.parse(row.raw_json);

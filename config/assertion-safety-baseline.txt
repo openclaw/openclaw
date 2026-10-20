@@ -233,12 +233,12 @@ extensions/discord/src/monitor/message-text.ts	1
 extensions/discord/src/monitor/model-picker-preferences.ts	1
 extensions/discord/src/monitor/native-command-reply.ts	2
 extensions/discord/src/monitor/presence.ts	1
-extensions/discord/src/monitor/provider.deploy-errors.ts	9
+extensions/discord/src/monitor/provider.deploy-errors.ts	6
 extensions/discord/src/monitor/provider.deploy.ts	3
 extensions/discord/src/monitor/provider.lifecycle.ts	2
 extensions/discord/src/monitor/reply-safety.ts	1
 extensions/discord/src/monitor/rest-fetch.ts	3
-extensions/discord/src/monitor/thread-bindings.discord-api.ts	2
+extensions/discord/src/monitor/thread-bindings.discord-api.ts	1
 extensions/discord/src/monitor/thread-bindings.state.ts	1
 extensions/discord/src/monitor/thread-channel-context.ts	1
 extensions/discord/src/monitor/threading.starter.ts	1
@@ -250,7 +250,6 @@ extensions/discord/src/pluralkit.ts	1
 extensions/discord/src/probe.ts	1
 extensions/discord/src/security-audit.ts	5
 extensions/discord/src/send.messages.ts	2
-extensions/discord/src/send.shared.ts	1
 extensions/discord/src/setup-core.ts	1
 extensions/discord/src/target-parsing.ts	1
 extensions/discord/src/token.ts	2
@@ -1276,7 +1275,6 @@ src/agents/session-suspension.ts	1
 src/agents/session-tool-result-guard.ts	3
 src/agents/session-transcript-repair.ts	2
 src/agents/sessions/agent-session-base.ts	3
-src/agents/sessions/agent-session-models.ts	1
 src/agents/sessions/auth-storage.ts	1
 src/agents/sessions/extensions/loader.ts	2
 src/agents/sessions/extensions/runner.ts	14

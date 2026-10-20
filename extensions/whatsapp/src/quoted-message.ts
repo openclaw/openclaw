@@ -21,7 +21,7 @@ type QuotedMeta = {
   media?: MediaPlaceholderTextFact;
   fromMe?: boolean;
 };
-type CacheEntry = QuotedMeta & { ts: number };
+type CacheEntry = { meta: QuotedMeta; ts: number };
 type QuotedMetaLookup = QuotedMeta & { remoteJid: string };
 
 export type WhatsAppQuotedMessageKey = {
@@ -53,7 +53,7 @@ export function cacheInboundMessageMeta(
     return;
   }
   pruneMapToMaxSize(cache, MAX_ENTRIES - 1);
-  cache.set(makeCacheKey(accountId, remoteJid, messageId), { ...meta, ts: Date.now() });
+  cache.set(makeCacheKey(accountId, remoteJid, messageId), { meta, ts: Date.now() });
 }
 
 export function lookupInboundMessageMeta(
@@ -73,13 +73,7 @@ function readCachedMessageMeta(cacheKey: string): QuotedMeta | undefined {
     cache.delete(cacheKey);
     return undefined;
   }
-  return {
-    participant: entry.participant,
-    participantE164: entry.participantE164,
-    body: entry.body,
-    media: entry.media,
-    fromMe: entry.fromMe,
-  };
+  return entry.meta;
 }
 
 function normalizeComparableJid(jid: string | undefined): string | undefined {

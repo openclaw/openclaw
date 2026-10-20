@@ -3,6 +3,7 @@ import { getPreparedModelRuntimePluginGeneration } from "../../agents/prepared-m
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../../plugins/installed-plugin-index-policy.js";
+import { getPluginExecutionFrame } from "../../plugins/plugin-instance-invocation.js";
 import { getPluginRuntimeGenerationRegistry } from "../../plugins/runtime/generation-scope.js";
 import { runPreparedReply } from "./get-reply-run.js";
 import type { RunPreparedReplyParams } from "./get-reply-run.types.js";
@@ -67,6 +68,10 @@ it("keeps the admitted Gateway generation active through a different reply works
     pluginGeneration: selectedGeneration,
   }));
   const expectSelectedScope = () => {
+    expect(getPluginExecutionFrame()?.retentionOwner).toMatchObject({
+      agentId: "main",
+      sessionKey: "fixture-session",
+    });
     expect(getCurrentPluginMetadataSnapshot({ config, workspaceDir })).toBe(metadataSnapshot);
     expect(getPluginRuntimeGenerationRegistry()).toBe(selectedGeneration.pluginRegistry);
     expect(getPreparedModelRuntimePluginGeneration()).toBe(selectedGeneration);
@@ -84,7 +89,7 @@ it("keeps the admitted Gateway generation active through a different reply works
     sessionCtx: {},
     ctx: {},
     agentId: "main",
-    sessionKey: "",
+    sessionKey: "fixture-session",
     workspaceDir,
     provider: "selected",
     model: "model",
@@ -124,4 +129,5 @@ it("keeps the admitted Gateway generation active through a different reply works
   expect(getCurrentPluginMetadataSnapshot({ config, workspaceDir })).toBeUndefined();
   expect(getPluginRuntimeGenerationRegistry()).toBeUndefined();
   expect(getPreparedModelRuntimePluginGeneration()).toBeUndefined();
+  expect(getPluginExecutionFrame()?.retentionOwner).toBeUndefined();
 });

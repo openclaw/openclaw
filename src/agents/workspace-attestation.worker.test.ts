@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
   createOpenClawTestState,
@@ -112,6 +113,23 @@ it("refreshes unchanged hashes so disappearance protection survives a database r
     code: WORKSPACE_VANISHED_ERROR_CODE,
   });
   await expect(fs.stat(state.workspaceDir)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it("retains the published workspace snapshot across populated warm preparations", async () => {
+  await fs.writeFile(path.join(state.workspaceDir, "seed.txt"), "Synthetic workspace content.\n");
+  await ensureAgentWorkspace({ dir: state.workspaceDir, ensureBootstrapFiles: false });
+  // Populate the read cache after first creation promotes the database identity.
+  await readWorkspaceStateSnapshot(state.workspaceDir);
+  const commands: string[] = [];
+  probe.command(stateWorker, (command, options, scope) => {
+    commands.push(command.type);
+    return scope.execute(command, options);
+  });
+  for (let turn = 0; turn < 2; turn++) {
+    commands.length = 0;
+    await ensureAgentWorkspace({ dir: state.workspaceDir, ensureBootstrapFiles: false });
+    expect(commands).toEqual(["workspace.replaceAttestation"]);
+  }
 });
 
 it("does not synchronously inventory skills when a recent attestation prevents expiry", async () => {

@@ -15,7 +15,7 @@ const variants = [
   {
     name: "vercel",
     version: "63.1.2",
-    hash: "81a44227cdb0fdb14aeb166302ae0c44ccd91cd99ab9e19d95b507b53373bf74",
+    hash: "dccdda41622764f52c604c2cb2ffaed3085fbd6c4764444e90d4669f5f423ac8",
   },
 ] as const;
 

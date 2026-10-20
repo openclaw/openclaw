@@ -26,6 +26,8 @@ export interface FullTextCapability {
   rank(
     index: TextIndex,
     query?: TextQuery,
+    /** PostgreSQL cover-density normalization: none (0) or document length (2, default). */
+    options?: { postgres?: { normalization: 0 | 2 } },
   ): {
     value: RawBuilder<number>;
     order: "asc" | "desc";

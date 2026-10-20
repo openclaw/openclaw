@@ -2482,7 +2482,7 @@ retention, stored bytes, or update behavior changes.
 Ordinary turn preparation retains workspace snapshots, conversation bindings,
 skill-library queries, workshop changes, GitHub attribution, node catalogs, and
 exec policy in bounded process-local caches. Their existing owning writers
-invalidate the retained facts on commit or uncertain settlement. Binding expiry
+update or invalidate retained facts on commit; uncertain settlement invalidates them. Binding expiry
 still invokes its pruning owner; workspace recovery predicates and explicit
 snapshot reads retain their existing database paths. Unchanged workspace
 preparation does not dispatch another registration transaction. Workshop reads
@@ -2504,10 +2504,14 @@ existing authority owner. Committed facts install when native commit evidence
 arrives, before the ordinary reply; the writer queue still owns accepted work
 until settlement. A lost reply never triggers mutation replay.
 
-Workspace setup, aliases, attestation sets, local and repository workspaces, and
-node prepared-workspace lifecycle operations publish through their existing
-native or worker kernels. Deletion remains a tombstone, and newer native changes
-supersede delayed worker postimages. All domains in a compound receipt install
+Workspace setup and attestation writers publish the complete snapshot they just
+committed, so the next preparation reuses those facts without another registration
+read. Unchanged hashes still refresh the durable attestation timestamp: the
+24-hour disappearance protection must survive a restart. Alias changes invalidate
+cached resolutions. Local and repository workspaces and node prepared-workspace
+lifecycle operations publish through their existing native or worker kernels.
+Deletion remains a tombstone, and newer native changes supersede delayed worker
+postimages. All domains in a compound receipt install
 before public observers. Nested rollback discards tentative facts; a confirmed
 rollback preserves the previous committed projection. Missing accepted receipts,
 unknown settlement, or failed installation invalidate the affected domain.
