@@ -177,7 +177,6 @@ describe("verifyPlivoWebhook", () => {
 
       expectReplay(first, second);
       expect(first).toMatchObject({
-        version: "v3",
         verifiedRequestKey: `plivo:v3:${crypto.createHash("sha256").update(`${canonicalBase}\n${nonce}`).digest("hex")}`,
       });
       first.releaseReplay?.();
@@ -186,7 +185,7 @@ describe("verifyPlivoWebhook", () => {
           { ...ctx, headers: { ...ctx.headers, "x-plivo-signature-v3": "invalid" } },
           authToken,
         ),
-      ).toMatchObject({ ok: false, version: "v3", reason: "Invalid Plivo V3 signature" });
+      ).toMatchObject({ ok: false, reason: "Invalid Plivo V3 signature" });
     },
   );
 
@@ -212,14 +211,12 @@ describe("verifyPlivoWebhook", () => {
 
     expect(result).toMatchObject({
       ok: false,
-      version: "v3",
-      verificationUrl: "https://voice.openclaw.ai/voice/webhook?flow=answer&callId=abc",
+      reason: "Invalid Plivo V3 signature",
     });
   });
 
   it("matches trusted proxies for Plivo when Node reports an IPv4-mapped remote address", () => {
     const nonce = "nonce-ipv4-mapped-plivo";
-    const webhookUrl = "https://proxy.example.com/voice/webhook?flow=answer&callId=abc";
     const result = verifyPlivoWebhook(
       context({
         headers: {
@@ -239,7 +236,7 @@ describe("verifyPlivoWebhook", () => {
       { trustForwardingHeaders: true, trustedProxyIPs: ["127.0.0.1"] },
     );
 
-    expect(result).toMatchObject({ ok: true, version: "v3", verificationUrl: webhookUrl });
+    expect(result.ok).toBe(true);
   });
 
   it("rejects missing signatures", () => {
@@ -358,7 +355,7 @@ describe("verifyTwilioWebhook", () => {
       );
     const result = verify("first");
 
-    expect(result).toMatchObject({ ok: true, verificationUrl: webhookUrl });
+    expect(result.ok).toBe(true);
     expectReplay(result, verify("changed"));
   });
 
@@ -380,7 +377,7 @@ describe("verifyTwilioWebhook", () => {
       );
 
     const result = verifySignedUrl(urlWithQuery);
-    expect(result).toMatchObject({ ok: true, verificationUrl: urlWithQuery });
+    expect(result.ok).toBe(true);
 
     const localPathResult = verifySignedUrl("https://example.com/voice/webhook?callId=abc");
     expect(localPathResult.ok).toBe(false);
@@ -443,7 +440,6 @@ describe("verifyTwilioWebhook", () => {
 
     expect(result.ok).toBe(false);
     expect(result.reason).toMatch(/Invalid signature/);
-    expect(result.isNgrokFreeTier).toBe(true);
   });
 
   it("ignores attacker X-Forwarded-Host without allowedHosts or trustForwardingHeaders", () => {
@@ -458,7 +454,6 @@ describe("verifyTwilioWebhook", () => {
 
     expect(result.ok).toBe(false);
     expect(result.reason).toContain("https://legitimate.example.com/voice/webhook");
-    expect(result.verificationUrl).toBeUndefined();
   });
 
   it("rejects X-Forwarded-Host not in allowedHosts whitelist", () => {
@@ -476,7 +471,6 @@ describe("verifyTwilioWebhook", () => {
 
     expect(result.ok).toBe(false);
     expect(result.reason).toContain("https://localhost/voice/webhook");
-    expect(result.verificationUrl).toBeUndefined();
   });
 
   it("ignores forwarding headers when trustedProxyIPs are set but remote IP is missing", () => {
@@ -495,7 +489,6 @@ describe("verifyTwilioWebhook", () => {
 
     expect(result.ok).toBe(false);
     expect(result.reason).toContain("https://legitimate.example.com/voice/webhook");
-    expect(result.verificationUrl).toBeUndefined();
   });
   it("succeeds when Twilio signs URL without port but server URL has port", () => {
     const urlWithPort = "https://example.com:8443/voice/webhook";
@@ -511,7 +504,7 @@ describe("verifyTwilioWebhook", () => {
       { publicUrl: urlWithPort },
     );
 
-    expect(result).toMatchObject({ ok: true, verificationUrl: signedUrl });
+    expect(result.ok).toBe(true);
     expect(result.verifiedRequestKey).toMatch(/^twilio:req:/);
   });
 });

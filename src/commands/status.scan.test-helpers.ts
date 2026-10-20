@@ -282,11 +282,10 @@ export async function loadStatusScanModuleForTest(
     vi.doMock("./status-all/channels.js", () => ({
       buildChannelsTable: mocks.buildChannelsTable,
     }));
-    vi.doMock("./status.scan.runtime.js", () => ({
-      statusScanRuntime: {
-        buildChannelsTable: mocks.buildChannelsTable,
-        collectChannelStatusIssues: vi.fn(() => []),
-      },
+    vi.doMock("./status.scan.runtime.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./status.scan.runtime.js")>()),
+      buildChannelsTable: mocks.buildChannelsTable,
+      collectChannelStatusIssues: vi.fn(() => []),
     }));
   }
 

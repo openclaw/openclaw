@@ -415,6 +415,9 @@ describe("package update recovery safety", () => {
         entry.startsWith(".openclaw.shim-backup-"),
       );
       expect(backupDirs).toHaveLength(1);
+      expect(result.failedStep?.stderrTail).toContain(
+        path.join(globalRoot, backupDirs[0] ?? "", "openclaw.cmd"),
+      );
       await expectText(globalRoot, backupDirs[0] ?? "", "openclaw.cmd").toBe("old openclaw.cmd\n");
     });
   });
