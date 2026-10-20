@@ -9,34 +9,21 @@ import {
 } from "./thread-fingerprints.js";
 
 describe("codexDynamicToolsFingerprint", () => {
-  const createMessageTool = (description: string, channelDescription: string) =>
-    ({
+  it("remains stable when tools and schema properties are reordered", () => {
+    const message: CodexDynamicToolFunctionSpec = {
       type: "function",
       name: "message",
-      description,
+      description: "Send a message.",
       inputSchema: {
         type: "object",
-        properties: {
-          channel: {
-            type: "string",
-            description: channelDescription,
-          },
-        },
+        properties: { channel: { type: "string", description: "Current channel." } },
       },
-    }) satisfies CodexDynamicToolFunctionSpec;
-
-  it("remains stable when tools and schema properties are reordered", () => {
-    const message = createMessageTool("Send a message.", "Current channel.");
+    };
     const reorderedMessage: CodexDynamicToolFunctionSpec = {
       name: message.name,
       type: message.type,
       inputSchema: {
-        properties: {
-          channel: {
-            description: "Current channel.",
-            type: "string",
-          },
-        },
+        properties: { channel: { description: "Current channel.", type: "string" } },
         type: "object",
       },
       description: message.description,
@@ -136,14 +123,14 @@ describe.each(["ordinary", "restricted"] as const)("%s proxied thread fingerprin
 });
 
 describe("fingerprintUserMcpServersConfigPatch", () => {
-  it.each(["header"])("retains literal __proto__ %s keys during redaction", (scope) => {
+  it("retains literal __proto__ header keys during redaction", () => {
     const config = (value: string): JsonObject => ({
       mcp_servers: {
-        [scope === "server" ? "__proto__" : "calendar"]: {
+        calendar: {
           url: "https://example.test/mcp",
           http_headers: {
-            Authorization: scope === "server" ? value : "synthetic-access-token",
-            ...(scope === "header" ? { ["__proto__"]: value } : {}),
+            Authorization: "synthetic-access-token",
+            ["__proto__"]: value,
           },
         },
       },
@@ -163,9 +150,7 @@ describe("readActiveCodexTurnIdsFromResume", () => {
     expect(
       readActiveCodexTurnIdsFromResume({
         thread: { turns: [{ id: "stale", status: "inProgress" }] },
-        initialTurnsPage: {
-          data: [{ id: "current", status: "inProgress" }],
-        },
+        initialTurnsPage: { data: [{ id: "current", status: "inProgress" }] },
       }),
     ).toEqual(["current"]);
   });

@@ -84,9 +84,7 @@ describe("side-question model selection", () => {
         threadId: "side-thread",
         model: requestedModel,
         effort: expected,
-        collaborationMode: {
-          settings: { model: requestedModel, reasoning_effort: expected },
-        },
+        collaborationMode: { settings: { model: requestedModel, reasoning_effort: expected } },
       });
     },
   );

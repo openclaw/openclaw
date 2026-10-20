@@ -9,25 +9,22 @@ function message(value: unknown, identity: string): AgentMessage {
   return attachCodexMirrorIdentity(value as AgentMessage, identity);
 }
 
+const oversizedText = () => ({ type: "text", text: "x".repeat(65537) });
+const toolCall = (id: string, argumentsValue: unknown = {}) => ({
+  role: "assistant",
+  content: [{ type: "toolCall", id, name: "lookup", arguments: argumentsValue }],
+});
+const toolResult = (
+  id: string,
+  toolName = "lookup",
+  content: unknown[] = [{ type: "text", text: "Verified." }],
+) => ({ role: "toolResult", toolCallId: id, toolName, content });
+
 function exchange(prefix: string, callId: string): AgentMessage[] {
   return [
     message({ role: "user", content: "Check the result." }, `${prefix}:prompt`),
-    message(
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: callId, name: "lookup", arguments: {} }],
-      },
-      `${prefix}:tool:${callId}:call`,
-    ),
-    message(
-      {
-        role: "toolResult",
-        toolCallId: callId,
-        toolName: "lookup",
-        content: [{ type: "text", text: "Verified." }],
-      },
-      `${prefix}:tool:${callId}:result`,
-    ),
+    message(toolCall(callId), `${prefix}:tool:${callId}:call`),
+    message(toolResult(callId), `${prefix}:tool:${callId}:result`),
   ];
 }
 
@@ -64,57 +61,28 @@ describe("settled prior-history validation", () => {
     {
       name: "assistant block after an oversized block in the same message",
       reason: "unsupported_content",
-      records: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "x".repeat(65537) }, { type: "future-block" }],
-        },
-      ],
+      records: [{ role: "assistant", content: [oversizedText(), { type: "future-block" }] }],
     },
     {
       name: "user image after oversized text in the same message",
       reason: "unsupported_user_image",
-      records: [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: "x".repeat(65537) },
-            { type: "image", data: "image" },
-          ],
-        },
-      ],
+      records: [{ role: "user", content: [oversizedText(), { type: "image", data: "image" }] }],
     },
     {
       name: "tool-result block after oversized text in the same result",
       reason: "invalid_content",
       records: [
-        {
-          role: "assistant",
-          content: [{ type: "toolCall", id: "prior-call", name: "lookup", arguments: {} }],
-        },
-        {
-          role: "toolResult",
-          toolCallId: "prior-call",
-          toolName: "lookup",
-          content: [{ type: "text", text: "x".repeat(65537) }, { type: "future-block" }],
-        },
+        toolCall("prior-call"),
+        toolResult("prior-call", "lookup", [oversizedText(), { type: "future-block" }]),
       ],
     },
     {
       name: "malformed arguments after the group was omitted",
       reason: "invalid_content",
       records: [
-        { role: "assistant", content: [{ type: "text", text: "x".repeat(65537) }] },
-        {
-          role: "assistant",
-          content: [{ type: "toolCall", id: "prior-call", name: "lookup", arguments: "{" }],
-        },
-        {
-          role: "toolResult",
-          toolCallId: "prior-call",
-          toolName: "lookup",
-          content: [{ type: "text", text: "Verified." }],
-        },
+        { role: "assistant", content: [oversizedText()] },
+        toolCall("prior-call", "{"),
+        toolResult("prior-call"),
       ],
     },
   ])("rejects $name", ({ records, reason }) => {
@@ -129,19 +97,15 @@ describe("settled prior-history validation", () => {
     "rejects %s tool pairing after an oversized steering message",
     (failure) => {
       const prior = exchange("prior", "prior-call");
-      prior.splice(2, 0, message({ role: "user", content: "x".repeat(65537) }, "prior:steering"));
+      prior.splice(
+        2,
+        0,
+        message({ role: "user", content: oversizedText().text }, "prior:steering"),
+      );
       if (failure === "missing") {
         prior.pop();
       } else if (failure === "wrong-name") {
-        prior[3] = message(
-          {
-            role: "toolResult",
-            toolCallId: "prior-call",
-            toolName: "other",
-            content: [{ type: "text", text: "Verified." }],
-          },
-          "prior:tool:prior-call:result",
-        );
+        prior[3] = message(toolResult("prior-call", "other"), "prior:tool:prior-call:result");
       } else {
         prior.push(...exchange("duplicate", "prior-call").slice(1));
       }
@@ -153,7 +117,7 @@ describe("settled prior-history validation", () => {
 
   it("omits a valid oversized tool exchange and retains the complete nearest suffix", () => {
     const prior = exchange("prior", "prior-call");
-    prior.splice(2, 0, message({ role: "user", content: "x".repeat(65537) }, "prior:steering"));
+    prior.splice(2, 0, message({ role: "user", content: oversizedText().text }, "prior:steering"));
     const later = laterExchanges();
     const history = [...prior, ...later];
     const before = structuredClone(history);
