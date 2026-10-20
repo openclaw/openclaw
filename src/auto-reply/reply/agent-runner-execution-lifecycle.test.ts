@@ -248,7 +248,6 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       meta: {},
     });
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
     await executeAgentTurn({
       ...createMinimalRunAgentTurnParams(),
       replyOperation,
@@ -700,7 +699,6 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       meta: {},
     });
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
     await executeAgentTurn(createMinimalRunAgentTurnParams());
 
     const embeddedParams = requireMockCall(
