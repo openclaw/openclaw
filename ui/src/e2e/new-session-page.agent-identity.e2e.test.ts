@@ -25,38 +25,16 @@ const agentsList = {
 };
 
 const agentIdentities = {
-  cases: [
-    {
-      match: { agentId: "main" },
-      response: {
-        agentId: "main",
-        avatar: "🎬",
-        avatarStatus: "none",
-        name: "Pacino",
-        nameSource: "workspace",
-      },
-    },
-    {
-      match: { agentId: "research" },
-      response: {
-        agentId: "research",
-        avatar: "A",
-        avatarStatus: "none",
-        name: "Assistant",
-        nameSource: "default",
-      },
-    },
-    {
-      match: { agentId: "release" },
-      response: {
-        agentId: "release",
-        avatar: "R",
-        avatarStatus: "none",
-        name: "Deployment Safety and Release Verification Agent",
-        nameSource: "agent",
-      },
-    },
-  ],
+  cases: (
+    [
+      ["main", "🎬", "Pacino", "workspace"],
+      ["research", "A", "Assistant", "default"],
+      ["release", "R", "Deployment Safety and Release Verification Agent", "agent"],
+    ] as const
+  ).map(([agentId, avatar, name, nameSource]) => ({
+    match: { agentId },
+    response: { agentId, avatar, avatarStatus: "none", name, nameSource },
+  })),
 };
 
 const CONTEXT: BrowserContextOptions = {
@@ -75,38 +53,20 @@ async function setTheme(page: Page, mode: "dark" | "light") {
   }, mode);
 }
 
-async function capture(page: Page, name: string) {
+async function capture(target: Page | Locator, name: string, fullPage = true) {
   if (!captureProof) {
     return;
   }
-  await mkdir(path.join(suite.artifactDir, "new-session-agent-identity", proofStage), {
-    recursive: true,
-  });
-  await page.screenshot({
+  const directory = path.join(suite.artifactDir, "new-session-agent-identity", proofStage);
+  await mkdir(directory, { recursive: true });
+  await target.screenshot({
     animations: "disabled",
-    fullPage: true,
-    path: path.join(
-      path.join(suite.artifactDir, "new-session-agent-identity", proofStage),
-      `${proofStage}-${name}`,
-    ),
+    ...(fullPage ? { fullPage: true } : {}),
+    path: path.join(directory, `${proofStage}-${name}`),
   });
 }
 
-async function captureElement(locator: Locator, name: string) {
-  if (!captureProof) {
-    return;
-  }
-  await mkdir(path.join(suite.artifactDir, "new-session-agent-identity", proofStage), {
-    recursive: true,
-  });
-  await locator.screenshot({
-    animations: "disabled",
-    path: path.join(
-      path.join(suite.artifactDir, "new-session-agent-identity", proofStage),
-      `${proofStage}-${name}`,
-    ),
-  });
-}
+const captureElement = (locator: Locator, name: string) => capture(locator, name, false);
 
 suite.define(() => {
   it("drops a pending skill completion after an agent switch", async () => {
@@ -177,20 +137,17 @@ suite.define(() => {
             count: 2,
             defaults: { contextTokens: null, model: null, modelProvider: null },
             path: "",
-            sessions: [
-              {
-                key: "agent:main:refactor-plan",
-                kind: "direct",
-                displayName: "Review the auth refactor plan",
-                updatedAt: Date.now() - 90_000,
-              },
-              {
-                key: "agent:main:test-matrix",
-                kind: "direct",
-                displayName: "Build the release test matrix",
-                updatedAt: Date.now() - 300_000,
-              },
-            ],
+            sessions: (
+              [
+                ["refactor-plan", "Review the auth refactor plan", 90_000],
+                ["test-matrix", "Build the release test matrix", 300_000],
+              ] as const
+            ).map(([key, displayName, age]) => ({
+              key: `agent:main:${key}`,
+              kind: "direct",
+              displayName,
+              updatedAt: Date.now() - age,
+            })),
             ts: Date.now(),
           },
         },

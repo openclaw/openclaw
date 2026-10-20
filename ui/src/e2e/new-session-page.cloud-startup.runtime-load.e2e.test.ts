@@ -68,6 +68,14 @@ suite.define(() => {
           : {}),
       });
       const page = await context.newPage();
+      const capture = async (name: string) => {
+        if (captureUiProofEnabled) {
+          await page.screenshot({
+            animations: "disabled",
+            path: path.join(suite.artifactDir, name),
+          });
+        }
+      };
       const sessionKey = "agent:main:startup-load-recovery";
       const messageId = "startup-load-first-turn";
       const message = "Continue the saved cloud task";
@@ -162,15 +170,7 @@ suite.define(() => {
         try {
           await alert.getByRole("button", { name: "Retry", exact: true }).waitFor();
         } finally {
-          if (captureUiProofEnabled) {
-            await page.screenshot({
-              animations: "disabled",
-              path: path.join(
-                suite.artifactDir,
-                `${incognito ? "mixed" : "saved"}-startup-load-failure.png`,
-              ),
-            });
-          }
+          await capture(`${incognito ? "mixed" : "saved"}-startup-load-failure.png`);
         }
         const readStartup = () =>
           evaluateControlUiContext(
@@ -222,15 +222,9 @@ suite.define(() => {
             await expect.poll(() => alert.locator("strong").textContent()).toContain(warning);
             expect(await alert.getByRole("button", { name: "Retry", exact: true }).count()).toBe(0);
             expect(await alert.locator("details").count()).toBe(0);
-            if (captureUiProofEnabled) {
-              await page.screenshot({
-                animations: "disabled",
-                path: path.join(
-                  suite.artifactDir,
-                  `${selectedKey === privateKey ? "incognito" : "saved"}-reload-blocked.png`,
-                ),
-              });
-            }
+            await capture(
+              `${selectedKey === privateKey ? "incognito" : "saved"}-reload-blocked.png`,
+            );
           }
           // Restored connectivity must not bypass the live unsaved-start owner.
           const blockedDocumentProbes = documentProbes;
@@ -248,12 +242,7 @@ suite.define(() => {
               }),
             )
             .toBe(true);
-          if (captureUiProofEnabled) {
-            await page.screenshot({
-              animations: "disabled",
-              path: path.join(suite.artifactDir, "mobile-reload-blocked.png"),
-            });
-          }
+          await capture("mobile-reload-blocked.png");
           await page.setViewportSize({ width: 1280, height: 900 });
           expect(
             await page.evaluate(
@@ -332,12 +321,7 @@ suite.define(() => {
 
           expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin);
           expect(documentProbes).toBe(probesBeforeManualReload);
-          if (captureUiProofEnabled) {
-            await page.screenshot({
-              animations: "disabled",
-              path: path.join(suite.artifactDir, "sibling-reload-blocked.png"),
-            });
-          }
+          await capture("sibling-reload-blocked.png");
           await page.unroute(configRuntime);
           // Only these explicit actions authorize discarding the unsaved Incognito start.
           if (escape === "toast") {
@@ -351,11 +335,8 @@ suite.define(() => {
               automaticReload.then(() => "reloaded" as const),
               review.waitFor().then(() => "held" as const),
             ]);
-            if (captureUiProofEnabled && outcome === "reloaded") {
-              await page.screenshot({
-                animations: "disabled",
-                path: path.join(suite.artifactDir, "mixed-private-draft-lost.png"),
-              });
+            if (outcome === "reloaded") {
+              await capture("mixed-private-draft-lost.png");
             }
             expect(
               outcome,
@@ -367,12 +348,7 @@ suite.define(() => {
             expect(
               await dialog.getByRole("textbox", { name: "Draft text", exact: true }).inputValue(),
             ).toBe(separateDraft);
-            if (captureUiProofEnabled) {
-              await page.screenshot({
-                animations: "disabled",
-                path: path.join(suite.artifactDir, "mixed-private-draft-preserved.png"),
-              });
-            }
+            await capture("mixed-private-draft-preserved.png");
             await dialog
               .getByRole("button", { name: "Discard this draft and refresh", exact: true })
               .click();
@@ -420,15 +396,7 @@ suite.define(() => {
             ),
           ).toBe(false);
         }
-        if (captureUiProofEnabled) {
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(
-              suite.artifactDir,
-              `${incognito ? "mixed" : "saved"}-startup-load-recovered.png`,
-            ),
-          });
-        }
+        await capture(`${incognito ? "mixed" : "saved"}-startup-load-recovered.png`);
       } finally {
         await context.close();
       }
