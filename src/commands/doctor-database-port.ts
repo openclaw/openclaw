@@ -615,7 +615,7 @@ export async function doctorDatabasePort(options: DatabasePortOptions) {
       : undefined;
     return await withDatabasePortStateOwner(ctx, recovery, async () => {
       if (recovery) {
-        ctx.manifest = assertDatabasePortRecoveryAllowed(stateDir, recovery);
+        ctx.manifest = assertDatabasePortRecoveryAllowed(ctx.stateDir, recovery);
         await loadRecovery(ctx);
         if (ctx.manifest.state === "complete") {
           return finalize(ctx, ctx.manifest.outcome!);

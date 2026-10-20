@@ -73,18 +73,27 @@ async function loseOneCommittedReply(original: string) {
 }
 
 describe("database port command custody and inspection", () => {
-  it("takes no persistent action for a dry run, including disabled workboard stores", async () => {
-    await fixture(async ({ state, source }) => {
-      const before = await files(state.stateDir);
-      const hashes = before.map((file) => [file, hash(file)]);
-      const result = await doctorDatabasePort({ to: "sqlite", dryRun: true });
-      expect(result).toMatchObject({ phase: "preflight", stores: [source] });
-      expect(await files(state.stateDir)).toEqual(before);
-      expect(before.map((file) => [file, hash(file)])).toEqual(hashes);
-      expect(JSON.stringify(result)).not.toContain(connection ?? injected);
-      expect(JSON.stringify(result)).not.toContain(payload);
-    });
-  });
+  it.each(["canonical", "symlinked ancestor"])(
+    "takes no persistent action for a dry run through a %s state path, including disabled workboard stores",
+    async (statePath) => {
+      await fixture(async ({ state, source }) => {
+        if (statePath === "symlinked ancestor") {
+          const homeAlias = state.path("home-alias");
+          await fsp.symlink(state.home, homeAlias, "junction");
+          state.envVars.OPENCLAW_STATE_DIR = path.join(homeAlias, ".openclaw");
+          state.applyEnv();
+        }
+        const before = await files(state.stateDir);
+        const hashes = before.map((file) => [file, hash(file)]);
+        const result = await doctorDatabasePort({ to: "sqlite", dryRun: true });
+        expect(result).toMatchObject({ phase: "preflight", stores: [source] });
+        expect(await files(state.stateDir)).toEqual(before);
+        expect(before.map((file) => [file, hash(file)])).toEqual(hashes);
+        expect(JSON.stringify(result)).not.toContain(connection ?? injected);
+        expect(JSON.stringify(result)).not.toContain(payload);
+      });
+    },
+  );
 
   it("refuses an already hosted owner before touching config or stores", async () => {
     await fixture(async ({ state, source }) => {
@@ -541,7 +550,7 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
     120_000,
   );
 
-  it("resumes a complete active manifest by archiving without replacing stores or config", async () => {
+  it("resumes through a symlinked ancestor by archiving without replacing stores or config", async () => {
     await fixture(async ({ state, source }) => {
       vi.spyOn(recovery, "archiveDatabasePortManifest").mockImplementationOnce(() => {
         throw new Error(injected);
@@ -551,6 +560,10 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
       expect(manifest(state).state).toBe("complete");
       const storeHash = hash(source);
       const configHash = hash(state.configPath);
+      const homeAlias = state.path("home-alias");
+      await fsp.symlink(state.home, homeAlias, "junction");
+      state.envVars.OPENCLAW_STATE_DIR = path.join(homeAlias, ".openclaw");
+      state.applyEnv();
       await doctorDatabasePort({ resume: recovery.databasePortManifestPath(state.stateDir) });
       expect(hash(source)).toBe(storeHash);
       expect(hash(state.configPath)).toBe(configHash);
