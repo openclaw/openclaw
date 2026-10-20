@@ -8,11 +8,7 @@ const mocks = vi.hoisted(() => ({
   migrateDefaultCommand: vi.fn(),
   migrateListCommand: vi.fn(),
   migratePlanCommand: vi.fn(),
-  runtime: {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  },
+  runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
 }));
 
 vi.mock("../../commands/migrate.js", () => ({
@@ -27,11 +23,11 @@ vi.mock("../../runtime.js", () => ({
   defaultRuntime: mocks.runtime,
 }));
 
-async function runCli(args: string[]): Promise<void> {
+async function runCli(args: string): Promise<void> {
   const program = new OpenClawCommand();
   program.enablePositionalOptions();
   registerMigrateCommand(program);
-  await program.parseAsync(args, { from: "user" });
+  await program.parseAsync(["migrate", ...args.split(" ")], { from: "user" });
 }
 
 beforeEach(() => vi.resetAllMocks());
@@ -87,7 +83,7 @@ describe("registered migration routes", () => {
       },
     },
   ])("resolves migration options for $args", async ({ args, command, options }) => {
-    await runCli(["migrate", ...args.split(" ")]);
+    await runCli(args);
     expect(command).toHaveBeenCalledExactlyOnceWith(
       mocks.runtime,
       expect.objectContaining(options),
@@ -95,12 +91,12 @@ describe("registered migration routes", () => {
   });
 
   it("inherits parent JSON into list", async () => {
-    await runCli(["migrate", "--json", "list"]);
+    await runCli("--json list");
     expect(mocks.migrateListCommand).toHaveBeenCalledExactlyOnceWith(mocks.runtime, { json: true });
   });
 
   it("rejects a parent dry-run before apply can mutate", async () => {
-    await runCli("migrate --dry-run apply hermes --yes".split(" "));
+    await runCli("--dry-run apply hermes --yes");
     expect(mocks.migrateApplyCommand).not.toHaveBeenCalled();
     expect(mocks.runtime.error).toHaveBeenCalledWith(
       expect.stringContaining("--dry-run is not supported for `openclaw migrate apply`"),

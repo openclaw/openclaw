@@ -13,17 +13,10 @@ const mocks = vi.hoisted(() => ({
   backupSqliteRestoreCommand: vi.fn(),
   backupSqliteVerifyCommand: vi.fn(),
   backupVerifyCommand: vi.fn(),
-  runtime: {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  },
+  runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
 }));
 
-vi.mock("../../commands/backup.js", () => ({
-  backupCreateCommand: mocks.backupCreateCommand,
-}));
-
+vi.mock("../../commands/backup.js", () => ({ backupCreateCommand: mocks.backupCreateCommand }));
 // mock-isolation: Argument parsing must not open database owners or launch backup workers.
 vi.mock("../../commands/backup-git.js", () => ({
   backupGitLogCommand: mocks.backupGitLogCommand,
@@ -34,11 +27,9 @@ vi.mock("../../commands/backup-git.js", () => ({
 vi.mock("../../commands/backup-restore.js", () => ({
   backupRestoreCommand: mocks.backupRestoreCommand,
 }));
-
 vi.mock("../../commands/backup-verify.js", () => ({
   backupVerifyCommand: mocks.backupVerifyCommand,
 }));
-
 vi.mock("../../commands/backup-sqlite.js", () => ({
   backupSqliteCreateCommand: mocks.backupSqliteCreateCommand,
   backupSqliteListCommand: mocks.backupSqliteListCommand,
@@ -46,11 +37,18 @@ vi.mock("../../commands/backup-sqlite.js", () => ({
   backupSqliteVerifyCommand: mocks.backupSqliteVerifyCommand,
 }));
 
-vi.mock("../../runtime.js", () => ({
-  defaultRuntime: mocks.runtime,
-}));
+vi.mock("../../runtime.js", () => ({ defaultRuntime: mocks.runtime }));
 
 const { runtime } = mocks;
+const gitOptions = { repository: "/tmp/backups", ref: "HEAD", global: false, json: true };
+async function parse(args: string, quiet = false) {
+  const program = new Command();
+  if (quiet) {
+    program.exitOverride().configureOutput({ writeErr: () => {} });
+  }
+  registerBackupCommand(program);
+  await program.parseAsync(["backup", ...args.split(" ")], { from: "user" });
+}
 beforeEach(() => vi.resetAllMocks());
 
 describe("registered backup routes", () => {
@@ -90,30 +88,15 @@ describe("registered backup routes", () => {
     {
       args: "git restore --repository /tmp/backups --store team-reports --target /tmp/restored.sqlite --json",
       command: mocks.backupGitRestoreCommand,
-      options: {
-        repository: "/tmp/backups",
-        store: "team-reports",
-        target: "/tmp/restored.sqlite",
-        ref: "HEAD",
-        global: false,
-        json: true,
-      },
+      options: { ...gitOptions, store: "team-reports", target: "/tmp/restored.sqlite" },
     },
     {
       args: "git verify --repository /tmp/backups --store workboard --json",
       command: mocks.backupGitVerifyCommand,
-      options: {
-        repository: "/tmp/backups",
-        store: "workboard",
-        ref: "HEAD",
-        global: false,
-        json: true,
-      },
+      options: { ...gitOptions, store: "workboard" },
     },
   ])("dispatches backup $args", async ({ args, command, options }) => {
-    const program = new Command();
-    registerBackupCommand(program);
-    await program.parseAsync(["backup", ...args.split(" ")], { from: "user" });
+    await parse(args);
     expect(command).toHaveBeenCalledExactlyOnceWith(runtime, options);
   });
 
@@ -129,20 +112,14 @@ describe("registered backup routes", () => {
       options: { target: "/tmp/restored.sqlite", json: true },
     },
   ])("dispatches backup sqlite $args", async ({ args, command, options }) => {
-    const program = new Command();
-    registerBackupCommand(program);
-    await program.parseAsync(["backup", "sqlite", ...args.split(" ")], { from: "user" });
+    await parse(`sqlite ${args}`);
     expect(command).toHaveBeenCalledExactlyOnceWith(runtime, "/tmp/snapshots/one", options);
   });
 
   it("rejects partial Git log limits before dispatch", async () => {
-    const program = new Command().exitOverride().configureOutput({ writeErr: () => {} });
-    registerBackupCommand(program);
-    await expect(
-      program.parseAsync("backup git log --repository /tmp/backups --limit 1oops".split(" "), {
-        from: "user",
-      }),
-    ).rejects.toThrow("--limit must be a positive integer.");
+    await expect(parse("git log --repository /tmp/backups --limit 1oops", true)).rejects.toThrow(
+      "--limit must be a positive integer.",
+    );
     expect(mocks.backupGitLogCommand).not.toHaveBeenCalled();
   });
 });

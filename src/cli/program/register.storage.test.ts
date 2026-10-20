@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { StorageLocationConfig } from "../../config/types.storage.js";
 import type { StorageProvider } from "../../storage/types.js";
 import { OpenClawCommand } from "./openclaw-command.js";
 import { registerStorageCommand } from "./register.storage.js";
@@ -44,13 +45,11 @@ let root: string;
 beforeEach(() => {
   vi.clearAllMocks();
   root = tempDirs.make("openclaw-storage-cli-");
-  fixture.config = {
-    storage: {
-      locations: {
-        archive: { provider: "filesystem", settings: { path: root }, encryption: "none" },
-      },
-    },
-  };
+  configureLocation("archive", {
+    provider: "filesystem",
+    settings: { path: root },
+    encryption: "none",
+  });
 });
 
 async function runStorageCli(args: string[]) {
@@ -60,11 +59,19 @@ async function runStorageCli(args: string[]) {
   await program.parseAsync(["storage", ...args], { from: "user" });
 }
 
+function loggedJson() {
+  return expect(JSON.parse(String(fixture.runtime.log.mock.lastCall?.[0])));
+}
+
+function configureLocation(name: string, location: StorageLocationConfig) {
+  fixture.config = { storage: { locations: { [name]: location } } };
+}
+
 describe("storage CLI with filesystem transport", () => {
   it("initializes, verifies a probe round trip, deletes the probe, and lists availability", async () => {
     await runStorageCli(["--json", "init", "archive"]);
     expect(fixture.runtime.error).not.toHaveBeenCalled();
-    expect(JSON.parse(String(fixture.runtime.log.mock.lastCall?.[0]))).toMatchObject({
+    loggedJson().toMatchObject({
       name: "archive",
       provider: "filesystem",
       state: "ok",
@@ -73,15 +80,11 @@ describe("storage CLI with filesystem transport", () => {
 
     await runStorageCli(["test", "archive", "--json"]);
     expect(fixture.runtime.error).not.toHaveBeenCalled();
-    expect(JSON.parse(String(fixture.runtime.log.mock.lastCall?.[0]))).toMatchObject({
-      name: "archive",
-      state: "ok",
-      sizeBytes: 256,
-    });
+    loggedJson().toMatchObject({ name: "archive", state: "ok", sizeBytes: 256 });
     expect(await fs.readdir(root)).toEqual(["openclaw-storage.json"]);
 
     await runStorageCli(["list", "--json"]);
-    expect(JSON.parse(String(fixture.runtime.log.mock.lastCall?.[0]))).toMatchObject({
+    loggedJson().toMatchObject({
       locations: [{ name: "archive", provider: "filesystem", state: "ok" }],
     });
     expect(fixture.runtime.exit).not.toHaveBeenCalled();
@@ -98,17 +101,11 @@ describe("storage CLI with filesystem transport", () => {
           throw new Error("synthetic-private-credential");
         },
       };
-      fixture.config = {
-        storage: {
-          locations: {
-            r2test: {
-              provider: "r2",
-              settings: { bucket: "bucket", prefix: "prefix" },
-              encryption: "none",
-            },
-          },
-        },
-      };
+      configureLocation("r2test", {
+        provider: "r2",
+        settings: { bucket: "bucket", prefix: "prefix" },
+        encryption: "none",
+      });
       fixture.acquire.mockResolvedValue({
         provider,
         registry: {
@@ -118,7 +115,7 @@ describe("storage CLI with filesystem transport", () => {
       });
       await runStorageCli(["list", ...(json ? ["--json"] : [])]);
       if (json) {
-        expect(JSON.parse(String(fixture.runtime.log.mock.lastCall?.[0]))).toMatchObject({
+        loggedJson().toMatchObject({
           locations: [
             { name: "r2test", provider: "r2", displayTarget: "r2://bucket/prefix", state: "error" },
           ],

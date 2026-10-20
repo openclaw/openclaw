@@ -19,15 +19,9 @@ vi.mock("../../runtime.js", async (importOriginal) => ({
 }));
 
 const routes = ["configure", "config"] as const;
-type Route = (typeof routes)[number];
-
-async function parse(route: Route, options: string[] = []) {
+async function parse(route: (typeof routes)[number], options: string[] = []) {
   const program = new Command();
-  if (route === "configure") {
-    registerConfigureCommand(program);
-  } else {
-    registerConfigCli(program);
-  }
+  (route === "configure" ? registerConfigureCommand : registerConfigCli)(program);
   return await program.parseAsync([route, ...options], { from: "user" });
 }
 
@@ -61,26 +55,19 @@ describe("registered configure dispatch", { concurrent: false }, () => {
       entered.resolve(undefined);
       await released.promise;
     });
-    let settled = false;
+    const settled = vi.fn();
     const parsing = parse(route, ["--section", "channels"]);
     void parsing.catch(entered.reject);
-    const observed = parsing.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      },
-    );
+    const observed = parsing.then(settled, settled);
     try {
       await entered.promise;
-      expect(settled).toBe(false);
+      expect(settled).not.toHaveBeenCalled();
     } finally {
       released.resolve(undefined);
       await observed;
     }
     await parsing;
-    expect(settled).toBe(true);
+    expect(settled).toHaveBeenCalledOnce();
     expect(mocks.runWizard).toHaveBeenCalledOnce();
   });
 

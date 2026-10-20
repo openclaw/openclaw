@@ -1,51 +1,18 @@
-// Build program tests cover root CLI program construction and command wiring.
 import process from "node:process";
 import { CommanderError } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildProgram } from "./build-program.js";
 import type { ProgramContext } from "./context.js";
 
-const registerCoreCliCommandsMock = vi.hoisted(() => vi.fn());
-const registerSubCliCommandsMock = vi.hoisted(() => vi.fn());
 const createProgramContextMock = vi.hoisted(() => vi.fn());
-const configureProgramHelpMock = vi.hoisted(() => vi.fn());
-const registerPreActionHooksMock = vi.hoisted(() => vi.fn());
-const setProgramContextMock = vi.hoisted(() => vi.fn());
-
-vi.mock("./command-registry-core.js", () => ({
-  registerCoreCliCommands: registerCoreCliCommandsMock,
-}));
-
-vi.mock("./register.subclis.js", () => ({
-  registerSubCliCommands: registerSubCliCommandsMock,
-}));
-
-vi.mock("./context.js", () => ({
-  createProgramContext: createProgramContextMock,
-}));
-
-vi.mock("./help.js", () => ({
-  configureProgramHelp: configureProgramHelpMock,
-}));
-
-vi.mock("./preaction.js", () => ({
-  registerPreActionHooks: registerPreActionHooksMock,
-}));
-
-vi.mock("./program-context.js", () => ({
-  setProgramContext: setProgramContextMock,
-}));
+vi.mock("./command-registry-core.js", () => ({ registerCoreCliCommands: vi.fn() }));
+vi.mock("./register.subclis.js", () => ({ registerSubCliCommands: vi.fn() }));
+vi.mock("./context.js", () => ({ createProgramContext: createProgramContextMock }));
+vi.mock("./help.js", () => ({ configureProgramHelp: vi.fn() }));
+vi.mock("./preaction.js", () => ({ registerPreActionHooks: vi.fn() }));
+vi.mock("./program-context.js", () => ({ setProgramContext: vi.fn() }));
 
 describe("buildProgram", () => {
-  function mockProcessOutput() {
-    vi.spyOn(process.stdout, "write").mockImplementation(
-      (() => true) as unknown as typeof process.stdout.write,
-    );
-    vi.spyOn(process.stderr, "write").mockImplementation(
-      (() => true) as unknown as typeof process.stderr.write,
-    );
-  }
-
   async function expectCommanderExit(promise: Promise<unknown>, exitCode: number) {
     const error = await promise.catch((err: unknown) => err);
 
@@ -56,7 +23,8 @@ describe("buildProgram", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockProcessOutput();
+    vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     createProgramContextMock.mockReturnValue({
       programVersion: "9.9.9-test",
       messageChannelOptions: "quietchat",

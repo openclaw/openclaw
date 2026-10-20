@@ -39,7 +39,21 @@ it.each([
         await fs.mkdir(path.dirname(sourcePath), { recursive: true });
         await fs.writeFile(sourcePath, original);
         const originalConfig = await fs.readFile(configPath, "utf8");
-        const { db } = openOpenClawStateDatabase();
+        openOpenClawStateDatabase();
+        const expectUnchanged = async () => {
+          const { db } = openOpenClawStateDatabase();
+          expect(await fs.readFile(sourcePath, "utf8")).toBe(original);
+          expect(await fs.readFile(configPath, "utf8")).toBe(originalConfig);
+          expect(db.prepare("SELECT count(*) AS count FROM migration_runs").get()).toEqual({
+            count: 0,
+          });
+          const markers =
+            "SELECT meta_key FROM schema_meta WHERE meta_key IN ('startup-migrations', 'state-migrations')";
+          expect(db.prepare(markers).all()).toEqual([]);
+          const voicewake =
+            "SELECT value_json FROM config_machine_state WHERE state_key = 'voicewake.triggers'";
+          expect(db.prepare(voicewake).get()).toBeUndefined();
+        };
         const runtime = {
           log: vi.fn(),
           error: vi.fn(),
@@ -66,55 +80,16 @@ it.each([
             "Retired runtime state was left unchanged for Doctor; no import was attempted.",
           );
           expect(readStartupMigrationWarning()).toContain(sourcePath);
-          expect(await fs.readFile(sourcePath, "utf8")).toBe(original);
-          expect(await fs.readFile(configPath, "utf8")).toBe(originalConfig);
-          expect(db.prepare("SELECT count(*) AS count FROM migration_runs").get()).toEqual({
-            count: 0,
-          });
-          expect(
-            db
-              .prepare(
-                "SELECT meta_key FROM schema_meta WHERE meta_key IN ('startup-migrations', 'state-migrations')",
-              )
-              .all(),
-          ).toEqual([]);
-          expect(
-            db
-              .prepare(
-                "SELECT value_json FROM config_machine_state WHERE state_key = 'voicewake.triggers'",
-              )
-              .get(),
-          ).toBeUndefined();
+          await expectUnchanged();
 
           await using doctor = await prepareDoctorContext(configPath, {
             options: { nonInteractive: true, repair: false },
           });
           expect(doctor.sourceConfigValid).toBe(true);
-          const { db: deferredDb } = openOpenClawStateDatabase();
-
-          expect(await fs.readFile(sourcePath, "utf8")).toBe(original);
-          expect(await fs.readFile(configPath, "utf8")).toBe(originalConfig);
-          expect(
-            deferredDb
-              .prepare(
-                "SELECT value_json FROM config_machine_state WHERE state_key = 'voicewake.triggers'",
-              )
-              .get(),
-          ).toBeUndefined();
-          const receipts = deferredDb.prepare("SELECT count(*) AS count FROM migration_runs").get();
-          expect(receipts).toEqual({ count: 0 });
-          expect(
-            deferredDb
-              .prepare(
-                "SELECT meta_key FROM schema_meta WHERE meta_key IN ('startup-migrations', 'state-migrations')",
-              )
-              .all(),
-          ).toEqual([]);
+          await expectUnchanged();
           testApi.resetConfigGuardStateForTests();
           await bootstrap();
-          expect(deferredDb.prepare("SELECT count(*) AS count FROM migration_runs").get()).toEqual(
-            receipts,
-          );
+          await expectUnchanged();
         } finally {
           closeOpenClawStateDatabaseForTest();
         }
