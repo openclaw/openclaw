@@ -39,6 +39,10 @@ const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 let root: string;
 let client: pg.Client;
 
+async function expectRows(sql: string, expected: unknown[], values?: unknown[]) {
+  expect((await client.query(sql, values)).rows).toEqual(expected);
+}
+
 describe.skipIf(!connection)("PostgreSQL Doctor media inspection", () => {
   beforeAll(async () => {
     root = tempDirs.make("doctor-media-postgres-");
@@ -96,15 +100,10 @@ describe.skipIf(!connection)("PostgreSQL Doctor media inspection", () => {
     // Raw Workers borrow their parent's admitted native anchor identity.
     using anchor = openNodeSqliteDatabase(pathname);
     admitSqliteSchema(anchor);
-    expect(
-      (
-        await client.query(
-          `SELECT agent_id, role, schema_version::integer AS schema_version FROM "${namespace}".schema_meta WHERE meta_key = 'primary'`,
-        )
-      ).rows,
-    ).toEqual([
-      { agent_id: agentId, role: "agent", schema_version: OPENCLAW_AGENT_SCHEMA_VERSION },
-    ]);
+    await expectRows(
+      `SELECT agent_id, role, schema_version::integer AS schema_version FROM "${namespace}".schema_meta WHERE meta_key = 'primary'`,
+      [{ agent_id: agentId, role: "agent", schema_version: OPENCLAW_AGENT_SCHEMA_VERSION }],
+    );
     const clean =
       '{"type":"message","id":"media-message","timestamp":1,"message":{"role":"user","content":"preserved"},"opaqueCount":9007199254740993}';
     const legacy = clean.replace(
@@ -116,9 +115,10 @@ describe.skipIf(!connection)("PostgreSQL Doctor media inspection", () => {
         `UPDATE "${namespace}".transcript_events SET event_json = $1 WHERE session_id = $2 AND message_role = 'user'`,
         [raw, sessionId],
       );
-    const readTranscript = () =>
-      client.query(
+    const expectTranscript = (event_json: string) =>
+      expectRows(
         `SELECT event_json FROM "${namespace}".transcript_events WHERE session_id = $1 AND message_role = 'user'`,
+        [{ event_json }],
         [sessionId],
       );
     const inspect = async () => {
@@ -166,7 +166,7 @@ describe.skipIf(!connection)("PostgreSQL Doctor media inspection", () => {
       initialVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
       finalVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
     });
-    expect((await readTranscript()).rows).toEqual([{ event_json: clean }]);
+    await expectTranscript(clean);
 
     const expectRefused = async () => {
       await expect(inspect()).rejects.toThrow("PostgreSQL cannot use SQLite repair");
@@ -174,7 +174,7 @@ describe.skipIf(!connection)("PostgreSQL Doctor media inspection", () => {
     };
     await updateTranscript(legacy);
     await expectRefused();
-    expect((await readTranscript()).rows).toEqual([{ event_json: legacy }]);
+    await expectTranscript(legacy);
 
     await updateTranscript(clean);
     const trajectory =
@@ -184,9 +184,9 @@ describe.skipIf(!connection)("PostgreSQL Doctor media inspection", () => {
       [sessionId, trajectory],
     );
     await expectRefused();
-    expect(
-      (await client.query(`SELECT event_json FROM "${namespace}".trajectory_runtime_events`)).rows,
-    ).toEqual([{ event_json: trajectory }]);
+    await expectRows(`SELECT event_json FROM "${namespace}".trajectory_runtime_events`, [
+      { event_json: trajectory },
+    ]);
 
     await client.query(`DELETE FROM "${namespace}".trajectory_runtime_events`);
     const archive = Buffer.from(`${legacy}\n`);
@@ -195,10 +195,9 @@ describe.skipIf(!connection)("PostgreSQL Doctor media inspection", () => {
       [sessionId, target.sessionKey, archive, createHash("sha256").update(archive).digest("hex")],
     );
     await expectRefused();
-    expect(
-      (await client.query(`SELECT archive_blob FROM "${namespace}".session_transcript_archives`))
-        .rows,
-    ).toEqual([{ archive_blob: archive }]);
+    await expectRows(`SELECT archive_blob FROM "${namespace}".session_transcript_archives`, [
+      { archive_blob: archive },
+    ]);
     expect(anchor.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all()).toEqual([
       { name: "openclaw_engine_anchor" },
     ]);

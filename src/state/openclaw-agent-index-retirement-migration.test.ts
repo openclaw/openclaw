@@ -48,6 +48,15 @@ const schemaV28 = fs
   );
 const scope = ["schema_meta", "session_nodes", "session_reactions", "sqlite_stat1", "sqlite_stat4"];
 
+const rows = (db: DatabaseSync, sql: string) => db.prepare(sql).all();
+const row = (db: DatabaseSync, sql: string) => db.prepare(sql).get();
+const allIndexes = (db: DatabaseSync) =>
+  rows(db, "SELECT name FROM sqlite_schema WHERE type = 'index' ORDER BY name");
+const statistics = (db: DatabaseSync) => rows(db, "SELECT * FROM sqlite_stat1 ORDER BY tbl, idx");
+function migrate(database: DatabaseSync, pathname: string) {
+  ensureOpenClawAgentSchema(database, "main", pathname, AGENT_INDEX_RETIREMENT_SCHEMA_VERSION);
+}
+
 function seed(database: DatabaseSync, schema = schemaV28, version = 28): void {
   database.exec(schema);
   database.exec(`
@@ -73,17 +82,18 @@ function seed(database: DatabaseSync, schema = schemaV28, version = 28): void {
 }
 
 function indexDefinitions(database: DatabaseSync) {
-  return database
-    .prepare(`SELECT name, sql FROM sqlite_schema
+  return rows(
+    database,
+    `SELECT name, sql FROM sqlite_schema
       WHERE tbl_name IN ('session_nodes', 'session_reactions') AND type = 'index'
-      ORDER BY name`)
-    .all();
+      ORDER BY name`,
+  );
 }
 
 function retained(database: DatabaseSync) {
   return {
-    nodes: database.prepare("SELECT * FROM session_nodes ORDER BY session_key").all(),
-    reactions: database.prepare("SELECT * FROM session_reactions ORDER BY identity_id").all(),
+    nodes: rows(database, "SELECT * FROM session_nodes ORDER BY session_key"),
+    reactions: rows(database, "SELECT * FROM session_reactions ORDER BY identity_id"),
   };
 }
 
@@ -111,11 +121,9 @@ describe("agent index retirement migration", () => {
       } else {
         seed(database);
       }
-      const previousVersion = database.prepare("PRAGMA user_version").get()?.user_version;
+      const previousVersion = row(database, "PRAGMA user_version");
       const before = retained(database);
-      const indexes = database
-        .prepare("SELECT name FROM sqlite_schema WHERE type = 'index' ORDER BY name")
-        .all();
+      const indexes = allIndexes(database);
       const shared = openOpenClawStateDatabase({ env: state.env });
       using writer = new DatabaseSync(shared.path);
       writer.exec("PRAGMA busy_timeout = 0");
@@ -174,30 +182,25 @@ describe("agent index retirement migration", () => {
         ).catch((error: unknown) => error);
         expect(wroteDuringDdl, String(migrationFailure)).toBe(true);
         expect(
-          writer
-            .prepare(
-              "SELECT value_json FROM config_machine_state WHERE state_key = 'migration-heartbeat-peer'",
-            )
-            .get(),
+          row(
+            writer,
+            "SELECT value_json FROM config_machine_state WHERE state_key = 'migration-heartbeat-peer'",
+          ),
         ).toEqual({ value_json: "{}" });
         expect(retained(database)).toEqual(before);
         if (outcome === "commit") {
           expect(migrationFailure).toBeUndefined();
           expect(maintenanceFailure).toBeUndefined();
-          expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
-            OPENCLAW_AGENT_SCHEMA_VERSION,
-          );
+          expect(row(database, "PRAGMA user_version")).toEqual({
+            user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+          });
         } else {
           expect(migrationFailure).toBeInstanceOf(Error);
           expect(migrationFailure).toMatchObject({
             message: expect.stringMatching(outcome === "deletion" ? /deleted/u : /was lost/u),
           });
-          expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(previousVersion);
-          expect(
-            database
-              .prepare("SELECT name FROM sqlite_schema WHERE type = 'index' ORDER BY name")
-              .all(),
-          ).toEqual(indexes);
+          expect(row(database, "PRAGMA user_version")).toEqual(previousVersion);
+          expect(allIndexes(database)).toEqual(indexes);
         }
       } finally {
         exec.mockRestore();
@@ -231,28 +234,22 @@ describe("agent index retirement migration", () => {
           );
         }
         await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
-          const migrate = () =>
-            ensureOpenClawAgentSchema(
-              database,
-              "main",
-              pathname,
-              AGENT_INDEX_RETIREMENT_SCHEMA_VERSION,
-            );
+          const runMigration = () => migrate(database, pathname);
           await assertSqliteMigrationScopePreserved(database, scope, () => {
             if (outcome === "rollback") {
-              expect(migrate).toThrow(/authoriz/u);
+              expect(runMigration).toThrow(/authoriz/u);
             } else {
-              migrate();
+              runMigration();
             }
           });
         });
         database.setAuthorizer(null);
         expect(retained(database)).toEqual(before);
         const expectedVersion = outcome === "rollback" ? 28 : AGENT_INDEX_RETIREMENT_SCHEMA_VERSION;
-        expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(expectedVersion);
-        expect(
-          database.prepare("SELECT schema_version FROM schema_meta").get()?.schema_version,
-        ).toBe(expectedVersion);
+        expect(row(database, "PRAGMA user_version")).toEqual({ user_version: expectedVersion });
+        expect(row(database, "SELECT schema_version FROM schema_meta")).toEqual({
+          schema_version: expectedVersion,
+        });
         expect(assertOpenClawMigrationWitnessPreserved(originalWitness, captureWitness())).toEqual({
           warnings: [],
         });
@@ -294,15 +291,15 @@ describe("agent index retirement migration", () => {
             VALUES ('agent:main:test', 'session', 'message', '👍', 'bob', 2);
           DELETE FROM session_reactions WHERE identity_id = 'alice';
         `);
+        expect(row(database, "SELECT last_interaction_at FROM session_nodes")).toEqual({
+          last_interaction_at: 20,
+        });
         expect(
-          database.prepare("SELECT last_interaction_at FROM session_nodes").get()
-            ?.last_interaction_at,
-        ).toBe(20);
-        expect(
-          database
-            .prepare(`SELECT identity_id FROM session_reactions
-            WHERE session_key = 'agent:main:test' AND session_id = 'session' AND message_id = 'message'`)
-            .all(),
+          rows(
+            database,
+            `SELECT identity_id FROM session_reactions
+            WHERE session_key = 'agent:main:test' AND session_id = 'session' AND message_id = 'message'`,
+          ),
         ).toEqual([{ identity_id: "bob" }]);
         expect(() =>
           database.exec(`INSERT INTO session_reactions
@@ -310,8 +307,8 @@ describe("agent index retirement migration", () => {
             VALUES ('agent:main:test', 'session', 'message', '👍', 'bob', 3)`),
         ).toThrow(/UNIQUE/u);
         database.exec("DELETE FROM session_nodes WHERE session_key = 'agent:main:test'");
-        expect(database.prepare("SELECT * FROM session_reactions").all()).toEqual([]);
-        expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+        expect(rows(database, "SELECT * FROM session_reactions")).toEqual([]);
+        expect(rows(database, "PRAGMA foreign_key_check")).toEqual([]);
       });
     },
   );
@@ -324,7 +321,7 @@ describe("agent index retirement migration", () => {
       seed(database);
       const before = retained(database);
       const indexes = indexDefinitions(database);
-      const statistics = database.prepare("SELECT * FROM sqlite_stat1 ORDER BY tbl, idx").all();
+      const beforeStatistics = statistics(database);
       expect(
         resolveSchemaMigrationBackupTables({
           kind: "agent",
@@ -339,26 +336,19 @@ describe("agent index retirement migration", () => {
           tables: scope,
           beforePublish: () => lease.assertOwned(),
         });
-        ensureOpenClawAgentSchema(
-          database,
-          "main",
-          pathname,
-          AGENT_INDEX_RETIREMENT_SCHEMA_VERSION,
-        );
+        migrate(database, pathname);
       });
       database.exec("UPDATE cache_entries SET blob = X'BEEF' WHERE scope = 'unrelated'");
       await assertSqliteMigrationScopePreserved(database, scope, () =>
         restoreDoctorMigrationBackup({ sourcePath: pathname, backupPath, env: state.env }),
       );
-      expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(28);
+      expect(row(database, "PRAGMA user_version")).toEqual({ user_version: 28 });
       expect(retained(database)).toEqual(before);
       expect(indexDefinitions(database)).toEqual(indexes);
-      expect(database.prepare("SELECT * FROM sqlite_stat1 ORDER BY tbl, idx").all()).toEqual(
-        statistics,
-      );
-      expect(database.prepare("SELECT hex(blob) AS bytes FROM cache_entries").get()?.bytes).toBe(
-        "BEEF",
-      );
+      expect(statistics(database)).toEqual(beforeStatistics);
+      expect(row(database, "SELECT hex(blob) AS bytes FROM cache_entries")).toEqual({
+        bytes: "BEEF",
+      });
     });
   });
 });

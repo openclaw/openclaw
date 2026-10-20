@@ -31,25 +31,20 @@ function fixture() {
     return pathname;
   };
   const registeredPaths = () => state.db.prepare("SELECT path FROM agent_databases").all();
-  return { root, env, state, register, registeredPaths };
+  const open = (basename: string) =>
+    openOpenClawAgentDatabase({ env, agentId: "main", path: path.join(root, basename) });
+  const repair = (overrides: NodeJS.ProcessEnv = {}) =>
+    noteDoctorAgentDatabasePathHealth({ env: { ...env, ...overrides }, shouldRepair: true });
+  return { root, env, register, registeredPaths, open, repair };
 }
 
 describe("Doctor agent database path repair", () => {
   it("removes sentinel registrations on every platform, deleting only empty files", () => {
     const f = fixture();
-    const empty = openOpenClawAgentDatabase({
-      env: f.env,
-      agentId: "main",
-      path: path.join(f.root, "(multiple).main.sqlite"),
-    });
-    const emptyPath = empty.path;
+    const emptyPath = f.open("(multiple).main.sqlite").path;
     closeOpenClawAgentDatabasesForTest();
     const populatedPath = f.register("(multiple).main.2.sqlite");
-    const populated = openOpenClawAgentDatabase({
-      env: f.env,
-      agentId: "main",
-      path: populatedPath,
-    });
+    const populated = f.open(path.basename(populatedPath));
     populated.db.exec(
       "CREATE TABLE retained_payload (value TEXT); INSERT INTO retained_payload VALUES ('keep')",
     );
@@ -65,7 +60,7 @@ describe("Doctor agent database path repair", () => {
     fs.writeFileSync(`${journalPath}-wal`, "retained journal");
     f.register("ordinary.sqlite");
 
-    const warnings = noteDoctorAgentDatabasePathHealth({ env: f.env, shouldRepair: true });
+    const warnings = f.repair().join("\n");
 
     expect(f.registeredPaths()).toEqual([{ path: path.join(f.root, "ordinary.sqlite") }]);
     expect(fs.existsSync(emptyPath)).toBe(false);
@@ -74,10 +69,10 @@ describe("Doctor agent database path repair", () => {
     expect(fs.readFileSync(`${journalPath}-wal`, "utf8")).toBe("retained journal");
     expect(fs.readFileSync(populatedPath)).toEqual(populatedBytes);
     expect(fs.readFileSync(unreadablePath, "utf8")).toBe("not a database");
-    expect(warnings.join("\n")).toContain(populatedPath);
-    expect(warnings.join("\n")).toContain(unreadablePath);
-    expect(warnings.join("\n")).toContain(journalPath);
-    expect(noteDoctorAgentDatabasePathHealth({ env: f.env, shouldRepair: true })).toEqual([]);
+    expect(warnings).toContain(populatedPath);
+    expect(warnings).toContain(unreadablePath);
+    expect(warnings).toContain(journalPath);
+    expect(f.repair()).toEqual([]);
   });
 
   it("preserves the captured registry and files during active and candidate updates", () => {
@@ -86,18 +81,13 @@ describe("Doctor agent database path repair", () => {
     fs.writeFileSync(pathname, "");
     const before = f.registeredPaths();
     const run = createUpdateRun({ trigger: "cli" }, { env: f.env });
-    expect(noteDoctorAgentDatabasePathHealth({ env: f.env, shouldRepair: true })).toEqual([
-      expect.stringContaining(`update ${run.runId} is in progress`),
-    ]);
+    expect(f.repair()).toEqual([expect.stringContaining(`update ${run.runId} is in progress`)]);
     expect(f.registeredPaths()).toEqual(before);
     expect(fs.existsSync(pathname)).toBe(true);
     finishUpdateRun(run.runId, { status: "succeeded" }, { env: f.env });
-    expect(
-      noteDoctorAgentDatabasePathHealth({
-        env: { ...f.env, OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1" },
-        shouldRepair: true,
-      }),
-    ).toEqual([expect.stringContaining("during update Doctor")]);
+    expect(f.repair({ OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1" })).toEqual([
+      expect.stringContaining("during update Doctor"),
+    ]);
     expect(f.registeredPaths()).toEqual(before);
     expect(fs.existsSync(pathname)).toBe(true);
   });

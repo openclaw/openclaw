@@ -18,31 +18,37 @@ afterEach(async () => {
 });
 
 function previousSchema(): string {
-  const start = OPENCLAW_AGENT_SCHEMA_SQL.indexOf(
-    "CREATE TABLE IF NOT EXISTS session_goal_operations (",
-  );
-  const end = OPENCLAW_AGENT_SCHEMA_SQL.indexOf(
-    "CREATE TABLE IF NOT EXISTS transcript_events (",
-    start,
-  );
+  const marker = (table: string) => `CREATE TABLE IF NOT EXISTS ${table} (`;
+  const start = OPENCLAW_AGENT_SCHEMA_SQL.indexOf(marker("session_goal_operations"));
+  const end = OPENCLAW_AGENT_SCHEMA_SQL.indexOf(marker("transcript_events"), start);
   return OPENCLAW_AGENT_SCHEMA_SQL.slice(0, start) + OPENCLAW_AGENT_SCHEMA_SQL.slice(end);
+}
+
+function fixture() {
+  const options = {
+    agentId: "main",
+    env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-goal-schema-") },
+  };
+  const pathname = openOpenClawAgentDatabase(options).path;
+  closeOpenClawAgentDatabasesForTest();
+  return { options, pathname };
+}
+
+function schemaMetadata(db: DatabaseSync) {
+  return {
+    version: db.prepare("PRAGMA user_version").get(),
+    metadata: db
+      .prepare("SELECT schema_version, updated_at FROM schema_meta WHERE meta_key = 'primary'")
+      .get(),
+  };
 }
 
 describe("Goal operation additive schema", () => {
   it("keeps old databases table-free on reads, lazily installs once, and survives older-reader use and candidate reopen", async () => {
-    const options = {
-      agentId: "main",
-      env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-goal-schema-") },
-    };
-    const initial = openOpenClawAgentDatabase(options);
-    const databasePath = initial.path;
-    closeOpenClawAgentDatabasesForTest();
-    const previous = new DatabaseSync(databasePath);
+    const { options, pathname } = fixture();
+    const previous = new DatabaseSync(pathname);
     previous.exec("DROP TABLE session_goal_operations");
-    const version = previous.prepare("PRAGMA user_version").get();
-    const metadata = previous
-      .prepare("SELECT schema_version, updated_at FROM schema_meta WHERE meta_key = 'primary'")
-      .get();
+    const metadata = schemaMetadata(previous);
     previous.close();
 
     expect(
@@ -74,33 +80,23 @@ describe("Goal operation additive schema", () => {
     closeOpenClawAgentDatabasesForTest();
 
     // The previous version can open and use canonical tables with populated receipt data present.
-    const olderReader = new DatabaseSync(databasePath);
-    assertSqliteSchemaContains(olderReader, databasePath, previousSchema());
+    const olderReader = new DatabaseSync(pathname);
+    assertSqliteSchemaContains(olderReader, pathname, previousSchema());
     olderReader
       .prepare("UPDATE schema_meta SET updated_at = updated_at WHERE meta_key = 'primary'")
       .run();
-    expect(olderReader.prepare("PRAGMA user_version").get()).toEqual(version);
-    expect(
-      olderReader
-        .prepare("SELECT schema_version, updated_at FROM schema_meta WHERE meta_key = 'primary'")
-        .get(),
-    ).toEqual(metadata);
+    expect(schemaMetadata(olderReader)).toEqual(metadata);
     olderReader.close();
 
     const reopened = openOpenClawAgentDatabase(options);
     expect(reopened.db.prepare("SELECT operation_id FROM session_goal_operations").get()).toEqual({
       operation_id: "op-1",
     });
-    expect(reopened.db.prepare("PRAGMA user_version").get()).toEqual(version);
+    expect(reopened.db.prepare("PRAGMA user_version").get()).toEqual(metadata.version);
   });
 
   it("rejects a drifted receipt table instead of treating it as an optional absence", () => {
-    const options = {
-      agentId: "main",
-      env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-goal-schema-drift-") },
-    };
-    const pathname = openOpenClawAgentDatabase(options).path;
-    closeOpenClawAgentDatabasesForTest();
+    const { options, pathname } = fixture();
     const drifted = new DatabaseSync(pathname);
     drifted.exec(
       "DROP TABLE session_goal_operations; CREATE TABLE session_goal_operations (operation_id TEXT NOT NULL PRIMARY KEY) STRICT",

@@ -87,13 +87,9 @@ describe("agent database alias observation", () => {
       fs.linkSync(first, hardlink);
       const matcher = createOpenClawAgentDatabasePathMatcher();
       const key = matcher.createIndex();
-      expect(key(first)).toBe(first);
-      expect(key(second)).toBe(second);
-      expect(key(alias)).toBe(first);
-      expect(key(hardlink)).toBe(first);
+      expect([first, second, alias, hardlink].map(key)).toEqual([first, second, first, first]);
       const independentKey = matcher.createIndex();
-      expect(independentKey(hardlink)).toBe(hardlink);
-      expect(independentKey(first)).toBe(hardlink);
+      expect([hardlink, first].map(independentKey)).toEqual([hardlink, hardlink]);
       expect(matcher.isCurrent()).toBe(true);
 
       fs.unlinkSync(first);
@@ -102,14 +98,15 @@ describe("agent database alias observation", () => {
       const secondHardlink = path.join(stateDir, "second-hardlink.sqlite");
       fs.symlinkSync(first, bridge);
       fs.linkSync(second, secondHardlink);
-      expect(key(bridge)).toBe(first);
-      expect(key(secondHardlink)).toBe(second);
+      expect([bridge, secondHardlink].map(key)).toEqual([first, second]);
       expect(matcher.isCurrent()).toBe(false);
       const refreshed = createOpenClawAgentDatabasePathMatcher().createIndex();
-      expect(refreshed(first)).toBe(first);
-      expect(refreshed(alias)).toBe(first);
-      expect(refreshed(second)).toBe(first);
-      expect(refreshed(hardlink)).toBe(hardlink);
+      expect([first, alias, second, hardlink].map(refreshed)).toEqual([
+        first,
+        first,
+        first,
+        hardlink,
+      ]);
     },
   );
 
@@ -131,18 +128,12 @@ describe("agent database alias observation", () => {
     }
 
     const parents = Array.from({ length: 64 }, () => "a");
-    expect(
-      isSameOpenClawAgentDatabasePath(
-        path.join(stateDir, ...parents, "Worker.sqlite"),
-        path.join(stateDir, ...parents, "worker.sqlite"),
-      ),
-    ).toBe(aliases);
+    const upper = path.join(stateDir, ...parents, "Worker.sqlite");
+    const lower = path.join(stateDir, ...parents, "worker.sqlite");
+    expect(isSameOpenClawAgentDatabasePath(upper, lower)).toBe(aliases);
     const matcher = createOpenClawAgentDatabasePathMatcher();
     const key = matcher.createIndex();
-    expect(
-      key(path.join(stateDir, ...parents, "Worker.sqlite")) ===
-        key(path.join(stateDir, ...parents, "worker.sqlite")),
-    ).toBe(aliases);
+    expect(key(upper) === key(lower)).toBe(aliases);
     expect(fs.readdirSync(stateDir)).toEqual([]);
   });
 

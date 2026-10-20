@@ -64,8 +64,8 @@ const source: AgentDatabaseRequestExecutionSource = {
   },
 };
 
-function capture(agentId: string) {
-  return captureOpenClawAgentDatabaseExecution({ agentId, env });
+function capture(agentId: string, pathname?: string) {
+  return captureOpenClawAgentDatabaseExecution({ agentId, env, path: pathname });
 }
 
 async function use(agentId: string) {
@@ -77,6 +77,12 @@ async function use(agentId: string) {
 
 function closedAgents() {
   return opened.filter(({ close }) => close.mock.calls.length > 0).map(({ agentId }) => agentId);
+}
+
+async function fillIdlePool() {
+  for (const agentId of ["first", "second", "third", "fourth"]) {
+    await use(agentId);
+  }
 }
 
 it("keeps a shared creating owner out of idle eviction until its last borrower releases", async () => {
@@ -134,9 +140,7 @@ it("retires a CLI one-shot's warm executor after the CLI window", async () => {
 });
 
 it("closes all warm executors on restart drain", async () => {
-  for (const agentId of ["first", "second", "third", "fourth"]) {
-    await use(agentId);
-  }
+  await fillIdlePool();
   expect(closedAgents()).toEqual([]);
   markGatewayRestartDraining();
   await vi.advanceTimersByTimeAsync(0);
@@ -154,11 +158,7 @@ it("retires only the selected physical store and shares its directory alias", as
     alias,
     process.platform === "win32" ? "junction" : "dir",
   );
-  const borrowed = captureOpenClawAgentDatabaseExecution({
-    agentId: "first",
-    env,
-    path: path.join(alias, path.basename(first.path)),
-  });
+  const borrowed = capture("first", path.join(alias, path.basename(first.path)));
   await borrowed.prepare(source);
   await borrowed.release();
   expect(opened).toHaveLength(2);
@@ -170,9 +170,7 @@ it("retires only the selected physical store and shares its directory alias", as
 });
 
 it("keeps a reborrow live while another idle executor is being evicted", async () => {
-  for (const agentId of ["first", "second", "third", "fourth"]) {
-    await use(agentId);
-  }
+  await fillIdlePool();
   const evicting = createDeferredCore();
   const entered = createDeferredCore();
   const first = opened[0];
@@ -195,9 +193,7 @@ it("keeps a reborrow live while another idle executor is being evicted", async (
 });
 
 it("retains failed eviction custody without retaining a fifth idle executor", async () => {
-  for (const agentId of ["first", "second", "third", "fourth"]) {
-    await use(agentId);
-  }
+  await fillIdlePool();
   const first = opened[0];
   assert(first);
   first.close.mockRejectedValueOnce(new Error("synthetic cleanup failure"));

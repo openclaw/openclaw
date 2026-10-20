@@ -17,6 +17,39 @@ import {
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import type { OpenClawStateWorkerCleanupOperations } from "./openclaw-state-worker-contract.js";
 
+type CleanupStore = SqliteWorkerStore<
+  Pick<OpenClawStateWorkerCleanupOperations, "agentDatabases.releaseExitedLease">
+>;
+const sharedStatePath = "/synthetic/state/openclaw.sqlite";
+function cleanup(
+  target = { agentId: "main", path: "/synthetic/agents/main.sqlite" },
+  leaseId = "synthetic-lease",
+) {
+  const context: OpenClawStateWorkerContext = {
+    environment: { OPENCLAW_STATE_DIR: "/synthetic" },
+    existingSchemaPath: sharedStatePath,
+    admission: {
+      coordinationKey: "file:synthetic-state",
+      databasePath: sharedStatePath,
+      identity: { key: "file:synthetic-state", canonicalPath: sharedStatePath },
+      assertCurrent() {},
+    },
+  };
+  return cleanupRetiredAgentDatabaseLease({
+    context,
+    stopped: Promise.resolve(),
+    assertOwned() {},
+    lease: {
+      leaseId,
+      ...target,
+      ownerPid: process.pid,
+      ownerStartTime: null,
+      sharedStatePath,
+      sharedStateIdentity: "file:synthetic-state",
+    },
+  });
+}
+
 const edge = vi.hoisted(() => ({
   close: vi.fn(async () => {}),
   openFailure: undefined as Error | undefined,
@@ -50,9 +83,7 @@ vi.mock("./openclaw-state-worker-store.js", async (importOriginal) => ({
     if (edge.openFailure) {
       throw edge.openFailure;
     }
-    const store: SqliteWorkerStore<
-      Pick<OpenClawStateWorkerCleanupOperations, "agentDatabases.releaseExitedLease">
-    > = {
+    const store: CleanupStore = {
       async execute(command) {
         inspectRepairPolicy("cleanup", command.input.sharedStatePath);
       },
@@ -63,14 +94,8 @@ vi.mock("./openclaw-state-worker-store.js", async (importOriginal) => ({
 }));
 vi.mock("../infra/sqlite-worker-store.js", () => ({
   runSqliteWorkerStoreOperation: async (
-    store: SqliteWorkerStore<
-      Pick<OpenClawStateWorkerCleanupOperations, "agentDatabases.releaseExitedLease">
-    >,
-    operation: (
-      scope: SqliteWorkerStore<
-        Pick<OpenClawStateWorkerCleanupOperations, "agentDatabases.releaseExitedLease">
-      >,
-    ) => Promise<void>,
+    store: CleanupStore,
+    operation: (scope: CleanupStore) => Promise<void>,
     context: SqliteWorkerStateContext,
   ) => runWithSqliteWorkerStateContext(context, () => operation(store)),
 }));
@@ -94,33 +119,9 @@ afterEach(() => {
 });
 
 it("retains installed-schema repair ownership through retired agent lease cleanup", async () => {
-  const databasePath = "/synthetic/state/openclaw.sqlite";
-  const context: OpenClawStateWorkerContext = {
-    environment: { OPENCLAW_STATE_DIR: "/synthetic" },
-    existingSchemaPath: databasePath,
-    admission: {
-      coordinationKey: "file:synthetic-state",
-      databasePath,
-      identity: { key: "file:synthetic-state", canonicalPath: databasePath },
-      assertCurrent() {},
-    },
-  };
   // There is no ambient schema scope for the mocked transport to inherit.
   expect(getExistingOpenClawStateSchemaPath()).toBeUndefined();
-  await cleanupRetiredAgentDatabaseLease({
-    context,
-    stopped: Promise.resolve(),
-    assertOwned() {},
-    lease: {
-      leaseId: "synthetic-lease",
-      agentId: "main",
-      path: "/synthetic/agents/main.sqlite",
-      ownerPid: process.pid,
-      ownerStartTime: null,
-      sharedStatePath: databasePath,
-      sharedStateIdentity: "file:synthetic-state",
-    },
-  });
+  await cleanup();
   expect(edge.repairs).toEqual(
     ["open", "cleanup"].map((phase) => ({
       phase,
@@ -134,7 +135,6 @@ it("retains installed-schema repair ownership through retired agent lease cleanu
 });
 
 it("revokes retired reader validation when shared cleanup admission fails", async () => {
-  const databasePath = "/synthetic/state/openclaw.sqlite";
   const target = { agentId: "main", path: "/synthetic/reader-recovery/main.sqlite" };
   const valid = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
   const canonicalReady = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
@@ -157,31 +157,7 @@ it("revokes retired reader validation when shared cleanup admission fails", asyn
 
   const failure = new Error("shared state is undergoing offline maintenance");
   edge.openFailure = failure;
-  const context: OpenClawStateWorkerContext = {
-    environment: { OPENCLAW_STATE_DIR: "/synthetic" },
-    existingSchemaPath: databasePath,
-    admission: {
-      coordinationKey: "file:synthetic-state",
-      databasePath,
-      identity: { key: "file:synthetic-state", canonicalPath: databasePath },
-      assertCurrent() {},
-    },
-  };
-  await expect(
-    cleanupRetiredAgentDatabaseLease({
-      context,
-      stopped: Promise.resolve(),
-      assertOwned() {},
-      lease: {
-        leaseId: "synthetic-retired-lease",
-        ...target,
-        ownerPid: process.pid,
-        ownerStartTime: null,
-        sharedStatePath: databasePath,
-        sharedStateIdentity: "file:synthetic-state",
-      },
-    }),
-  ).rejects.toBe(failure);
+  await expect(cleanup(target, "synthetic-retired-lease")).rejects.toBe(failure);
 
   expect(getOpenClawAgentDatabaseValidationForTransfer(target)).toBeUndefined();
   expect(Atomics.load(new Int32Array(valid), 0)).toBe(0);

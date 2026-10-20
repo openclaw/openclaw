@@ -15,6 +15,7 @@ import {
 } from "./openclaw-agent-db.js";
 import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import { AgentDatabaseExecutionLifetime } from "./openclaw-agent-execution-authority.js";
+import type { AgentDatabaseExecutionFileIdentity } from "./openclaw-agent-execution-contract.js";
 import { createAgentDatabaseNativeGeneration } from "./openclaw-agent-execution-native.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
@@ -27,6 +28,25 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     cleanup();
   }),
 );
+
+function fixture() {
+  const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-schema-")) };
+  const options = { agentId: "main", env };
+  const database = openOpenClawAgentDatabase(options);
+  const generation = (identity?: AgentDatabaseExecutionFileIdentity) =>
+    createAgentDatabaseNativeGeneration(
+      "main",
+      database.path,
+      captureOpenClawStateWorkerContext({ env }),
+      new AgentDatabaseExecutionLifetime().state,
+      () => {},
+      () => {},
+      identity,
+      () => {},
+      () => {},
+    );
+  return { env, options, database, generation };
+}
 
 function createSource(
   assertCurrent = () => {},
@@ -50,18 +70,11 @@ function createSource(
 it.each([false, true])(
   "preserves clean restart proof on refused worker admission (prepared: %s)",
   async (prepared) => {
-    const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-refused-restart-")) };
-    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const { env, database, generation: createGeneration } = fixture();
     closeOpenClawAgentDatabaseByPath(database.path);
     const seal = fs.readFileSync(`${database.path}.seal`, "utf8");
     const identity = readDatabasePathIdentitySync(database.path);
-    const generation = createAgentDatabaseNativeGeneration(
-      "main",
-      database.path,
-      captureOpenClawStateWorkerContext({ env }),
-      new AgentDatabaseExecutionLifetime().state,
-      () => {},
-      () => {},
+    const generation = createGeneration(
       prepared
         ? {
             kind: "file",
@@ -70,8 +83,6 @@ it.each([false, true])(
             nativeLocation: identity.canonicalPath,
           }
         : undefined,
-      () => {},
-      () => {},
     );
     let refused = false;
     const refusal = sqliteWorkerOwnerProbe.admission(workerAdmission, (request, grant, admit) => {
@@ -106,9 +117,7 @@ it.each([false, true])(
 );
 
 it("rejects malformed native schema receipts without replaying caller work", async () => {
-  const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-schema-invalid-")) };
-  const options = { agentId: "main", env };
-  const database = openOpenClawAgentDatabase(options);
+  const { options, database } = fixture();
   closeOpenClawAgentDatabaseByPath(database.path);
   const execution = captureOpenClawAgentDatabaseExecution(options);
   let publications = 0;
@@ -141,21 +150,10 @@ it("rejects malformed native schema receipts without replaying caller work", asy
 });
 
 it("admits schema and integrity once, then warm turns request only their writes", async () => {
-  const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-warm-turn-")) };
-  const database = openOpenClawAgentDatabase({ agentId: "main", env });
+  const { database, generation: createGeneration } = fixture();
   // Force worker verification so the cold turn shows the admission work being counted.
   invalidateOpenClawAgentDatabaseValidation(database.path);
-  const generation = createAgentDatabaseNativeGeneration(
-    "main",
-    database.path,
-    captureOpenClawStateWorkerContext({ env }),
-    new AgentDatabaseExecutionLifetime().state,
-    () => {},
-    () => {},
-    undefined,
-    () => {},
-    () => {},
-  );
+  const generation = createGeneration();
   const requests: string[] = [];
   const source = createSource(undefined, (request) => {
     const kind = isRecord(request.facts) ? request.facts.kind : undefined;
