@@ -25,6 +25,11 @@ vi.mock("./auth-profiles/oauth.js", async (importActual) => ({
   resolveApiKeyForProfile: profileMocks.resolveApiKeyForProfile,
 }));
 afterEach(() => profileMocks.resolveApiKeyForProfile.mockReset());
+const modelRef = { modelId: "gpt-5.4", runtimeId: "codex" };
+const platformCredential = createApiKeyCredential("openai", "platform-key");
+function oauthCredential(authFlow?: "chatgpt-token-sharing") {
+  return createOAuthRefreshCredential({ authFlow, expires: Date.now() + 3_600_000 });
+}
 
 function resolver(mode?: "api_key" | "oauth" | "token", cfg: OpenClawConfig = {}, complete = true) {
   mockRouteResolverFactory(routeResolverFactory(dualRoutes));
@@ -44,33 +49,28 @@ describe("native Codex model auth", () => {
     ["oauth", subscriptionRoute],
   ] as const)("selects the route for native %s auth without a host profile", (mode, route) => {
     const auth = resolver(mode);
-    expect(
-      auth.evaluateRuntimeModelAuth("openai", { modelId: "gpt-5.4", runtimeId: "codex" }),
-    ).toMatchObject({
+    expect(auth.evaluateRuntimeModelAuth("openai", modelRef)).toMatchObject({
       availability: true,
       selectedRoute: route,
       runtimeAuth: { id: "codex", source: "native" },
     });
     expect(auth.evaluateModelAuth("openai", { modelId: "gpt-5.4" }).availability).not.toBe(true);
     expect(
-      auth.evaluateRuntimeModelAuth("openai", { modelId: "gpt-5.4", runtimeId: "openclaw" })
-        .availability,
+      auth.evaluateRuntimeModelAuth("openai", { ...modelRef, runtimeId: "openclaw" }).availability,
     ).not.toBe(true);
   });
 
   it("distinguishes a completed logout from an unobserved native account", () => {
-    const ref = { modelId: "gpt-5.4", runtimeId: "codex" };
-    expect(resolver().evaluateRuntimeModelAuth("openai", ref).availability).toBe(false);
+    expect(resolver().evaluateRuntimeModelAuth("openai", modelRef).availability).toBe(false);
     expect(
-      resolver(undefined, {}, false).evaluateRuntimeModelAuth("openai", ref).availability,
+      resolver(undefined, {}, false).evaluateRuntimeModelAuth("openai", modelRef).availability,
     ).toBeUndefined();
   });
 
   it("does not rescue a pinned account with the native login", () => {
     expect(
       resolver("api_key").evaluateRuntimeModelAuth("openai", {
-        modelId: "gpt-5.4",
-        runtimeId: "codex",
+        ...modelRef,
         pinnedProfileId: "openai:missing",
       }).availability,
     ).not.toBe(true);
@@ -78,10 +78,10 @@ describe("native Codex model auth", () => {
 
   it("keeps an authored empty account order authoritative", () => {
     expect(
-      resolver("api_key", { auth: { order: { openai: [] } } }).evaluateRuntimeModelAuth("openai", {
-        modelId: "gpt-5.4",
-        runtimeId: "codex",
-      }).availability,
+      resolver("api_key", { auth: { order: { openai: [] } } }).evaluateRuntimeModelAuth(
+        "openai",
+        modelRef,
+      ).availability,
     ).not.toBe(true);
   });
 });
@@ -119,11 +119,8 @@ describe("OAuth inference grants", () => {
         profileId: "openai:shared",
         lockedProfile: true,
         store: createAuthProfileStoreFixture({
-          "openai:shared": createOAuthRefreshCredential({
-            authFlow: "chatgpt-token-sharing",
-            expires: Date.now() + 3_600_000,
-          }),
-          "openai:platform": createApiKeyCredential("openai", "platform-key"),
+          "openai:shared": oauthCredential("chatgpt-token-sharing"),
+          "openai:platform": platformCredential,
         }),
       }),
     ).rejects.toThrow(/does not support this operation with Sign in with ChatGPT/);
@@ -149,13 +146,8 @@ describe("OpenAI Decision credentials", () => {
     async ({ authFlow, withApiKey }) => {
       await prepareSharedAuthStoreOwnership();
       const profiles = {
-        "openai:oauth": createOAuthRefreshCredential({
-          ...(authFlow ? { authFlow } : {}),
-          expires: Date.now() + 3_600_000,
-        }),
-        ...(withApiKey
-          ? { "openai:platform": createApiKeyCredential("openai", "platform-key") }
-          : {}),
+        "openai:oauth": oauthCredential(authFlow),
+        ...(withApiKey ? { "openai:platform": platformCredential } : {}),
       };
       const order = ["openai:oauth", ...(withApiKey ? ["openai:platform"] : [])];
       profileMocks.resolveApiKeyForProfile.mockImplementation(async ({ profileId }) => {
@@ -209,8 +201,8 @@ describe("OpenAI Decision credentials", () => {
             },
           },
           store: createAuthProfileStoreFixture({
-            "openai:oauth": createOAuthRefreshCredential({ expires: Date.now() + 3_600_000 }),
-            "openai:platform": createApiKeyCredential("openai", "platform-key"),
+            "openai:oauth": oauthCredential(),
+            "openai:platform": platformCredential,
           }),
         }),
       ).rejects.toThrow(/not a bearer-style auth class/);

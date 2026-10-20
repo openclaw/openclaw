@@ -38,16 +38,13 @@ function fixture(discovery: "static" | "runtime", ...modelIds: string[]) {
   );
 }
 
-async function build(
-  params: { config: OpenClawConfig; metadataSnapshot: PluginMetadataSnapshot },
-  observed: string[] = [],
-) {
+async function build(params: { config: OpenClawConfig; metadataSnapshot: PluginMetadataSnapshot }) {
   return await buildPreparedModelCatalogSnapshot({
     ...params,
     agentDir: "/tmp/model-catalog-planning-test",
     authCredentials: {},
     readOnly: true,
-    models: observed.map((id) => ({ provider: "catalog-fixture", id, name: id })),
+    models: [],
   });
 }
 
@@ -69,10 +66,7 @@ describe("prepared catalog planning and declaration cache", () => {
       vi.mocked(planEffectiveModelCatalogRows).mockClear();
       vi.mocked(normalizeModelCatalogProviderRows).mockClear();
       const snapshot = await build(params);
-      for (const rows of [snapshot.entries, snapshot.routeVariants]) {
-        expect(rows.map((row) => row.id)).toEqual([]);
-        expect(rows.every((row) => row.provider === "catalog-fixture")).toBe(true);
-      }
+      expect([snapshot.entries, snapshot.routeVariants]).toEqual([[], []]);
       const firstRead = loadManifestModelCatalog(params);
       expect(firstRead.map((row) => row.id)).toEqual(["allowed", "denied"]);
       expect(loadManifestModelCatalog(params)).toBe(firstRead);

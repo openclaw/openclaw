@@ -46,7 +46,6 @@ async function writeWorkspaceAuthEvidencePlugin(workspaceDir: string) {
 
 describe("workspace plugin model auth evidence", () => {
   it("uses trusted workspace plugin auth evidence across runtime and picker auth checks", async () => {
-    // Workspace scope is required for this plugin-owned marker.
     const tempRoot = tempDirs.make("openclaw-workspace-auth-");
     const workspaceDir = path.join(tempRoot, "workspace");
     const bundledDir = path.join(tempRoot, "bundled");
@@ -57,12 +56,13 @@ describe("workspace plugin model auth evidence", () => {
     await fs.writeFile(credentialsPath, "{}", "utf8");
     await writeWorkspaceAuthEvidencePlugin(workspaceDir);
 
-    const cfg: OpenClawConfig = {
-      plugins: {
-        allow: ["workspace-cloud"],
-      },
-    };
+    const cfg: OpenClawConfig = { plugins: { allow: ["workspace-cloud"] } };
     const store: AuthProfileStore = { version: 1, profiles: {} };
+    const request = { provider: "workspace-cloud", cfg, workspaceDir, store };
+    const evidence = {
+      apiKey: "workspace-cloud-local-credentials",
+      source: "workspace cloud credentials",
+    };
 
     await withEnvAsync(
       {
@@ -73,37 +73,16 @@ describe("workspace plugin model auth evidence", () => {
       async () => {
         expect(resolveEnvApiKey("workspace-cloud", process.env, { config: cfg })).toBeNull();
         expect(
-          resolveEnvApiKey("workspace-cloud", process.env, {
-            config: cfg,
-            workspaceDir,
-          }),
-        ).toEqual({
-          apiKey: "workspace-cloud-local-credentials",
-          source: "workspace cloud credentials",
-        });
-        await expect(
-          resolveApiKeyForProviderCore({
-            provider: "workspace-cloud",
-            cfg,
-            workspaceDir,
-            store,
-          }),
-        ).resolves.toEqual({
-          apiKey: "workspace-cloud-local-credentials",
-          source: "workspace cloud credentials",
+          resolveEnvApiKey(request.provider, process.env, { config: cfg, workspaceDir }),
+        ).toEqual(evidence);
+        await expect(resolveApiKeyForProviderCore(request)).resolves.toEqual({
+          ...evidence,
           mode: "api-key",
         });
         expect(resolveModelAuthMode("workspace-cloud", cfg, store, { workspaceDir })).toBe(
           "api-key",
         );
-        await expect(
-          hasAvailableAuthForProvider({
-            provider: "workspace-cloud",
-            cfg,
-            workspaceDir,
-            store,
-          }),
-        ).resolves.toBe(true);
+        await expect(hasAvailableAuthForProvider(request)).resolves.toBe(true);
         await expect(
           createProviderAuthChecker({
             cfg,

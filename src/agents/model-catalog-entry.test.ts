@@ -5,7 +5,7 @@ import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
 
 describe("model catalog metadata projection", () => {
   it("retains runtime capabilities without exporting request credentials", () => {
-    const model: ProviderRuntimeModel = {
+    const capabilities = {
       id: "configured-model",
       name: "Configured model",
       provider: "custom",
@@ -13,8 +13,6 @@ describe("model catalog metadata projection", () => {
       baseUrl: "https://example.test/v1",
       reasoning: true,
       input: ["text", "image"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      maxTokens: 4096,
       contextWindow: 96_000,
       contextTokens: 48_000,
       parameterCount: 4_000_000_000,
@@ -23,29 +21,17 @@ describe("model catalog metadata projection", () => {
       thinkingLevelMap: { off: null, high: "high" },
       params: { platformOnly: true },
       compat: { supportsTools: false },
+    } satisfies Partial<ProviderRuntimeModel>;
+    const model: ProviderRuntimeModel = {
+      ...capabilities,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      maxTokens: 4096,
       headers: { Authorization: "synthetic-unused" },
       authHeader: true,
       requestTimeoutMs: 12_000,
     };
-
     const entry = modelCatalogRowToEntry(model);
-
-    expect(entry).toMatchObject({
-      id: "configured-model",
-      name: "Configured model",
-      provider: "custom",
-      api: "openai-responses",
-      contextWindow: 96_000,
-      contextTokens: 48_000,
-      parameterCount: 4_000_000_000,
-      contextWindows: [{ id: "large", label: "Large", contextWindow: 96_000 }],
-      contextWindowDefault: "large",
-      reasoning: true,
-      input: ["text", "image"],
-      thinkingLevelMap: { off: null, high: "high" },
-      params: { platformOnly: true },
-      compat: { supportsTools: false },
-    });
+    expect(entry).toMatchObject(capabilities);
     expect(entry).not.toHaveProperty("headers");
     expect(entry).not.toHaveProperty("authHeader");
     expect(entry).not.toHaveProperty("requestTimeoutMs");
