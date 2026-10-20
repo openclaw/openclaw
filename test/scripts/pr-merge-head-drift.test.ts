@@ -1,42 +1,32 @@
 import { expect, it } from "vitest";
+import { configureMerge, expectExit } from "./pr-merge-assertions.test-support.js";
 import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-support.js";
 
 const { fixture, outcomeRef, describePosix } = createMergeOutcomeFixtureHarness();
 
 function mergedAfterPush(variant = "") {
   const f = fixture();
-  f.save({
-    ...f.state(),
-    mode:
-      variant === "unaccepted"
-        ? "pending-error"
-        : variant === "immediate"
-          ? "unapplied"
-          : "pending",
-    pr: { ...f.state().pr, mergeStateStatus: variant === "immediate" ? "CLEAN" : "BEHIND" },
+  const immediate = variant === "immediate";
+  const accepted = !["unaccepted", "immediate"].includes(variant);
+  configureMerge(f, {
+    mode: variant === "unaccepted" ? "pending-error" : immediate ? "unapplied" : "pending",
+    pr: { mergeStateStatus: immediate ? "CLEAN" : "BEHIND" },
   });
-  const first = f.run(variant !== "immediate");
-  expect(first.status, first.output).toBe(["unaccepted", "immediate"].includes(variant) ? 1 : 0);
-  if (!["unaccepted", "immediate"].includes(variant)) {
+  const first = expectExit(f.run(!immediate), accepted ? 0 : 1);
+  expect(f.record()).toMatchObject({
+    phase: "intent",
+    route: immediate ? "immediate" : "auto",
+    accepted,
+  });
+  if (accepted) {
     expect(first.output).toContain("AUTO/QUEUE PENDING");
-    expect(f.record()).toMatchObject({
-      phase: "intent",
-      route: "auto",
-      accepted: true,
-      head: f.head,
-    });
+    expect(f.record().head).toBe(f.head);
   } else {
-    expect(f.record()).toMatchObject({
-      phase: "intent",
-      route: variant === "immediate" ? "immediate" : "auto",
-      accepted: false,
-    });
     f.recover();
   }
   let oid = f.git(["rev-parse", outcomeRef]);
   if (variant === "cancelled") {
-    const cancelled = f.cancel(oid);
-    expect(cancelled.status, cancelled.output).toBe(0);
+    expectExit(f.cancel(oid));
     expect(f.record().cancellation.state).toBe("confirmed");
     expect(f.state().cancellations).toBe(1);
     oid = f.git(["rev-parse", outcomeRef]);
@@ -65,10 +55,8 @@ function mergedAfterPush(variant = "") {
   if (variant !== "not-on-main") {
     f.git(["push", "-q", "origin", `${landed}:refs/heads/main`]);
   }
-  f.save({
-    ...f.state(),
+  configureMerge(f, {
     pr: {
-      ...f.state().pr,
       state: "MERGED",
       headRefOid: pushed,
       mergeCommit: { oid: landed },
@@ -83,24 +71,20 @@ describePosix("native merged head-drift receipt", () => {
   it("records the pushed head without dispatch and completes after source cleanup and GC", () => {
     const { f, oid, pushed, landed } = mergedAfterPush();
     const original = f.git(["show", `${oid}:outcome.json`]);
-    const reconcile = f.run(true);
-    expect(reconcile.status, reconcile.output).toBe(1);
+    const reconcile = expectExit(f.run(true), 1);
     expect(reconcile.output).toContain("PR identity/head/base drift from the retained attempt");
     expect(reconcile.output).toContain(
       `scripts/pr merge-recover 123 ${oid} --confirmed-operator-recovery --merged-head ${pushed}`,
     );
     expect(f.git(["rev-parse", outcomeRef])).toBe(oid);
     expect(f.state()).toMatchObject({ mutations: 1, posts: 0 });
-    const cancel = f.cancel(oid);
-    expect(cancel.status, cancel.output).toBe(1);
+    expectExit(f.cancel(oid), 1);
     expect(f.git(["rev-parse", outcomeRef])).toBe(oid);
     expect(f.state().cancellations).toBe(0);
-    const incomplete = f.complete(oid);
-    expect(incomplete.status, incomplete.output).toBe(1);
+    const incomplete = expectExit(f.complete(oid), 1);
     expect(incomplete.output).toContain("completion requires the exact verified merge receipt");
 
-    const accepted = f.acceptHeadDrift(oid, pushed);
-    expect(accepted.status, accepted.output).toBe(0);
+    const accepted = expectExit(f.acceptHeadDrift(oid, pushed));
     expect(accepted.output).toContain(`MERGED pushed head ${pushed}`);
     expect(f.record()).toMatchObject({
       phase: "merged",
@@ -115,11 +99,9 @@ describePosix("native merged head-drift receipt", () => {
     expect(f.git(["show", `${oid}:outcome.json`])).toBe(original);
     expect(f.git(["show", "-s", "--format=%P", receipt]).split(" ")).toContain(pushed);
     expect(f.state()).toMatchObject({ mutations: 1, posts: 0, cancellations: 0 });
-    const stale = f.acceptHeadDrift(oid, pushed);
-    expect(stale.status, stale.output).toBe(1);
+    expectExit(f.acceptHeadDrift(oid, pushed), 1);
     expect(f.git(["rev-parse", outcomeRef])).toBe(receipt);
-    const resumed = f.run();
-    expect(resumed.status, resumed.output).toBe(0);
+    const resumed = expectExit(f.run());
     expect(resumed.output).toContain("Merge confirmed; completion pending");
     expect(f.state().mutations).toBe(1);
 
@@ -130,8 +112,7 @@ describePosix("native merged head-drift receipt", () => {
     f.git(["reflog", "expire", "--expire=now", "--all"]);
     f.git(["gc", "--prune=now"]);
     f.git(["cat-file", "-e", `${pushed}^{commit}`]);
-    const done = f.complete(f.git(["rev-parse", outcomeRef]));
-    expect(done.status, done.output).toBe(0);
+    expectExit(f.complete(f.git(["rev-parse", outcomeRef])));
     expect(f.record().phase).toBe("complete");
     expect(f.state()).toMatchObject({ posts: 1, mutations: 1 });
     const body = f.state().comments[0]!.body;
@@ -171,15 +152,13 @@ describePosix("native merged head-drift receipt", () => {
     ],
   ])("refuses %s without changing the retained intent or remote state", (variant, refusal) => {
     const { f, oid, pushed } = mergedAfterPush(variant);
-    if (variant === "identity") {
-      f.save({ ...f.state(), pr: { ...f.state().pr, id: "other-pr" } });
-    }
-    if (variant === "base") {
-      f.save({ ...f.state(), pr: { ...f.state().pr, baseRefName: "release" } });
-    }
-    if (variant === "open") {
-      f.save({ ...f.state(), pr: { ...f.state().pr, state: "OPEN", mergeCommit: null } });
-    }
+    configureMerge(f, {
+      pr: {
+        ...(variant === "identity" ? { id: "other-pr" } : {}),
+        ...(variant === "base" ? { baseRefName: "release" } : {}),
+        ...(variant === "open" ? { state: "OPEN", mergeCommit: null } : {}),
+      },
+    });
     const before = f.state();
     const result = f.acceptHeadDrift(
       variant === "stale-oid" ? f.base : oid,

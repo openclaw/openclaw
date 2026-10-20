@@ -1,6 +1,11 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
+import {
+  configureMerge,
+  expectExit,
+  pendingGates as writePendingGates,
+} from "./pr-merge-assertions.test-support.js";
 import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-support.js";
 
 const { fixture, outcomeRef, describePosix } = createMergeOutcomeFixtureHarness();
@@ -15,13 +20,11 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     });
     const body = join(f.repo, "operator body.md");
     writeFileSync(body, "Partial repair. Related: #42.\n");
-    f.save({
-      ...f.state(),
+    configureMerge(f, {
       previewBody: `Fixes #42\n\n${server}`,
       duringChecks: { bodyPath: body },
     });
-    const result = f.run(false, f.repo, "squash", "", "", body);
-    expect(result.status, result.output).toBe(0);
+    expectExit(f.run(false, f.repo, "squash", "", "", body));
     expect(readFileSync(body, "utf8")).toBe("Changed later");
     expect(f.state().mergeBody).toBe(`Partial repair. Related: #42.\n\n${server}\n${source}\n`);
     expect(f.state().mutations).toBe(1);
@@ -34,17 +37,11 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       const f = fixture();
       const body = join(f.repo, "body.md");
       writeFileSync(body, "Corrected prose");
-      const state = f.state();
-      if (fault === "tamper") {
-        state.tamperMergeBody = true;
-      }
-      if (fault === "head") {
-        state.duringChecks = { head: "a".repeat(40) };
-      }
-      if (fault === "queue") {
-        state.observations = [{ pr: { isMergeQueueEnabled: true } }];
-      }
-      f.save(state);
+      configureMerge(f, {
+        tamperMergeBody: fault === "tamper",
+        ...(fault === "head" ? { duringChecks: { head: "a".repeat(40) } } : {}),
+        ...(fault === "queue" ? { observations: [{ pr: { isMergeQueueEnabled: true } }] } : {}),
+      });
       const result = f.run(false, f.repo, fault === "merge" ? "merge" : "squash", "", "", body);
       expect(result.status, result.output).not.toBe(0);
       expect(f.state().mutations).toBe(0);
@@ -85,7 +82,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
 
   it("reconciles a prior outcome before reading squash privacy provenance", () => {
     const f = fixture();
-    f.save({ ...f.state(), mode: "unapplied" });
+    configureMerge(f, { mode: "unapplied" });
     expect(f.run().status).toBe(1);
     f.recover();
     f.setPrivacyProvenance(null, null);
@@ -107,21 +104,16 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     ({ auto, admin, mergeState, route, pendingGates }) => {
       const credit = "Co-authored-by: Fixture Contributor <contributor@example.com>";
       const f = fixture(`Source change\n\n${credit}\n`);
-      f.save({
-        ...f.state(),
+      configureMerge(f, {
         admin,
         ...(pendingGates ? { requiredCheckName: "openclaw/ci-gate" } : {}),
         gates: admin ? "fail" : "pass",
-        pr: { ...f.state().pr, mergeStateStatus: mergeState },
+        pr: { mergeStateStatus: mergeState },
       });
       if (pendingGates) {
-        writeFileSync(
-          join(f.worktree, ".local/gates.env"),
-          `PR_NUMBER=123\nGATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${f.head}\n`,
-        );
+        writePendingGates(f);
       }
-      const run = f.run(auto);
-      expect(run.status, run.output).toBe(0);
+      const run = expectExit(f.run(auto));
       const submissions = f.state().calls.filter((call) => call[1] === "pr" && call[2] === "merge");
       if (route === "immediate") {
         expect(submissions).toHaveLength(0);
@@ -141,10 +133,9 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
   );
   it("rejects a missing auto-merge headline before intent", () => {
     const f = fixture();
-    f.save({
-      ...f.state(),
+    configureMerge(f, {
       previewHeadline: null,
-      pr: { ...f.state().pr, mergeStateStatus: "BEHIND" },
+      pr: { mergeStateStatus: "BEHIND" },
     });
     const run = f.run(true);
     expect(run.status, run.output).toBe(1);

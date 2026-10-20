@@ -1,7 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildCrabboxGateCommand } from "../../scripts/pr-lib/crabbox-gate-contract.mjs";
@@ -9,9 +8,10 @@ import {
   buildCrabboxGateTransport,
   executeCrabbox,
 } from "../../scripts/pr-lib/crabbox-gate-transport.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const headSha = "b".repeat(40);
-const temporaryDirectories: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 const bootstrap = `#!/usr/bin/env bash
 set -euo pipefail
@@ -24,17 +24,16 @@ command_status=0
 exit "$command_status"
 `;
 
-function temporaryDirectory() {
-  const directory = mkdtempSync(path.join(tmpdir(), "openclaw-gate-transport-"));
-  temporaryDirectories.push(directory);
-  return directory;
-}
+const temporaryDirectory = () => tempDirs.make("openclaw-gate-transport-");
 
-afterEach(() => {
-  for (const directory of temporaryDirectories.splice(0)) {
-    rmSync(directory, { recursive: true, force: true });
-  }
-});
+function execute(input: string, program: string, ...args: string[]) {
+  return executeCrabbox({
+    args: ["-e", program, ...args],
+    bin: process.execPath,
+    env: process.env,
+    input,
+  });
+}
 
 function launch(
   command: string,
@@ -138,16 +137,10 @@ describe.skipIf(process.platform !== "linux")("Crabbox Linux launcher", () => {
 
 describe("Crabbox stdin lifecycle", () => {
   it("delivers the complete payload and retains the joined child result", async () => {
-    const input = "x".repeat(600_000);
-    const result = await executeCrabbox({
-      args: [
-        "-e",
-        "let n=0; process.stdin.on('data', b=>n+=b.length); process.stdin.on('end',()=>console.log(n));",
-      ],
-      bin: process.execPath,
-      env: process.env,
-      input,
-    });
+    const result = await execute(
+      "x".repeat(600_000),
+      "let n=0; process.stdin.on('data', b=>n+=b.length); process.stdin.on('end',()=>console.log(n));",
+    );
     expect(result).toEqual({ exitCode: 0, stderr: "", stdout: "600000\n" });
   });
 
@@ -155,17 +148,12 @@ describe("Crabbox stdin lifecycle", () => {
     "joins an early stdin close and preserves child failure %i",
     async (exitCode) => {
       const finished = path.join(temporaryDirectory(), "finished");
-      const result = executeCrabbox({
-        args: [
-          "-e",
-          "const fs=require('node:fs'); fs.closeSync(0); fs.writeFile(process.argv[1],'finished',error=>{if(error)throw error; process.exit(Number(process.argv[2]));});",
-          finished,
-          String(exitCode),
-        ],
-        bin: process.execPath,
-        env: process.env,
-        input: "x".repeat(8 * 1024 * 1024),
-      });
+      const result = execute(
+        "x".repeat(8 * 1024 * 1024),
+        "const fs=require('node:fs'); fs.closeSync(0); fs.writeFile(process.argv[1],'finished',error=>{if(error)throw error; process.exit(Number(process.argv[2]));});",
+        finished,
+        String(exitCode),
+      );
       if (exitCode === 0) {
         await expect(result).rejects.toThrow();
       } else {

@@ -14,14 +14,19 @@ function executable(path: string, body: string) {
   return path;
 }
 
+function run(command: string, args: string[], env: NodeJS.ProcessEnv, timeout = 15_000) {
+  const result = spawnSync(command, args, {
+    encoding: "utf8",
+    timeout,
+    env: { ...process.env, ...env },
+  });
+  expect(result.error, result.stderr).toBeUndefined();
+  return result;
+}
+
 describePosix("scripts/pr host tooling", () => {
   it("rejects a failing selected Git before reading wrapper code", () => {
-    const result = spawnSync("/bin/bash", [wrapper, "ls"], {
-      encoding: "utf8",
-      timeout: 5000,
-      env: { ...process.env, OPENCLAW_PR_GIT: "/bin/false" },
-    });
-    expect(result.error).toBeUndefined();
+    const result = run("/bin/bash", [wrapper, "ls"], { OPENCLAW_PR_GIT: "/bin/false" }, 5000);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("git preflight failed or exceeded 10 seconds: /bin/false");
     expect(result.stderr).toContain("xcode-select -p:");
@@ -35,12 +40,7 @@ describePosix("scripts/pr host tooling", () => {
     const root = tempDirs.make("openclaw-pr-hung-git-");
     const git = executable(join(root, "sleeping-git"), "sleep 60");
     const started = Date.now();
-    const result = spawnSync("/bin/bash", [wrapper, "ls"], {
-      encoding: "utf8",
-      timeout: 15_000,
-      env: { ...process.env, OPENCLAW_PR_GIT: git },
-    });
-    expect(result.error).toBeUndefined();
+    const result = run("/bin/bash", [wrapper, "ls"], { OPENCLAW_PR_GIT: git });
     expect(result.status).toBe(1);
     expect(Date.now() - started).toBeGreaterThanOrEqual(9000);
     expect(result.stderr).toContain(`git preflight failed or exceeded 10 seconds: ${git}`);
@@ -56,21 +56,15 @@ describePosix("scripts/pr host tooling", () => {
       join(root, "operation"),
       "set -e\ngit --version\nprintf 'phase\\toperation-complete\\n' >&3",
     );
-    const result = spawnSync(
+    const result = run(
       process.execPath,
       [join(process.cwd(), "scripts/pr-lib/process-group-runner.mjs"), root, operation],
       {
-        encoding: "utf8",
-        timeout: 15_000,
-        env: {
-          ...process.env,
-          OPENCLAW_PR_GIT: git,
-          PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`,
-          TMPDIR: root,
-        },
+        OPENCLAW_PR_GIT: git,
+        PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`,
+        TMPDIR: root,
       },
     );
-    expect(result.error, result.stderr).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toBe("selected Git: --version\n");
     expect(
@@ -82,7 +76,7 @@ describePosix("scripts/pr host tooling", () => {
     const root = tempDirs.make("openclaw-pr-hung-python-");
     executable(join(root, "python3"), "sleep 60");
     const started = Date.now();
-    const result = spawnSync(
+    const result = run(
       "/bin/bash",
       [
         "-c",
@@ -90,13 +84,8 @@ describePosix("scripts/pr host tooling", () => {
         "pr-python-preflight",
         join(process.cwd(), "scripts/pr-lib/operation-lock.sh"),
       ],
-      {
-        encoding: "utf8",
-        timeout: 15_000,
-        env: { ...process.env, PATH: `${root}${delimiter}${process.env.PATH ?? ""}` },
-      },
+      { PATH: `${root}${delimiter}${process.env.PATH ?? ""}` },
     );
-    expect(result.error).toBeUndefined();
     expect(result.status).not.toBe(0);
     expect(Date.now() - started).toBeGreaterThanOrEqual(9000);
   }, 20_000);
