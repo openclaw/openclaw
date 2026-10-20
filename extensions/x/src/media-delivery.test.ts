@@ -3,11 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createXApiClient } from "./api.js";
 import { xPlugin } from "./channel.js";
+import { createXTestApi } from "./test-support/api-client.js";
 import { completedMonitor } from "./test-support/completed-monitor.js";
 import { client, config, fixture, page, post } from "./test-support/monitor-fixture.js";
-import { createXTestSpend } from "./test-support/spend.js";
 
 vi.mock("./client.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./client.js")>()),
@@ -35,15 +34,13 @@ async function mediaFixture(failProcessing = false) {
     entities: { mentions: [{ id: "100", username: "roboclawbot" }] },
   };
   fixture({ posts: [mention] });
-  const requests: { path: string; method: string; body: unknown }[] = [];
+  const requests: { path: string; body: unknown }[] = [];
   let nextMediaId = 700;
   let nextPostId = 900;
-  const api = createXApiClient({
-    spend: createXTestSpend(),
+  const api = createXTestApi({
     clientId: "test-client",
     clientSecret: "test-secret",
     refreshToken: "test-refresh",
-    saveRefreshToken: async () => {},
     fetch: async (url, init) => {
       const route = new URL(url).pathname;
       if (route.endsWith("/oauth2/token")) {
@@ -53,7 +50,7 @@ async function mediaFixture(failProcessing = false) {
         return Response.json(page([mention]));
       }
       const body = typeof init?.body === "string" ? JSON.parse(init.body) : init?.body;
-      requests.push({ path: route, method: init?.method ?? "GET", body });
+      requests.push({ path: route, body });
       if (route === "/2/media/upload/initialize") {
         return Response.json({ data: { id: String(++nextMediaId) } });
       }
@@ -64,14 +61,7 @@ async function mediaFixture(failProcessing = false) {
         return Response.json({
           data: {
             id: route.split("/")[4],
-            ...(failProcessing
-              ? {
-                  processing_info: {
-                    state: "failed",
-                    error: { code: 3, name: "InvalidMedia", message: "Unsupported fixture" },
-                  },
-                }
-              : {}),
+            ...(failProcessing ? { processing_info: { state: "failed" } } : {}),
           },
         });
       }
@@ -96,29 +86,36 @@ async function mediaFixture(failProcessing = false) {
 
 describe("X native attachment delivery", () => {
   it.each([
-    "action",
-    "outbound",
-    "message",
-    "payload",
-    "monitor-mediaUrl",
-    "monitor-mediaUrls",
-  ] as const)("attaches the uploaded image through the %s entrypoint", async (route) => {
+    ["action", "image"],
+    ["outbound", "image"],
+    ["message", "image"],
+    ["payload", "image"],
+    ["monitor-mediaUrl", "image"],
+    ["monitor-mediaUrls", "image"],
+    ["action", "empty"],
+    ["outbound", "video"],
+  ] as const)("attaches native %s media with %s caption", async (route, kind) => {
     const test = await mediaFixture();
-    const ctx = test.context;
+    const mediaUrl = kind === "video" ? path.join(test.root, "proof.mp4") : test.file;
+    if (kind === "video") {
+      await writeFile(mediaUrl, videoBytes);
+    }
+    const text = kind === "empty" ? "" : kind === "video" ? "Video proof." : "Proof.";
+    const ctx = { ...test.context, text };
     if (route === "action") {
       await xPlugin.actions!.handleAction!({
         channel: "x",
         action: "send",
         ...ctx,
-        params: { to: ctx.to, message: ctx.text, media: test.file },
+        params: { to: ctx.to, ...(text ? { message: text } : {}), media: mediaUrl },
       });
     } else if (route === "payload") {
       await xPlugin.outbound!.sendPayload!({
         ...ctx,
-        payload: { text: ctx.text, mediaUrl: test.file },
+        payload: { text, mediaUrl },
       });
     } else if (route === "message") {
-      await xPlugin.message!.send!.media!({ ...ctx, mediaUrl: test.file });
+      await xPlugin.message!.send!.media!({ ...ctx, mediaUrl });
     } else if (route === "monitor-mediaUrl" || route === "monitor-mediaUrls") {
       const monitor = completedMonitor({
         cfg: {
@@ -139,43 +136,25 @@ describe("X native attachment delivery", () => {
       monitor.api.reply.mockImplementation((params) => test.api.reply(params));
       await monitor.run();
     } else {
-      const result = await test.sendMedia();
+      const result = await test.sendMedia(mediaUrl, text);
       expect(result.receipt?.parts[0]?.kind).toBe("media");
     }
-    expect(test.posts()).toEqual([
-      { text: "Proof.", reply: { in_reply_to_tweet_id: "501" }, media: { media_ids: ["701"] } },
-    ]);
-  });
-  it("sends an attachment-only reply without an empty text field", async () => {
-    const test = await mediaFixture();
-    await xPlugin.actions!.handleAction!({
-      channel: "x",
-      action: "send",
-      cfg: config,
-      mediaAccess: test.context.mediaAccess,
-      params: { to: "x:501", media: test.file },
-    });
-    expect(test.requests.at(-1)?.body).toEqual({
+    const expected = {
+      ...(text ? { text } : {}),
       reply: { in_reply_to_tweet_id: "501" },
       media: { media_ids: ["701"] },
-    });
-  });
-
-  it("sends an MP4 as a native video reply", async () => {
-    const test = await mediaFixture();
-    const video = path.join(test.root, "proof.mp4");
-    await writeFile(video, videoBytes);
-    await test.sendMedia(video, "Video proof.");
-    expect(test.requests.find((r) => r.path.endsWith("/initialize"))?.body).toMatchObject({
-      media_type: "video/mp4",
-      media_category: "tweet_video",
-      total_bytes: videoBytes.length,
-    });
-    expect(test.requests.at(-1)?.body).toEqual({
-      text: "Video proof.",
-      reply: { in_reply_to_tweet_id: "501" },
-      media: { media_ids: ["701"] },
-    });
+    };
+    expect(test.posts()).toEqual([expected]);
+    if (kind !== "image") {
+      expect(test.requests.at(-1)?.body).toEqual(expected);
+    }
+    if (kind === "video") {
+      expect(test.requests.find((r) => r.path.endsWith("/initialize"))?.body).toMatchObject({
+        media_type: "video/mp4",
+        media_category: "tweet_video",
+        total_bytes: videoBytes.length,
+      });
+    }
   });
 
   it("uploads a gallery once and attaches it only to the first caption chunk", async () => {

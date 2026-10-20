@@ -1,4 +1,3 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -28,7 +27,7 @@ describe("X work-session publication admission", () => {
   it.each(["off", "no-link", "public", "protected", "guest"])(
     "attaches publication intent only for opted-in public maintainer context: %s",
     async (kind) => {
-      const cfg: OpenClawConfig = structuredClone(config);
+      const cfg = structuredClone(config);
       cfg.channels!.x!.autoPublishWorkSessions = kind !== "off" && kind !== "no-link";
       if (kind === "guest") {
         cfg.channels!.x!.guests = { enabled: true };
@@ -54,28 +53,25 @@ describe("X work-session publication admission", () => {
           ([input]) => input.contextBinding,
         )?.[0];
         expect(Boolean(admission?.childSessionPublication)).toBe(kind === "public");
-        expect(
-          await openXWorkOrigins(test.runtime).lookup("agent:maintainer:work:example"),
-        ).toEqual(
-          kind === "guest"
-            ? undefined
-            : {
-                accountId: "default",
-                postId: "501",
-                postUrl: "https://x.com/config_maintainer/status/501",
-                authorHandle: "config_maintainer",
-                conversationId: "500",
-                senderTier: "maintainer",
-              },
-        );
+        const origin = await openXWorkOrigins(test.runtime).lookup("agent:maintainer:work:example");
         expect(test.api.getPublicPosts).toHaveBeenCalledTimes(
           kind === "off" || kind === "no-link" || kind === "guest" ? 0 : 1,
         );
         if (kind === "guest") {
+          expect(origin).toBeUndefined();
           expect(test.dispatch.mock.calls[0]![0].route.sessionKey).toBe(
             "agent:maintainer:x:group:500:guest:501",
           );
           expect(test.replies[0]?.text).toBe("I am on it.");
+        } else {
+          expect(origin).toEqual({
+            accountId: "default",
+            postId: "501",
+            postUrl: "https://x.com/config_maintainer/status/501",
+            authorHandle: "config_maintainer",
+            conversationId: "500",
+            senderTier: "maintainer",
+          });
         }
       });
     },
@@ -84,7 +80,7 @@ describe("X work-session publication admission", () => {
   it.each(["allowlist", "configuration"])(
     "retires the captured publication intent after %s changes, not unrelated account writes",
     async (change) => {
-      const cfg: OpenClawConfig = structuredClone(config);
+      const cfg = structuredClone(config);
       cfg.channels!.x!.autoPublishWorkSessions = true;
       setRuntimeConfigSnapshot(cfg);
       const entered = Promise.withResolvers<void>();

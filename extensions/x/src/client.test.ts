@@ -45,31 +45,20 @@ vi.mock("./api.js", async (importOriginal) => {
   };
 });
 
-function config(overrides: Partial<XAccountConfig> = {}): OpenClawConfig {
-  return {
-    channels: {
-      x: {
-        userId: "9",
-        username: "roboclawbot",
-        clientId: "client",
-        clientSecret: "secret-initial",
-        refreshToken: "seed-initial",
-        bearerToken: "bearer-initial",
-        ...overrides,
-      },
-    },
-  };
-}
+const account: XAccountConfig = {
+  userId: "9",
+  username: "roboclawbot",
+  clientId: "client",
+  clientSecret: "secret-initial",
+  refreshToken: "seed-initial",
+  bearerToken: "bearer-initial",
+};
+const config = (overrides: Partial<XAccountConfig> = {}): OpenClawConfig => ({
+  channels: { x: { ...account, ...overrides } },
+});
 
 function restartRuntime() {
   fixture.runtime = { ...fixture.runtime };
-}
-
-function requestBody(init?: RequestInit): string {
-  if (typeof init?.body !== "string") {
-    throw new Error("Expected a serialized OAuth request body");
-  }
-  return init.body;
 }
 
 beforeEach(() => {
@@ -85,84 +74,80 @@ const tokenResponse = (refresh_token: string, expires_in?: number) =>
   Response.json({ access_token: "access", refresh_token, expires_in });
 
 describe("X OAuth client ownership", () => {
-  it("shares an active refresh across transport rotation and preserves its grant across restart", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    const refreshStarted = Promise.withResolvers<void>();
-    const releaseRefresh = Promise.withResolvers<void>();
-    const refreshes: { token: string | null; auth: string | null }[] = [];
-    const bearerHeaders: (string | null)[] = [];
-    fixture.fetch.mockImplementation(async (input, init) => {
-      if (input.endsWith("/oauth2/token")) {
-        refreshes.push({
-          token: new URLSearchParams(requestBody(init)).get("refresh_token"),
-          auth: new Headers(init?.headers).get("authorization"),
-        });
-        if (refreshes.length === 1) {
-          refreshStarted.resolve();
-          await releaseRefresh.promise;
+  it.each(["transport", "seed"] as const)(
+    "preserves refresh ownership across %s rotation and restart",
+    async (rotation) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const refreshStarted = Promise.withResolvers<void>();
+      const releaseRefresh = Promise.withResolvers<void>();
+      const refreshes: { token: string | null; auth: string | null }[] = [];
+      const bearerHeaders: (string | null)[] = [];
+      fixture.fetch.mockImplementation(async (input, init) => {
+        if (input.endsWith("/oauth2/token")) {
+          const index = refreshes.push({
+            token: new URLSearchParams(await new Request(input, init).text()).get("refresh_token"),
+            auth: new Headers(init?.headers).get("authorization"),
+          });
+          if (refreshes.length === 1) {
+            refreshStarted.resolve();
+            await releaseRefresh.promise;
+          }
+          return tokenResponse(`rotated-${index}`, 3600);
         }
-        return tokenResponse(`rotated-${refreshes.length}`, 3600);
+        if (rotation === "transport" && input.endsWith("/activity/subscriptions")) {
+          bearerHeaders.push(new Headers(init?.headers).get("authorization"));
+          return Response.json({
+            data: [{ event_type: "post.mention.create", filter: { user_id: "9" } }],
+          });
+        }
+        return Response.json({ data: [] });
+      });
+      const initial = await getXApi("default", config());
+      const first = initial.getMentions({ userId: "9" });
+      const firstResult =
+        rotation === "seed"
+          ? expect(first).rejects.toThrow("X token refresh failed")
+          : expect(first).resolves.toBeDefined();
+      await refreshStarted.promise;
+      const rotatedConfig = config(
+        rotation === "seed"
+          ? { refreshToken: "seed-new" }
+          : { bearerToken: "bearer-new", clientSecret: "secret-new" },
+      );
+      const updated = await getXApi("default", rotatedConfig);
+      const concurrent = updated.getMentions({ userId: "9" });
+      if (rotation === "seed") {
+        await concurrent;
       }
-      if (input.endsWith("/activity/subscriptions")) {
-        bearerHeaders.push(new Headers(init?.headers).get("authorization"));
-        return Response.json({
-          data: [{ event_type: "post.mention.create", filter: { user_id: "9" } }],
+      releaseRefresh.resolve();
+      await Promise.all([firstResult, concurrent]);
+      if (rotation === "transport") {
+        expect(refreshes.map(({ token }) => token)).toEqual(["seed-initial"]);
+        await updated.ensureActivitySubscriptions("9");
+        expect(bearerHeaders).toEqual(["Bearer bearer-new"]);
+        vi.setSystemTime(Date.now() + 3_600_000);
+        await updated.getMentions({ userId: "9" });
+        expect(refreshes[1]).toEqual({
+          token: "rotated-1",
+          auth: `Basic ${Buffer.from("client:secret-new").toString("base64")}`,
         });
       }
-      return Response.json({ data: [] });
-    });
-    const initial = await getXApi("default", config());
-    const first = initial.getMentions({ userId: "9" });
-    await refreshStarted.promise;
-    const rotatedConfig = config({ bearerToken: "bearer-new", clientSecret: "secret-new" });
-    const updated = await getXApi("default", rotatedConfig);
-    const concurrent = updated.getMentions({ userId: "9" });
-    releaseRefresh.resolve();
-    await Promise.all([first, concurrent]);
-    expect(refreshes.map(({ token }) => token)).toEqual(["seed-initial"]);
-    await updated.ensureActivitySubscriptions("9");
-    expect(bearerHeaders).toEqual(["Bearer bearer-new"]);
-    vi.setSystemTime(Date.now() + 3_600_000);
-    await updated.getMentions({ userId: "9" });
-    expect(refreshes[1]).toEqual({
-      token: "rotated-1",
-      auth: `Basic ${Buffer.from("client:secret-new").toString("base64")}`,
-    });
 
-    restartRuntime();
-    await (await getXApi("default", rotatedConfig)).getMentions({ userId: "9" });
-    expect(refreshes.at(-1)?.token).toBe("rotated-2");
-    await (
-      await getXApi("default", config({ refreshToken: "seed-new" }))
-    ).getMentions({ userId: "9" });
-    expect(refreshes.at(-1)?.token).toBe("seed-new");
-  });
-
-  it("does not let a retired seed overwrite the replacement grant", async () => {
-    const staleStarted = Promise.withResolvers<void>();
-    const releaseStale = Promise.withResolvers<void>();
-    const refreshes: (string | null)[] = [];
-    fixture.fetch.mockImplementation(async (input, init) => {
-      if (input.endsWith("/oauth2/token")) {
-        const token = new URLSearchParams(requestBody(init)).get("refresh_token");
-        refreshes.push(token);
-        if (token === "seed-initial") {
-          staleStarted.resolve();
-          await releaseStale.promise;
-        }
-        return tokenResponse(token === "seed-initial" ? "rotated-stale" : "rotated-current");
+      restartRuntime();
+      await (await getXApi("default", rotatedConfig)).getMentions({ userId: "9" });
+      expect(refreshes.at(-1)?.token).toBe("rotated-2");
+      if (rotation === "seed") {
+        expect(refreshes.map(({ token }) => token)).toEqual([
+          "seed-initial",
+          "seed-new",
+          "rotated-2",
+        ]);
+      } else {
+        await (
+          await getXApi("default", config({ refreshToken: "seed-new" }))
+        ).getMentions({ userId: "9" });
+        expect(refreshes.at(-1)?.token).toBe("seed-new");
       }
-      return Response.json({ data: [] });
-    });
-    const stale = (await getXApi("default", config())).getMentions({ userId: "9" });
-    const rejected = expect(stale).rejects.toThrow("X token refresh failed");
-    await staleStarted.promise;
-    const replacement = config({ refreshToken: "seed-new" });
-    await (await getXApi("default", replacement)).getMentions({ userId: "9" });
-    releaseStale.resolve();
-    await rejected;
-    restartRuntime();
-    await (await getXApi("default", replacement)).getMentions({ userId: "9" });
-    expect(refreshes).toEqual(["seed-initial", "seed-new", "rotated-current"]);
-  });
+    },
+  );
 });
