@@ -13,7 +13,6 @@ import type { Message } from "../../llm/types.js";
 import type { NormalizedUsage } from "../usage.js";
 import { log } from "./logger.js";
 import { fingerprintMessage, type PromptHistoryFingerprint } from "./prompt-cache-history.js";
-import type { ProviderPromptCachePrefix } from "./provider-prompt-serialization.js";
 import type { ProviderPromptState } from "./provider-prompt-state.js";
 
 type PromptHistoryRewriteReason = "compaction" | "pruning" | "runtimeContextCarrier";
@@ -247,14 +246,12 @@ function buildTrackerKey(params: PromptCacheIdentity): string {
 }
 
 function describeProviderFields(
-  before: ProviderPromptCachePrefix["parameters"],
-  after: ProviderPromptCachePrefix["parameters"] | undefined,
+  beforeFields: Record<string, string>,
+  afterFields: Record<string, string> | undefined,
 ): string {
-  if (!after) {
+  if (!afterFields) {
     return "removed";
   }
-  const beforeFields = before.fields ?? {};
-  const afterFields = after.fields ?? {};
   const changed = [...new Set([...Object.keys(beforeFields), ...Object.keys(afterFields)])].filter(
     (key) => beforeFields[key] !== afterFields[key],
   );
@@ -280,24 +277,35 @@ function describeProviderPrefix(
   }
   const continuation = before.continuation || after.continuation;
   const segment = (["system", "tools"] as const).find((key) => before[key] !== after[key]);
-  const index = before.messages.findIndex((item, i) => item.digest !== after.messages[i]?.digest);
+  let index = -1;
+  if (!after.messageDigests.startsWith(before.messageDigests)) {
+    for (let offset = 0; offset < before.messageDigests.length; offset += 32) {
+      if (
+        before.messageDigests.slice(offset, offset + 32) !==
+        after.messageDigests.slice(offset, offset + 32)
+      ) {
+        index = offset / 32;
+        break;
+      }
+    }
+  }
   let prefix = segment ?? (continuation ? "wire-prefix-match" : "prefix-match");
   if (!segment && index >= 0) {
-    const item = before.messages[index]!;
-    const fields = item.fields ? `.${describeProviderFields(item, after.messages[index])}` : "";
+    const item = before.messageFields[index];
+    const fields = item ? `.${describeProviderFields(item, after.messageFields[index])}` : "";
     prefix = `${continuation ? "wire-input" : "message"}:${index}${fields}`;
   } else if (!segment && before.tail !== undefined) {
     // A growing tail cannot establish equality of its earlier messages from one digest.
     prefix =
       before.messageCount !== after.messageCount
-        ? `unverified-after:${before.messages.length}`
+        ? `unverified-after:${before.messageDigests.length / 32}`
         : before.tail !== after.tail
-          ? `message-tail:${before.messages.length}`
+          ? `message-tail:${before.messageDigests.length / 32}`
           : prefix;
   }
   const parameters =
     before.parameters.digest !== after.parameters.digest
-      ? `parameters:${describeProviderFields(before.parameters, after.parameters)}`
+      ? `parameters:${describeProviderFields(before.parameters.fields, after.parameters.fields)}`
       : undefined;
   const format = before.messageField !== after.messageField ? "input-format" : undefined;
   const details = [
