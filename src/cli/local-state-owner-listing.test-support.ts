@@ -56,38 +56,50 @@ const readRecord = async (fixture: ListingOwnerFixture, id: string) =>
 const readObservation = async (fixture: ListingOwnerFixture) =>
   JSON.parse(await fs.readFile(path.join(fixture.root, "control", "sql-observation.json"), "utf8"));
 
+async function holdLease(env: NodeJS.ProcessEnv, id: string, guarded = false) {
+  const held = createDeferred(),
+    release = createDeferred();
+  const holder = withWorktreeMutationLease({ env, id }, async (guard) => {
+    if (guarded) {
+      guard.commitGuard();
+    }
+    held.resolve();
+    await release.promise;
+    if (guarded) {
+      guard.commitGuard();
+    }
+  });
+  await awaitGateBeforeSettlement(held.promise, holder, "Mutation custody was not acquired");
+  return { release, holder };
+}
+
 export function registerWorktreeListingOwnerTests(
   getFixture: () => ListingOwnerFixture,
   entrypoint: readonly string[],
 ) {
-  const list = (env: NodeJS.ProcessEnv) =>
-    runCliProcessChild({
+  const list = async (fixture: ListingOwnerFixture) => {
+    const before = fixture.methods.length;
+    const result = await runCliProcessChild({
       nodeArgs: [...entrypoint, "worktrees", "list", "--json"],
-      env,
+      env: fixture.env,
     });
+    expect(result.code, result.stderr).toBe(0);
+    expect(fixture.methods.slice(before)).toEqual([]);
+    return JSON.parse(result.stdout);
+  };
   it("list: reports retirement candidates without mutating a foreign owner's registry", async () => {
     const fixture = getFixture();
-    const { env, methods } = fixture;
+    const { env } = fixture;
     const record = await seedRecord(fixture, "list-foreign-custody");
-    const held = createDeferred();
-    const release = createDeferred();
-    const holder = withWorktreeMutationLease({ env, id: record.id }, async () => {
-      held.resolve();
-      await release.promise;
-    });
-    await awaitGateBeforeSettlement(held.promise, holder, "Mutation custody was not acquired");
+    const { release, holder } = await holdLease(env, record.id);
     const sleep = vi.spyOn(backoff, "sleepWithAbort").mockImplementationOnce(async () => {
       throw new Error("Foreign listing requested mutation custody");
     });
-    const before = methods.length;
     try {
-      const result = await list(env);
-      expect(result.code, result.stderr).toBe(0);
-      expect(JSON.parse(result.stdout)).toMatchObject({
+      expect(await list(fixture)).toMatchObject({
         worktrees: expect.arrayContaining([record]),
         retirementCandidates: [record.id],
       });
-      expect(methods.slice(before)).toEqual([]);
       expect(await readRecord(fixture, record.id)).toEqual(record);
       expect((await readObservation(fixture)).worktreeSql).toBe(0);
     } finally {
@@ -102,17 +114,9 @@ export function registerWorktreeListingOwnerTests(
     const { env, service } = fixture;
     const record = await seedRecord(fixture, "list-live-custody");
     await changeOwner(fixture, "embedded");
-    const held = createDeferred();
-    const release = createDeferred();
+    const { release, holder } = await holdLease(env, record.id, true);
     const waiting = createDeferred();
     const resume = createDeferred();
-    const holder = withWorktreeMutationLease({ env, id: record.id }, async (guard) => {
-      guard.commitGuard();
-      held.resolve();
-      await release.promise;
-      guard.commitGuard();
-    });
-    await awaitGateBeforeSettlement(held.promise, holder, "Mutation custody was not acquired");
     const sleep = vi.spyOn(backoff, "sleepWithAbort").mockImplementationOnce(async () => {
       waiting.resolve();
       await resume.promise;
@@ -144,15 +148,10 @@ export function registerWorktreeListingOwnerTests(
 
   it("list: retires an absent checkout under offline ownership", async () => {
     const fixture = getFixture();
-    const { env, methods } = fixture;
     const record = await seedRecord(fixture, "list-offline-custody");
     await changeOwner(fixture, "offline");
-    const before = methods.length;
     try {
-      const result = await list(env);
-      expect(result.code, result.stderr).toBe(0);
-      expect(methods.slice(before)).toEqual([]);
-      expect(JSON.parse(result.stdout).worktrees).not.toContainEqual(
+      expect((await list(fixture)).worktrees).not.toContainEqual(
         expect.objectContaining({ id: record.id }),
       );
       const observation = await readObservation(fixture);

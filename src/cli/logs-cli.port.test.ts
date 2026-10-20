@@ -58,18 +58,12 @@ async function withLogsGateway(
             return;
           }
           requests.push(frame.method);
-          if (frame.method === "connect") {
-            sendMinimalGatewayResponse(
-              socket,
-              frame.id,
-              buildMinimalGatewayHelloOkPayload({ methods: ["logs.tail"] }),
-            );
-          } else if (!options.failure) {
-            sendMinimalGatewayResponse(socket, frame.id, {
-              file: "selected-gateway.log",
-              cursor: 1,
-              lines: ["selected local log"],
-            });
+          if (frame.method === "connect" || !options.failure) {
+            const payload =
+              frame.method === "connect"
+                ? buildMinimalGatewayHelloOkPayload({ methods: ["logs.tail"] })
+                : { file: "selected-gateway.log", cursor: 1, lines: ["selected local log"] };
+            sendMinimalGatewayResponse(socket, frame.id, payload);
           }
         });
       });
@@ -77,14 +71,15 @@ async function withLogsGateway(
       const port = String((server.address() as AddressInfo).port);
       const stdout: string[] = [];
       const stderr: string[] = [];
-      vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
-        stdout.push(String(chunk));
-        return true;
-      });
-      vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
-        stderr.push(String(chunk));
-        return true;
-      });
+      for (const [stream, chunks] of [
+        [process.stdout, stdout],
+        [process.stderr, stderr],
+      ] as const) {
+        vi.spyOn(stream, "write").mockImplementation((chunk) => {
+          chunks.push(String(chunk));
+          return true;
+        });
+      }
       vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
         throw new ExitError(code);
       });
@@ -111,22 +106,19 @@ const explicitTarget = (port: string) => [
 ];
 
 describe("logs local port selection", () => {
-  it("tails the selected local port instead of validating the config default URL", async () => {
-    await withLogsGateway({ source: "config" }, async ({ port, requests, stdout }) => {
-      await runLogs(["--port", port]);
-      expect(requests).toEqual(["connect", "logs.tail"]);
-      expect(stdout.join("")).toContain("selected local log");
-    });
-  });
-
-  it("rejects explicitly empty --max-bytes before contacting Gateway", async () => {
-    await withLogsGateway({}, async ({ port, requests }) => {
-      await expect(runLogs(["--port", port, "--max-bytes", ""])).rejects.toThrow(
-        "--max-bytes must be a positive integer.",
-      );
-      expect(requests).toEqual([]);
-    });
-  });
+  it.each(["config", "malformed"] as const)(
+    "honors an explicit target with %s config",
+    async (source) => {
+      await withLogsGateway({ source }, async ({ port, requests, stdout, stderr }) => {
+        await runLogs(source === "config" ? ["--port", port] : explicitTarget(port));
+        expect(requests).toEqual(["connect", "logs.tail"]);
+        expect(stdout.join("")).toContain("selected local log");
+        if (source === "malformed") {
+          expect(stderr.join("")).toContain("openclaw doctor --fix");
+        }
+      });
+    },
+  );
 
   it("uses the failure reason as the JSON summary after a post-hello timeout", async () => {
     await withLogsGateway({ failure: "timeout" }, async ({ port, requests, stdout, stderr }) => {
@@ -142,31 +134,20 @@ describe("logs local port selection", () => {
     });
   });
 
-  it("honors an explicit URL with malformed config", async () => {
-    await withLogsGateway({ source: "malformed" }, async ({ port, requests, stdout, stderr }) => {
-      await runLogs(explicitTarget(port));
-      expect(requests).toEqual(["connect", "logs.tail"]);
-      expect(stdout.join("")).toContain("selected local log");
-      expect(stderr.join("")).toContain("openclaw doctor --fix");
-    });
-  });
-
-  it("still rejects an unsafe config target without an override", async () => {
-    await withLogsGateway({ source: "config" }, async ({ requests }) => {
-      await expect(runLogs([])).rejects.toThrow("uses plaintext ws:// to a non-loopback address");
-      expect(requests).toEqual([]);
-    });
-  });
-
   it.each([
-    { args: ["--port", "65536"], message: "--port must be an integer between 1 and 65535." },
-    {
-      args: ["--port", "19083", "--url", "ws://127.0.0.1:19083"],
-      message: "Use either --url or --port, not both.",
-    },
-  ])("keeps target validation for $args", async ({ args, message }) => {
-    await withLogsGateway({}, async ({ requests }) => {
-      await expect(runLogs(args)).rejects.toThrow(message);
+    [undefined, ["--port", "$port", "--max-bytes", ""], "--max-bytes must be a positive integer."],
+    ["config", [], "uses plaintext ws:// to a non-loopback address"],
+    [undefined, ["--port", "65536"], "--port must be an integer between 1 and 65535."],
+    [
+      undefined,
+      ["--port", "19083", "--url", "ws://127.0.0.1:19083"],
+      "Use either --url or --port, not both.",
+    ],
+  ] as const)("rejects config=%s args=%j before connecting", async (source, args, message) => {
+    await withLogsGateway({ source }, async ({ port, requests }) => {
+      await expect(runLogs(args.map((arg) => (arg === "$port" ? port : arg)))).rejects.toThrow(
+        message,
+      );
       expect(requests).toEqual([]);
     });
   });

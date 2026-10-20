@@ -1,12 +1,11 @@
-// The routed Gateway status path must not initialize full config IO for a plain config.
 import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
 const testState = vi.hoisted(() => ({
-  loadedModules: new Set<string>(),
+  loadedConfigRuntime: false,
   output: undefined as unknown,
 }));
 
@@ -16,30 +15,24 @@ vi.mock("./command-execution-startup.js", () => ({
 }));
 
 vi.mock("../config/io.runtime.js", async (importOriginal) => {
-  testState.loadedModules.add("config-io-runtime");
+  testState.loadedConfigRuntime = true;
   return await importOriginal();
 });
 
-const fakeServiceResolver = vi.fn(() => ({
-  label: "Gateway",
-  loadedText: "loaded",
-  notLoadedText: "not loaded",
+vi.mock("../daemon/service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/service.js")>()),
+  resolveGatewayService: vi.fn(() => ({
+    label: "Gateway",
+    loadedText: "loaded",
+    notLoadedText: "not loaded",
+  })),
+  readGatewayServiceState: vi.fn(async () => ({
+    command: null,
+    env: {},
+    loadState: { status: "not-loaded" as const },
+    runtime: { status: "stopped" as const },
+  })),
 }));
-const fakeServiceStateReader = vi.fn(async () => ({
-  command: null,
-  env: {},
-  loadState: { status: "not-loaded" as const },
-  runtime: { status: "stopped" as const },
-}));
-
-vi.mock("../daemon/service.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../daemon/service.js")>();
-  return {
-    ...actual,
-    resolveGatewayService: fakeServiceResolver,
-    readGatewayServiceState: fakeServiceStateReader,
-  };
-});
 
 vi.mock("../gateway/control-ui-links.js", () => ({
   resolveAdvertisedControlUiLinks: vi.fn(async () => ({
@@ -91,14 +84,11 @@ vi.mock("../runtime.js", () => ({
 
 import { tryRouteCli } from "./route.js";
 
-const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-status-route-"));
+const tempRoot = useAutoCleanupTempDirTracker(afterAll).make("openclaw-gateway-status-route-");
 const configPath = path.join(tempRoot, "openclaw.json");
 fs.writeFileSync(configPath, JSON.stringify({ gateway: { bind: "loopback" } }));
 
-afterAll(() => {
-  fs.rmSync(tempRoot, { recursive: true, force: true });
-  vi.unstubAllEnvs();
-});
+afterAll(() => vi.unstubAllEnvs());
 
 it("keeps plain-config status off the full config runtime", async () => {
   vi.stubEnv("OPENCLAW_HOME", tempRoot);
@@ -110,10 +100,8 @@ it("keeps plain-config status off the full config runtime", async () => {
   ).resolves.toBe(true);
 
   expect(testState.output).toMatchObject({
-    config: {
-      cli: { path: configPath, exists: true, valid: true },
-    },
+    config: { cli: { path: configPath, exists: true, valid: true } },
     gateway: { bindMode: "loopback", port: 18789 },
   });
-  expect(testState.loadedModules).not.toContain("config-io-runtime");
+  expect(testState.loadedConfigRuntime).toBe(false);
 });
