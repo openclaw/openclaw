@@ -11,6 +11,7 @@ import { runQaGatewayFixture, stopQaGatewayFixture } from "openclaw/plugin-sdk/t
 import { expect, it } from "vitest";
 import type { QaGatewayChildListeningContext } from "./gateway-child-setup.js";
 import { createQaGatewayChild } from "./gateway-child.js";
+import { resolveQaNodeExecPath } from "./node-exec.js";
 import { attachQaMockResponsesWebSocketServer } from "./providers/mock-openai/mock-openai-responses-websocket.js";
 import { MockResponseStream } from "./providers/mock-openai/mock-openai-stream.js";
 
@@ -20,7 +21,7 @@ const MODEL_ID = "qa-deferred-startup-model";
 
 // Opt-in Gateway proof keeps the real 120-second deadline. Unit tests own its clock matrix.
 it(
-  "admits deferred agents after finite slow preparation and cancels shutdown preparation",
+  "admits deferred agents after finite slow preparation and prevents publication after shutdown",
   {
     timeout: 300_000,
   },
@@ -135,7 +136,7 @@ export default {
           const starting = owner.start({
             repoRoot: REPO_ROOT,
             command: {
-              executablePath: process.execPath,
+              executablePath: await resolveQaNodeExecPath(),
               argsPrefix: [path.join(REPO_ROOT, "dist/index.js")],
               cwd: REPO_ROOT,
               usePackagedPlugins: false,
@@ -173,7 +174,9 @@ export default {
         };
         const { owner, starting } = await start(async (context) => {
           await expect
-            .poll(() => context.logs().includes('"phase":"started"'), { timeout: 30_000 })
+            .poll(() => context.logs().includes('QA_DEFERRED_STATIC {"phase":"started"'), {
+              timeout: 30_000,
+            })
             .toBe(true);
           const startedAt = Date.now();
           const readiness = async () => {
@@ -226,12 +229,14 @@ export default {
               }),
           );
           await expect
-            .poll(() => context.logs().includes('"phase":"completed"'), { timeout: 30_000 })
+            .poll(() => context.logs().includes('QA_DEFERRED_STATIC {"phase":"completed"'), {
+              timeout: 30_000,
+            })
             .toBe(true);
         });
         const gateway = await starting;
         console.log("DEFERRED_STARTUP_OWNER " + JSON.stringify({ pid: gateway.pid }));
-        expect(gateway.logs()).toContain('"phase":"completed"');
+        expect(gateway.logs()).toContain('QA_DEFERRED_STATIC {"phase":"completed"');
         expect(gateway.logs()).toContain(
           "agent database recovered after background inspection and preparation",
         );
@@ -265,9 +270,12 @@ export default {
         let stopping: ReturnType<typeof cancelled.owner.stop>;
         try {
           await expect
-            .poll(() => cancellationContext.logs().includes('"phase":"started"'), {
-              timeout: 30_000,
-            })
+            .poll(
+              () => cancellationContext.logs().includes('QA_DEFERRED_STATIC {"phase":"started"'),
+              {
+                timeout: 30_000,
+              },
+            )
             .toBe(true);
           stopping = cancelled.owner.stop();
         } finally {
@@ -278,8 +286,10 @@ export default {
         expect(stopped.process).toBe("confirmed-stopped");
         expect(stopped.errors).toEqual([]);
         owners.splice(owners.indexOf(cancelled.owner), 1);
-        expect(cancellationContext.logs()).toContain('"phase":"aborted"');
-        expect(cancellationContext.logs()).not.toContain('"phase":"completed"');
+        // Unready QA children have a bounded force-stop path. stop() guarantees
+        // process quiescence, not a cooperative callback's abort-log completion.
+        expect(cancellationContext.logs()).toContain("received SIGTERM; shutting down");
+        expect(cancellationContext.logs()).not.toContain('QA_DEFERRED_STATIC {"phase":"completed"');
         expect(cancellationContext.logs()).not.toContain(
           "agent database recovered after background inspection and preparation",
         );
@@ -293,7 +303,8 @@ export default {
               deferredPendingObserved: true,
               admittedAfterCompletion: true,
               ordinaryTurn: terminal.status,
-              shutdownCancelledAcquisition: true,
+              shutdownReceived: true,
+              shutdownStoppedProcess: true,
               readmissionAfterShutdown: false,
               providerRequests: requests,
               delivery: false,
