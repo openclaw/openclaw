@@ -311,12 +311,8 @@ type EmbeddedRunRecoveryBlocker =
 /** Re-read at the recovery action, including after queued/lazy recovery dispatch. */
 export function resolveActiveEmbeddedRunRecoveryBlocker(
   sessionId: string,
-  expectedHandle?: object,
 ): EmbeddedRunRecoveryBlocker {
   const handle = getActiveNativeAttempt(sessionId);
-  if (expectedHandle && handle !== expectedHandle) {
-    return "stale_session_state";
-  }
   const registration = handle && getEmbeddedRunAttachment(handle);
   return registration
     ? resolveRegisteredEmbeddedRunRecoveryBlocker(

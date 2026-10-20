@@ -120,24 +120,20 @@ describe("tool description summaries", () => {
 
   it("keeps verbose descriptions UTF-16 safe at truncation boundaries", () => {
     const description = describeToolForVerbose({
-      rawDescription: "abcd😀 efgh",
+      rawDescription: `${"a".repeat(316)}😀 efgh`,
       fallback: "Tool",
-      maxLen: 8,
     });
 
-    expect(description).toBe("abcd...");
+    expect(description).toBe(`${"a".repeat(316)}...`);
     expect(hasDanglingSurrogate(description)).toBe(false);
   });
 
-  it.each<[string, number, string]>([
-    ["ab\n\ncd\nef", 6, "ab\n\ncd"],
-    ["ab\n \n\t\ncd\nef", 6, "ab\n\ncd"],
-    ["  ab  \r\n\r\n  cd  \r\nef", 6, "ab\n\ncd"],
-    ["ab\n\nACTIONS:\nLater detail.", 320, "ab"],
-  ])(
-    "preserves verbose paragraph spacing and stopping for %j",
-    (rawDescription, maxLen, expected) => {
-      expect(describeToolForVerbose({ rawDescription, maxLen, fallback: "Tool" })).toBe(expected);
-    },
-  );
+  it.each<[string, string]>([
+    [`${"a".repeat(316)}\n\ncd\nef`, `${"a".repeat(316)}\n\ncd`],
+    [`${"a".repeat(316)}\n \n\t\ncd\nef`, `${"a".repeat(316)}\n\ncd`],
+    [`  ${"a".repeat(316)}  \r\n\r\n  cd  \r\nef`, `${"a".repeat(316)}\n\ncd`],
+    ["ab\n\nACTIONS:\nLater detail.", "ab"],
+  ])("preserves verbose paragraph spacing and stopping for %j", (rawDescription, expected) => {
+    expect(describeToolForVerbose({ rawDescription, fallback: "Tool" })).toBe(expected);
+  });
 });
