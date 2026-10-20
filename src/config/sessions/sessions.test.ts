@@ -38,7 +38,6 @@ it.each([
 
 it("merges bounded restart tombstones without evicting fresh-only ids", () => {
   const existing = Array.from({ length: 64 }, (_, index) => `run-${index}`);
-
   expect(mergeRestartRecoveryTerminalRunIds(existing, [...existing.slice(1), "run-new"])).toEqual([
     ...existing.slice(1),
     "run-new",
@@ -46,10 +45,11 @@ it("merges bounded restart tombstones without evicting fresh-only ids", () => {
   expect(mergeRestartRecoveryTerminalRunIds(existing, ["run-0"])).toEqual(existing);
 });
 
+type EntryFields = Record<string, unknown>;
 type NormalizationCase = [
   name: string,
-  input: Record<string, unknown>,
-  expected?: Record<string, unknown>,
+  input: EntryFields,
+  expected?: EntryFields,
   absent?: string[],
   sessionKey?: string,
 ];
@@ -57,29 +57,27 @@ const repairBacklog = [
   { id: "repair-1", text: "first", provider: "openai", model: "gpt-5.5", createdAt: 42 },
   { id: "repair-2", text: "second", createdAt: 43 },
 ];
-const deliveries = [
-  { id: "prepared", state: "prepared" },
-  { id: "delivered", state: "delivered" },
-];
+const deliveries = ["prepared", "delivered"].map((state) => ({ id: state, state }));
 const archived = { archivedAt: 41, archiveReason: "active-session-cap" };
 const actor = { type: "human", id: "operator" };
 const childKey = "agent:child:main";
 const pluginExtensions = { wordboard: { draftId: "draft-1" } };
+const snoozed = { snoozedUntil: Number.MAX_SAFE_INTEGER, snoozedAt: 41 };
+const session = (input: EntryFields) => ({ sessionId: "session-1", updatedAt: 42, ...input });
+const pendingDelivery = {
+  kind: "replayable",
+  text: "reply",
+  createdAt: 41,
+  intentId: "intent-1",
+  deliveries: [...deliveries, { id: "", state: "queued" }, { id: "invalid", state: "invalid" }],
+};
 
 it.each<NormalizationCase>([
   ["noncanonical ID", { sessionId: "legacy:session", pluginExtensions: { memory: {} } }],
   [
     "retired conversation link",
-    {
-      sessionId: "existing",
-      conversationLink: { url: "https://example.test" },
-      pluginExtensions,
-    },
-    {
-      sessionId: "existing",
-      updatedAt: 42,
-      pluginExtensions: structuredClone(pluginExtensions),
-    },
+    { conversationLink: { url: "https://example.test" }, pluginExtensions },
+    session({ pluginExtensions: structuredClone(pluginExtensions) }),
     ["conversationLink"],
   ],
   ["known archive reason", archived, { archiveReason: "active-session-cap" }],
@@ -100,17 +98,7 @@ it.each<NormalizationCase>([
     { updatedAt: 42 },
     ["snoozedUntil", "snoozedAt"],
   ]),
-  [
-    "archived snooze",
-    {
-      archivedAt: 43,
-      archiveReason: "active-session-cap",
-      snoozedUntil: Number.MAX_SAFE_INTEGER,
-      snoozedAt: 41,
-    },
-    { archivedAt: 43, archiveReason: "active-session-cap" },
-    ["snoozedUntil", "snoozedAt"],
-  ],
+  ["archived snooze", { ...archived, ...snoozed }, archived, ["snoozedUntil", "snoozedAt"]],
   [
     "shipped pending key-as-ID",
     { sessionId: childKey },
@@ -132,19 +120,7 @@ it.each<NormalizationCase>([
   ],
   [
     "pending delivery owners",
-    {
-      pendingFinalDelivery: {
-        kind: "replayable",
-        text: "reply",
-        createdAt: 41,
-        intentId: "intent-1",
-        deliveries: [
-          ...structuredClone(deliveries),
-          { id: "", state: "queued" },
-          { id: "invalid", state: "invalid" },
-        ],
-      },
-    },
+    { pendingFinalDelivery: structuredClone(pendingDelivery) },
     { pendingFinalDelivery: { intentId: "intent-1", deliveries } },
   ],
   [
@@ -161,10 +137,7 @@ it.each<NormalizationCase>([
     ],
   ),
 ])("normalization: %s", (_name, input, expected, absent, sessionKey) => {
-  const entry = normalizePersistedSessionEntryShape(
-    { sessionId: "session-1", updatedAt: 42, ...input },
-    { sessionKey },
-  );
+  const entry = normalizePersistedSessionEntryShape(session(input), { sessionKey });
   if (expected === undefined) {
     expect(entry).toBeUndefined();
   } else {
@@ -176,28 +149,21 @@ it.each<NormalizationCase>([
 });
 
 it("retains valid snooze metadata without turning it into a work-admission barrier", () => {
-  const entry = normalizePersistedSessionEntryShape({
-    sessionId: "snoozed-session",
-    updatedAt: 42,
-    snoozedUntil: 100,
-    snoozedAt: 41,
-  });
-  expect(entry).toMatchObject({ snoozedUntil: 100, snoozedAt: 41 });
+  const entry = normalizePersistedSessionEntryShape(session(snoozed));
+  expect(entry).toMatchObject(snoozed);
   expect(resolveSessionWorkStartError("agent:main:snoozed", entry)).toBeUndefined();
 });
 
 describe("session path safety", () => {
+  const defaultSessionsDir = "/tmp/openclaw/agents/main/sessions";
   it("preserves path-safe Unicode session IDs", () => {
-    const sessionsDir = "/tmp/openclaw/agents/main/sessions";
-
     for (const sessionId of ["volume-main-会議-000000", "volume-main-हिन्दी-000001"]) {
       expect(validateSessionId(sessionId)).toBe(sessionId);
-      expect(normalizePersistedSessionEntryShape({ sessionId, updatedAt: 42 })).toMatchObject({
-        sessionId,
-        updatedAt: 42,
-      });
-      expect(resolveSessionTranscriptPathInDir(sessionId, sessionsDir)).toBe(
-        path.resolve(sessionsDir, `${sessionId}.jsonl`),
+      expect(normalizePersistedSessionEntryShape(session({ sessionId }))).toMatchObject(
+        session({ sessionId }),
+      );
+      expect(resolveSessionTranscriptPathInDir(sessionId, defaultSessionsDir)).toBe(
+        path.resolve(defaultSessionsDir, `${sessionId}.jsonl`),
       );
     }
   });
@@ -217,20 +183,18 @@ describe("session path safety", () => {
       `session-${"会".repeat(82)}`,
     ]) {
       expect(() => validateSessionId(sessionId), sessionId).toThrow(/Invalid session ID/);
-      expect(normalizePersistedSessionEntryShape({ sessionId, updatedAt: 42 })).toBeUndefined();
+      expect(normalizePersistedSessionEntryShape(session({ sessionId }))).toBeUndefined();
     }
   });
 
   it("resolves transcript path inside an explicit sessions dir", () => {
-    const sessionsDir = "/tmp/openclaw/agents/main/sessions";
-    const resolved = resolveSessionTranscriptPathInDir("sess-1", sessionsDir, "topic/a+b");
-
-    expect(resolved).toBe(path.resolve(sessionsDir, "sess-1-topic-topic%2Fa%2Bb.jsonl"));
+    expect(resolveSessionTranscriptPathInDir("sess-1", defaultSessionsDir, "topic/a+b")).toBe(
+      path.resolve(defaultSessionsDir, "sess-1-topic-topic%2Fa%2Bb.jsonl"),
+    );
   });
 
   it("rejects topic-qualified transcript filenames over 255 bytes", () => {
     const sessionId = "会".repeat(82);
-
     expect(validateSessionId(sessionId)).toBe(sessionId);
     expect(() => resolveSessionTranscriptPathInDir(sessionId, "/tmp/sessions", 1)).toThrow(
       /Invalid session transcript filename/,
@@ -238,21 +202,20 @@ describe("session path safety", () => {
   });
 
   it("falls back to derived path when sessionFile is outside known agent sessions dirs", () => {
-    const sessionsDir = "/tmp/openclaw/agents/main/sessions";
-
     const resolved = resolveSessionFilePathCore(
       "sess-1",
       { sessionFile: "/tmp/openclaw/agents/work/not-sessions/abc-123.jsonl" },
-      { sessionsDir },
+      { sessionsDir: defaultSessionsDir },
     );
-    expect(resolved).toBe(path.resolve(sessionsDir, "sess-1.jsonl"));
+    expect(resolved).toBe(path.resolve(defaultSessionsDir, "sess-1.jsonl"));
   });
 
   it("ignores multi-store sentinel paths when deriving session file options", () => {
-    expect(resolveSessionFilePathOptions({ agentId: "worker", storePath: "(multiple)" })).toEqual({
-      agentId: "worker",
-    });
-    expect(resolveSessionFilePathOptions({ storePath: "(multiple)" })).toBeUndefined();
+    for (const agentId of ["worker", undefined]) {
+      expect(resolveSessionFilePathOptions({ agentId, storePath: "(multiple)" })).toEqual(
+        agentId ? { agentId } : undefined,
+      );
+    }
   });
 
   it.each([false, true])("contains symlink session paths (escape=%s)", (escape) => {
@@ -318,11 +281,6 @@ describe("resolveSessionResetPolicy", () => {
   const dailyNow = new Date(2026, 3, 25, 12).getTime();
   const idleNow = 60 * 60_000;
   type Input = Parameters<typeof evaluateSessionFreshness>[0];
-  type Case = [
-    name: string,
-    input: Input,
-    expected: Partial<ReturnType<typeof evaluateSessionFreshness>>,
-  ];
   function input(
     mode: "daily" | "idle",
     timestamps: Partial<Input> = {},
@@ -332,48 +290,25 @@ describe("resolveSessionResetPolicy", () => {
     return {
       updatedAt: now,
       now,
-      policy: { mode, atHour: 4, ...(idleMinutes === undefined ? {} : { idleMinutes }) },
+      policy: { mode, atHour: 4, idleMinutes },
       ...timestamps,
     };
   }
-  it.each<Case>([
-    [
-      "zero idle timeout",
-      input("idle", { updatedAt: 1_000 }, 0),
-      { fresh: true, dailyResetAt: undefined, idleExpiresAt: undefined },
-    ],
-    [
-      "daily uses session start",
-      input("daily", { sessionStartedAt: dailyNow - 25 * 60 * 60_000 }),
-      { fresh: false, staleReason: "daily" },
-    ],
-    ...[{ lastInteractionAt: 0 }, { sessionStartedAt: 0 }].map((timestamps): Case => [
-      `idle uses ${Object.keys(timestamps)[0]}`,
-      input("idle", timestamps, 5),
-      { fresh: false, idleExpiresAt: 5 * 60_000, staleReason: "idle" },
-    ]),
-    [
-      "first of combined deadlines",
-      input(
-        "daily",
-        {
-          sessionStartedAt: new Date(2026, 3, 24, 23).getTime(),
-          lastInteractionAt: new Date(2026, 3, 25, 11).getTime(),
-        },
-        30,
-      ),
-      { fresh: false, staleReason: "daily" },
-    ],
-    ...(["daily", "idle"] as const).map((mode): Case => [
-      `future legacy timestamp: ${mode}`,
-      input(
-        mode,
-        { updatedAt: (mode === "daily" ? dailyNow : idleNow) + 30 * 24 * 60 * 60_000 },
-        mode === "idle" ? 5 : undefined,
-      ),
-      { fresh: false, ...(mode === "idle" ? { idleExpiresAt: 5 * 60_000 } : {}) },
-    ]),
-  ])("%s", (_name, request, expected) => {
+  const combined = {
+    sessionStartedAt: new Date(2026, 3, 24, 23).getTime(),
+    lastInteractionAt: new Date(2026, 3, 25, 11).getTime(),
+  };
+  const futureOffset = 30 * 24 * 60 * 60_000;
+  it.each`
+    name                          | request                                                              | expected
+    ${"zero idle timeout"}        | ${input("idle", { updatedAt: 1_000 }, 0)}                            | ${{ fresh: true, dailyResetAt: undefined, idleExpiresAt: undefined }}
+    ${"daily uses session start"} | ${input("daily", { sessionStartedAt: dailyNow - 25 * 60 * 60_000 })} | ${{ fresh: false, staleReason: "daily" }}
+    ${"idle uses interaction"}    | ${input("idle", { lastInteractionAt: 0 }, 5)}                        | ${{ fresh: false, idleExpiresAt: 5 * 60_000, staleReason: "idle" }}
+    ${"idle uses session start"}  | ${input("idle", { sessionStartedAt: 0 }, 5)}                         | ${{ fresh: false, idleExpiresAt: 5 * 60_000, staleReason: "idle" }}
+    ${"first combined deadline"}  | ${input("daily", combined, 30)}                                      | ${{ fresh: false, staleReason: "daily" }}
+    ${"future daily timestamp"}   | ${input("daily", { updatedAt: dailyNow + futureOffset })}            | ${{ fresh: false }}
+    ${"future idle timestamp"}    | ${input("idle", { updatedAt: idleNow + futureOffset }, 5)}           | ${{ fresh: false, idleExpiresAt: 5 * 60_000 }}
+  `("$name", ({ request, expected }) => {
     const freshness = evaluateSessionFreshness(request);
     if (expected.fresh) {
       expect(freshness).toEqual(expected);
@@ -383,49 +318,38 @@ describe("resolveSessionResetPolicy", () => {
   });
 });
 
-describe("session work admission", () => {
-  it("fails closed while trusted session initialization is pending", () => {
-    expect(
-      resolveSessionWorkStartError("agent:main:pending", {
-        sessionId: "pending-session",
-        initializationPending: true,
-      }),
-    ).toContain("still initializing");
-    expect(
-      resolveSessionWorkStartError("agent:main:pending", {
-        sessionId: "pending-session",
-      }),
-    ).toBeUndefined();
-  });
+it("fails closed while trusted session initialization is pending", () => {
+  const entry = { sessionId: "pending-session" };
+  const key = "agent:main:pending";
+  expect(resolveSessionWorkStartError(key, { ...entry, initializationPending: true })).toContain(
+    "still initializing",
+  );
+  expect(resolveSessionWorkStartError(key, entry)).toBeUndefined();
+});
 
-  it("keeps restart-recovery tombstones terminal when archive metadata is missing", () => {
-    const entry = {
-      sessionId: "failed-session",
-      mainRestartRecovery: {
-        cycleId: "cycle-1",
-        revision: 4,
-        chargedAttempts: 3,
-        tombstone: {
-          reason: "automatic recovery exhausted",
-          recoveredSessionId: "dashboard-successor",
-          recoveredSessionKey: "agent:main:dashboard:successor",
-        },
+it("keeps restart-recovery tombstones terminal when archive metadata is missing", () => {
+  const entry = {
+    sessionId: "failed-session",
+    mainRestartRecovery: {
+      cycleId: "cycle-1",
+      revision: 4,
+      chargedAttempts: 3,
+      tombstone: {
+        reason: "automatic recovery exhausted",
+        recoveredSessionId: "dashboard-successor",
+        recoveredSessionKey: "agent:main:dashboard:successor",
       },
-    };
+    },
+  };
 
-    expect(resolveSessionWorkStartError("agent:main:matrix:channel:room-a", entry)).toContain(
-      "ended during restart recovery",
-    );
-    expect(
-      resolveSessionWorkStartError("agent:main:matrix:channel:room-a", {
-        ...entry,
-        modelSelectionLocked: true,
-      }),
-    ).toContain("Open it in WebChat and use Resume.");
-    expect(
-      resolveSessionWorkStartError("agent:main:matrix:channel:room-a", entry, {
-        allowRestartTombstoneReplacement: true,
-      }),
-    ).toBeUndefined();
-  });
+  const key = "agent:main:matrix:channel:room-a";
+  expect([
+    resolveSessionWorkStartError(key, entry),
+    resolveSessionWorkStartError(key, { ...entry, modelSelectionLocked: true }),
+    resolveSessionWorkStartError(key, entry, { allowRestartTombstoneReplacement: true }),
+  ]).toEqual([
+    expect.stringContaining("ended during restart recovery"),
+    expect.stringContaining("Open it in WebChat and use Resume."),
+    undefined,
+  ]);
 });

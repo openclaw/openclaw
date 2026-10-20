@@ -3,20 +3,21 @@
 import { input, nativePosts, nativeWorkers, observed, type NativeWorker } from "./session-transcript-worker-lanes.test-support.js";
 import assert from "node:assert/strict";
 import { expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement as waitFor } from "../../../test/helpers/promise.js";
 import type { UsageCostWorkerInput } from "../../infra/session-cost-usage-worker.types.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { runQueuedStoreWrite } from "../../shared/store-writer-queue.js";
 import {
-  runOpenClawAgentWorkerWrite,
-  runOpenClawAgentWriteAdmission,
+  runOpenClawAgentWorkerWrite as workerWrite,
+  runOpenClawAgentWriteAdmission as withWriter,
 } from "../../state/openclaw-agent-write-admission.js";
 import { costRefreshLane, projectionLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 
 it("keeps usage refresh host writes out of writer-held reader compute capacity", async () => {
   const { database } = input();
+  const { agentId, path: databasePath } = database;
   const reader = new WorkerTaskPool<string, string>({
     workerUrl: new URL("file:///synthetic/memory-origin-reader.js"),
     sharedCompute: true,
@@ -31,7 +32,7 @@ it("keeps usage refresh host writes out of writer-held reader compute capacity",
   const controller = new AbortController();
   const prepareRead = vi.fn(() => "origin-rows");
   let hostWrites = 0;
-  const writing = runOpenClawAgentWriteAdmission(database, async () => {
+  const writing = withWriter(database, async () => {
     held.resolve();
     await startRead.promise;
     const reading = reader.run(prepareRead, {});
@@ -44,12 +45,7 @@ it("keeps usage refresh host writes out of writer-held reader compute capacity",
     await held.promise;
     const request: UsageCostWorkerInput = {
       kind: "usage-cost",
-      location: {
-        agentId: database.agentId,
-        databasePath: database.path,
-        storePath: database.path,
-        env: {},
-      },
+      location: { agentId, databasePath, storePath: databasePath, env: {} },
       databases: [database],
       archiveStorePaths: [database.path],
       stores: [{ agentId: database.agentId, storePath: database.path, database }],
@@ -63,7 +59,7 @@ it("keeps usage refresh host writes out of writer-held reader compute capacity",
     const refreshing = costRefreshLane.pool.run(request, {
       signal: controller.signal,
       async onRequest() {
-        const restoring = runOpenClawAgentWriteAdmission(database, () => {
+        const restoring = withWriter(database, () => {
           hostWrites++;
         });
         hostRequested.resolve();
@@ -72,11 +68,7 @@ it("keeps usage refresh host writes out of writer-held reader compute capacity",
       },
     });
     refreshOutcome = Promise.allSettled([refreshing]);
-    await awaitGateBeforeSettlement(
-      refreshPosted.promise,
-      refreshing,
-      "Usage refresh did not finish worker preparation",
-    );
+    await waitFor(refreshPosted.promise, refreshing, "Usage worker preparation");
     const [worker, task] = postedTask(request);
     worker.posted.mockImplementation((message) => {
       if (message.responseId !== undefined) {
@@ -95,11 +87,7 @@ it("keeps usage refresh host writes out of writer-held reader compute capacity",
       }
     });
     worker.emit("message", { status: "request", taskId: task.taskId, id: 1, value: "restore" });
-    await awaitGateBeforeSettlement(
-      hostRequested.promise,
-      refreshing,
-      "Usage refresh did not request its host writer",
-    );
+    await waitFor(hostRequested.promise, refreshing, "Usage host writer request");
     expect(hostWrites).toBe(0);
     startRead.resolve();
     await readSubmitted.promise;
@@ -164,7 +152,7 @@ it("lets a cold search host write reenter its reserved discovery admission", asy
   });
   const search = withSessionHistoryWorkerDatabase(database, (owner) =>
     owner.searchTranscripts({ agentId: "main", query: "needle" }, (signal) => {
-      status = runOpenClawAgentWorkerWrite(
+      status = workerWrite(
         database,
         async () => {
           entered.resolve();
@@ -177,7 +165,7 @@ it("lets a cold search host write reenter its reserved discovery admission", asy
     }),
   );
   try {
-    await awaitGateBeforeSettlement(entered.promise, search, "Cold search lost its writer context");
+    await waitFor(entered.promise, search, "Cold search writer admission");
     await expect(search).resolves.toEqual({ hits: [] });
   } finally {
     releaseOnFailure.resolve(false);
