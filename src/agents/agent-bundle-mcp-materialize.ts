@@ -5,12 +5,12 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
-import { sanitizeModelSpecialTokens } from "../security/external-content.js";
 import {
   getPluginToolMeta,
   setPluginToolMeta,
   type PluginToolMcpMeta,
 } from "../plugins/tool-metadata.js";
+import { sanitizeModelSpecialTokens } from "../security/external-content.js";
 import { releaseSessionMcpRuntime } from "./agent-bundle-mcp-manager-cleanup.js";
 import {
   buildSafeToolName,
