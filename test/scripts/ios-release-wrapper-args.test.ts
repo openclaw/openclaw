@@ -1,5 +1,4 @@
-// iOS release wrapper tests keep release args fail-closed before Fastlane work.
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -8,46 +7,30 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const BASH_BIN = process.platform === "win32" ? "bash" : "/bin/bash";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const gemfilePath = path.join(process.cwd(), "apps", "ios", "Gemfile");
-
-function runScript(
-  scriptPath: string,
-  args: readonly string[],
-  extraEnv: NodeJS.ProcessEnv = {},
-): { ok: boolean; stdout: string; stderr: string } {
-  const scriptArgs =
-    process.platform === "win32" ? [scriptPath] : ["--noprofile", "--norc", scriptPath];
-  try {
-    const stdout = execFileSync(BASH_BIN, [...scriptArgs, ...args], {
-      cwd: process.cwd(),
-      env: { ...process.env, ...extraEnv },
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    return { ok: true, stdout, stderr: "" };
-  } catch (error) {
-    const e = error as { stdout?: unknown; stderr?: unknown };
-    const stdout = Buffer.isBuffer(e.stdout)
-      ? e.stdout.toString("utf8")
-      : ((e.stdout ?? "") as string);
-    const stderr = Buffer.isBuffer(e.stderr)
-      ? e.stderr.toString("utf8")
-      : ((e.stderr ?? "") as string);
-    return { ok: false, stdout, stderr };
-  }
-}
+const releaseArgs = ["--version", "2026.7.2", "--revision", "1", "--build-number", "3"];
 
 describe("iOS release shell wrapper arguments", () => {
   it("rejects App Store release relay URL overrides before release work", () => {
-    const result = runScript(
-      path.join(process.cwd(), "scripts/ios-release-prepare.sh"),
-      ["--version", "2026.7.2", "--revision", "1", "--build-number", "3"],
+    const result = spawnSync(
+      BASH_BIN,
+      [
+        ...(process.platform === "win32" ? [] : ["--noprofile", "--norc"]),
+        "scripts/ios-release-prepare.sh",
+        ...releaseArgs,
+      ],
       {
-        IOS_DEVELOPMENT_TEAM: "FWJYW4S8P8",
-        OPENCLAW_PUSH_RELAY_BASE_URL: "https://relay.example.com",
+        cwd: process.cwd(),
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        env: {
+          ...process.env,
+          IOS_DEVELOPMENT_TEAM: "FWJYW4S8P8",
+          OPENCLAW_PUSH_RELAY_BASE_URL: "https://relay.example.com",
+        },
       },
     );
 
-    expect(result.ok).toBe(false);
+    expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("custom relay URL overrides are not allowed");
     expect(result.stderr).not.toContain("fastlane");
     expect(result.stdout).toBe("");
@@ -68,7 +51,6 @@ describe("iOS release shell wrapper arguments", () => {
   });
 
   function runSharedFastlane(options: {
-    fastlaneExit: number;
     bundleGemfile?: string;
     changeDirectoryAfterSource?: boolean;
     uploadArgs?: string[];
@@ -86,10 +68,7 @@ describe("iOS release shell wrapper arguments", () => {
         "shift 3\n" +
         'exec fastlane "$@"\n',
     );
-    writeFileSync(
-      fastlane,
-      `#!/usr/bin/env bash\nprintf '%s\\n' "$*"\nexit ${options.fastlaneExit}\n`,
-    );
+    writeFileSync(fastlane, `#!/usr/bin/env bash\nprintf '%s\\n' "$*"\nexit 0\n`);
     chmodSync(bundle, 0o755);
     chmodSync(fastlane, 0o755);
     return spawnSync(
@@ -117,16 +96,7 @@ describe("iOS release shell wrapper arguments", () => {
 
   it("routes stage recovery to the non-uploading lane with the saved identity", () => {
     const result = runSharedFastlane({
-      fastlaneExit: 0,
-      uploadArgs: [
-        "--stage-only",
-        "--version",
-        "2026.7.2",
-        "--revision",
-        "1",
-        "--build-number",
-        "3",
-      ],
+      uploadArgs: ["--stage-only", ...releaseArgs],
     });
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toBe(
@@ -138,7 +108,6 @@ describe("iOS release shell wrapper arguments", () => {
     const result = runSharedFastlane({
       bundleGemfile: "/tmp/hostile/Gemfile",
       changeDirectoryAfterSource: true,
-      fastlaneExit: 0,
     });
 
     expect(result.status).toBe(0);
