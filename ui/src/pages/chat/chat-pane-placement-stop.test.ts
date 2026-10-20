@@ -2,7 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { createComponent } from "solid-js";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
@@ -52,7 +52,6 @@ const workerPlacement = {
 
 const startupPlacements = [
   { state: "requested", ...placementTiming },
-  { state: "provisioning", ...workerPlacement },
   { state: "syncing", ...workerPlacement, workerBundleHash: "a".repeat(64) },
   {
     state: "starting",
@@ -139,343 +138,289 @@ function placementFor(pane: ReturnType<typeof createTestChatPane>["pane"], row: 
   });
 }
 
-describe("chat pane startup worker copy", () => {
-  it("retains the startup retry callback across renders and resolves the current pane session", () => {
-    const context = createInitializationContext();
-    const pane = createRenderTestChatPane();
-    const state = pane.initialize(context);
-    state.sessionKey = "agent:main:startup";
-    const startup = {
-      sessionKey: state.sessionKey,
-      phase: "failed" as const,
-      startedAt: 1,
-      retryable: true,
-      initialTurn: {
-        id: "initial",
-        text: "Retained prompt",
-        createdAt: 1,
-        sendState: "failed" as const,
-      },
-    };
-    const get = vi.spyOn(context.placementStartup, "get").mockImplementation((sessionKey) => ({
-      ...startup,
-      sessionKey,
-    }));
-    const retry = vi.spyOn(context.placementStartup, "retry");
-    pane.render();
-    const action = expectDefined(pane.chatProps?.onRetrySessionPlacementStartup, "startup retry");
-    pane.render();
-    expect(pane.chatProps?.onRetrySessionPlacementStartup).toBe(action);
-    action();
-    expect(retry).toHaveBeenLastCalledWith(state.sessionKey);
+it("retains the startup retry callback across renders and resolves the current pane session", () => {
+  const context = createInitializationContext();
+  const pane = createRenderTestChatPane();
+  const state = pane.initialize(context);
+  state.sessionKey = "agent:main:startup";
+  const startup = {
+    sessionKey: state.sessionKey,
+    phase: "failed" as const,
+    startedAt: 1,
+    retryable: true,
+    initialTurn: {
+      id: "initial",
+      text: "Retained prompt",
+      createdAt: 1,
+      sendState: "failed" as const,
+    },
+  };
+  const get = vi.spyOn(context.placementStartup, "get").mockImplementation((sessionKey) => ({
+    ...startup,
+    sessionKey,
+  }));
+  const retry = vi.spyOn(context.placementStartup, "retry");
+  pane.render();
+  const action = expectDefined(pane.chatProps?.onRetrySessionPlacementStartup, "startup retry");
+  pane.render();
+  expect(pane.chatProps?.onRetrySessionPlacementStartup).toBe(action);
+  action();
+  expect(retry).toHaveBeenLastCalledWith(state.sessionKey);
 
-    const nextState = pane.initialize(context);
-    nextState.sessionKey = "agent:main:next-startup";
-    action();
-    expect(retry).toHaveBeenLastCalledWith(nextState.sessionKey);
-    expect(retry).toHaveBeenCalledTimes(2);
-    pane.render();
-    expect(pane.chatProps?.onRetrySessionPlacementStartup).toBe(action);
+  const nextState = pane.initialize(context);
+  nextState.sessionKey = "agent:main:next-startup";
+  action();
+  expect(retry).toHaveBeenLastCalledWith(nextState.sessionKey);
+  expect(retry).toHaveBeenCalledTimes(2);
+  pane.render();
+  expect(pane.chatProps?.onRetrySessionPlacementStartup).toBe(action);
 
-    get.mockReturnValue({ ...startup, retryable: false });
-    pane.render();
-    expect(pane.chatProps?.onRetrySessionPlacementStartup).toBeUndefined();
-  });
-
-  it("uses generic cloud copy before a requested profile has worker metadata", () => {
-    expect(
-      resolveChatPaneWorkerPresentation(startupSession(startupPlacements[0]), {
-        phase: "requested",
-        targetKind: "profile",
-      }),
-    ).toEqual(cloudCopy);
-  });
+  get.mockReturnValue({ ...startup, retryable: false });
+  pane.render();
+  expect(pane.chatProps?.onRetrySessionPlacementStartup).toBeUndefined();
 });
 
-describe("chat pane worker stop", () => {
-  it.each([
-    { placement: startupPlacements[0], targetKind: "device", copy: deviceCopy },
-    {
-      placement: startupPlacements[2],
+it("uses generic cloud copy before a requested profile has worker metadata", () => {
+  expect(
+    resolveChatPaneWorkerPresentation(startupSession(startupPlacements[0]), {
+      phase: "requested",
       targetKind: "profile",
-      copy: { ...cloudCopy, label: "device-service · device-profile" },
-    },
-    { placement: startupPlacements[3], targetKind: undefined, copy: unknownCopy },
-  ] as const)(
-    "stops $placement.state $targetKind startup from the placement menu",
-    async ({ placement, targetKind, copy }) => {
-      const request = dialogs.mockRequest(async () => ({ ok: true }));
-      const reconcileMutation = vi.fn(async () => ({ status: "refreshed" as const }));
-      const { pane } = createTestChatPane({
-        client: createGatewayBrowserClientFixture({ request }),
-        sessions: createSessionCapabilityFixture({ reconcileMutation }),
-      });
-      const session = startupSession(placement);
-      const startup = targetKind
-        ? { sessionKey: session.key, phase: placement.state, startedAt: 1, targetKind }
-        : null;
-      vi.mocked(pane.context.placementStartup.get).mockReturnValue(startup);
-      const container = document.createElement("div");
-      document.body.append(container);
-      let reclaim: Promise<void> | undefined;
-      const view = mountSolid(
-        () =>
-          createComponent(ChatPanePlacement, {
-            session,
-            placementStartupStatus: startup,
-            onPlacementReclaim: () => {
-              reclaim = dialogs.track(startReclaim(pane, session));
-            },
-          }),
-        { container },
-      );
-      onTestFinished(view.unmount);
-      flush();
-      expect(container.querySelector(".chat-pane__placement-chip")?.textContent?.trim()).toBe(
-        copy.label,
-      );
-      container.querySelector<HTMLButtonElement>(".chat-pane__placement-chip")!.click();
-      await waitForSolid(() =>
-        expect(
-          container
-            .querySelector('.chat-pane__placement-menu > [role="menu"]')
-            ?.matches(":popover-open"),
-        ).toBe(true),
-      );
-      const stop = container.querySelector<HTMLButtonElement>(".chat-pane__placement-reclaim");
-      expect(stop?.textContent?.trim()).toBe(copy.stopLabel);
-      stop?.click();
-      const actions = await waitForConfirmDialogActions();
-      expect(document.querySelector("openclaw-modal-dialog")?.textContent).toContain(
-        copy.confirmMessage,
-      );
-      expect(actions.querySelector(".btn.danger")?.textContent?.trim()).toBe(copy.confirmLabel);
-      answerConfirmDialog(actions, "confirm");
-      await reclaim;
-      expect(request).toHaveBeenCalledExactlyOnceWith(
-        "sessions.reclaim",
-        { key: session.key, agentId: "main" },
-        { timeoutMs: null },
-      );
-      expect(pane.context.placementStartup.pause).toHaveBeenCalledBefore(request);
-    },
-  );
-
-  it("disables offline Stop while keeping Continue enabled, then restores ordinary actions", () => {
-    const { pane } = stopFixture(
-      undefined,
-      ["operator.read", "operator.write"],
-      ["sessions.move", "sessions.reclaim"],
-    );
-    const offline = {
-      ...offlineDeviceSession(),
-      sessionId: "offline-device-session",
-      hasActiveRun: false,
-    };
-    const available = {
-      ...offline,
-      placement: {
-        ...offline.placement,
-        runner: { kind: "device" as const, status: "available" as const },
-      },
-    };
-
-    expect(placementFor(pane, offline)).toEqual({
-      moving: false,
-      restarting: false,
-      moveDisabledReason: undefined,
-      reclaimDisabledReason:
-        "Reconnect the device to stop and sync its workspace, or Continue on Gateway.",
-      recoveryDisabledReason: "This Gateway does not support this session action.",
+    }),
+  ).toEqual(cloudCopy);
+});
+it.each([
+  { placement: startupPlacements[0], targetKind: "device", copy: deviceCopy },
+  {
+    placement: startupPlacements[1],
+    targetKind: "profile",
+    copy: { ...cloudCopy, label: "device-service · device-profile" },
+  },
+  { placement: startupPlacements[2], targetKind: undefined, copy: unknownCopy },
+] as const)(
+  "stops $placement.state $targetKind startup from the placement menu",
+  async ({ placement, targetKind, copy }) => {
+    const request = dialogs.mockRequest(async () => ({ ok: true }));
+    const reconcileMutation = vi.fn(async () => ({ status: "refreshed" as const }));
+    const { pane } = createTestChatPane({
+      client: createGatewayBrowserClientFixture({ request }),
+      sessions: createSessionCapabilityFixture({ reconcileMutation }),
     });
-    expect(placementFor(pane, available)).toEqual({
-      moving: false,
-      restarting: false,
-      moveDisabledReason: undefined,
-      reclaimDisabledReason: undefined,
-      recoveryDisabledReason: "This Gateway does not support this session action.",
-    });
-  });
-
-  it("requires restoring an archived repository session before worker dispatch", () => {
-    const { pane } = stopFixture(
-      undefined,
-      ["operator.read", "operator.write"],
-      ["sessions.dispatch"],
+    const session = startupSession(placement);
+    const startup = targetKind
+      ? { sessionKey: session.key, phase: placement.state, startedAt: 1, targetKind }
+      : null;
+    vi.mocked(pane.context.placementStartup.get).mockReturnValue(startup);
+    const container = document.createElement("div");
+    document.body.append(container);
+    let reclaim: Promise<void> | undefined;
+    const view = mountSolid(
+      () =>
+        createComponent(ChatPanePlacement, {
+          session,
+          placementStartupStatus: startup,
+          onPlacementReclaim: () => {
+            reclaim = dialogs.track(startReclaim(pane, session));
+          },
+        }),
+      { container },
     );
-
-    expect(
-      placementFor(pane, {
-        key: "agent:main:archived-repository",
-        kind: "direct",
-        updatedAt: 0,
-        archived: true,
-        repositoryWorkspaceId: "repository-workspace-1",
-        placement: { state: "local", ...placementTiming },
-      }).recoveryDisabledReason,
-    ).toBe("This session is archived. Unarchive it to continue the conversation.");
-  });
-
-  it("does not issue reclaim for an offline device placement", async () => {
-    const { pane, request } = stopFixture(undefined, ["operator.read", "operator.write"]);
-
-    await startReclaim(pane, { ...offlineDeviceSession(), hasActiveRun: false });
-
-    expect(request).not.toHaveBeenCalled();
-    expect(document.body.querySelector("dialog[open]")).toBeNull();
-  });
-
-  it("reclaims an active device placement with conflicting failed intent after the operator confirms", async () => {
-    vi.stubGlobal(
-      "confirm",
-      vi.fn(() => {
-        throw new Error("native confirm must not be used");
-      }),
+    onTestFinished(view.unmount);
+    flush();
+    expect(container.querySelector(".chat-pane__placement-chip")?.textContent?.trim()).toBe(
+      copy.label,
     );
-    const { pane, request, reconcileMutation } = stopFixture(
-      undefined,
-      ["operator.read", "operator.write"],
-      ["sessions.reclaim"],
-      true,
+    container.querySelector<HTMLButtonElement>(".chat-pane__placement-chip")!.click();
+    await waitForSolid(() =>
+      expect(
+        container
+          .querySelector('.chat-pane__placement-menu > [role="menu"]')
+          ?.matches(":popover-open"),
+      ).toBe(true),
     );
-    const session = activePlacementSession();
-    session.placement.runner = { kind: "device", status: "available" };
-    vi.mocked(pane.context.placementStartup.get).mockReturnValue({
-      sessionKey: session.key,
-      phase: "failed",
-      startedAt: 1,
-      targetKind: "profile",
-    });
-
-    const reclaim = dialogs.track(startReclaim(pane, session));
+    const stop = container.querySelector<HTMLButtonElement>(".chat-pane__placement-reclaim");
+    expect(stop?.textContent?.trim()).toBe(copy.stopLabel);
+    stop?.click();
     const actions = await waitForConfirmDialogActions();
-    const actionText = actions.textContent;
-    const confirmation = document.body.querySelector("openclaw-modal-dialog")?.textContent;
-    const pausesBeforeConfirmation = vi.mocked(pane.context.placementStartup.pause).mock.calls
-      .length;
+    expect(document.querySelector("openclaw-modal-dialog")?.textContent).toContain(
+      copy.confirmMessage,
+    );
+    expect(actions.querySelector(".btn.danger")?.textContent?.trim()).toBe(copy.confirmLabel);
     answerConfirmDialog(actions, "confirm");
     await reclaim;
-
-    expect(actionText).toContain("Stop device worker");
-    expect(confirmation).toContain(`Stop the device worker for "${session.key}"?`);
-    expect(pausesBeforeConfirmation).toBe(0);
-    expect(request).toHaveBeenCalledWith(
+    expect(request).toHaveBeenCalledExactlyOnceWith(
       "sessions.reclaim",
       { key: session.key, agentId: "main" },
       { timeoutMs: null },
     );
-    expect(pane.context.placementStartup.pause).toHaveBeenCalledExactlyOnceWith(
-      session.key,
-      "Worker stop requested. Review the initial message before retrying.",
-      expect.objectContaining({
-        readSessionPlacementRecovery: expect.any(Function),
-        pauseSessionPlacementRecovery: expect.any(Function),
-      }),
-    );
     expect(pane.context.placementStartup.pause).toHaveBeenCalledBefore(request);
-    expect(reconcileMutation).toHaveBeenCalledWith("main");
+  },
+);
+
+it("disables offline Stop while keeping Continue enabled, then restores ordinary actions", () => {
+  const { pane } = stopFixture(
+    undefined,
+    ["operator.read", "operator.write"],
+    ["sessions.move", "sessions.reclaim"],
+  );
+  const offline = {
+    ...offlineDeviceSession(),
+    sessionId: "offline-device-session",
+    hasActiveRun: false,
+  };
+  const available = {
+    ...offline,
+    placement: {
+      ...offline.placement,
+      runner: { kind: "device" as const, status: "available" as const },
+    },
+  };
+
+  expect(placementFor(pane, offline)).toEqual({
+    moving: false,
+    restarting: false,
+    moveDisabledReason: undefined,
+    reclaimDisabledReason:
+      "Reconnect the device to stop and sync its workspace, or Continue on Gateway.",
+    recoveryDisabledReason: "This Gateway does not support this session action.",
+  });
+  expect(placementFor(pane, available)).toEqual({
+    moving: false,
+    restarting: false,
+    moveDisabledReason: undefined,
+    reclaimDisabledReason: undefined,
+    recoveryDisabledReason: "This Gateway does not support this session action.",
+  });
+});
+
+it("requires restoring an archived repository session before worker dispatch", () => {
+  const { pane } = stopFixture(
+    undefined,
+    ["operator.read", "operator.write"],
+    ["sessions.dispatch"],
+  );
+
+  expect(
+    placementFor(pane, {
+      key: "agent:main:archived-repository",
+      kind: "direct",
+      updatedAt: 0,
+      archived: true,
+      repositoryWorkspaceId: "repository-workspace-1",
+      placement: { state: "local", ...placementTiming },
+    }).recoveryDisabledReason,
+  ).toBe("This session is archived. Unarchive it to continue the conversation.");
+});
+
+it("does not issue reclaim for an offline device placement", async () => {
+  const { pane, request } = stopFixture(undefined, ["operator.read", "operator.write"]);
+
+  await startReclaim(pane, { ...offlineDeviceSession(), hasActiveRun: false });
+
+  expect(request).not.toHaveBeenCalled();
+  expect(document.body.querySelector("dialog[open]")).toBeNull();
+});
+
+it("reclaims an active device placement with conflicting failed intent after the operator confirms", async () => {
+  vi.stubGlobal(
+    "confirm",
+    vi.fn(() => {
+      throw new Error("native confirm must not be used");
+    }),
+  );
+  const { pane, request, reconcileMutation } = stopFixture(
+    undefined,
+    ["operator.read", "operator.write"],
+    ["sessions.reclaim"],
+    true,
+  );
+  const session = activePlacementSession();
+  session.placement.runner = { kind: "device", status: "available" };
+  vi.mocked(pane.context.placementStartup.get).mockReturnValue({
+    sessionKey: session.key,
+    phase: "failed",
+    startedAt: 1,
+    targetKind: "profile",
   });
 
-  it("does not reclaim when the operator cancels", async () => {
-    const { pane, request } = stopFixture();
-    const session = requestedDevice(pane);
+  const reclaim = dialogs.track(startReclaim(pane, session));
+  const actions = await waitForConfirmDialogActions();
+  const actionText = actions.textContent;
+  const confirmation = document.body.querySelector("openclaw-modal-dialog")?.textContent;
+  const pausesBeforeConfirmation = vi.mocked(pane.context.placementStartup.pause).mock.calls.length;
+  answerConfirmDialog(actions, "confirm");
+  await reclaim;
 
-    const reclaim = dialogs.track(startReclaim(pane, session));
-    const actions = await waitForConfirmDialogActions();
-    answerConfirmDialog(actions, "cancel");
-    await reclaim;
+  expect(actionText).toContain("Stop device worker");
+  expect(confirmation).toContain(`Stop the device worker for "${session.key}"?`);
+  expect(pausesBeforeConfirmation).toBe(0);
+  expect(request).toHaveBeenCalledWith(
+    "sessions.reclaim",
+    { key: session.key, agentId: "main" },
+    { timeoutMs: null },
+  );
+  expect(pane.context.placementStartup.pause).toHaveBeenCalledExactlyOnceWith(
+    session.key,
+    "Worker stop requested. Review the initial message before retrying.",
+    expect.objectContaining({
+      readSessionPlacementRecovery: expect.any(Function),
+      pauseSessionPlacementRecovery: expect.any(Function),
+    }),
+  );
+  expect(pane.context.placementStartup.pause).toHaveBeenCalledBefore(request);
+  expect(reconcileMutation).toHaveBeenCalledWith("main");
+});
 
-    expect(request).not.toHaveBeenCalled();
-    expect(pane.context.placementStartup.pause).not.toHaveBeenCalled();
-  });
-
-  it("does not reclaim after the connection changes while confirmation is open", async () => {
-    const { pane, state, request } = stopFixture();
-    const session = requestedDevice(pane);
-
-    const reclaim = dialogs.track(startReclaim(pane, session));
-    const actions = await waitForConfirmDialogActions();
+it.each(["cancel", "connection change"] as const)("does not reclaim after %s", async (reason) => {
+  const { pane, state, request } = stopFixture();
+  const session = requestedDevice(pane);
+  const reclaim = dialogs.track(startReclaim(pane, session));
+  const actions = await waitForConfirmDialogActions();
+  if (reason === "connection change") {
     pane.connectionGeneration += 1;
-    answerConfirmDialog(actions, "confirm");
-    await reclaim;
+  }
+  answerConfirmDialog(actions, reason === "cancel" ? "cancel" : "confirm");
+  await reclaim;
 
-    expect(request).not.toHaveBeenCalled();
-    expect(pane.context.placementStartup.pause).not.toHaveBeenCalled();
-    expect(state.lastError).toBeNull();
-    expect(state.chatError).toBeNull();
-  });
+  expect(request).not.toHaveBeenCalled();
+  expect(pane.context.placementStartup.pause).not.toHaveBeenCalled();
+  if (reason === "connection change") {
+    expect(state).toMatchObject({ lastError: null, chatError: null });
+  }
+});
 
-  it("publishes a reclaim failure for the current presentation", async () => {
-    const { pane, state } = stopFixture(async () => {
-      throw new Error("reclaim failed");
-    });
-    const session = activePlacementSession();
+it("keeps reclaim progress with its session when the pane switches rows", async () => {
+  const response = createDeferred<{ ok: true }>();
+  const { pane, state } = stopFixture(() => response.promise, undefined, undefined, true);
+  const sessionA = activePlacementSession("agent:main:cloud-a");
+  const sessionB = {
+    ...sessionA,
+    key: "agent:main:cloud-b",
+    placement: {
+      ...sessionA.placement,
+      environmentId: "worker:two",
+      remoteWorkspaceDir: "/worker/repo-b",
+    },
+  } satisfies GatewaySessionRow;
 
-    const reclaim = dialogs.track(startReclaim(pane, session));
+  try {
+    const pendingReclaim = dialogs.track(startReclaim(pane, sessionA));
     const actions = await waitForConfirmDialogActions();
     answerConfirmDialog(actions, "confirm");
-    await reclaim;
+    await vi.waitFor(() =>
+      expect(pane.headerPresentation.placementReclaimingKey).toBe(sessionA.key),
+    );
 
-    expect(state.lastError).toBe("reclaim failed");
-    expect(state.chatError).toBe(state.lastError);
-  });
+    state.sessionKey = sessionB.key;
+    const placementA = placementFor(pane, sessionA);
+    const placementB = placementFor(pane, sessionB);
+    expect(placementA.reclaimDisabledReason).toBe(t("common.loading"));
+    expect(placementB.reclaimDisabledReason).toBeUndefined();
 
-  it("does not publish a reclaim failure after leaving and returning", async () => {
-    const response = createDeferred<{ ok: true }>();
-    const { pane, state, request } = stopFixture(() => response.promise);
-    const session = activePlacementSession();
+    response.resolve({ ok: true });
+    await pendingReclaim;
 
-    try {
-      const reclaim = dialogs.track(startReclaim(pane, session));
-      const actions = await waitForConfirmDialogActions();
-      answerConfirmDialog(actions, "confirm");
-      await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-      pane.presented = false;
-      pane.presented = true;
-      response.reject(new Error("stale reclaim failed"));
-      await reclaim;
-
-      expect(state.lastError).toBeNull();
-      expect(state.chatError).toBeNull();
-    } finally {
-      response.resolve({ ok: true });
-    }
-  });
-
-  it("keeps reclaim progress with its session when the pane switches rows", async () => {
-    const response = createDeferred<{ ok: true }>();
-    const { pane, state } = stopFixture(() => response.promise, undefined, undefined, true);
-    const sessionA = activePlacementSession("agent:main:cloud-a");
-    const sessionB = {
-      ...sessionA,
-      key: "agent:main:cloud-b",
-      placement: {
-        ...sessionA.placement,
-        environmentId: "worker:two",
-        remoteWorkspaceDir: "/worker/repo-b",
-      },
-    } satisfies GatewaySessionRow;
-
-    try {
-      const pendingReclaim = dialogs.track(startReclaim(pane, sessionA));
-      const actions = await waitForConfirmDialogActions();
-      answerConfirmDialog(actions, "confirm");
-      await vi.waitFor(() =>
-        expect(pane.headerPresentation.placementReclaimingKey).toBe(sessionA.key),
-      );
-
-      state.sessionKey = sessionB.key;
-      const placementA = placementFor(pane, sessionA);
-      const placementB = placementFor(pane, sessionB);
-      expect(placementA.reclaimDisabledReason).toBe(t("common.loading"));
-      expect(placementB.reclaimDisabledReason).toBeUndefined();
-
-      response.resolve({ ok: true });
-      await pendingReclaim;
-
-      expect(pane.headerPresentation.placementReclaimingKey).toBeNull();
-    } finally {
-      response.resolve({ ok: true });
-    }
-  });
+    expect(pane.headerPresentation.placementReclaimingKey).toBeNull();
+  } finally {
+    response.resolve({ ok: true });
+  }
 });

@@ -63,6 +63,21 @@ function expectErrors(state: ChatPageHost, error: string | null) {
   expect(state).toMatchObject({ chatError: error, lastError: error });
 }
 
+function expectPermissionPatch(
+  host: ReturnType<typeof makeChatHost>,
+  row: Pick<GatewaySessionRow, "key" | "sessionId">,
+  exactIdentity = true,
+) {
+  expect(host.request).toHaveBeenCalledWith(
+    "sessions.patch",
+    expect.objectContaining({
+      key: row.key,
+      permissionMode: "full",
+      ...(exactIdentity ? { expectedSessionId: row.sessionId } : {}),
+    }),
+  );
+}
+
 describe("chat permission failure ownership", () => {
   it.each([
     ["primary list", "full", "main", "immediate"],
@@ -115,16 +130,7 @@ describe("chat permission failure ownership", () => {
         await host.sessions.refresh({ agentId: "main", force: true });
         const controls = picker();
         selection = Promise.resolve(controls.onSelect("full"));
-        await vi.waitFor(() =>
-          expect(host.request).toHaveBeenCalledWith(
-            "sessions.patch",
-            expect.objectContaining({
-              key: selectedSession.key,
-              permissionMode: "full",
-              expectedSessionId: selectedSession.sessionId,
-            }),
-          ),
-        );
+        await vi.waitFor(() => expectPermissionPatch(host, selectedSession));
         const container = document.createElement("div");
         const [currentPicker, setCurrentPicker] = createSignal(picker());
         const view = mountSolid(() => createComponent(ChatPermissionPicker, merge(currentPicker)), {
@@ -141,12 +147,9 @@ describe("chat permission failure ownership", () => {
         expectPicker(trigger, "full", true);
         expect(trigger.getAttribute("aria-label")).not.toContain("Applying permissions");
         void controls.onSelect("guarded");
-        expect(
-          host.request.mock.calls.filter(([method]) => method === "sessions.patch"),
-        ).toHaveLength(1);
-        expect(
-          host.request.mock.calls.find(([method]) => method === "sessions.patch")?.[1],
-        ).not.toHaveProperty("agentId");
+        const patches = host.request.mock.calls.filter(([method]) => method === "sessions.patch");
+        expect(patches).toHaveLength(1);
+        expect(patches[0]?.[1]).not.toHaveProperty("agentId");
         if (recovery === "identical") {
           expect(observation.captureReconcile()({ ...selectedSession })).toMatchObject({
             status: "current",
@@ -270,23 +273,14 @@ describe("chat permission failure ownership", () => {
       const operations: Promise<unknown>[] = [];
       try {
         await host.sessions.refresh({ agentId: "main", force: true });
-        // A pane can retain main while the shared roster shows another agent.
-        // Its mutation recovery uses the scoped reader, so a later foreground
-        // list can establish B without violating primary-read serialization.
+        // A scoped recovery must not serialize with the other agent's foreground list.
         await host.sessions.refresh({ agentId: "research", force: true });
         expect(host.sessions.state.agentId).toBe("research");
         expect(state.sessionsResult?.sessions[0]?.sessionId).toBe(original.sessionId);
         const older = Promise.resolve(controls().onSelect("full"));
         operations.push(older);
         await patchIssued.promise;
-        expect(host.request).toHaveBeenCalledWith(
-          "sessions.patch",
-          expect.objectContaining({
-            key: original.key,
-            permissionMode: "full",
-            expectedSessionId: original.sessionId,
-          }),
-        );
+        expectPermissionPatch(host, original);
         if (replacement === "before recovery") {
           await replace();
         }
@@ -416,10 +410,7 @@ describe("chat permission failure ownership", () => {
     try {
       await host.sessions.refresh({ agentId: "main", force: true });
       await permissionPicker(state, selectedChatSessionRow(state)).onSelect("full");
-      expect(host.request).toHaveBeenCalledWith(
-        "sessions.patch",
-        expect.objectContaining({ key: state.sessionKey, permissionMode: "full" }),
-      );
+      expectPermissionPatch(host, { key: state.sessionKey }, false);
       if (scenario === "retired identity-less row") {
         expect(selectedChatSessionRow(state)).toBeUndefined();
         expectErrors(state, null);
