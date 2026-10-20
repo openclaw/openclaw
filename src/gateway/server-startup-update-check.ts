@@ -122,9 +122,7 @@ export function createDeferredGatewayUpdateCheck(params: {
       }
       ownerReady = (async () => {
         try {
-          owner = await (
-            await import("../infra/update-startup.js")
-          ).createGatewayUpdateCheck({
+          owner = (await import("../infra/update-startup.js")).createGatewayUpdateCheck({
             lifecycle,
             getConfig: params.getConfig,
             applyRemoteCatalogUpdate: (signal) =>
