@@ -1,4 +1,3 @@
-// Discord tests cover preflight audio plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const transcribeFirstAudioMock = vi.hoisted(() => vi.fn());
@@ -39,35 +38,17 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
     transcribeFirstAudioMock.mockReset();
   });
 
-  it.each([
-    {
-      name: "filename without content type",
-      attachment: {
-        url: "https://cdn.discordapp.com/attachments/voice.opus",
-        filename: "voice.opus",
-      },
-      expected: {
-        url: "https://cdn.discordapp.com/attachments/voice.opus",
-        contentType: "audio/opus",
-      },
-    },
-  ])(
-    "preflights direct-message audio from $name without requiring a mention",
-    async ({ attachment, expected }) => {
-      transcribeFirstAudioMock.mockResolvedValue("hello from dm");
-      const result = await preflight({ attachments: [attachment] });
-
-      expect(transcribeFirstAudioMock).toHaveBeenCalledWith({
-        ctx: { media: [expected] },
-        cfg,
-        agentDir: undefined,
-      });
-      expect(result).toEqual({
-        hasTypedText: false,
-        transcript: "hello from dm",
-      });
-    },
-  );
+  it("preflights DM audio by filename without requiring a mention", async () => {
+    const url = "https://cdn.discordapp.com/attachments/voice.opus";
+    transcribeFirstAudioMock.mockResolvedValue("hello from dm");
+    const result = await preflight({ attachments: [{ url, filename: "voice.opus" }] });
+    expect(transcribeFirstAudioMock).toHaveBeenCalledWith({
+      ctx: { media: [{ url, contentType: "audio/opus" }] },
+      cfg,
+      agentDir: undefined,
+    });
+    expect(result).toEqual({ hasTypedText: false, transcript: "hello from dm" });
+  });
 
   it("does not preflight typed direct-message audio", async () => {
     const result = await preflight({
@@ -88,21 +69,15 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
   });
 
   it("does not preflight a duration-bearing image attachment as audio", async () => {
-    const result = await resolveDiscordPreflightAudioMentionContext({
-      message: {
-        attachments: [
-          {
-            url: "https://cdn.discordapp.com/attachments/photo.png",
-            content_type: "image/png",
-            filename: "photo.png",
-            duration_secs: 0.5,
-          },
-        ],
-      },
-      isDirectMessage: true,
-      shouldRequireMention: false,
-      mentionRegexes: [],
-      cfg,
+    const result = await preflight({
+      attachments: [
+        {
+          url: "https://cdn.discordapp.com/attachments/photo.png",
+          content_type: "image/png",
+          filename: "photo.png",
+          duration_secs: 0.5,
+        },
+      ],
     });
 
     expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
@@ -114,33 +89,21 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
   it("still preflights a waveform-bearing voice note with a definitive video MIME", async () => {
     transcribeFirstAudioMock.mockResolvedValue("waveform over video mime transcript");
 
-    await resolveDiscordPreflightAudioMentionContext({
-      message: {
-        attachments: [
-          {
-            url: "https://cdn.discordapp.com/attachments/voice",
-            content_type: "video/ogg",
-            filename: "voice",
-            duration_secs: 1.5,
-            waveform: "AAAA",
-          },
-        ],
-      },
-      isDirectMessage: true,
-      shouldRequireMention: false,
-      mentionRegexes: [],
-      cfg,
+    const url = "https://cdn.discordapp.com/attachments/voice";
+    await preflight({
+      attachments: [
+        {
+          url,
+          content_type: "video/ogg",
+          filename: "voice",
+          duration_secs: 1.5,
+          waveform: "AAAA",
+        },
+      ],
     });
 
     expect(transcribeFirstAudioMock).toHaveBeenCalledWith({
-      ctx: {
-        media: [
-          {
-            url: "https://cdn.discordapp.com/attachments/voice",
-            contentType: "audio/ogg",
-          },
-        ],
-      },
+      ctx: { media: [{ url, contentType: "audio/ogg" }] },
       cfg,
       agentDir: undefined,
     });
