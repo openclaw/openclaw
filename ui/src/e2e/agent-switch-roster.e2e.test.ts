@@ -76,18 +76,11 @@ suite.define(() => {
         await gateway.resolveDeferred("chat.startup");
 
         // Hold the authoritative replacement: only correctly scoped loaded rows can appear.
-        await gateway.deferNext("sessions.list", { agentId: "main", includeLastMessage: true });
+        const mainQuery = { agentId: "main", includeLastMessage: true };
+        await gateway.deferNext("sessions.list", mainQuery);
         await switchAgent(page, "main");
         await expect
-          .poll(
-            async () =>
-              (
-                await gateway.getRequests("sessions.list", {
-                  agentId: "main",
-                  includeLastMessage: true,
-                })
-              ).length,
-          )
+          .poll(async () => (await gateway.getRequests("sessions.list", mainQuery)).length)
           .toBe(2);
         await projectRow(page, "main").waitFor();
         expect(await projectRow(page, "writer").count()).toBe(0);

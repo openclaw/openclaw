@@ -1,9 +1,17 @@
 import { expect, it } from "vitest";
 import { createPlaybackMediaFixture } from "../../../test/fixtures/media-playback.js";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { computedStyles as styles } from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Attachment file styles" });
+
+function attachment(kind: string, label: string, mimeType: string) {
+  return {
+    type: "attachment",
+    attachment: { kind, label, mimeType, url: new URL(label, suite.server.baseUrl).href },
+  };
+}
 
 suite.define(() => {
   it("preserves large, preview, and unavailable file visuals in both themes", async () => {
@@ -16,24 +24,8 @@ suite.define(() => {
           {
             role: "assistant",
             content: [
-              {
-                type: "attachment",
-                attachment: {
-                  kind: "document",
-                  label: "report.pdf",
-                  mimeType: "application/pdf",
-                  url: new URL("report.pdf", suite.server.baseUrl).href,
-                },
-              },
-              {
-                type: "attachment",
-                attachment: {
-                  kind: "audio",
-                  label: "style-proof.mp3",
-                  mimeType: "audio/mpeg",
-                  url: new URL("style-proof.mp3", suite.server.baseUrl).href,
-                },
-              },
+              attachment("document", "report.pdf", "application/pdf"),
+              attachment("audio", "style-proof.mp3", "audio/mpeg"),
               {
                 type: "attachment_error",
                 attachment: {
@@ -63,41 +55,32 @@ suite.define(() => {
           document.documentElement.dataset.themeMode = mode;
         }, theme);
         const large = documentCard.locator(".chat-attachment-file-icon");
-        const largeStyle = await large.evaluate((icon) => {
-          const style = getComputedStyle(icon);
-          const overlay = icon.querySelector(".chat-attachment-file-icon__overlay")!;
-          const glyph = getComputedStyle(overlay);
-          return {
-            width: style.width,
-            height: style.height,
-            background: style.backgroundImage,
-            glyphWidth: glyph.width,
-            glyphHeight: glyph.height,
-            mask: glyph.maskImage,
-            webkitMask: glyph.webkitMaskImage,
-          };
-        });
-        expect(largeStyle).toMatchObject({
+        expect(await styles(large, ["width", "height", "background-image"])).toEqual({
           width: "44px",
           height: "44px",
-          glyphWidth: "14px",
-          glyphHeight: "14px",
+          "background-image": expect.stringContaining(`large/shell-${theme}.svg`),
         });
-        expect(largeStyle.background).toContain(`large/shell-${theme}.svg`);
-        expect(largeStyle.mask).toContain("overlays/pdf.svg");
-        expect(largeStyle.webkitMask).toBe(largeStyle.mask);
-        const previewStyle = await compact.evaluate((icon) => {
-          const style = getComputedStyle(icon);
-          return { width: style.width, height: style.height, background: style.backgroundImage };
+        const glyph = await styles(large.locator(".chat-attachment-file-icon__overlay"), [
+          "width",
+          "height",
+          "mask-image",
+          "-webkit-mask-image",
+        ]);
+        expect(glyph).toEqual({
+          width: "14px",
+          height: "14px",
+          "mask-image": expect.stringContaining("overlays/pdf.svg"),
+          "-webkit-mask-image": glyph["mask-image"],
         });
-        expect(previewStyle).toMatchObject({ width: "20px", height: "20px" });
-        expect(previewStyle.background).toContain(`compact/${theme}/mp3.svg`);
-        expect(
-          await documentCard.evaluate((card) => {
-            const style = getComputedStyle(card);
-            return [style.display, style.padding];
-          }),
-        ).toEqual(["block", "0px"]);
+        expect(await styles(compact, ["width", "height", "background-image"])).toEqual({
+          width: "20px",
+          height: "20px",
+          "background-image": expect.stringContaining(`compact/${theme}/mp3.svg`),
+        });
+        expect(await styles(documentCard, ["display", "padding"])).toEqual({
+          display: "block",
+          padding: "0px",
+        });
         const failedStyle = await unavailable.evaluate((card) => {
           const icon = card.querySelector(".chat-attachment-file-icon")!;
           const metadata = card.querySelector(".chat-assistant-attachment-card__status-meta")!;

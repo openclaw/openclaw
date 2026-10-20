@@ -1,28 +1,32 @@
-// Control UI tests cover the canonical scrollbar profile and native-style text selection.
 import path from "node:path";
 import type { Locator, Page } from "playwright";
-import { beforeEach, expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { expect, it } from "vitest";
 import {
   installMockGateway,
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { createConfigSuite } from "./config-composer-fixtures.test-support.ts";
 
-const suite = createControlUiE2eSuite({
-  name: "Control UI app chrome interaction mocked Gateway E2E",
-  startServerBeforeBrowser: true,
-  unavailableMessage: (executablePath) =>
-    `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
-});
+const suite = createConfigSuite("Control UI app chrome interaction mocked Gateway E2E");
 
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-let uiProofArtifactDir: string;
-beforeEach(() => {
-  if (captureUiProofEnabled) {
-    uiProofArtifactDir = createControlUiE2eArtifactDir("app-chrome-interaction");
-  }
-});
+
+const scrollModels = Array.from({ length: 24 }, (_, index) => ({
+  id: `scroll-model-${index + 1}`,
+  name: `Scroll Model ${index + 1}`,
+  provider: "openai",
+}));
+const historyMessages = [
+  {
+    role: "assistant",
+    content: [
+      {
+        type: "text",
+        text: "Selectable transcript content\n\nRead [example.ts](/tmp/example.ts) for details.",
+      },
+    ],
+  },
+];
 
 async function dragAcross(page: Page, locator: Locator): Promise<string> {
   await locator.scrollIntoViewIfNeeded();
@@ -48,13 +52,32 @@ async function readFocusOutline(locator: Locator) {
   });
 }
 
+async function expectChrome(page: Page, selections: Record<string, string>, scrollbars: string[]) {
+  for (const [selector, value] of Object.entries(selections)) {
+    expect(
+      await page
+        .locator(selector)
+        .first()
+        .evaluate((node) => getComputedStyle(node).userSelect),
+    ).toBe(value);
+  }
+  for (const selector of scrollbars) {
+    expect(
+      await page
+        .locator(selector)
+        .first()
+        .evaluate((node) => getComputedStyle(node, "::-webkit-scrollbar").width),
+    ).toBe("12px");
+  }
+}
+
 async function captureUiProof(page: Page, fileName: string) {
   if (!captureUiProofEnabled) {
     return;
   }
   await page.screenshot({
     animations: "disabled",
-    path: path.join(uiProofArtifactDir, fileName),
+    path: path.join(suite.artifactDir, fileName),
   });
 }
 
@@ -64,24 +87,14 @@ suite.define(() => {
       {
         locale: "en-US",
         recordVideo: captureUiProofEnabled
-          ? { dir: path.join(uiProofArtifactDir, "video"), size: { height: 900, width: 1440 } }
+          ? { dir: path.join(suite.artifactDir, "video"), size: { height: 900, width: 1440 } }
           : undefined,
         serviceWorkers: "block",
         viewport: { height: 900, width: 1440 },
       },
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
-          historyMessages: [
-            {
-              role: "assistant",
-              content: [
-                {
-                  type: "text",
-                  text: "Selectable transcript content\n\nRead [example.ts](/tmp/example.ts) for details.",
-                },
-              ],
-            },
-          ],
+          historyMessages,
           models: [
             {
               contextWindow: 1_000_000,
@@ -89,11 +102,7 @@ suite.define(() => {
               name: "openai/gpt-5.6-sol-openclaw",
               provider: "openai",
             },
-            ...Array.from({ length: 24 }, (_value, index) => ({
-              id: `scroll-model-${index + 1}`,
-              name: `Scroll Model ${index + 1}`,
-              provider: "openai",
-            })),
+            ...scrollModels,
           ],
         });
 
@@ -103,37 +112,17 @@ suite.define(() => {
         await page.locator('[data-chat-model-select="true"]').click();
         const modelOptions = page.locator(".chat-controls__model-options");
         await expect.poll(() => modelOptions.isVisible()).toBe(true);
-        const chatStyles = await page.evaluate(() => {
-          const sidebar = document.querySelector<HTMLElement>(".sidebar");
-          const sessions = document.querySelector<HTMLElement>(".sidebar-shell__body");
-          const thread = document.querySelector<HTMLElement>(".chat-thread");
-          const modelPicker = document.querySelector<HTMLElement>(".chat-controls__model-options");
-          if (!sidebar || !sessions || !thread || !modelPicker) {
-            throw new Error("Missing chat interaction surface");
-          }
-          return {
-            chatSelection: getComputedStyle(thread).userSelect,
-            chatScrollbar: getComputedStyle(thread, "::-webkit-scrollbar").width,
-            sidebarSelection: getComputedStyle(sidebar).userSelect,
-            sidebarScrollbar: getComputedStyle(sessions, "::-webkit-scrollbar").width,
-            modelPickerScrollbar: getComputedStyle(modelPicker, "::-webkit-scrollbar").width,
-            modelPickerOverflowX: getComputedStyle(modelPicker).overflowX,
-            modelPickerHorizontalOverflow: modelPicker.scrollWidth - modelPicker.clientWidth,
-          };
-        });
-        // One canonical width everywhere: the sidebar no longer overrides
-        // --scrollbar-size down to 6px, and the model picker (which used to
-        // inherit the raw document default with no width of its own) now
-        // reports the same value as every other sampled surface.
-        expect(chatStyles).toEqual({
-          chatSelection: "text",
-          chatScrollbar: "12px",
-          sidebarSelection: "none",
-          sidebarScrollbar: "12px",
-          modelPickerScrollbar: "12px",
-          modelPickerOverflowX: "hidden",
-          modelPickerHorizontalOverflow: 0,
-        });
+        await expectChrome(page, { ".chat-thread": "text", ".sidebar": "none" }, [
+          ".chat-thread",
+          ".sidebar-shell__body",
+          ".chat-controls__model-options",
+        ]);
+        expect(
+          await modelOptions.evaluate((element) => ({
+            overflowX: getComputedStyle(element).overflowX,
+            overflow: element.scrollWidth - element.clientWidth,
+          })),
+        ).toEqual({ overflowX: "hidden", overflow: 0 });
         await page.keyboard.press("Escape");
         expect(await dragAcross(page, transcript)).toContain("Selectable transcript");
         const fileLink = page.getByRole("button", { name: "example.ts", exact: true });
@@ -168,9 +157,7 @@ suite.define(() => {
         await captureUiProof(page, "02-chat-thread-keyboard-focus.png");
 
         await page.setViewportSize({ height: 650, width: 1440 });
-        // Appearance renders schema-independent theme/UI sections that overflow
-        // 650px even against the mock gateway's tiny config fixture; General
-        // became short enough to fit once the host panel moved to Gateway.
+        // Appearance overflows at 650px even with the tiny mock config.
         await page.goto(`${suite.server.baseUrl}settings/appearance`);
         const { search: settingsSearch, sidebar: settingsSidebar } =
           await waitForControlUiSettingsTakeover(page);
@@ -180,29 +167,15 @@ suite.define(() => {
           .poll(() => content.evaluate((element) => element.scrollHeight))
           .toBeGreaterThan(await content.evaluate((element) => element.clientHeight));
 
-        const settingsStyles = await page.evaluate(() => {
-          const contentNode = document.querySelector<HTMLElement>(".content");
-          const nav = document.querySelector<HTMLElement>(".settings-sidebar__nav");
-          const search = document.querySelector<HTMLElement>(".settings-sidebar__search-input");
-          const sidebar = document.querySelector<HTMLElement>(".settings-sidebar");
-          if (!contentNode || !nav || !search || !sidebar) {
-            throw new Error("Missing settings interaction surface");
-          }
-          return {
-            contentScrollbar: getComputedStyle(contentNode, "::-webkit-scrollbar").width,
-            contentSelection: getComputedStyle(contentNode).userSelect,
-            inputSelection: getComputedStyle(search).userSelect,
-            sidebarScrollbar: getComputedStyle(nav, "::-webkit-scrollbar").width,
-            sidebarSelection: getComputedStyle(sidebar).userSelect,
-          };
-        });
-        expect(settingsStyles).toEqual({
-          contentScrollbar: "12px",
-          contentSelection: "auto",
-          inputSelection: "text",
-          sidebarScrollbar: "12px",
-          sidebarSelection: "none",
-        });
+        await expectChrome(
+          page,
+          {
+            ".content": "auto",
+            ".settings-sidebar__search-input": "text",
+            ".settings-sidebar": "none",
+          },
+          [".content", ".settings-sidebar__nav"],
+        );
 
         await page.evaluate(() => globalThis.getSelection()?.removeAllRanges());
         expect(await dragAcross(page, settingsTitle)).toBe("");
@@ -271,14 +244,7 @@ suite.define(() => {
                 content: [{ type: "text", text: "Selectable transcript content" }],
               },
             ],
-            models: [
-              { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
-              ...Array.from({ length: 24 }, (_value, index) => ({
-                id: `scroll-model-${index + 1}`,
-                name: `Scroll Model ${index + 1}`,
-                provider: "openai",
-              })),
-            ],
+            models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai" }, ...scrollModels],
           });
 
           await page.goto(`${suite.server.baseUrl}chat`);
@@ -286,24 +252,20 @@ suite.define(() => {
           thumbColorByScheme[colorScheme] = await page.evaluate(
             () => getComputedStyle(document.body, "::-webkit-scrollbar-thumb").backgroundColor,
           );
-          // Chat transcript + session sidebar together, before opening anything.
           await captureUiProof(page, `chat-transcript-sidebar-${colorScheme}.png`);
 
-          // The headline complaint surface: the light-DOM chat model picker.
           await page.locator('[data-chat-model-select="true"]').click();
           const modelOptions = page.locator(".chat-controls__model-options");
           await expect.poll(() => modelOptions.isVisible()).toBe(true);
           await captureUiProof(page, `model-picker-${colorScheme}.png`);
           await page.keyboard.press("Escape");
 
-          // Native top-layer menus keep the same scrollbar profile as the shell.
           const composer = page.locator(".agent-chat__input");
           await composer.getByRole("button", { name: "Add attachment" }).click();
           const capabilityMenu = composer.locator(".agent-chat__capability-menu");
           await expect
             .poll(() => capabilityMenu.evaluate((node) => node.hasAttribute("open")))
             .toBe(true);
-          // The top-layer menu must retain the canonical width and thumb color.
           const menuScrollbar = await capabilityMenu.evaluate((node) => {
             const part = node.querySelector(".oc-menu");
             if (!part) {
@@ -318,8 +280,6 @@ suite.define(() => {
           expect(menuScrollbar?.thumbBackground).not.toBe("rgba(0, 0, 0, 0)");
           await captureUiProof(page, `capability-menu-native-${colorScheme}.png`);
 
-          // Sample every native popover, including surfaces without a named
-          // scrollbar rule, to verify the shared light-DOM profile.
           const menuScrollbarWidths = await page.evaluate(() => {
             return Array.from(
               document.querySelectorAll("[popover]"),
@@ -331,8 +291,6 @@ suite.define(() => {
         },
       );
     }
-    // Same source (--muted), different value per mode: the token derivation
-    // covers dark and light without a hand-written color pair.
     expect(thumbColorByScheme.dark).not.toBe(thumbColorByScheme.light);
     expect(thumbColorByScheme.dark).not.toBe("");
     expect(thumbColorByScheme.light).not.toBe("");

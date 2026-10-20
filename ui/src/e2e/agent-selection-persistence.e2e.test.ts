@@ -1,8 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
-import { beforeEach, expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { expect, it } from "vitest";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledGatewayUrl,
@@ -22,18 +21,14 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-let proofDir: string;
-beforeEach(() => {
-  if (captureUiProof) {
-    proofDir = createControlUiE2eArtifactDir("agent-selection-persistence");
-  }
-});
 
 const agentsList = {
-  agents: [
-    { id: "dummy", identity: { name: "Dummy" }, kind: "agent", name: "Dummy" },
-    { id: "openclaw", identity: { name: "OpenClaw" }, kind: "agent", name: "OpenClaw" },
-  ],
+  agents: Object.entries({ dummy: "Dummy", openclaw: "OpenClaw" }).map(([id, name]) => ({
+    id,
+    identity: { name },
+    kind: "agent",
+    name,
+  })),
   defaultId: "dummy",
   mainKey: "main",
   scope: "global",
@@ -47,16 +42,10 @@ const scenario: ControlUiMockGatewayScenario = {
   sessionScope: "global",
   methodResponses: {
     "agent.identity.get": {
-      cases: [
-        {
-          match: { agentId: "dummy" },
-          response: { agentId: "dummy", avatar: "", emoji: "D", name: "Dummy" },
-        },
-        {
-          match: { agentId: "openclaw" },
-          response: { agentId: "openclaw", avatar: "", emoji: "O", name: "OpenClaw" },
-        },
-      ],
+      cases: agentsList.agents.map(({ id: agentId, name }) => ({
+        match: { agentId },
+        response: { agentId, avatar: "", emoji: name[0], name },
+      })),
     },
     "agents.list": agentsList,
     "chat.startup": {
@@ -82,17 +71,21 @@ async function screenshot(page: Page, name: string) {
   }
   await page.waitForTimeout(600);
   await writeFile(
-    path.join(proofDir, name),
+    path.join(suite.artifactDir, name),
     await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
       page.locator(".sidebar-agent-card__main"),
     ]),
   );
 }
 
-async function selectedAgentName(page: Page): Promise<string> {
-  const text =
-    (await page.locator("openclaw-app-sidebar .sidebar-agent-card__name").textContent()) ?? "";
-  return text.trim();
+const selectedAgentName = async (page: Page) =>
+  (
+    (await page.locator("openclaw-app-sidebar .sidebar-agent-card__name").textContent()) ?? ""
+  ).trim();
+
+async function expectOpenClaw(page: Page) {
+  await expect.poll(() => selectedAgentName(page)).toBe("OpenClaw");
+  await expect.poll(() => page.getByRole("heading", { name: "OpenClaw" }).isVisible()).toBe(true);
 }
 
 async function hasOpenClawStartup(gateway: MockGatewayControls): Promise<boolean> {
@@ -146,14 +139,13 @@ suite.define(() => {
       serviceWorkers: "block",
       viewport: { height: 900, width: 1440 },
       ...(captureUiProof
-        ? { recordVideo: { dir: proofDir, size: { height: 900, width: 1440 } } }
+        ? { recordVideo: { dir: suite.artifactDir, size: { height: 900, width: 1440 } } }
         : {}),
     });
     try {
-      const first = await openPage(context);
-      const firstPage = first.page;
+      const { gateway: firstGateway, page: firstPage } = await openPage(context);
       const sidebar = firstPage.locator("openclaw-app-sidebar");
-      await first.gateway.waitForRequest("chat.startup");
+      await firstGateway.waitForRequest("chat.startup");
       await expect.poll(() => selectedAgentName(firstPage)).toBe("Dummy");
       await screenshot(firstPage, "01-default-agent.png");
 
@@ -163,10 +155,7 @@ suite.define(() => {
         .getByRole("menuitem", { name: "OpenClaw" })
         .click();
       await waitForControlUiRoute(firstPage, { pathname: "/chat/openclaw", routeId: "chat" });
-      await expect.poll(() => selectedAgentName(firstPage)).toBe("OpenClaw");
-      await expect
-        .poll(() => firstPage.getByRole("heading", { name: "OpenClaw" }).isVisible())
-        .toBe(true);
+      await expectOpenClaw(firstPage);
       await screenshot(firstPage, "02-selected-openclaw.png");
 
       // The macOS host reopens the Gateway's canonical session key. Unlike the
@@ -174,19 +163,12 @@ suite.define(() => {
       await persistCanonicalGlobalSession(firstPage);
 
       await firstPage.close();
-      const reopened = await openPage(context);
-      const reopenedPage = reopened.page;
-      await reopened.gateway.waitForRequest("chat.startup");
-      await waitForControlUiRoute(reopenedPage, {
-        pathname: "/chat/openclaw",
-        routeId: "chat",
-      });
+      const { gateway: reopenedGateway, page: reopenedPage } = await openPage(context);
+      await reopenedGateway.waitForRequest("chat.startup");
+      await waitForControlUiRoute(reopenedPage, { pathname: "/chat/openclaw", routeId: "chat" });
       await screenshot(reopenedPage, "03-reopened-agent.png");
-      await expect.poll(() => hasOpenClawStartup(reopened.gateway)).toBe(true);
-      await expect.poll(() => selectedAgentName(reopenedPage)).toBe("OpenClaw");
-      await expect
-        .poll(() => reopenedPage.getByRole("heading", { name: "OpenClaw" }).isVisible())
-        .toBe(true);
+      await expect.poll(() => hasOpenClawStartup(reopenedGateway)).toBe(true);
+      await expectOpenClaw(reopenedPage);
       await screenshot(reopenedPage, "04-verified-reopened-agent.png");
       await reopenedPage.getByRole("link", { name: "New conversation", exact: true }).click();
       await waitForControlUiRoute(reopenedPage, {
@@ -194,7 +176,7 @@ suite.define(() => {
         search: "?agent=openclaw",
       });
       await reopenedPage.locator(".new-session-page__message").waitFor();
-      expect(await reopened.gateway.getRequests("sessions.create")).toHaveLength(0);
+      expect(await reopenedGateway.getRequests("sessions.create")).toHaveLength(0);
     } finally {
       await suite.closeBrowserContext(context);
     }
