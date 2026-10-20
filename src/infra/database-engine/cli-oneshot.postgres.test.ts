@@ -21,8 +21,10 @@ const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.
 const connection = typeof configured === "string" ? configured : undefined;
 const roots = useAutoCleanupTempDirTracker(afterAll);
 const childTimeoutMs = 60_000;
-// Repair preserves a complete PostgreSQL recovery capture before running its checks.
-const doctorRepairTimeoutMs = 120_000;
+// Local PG (2026-10-19, n=3): inspect p95 53.9s, repair p95 74.5s.
+// Repair also hit 120s under load; allow cold workers and the complete recovery capture.
+const doctorInspectTimeoutMs = 120_000;
+const doctorRepairTimeoutMs = 300_000;
 
 describe.skipIf(!connection)("PostgreSQL one-shot CLI", () => {
   it(
@@ -133,12 +135,13 @@ describe.skipIf(!connection)("PostgreSQL one-shot CLI", () => {
       try {
         const schemas = new Set<string>();
         for (const args of commands) {
-          const result = await runBuiltRuntime(
-            runtimeRoot,
-            env,
-            args,
-            args.includes("--fix") ? doctorRepairTimeoutMs : childTimeoutMs,
-          );
+          const timeoutMs =
+            args[0] === "doctor"
+              ? args.includes("--fix")
+                ? doctorRepairTimeoutMs
+                : doctorInspectTimeoutMs
+              : childTimeoutMs;
+          const result = await runBuiltRuntime(runtimeRoot, env, args, timeoutMs);
           expect(
             result.code,
             formatCliProcessFailure({
@@ -211,7 +214,11 @@ describe.skipIf(!connection)("PostgreSQL one-shot CLI", () => {
         }
       }
     },
-    getCliProcessTestTimeout(doctorRepairTimeoutMs, ...Array<number>(6).fill(childTimeoutMs)),
+    getCliProcessTestTimeout(
+      doctorRepairTimeoutMs,
+      doctorInspectTimeoutMs,
+      ...Array<number>(5).fill(childTimeoutMs),
+    ),
   );
 });
 
