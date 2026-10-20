@@ -11,8 +11,11 @@ import { NewSessionModelControl, type NewSessionModelRenderOptions } from "./mod
 it("keeps one mounted model view live without depending on draft revisions", async () => {
   const model = { id: "gpt-5.5", name: "GPT 5.5", provider: "openai", reasoning: true };
   const models = [model, { ...model, id: "fixture-alternative", name: "Alternative" }];
+  const alternate = "openai/fixture-alternative";
   const first = contextWith(models);
   const second = contextWith(models);
+  const { sessions, gateway } = first.context;
+  const client = gateway.snapshot.client!;
   const control = new NewSessionModelControl(() => undefined);
   const agent = { id: "main", model: { primary: "openai/gpt-5.5" } };
   control.load(first.context, "main", true, { agent });
@@ -29,6 +32,14 @@ it("keeps one mounted model view live without depending on draft revisions", asy
     <NewSessionModelControlView control={control} options={options()} />
   ));
   const query = (selector: string) => view.container.querySelector(selector);
+  const controlValue = (kind: "model" | "thinking") =>
+    query(`[data-chat-${kind}-select]`)?.getAttribute(
+      kind === "model" ? "data-chat-select-value" : "data-chat-thinking-value",
+    );
+  const publish = (owner: Parameters<typeof first.publish>[0]) => {
+    first.publish(owner);
+    flush();
+  };
   const render = vi.spyOn(control, "renderProps");
   try {
     setOptions((previous) => ({ ...previous }));
@@ -46,21 +57,13 @@ it("keeps one mounted model view live without depending on draft revisions", asy
     flush();
     await waitForSolid(() => expect(option()).not.toBeNull());
     const mountedOption = option();
-    expect(mountedOption).not.toBeNull();
     render.mockClear();
     const labels = vi.spyOn(String.prototype, "toLocaleLowerCase");
     try {
-      const result = first.context.sessions.state.result!;
-      result.sessions.push({
-        key: "agent:main:unrelated",
-        kind: "direct",
-        label: "Background session",
-      });
+      const result = sessions.state.result!;
+      result.sessions.push({ key: "agent:main:unrelated", kind: "direct", label: "Background" });
       first.publish("sessions");
-      invalidateModelCatalogCache(first.context.gateway.snapshot.client!, {
-        agentId: "main",
-        sessionKey: "agent:main:unrelated",
-      });
+      invalidateModelCatalogCache(client, { agentId: "main", sessionKey: "agent:main:unrelated" });
       flush();
       expect(render).not.toHaveBeenCalled();
       expect(labels.mock.contexts.filter((value) => String(value) === "GPT 5.5")).toHaveLength(0);
@@ -69,21 +72,18 @@ it("keeps one mounted model view live without depending on draft revisions", asy
 
       // A default can change in place: filtering row traffic must not freeze it.
       agent.model.primary = "";
-      first.publish("agents");
-      flush();
+      publish("agents");
       result.defaults.model = "fixture-alternative";
-      first.publish("sessions");
-      flush();
+      publish("sessions");
       expect(trigger()?.textContent).toContain("Alternative");
       render.mockClear();
-      first.context.sessions.state.result = { ...result, defaults: { ...result.defaults } };
-      first.publish("sessions");
-      flush();
+      sessions.state.result = { ...result, defaults: { ...result.defaults } };
+      publish("sessions");
       expect(render).not.toHaveBeenCalled();
     } finally {
       labels.mockRestore();
     }
-    invalidateModelCatalogCache(first.context.gateway.snapshot.client!, { agentId: "main" });
+    invalidateModelCatalogCache(client, { agentId: "main" });
     flush();
     expect(render).toHaveBeenCalled();
     render.mockClear();
@@ -93,23 +93,19 @@ it("keeps one mounted model view live without depending on draft revisions", asy
         expect(render).toHaveBeenLastCalledWith(expect.objectContaining({ sending })),
       );
     }
-    control.selectModel("openai/fixture-alternative");
-    await waitForFast(() =>
-      expect(trigger()?.getAttribute("data-chat-select-value")).toBe("openai/fixture-alternative"),
-    );
+    control.selectModel(alternate);
+    await waitForFast(() => expect(controlValue("model")).toBe(alternate));
     const current = control.renderProps(untrack(options));
     current.onThinkingSelect?.("high", current.sessionKey);
-    await waitForFast(() =>
-      expect(query("[data-chat-thinking-select]")?.getAttribute("data-chat-thinking-value")).toBe(
-        "high",
-      ),
-    );
-    first.context.gateway.snapshot.phase = "offline";
-    first.publish("gateway");
-    await waitForFast(() => expect(trigger()?.getAttribute("aria-disabled")).toBe("true"));
-    first.context.gateway.snapshot.phase = "connected";
-    first.publish("gateway");
-    await waitForFast(() => expect(trigger()?.getAttribute("aria-disabled")).toBe("false"));
+    await waitForFast(() => expect(controlValue("thinking")).toBe("high"));
+    for (const [phase, disabled] of [
+      ["offline", "true"],
+      ["connected", "false"],
+    ] as const) {
+      gateway.snapshot.phase = phase;
+      first.publish("gateway");
+      await waitForFast(() => expect(trigger()?.getAttribute("aria-disabled")).toBe(disabled));
+    }
     setOptions((previous) => ({ ...previous, context: second.context }));
     await waitForFast(() => expect(second.ownerListeners.gateway.size).toBe(1));
     expect(Object.values(first.ownerListeners).every((listeners) => listeners.size === 0)).toBe(

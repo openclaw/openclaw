@@ -11,7 +11,7 @@ afterEach(() => {
 
 function fixture(pending = false) {
   const result = createDeferred<{ title: string }>();
-  const prepare = vi.fn().mockResolvedValue({ title: "Repair sidebar naming" });
+  const prepare = vi.fn().mockResolvedValue({ title: "Prepared" });
   if (pending) {
     prepare.mockImplementationOnce(() => result.promise);
   }
@@ -42,7 +42,7 @@ it.each(["edits", "composition"])("debounces %s without polling", async (change)
     await vi.advanceTimersByTimeAsync(1_000);
   }
   expect(prepare).toHaveBeenCalledOnce();
-  expect(titles.takePreparedTitle()).toBe("Repair sidebar naming");
+  expect(titles.takePreparedTitle()).toBe("Prepared");
 });
 
 it.each(["edited", "disposed"])("discards a pending title when %s", async (change) => {
@@ -59,9 +59,7 @@ it.each(["edited", "disposed"])("discards a pending title when %s", async (chang
   finish({ title: "Old draft" });
   await vi.advanceTimersByTimeAsync(change === "disposed" ? 5_000 : 0);
   expect(prepare).toHaveBeenCalledTimes(change === "disposed" ? 1 : 2);
-  expect(titles.takePreparedTitle()).toBe(
-    change === "disposed" ? undefined : "Repair sidebar naming",
-  );
+  expect(titles.takePreparedTitle()).toBe(change === "disposed" ? undefined : "Prepared");
 });
 
 it("does not retry failures until the draft changes", async () => {

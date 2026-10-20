@@ -10,6 +10,12 @@ import { NewSessionModelControl } from "./model-control.ts";
 
 type ViewProps = Parameters<typeof NewSessionModelControlView>[0];
 const views = new WeakMap<NewSessionModelControl, ReturnType<typeof mountSolid<ViewProps>>>();
+const subscribe =
+  <T>(listeners: Set<T>) =>
+  (listener: T) => {
+    listeners.add(listener);
+    return () => listeners.delete(listener);
+  };
 
 export function contextWith(
   models: ModelCatalogEntry[],
@@ -31,19 +37,13 @@ export function contextWith(
       undefined,
       modelCatalogEventInvalidation({ event, payload }) ?? "preserve",
     );
-    for (const listener of listeners) {
-      listener({ type: "event", event, payload });
-    }
+    listeners.forEach((listener) => listener({ type: "event", event, payload }));
   };
   const ownerListeners = {
     gateway: new Set<() => void>(),
     agents: new Set<() => void>(),
     sessions: new Set<() => void>(),
     config: new Set<() => void>(),
-  };
-  const subscribe = (owner: keyof typeof ownerListeners) => (listener: () => void) => {
-    ownerListeners[owner].add(listener);
-    return () => ownerListeners[owner].delete(listener);
   };
   const publish = (owner: keyof typeof ownerListeners) =>
     ownerListeners[owner].forEach((listener) => listener());
@@ -59,14 +59,11 @@ export function contextWith(
   };
   const context = {
     navigate,
-    agents: { subscribe: subscribe("agents") },
-    config: { subscribe: subscribe("config"), current: {} },
+    agents: { subscribe: subscribe(ownerListeners.agents) },
+    config: { subscribe: subscribe(ownerListeners.config), current: {} },
     gateway: {
-      subscribe: subscribe("gateway"),
-      subscribeEvents: (listener: Parameters<ApplicationGateway["subscribeEvents"]>[0]) => {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
+      subscribe: subscribe(ownerListeners.gateway),
+      subscribeEvents: subscribe(listeners),
       snapshot: {
         phase: "connected",
         client: { request },
@@ -74,7 +71,7 @@ export function contextWith(
       },
     },
     sessions: {
-      subscribe: subscribe("sessions"),
+      subscribe: subscribe(ownerListeners.sessions),
       state: { result: { defaults, sessions: [] } },
     },
   } as unknown as ApplicationContext;

@@ -136,7 +136,7 @@ function createBrowser(
 }
 
 describe("DraftPlaceBrowser", () => {
-  it.each(["current", "closed", "disconnected", "focus moved", "returned"])(
+  it.each(["current", "closed", "disconnected", "focus moved", "returned"] as const)(
     "focuses only the current project view after rendering (%s)",
     async (change) => {
       const update = createDeferred<boolean>();
@@ -165,27 +165,23 @@ describe("DraftPlaceBrowser", () => {
       browser.projectFocus.path = path;
       expect(document.activeElement).toBe(document.body);
 
-      if (change === "closed") {
-        browser.close();
-      } else if (change === "disconnected") {
-        browser.disconnect();
-      } else if (change === "focus moved") {
-        elsewhere.focus();
-      } else if (change === "returned") {
-        browser.showRoot();
-        popover.replaceChildren(browse);
-      }
+      const { run, focus } = {
+        current: { run: () => {}, focus: path },
+        closed: { run: () => browser.close(), focus: document.body },
+        disconnected: { run: () => browser.disconnect(), focus: document.body },
+        "focus moved": { run: () => elsewhere.focus(), focus: elsewhere },
+        returned: {
+          run: () => {
+            browser.showRoot();
+            popover.replaceChildren(browse);
+          },
+          focus: browse,
+        },
+      }[change];
+      run();
       update.resolve(true);
       await update.promise;
-      expect(document.activeElement).toBe(
-        change === "current"
-          ? path
-          : change === "returned"
-            ? browse
-            : change === "focus moved"
-              ? elsewhere
-              : document.body,
-      );
+      expect(document.activeElement).toBe(focus);
       if (change === "current") {
         browser.showRoot();
         popover.replaceChildren(browse);
