@@ -15,7 +15,7 @@ import { hasUnchangedCronSchedule, buildCronSchedule } from "./form-schedule.ts"
 import { isReadOnlyCronPayload, jobToForm, normalizeCronFormState } from "./form.ts";
 import { loadCronJobsPage } from "./jobs-full.ts";
 import { retireCronJobsRequest } from "./jobs.ts";
-import { buildCronPayload, getCronJobPayload } from "./payload.ts";
+import { buildCronPayload } from "./payload.ts";
 import { cronRunNotStartedMessage } from "./run-feedback.ts";
 import { clearCronRunsPage, loadCronRuns, retireCronRunsRequest } from "./runs.ts";
 import {
@@ -32,7 +32,6 @@ export { normalizeCronFormState } from "./form.ts";
 export { createInitialCronState, loadCronStatus } from "./state.ts";
 export { loadCronScopeStats } from "./scope.ts";
 export { loadCronJobsPage } from "./jobs-full.ts";
-export { getCronJobPayload } from "./payload.ts";
 export { resolveConfiguredCronModelSuggestions } from "./model-suggestions.ts";
 
 const CRON_CHANNEL_LAST = "last";
@@ -184,10 +183,6 @@ function requireCronConfigRevision(revision: string | null | undefined): string 
   throw new Error("This automation is missing its configuration revision. Refresh and try again.");
 }
 
-function replaceLocalCronJob(state: CronState, updatedJob: CronJob) {
-  state.cronJobs = state.cronJobs.map((job) => (job.id === updatedJob.id ? updatedJob : job));
-}
-
 export function updateCronJobsFilter(
   state: CronState,
   patch: Partial<
@@ -313,7 +308,7 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
 
     const editingJob = state.cronEditingJob;
     const sourceJob = editingJob ?? state.cronCloningJob;
-    const sourcePayload = sourceJob ? getCronJobPayload(sourceJob) : null;
+    const sourcePayload = sourceJob?.payload ?? null;
     // Form fields cannot represent process commands, anchors, or full timestamp precision.
     const schedule =
       sourceJob && hasUnchangedCronSchedule(form, sourceJob)
@@ -466,7 +461,9 @@ async function updateCronJobDefinition(
     if (!isCurrent()) {
       return false;
     }
-    replaceLocalCronJob(state, updatedJob);
+    state.cronJobs = state.cronJobs.map((entry) =>
+      entry.id === updatedJob.id ? updatedJob : entry,
+    );
     if (ownsEditor()) {
       if (operation === "toggle") {
         setCronEditState(state, updatedJob, { ...form, enabled: updatedJob.enabled });

@@ -47,7 +47,6 @@ function synchronizeInputs(runtime: ChatPaneRuntime, host: ChatPaneProps) {
     inputRegion: !Object.is(runtime.inputRegion, host.inputRegion),
     draft: !Object.is(runtime.draft, host.draft),
     focusComposer: !Object.is(runtime.focusComposer, host.focusComposer),
-    routeResolutionPending: !Object.is(runtime.routeResolutionPending, host.routeResolutionPending),
   };
   Object.assign(runtime, Object.fromEntries(chatPanePropertyKeys.map((key) => [key, host[key]])));
   if (runtime.isConnected) {

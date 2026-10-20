@@ -310,7 +310,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     }
     pageState.sidebarLayout = this.restorePaneSidebarLayout(pageState.sidebarLayout);
     pageState.getWorkContext = () => this.workContext;
-    pageState.isRouteSessionPending = () => this.routeResolutionPending;
     // Task tabs can precede main chat in DOM order; viewport reads and commands
     // must resolve through the same transcript owner.
     pageState.chatIsProgrammaticScroll = () => this.transcript.isProgrammaticScroll;
@@ -611,9 +610,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     }
     this.syncSessionReactions();
     this.syncRetainedBoardSession(this.resolveBoardView());
-    if (changes.routeResolutionPending && !this.routeResolutionPending && this.state) {
-      void resumeStoredChatOutboxes(this.state);
-    }
   }
 
   override afterRender(focusComposerChanged: boolean) {
