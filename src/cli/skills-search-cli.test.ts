@@ -2,23 +2,11 @@ import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerSkillsSearchCli } from "./skills-search-cli.js";
 
-const { searchSkillsFromClawHubMock, runtimeLogs, runtimeStdout, defaultRuntime } = vi.hoisted(
-  () => {
-    const logs: string[] = [];
-    const stdout: string[] = [];
-    return {
-      searchSkillsFromClawHubMock: vi.fn(),
-      runtimeLogs: logs,
-      runtimeStdout: stdout,
-      defaultRuntime: {
-        log: vi.fn((value: string) => logs.push(value)),
-        error: vi.fn(),
-        exit: vi.fn(),
-        writeJson: vi.fn((value: unknown) => stdout.push(JSON.stringify(value, null, 2))),
-      },
-    };
-  },
-);
+const { searchSkillsFromClawHubMock, defaultRuntime } = vi.hoisted(() => ({
+  searchSkillsFromClawHubMock: vi.fn(),
+  defaultRuntime: { log: vi.fn(), error: vi.fn(), exit: vi.fn(), writeJson: vi.fn() },
+}));
+const loggedLines = () => defaultRuntime.log.mock.calls.map(([line]) => line);
 
 vi.mock("../runtime.js", () => ({ defaultRuntime }));
 vi.mock("../skills/lifecycle/clawhub.js", () => ({
@@ -28,8 +16,6 @@ vi.mock("../skills/lifecycle/clawhub.js", () => ({
 describe("skills search CLI", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    runtimeLogs.length = 0;
-    runtimeStdout.length = 0;
     searchSkillsFromClawHubMock.mockReset().mockResolvedValue([]);
   });
 
@@ -107,7 +93,7 @@ describe("skills search CLI", () => {
     searchSkillsFromClawHubMock.mockResolvedValue(results);
     await runCommand(["skills", "search", query]);
     expect(searchSkillsFromClawHubMock).toHaveBeenCalledWith({ query, limit: undefined });
-    expect(runtimeLogs).toEqual(lines);
+    expect(loggedLines()).toEqual(lines);
   });
 
   it("formats ClawHub skill versions without changing JSON output", async () => {
@@ -126,16 +112,16 @@ describe("skills search CLI", () => {
 
     await runCommand(["skills", "search", "calendar", "--json"]);
 
-    expect(runtimeLogs).toEqual([]);
-    expect(runtimeStdout).toEqual([JSON.stringify({ results }, null, 2)]);
+    expect(defaultRuntime.log).not.toHaveBeenCalled();
+    expect(defaultRuntime.writeJson.mock.calls).toEqual([[{ results }]]);
 
     await runCommand(["skills", "--json", "search", "calendar"]);
-    expect(runtimeLogs).toEqual([]);
-    expect(runtimeStdout).toEqual(Array(2).fill(JSON.stringify({ results }, null, 2)));
+    expect(defaultRuntime.log).not.toHaveBeenCalled();
+    expect(defaultRuntime.writeJson.mock.calls).toEqual([[{ results }], [{ results }]]);
 
     await runCommand(["skills", "search", "calendar"]);
 
-    expect(runtimeLogs).toEqual([
+    expect(loggedLines()).toEqual([
       "calendar-0 v1.2.3  Calendar  CalDAV helpers",
       "calendar-1 v1.2.3  Calendar  CalDAV helpers",
       "calendar-2 V1.2.3  Calendar  CalDAV helpers",
