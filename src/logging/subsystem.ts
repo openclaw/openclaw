@@ -11,7 +11,7 @@ import { clearActiveProgressLine } from "../../packages/terminal-core/src/progre
 import { isVerbose } from "../global-state.js";
 import { hasInternalDiagnosticEventInterest } from "../infra/diagnostic-event-listener-presence.js";
 import { areDiagnosticsEnabledForProcess } from "../infra/diagnostic-events.js";
-import { defaultRuntime, type OutputRuntimeEnv } from "../runtime.js";
+import { defaultRuntime, type OutputRuntimeEnv, type RuntimeEnv } from "../runtime.js";
 import {
   formatConsoleTimestamp,
   formatJsonConsoleLine,
@@ -502,7 +502,10 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
   };
 }
 
-export function runtimeForLogger(logger: SubsystemLogger): OutputRuntimeEnv {
+export function runtimeForLogger(
+  logger: SubsystemLogger,
+  exit: RuntimeEnv["exit"] = defaultRuntime.exit,
+): OutputRuntimeEnv {
   return {
     log(...args) {
       logger.info(args.map(formatRuntimeArg).join(" ").trim());
@@ -516,6 +519,6 @@ export function runtimeForLogger(logger: SubsystemLogger): OutputRuntimeEnv {
     writeJson(value: unknown, space = 2) {
       logger.info(JSON.stringify(value, undefined, space > 0 ? space : undefined));
     },
-    exit: defaultRuntime.exit,
+    exit,
   };
 }

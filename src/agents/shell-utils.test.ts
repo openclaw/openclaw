@@ -234,14 +234,14 @@ describe("getBashShellConfig", () => {
   it.each(["System32", "Sysnative"])(
     "uses stdin transport for the legacy %s WSL launcher",
     (systemDirectory) => {
-      const shellPath = path.join("C:\\Windows", systemDirectory, "bash.exe");
-      vi.spyOn(fs, "existsSync").mockReturnValue(false);
+      const shellPath = writeCommand(
+        tempDirs.make("openclaw-wsl-bash-"),
+        `Windows/${systemDirectory}/bash.exe`,
+        true,
+      );
+      vi.stubEnv("ProgramFiles", "");
+      vi.stubEnv("ProgramFiles(x86)", "");
       vi.stubEnv("PATH", path.dirname(shellPath));
-      vi.spyOn(fs, "accessSync").mockImplementation((candidate) => {
-        if (String(candidate) !== shellPath) {
-          throw new Error("missing shell fixture");
-        }
-      });
 
       expect(getBashShellConfig()).toEqual({
         shell: shellPath,
