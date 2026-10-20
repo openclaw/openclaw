@@ -1,4 +1,3 @@
-// Verifies model IDs declared by plugin manifests are normalized.
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeConfiguredProviderCatalogModelId } from "@openclaw/model-catalog-core/provider-model-id-normalization";
@@ -7,13 +6,14 @@ import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { normalizeStaticProviderModelId } from "../agents/model-ref-shared.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { withPluginMetadataSnapshotScope } from "./current-plugin-metadata-snapshot.js";
-import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
+import {
+  makePluginMetadataIndex,
+  setCurrentPluginMetadataSnapshot,
+} from "./current-plugin-metadata.test-support.js";
 import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { listOpenClawPluginManifestMetadata } from "./manifest-metadata-scan.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
-// Registers the snapshot resolver in the runtime bridge slot. Production and
-// jiti load it via the bridge's require fallback; vitest workers lack a CJS TS
-// hook, so the no-snapshot fallback path needs the ESM registration.
+// Import registers the ESM resolver for Vitest's no-CJS-TS-hook fallback.
 import {
   projectPluginMetadataSnapshot,
   resolvePluginMetadataSnapshot,
@@ -31,31 +31,13 @@ const testEnvSnapshot = captureEnv([
 async function installNormalizer(prefix: string) {
   const stateDir = tempDirs.make("openclaw-model-id-normalization-");
   const pluginDir = path.join(stateDir, "extensions", "normalizer");
-  await writePersistedInstalledPluginIndex(
-    {
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash: "test",
-      generatedAtMs: 1,
-      installRecords: {},
-      plugins: [
-        {
-          pluginId: "normalizer",
-          manifestPath: path.join(pluginDir, "openclaw.plugin.json"),
-          manifestHash: "normalizer-manifest",
-          rootDir: pluginDir,
-          origin: "global",
-          enabled: true,
-          startup: { sidecar: false, memory: false, agentHarnesses: [] },
-          compat: [],
-        },
-      ],
-      diagnostics: [],
-    },
-    { stateDir },
-  );
+  const index = makePluginMetadataIndex("normalizer");
+  index.plugins = index.plugins.map((plugin) => ({
+    ...plugin,
+    rootDir: pluginDir,
+    manifestPath: path.join(pluginDir, "openclaw.plugin.json"),
+  }));
+  await writePersistedInstalledPluginIndex(index, { stateDir });
   writeNormalizerManifest({ pluginDir, prefix });
   setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
   return pluginDir;
@@ -144,8 +126,7 @@ describe("manifest model id normalization", () => {
   it("reuses manifest metadata for the same environment identity", async () => {
     const pluginDir = await installNormalizer("alpha");
 
-    // The scan also lists source-checkout extensions/ manifests when tests run
-    // from a repo checkout, so only pin the record for the plugin under test.
+    // Ignore source-checkout extensions returned alongside the fixture.
     const listNormalizerRecords = () =>
       listOpenClawPluginManifestMetadata(process.env).filter(
         (record) => record.pluginDir === pluginDir,

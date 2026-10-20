@@ -4,12 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
-import type * as ConfigIO from "../config/io.js";
-import {
-  captureRuntimeConfigAsyncReader as captureFixtureRuntimeConfigAsyncReader,
-  clearRuntimeConfigSnapshot as clearFixtureRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot as setFixtureRuntimeConfigSnapshot,
-} from "../config/io.js";
+import * as fixtureConfig from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createTestPluginServiceScheduler } from "../plugin-sdk/plugin-test-api.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -31,10 +26,13 @@ import type { OpenClawPluginDefinition } from "./types.js";
 
 const repository = fileURLToPath(new URL("../..", import.meta.url));
 const memorySource = path.join(repository, "extensions/memory-core/index.ts");
-const loadHost = createPluginModuleLoader({
-  devSourceRoot: repository,
-  pluginSdkResolution: "src",
-});
+const loaderOptions = { devSourceRoot: repository, pluginSdkResolution: "src" as const };
+const pluginSource = {
+  origin: "bundled" as const,
+  source: memorySource,
+  rootDir: path.dirname(memorySource),
+};
+const loadHost = createPluginModuleLoader(loaderOptions);
 const { createOpenClawTestState } = loadHost(
   path.join(repository, "src/test-utils/openclaw-test-state.ts"),
 ) as typeof import("../test-utils/openclaw-test-state.js");
@@ -46,13 +44,11 @@ const { MEMORY_DREAMING_SYSTEM_EVENT_TEXT } = loadHost(
 const configRuntime = tryNativeRequireModule(path.join(repository, "src/config/io.ts"), {
   aliasMap: preparePluginLoaderAliases({
     modulePath: memorySource,
-    devSourceRoot: repository,
-    pluginSdkResolution: "src",
+    ...loaderOptions,
   }).resolveAlias,
 });
 assert(configRuntime.ok, "Expected the native config runtime fixture");
-const { captureRuntimeConfigAsyncReader, clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
-  configRuntime.moduleExport as typeof ConfigIO;
+const nativeConfig = configRuntime.moduleExport as typeof fixtureConfig;
 
 it("keeps successor sweeps and diary publication owned after another registration retires", async () => {
   const state = await createOpenClawTestState({ label: "memory-dreaming-reload" });
@@ -64,11 +60,11 @@ it("keeps successor sweeps and diary publication owned after another registratio
     agents: { entries: { main: { workspace: state.workspaceDir } } },
   };
   await state.writeConfig(config);
-  setRuntimeConfigSnapshot(config, config);
-  // The host-owned runtime facade uses Vitest's config graph; SDK modules use the native graph.
-  setFixtureRuntimeConfigSnapshot(config, config);
-  await captureRuntimeConfigAsyncReader()();
-  await captureFixtureRuntimeConfigAsyncReader()();
+  // Facade and native SDK imports have distinct config graphs; initialize both.
+  nativeConfig.setRuntimeConfigSnapshot(config, config);
+  fixtureConfig.setRuntimeConfigSnapshot(config, config);
+  await nativeConfig.captureRuntimeConfigAsyncReader()();
+  await fixtureConfig.captureRuntimeConfigAsyncReader()();
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
   const load = () => {
     const subagent = {
@@ -82,17 +78,14 @@ it("keeps successor sweeps and diary publication owned after another registratio
     const host = createPluginRegistry({
       logger,
       runtime: createLazyPluginRuntime({
-        devSourceRoot: repository,
-        pluginSdkResolution: "src",
+        ...loaderOptions,
         runtimeOptions: { subagent },
       }),
       activateGlobalSideEffects: false,
     });
     const record = createPluginRecord({
       id: "memory-core",
-      origin: "bundled",
-      source: memorySource,
-      rootDir: path.dirname(memorySource),
+      ...pluginSource,
       kind: "memory",
       memorySlotSelected: true,
     });
@@ -102,11 +95,8 @@ it("keeps successor sweeps and diary publication owned after another registratio
     instances.push(instance);
     bindPluginInstanceModuleLoader({
       instance,
-      origin: "bundled",
-      source: memorySource,
-      rootDir: path.dirname(memorySource),
-      devSourceRoot: repository,
-      pluginSdkResolution: "src",
+      ...pluginSource,
+      ...loaderOptions,
     });
     const module = instance.loadModule(memorySource) as { default: OpenClawPluginDefinition };
     assert(module.default.register);
@@ -192,8 +182,8 @@ it("keeps successor sweeps and diary publication owned after another registratio
     await Promise.all(instances.map((instance) => instance.dispose()));
     vi.useRealTimers();
     await state.cleanup().finally(() => {
-      clearRuntimeConfigSnapshot();
-      clearFixtureRuntimeConfigSnapshot();
+      nativeConfig.clearRuntimeConfigSnapshot();
+      fixtureConfig.clearRuntimeConfigSnapshot();
     });
   }
 });

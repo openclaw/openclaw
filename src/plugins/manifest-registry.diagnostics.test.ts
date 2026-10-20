@@ -38,10 +38,6 @@ function expectNoRegistryDiagnosticContains(
   expect(registry.diagnostics.map((diag) => diag.message).join("\n")).not.toContain(fragment);
 }
 
-afterEach(() => {
-  vi.restoreAllMocks();
-});
-
 describe("loadPluginManifestRegistry compatibility diagnostics", () => {
   it("reports only selected plugin compatibility diagnostics", () => {
     const globalDir = makeTempDir();
@@ -86,10 +82,7 @@ describe("loadPluginManifestRegistry compatibility diagnostics", () => {
 
   it("suppresses missing channel config diagnostics for inactive external channel plugins", () => {
     const dir = makeTempDir();
-    writeManifest(dir, {
-      id: "external-chat",
-      channels: ["external-chat"],
-    });
+    writeManifest(dir, { id: "external-chat", channels: ["external-chat"] });
     const candidate = createPluginCandidate(dir, "global");
 
     const disabledRegistry = loadPluginManifestRegistryCore({
@@ -115,47 +108,33 @@ const authChoice = (provider: string, method = "api-key") => ({
 it.each([
   {
     name: "drops non-HTTPS provider auth presentation URLs",
-    manifest: {
-      id: "unsafe-auth-artwork",
-      providerAuthChoices: [
-        {
-          ...authChoice("unsafe"),
-          icon: "http://example.com/icon.svg",
-          website: "javascript:alert(1)",
-          docsUrl: "javascript:alert(1)",
-        },
-        {
-          ...authChoice("oversized"),
-          icon: `https://example.com/${"a".repeat(2048)}`,
-          docsUrl: `https://example.com/${"a".repeat(2048)}`,
-        },
-      ],
-    },
-    expected: {
-      providerAuthChoices: [authChoice("unsafe"), authChoice("oversized")],
-    },
+    choices: [
+      {
+        ...authChoice("unsafe"),
+        icon: "http://example.com/icon.svg",
+        website: "javascript:alert(1)",
+        docsUrl: "javascript:alert(1)",
+      },
+      {
+        ...authChoice("oversized"),
+        icon: `https://example.com/${"a".repeat(2048)}`,
+        docsUrl: `https://example.com/${"a".repeat(2048)}`,
+      },
+    ],
+    expected: [authChoice("unsafe"), authChoice("oversized")],
   },
   ...[["not-a-platform"], "darwin"].map((platforms) => ({
     name: `preserves unavailable platform restriction ${JSON.stringify(platforms)}`,
-    manifest: {
-      id: "native-provider",
-      providerAuthChoices: [{ ...authChoice("native", "local"), platforms }],
-    },
-    expected: {
-      providerAuthChoices: [{ ...authChoice("native", "local"), platforms: [] }],
-    },
+    choices: [{ ...authChoice("native", "local"), platforms }],
+    expected: [{ ...authChoice("native", "local"), platforms: [] }],
   })),
-])("$name", ({ manifest, expected }) => {
+])("$name", ({ choices, expected }) => {
   const rootDir = makeTempDir();
-  writeManifest(rootDir, manifest);
+  writeManifest(rootDir, { id: "auth", providerAuthChoices: choices });
   const registry = loadPluginManifestRegistryCore({
     candidates: [
-      { idHint: manifest.id, rootDir, origin: "bundled", source: path.join(rootDir, "index.ts") },
+      { idHint: "auth", rootDir, origin: "bundled", source: path.join(rootDir, "index.ts") },
     ],
   });
-  const plugin = registry.plugins[0];
-  expect(plugin).toBeDefined();
-  for (const [key, value] of Object.entries(expected)) {
-    expect(plugin && Reflect.get(plugin, key), key).toEqual(value);
-  }
+  expect(registry.plugins[0]?.providerAuthChoices).toEqual(expected);
 });
