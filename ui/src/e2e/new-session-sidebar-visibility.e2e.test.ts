@@ -17,6 +17,13 @@ import {
 import { chooseSidebarOwner } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "New session sidebar visibility" });
+const prompt = "Investigate sidebar updates";
+const human = (id: string, label: string) => ({
+  type: "human" as const,
+  id: `profile-${id}`,
+  label,
+  identity: { type: "profile" as const, id: `profile-${id}` },
+});
 suite.define(() => {
   it("clears accepted text and attachments while the preview route is still loading", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
@@ -24,22 +31,20 @@ suite.define(() => {
         deferredMethods: ["sessions.create"],
       });
       await page.goto(suite.server.baseUrl + "new?agent=main");
-      const composer = page.locator(".new-session-page__message");
-      await composer.fill("Investigate sidebar updates");
+      const message = page.locator(".new-session-page__message");
+      await message.fill(prompt);
       await page.locator(".agent-chat__file-input").setInputFiles({
         name: "sidebar-notes.txt",
         mimeType: "text/plain",
         buffer: Buffer.from("Synthetic reproduction notes"),
       });
-      await waitForCommittedNewSessionDraft(page, "Investigate sidebar updates", [
-        "sidebar-notes.txt",
-      ]);
+      await waitForCommittedNewSessionDraft(page, prompt, ["sidebar-notes.txt"]);
       const held = await holdModuleResponse(
         page,
         controlUiE2eBuiltModuleRequest("ui/src/pages/chat/route-entry.ts"),
       );
       try {
-        await composer.press("Enter");
+        await message.press("Enter");
         await gateway.waitForRequest("sessions.create");
         await held.request;
         await gateway.resolveDeferred("sessions.create");
@@ -54,12 +59,7 @@ suite.define(() => {
   });
   it("shows an accepted running session under Involving me before event refresh timers or run completion", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      const viewer = {
-        type: "human" as const,
-        id: "profile-ada",
-        label: "Ada",
-        identity: { type: "profile" as const, id: "profile-ada" },
-      };
+      const viewer = human("ada", "Ada");
       const old = {
         key: "agent:main:planning",
         sessionId: "planning",
@@ -72,7 +72,7 @@ suite.define(() => {
         ...old,
         key: "agent:main:sidebar-proof",
         sessionId: "sidebar-proof",
-        label: "Investigate sidebar updates",
+        label: prompt,
         updatedAt: 2,
         hasActiveRun: true,
         status: "running",
@@ -85,15 +85,7 @@ suite.define(() => {
         hasMore: false,
         nextOffset: null,
         defaults: { model: null, modelProvider: null, contextTokens: null },
-        owners: [
-          viewer,
-          {
-            type: "human",
-            id: "profile-bob",
-            label: "Bob",
-            identity: { type: "profile", id: "profile-bob" },
-          },
-        ],
+        owners: [viewer, human("bob", "Bob")],
       });
       const gateway = await installMockGateway(page, {
         sessionKey: old.key,
@@ -120,9 +112,9 @@ suite.define(() => {
           ),
         )
         .toBe(true);
-      const composer = page.locator(".new-session-page__message");
-      await composer.fill("Investigate sidebar updates");
-      await composer.press("Enter");
+      const message = page.locator(".new-session-page__message");
+      await message.fill(prompt);
+      await message.press("Enter");
       await gateway.waitForRequest("sessions.create");
       await page.clock.install();
       await pauseVirtualClock(page);

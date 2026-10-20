@@ -9,6 +9,8 @@ import {
   navigateInApp,
   waitForCommittedChatRoute,
   controlUiSessionPath,
+  pollText,
+  pollValue,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
@@ -30,7 +32,7 @@ suite.define(() => {
         };
         const gateway = await installMockGateway(page, { sessionKey: key, sessions: [pending] });
         await page.goto(new URL(controlUiSessionPath(key), suite.server.baseUrl).href);
-        const sidebar = page.locator('.sidebar-recent-session[data-session-key="' + key + '"]');
+        const sidebar = page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
         const header = page.locator(".chat-pane__header");
         await sidebar.locator(".session-title-placeholder").waitFor();
         await header.locator(".session-title-placeholder").waitFor();
@@ -48,12 +50,8 @@ suite.define(() => {
           session: settled,
         });
         const expected = outcome === "named" ? "Release readiness" : "New session";
-        await expect
-          .poll(() => sidebar.locator(".sidebar-recent-session__name").textContent())
-          .toBe(expected);
-        await expect
-          .poll(() => header.locator(".chat-pane__session-title-text").textContent())
-          .toBe(expected);
+        await pollText(sidebar.locator(".sidebar-recent-session__name")).toBe(expected);
+        await pollText(header.locator(".chat-pane__session-title-text")).toBe(expected);
         expect(await sidebar.locator(".session-title-placeholder").count()).toBe(0);
         expect(await header.locator(".session-title-placeholder").count()).toBe(0);
       });
@@ -102,9 +100,9 @@ suite.define(() => {
             expect(await oldRow.count()).toBe(0);
           }
           await navigateInApp(page, "new-session", "?agent=main");
-          await page
-            .locator(".new-session-page__message")
-            .fill("Review release readiness and outstanding fixes");
+          const message = page.locator(".new-session-page__message");
+          const prompt = "Review release readiness and outstanding fixes";
+          await message.fill(prompt);
           await gateway.deferNext("sessions.create");
           await page.getByRole("button", { name: "Start session", exact: true }).click();
           await gateway.waitForRequest("sessions.create");
@@ -188,9 +186,7 @@ suite.define(() => {
             code: "UNAVAILABLE",
             message: "Synthetic admission refused",
           });
-          await expect
-            .poll(() => page.locator(".new-session-page__message").inputValue())
-            .toBe("Review release readiness and outstanding fixes");
+          await pollValue(message).toBe(prompt);
           expect(await provisional.count()).toBe(0);
           expect(await page.locator('.sidebar-recent-session [aria-current="page"]').count()).toBe(
             0,

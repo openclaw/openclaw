@@ -96,13 +96,8 @@ suite.define(() => {
           expect(plusBox).not.toBeNull();
           expect(plusBox?.width).toBeLessThanOrEqual(20);
           expect(chevronBox).not.toBeNull();
-          expect(
-            Math.abs(
-              (plusBox?.x ?? 0) +
-                (plusBox?.width ?? 0) / 2 -
-                ((chevronBox?.x ?? 0) + (chevronBox?.width ?? 0) / 2),
-            ),
-          ).toBeLessThanOrEqual(4);
+          const center = (box: typeof plusBox) => (box?.x ?? 0) + (box?.width ?? 0) / 2;
+          expect(Math.abs(center(plusBox) - center(chevronBox))).toBeLessThanOrEqual(4);
         });
         await capture(page, "environment-picker-capabilities-after.png");
       },

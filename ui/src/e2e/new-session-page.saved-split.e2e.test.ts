@@ -12,6 +12,9 @@ import {
   createNewSessionPageE2eSuite,
   installMockGateway,
   navigateInApp,
+  pollCount,
+  pollText,
+  pollValue,
   waitForCommittedChatRoute,
 } from "./new-session-page.test-support.ts";
 
@@ -19,28 +22,28 @@ const suite = createNewSessionPageE2eSuite();
 const leftKey = "agent:main:saved-left";
 const rightKey = "agent:main:saved-right";
 const confirmedKey = "agent:main:confirmed-split-thread";
-const savedLayout: ChatSplitLayout = {
+const selection = (sessionKey: string) => ({ sessionKey, lastActiveSessionKey: sessionKey });
+const savedLayout = (left: string, right: string): ChatSplitLayout => ({
   activePaneId: "p2",
   columnWeights: [0.4, 0.6],
   columns: [
-    { id: "c1", paneWeights: [1], panes: [{ id: "p1", sessionKey: leftKey }] },
-    { id: "c2", paneWeights: [1], panes: [{ id: "p2", sessionKey: rightKey }] },
+    { id: "c1", paneWeights: [1], panes: [{ id: "p1", sessionKey: left }] },
+    { id: "c2", paneWeights: [1], panes: [{ id: "p2", sessionKey: right }] },
   ],
-};
+});
 
 function readSaved(page: Page, storageKey: string) {
   return page.evaluate((key) => {
-    // This is the real persisted settings document, not a mocked settings owner.
     const settings = JSON.parse(localStorage.getItem(key) ?? "null") as {
       chatSplitLayout?: ChatSplitLayout;
       sessionsByGateway?: Record<string, Pick<UiSettings, "sessionKey" | "lastActiveSessionKey">>;
     } | null;
     const scope = key.slice("openclaw.control.settings.v1:".length);
-    const selection = settings?.sessionsByGateway?.[scope];
+    const selected = settings?.sessionsByGateway?.[scope];
     return {
       chatSplitLayout: settings?.chatSplitLayout,
-      sessionKey: selection?.sessionKey,
-      lastActiveSessionKey: selection?.lastActiveSessionKey,
+      sessionKey: selected?.sessionKey,
+      lastActiveSessionKey: selected?.lastActiveSessionKey,
     };
   }, storageKey);
 }
@@ -49,34 +52,26 @@ suite.define(() => {
   it.each([false, true])(
     "preserves an existing split across pending creation, rejection and reload, then adopts only the confirmed key (unbound: %s)",
     async (unbound) => {
-      const initialLayout = structuredClone(savedLayout);
-      if (unbound) {
-        initialLayout.columns[0]!.panes[0]!.sessionKey = "global";
-      }
+      const initialLayout = savedLayout(unbound ? "global" : leftKey, rightKey);
       await suite.withPage({ viewport: { width: 1600, height: 1000 } }, async ({ page }) => {
         const storageKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
         await page.addInitScript(
-          ({ key, scope, layout, selectedKey }) => {
+          ({ key, settings }) => {
             // Seed once: reload must consume the application's actual persisted result.
             if (sessionStorage.getItem("saved-split-fixture-seeded")) {
               return;
             }
             sessionStorage.setItem("saved-split-fixture-seeded", "true");
-            localStorage.setItem(
-              key,
-              JSON.stringify({
-                chatSplitLayout: layout,
-                sessionsByGateway: {
-                  [scope]: { sessionKey: selectedKey, lastActiveSessionKey: selectedKey },
-                },
-              }),
-            );
+            localStorage.setItem(key, settings);
           },
           {
             key: storageKey,
-            scope: controlUiBundledGatewayUrl(suite.server.baseUrl),
-            layout: initialLayout,
-            selectedKey: rightKey,
+            settings: JSON.stringify({
+              chatSplitLayout: initialLayout,
+              sessionsByGateway: {
+                [controlUiBundledGatewayUrl(suite.server.baseUrl)]: selection(rightKey),
+              },
+            }),
           },
         );
         const gateway = await installMockGateway(page, {
@@ -90,17 +85,14 @@ suite.define(() => {
         await composer.fill("preserve my saved split");
         const before = {
           chatSplitLayout: initialLayout,
-          sessionKey: rightKey,
-          lastActiveSessionKey: rightKey,
+          ...selection(rightKey),
         };
         expect(await readSaved(page, storageKey)).toEqual(before);
         const draftUrl = page.url();
         await gateway.deferNext("sessions.create");
         await start.click();
         await gateway.waitForRequest("sessions.create");
-        await expect
-          .poll(() => page.locator(".chat-thread").textContent())
-          .toContain("preserve my saved split");
+        await pollText(page.locator(".chat-thread")).toContain("preserve my saved split");
         await pending.locator(".chat-group.user .chat-bubble").click();
         expect(await pending.isVisible()).toBe(true);
         expect(await readSaved(page, storageKey)).toEqual(before);
@@ -112,7 +104,7 @@ suite.define(() => {
           code: "UNAVAILABLE",
           message: "Synthetic saved-layout admission refusal",
         });
-        await expect.poll(() => composer.inputValue()).toBe("preserve my saved split");
+        await pollValue(composer).toBe("preserve my saved split");
         expect(await readSaved(page, storageKey)).toEqual(before);
         expect(page.url()).toBe(draftUrl);
         await page.reload();
@@ -121,7 +113,7 @@ suite.define(() => {
 
         await navigateToControlUiSession(page, rightKey);
         await waitForCommittedChatRoute(page);
-        await expect.poll(() => page.locator(".chat-split-view__cell").count()).toBe(2);
+        await pollCount(page.locator(".chat-split-view__cell")).toBe(2);
         expect(await readSaved(page, storageKey)).toEqual(before);
         await navigateInApp(page, "new-session", "?agent=main");
         await composer.fill("adopt the confirmed session only");
@@ -129,9 +121,7 @@ suite.define(() => {
         await start.click();
         const request = await gateway.waitForRequest("sessions.create");
         expect(request.params).toHaveProperty("key", expect.not.stringContaining(confirmedKey));
-        await expect
-          .poll(() => pending.textContent())
-          .toContain("adopt the confirmed session only");
+        await pollText(pending).toContain("adopt the confirmed session only");
         expect(await readSaved(page, storageKey)).toEqual(before);
         await gateway.resolveDeferred("sessions.create", {
           key: confirmedKey,
@@ -140,21 +130,13 @@ suite.define(() => {
         });
         await waitForCommittedChatRoute(page);
         expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(confirmedKey));
-        const confirmedLayout = {
-          ...initialLayout,
-          columns: [
-            initialLayout.columns[0],
-            { id: "c2", paneWeights: [1], panes: [{ id: "p2", sessionKey: confirmedKey }] },
-          ],
-        };
         await expect
           .poll(() => readSaved(page, storageKey))
           .toEqual({
-            chatSplitLayout: confirmedLayout,
-            sessionKey: confirmedKey,
-            lastActiveSessionKey: confirmedKey,
+            chatSplitLayout: savedLayout(unbound ? "global" : leftKey, confirmedKey),
+            ...selection(confirmedKey),
           });
-        await expect.poll(() => page.locator(".chat-split-view__cell").count()).toBe(2);
+        await pollCount(page.locator(".chat-split-view__cell")).toBe(2);
         await gateway.waitForRequest("chat.startup", { match: { sessionKey: confirmedKey } });
       });
     },
