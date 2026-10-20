@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import path from "node:path";
 import {
   AcpxRuntime as BaseAcpxRuntime,
   createAgentRegistry,
@@ -21,6 +20,7 @@ import {
 } from "./process-lease.js";
 import {
   createTestGate,
+  fixtureSession,
   ownerAgentScript as script,
   ownerRuntimeOptions,
   promptJson,
@@ -37,8 +37,8 @@ it.skipIf(process.platform === "win32").each([false, true])(
   "keeps a live successor wrapper after delayed close (snapshot has PID=%s)",
   async (keepPid) => {
     await withOpenClawTestState({ label: "acpx-close-lease-overlap" }, async (state) => {
-      const peerDirectory = path.join(state.root, "peer");
-      const codexHome = path.join(state.root, "empty-codex-home");
+      const peerDirectory = state.path("peer");
+      const codexHome = state.path("empty-codex-home");
       await fs.mkdir(peerDirectory);
       await fs.mkdir(codexHome);
       vi.stubEnv("CODEX_HOME", codexHome);
@@ -63,17 +63,12 @@ it.skipIf(process.platform === "win32").each([false, true])(
         ownerRuntimeOptions(state.root, {
           sessionStore: store,
           agentRegistry: createAgentRegistry({ overrides: config.agents }),
-          openclawWrapperRoot: path.join(state.root, "acpx"),
+          openclawWrapperRoot: state.path("acpx"),
           openclawGatewayInstanceId: "close-overlap",
           openclawProcessLeaseStore: leases,
         }),
       );
-      const target = {
-        sessionKey: "leased-reset",
-        agentId: "main",
-        agent: "codex",
-        mode: "persistent" as const,
-      };
+      const target = { ...fixtureSession("leased-reset"), agentId: "main", agent: "codex" };
       const gate = createTestGate();
       let closing: Promise<void> | undefined;
       let fresh: Awaited<ReturnType<AcpxRuntime["ensureSession"]>> | undefined;
