@@ -1,7 +1,7 @@
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatDocs } from "../../scripts/format-docs.mts";
 import { createScriptTestHarness } from "./test-helpers.js";
 
@@ -11,6 +11,11 @@ vi.mock("node:child_process", async (importOriginal) => ({
 }));
 
 const { createTempDir } = createScriptTestHarness();
+let root: string;
+beforeEach(() => {
+  root = createTempDir("openclaw-format-docs-");
+  writeDocsFixture(root);
+});
 
 afterEach(() => {
   vi.mocked(spawnSync).mockReset();
@@ -22,10 +27,11 @@ function commandResult(stdout = "", stderr = "", status = 0): SpawnSyncReturns<s
   return { pid: 1, output: [null, stdout, stderr], stdout, stderr, status, signal: null };
 }
 
-function writeDocsFixture(root: string, files = ["README.md", "docs/guide.mdx"]): void {
+function writeDocsFixture(directory: string, files = ["README.md", "docs/guide.mdx"]): void {
   for (const file of files) {
-    fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
-    fs.writeFileSync(path.join(root, file), "# Guide\n", "utf8");
+    const target = path.join(directory, file);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, "# Guide\n", "utf8");
   }
 }
 
@@ -47,8 +53,6 @@ function mockFormatter(
 
 describe("format-docs", () => {
   it("wraps the Windows oxfmt.cmd shim through cmd.exe", () => {
-    const root = createTempDir("openclaw-format-docs-windows-");
-    writeDocsFixture(root);
     const shim = path.join(root, "node_modules", ".bin", "oxfmt.cmd");
     fs.mkdirSync(path.dirname(shim), { recursive: true });
     fs.writeFileSync(shim, "@echo off\n");
@@ -58,12 +62,12 @@ describe("format-docs", () => {
 
     formatDocs({ root });
 
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.command).toBe("C:\\Windows\\System32\\cmd.exe");
-    expect(calls[0]?.args.slice(0, 3)).toEqual(["/d", "/s", "/c"]);
-    expect(calls[0]?.args[3]).toContain("oxfmt.cmd");
-    expect(calls[0]?.args[3]).toContain("--write");
-    expect(calls[0]?.args[3]).toContain("docs/guide.mdx");
+    expect(calls).toEqual([
+      {
+        command: "C:\\Windows\\System32\\cmd.exe",
+        args: ["/d", "/s", "/c", expect.stringMatching(/oxfmt\.cmd.*--write.*docs\/guide\.mdx/u)],
+      },
+    ]);
     expect(spawnSync).toHaveBeenLastCalledWith(
       expect.any(String),
       expect.any(Array),
@@ -72,7 +76,6 @@ describe("format-docs", () => {
   });
 
   it("batches oxfmt invocations without losing docs that exceed the command line budget", () => {
-    const root = createTempDir("openclaw-format-docs-batch-");
     const files = Array.from({ length: 150 }, (_, index) => `docs/${index}-${"a".repeat(180)}.md`);
     writeDocsFixture(root, files);
     const calls = mockFormatter(files);
@@ -85,8 +88,6 @@ describe("format-docs", () => {
   });
 
   it("reports git and oxfmt spawn diagnostics", () => {
-    const root = createTempDir("openclaw-format-docs-failures-");
-    writeDocsFixture(root);
     vi.mocked(spawnSync).mockReturnValue(commandResult("", "fatal: not a git repository", 128));
     expect(() => formatDocs({ root })).toThrow(
       /git ls-files failed:[\s\S]*exit status: 128[\s\S]*fatal: not a git repository/u,
@@ -101,8 +102,6 @@ describe("format-docs", () => {
   it("keeps real formatter failure tails UTF-8 safe", async () => {
     const { spawnSync: realSpawnSync } =
       await vi.importActual<typeof import("node:child_process")>("node:child_process");
-    const root = createTempDir("openclaw-format-docs-utf8-tail-");
-    writeDocsFixture(root);
     mockFormatter(["README.md"], () =>
       realSpawnSync(
         process.execPath,
@@ -117,8 +116,6 @@ describe("format-docs", () => {
   });
 
   it("uses repository paths in write mode and temporary paths in check mode", () => {
-    const root = createTempDir("openclaw-format-docs-mode-");
-    writeDocsFixture(root);
     const calls = mockFormatter(["README.md", "docs/guide.mdx"]);
 
     expect(formatDocs({ root })).toEqual({ changed: [], fileCount: 2 });
