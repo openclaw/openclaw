@@ -56,12 +56,10 @@ const msg = <Content>(role: string, content: Content, timestamp = 1_000, extra =
   timestamp,
   ...extra,
 });
-const find = <T extends Element = HTMLElement>(root: ParentNode, selector: string): T | null =>
-  root.querySelector<T>(selector);
-const required = <T extends Element = HTMLElement>(root: ParentNode, selector: string): T =>
-  expectDefined(find<T>(root, selector), selector);
-const click = (root: ParentNode, selector: string) =>
-  required<HTMLButtonElement>(root, selector).click();
+const find = (root: ParentNode, selector: string) => root.querySelector<HTMLElement>(selector);
+const required = (root: ParentNode, selector: string) =>
+  expectDefined(find(root, selector), selector);
+const click = (root: ParentNode, selector: string) => required(root, selector).click();
 const pending = (id: string, runId: string, content: unknown) => ({
   id,
   runId,
@@ -205,7 +203,7 @@ describe("chat transcript invalidation", () => {
 
         toggleTranscriptSearch(paneId);
         flush();
-        const input = required<HTMLInputElement>(searchContainer, "input");
+        const input = expectDefined(searchContainer.querySelector("input"), "search input");
         input.value = ownMessage.content;
         input.dispatchEvent(new Event("input", { bubbles: true }));
         await flushDeferredRowPrune();
@@ -332,7 +330,7 @@ describe("chat transcript invalidation", () => {
     ]);
     props.githubRepo = { owner: "openclaw", repo: "openclaw" };
     const { container, rerender } = threadFixture(props);
-    const chip = () => find<HTMLAnchorElement>(container, "a.markdown-github-item");
+    const chip = () => container.querySelector<HTMLAnchorElement>("a.markdown-github-item");
     rerender();
     expect(chip()).toBeNull();
     props.githubRepositories = [
@@ -354,7 +352,7 @@ describe("chat transcript invalidation", () => {
       { role: "assistant", content: "PR #141270", timestamp: 1_000 },
     ]);
     const { container, rerender } = threadFixture(props);
-    const chip = () => find<HTMLAnchorElement>(container, "a.markdown-github-item");
+    const chip = () => container.querySelector<HTMLAnchorElement>("a.markdown-github-item");
     rerender();
     expect(chip()).toBeNull();
 
@@ -688,7 +686,7 @@ describe("chat transcript invalidation", () => {
     expect(new Headers(fetchMock.mock.calls[1]?.[1]?.headers).get("Authorization")).toBe(
       "Bearer test-token",
     );
-    expect(find<HTMLImageElement>(container, ".chat-message-image")?.src).toBe(blobUrl);
+    expect(container.querySelector<HTMLImageElement>(".chat-message-image")?.src).toBe(blobUrl);
 
     releaseChatMediaResourceOwner(mediaOwner);
     transcript.dispose();

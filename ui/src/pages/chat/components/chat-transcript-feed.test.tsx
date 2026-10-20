@@ -18,8 +18,7 @@ function mount(initial: unknown[]) {
       return container.textContent;
     },
     all,
-    one: <T extends Element = HTMLElement>(selector: string): T | null =>
-      container.querySelector<T>(selector),
+    one: (selector: string) => container.querySelector(selector),
     texts: (selector: string) => all(selector).map((entry) => entry.textContent?.trim()),
     update: (next: unknown[]) => {
       setMessages(next);
@@ -269,7 +268,7 @@ it("preserves anonymous command disclosures when earlier rows arrive in the same
   const one = anonymous("message-one", "echo one");
   const two = anonymous("message-two", "echo two");
   const container = mount([first, one, two]);
-  const originalGroup = container.one<HTMLDetailsElement>(part("tool-group"))!;
+  const originalGroup = container.all<HTMLDetailsElement>(part("tool-group"))[0]!;
   originalGroup.querySelector("summary")!.click();
   const original = container.all<HTMLDetailsElement>(part("tool-line"));
   original[2]!.querySelector("summary")!.click();
