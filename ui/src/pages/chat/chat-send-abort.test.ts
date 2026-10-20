@@ -175,20 +175,14 @@ describe("handleAbortChat", () => {
   );
 
   it.each([
-    {
-      name: "ignores stale active-run flags once the current session is terminal",
-      selected: { hasActiveRun: true, status: "done" as const },
-    },
-    {
-      name: "ignores stale running status once the gateway reports no active run",
-      selected: { hasActiveRun: false, status: "running" as const },
-    },
-  ])("$name", ({ selected }) => {
+    ["ignores stale active-run flags once the current session is terminal", true, "done"],
+    ["ignores stale running status once the gateway reports no active run", false, "running"],
+  ] as const)("%s", (_name, hasActiveRun, status) => {
     const host = makeChatHost({
       chatRunId: null,
       sessionKey: "agent:main",
       sessionsResult: createSessionsResult([
-        row("agent:main", selected),
+        row("agent:main", { hasActiveRun, status }),
         row("agent:other", { hasActiveRun: true, status: "running" }),
       ]),
     });

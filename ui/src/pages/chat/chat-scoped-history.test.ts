@@ -35,27 +35,11 @@ afterEach(() => {
 
 describe("scoped chat history defaults and row ordering", () => {
   it.each([
-    {
-      name: "same-owner equal timestamp control",
-      moveRoster: false,
-      workRefresh: "updated",
-    },
-    {
-      name: "different-owner equal timestamp regression",
-      moveRoster: true,
-      workRefresh: "updated",
-    },
-    {
-      name: "missing Work row remains admissible",
-      moveRoster: true,
-      workRefresh: "missing",
-    },
-    {
-      name: "Main-only publication does not freeze Work history",
-      moveRoster: true,
-      workRefresh: "none",
-    },
-  ])("$name", async ({ moveRoster, workRefresh }) => {
+    ["same-owner equal timestamp control", false, "updated"],
+    ["different-owner equal timestamp regression", true, "updated"],
+    ["missing Work row remains admissible", true, "missing"],
+    ["Main-only publication does not freeze Work history", true, "none"],
+  ] as const)("%s", async (_name, moveRoster, workRefresh) => {
     const pendingHistory = createDeferred<ChatHistoryResult>();
     const initialWork: GatewaySessionRow = {
       key: "global",
@@ -130,12 +114,11 @@ describe("scoped chat history defaults and row ordering", () => {
       expect(selectedChatSessionRow(state)).toMatchObject(initialWork);
       const previousSessionsResult = state.sessionsResult;
       const issuedRevision = sessions.canonicalListRevision;
-      const refreshOptions = {
+      const refresh = refreshPageChat(state, {
         awaitHistory: true,
         deferBranches: true,
         scheduleScroll: false,
-      };
-      const refresh = refreshPageChat(state, refreshOptions);
+      });
       const historyLoad = loadChatHistory(state, { deferBranches: true });
       expect(getChatHistoryLoadState(state).phase).toBe("in-flight");
       if (workRefresh !== "none") {

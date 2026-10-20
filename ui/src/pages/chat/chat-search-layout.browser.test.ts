@@ -52,12 +52,9 @@ describeBrowser("transcript search layout", () => {
           }
           const radii = (element: Element) => {
             const style = getComputedStyle(element);
-            return [
-              style.borderTopLeftRadius,
-              style.borderTopRightRadius,
-              style.borderBottomRightRadius,
-              style.borderBottomLeftRadius,
-            ];
+            return ["top-left", "top-right", "bottom-right", "bottom-left"].map((corner) =>
+              style.getPropertyValue(`border-${corner}-radius`),
+            );
           };
           return { chat: radii(chat), search: radii(search) };
         });
@@ -73,10 +70,8 @@ describeBrowser("transcript search layout", () => {
         expect(inputBox.width).toBeGreaterThan(100);
         expect(inputBox.x + inputBox.width).toBeLessThanOrEqual(closeButton.x);
         expect(closeButton.x + closeButton.width).toBeLessThan(searchBar.x + searchBar.width);
-        expect(cornerRadii).toEqual({
-          chat: [searchRadius, searchRadius, searchRadius, searchRadius],
-          search: [searchRadius, searchRadius, searchRadius, searchRadius],
-        });
+        const expectedRadii = Array<string>(4).fill(searchRadius);
+        expect(cornerRadii).toEqual({ chat: expectedRadii, search: expectedRadii });
         expect(icons).toHaveLength(2);
         for (const icon of icons) {
           const box = await icon.boundingBox();
@@ -88,26 +83,16 @@ describeBrowser("transcript search layout", () => {
         const focusStyle = () =>
           search.evaluate((element) => {
             const style = getComputedStyle(element);
-            return {
-              shadow: style.boxShadow,
-              outline: style.outlineStyle,
-              width: style.outlineWidth,
-              offset: style.outlineOffset,
-            };
+            return [style.boxShadow, style.outlineStyle, style.outlineWidth, style.outlineOffset];
           });
-        expect(await focusStyle()).toEqual({
-          shadow: "none",
-          outline: "solid",
-          width: "2px",
-          offset: "-1px",
-        });
+        expect(await focusStyle()).toEqual(["none", "solid", "2px", "-1px"]);
         expect(await input.evaluate((element) => getComputedStyle(element).outlineStyle)).toBe(
           "none",
         );
         await page.keyboard.press("Tab");
         const close = page.locator(".agent-chat__search-bar button");
         await expectBrowser(close).toBeFocused();
-        expect(await focusStyle()).toMatchObject({ shadow: "none", outline: "none" });
+        expect((await focusStyle()).slice(0, 2)).toEqual(["none", "none"]);
         expect(await close.evaluate((element) => getComputedStyle(element).outlineStyle)).toBe(
           "solid",
         );
