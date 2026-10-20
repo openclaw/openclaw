@@ -461,6 +461,10 @@ function WebPushSection(props: {
   actions: NotificationsSectionProps;
 }) {
   const registered = () => props.push.subscription === "registered";
+  const hasSubscription = () =>
+    registered() ||
+    props.push.subscription === "vapid-mismatch" ||
+    props.push.subscription === "local";
   const permissionLabel = () =>
     t(
       props.push.permission === "granted"
@@ -477,24 +481,28 @@ function WebPushSection(props: {
         ? "configView.notifications.subscribed"
         : props.push.subscription === "unknown"
           ? "configView.notifications.checking"
-          : "configView.notifications.notSubscribed",
+          : props.push.subscription === "local"
+            ? "configView.notifications.localSubscription"
+            : "configView.notifications.notSubscribed",
     );
   const statusLabel = () =>
     t(
       !props.push.supported
         ? "configView.notifications.unsupported"
-        : props.push.permission === "denied"
-          ? "configView.notifications.blocked"
-          : registered()
-            ? "configView.notifications.subscribed"
-            : props.push.subscription === "vapid-mismatch"
-              ? "configView.notifications.unavailable"
-              : props.push.subscription === "unknown"
-                ? "configView.notifications.checking"
-                : "configView.notifications.ready",
+        : !props.push.canManage
+          ? "configView.notifications.unavailable"
+          : props.push.permission === "denied"
+            ? "configView.notifications.blocked"
+            : registered()
+              ? "configView.notifications.subscribed"
+              : props.push.subscription === "vapid-mismatch"
+                ? "configView.notifications.unavailable"
+                : props.push.subscription === "unknown"
+                  ? "configView.notifications.checking"
+                  : "configView.notifications.ready",
     );
   const statusKind = () =>
-    !props.push.supported
+    !props.push.supported || !props.push.canManage
       ? "muted"
       : props.push.permission === "denied" || props.push.subscription === "vapid-mismatch"
         ? "danger"
@@ -534,9 +542,28 @@ function WebPushSection(props: {
             <SettingsStatus kind={registered() ? "ok" : "muted"} label={subscriptionLabel()} />
           }
         />
-        <Show when={props.push.supported && props.push.permission !== "denied"}>
+        <Show when={props.push.supported && !props.push.canManage}>
+          <SettingsRow
+            title={t("configView.notifications.gatewayAccess")}
+            description={t(
+              props.actions.connected
+                ? "configView.notifications.gatewayAccessRequired"
+                : "configView.notifications.gatewayDisconnected",
+            )}
+            control={
+              <SettingsStatus kind="muted" label={t("configView.notifications.unavailable")} />
+            }
+          />
+        </Show>
+        <Show
+          when={
+            props.push.supported &&
+            props.push.permission !== "denied" &&
+            (props.push.canManage || hasSubscription())
+          }
+        >
           <NotificationActions>
-            {registered() || props.push.subscription === "vapid-mismatch" ? (
+            {hasSubscription() ? (
               <>
                 <button
                   class="btn"
@@ -545,7 +572,7 @@ function WebPushSection(props: {
                 >
                   <Icon name="x" /> {t("configView.notifications.unsubscribe")}
                 </button>
-                <Show when={registered()}>
+                <Show when={registered() && props.push.canManage}>
                   <button
                     class="btn primary"
                     disabled={props.push.loading || !props.actions.connected}
@@ -556,20 +583,22 @@ function WebPushSection(props: {
                 </Show>
               </>
             ) : (
-              <button
-                class="btn primary"
-                disabled={props.push.loading || !props.actions.connected}
-                onClick={() => props.actions.onWebPushSubscribe?.()}
-              >
-                <Show when={props.push.loading}>
-                  <Icon name="loader" />
-                </Show>
-                {t(
-                  props.push.loading
-                    ? "configView.notifications.subscribing"
-                    : "configView.notifications.enable",
-                )}
-              </button>
+              <Show when={props.push.canManage}>
+                <button
+                  class="btn primary"
+                  disabled={props.push.loading || !props.actions.connected}
+                  onClick={() => props.actions.onWebPushSubscribe?.()}
+                >
+                  <Show when={props.push.loading}>
+                    <Icon name="loader" />
+                  </Show>
+                  {t(
+                    props.push.loading
+                      ? "configView.notifications.subscribing"
+                      : "configView.notifications.enable",
+                  )}
+                </button>
+              </Show>
             )}
           </NotificationActions>
         </Show>
@@ -584,9 +613,12 @@ function WebPushSection(props: {
           </div>
         </Show>
       </NotificationSection>
-      <Show when={registered() ? props.push.preferences : undefined}>
+      <Show when={props.push.canReadPreferences ? props.push.preferences : undefined}>
         {(preferences) => (
-          <div class="settings-stack" inert={props.push.loading}>
+          <div
+            class="settings-stack"
+            inert={props.push.loading || !props.push.canManage || !props.actions.connected}
+          >
             <Show when={preferences().durableIdentity}>
               <UserNotificationPreferences
                 preferences={preferences().user}
