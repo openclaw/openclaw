@@ -51,6 +51,7 @@ afterAll(() => {
 
 function archive(key: string, entry: SessionEntry, placement: PlacementContext = {}) {
   const context = createDirectChatContext({ getRuntimeConfig: () => cfg, ...placement });
+  const scope = { canonicalKey: key, storePath };
   return prepareSessionPatchArchive({
     cfg,
     context,
@@ -58,20 +59,18 @@ function archive(key: string, entry: SessionEntry, placement: PlacementContext =
     loadGatewayModelCatalogSnapshot: () => context.loadGatewayModelCatalogSnapshot(),
     target: {
       archiveActor: undefined,
-      canonicalKey: key,
+      ...scope,
       fullPatch: { key, archived: true, expectedSessionId: entry.sessionId },
       initialEntry: entry,
       initialTarget: {
         agentId: "main",
-        canonicalKey: key,
-        storePath,
+        ...scope,
         storeKeys: [key],
         store: { [key]: entry },
       },
       key,
       lifecycleIdentities: [key, entry.sessionId],
       requestedAgentId: "main",
-      storePath,
     },
   });
 }
@@ -145,13 +144,10 @@ it.each(["archive", "restore"] as const)(
         },
       },
     };
-    const pending = (async () => {
-      if (operation === "restore") {
-        await restore(key, entry, placement);
-        return { ok: true };
-      }
-      return archive(key, entry, placement);
-    })();
+    const pending =
+      operation === "restore"
+        ? restore(key, entry, placement).then(() => ({ ok: true }))
+        : archive(key, entry, placement);
     const settled = pending.then(
       (value) => ({ value }),
       (error: unknown) => ({ error }),

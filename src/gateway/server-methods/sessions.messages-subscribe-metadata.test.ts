@@ -22,13 +22,14 @@ afterEach(() => clearRuntimeConfigSnapshot());
 
 it.each(["operator.read", "operator.sessions.read"])(
   "keeps %s approval subscriptions across metadata updates but rejects changed access",
-  async (readScope) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  (readScope) =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const cfg = rolePolicyConfig();
       cfg.gateway!.roles!.definitions.view!.scopes.push("operator.approvals");
       await state.writeConfig(cfg);
       setRuntimeConfigSnapshot(cfg);
-      const scope = { agentId: "main", sessionKey: "agent:main:subscribe-metadata" };
+      const key = "agent:main:subscribe-metadata";
+      const scope = { agentId: "main", sessionKey: key };
       const entry: SessionEntry = {
         sessionId: "subscribe-metadata",
         lifecycleRevision: "original",
@@ -77,7 +78,7 @@ it.each(["operator.read", "operator.sessions.read"])(
               type: "req",
               id: name,
               method: "sessions.messages.subscribe",
-              params: { key: scope.sessionKey, includeApprovals: true, subscriptionId: name },
+              params: { key, includeApprovals: true, subscriptionId: name },
             },
             client,
             context,
@@ -86,37 +87,30 @@ it.each(["operator.read", "operator.sessions.read"])(
             extraHandlers: sessionSubscriptionHandlers,
           });
           expect(replayMutation, name).toHaveBeenCalledOnce();
-          if (allowed) {
-            expect(respond, name).toHaveBeenCalledExactlyOnceWith(
-              true,
-              {
+          const payload = allowed
+            ? {
                 subscribed: true,
-                key: scope.sessionKey,
+                key,
                 agentId: scope.agentId,
                 approvalReplay: expect.objectContaining({ approvals: [], truncated: false }),
-              },
-              undefined,
-            );
-            expect(subscribers.getApprovals(scope.sessionKey), name).toEqual(
-              new Set([client.connId]),
-            );
-          } else {
-            expect(respond, name).toHaveBeenCalledExactlyOnceWith(
-              false,
-              undefined,
-              // Narrow reads also revalidate access in the router response guard.
-              expect.objectContaining({
+              }
+            : undefined;
+          const error = allowed
+            ? undefined
+            : expect.objectContaining({
                 code: expect.stringMatching(/^(INVALID_REQUEST|UNAVAILABLE)$/),
-              }),
-            );
-            expect(subscribers.get(scope.sessionKey), name).toEqual(new Set());
-            expect(subscribers.getApprovals(scope.sessionKey), name).toEqual(new Set());
+              });
+          expect(respond, name).toHaveBeenCalledExactlyOnceWith(allowed, payload, error);
+          expect(subscribers.getApprovals(key), name).toEqual(
+            new Set(allowed ? [client.connId] : []),
+          );
+          if (!allowed) {
+            expect(subscribers.get(key), name).toEqual(new Set());
           }
           subscribers.unsubscribeAll(client.connId);
         }
       } finally {
         await disposeSessionReadContexts();
       }
-    });
-  },
+    }),
 );
