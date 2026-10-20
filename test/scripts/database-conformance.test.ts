@@ -3,15 +3,11 @@ import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
-import { createTempDirTracker } from "../helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const tempDirs = createTempDirTracker();
+const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 let runner: string;
-const engineFiles = [
-  "store.test.ts",
-  "command.integration.test.ts",
-  "nested/new.integration.test.ts",
-];
+const engineFiles = ["unit.test.ts", "integration.test.ts", "nested/integration.test.ts"];
 
 beforeAll(() => {
   const scripts = path.join(tempDirs.make("database-conformance-"), "scripts");
@@ -27,14 +23,10 @@ beforeAll(() => {
     "scripts/lib/weighted-test-shards.mts",
     path.join(scripts, "lib/weighted-test-shards.mts"),
   );
-  write(
-    "../config/postgres-conformance-timings.json",
-    JSON.stringify({
-      targetSeconds: Object.fromEntries(
-        engineFiles.map((file, index) => [`src/infra/database-engine/${file}`, 900 - index * 100]),
-      ),
-    }),
+  const targetSeconds = Object.fromEntries(
+    engineFiles.map((file, index) => [`src/infra/database-engine/${file}`, 900 - index * 100]),
   );
+  write("../config/postgres-conformance-timings.json", JSON.stringify({ targetSeconds }));
   for (const file of [
     ...engineFiles.map((engineFile) => `../src/infra/database-engine/${engineFile}`),
     "tsx.mjs",
@@ -45,7 +37,6 @@ beforeAll(() => {
   }
   write("test-projects.mts", "console.log(JSON.stringify(process.argv.slice(2)));\n");
 });
-afterAll(tempDirs.cleanup);
 
 function run(args: string[], connection = true) {
   const connectionArgs = connection ? ["--connection", "postgresql://fixture@localhost/test"] : [];
@@ -71,14 +62,10 @@ describe("PostgreSQL conformance shards", () => {
     }
     expect(shards.flat().toSorted()).toEqual(full.toSorted());
     expect(new Set(shards.flat()).size).toBe(full.length);
-    expect(targets(["--shard", "1/3", "--", "--maxWorkers=1"])).toEqual([
-      ...shards[0],
-      "--maxWorkers=1",
-    ]);
-    expect(targets(["--", "custom.test.ts", "--maxWorkers=1"])).toEqual([
-      "custom.test.ts",
-      "--maxWorkers=1",
-    ]);
+    const options = ["--maxWorkers=1"];
+    expect(targets(["--shard", "1/3", "--", ...options])).toEqual([...shards[0], ...options]);
+    const custom = ["custom.test.ts", ...options];
+    expect(targets(["--", ...custom])).toEqual(custom);
   });
 
   it("lists the selected targets without a database connection or catalog probe", () => {

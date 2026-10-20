@@ -66,27 +66,14 @@ describe("dependency-changes-report", () => {
     ["--base-ref", "origin/main", "origin/main", null],
     ["--base-lockfile", "base-lock.yaml", null, "base-lock.yaml"],
   ] as const)("parses all report options with %s", (flag, value, baseRef, baseLockfile) => {
-    expect(
-      parseArgs([
-        "--root",
-        "/repo",
-        flag,
-        value,
-        "--head-lockfile",
-        "head-lock.yaml",
-        "--json",
-        "artifacts/report.json",
-        "--",
-        "--markdown",
-        "artifacts/report.md",
-      ]),
-    ).toEqual({
+    const outputs = "--head-lockfile head.yaml --json r.json -- --markdown r.md".split(" ");
+    expect(parseArgs(["--root", "/repo", flag, value, ...outputs])).toEqual({
       rootDir: "/repo",
       baseRef,
       baseLockfile,
-      headLockfile: "head-lock.yaml",
-      jsonPath: "artifacts/report.json",
-      markdownPath: "artifacts/report.md",
+      headLockfile: "head.yaml",
+      jsonPath: "r.json",
+      markdownPath: "r.md",
     });
   });
 

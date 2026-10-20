@@ -28,7 +28,6 @@ describe("dated-todo-scan", () => {
       "docs/adjacent.md": "<!-- temporary workaround -->\nDeadline: March 2027.\n",
     };
     const excluded = {
-      "src/untracked.ts": "// TODO remove after 2026-12-01\n",
       "src/history.ts": "// Released on 2026-01-01.\n",
       "src/no-date.ts": "// TODO: improve this eventually.\n",
       "src/too-far.ts": "// FIXME: remove this\nconst gap = true;\n// 2027-04-01\n",
@@ -50,33 +49,25 @@ describe("dated-todo-scan", () => {
       ].join("\n"),
     };
     for (const [file, contents] of Object.entries(fixtures)) {
-      if (file !== "src/untracked.ts") {
-        writeFixture(root, file, contents);
-      }
+      writeFixture(root, file, contents);
     }
     spawnSync("git", ["init", "-q"], { cwd: root });
     spawnSync("git", ["add", "."], { cwd: root });
     spawnSync("git", ["add", "-f", "config/ignored.ts"], { cwd: root });
-    writeFixture(root, "src/untracked.ts", excluded["src/untracked.ts"]);
+    writeFixture(root, "src/untracked.ts", "// TODO remove after 2026-12-01\n");
 
     const compatReport = path.join(reportRoot, "compat.json");
-    writeFileSync(
-      compatReport,
-      JSON.stringify({
-        compat: {
-          records: [
-            {
-              code: "fixture-deprecation",
-              status: "deprecated",
-              removeAfter: "2026-11-15",
-              replacement: "fixture replacement",
-            },
-            { code: "active-record", status: "active", removeAfter: "2026-12-01" },
-            { code: "undated-deprecation", status: "deprecated" },
-          ],
-        },
-      }),
-    );
+    const records = [
+      {
+        code: "fixture-deprecation",
+        status: "deprecated",
+        removeAfter: "2026-11-15",
+        replacement: "fixture replacement",
+      },
+      { code: "active-record", status: "active", removeAfter: "2026-12-01" },
+      { code: "undated-deprecation", status: "deprecated" },
+    ];
+    writeFileSync(compatReport, JSON.stringify({ compat: { records } }));
     const output = path.join(root, ".artifacts", "candidates.json");
     const args = ["--root", root, "--output", output, "--compat-report", compatReport];
     const result = spawnSync(process.execPath, ["--import", "tsx", scriptPath, ...args], {
@@ -105,7 +96,7 @@ describe("dated-todo-scan", () => {
       ]),
     );
     const candidateFiles = candidates.map((candidate) => candidate.file);
-    for (const excludedFile of Object.keys(excluded)) {
+    for (const excludedFile of [...Object.keys(excluded), "src/untracked.ts"]) {
       expect(candidateFiles).not.toContain(excludedFile);
     }
     expect(candidates.filter((candidate) => candidate.source === "compat-registry")).toHaveLength(
