@@ -11,6 +11,9 @@ const now = new Date(2026, 9, 13, 12).getTime();
 const future = now + 86_400_000;
 let key: string;
 let storage: Map<string, string>;
+const denied = () => {
+  throw new Error("denied");
+};
 beforeEach(() => {
   key = customSnoozeStorageKey("wss://gateway.example", "account-" + Math.random())!;
   storage = new Map();
@@ -48,15 +51,9 @@ describe("custom snooze choice", () => {
   });
   it("tolerates denied storage and retains the successful choice in this page", () => {
     vi.stubGlobal("localStorage", {
-      getItem() {
-        throw new Error("denied");
-      },
-      setItem() {
-        throw new Error("denied");
-      },
-      removeItem() {
-        throw new Error("denied");
-      },
+      getItem: denied,
+      setItem: denied,
+      removeItem: denied,
     });
     rememberCustomSnooze(key, future, now);
     expect(readCustomSnooze(key, now)).toBe(future);

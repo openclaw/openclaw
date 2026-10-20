@@ -6,6 +6,17 @@ import {
   normalizeCatalogProjectGrouping,
 } from "./catalog-project-grouping.ts";
 
+type Actor = NonNullable<SessionCatalogSession["createdActor"]>;
+function attributed(
+  threadId: string,
+  id: string,
+  identity: Actor["identity"],
+  label: string,
+  type: Actor["type"] = "human",
+) {
+  return { ...session(threadId), createdActor: { type, id, identity, label } };
+}
+
 describe("normalizeCatalogProjectGrouping", () => {
   it.each([
     ["person", "person"],
@@ -69,42 +80,15 @@ describe("groupCatalogSessionsByProject", () => {
 describe("groupCatalogSessionsByPerson", () => {
   it("keeps creator namespaces separate and combines canonical profile aliases", () => {
     const result = groupCatalogSessionsByPerson([
-      {
-        ...session("channel"),
-        createdActor: {
-          type: "human",
-          id: "current",
-          label: "Channel",
-          identity: { type: "legacy", actorType: "human", source: null, id: "current" },
-        },
-      },
-      {
-        ...session("agent"),
-        createdActor: {
-          type: "agent",
-          id: "current",
-          label: "Agent",
-          identity: { type: "agent", id: "current" },
-        },
-      },
-      {
-        ...session("old-profile"),
-        createdActor: {
-          type: "human",
-          id: "former",
-          label: "Person",
-          identity: { type: "profile", id: "current" },
-        },
-      },
-      {
-        ...session("profile"),
-        createdActor: {
-          type: "human",
-          id: "current",
-          label: "Person",
-          identity: { type: "profile", id: "current" },
-        },
-      },
+      attributed(
+        "channel",
+        "current",
+        { type: "legacy", actorType: "human", source: null, id: "current" },
+        "Channel",
+      ),
+      attributed("agent", "current", { type: "agent", id: "current" }, "Agent", "agent"),
+      attributed("old-profile", "former", { type: "profile", id: "current" }, "Person"),
+      attributed("profile", "current", { type: "profile", id: "current" }, "Person"),
     ]);
     expect(result.groups.map((group) => group.sessions.map((item) => item.threadId))).toEqual([
       ["agent"],
@@ -117,17 +101,7 @@ describe("groupCatalogSessionsByPerson", () => {
     ["profile", "gateway-owner", "Shared owner"],
     ["agent", "gateway-owner", "gateway-owner"],
   ] as const)("labels a blank %s actor %s", (type, id, expected) => {
-    const result = groupCatalogSessionsByPerson([
-      {
-        ...session("one"),
-        createdActor: {
-          type: "human",
-          id,
-          identity: { type, id },
-          label: "  ",
-        },
-      },
-    ]);
+    const result = groupCatalogSessionsByPerson([attributed("one", id, { type, id }, "  ")]);
 
     expect(result.groups[0]).toMatchObject({
       key: `person:${type}:${id}`,
@@ -139,15 +113,7 @@ describe("groupCatalogSessionsByPerson", () => {
   it("leaves unattributed sessions in the flat ungrouped tail", () => {
     const result = groupCatalogSessionsByPerson([
       session("native"),
-      {
-        ...session("adopted"),
-        createdActor: {
-          type: "human",
-          id: "profile-ada",
-          identity: { type: "profile", id: "profile-ada" },
-          label: "Ada",
-        },
-      },
+      attributed("adopted", "profile-ada", { type: "profile", id: "profile-ada" }, "Ada"),
     ]);
 
     expect(result.groups).toHaveLength(1);

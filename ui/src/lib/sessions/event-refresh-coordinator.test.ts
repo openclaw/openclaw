@@ -2,45 +2,53 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSessionEventRefreshCoordinator } from "./event-refresh-coordinator.ts";
 
+const coordinators: ReturnType<typeof createSessionEventRefreshCoordinator>[] = [];
+function setup(duration = 0) {
+  const refresh = vi.fn(async () => {
+    if (duration) {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, duration);
+      });
+    }
+  });
+  const coordinator = createSessionEventRefreshCoordinator({ active: true, refresh });
+  coordinators.push(coordinator);
+  return { coordinator, refresh };
+}
+
 describe("automatic session refresh pacing", () => {
   beforeEach(() => {
+    vi.useFakeTimers();
     vi.spyOn(Math, "random").mockReturnValue(0);
   });
   afterEach(() => {
+    coordinators.splice(0).forEach((coordinator) => coordinator.dispose());
     vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
   it("spreads simultaneous invalidations without postponing their armed deadlines", async () => {
-    vi.useFakeTimers();
-    const refreshFirst = vi.fn(async () => {});
-    const refreshSecond = vi.fn(async () => {});
-    const first = createSessionEventRefreshCoordinator({ active: true, refresh: refreshFirst });
-    const second = createSessionEventRefreshCoordinator({ active: true, refresh: refreshSecond });
-    try {
-      first.schedule();
-      vi.mocked(Math.random).mockReturnValue(0.5);
-      second.schedule();
-      await vi.advanceTimersByTimeAsync(3_000);
-      vi.mocked(Math.random).mockReturnValue(0.9);
-      first.schedule();
-      second.schedule();
+    const { coordinator: first, refresh: refreshFirst } = setup();
+    const { coordinator: second, refresh: refreshSecond } = setup();
+    first.schedule();
+    vi.mocked(Math.random).mockReturnValue(0.5);
+    second.schedule();
+    await vi.advanceTimersByTimeAsync(3_000);
+    vi.mocked(Math.random).mockReturnValue(0.9);
+    first.schedule();
+    second.schedule();
 
-      await vi.advanceTimersByTimeAsync(1_499);
-      expect(refreshFirst).not.toHaveBeenCalled();
-      expect(refreshSecond).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(1);
-      expect(refreshSecond).toHaveBeenCalledOnce();
-      expect(refreshFirst).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(500);
-      expect(refreshFirst).toHaveBeenCalledOnce();
-      await vi.advanceTimersByTimeAsync(15_000);
-      expect(refreshFirst).toHaveBeenCalledOnce();
-      expect(refreshSecond).toHaveBeenCalledOnce();
-    } finally {
-      first.dispose();
-      second.dispose();
-    }
+    await vi.advanceTimersByTimeAsync(1_499);
+    expect(refreshFirst).not.toHaveBeenCalled();
+    expect(refreshSecond).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(refreshSecond).toHaveBeenCalledOnce();
+    expect(refreshFirst).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(refreshFirst).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(refreshFirst).toHaveBeenCalledOnce();
+    expect(refreshSecond).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -50,87 +58,60 @@ describe("automatic session refresh pacing", () => {
   ])(
     "waits $cooldown ms after a $duration ms refresh and debounces after idle",
     async ({ duration, cooldown, draw, collection }) => {
-      vi.useFakeTimers();
       vi.mocked(Math.random).mockReturnValue(draw);
-      const refresh = vi.fn(
-        () =>
-          new Promise<void>((resolve) => {
-            setTimeout(resolve, duration);
-          }),
-      );
-      const coordinator = createSessionEventRefreshCoordinator({ active: true, refresh });
-      try {
-        coordinator.schedule();
-        await vi.advanceTimersByTimeAsync(collection - 1);
-        expect(refresh).not.toHaveBeenCalled();
-        await vi.advanceTimersByTimeAsync(1);
-        coordinator.schedule();
-        await vi.advanceTimersByTimeAsync(duration + cooldown - 1);
-        expect(refresh).toHaveBeenCalledTimes(1);
-        await vi.advanceTimersByTimeAsync(1);
-        expect(refresh).toHaveBeenCalledTimes(2);
-        await vi.advanceTimersByTimeAsync(duration + cooldown + 1);
-        coordinator.schedule();
-        await vi.advanceTimersByTimeAsync(collection - 1);
-        expect(refresh).toHaveBeenCalledTimes(2);
-        await vi.advanceTimersByTimeAsync(1);
-        expect(refresh).toHaveBeenCalledTimes(3);
-      } finally {
-        coordinator.dispose();
-        await vi.advanceTimersByTimeAsync(duration);
-      }
+      const { coordinator, refresh } = setup(duration);
+      coordinator.schedule();
+      await vi.advanceTimersByTimeAsync(collection - 1);
+      expect(refresh).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      coordinator.schedule();
+      await vi.advanceTimersByTimeAsync(duration + cooldown - 1);
+      expect(refresh).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(refresh).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(duration + cooldown + 1);
+      coordinator.schedule();
+      await vi.advanceTimersByTimeAsync(collection - 1);
+      expect(refresh).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(refresh).toHaveBeenCalledTimes(3);
+      coordinator.dispose();
+      await vi.advanceTimersByTimeAsync(duration);
     },
   );
 
   it("holds pending and in-flight invalidation while inactive and catches up once", async () => {
-    vi.useFakeTimers();
-    const refresh = vi.fn(
-      () =>
-        new Promise<void>((resolve) => {
-          setTimeout(resolve, 1_000);
-        }),
-    );
-    const coordinator = createSessionEventRefreshCoordinator({ active: true, refresh });
-    try {
-      coordinator.schedule();
-      coordinator.setActive(false);
-      await vi.advanceTimersByTimeAsync(10_000);
-      expect(refresh).not.toHaveBeenCalled();
-      coordinator.setActive(true);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(refresh).toHaveBeenCalledTimes(1);
-      coordinator.schedule();
-      coordinator.setActive(false);
-      await vi.advanceTimersByTimeAsync(20_000);
-      expect(refresh).toHaveBeenCalledTimes(1);
-      coordinator.setActive(true);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(refresh).toHaveBeenCalledTimes(2);
-      await vi.advanceTimersByTimeAsync(20_000);
-      expect(refresh).toHaveBeenCalledTimes(2);
-    } finally {
-      coordinator.dispose();
-    }
+    const { coordinator, refresh } = setup(1_000);
+    coordinator.schedule();
+    coordinator.setActive(false);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(refresh).not.toHaveBeenCalled();
+    coordinator.setActive(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    coordinator.schedule();
+    coordinator.setActive(false);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    coordinator.setActive(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(refresh).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(refresh).toHaveBeenCalledTimes(2);
   });
 
   it("keeps one minute fallback under row traffic and absorbs it on an authoritative read", async () => {
-    vi.useFakeTimers();
-    const refresh = vi.fn(async () => {});
-    const coordinator = createSessionEventRefreshCoordinator({ active: true, refresh });
-    try {
-      for (let second = 0; second < 60; second += 1) {
-        coordinator.scheduleFallback();
-        await vi.advanceTimersByTimeAsync(1_000);
-      }
-      expect(refresh).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(refresh).toHaveBeenCalledOnce();
+    const { coordinator, refresh } = setup();
+    for (let second = 0; second < 60; second += 1) {
       coordinator.scheduleFallback();
-      coordinator.absorb();
-      await vi.advanceTimersByTimeAsync(65_000);
-      expect(refresh).toHaveBeenCalledOnce();
-    } finally {
-      coordinator.dispose();
+      await vi.advanceTimersByTimeAsync(1_000);
     }
+    expect(refresh).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(refresh).toHaveBeenCalledOnce();
+    coordinator.scheduleFallback();
+    coordinator.absorb();
+    await vi.advanceTimersByTimeAsync(65_000);
+    expect(refresh).toHaveBeenCalledOnce();
   });
 });

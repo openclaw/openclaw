@@ -1,6 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import type { GatewayEventFrame } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import {
   createGatewayRequestMock,
@@ -15,6 +16,32 @@ import {
 
 const listed = (key: string, fields: Partial<GatewaySessionRow>, ts: number) =>
   sessionsResult([{ key, kind: "direct", ...fields }], ts);
+const worktree = { id: "wt-1", branch: "openclaw/task", repoRoot: "/repo" };
+const background = { reconciliation: "background" } as const;
+const model = "openai/gpt-5.6-sol";
+
+async function createPrepared(
+  sessions: ReturnType<typeof createTestSessionCapability>,
+  key: string,
+) {
+  const created = vi.fn();
+  sessions.subscribeCreated(created);
+  await expect(
+    sessions.createResult({ agentId: "main", model, worktree: true }, background),
+  ).resolves.toMatchObject({ key });
+  expect(created).toHaveBeenCalledExactlyOnceWith(key);
+  expect(sessions.isPreparedWorkSession(key)).toBe(true);
+  expect(sessions.state.modelOverrides[key]).toBe(model);
+  return created;
+}
+
+function changed(key: string, fields: Partial<GatewaySessionRow>): GatewayEventFrame {
+  return {
+    type: "event",
+    event: "sessions.changed",
+    payload: { sessionKey: key, key, kind: "direct", ...fields },
+  };
+}
 
 function harness(routes: Record<string, (params?: unknown) => unknown>) {
   const request = createGatewayRequestMock(async (method, params) => {
@@ -39,19 +66,7 @@ it.each(["newer", "failed-before-list", "failed-after-list"])(
       "sessions.list": () => pendingList.promise,
       "sessions.patch": () => pendingPatch.promise,
     });
-    const created = vi.fn();
-    sessions.subscribeCreated(created);
-
-    await expect(
-      sessions.createResult(
-        { agentId: "main", model: "openai/gpt-5.6-sol", worktree: true },
-        { reconciliation: "background" },
-      ),
-    ).resolves.toMatchObject({ key });
-    expect(created).toHaveBeenCalledOnce();
-    expect(created).toHaveBeenCalledWith(key);
-    expect(sessions.isPreparedWorkSession(key)).toBe(true);
-    expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-5.6-sol");
+    const created = await createPrepared(sessions, key);
     const patch = sessions
       .patch(key, { model: claim === "newer" ? "openai/gpt-5.6-sol" : "openai/gpt-5-mini" })
       .catch((error: unknown) => error);
@@ -69,7 +84,7 @@ it.each(["newer", "failed-before-list", "failed-after-list"])(
           model: "gpt-5.6-sol",
           modelProvider: "openai",
           modelOverrideSource: null,
-          worktree: { id: "wt-1", branch: "openclaw/task", repoRoot: "/repo" },
+          worktree,
         },
         2,
       ),
@@ -90,7 +105,6 @@ it.each(["newer", "failed-before-list", "failed-after-list"])(
       await patch;
       expect(sessions.state.modelOverrides[key]).toBeUndefined();
     }
-    sessions.dispose();
   },
 );
 it.each([
@@ -138,33 +152,12 @@ it.each([
       throw new Error("thinking rejected");
     },
   });
-  const created = vi.fn();
-  sessions.subscribeCreated(created);
   await sessions.refresh({ force: true });
-
-  await expect(
-    sessions.createResult(
-      { agentId: "main", model: "openai/gpt-5.6-sol", worktree: true },
-      { reconciliation: "background" },
-    ),
-  ).resolves.toMatchObject({ key });
-  expect(created).toHaveBeenCalledOnce();
-  expect(created).toHaveBeenCalledWith(key);
-  expect(sessions.isPreparedWorkSession(key)).toBe(true);
-  expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-5.6-sol");
+  const created = await createPrepared(sessions, key);
   expect(sessions.think(key)).toBe("xhigh");
   const stateChanged = vi.fn();
   sessions.subscribe(stateChanged);
-  emitEvent({
-    type: "event",
-    event: "sessions.changed",
-    payload: {
-      sessionKey: key,
-      key,
-      kind: "direct",
-      ...testCase.event,
-    },
-  });
+  emitEvent(changed(key, testCase.event));
   expect(sessions.think(key)).toBe("medium");
   expect(stateChanged).toHaveBeenCalledOnce();
 
@@ -174,7 +167,7 @@ it.each([
       {
         thinkingLevel: "xhigh",
         updatedAt: 2,
-        worktree: { id: "wt-1", branch: "openclaw/task", repoRoot: "/repo" },
+        worktree,
       },
       2,
     ),
@@ -186,17 +179,7 @@ it.each([
   );
   expect(sessions.think(key)).toBe("medium");
   if (testCase.settleWithEvent) {
-    emitEvent({
-      type: "event",
-      event: "sessions.changed",
-      payload: {
-        sessionKey: key,
-        key,
-        kind: "direct",
-        thinkingLevel: "medium",
-        updatedAt: 3,
-      },
-    });
+    emitEvent(changed(key, { thinkingLevel: "medium", updatedAt: 3 }));
     expect(sessions.think(key)).toBeUndefined();
   } else {
     const appendRefresh = sessions.refresh({ append: true, offset: 1, force: true });
@@ -214,7 +197,6 @@ it.each([
   expect(sessions.state.result?.sessions[0]?.thinkingLevel).toBe(canonicalThinkingLevel);
   expect(created).toHaveBeenCalledOnce();
   expect(sessions.isPreparedWorkSession(key)).toBe(false);
-  sessions.dispose();
 });
 
 it("clears a created thinking claim for an unversioned removal", async () => {
@@ -225,20 +207,9 @@ it("clears a created thinking claim for an unversioned removal", async () => {
   });
   await sessions.createResult({ agentId: "main" });
   expect(sessions.think(key)).toBe("xhigh");
-  emitEvent({
-    type: "event",
-    event: "sessions.changed",
-    payload: {
-      sessionKey: key,
-      key,
-      kind: "direct",
-      archived: true,
-      thinkingLevel: "medium",
-    },
-  });
+  emitEvent(changed(key, { archived: true, thinkingLevel: "medium" }));
   expect(sessions.state.result?.sessions).toHaveLength(0);
   expect(sessions.think(key)).toBeUndefined();
-  sessions.dispose();
 });
 
 it("isolates delayed raw-global thinking claims by agent", async () => {
@@ -261,7 +232,6 @@ it("isolates delayed raw-global thinking claims by agent", async () => {
   expect(sessions.think("global", "alpha")).toBe("xhigh");
   expect(sessions.think("global", "beta")).toBe("medium");
   expect(sessions.think("global", "main")).toBeUndefined();
-  sessions.dispose();
 });
 
 it.each(["success", "in-place", "failure", "replaced"])(
@@ -317,7 +287,6 @@ it.each(["success", "in-place", "failure", "replaced"])(
       expect(created).not.toHaveBeenCalled();
       expect(request).not.toHaveBeenCalledWith("sessions.list", expect.anything());
     }
-    sessions.dispose();
   },
 );
 
@@ -334,7 +303,6 @@ it("retires prepared work placement when the session is deleted", async () => {
   expect(sessions.isPreparedWorkSession(key)).toBe(true);
   await expect(sessions.delete(key)).resolves.toMatchObject({ deleted: true });
   expect(sessions.isPreparedWorkSession(key)).toBe(false);
-  sessions.dispose();
 });
 
 it("retires a created thinking claim before replacement state is published", async () => {
@@ -350,5 +318,4 @@ it("retires a created thinking claim before replacement state is published", asy
   sessions.subscribe(() => published.push(sessions.think(key)));
   publish(true, createTestGatewayClient(request));
   expect(published[0]).toBeUndefined();
-  sessions.dispose();
 });

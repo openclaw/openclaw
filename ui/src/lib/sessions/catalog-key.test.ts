@@ -7,6 +7,24 @@ import {
   parseCatalogSessionKey,
 } from "./catalog-key.ts";
 
+function page(sessions: Array<{ threadId: string }>, nextCursor?: string) {
+  const host = {
+    hostId: "gateway:local",
+    label: "Gateway",
+    kind: "gateway",
+    connected: true,
+    sessions: sessions.map((session) => ({
+      ...session,
+      status: "idle",
+      archived: false,
+      canContinue: true,
+      canArchive: true,
+    })),
+    nextCursor,
+  };
+  return { catalogs: [{ id: "codex", label: "Codex", capabilities: {}, hosts: [host] }] };
+}
+
 describe("catalog session keys", () => {
   it.each([undefined, "other"])("round-trips opaque source ids for owner %s", (agentId) => {
     const key = { catalogId: "fixture", hostId: "node:DevBox", threadId: "Thread:A/B" };
@@ -41,51 +59,8 @@ describe("catalog session keys", () => {
     const key = { catalogId: "codex", hostId: "gateway:local", threadId: "thread-2" };
     const request = vi
       .fn()
-      .mockResolvedValueOnce({
-        catalogs: [
-          {
-            id: "codex",
-            label: "Codex",
-            capabilities: {},
-            hosts: [
-              {
-                hostId: "gateway:local",
-                label: "Gateway",
-                kind: "gateway",
-                connected: true,
-                sessions: [],
-                nextCursor: "next",
-              },
-            ],
-          },
-        ],
-      })
-      .mockResolvedValueOnce({
-        catalogs: [
-          {
-            id: "codex",
-            label: "Codex",
-            capabilities: {},
-            hosts: [
-              {
-                hostId: "gateway:local",
-                label: "Gateway",
-                kind: "gateway",
-                connected: true,
-                sessions: [
-                  {
-                    threadId: "thread-2",
-                    status: "idle",
-                    archived: false,
-                    canContinue: true,
-                    canArchive: true,
-                  },
-                ],
-              },
-            ],
-          },
-        ],
-      });
+      .mockResolvedValueOnce(page([], "next"))
+      .mockResolvedValueOnce(page([{ threadId: "thread-2" }]));
 
     const result = await lookupCatalogSession({
       client: { request } as never,
@@ -95,17 +70,15 @@ describe("catalog session keys", () => {
     });
 
     expect(result?.session?.threadId).toBe("thread-2");
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.catalog.list", {
+    const params = {
       agentId: "jarvis",
       catalogId: "codex",
       hostIds: ["gateway:local"],
       limitPerHost: 100,
-    });
+    };
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.catalog.list", params);
     expect(request).toHaveBeenNthCalledWith(2, "sessions.catalog.list", {
-      agentId: "jarvis",
-      catalogId: "codex",
-      hostIds: ["gateway:local"],
-      limitPerHost: 100,
+      ...params,
       cursors: { "gateway:local": "next" },
     });
   });

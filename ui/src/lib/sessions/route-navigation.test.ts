@@ -10,6 +10,12 @@ import {
   sessionNavigationTarget,
 } from "./route-navigation.ts";
 
+const catalog = (threadId = "thread-1") => ({
+  catalogId: "claude",
+  hostId: "gateway:local",
+  threadId,
+});
+
 describe("sessionNavigationTarget", () => {
   it("defaults generic opens to chat and honors a stored dashboard preference", () => {
     expect(resolveSessionPreferredFace(undefined)).toBe("chat");
@@ -18,26 +24,15 @@ describe("sessionNavigationTarget", () => {
   });
 
   it("keeps different catalog threads on different destinations", () => {
-    const first = sessionNavigationTarget({
-      face: "chat",
-      sessionKey: buildCatalogSessionKey({
-        catalogId: "claude",
-        hostId: "gateway:local",
-        threadId: "thread-1",
-      }),
-      fallbackAgentId: "main",
-      mainKey: "main",
-    });
-    const second = sessionNavigationTarget({
-      face: "chat",
-      sessionKey: buildCatalogSessionKey({
-        catalogId: "claude",
-        hostId: "gateway:local",
-        threadId: "thread-2",
-      }),
-      fallbackAgentId: "main",
-      mainKey: "main",
-    });
+    const target = (threadId: string) =>
+      sessionNavigationTarget({
+        face: "chat",
+        sessionKey: buildCatalogSessionKey(catalog(threadId)),
+        fallbackAgentId: "main",
+        mainKey: "main",
+      });
+    const first = target("thread-1");
+    const second = target("thread-2");
 
     expect(first.href).toBe("/chat/main?catalog=claude&host=gateway%3Alocal&thread=thread-1");
     expect(second.href).toBe("/chat/main?catalog=claude&host=gateway%3Alocal&thread=thread-2");
@@ -45,11 +40,7 @@ describe("sessionNavigationTarget", () => {
   });
 
   it("requires the destination face while preserving catalog identity", () => {
-    const catalogKey = {
-      catalogId: "claude",
-      hostId: "gateway:local",
-      threadId: "thread-1",
-    };
+    const catalogKey = catalog();
     const target = sessionNavigationTarget({
       face: "dashboard",
       sessionKey: buildCatalogSessionKey(catalogKey, "research"),

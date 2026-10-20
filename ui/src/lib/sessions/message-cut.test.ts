@@ -6,68 +6,56 @@ import {
   createTestSessionCapability,
 } from "./session-capability.test-support.ts";
 
+const key = "agent:main:main";
+const editor = {
+  editorText: "edit me",
+  editorAttachments: [{ mimeType: "image/png", data: "aW1hZ2U=" }],
+};
+function harness(request: (method: string) => unknown) {
+  const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+  return { ...gateway, sessions: createTestSessionCapability(gateway.gateway) };
+}
+
 describe("session capability message cuts", () => {
   it("returns a committed rewind result after the connection is replaced", async () => {
-    const committed = createDeferred<{
-      editorText?: string;
-      editorAttachments?: Array<{ mimeType: string; data: string }>;
-    }>();
+    const committed = createDeferred<typeof editor>();
     const request = vi.fn((method: string) => {
       if (method === "sessions.rewind") {
         return committed.promise;
       }
       throw new Error(`Unexpected request: ${method}`);
     });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const harness = createGatewayHarness(client);
-    const sessions = createTestSessionCapability(harness.gateway);
+    const { sessions, publish } = harness(request);
 
-    const pending = sessions.rewind("agent:main:main", "user-entry");
-    harness.publish(false);
-    committed.resolve({
-      editorText: "edit me",
-      editorAttachments: [{ mimeType: "image/png", data: "aW1hZ2U=" }],
-    });
+    const pending = sessions.rewind(key, "user-entry");
+    publish(false);
+    committed.resolve(structuredClone(editor));
 
-    await expect(pending).resolves.toEqual({
-      editorText: "edit me",
-      editorAttachments: [{ mimeType: "image/png", data: "aW1hZ2U=" }],
-    });
+    await expect(pending).resolves.toEqual(editor);
     expect(request).toHaveBeenCalledWith("sessions.rewind", {
-      sessionKey: "agent:main:main",
+      sessionKey: key,
       entryId: "user-entry",
     });
-    sessions.dispose();
   });
 
   it("returns a committed fork result when the replacement refresh fails", async () => {
+    const fork = { sessionKey: "agent:main:dashboard:forked", ...editor };
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.fork") {
-        return {
-          sessionKey: "agent:main:dashboard:forked",
-          editorText: "edit me",
-          editorAttachments: [{ mimeType: "image/png", data: "aW1hZ2U=" }],
-        };
+        return structuredClone(fork);
       }
       if (method === "sessions.list") {
         throw new Error("refresh failed");
       }
       throw new Error(`Unexpected request: ${method}`);
     });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const { gateway } = createGatewayHarness(client);
-    const sessions = createTestSessionCapability(gateway);
+    const { sessions } = harness(request);
 
-    await expect(sessions.forkAtMessage("agent:main:main", "user-entry")).resolves.toEqual({
-      sessionKey: "agent:main:dashboard:forked",
-      editorText: "edit me",
-      editorAttachments: [{ mimeType: "image/png", data: "aW1hZ2U=" }],
-    });
+    await expect(sessions.forkAtMessage(key, "user-entry")).resolves.toEqual(fork);
     expect(request).toHaveBeenCalledWith("sessions.fork", {
-      sessionKey: "agent:main:main",
+      sessionKey: key,
       entryId: "user-entry",
     });
-    sessions.dispose();
   });
 
   it("lists branches and sends the selected leaf to the switch RPC", async () => {
@@ -89,16 +77,13 @@ describe("session capability message cuts", () => {
       }
       throw new Error(`Unexpected request: ${method}`);
     });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const { gateway } = createGatewayHarness(client);
-    const sessions = createTestSessionCapability(gateway);
+    const { sessions } = harness(request);
 
-    await expect(sessions.listBranches("agent:main:main")).resolves.toEqual([branch]);
-    await expect(sessions.switchBranch("agent:main:main", "branch-b")).resolves.toEqual({});
+    await expect(sessions.listBranches(key)).resolves.toEqual([branch]);
+    await expect(sessions.switchBranch(key, "branch-b")).resolves.toEqual({});
     expect(request).toHaveBeenCalledWith("sessions.branches.switch", {
-      sessionKey: "agent:main:main",
+      sessionKey: key,
       leafEntryId: "branch-b",
     });
-    sessions.dispose();
   });
 });
