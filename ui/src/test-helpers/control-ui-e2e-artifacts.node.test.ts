@@ -9,6 +9,8 @@ import { createControlUiE2eArtifactDir } from "./control-ui-e2e-artifacts.ts";
 
 const tempDirs: string[] = [];
 const artifactNames = ["state.png", "proof.webm", "report.json"];
+const readArtifacts = (directory: string) =>
+  artifactNames.map((name) => readFileSync(path.join(directory, name), "utf8"));
 // Vite rewrites asset-style new URL expressions under the ordinary UI test runner.
 const sourceDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -59,13 +61,9 @@ it("allocates independently in concurrent workers sharing the same parent and sc
     ),
   );
   expect(new Set(outputs).size).toBe(2);
-  for (const name of artifactNames) {
-    expect(readFileSync(path.join(previous, name), "utf8")).toBe(`old:${name}`);
-  }
+  expect(readArtifacts(previous)).toEqual(artifactNames.map((name) => `old:${name}`));
   for (const [index, directory] of outputs.entries()) {
-    for (const name of artifactNames) {
-      expect(readFileSync(path.join(directory, name), "utf8")).toBe(["first", "second"][index]);
-    }
+    expect(readArtifacts(directory)).toEqual(artifactNames.map(() => ["first", "second"][index]));
   }
 });
 

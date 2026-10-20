@@ -1,9 +1,7 @@
 /* @vitest-environment jsdom */
 import { expect } from "vitest";
-import {
-  createControlUiMockGatewayInitScript,
-  type ControlUiMockGateway,
-} from "./control-ui-e2e.ts";
+import type { MockGatewayWindow } from "./control-ui-e2e-contract.ts";
+import { createControlUiMockGatewayInitScript } from "./control-ui-e2e.ts";
 import {
   flushMockTimers as flush,
   mockGatewayTest as it,
@@ -24,15 +22,7 @@ it.for(["resolve", "reject"] as const)(
       gatewayPage.connect("ws://mock-gateway/first"),
       gatewayPage.connect("ws://mock-gateway/second"),
     ] as const;
-    const gateway = (
-      window as typeof window & {
-        openclawControlUiE2eGateway?: {
-          resolveDeferred: (method: string) => void;
-          rejectDeferred: (method: string, error: { message: string }) => void;
-          deferNext: (method: string) => void;
-        };
-      }
-    ).openclawControlUiE2eGateway;
+    const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
     if (!gateway) {
       throw new Error("Mock Gateway was not installed");
     }
@@ -88,8 +78,7 @@ it("separates canonical roster capture and deferrals from child session queries"
 }) => {
   const { window, execute, responses: frames } = gatewayPage;
   execute(createControlUiMockGatewayInitScript());
-  const gateway = (window as typeof window & { openclawControlUiE2eGateway?: ControlUiMockGateway })
-    .openclawControlUiE2eGateway;
+  const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
   if (!gateway) {
     throw new Error("Mock Gateway was not installed");
   }

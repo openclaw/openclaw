@@ -36,47 +36,31 @@ export type MockGatewayRequestSelector = {
 
 type MockSessionsListResponse = { sessions: unknown[]; [field: string]: unknown };
 
+type AsyncMethod<T extends (...args: never[]) => unknown> = (
+  ...args: Parameters<T>
+) => Promise<ReturnType<T>>;
+
+type SharedGatewayMethod = Exclude<
+  keyof ControlUiMockGateway,
+  | "online"
+  | "requests"
+  | "emit"
+  | "findRequests"
+  | "setRequestHandler"
+  | "socketCount"
+  | "socketStates"
+  | "socketUrls"
+>;
+
+/** Browser controls preserve the in-page method signatures across the async boundary. */
 export type MockGatewayControls = {
-  closeLatest: (code?: number, reason?: string) => Promise<void>;
-  deliverLatest: (frame: unknown) => Promise<void>;
-  /** Returns the matching request count captured when deferral is armed. */
-  deferNext: (
-    method: string,
-    match?: Record<string, unknown>,
-    options?: { exactParams?: boolean },
-  ) => Promise<number>;
+  [K in SharedGatewayMethod]: AsyncMethod<ControlUiMockGateway[K]>;
+} & {
   emitChatFinal: (params: { runId: string; sessionKey?: string; text: string }) => Promise<void>;
-  emitGatewayEvent: (event: string, payload?: unknown) => Promise<void>;
-  getRequests: (
-    method?: string,
-    match?: Record<string, unknown>,
-    options?: { exactParams?: boolean },
-  ) => Promise<MockGatewayRequest[]>;
-  getSessionRow: (key: string) => Promise<ControlUiSessionFixture>;
-  getSocketCount: () => Promise<number>;
-  getSocketUrls: () => Promise<string[]>;
-  rejectDeferred: (
-    method: string,
-    error?: { code?: string; message?: string; details?: unknown; retryable?: boolean },
-    options?: { match?: Record<string, unknown>; exactParams?: boolean },
-  ) => Promise<void>;
-  resolveDeferred: (
-    method: string,
-    payload?: unknown,
-    options?: { match?: Record<string, unknown>; exactParams?: boolean },
-  ) => Promise<void>;
-  suspendLatest: () => Promise<void>;
-  setOnline: (online: boolean) => Promise<void>;
-  setGatewayBootId: (bootId: string) => Promise<void>;
-  setServerBuildId: (buildId: string) => Promise<void>;
-  setOperatorScopes: (scopes: string[]) => Promise<void>;
-  setHistoryMessages: (messages: unknown[]) => Promise<void>;
-  setMethodResponse: (method: string, payload: unknown) => Promise<void>;
-  setSessionsListResponse: (payload: MockSessionsListResponse) => Promise<void>;
-  setSessionSharingPolicy: (policy: {
-    allowedSessionVisibilities: Array<"shared" | "read-only" | "suggest" | "draft">;
-    hasMultipleSessionSharingIdentities: boolean;
-  }) => Promise<void>;
+  emitGatewayEvent: AsyncMethod<ControlUiMockGateway["emit"]>;
+  getRequests: AsyncMethod<ControlUiMockGateway["findRequests"]>;
+  getSocketCount: AsyncMethod<ControlUiMockGateway["socketCount"]>;
+  getSocketUrls: AsyncMethod<ControlUiMockGateway["socketUrls"]>;
   /**
    * Resolves with a captured request for `method`. Without `after` this is
    * satisfied by ANY prior request of the method (and returns the latest), so
@@ -100,6 +84,7 @@ export type ControlUiMockGateway = {
   readonly online: boolean;
   closeLatest: (code?: number, reason?: string) => void;
   deliverLatest: (frame: unknown) => void;
+  /** Returns the matching request count captured when deferral is armed. */
   deferNext: (
     method: string,
     match?: Record<string, unknown>,

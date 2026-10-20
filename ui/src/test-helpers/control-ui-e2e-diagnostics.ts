@@ -62,53 +62,37 @@ export function installControlUiE2ePageDiagnosticRing(page: Page): ControlUiE2eD
     lifecycle.firstBrowserDisconnectAt ??= new Date().toISOString();
   };
   const events: ControlUiE2eDiagnosticEvent[] = [];
-  const push = (event: ControlUiE2eDiagnosticEvent) => {
-    events.push(event);
+  const push = (
+    source: ControlUiE2eDiagnosticEvent["source"],
+    details: ControlUiE2eDiagnosticEvent["details"],
+  ) => {
+    events.push({ at: new Date().toISOString(), source, details });
     if (events.length > CONTROL_UI_E2E_DIAGNOSTIC_RING_LIMIT) {
       events.splice(0, events.length - CONTROL_UI_E2E_DIAGNOSTIC_RING_LIMIT);
     }
   };
-  const onConsole = (message: ConsoleMessage) => {
-    push({
-      at: new Date().toISOString(),
-      details: {
-        location: message.location(),
-        text: message.text(),
-        type: message.type(),
-      },
-      source: "console",
+  const onConsole = (message: ConsoleMessage) =>
+    push("console", {
+      location: message.location(),
+      text: message.text(),
+      type: message.type(),
     });
-  };
-  const onPageError = (error: Error) => {
-    push({
-      at: new Date().toISOString(),
-      details: { message: error.message, name: error.name, stack: error.stack ?? null },
-      source: "pageerror",
+  const onPageError = (error: Error) =>
+    push("pageerror", { message: error.message, name: error.name, stack: error.stack ?? null });
+  const onRequestFailed = (request: Request) =>
+    push("requestfailed", {
+      errorText: request.failure()?.errorText ?? null,
+      method: request.method(),
+      resourceType: request.resourceType(),
+      url: request.url(),
     });
-  };
-  const onRequestFailed = (request: Request) => {
-    push({
-      at: new Date().toISOString(),
-      details: {
-        errorText: request.failure()?.errorText ?? null,
-        method: request.method(),
-        resourceType: request.resourceType(),
-        url: request.url(),
-      },
-      source: "requestfailed",
-    });
-  };
   const onFrameNavigated = (frame: Frame) => {
     // Main-frame navigations order boot/reload sequences in failure reports;
     // subframes are noise.
     if (frame !== page.mainFrame()) {
       return;
     }
-    push({
-      at: new Date().toISOString(),
-      details: { url: frame.url() },
-      source: "framenavigated",
-    });
+    push("framenavigated", { url: frame.url() });
   };
   page.on("console", onConsole);
   page.on("framenavigated", onFrameNavigated);
@@ -271,15 +255,13 @@ function summarizeRecordedModelResponses(
   const catalogCounts = (payload: unknown) => {
     const catalog = asOptionalRecord(payload);
     const models = Array.isArray(catalog?.models) ? catalog.models : undefined;
+    const availability = models?.map((model) => asOptionalRecord(model)?.available);
     return {
       models: models?.length ?? null,
-      available:
-        models?.filter((model) => asOptionalRecord(model)?.available === true).length ?? null,
-      unavailable:
-        models?.filter((model) => asOptionalRecord(model)?.available === false).length ?? null,
+      available: availability?.filter((value) => value === true).length ?? null,
+      unavailable: availability?.filter((value) => value === false).length ?? null,
       unknownAvailability:
-        models?.filter((model) => typeof asOptionalRecord(model)?.available !== "boolean").length ??
-        null,
+        availability?.filter((value) => typeof value !== "boolean").length ?? null,
       pendingProviders: Array.isArray(catalog?.pendingProviders)
         ? catalog.pendingProviders.length
         : null,
@@ -394,9 +376,11 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
       // may reach CI logs; private reports retain the existing detailed state.
       const safeValue = (value: unknown, allowed: string[]) =>
         allowed.find((entry) => entry === value) ?? "unknown";
+      const nullableBoolean = (value: unknown) => (typeof value === "boolean" ? value : null);
       const agentPage = document.querySelector("openclaw-agents-page");
-      const selectedAgent = agentPage ? Reflect.get(agentPage, "agentsSelectedId") : undefined;
-      const fileList = agentPage ? Reflect.get(agentPage, "agentFilesList") : undefined;
+      const agentProperty = (key: string) => (agentPage ? Reflect.get(agentPage, key) : undefined);
+      const selectedAgent = agentProperty("agentsSelectedId");
+      const fileList = agentProperty("agentFilesList");
       const fileEditor = document.querySelector<HTMLTextAreaElement>(".agent-file-textarea");
       const agentPath = window.location.pathname.match(
         /^\/settings\/agents\/([^/]+)\/(overview|files|tools|skills|channels|cron)$/u,
@@ -465,7 +449,7 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
             selectedAgentPresent: typeof selectedAgent === "string" && selectedAgent.length > 0,
             selectionMatchesPath: agentPath ? selectedAgent === agentPath[1] : null,
             listMatchesSelection: fileList ? fileList.agentId === selectedAgent : null,
-            panel: safeValue(agentPage ? Reflect.get(agentPage, "agentsPanel") : undefined, [
+            panel: safeValue(agentProperty("agentsPanel"), [
               "overview",
               "files",
               "tools",
@@ -473,20 +457,17 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
               "channels",
               "cron",
             ]),
-            activeFile: safeValue(
-              agentPage ? Reflect.get(agentPage, "agentFileActive") : undefined,
-              [
-                "AGENTS.md",
-                "SOUL.md",
-                "USER.md",
-                "BOOTSTRAP.md",
-                "MEMORY.md",
-                "IDENTITY.md",
-                "TOOLS.md",
-                "HEARTBEAT.md",
-              ],
-            ),
-            loading: agentPage ? Reflect.get(agentPage, "agentFilesLoading") === true : null,
+            activeFile: safeValue(agentProperty("agentFileActive"), [
+              "AGENTS.md",
+              "SOUL.md",
+              "USER.md",
+              "BOOTSTRAP.md",
+              "MEMORY.md",
+              "IDENTITY.md",
+              "TOOLS.md",
+              "HEARTBEAT.md",
+            ]),
+            loading: agentPage ? agentProperty("agentFilesLoading") === true : null,
             editorPresent: Boolean(fileEditor),
             editorLength: fileEditor?.value.length ?? null,
             editorDisabled: fileEditor?.disabled ?? null,
@@ -505,10 +486,9 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
             "starting",
             "reload-required",
           ]),
-          connected: typeof agentsState?.connected === "boolean" ? agentsState.connected : null,
+          connected: nullableBoolean(agentsState?.connected),
           roster: {
-            loading:
-              typeof agentsState?.agentsLoading === "boolean" ? agentsState.agentsLoading : null,
+            loading: nullableBoolean(agentsState?.agentsLoading),
             count: Array.isArray(roster?.agents) ? roster.agents.length : null,
             errorPresent: Boolean(agentsState?.agentsError),
           },
