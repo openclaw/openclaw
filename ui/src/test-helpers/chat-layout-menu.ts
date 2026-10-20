@@ -197,8 +197,12 @@ export async function selectChatLayoutAction(
   const nativeControl = nativePanelControl(scope, name);
   if (
     nativeControl &&
-    // Main-pane Focus and Restore belong to Layout while that entry is available.
+    // Expanded mobile panels restore within their modal host; desktop main
+    // Focus and Restore retain Layout while that entry is available.
     (name === "Expand Side panel" ||
+      (name === "Restore split" &&
+        (await host.isVisible()) &&
+        (await host.getAttribute("data-mode")) === "expanded") ||
       !(await scope.locator("button.chat-pane__layout-trigger:not([inert] *)").first().isVisible()))
   ) {
     await nativeControl.click();
