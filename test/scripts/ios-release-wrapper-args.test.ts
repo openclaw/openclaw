@@ -8,25 +8,25 @@ const BASH_BIN = process.platform === "win32" ? "bash" : "/bin/bash";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const gemfilePath = path.join(process.cwd(), "apps", "ios", "Gemfile");
 const releaseArgs = ["--version", "2026.7.2", "--revision", "1", "--build-number", "3"];
+const runBash = (args: string[], env: NodeJS.ProcessEnv) =>
+  spawnSync(BASH_BIN, args, {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, ...env },
+  });
 
 describe("iOS release shell wrapper arguments", () => {
   it("rejects App Store release relay URL overrides before release work", () => {
-    const result = spawnSync(
-      BASH_BIN,
+    const result = runBash(
       [
         ...(process.platform === "win32" ? [] : ["--noprofile", "--norc"]),
         "scripts/ios-release-prepare.sh",
         ...releaseArgs,
       ],
       {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-        env: {
-          ...process.env,
-          IOS_DEVELOPMENT_TEAM: "FWJYW4S8P8",
-          OPENCLAW_PUSH_RELAY_BASE_URL: "https://relay.example.com",
-        },
+        IOS_DEVELOPMENT_TEAM: "FWJYW4S8P8",
+        OPENCLAW_PUSH_RELAY_BASE_URL: "https://relay.example.com",
       },
     );
 
@@ -69,15 +69,10 @@ describe("iOS release shell wrapper arguments", () => {
     writeFileSync(fastlane, `#!/usr/bin/env bash\nprintf '%s\\n' "$*"\nexit 0\n`);
     chmodSync(bundle, 0o755);
     chmodSync(fastlane, 0o755);
-    return spawnSync(BASH_BIN, args, {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        BUNDLE_GEMFILE: bundleGemfile,
-        OPENCLAW_FASTLANE_EXPECTED_GEMFILE: gemfilePath,
-        PATH: `${binDir}:${process.env.PATH ?? ""}`,
-      },
-      encoding: "utf8",
+    return runBash(args, {
+      BUNDLE_GEMFILE: bundleGemfile,
+      OPENCLAW_FASTLANE_EXPECTED_GEMFILE: gemfilePath,
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
     });
   }
 

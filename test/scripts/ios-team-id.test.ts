@@ -58,15 +58,7 @@ describe("scripts/ios-team-id.sh", () => {
       `#!/usr/bin/env bash
 echo '{}'`,
     );
-    await writeExecutable(
-      path.join(sharedBinDir, "defaults"),
-      `#!/usr/bin/env bash
-if [[ "$3" == "DVTDeveloperAccountManagerAppleIDLists" ]]; then
-  echo '(identifier = "dev@example.com";)'
-  exit 0
-fi
-exit 0`,
-    );
+    await writeExecutable(path.join(sharedBinDir, "defaults"), "#!/usr/bin/env bash\nexit 0\n");
     sharedFakePythonPath = path.join(sharedHomeDir, "bin", "fake-python");
     await writeExecutable(
       sharedFakePythonPath,
