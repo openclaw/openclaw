@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
@@ -19,8 +19,8 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
 const agentId = "main";
-const CONSULT_REPLY = "Two meetings tomorrow.";
-const QUESTION = "what is on the calendar tomorrow?";
+const CONSULT_REPLY = "Two meetings.";
+const QUESTION = "Calendar tomorrow?";
 
 function readMessageTexts(scope: Parameters<typeof loadEvents>[0]): string[] {
   return loadEvents(scope).flatMap((event) => {
@@ -48,11 +48,8 @@ async function prepareConsultTurn(label: string) {
   const scope = { agentId, sessionId, sessionKey, storePath };
   const manager = SessionManager.open(scope, dir);
   manager.appendMessage({ role: "user", content: "earlier question", timestamp: 1 });
-  const { anchor } = manager.appendMessageWithTranscriptAnchor({
-    role: "user",
-    content: QUESTION,
-    timestamp: 2,
-  });
+  const input = { role: "user" as const, content: QUESTION, timestamp: 2 };
+  const { anchor } = manager.appendMessageWithTranscriptAnchor(input);
   if (!anchor) {
     throw new Error("missing current-turn anchor");
   }
@@ -67,10 +64,6 @@ async function prepareConsultTurn(label: string) {
     );
   return { appendConsultReply, scope, sessionKey, storePath };
 }
-
-beforeEach(() => {
-  envSnapshot.restore();
-});
 
 afterEach(async () => {
   for (const stateDir of tempDirs.dirs) {
@@ -96,45 +89,24 @@ it("keeps the voice transcript from failing an in-flight agent consult", async (
     voiceSessionId,
   };
   await appendRelay({ ...target, entryId: "utterance-1", role: "user", text: QUESTION });
-  await appendRelay({
-    ...target,
-    entryId: "filler-1",
-    role: "assistant",
-    text: "I'll check that request.",
-  });
+  await appendRelay({ ...target, entryId: "filler-1", role: "assistant", text: "Checking." });
   expect(() => appendConsultReply()).not.toThrow();
-  expect(readMessageTexts(scope)).toEqual([
-    "earlier question",
-    QUESTION,
-    QUESTION,
-    "I'll check that request.",
-    CONSULT_REPLY,
-  ]);
+  const messages = readMessageTexts(scope);
+  expect(messages).toEqual(["earlier question", QUESTION, QUESTION, "Checking.", CONSULT_REPLY]);
 });
 
 // The exemption keys on the marker the voice writer stamps, not on the kind alone.
 it.each([
-  { label: "no-channel", provenance: { kind: "realtime_voice" } },
-  {
-    label: "foreign-channel",
-    provenance: { kind: "realtime_voice", sourceChannel: "discord" },
-  },
-  {
-    label: "foreign-kind",
-    provenance: { kind: "typed_chat", sourceChannel: "talk" },
-  },
-])(
-  "still rejects a consult reply superseded by a $label user row",
-  async ({ label, provenance }) => {
+  ["no-channel", { kind: "realtime_voice" }],
+  ["foreign-channel", { kind: "realtime_voice", sourceChannel: "discord" }],
+  ["foreign-kind", { kind: "typed_chat", sourceChannel: "talk" }],
+] as const)(
+  "still rejects a consult reply superseded by a %s user row",
+  async (label, provenance) => {
     const { appendConsultReply, scope } = await prepareConsultTurn(`voice-consult-${label}`);
     await appendTranscriptMessage(scope, {
       eventId: `forged:${label}`,
-      message: {
-        role: "user",
-        content: [{ type: "text", text: "different question" }],
-        timestamp: 3,
-        provenance,
-      },
+      message: { role: "user", content: [{ type: "text", text: "new" }], timestamp: 3, provenance },
       now: 3,
     });
 

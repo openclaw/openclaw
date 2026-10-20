@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   isRealtimeVoiceWakeNameRequired as wakeNameRequired,
@@ -26,23 +26,21 @@ function resolve(overrides: Partial<Parameters<typeof resolveRealtimeVoiceSessio
   });
 }
 
-describe("realtime voice session policy", () => {
-  it("defaults agent-proxy sessions to owner consults and adaptive wake names", () => {
-    expect(resolve()).toStrictEqual({
-      handlesAgentConsult: false,
-      toolPolicy: "owner",
-      consultToolsAllow: undefined,
-      consultPolicy: "always",
-      wakeNamePolicy: "automatic",
-      wakeNames: ["openclaw", "clawbot", "molty"],
-      autoRespondToAudio: false,
-    });
+it("defaults agent-proxy sessions to owner consults and adaptive wake names", () => {
+  expect(resolve()).toStrictEqual({
+    handlesAgentConsult: false,
+    toolPolicy: "owner",
+    consultToolsAllow: undefined,
+    consultPolicy: "always",
+    wakeNamePolicy: "automatic",
+    wakeNames: ["openclaw", "clawbot", "molty"],
+    autoRespondToAudio: false,
   });
+});
 
-  it.each([
-    { configuredConsultPolicy: undefined, requireWakeName: undefined, allowed: true },
-    { configuredConsultPolicy: "always" as const, requireWakeName: undefined, allowed: false },
-  ])("resolves native delegation policy: %j", ({ allowed, ...overrides }) => {
+it.each([undefined, "always"] as const)(
+  "resolves native delegation policy: %s",
+  (configuredConsultPolicy) => {
     const native = () =>
       resolve({
         supportsActivationNameGating: undefined,
@@ -51,12 +49,11 @@ describe("realtime voice session policy", () => {
           inputAudioFormats: [],
           outputAudioFormats: [],
           handlesAgentConsult: true,
-          supportsBargeIn: false,
         },
         configuredToolPolicy: "safe-read-only",
-        ...overrides,
+        configuredConsultPolicy,
       });
-    if (!allowed) {
+    if (configuredConsultPolicy === "always") {
       expect(native).toThrow("owns voice responses and delegation");
       return;
     }
@@ -67,73 +64,67 @@ describe("realtime voice session policy", () => {
       wakeNamePolicy: "never",
       autoRespondToAudio: true,
     });
-  });
+  },
+);
 
-  it("preserves explicit wake-name overrides for capable agent-proxy sessions", () => {
-    expect(resolve({ requireWakeName: true }).wakeNamePolicy).toBe("always");
-    expect(resolve({ requireWakeName: false })).toMatchObject({
+it("preserves explicit wake-name overrides for capable agent-proxy sessions", () => {
+  expect(resolve({ requireWakeName: true }).wakeNamePolicy).toBe("always");
+  expect(resolve({ requireWakeName: false })).toMatchObject({
+    wakeNamePolicy: "never",
+    wakeNames: [],
+  });
+});
+
+it("disables wake-name gating outside capable agent-proxy sessions", () => {
+  const expectDisabled = (isAgentProxy: boolean, supportsActivationNameGating: boolean) => {
+    expect(
+      resolve({
+        isAgentProxy,
+        supportsActivationNameGating,
+        configuredConsultPolicy: "auto",
+        requireWakeName: true,
+      }),
+    ).toMatchObject({
+      toolPolicy: isAgentProxy ? "owner" : "safe-read-only",
+      consultPolicy: "auto",
       wakeNamePolicy: "never",
       wakeNames: [],
+      autoRespondToAudio: true,
     });
+  };
+  expectDisabled(false, true);
+  expectDisabled(true, false);
+});
+
+it("normalizes configured wake names instead of adding defaults", () => {
+  const policy = resolve({
+    configuredToolPolicy: "safe-read-only",
+    configuredConsultPolicy: "auto",
+    requireWakeName: true,
+    configuredWakeNames: [" Claw ", "Claw Bot Helper", "claw"],
   });
 
-  it("disables wake-name gating outside capable agent-proxy sessions", () => {
-    const expectDisabled = (isAgentProxy: boolean, supportsActivationNameGating: boolean) => {
-      expect(
-        resolve({
-          isAgentProxy,
-          supportsActivationNameGating,
-          configuredConsultPolicy: "auto",
-          requireWakeName: true,
-        }),
-      ).toMatchObject({
-        toolPolicy: isAgentProxy ? "owner" : "safe-read-only",
-        consultPolicy: "auto",
-        wakeNamePolicy: "never",
-        wakeNames: [],
-        autoRespondToAudio: true,
-      });
-    };
-    expectDisabled(false, true);
-    expectDisabled(true, false);
-  });
+  expect(policy.toolPolicy).toBe("safe-read-only");
+  const tools = ["read", "web_search", "web_fetch", "x_search", "memory_search", "memory_get"];
+  expect(policy.consultToolsAllow).toEqual(tools);
+  expect(policy.wakeNames).toStrictEqual(["claw"]);
+});
 
-  it("normalizes configured wake names instead of adding defaults", () => {
-    const policy = resolve({
-      configuredToolPolicy: "safe-read-only",
-      configuredConsultPolicy: "auto",
-      requireWakeName: true,
-      configuredWakeNames: [" Claw ", "Claw Bot Helper", "claw"],
-    });
+it("requires automatic wake names only for shared human participation", () => {
+  expect(wakeNameRequired("always", 0)).toBe(true);
+  expect(wakeNameRequired("automatic", 1)).toBe(false);
+  expect(wakeNameRequired("automatic", 2)).toBe(true);
+  expect(wakeNameRequired("never", 3)).toBe(false);
+});
 
-    expect(policy.toolPolicy).toBe("safe-read-only");
-    expect(policy.consultToolsAllow).toEqual([
-      "read",
-      "web_search",
-      "web_fetch",
-      "x_search",
-      "memory_search",
-      "memory_get",
-    ]);
-    expect(policy.wakeNames).toStrictEqual(["claw"]);
-  });
-
-  it("requires automatic wake names only for shared human participation", () => {
-    expect(wakeNameRequired("always", 0)).toBe(true);
-    expect(wakeNameRequired("automatic", 1)).toBe(false);
-    expect(wakeNameRequired("automatic", 2)).toBe(true);
-    expect(wakeNameRequired("never", 3)).toBe(false);
-  });
-
-  it("resolves provider-driven barge-in defaults", () => {
-    expect(interruptOnAudio(undefined)).toBe(true);
-    expect(interruptOnAudio(false)).toBe(false);
-    expect(interruptOnAudio("false")).toBe(true);
-    expect(bargeIn({ configuredBargeIn: false, interruptResponseOnInputAudio: true })).toBe(false);
-    expect(bargeIn({ configuredBargeIn: undefined, interruptResponseOnInputAudio: false })).toBe(
-      false,
-    );
-    expect(minAudioEndMs(undefined)).toBe(250);
-    expect(minAudioEndMs(0)).toBe(0);
-  });
+it("resolves provider-driven barge-in defaults", () => {
+  expect(interruptOnAudio(undefined)).toBe(true);
+  expect(interruptOnAudio(false)).toBe(false);
+  expect(interruptOnAudio("false")).toBe(true);
+  expect(bargeIn({ configuredBargeIn: false, interruptResponseOnInputAudio: true })).toBe(false);
+  expect(bargeIn({ configuredBargeIn: undefined, interruptResponseOnInputAudio: false })).toBe(
+    false,
+  );
+  expect(minAudioEndMs(undefined)).toBe(250);
+  expect(minAudioEndMs(0)).toBe(0);
 });
