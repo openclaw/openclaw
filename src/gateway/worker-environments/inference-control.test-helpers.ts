@@ -20,11 +20,10 @@ export function createWorkerInferenceDrainService(
       const completed = createDeferred();
       let drain: WorkerInferenceSessionDrain | undefined;
       let started = false;
-      const release = () => drain?.release();
       return {
         drained: completed.promise,
         hasWork: () => drain?.hasWork() ?? false,
-        release,
+        release: () => drain?.release(),
         start: () => {
           if (started) {
             return;
@@ -32,7 +31,7 @@ export function createWorkerInferenceDrainService(
           started = true;
           try {
             drain = startDrain(sessionId);
-            void drain.drained.then(completed.resolve, completed.reject);
+            completed.resolve(drain.drained);
           } catch (error) {
             completed.reject(error);
           }

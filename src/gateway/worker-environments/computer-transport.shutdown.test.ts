@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
@@ -45,10 +45,8 @@ it.each(["current", "lease", "epoch", "connection", "pairing", "after-handler-lo
     const registry = new NodeRegistry({
       resolveCurrentPairingState: async () => ({ identity: "paired", generation: "pairing-1" }),
     });
-    h.state.node = registry.register(client, {
-      pairingIdentity: "paired",
-      pairingGeneration: "pairing-1",
-    });
+    const pairing = { pairingIdentity: "paired", pairingGeneration: "pairing-1" };
+    h.state.node = registry.register(client, pairing);
     const context = h.state.context;
     if (!context) {
       throw new Error("expected computer Gateway context");
@@ -115,13 +113,7 @@ it.each(["current", "lease", "epoch", "connection", "pairing", "after-handler-lo
       } else if (boundary === "epoch") {
         h.state.environment = { ...h.state.environment, ownerEpoch: 8 };
       } else if (boundary === "connection") {
-        registry.register(
-          { ...client, connId: "replacement" },
-          {
-            pairingIdentity: "paired",
-            pairingGeneration: "pairing-1",
-          },
-        );
+        registry.register({ ...client, connId: "replacement" }, pairing);
       } else if (boundary === "pairing") {
         registry.updateSurface(
           "desktop-node",
@@ -136,12 +128,11 @@ it.each(["current", "lease", "epoch", "connection", "pairing", "after-handler-lo
       }
       const response = respond(1);
       if (boundary === "after-handler-load") {
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           handlerEntered.promise,
-          response.then(() => {
-            throw new Error("cleanup reply was rejected before reaching its handler");
-          }),
-        ]);
+          response,
+          "cleanup reply was rejected before reaching its handler",
+        );
         h.state.environment = { ...h.state.environment, leaseId: "replacement" };
         resumeHandler.resolve();
         expect(await response).toHaveBeenCalledWith(true, { ok: true, ignored: true }, undefined);

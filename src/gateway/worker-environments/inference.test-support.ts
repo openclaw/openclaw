@@ -5,6 +5,8 @@ import type {
   WorkerInferenceTerminalOutcome,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
+import { createZeroUsageFixture } from "../../agents/test-helpers/usage-fixtures.js";
 import type { WorkerConnectionIdentity, WorkerInferenceExecutor } from "./connection-identity.js";
 import type { WorkerInferenceStore } from "./inference-store.js";
 import { createWorkerInferenceManager, type WorkerInferenceSink } from "./inference.js";
@@ -25,9 +27,10 @@ export const REQUEST: WorkerInferenceStartParams = {
   context: { messages: [] },
   options: {},
 };
+const { runEpoch, sessionId, runId, turnId, modelRef } = REQUEST;
 export const SESSION_TARGET = {
   agentId: "main",
-  sessionId: REQUEST.sessionId,
+  sessionId,
   sessionKey: "agent:main:inference",
   storePath: "inference-sessions.sqlite",
 };
@@ -35,16 +38,16 @@ export const IDENTITY: WorkerConnectionIdentity = {
   environmentId: "w",
   credentialHash: "d",
   bundleHash: "b",
-  sessionId: REQUEST.sessionId,
-  runId: REQUEST.runId,
+  sessionId,
+  runId,
   turnClaim: {
-    sessionId: REQUEST.sessionId,
+    sessionId,
     claimId: "claim-r",
-    runId: REQUEST.runId,
+    runId,
     placementGeneration: 4,
-    owner: { kind: "worker", environmentId: "w", ownerEpoch: REQUEST.runEpoch },
+    owner: { kind: "worker", environmentId: "w", ownerEpoch: runEpoch },
   },
-  ownerEpoch: REQUEST.runEpoch,
+  ownerEpoch: runEpoch,
   rpcSetVersion: 1,
   protocolFeatures: ["worker-inference-v1"],
   credentialExpiresAtMs: 10_000,
@@ -56,30 +59,14 @@ export const ERROR: WorkerInferenceTerminalOutcome = {
 };
 export const DONE: WorkerInferenceTerminalOutcome = {
   type: "done",
-  message: {
-    role: "assistant",
+  message: makeAgentAssistantMessage({
     content: [{ type: "text", text: "done" }],
-    api: "openai-responses",
-    provider: REQUEST.modelRef.provider,
-    model: REQUEST.modelRef.model,
-    usage: {
-      input: 1,
-      output: 1,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 2,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
-    stopReason: "stop",
+    ...modelRef,
+    usage: { ...createZeroUsageFixture(), input: 1, output: 1, totalTokens: 2 },
     timestamp: 1,
-  },
+  }),
 };
-export const CANCEL = {
-  runEpoch: REQUEST.runEpoch,
-  sessionId: REQUEST.sessionId,
-  runId: REQUEST.runId,
-  turnId: REQUEST.turnId,
-};
+export const CANCEL = { runEpoch, sessionId, runId, turnId };
 
 export function identityFor(request: WorkerInferenceStartParams): WorkerConnectionIdentity {
   return {

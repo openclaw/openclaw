@@ -4,6 +4,7 @@ import { sameWorkerBuild } from "../../worker/worker-build-identity.js";
 import { admitWorkerConnection, validateWorkerConnectionIdentity } from "./admission.js";
 import { hashWorkerCredential, type WorkerCredentialRecord } from "./credential.js";
 import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
+import { workerCredential } from "./store.test-support.js";
 
 const BUNDLE_HASH = "a".repeat(64);
 const CREDENTIAL = ["worker", "credential", "fixture"].join("-");
@@ -30,49 +31,48 @@ describe("worker admission", () => {
       bootstrapReceipt: RECEIPT,
     } as WorkerEnvironmentRecord;
     credential = {
+      ...workerCredential(hashWorkerCredential(CREDENTIAL)),
       environmentId: environment.environmentId,
-      credentialHash: hashWorkerCredential(CREDENTIAL),
       bundleHash: BUNDLE_HASH,
-      sessionId: null,
-      rpcSetVersion: 1,
       ownerEpoch: 1,
-      expiresAtMs: 2_000,
       deliveredAtMs: null,
     };
     store = {
-      get: (environmentId: string) =>
-        environmentId.trim() === environment.environmentId ? environment : undefined,
-      getCredential: (environmentId: string) =>
-        environmentId.trim() === credential.environmentId ? credential : undefined,
+      get: (id: string) => (id.trim() === environment.environmentId ? environment : undefined),
+      getCredential: (id: string) =>
+        id.trim() === credential.environmentId ? credential : undefined,
       findCredentialByHash: (hash: string) =>
         hash === credential.credentialHash ? credential : undefined,
     } as WorkerEnvironmentStore;
   });
 
-  type AdmissionCommon = Omit<WorkerConnectParams["admission"], "sessionId" | "runId">;
-  type AdmissionOverrides =
-    | (Partial<AdmissionCommon> & { sessionId?: null; runId?: null })
-    | (Partial<AdmissionCommon> & { sessionId: string; runId: string });
-  const admission = (overrides: AdmissionOverrides = {}): WorkerConnectParams["admission"] => {
-    const common = {
-      environmentId: overrides.environmentId ?? "worker-1",
-      credential: overrides.credential ?? CREDENTIAL,
-      ownerEpoch: overrides.ownerEpoch ?? 1,
-      rpcSetVersion: overrides.rpcSetVersion ?? 1,
-      handshake: overrides.handshake ?? RECEIPT,
-    };
-    if (typeof overrides.sessionId === "string" && typeof overrides.runId === "string") {
-      return { ...common, sessionId: overrides.sessionId, runId: overrides.runId };
-    }
-    return { ...common, sessionId: null, runId: null };
-  };
-  const admit = (workerAdmission = admission(), expectedBuild: typeof RECEIPT = RECEIPT) =>
-    admitWorkerConnection({ store, admission: workerAdmission, expectedBuild, nowMs });
+  type Admission = WorkerConnectParams["admission"];
+  type AdmissionOverrides = Partial<Omit<Admission, "sessionId" | "runId">> &
+    ({ sessionId?: null; runId?: null } | { sessionId: string; runId: string });
+  const admit = (
+    overrides: AdmissionOverrides = {},
+    options: { expectedBuild?: typeof RECEIPT; allowExpiredCredential?: boolean } = {},
+  ) =>
+    admitWorkerConnection({
+      store,
+      admission: {
+        environmentId: "worker-1",
+        credential: CREDENTIAL,
+        ownerEpoch: 1,
+        rpcSetVersion: 1,
+        handshake: RECEIPT,
+        sessionId: null,
+        runId: null,
+        ...overrides,
+      },
+      expectedBuild: RECEIPT,
+      nowMs,
+      ...options,
+    });
 
   it("verifies and admits the complete current build identity", () => {
     expect(sameWorkerBuild(RECEIPT, RECEIPT)).toBe(true);
-    const result = admit();
-    expect(result).toMatchObject({
+    expect(admit()).toMatchObject({
       ok: true,
       identity: {
         environmentId: "worker-1",
@@ -87,39 +87,31 @@ describe("worker admission", () => {
   });
 
   it.each([
-    ["invalid-credential", () => admission({ credential: OTHER_CREDENTIAL })],
-    ["environment-mismatch", () => admission({ environmentId: "worker-other" })],
-    ["environment-mismatch", () => admission({ environmentId: " worker-1 " })],
-    ["bundle-mismatch", () => admission({ handshake: { ...RECEIPT, bundleHash: "b".repeat(64) } })],
-    ["version-mismatch", () => admission({ handshake: { ...RECEIPT, openclawVersion: "other" } })],
-    ["placement-mismatch", () => admission({ sessionId: "session-other", runId: "run-other" })],
-    ["owner-epoch-mismatch", () => admission({ ownerEpoch: 2 })],
-    ["rpc-set-mismatch", () => admission({ rpcSetVersion: 2 })],
+    ["invalid-credential", { credential: OTHER_CREDENTIAL }],
+    ["environment-mismatch", { environmentId: "worker-other" }],
+    ["environment-mismatch", { environmentId: " worker-1 " }],
+    ["bundle-mismatch", { handshake: { ...RECEIPT, bundleHash: "b".repeat(64) } }],
+    ["version-mismatch", { handshake: { ...RECEIPT, openclawVersion: "other" } }],
+    ["placement-mismatch", { sessionId: "session-other", runId: "run-other" }],
+    ["owner-epoch-mismatch", { ownerEpoch: 2 }],
+    ["rpc-set-mismatch", { rpcSetVersion: 2 }],
     [
       "protocol-features-mismatch",
-      () => admission({ handshake: { ...RECEIPT, protocolFeatures: ["different-feature"] } }),
+      { handshake: { ...RECEIPT, protocolFeatures: ["different-feature"] } },
     ],
-  ] as const)("rejects %s", (reason, buildAdmission) => {
-    expect(admit(buildAdmission())).toEqual({ ok: false, reason });
+  ] satisfies Array<[string, AdmissionOverrides]>)("rejects %s", (reason, overrides) => {
+    expect(admit(overrides)).toEqual({ ok: false, reason });
   });
 
   it("rejects expiry, unavailable state, and the previous gateway build", () => {
     nowMs = credential.expiresAtMs;
     expect(admit()).toEqual({ ok: false, reason: "credential-expired" });
-    expect(
-      admitWorkerConnection({
-        store,
-        admission: admission(),
-        expectedBuild: RECEIPT,
-        nowMs,
-        allowExpiredCredential: true,
-      }),
-    ).toMatchObject({ ok: true });
+    expect(admit({}, { allowExpiredCredential: true })).toMatchObject({ ok: true });
     nowMs = 1_000;
     environment = { ...environment, destroyRequestedAtMs: nowMs };
     expect(admit()).toEqual({ ok: false, reason: "environment-unavailable" });
     environment = { ...environment, destroyRequestedAtMs: null };
-    expect(admit(admission(), { ...RECEIPT, bundleHash: "b".repeat(64) })).toEqual({
+    expect(admit({}, { expectedBuild: { ...RECEIPT, bundleHash: "b".repeat(64) } })).toEqual({
       ok: false,
       reason: "bundle-mismatch",
     });
