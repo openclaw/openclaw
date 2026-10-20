@@ -8,7 +8,10 @@ import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js"
 import { buildSubagentRunReadIndexFromRuns } from "./subagent-registry-queries.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import { registerSubagentCollectorPublicationCases } from "./subagent-registry-state.collector.test-support.js";
-import { persistRegistryFixture } from "./subagent-registry-state.fixture.test-support.js";
+import {
+  persistRegistryFixture,
+  publishRegistryFixture,
+} from "./subagent-registry-state.fixture.test-support.js";
 import {
   clearSubagentRunsReadCacheForTest,
   getSubagentSessionListRunsSnapshotForRead as readCompact,
@@ -16,11 +19,9 @@ import {
   getSubagentRunsSnapshotForChildSession as readChild,
   getSubagentSessionListRunsSnapshotForChildSessions as readCompactChildren,
   prepareSubagentSessionListReadCache,
-  publishSubagentRunsAfterAtomicStore,
 } from "./subagent-registry-state.js";
 import { registerSubagentRestoreCacheCases } from "./subagent-registry-state.restore.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { copySubagentRunRuntimeOwner } from "./subagent-run-generation.js";
 
 const mocks = vi.hoisted(() => ({
   loadSubagentRunsForChildSessionFromSqlite:
@@ -51,14 +52,7 @@ vi.mock("./subagent-registry-state.fixture.test-support.js", async (importOrigin
       mocks.saveSubagentRegistryToSqlite(runs);
     }
 
-    const published = new Map(runs);
-    for (const id of runIds ?? runs.keys()) {
-      const entry = runs.get(id);
-      if (entry) {
-        published.set(id, copySubagentRunRuntimeOwner(entry, structuredClone(entry)));
-      }
-    }
-    publishSubagentRunsAfterAtomicStore(published, runIds)();
+    publishRegistryFixture(runs, runIds);
   },
 }));
 
@@ -74,11 +68,6 @@ function createRun(runId: string, overrides: Partial<SubagentRunRecord> = {}): S
 }
 
 const runMap = (...runs: SubagentRunRecord[]) => new Map(runs.map((run) => [run.runId, run]));
-
-async function prepareCompact(...runs: SubagentRunRecord[]) {
-  mocks.readCompactRuns.mockReturnValue(runMap(...runs));
-  await prepareSubagentSessionListReadCache();
-}
 
 function addLiveRuns(...runs: SubagentRunRecord[]) {
   for (const run of runs) {
@@ -177,6 +166,9 @@ describe("subagent registry state read cache", () => {
     persistRegistryFixture(runMap(moved), [moved.runId]);
     expect(ids()).toEqual([selected.runId]);
     expect(ids("agent:main:controller")).toEqual([selected.runId]);
+    expect([...readCompact(new Map(), [moved.controllerSessionKey]).keys()]).toEqual([
+      selected.runId,
+    ]);
     const replacement = {
       ...moved,
       runId: "replacement",
@@ -188,35 +180,6 @@ describe("subagent registry state read cache", () => {
     expect(read()).toEqual([]);
     expect(scan).not.toHaveBeenCalled();
     expect(iterate).not.toHaveBeenCalled();
-  });
-
-  it("scopes compact reads while preserving owner writes and live controller moves", async () => {
-    const parent = "agent:main:parent";
-    const selected = createRun("selected", { controllerSessionKey: parent });
-    const unrelated = createRun("unrelated");
-    const runs = runMap(selected, unrelated);
-    mocks.readCompactRuns.mockReturnValueOnce(new Map(runs));
-    await prepareSubagentSessionListReadCache();
-    readCompact(new Map());
-
-    expect([...readCompact(new Map(), [parent]).keys()]).toEqual(["selected"]);
-    expect(mocks.readCompactRuns).toHaveBeenCalledOnce();
-    const moved = { ...selected, controllerSessionKey: "agent:main:other" };
-    expect(readCompact(runMap(moved), [parent])).toEqual(new Map());
-
-    vi.advanceTimersByTime(500);
-    const refreshed = { ...selected, model: "updated-model" };
-    runs.set(refreshed.runId, refreshed);
-    persistRegistryFixture(runs, [refreshed.runId]);
-    expect(readCompact(new Map(), [parent]).get("selected")?.model).toBe("updated-model");
-    runs.set(refreshed.runId, { ...refreshed, controllerSessionKey: moved.controllerSessionKey });
-    persistRegistryFixture(runs, [refreshed.runId]);
-    expect(readCompact(new Map(), [parent])).toEqual(new Map());
-    expect([...readCompact(new Map(), [moved.controllerSessionKey]).keys()]).toEqual([
-      selected.runId,
-    ]);
-    expect(mocks.readCompactRuns).toHaveBeenCalledOnce();
-    expect(readCompact(new Map(), [" "])).toEqual(new Map());
   });
 
   it("reads a warm session tree without enumerating unrelated live runs", async () => {
@@ -275,7 +238,8 @@ describe("subagent registry state read cache", () => {
       requesterSessionKey: "agent:main:other",
     });
     const unrelated = createRun("unrelated");
-    await prepareCompact(old, successor, unrelated);
+    mocks.readCompactRuns.mockReturnValue(runMap(old, successor, unrelated));
+    await prepareSubagentSessionListReadCache();
     const read = () => [
       ...readCompactChildren([`  ${old.childSessionKey}  `, old.childSessionKey, " "]).keys(),
     ];
@@ -285,8 +249,14 @@ describe("subagent registry state read cache", () => {
     );
     expect(read()).toEqual(["old", "successor"]);
     expect(readCompactChildren([old.childSessionKey]).get("successor")?.generation).toBe(2);
-    const moved = { ...successor, childSessionKey: "agent:main:moved" };
+    const moved = {
+      ...successor,
+      childSessionKey: "agent:main:moved",
+      controllerSessionKey: "agent:main:controller",
+    };
     persistRegistryFixture(runMap(moved), [moved.runId]);
+    expect(readCompact(new Map(), [successor.requesterSessionKey])).toEqual(new Map());
+    expect([...readCompact(new Map(), [moved.controllerSessionKey]).keys()]).toEqual([moved.runId]);
     expect(read()).toEqual(["old"]);
     expect(listener).toHaveBeenLastCalledWith(
       expect.arrayContaining([old.childSessionKey, moved.childSessionKey]),
@@ -308,6 +278,7 @@ describe("subagent registry state read cache", () => {
     persistRegistryFixture(runMap(persisted), [persisted.runId]);
     mocks.readCompactRuns.mockReturnValue(runMap(persisted));
     addLiveRuns({ ...persisted, childSessionKey: "agent:main:moved" });
+    expect(readCompact(new Map(), [" "])).toEqual(new Map());
     expect(readCompactChildren([" "])).toEqual(new Map());
     expect(() => readCompactChildren([persisted.childSessionKey])).toThrow("must be prepared");
     await prepareSubagentSessionListReadCache();

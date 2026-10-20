@@ -97,14 +97,14 @@ function writeFixture(runs: Map<string, SubagentRunRecord>, changedRunIds?: read
       const stateDb = getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "subagent_runs">>(
         database.db,
       );
-      const deleteQuery =
-        ids.length === 0
-          ? stateDb.deleteFrom("subagent_runs")
-          : stateDb.deleteFrom("subagent_runs").where(
-              "run_id",
-              "not in",
-              values.map((row) => row.run_id),
-            );
+      let deleteQuery = stateDb.deleteFrom("subagent_runs");
+      if (values.length) {
+        deleteQuery = deleteQuery.where(
+          "run_id",
+          "not in",
+          values.map((row) => row.run_id),
+        );
+      }
       executeSqliteQuerySync(database.db, deleteQuery);
     }
   });
@@ -133,7 +133,13 @@ export function persistRegistryFixture(
   } else {
     saveSubagentRegistryToSqlite(runs);
   }
+  publishRegistryFixture(runs, runIds);
+}
 
+export function publishRegistryFixture(
+  runs: Map<string, SubagentRunRecord>,
+  runIds?: readonly string[],
+): void {
   const published = new Map(runs);
   for (const id of runIds ?? runs.keys()) {
     const entry = runs.get(id);

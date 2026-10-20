@@ -53,12 +53,7 @@ export function registerSubagentCollectorPublicationCases(params: {
   });
 
   it("invalidates archived cold-restored groups once per exact parent", async () => {
-    const rows = ["a", "b"].map((runId) =>
-      collector(runId, {
-        groupId: "batch",
-        collectorCompletion: { status: "done" },
-      }),
-    );
+    const rows = ["a", "b"].map((id) => collector(id, { collectorCompletion: { status: "done" } }));
     params.mockRestoredRows(new Map(rows.map((row) => [row.runId, row])));
     const runs = new Map<string, SubagentRunRecord>();
     const received = vi.fn();
@@ -79,13 +74,7 @@ export function registerSubagentCollectorPublicationCases(params: {
       base,
       { ...base, runId: "no-agent", swarmRequesterSessionKey: "agent:ops:parent" },
       { ...base, runId: "no-key", requesterAgentId: "ops" },
-      {
-        ...base,
-        runId: "ordinary",
-        collect: false,
-        swarmRequesterSessionKey: "agent:ops:parent",
-        requesterAgentId: "ops",
-      },
+      collector("ordinary", { collect: false }),
     ];
     const received = vi.fn();
     onTestFinished(onSessionLifecycleEvent(received));

@@ -17,7 +17,7 @@ import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { prepareSubagentRegistrationRows } from "./subagent-registry-state.js";
-import { registerSubagentRun } from "./subagent-registry.js";
+import { registerSubagentRun as register } from "./subagent-registry.js";
 
 const fixture = useSubagentPersistenceFixture();
 
@@ -69,8 +69,8 @@ it("keeps ordinary subagent registration responsive while a SQLite writer is hel
   let holder: ReturnType<typeof holdStateDatabaseWriteTransaction> | undefined;
   let registration: Promise<void> | undefined;
   let hostSql: ReturnType<typeof observeHostDataSql> | undefined;
+  let settled: PromiseSettledResult<unknown>[];
   const registrationSettled = vi.fn();
-  const failures: unknown[] = [];
   try {
     // Warm the real workers before the independent holder starts its existing release deadline.
     await mutateSubagentRuns(
@@ -83,15 +83,13 @@ it("keeps ordinary subagent registration responsive while a SQLite writer is hel
     await holder.ready;
     Atomics.store(nativeBegin, 0, 1);
     hostSql = observeHostDataSql();
-    registration = Promise.resolve(
-      registerSubagentRun(
-        createSubagentRunParams({
-          runId,
-          childSessionKey,
-          sessionEntry: { sessionId: "contended-registration-session" },
-          expectsCompletionMessage: false,
-        }),
-      ),
+    registration = register(
+      createSubagentRunParams({
+        runId,
+        childSessionKey,
+        sessionEntry: { sessionId: "contended-registration-session" },
+        expectsCompletionMessage: false,
+      }),
     );
     const settlement = registration.finally(registrationSettled);
     await Promise.race([Atomics.waitAsync(nativeBegin, 1, 0).value, settlement, holder.joined]);
@@ -108,17 +106,11 @@ it("keeps ordinary subagent registration responsive while a SQLite writer is hel
     expect(
       db.prepare("SELECT run_id FROM subagent_runs WHERE run_id = ?").get(runId),
     ).toBeUndefined();
-  } catch (error) {
-    failures.push(error);
   } finally {
     Atomics.store(nativeBegin, 0, 0);
     Atomics.notify(nativeBegin, 1);
     holder?.release();
-    for (const result of await Promise.allSettled([registration, holder?.joined])) {
-      if (result.status === "rejected" && !failures.includes(result.reason)) {
-        failures.push(result.reason);
-      }
-    }
+    settled = await Promise.allSettled([registration, holder?.joined]);
     try {
       // Cover the whole registration through its ACK, including any later host-side fallback.
       if (hostSql) {
@@ -128,15 +120,14 @@ it("keeps ordinary subagent registration responsive while a SQLite writer is hel
           ),
         ).toEqual([]);
       }
-    } catch (error) {
-      failures.push(error);
     } finally {
       hostSql?.restore();
       observeWorker.mockRestore();
     }
   }
-  if (failures.length > 0) {
-    throw new AggregateError(failures, "Registration responsiveness or worker settlement failed");
+  const failed = settled.find((result) => result.status === "rejected");
+  if (failed?.status === "rejected") {
+    throw failed.reason;
   }
   const durable = loadSubagentRegistryFromSqlite().get(runId);
   expect(durable).toMatchObject({ runId, childSessionKey, execution: { status: "running" } });

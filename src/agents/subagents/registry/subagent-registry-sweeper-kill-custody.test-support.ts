@@ -29,11 +29,7 @@ export function createSubagentKillFixture() {
     retireObligations: vi.fn(async () => {}),
     warn: vi.fn(),
   };
-  return {
-    ...options,
-    childLookup,
-    reconcile: () => reconcileDurableSubagentKillIntent(options),
-  };
+  return { ...options, childLookup, reconcile: () => reconcileDurableSubagentKillIntent(options) };
 }
 
 export function registerSubagentSweepKillCustodyTests(killSessionEntry: {
@@ -72,9 +68,7 @@ export function registerSubagentSweepKillCustodyTests(killSessionEntry: {
       const pending = h.reconcile();
 
       try {
-        if (change === "existing successor") {
-          await pending;
-        } else {
+        if (change !== "existing successor") {
           await entered.promise;
           if (change === "same run id") {
             runs.set(entry.runId, run());
