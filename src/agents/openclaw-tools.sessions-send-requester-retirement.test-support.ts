@@ -50,6 +50,60 @@ export type GatewayCall = {
   onAccepted?: (payload: unknown) => void;
 };
 
+export function observeSubagentChange(ready: () => boolean) {
+  const done = createDeferredCore();
+  const stop = subscribeSubagentRunChanges("persistence", () => {
+    if (ready()) {
+      done.resolve();
+    }
+  });
+  return { ...done, stop };
+}
+
+export function seedDeliveredChild(
+  runId: string,
+  childSessionKey: string,
+  requesterSessionKey: string,
+) {
+  return addSubagentRunForTests({
+    runId,
+    childSessionKey,
+    requesterSessionKey,
+    requesterAgentId: "main",
+    expectsCompletionMessage: true,
+    createdAt: 1,
+    execution: { status: "terminal", startedAt: 1, endedAt: 2, outcome: { status: "ok" } },
+    completion: {
+      required: true,
+      resultText: "Original result",
+      terminalReply: { disposition: "visible", text: "Original result" },
+    },
+    delivery: { status: "delivered" },
+    cleanupCompletedAt: 3,
+  });
+}
+
+export function childDeliverySettled(runId: string) {
+  const child = getSubagentRunByRunId(runId);
+  return child?.delivery?.status === "delivered" && !child.requesterSettleWake;
+}
+
+function requesterScope(
+  context: ReturnType<typeof createContext>,
+  identity: Parameters<typeof createAdmittedGatewayToolCallerIdentity>[0],
+  client?: ReturnType<typeof createOperatorClient>,
+) {
+  return <T>(run: () => T, receiptAuthority?: () => boolean) =>
+    withPluginRuntimeGatewayRequestScope(
+      { client, context, resolveGatewayContext: () => context, isWebchatConnect: () => false },
+      () =>
+        withGatewayToolCallerIdentity(
+          createAdmittedGatewayToolCallerIdentity({ ...identity, receiptAuthority }),
+          run,
+        ),
+    );
+}
+
 /** Reuse the coordination suite's transport and state fixture for post-commit retirement. */
 export function registerSessionsSendRequesterRetirementTests({
   config,
@@ -164,22 +218,11 @@ export function registerSessionsSendRequesterRetirementTests({
           config,
         );
       } else {
-        await addSubagentRunForTests({
-          runId: "retiring-original-child-run",
+        await seedDeliveredChild(
+          "retiring-original-child-run",
           childSessionKey,
           requesterSessionKey,
-          requesterAgentId: "main",
-          expectsCompletionMessage: true,
-          createdAt: 1,
-          execution: { status: "terminal", startedAt: 1, endedAt: 2, outcome: { status: "ok" } },
-          completion: {
-            required: true,
-            resultText: "Original result",
-            terminalReply: { disposition: "visible", text: "Original result" },
-          },
-          delivery: { status: "delivered" },
-          cleanupCompletedAt: 3,
-        });
+        );
       }
       const admission = prepareSystemAgentRunAdmission(
         config,
@@ -225,25 +268,20 @@ export function registerSessionsSendRequesterRetirementTests({
       announceTesting.setDepsForTest({ callGateway: callGatewayMock });
       let stopObserving = () => {};
       try {
-        const result = await withPluginRuntimeGatewayRequestScope(
-          { context, resolveGatewayContext: () => context, isWebchatConnect: () => false },
-          () =>
-            withGatewayToolCallerIdentity(
-              createAdmittedGatewayToolCallerIdentity({
-                admittedRunContext,
-                agentId: "main",
-                sessionKey: requesterSessionKey,
-                requesterOrigin: createSessionsSendTestCaller(requesterSessionKey).requesterOrigin,
-              }),
-              () =>
-                sendTool(requesterSessionKey, requesterTurnRunId).execute("retiring-watched-send", {
-                  sessionKey: childSessionKey,
-                  mode,
-                  watch: true,
-                  timeoutSeconds: 0,
-                  message: "Return the follow-up result",
-                }),
-            ),
+        const withCaller = requesterScope(context, {
+          admittedRunContext,
+          agentId: "main",
+          sessionKey: requesterSessionKey,
+          requesterOrigin: createSessionsSendTestCaller(requesterSessionKey).requesterOrigin,
+        });
+        const result = await withCaller(() =>
+          sendTool(requesterSessionKey, requesterTurnRunId).execute("retiring-watched-send", {
+            sessionKey: childSessionKey,
+            mode,
+            watch: true,
+            timeoutSeconds: 0,
+            message: "Return the follow-up result",
+          }),
         );
         expect(requesterRetired).toBe(true);
         expect(result.details).toMatchObject({ status: "error", sentBeforeError: true });
@@ -252,13 +290,8 @@ export function registerSessionsSendRequesterRetirementTests({
           expect(queueMessage).toHaveBeenCalledOnce();
         }
         expect(requesterCalls(requesterSessionKey)).toHaveLength(0);
-        const delivered = createDeferredCore();
-        stopObserving = subscribeSubagentRunChanges("persistence", () => {
-          const child = getSubagentRunByRunId(runId);
-          if (child?.delivery?.status === "delivered" && !child.requesterSettleWake) {
-            delivered.resolve();
-          }
-        });
+        const delivered = observeSubagentChange(() => childDeliverySettled(runId));
+        stopObserving = delivered.stop;
         clearActiveEmbeddedRun(childSessionId, handle, childSessionKey);
         childPending.resolve();
         await delivered.promise;
@@ -298,24 +331,14 @@ export function registerSessionsSendRequesterRetirementTests({
   );
 
   it.for([
-    { scenario: "only a watched tool's authority retires", sameChild: false, revokeTool: true },
-    { scenario: "two watched runs target the same child", sameChild: true, revokeTool: false },
-    { scenario: "the requester finishes without yielding", sameChild: true, finish: "normal" },
-    { scenario: "the requester retires without yielding", sameChild: true, finish: "retired" },
-    {
-      scenario: "the newest task finishes first without yielding",
-      sameChild: true,
-      finish: "normal",
-      newestFirst: true,
-    },
-    {
-      scenario: "a nested requester finishes without yielding",
-      sameChild: true,
-      finish: "normal",
-      nested: true,
-    },
+    { scenario: "tool authority retires", sameChild: false, revokeTool: true },
+    { scenario: "two runs target one child" },
+    { scenario: "requester finishes without yielding", finish: "normal" },
+    { scenario: "requester retires without yielding", finish: "retired" },
+    { scenario: "newest child finishes first", finish: "normal", newestFirst: true },
+    { scenario: "nested requester finishes", finish: "normal", nested: true },
   ])("keeps earlier child claims when $scenario", async (scenario, { signal }) => {
-    const { sameChild, revokeTool, finish, newestFirst, nested } = scenario;
+    const { sameChild = true, revokeTool = false, finish, newestFirst, nested } = scenario;
     const requesterSessionKey = "agent:main:dashboard:active-requester";
     const requesterTurnRunId = "active-requester-turn";
     const firstChildKey = "agent:main:dashboard:first-watched-child";
@@ -399,20 +422,11 @@ export function registerSessionsSendRequesterRetirementTests({
     );
     const admittedRunContext = await admission.admit("embedded");
     let toolCurrent = true;
-    const withCaller = <T>(run: () => T, receiptAuthority?: () => boolean) =>
-      withPluginRuntimeGatewayRequestScope(
-        { client, context, resolveGatewayContext: () => context, isWebchatConnect: () => false },
-        () =>
-          withGatewayToolCallerIdentity(
-            createAdmittedGatewayToolCallerIdentity({
-              admittedRunContext,
-              agentId: "main",
-              sessionKey: requesterSessionKey,
-              receiptAuthority,
-            }),
-            run,
-          ),
-      );
+    const withCaller = requesterScope(
+      context,
+      { admittedRunContext, agentId: "main", sessionKey: requesterSessionKey },
+      client,
+    );
     const send = (sessionKey: string) =>
       withCaller(
         () =>
@@ -499,12 +513,7 @@ export function registerSessionsSendRequesterRetirementTests({
         if (!firstChild || firstChild.cleanupCompletedAt !== undefined) {
           firstSettled.resolve();
         }
-        if (
-          children.every(({ runId }) => {
-            const child = getSubagentRunByRunId(runId);
-            return child?.delivery?.status === "delivered" && !child.requesterSettleWake;
-          })
-        ) {
+        if (children.every(({ runId }) => childDeliverySettled(runId))) {
           resultsDelivered.resolve();
         }
       });

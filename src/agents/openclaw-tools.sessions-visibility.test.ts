@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 
@@ -7,9 +7,7 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
 
-let mockConfig: Record<string, unknown> = {
-  session: { mainKey: "main", scope: "per-sender" },
-};
+let mockConfig: Record<string, unknown> = {};
 vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
@@ -44,72 +42,67 @@ function mockGatewayWithHistory(
   });
 }
 
-describe("sessions tools visibility", () => {
-  it("keeps same-agent history accessible but denies cross-agent history when a2a is explicitly disabled", async () => {
-    mockConfig = {
-      session: { mainKey: "main", scope: "per-sender" },
-      tools: { agentToAgent: { enabled: false } },
-    };
-    mockGatewayWithHistory((req) =>
-      req.method === "sessions.resolve" ? { key: req.params?.key } : undefined,
-    );
+it("keeps same-agent history accessible but denies cross-agent history when a2a is explicitly disabled", async () => {
+  mockConfig = {
+    session: { mainKey: "main", scope: "per-sender" },
+    tools: { agentToAgent: { enabled: false } },
+  };
+  mockGatewayWithHistory((req) =>
+    req.method === "sessions.resolve" ? { key: req.params?.key } : undefined,
+  );
 
-    const tool = history();
-    const sessionKey = "agent:main:quietchat:direct:someone-else";
-    expect((await tool.execute("call1", { sessionKey })).details).toMatchObject({ sessionKey });
+  const tool = history();
+  const sessionKey = "agent:main:quietchat:direct:someone-else";
+  expect((await tool.execute("call1", { sessionKey })).details).toMatchObject({ sessionKey });
 
-    const denied = await tool.execute("call-cross-agent", { sessionKey: "agent:other:main" });
-    expect(denied.details).toEqual({
-      status: "forbidden",
-      error:
-        "Agent-to-agent history is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent access.",
-    });
+  expect(
+    (await tool.execute("call-cross-agent", { sessionKey: "agent:other:main" })).details,
+  ).toEqual({
+    status: "forbidden",
+    error:
+      "Agent-to-agent history is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent access.",
+  });
+});
+
+it("lists and reads another agent's session by default with no tools configuration", async () => {
+  mockConfig = {};
+  const sessionKey = "agent:other:main";
+  const session = { key: sessionKey, agentId: "other" };
+  mockGatewayWithHistory(({ method }) =>
+    method === "sessions.list"
+      ? { sessions: [session] }
+      : method === "sessions.resolve"
+        ? session
+        : undefined,
+  );
+  const list = createSessionsListTool({
+    agentSessionKey: "agent:main:main",
+    config: {},
+    callGateway: (opts: unknown) => callGatewayMock(opts),
+  });
+  expect((await list.execute("call-list", {})).details).toMatchObject({
+    count: 1,
+    sessions: [{ key: sessionKey, agentId: "other" }],
   });
 
-  it("lists and reads another agent's session by default with no tools configuration", async () => {
-    mockConfig = {};
-    const sessionKey = "agent:other:main";
-    mockGatewayWithHistory((req) => {
-      if (req.method === "sessions.list") {
-        return { sessions: [{ key: sessionKey, agentId: "other" }] };
-      }
-      if (req.method === "sessions.resolve") {
-        return { key: sessionKey, agentId: "other" };
-      }
-      return undefined;
-    });
-    const list = createSessionsListTool({
-      agentSessionKey: "agent:main:main",
-      config: {},
-      callGateway: (opts: unknown) => callGatewayMock(opts),
-    });
-    const listed = await list.execute("call-list", {});
-    expect(listed.details).toMatchObject({
-      count: 1,
-      sessions: [{ key: sessionKey, agentId: "other" }],
-    });
-
-    const result = await history().execute("call3", { sessionKey });
-    expect(result.details).toMatchObject({
-      sessionKey,
-      messages: [{ role: "assistant", content: [{ type: "text", text: "ok" }] }],
-    });
+  const result = await history().execute("call3", { sessionKey });
+  expect(result.details).toMatchObject({
+    sessionKey,
+    messages: [{ role: "assistant", content: [{ type: "text", text: "ok" }] }],
   });
+});
 
-  it("clamps sandboxed sessions to tree when agents.defaults.sandbox.sessionToolsVisibility=spawned", async () => {
-    mockConfig = {
-      session: { mainKey: "main", scope: "per-sender" },
-      tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true, allow: ["*"] } },
-      agents: { defaults: { sandbox: { sessionToolsVisibility: "spawned" } } },
-    };
-    mockGatewayWithHistory((req) => {
-      if (req.method === "sessions.resolve" && req.params?.spawnedBy === "main") {
-        return {};
-      }
-      return undefined;
-    });
+it("clamps sandboxed sessions to tree when agents.defaults.sandbox.sessionToolsVisibility=spawned", async () => {
+  mockConfig = {
+    session: { mainKey: "main", scope: "per-sender" },
+    tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true, allow: ["*"] } },
+    agents: { defaults: { sandbox: { sessionToolsVisibility: "spawned" } } },
+  };
+  mockGatewayWithHistory((req) =>
+    req.method === "sessions.resolve" && req.params?.spawnedBy === "main" ? {} : undefined,
+  );
 
-    const denied = await history(true).execute("call4", { sessionKey: "agent:other:main" });
-    expect(denied.details).toMatchObject({ status: "forbidden" });
-  });
+  expect(
+    (await history(true).execute("call4", { sessionKey: "agent:other:main" })).details,
+  ).toMatchObject({ status: "forbidden" });
 });

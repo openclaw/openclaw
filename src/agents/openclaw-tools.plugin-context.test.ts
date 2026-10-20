@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { resolveMemoryAudienceFromEntry } from "../plugins/memory-audience.js";
 import { fakeSessionOwner } from "../plugins/memory-audience.test-support.js";
 import {
@@ -15,93 +15,85 @@ vi.mock("../config/sessions/session-delivery-generation.js", async () => {
 });
 
 function resolve(options: OpenClawPluginToolOptions) {
-  return resolveOpenClawPluginToolInputs({ options: { config: {}, ...options } });
+  return resolveOpenClawPluginToolInputs({
+    options: { config: {}, ...options },
+    resolvedConfig: options.config,
+  }).context;
 }
 
-describe("openclaw plugin tool context", () => {
-  it("forwards one host-minted memory audience and its currency assertion", async () => {
-    const sessionId = randomUUID();
-    const entry = { sessionId, updatedAt: 1, chatType: "direct" as const };
-    fakeSessionOwner.rows.set("agent:main:direct:owner", entry);
-    const resolution = await resolveMemoryAudienceFromEntry(
-      {
-        agentId: "main",
-        sessionKey: "agent:main:direct:owner",
-        sessionId,
-        senderIsOwner: true,
-        storePath: "/tmp/openclaw-tools/main.sqlite",
-      },
-      entry,
-    );
-    const memoryAudience = resolution.status === "granted" ? resolution.audience : undefined;
-    expect(memoryAudience).toBeDefined();
-    const result = resolve({
-      memoryAudience,
-      agentSessionKey: "agent:main:direct:owner",
-    });
-
-    expect(result.context.memoryAudience).toBe(memoryAudience);
-    expect(result.context.assertMemoryAudienceCurrent).toEqual(expect.any(Function));
-    expect(() => result.context.assertMemoryAudienceCurrent?.()).not.toThrow();
-    expect(() => resolve({ memoryAudience, agentSessionKey: "agent:main:other" })).toThrow(
-      "memory audience is bound to a different session",
-    );
-  });
-
-  it.each([
-    [
-      " local-provider ",
-      " local-model ",
-      "local-provider",
-      "local-model",
-      "local-provider/local-model",
-    ],
-    ["openrouter", "openrouter/auto", "openrouter", "openrouter/auto", "openrouter/auto"],
-  ])(
-    "normalizes active model metadata for %s/%s",
-    (modelProvider, inputId, provider, modelId, modelRef) => {
-      expect(resolve({ modelProvider, modelId: inputId }).context.activeModel).toStrictEqual({
-        provider,
-        modelId,
-        modelRef,
-      });
+it("forwards one host-minted memory audience and its currency assertion", async () => {
+  const sessionId = randomUUID();
+  const entry = { sessionId, updatedAt: 1, chatType: "direct" as const };
+  fakeSessionOwner.rows.set("agent:main:direct:owner", entry);
+  const resolution = await resolveMemoryAudienceFromEntry(
+    {
+      agentId: "main",
+      sessionKey: "agent:main:direct:owner",
+      sessionId,
+      senderIsOwner: true,
+      storePath: "/tmp/openclaw-tools/main.sqlite",
     },
+    entry,
   );
+  const memoryAudience = resolution.status === "granted" ? resolution.audience : undefined;
+  expect(memoryAudience).toBeDefined();
+  const result = resolve({
+    memoryAudience,
+    agentSessionKey: "agent:main:direct:owner",
+  });
 
-  it("uses requester agent override for synthetic embedded session keys", () => {
-    const recallWorkspace = path.join(process.cwd(), "tmp-recall-workspace");
-    const config = {
-      agents: {
-        defaults: { workspace: path.join(process.cwd(), "tmp-default-workspace") },
-        entries: { main: {}, recall: { workspace: recallWorkspace } },
-      },
-    } as never;
-    const result = resolveOpenClawPluginToolInputs({
-      options: {
-        config,
-        agentSessionKey: "explicit:user-session:active-memory:abc123",
-        requesterAgentIdOverride: "recall",
-      },
-      resolvedConfig: config,
+  expect(result.memoryAudience).toBe(memoryAudience);
+  expect(result.assertMemoryAudienceCurrent).toEqual(expect.any(Function));
+  expect(() => result.assertMemoryAudienceCurrent?.()).not.toThrow();
+  expect(() => resolve({ memoryAudience, agentSessionKey: "agent:main:other" })).toThrow(
+    "memory audience is bound to a different session",
+  );
+});
+
+it.each([
+  [" local ", " model ", "local", "model", "local/model"],
+  ["openrouter", "openrouter/auto", "openrouter", "openrouter/auto", "openrouter/auto"],
+])(
+  "normalizes active model metadata for %s/%s",
+  (modelProvider, inputId, provider, modelId, modelRef) => {
+    expect(resolve({ modelProvider, modelId: inputId }).activeModel).toStrictEqual({
+      provider,
+      modelId,
+      modelRef,
     });
+  },
+);
 
-    expect(result.context).toMatchObject({ agentId: "recall", workspaceDir: recallWorkspace });
+it("uses requester agent override for synthetic embedded session keys", () => {
+  const recallWorkspace = path.join(process.cwd(), "tmp-recall-workspace");
+  const config = {
+    agents: {
+      defaults: { workspace: path.join(process.cwd(), "tmp-default-workspace") },
+      entries: { main: {}, recall: { workspace: recallWorkspace } },
+    },
+  } as never;
+  const result = resolve({
+    config,
+    agentSessionKey: "explicit:user-session:active-memory:abc123",
+    requesterAgentIdOverride: "recall",
   });
 
-  it("keeps the routable conversation target ahead of the native channel id", () => {
-    const result = resolve({
-      agentChannel: "slack",
-      currentMessagingTarget: "user:U123",
-      currentChannelId: "D123",
-    });
+  expect(result).toMatchObject({ agentId: "recall", workspaceDir: recallWorkspace });
+});
 
-    expect(result.context.deliveryContext?.to).toBe("user:U123");
+it("keeps the routable conversation target ahead of the native channel id", () => {
+  const result = resolve({
+    agentChannel: "slack",
+    currentMessagingTarget: "user:U123",
+    currentChannelId: "D123",
   });
 
-  it.each([
-    { approvalReviewerDeviceIds: ["device-reviewer"] },
-    { approvalReviewerDeviceId: "device-reviewer" },
-  ])("carries host-selected approval reviewers into plugin tools: %j", (options) => {
-    expect(resolve(options).context.approvalReviewerDeviceIds).toEqual(["device-reviewer"]);
-  });
+  expect(result.deliveryContext?.to).toBe("user:U123");
+});
+
+it.each([
+  { approvalReviewerDeviceIds: ["device-reviewer"] },
+  { approvalReviewerDeviceId: "device-reviewer" },
+])("carries host-selected approval reviewers into plugin tools: %j", (options) => {
+  expect(resolve(options).approvalReviewerDeviceIds).toEqual(["device-reviewer"]);
 });
