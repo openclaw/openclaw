@@ -23,11 +23,14 @@ export function createMeetingRealtimeOutputQueue(params: {
   transport: MeetingRealtimeAudioTransport;
   bytesPerMs: number;
   onFailure: (source: string, error: unknown) => void;
+  /** Playback stopped making progress; the caller drops output and recovers. */
+  onStall: () => void;
 }) {
   let stopped = false;
   let generation = 0;
   let writePhase: "idle" | "scheduled" | "writing" = "idle";
   let writeStartedAt = 0;
+  let stallTimer: ReturnType<typeof setTimeout> | undefined;
   let clearPending = 0;
   let clearAfterActive = false;
   let pendingBytes = 0;
@@ -48,7 +51,30 @@ export function createMeetingRealtimeOutputQueue(params: {
   const stallPendingBytes = params.bytesPerMs * OUTPUT_STALL_PENDING_MS;
   const maxWriteBytes = params.bytesPerMs * OUTPUT_MAX_WRITE_MS;
 
+  const isStalled = (incomingBytes = 0) =>
+    writePhase === "writing" &&
+    Date.now() - writeStartedAt >= OUTPUT_STALL_MS &&
+    pendingBytes + incomingBytes > stallPendingBytes;
+  // A provider often finishes sending before playback stalls, so no later enqueue would
+  // notice; the write itself keeps watch until it settles.
+  const watchStall = () => {
+    clearTimeout(stallTimer);
+    stallTimer = setTimeout(() => {
+      stallTimer = undefined;
+      if (stopped || writePhase !== "writing") {
+        return;
+      }
+      if (isStalled()) {
+        params.onStall();
+      } else {
+        watchStall();
+      }
+    }, OUTPUT_STALL_MS);
+  };
+
   const reset = () => {
+    clearTimeout(stallTimer);
+    stallTimer = undefined;
     generation += 1;
     queue.length = 0;
     pendingBytes = 0;
@@ -117,6 +143,7 @@ export function createMeetingRealtimeOutputQueue(params: {
         }
         writePhase = "writing";
         writeStartedAt = Date.now();
+        watchStall();
         await params.transport.writeOutput(audio);
         if (!stopped && next.generation === generation) {
           // Native write completion admits audio to playback; it does not mean it was heard.
@@ -135,6 +162,8 @@ export function createMeetingRealtimeOutputQueue(params: {
         }
       })
       .finally(() => {
+        clearTimeout(stallTimer);
+        stallTimer = undefined;
         writePhase = "idle";
         if (next.generation === generation) {
           pendingBytes -= batchBytes;
@@ -152,13 +181,9 @@ export function createMeetingRealtimeOutputQueue(params: {
 
   return {
     enqueue(audio: Buffer, audible: boolean, beginsOutput: boolean): boolean {
-      const stalled =
-        writePhase === "writing" &&
-        Date.now() - writeStartedAt >= OUTPUT_STALL_MS &&
-        pendingBytes + audio.byteLength > stallPendingBytes;
       if (
         stopped ||
-        stalled ||
+        isStalled(audio.byteLength) ||
         audio.byteLength > maxPendingBytes - pendingBytes ||
         pendingFrames >= OUTPUT_MAX_PENDING_FRAMES
       ) {

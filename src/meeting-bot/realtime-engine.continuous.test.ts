@@ -175,6 +175,26 @@ describe("meeting native continuous voice", () => {
     expect(fixture.bridge.handleBargeIn).not.toHaveBeenCalled();
   });
 
+  it("recovers stuck playback after the provider has finished sending", async () => {
+    vi.useFakeTimers();
+    const pending = createDeferredCore();
+    const fixture = await createLiveFixture({ cleanup: () => pending.resolve() });
+    fixture.transport.writeOutput.mockImplementationOnce(() => pending.promise);
+    // The whole reply arrives at once, then the provider goes quiet while playback is stuck.
+    for (let index = 1; index <= 3; index += 1) {
+      fixture.callbacks.onAudio(Buffer.alloc(48_000, index));
+    }
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(fixture.transport.clearOutput).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fixture.transport.clearOutput).toHaveBeenCalledOnce();
+    const fresh = Buffer.alloc(960, 4);
+    fixture.callbacks.onAudio(fresh);
+    pending.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fixture.transport.writeOutput).toHaveBeenLastCalledWith(fresh);
+  });
+
   it("refuses mixed loopback input before connecting native voice", async () => {
     const connect = vi.fn(async () => {});
     await expect(createLiveFixture({ isolated: false, connect })).rejects.toThrow(
