@@ -1,4 +1,4 @@
-// Full-entry coverage for before_agent_finalize revision handling in embedded runs.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   mockedGlobalHookRunner,
@@ -22,38 +22,31 @@ function finalAnswerAttempt(
   text: string,
   overrides?: Partial<EmbeddedRunAttemptResult>,
 ): EmbeddedRunAttemptResult {
-  // Finalize tests need a successful assistant turn with both surfaced text and
-  // snapshot content so the runner can decide whether to request a revision.
+  const content = [{ type: "text" as const, text }];
   return session.makeAttemptResult({
     assistantTexts: [text],
     lastAssistant: {
       stopReason: "stop",
       provider: "openai",
       model: "gpt-5.5",
-      content: [{ type: "text", text }],
+      content,
     } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
     messagesSnapshot: [
       {
         role: "assistant",
-        content: [{ type: "text", text }],
+        content,
       } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
     ],
     ...overrides,
   });
 }
 
-function attemptCall(index: number): {
-  prompt?: string;
-  suppressNextUserMessagePersistence?: boolean;
-} {
-  const call = mockedRunEmbeddedAttempt.mock.calls[index];
-  if (!call) {
-    throw new Error(`Expected embedded attempt call ${index}`);
-  }
-  return call[0] as {
-    prompt?: string;
-    suppressNextUserMessagePersistence?: boolean;
-  };
+function attemptCall(index: number) {
+  return expectDefined(mockedRunEmbeddedAttempt.mock.calls[index], `embedded attempt ${index}`)[0];
+}
+
+function runFinalize(runId: string) {
+  return runEmbeddedAgent({ ...session.runParams, provider: "openai", model: "gpt-5.5", runId });
 }
 
 describe("runEmbeddedAgent before_agent_finalize", () => {
@@ -101,12 +94,7 @@ describe("runEmbeddedAgent before_agent_finalize", () => {
       )
       .mockResolvedValueOnce(finalAnswerAttempt("Revised recovered answer."));
 
-    await runEmbeddedAgent({
-      ...session.runParams,
-      provider: "openai",
-      model: "gpt-5.5",
-      runId: "run-before-finalize-after-incomplete-turn",
-    });
+    await runFinalize("run-before-finalize-after-incomplete-turn");
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
     expect(attemptCall(1).prompt).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
@@ -131,12 +119,7 @@ describe("runEmbeddedAgent before_agent_finalize", () => {
       }),
     );
 
-    await runEmbeddedAgent({
-      ...session.runParams,
-      provider: "openai",
-      model: "gpt-5.5",
-      runId: "run-before-finalize-timeout",
-    });
+    await runFinalize("run-before-finalize-timeout");
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
   });

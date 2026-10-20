@@ -32,6 +32,11 @@ describe("runEmbeddedAgent retry-limit metadata", () => {
   });
 
   it("reports the latest physical attempt after ordinary retry-budget exhaustion", async () => {
+    const credentialSource = {
+      kind: "direct",
+      evidence: "environment",
+      authorization: "ambient",
+    } as const;
     let physicalAttempt = 0;
     mockedBuildAgentRuntimePlan.mockImplementation(() => {
       physicalAttempt += 1;
@@ -41,13 +46,7 @@ describe("runEmbeddedAgent retry-limit metadata", () => {
         auth: {
           authProfileProviderForAuth: "openai",
           providerForAuth: "openai",
-          credentialSource: isLatestAttempt
-            ? {
-                kind: "direct",
-                evidence: "environment",
-                authorization: "ambient",
-              }
-            : { kind: "profile" },
+          credentialSource: isLatestAttempt ? credentialSource : { kind: "profile" },
         },
         observability: {
           resolvedRef: "openai/gpt-5.6-luna",
@@ -84,19 +83,11 @@ describe("runEmbeddedAgent retry-limit metadata", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(32);
     expect(result.meta.error?.kind).toBe("retry_limit");
     expect(result.acceptedSessionSpawns).toEqual([accepted]);
-    expect(result.meta.agentMeta).toMatchObject({
-      provider: "openai",
-      model: "gpt-5.6-luna",
-      credentialSource: {
-        kind: "direct",
-        evidence: "environment",
-        authorization: "ambient",
-      },
+    expect(result.meta.agentMeta).toMatchObject({ provider: "openai", model: "gpt-5.6-luna" });
+    expect(result.meta.agentMeta?.credentialSource).toEqual({
+      kind: "direct",
+      evidence: "environment",
+      authorization: "ambient",
     });
-    expect(Object.keys(result.meta.agentMeta?.credentialSource ?? {}).toSorted()).toEqual([
-      "authorization",
-      "evidence",
-      "kind",
-    ]);
   });
 });

@@ -15,43 +15,78 @@ import {
   initialAttemptOptions,
   fallbackAttemptOptions,
 } from "./run-entry.test-support.js";
+import type { EmbeddedAgentMeta } from "./types.js";
 
 const state = setupRunEntryTestState();
 beforeEach(() => setRuntimeConfigSnapshot({}));
 afterEach(() => clearRuntimeConfigSnapshot());
 
+function pricedProvider(name: string, input: number, output: number) {
+  return {
+    baseUrl: `https://${name}.invalid`,
+    models: [
+      {
+        id: `${name}-model`,
+        name,
+        reasoning: false,
+        input: ["text" as const],
+        maxTokens: 128,
+        cost: { input, output, cacheRead: 0, cacheWrite: 0 },
+      },
+    ],
+  };
+}
+
 const cfg: OpenClawConfig = {
   models: {
     providers: {
-      "primary-provider": {
-        baseUrl: "https://primary.invalid",
-        models: [
-          {
-            id: "primary-model",
-            name: "Primary",
-            reasoning: false,
-            input: ["text"],
-            maxTokens: 128,
-            cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
-          },
-        ],
-      },
-      "fallback-provider": {
-        baseUrl: "https://fallback.invalid",
-        models: [
-          {
-            id: "fallback-model",
-            name: "Fallback",
-            reasoning: false,
-            input: ["text"],
-            maxTokens: 128,
-            cost: { input: 10, output: 20, cacheRead: 0, cacheWrite: 0 },
-          },
-        ],
-      },
+      "primary-provider": pricedProvider("primary", 1, 2),
+      "fallback-provider": pricedProvider("fallback", 10, 20),
     },
   },
 };
+
+const entryDefaults = {
+  selection: { cfg, provider: "primary-provider", model: "primary-model" },
+  identity: { runId: "run-accounting", agentId: "main", sessionId: "session-1" },
+  harness: createDirectHarness(),
+  behavior: { kind: "command-rpc" as const, hasCommittedSideEffect: () => false },
+  sessionOverride: { kind: "preserve" as const },
+};
+
+function usageConsumers(
+  meta: Pick<EmbeddedAgentMeta, "usage" | "lastCallUsage" | "diagnosticUsage"> &
+    Partial<Pick<EmbeddedAgentMeta, "provider" | "model">>,
+) {
+  const { provider, model, usage, lastCallUsage } = meta;
+  return {
+    reply: buildReplyUsageState({
+      config: cfg,
+      agentDir: "/nonexistent-fallback-accounting",
+      agentId: "main",
+      sessionId: "session-1",
+      provider,
+      model,
+      winnerProvider: provider,
+      winnerModel: model,
+      usage,
+      lastCallUsage,
+    }),
+    session: prepareSessionUsageUpdate({
+      cfg,
+      usage,
+      lastCallUsage,
+      providerUsed: provider,
+      modelUsed: model,
+    }),
+    diagnosticCost: estimateAggregateUsageCost({
+      config: cfg,
+      provider,
+      model,
+      usage: meta.diagnosticUsage,
+    }),
+  };
+}
 
 async function runAccountedEntry(
   primary: NormalizedUsage,
@@ -61,11 +96,8 @@ async function runAccountedEntry(
   lastCallUsage: NormalizedUsage | null = { input: 20, output: 2 },
 ) {
   return runEmbeddedAgentEntry({
+    ...entryDefaults,
     selection: { cfg: config, provider: "primary-provider", model: "primary-model" },
-    identity: { runId: "run-accounting", agentId: "main", sessionId: "session-1" },
-    harness: createDirectHarness(),
-    behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
-    sessionOverride: { kind: "preserve" },
     runCandidate: async (provider, model, options) => {
       const usage = options.isFallbackRetry ? fallback : primary;
       const result = makeResult({
@@ -107,14 +139,7 @@ describe("fallback candidate accounting", () => {
         lastCallUsage,
       );
       const meta = result.meta.agentMeta!;
-      const reply = buildReplyUsageState({
-        config: cfg,
-        agentDir: "/nonexistent-fallback-accounting",
-        agentId: "main",
-        sessionId: "session-1",
-        usage: meta.usage,
-        lastCallUsage: meta.lastCallUsage,
-      });
+      const { reply } = usageConsumers({ usage: meta.usage, lastCallUsage: meta.lastCallUsage });
       expect(meta.usage?.input).toBe(300);
       expect(reply.contextUsedTokens).toBeUndefined();
       expect(meta.lastCallUsage).toEqual(lastCallUsage ?? undefined);
@@ -150,37 +175,12 @@ describe("fallback candidate accounting", () => {
         assistantTurns: 3,
         bridgeCalls: { search: 2, describe: 0, call: 4 },
       });
-      const reply = buildReplyUsageState({
-        config: cfg,
-        agentDir: "/nonexistent-fallback-accounting",
-        agentId: "main",
-        sessionId: "session-1",
-        provider: meta.provider,
-        model: meta.model,
-        winnerProvider: meta.provider,
-        winnerModel: meta.model,
-        usage: meta.usage,
-        lastCallUsage: meta.lastCallUsage,
-      });
-      const session = prepareSessionUsageUpdate({
-        cfg,
-        usage: meta.usage,
-        lastCallUsage: meta.lastCallUsage,
-        providerUsed: meta.provider,
-        modelUsed: meta.model,
-      });
+      const { reply, session, diagnosticCost } = usageConsumers(meta);
       expect(reply.usage).toMatchObject({ input: 300, output: 30 });
       expect(reply.contextUsedTokens).toBe(20);
       expect(reply.turnUsd).toBeCloseTo(expected, 9);
       expect(session?.estimateCost()).toBeCloseTo(expected, 9);
-      expect(
-        estimateAggregateUsageCost({
-          usage: meta.diagnosticUsage,
-          config: cfg,
-          provider: meta.provider,
-          model: meta.model,
-        }),
-      ).toBeCloseTo(expected, 9);
+      expect(diagnosticCost).toBeCloseTo(expected, 9);
     },
   );
 
@@ -197,21 +197,9 @@ describe("fallback candidate accounting", () => {
       const meta = result.meta.agentMeta!;
       expect(meta.usage).toMatchObject({ input: 300, output: 30 });
       // Even a consumer with a known winner price cannot reprice a mixed total.
-      const session = prepareSessionUsageUpdate({
-        cfg,
-        usage: meta.usage,
-        providerUsed: meta.provider,
-        modelUsed: meta.model,
-      });
+      const { session, diagnosticCost } = usageConsumers({ ...meta, lastCallUsage: undefined });
       expect(session?.estimateCost()).toBeUndefined();
-      expect(
-        estimateAggregateUsageCost({
-          config: cfg,
-          provider: meta.provider,
-          model: meta.model,
-          usage: meta.diagnosticUsage,
-        }),
-      ).toBeUndefined();
+      expect(diagnosticCost).toBeUndefined();
     },
   );
 
@@ -250,11 +238,8 @@ describe("fallback candidate accounting", () => {
       };
     });
     const { result } = await runEmbeddedAgentEntry({
-      selection: { cfg, provider: "primary-provider", model: "primary-model" },
+      ...entryDefaults,
       identity: { runId: "run-accounting-throw", agentId: "main", sessionId: "session-1" },
-      harness: createDirectHarness(),
-      behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
-      sessionOverride: { kind: "preserve" },
       runCandidate: async (provider, model) => {
         if (provider === "primary-provider") {
           throw new Error("before result");
