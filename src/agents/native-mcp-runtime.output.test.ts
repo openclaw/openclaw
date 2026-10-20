@@ -13,7 +13,7 @@ import { createFixtureRuntime, options } from "./native-mcp-runtime.test-support
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-async function fixture(era: "legacy" | "modern") {
+async function fixture(era: "legacy" | "modern", signal: AbortSignal) {
   const directory = tempDirs.make("native-mcp-output-");
   const file = path.join(directory, "server.mjs");
   const receipts = await openFixtureReceiptChannel();
@@ -83,22 +83,39 @@ if (${JSON.stringify(era)} === "modern") {
     views.push(view);
     return view;
   };
-  return {
-    file,
-    receipts,
-    acquire,
-    async close() {
-      try {
-        await Promise.all(views.map((view) => view.release()));
-        await runtime.dispose();
-        assert(runtime.joinCleanup);
-        await runtime.joinCleanup();
-      } finally {
-        await receipts.close();
-      }
-    },
+  const close = async () => {
+    try {
+      await Promise.all(views.map((view) => view.release()));
+      await runtime.dispose();
+      assert(runtime.joinCleanup);
+      await runtime.joinCleanup();
+    } finally {
+      await receipts.close();
+    }
   };
+  const value = (view: NativeMcpServerView, count: unknown, extra = {}) =>
+    view.callTool({ name: "value", arguments: { count, ...extra } }, options(signal));
+  return { file, receipts, acquire, value, close };
 }
+
+async function withFixture(
+  era: "legacy" | "modern",
+  signal: AbortSignal,
+  run: (peer: Awaited<ReturnType<typeof fixture>>) => Promise<void>,
+) {
+  const peer = await fixture(era, signal);
+  try {
+    await run(peer);
+  } finally {
+    await peer.close();
+  }
+}
+
+const completeValue = (count: number) => ({
+  kind: "complete",
+  result: { structuredContent: { count } },
+});
+const schemaError = "does not match the tool's output schema";
 
 async function changeSchema(view: NativeMcpServerView, signal: AbortSignal) {
   const invalidated = new Promise<void>((resolve) => {
@@ -119,35 +136,23 @@ async function changeSchema(view: NativeMcpServerView, signal: AbortSignal) {
 
 it.for(["legacy", "modern"] as const)(
   "validates completed %s tool results against their output schema",
-  async (era, { signal }) => {
-    const peer = await fixture(era);
-    try {
+  async (era, { signal }) =>
+    withFixture(era, signal, async (peer) => {
       const view = await peer.acquire();
-      await expect(
-        view.callTool({ name: "value", arguments: { count: "oops" } }, options(signal)),
-      ).rejects.toThrow("does not match the tool's output schema");
-      expect(
-        await view.callTool({ name: "value", arguments: { count: 7 } }, options(signal)),
-      ).toMatchObject({
+      await expect(peer.value(view, "oops")).rejects.toThrow(schemaError);
+      expect(await peer.value(view, 7)).toMatchObject({
         kind: "complete",
         result: { content: [], structuredContent: { count: 7 } },
       });
-    } finally {
-      await peer.close();
-    }
-  },
+    }),
 );
 
 it.for(["legacy", "modern"] as const)(
   "retains the admitted %s output schema across catalog refresh",
-  async (era, { signal }) => {
-    const peer = await fixture(era);
-    try {
+  async (era, { signal }) =>
+    withFixture(era, signal, async (peer) => {
       const view = await peer.acquire();
-      const pending = view.callTool(
-        { name: "value", arguments: { count: 7, hold: true } },
-        options(signal),
-      );
+      const pending = peer.value(view, 7, { hold: true });
       void pending.catch(() => {});
       try {
         await withinTest(peer.receipts.waitFor(peer.file, "held"), signal);
@@ -159,49 +164,31 @@ it.for(["legacy", "modern"] as const)(
           properties: { count: { type: "string" } },
         });
         peer.receipts.release(peer.file, "finish");
-        expect(await pending).toMatchObject({
-          kind: "complete",
-          result: { structuredContent: { count: 7 } },
-        });
-        await expect(
-          next.callTool({ name: "value", arguments: { count: 7 } }, options(signal)),
-        ).rejects.toThrow("does not match the tool's output schema");
+        expect(await pending).toMatchObject(completeValue(7));
+        await expect(peer.value(next, 7)).rejects.toThrow(schemaError);
       } finally {
         peer.receipts.release(peer.file, "finish");
         await pending.catch(() => {});
       }
-    } finally {
-      await peer.close();
-    }
-  },
+    }),
 );
 
 it("validates resumed results with the continuation's original output schema", async ({
   signal,
 }) => {
-  const peer = await fixture("modern");
-  try {
+  await withFixture("modern", signal, async (peer) => {
     const view = await peer.acquire();
-    const pending = await view.callTool(
-      { name: "value", arguments: { count: 7, continue: true } },
-      options(signal),
-    );
+    const pending = await peer.value(view, 7, { continue: true });
     assert(pending.kind === "input-required");
     await changeSchema(view, signal);
     const next = await peer.acquire();
-    expect(await pending.resume({ roots: { roots: [] } }, options(signal))).toMatchObject({
-      kind: "complete",
-      result: { structuredContent: { count: 7 } },
-    });
-    const invalid = await next.callTool(
-      { name: "value", arguments: { count: 7, continue: true } },
-      options(signal),
+    expect(await pending.resume({ roots: { roots: [] } }, options(signal))).toMatchObject(
+      completeValue(7),
     );
+    const invalid = await peer.value(next, 7, { continue: true });
     assert(invalid.kind === "input-required");
     await expect(invalid.resume({ roots: { roots: [] } }, options(signal))).rejects.toThrow(
-      "does not match the tool's output schema",
+      schemaError,
     );
-  } finally {
-    await peer.close();
-  }
+  });
 });

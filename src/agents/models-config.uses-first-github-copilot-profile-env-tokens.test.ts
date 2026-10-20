@@ -48,6 +48,18 @@ vi.mock("./models-config.providers.implicit.js", async (importOriginal) => ({
 }));
 
 const resolveImplicitProvidersMock = vi.mocked(resolveImplicitProviders);
+const tokenProfile = (token: string) => ({
+  type: "token" as const,
+  provider: "github-copilot",
+  token,
+});
+const expectedAuth = (profile: string, apiKey: string, discoveryApiKey = apiKey) => ({
+  apiKey,
+  discoveryApiKey,
+  mode: "token",
+  source: "profile",
+  profileId: `github-copilot:${profile}`,
+});
 
 beforeEach(() => {
   resolveImplicitProvidersMock
@@ -62,27 +74,13 @@ describe("models-config", () => {
       {
         version: 1,
         profiles: {
-          "github-copilot:alpha": {
-            type: "token",
-            provider: "github-copilot",
-            token: "alpha-token",
-          },
-          "github-copilot:beta": {
-            type: "token",
-            provider: "github-copilot",
-            token: "beta-token",
-          },
+          "github-copilot:alpha": tokenProfile("alpha-token"),
+          "github-copilot:beta": tokenProfile("beta-token"),
         },
       },
     );
 
-    expect(auth("github-copilot")).toEqual({
-      apiKey: "alpha-token",
-      discoveryApiKey: "alpha-token",
-      mode: "token",
-      source: "profile",
-      profileId: "github-copilot:alpha",
-    });
+    expect(auth("github-copilot")).toEqual(expectedAuth("alpha", "alpha-token"));
   });
 
   it("keeps a non-empty existing models.json baseUrl when merge mode regenerates the provider", async () => {
@@ -122,12 +120,8 @@ describe("models-config", () => {
       },
     );
 
-    expect(auth("github-copilot")).toEqual({
-      apiKey: "COPILOT_REF_TOKEN",
-      discoveryApiKey: "token-from-ref-env",
-      mode: "token",
-      source: "profile",
-      profileId: "github-copilot:default",
-    });
+    expect(auth("github-copilot")).toEqual(
+      expectedAuth("default", "COPILOT_REF_TOKEN", "token-from-ref-env"),
+    );
   });
 });

@@ -10,6 +10,7 @@ import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import { createSessionMcpRuntime } from "./agent-bundle-mcp-runtime.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { acquireNativeMcpServer, type NativeMcpServerView } from "./native-mcp-runtime.js";
+import { options } from "./native-mcp-runtime.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const requests: Array<{
@@ -129,9 +130,21 @@ afterAll(async () => {
   await listener.claim.release();
 });
 
-function requestOptions(signal: AbortSignal) {
-  return { signal, assertCurrent() {} };
+async function expectMirror(tenant: string, enabled: boolean, signal: AbortSignal) {
+  expect(
+    await view!.callTool(
+      { name: "mirror", arguments: { tenant, options: { enabled } } },
+      options(signal),
+    ),
+  ).toMatchObject({
+    kind: "complete",
+    result: {
+      content: [{ type: "text", text: JSON.stringify({ tenant, enabled: String(enabled) }) }],
+    },
+  });
 }
+
+const requestsFor = (method: string) => requests.filter((request) => request.method === method);
 
 describe("native MCP HTTP projection calls", () => {
   it("mirrors schema headers with cold-cache recovery and changing warm arguments", async ({
@@ -139,52 +152,36 @@ describe("native MCP HTTP projection calls", () => {
   }) => {
     expect(view!.getProtocolEra()).toBe("modern");
     requests.length = 0;
-    expect(
-      await view!.callTool(
-        { name: "mirror", arguments: { tenant: "tenant-a", options: { enabled: true } } },
-        requestOptions(signal),
-      ),
-    ).toMatchObject({
-      kind: "complete",
-      result: { content: [{ type: "text", text: '{"tenant":"tenant-a","enabled":"true"}' }] },
-    });
-    expect(requests.filter((request) => request.method === "tools/call")).toEqual([
+    await expectMirror("tenant-a", true, signal);
+    expect(requestsFor("tools/call")).toEqual([
       { method: "tools/call", name: "mirror", tenant: null, enabled: null },
       { method: "tools/call", name: "mirror", tenant: "tenant-a", enabled: "true" },
     ]);
-    expect(requests.filter((request) => request.method === "tools/list")).toHaveLength(1);
+    expect(requestsFor("tools/list")).toHaveLength(1);
     expect(mirrorCalls).toBe(1);
 
-    expect(
-      await view!.callTool(
-        { name: "mirror", arguments: { tenant: "tenant-b", options: { enabled: false } } },
-        requestOptions(signal),
-      ),
-    ).toMatchObject({
-      kind: "complete",
-      result: { content: [{ type: "text", text: '{"tenant":"tenant-b","enabled":"false"}' }] },
-    });
-    expect(requests.filter((request) => request.method === "tools/call")).toHaveLength(3);
+    await expectMirror("tenant-b", false, signal);
+    expect(requestsFor("tools/call")).toHaveLength(3);
     expect(requests.at(-1)).toEqual({
       method: "tools/call",
       name: "mirror",
       tenant: "tenant-b",
       enabled: "false",
     });
-    expect(requests.filter((request) => request.method === "tools/list")).toHaveLength(1);
+    expect(requestsFor("tools/list")).toHaveLength(1);
     expect(mirrorCalls).toBe(2);
     expect(runtime!.activeLeases).toBe(0);
   });
 
   it("rejects HTTP input-required results without a continuation or retry", async ({ signal }) => {
-    const call = view!.callTool({ name: "needs-input" }, requestOptions(signal));
+    const call = view!.callTool({ name: "needs-input" }, options(signal));
     await expect(call).rejects.toBeInstanceOf(SdkError);
     await expect(call).rejects.toMatchObject({
       code: SdkErrorCode.UnsupportedResultType,
       data: { resultType: "input_required", method: "tools/call" },
     });
     expect(inputCalls).toBe(1);
-    expect(requests.filter((request) => request.method === "tools/call")).toHaveLength(1);
+    expect(requestsFor("tools/call")).toHaveLength(1);
     expect(runtime!.activeLeases).toBe(0);
   });
 });
