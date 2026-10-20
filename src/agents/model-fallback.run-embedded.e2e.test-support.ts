@@ -5,8 +5,9 @@ import type { OpenClawConfig } from "../config/config.js";
 import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
-import type { ProfileUsageStats } from "./auth-profiles/types.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import type { EmbeddedRunAttemptResult } from "./embedded-agent-runner/run/types.js";
+import { model as catalogModel } from "./model-catalog-fixtures.test-support.js";
 import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
@@ -14,30 +15,18 @@ import {
 
 export function makeModelFallbackConfig(primaryProvider = "openai"): OpenClawConfig {
   const apiKeyField = ["api", "Key"].join("");
-  const provider = (id: string, modelNumber: number) => ({
+  const provider = (id: string, number: number) => ({
     api: "openai-responses" as const,
     [apiKeyField]: `${id}-test-key`, // pragma: allowlist secret
     baseUrl: `https://example.com/${id}`,
     models: [
-      {
-        id: `mock-${modelNumber}`,
-        name: `Mock ${modelNumber}`,
-        reasoning: false,
-        input: ["text" as const],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 16_000,
-        maxTokens: 2048,
-      },
+      catalogModel(`mock-${number}`, `Mock ${number}`, { contextWindow: 16_000, maxTokens: 2048 }),
     ],
   });
+  const model = { primary: `${primaryProvider}/mock-1`, fallbacks: ["groq/mock-2"] };
   return {
     agents: {
-      defaults: {
-        model: {
-          primary: `${primaryProvider}/mock-1`,
-          fallbacks: ["groq/mock-2"],
-        },
-      },
+      defaults: { model },
       entries: { test: {} },
     },
     models: {
@@ -49,13 +38,7 @@ export function makeModelFallbackConfig(primaryProvider = "openai"): OpenClawCon
   } satisfies OpenClawConfig;
 }
 
-type UsageStats = Record<
-  string,
-  Pick<
-    ProfileUsageStats,
-    "lastUsed" | "cooldownUntil" | "disabledUntil" | "disabledReason" | "failureCounts"
-  >
->;
+type UsageStats = AuthProfileStore["usageStats"];
 type ProfileRow = [id: string, provider: string, key: string, lastUsed: number];
 
 function saveProfiles(agentDir: string, rows: ProfileRow[], usageStats?: UsageStats) {
@@ -75,8 +58,6 @@ function saveProfiles(agentDir: string, rows: ProfileRow[], usageStats?: UsageSt
 export async function withModelFallbackWorkspace<T>(
   fn: (ctx: { agentDir: string; workspaceDir: string }) => Promise<T>,
 ): Promise<T> {
-  // Each e2e case gets isolated agent/workspace dirs because usage stats and
-  // transcripts are part of the fallback behavior under test.
   const root = await fs.realpath(
     // openclaw-temp-dir: allow callback-owned roots must match canonical agent database paths
     await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-model-fallback-")),
@@ -156,7 +137,6 @@ export function makeFallbackSuccessAttempt(): EmbeddedRunAttemptResult {
     lastAssistant: buildEmbeddedRunnerAssistant({
       provider: "groq",
       model: "mock-2",
-      stopReason: "stop",
       content: [{ type: "text", text: "fallback ok" }],
     }),
   });

@@ -6,11 +6,9 @@ const providerRuntimeMocks = vi.hoisted(() => ({
   resolveProviderModernModelRef: vi.fn(),
 }));
 
-vi.mock("../plugins/provider-runtime.js", () => {
-  return {
-    resolveProviderModernModelRef: providerRuntimeMocks.resolveProviderModernModelRef,
-  };
-});
+vi.mock("../plugins/provider-runtime.js", () => ({
+  resolveProviderModernModelRef: providerRuntimeMocks.resolveProviderModernModelRef,
+}));
 
 import { normalizeModelCompat } from "../plugins/provider-model-compat.js";
 import { isModernModelRef } from "./test-helpers/live-model-dynamic-candidates.js";
@@ -43,16 +41,13 @@ function expectSupportsDeveloperRoleForcedOff(overrides?: Partial<Model>): void 
 }
 
 beforeEach(() => {
-  // Endpoint capabilities come from manifests. Keep source tests independent
-  // from partial dist output left by an earlier build in the same checkout.
+  // Ignore stale dist manifests left by earlier builds.
   vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.join(process.cwd(), "extensions"));
   providerRuntimeMocks.resolveProviderModernModelRef.mockReset();
   providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(undefined);
 });
 
-afterEach(() => {
-  vi.unstubAllEnvs();
-});
+afterEach(vi.unstubAllEnvs);
 
 describe("isModernModelRef", () => {
   it("matches plugin-advertised modern models only for exact provider ids", () => {
@@ -69,12 +64,8 @@ describe("isModernModelRef", () => {
 describe("normalizeModelCompat", () => {
   it("strips trailing /v1/ (with slash) from anthropic-messages baseUrl", () => {
     const model = baseModel({
-      id: "claude-opus-4-6",
-      name: "claude-opus-4-6",
       api: "anthropic-messages",
       provider: "anthropic",
-      contextWindow: 200_000,
-      maxTokens: 8_192,
       baseUrl: "https://api.anthropic.com/v1/",
     });
     const normalized = normalizeModelCompat(model);
@@ -97,10 +88,7 @@ describe("normalizeModelCompat", () => {
   );
 
   it("leaves native api.openai.com model untouched", () => {
-    const model = baseModel({
-      provider: "openai",
-      baseUrl: "https://api.openai.com/v1",
-    });
+    const model = baseModel({ provider: "openai", baseUrl: "https://api.openai.com/v1" });
     const normalized = normalizeModelCompat(model);
     expect(normalized.compat).toBeUndefined();
   });

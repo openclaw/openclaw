@@ -9,7 +9,6 @@ import type {
 import { resetFallbackSkipCacheForTest } from "./fallback-skip-cache.test-support.js";
 import { createFallbackE2eMocks } from "./model-fallback.e2e.test-support.js";
 import {
-  type EmbeddedAttemptParams,
   makeModelFallbackConfig,
   readFallbackUsageStats,
   withModelFallbackWorkspace,
@@ -20,7 +19,8 @@ import {
   makeEmbeddedRunnerAttempt,
 } from "./test-helpers/embedded-agent-runner-e2e-fixtures.js";
 
-const runEmbeddedAttemptMock = vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
+const runEmbeddedAttemptMock =
+  vi.fn<(params: EmbeddedRunAttemptParams) => Promise<EmbeddedRunAttemptResult>>();
 const fallbackMocks = createFallbackE2eMocks((params) => runEmbeddedAttemptMock(params));
 // mock-isolation: keep model config writes out of the isolated fallback workspace.
 vi.mock("./models-config.js", () => ({
@@ -104,12 +104,12 @@ async function runEmbeddedEntryFallback(workspace: Workspace, name: string, cfg:
   }
 }
 
-function expectAttemptOrder(expected: Array<{ provider: string; authProfileId: string }>) {
+function expectAttemptOrder(expected: Array<[string, string]>) {
   expect(
-    runEmbeddedAttemptMock.mock.calls.map(([params]) => {
-      const { provider, authProfileId } = params as EmbeddedRunAttemptParams;
-      return { provider, authProfileId };
-    }),
+    runEmbeddedAttemptMock.mock.calls.map(([{ provider, authProfileId }]) => [
+      provider,
+      authProfileId,
+    ]),
   ).toEqual(expected);
 }
 
@@ -128,8 +128,7 @@ describe("timeout cooldown availability", () => {
         cfg.auth = { order: { openai: hasBackup ? ["openai:p1", "openai:p2"] : ["openai:p1"] } };
         // Stored credentials outside the authorized order must not enable cooldown.
         await writeFallbackMultiProfileAuthStore(workspace.agentDir, { openAiProfileCount: 2 });
-        runEmbeddedAttemptMock.mockImplementation(async (params: unknown) => {
-          const { provider, modelId } = params as EmbeddedAttemptParams;
+        runEmbeddedAttemptMock.mockImplementation(async ({ provider, modelId }) => {
           const failed = runEmbeddedAttemptMock.mock.calls.length === 1;
           const assistant = buildEmbeddedRunnerAssistant({
             provider,
@@ -145,17 +144,14 @@ describe("timeout cooldown availability", () => {
                 ? { kind: "timeout", phase: "prompt", source: "idle", aborted: true }
                 : { kind: "ok" },
             lastAssistant: assistant,
-            currentAttemptAssistant: assistant,
             assistantTexts: failed ? [] : ["recovered"],
           });
         });
         const run = async (name: string) => {
           const work = new AsyncWorkScope();
-          try {
-            return await work.run(() => runEmbeddedEntryFallback(workspace, name, cfg));
-          } finally {
-            await work.drain();
-          }
+          return work
+            .run(() => runEmbeddedEntryFallback(workspace, name, cfg))
+            .finally(() => work.drain());
         };
 
         await run(`timeout-${scenario}`).catch(() => undefined);
@@ -164,10 +160,8 @@ describe("timeout cooldown availability", () => {
           expect(stats?.cooldownReason).toBe("timeout");
           expect(stats?.cooldownUntil).toBeGreaterThan(Date.now());
           expectAttemptOrder([
-            { provider: "openai", authProfileId: "openai:p1" },
-            hasBackup
-              ? { provider: "openai", authProfileId: "openai:p2" }
-              : { provider: "groq", authProfileId: "groq:p1" },
+            ["openai", "openai:p1"],
+            hasBackup ? ["openai", "openai:p2"] : ["groq", "groq:p1"],
           ]);
         } else {
           expect(stats?.cooldownUntil).toBeUndefined();
@@ -177,9 +171,7 @@ describe("timeout cooldown availability", () => {
             const result = await run(`${name}-${scenario}`);
             expect(result.result.payloads?.[0]?.text).toBe("recovered");
           }
-          expectAttemptOrder(
-            Array.from({ length: 3 }, () => ({ provider: "openai", authProfileId: "openai:p1" })),
-          );
+          expectAttemptOrder(Array.from({ length: 3 }, () => ["openai", "openai:p1"]));
         }
       });
     },
