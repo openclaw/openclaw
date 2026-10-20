@@ -123,7 +123,10 @@ vi.mock("../daemon/launchd-exec.js", async (importOriginal) => ({
   execLaunchctl: mocks.execLaunchctl,
 }));
 
-vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: mocks.note }));
+vi.mock("../../packages/terminal-core/src/note.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../packages/terminal-core/src/note.js")>()),
+  note: mocks.note,
+}));
 
 vi.mock("./daemon-install-helpers.js", () => ({
   buildGatewayInstallPlan: mocks.buildGatewayInstallPlan,
