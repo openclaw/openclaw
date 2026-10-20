@@ -197,10 +197,13 @@ export function bindFollowupCompletion(execution: ReturnType<typeof createExecut
   rpcSourceTesting.reset([[params.runId, entry]]);
   const previousAbort = params.prepared.activeRunAbort;
   params.prepared.activeRunAbort = {
-    ...previousAbort,
     registered: true,
     controller: testRpcSourceController(entry),
     entry,
+    initializeTiming: previousAbort.initializeTiming,
+    markExecutionStarted: previousAbort.markExecutionStarted,
+    bindAgentRunDelegatedAuthority: previousAbort.bindAgentRunDelegatedAuthority,
+    cleanup: previousAbort.cleanup,
   };
   params.prepared.activeGatewayWorkAdmission!.isActive = () => true;
   execution.abortCleanup.mockImplementation(() => {

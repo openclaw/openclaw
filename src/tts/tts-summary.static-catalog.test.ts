@@ -66,7 +66,12 @@ it.each([
           response.writeHead(200, { "content-type": "text/event-stream" });
           const message = {
             id: "kimi-summary",
+            type: "message",
+            role: "assistant",
             model,
+            content: [],
+            stop_reason: null,
+            stop_sequence: null,
             usage: { input_tokens: 1, output_tokens: 0 },
           };
           response.end(
@@ -79,7 +84,7 @@ it.each([
               }),
               sse("content_block_stop", { index: 0 }),
               sse("message_delta", {
-                delta: { stop_reason: "end_turn" },
+                delta: { stop_reason: "end_turn", stop_sequence: null },
                 usage: { output_tokens: 6 },
               }),
               sse("message_stop"),

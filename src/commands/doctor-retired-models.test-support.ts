@@ -68,18 +68,22 @@ vi.mock(import("../agents/openai-model-routes.js"), async (importOriginal) => {
     createOpenAIModelRoutesResolver: () => () => ({
       kind: "routes",
       defaultRuntimeId: "codex",
-      routes: (
-        [
-          ["openai-responses", "https://api.openai.com/v1", "api-key"],
-          ["openai-chatgpt-responses", "https://chatgpt.com/backend-api/codex", "subscription"],
-        ] as const
-      ).map(([api, baseUrl, authRequirement]) => ({
-        api,
-        baseUrl,
-        authRequirement,
-        requestTransportOverrides: "none",
-        runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
-      })),
+      routes: [
+        {
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          authRequirement: "api-key",
+          requestTransportOverrides: "none",
+          runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+        },
+        {
+          api: "openai-chatgpt-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authRequirement: "subscription",
+          requestTransportOverrides: "none",
+          runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+        },
+      ],
     }),
   };
 });

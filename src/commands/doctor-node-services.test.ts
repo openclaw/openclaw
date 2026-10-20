@@ -33,7 +33,17 @@ let home: string;
 let packageRoot: string;
 let plist: string;
 let original: string;
-const nodeOptions = ["node", "run", "--display-name", "Original node"];
+const nodeOptions = [
+  "node",
+  "run",
+  "--host",
+  "node.example.test",
+  "--port",
+  "9443",
+  "--tls",
+  "--display-name",
+  "Original node",
+];
 const isolatedEnvKeys = [
   "OPENCLAW_HOME",
   "OPENCLAW_CONFIG_PATH",
