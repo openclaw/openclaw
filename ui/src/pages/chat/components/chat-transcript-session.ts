@@ -5,7 +5,6 @@ import type { Virtualizer } from "@tanstack/virtual-core";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
-import type { AssistantMessageExpansionState } from "../chat-message-recovery.ts";
 import type { ChatSessionScrollPosition } from "../scroll.ts";
 import type { ChatHistoryBoundaryProps } from "./chat-history-boundary.tsx";
 import type { ChatMessageEntryAnimations } from "./chat-message-entry.ts";
@@ -13,7 +12,7 @@ import type { TranscriptAnnouncement } from "./chat-transcript-announcement.ts";
 import { readConnectedTranscriptRows } from "./chat-transcript-geometry.ts";
 import type { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
 import type { TranscriptContent, TranscriptRow } from "./chat-transcript-layout.ts";
-import type { TranscriptMessageElements } from "./chat-transcript-message-elements.ts";
+import type { ChatSessionVirtualizerHost } from "./chat-transcript-virtualizer-host.ts";
 
 /** A reader-position restoration that is waiting for measurable transcript geometry. */
 export type ChatTranscriptPendingScrollOffset = {
@@ -48,34 +47,23 @@ export type TranscriptHeader = {
   height: number;
 };
 
-export type ChatTranscriptSession = {
+export type ChatTranscriptSession = Pick<
+  ChatSessionVirtualizerHost,
+  | "entryAnimations"
+  | "messageElements"
+  | "contentElement"
+  | "liveAnnouncementText"
+  | "scrollElementRef"
+  | "render"
+  | "syncMessageRows"
+  | "activeMessageId"
+  | "revealMessage"
+  | "setContentReady"
+  | "handleFocusIn"
+  | "handleFocusOut"
+> & {
   readonly layout: Pick<TranscriptLayoutOwner, "viewportResizePending">;
-  readonly entryAnimations: ChatMessageEntryAnimations;
-  readonly messageElements: TranscriptMessageElements;
-  readonly contentElement: HTMLDivElement | null;
-  readonly expandedAssistantMessages: Map<string, AssistantMessageExpansionState>;
-  readonly liveAnnouncementText: string;
-  readonly scrollElementRef: (element?: Element) => void;
-  render<T>(
-    rows: readonly TranscriptRow<T>[],
-    renderRow: (row: TranscriptRow<T>) => TranscriptContent,
-    announcement: TranscriptAnnouncement | null,
-    announce: boolean,
-    overlay?: JSX.Element,
-    header?: TranscriptHeader | null,
-    presented?: PresentationValue,
-    applicationContext?: ApplicationContext,
-  ): HTMLDivElement;
-  syncMessageRows(
-    messageRowKeysById: ReadonlyMap<string, string>,
-    messageRowsByKey: ReadonlyMap<string, string>,
-  ): void;
-  /** Returns the sampled loaded message at or preceding the viewport midpoint. */
-  activeMessageId(messageIds: readonly string[]): string | null;
-  revealMessage(messageId: string): boolean;
-  setContentReady(ready: boolean): void;
-  handleFocusIn(event: FocusEvent): void;
-  handleFocusOut(event: FocusEvent): void;
+  readonly expandedAssistantMessages: ChatSessionVirtualizerHost["expandedAssistantMessages"];
 };
 
 /** Rows and lookup identities that must be promoted as one rendered projection. */

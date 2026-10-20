@@ -34,8 +34,8 @@ import {
   trackSessionCheckoutSidebar,
 } from "./chat-session-workspace-state.ts";
 import type {
+  SessionWorkspaceFilter,
   SessionWorkspaceHost,
-  SessionWorkspaceProps,
   SessionWorkspaceState,
 } from "./chat-session-workspace-types.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
@@ -502,7 +502,7 @@ export function createSessionWorkspaceProps(
     expanded?: boolean;
     presented?: boolean;
   },
-): SessionWorkspaceProps {
+) {
   state.sessionWorkspaceDraftScope = options?.draftScope;
   state.sessionWorkspaceDraftContext = options?.draftContext;
   const workspace = getSessionWorkspace(state);
@@ -536,7 +536,7 @@ export function createSessionWorkspaceProps(
     browserPath: workspace.browserPath,
     browserSearch: workspace.browserSearch,
     connectionEpoch: state.connectionEpoch,
-    onDownloadFile: (path, origin, signal) =>
+    onDownloadFile: (path: string, origin: "session" | "workspace", signal: AbortSignal) =>
       downloadSessionFile(
         state,
         {
@@ -547,7 +547,7 @@ export function createSessionWorkspaceProps(
         },
         signal,
       ),
-    onSetFilter: (filter) => {
+    onSetFilter: (filter: SessionWorkspaceFilter) => {
       workspace.filter = filter;
       sessionWorkspaceForHost(state).publish();
     },
@@ -555,14 +555,14 @@ export function createSessionWorkspaceProps(
       clearWorkspaceTimer(workspace);
       loadSessionWorkspace(state, workspace, true);
     },
-    onBrowsePath: (path) => {
+    onBrowsePath: (path: string) => {
       clearWorkspaceTimer(workspace);
       workspace.browserPath = path;
       workspace.browserSearch = "";
       loadSessionWorkspace(state, workspace, true);
       sessionWorkspaceForHost(state).publish();
     },
-    onOpenFile: (path, origin) => {
+    onOpenFile: (path: string, origin: "session" | "workspace") => {
       // Session paths are cwd-relative; browser rows are workspace-root-relative.
       // Keep the origin explicit so a nested cwd cannot shadow the selected browser file.
       const opts =
@@ -571,7 +571,7 @@ export function createSessionWorkspaceProps(
           : {};
       openFile(state, workspace, path, opts);
     },
-    onSearch: (search) => {
+    onSearch: (search: string) => {
       workspace.browserSearch = search;
       sessionWorkspaceForHost(state).publish();
       clearWorkspaceTimer(workspace);
@@ -580,7 +580,7 @@ export function createSessionWorkspaceProps(
         loadSessionWorkspace(state, workspace, true);
       }, 160);
     },
-    onOpenArtifact: (artifactId) => openArtifact(state, workspace, artifactId),
+    onOpenArtifact: (artifactId: string) => openArtifact(state, workspace, artifactId),
     onOpenDiff: diffContent ? () => state.handleOpenSidebar(diffContent) : undefined,
   };
 }

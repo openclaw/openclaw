@@ -1,8 +1,8 @@
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../../api/gateway.ts";
-import type { SessionFileDownload } from "../../../api/session-file-download.ts";
 import type { SessionWorkspaceListResult } from "../../../api/types.ts";
 import type { UiSettings } from "../../../app/settings.ts";
 import type { SessionCapability, SessionScopeHost } from "../../../lib/sessions/index.ts";
+import type { createSessionWorkspaceProps } from "./chat-session-workspace.ts";
 import type {
   FileSidebarNavigation,
   SidebarContent,
@@ -11,30 +11,12 @@ import type {
 
 export type SessionWorkspaceFilter = "all" | "changed" | "read" | "artifacts";
 
-export type SessionWorkspaceProps = {
-  filter: SessionWorkspaceFilter;
-  browserPath: string;
-  browserSearch: string;
-  sessionKey: string;
-  list: SessionWorkspaceListResult | null;
-  loading: boolean;
-  error: string | null;
-  activeId: string | null;
-  connectionEpoch?: number;
-  onDownloadFile?: (
-    path: string,
-    origin: "session" | "workspace",
-    signal: AbortSignal,
-  ) => Promise<SessionFileDownload | null>;
-  onBrowsePath: (path: string) => void;
-  onRetry: () => void;
-  onOpenFile: (path: string, origin: "session" | "workspace") => void;
-  onSearch: (search: string) => void;
-  onSetFilter: (filter: SessionWorkspaceFilter) => void;
-  onOpenArtifact: (artifactId: string) => void;
-  /** Opens the session diff panel; absent until a usable checkout is known. */
-  onOpenDiff?: () => void;
-};
+type SessionWorkspaceView = ReturnType<typeof createSessionWorkspaceProps>;
+export type SessionWorkspaceProps = Omit<
+  SessionWorkspaceView,
+  "connectionEpoch" | "onDownloadFile" | "onOpenDiff"
+> &
+  Partial<Pick<SessionWorkspaceView, "connectionEpoch" | "onDownloadFile" | "onOpenDiff">>;
 
 export type SessionWorkspacePreview = {
   id: string;
