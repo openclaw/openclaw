@@ -1191,6 +1191,7 @@ export function discoverOpenClawPlugins(params: {
       () => {
         scanner.discoverConfiguredPaths(params.extraPaths ?? [], workspaceDir);
         const workspaceMatchesBundledRoot = resolvesToSameDirectory(workspaceRoot, roots.stock);
+        // Scanning the global root as workspace first would hide its install provenance.
         const workspaceMatchesGlobalRoot = resolvesToSameDirectory(roots.workspace, roots.global);
         if (
           roots.workspace &&
@@ -1201,7 +1202,6 @@ export function discoverOpenClawPlugins(params: {
           // Keep workspace auto-discovery constrained to the OpenClaw extensions root.
           // Recursively scanning the full workspace treats arbitrary project folders as
           // plugin candidates and causes noisy "plugin manifest not found" validation failures.
-          // A shared global root must keep its installed provenance in the shared scan.
           discoverInDirectory({
             dir: roots.workspace,
             origin: "workspace",
