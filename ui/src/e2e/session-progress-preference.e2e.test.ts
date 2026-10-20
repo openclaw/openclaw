@@ -6,6 +6,7 @@ import {
 import { openChatDetails } from "./chat-details.test-support.ts";
 import {
   captureUiProof,
+  chatMessage,
   chatSessionListResponse,
   controlUiSessionUrl,
   createChatFlowE2eSuite,
@@ -33,19 +34,11 @@ suite.define(() => {
           sessionKey,
           featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
           historyMessages: [
-            {
-              role: "user",
-              content: [{ type: "text", text: "Check the progress display setting." }],
-            },
-            {
-              role: "assistant",
-              content: [
-                {
-                  type: "text",
-                  text: "The task continues whether progress cards are visible or hidden.",
-                },
-              ],
-            },
+            chatMessage("user", "Check the progress display setting."),
+            chatMessage(
+              "assistant",
+              "The task continues whether progress cards are visible or hidden.",
+            ),
           ],
           methodResponses: {
             "progressCard.get": { card: cardData },

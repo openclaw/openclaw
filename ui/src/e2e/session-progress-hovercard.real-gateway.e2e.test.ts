@@ -141,13 +141,16 @@ suite.define(() => {
             },
           );
           await row.waitFor({ state: "visible", timeout: 30_000 });
-          if (artifactDir) {
-            await page.screenshot({
-              animations: "disabled",
-              fullPage: true,
-              path: path.join(artifactDir, "01-native-catalog-row.png"),
-            });
-          }
+          const screenshot = async (name: string) => {
+            if (artifactDir) {
+              await page.screenshot({
+                animations: "disabled",
+                fullPage: true,
+                path: path.join(artifactDir, name),
+              });
+            }
+          };
+          await screenshot("01-native-catalog-row.png");
           expect(await row.getAttribute("data-session-key")).toBe(catalogSessionKey);
           await evaluateControlUiContext(page, (context) => {
             const client = context.gateway.snapshot.client;
@@ -179,13 +182,7 @@ suite.define(() => {
             .poll(() => page.evaluate(() => window.catalogProgressRequests))
             .toEqual([{ outcome: "ok", sessionKey: catalogSessionKey }]);
           await expect.poll(() => card.textContent()).toContain("Native catalog progress");
-          if (artifactDir) {
-            await page.screenshot({
-              animations: "disabled",
-              fullPage: true,
-              path: path.join(artifactDir, "02-qualified-progress-card.png"),
-            });
-          }
+          await screenshot("02-qualified-progress-card.png");
         },
       );
     } finally {

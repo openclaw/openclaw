@@ -45,15 +45,14 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, workKey));
       await page.locator(".chat-thread-inner").getByText("Workspace ready.").waitFor();
       expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
-      const reportRequests = async () =>
-        (await gateway.getRequests("chat.history")).filter(
-          (request) => (request.params as { sessionKey?: string }).sessionKey === reportKey,
-        );
+      const reportTarget = { sessionKey: reportKey };
       const reportLink = page
         .locator(`openclaw-app-sidebar [data-session-key="${reportKey}"] a`)
         .first();
       await reportLink.hover();
-      await expect.poll(async () => (await reportRequests()).length).toBe(1);
+      await expect
+        .poll(async () => (await gateway.getRequests("chat.history", reportTarget)).length)
+        .toBe(1);
       expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
       const before = (await gateway.getRequests("sessions.list")).length;
       await gateway.setSessionsListResponse(
@@ -73,16 +72,11 @@ suite.define(() => {
         )
         .toContain("Workspace updated");
       await gateway.resolveDeferred("chat.history", reportHistory);
-      await gateway.setMethodResponse("chat.history", {
-        messages: [],
-        sessionId: report.sessionId,
-      });
-      await gateway.setMethodResponse("chat.startup", {
-        messages: [],
-        sessionId: report.sessionId,
-      });
-      await gateway.deferNext("chat.history", { sessionKey: reportKey });
-      await gateway.deferNext("chat.startup", { sessionKey: reportKey });
+      const emptyReport = { messages: [], sessionId: report.sessionId };
+      await gateway.setMethodResponse("chat.history", emptyReport);
+      await gateway.setMethodResponse("chat.startup", emptyReport);
+      await gateway.deferNext("chat.history", reportTarget);
+      await gateway.deferNext("chat.startup", reportTarget);
       await reportLink.click();
       try {
         await page.locator(".chat-thread-inner").getByText(reportText).waitFor();
@@ -93,11 +87,7 @@ suite.define(() => {
           JSON.stringify(await gateway.getRequests(), null, 2),
         );
       }
-      expect(
-        (await gateway.getRequests("chat.startup")).some(
-          (request) => (request.params as { sessionKey?: string }).sessionKey === reportKey,
-        ),
-      ).toBe(true);
+      expect((await gateway.getRequests("chat.startup", reportTarget)).length).toBeGreaterThan(0);
     } finally {
       await suite.closeBrowserContext(context);
     }

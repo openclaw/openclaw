@@ -80,10 +80,10 @@ suite.define(() => {
 
       await page.keyboard.press(`${modifier}+/`);
       const shortcuts = page.getByRole("dialog", { name: "Keyboard shortcuts" });
-      await page
+      const newSessionHelp = page
         .locator("openclaw-keyboard-shortcuts-dialog")
-        .getByText("Open New Session", { exact: true })
-        .waitFor({ state: "visible" });
+        .getByText("Open New Session", { exact: true });
+      await newSessionHelp.waitFor({ state: "visible" });
       await page.keyboard.press(`${modifier}+Shift+A`);
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(2);
       await captureUiProof(suite, page, "direct-new-session-before.png");
@@ -99,10 +99,7 @@ suite.define(() => {
       expect(await gateway.getRequests("chat.send")).toEqual([]);
       await captureUiProof(suite, page, "direct-new-session-after.png");
       await page.keyboard.press(`${modifier}+/`);
-      await page
-        .locator("openclaw-keyboard-shortcuts-dialog")
-        .getByText("Open New Session", { exact: true })
-        .waitFor({ state: "visible" });
+      await newSessionHelp.waitFor({ state: "visible" });
       await captureUiProof(suite, page, "direct-session-shortcuts-help.png");
       await page.keyboard.press(`${modifier}+/`);
       await shortcuts.waitFor({ state: "detached" });

@@ -5,6 +5,7 @@ import {
   createChatFlowE2eSuite,
   installMockGateway,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
@@ -14,12 +15,7 @@ suite.define(() => {
     const catalogSessionKey = "agent:main:catalog:codex:gateway%3Acodex:thread-1";
 
     await suite.withPage(
-      {
-        hasTouch: false,
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      },
+      { ...createControlUiE2eContextOptions(), hasTouch: false },
       async ({ page }) => {
         const nowSeconds = Math.floor(Date.now() / 1000);
         await installMockGateway(page, {
