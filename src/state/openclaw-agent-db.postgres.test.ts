@@ -76,9 +76,8 @@ function openDatabase(options: { agentId: string; path?: string }) {
   };
 }
 
-function closeDatabase(databasePath: string) {
-  return admit(() => owners.closeOpenClawAgentDatabaseByPath(databasePath));
-}
+const closeDatabase = (databasePath: string) =>
+  admit(() => owners.closeOpenClawAgentDatabaseByPath(databasePath));
 
 function exportFts(database: { db: EngineConnection }, sessionId: string) {
   return Array.from(
@@ -202,9 +201,10 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
       now: 1,
     });
     using database = openDatabase({ agentId: target.agentId });
-    const inspect = () =>
-      admit(() =>
-        migrateHistoricalTranscriptDirectives({
+    const inspect = () => {
+      let result: ReturnType<typeof migrateHistoricalTranscriptDirectives> | undefined;
+      admit(() => {
+        result = migrateHistoricalTranscriptDirectives({
           env: process.env,
           preparedTargets: [
             {
@@ -214,14 +214,14 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
               source: "configured",
             },
           ],
-        }),
-      );
+        });
+      });
+      return result!;
+    };
     expect(await inspect()).toEqual({ changes: [], warnings: [] });
-    const readEvent = () =>
-      database.get(
-        "SELECT event_json FROM transcript_events WHERE message_role = 'assistant' LIMIT 1",
-      );
-    const event = JSON.parse(String(readEvent()?.event_json));
+    const eventQuery =
+      "SELECT event_json FROM transcript_events WHERE message_role = 'assistant' LIMIT 1";
+    const event = JSON.parse(String(database.get(eventQuery)?.event_json));
     event.message.content = [{ type: "text", text: "[[reply_to_current]] Legacy reply" }];
     const raw = JSON.stringify(event);
     database.write(
@@ -232,7 +232,7 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
       changes: [],
       warnings: [expect.stringContaining("PostgreSQL cannot use SQLite repair")],
     });
-    expect(readEvent()).toEqual({ event_json: raw });
+    expect(database.get(eventQuery)).toEqual({ event_json: raw });
     expectAnchorOnly(database.path);
   });
 
