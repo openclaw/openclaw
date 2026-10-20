@@ -3,32 +3,23 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  detectLegacySandboxRegistryFileIssues,
-  legacySandboxRegistryInspectionToHealthFinding,
-  legacySandboxRegistryInspectionToRepairEffect,
-  maybeRepairSandboxRegistryFiles,
-} from "./doctor-sandbox.js";
+import * as registry from "./doctor-sandbox.js";
 
 const fixture = vi.hoisted(() => ({ root: "" }));
 const at = (name: string) => path.join(fixture.root, name);
 const read = (file: string) => fs.readFileSync(file, "utf8");
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
 vi.mock("../agents/sandbox/docker.js", () => ({}));
-vi.mock("../agents/sandbox/constants.js", () => ({
-  get SANDBOX_REGISTRY_PATH() {
-    return path.join(fixture.root, "containers.json");
-  },
-  get SANDBOX_BROWSER_REGISTRY_PATH() {
-    return path.join(fixture.root, "browsers.json");
-  },
-  get SANDBOX_CONTAINERS_DIR() {
-    return path.join(fixture.root, "containers");
-  },
-  get SANDBOX_BROWSERS_DIR() {
-    return path.join(fixture.root, "browsers");
-  },
-}));
+vi.mock("../agents/sandbox/constants.js", () => {
+  const prop = (p: string) => ({ enumerable: true, get: () => path.join(fixture.root, p) });
+  const paths = {
+    SANDBOX_REGISTRY_PATH: prop("containers.json"),
+    SANDBOX_BROWSER_REGISTRY_PATH: prop("browsers.json"),
+    SANDBOX_CONTAINERS_DIR: prop("containers"),
+    SANDBOX_BROWSERS_DIR: prop("browsers"),
+  };
+  return Object.defineProperties({}, paths);
+});
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => {
@@ -36,9 +27,9 @@ beforeEach(() => {
   vi.mocked(note).mockClear();
 });
 
-const repair = (shouldRepair = true) => maybeRepairSandboxRegistryFiles({ shouldRepair }, () => {});
-const expectArchiveNote = (location: string) =>
-  expect(note).toHaveBeenLastCalledWith(expect.stringContaining(location), "Sandbox");
+const repair = (shouldRepair = true) =>
+  registry.maybeRepairSandboxRegistryFiles({ shouldRepair }, () => {});
+const inspect = registry.detectLegacySandboxRegistryFileIssues;
 
 it.each([
   { name: "containers.json", sharded: false, bytes: '{"entries":[]}' },
@@ -59,13 +50,13 @@ it.each([
 
   await repair(false);
   expect(note).toHaveBeenCalledWith(expect.stringContaining("doctor --fix"), "Sandbox");
-  const issues = await detectLegacySandboxRegistryFileIssues();
+  const issues = await inspect();
   expect(issues).toHaveLength(1);
-  expect(legacySandboxRegistryInspectionToHealthFinding(issues[0]!)).toMatchObject({
+  expect(registry.legacySandboxRegistryInspectionToHealthFinding(issues[0]!)).toMatchObject({
     path: source,
     fixHint: expect.stringContaining("archive retired registry files"),
   });
-  expect(legacySandboxRegistryInspectionToRepairEffect(issues[0]!)).toMatchObject({
+  expect(registry.legacySandboxRegistryInspectionToRepairEffect(issues[0]!)).toMatchObject({
     action: "archive-retired-sandbox-registry",
     target: source,
   });
@@ -75,8 +66,8 @@ it.each([
   const archive = sharded ? `${destination}/entry.json.migrated` : destination;
   expect(fs.existsSync(source)).toBe(false);
   expect(read(archive)).toBe(bytes);
-  expect(await detectLegacySandboxRegistryFileIssues()).toEqual([]);
-  expectArchiveNote(archive);
+  expect(await inspect()).toEqual([]);
+  expect(note).toHaveBeenLastCalledWith(expect.stringContaining(archive), "Sandbox");
   if (occupied) {
     expect(fs.readlinkSync(`${source}.migrated`)).toBe(at("missing-archive"));
   }
@@ -101,7 +92,7 @@ it("refuses an uninspectable source path instead of treating it as absent", asyn
 
 it("leaves current installations alone when retired registry paths are absent", async () => {
   fs.writeFileSync(at("current-state"), "current installation");
-  expect(await detectLegacySandboxRegistryFileIssues()).toEqual([]);
+  expect(await inspect()).toEqual([]);
   await repair();
   expect(note).not.toHaveBeenCalled();
   expect(fs.readdirSync(fixture.root)).toEqual(["current-state"]);

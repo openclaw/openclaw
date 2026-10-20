@@ -1,8 +1,6 @@
-import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import { build } from "tsdown";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import packageJson from "../../package.json" with { type: "json" };
@@ -18,8 +16,8 @@ import {
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { canonicalMemoryTestSupportModuleUrl } from "./doctor-session-canonical-keys.memory.test-support.js";
 import { insertLegacySession } from "./doctor-session-canonical-keys.test-support.js";
+import { runDoctorChild } from "./doctor-session-child.test-support.js";
 
-const execFileAsync = promisify(execFile);
 const ROW_COUNT = 48;
 const ENTRY_PAYLOAD_BYTES = 512 * 1024;
 const CHILD_HEAP_MIB = 160;
@@ -89,20 +87,11 @@ it("keeps canonical SQLite entry JSON streaming under a low child heap", async (
       path: resolveSqliteTargetFromSessionStorePath(storePath, scope).path,
     };
     openOpenClawAgentDatabase(databaseOptions);
-    const runChild = async () => {
-      const { stdout } = await execFileAsync(
-        process.execPath,
+    const runChild = () =>
+      runDoctorChild(
         [`--max-old-space-size=${CHILD_HEAP_MIB}`, childPath, state.stateDir, storeTemplate],
-        {
-          cwd: process.cwd(),
-          encoding: "utf8",
-          env: state.env,
-          maxBuffer: 1024 * 1024,
-          timeout: 60_000,
-        },
+        state.env,
       );
-      return JSON.parse(stdout) as { foundGroups: number; scannedStores: number };
-    };
 
     closeOpenClawAgentDatabasesForTest();
     await expect(runChild()).resolves.toMatchObject({ foundGroups: 0, scannedStores: 1 });

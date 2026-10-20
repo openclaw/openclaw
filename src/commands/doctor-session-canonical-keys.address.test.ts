@@ -13,11 +13,7 @@ import { createCanonicalRepairFixture } from "./doctor-session-repair-fixture.te
 
 type Target = Parameters<typeof persistSessionTranscriptTurn>[0] & { sessionId: string };
 
-async function seed(
-  target: Target,
-  content = target.sessionKey,
-  extra: Partial<SessionEntry> = {},
-) {
+async function seed(target: Target, content: string, extra: Partial<SessionEntry> = {}) {
   replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: 1, ...extra });
   await persistSessionTranscriptTurn(target, {
     expectedSessionId: target.sessionId,
