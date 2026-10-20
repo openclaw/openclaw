@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import { createGateway, createSessionsHarness, mountSidebar } from "../app-sidebar.ts";
 import { waitForFast } from "../wait-for.ts";
+import { sessionList } from "./compact.test-support.ts";
 import "../../components/app-sidebar.tsx";
 
 describe("AppSidebar categorized child sessions", () => {
   it("shows a categorized Discord-spawned dashboard session on a cold sidebar without its parent", async () => {
-    const variant = "panel";
     const officeKey = "agent:main:dashboard:office-ha";
     const wakeKey = "agent:main:dashboard:wake-word";
     const archivedKey = "agent:main:dashboard:archived";
@@ -36,7 +37,6 @@ describe("AppSidebar categorized child sessions", () => {
     const { sidebar } = await mountSidebar(
       createGateway({} as GatewayBrowserClient),
       harness.sessions,
-      variant,
     );
     sidebar.sessionKey = wakeKey;
     await sidebar.updateComplete;
@@ -58,42 +58,36 @@ describe("AppSidebar categorized child sessions", () => {
       childSessions: [categorizedKey, ordinaryKey, archivedKey],
       label: "Parent task",
     });
-    harness.list.mockResolvedValue({
-      count: 3,
-      defaults: { contextTokens: null, model: null, modelProvider: null },
-      path: "",
-      sessions: [
-        {
-          category: "Research",
-          key: categorizedKey,
-          kind: "direct",
-          label: "Cached categorized child",
-          spawnedBy: parentKey,
-          updatedAt: 3,
-        },
-        {
-          key: ordinaryKey,
-          kind: "direct",
-          label: "Cached ordinary child",
-          spawnedBy: parentKey,
-          updatedAt: 2,
-        },
-        {
-          archived: true,
-          category: "Research",
-          key: archivedKey,
-          kind: "direct",
-          label: "Cached archived child",
-          spawnedBy: parentKey,
-          updatedAt: 1,
-        },
-      ],
-      ts: 1,
+    const child = (
+      key: string,
+      label: string,
+      updatedAt: number,
+      extra: Partial<GatewaySessionRow> = {},
+    ) => ({
+      key,
+      label,
+      updatedAt,
+      ...extra,
+      kind: "direct" as const,
+      spawnedBy: parentKey,
     });
+    harness.list.mockResolvedValue(
+      sessionList(
+        [
+          child(categorizedKey, "Cached categorized child", 3, { category: "Research" }),
+          child(ordinaryKey, "Cached ordinary child", 2),
+          child(archivedKey, "Cached archived child", 1, { category: "Research", archived: true }),
+        ],
+        1,
+      ),
+    );
     harness.publish({ groups: ["Research"] });
 
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, harness.sessions);
+    const tree = `[data-session-tree="${parentKey}"]`;
+    const ordinaryChild = () =>
+      sidebar.querySelector(`${tree} [data-session-key="${ordinaryKey}"]`);
     sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]")?.click();
     await waitForFast(() => expect(harness.list).toHaveBeenCalledOnce());
 
@@ -101,34 +95,21 @@ describe("AppSidebar categorized child sessions", () => {
     await waitForFast(() =>
       expect(research?.querySelectorAll(`[data-session-key="${categorizedKey}"]`)).toHaveLength(1),
     );
-    expect(
-      sidebar.querySelector(
-        `[data-session-tree="${parentKey}"] [data-session-key="${ordinaryKey}"]`,
-      ),
-    ).not.toBeNull();
+    expect(ordinaryChild()).not.toBeNull();
     expect(sidebar.querySelector(`[data-session-key="${archivedKey}"]`)).toBeNull();
 
     harness.publishList({
       result: {
         ...harness.sessions.state.result!,
         count: 2,
-        sessions: [
-          parent!,
-          {
-            key: categorizedKey,
-            kind: "direct",
-            label: "Current ordinary child",
-            spawnedBy: parentKey,
-            updatedAt: 4,
-          },
-        ],
+        sessions: [parent!, child(categorizedKey, "Current ordinary child", 4)],
       },
     });
     await waitForFast(() => {
       const rows = sidebar.querySelectorAll(`[data-session-key="${categorizedKey}"]`);
       expect(rows).toHaveLength(1);
       expect(rows[0]?.textContent).toContain("Current ordinary child");
-      expect(rows[0]?.closest(`[data-session-tree="${parentKey}"]`)).not.toBeNull();
+      expect(rows[0]?.closest(tree)).not.toBeNull();
     });
     expect(sidebar.textContent).not.toContain("Cached categorized child");
     expect(
@@ -136,11 +117,7 @@ describe("AppSidebar categorized child sessions", () => {
         `[data-session-section="category:Research"] [data-session-key="${categorizedKey}"]`,
       ),
     ).toBeNull();
-    expect(
-      sidebar.querySelector(
-        `[data-session-tree="${parentKey}"] [data-session-key="${ordinaryKey}"]`,
-      ),
-    ).not.toBeNull();
+    expect(ordinaryChild()).not.toBeNull();
     expect(sidebar.querySelector(`[data-session-key="${archivedKey}"]`)).toBeNull();
   });
 });

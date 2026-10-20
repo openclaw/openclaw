@@ -9,23 +9,54 @@ import {
 } from "../../lib/sessions/route-navigation.ts";
 import {
   createGateway,
-  createGatewayHarness,
+  catalogPage,
   createSessions,
   createSessionsHarness,
   mountSidebar,
   TWO_AGENTS,
 } from "../app-sidebar.ts";
+import { agentList, sessionList } from "./compact.test-support.ts";
 import { settleRoster } from "./roster.test-support.ts";
 import "../../components/app-sidebar.tsx";
 
 await import("../../components/viewer-facepile.ts");
 
+function mountAgentSidebar(
+  sessions = createSessions("main", ["agent:main:main"]),
+  agents: AgentsListResult | null = TWO_AGENTS,
+  gateway = createGateway({} as GatewayBrowserClient),
+) {
+  return mountSidebar(gateway, sessions, "panel", agents);
+}
+
+async function clickAgentMenu(
+  sidebar: Awaited<ReturnType<typeof mountSidebar>>["sidebar"],
+  value?: string,
+) {
+  const selector = value
+    ? `.sidebar-agent-menu [data-value="${value}"]`
+    : ".sidebar-agent-card__main";
+  sidebar.querySelector<HTMLElement>(selector)!.click();
+  await sidebar.updateComplete;
+}
+
+async function mountNavigation(
+  sessions?: Parameters<typeof mountAgentSidebar>[0],
+  agents?: AgentsListResult,
+) {
+  const gateway = createGateway({} as GatewayBrowserClient);
+  const setSessionKey = vi.fn();
+  (gateway as { setSessionKey: (key: string) => void }).setSessionKey = setSessionKey;
+  const mounted = await mountAgentSidebar(sessions, agents, gateway);
+  const onNavigate = vi.fn();
+  mounted.sidebar.connected = true;
+  mounted.sidebar.onNavigate = onNavigate;
+  return { ...mounted, setSessionKey, onNavigate };
+}
+
 describe("AppSidebar community entry", () => {
   it("follows the deployment flag without using the old invitation dismissal", async () => {
-    const { sidebar, context } = await mountSidebar(
-      createGateway({} as GatewayBrowserClient),
-      createSessions("main", ["agent:main:main"]),
-    );
+    const { sidebar, context } = await mountAgentSidebar(undefined, null);
     localStorage.setItem("openclaw:control-ui:community-invite:v2", "dismissed");
     const fetch = vi.spyOn(globalThis, "fetch");
     try {
@@ -46,18 +77,9 @@ describe("AppSidebar new session navigation", () => {
   it.each(["chip", "roster"] as const)(
     "opens new-session links directly in %s mode without intercepting browser gestures",
     async (mode) => {
-      const gateway = createGateway({} as GatewayBrowserClient);
-      const agentsList = {
-        defaultId: "main",
-        mainKey: "main",
-        scope: "per-sender",
-        agents: [{ id: "main" }, { id: "research" }],
-      } as AgentsListResult;
-      const { sidebar } = await mountSidebar(
-        gateway,
+      const { sidebar } = await mountAgentSidebar(
         createSessions("research", ["agent:research:main", "agent:research:task"]),
-        "panel",
-        agentsList,
+        agentList([{ id: "main" }, { id: "research" }]),
       );
       const onOpenNewSession = vi.fn();
       const onOpenPalette = vi.fn();
@@ -125,11 +147,8 @@ describe("AppSidebar new session navigation", () => {
   );
 
   it("opens a catalog-targeted draft from its new-session action", async () => {
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(
-      gateway,
+    const { sidebar } = await mountAgentSidebar(
       createSessions("research", ["agent:research:main"]),
-      "panel",
       {
         defaultId: "main",
         mainKey: "agent:main:main",
@@ -143,35 +162,16 @@ describe("AppSidebar new session navigation", () => {
     const onOpenNewSession = vi.fn();
     sidebar.connected = true;
     sidebar.onOpenNewSession = onOpenNewSession;
-    sidebar.sessionData.sessionCatalogs = [
-      {
-        id: "claude",
-        label: "Claude Code",
-        capabilities: {
-          continueSession: true,
-          archive: false,
-          startTerminal: true,
-        },
-        hosts: [
-          {
-            hostId: "gateway:local",
-            label: "Gateway Mac",
-            kind: "gateway",
-            connected: true,
-            sessions: [
-              {
-                threadId: "local-thread",
-                name: "Local plan",
-                status: "stored",
-                archived: false,
-                canContinue: true,
-                canArchive: false,
-              },
-            ],
-          },
-        ],
-      },
-    ];
+    const catalog = catalogPage(
+      [{ threadId: "local-thread", name: "Local plan" }],
+      undefined,
+      "claude",
+    ).catalogs[0]!;
+    catalog.label = "Claude Code";
+    catalog.capabilities = { continueSession: true, archive: false, startTerminal: true };
+    catalog.hosts[0]!.label = "Gateway Mac";
+    Object.assign(catalog.hosts[0]!.sessions[0]!, { status: "stored", canArchive: false });
+    sidebar.sessionData.sessionCatalogs = [catalog];
     sidebar.sessionData.requestSessionDataUpdate();
     await sidebar.updateComplete;
 
@@ -190,11 +190,8 @@ describe("AppSidebar new session navigation", () => {
 
 describe("AppSidebar agent chip", () => {
   it("qualifies unscoped session rows with the selected agent", async () => {
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(
-      gateway,
+    const { sidebar } = await mountAgentSidebar(
       createSessions("research", ["agent:research:main", "telegram:12345"]),
-      "panel",
       { ...TWO_AGENTS, defaultId: "research" },
     );
     sidebar.sessionKey = "agent:research:main";
@@ -216,23 +213,12 @@ describe("AppSidebar agent chip", () => {
 
   it("resumes the newest session when the menu switches to an agent with cached rows", async () => {
     const taskKey = "agent:main:dashboard:00000002-0000-4000-8000-000000000000";
-    const gatewayHarness = createGatewayHarness({} as GatewayBrowserClient);
-    const setSessionKey = vi.fn();
-    (gatewayHarness.gateway as { setSessionKey: (key: string) => void }).setSessionKey =
-      setSessionKey;
-    const { sidebar } = await mountSidebar(
-      gatewayHarness.gateway,
+    const { sidebar, setSessionKey, onNavigate } = await mountNavigation(
       createSessions("main", ["agent:main:main", taskKey]),
-      "panel",
-      TWO_AGENTS,
     );
-    const onNavigate = vi.fn();
-    sidebar.connected = true;
-    sidebar.onNavigate = onNavigate;
     await sidebar.updateComplete;
 
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
-    await sidebar.updateComplete;
+    await clickAgentMenu(sidebar);
     const rows = [
       ...sidebar.querySelectorAll<HTMLElement>(
         ".sidebar-agent-menu .sidebar-agent-menu__agent-switch",
@@ -249,25 +235,15 @@ describe("AppSidebar agent chip", () => {
   });
 
   it("switches the Skills owner without opening an agent conversation", async () => {
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar, context } = await mountSidebar(
-      gateway,
-      createSessions("main", ["agent:main:main"]),
-      "panel",
-      TWO_AGENTS,
-    );
+    const { sidebar, context } = await mountAgentSidebar();
     const onNavigate = vi.fn();
     sidebar.activeRouteId = "skills";
     sidebar.connected = true;
     sidebar.onNavigate = onNavigate;
     await sidebar.updateComplete;
 
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")!.click();
-    await sidebar.updateComplete;
-    sidebar
-      .querySelector<HTMLElement>('.sidebar-agent-menu [data-value="agent:research"]')!
-      .click();
-    await sidebar.updateComplete;
+    await clickAgentMenu(sidebar);
+    await clickAgentMenu(sidebar, "agent:research");
 
     expect(context.agentSelection.state).toEqual({
       selectedId: "research",
@@ -279,29 +255,13 @@ describe("AppSidebar agent chip", () => {
   });
 
   it("keeps agent ids distinct from utility command values", async () => {
-    const gatewayHarness = createGatewayHarness({} as GatewayBrowserClient);
-    const setSessionKey = vi.fn();
-    (gatewayHarness.gateway as { setSessionKey: (key: string) => void }).setSessionKey =
-      setSessionKey;
-    const agents = {
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [{ id: "main" }, { id: "settings" }],
-    } as AgentsListResult;
-    const { sidebar } = await mountSidebar(
-      gatewayHarness.gateway,
-      createSessions("main", ["agent:main:main"]),
-      "panel",
-      agents,
+    const { sidebar, setSessionKey, onNavigate } = await mountNavigation(
+      undefined,
+      agentList([{ id: "main" }, { id: "settings" }]),
     );
-    const onNavigate = vi.fn();
-    sidebar.connected = true;
-    sidebar.onNavigate = onNavigate;
     await sidebar.updateComplete;
 
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
-    await sidebar.updateComplete;
+    await clickAgentMenu(sidebar);
     const menu = sidebar.querySelector<HTMLElement>(".sidebar-agent-menu");
     const settingsAgent = menu?.querySelector<HTMLElement>('[data-value="agent:settings"]');
     expect(settingsAgent).not.toBeNull();
@@ -319,8 +279,7 @@ describe("AppSidebar agent chip", () => {
   });
 
   it("keeps the identity card available offline with reconnect and retry actions", async () => {
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    const { sidebar } = await mountAgentSidebar(undefined, null);
     const onRetryConnect = vi.fn();
     sidebar.onRetryConnect = onRetryConnect;
     sidebar.connected = true;
@@ -359,37 +318,26 @@ describe("AppSidebar agent chip", () => {
   });
 
   it("keeps the sessions list flat for the selected agent and flags other-agent unread", async () => {
-    const gateway = createGateway({} as GatewayBrowserClient);
     const harness = createSessionsHarness("main", ["agent:main:main"]);
-    const { sidebar, context } = await mountSidebar(gateway, harness.sessions, "panel", TWO_AGENTS);
+    const { sidebar, context } = await mountAgentSidebar(harness.sessions);
     sidebar.connected = true;
-    const defaults = { modelProvider: null, model: null, contextTokens: null };
     const researchSnapshot = {
-      result: {
-        ts: 2,
-        path: "",
-        count: 1,
-        defaults,
-        sessions: [
-          {
-            key: "agent:research:one",
-            kind: "direct",
-            label: "Research task",
-            updatedAt: 3,
-            unread: true,
-          },
-        ],
-      },
+      result: sessionList([
+        {
+          key: "agent:research:one",
+          kind: "direct",
+          label: "Research task",
+          updatedAt: 3,
+          unread: true,
+        },
+      ]),
       agentId: "research",
     } satisfies Parameters<typeof harness.publishList>[0];
     const mainSnapshot = {
-      result: {
-        ts: 3,
-        path: "",
-        count: 1,
-        defaults,
-        sessions: [{ key: "agent:main:main", kind: "direct", label: "Main task", updatedAt: 5 }],
-      },
+      result: sessionList(
+        [{ key: "agent:main:main", kind: "direct", label: "Main task", updatedAt: 5 }],
+        3,
+      ),
       agentId: "main",
     } satisfies Parameters<typeof harness.publishList>[0];
     harness.publishList(researchSnapshot);
@@ -419,21 +367,9 @@ describe("AppSidebar agent chip", () => {
   });
 
   it("routes the agent header to its main session and marks it active there", async () => {
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const setSessionKey = vi.fn();
-    (gateway as { setSessionKey: (key: string) => void }).setSessionKey = setSessionKey;
-    const { sidebar } = await mountSidebar(
-      gateway,
-      createSessions("main", ["agent:main:main"]),
-      "panel",
-      TWO_AGENTS,
-    );
-    const navigate = vi.fn();
-    sidebar.onNavigate = navigate;
-    sidebar.connected = true;
+    const { sidebar, setSessionKey, onNavigate } = await mountNavigation();
     (sidebar as unknown as { activeRouteId: string }).activeRouteId = "chat";
     sidebar.sessionKey = "agent:main:main";
-    sidebar.connected = true;
     sidebar.sidebarAgentsMode = "roster";
     await settleRoster(sidebar);
 
@@ -444,11 +380,10 @@ describe("AppSidebar agent chip", () => {
 
     home?.click();
     expect(setSessionKey).toHaveBeenCalledWith("agent:main:main");
-    expect(navigate).toHaveBeenCalledWith("chat", { pathname: "/chat/main" });
+    expect(onNavigate).toHaveBeenCalledWith("chat", { pathname: "/chat/main" });
   });
 
   it("treats the global key as the main session under global scope", async () => {
-    const gateway = createGateway({} as GatewayBrowserClient);
     const harness = createSessionsHarness("main", ["global"]);
     const globalAgents = {
       defaultId: "main",
@@ -456,18 +391,12 @@ describe("AppSidebar agent chip", () => {
       scope: "global",
       agents: [{ id: "main", identity: { name: "Molty" } }],
     } as AgentsListResult;
-    const { sidebar } = await mountSidebar(gateway, harness.sessions, "panel", globalAgents);
+    const { sidebar } = await mountAgentSidebar(harness.sessions, globalAgents);
     harness.publishList({
-      result: {
-        ts: 2,
-        path: "",
-        count: 2,
-        defaults: { modelProvider: null, model: null, contextTokens: null },
-        sessions: [
-          { key: "global", kind: "global", updatedAt: 5, unread: true },
-          { key: "agent:main:side-quest", kind: "direct", label: "Side quest", updatedAt: 4 },
-        ],
-      },
+      result: sessionList([
+        { key: "global", kind: "global", updatedAt: 5, unread: true },
+        { key: "agent:main:side-quest", kind: "direct", label: "Side quest", updatedAt: 4 },
+      ]),
     });
     sidebar.connected = true;
     sidebar.sidebarAgentsMode = "roster";
@@ -483,41 +412,32 @@ describe("AppSidebar agent chip", () => {
 
   it("keeps main-session activity on its agent header without duplicate main or subagent rows", async () => {
     const key = "main";
-    const gateway = createGateway({} as GatewayBrowserClient);
     const harness = createSessionsHarness("main", [key]);
-    const { sidebar, context } = await mountSidebar(gateway, harness.sessions, "panel", {
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [{ id: "main", identity: { name: "Molty" } }],
-    });
+    const { sidebar, context } = await mountAgentSidebar(
+      harness.sessions,
+      agentList([{ id: "main", identity: { name: "Molty" } }]),
+    );
     harness.publishList({
-      result: {
-        ts: 2,
-        path: "",
-        count: 2,
-        defaults: { modelProvider: null, model: null, contextTokens: null },
-        sessions: [
-          {
-            key,
-            kind: "direct",
-            label: "[OpenClaw heartbeat poll]",
-            category: "Team",
-            pinned: false,
-            updatedAt: 5,
-            childSessions: ["agent:main:subagent:thread-a"],
-          },
-          {
-            key: "agent:main:subagent:thread-a",
-            spawnedBy: key,
-            kind: "direct",
-            label: "Spawned thread",
-            updatedAt: 4,
-            hasActiveRun: true,
-            status: "running",
-          },
-        ],
-      },
+      result: sessionList([
+        {
+          key,
+          kind: "direct",
+          label: "[OpenClaw heartbeat poll]",
+          category: "Team",
+          pinned: false,
+          updatedAt: 5,
+          childSessions: ["agent:main:subagent:thread-a"],
+        },
+        {
+          key: "agent:main:subagent:thread-a",
+          spawnedBy: key,
+          kind: "direct",
+          label: "Spawned thread",
+          updatedAt: 4,
+          hasActiveRun: true,
+          status: "running",
+        },
+      ]),
     });
     sidebar.connected = true;
     sidebar.sidebarAgentsMode = "roster";
