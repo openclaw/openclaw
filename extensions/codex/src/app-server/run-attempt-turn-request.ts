@@ -30,6 +30,7 @@ import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import { resolveCodexUltrafastServiceTier } from "./service-tier.js";
 import { buildTurnStartParams } from "./thread-lifecycle.js";
+import { recordCodexAcceptedTurn } from "./thread-orphan-recovery.js";
 import { recordCodexTrajectoryContext } from "./trajectory.js";
 import { buildCodexParentLocalInstructions } from "./turn-params.js";
 import type { CodexThreadRouteReservation } from "./turn-router.js";
@@ -338,6 +339,7 @@ export async function prepareCodexAttemptTurnRequest(
         }),
       );
       acceptedTurnId = startedTurn.turn.id;
+      await recordCodexAcceptedTurn(resources, acceptedTurnId, assertTurnCurrent);
       resources.nativeProcessAuthority?.bindTurn(turnClient, threadId, acceptedTurnId);
       assertTurnCurrent();
       resourceState.nativeSubagentMonitor?.bindTurn(acceptedTurnId, modelMapping);

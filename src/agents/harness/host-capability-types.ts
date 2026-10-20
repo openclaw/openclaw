@@ -123,17 +123,6 @@ export type AgentHarnessHostCapabilities = Readonly<{
   }>;
   /** Closure-bound non-secret maps prepared before harness placement. */
   preparedEnvironment?: () => AgentHarnessPreparedEnvironment;
-  /** Request-scoped instruction text; callers keep live policy and authority checks separate. */
-  preparePromptInstructions?: (request: {
-    scope: string;
-    developerInstructions: string;
-    refreshableInstructions?: string;
-  }) => Promise<
-    Readonly<{
-      developerInstructions: string;
-      refreshableInstructions?: string;
-    }>
-  >;
   /** Current bounded presence hint; physical activity does not identify the message source. */
   activeComputerContext?: () => string;
   /** Applies the exact host caller binding to a plugin-built tool surface. */

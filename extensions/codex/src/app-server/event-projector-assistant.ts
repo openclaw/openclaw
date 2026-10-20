@@ -10,6 +10,7 @@ import {
   type AssistantMessageOptions,
 } from "./event-projector-assistant-message.js";
 import { shouldClearTerminalPresentationForNativeItem } from "./event-projector-items.js";
+import type { CodexCompletedAssistantIdentity } from "./event-projector-recovery.js";
 import { extractRawAssistantText } from "./event-projector-values.js";
 import type { CodexThreadItem, JsonObject } from "./protocol.js";
 import type { CodexTranscriptCheckpointEntry } from "./transcript-checkpoint.js";
@@ -68,6 +69,16 @@ export class CodexAssistantProjection {
       entry: CodexTranscriptCheckpointEntry,
     ) => void,
   ) {}
+
+  getCompletedItems(): CodexCompletedAssistantIdentity[] {
+    return [...this.completedAssistantItemIds].map((id) => ({
+      id,
+      text: this.assistantTextByItem.get(id) ?? "",
+      phase: this.assistantPhaseByItem.get(id),
+      delivery: this.assistantDeliveryByItem.get(id),
+      questions: this.assistantQuestionsByItem.get(id),
+    }));
+  }
 
   handleNotification(method: string, params: JsonObject): void {
     if (method === "model/rerouted") {

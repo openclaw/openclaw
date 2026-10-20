@@ -180,6 +180,20 @@ export async function assertAdoptedCodexThreadResumeAllowed(
   context: Pick<CodexThreadRequestContext, "lifecycleTiming" | "throwIfAborted">,
   assertCurrent: () => void,
 ): Promise<CodexThread> {
+  const thread = await readCodexThreadForResume(params, threadId, context, assertCurrent);
+  if (thread.status?.type === "active") {
+    throw new CodexAdoptedThreadActiveError();
+  }
+  return thread;
+}
+
+/** Reads the exact selected thread before adoption or owned-orphan settlement. */
+export async function readCodexThreadForResume(
+  params: CodexStartOrResumeThreadParams,
+  threadId: string,
+  context: Pick<CodexThreadRequestContext, "lifecycleTiming" | "throwIfAborted">,
+  assertCurrent: () => void,
+): Promise<CodexThread> {
   const { thread } = await context.lifecycleTiming.measure("thread-read-adoption-status", () =>
     params.client.request(
       "thread/read",
@@ -192,8 +206,5 @@ export async function assertAdoptedCodexThreadResumeAllowed(
     throw new Error("Codex returned another thread during adoption status read");
   }
   assertCodexThreadAcceptsDirectInput(thread);
-  if (thread.status?.type === "active") {
-    throw new CodexAdoptedThreadActiveError();
-  }
   return thread;
 }

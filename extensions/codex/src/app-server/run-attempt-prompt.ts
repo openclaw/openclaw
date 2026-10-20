@@ -29,7 +29,6 @@ import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import type { CodexAttemptContext } from "./run-attempt-context.js";
 import { estimateCodexAppServerProjectedTurnTokens } from "./run-attempt-lifecycle.js";
 import { prependCurrentInboundContext } from "./run-attempt-state.js";
-import { hashCodexAppServerBindingFingerprint } from "./session-binding.js";
 import { rotateOversizedCodexAppServerStartupBinding } from "./startup-binding.js";
 import {
   buildContextEngineBinding,
@@ -55,6 +54,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     baseDeveloperInstructions,
     buildOpenClawPromptContext,
     skillsInstructions,
+    refreshableInstructions,
     promptState,
     codexContextProjectionMaxChars,
     codexContinuityProjectionMaxChars,
@@ -285,8 +285,8 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     );
   }
   // Refresh changes the transport prompt, but retains the admitted request's recorder.
-  const buildPromptFromCurrentInputs = async () => {
-    const result = await resolveAgentHarnessBeforePromptBuildResult({
+  const buildPromptFromCurrentInputs = () =>
+    resolveAgentHarnessBeforePromptBuildResult({
       currentUserMessage:
         admittedMessage ?? (params.pluginRuntimeRefreshMessages ? "" : params.prompt),
       prompt: prependCurrentInboundContext(promptState.promptText, params.currentInboundContext),
@@ -313,41 +313,6 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
         assertActive: connection.assertLegacyCurrent,
       },
     });
-    // Automatic retries belong to the admitted request. Rebuilding its instruction
-    // text can otherwise force an immutable native config handoff while the failed
-    // thread is still loaded. Explicit policy/model/tool changes get a fresh scope;
-    // hooks and native authority/config validation remain live on every attempt.
-    if (
-      !activeContextEngine &&
-      !usesSupervisionConnection &&
-      !params.pluginRuntimeRefreshMessages &&
-      params.operation !== "settled-tool-finalization" &&
-      params.hostCapabilities.preparePromptInstructions
-    ) {
-      const instructions = await params.hostCapabilities.preparePromptInstructions({
-        scope: hashCodexAppServerBindingFingerprint(
-          JSON.stringify({
-            sessionKey: contextSessionKey,
-            sessionId: params.sessionId,
-            provider: effectiveRuntimeProviderId,
-            model: effectiveRuntimeModelId,
-            config: params.config,
-            tools: codexDynamicToolsFingerprint(toolBridge.specs),
-            toolAuthority: params.toolAuthorityFingerprint,
-            extraSystemPrompt: runtimeParams.extraSystemPrompt,
-            workspace: effectiveWorkspace,
-            operation: params.operation,
-          }),
-        ),
-        developerInstructions: result.developerInstructions,
-        refreshableInstructions: context.refreshableInstructions,
-      });
-      connection.assertCurrent();
-      context.refreshableInstructions = instructions.refreshableInstructions;
-      return { ...result, developerInstructions: instructions.developerInstructions };
-    }
-    return result;
-  };
   const resolveShiftedPromptRanges = (
     prompt: string,
     promptInputRange: { start: number; end: number } | undefined,
@@ -474,7 +439,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   const buildRenderedCodexDeveloperInstructions = () =>
     joinPresentSections(
       turnState.promptBuild.developerInstructions,
-      parentLocalEgress ? undefined : context.refreshableInstructions,
+      parentLocalEgress ? undefined : refreshableInstructions,
       (parentLocalEgress
         ? buildCodexParentLocalInstructions(params, { ...parentLocalContext, skillsInstructions })
         : buildTurnCollaborationMode(params).settings.developer_instructions) ?? undefined,

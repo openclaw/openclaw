@@ -12,6 +12,7 @@ import {
   matchesCodexSnapshotTurn,
   shouldClearTerminalPresentationForNativeItem,
 } from "./event-projector-items.js";
+import { reconcileCodexRecoveredAssistantItems } from "./event-projector-recovery.js";
 import { CodexTurnProjection } from "./event-projector-result.js";
 import { buildCodexSteeringMessagesSnapshot } from "./event-projector-snapshot.js";
 import type { CodexToolProgressProjection } from "./event-projector-tool-progress.js";
@@ -41,6 +42,47 @@ const optedOutNotificationMethods = new Set<string>(CODEX_APP_SERVER_OPT_OUT_NOT
 
 export class CodexAppServerEventProjector extends CodexTurnProjection {
   private readonly compactionProgress = new Map<string, "open" | "closed">();
+
+  /** Backfill only after native terminal proof, with canonical identities retained. */
+  async reconcileRecoveredTurn(
+    snapshot: CodexTurn,
+    terminal: CodexTurn,
+    assertCurrent: () => void,
+  ): Promise<CodexTurn> {
+    const terminalAssistant =
+      terminal.items.length === 1 && terminal.items[0]?.type === "agentMessage"
+        ? terminal.items[0]
+        : undefined;
+    const items = reconcileCodexRecoveredAssistantItems({
+      observed: this.assistantProjection.getCompletedItems(),
+      items: snapshot.items,
+      terminalAssistant,
+    });
+    for (const item of items) {
+      assertCurrent();
+      if (this.completedItemIds.has(item.id)) {
+        continue;
+      }
+      if (item.status === "inProgress") {
+        continue;
+      }
+      if (
+        (item.status != null ||
+          ["commandExecution", "dynamicToolCall", "mcpToolCall", "fileChange"].includes(
+            item.type,
+          )) &&
+        !["completed", "failed", "declined"].includes(item.status ?? "")
+      ) {
+        throw new Error("Recovered Codex item has no confirmed terminal status");
+      }
+      if (!isJsonObject(item) || this.projectionClosed || this.options.runAbortSignal?.aborted) {
+        throw new Error("Recovered Codex item projection no longer has an active owner");
+      }
+      await this.handleItemCompleted({ item });
+      assertCurrent();
+    }
+    return { ...snapshot, ...terminal, items };
+  }
 
   getCompletedTurnStatus(): CodexTurn["status"] | undefined {
     return this.completedTurn?.status;

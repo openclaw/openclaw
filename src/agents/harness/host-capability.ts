@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { buildActiveNodeContextText } from "../../infra/active-node-context.js";
-import { emitAgentRunOutputTokens, runOncePerAgentRun } from "../../infra/agent-events.js";
+import { emitAgentRunOutputTokens } from "../../infra/agent-events.js";
 import { getActiveDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import {
   getInstallationTarget,
@@ -443,25 +443,6 @@ export function createAgentHarnessHostCapabilities(params: {
     preparedEnvironment: () => {
       assertActive();
       return preparedRunEnvironment;
-    },
-    preparePromptInstructions: async ({
-      scope,
-      developerInstructions,
-      refreshableInstructions,
-    }) => {
-      assertActive();
-      const instructions = await runOncePerAgentRun(
-        runId,
-        JSON.stringify([
-          "harness-prompt-instructions",
-          operationalRunInstance.instanceId,
-          params.pluginId,
-          scope,
-        ]),
-        async () => Object.freeze({ developerInstructions, refreshableInstructions }),
-      );
-      assertActive();
-      return instructions;
     },
     activeComputerContext: () => {
       assertActive();

@@ -4,6 +4,7 @@ import { acknowledgeInternalToolResult } from "openclaw/plugin-sdk/agent-harness
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   isCodexTurnAbortMarkerNotification,
+  isTerminalTurnStatus,
   isPendingOpenClawDynamicToolCompletionNotification,
   isRawFunctionToolOutputCompletionNotification,
   readCodexNotificationItem,
@@ -13,11 +14,13 @@ import {
 } from "./attempt-notifications.js";
 import { isCodexNotificationForTurn } from "./notification-correlation.js";
 import { readCodexTurnCompletedNotification } from "./protocol-validators.js";
-import type { CodexServerNotification } from "./protocol.js";
+import { isJsonObject, type CodexServerNotification, type CodexThreadItem } from "./protocol.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
-import { waitForPromiseOrAbort } from "./timeout.js";
+import { CodexServerRequestResolvedError } from "./server-requests.js";
+import { isSameCodexAppServerThreadOwner } from "./thread-ownership.js";
+import { withAbortableTimeout, waitForPromiseOrAbort } from "./timeout.js";
 import { CODEX_APP_SERVER_NATIVE_TURN_WAIT_TIMEOUT_MS } from "./turn-router.js";
 import type { CodexThreadRouteScope } from "./turn-router.js";
 
@@ -80,7 +83,27 @@ export function createCodexAttemptNotificationController(
     )
       ? readCodexTurnCompletedNotification(notification.params)?.turn
       : undefined;
-  const handleNotification = async (notification: CodexServerNotification) => {
+  const acknowledgeCompletedDynamicTool = async (item: CodexThreadItem, turnId: string) => {
+    const response = await openClawDynamicToolExecutions.get({
+      threadId: resourceState.thread.threadId,
+      turnId,
+      callId: item.id,
+    });
+    // Codex emits these fields after accepting the response; decode failures
+    // instead complete with a replacement error. A pipe write is not acceptance.
+    if (
+      response &&
+      !state.projectionClosed &&
+      !runAbortController.signal.aborted &&
+      turnIdRef.current === turnId &&
+      item.success === response.success &&
+      isDeepStrictEqual(item.contentItems, response.contentItems)
+    ) {
+      acknowledgeInternalToolResult(response);
+    }
+  };
+  const handleNotification = async (incomingNotification: CodexServerNotification) => {
+    let notification = incomingNotification;
     if (state.projectionClosed) {
       return;
     }
@@ -107,6 +130,103 @@ export function createCodexAttemptNotificationController(
       completeTurn();
       return;
     }
+    if (completedTurn && state.recoveredTurnId === turnId) {
+      try {
+        const connection = runtime.connection;
+        const client = resourceState.client;
+        const assertCurrent = () => {
+          runAbortController.signal.throwIfAborted();
+          connection.assertCurrent();
+          resourceState.thread.liveThreadOwnership?.assertCurrent();
+          if (
+            !isSameCodexAppServerThreadOwner(
+              connection.bindingStore.read(connection.bindingIdentity),
+              resourceState.thread,
+            ) ||
+            resourceState.client !== client ||
+            turnIdRef.current !== turnId ||
+            state.projectionClosed
+          ) {
+            throw new Error("Recovered Codex terminal projection lost its owner");
+          }
+        };
+        assertCurrent();
+        if (!isTerminalTurnStatus(completedTurn.status)) {
+          throw new Error("Recovered Codex completion has no terminal proof");
+        }
+        // All these pending requests belong to the now-terminal native turn.
+        // Cancel before joining old projection tails that may await their results.
+        for (const controller of turnRuntime.pendingDynamicToolAbortControllers) {
+          controller.abort(new CodexServerRequestResolvedError());
+        }
+        await withAbortableTimeout({
+          promise: state.recoveredProjectionDrain ?? Promise.resolve(),
+          timeoutMs: appServer.requestTimeoutMs,
+          signal: runAbortController.signal,
+          timeoutMessage: "Recovered Codex projection did not settle",
+        });
+        assertCurrent();
+        const response = await client.request(
+          "thread/turns/list",
+          {
+            threadId: resourceState.thread.threadId,
+            limit: 1,
+            sortDirection: "desc",
+            itemsView: "full",
+          },
+          {
+            signal: runAbortController.signal,
+            timeoutMs: appServer.requestTimeoutMs,
+            assertCurrent,
+            withCurrent: connection.authority.withCurrent,
+          },
+        );
+        assertCurrent();
+        const snapshot = response.data[0];
+        if (
+          response.data.length !== 1 ||
+          !snapshot ||
+          snapshot.id !== turnId ||
+          snapshot.status !== completedTurn.status ||
+          !Array.isArray(snapshot.items)
+        ) {
+          throw new Error("Recovered Codex terminal history does not match its original turn");
+        }
+        for (const item of snapshot.items) {
+          if (
+            item.type === "dynamicToolCall" &&
+            ["completed", "failed"].includes(item.status ?? "")
+          ) {
+            await acknowledgeCompletedDynamicTool(item, turnId);
+            assertCurrent();
+          }
+        }
+        const reconciled = await projector.reconcileRecoveredTurn(
+          snapshot,
+          completedTurn,
+          assertCurrent,
+        );
+        assertCurrent();
+        await projector.transcriptCheckpoint.flush();
+        assertCurrent();
+        if (!isJsonObject(reconciled) || !isJsonObject(notification.params)) {
+          throw new Error("Recovered Codex terminal history is not a JSON object");
+        }
+        notification = { ...notification, params: { ...notification.params, turn: reconciled } };
+        state.recoveredTurnId = undefined;
+      } catch (error) {
+        // This is a recovery failure, not an ordinary best-effort UI projection.
+        // Do not swallow it and publish a successful terminal result or retry tools.
+        resourceState.remoteRecoveryFailed = true;
+        state.clientClosedPromptError =
+          "Codex recovery could not safely reconcile the previous task history.";
+        state.clientClosedDiagnostic = error instanceof Error ? error.message : String(error);
+        state.clientClosedAbort = true;
+        runAbortController.abort(error);
+        completeTurn();
+        return;
+      }
+    }
     state.activeLocalProjections += 1;
     try {
       if (isCurrentTurn) {
@@ -130,23 +250,7 @@ export function createCodexAttemptNotificationController(
           }
           const item = readCodexNotificationItem(notification.params);
           if (item?.type === "dynamicToolCall") {
-            const response = await openClawDynamicToolExecutions.get({
-              threadId: resourceState.thread.threadId,
-              turnId,
-              callId: item.id,
-            });
-            // Codex emits these fields after accepting the response; decode failures
-            // instead complete with a replacement error. A pipe write is not acceptance.
-            if (
-              response &&
-              !state.projectionClosed &&
-              !runAbortController.signal.aborted &&
-              turnIdRef.current === turnId &&
-              item.success === response.success &&
-              isDeepStrictEqual(item.contentItems, response.contentItems)
-            ) {
-              acknowledgeInternalToolResult(response);
-            }
+            await acknowledgeCompletedDynamicTool(item, turnId);
           }
           if (item?.type === "userMessage" && typeof item.clientId === "string") {
             steeringQueueRef.current?.confirmConsumed(item.clientId);
