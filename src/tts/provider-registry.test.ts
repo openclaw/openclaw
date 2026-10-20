@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
 import { createSpeechProviderRegistry } from "./provider-registry-core.js";
+import { speechProvider as provider } from "./speech-provider.test-support.js";
 import {
   isTtsProviderConfiguredAsync,
   resolveTtsProviderAsync,
@@ -25,21 +26,6 @@ vi.mock("./provider-registry.js", async (importOriginal) => ({
   getSpeechProvider: mocks.getSpeechProvider,
   listSpeechProviders: mocks.listSpeechProviders,
 }));
-
-function provider(id: string, options: Partial<SpeechProviderPlugin> = {}): SpeechProviderPlugin {
-  return {
-    id,
-    label: id,
-    isConfigured: () => true,
-    synthesize: async () => ({
-      audioBuffer: Buffer.from("audio"),
-      outputFormat: "mp3",
-      voiceCompatible: false,
-      fileExtension: ".mp3",
-    }),
-    ...options,
-  };
-}
 
 describe("speech provider registry", () => {
   const select = (
@@ -67,13 +53,12 @@ describe("speech provider registry", () => {
       provider("elevenlabs", { autoSelectOrder: 3 }),
     ];
 
-    expect(
-      resolveTtsProviderOrder(
-        " OAI " as Parameters<typeof resolveTtsProviderOrder>[0],
-        undefined,
-        inventory,
-      ),
-    ).toEqual(["openai", "azure", "google", "elevenlabs"]);
+    expect(resolveTtsProviderOrder(" OAI ", undefined, inventory)).toEqual([
+      "openai",
+      "azure",
+      "google",
+      "elevenlabs",
+    ]);
   });
 
   it.each([
@@ -84,8 +69,7 @@ describe("speech provider registry", () => {
   });
 
   it("keeps persona selection conditional on provider availability", () => {
-    const availablePersonaProvider = provider("persona-provider");
-    mocks.getSpeechProvider.mockReturnValueOnce(availablePersonaProvider);
+    mocks.getSpeechProvider.mockReturnValueOnce(provider("persona-provider"));
     const preference = { provider: "persona-provider", source: "persona" } as const;
 
     expect(select(preference, [])).toBe("persona-provider");
@@ -120,16 +104,14 @@ describe("speech provider registry", () => {
     const fallback = provider("fallback", { autoSelectOrder: 2 });
     const availableProviders = [first, fallback];
     const config = resolveTtsConfig({});
-    const selectionRegistry = createSpeechProviderRegistry({
+    const registry = createSpeechProviderRegistry({
       getProvider: (id) => availableProviders.find((entry) => entry.id === id),
       listProviders: () => availableProviders,
     });
 
-    expect(await resolveTtsProviderAsync(config, "/unused", selectionRegistry, {})).toBe("first");
+    expect(await resolveTtsProviderAsync(config, "/unused", registry, {})).toBe("first");
     configured = false;
-    expect(await resolveTtsProviderAsync(config, "/unused", selectionRegistry, {})).toBe(
-      "fallback",
-    );
+    expect(await resolveTtsProviderAsync(config, "/unused", registry, {})).toBe("fallback");
     expect(isConfigured).not.toHaveBeenCalled();
   });
 

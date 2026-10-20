@@ -3,7 +3,6 @@ import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { captureEnv } from "../test-utils/env.js";
 import {
   readTtsPrefs,
   resolveConfiguredTtsMode,
@@ -13,21 +12,18 @@ import {
 import { setTtsMaxLength } from "./tts-settings-writes.js";
 
 describe("shouldAttemptTtsPayload", () => {
-  let envSnapshot: ReturnType<typeof captureEnv> | undefined;
   let prefsPath: string;
   const tempDirs = createTempDirTracker();
   afterAll(tempDirs.cleanup);
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["OPENCLAW_TTS_PREFS"]);
     prefsPath = path.join(tempDirs.make("openclaw-tts-config-"), "tts.json");
-    process.env.OPENCLAW_TTS_PREFS = prefsPath;
+    vi.stubEnv("OPENCLAW_TTS_PREFS", prefsPath);
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
-    envSnapshot?.restore();
-    envSnapshot = undefined;
+    vi.unstubAllEnvs();
   });
 
   const attempt = (

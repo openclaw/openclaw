@@ -3,35 +3,16 @@ import type { SpeechProviderPlugin } from "../plugins/types.js";
 import { createSpeechDirectiveParser } from "./directive-parser.js";
 import { createTtsDirectiveTextStreamCleaner, parseTtsDirectives } from "./directives.js";
 import type { SpeechModelOverridePolicy } from "./provider-types.js";
-
-function makeProvider(
-  id: string,
-  order: number,
-  parseToken: NonNullable<SpeechProviderPlugin["parseDirectiveToken"]>,
-  options?: { aliases?: string[] },
-): SpeechProviderPlugin {
-  return {
-    id,
-    label: id,
-    aliases: options?.aliases,
-    autoSelectOrder: order,
-    parseDirectiveToken: parseToken,
-    isConfigured: () => true,
-    synthesize: async () => ({
-      audioBuffer: Buffer.alloc(0),
-      outputFormat: "mp3",
-      fileExtension: ".mp3",
-      voiceCompatible: false,
-    }),
-  } as SpeechProviderPlugin;
-}
+import { speechProvider } from "./speech-provider.test-support.js";
 
 const speed: NonNullable<SpeechProviderPlugin["parseDirectiveToken"]> = ({ key, value }) =>
   key === "speed" ? { handled: true, overrides: { speed: Number(value) } } : undefined;
-const elevenlabs = makeProvider("elevenlabs", 10, (ctx) =>
-  ctx.key === "style" ? { handled: true, overrides: { style: Number(ctx.value) } } : speed(ctx),
-);
-const minimax = makeProvider("minimax", 20, speed);
+const elevenlabs = speechProvider("elevenlabs", {
+  autoSelectOrder: 10,
+  parseDirectiveToken: (ctx) =>
+    ctx.key === "style" ? { handled: true, overrides: { style: Number(ctx.value) } } : speed(ctx),
+});
+const minimax = speechProvider("minimax", { autoSelectOrder: 20, parseDirectiveToken: speed });
 
 const fullPolicy: SpeechModelOverridePolicy = {
   enabled: true,
@@ -54,10 +35,9 @@ function parse(
 
 describe("parseTtsDirectives provider-aware routing", () => {
   it("accumulates provider patches without asking the provider to copy prior overrides", () => {
-    const provider = makeProvider(
-      "example",
-      10,
-      createSpeechDirectiveParser({
+    const provider = speechProvider("example", {
+      autoSelectOrder: 10,
+      parseDirectiveToken: createSpeechDirectiveParser({
         voice: ["allowVoice", ["voice"]],
         speed: [
           "allowVoiceSettings",
@@ -67,7 +47,7 @@ describe("parseTtsDirectives provider-aware routing", () => {
           },
         ],
       }),
-    );
+    });
     const result = parse("[[tts:provider=example voice=speaker speed=1.25]]", {
       providers: [provider],
     });
@@ -99,33 +79,36 @@ describe("parseTtsDirectives provider-aware routing", () => {
     });
   });
 
-  it("routes to preferred provider aliases when no provider token is declared", () => {
-    const azure = makeProvider("azure-speech", 20, speed, { aliases: ["azure"] });
-
-    const result = parse("[[tts:speed=1.5]]", {
-      providers: [elevenlabs, azure],
-      preferredProviderId: "azure",
+  it.each([
+    ["auto order", {}, "elevenlabs"],
+    [
+      "preferred alias",
+      {
+        providers: [
+          elevenlabs,
+          speechProvider("azure-speech", {
+            autoSelectOrder: 20,
+            parseDirectiveToken: speed,
+            aliases: ["azure"],
+          }),
+        ],
+        preferredProviderId: "azure",
+      },
+      "azure-speech",
+    ],
+  ] as const)("routes implicit providers by %s", (_name, options, selected) => {
+    expect(parse("[[tts:speed=1.5]]", options).overrides).toEqual({
+      providerOverrides: { [selected]: { speed: 1.5 } },
     });
-
-    expect(result.overrides.provider).toBeUndefined();
-    expect(result.overrides.providerOverrides?.["azure-speech"]).toEqual({ speed: 1.5 });
-    expect(result.overrides.providerOverrides?.elevenlabs).toBeUndefined();
-  });
-
-  it("falls back to autoSelectOrder when no provider hint is available", () => {
-    const result = parse("[[tts:speed=1.5]]");
-
-    expect(result.overrides.provider).toBeUndefined();
-    expect(result.overrides.providerOverrides?.elevenlabs).toEqual({ speed: 1.5 });
-    expect(result.overrides.providerOverrides?.minimax).toBeUndefined();
   });
 
   it("keeps explicit-provider tokens scoped to the selected provider", () => {
     const result = parse("[[tts:provider=minimax style=0.4 speed=1.2]]");
 
-    expect(result.overrides.provider).toBe("minimax");
-    expect(result.overrides.providerOverrides?.minimax).toEqual({ speed: 1.2 });
-    expect(result.overrides.providerOverrides?.elevenlabs).toBeUndefined();
+    expect(result.overrides).toEqual({
+      provider: "minimax",
+      providerOverrides: { minimax: { speed: 1.2 } },
+    });
     expect(result.warnings).toContain('unsupported minimax directive key "style"');
   });
 
@@ -134,13 +117,17 @@ describe("parseTtsDirectives provider-aware routing", () => {
       "[[tts:provider=elevenlabs speakerVoice=Rachel speakerVoiceId=voice-123]]",
     );
 
-    expect(result.overrides.provider).toBe("elevenlabs");
-    expect(result.overrides.providerOverrides?.elevenlabs).toEqual({
-      speakerVoice: "Rachel",
-      voice: "Rachel",
-      voiceName: "Rachel",
-      speakerVoiceId: "voice-123",
-      voiceId: "voice-123",
+    expect(result.overrides).toEqual({
+      provider: "elevenlabs",
+      providerOverrides: {
+        elevenlabs: {
+          speakerVoice: "Rachel",
+          voice: "Rachel",
+          voiceName: "Rachel",
+          speakerVoiceId: "voice-123",
+          voiceId: "voice-123",
+        },
+      },
     });
     expect(result.warnings).toStrictEqual([]);
   });
@@ -148,8 +135,7 @@ describe("parseTtsDirectives provider-aware routing", () => {
   it("warns once and drops non-provider tokens when the explicit provider is unknown", () => {
     const result = parse("[[tts:provider=missing speed=1.2 style=0.4]]");
 
-    expect(result.overrides.provider).toBe("missing");
-    expect(result.overrides.providerOverrides).toBeUndefined();
+    expect(result.overrides).toEqual({ provider: "missing" });
     expect(result.warnings).toEqual(['unknown provider "missing"']);
   });
 
@@ -161,9 +147,7 @@ describe("parseTtsDirectives provider-aware routing", () => {
       policy,
     );
 
-    expect(result.overrides.provider).toBeUndefined();
-    expect(result.overrides.providerOverrides?.minimax).toEqual({ speed: 1.2 });
-    expect(result.overrides.providerOverrides?.elevenlabs).toBeUndefined();
+    expect(result.overrides).toEqual({ providerOverrides: { minimax: { speed: 1.2 } } });
   });
 
   it.each([
@@ -178,15 +162,9 @@ describe("parseTtsDirectives provider-aware routing", () => {
     "[[tts:text]]hidden example[[/tts:text]] [[tts]]visible example[[/tts]] " +
     "[[tts:provider=elevenlabs speed=1.2]] [[tts:Here is your answer]] [[tts]] [[/tts:text]]";
 
-  it.each([
-    {
-      name: "a closed fence and inline span",
-      input: `Use \`[[tts:text]]\` for hidden speech.\n\n\`\`\`\n${ttsExample}\n\`\`\`\n\nThen continue normally.`,
-    },
-  ])("does not parse tts examples inside $name", ({ input }) => {
-    const result = parse(input);
-
-    expect(result).toEqual({
+  it("does not parse tts examples inside a closed fence and inline span", () => {
+    const input = `Use \`[[tts:text]]\` for hidden speech.\n\n\`\`\`\n${ttsExample}\n\`\`\`\n\nThen continue normally.`;
+    expect(parse(input)).toEqual({
       cleanedText: input,
       overrides: {},
       warnings: [],
@@ -196,20 +174,18 @@ describe("parseTtsDirectives provider-aware routing", () => {
 });
 
 describe("createTtsDirectiveTextStreamCleaner", () => {
-  it("strips directive tags split across streamed chunks", () => {
+  it.each([
+    [
+      ["Hello [[tts:voice=al", "loy]]world[[/tt", "s]]"],
+      ["Hello ", "world", ""],
+    ],
+    [
+      ["Shown [[tts:text]]hid", "den[[/tts:text]] visible"],
+      ["Shown ", " visible"],
+    ],
+  ] as const)("cleans every incremental chunk: %j", (chunks, expected) => {
     const cleaner = createTtsDirectiveTextStreamCleaner();
-
-    expect(cleaner.push("Hello [[tts:voice=al")).toBe("Hello ");
-    expect(cleaner.push("loy]]world[[/tt")).toBe("world");
-    expect(cleaner.push("s]]")).toBe("");
-    expect(cleaner.flush()).toBe("");
-  });
-
-  it("suppresses hidden tts text blocks while preserving normal text", () => {
-    const cleaner = createTtsDirectiveTextStreamCleaner();
-
-    expect(cleaner.push("Shown [[tts:text]]hid")).toBe("Shown ");
-    expect(cleaner.push("den[[/tts:text]] visible")).toBe(" visible");
+    expect(chunks.map((chunk) => cleaner.push(chunk))).toEqual(expected);
     expect(cleaner.flush()).toBe("");
   });
 

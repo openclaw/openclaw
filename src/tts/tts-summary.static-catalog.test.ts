@@ -15,6 +15,9 @@ import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-l
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolveTtsConfig } from "./tts-settings.js";
 
+const sse = (type: string, fields = {}) =>
+  `event: ${type}\ndata: ${JSON.stringify({ type, ...fields })}\n\n`;
+
 afterEach(async () => {
   await resetPreparedModelRuntimeSnapshotsForTest();
   clearPluginMetadataLifecycleCaches();
@@ -61,38 +64,26 @@ it.each([
           const { model } = JSON.parse(await readRequestText(request)) as { model: string };
           requests.push(model);
           response.writeHead(200, { "content-type": "text/event-stream" });
-          const events = [
-            {
-              type: "message_start",
-              message: {
-                id: "kimi-summary",
-                type: "message",
-                role: "assistant",
-                model,
-                content: [],
-                stop_reason: null,
-                stop_sequence: null,
-                usage: { input_tokens: 1, output_tokens: 0 },
-              },
-            },
-            { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
-            {
-              type: "content_block_delta",
-              index: 0,
-              delta: { type: "text_delta", text: `Summary from ${model}.` },
-            },
-            { type: "content_block_stop", index: 0 },
-            {
-              type: "message_delta",
-              delta: { stop_reason: "end_turn", stop_sequence: null },
-              usage: { output_tokens: 6 },
-            },
-            { type: "message_stop" },
-          ];
+          const message = {
+            id: "kimi-summary",
+            model,
+            usage: { input_tokens: 1, output_tokens: 0 },
+          };
           response.end(
-            events
-              .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
-              .join(""),
+            [
+              sse("message_start", { message }),
+              sse("content_block_start", { index: 0, content_block: { type: "text", text: "" } }),
+              sse("content_block_delta", {
+                index: 0,
+                delta: { type: "text_delta", text: `Summary from ${model}.` },
+              }),
+              sse("content_block_stop", { index: 0 }),
+              sse("message_delta", {
+                delta: { stop_reason: "end_turn" },
+                usage: { output_tokens: 6 },
+              }),
+              sse("message_stop"),
+            ].join(""),
           );
         });
         const baseUrl = await listenLoopback(server);
