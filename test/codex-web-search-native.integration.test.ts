@@ -152,6 +152,12 @@ it.each([
         bindingStore: fixture.testCodexAppServerBindingStore,
         pluginConfig,
       });
+      const bindingScope = {
+        kind: "session" as const,
+        agentId: "main",
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+      };
       const revokeRequester = () =>
         patchSessionEntry({
           ...scope,
@@ -191,15 +197,7 @@ it.each([
       await fixture.writeNativeCatalogFixture(binding.rolloutPath, binding.threadId, []);
       await fixture.writeCodexAppServerBinding(params.sessionFile, binding);
       if (sideQuestion) {
-        await fixture.testCodexAppServerBindingStore.mutate(
-          {
-            kind: "session",
-            agentId: "main",
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-          },
-          { kind: "set", binding },
-        );
+        await fixture.testCodexAppServerBindingStore.mutate(bindingScope, { kind: "set", binding });
       }
       let preparationReply = false;
       let mutation: Promise<void> | undefined;
@@ -224,12 +222,10 @@ it.each([
           preparationReply = true;
           // Delay only delivery of a real worker result while the native owner changes models.
           mutation = (async () => {
-            if (transition === "changed") {
-              await fixture.writeCodexAppServerBinding(params.sessionFile, {
-                ...binding,
-                model: "search-denied",
-              });
-            }
+            await fixture.writeCodexAppServerBinding(params.sessionFile, {
+              ...binding,
+              model: "search-denied",
+            });
             emit.call(this, event, ...args);
           })();
           return true;
@@ -299,6 +295,12 @@ it.each([
       const missingRequesterId = `native-search-requester-${transition}`;
       const requesterScope = { ...scope, sessionKey: "agent:main:dashboard:id-requester" };
       const lateIdChange = transition.startsWith("late-requester-id-");
+      const requesterChangesAtDispatch =
+        !sideQuestion &&
+        (transition === "requester-revoked" ||
+          transition === "requester-reassigned" ||
+          transition === "missing-requester-id-created" ||
+          lateIdChange);
       if (
         transition === "late-requester-id-removed" ||
         transition === "late-requester-id-reassigned"
@@ -344,30 +346,29 @@ it.each([
         };
       }
       const resolvePolicy = vi.spyOn(webSearchPolicy, "resolveWebSearchToolPolicy");
+      const threadResult = (
+        threadId: string,
+        model: string = nativeModel,
+        modelProvider: string = nativeProvider,
+      ) => ({
+        ...fixture.threadStartResult(threadId, { cwd: fixture.tempDir }),
+        model,
+        modelProvider,
+      });
       const wire = await fixture.createLeasedCodexLifecycleHarness({
         agentDir: path.join(fixture.tempDir, "wire-agent"),
         codexHome,
-        persistedThreads: [
-          {
-            ...fixture.threadStartResult(binding.threadId, { cwd: fixture.tempDir }),
-            model: nativeModel,
-            modelProvider: nativeProvider,
-          },
-        ],
+        persistedThreads: [threadResult(binding.threadId)],
         respond(method) {
           if (method === "thread/resume") {
-            return {
-              ...fixture.threadStartResult(binding.threadId, { cwd: fixture.tempDir }),
-              model: transition === "changed" ? "search-denied" : "search-allowed",
-              modelProvider: "openai",
-            };
+            return threadResult(
+              binding.threadId,
+              transition === "changed" ? "search-denied" : "search-allowed",
+              "openai",
+            );
           }
           if (method === "thread/fork") {
-            const response = {
-              ...fixture.threadStartResult("side-thread", { cwd: fixture.tempDir }),
-              model: nativeModel,
-              modelProvider: nativeProvider,
-            };
+            const response = threadResult("side-thread");
             wire.seed(response, { loaded: true, subscribed: true });
             return response;
           }
@@ -414,13 +415,7 @@ it.each([
         }),
       );
       let requesterChanged = false;
-      if (
-        !sideQuestion &&
-        (transition === "requester-revoked" ||
-          transition === "requester-reassigned" ||
-          transition === "missing-requester-id-created" ||
-          lateIdChange)
-      ) {
+      if (requesterChangesAtDispatch) {
         const dispatch = fixture.CodexAppServerClient.prototype.request.bind(wire.client);
         wire.request.mockImplementation((method, body, options) =>
           method !== "thread/resume"
@@ -551,34 +546,21 @@ it.each([
           async (input: Parameters<NonNullable<typeof harness.runSideQuestion>>[0]) => {
             coreInput = input;
             if (scenario === "core-btw-host-changed") {
-              await fixture.testCodexAppServerBindingStore.mutate(
-                {
-                  kind: "session",
-                  agentId: "main",
-                  sessionId: params.sessionId,
-                  sessionKey: params.sessionKey,
-                },
-                { kind: "set", binding: { ...binding, model: "search-changed" } },
-              );
+              await fixture.testCodexAppServerBindingStore.mutate(bindingScope, {
+                kind: "set",
+                binding: { ...binding, model: "search-changed" },
+              });
             }
             if (ownershipChanged) {
               expect(
-                await fixture.testCodexAppServerBindingStore.mutate(
-                  {
-                    kind: "session",
-                    agentId: "main",
-                    sessionId: params.sessionId,
-                    sessionKey: params.sessionKey,
+                await fixture.testCodexAppServerBindingStore.mutate(bindingScope, {
+                  kind: "patch",
+                  threadId: binding.threadId,
+                  patch: {
+                    connectionScope: nativeAuth ? undefined : "supervision",
+                    supervisionSourceThreadId: nativeAuth ? undefined : binding.threadId,
                   },
-                  {
-                    kind: "patch",
-                    threadId: binding.threadId,
-                    patch: {
-                      connectionScope: nativeAuth ? undefined : "supervision",
-                      supervisionSourceThreadId: nativeAuth ? undefined : binding.threadId,
-                    },
-                  },
-                ),
+                }),
               ).toBe(true);
             }
             return await harness.runSideQuestion!(input);
@@ -651,12 +633,6 @@ it.each([
             ? requestParams.config.web_search
             : undefined,
         );
-      console.log(
-        `[native-search] transition=${scenario} thread-or-turn-writes=${nativeWrites.length} thread-search=${JSON.stringify(nativeSearch)} outcome=${"error" in outcome ? "rejected" : "completed"}`,
-      );
-      if (coreDispatch && "error" in outcome) {
-        console.log(`[native-search] core-error=${String(outcome.error)}`);
-      }
       if (ownershipChanged) {
         expect(outcome).toHaveProperty("error");
         expect("error" in outcome && outcome.error).toMatchObject({
@@ -692,13 +668,7 @@ it.each([
           ),
         });
         expect(nativeWrites).toEqual([]);
-        if (
-          !sideQuestion &&
-          (transition === "requester-revoked" ||
-            transition === "requester-reassigned" ||
-            transition === "missing-requester-id-created" ||
-            lateIdChange)
-        ) {
+        if (requesterChangesAtDispatch) {
           expect(requesterChanged).toBe(true);
         }
       } else {
