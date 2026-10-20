@@ -1,10 +1,11 @@
 import { streamAnthropic } from "@openclaw/ai/internal/anthropic";
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import type { Context, Message } from "../../llm/types.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { parseSessionEntries, SessionManager } from "./session-manager.js";
+import { text } from "./session-message-fixtures.test-support.js";
 
 function replayContext(role: "assistant" | "toolResult", content: unknown) {
   const messages = [
@@ -80,31 +81,29 @@ async function toolResultPayload(context: { messages: AgentMessage[] }) {
     .find((block) => block.type === "tool_result")?.content;
 }
 
-describe("SessionManager tool-result replay", () => {
-  it("replays string assistant JSONL content as Anthropic assistant text", async () => {
-    const context = replayContext("assistant", "assistant replay text");
-    const assistant = context.messages.find((message) => message.role === "assistant");
-    expect(assistant?.content).toEqual([{ type: "text", text: "assistant replay text" }]);
+it.each(["assistant", "toolResult"] as const)(
+  "replays string %s JSONL as Anthropic text",
+  async (role) => {
+    const context = replayContext(role, "replay text");
+    expect(context.messages.find((message) => message.role === role)?.content).toEqual(
+      text("replay text"),
+    );
+    if (role === "toolResult") {
+      expect(await toolResultPayload(context)).toBe("replay text");
+    } else {
+      const payload = await anthropicPayload(context);
+      expect(payload.messages.find((message) => message.role === role)?.content).toEqual(
+        text("replay text"),
+      );
+    }
+  },
+);
 
-    const payload = await anthropicPayload(context);
-    const assistantPayload = payload.messages.find((message) => message.role === "assistant");
-    expect(assistantPayload?.content).toEqual([{ type: "text", text: "assistant replay text" }]);
-  });
+it("replays object tool-result JSONL content as structured Anthropic tool text", async () => {
+  const content = { output: "status card text" };
+  const context = replayContext("toolResult", content);
+  const toolResult = context.messages.find((message) => message.role === "toolResult");
+  expect(toolResult?.content).toEqual([content]);
 
-  it("replays string tool-result JSONL content as Anthropic tool text", async () => {
-    const context = replayContext("toolResult", "lookup result text");
-    const toolResult = context.messages.find((message) => message.role === "toolResult");
-    expect(toolResult?.content).toEqual([{ type: "text", text: "lookup result text" }]);
-
-    expect(await toolResultPayload(context)).toBe("lookup result text");
-  });
-
-  it("replays object tool-result JSONL content as structured Anthropic tool text", async () => {
-    const content = { output: "status card text" };
-    const context = replayContext("toolResult", content);
-    const toolResult = context.messages.find((message) => message.role === "toolResult");
-    expect(toolResult?.content).toEqual([content]);
-
-    expect(String(await toolResultPayload(context))).toContain("status card text");
-  });
+  expect(String(await toolResultPayload(context))).toContain("status card text");
 });

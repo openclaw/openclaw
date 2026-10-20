@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, assert, describe, expect, it } from "vitest";
 import { openFileBackedSessionManagerForTest } from "../../../test/helpers/session-manager-file-fixture.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
@@ -19,9 +19,13 @@ import { appendAssistantMessageToSessionTranscript } from "../../config/sessions
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../internal-runtime-context.js";
-import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { parseOpaqueLeafEntry } from "./session-manager-codec.js";
+import {
+  assistantText as buildAssistantMessage,
+  sessionScope,
+} from "./session-manager-fixtures.test-support.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
+import { text } from "./session-message-fixtures.test-support.js";
 
 const tempDirs = createTempDirTracker();
 const replayLimits = { maxBytes: 100_000, maxEvents: 100 };
@@ -32,27 +36,9 @@ afterEach(async () => {
   tempDirs.cleanup();
 });
 
-function buildAssistantMessage(text: string) {
-  return {
-    role: "assistant" as const,
-    content: [{ type: "text" as const, text }],
-    api: "messages" as const,
-    provider: "anthropic" as const,
-    model: "sonnet-4.6" as const,
-    usage: createZeroUsageFixture(),
-    stopReason: "stop" as const,
-    timestamp: Date.now(),
-  };
-}
-
 function createScope(sessionId: string) {
   const dir = tempDirs.make("openclaw-session-manager-compat-");
-  const scope = {
-    agentId: "main",
-    sessionId,
-    sessionKey: `agent:main:${sessionId}`,
-    storePath: path.join(dir, "openclaw-agent.sqlite"),
-  };
+  const scope = sessionScope(path.join(dir, "openclaw-agent.sqlite"), sessionId);
   const persist = (eventId: string, message: unknown) =>
     appendTranscriptMessage(scope, { cwd: dir, eventId, message });
   return { dir, scope, persist };
@@ -79,22 +65,18 @@ describe("SessionManager persistence compatibility", () => {
         "Final answer [[tts:text]]Spoken answer[[/tts:text]]",
       ].join("\n"),
     );
-    const cases = [
-      {
-        input:
-          "Use `[[reply_to_current]]` literally.\nUse `[[tts:text]]spoken[[/tts:text]]` literally.\n```text\n[[audio_as_voice]]\n[[tts:provider=mock voiceId=voice-7]]\n```",
-      },
-      { input: "    [[reply_to_current]]\n    [[audio_as_voice]]" },
-      { input: "[[reply_to_current]\nVisible reply", expected: "Visible reply" },
-      { input: "Visible reply\n[[reply_to_current] literally" },
-      { input: "Generated image\nMEDIA:./render.png" },
-      {
-        input:
-          "  Leading  spaces\r\n\r\n\r\n    indented code\r\n```ts\r\nconst value = 1;\r\n```\r\n",
-      },
+    const cases: Array<[string, string?]> = [
+      [
+        "Use `[[reply_to_current]]` literally.\nUse `[[tts:text]]spoken[[/tts:text]]` literally.\n```text\n[[audio_as_voice]]\n[[tts:provider=mock voiceId=voice-7]]\n```",
+      ],
+      ["    [[reply_to_current]]\n    [[audio_as_voice]]"],
+      ["[[reply_to_current]\nVisible reply", "Visible reply"],
+      ["Visible reply\n[[reply_to_current] literally"],
+      ["Generated image\nMEDIA:./render.png"],
+      ["  Leading  spaces\r\n\r\n\r\n    indented code\r\n```ts\r\nconst value = 1;\r\n```\r\n"],
     ];
     manager.appendMessage(tagged);
-    expect(tagged.content).toEqual([{ type: "text", text: "Final answer" }]);
+    expect(tagged.content).toEqual(text("Final answer"));
     expect(tagged).toMatchObject({
       openclawDelivery: {
         audioAsVoice: true,
@@ -108,10 +90,10 @@ describe("SessionManager persistence compatibility", () => {
     });
     const messages = [
       tagged,
-      ...cases.map(({ input, expected }) => {
+      ...cases.map(([input, expected]) => {
         const message = buildAssistantMessage(input);
         manager.appendMessage(message);
-        expect(message.content).toEqual([{ type: "text", text: expected ?? input }]);
+        expect(message.content).toEqual(text(expected ?? input));
         expect(message).not.toHaveProperty("openclawDelivery");
         return message;
       }),
@@ -161,9 +143,7 @@ describe("SessionManager persistence compatibility", () => {
     const temporaryId = manager.appendMessage(buildAssistantMessage("temporary"));
     const afterAppend = await loadTranscriptEvents(scope);
     const base = afterAppend[1];
-    if (!base || typeof base !== "object") {
-      throw new Error("Expected persisted base transcript event");
-    }
+    assert(base && typeof base === "object", "Expected persisted base transcript event");
     expect(
       replaceTranscriptEventsSync(scope, [
         afterAppend[0],
@@ -184,16 +164,15 @@ describe("SessionManager persistence compatibility", () => {
 
   it("keeps the bounded tree unchanged after a rejected tail rewrite", async () => {
     const { dir, scope } = createScope("tail-rewrite");
-    const initialEntry = {
+    await upsertSessionEntryCore(scope, {
       sessionId: scope.sessionId,
       updatedAt: 1,
       activeWriterRunId: "original-writer",
       lifecycleRevision: "original-lifecycle",
-    };
-    await upsertSessionEntryCore(scope, initialEntry);
+    });
     const seed = SessionManager.open(scope, dir);
     const earlierId = seed.appendMessage(makeUserMessage("earlier history", 1));
-    const questionId = seed.appendMessage({ role: "user", content: "question", timestamp: 2 });
+    const questionId = seed.appendMessage(makeUserMessage("question", 2));
     const temporaryId = seed.appendMessage(buildAssistantMessage("temporary error"));
     const metadataId = seed.appendCustomEntry("preserved-state", { retained: true });
     const labelId = seed.appendLabelChange(temporaryId, "temporary label");
@@ -219,14 +198,13 @@ describe("SessionManager persistence compatibility", () => {
     const beforeManager = structuredClone(readManager());
     database.db.exec(`CREATE TRIGGER reject_tail_rewrite BEFORE INSERT ON transcript_events
           BEGIN SELECT RAISE(ABORT, 'tail rewrite failed'); END;`);
-    const remove = () =>
-      manager.removeTrailingEntries((entry) => entry.id === temporaryId, {
-        preserveTrailing: (entry) => entry.type === "custom" || entry.type === "label",
-      });
     const rewrite = () =>
       withOwnedSessionTranscriptWrites(
         { withTranscriptWrite: async (run) => await run() },
-        async () => remove(),
+        async () =>
+          manager.removeTrailingEntries((entry) => entry.id === temporaryId, {
+            preserveTrailing: (entry) => entry.type === "custom" || entry.type === "label",
+          }),
       );
 
     await expect(rewrite()).rejects.toThrow();
@@ -401,40 +379,40 @@ describe("SessionManager user idempotency", () => {
     expectSingleUser(events, user.idempotencyKey);
   });
 
-  it("adopts an excluded persisted user across session setup metadata", async () => {
+  it.each([
+    ["session setup metadata", true],
+    ["runtime context and compaction", false],
+  ] as const)("adopts a persisted user across %s", async (_name, excluded) => {
     const { dir, scope, user, persist } = await userSession();
-    const excluded = { ...user, excludeFromContext: true };
-    await persist("pre-persisted-user", excluded);
-    const manager = SessionManager.openBounded(scope, { cwd: dir, ...replayLimits });
-    const { metadataId } = await appendSetupMetadata(manager);
-    expect(manager.appendMessageWithTranscriptAnchor({ ...excluded, timestamp: 2 })).toMatchObject({
-      entryId: "pre-persisted-user",
-      message: excluded,
-      anchor: { entryId: "pre-persisted-user", idempotencyKey: user.idempotencyKey },
-    });
-    expect(manager.getAppendParentId()).toBe(metadataId);
+    const input = excluded ? { ...user, excludeFromContext: true } : user;
+    if (!excluded) {
+      await persist("requester-final", buildAssistantMessage("Earlier requester turn is complete"));
+    }
+    await persist("pre-persisted-user", input);
+    const manager = excluded
+      ? SessionManager.openBounded(scope, { cwd: dir, ...replayLimits })
+      : SessionManager.open(scope, dir);
+    let parentId: string;
+    if (excluded) {
+      parentId = (await appendSetupMetadata(manager)).metadataId;
+      expect(manager.appendMessageWithTranscriptAnchor({ ...input, timestamp: 2 })).toMatchObject({
+        entryId: "pre-persisted-user",
+        message: input,
+        anchor: { entryId: "pre-persisted-user", idempotencyKey: user.idempotencyKey },
+      });
+    } else {
+      manager.appendCustomMessageEntry(
+        OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
+        "Child completed; summarize its result.",
+        false,
+      );
+      parentId = manager.appendCompaction("Compacted history", "pre-persisted-user", 100);
+      expect(manager.appendMessage(input)).toBe("pre-persisted-user");
+    }
+    expect(manager.getAppendParentId()).toBe(parentId);
     const id = manager.appendMessage(buildAssistantMessage("answer"));
     const events = await loadTranscriptEvents(scope);
-    expect(events).toContainEqual(expect.objectContaining({ id, parentId: metadataId }));
-    expectSingleUser(events, user.idempotencyKey);
-  });
-
-  it("adopts the current keyed user across runtime context and compaction", async () => {
-    const { dir, scope, user, persist } = await userSession();
-    await persist("requester-final", buildAssistantMessage("Earlier requester turn is complete"));
-    await persist("pre-persisted-user", user);
-    const manager = SessionManager.open(scope, dir);
-    manager.appendCustomMessageEntry(
-      OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
-      "Child completed; summarize its result.",
-      false,
-    );
-    const compactionId = manager.appendCompaction("Compacted history", "pre-persisted-user", 100);
-    expect(manager.appendMessage(user)).toBe("pre-persisted-user");
-    expect(manager.getAppendParentId()).toBe(compactionId);
-    const id = manager.appendMessage(buildAssistantMessage("answer"));
-    const events = await loadTranscriptEvents(scope);
-    expect(events).toContainEqual(expect.objectContaining({ id, parentId: compactionId }));
+    expect(events).toContainEqual(expect.objectContaining({ id, parentId }));
     expectSingleUser(events, user.idempotencyKey);
   });
 });

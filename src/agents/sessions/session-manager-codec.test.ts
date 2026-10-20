@@ -12,21 +12,16 @@ import {
 } from "./session-manager-codec.js";
 import type { SessionEntry, SessionMessageEntry } from "./session-manager-types.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
+import { toolResult as makeToolResult } from "./session-message-fixtures.test-support.js";
 
 const userMessage = (content: string) => ({ role: "user" as const, content, timestamp: 0 });
-function messageEntry(
-  message: SessionMessageEntry["message"],
-  id = "entry",
-  parentId: string | null = null,
-): SessionMessageEntry {
-  return { type: "message", id, parentId, timestamp: "2026-01-01T00:00:00.000Z", message };
+type Message = SessionMessageEntry["message"];
+function messageEntry(message: Message, id = "entry", parentId: string | null = null) {
+  return { type: "message" as const, id, parentId, timestamp: "2026-01-01T00:00:00.000Z", message };
 }
-const sessionHeader = (id: string, version = CURRENT_SESSION_VERSION) => ({
-  type: "session",
-  version,
-  id,
-  cwd: "/tmp",
-});
+function sessionHeader(id: string, version = CURRENT_SESSION_VERSION) {
+  return { type: "session", version, id, cwd: "/tmp" };
+}
 
 it("shares checkpoint prefixes and releases prepared transcript history", async ({ signal }) => {
   const result = await runNodeScript(
@@ -205,14 +200,7 @@ const parentTraversalCases: Array<
 ];
 
 describe("model context projection isolation", () => {
-  const toolResult = {
-    role: "toolResult" as const,
-    toolCallId: "call",
-    toolName: "read",
-    isError: false,
-    content: [{ type: "text" as const, text: "visible" }],
-    timestamp: 0,
-  };
+  const toolResult = makeToolResult("visible");
   const customMessage = {
     role: "custom" as const,
     customType: "synthetic",
@@ -223,7 +211,7 @@ describe("model context projection isolation", () => {
   };
   const missingDetails = { openclawSyntheticMissingToolResult: true };
   const missingResult = { ...toolResult, details: missingDetails };
-  const cases: Array<[string, SessionMessageEntry["message"], unknown]> = [
+  const cases: Array<[string, Message, unknown]> = [
     [
       "private user metadata",
       Object.assign(userMessage("visible"), {
@@ -302,18 +290,16 @@ describe("model context projection isolation", () => {
   });
 });
 
-describe("session context parent traversal", () => {
-  it.each(parentTraversalCases)(
-    "returns each selected entry once for %s",
-    (_name, parents, leaf, expected) => {
-      const entries = Object.entries(parents).map(([id, parentId]) =>
-        messageEntry(userMessage(id), id, parentId),
-      );
-      const before = structuredClone(entries);
-      const byId = new BoundedEntryMap(entries.map((entry) => [entry.id, entry]));
+it.each(parentTraversalCases)(
+  "returns each selected entry once for %s",
+  (_name, parents, leaf, expected) => {
+    const entries = Object.entries(parents).map(([id, parentId]) =>
+      messageEntry(userMessage(id), id, parentId),
+    );
+    const before = structuredClone(entries);
+    const byId = new BoundedEntryMap(entries.map((entry) => [entry.id, entry]));
 
-      expect(buildSessionContext(entries, leaf, byId).messages).toEqual(expected.map(userMessage));
-      expect(entries).toEqual(before);
-    },
-  );
-});
+    expect(buildSessionContext(entries, leaf, byId).messages).toEqual(expected.map(userMessage));
+    expect(entries).toEqual(before);
+  },
+);

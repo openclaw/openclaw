@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -23,11 +23,8 @@ function configWithKey(apiKey: ModelProviderConfig["apiKey"]): OpenClawConfig {
     },
   };
 }
-const sourceConfig = configWithKey({
-  source: "store",
-  provider: "default",
-  id: "CATALOG_FIXTURE_KEY",
-});
+const secretRef = (id: string) => ({ source: "store" as const, provider: "default", id });
+const sourceConfig = configWithKey(secretRef("CATALOG_FIXTURE_KEY"));
 const runtimeConfig = configWithKey("resolved-fixture-key");
 
 function createRegistry(config: OpenClawConfig) {
@@ -56,29 +53,23 @@ function createRegistry(config: OpenClawConfig) {
 
 afterEach(clearRuntimeConfigSnapshot);
 
-describe("deferred model catalog admission with provider SecretRefs", () => {
-  it.each(["source", "runtime"] as const)(
-    "retains discovered inventory for a materialized provider key with %s config",
-    (view) => {
-      setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
-      const registry = createRegistry(view === "source" ? sourceConfig : runtimeConfig);
-      expect(registry.getError()).toBeUndefined();
-      expect(registry.getAll().map((model) => model.id)).toEqual(["discovered-chat-model"]);
-    },
-  );
-
-  it("does not admit cached inventory for an unresolved provider SecretRef", () => {
-    setRuntimeConfigSnapshot(sourceConfig, sourceConfig);
-    expect(createRegistry(sourceConfig).getAll()).toEqual([]);
-  });
-
-  it("does not borrow a resolved key from a different provider configuration", () => {
+it.each(["source", "runtime"] as const)(
+  "retains discovered inventory for a materialized provider key with %s config",
+  (view) => {
     setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
-    const changed = configWithKey({
-      source: "store",
-      provider: "default",
-      id: "OTHER_FIXTURE_KEY",
-    });
-    expect(createRegistry(changed).getAll()).toEqual([]);
-  });
+    const registry = createRegistry(view === "source" ? sourceConfig : runtimeConfig);
+    expect(registry.getError()).toBeUndefined();
+    expect(registry.getAll().map((model) => model.id)).toEqual(["discovered-chat-model"]);
+  },
+);
+
+it("does not admit cached inventory for an unresolved provider SecretRef", () => {
+  setRuntimeConfigSnapshot(sourceConfig, sourceConfig);
+  expect(createRegistry(sourceConfig).getAll()).toEqual([]);
+});
+
+it("does not borrow a resolved key from a different provider configuration", () => {
+  setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+  const changed = configWithKey(secretRef("OTHER_FIXTURE_KEY"));
+  expect(createRegistry(changed).getAll()).toEqual([]);
 });

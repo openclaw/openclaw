@@ -1,50 +1,31 @@
-import path from "node:path";
 import { expect, it } from "vitest";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { appendTranscriptMessages } from "../../config/sessions/session-accessor.transcript-turn.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
+import { withSessionState } from "./session-manager-fixtures.test-support.js";
 import { SessionManager } from "./session-manager.js";
+import { toolResult } from "./session-message-fixtures.test-support.js";
 
 function turn(index: number, resultBytes = 0) {
   const id = `turn-${index}`;
-  return [
-    {
-      eventId: `${id}-user`,
-      message: { role: "user", content: `${id}: ${"x".repeat(256)}`, timestamp: index },
-    },
-    {
-      eventId: `${id}-call`,
-      message: makeAgentAssistantMessage({
-        content: [{ type: "toolCall", id, name: "read", arguments: { path: "fixture.txt" } }],
-        stopReason: "toolUse",
-      }),
-    },
-    {
-      eventId: `${id}-result`,
-      message: {
-        role: "toolResult",
-        toolCallId: id,
-        toolName: "read",
-        content: [{ type: "text", text: `receipt ${index}${"x".repeat(resultBytes)}` }],
-        timestamp: index,
-        isError: false,
-      },
-    },
+  const messages = [
+    makeUserMessage(`${id}: ${"x".repeat(256)}`, index),
+    makeAgentAssistantMessage({
+      content: [{ type: "toolCall", id, name: "read", arguments: { path: "fixture.txt" } }],
+      stopReason: "toolUse",
+    }),
+    toolResult(`receipt ${index}${"x".repeat(resultBytes)}`, id, index),
   ];
+  return messages.map((message, offset) => ({
+    eventId: `${id}-${["user", "call", "result"][offset]}`,
+    message,
+  }));
 }
 
 it("keeps complete history prefixes across appends and restarts the window after compaction and reset", async () => {
-  await withOpenClawTestState({ label: "model-context-prefix" }, async (state) => {
+  await withSessionState("prefix", async ({ scope }) => {
     setRuntimeConfigSnapshot({});
-    const scope = {
-      agentId: "main",
-      sessionId: "prefix",
-      sessionKey: "agent:main:prefix",
-      storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-    };
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     await appendTranscriptMessages(scope, {
       messages: Array.from({ length: 30 }, (_, index) => turn(index)).flat(),
     });
@@ -62,12 +43,8 @@ it("keeps complete history prefixes across appends and restarts the window after
       expect(Buffer.byteLength(JSON.stringify(current))).toBeLessThan(limits.maxBytes);
       expect(current[0]?.role).toBe("user");
       for (let offset = 0; offset < current.length; offset += 3) {
-        const user = current[offset];
-        const call = current[offset + 1];
-        const result = current[offset + 2];
-        expect(user?.role).toBe("user");
-        expect(call?.role).toBe("assistant");
-        expect(result?.role).toBe("toolResult");
+        const [user, call, result] = current.slice(offset, offset + 3);
+        expect([user?.role, call?.role, result?.role]).toEqual(["user", "assistant", "toolResult"]);
         if (call?.role === "assistant" && result?.role === "toolResult") {
           expect(call.content).toContainEqual(expect.objectContaining({ id: result.toolCallId }));
         }
@@ -89,9 +66,9 @@ it("keeps complete history prefixes across appends and restarts the window after
     expect(read().messages).toEqual(source.buildSessionContext().messages);
     source.appendResetBoundary("new");
     expect(read().messages).toEqual([]);
-    source.appendMessage({ role: "user", content: "fresh start", timestamp: 40 });
-    expect(read().messages).toEqual([{ role: "user", content: "fresh start", timestamp: 40 }]);
-    source.appendMessage({ role: "user", content: "old".repeat(700), timestamp: 41 });
+    source.appendMessage(makeUserMessage("fresh start", 40));
+    expect(read().messages).toEqual([makeUserMessage("fresh start", 40)]);
+    source.appendMessage(makeUserMessage("old".repeat(700), 41));
     await appendTranscriptMessages(scope, { messages: turn(42, 14_500) });
     // Headroom must not reject an atomic tool turn that fits the unchanged hard cap.
     expect(read().messages).toEqual(
