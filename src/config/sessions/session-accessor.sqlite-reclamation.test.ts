@@ -479,11 +479,11 @@ test("file warnings retain rejected native admission releases without attributin
     expect(records).toHaveLength(3);
     const workerRecords = records.filter((record) => record.workerThreadId === workerThreadId);
     expect(workerRecords).toMatchObject(
-      [1, 2].map((reclamationAdmissionId) =>
+      ["preliminary-release", "worker-release"].map((releaseCause, index) =>
         Object.assign({}, executionContext, {
           reclamationKind: "history-eviction",
-          reclamationAdmissionId,
-          reclamationAdmissionReleaseCause: "worker-release",
+          reclamationAdmissionId: index + 1,
+          reclamationAdmissionReleaseCause: releaseCause,
         }),
       ),
     );

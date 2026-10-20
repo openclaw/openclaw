@@ -677,6 +677,7 @@ src/config/sessions/migration-required.ts
 src/config/sessions/model-override-provenance.ts
 src/config/sessions/paths.ts
 src/config/sessions/session-accessor.sqlite-entry-inventory.ts
+src/config/sessions/session-accessor.sqlite-conversation-publication.ts
 src/config/sessions/session-accessor.sqlite-owner-projection.ts
 src/config/sessions/session-accessor.sqlite-scope-helpers.ts
 src/config/sessions/session-accessor.sqlite-status.ts
@@ -685,6 +686,7 @@ src/config/sessions/session-canonical-key.ts
 src/config/sessions/session-canonical-row.ts
 src/config/sessions/session-cold-storage-state.ts
 src/config/sessions/session-entry-codec.ts
+src/config/sessions/session-entry-write-policy.ts
 src/config/sessions/session-entry-cohort.worker.ts
 src/config/sessions/session-entry-json.ts
 src/config/sessions/session-entry-snapshot-values.ts
@@ -2192,6 +2194,7 @@ packages/agent-core/src/harness/session/session.ts
 packages/ai/src/transports/provider-compaction-checkpoint.ts
 src/config/sessions/restart-recovery-state.ts
 src/config/sessions/session-accessor.sqlite-delete-snapshot.ts
+src/config/sessions/session-accessor.sqlite-export-slices.ts
 src/config/sessions/session-accessor.sqlite-entry-cache-projection.ts
 src/config/sessions/session-accessor.sqlite-entry-cache-publication-state.ts
 src/config/sessions/session-accessor.sqlite-entry-cache-publication.ts

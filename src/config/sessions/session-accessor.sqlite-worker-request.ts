@@ -430,7 +430,7 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
         admissionTasks.push(task);
       } else if (message.type === "admission-release") {
         if (admission) {
-          admission.diagnostics.releaseCause = "worker-release";
+          admission.diagnostics.releaseCause = "preliminary-release";
           admission.released.resolve();
           admission = undefined;
         }

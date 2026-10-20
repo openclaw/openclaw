@@ -206,25 +206,19 @@ function PendingSessionCreateContent(
     <>
       <div class="sidebar-region">
         <div class="sidebar-region__header">
-          <Show when={view()?.header}>{(header) => <ChatPaneHeader {...header()} />}</Show>
+          <ChatPaneHeader {...view().header} />
         </div>
-        <section class="chat" data-region="main" aria-busy={view()?.submitting ? "true" : "false"}>
+        <section class="chat" data-region="main" aria-busy={view().submitting ? "true" : "false"}>
           <div class="chat-main__conversation-frame">
             <div class="chat-main__conversation">
-              <Show when={view()?.body}>{(body) => <NewSessionBody {...body()} />}</Show>
+              <NewSessionBody {...view().body} />
               <div class="chat-footer">
-                <Show when={view()}>
-                  {(current) => (
-                    <Show
-                      when={current().creationComposer}
-                      keyed
-                      fallback={<ChatComposer {...current().composer} />}
-                    >
-                      {(composer) => (
-                        <CreationComposer composer={composer} onOpenImage={openImage} />
-                      )}
-                    </Show>
-                  )}
+                <Show
+                  when={view().creationComposer}
+                  keyed
+                  fallback={<ChatComposer {...view().composer} />}
+                >
+                  {(composer) => <CreationComposer composer={composer} onOpenImage={openImage} />}
                 </Show>
               </div>
             </div>

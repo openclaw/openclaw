@@ -1,5 +1,37 @@
 # Team-shaped synthetic state
 
+## Usage metadata bursts
+
+`chat-metadata-burst-measure.ts` requests `sessions.usage` on a cold 5,000-session
+fixture while ten signed synthetic clients observe the real Gateway. Prepare a
+fresh fixture for every sample; the read populates the usage cache:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/team-shape-fixture.ts \
+  --state-dir /path/to/new-fixture --sessions 5000 --runs 0 --approvals 0 \
+  --cron 0 --projects 0 --transcript-mib 1 --port 41483
+node --import ./scripts/tsx.mjs scripts/perf/chat-metadata-burst-measure.ts \
+  --root /path/to/new-fixture --port 41483 --clients 10 \
+  --duration 60000 --output /path/to/result.json
+```
+
+Results classify metadata frames, count usage publications and their event-loop
+ticks, and record main-thread CPU plus synchronous WebSocket send CPU. Send CPU
+excludes Gateway JSON encoding and asynchronous socket work. Final assertions
+require all 5,000 usage entries to be cached and every socket to have received the
+latest committed usage receipt. The fixture uses synthetic model configuration
+and makes no model calls.
+
+For concurrent A/B pairs, use identical separate fixtures and `--start-at` with
+the same future epoch milliseconds to synchronize Gateway launch. The measurement
+starts once each Gateway's sockets connect; waiting for idle would let startup
+warm the usage cache and erase the cold workload. The script rejects fixtures with
+existing usage rollups and rejects any run where startup publishes usage before
+all clients connect, including partially warmed samples.
+`--metadata-owner /path/to/server-chat-metadata-lifecycle.baseline.ts` replaces
+only that module; place the baseline beside the original so relative imports
+remain valid. Swap the CPU halves for the next pair and compare paired differences.
+
 ## Startup with one checking agent
 
 The startup benchmark has an opt-in `slowAgentDatabase` case. Prepare each side
@@ -640,7 +672,11 @@ text and a 256×128 synthetic noise PNG, executes three real `read` tools with
 16 KiB text results, receives one synthetic output-limit stop,
 and completes the resulting transcript continuation. The driver requires one
 completed tool batch, output-limit response, and recovered response per child,
-and verifies inline images reach all three provider requests. These are
+and verifies inline images reach all three provider requests. Each provider
+response includes a distinct deterministic 16 KiB synthetic reasoning signature;
+the driver verifies that tool and recovery continuations replay the exact completed
+signature and omit the reasoning-only output-limit signature, as required by the
+replay owner. These are
 direct child-session `agent` calls, not model-driven `sessions_spawn` calls.
 Post-GC Gateway heap samples follow every completed cohort, and the optional
 final `settled.heapsnapshot` permits retainer inspection. Session resets exclude
@@ -658,7 +694,8 @@ node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
 ```
 
 This runs paced cohorts after five minutes of warmup, with one real `read` tool
-and a streamed completion per turn. Diagnostics and the Prometheus plugin are
+and a streamed completion per turn, including the same synthetic reasoning
+signature and replay check as `attempt-retention`. Diagnostics and the Prometheus plugin are
 enabled. Session generations reset every twenty cohorts (including warmup) to
 bound intentional live transcript growth; `--reset-every-rounds 0` keeps history
 instead. The report records resets and completed cohorts. It does not exercise
