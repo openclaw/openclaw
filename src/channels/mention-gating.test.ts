@@ -7,17 +7,18 @@ import {
   resolveInboundMentionDecision,
 } from "./mention-gating.js";
 
+const defaultFacts = { canDetectMention: true, wasMentioned: false, implicitMentionKinds: [] };
+const defaultPolicy = {
+  isGroup: true,
+  requireMention: true,
+  allowTextCommands: true,
+  hasControlCommand: false,
+  commandAuthorized: false,
+};
 function decide(facts: Partial<InboundMentionFacts>, policy: Partial<InboundMentionPolicy> = {}) {
   return resolveInboundMentionDecision({
-    facts: { canDetectMention: true, wasMentioned: false, implicitMentionKinds: [], ...facts },
-    policy: {
-      isGroup: true,
-      requireMention: true,
-      allowTextCommands: true,
-      hasControlCommand: false,
-      commandAuthorized: false,
-      ...policy,
-    },
+    facts: { ...defaultFacts, ...facts },
+    policy: { ...defaultPolicy, ...policy },
   });
 }
 
@@ -34,14 +35,9 @@ describe("resolveInboundMentionDecision", () => {
 
   it("keeps the flat call shape for compatibility", () => {
     const res = resolveInboundMentionDecision({
-      isGroup: true,
-      requireMention: true,
-      canDetectMention: true,
-      wasMentioned: false,
+      ...defaultFacts,
+      ...defaultPolicy,
       implicitMentionKinds: ["reply_to_bot"],
-      allowTextCommands: true,
-      hasControlCommand: false,
-      commandAuthorized: false,
     });
     expect(res.effectiveWasMentioned).toBe(true);
   });
