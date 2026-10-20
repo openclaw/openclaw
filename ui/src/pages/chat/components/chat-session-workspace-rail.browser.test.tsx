@@ -5,7 +5,7 @@ import "../../../styles/chat.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { SessionWorkspaceRail } from "./chat-session-workspace-rail-solid.tsx";
-import type { SessionWorkspaceProps } from "./chat-sidebar-content-types.ts";
+import type { SessionWorkspaceProps } from "./chat-session-workspace.ts";
 
 it.each([false, true])(
   "restores a loaded Files catalog after remount (search open: %s)",
