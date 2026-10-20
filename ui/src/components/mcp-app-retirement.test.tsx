@@ -20,11 +20,7 @@ function mountRetirement() {
   const renderedIdentities: string[] = [];
   let container!: HTMLDivElement;
   const mounted = mountSolid(() => (
-    <div
-      ref={(element) => {
-        container = element;
-      }}
-    >
+    <div ref={(element) => (container = element)}>
       <McpAppRetirement identity={identity()} roots={() => [container]}>
         {(value) => {
           renderedIdentities.push(value);

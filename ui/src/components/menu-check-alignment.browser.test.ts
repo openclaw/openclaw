@@ -1,11 +1,11 @@
 import { createComponent } from "solid-js";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { extractQueryTerms } from "../../../src/shared/usage-query.js";
 import { registerUsageEnglish } from "../i18n/locales/en-usage.ts";
 import { registerEnglishCatalog } from "../lib/reactive/i18n.ts";
 import { RunsSection } from "../pages/cron/view-runs.tsx";
 import { UsageQueryFilter } from "../pages/usage/view-query-filter.tsx";
-import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import { Menu } from "./solid/menu.tsx";
 import "../styles.css";
@@ -15,12 +15,27 @@ import "../styles/usage.css";
 registerEnglishCatalog(registerUsageEnglish);
 const hasBrowserLayout = !navigator.userAgent.toLowerCase().includes("jsdom");
 
-afterEach(cleanupSolid);
-
 function partBounds(item: HTMLElement, part: "check" | "label" | "icon"): DOMRect {
   const element = item.querySelector<HTMLElement>(`.oc-menu-item__${part}`);
   expect(element, `${part} should exist`).not.toBeNull();
   return element!.getBoundingClientRect();
+}
+
+function expectCheckAlignment(items: HTMLElement[], trailing: boolean) {
+  for (const item of items) {
+    const check = partBounds(item, "check");
+    const label = partBounds(item, "label");
+    expect(check.width).toBeGreaterThan(0);
+    expect(label.width).toBeGreaterThan(0);
+    if (trailing) {
+      expect(check.left).toBeGreaterThanOrEqual(label.right);
+    } else {
+      expect(check.right).toBeLessThanOrEqual(label.left);
+    }
+    expect(
+      Math.abs(check.top + check.height / 2 - label.top - label.height / 2),
+    ).toBeLessThanOrEqual(2);
+  }
 }
 
 async function openMenu(container: HTMLElement) {
@@ -55,16 +70,7 @@ describe.skipIf(!hasBrowserLayout)("menu selection check alignment", () => {
     expect(unselected.getAttribute("aria-checked")).toBe("false");
     expect(command.hasAttribute("aria-checked")).toBe(false);
 
-    for (const item of [selected, unselected]) {
-      const check = partBounds(item, "check");
-      const label = partBounds(item, "label");
-      expect(check.width).toBeGreaterThan(0);
-      expect(label.width).toBeGreaterThan(0);
-      expect(check.left).toBeGreaterThanOrEqual(label.right);
-      expect(
-        Math.abs(check.top + check.height / 2 - label.top - label.height / 2),
-      ).toBeLessThanOrEqual(2);
-    }
+    expectCheckAlignment([selected, unselected], true);
     const iconStarts = [selected, unselected, command].map((item) => partBounds(item, "icon").left);
     expect(Math.max(...iconStarts) - Math.min(...iconStarts)).toBeLessThanOrEqual(1);
   });
@@ -111,16 +117,7 @@ describe.skipIf(!hasBrowserLayout)("menu selection check alignment", () => {
         '[role="menuitemcheckbox"][aria-checked="false"]',
       )!;
 
-      for (const item of [selected, unselected]) {
-        const check = partBounds(item, "check");
-        const label = partBounds(item, "label");
-        expect(check.width).toBeGreaterThan(0);
-        expect(label.width).toBeGreaterThan(0);
-        expect(check.right).toBeLessThanOrEqual(label.left);
-        expect(
-          Math.abs(check.top + check.height / 2 - label.top - label.height / 2),
-        ).toBeLessThanOrEqual(2);
-      }
+      expectCheckAlignment([selected, unselected], false);
       expect(
         Math.abs(partBounds(selected, "label").left - partBounds(unselected, "label").left),
       ).toBeLessThanOrEqual(1);

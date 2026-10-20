@@ -23,6 +23,9 @@ vi.mock("@modelcontextprotocol/ext-apps/app-bridge", async (importOriginal) => {
   return { ...actual, ...createMcpAppBridgeMocks(bridgeMocks) };
 });
 const mountBridge = createMcpBridgeFixture(bridgeMocks);
+function viewCalls(request: ReturnType<typeof createGatewayRequestMock>) {
+  return request.mock.calls.filter(([method]) => method === "mcp.app.view");
+}
 
 describe("mcp-app-view owner lifecycle", () => {
   it("coalesces same-turn identity changes into one replacement view", async () => {
@@ -31,9 +34,8 @@ describe("mcp-app-view owner lifecycle", () => {
     view.viewId = "view-batched-final";
     view.agentId = "other";
     await waitForSolid(() => {
-      const viewCalls = request.mock.calls.filter(([method]) => method === "mcp.app.view");
-      expect(viewCalls).toHaveLength(2);
-      expect(viewCalls[1]?.[1]).toEqual({
+      expect(viewCalls(request)).toHaveLength(2);
+      expect(viewCalls(request)[1]?.[1]).toEqual({
         sessionKey: "agent:other:main",
         viewId: "view-batched-final",
         agentId: "other",
@@ -46,12 +48,12 @@ describe("mcp-app-view owner lifecycle", () => {
     gateway.snapshot.selfUser = { id: "one", name: "One" };
     publish(gateway.snapshot);
     flush();
-    expect(request.mock.calls.filter(([method]) => method === "mcp.app.view")).toHaveLength(1);
+    expect(viewCalls(request)).toHaveLength(1);
     expect(view.querySelector("iframe")).toBe(frame);
     gateway.snapshot.selfUser = { id: "two", name: "Two" };
     publish(gateway.snapshot);
     await waitForSolid(() => {
-      expect(request.mock.calls.filter(([method]) => method === "mcp.app.view")).toHaveLength(2);
+      expect(viewCalls(request)).toHaveLength(2);
       expect(frame.isConnected).toBe(false);
     });
   });
@@ -69,15 +71,13 @@ describe("mcp-app-view owner lifecycle", () => {
       view.surface = "board";
       await view.updateComplete;
       expect(view.querySelector("iframe")).toBeNull();
-      expect(request.mock.calls.filter(([method]) => method === "mcp.app.view")).toHaveLength(1);
+      expect(viewCalls(request)).toHaveLength(1);
       if (reopen === "restart") {
         view.restartAfterTeardown();
       } else {
         view.viewId = "view-retired-replacement";
       }
-      await waitForSolid(() =>
-        expect(request.mock.calls.filter(([method]) => method === "mcp.app.view")).toHaveLength(2),
-      );
+      await waitForSolid(() => expect(viewCalls(request)).toHaveLength(2));
     },
   );
 
@@ -95,13 +95,9 @@ describe("mcp-app-view owner lifecycle", () => {
       publish(gateway.snapshot);
       await waitForSolid(() => expect(frame.isConnected).toBe(false));
       if (change === "generation") {
-        await waitForSolid(() =>
-          expect(request.mock.calls.filter(([method]) => method === "mcp.app.view")).toHaveLength(
-            2,
-          ),
-        );
+        await waitForSolid(() => expect(viewCalls(request)).toHaveLength(2));
       } else {
-        expect(request.mock.calls.filter(([method]) => method === "mcp.app.view")).toHaveLength(1);
+        expect(viewCalls(request)).toHaveLength(1);
         expect(view.querySelector(".error")?.textContent).toContain("gateway unavailable");
       }
     },
@@ -153,6 +149,6 @@ describe("mcp-app-view owner lifecycle", () => {
     expect(frame.title).toBe("Lokalisierte App");
     expect(frame.style.height).toBe("900px");
     expect(view.querySelector("iframe")).toBe(frame);
-    expect(request.mock.calls.filter(([method]) => method === "mcp.app.view")).toHaveLength(1);
+    expect(viewCalls(request)).toHaveLength(1);
   });
 });

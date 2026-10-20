@@ -1,11 +1,12 @@
 import { describe, expect, it, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import type { GatewayEventFrame } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import type { ApplicationGateway } from "../app/gateway.ts";
 import * as mcpContexts from "../lib/mcp-app-context.ts";
 import { publishMcpAppContext, readMcpAppContexts } from "../lib/mcp-app-context.ts";
-import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
+import {
+  createTestGatewayClient,
+  type GatewayRequestHandler,
+} from "../test-helpers/gateway-client.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import {
   createApplicationGateway,
@@ -14,87 +15,52 @@ import {
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import { McpAppContextStrip } from "./solid/mcp-app-context-strip.tsx";
 
+const binding = { sessionKey: "agent:main:one", agentId: "main", viewId: "view-one" };
+const state = {
+  updateId: "revision-one",
+  content: [
+    { type: "text" as const, text: "selected hex bolt", _meta: { "openai/title": "Hex bolt" } },
+  ],
+};
+function mountStrip(context: ApplicationContext) {
+  return mountSolid(
+    () => <McpAppContextStrip sessionKey={binding.sessionKey} agentId={binding.agentId} />,
+    { wrapper: createSolidApplicationContextProvider(context).wrapper },
+  );
+}
+function mountContext(request: GatewayRequestHandler = vi.fn(async () => ({ state }))) {
+  const client = createTestGatewayClient(request);
+  const application = createApplicationGateway();
+  application.publish({ ...application.gateway.snapshot, client, phase: "connected" });
+  publishMcpAppContext(client, { ...binding, title: "Library", state });
+  const { container: strip } = mountStrip({ gateway: application.gateway } as ApplicationContext);
+  flush();
+  expect(strip.textContent).toContain("Hex bolt");
+  return {
+    client,
+    strip,
+    emit: (payload: Record<string, unknown>) => {
+      application.publishEvent({ type: "event", event: "mcp.app.hostContextChanged", payload });
+      flush();
+    },
+  };
+}
+
 describe("composer app context", () => {
   it("clears consumed context immediately", () => {
-    const state = {
-      updateId: "revision-one",
-      content: [
-        { type: "text" as const, text: "selected hex bolt", _meta: { "openai/title": "Hex bolt" } },
-      ],
-    };
-    const request = vi.fn(async () => ({ state }));
-    const client = { request } as unknown as NonNullable<ApplicationGateway["snapshot"]["client"]>;
-    const listeners = new Set<(event: GatewayEventFrame) => void>();
-    publishMcpAppContext(client, {
-      sessionKey: "agent:main:one",
-      agentId: "main",
-      viewId: "view-one",
-      title: "Library",
-      state,
-    });
-    const context = {
-      gateway: {
-        snapshot: { client, phase: "connected" },
-        connectionRevision: 1,
-        subscribe: () => () => {},
-        subscribeEvents: (listener: (event: GatewayEventFrame) => void) => {
-          listeners.add(listener);
-          return () => listeners.delete(listener);
-        },
-      },
-    } as unknown as ApplicationContext;
-    const { container: strip } = mountSolid(
-      () => <McpAppContextStrip sessionKey="agent:main:one" agentId="main" />,
-      { wrapper: createSolidApplicationContextProvider(context).wrapper },
-    );
-    flush();
-    expect(strip.textContent).toContain("Hex bolt");
-    const emit = (payload: Record<string, unknown>) => {
-      for (const listener of listeners) {
-        listener({ type: "event", event: "mcp.app.hostContextChanged", payload });
-      }
-    };
+    const { strip, emit } = mountContext();
     emit({ viewId: "another-view", modelContext: null, updateId: "revision-one" });
-    flush();
     expect(strip.textContent).toContain("Hex bolt");
     emit({ viewId: "view-one", modelContext: null, updateId: "earlier-revision" });
-    flush();
     expect(strip.textContent).toContain("Hex bolt");
     emit({ viewId: "view-one", modelContext: null, updateId: "revision-one" });
-    flush();
     expect.soft(strip.textContent?.trim()).toBe("");
     expect(strip.querySelector('[role="alert"]')).toBeNull();
   });
   it("releases a failed removal for retry and clears an idempotent response", async () => {
     const removal = createDeferred<{ state: null }>();
     const request = vi.fn().mockReturnValueOnce(removal.promise).mockResolvedValue({ state: null });
-    const client = { request } as unknown as NonNullable<ApplicationGateway["snapshot"]["client"]>;
-    publishMcpAppContext(client, {
-      sessionKey: "agent:main:one",
-      agentId: "main",
-      viewId: "view-one",
-      title: "Library",
-      state: {
-        updateId: "revision-one",
-        content: [
-          { type: "text", text: "selected hex bolt", _meta: { "openai/title": "Hex bolt" } },
-        ],
-      },
-    });
-    const context = {
-      gateway: {
-        snapshot: { client, phase: "connected" },
-        connectionRevision: 1,
-        subscribe: () => () => {},
-        subscribeEvents: () => () => {},
-      },
-    } as unknown as ApplicationContext;
-    const { container: strip } = mountSolid(
-      () => <McpAppContextStrip sessionKey="agent:main:one" agentId="main" />,
-      { wrapper: createSolidApplicationContextProvider(context).wrapper },
-    );
-    flush();
-    expect(strip.textContent).toContain("Hex bolt");
+    const { client, strip } = mountContext(request);
     const remove = strip.querySelector<HTMLButtonElement>("button")!;
     remove.click();
     flush();
@@ -108,14 +74,11 @@ describe("composer app context", () => {
     remove.click();
     await waitForSolid(() => expect(strip.textContent?.trim()).toBe(""));
     expect(request).toHaveBeenCalledWith("mcp.app.removeModelContext", {
-      sessionKey: "agent:main:one",
-      agentId: "main",
-      viewId: "view-one",
+      ...binding,
       updateId: "revision-one",
       index: 0,
     });
     expect(readMcpAppContexts(client, "agent:main:one", "main")).toEqual([]);
-    expect(strip.textContent?.trim()).toBe("");
     expect(strip.querySelector('[role="alert"]')).toBeNull();
   });
 
@@ -138,11 +101,7 @@ describe("composer app context", () => {
       phase: "connected",
     });
     // SAFETY: The strip reads only the Gateway; the provider supplies shared optional defaults.
-    const context = { gateway: application.gateway } as ApplicationContext;
-    const mounted = mountSolid(
-      () => <McpAppContextStrip sessionKey="agent:main:one" agentId="main" />,
-      { wrapper: createSolidApplicationContextProvider(context).wrapper },
-    );
+    const mounted = mountStrip({ gateway: application.gateway } as ApplicationContext);
     try {
       flush();
       expect(subscription).toHaveBeenCalledTimes(1);
