@@ -2328,7 +2328,6 @@
 ["src/agents/openclaw-tools.sessions-send-child-coordination.test.ts","../commands/agent.js","f3ec87a9117a88c994dfbf4651c353c2f5746343166fd3a7c2f7bafd9386261f",1]
 ["src/agents/openclaw-tools.sessions-send-child-coordination.test.ts","../config/config.js","6108a3a6551979fcf8ef5e9ae1acb81d34b0866c4f74416d3fa3e112db6c8e13",1]
 ["src/agents/openclaw-tools.sessions-send-child-coordination.test.ts","../gateway/call.js","de083e8ea43d763ca19016b42b51fba574128150139fc2e7eb51e761bfa7e166",1]
-["src/agents/openclaw-tools.sessions-visibility.test.ts","../gateway/call.js","4f6275dc1b0a05577c201168cdf322d6655e59b21d99250393d1387d9eb49e37",1]
 ["src/agents/openclaw-tools.sessions.mocks.test-support.ts","../commands/agent.js","f3ec87a9117a88c994dfbf4651c353c2f5746343166fd3a7c2f7bafd9386261f",1]
 ["src/agents/openclaw-tools.sessions.mocks.test-support.ts","../config/config.js","d51d2534de86980cfe11f380f09a62677b5b82685813687647e5c817a6ad22aa",1]
 ["src/agents/openclaw-tools.sessions.mocks.test-support.ts","../gateway/call.js","4f6275dc1b0a05577c201168cdf322d6655e59b21d99250393d1387d9eb49e37",1]
