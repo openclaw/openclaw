@@ -10,11 +10,13 @@ import { ControlUiPluginRuntime } from "./control-ui-runtime.ts";
 // mock-isolation: synthetic packaged modules replace the real loader's DOM/network acquisition and host rendering imports.
 vi.mock("./control-ui-loader.ts", () => ({ loadControlUiPluginAssets: vi.fn() }));
 const packaged = vi.hoisted(() => [] as ControlUiPluginDistribution[]);
+const runtimes: ControlUiPluginRuntime[] = [];
 vi.mock("./control-ui-distribution.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./control-ui-distribution.ts")>()),
   controlUiPluginDistributions: packaged,
 }));
 afterEach(() => {
+  runtimes.splice(0).forEach((runtime) => runtime.dispose());
   packaged.length = 0;
   vi.resetAllMocks();
 });
@@ -50,11 +52,15 @@ function fixture() {
   const runtime = new ControlUiPluginRuntime(() => {
     throw new Error("Settings loading must not read the active catalog");
   });
-  return { runtime, view, activate, stop, style, module };
+  runtimes.push(runtime);
+  const load = (target: ControlUiSettingsView["placement"] = placement) =>
+    runtime.loadSettingsView(target, new AbortController().signal);
+  const channel = { section: "channels", panel: "detail", channelId: "custom" } as const;
+  return { runtime, view, activate, stop, style, module, load, channel };
 }
 it("loads packaged Settings independently and retires its assets with the runtime", async () => {
   const f = fixture();
-  const loaded = await f.runtime.loadSettingsView(placement, new AbortController().signal);
+  const loaded = await f.load();
   expect(loaded.view).toBe(f.view);
   expect(f.style.media).toBe("all");
   expect(f.activate).not.toHaveBeenCalled();
@@ -80,27 +86,17 @@ it("selects Memories from a package that also owns Overview without runtime acti
   };
   packaged[0]!.settingsViews = [placement, memories.placement];
   f.module.settingsViews.push(memories);
-  try {
-    const loaded = await f.runtime.loadSettingsView(
-      memories.placement,
-      new AbortController().signal,
-    );
-    expect(loaded.view).toBe(memories);
-    expect(f.activate).not.toHaveBeenCalled();
-    loaded.dispose();
-    expect(f.stop).toHaveBeenCalledOnce();
-  } finally {
-    f.runtime.dispose();
-  }
+  const loaded = await f.load(memories.placement);
+  expect(loaded.view).toBe(memories);
+  expect(f.activate).not.toHaveBeenCalled();
+  loaded.dispose();
+  expect(f.stop).toHaveBeenCalledOnce();
 });
 it("rejects ambiguous packaged placement owners before loading code", async () => {
   const f = fixture();
   packaged.push({ ...packaged[0]!, pluginId: "duplicate" });
-  await expect(f.runtime.loadSettingsView(placement, new AbortController().signal)).rejects.toThrow(
-    "one packaged owner",
-  );
+  await expect(f.load()).rejects.toThrow("one packaged owner");
   expect(loadControlUiPluginAssets).not.toHaveBeenCalled();
-  f.runtime.dispose();
 });
 it.each(["owner", "placement", "duplicate"])(
   "rejects a built module with a mismatched %s and disposes its styles",
@@ -120,19 +116,16 @@ it.each(["owner", "placement", "duplicate"])(
     if (kind === "duplicate") {
       f.module.settingsViews = [f.view, f.view];
     }
-    await expect(
-      f.runtime.loadSettingsView(placement, new AbortController().signal),
-    ).rejects.toThrow();
+    await expect(f.load()).rejects.toThrow();
     expect(f.style.media).toBe("not all");
     expect(f.stop).toHaveBeenCalledOnce();
-    f.runtime.dispose();
   },
 );
 
 it("binds channel settings loading to the declared channel without runtime activation", async () => {
   const f = fixture();
   const view: ControlUiChannelSettingsView = {
-    placement: { section: "channels", panel: "detail", channelId: "custom" },
+    placement: f.channel,
     mount: vi.fn(),
   };
   packaged[0]!.settingsViews = [view.placement];
@@ -155,14 +148,12 @@ it("binds channel settings loading to the declared channel without runtime activ
 });
 it("rejects module channel identity drift even when section and panel match", async () => {
   const f = fixture();
-  const channelPlacement = { section: "channels", panel: "detail", channelId: "custom" } as const;
-  packaged[0]!.settingsViews = [channelPlacement];
+  packaged[0]!.settingsViews = [f.channel];
   vi.mocked(loadControlUiPluginAssets).mockResolvedValue({
     pluginId: "fixture",
-    settingsViews: [{ placement: { ...channelPlacement, channelId: "foreign" }, mount: vi.fn() }],
+    settingsViews: [{ placement: { ...f.channel, channelId: "foreign" }, mount: vi.fn() }],
   });
-  await expect(
-    f.runtime.loadSettingsView(channelPlacement, new AbortController().signal),
-  ).rejects.toThrow("Invalid or duplicate");
-  f.runtime.dispose();
+  await expect(f.runtime.loadSettingsView(f.channel, new AbortController().signal)).rejects.toThrow(
+    "Invalid or duplicate",
+  );
 });

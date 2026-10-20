@@ -50,6 +50,18 @@ describe("plugin session message body admission", () => {
   function hello() {
     store.current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
   }
+  function start() {
+    store.gateway.start();
+    hello();
+  }
+  const listen = (plugin: string, listener: (payload: unknown) => void) =>
+    host(plugin).onEvent("session.message", listener);
+  const bodyRequests = () =>
+    store.current().request.mock.calls.filter(([method]) => method === "sessions.subscribe");
+  const expectInterest = (includeMessageBodies: boolean) =>
+    expect(store.current().request).toHaveBeenCalledWith("sessions.subscribe", {
+      includeMessageBodies,
+    });
 
   const rosterPayload = { sessionKey: "agent:main:background", messageId: "message-1" };
   const fullPayload = { ...rosterPayload, message: { role: "assistant", content: "Complete" } };
@@ -58,8 +70,7 @@ describe("plugin session message body admission", () => {
   }
 
   it("shares runtime body interest, filters the admission window, and reverts after the last listener", async () => {
-    store.gateway.start();
-    hello();
+    start();
     const admission = createDeferred<unknown>();
     store
       .current()
@@ -70,10 +81,8 @@ describe("plugin session message body admission", () => {
     disposers.push(store.gateway.subscribeEvents(core));
     const first = vi.fn();
     const second = vi.fn();
-    const stopFirst = host("first").onEvent("session.message", first);
-    const stopSecond = host("second").onEvent("session.message", second);
-    const bodyRequests = () =>
-      store.current().request.mock.calls.filter(([method]) => method === "sessions.subscribe");
+    const stopFirst = listen("first", first);
+    const stopSecond = listen("second", second);
     expect(bodyRequests()).toEqual([["sessions.subscribe", { includeMessageBodies: true }]]);
 
     emit(rosterPayload);
@@ -105,7 +114,7 @@ describe("plugin session message body admission", () => {
 
   it("includes existing interest in initial and reconnect handshakes without extra admission requests", () => {
     const listener = vi.fn();
-    const stop = host("early").onEvent("session.message", listener);
+    const stop = listen("early", listener);
     store.gateway.start();
     expect(store.current().opts.includeSessionMessageBodies).toBe(true);
     store.current().request.mockResolvedValue({ subscribed: true });
@@ -127,9 +136,7 @@ describe("plugin session message body admission", () => {
       expect.anything(),
     );
     stop();
-    expect(store.current().request).toHaveBeenCalledWith("sessions.subscribe", {
-      includeMessageBodies: false,
-    });
+    expectInterest(false);
   });
 
   it("admits interest registered after connect parameters were sent and retires it with the activation", async () => {
@@ -137,59 +144,47 @@ describe("plugin session message body admission", () => {
     expect(store.current().opts.includeSessionMessageBodies).toBeUndefined();
     store.current().request.mockResolvedValue({ subscribed: true });
     const listener = vi.fn();
-    host("connecting").onEvent("session.message", listener);
+    listen("connecting", listener);
     hello();
-    expect(store.current().request).toHaveBeenCalledWith("sessions.subscribe", {
-      includeMessageBodies: true,
-    });
+    expectInterest(true);
     emit(rosterPayload);
     expect(listener).not.toHaveBeenCalled();
     await Promise.resolve();
     emit(fullPayload);
     expect(listener).toHaveBeenCalledExactlyOnceWith(fullPayload);
     disposers.pop()?.();
-    expect(store.current().request).toHaveBeenCalledWith("sessions.subscribe", {
-      includeMessageBodies: false,
-    });
+    expectInterest(false);
     emit(fullPayload);
     expect(listener).toHaveBeenCalledOnce();
   });
 
   it("reverts interest removed after the handshake parameters were sent", () => {
-    const stop = host("retiring").onEvent("session.message", vi.fn());
+    const stop = listen("retiring", vi.fn());
     store.gateway.start();
     expect(store.current().opts.includeSessionMessageBodies).toBe(true);
     stop();
     store.current().request.mockResolvedValue({ subscribed: true });
     hello();
-    expect(store.current().request).toHaveBeenCalledWith("sessions.subscribe", {
-      includeMessageBodies: false,
-    });
+    expectInterest(false);
   });
 
   it("reports rejected admission and retries only when another listener registers", async () => {
-    store.gateway.start();
-    hello();
+    start();
     const admission = createDeferred<unknown>();
     store.current().request.mockReturnValueOnce(admission.promise);
     const first = vi.fn();
-    host("rejected").onEvent("session.message", first);
+    listen("rejected", first);
     admission.reject(new Error("Admission unavailable"));
     await admission.promise.catch(() => {});
     await Promise.resolve();
     expect(store.gateway.snapshot.lastError).toBe("Admission unavailable");
     emit(rosterPayload);
     expect(first).not.toHaveBeenCalled();
-    const beforeRetry = store
-      .current()
-      .request.mock.calls.filter(([method]) => method === "sessions.subscribe");
-    expect(beforeRetry).toHaveLength(1);
+    expect(bodyRequests()).toHaveLength(1);
     store.current().request.mockResolvedValue({ subscribed: true });
     const second = vi.fn();
-    host("retrying").onEvent("session.message", second);
-    expect(
-      store.current().request.mock.calls.filter(([method]) => method === "sessions.subscribe"),
-    ).toHaveLength(2);
+    listen("retrying", second);
+    expect(bodyRequests()).toHaveLength(2);
     await Promise.resolve();
     emit(fullPayload);
     expect(first).toHaveBeenCalledExactlyOnceWith(fullPayload);

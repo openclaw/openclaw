@@ -84,6 +84,7 @@ async function transportFixture(scopes: string[], signal: AbortSignal) {
       locale: "en",
     };
     const listeners = new Set<() => void>();
+    const notify = () => listeners.forEach((listener) => listener());
     const runtime = new AbortController();
     const context = createDeferred<ControlUiSettingsContext>();
     const gateway = { snapshot: { phase: "connected" as string, hello: connected, client } };
@@ -130,9 +131,7 @@ async function transportFixture(scopes: string[], signal: AbortSignal) {
       reconnect(phase: "reconnecting" | "connected", connectionEpoch: number) {
         gateway.snapshot.phase = phase;
         snapshot = { ...snapshot, connected: phase === "connected", connectionEpoch };
-        for (const notify of listeners) {
-          notify();
-        }
+        notify();
       },
       retire(cause: string) {
         if (cause === "runtime") {
@@ -146,17 +145,14 @@ async function transportFixture(scopes: string[], signal: AbortSignal) {
                 ? { ...auth, recoveryScope: "account-b" }
                 : { ...auth, scopes: [] },
           };
-          for (const notify of listeners) {
-            notify();
-          }
         } else {
           snapshot = {
             ...snapshot,
             ...(cause === "agent" ? { agentId: "writer" } : { advertisedMethods: ["health"] }),
           };
-          for (const notify of listeners) {
-            notify();
-          }
+        }
+        if (cause !== "runtime") {
+          notify();
         }
       },
     };

@@ -1,7 +1,6 @@
 import { createSignal, onCleanup } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import type {
-  ControlUiHost,
   ControlUiReplacement,
   ControlUiSurfaceProps,
   ControlUiViewContext,
@@ -12,58 +11,15 @@ import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import { PluginSurface } from "./control-ui-view.solid.tsx";
+import { createViewRuntime } from "./control-ui-view.test-support.ts";
 
 function runtime(initial?: ControlUiReplacement) {
-  let selected = initial;
-  const listeners = new Set<() => void>();
-  const abort = new AbortController();
-  // SAFETY: these tests exercise only the view mount and scoped host request boundary.
-  const host = {
-    signal: abort.signal,
+  return createViewRuntime(initial, {
+    pluginId: "example",
+    key: "example/view",
     request: vi.fn(),
-    sessions: {},
-    agents: {},
-    navigation: {},
-    ui: {},
-    components: {},
-  } as unknown as ControlUiHost;
-  const reportError = vi.fn();
-  // SAFETY: PluginSurface reads only the plugin capability supplied by this fixture.
-  const context = {
-    plugins: {
-      selectedReplacement: () =>
-        selected
-          ? {
-              key: "example/view",
-              pluginId: "example",
-              value: selected,
-              host,
-              signal: abort.signal,
-            }
-          : undefined,
-      subscribe: (listener: () => void) => {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
-      reportError,
-    },
-  } as unknown as ApplicationContext;
-  return {
-    context,
-    listeners,
-    reportError,
-    select(value?: ControlUiReplacement) {
-      selected = value;
-      for (const listener of listeners) {
-        listener();
-      }
-    },
-    invalidate() {
-      for (const listener of listeners) {
-        listener();
-      }
-    },
-  };
+    hostInvalidation: false,
+  });
 }
 
 describe("native plugin surface", () => {
