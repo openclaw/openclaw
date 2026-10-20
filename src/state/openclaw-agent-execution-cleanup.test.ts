@@ -5,9 +5,9 @@ import {
   type SqliteWorkerStateContext,
 } from "../infra/sqlite-worker-state-context.js";
 import {
-  captureOpenClawAgentDatabaseValidationTransfer,
+  captureOpenClawAgentDatabaseValidationTransfer as captureReceipt,
   clearOpenClawAgentDatabaseValidationCache,
-  getOpenClawAgentDatabaseValidationForTransfer,
+  getOpenClawAgentDatabaseValidationForTransfer as readReceipt,
 } from "./openclaw-agent-db-validation-cache.js";
 import { cleanupRetiredAgentDatabaseLease } from "./openclaw-agent-execution-cleanup.js";
 import {
@@ -48,11 +48,9 @@ function cleanup() {
 
 const edge = vi.hoisted(() => ({
   close: vi.fn(async () => {}),
-  openFailure: undefined as Error | undefined,
+  prepare: vi.fn(async () => {}),
   repairs: [] as string[],
-  forbidden: vi.fn((): never => {
-    throw new Error("Cleanup schema proof crossed a native database or Worker boundary");
-  }),
+  forbidden: vi.fn(() => expect.unreachable("Unexpected native database/Worker access")),
 }));
 
 vi.mock("node:sqlite", () => ({ DatabaseSync: edge.forbidden }));
@@ -72,18 +70,15 @@ vi.mock("./openclaw-state-worker-store.js", async (importOriginal) => ({
   openOpenClawStateWorkerCleanupStore: async (
     databasePath: string,
     context: SqliteWorkerStateContext,
-  ) => {
+  ): Promise<CleanupStore> => {
     inContext(context, () => inspectRepairPolicy("open", databasePath));
-    if (edge.openFailure) {
-      throw edge.openFailure;
-    }
-    const store: CleanupStore = {
+    await edge.prepare();
+    return {
       async execute(command) {
         inspectRepairPolicy("cleanup", command.input.sharedStatePath);
       },
       close: edge.close,
     };
-    return store;
   },
 }));
 vi.mock("../infra/sqlite-worker-store.js", () => ({
@@ -105,7 +100,7 @@ function inspectRepairPolicy(phase: string, databasePath: string) {
 
 afterEach(() => {
   expect(edge.forbidden).not.toHaveBeenCalled();
-  edge.openFailure = undefined;
+  edge.prepare.mockReset();
   clearOpenClawAgentDatabaseValidationCache("/synthetic/reader-recovery");
   edge.repairs.length = 0;
   vi.clearAllMocks();
@@ -132,18 +127,14 @@ it("revokes retired reader validation when shared cleanup admission fails", asyn
     valid,
     canonicalReady,
   };
-  expect(captureOpenClawAgentDatabaseValidationTransfer(target)(receipt.identity, receipt)).toBe(
-    true,
-  );
-  expect(getOpenClawAgentDatabaseValidationForTransfer(target)).toMatchObject({
-    receiptId: receipt.receiptId,
-  });
+  expect(captureReceipt(target)(receipt.identity, receipt)).toBe(true);
+  expect(readReceipt(target)?.receiptId).toBe(receipt.receiptId);
 
   const failure = new Error("shared state is undergoing offline maintenance");
-  edge.openFailure = failure;
+  edge.prepare.mockRejectedValueOnce(failure);
   await expect(cleanup()).rejects.toBe(failure);
 
-  expect(getOpenClawAgentDatabaseValidationForTransfer(target)).toBeUndefined();
+  expect(readReceipt(target)).toBeUndefined();
   expect(Atomics.load(new Int32Array(valid), 0)).toBe(0);
   expect(edge.close).not.toHaveBeenCalled();
 });

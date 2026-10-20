@@ -16,13 +16,6 @@ const previousSchema = OPENCLAW_AGENT_SCHEMA_SQL.replace(
   "",
 );
 
-function fixture() {
-  const options = createAgentCreationWitnessFixture();
-  const pathname = openOpenClawAgentDatabase(options).path;
-  closeOpenClawAgentDatabasesForTest();
-  return { options, pathname };
-}
-
 function schemaMetadata(db: DatabaseSync) {
   return {
     version: db.prepare("PRAGMA user_version").get(),
@@ -32,12 +25,23 @@ function schemaMetadata(db: DatabaseSync) {
   };
 }
 
-it("keeps old databases table-free on reads, lazily installs once, and survives older-reader use and candidate reopen", async () => {
-  const { options, pathname } = fixture();
+it.each(["missing", "drifted"] as const)("handles a %s goal receipt table", async (shape) => {
+  const options = createAgentCreationWitnessFixture();
+  const pathname = openOpenClawAgentDatabase(options).path;
+  closeOpenClawAgentDatabasesForTest();
   const previous = new DatabaseSync(pathname);
   previous.exec("DROP TABLE session_goal_operations");
+  if (shape === "drifted") {
+    previous.exec(
+      "CREATE TABLE session_goal_operations (operation_id TEXT NOT NULL PRIMARY KEY) STRICT",
+    );
+  }
   const metadata = schemaMetadata(previous);
   previous.close();
+  if (shape === "drifted") {
+    expect(() => openOpenClawAgentDatabase(options)).toThrow(/session_goal_operations|schema/u);
+    return;
+  }
 
   expect(
     await lookupSessionGoalOperation({
@@ -76,14 +80,4 @@ it("keeps old databases table-free on reads, lazily installs once, and survives 
     operation_id: "op-1",
   });
   expect(reopened.prepare("PRAGMA user_version").get()).toEqual(metadata.version);
-});
-
-it("rejects a drifted receipt table instead of treating it as an optional absence", () => {
-  const { options, pathname } = fixture();
-  const drifted = new DatabaseSync(pathname);
-  drifted.exec(
-    "DROP TABLE session_goal_operations; CREATE TABLE session_goal_operations (operation_id TEXT NOT NULL PRIMARY KEY) STRICT",
-  );
-  drifted.close();
-  expect(() => openOpenClawAgentDatabase(options)).toThrow(/session_goal_operations|schema/u);
 });

@@ -16,8 +16,12 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 let stateDir: string;
+let matcher: ReturnType<typeof createOpenClawAgentDatabasePathMatcher>;
+let key: ReturnType<typeof matcher.createIndex>;
 beforeEach(() => {
   stateDir = fs.realpathSync(tempDirs.make("openclaw-alias-"));
+  matcher = createOpenClawAgentDatabasePathMatcher();
+  key = matcher.createIndex();
 });
 const at = (...parts: string[]) => path.join(stateDir, ...parts);
 
@@ -27,14 +31,12 @@ it.runIf(process.platform !== "win32")("retries ELOOP resolution within one matc
   expect(() => isSameOpenClawAgentDatabasePath(loopPath, loopPath)).toThrow(
     expect.objectContaining({ code: "ELOOP" }),
   );
-  const matchesPath = createOpenClawAgentDatabasePathMatcher();
-  const key = matchesPath.createIndex();
-  expect(() => matchesPath(loopPath, loopPath)).toThrow(expect.objectContaining({ code: "ELOOP" }));
+  expect(() => matcher(loopPath, loopPath)).toThrow(expect.objectContaining({ code: "ELOOP" }));
   expect(() => key(loopPath)).toThrow(expect.objectContaining({ code: "ELOOP" }));
 
   fs.unlinkSync(loopPath);
   fs.writeFileSync(loopPath, "recovered");
-  expect(matchesPath(loopPath, loopPath)).toBe(true);
+  expect(matcher(loopPath, loopPath)).toBe(true);
   expect(key(loopPath)).toBe(loopPath);
 });
 
@@ -55,8 +57,6 @@ it("indexes each existing or missing database locator once per operation", () =>
   const realpath = vi.spyOn(fs.realpathSync, "native");
   const stat = vi.spyOn(fs, "statSync");
   syncBuiltinESMExports();
-  const matcher = createOpenClawAgentDatabasePathMatcher();
-  const key = matcher.createIndex();
   const reverseKey = matcher.createIndex();
   expect(paths.map(key)).toEqual(paths);
   expect(paths.toReversed().map(reverseKey)).toEqual(paths.toReversed());
@@ -79,8 +79,6 @@ it.runIf(process.platform !== "win32")(
     fs.writeFileSync(second, "second");
     fs.symlinkSync(first, alias);
     fs.linkSync(first, hardlink);
-    const matcher = createOpenClawAgentDatabasePathMatcher();
-    const key = matcher.createIndex();
     expect([first, second, alias, hardlink].map(key)).toEqual([first, second, first, first]);
     const independentKey = matcher.createIndex();
     expect([hardlink, first].map(independentKey)).toEqual([hardlink, hardlink]);
@@ -110,8 +108,6 @@ it("compares missing suffixes deeper than the default probe depth", () => {
   const upper = at(...parents, "Worker.sqlite");
   const lower = at(...parents, "worker.sqlite");
   expect(isSameOpenClawAgentDatabasePath(upper, lower)).toBe(aliases);
-  const matcher = createOpenClawAgentDatabasePathMatcher();
-  const key = matcher.createIndex();
   expect(key(upper) === key(lower)).toBe(aliases);
   expect(fs.readdirSync(stateDir)).toEqual([]);
 });

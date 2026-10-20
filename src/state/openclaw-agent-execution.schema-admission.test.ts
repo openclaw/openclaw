@@ -13,7 +13,7 @@ import {
 } from "./openclaw-agent-db.js";
 import { AgentDatabaseExecutionLifetime } from "./openclaw-agent-execution-authority.js";
 import type { AgentDatabaseExecutionFileIdentity } from "./openclaw-agent-execution-contract.js";
-import { createAgentDatabaseNativeGeneration } from "./openclaw-agent-execution-native.js";
+import { createAgentDatabaseNativeGeneration as createNative } from "./openclaw-agent-execution-native.js";
 import {
   createAgentCreationWitnessFixture,
   createAgentCreationWitnessSource as createSource,
@@ -25,30 +25,25 @@ import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-conte
 function fixture() {
   const options = createAgentCreationWitnessFixture();
   const { env } = options;
-  const database = openOpenClawAgentDatabase(options);
-  const generation = (identity?: AgentDatabaseExecutionFileIdentity) =>
-    createAgentDatabaseNativeGeneration(
-      "main",
-      database.path,
-      captureOpenClawStateWorkerContext({ env }),
-      new AgentDatabaseExecutionLifetime().state,
-      () => {},
-      () => {},
-      identity,
-      () => {},
-      () => {},
-    );
-  return { env, options, database, generation };
+  const { path } = openOpenClawAgentDatabase(options);
+  const generation = (identity?: AgentDatabaseExecutionFileIdentity) => {
+    const context = captureOpenClawStateWorkerContext({ env });
+    const lifetime = new AgentDatabaseExecutionLifetime().state;
+    const noop = () => {};
+    const native = createNative("main", path, context, lifetime, noop, noop, identity, noop, noop);
+    return Object.assign(native, { [Symbol.asyncDispose]: () => native.close() });
+  };
+  return { env, options, path, generation };
 }
 
 it.each([false, true])(
   "preserves clean restart proof on refused worker admission (prepared: %s)",
   async (prepared) => {
-    const { env, database, generation: createGeneration } = fixture();
-    closeOpenClawAgentDatabaseByPath(database.path);
-    const seal = fs.readFileSync(`${database.path}.seal`, "utf8");
-    const identity = readDatabasePathIdentitySync(database.path);
-    const generation = createGeneration(
+    const { env, path, generation: createGeneration } = fixture();
+    closeOpenClawAgentDatabaseByPath(path);
+    const seal = fs.readFileSync(`${path}.seal`, "utf8");
+    const identity = readDatabasePathIdentitySync(path);
+    await using generation = createGeneration(
       prepared
         ? {
             kind: "file",
@@ -70,26 +65,20 @@ it.each([false, true])(
       }
       admit(request, grant);
     });
-    try {
-      await expect(generation.run(createSource(), async () => "forbidden")).rejects.toThrow();
-    } finally {
-      await generation.close();
-    }
+    await expect(generation.run(createSource(), async () => "forbidden")).rejects.toThrow();
+    await generation.close();
     refusal.mockRestore();
     expect(refused).toBe(true);
-    expect(
-      openOpenClawStateDatabase({ env })
-        .db.prepare("SELECT lease_id FROM agent_database_leases")
-        .all(),
-    ).toEqual([]);
-    expect(fs.readFileSync(`${database.path}.seal`, "utf8")).toBe(seal);
-    expect(readSqliteDatabaseCleanClose(database.path)).toBe(true);
+    const state = openOpenClawStateDatabase({ env }).db;
+    expect(state.prepare("SELECT lease_id FROM agent_database_leases").all()).toEqual([]);
+    expect(fs.readFileSync(`${path}.seal`, "utf8")).toBe(seal);
+    expect(readSqliteDatabaseCleanClose(path)).toBe(true);
   },
 );
 
 it("rejects malformed native schema receipts without replaying caller work", async () => {
-  const { options, database } = fixture();
-  closeOpenClawAgentDatabaseByPath(database.path);
+  const { options, path } = fixture();
+  closeOpenClawAgentDatabaseByPath(path);
   const execution = captureOpenClawAgentDatabaseExecution(options);
   let publications = 0;
   const malformed = sqliteWorkerOwnerProbe.admission(workerAdmission, (request, grant, admit) => {
@@ -98,7 +87,7 @@ it("rejects malformed native schema receipts without replaying caller work", asy
       request.stage === "prepare" &&
       isRecord(facts) &&
       isRecord(facts.identity) &&
-      facts.identity.nativeLocation === database.path &&
+      facts.identity.nativeLocation === path &&
       facts.validation !== undefined
     ) {
       publications += 1;
@@ -121,16 +110,15 @@ it("rejects malformed native schema receipts without replaying caller work", asy
 });
 
 it("admits schema and integrity once, then warm turns request only their writes", async () => {
-  const { database, generation: createGeneration } = fixture();
-  // Force worker verification so the cold turn shows the admission work being counted.
-  invalidateOpenClawAgentDatabaseValidation(database.path);
-  const generation = createGeneration();
+  const { path, generation: createGeneration } = fixture();
+  // Force cold verification; warm turns must reuse it (#166253).
+  invalidateOpenClawAgentDatabaseValidation(path);
+  await using generation = createGeneration();
   const requests: string[] = [];
   const source = createSource((request) => {
     const kind = isRecord(request.facts) ? request.facts.kind : undefined;
     requests.push(typeof kind === "string" ? `${request.stage}:${kind}` : request.stage);
   });
-  // A chat turn prepares the agent database for writing, then records its transcript.
   const turn = (sessionId: string) =>
     generation.run(
       source,
@@ -142,18 +130,13 @@ it("admits schema and integrity once, then warm turns request only their writes"
       undefined,
       true,
     );
-  try {
-    await turn("first-turn");
-    expect(requests).toEqual(
-      expect.arrayContaining(["open", "prepare:agent-validation-start", "commit"]),
-    );
-    requests.length = 0;
-    await turn("second-turn");
-    await turn("third-turn");
-    // No open, registration, schema preparation or integrity validation repeats (#166253).
-    const write = ["prepare", "transaction", "commit"];
-    expect(requests).toEqual([...write, ...write]);
-  } finally {
-    await generation.close();
-  }
+  await turn("first-turn");
+  expect(requests).toEqual(
+    expect.arrayContaining(["open", "prepare:agent-validation-start", "commit"]),
+  );
+  requests.length = 0;
+  await turn("second-turn");
+  await turn("third-turn");
+  const write = ["prepare", "transaction", "commit"];
+  expect(requests).toEqual([...write, ...write]);
 });
