@@ -34,6 +34,19 @@ function launchInput() {
   };
 }
 
+const parseLaunch = (input: unknown) => parseNodeWorkerLaunchInput(JSON.stringify(input));
+const parseLookup = (input: unknown) => parseNodeWorkerLookupInput(JSON.stringify(input));
+const parseStop = (input: unknown) => parseNodeWorkerEnvironmentStopInput(JSON.stringify(input));
+function withAuthoring(base: ReturnType<typeof launchInput>, skillAuthoring: unknown) {
+  return {
+    ...base,
+    descriptor: {
+      ...base.descriptor,
+      assignment: { ...base.descriptor.assignment, skillAuthoring },
+    },
+  };
+}
+
 it.each([
   [undefined, "paramsJSON required"],
   [null, "paramsJSON required"],
@@ -46,39 +59,26 @@ it.each([
 it("accepts only bounded optional status waits", () => {
   for (const waitMs of [undefined, 1, NODE_WORKER_STATUS_WAIT_MAX_MS]) {
     const input = { launchId: identity.launchId, ...(waitMs === undefined ? {} : { waitMs }) };
-    expect(parseNodeWorkerLookupInput(JSON.stringify(input))).toEqual(input);
+    expect(parseLookup(input)).toEqual(input);
   }
   for (const waitMs of [0, -1, 1.5, "100", null, NODE_WORKER_STATUS_WAIT_MAX_MS + 1]) {
-    expect(() =>
-      parseNodeWorkerLookupInput(JSON.stringify({ launchId: identity.launchId, waitMs })),
-    ).toThrow("INVALID_REQUEST");
+    expect(() => parseLookup({ launchId: identity.launchId, waitMs })).toThrow("INVALID_REQUEST");
   }
 });
 
 it("preserves published authoring and negotiated idle retention in launch identity", () => {
   for (const multipleProfiles of [undefined, false, true]) {
     const base = launchInput();
-    const input = {
-      ...base,
-      descriptor: {
-        ...base.descriptor,
-        assignment: {
-          ...base.descriptor.assignment,
-          ...(multipleProfiles === undefined ? {} : { skillAuthoring: { multipleProfiles } }),
-        },
-      },
-    };
-    const legacy = parseNodeWorkerLaunchInput(JSON.stringify(input));
+    const input = multipleProfiles === undefined ? base : withAuthoring(base, { multipleProfiles });
+    const legacy = parseLaunch(input);
     expect(legacy).toEqual(input);
     if (multipleProfiles !== undefined) {
       expect(nodeWorkerPlanHash(legacy)).not.toBe(nodeWorkerPlanHash(base));
     }
-    const retained = parseNodeWorkerLaunchInput(JSON.stringify({ ...input, idleRetention: true }));
+    const retained = parseLaunch({ ...input, idleRetention: true });
     expect(retained).toEqual({ ...input, idleRetention: true });
     expect(nodeWorkerPlanHash(retained)).not.toBe(nodeWorkerPlanHash(legacy));
-    expect(() =>
-      parseNodeWorkerLaunchInput(JSON.stringify({ ...input, idleRetention: false })),
-    ).toThrow("INVALID_REQUEST");
+    expect(() => parseLaunch({ ...input, idleRetention: false })).toThrow("INVALID_REQUEST");
   }
 });
 
@@ -90,26 +90,14 @@ it("rejects malformed authoring, unnegotiated lifetimes, and mismatched turn ide
     { multipleProfiles: "false" },
     { multipleProfiles: false, extra: true },
   ]) {
-    expect(() =>
-      parseNodeWorkerLaunchInput(
-        JSON.stringify({
-          ...input,
-          descriptor: {
-            ...input.descriptor,
-            assignment: { ...input.descriptor.assignment, skillAuthoring },
-          },
-        }),
-      ),
-    ).toThrow("INVALID_REQUEST");
+    expect(() => parseLaunch(withAuthoring(input, skillAuthoring))).toThrow("INVALID_REQUEST");
   }
   for (const environmentSession of [undefined, 2]) {
-    expect(() =>
-      parseNodeWorkerLaunchInput(JSON.stringify({ ...input, environmentSession })),
-    ).toThrow("INVALID_REQUEST");
+    expect(() => parseLaunch({ ...input, environmentSession })).toThrow("INVALID_REQUEST");
   }
-  expect(() =>
-    parseNodeWorkerLaunchInput(JSON.stringify({ ...input, launchId: "other-launch" })),
-  ).toThrow("launchId must match descriptor assignment turnId");
+  expect(() => parseLaunch({ ...input, launchId: "other-launch" })).toThrow(
+    "launchId must match descriptor assignment turnId",
+  );
 });
 
 it("requires a complete bounded environment owner independently of its completed turn", () => {
@@ -119,7 +107,7 @@ it("requires a complete bounded environment owner independently of its completed
     sessionId: "session-1",
     ownerEpoch: 3,
   };
-  expect(parseNodeWorkerEnvironmentStopInput(JSON.stringify(scope))).toEqual(scope);
+  expect(parseStop(scope)).toEqual(scope);
   for (const fields of [
     { ownerEpoch: undefined },
     { ownerEpoch: -1 },
@@ -128,9 +116,7 @@ it("requires a complete bounded environment owner independently of its completed
     { launchId: "turn-1" },
     { environmentId: "x".repeat(4096) },
   ]) {
-    expect(() =>
-      parseNodeWorkerEnvironmentStopInput(JSON.stringify({ ...scope, ...fields })),
-    ).toThrow("INVALID_REQUEST");
+    expect(() => parseStop({ ...scope, ...fields })).toThrow("INVALID_REQUEST");
   }
 });
 
