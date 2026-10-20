@@ -1827,10 +1827,10 @@ describe("codex conversation binding", () => {
           );
         }
         if (method === "thread/read") {
-          return { thread: conversationThreadStartResult(tempDir, "thread-old").thread };
+          return { thread: conversationThreadStartResult("thread-old").thread };
         }
         if (method === "thread/resume") {
-          return conversationThreadStartResult(recoveredRoot, "thread-old");
+          return conversationThreadStartResult("thread-old");
         }
         if (method === "turn/start" && requestParams.threadId === "thread-old") {
           setImmediate(() => {
