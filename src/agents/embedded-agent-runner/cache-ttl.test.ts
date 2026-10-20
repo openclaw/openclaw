@@ -15,7 +15,10 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
   },
 }));
 
-import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "./cache-ttl.js";
+import {
+  isCacheTtlEligibleProvider as isEligible,
+  readLastCacheTtlTimestamp,
+} from "./cache-ttl.js";
 
 describe("isCacheTtlEligibleProvider", () => {
   it("forwards only the normalized identity and bounded resolved route", () => {
@@ -26,9 +29,7 @@ describe("isCacheTtlEligibleProvider", () => {
       headers: { "x-test-private": "not-for-provider-hooks" },
       apiKey: "synthetic-not-for-provider-hooks",
     };
-    expect(isCacheTtlEligibleProvider(" Moonshot ", " Kimi-K2.5 ", "openai-responses", route)).toBe(
-      true,
-    );
+    expect(isEligible(" Moonshot ", " Kimi-K2.5 ", "openai-responses", route)).toBe(true);
     expect(providerEligibility).toHaveBeenCalledExactlyOnceWith({
       provider: "moonshot",
       context: {
@@ -41,19 +42,13 @@ describe("isCacheTtlEligibleProvider", () => {
     });
   });
 
-  it("rejects unsupported providers and models", () => {
-    expect(isCacheTtlEligibleProvider("openai", "gpt-4o")).toBe(false);
-    expect(isCacheTtlEligibleProvider("openrouter", "openai/gpt-4o")).toBe(false);
-    expect(
-      isCacheTtlEligibleProvider("openrouter", "model-1", "openai-responses", {
-        supportsPromptCacheKey: true,
-      }),
-    ).toBe(false);
-    expect(
-      isCacheTtlEligibleProvider("myproxy", "model-1", "custom-api", {
-        supportsPromptCacheKey: true,
-      }),
-    ).toBe(false);
+  it.each([
+    ["openai", "gpt-4o", undefined, undefined],
+    ["openrouter", "openai/gpt-4o", undefined, undefined],
+    ["openrouter", "model-1", "openai-responses", { supportsPromptCacheKey: true }],
+    ["myproxy", "model-1", "custom-api", { supportsPromptCacheKey: true }],
+  ] as const)("rejects unsupported %s/%s via %s", (provider, model, api, route) => {
+    expect(isEligible(provider, model, api, route)).toBe(false);
   });
 
   it.each(["openai-responses", "openai-completions", "openai-chatgpt-responses"])(
@@ -61,20 +56,18 @@ describe("isCacheTtlEligibleProvider", () => {
     (modelApi) => {
       const route = { baseUrl: "https://proxy.example/v1" };
       const eligible = (supportsPromptCacheKey?: boolean) =>
-        isCacheTtlEligibleProvider("myproxy", "model-1", modelApi, {
+        isEligible("myproxy", "model-1", modelApi, {
           ...route,
           supportsPromptCacheKey,
         });
       expect(eligible(true)).toBe(true);
       expect(eligible(false)).toBe(false);
-      expect(isCacheTtlEligibleProvider("myproxy", "model-1", modelApi, route)).toBe(false);
+      expect(isEligible("myproxy", "model-1", modelApi, route)).toBe(false);
     },
   );
 
   it("allows custom anthropic-messages providers", () => {
-    expect(isCacheTtlEligibleProvider("litellm", "claude-sonnet-4-6", "anthropic-messages")).toBe(
-      true,
-    );
+    expect(isEligible("litellm", "claude-sonnet-4-6", "anthropic-messages")).toBe(true);
   });
 });
 
