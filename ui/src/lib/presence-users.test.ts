@@ -9,23 +9,17 @@ import {
 } from "./presence-users.ts";
 
 it.each([
-  [{ id: "gateway-owner" }, { name: "Shared owner", isSharedOwner: true }],
-  [
-    { id: "gateway-owner", name: "Saved owner name" },
-    { name: "Shared owner", isSharedOwner: true },
-  ],
-  [
-    { id: "person", name: "Example person", email: "person@example.test" },
-    { name: "Example person", isSharedOwner: false },
-  ],
-  [
-    { id: "person", email: "person@example.test" },
-    { name: "person@example.test", isSharedOwner: false },
-  ],
-  [{ id: "person" }, { name: "person", isSharedOwner: false }],
-])("labels presence without presenting the shared identity as a person: %j", (user, expected) => {
-  expect(presenceUserLabel(user)).toEqual(expected);
-});
+  [{ id: "gateway-owner" }, "Shared owner", true],
+  [{ id: "gateway-owner", name: "Saved owner name" }, "Shared owner", true],
+  [{ id: "person", name: "Example person", email: "person@example.test" }, "Example person", false],
+  [{ id: "person", email: "person@example.test" }, "person@example.test", false],
+  [{ id: "person" }, "person", false],
+] as const)(
+  "labels presence without presenting the shared identity as a person: %j",
+  (user, name, isSharedOwner) => {
+    expect(presenceUserLabel(user)).toEqual({ name, isSharedOwner });
+  },
+);
 
 it("isolates namespaces while merging renamed tabs and excluding disconnected facts", () => {
   const id = "synthetic-shared-id";
@@ -88,14 +82,10 @@ it.each([true, false])(
       [self, qualified ? "raw-tab" : "profile-tab"],
     ] as const) {
       const viewers = projectPresenceViewers(payload, explicitSelf, fallbackInstance);
-      expect(viewers).toHaveLength(1);
-      expect(viewers[0]?.identity).toEqual(other.identity);
-      expect(hasSessionPresenceViewers(payload, explicitSelf, fallbackInstance, otherSession)).toBe(
-        true,
-      );
-      expect(hasSessionPresenceViewers(payload, explicitSelf, fallbackInstance, selfSession)).toBe(
-        false,
-      );
+      expect(viewers.map((user) => user.identity)).toEqual([other.identity]);
+      const hasViewers = (key: string) =>
+        hasSessionPresenceViewers(payload, explicitSelf, fallbackInstance, key);
+      expect([hasViewers(otherSession), hasViewers(selfSession)]).toEqual([true, false]);
     }
     expect(projectOnlinePresenceViewers(payload).map((user) => user.identity)).toEqual([
       profile.identity,

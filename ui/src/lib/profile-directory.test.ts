@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import type { UsersListResult } from "../../../packages/gateway-protocol/src/schema/users.js";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
@@ -35,20 +35,28 @@ function setup(
   });
   const directory = profileDirectory(gateway);
   const stop = directory.subscribe(vi.fn());
+  onTestFinished(stop);
   return { gateway, publish, directory, stop };
+}
+
+function pendingDirectory(
+  initial?: (typeof photo)[],
+  overrides: Partial<ApplicationGateway["snapshot"]> = {},
+) {
+  const reply = createDeferred<UsersListResult>();
+  const request = vi.fn(() => reply.promise);
+  if (initial) {
+    request.mockResolvedValueOnce({ profiles: initial });
+  }
+  return { ...setup(request, overrides), reply, request };
 }
 
 it.each(["account", "recovery scope"])(
   "retires profiles when the same client's %s changes",
   async (change) => {
-    const pending = createDeferred<UsersListResult>();
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({ profiles: [photo] })
-      .mockReturnValue(pending.promise);
     const hello = gatewayHelloForMethods(["users.list"], ["operator.read"]);
     hello.auth!.recoveryScope = "alice-scope";
-    const { publish, directory, stop } = setup(request, {
+    const { publish, directory, reply } = pendingDirectory([photo], {
       hello,
       selfUser: { id: "alice", name: "Alice" },
     });
@@ -63,22 +71,16 @@ it.each(["account", "recovery scope"])(
           },
     );
     expect(directory.get("photo")).toBeUndefined();
-    pending.resolve({ profiles: [] });
+    reply.resolve({ profiles: [] });
     await old;
     await directory.load();
     expect(directory.get("photo")).toBeUndefined();
-    stop();
   },
 );
 
 it("retains profiles during a blip and clears them on fresh access loss", async () => {
-  const refreshed = createDeferred<UsersListResult>();
-  const request = vi
-    .fn()
-    .mockResolvedValueOnce({ profiles: [photo] })
-    .mockReturnValue(refreshed.promise);
   const hello = gatewayHelloForMethods(["users.list"], ["operator.read"]);
-  const { publish, directory, stop } = setup(request, { hello });
+  const { publish, directory, reply } = pendingDirectory([photo], { hello });
   await directory.load();
   publish({ phase: "reconnecting", hello: null });
   expect(directory.get("photo")).toEqual(photo);
@@ -86,16 +88,13 @@ it("retains profiles during a blip and clears them on fresh access loss", async 
   expect(directory.get("photo")).toEqual(photo);
   publish({ hello: gatewayHelloForMethods(["users.list"], []) });
   expect(directory.get("photo")).toBeUndefined();
-  refreshed.resolve({ profiles: [photo] });
+  reply.resolve({ profiles: [photo] });
   await directory.load();
   expect(directory.get("photo")).toBeUndefined();
-  stop();
 });
 
 it("shares directory reads, resolves merged identities, and advertises uploaded and email-backed photos", async () => {
-  const reply = createDeferred<UsersListResult>();
-  const request = vi.fn(() => reply.promise);
-  const { gateway, directory, stop: first } = setup(request);
+  const { gateway, directory, stop: first, request, reply } = pendingDirectory();
   const second = profileDirectory(gateway).subscribe(vi.fn());
   expect(request).toHaveBeenCalledTimes(1);
   expect(profileAvatarUrl(directory.get("photo"))).toBeUndefined();
@@ -120,9 +119,7 @@ it("shares directory reads, resolves merged identities, and advertises uploaded 
 });
 
 it("retires directory facts and ignores pending replies when the connection is replaced", async () => {
-  const reply = createDeferred<UsersListResult>();
-  const request = vi.fn(() => reply.promise);
-  const { publish, directory, stop } = setup(request);
+  const { publish, directory, stop, reply } = pendingDirectory();
   const old = directory.load();
   publish({ phase: "offline" });
   reply.resolve({ profiles: [photo] });
@@ -140,7 +137,7 @@ it("retires directory facts and ignores pending replies when the connection is r
 
 it("waits for roster access while a profile-only guest stays on known identity", async () => {
   const request = vi.fn(async () => ({ profiles: [photo] }));
-  const { publish, directory, stop } = setup(request, {
+  const { publish, directory } = setup(request, {
     hello: gatewayHelloForMethods(["users.list"], ["operator.sessions.write"]),
   });
   await directory.load();
@@ -151,5 +148,4 @@ it("waits for roster access while a profile-only guest stays on known identity",
   await directory.load();
   expect(request).toHaveBeenCalledTimes(1);
   expect(profileAvatarUrl(directory.get("photo"))).toBe("/api/users/photo/avatar?v=7");
-  stop();
 });
