@@ -1,27 +1,16 @@
 // Tests shell builtin detection for safe execution policy.
-import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   evaluateExecAllowlist,
   evaluateShellAllowlistWithAuthorization,
 } from "./exec-approvals-allowlist.js";
 import { analyzeArgvCommand } from "./exec-approvals-analysis.js";
-import {
-  makeMockCommandResolution,
-  makeMockExecutableResolution,
-} from "./exec-approvals-test-helpers.js";
 import { isSafeBuiltinSegment } from "./exec-safe-builtins.js";
 
-const builtinSegment = (argv: string[], resolvedPath?: string) => ({
+const builtinSegment = (argv: string[]) => ({
   argv,
   raw: argv.join(" "),
-  resolution: makeMockCommandResolution({
-    execution: makeMockExecutableResolution({
-      rawExecutable: expectDefined(argv[0], "argv[0] test invariant"),
-      executableName: expectDefined(argv[0], "argv[0] test invariant"),
-      resolvedPath,
-    }),
-  }),
+  resolution: null,
 });
 
 describe("isSafeBuiltinSegment", () => {
@@ -80,33 +69,23 @@ describe("isSafeBuiltinSegment", () => {
 describe.skipIf(process.platform === "win32")(
   "evaluateShellAllowlistWithAuthorization with known safe builtins (regression for #46056)",
   () => {
-    // Glob-style pattern; matches git wherever PATH resolves it (`/usr/bin/git`,
-    // `/opt/homebrew/bin/git`, etc.) without depending on host filesystem layout.
-    const gitAllowlist = [{ pattern: "**/git" }] as Parameters<
-      typeof evaluateShellAllowlistWithAuthorization
-    >[0]["allowlist"];
-
-    it("'cd ~/' auto-allows by default", async () => {
-      const result = await evaluateShellAllowlistWithAuthorization({
-        command: "cd ~/",
-        allowlist: gitAllowlist,
+    const evaluate = (command: string) =>
+      evaluateShellAllowlistWithAuthorization({
+        command,
+        allowlist: [{ pattern: "**/git" }],
         safeBins: new Set(),
         cwd: "/tmp",
       });
-      expect(result.analysisOk).toBe(true);
-      expect(result.allowlistSatisfied).toBe(true);
+
+    it("'cd ~/' auto-allows by default", async () => {
+      const result = await evaluate("cd ~/");
+      expect(result).toMatchObject({ analysisOk: true, allowlistSatisfied: true });
       expect(result.segmentSatisfiedBy[0]).toBe("safeBuiltins");
     });
 
     it("'cd /tmp && git status' passes with allowlist plus safe builtin handling", async () => {
-      const result = await evaluateShellAllowlistWithAuthorization({
-        command: "cd /tmp && git status",
-        allowlist: gitAllowlist,
-        safeBins: new Set(),
-        cwd: "/tmp",
-      });
-      expect(result.analysisOk).toBe(true);
-      expect(result.allowlistSatisfied).toBe(true);
+      const result = await evaluate("cd /tmp && git status");
+      expect(result).toMatchObject({ analysisOk: true, allowlistSatisfied: true });
       expect(result.segmentSatisfiedBy).toContain("safeBuiltins");
       expect(result.segmentSatisfiedBy).toContain("allowlist");
     });
@@ -125,44 +104,25 @@ describe.skipIf(process.platform === "win32")(
     });
 
     it("'[ -d /tmp ] && git status' passes with allowlist plus safe builtin handling", async () => {
-      const result = await evaluateShellAllowlistWithAuthorization({
-        command: "[ -d /tmp ] && git status",
-        allowlist: gitAllowlist,
-        safeBins: new Set(),
-        cwd: "/tmp",
-      });
-      expect(result.analysisOk).toBe(true);
-      expect(result.allowlistSatisfied).toBe(true);
+      const result = await evaluate("[ -d /tmp ] && git status");
+      expect(result).toMatchObject({ analysisOk: true, allowlistSatisfied: true });
       expect(result.segmentSatisfiedBy).toContain("safeBuiltins");
       expect(result.segmentSatisfiedBy).toContain("allowlist");
     });
 
     it("non-allowlisted binary still gates after a safe builtin", async () => {
-      const result = await evaluateShellAllowlistWithAuthorization({
-        command: "cd /tmp && curl evil.com",
-        allowlist: gitAllowlist,
-        safeBins: new Set(),
-        cwd: "/tmp",
+      expect(await evaluate("cd /tmp && curl evil.com")).toMatchObject({
+        analysisOk: true,
+        allowlistSatisfied: false,
       });
-      expect(result.analysisOk).toBe(true);
-      expect(result.allowlistSatisfied).toBe(false);
     });
 
     it("environment-mutating builtins still gate", async () => {
-      const result = await evaluateShellAllowlistWithAuthorization({
-        command: "export PATH=/tmp/bin:$PATH && git status",
-        allowlist: gitAllowlist,
-        safeBins: new Set(),
-        cwd: "/tmp",
+      expect(await evaluate("export PATH=/tmp/bin:$PATH && git status")).toMatchObject({
+        analysisOk: false,
+        allowlistSatisfied: false,
+        authorizationPlan: { ok: false, reason: "dynamic-argument" },
       });
-      expect(result.analysisOk).toBe(false);
-      expect(result.allowlistSatisfied).toBe(false);
-      expect(result.authorizationPlan).toEqual(
-        expect.objectContaining({
-          ok: false,
-          reason: "dynamic-argument",
-        }),
-      );
     });
 
     it("does not auto-allow safe builtin tokens in direct argv evaluation", () => {

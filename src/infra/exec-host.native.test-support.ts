@@ -35,6 +35,10 @@ const request: ExecHostRequest = {
   needsScreenRecording: false,
 };
 
+function send(payload: ExecHostRequest, socketPath = nativeSocket) {
+  return requestExecHostViaSocket({ socketPath, token, request: payload, timeoutMs: 10_000 });
+}
+
 async function waitForStart() {
   const deadline = Date.now() + 3_000;
   while (Date.now() < deadline) {
@@ -66,11 +70,10 @@ async function withDeadline<T>(promise: Promise<T>, ms: number): Promise<T> {
   }
 }
 
-const success = await requestExecHostViaSocket({
-  socketPath: nativeSocket,
-  token,
-  request: { command: ["/bin/echo", "native-success"], cwd: root, timeoutMs: 5_000 },
-  timeoutMs: 10_000,
+const success = await send({
+  command: ["/bin/echo", "native-success"],
+  cwd: root,
+  timeoutMs: 5_000,
 });
 assert.equal(success?.ok, true);
 if (success?.ok) {
@@ -78,12 +81,7 @@ if (success?.ok) {
   assert.equal(success.payload.exitCode, 0);
   assert.equal(success.payload.stdout, "native-success\n");
 }
-const denied = await requestExecHostViaSocket({
-  socketPath: nativeSocket,
-  token,
-  request: { ...request, agentId: "denied" },
-  timeoutMs: 10_000,
-});
+const denied = await send({ ...request, agentId: "denied" });
 assert.equal(denied?.ok, false);
 if (denied && !denied.ok) {
   assert.equal(denied.error.reason, "security=deny");
@@ -128,12 +126,7 @@ try {
   const listening = once(proxy, "listening");
   proxy.listen(proxySocket);
   await listening;
-  const outcome = requestExecHostViaSocket({
-    socketPath: proxySocket,
-    token,
-    request,
-    timeoutMs: 10_000,
-  });
+  const outcome = send(request, proxySocket);
   const caller = await withDeadline(forwarded.promise, 3_000);
   await waitForStart();
   order.push("native-started");

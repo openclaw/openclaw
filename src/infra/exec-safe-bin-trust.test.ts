@@ -17,6 +17,13 @@ function swapAsciiCase(value: string): string {
   });
 }
 
+function trusts(binDir: string, trustedDir: string) {
+  return isTrustedSafeBinPath({
+    resolvedPath: path.join(binDir, "jq"),
+    trustedDirs: getTrustedSafeBinDirs({ baseDirs: [], extraDirs: [trustedDir] }),
+  });
+}
+
 describe("exec safe bin trust", () => {
   it("keeps default trusted dirs limited to immutable system paths", () => {
     const dirs = getTrustedSafeBinDirs();
@@ -62,27 +69,11 @@ describe("exec safe bin trust", () => {
         return;
       }
       const originalStat = await fs.stat(dir);
-      let swappedStat: Awaited<ReturnType<typeof fs.stat>>;
-      try {
-        swappedStat = await fs.stat(swapped);
-      } catch {
+      const swappedStat = await fs.stat(swapped).catch(() => null);
+      if (originalStat.dev !== swappedStat?.dev || originalStat.ino !== swappedStat?.ino) {
         return;
       }
-      if (originalStat.dev !== swappedStat.dev || originalStat.ino !== swappedStat.ino) {
-        return;
-      }
-
-      const dirs = getTrustedSafeBinDirs({
-        baseDirs: [],
-        extraDirs: [swapped],
-      });
-
-      expect(
-        isTrustedSafeBinPath({
-          resolvedPath: path.join(dir, "jq"),
-          trustedDirs: dirs,
-        }),
-      ).toBe(true);
+      expect(trusts(dir, swapped)).toBe(true);
     });
   });
 
@@ -96,18 +87,7 @@ describe("exec safe bin trust", () => {
       } catch {
         return;
       }
-
-      const dirs = getTrustedSafeBinDirs({
-        baseDirs: [],
-        extraDirs: [trustedDir],
-      });
-
-      expect(
-        isTrustedSafeBinPath({
-          resolvedPath: path.join(untrustedDir, "jq"),
-          trustedDirs: dirs,
-        }),
-      ).toBe(false);
+      expect(trusts(untrustedDir, trustedDir)).toBe(false);
     });
   });
 

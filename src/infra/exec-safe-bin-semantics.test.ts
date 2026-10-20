@@ -5,50 +5,30 @@ import {
   validateSafeBinSemantics,
 } from "./exec-safe-bin-semantics.js";
 
+function expectDenied(binName: string, program: string) {
+  expect(validateSafeBinSemantics({ binName, positional: [program] })).toBe(false);
+}
+
 describe("exec safe-bin semantics", () => {
   it("rejects jq programs even when configured via path-like entries", () => {
-    expect(
-      validateSafeBinSemantics({
-        binName: "jq",
-        positional: [".foo"],
-      }),
-    ).toBe(false);
-    expect(
-      validateSafeBinSemantics({
-        binName: "/usr/local/bin/jq",
-        positional: ["{include: .foo, import : .bar}"],
-      }),
-    ).toBe(false);
+    expectDenied("jq", ".foo");
+    expectDenied("/usr/local/bin/jq", "{include: .foo, import : .bar}");
   });
 
   it("rejects awk and sed variants even when configured via path-like entries", () => {
-    expect(
-      validateSafeBinSemantics({
-        binName: "/opt/homebrew/bin/gawk",
-        positional: ['BEGIN { system("id") }'],
-      }),
-    ).toBe(false);
-    expect(
-      validateSafeBinSemantics({
-        binName: "C:\\Tools\\mawk.exe",
-        positional: ['BEGIN { print ENVIRON["HOME"] }'],
-      }),
-    ).toBe(false);
-    expect(
-      validateSafeBinSemantics({
-        binName: "nawk",
-        positional: ['BEGIN { print "hi" > "/tmp/out" }'],
-      }),
-    ).toBe(false);
-    expect(
-      validateSafeBinSemantics({
-        binName: "/usr/local/bin/gsed",
-        positional: ["e"],
-      }),
-    ).toBe(false);
+    expectDenied("/opt/homebrew/bin/gawk", 'BEGIN { system("id") }');
+    expectDenied("C:\\Tools\\mawk.exe", 'BEGIN { print ENVIRON["HOME"] }');
+    expectDenied("nawk", 'BEGIN { print "hi" > "/tmp/out" }');
+    expectDenied("/usr/local/bin/gsed", "e");
   });
 
   it("reports normalized risky configured safe bins once per executable family member", () => {
+    const awk =
+      "awk-family interpreters can execute commands, access ENVIRON, and write files, so prefer explicit allowlist entries or approval-gated runs instead of safeBins.";
+    const sed =
+      "sed scripts can execute commands and write files, so prefer explicit allowlist entries or approval-gated runs instead of safeBins.";
+    const jq =
+      "jq can read environment data and load jq code from modules or startup files, so prefer explicit allowlist entries or approval-gated runs instead of safeBins.";
     expect(
       listRiskyConfiguredSafeBins([
         " Awk ",
@@ -61,41 +41,13 @@ describe("exec safe-bin semantics", () => {
         "jq",
       ]),
     ).toEqual([
-      {
-        bin: "awk",
-        warning:
-          "awk-family interpreters can execute commands, access ENVIRON, and write files, so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
-      },
-      {
-        bin: "gawk",
-        warning:
-          "awk-family interpreters can execute commands, access ENVIRON, and write files, so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
-      },
-      {
-        bin: "gsed",
-        warning:
-          "sed scripts can execute commands and write files, so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
-      },
-      {
-        bin: "jq",
-        warning:
-          "jq can read environment data and load jq code from modules or startup files, so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
-      },
-      {
-        bin: "mawk",
-        warning:
-          "awk-family interpreters can execute commands, access ENVIRON, and write files, so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
-      },
-      {
-        bin: "nawk",
-        warning:
-          "awk-family interpreters can execute commands, access ENVIRON, and write files, so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
-      },
-      {
-        bin: "sed",
-        warning:
-          "sed scripts can execute commands and write files, so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
-      },
+      { bin: "awk", warning: awk },
+      { bin: "gawk", warning: awk },
+      { bin: "gsed", warning: sed },
+      { bin: "jq", warning: jq },
+      { bin: "mawk", warning: awk },
+      { bin: "nawk", warning: awk },
+      { bin: "sed", warning: sed },
     ]);
   });
 });
