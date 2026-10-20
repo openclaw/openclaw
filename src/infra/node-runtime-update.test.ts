@@ -26,6 +26,40 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+const targetRuntime = {
+  env: { CI: "1", OPENCLAW_NODE_UPDATE_RESPAWNED: "1" },
+  acceptVersion: (version: string) => version.startsWith("26."),
+  nodeVersion: "26.8.1",
+};
+const privateNode = (root: string) =>
+  path.join(
+    root,
+    "tools",
+    "cli-node",
+    "tools",
+    "node",
+    ...(process.platform === "win32" ? ["node.exe"] : ["bin", "node"]),
+  );
+
+async function writeRuntime(candidate: string, contents: string) {
+  await fs.mkdir(path.dirname(candidate), { recursive: true });
+  await fs.writeFile(candidate, contents);
+}
+
+function probeResult(version: string): SpawnSyncReturns<string> {
+  return {
+    pid: 100,
+    status: 0,
+    signal: null,
+    output: [],
+    stderr: "",
+    stdout: JSON.stringify({
+      version,
+      probe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+    }),
+  };
+}
+
 it.each([
   ["healthy supported", "26.8.1", true],
   ["broken supported", "26.8.1", false],
@@ -38,13 +72,8 @@ it.each([
     await vi.importActual<typeof import("node:child_process")>("node:child_process");
   await withTempDir("openclaw-node-recovery-", async (directory) => {
     const home = await fs.realpath(directory);
-    const nodeRoot = path.join(home, ".openclaw", "tools", "cli-node", "tools", "node");
-    const candidate =
-      process.platform === "win32"
-        ? path.join(nodeRoot, "node.exe")
-        : path.join(nodeRoot, "bin", "node");
-    await fs.mkdir(path.dirname(candidate), { recursive: true });
-    await fs.writeFile(candidate, "synthetic runtime; the probe uses the current Node");
+    const candidate = privateNode(path.join(home, ".openclaw"));
+    await writeRuntime(candidate, "synthetic runtime; the probe uses the current Node");
     const preload = path.join(home, "binding.mjs");
     await fs.writeFile(
       preload,
@@ -97,41 +126,22 @@ it.each([true, false])(
   async (compatible) => {
     await withTempDir("openclaw-node-target-", async (directory) => {
       const root = path.join(await fs.realpath(directory), ".openclaw");
-      const candidate = path.join(
-        root,
-        "tools",
-        "cli-node",
-        "tools",
-        "node",
-        ...(process.platform === "win32" ? ["node.exe"] : ["bin", "node"]),
-      );
-      await fs.mkdir(path.dirname(candidate), { recursive: true });
-      await fs.writeFile(candidate, "existing private Node");
+      const candidate = privateNode(root);
+      await writeRuntime(candidate, "existing private Node");
       let installed = false;
-      mocks.spawn.mockImplementation(() => ({
-        pid: 100,
-        status: 0,
-        signal: null,
-        output: [],
-        stderr: "",
-        stdout: JSON.stringify({
-          version: installed && compatible ? "26.8.1" : "24.19.0",
-          probe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
-        }),
-      }));
-      const env = { CI: "1", OPENCLAW_NODE_UPDATE_RESPAWNED: "1" };
+      mocks.spawn.mockImplementation(() =>
+        probeResult(installed && compatible ? "26.8.1" : "24.19.0"),
+      );
       const installCommand = vi.fn(
         async (_command: string, args: string[], installEnv: NodeJS.ProcessEnv) => {
           expect(args).toContain("26.8.1");
-          expect(installEnv).toEqual(env);
+          expect(installEnv).toEqual(targetRuntime.env);
           installed = true;
           return 0;
         },
       );
       const result = await resolveUpdatedNodeRuntime(root, {
-        env,
-        acceptVersion: (version) => version.startsWith("26."),
-        nodeVersion: "26.8.1",
+        ...targetRuntime,
         installCommand,
       });
       expect(installCommand).toHaveBeenCalledOnce();
@@ -152,21 +162,12 @@ it.skipIf(process.platform === "win32").each(["compatible", "incompatible", "mis
       const newNode = path.join(newRoot, "bin", "node");
       const alias = path.join(tools, "node");
       for (const node of [oldNode, newNode]) {
-        await fs.mkdir(path.dirname(node), { recursive: true });
-        await fs.writeFile(node, "private runtime fixture");
+        await writeRuntime(node, "private runtime fixture");
       }
       await fs.symlink(path.basename(oldRoot), alias, "dir");
-      mocks.spawn.mockImplementation((file) => ({
-        pid: 100,
-        status: 0,
-        signal: null,
-        output: [],
-        stderr: "",
-        stdout: JSON.stringify({
-          version: file === newNode && outcome === "compatible" ? "26.8.1" : "24.19.0",
-          probe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
-        }),
-      }));
+      mocks.spawn.mockImplementation((file) =>
+        probeResult(file === newNode && outcome === "compatible" ? "26.8.1" : "24.19.0"),
+      );
       const installCommand = vi.fn(async () => {
         await fs.unlink(alias);
         if (outcome !== "missing") {
@@ -175,9 +176,7 @@ it.skipIf(process.platform === "win32").each(["compatible", "incompatible", "mis
         return 0;
       });
       const result = await resolveUpdatedNodeRuntime(root, {
-        env: { CI: "1", OPENCLAW_NODE_UPDATE_RESPAWNED: "1" },
-        acceptVersion: (version) => version.startsWith("26."),
-        nodeVersion: "26.8.1",
+        ...targetRuntime,
         installCommand,
       });
       expect(installCommand).toHaveBeenCalledOnce();

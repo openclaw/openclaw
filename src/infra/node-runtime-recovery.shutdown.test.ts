@@ -37,6 +37,32 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
+function respawn(env: NodeJS.ProcessEnv = {}) {
+  completion = runRespawnedChild(
+    resolveOpenClawCliRespawn({
+      execPath: "node",
+      entryPath: "child.mjs",
+      execArgv: [],
+      args: [],
+      env,
+    }),
+  );
+  return completion;
+}
+
+function configureProcess(platform: NodeJS.Platform, args: readonly string[]) {
+  vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+  vi.spyOn(process, "argv", "get").mockReturnValue(["node", "openclaw.mjs", ...args]);
+}
+
+function expectExitSignal(platform: NodeJS.Platform, signal: NodeJS.Signals) {
+  if (platform === "win32") {
+    expect(processKill).not.toHaveBeenCalled();
+  } else {
+    expect(processKill).toHaveBeenCalledExactlyOnceWith(process.pid, signal);
+  }
+}
+
 it.each([
   { platform: "linux", args: ["gateway", "run"], nativeBudgetMs: 330_000 },
   { platform: "darwin", args: ["gateway"], nativeBudgetMs: 330_000 },
@@ -45,41 +71,21 @@ it.each([
 ] as const)(
   "bounds $platform $args shutdown without preempting the serving owner",
   async ({ platform, args, nativeBudgetMs }) => {
-    vi.spyOn(process, "platform", "get").mockReturnValue(platform);
-    vi.spyOn(process, "argv", "get").mockReturnValue([
-      "node",
-      "openclaw.mjs",
-      "--profile=fixture",
-      ...args,
-    ]);
+    configureProcess(platform, ["--profile=fixture", ...args]);
     const previous = new Set(process.listeners("SIGTERM"));
-    completion = runRespawnedChild(
-      resolveOpenClawCliRespawn({
-        execPath: "node",
-        entryPath: "child.mjs",
-        execArgv: [],
-        args: [],
-        env: {
-          OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.fixture",
-          XPC_SERVICE_NAME: "ai.openclaw.fixture",
-        },
-      }),
-    );
+    const env = {
+      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.fixture",
+      XPC_SERVICE_NAME: "ai.openclaw.fixture",
+    };
+    const active = respawn(env);
     let completed = false;
-    void completion.then(() => {
+    void active.then(() => {
       completed = true;
     });
-    // No new environment contract is needed to give newly started launchers the
-    // full service budget; legacy parent compatibility stays with the Gateway.
     expect(spawn).toHaveBeenCalledExactlyOnceWith(
       "node",
       ["--import", CLI_PARENT_BOUND_PRELOAD, "child.mjs"],
-      expect.objectContaining({
-        env: {
-          OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.fixture",
-          XPC_SERVICE_NAME: "ai.openclaw.fixture",
-        },
-      }),
+      expect.objectContaining({ env }),
     );
     const signal = process.listeners("SIGTERM").find((listener) => !previous.has(listener));
     expect(signal).toBeDefined();
@@ -103,11 +109,7 @@ it.each([
     child.emit("close", null, childSignal);
     await expect(completion).resolves.toBe(true);
     expect(process.exitCode).toBe(platform === "win32" ? 1 : 137);
-    if (platform === "win32") {
-      expect(processKill).not.toHaveBeenCalled();
-    } else {
-      expect(processKill).toHaveBeenCalledExactlyOnceWith(process.pid, childSignal);
-    }
+    expectExitSignal(platform, childSignal);
     expect(process.listeners("SIGTERM")).toEqual([...previous]);
   },
 );
@@ -122,18 +124,9 @@ it.each([
 ] as const)(
   "records actual $platform $childSignal only after pipes close",
   async ({ platform, childSignal, expected }) => {
-    vi.spyOn(process, "platform", "get").mockReturnValue(platform);
-    vi.spyOn(process, "argv", "get").mockReturnValue(["node", "openclaw.mjs", "gateway"]);
+    configureProcess(platform, ["gateway"]);
     const previous = process.listeners("SIGTERM");
-    completion = runRespawnedChild(
-      resolveOpenClawCliRespawn({
-        execPath: "node",
-        entryPath: "child.mjs",
-        execArgv: [],
-        args: [],
-        env: {},
-      }),
-    );
+    respawn();
     const forward = process.listeners("SIGTERM").find((listener) => !previous.includes(listener))!;
     forward("SIGTERM");
     child.emit("exit", null, childSignal);
@@ -145,11 +138,7 @@ it.each([
     child.emit("close", null, childSignal);
     await expect(completion).resolves.toBe(true);
     expect(process.exitCode).toBe(expected);
-    if (platform === "win32") {
-      expect(processKill).not.toHaveBeenCalled();
-    } else {
-      expect(processKill).toHaveBeenCalledExactlyOnceWith(process.pid, childSignal);
-    }
+    expectExitSignal(platform, childSignal);
     expect(process.listeners("SIGTERM")).toEqual(previous);
   },
 );

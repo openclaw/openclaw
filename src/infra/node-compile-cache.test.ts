@@ -11,19 +11,32 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const MiB = 1024 * 1024;
+const run = promisify(execFile);
+const helperUrl = new URL("../../node-compile-cache.mjs", import.meta.url);
+const modulePath = fileURLToPath(helperUrl);
+const evalModule = (script: string, env: NodeJS.ProcessEnv = {}) =>
+  run(process.execPath, ["--input-type=module", "--eval", script], { env });
+
+async function cacheFixture(prefix: string) {
+  const root = tempDirs.make(prefix);
+  const cache = path.join(root, "openclaw");
+  const directory = path.join(cache, "2026.9.6", "1000-100");
+  await fs.mkdir(directory, { recursive: true });
+  return { root, cache, directory };
+}
 
 it("remains synchronously importable from CommonJS bundles", async () => {
   const root = tempDirs.make("openclaw-cache-commonjs-");
   const outfile = path.join(root, "cache.cjs");
   await build({
-    entryPoints: [fileURLToPath(new URL("../../node-compile-cache.mjs", import.meta.url))],
+    entryPoints: [modulePath],
     outfile,
     bundle: true,
     platform: "node",
     format: "cjs",
     logLevel: "silent",
   });
-  await promisify(execFile)(process.execPath, ["-e", `require(${JSON.stringify(outfile)})`], {
+  await run(process.execPath, ["-e", `require(${JSON.stringify(outfile)})`], {
     env: {},
   });
 });
@@ -54,7 +67,6 @@ it("prewarms the release graph, respecting the disabled cache policy", async () 
   );
   const env: NodeJS.ProcessEnv = { ...process.env, NODE_COMPILE_CACHE: cache };
   delete env.NODE_DISABLE_COMPILE_CACHE;
-  const run = promisify(execFile);
   await run(process.execPath, [launcher], { env: { ...env, NODE_DISABLE_COMPILE_CACHE: "1" } });
   await expect(fs.stat(path.join(root, "loaded"))).rejects.toMatchObject({ code: "ENOENT" });
   // Start without an inherited native cache so the release owner chooses its namespace.
@@ -73,14 +85,13 @@ it.each([false, true])(
     const cache = path.join(root, "cache");
     await fs.writeFile(path.join(root, "first.mjs"), "export const value = 1;\n");
     await fs.writeFile(path.join(root, "later.mjs"), "export const value = 2;\n");
-    const helperUrl = new URL("../../node-compile-cache.mjs", import.meta.url).href;
     const script = `
       import assert from "node:assert/strict";
       import { readdirSync } from "node:fs";
       import { enableCompileCache, getCompileCacheDir } from "node:module";
       import { setImmediate as nextTurn } from "node:timers/promises";
       import { pathToFileURL } from "node:url";
-      import { scheduleOpenClawCompileCacheFlush } from ${JSON.stringify(helperUrl)};
+      import { scheduleOpenClawCompileCacheFlush } from ${JSON.stringify(helperUrl.href)};
       enableCompileCache(${JSON.stringify(cache)});
       const directory = getCompileCacheDir();
       const entries = () => directory
@@ -105,11 +116,7 @@ it.each([false, true])(
     if (disabled) {
       env.NODE_DISABLE_COMPILE_CACHE = "1";
     }
-    const { stdout } = await promisify(execFile)(
-      process.execPath,
-      ["--input-type=module", "--eval", script],
-      { env },
-    );
+    const { stdout } = await evalModule(script, env);
     const observed = JSON.parse(stdout);
     if (disabled) {
       expect(observed).toEqual({ enabled: false, first: 0, later: 0 });
@@ -123,15 +130,7 @@ it.each([false, true])(
 );
 
 async function maintainCompileCache(directory: string) {
-  await promisify(execFile)(
-    process.execPath,
-    [
-      fileURLToPath(new URL("../../node-compile-cache.mjs", import.meta.url)),
-      "--maintain",
-      directory,
-    ],
-    { env: {} },
-  );
+  await run(process.execPath, [modulePath, "--maintain", directory], { env: {} });
 }
 
 it.each([
@@ -193,11 +192,8 @@ it("keeps inherited cache namespaces flat and retains recently prepared builds",
 });
 
 it("prunes old bytecode and caps 600 MiB across releases without touching neighboring caches", async () => {
-  const root = tempDirs.make("openclaw-cache-retention-");
-  const cache = path.join(root, "openclaw");
-  const directory = path.join(cache, "2026.9.6", "1000-100");
+  const { root, cache, directory } = await cacheFixture("openclaw-cache-retention-");
   const candidate = path.join(cache, "2026.9.7", "2000-100");
-  await fs.mkdir(directory, { recursive: true });
   await fs.mkdir(candidate, { recursive: true });
   await fs.writeFile(path.join(root, "another-app"), "keep");
   for (let index = 0; index < 6; index++) {
@@ -222,31 +218,19 @@ it("prunes old bytecode and caps 600 MiB across releases without touching neighb
 });
 
 it("leaves failed pruning eligible for the next invocation", async () => {
-  const root = tempDirs.make("openclaw-cache-failed-");
-  const cache = path.join(root, "openclaw");
-  const directory = path.join(cache, "2026.9.6", "1000-100");
-  await fs.mkdir(directory, { recursive: true });
+  const { cache, directory } = await cacheFixture("openclaw-cache-failed-");
   const file = path.join(directory, "oversized");
   await sparseFile(file, 600 * MiB);
   await fs.utimes(cache, new Date(0), new Date(0));
-  const modulePath = fileURLToPath(new URL("../../node-compile-cache.mjs", import.meta.url));
-  const { stdout } = await promisify(execFile)(
-    process.execPath,
-    [
-      "--input-type=module",
-      "--eval",
-      `
+  const { stdout } = await evalModule(`
     import fs from "node:fs/promises";
     fs.unlink = async () => {
       process.stdout.write(String((await fs.stat(${JSON.stringify(cache)})).mtimeMs));
       throw Object.assign(new Error("denied"), { code: "EACCES" });
     };
     process.argv = [process.execPath, ${JSON.stringify(modulePath)}, "--maintain", ${JSON.stringify(directory)}];
-    await import(${JSON.stringify(new URL("../../node-compile-cache.mjs", import.meta.url).href)});
-  `,
-    ],
-    { env: {} },
-  );
+    await import(${JSON.stringify(helperUrl.href)});
+  `);
   expect(stdout).toBe("0");
   expect((await fs.stat(cache)).mtimeMs).toBe(0);
   expect((await fs.stat(file)).size).toBe(600 * MiB);
@@ -256,18 +240,9 @@ it("leaves failed pruning eligible for the next invocation", async () => {
 });
 
 it("makes bounded progress through tiny entries without claiming an incomplete pass", async () => {
-  const root = tempDirs.make("openclaw-cache-bounded-");
-  const cache = path.join(root, "openclaw");
-  const directory = path.join(cache, "2026.9.6", "1000-100");
-  await fs.mkdir(directory, { recursive: true });
+  const { cache, directory } = await cacheFixture("openclaw-cache-bounded-");
   await fs.utimes(cache, new Date(0), new Date(0));
-  const modulePath = fileURLToPath(new URL("../../node-compile-cache.mjs", import.meta.url));
-  const { stdout } = await promisify(execFile)(
-    process.execPath,
-    [
-      "--input-type=module",
-      "--eval",
-      `
+  const { stdout } = await evalModule(`
     import fs from "node:fs/promises";
     import path from "node:path";
     const cache = ${JSON.stringify(cache)};
@@ -291,15 +266,12 @@ it("makes bounded progress through tiny entries without claiming an incomplete p
     for (let pass = 0; pass < 2; pass++) {
       visited = 0;
       const completion = new Promise(resolve => { finished = resolve; });
-      await import(${JSON.stringify(new URL("../../node-compile-cache.mjs", import.meta.url).href)} + "?pass=" + pass);
+      await import(${JSON.stringify(helperUrl.href)} + "?pass=" + pass);
       await completion;
       results.push({ visited, remaining: files.size, mtimeMs: (await fs.stat(cache)).mtimeMs });
     }
     process.stdout.write(JSON.stringify(results));
-  `,
-    ],
-    { env: {} },
-  );
+  `);
   const [partial, completed] = JSON.parse(stdout);
   expect(partial.visited).toBeLessThanOrEqual(16_385);
   expect(partial.remaining).toBeLessThan(20_000);

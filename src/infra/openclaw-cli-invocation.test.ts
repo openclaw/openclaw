@@ -17,6 +17,10 @@ const repoSourceEntry = path.join(repoRoot, "src", "entry.ts");
 const trustedTsxLoader = pathToFileURL(requireFromHere.resolve("tsx", { paths: [repoRoot] })).href;
 const sourceEnv = { TSX_TSCONFIG_PATH: path.join(repoRoot, "tsconfig.json") };
 const commandArgs = ["sessions", "export-trajectory"];
+const invoke = (options: Parameters<typeof resolveCurrentOpenClawCliInvocation>[1]) =>
+  resolveCurrentOpenClawCliInvocation(commandArgs, options);
+const writePackage = (root: string) =>
+  writeFile(path.join(root, "package.json"), '{"name":"openclaw"}');
 
 describe("resolveCurrentOpenClawCliInvocation", () => {
   it.each(["sidecar", "foreign checkout"])(
@@ -25,7 +29,7 @@ describe("resolveCurrentOpenClawCliInvocation", () => {
       await withTempDir("openclaw-cli-standalone-", async (root) => {
         const packageRoot = path.join(root, "runtime");
         await mkdir(packageRoot);
-        await writeFile(path.join(packageRoot, "package.json"), '{"name":"openclaw"}');
+        await writePackage(packageRoot);
         const execPath = path.join(root, "openclaw");
         await writeFile(
           path.join(root, "manifest.json"),
@@ -39,7 +43,7 @@ describe("resolveCurrentOpenClawCliInvocation", () => {
           }),
         );
         expect(
-          resolveCurrentOpenClawCliInvocation(commandArgs, {
+          invoke({
             execPath,
             argv1:
               cwdKind === "sidecar"
@@ -70,18 +74,15 @@ describe("resolveCurrentOpenClawCliInvocation", () => {
     ).toEqual(["--import", "/loader.mjs", "--trace-warnings"]);
   });
 
-  it.each([
-    { execPath: resolveTestNodeExecPath(), tsxArgs: ["--import", "tsx"] },
-    { execPath: resolveTestNodeExecPath(), tsxArgs: ["--import=tsx"] },
-  ])(
-    "pins the source parent's TSX import while preserving other runtime hooks: $execPath $tsxArgs",
-    ({ execPath, tsxArgs }) => {
+  it.each([{ tsxArgs: ["--import", "tsx"] }, { tsxArgs: ["--import=tsx"] }])(
+    "pins the source parent's TSX import while preserving other runtime hooks: %j",
+    ({ tsxArgs }) => {
       const runtimeArgs = ["--trace-warnings", "--import", "/other-loader.mjs"];
-      const invocation = resolveCurrentOpenClawCliInvocation(commandArgs, {
+      const invocation = invoke({
         argv1: repoSourceEntry,
         cwd: repoRoot,
         execArgv: [...runtimeArgs, ...tsxArgs],
-        execPath,
+        execPath: resolveTestNodeExecPath(),
       });
       expect(invocation.args).toEqual([
         ...runtimeArgs,
@@ -96,7 +97,7 @@ describe("resolveCurrentOpenClawCliInvocation", () => {
 
   it("uses the source entry directly under Bun", () => {
     expect(
-      resolveCurrentOpenClawCliInvocation(commandArgs, {
+      invoke({
         argv1: path.join(repoRoot, "scripts", "test-live.mts"),
         cwd: repoRoot,
         execPath: "/usr/local/bin/bun",
@@ -116,7 +117,7 @@ describe("resolveCurrentOpenClawCliInvocation", () => {
         const releaseB = path.join(await realpath(root), "release-b");
         for (const release of [releaseA, releaseB]) {
           await mkdir(path.join(release, "dist"), { recursive: true });
-          await writeFile(path.join(release, "package.json"), '{"name":"openclaw"}');
+          await writePackage(release);
           await writeFile(path.join(release, "openclaw.mjs"), "export {};\n");
           await writeFile(path.join(release, "dist", "index.js"), "export {};\n");
         }
@@ -146,38 +147,29 @@ describe("resolveCurrentOpenClawCliInvocation", () => {
     },
   );
 
-  it.each(["/usr/bin/node"])(
-    "uses the installed wrapper under %s and canonical package cwd",
-    async (execPath) => {
-      await withTempDir("openclaw-cli-invocation-", async (packageRoot) => {
-        await writeFile(
-          path.join(packageRoot, "package.json"),
-          JSON.stringify({ name: "openclaw" }),
-        );
-        const moduleUrl = pathToFileURL(path.join(packageRoot, "dist", "tui", "index.js")).href;
-        expect(
-          resolveCurrentOpenClawCliInvocation(commandArgs, {
-            argv1: path.join(packageRoot, "bin", "host.mjs"),
-            cwd: path.join(packageRoot, "state"),
-            execPath,
-            moduleUrl,
-          }),
-        ).toEqual({
-          command: execPath,
-          args: [
-            ...(execPath.endsWith("/bun") ? ["--no-install"] : []),
-            path.join(packageRoot, "openclaw.mjs"),
-            ...commandArgs,
-          ],
-          cwd: packageRoot,
-        });
+  it("uses the installed wrapper under Node and canonical package cwd", async () => {
+    const execPath = "/usr/bin/node";
+    await withTempDir("openclaw-cli-invocation-", async (packageRoot) => {
+      await writePackage(packageRoot);
+      const moduleUrl = pathToFileURL(path.join(packageRoot, "dist", "tui", "index.js")).href;
+      expect(
+        invoke({
+          argv1: path.join(packageRoot, "bin", "host.mjs"),
+          cwd: path.join(packageRoot, "state"),
+          execPath,
+          moduleUrl,
+        }),
+      ).toEqual({
+        command: execPath,
+        args: [path.join(packageRoot, "openclaw.mjs"), ...commandArgs],
+        cwd: packageRoot,
       });
-    },
-  );
+    });
+  });
 
   it("does not preserve a foreign package entry", () => {
     expect(
-      resolveCurrentOpenClawCliInvocation(commandArgs, {
+      invoke({
         argv1: "/app/dist/index.js",
         cwd: repoRoot,
         execPath: "/usr/bin/node",

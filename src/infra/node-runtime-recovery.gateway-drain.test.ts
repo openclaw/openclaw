@@ -78,17 +78,17 @@ process.stdout.write("launcher-completed:" + handled + "\\n");
       stderr += data.toString();
     });
     let servingPid: number | undefined;
+    const waitFor = <T>(gate: Promise<T>, phase: string) =>
+      withinTest(
+        awaitGateBeforeSettlement(gate, closed, `launcher closed before ${phase}`),
+        signal,
+      );
     try {
-      const ready = JSON.parse(
-        await withinTest(
-          awaitGateBeforeSettlement(
-            readyLine.promise,
-            closed,
-            "launcher closed before the serving child was ready",
-          ),
-          signal,
-        ),
-      ) as { port: number; pid: number; parent: number };
+      const ready = JSON.parse(await waitFor(readyLine.promise, "the serving child was ready")) as {
+        port: number;
+        pid: number;
+        parent: number;
+      };
       servingPid = ready.pid;
       expect(ready.parent).toBe(child.pid);
       expect(servingPid).not.toBe(child.pid);
@@ -96,14 +96,7 @@ process.stdout.write("launcher-completed:" + handled + "\\n");
       const response = await fetch(url + "/work", { signal });
       const body = response.text().catch(() => "connection terminated before completion");
       child.kill("SIGTERM");
-      await withinTest(
-        awaitGateBeforeSettlement(
-          draining.promise,
-          closed,
-          "launcher closed before the serving child began draining",
-        ),
-        signal,
-      );
+      await waitFor(draining.promise, "the serving child began draining");
       const denied = await fetch(url + "/new-work", { signal });
       expect(denied.status).toBe(503);
       await denied.text();

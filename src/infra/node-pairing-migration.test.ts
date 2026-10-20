@@ -17,12 +17,27 @@ import { resolvePairingPaths } from "./pairing-files.js";
 
 const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-node-pairing-migration-" });
 
-async function seedNodeDevice(baseDir: string, deviceId: string): Promise<void> {
+async function fixture(deviceId: string) {
+  const baseDir = await suiteRootTracker.make("case");
   const request = await requestDevicePairing(
     { deviceId, publicKey: `pk-${deviceId}`, role: "node", roles: ["node"], scopes: [] },
     baseDir,
   );
   await approveDevicePairing(request.request.requestId, { callerScopes: [] }, baseDir);
+  const paths = resolvePairingPaths(baseDir, "nodes");
+  return { baseDir, ...paths };
+}
+
+const callerScopes = ["operator.pairing", "operator.write"];
+const legacyRow = (nodeId: string) => ({ nodeId, createdAtMs: 1_000, approvedAtMs: 2_000 });
+
+async function approveSurface(
+  baseDir: string,
+  nodeId: string,
+  surface: Omit<Parameters<typeof requestNodePairing>[0], "nodeId">,
+) {
+  const pending = await requestNodePairing({ ...surface, nodeId }, baseDir);
+  return approveNodePairing(pending.request.requestId, { callerScopes }, baseDir);
 }
 
 async function writeJson(filePath: string, value: unknown): Promise<void> {
@@ -31,9 +46,7 @@ async function writeJson(filePath: string, value: unknown): Promise<void> {
 }
 
 describe("migrateLegacyNodePairingStore", () => {
-  beforeAll(async () => {
-    await suiteRootTracker.setup();
-  });
+  beforeAll(() => suiteRootTracker.setup());
 
   afterAll(async () => {
     await closeStateDatabaseForTest();
@@ -41,24 +54,18 @@ describe("migrateLegacyNodePairingStore", () => {
   });
 
   test("folds legacy rows into device records, drops orphans, and archives files", async () => {
-    const baseDir = await suiteRootTracker.make("case");
-    await seedNodeDevice(baseDir, "node-kept");
-    const { pendingPath, pairedPath } = resolvePairingPaths(baseDir, "nodes");
+    const { baseDir, pendingPath, pairedPath } = await fixture("node-kept");
     await writeJson(pairedPath, {
       "node-kept": {
-        nodeId: "node-kept",
+        ...legacyRow("node-kept"),
         token: "retired-token",
         displayName: "Living Room iPad",
         caps: ["canvas", "screen"],
         commands: ["screen.snapshot", "system.run"],
-        createdAtMs: 1_000,
-        approvedAtMs: 2_000,
       },
       "node-orphaned": {
-        nodeId: "node-orphaned",
+        ...legacyRow("node-orphaned"),
         token: "orphaned-token",
-        createdAtMs: 1_000,
-        approvedAtMs: 2_000,
       },
     });
     await writeJson(pendingPath, {
@@ -86,25 +93,18 @@ describe("migrateLegacyNodePairingStore", () => {
   });
 
   test("keeps an existing device surface over stale legacy rows", async () => {
-    const baseDir = await suiteRootTracker.make("case");
-    await seedNodeDevice(baseDir, "node-current");
-    const pending = await requestNodePairing(
-      { nodeId: "node-current", caps: ["screen"], commands: ["screen.snapshot"] },
-      baseDir,
-    );
-    await approveNodePairing(
-      pending.request.requestId,
-      { callerScopes: ["operator.pairing", "operator.write"] },
-      baseDir,
-    );
-    const { pairedPath } = resolvePairingPaths(baseDir, "nodes");
+    const { baseDir, pairedPath } = await fixture("node-current");
+    await approveSurface(baseDir, "node-current", {
+      caps: ["screen"],
+      commands: ["screen.snapshot"],
+    });
     await writeJson(pairedPath, {
       "node-current": {
-        nodeId: "node-current",
-        caps: ["stale-cap"],
-        commands: ["stale.command"],
+        ...legacyRow("node-current"),
         createdAtMs: 1,
         approvedAtMs: 2,
+        caps: ["stale-cap"],
+        commands: ["stale.command"],
       },
     });
 
@@ -116,15 +116,11 @@ describe("migrateLegacyNodePairingStore", () => {
   });
 
   test("drops legacy client-instance aliases and reapproves the canonical device id", async () => {
-    const baseDir = await suiteRootTracker.make("case");
-    await seedNodeDevice(baseDir, "canonical-device-id");
-    const { pairedPath } = resolvePairingPaths(baseDir, "nodes");
+    const { baseDir, pairedPath } = await fixture("canonical-device-id");
     await writeJson(pairedPath, {
       "legacy-client-instance-id": {
-        nodeId: "legacy-client-instance-id",
+        ...legacyRow("legacy-client-instance-id"),
         commands: ["system.notify"],
-        createdAtMs: 1_000,
-        approvedAtMs: 2_000,
         lastConnectedAtMs: 3_000,
       },
     });
@@ -139,16 +135,8 @@ describe("migrateLegacyNodePairingStore", () => {
       recorded: false,
     });
 
-    const pending = await requestNodePairing(
-      { nodeId: "canonical-device-id", commands: ["system.notify"] },
-      baseDir,
-    );
     await expect(
-      approveNodePairing(
-        pending.request.requestId,
-        { callerScopes: ["operator.pairing", "operator.write"] },
-        baseDir,
-      ),
+      approveSurface(baseDir, "canonical-device-id", { commands: ["system.notify"] }),
     ).resolves.toMatchObject({ node: { nodeId: "canonical-device-id" } });
     await expect(
       recordPairedNodeConnection("canonical-device-id", 4_000, baseDir),
