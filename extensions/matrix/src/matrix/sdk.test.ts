@@ -1389,7 +1389,6 @@ describe("MatrixClient request hardening", () => {
             entered.resolve();
             return await gate.promise;
           },
-          "persist",
         );
         operationOutcome = operation.then(
           (value) => ({ ok: true as const, value }),

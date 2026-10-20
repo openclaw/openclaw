@@ -6,7 +6,7 @@ import {
   finiteJson,
   isPlainDecisionRecord,
 } from "./validation-common.js";
-import { DecisionContractError } from "./validation.js";
+import { DecisionContractError, exactKeys } from "./validation.js";
 
 const MAX_JSON_BYTES = decisionJsonLimits.maxBytes;
 const MAX_IMAGE_BYTES = 4 * 1_048_576;
@@ -14,12 +14,6 @@ const MAX_ENVELOPE_BYTES = 4 * Math.ceil(MAX_IMAGE_BYTES / 3) + MAX_JSON_BYTES +
 
 function fields(value: Record<string, unknown>, allowed: readonly string[]): boolean {
   return Object.keys(value).every((key) => allowed.includes(key));
-}
-function exactKeys(left: object, right: object): boolean {
-  const keys = Object.keys(left);
-  return (
-    keys.length === Object.keys(right).length && keys.every((key) => Object.hasOwn(right, key))
-  );
 }
 function finite(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);

@@ -205,6 +205,7 @@ export function readSessionRowInputs(params: {
       key,
       entry,
       lightweight,
+      preparedRuntimeOwnership: params.preparedRuntimeOwnership,
       swarm: buildSessionSwarmSummary(
         params.rowContext?.subagentRuns.swarmRunsByRequesterSessionKey.get(key) ?? [],
         key,
@@ -424,7 +425,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
 
   const row: GatewaySessionRow = {
     key,
-    sessionModelRevision: sessionModelRevision(entry),
+    sessionModelRevision: sessionModelRevision(entry, undefined, input.preparedRuntimeOwnership),
     // Only explicitly requested summaries may clear swarm state in event merges.
     ...(input.includeSwarmSummary ? { swarm: input.swarm } : {}),
     visibility: entry ? (entry.visibility ?? "shared") : undefined,

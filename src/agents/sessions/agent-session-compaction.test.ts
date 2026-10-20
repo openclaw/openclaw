@@ -325,33 +325,6 @@ describe("AgentSession compaction", () => {
     subscription.unsubscribe();
   });
 
-  it("accounts branch-summary responses through the same run owner", async () => {
-    const sessionManager = SessionManager.inMemory();
-    const rootId = sessionManager.appendMessage({ role: "user", content: "root", timestamp: 1 });
-    const abandonedId = sessionManager.appendMessage(makeUserMessage("abandoned branch", 2));
-    sessionManager.branch(rootId);
-    const targetId = sessionManager.appendMessage({
-      ...createAssistant(testModel, [{ type: "text", text: "target branch" }]),
-      timestamp: 3,
-    });
-    sessionManager.branch(abandonedId);
-    streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
-      createAssistantResultStream(
-        createAssistant(activeModel, [{ type: "text", text: "branch summary" }], "stop", 7),
-      ),
-    );
-    const { session } = await createTestSession({ sessionManager });
-    const subscription = subscribeEmbeddedAgentSession({
-      session,
-      runId: "run-branch-summary-usage",
-    });
-
-    await session.navigateTree(targetId, { summarize: true });
-
-    expect(subscription.getUsageTotals()).toMatchObject({ input: 7, output: 1, total: 8 });
-    subscription.unsubscribe();
-  });
-
   it("projects a rejected automatic cancellation as aborted without recording compaction", async () => {
     const sessionManager = SessionManager.inMemory();
     const handlers = createCompactionHandlers();

@@ -123,26 +123,6 @@ function SidebarInboxItem(props: {
   readContext: () => ApplicationContext;
   isMentionDismissing: (id: string) => boolean;
 }) {
-  const outbox = createMemo(() => {
-    const entry = props.entry;
-    return entry.type === "outbox" ? entry : null;
-  });
-  const approval = createMemo(() => {
-    const entry = props.entry;
-    return entry.type === "approval" ? entry : null;
-  });
-  const attention = createMemo(() => {
-    const entry = props.entry;
-    return entry.type === "attention" ? entry : null;
-  });
-  const mention = createMemo(() => {
-    const entry = props.entry;
-    return entry.type === "mention" ? entry : null;
-  });
-  const scopeUpgrade = createMemo(() => {
-    const entry = props.entry;
-    return entry.type === "scopeUpgrade" ? entry : null;
-  });
   const dismiss = () => {
     const dismissal = props.entry.dismissal;
     if (dismissal) {
@@ -151,7 +131,7 @@ function SidebarInboxItem(props: {
   };
   return (
     <Switch>
-      <Match when={outbox()}>
+      <Match when={props.entry.type === "outbox" ? props.entry : null}>
         {(entry) => (
           <SidebarOutboxItem
             entry={entry()}
@@ -159,7 +139,7 @@ function SidebarInboxItem(props: {
           />
         )}
       </Match>
-      <Match when={approval()}>
+      <Match when={props.entry.type === "approval" ? props.entry : null}>
         {(entry) => (
           <SidebarApprovalItem
             approval={entry().approval}
@@ -169,7 +149,7 @@ function SidebarInboxItem(props: {
           />
         )}
       </Match>
-      <Match when={attention()}>
+      <Match when={props.entry.type === "attention" ? props.entry : null}>
         {(entry) => (
           <SidebarIssueItem
             item={entry()}
@@ -186,7 +166,7 @@ function SidebarInboxItem(props: {
           />
         )}
       </Match>
-      <Match when={mention()}>
+      <Match when={props.entry.type === "mention" ? props.entry : null}>
         {(entry) => (
           <SidebarMentionItem
             mention={entry().mention}
@@ -202,7 +182,7 @@ function SidebarInboxItem(props: {
           />
         )}
       </Match>
-      <Match when={scopeUpgrade()}>
+      <Match when={props.entry.type === "scopeUpgrade" ? props.entry : null}>
         {(entry) => (
           <SidebarScopeUpgradeItem
             state={entry().state}

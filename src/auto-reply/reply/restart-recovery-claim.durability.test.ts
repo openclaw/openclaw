@@ -7,6 +7,7 @@ import {
 } from "../../agents/admitted-run-context.js";
 import { createHarnessCompletionSourceAssertion } from "../../agents/agent-harness-completion-recovery.js";
 import { claimAgentSessionWriter } from "../../agents/embedded-agent-runner/run/session-bootstrap.js";
+import { renderStorageFailureSummary } from "../../agents/failover/assistant-request-failure-copy.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -21,6 +22,7 @@ import {
   onInternalDiagnosticEvent,
   waitForDiagnosticEventsDrained,
 } from "../../infra/diagnostic-events.js";
+import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -424,12 +426,27 @@ it.each([
                 kind: "unknown",
                 target: actor.target,
                 commandId: input.commandId,
-                error: { name: "Error", message: "Adoption receipt lost" },
+                error: {
+                  name: "Error",
+                  message: "Adoption receipt lost",
+                  cause: new Error("Worker response lost", {
+                    cause: Object.assign(new Error("database or disk is full"), {
+                      code: "SQLITE_FULL",
+                    }),
+                  }),
+                },
               };
             });
           const error =
             outcome === "rollback" ? "Canceled before adoption commit" : "Adoption receipt lost";
-          await expect(claimWriter()).rejects.toThrow(error);
+          const failure = await claimWriter().catch((caughtError: unknown) => caughtError);
+          expect(failure).toHaveProperty("message", error);
+          if (outcome === "unknown") {
+            expect(failure).toHaveProperty("code", "outcome-unknown");
+            expect(renderStorageFailureSummary(classifyGatewayStorageFailure(failure))).toBe(
+              "OpenClaw couldn't save your conversation because the disk is full. Free up space on the computer running OpenClaw before continuing.",
+            );
+          }
           await expect(claimWriter()).rejects.toThrow(error);
           await controller.clear();
           await waitForDiagnosticEventsDrained();

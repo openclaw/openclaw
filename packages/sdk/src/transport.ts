@@ -257,9 +257,6 @@ export class GatewayClientTransport implements ConnectableOpenClawTransport {
     if (this.closePromise) {
       return await this.closePromise;
     }
-    if (this.closed) {
-      return;
-    }
     this.closed = true;
     this.eventsHub.close();
     const client = this.client;
@@ -269,8 +266,7 @@ export class GatewayClientTransport implements ConnectableOpenClawTransport {
     rejectPendingConnect?.(new Error("gateway transport closed before connect completed"));
     this.connectPromise = null;
     this.closePromise = client?.stopAndWait() ?? Promise.resolve();
-    await this.closePromise;
-    this.closePromise = null;
+    return this.closePromise;
   }
 }
 

@@ -1,4 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type {
   SessionsResolveParams,
@@ -57,18 +56,13 @@ type ReferenceEntry = {
   value?: SessionTitleTarget | null;
 };
 
-function titleFromPreview(value: unknown): SessionTitle {
-  if (!isRecord(value) || value.status !== "ok") {
+function titleFromPreview(value: ControlUiSessionPreview): SessionTitle {
+  if (value.status !== "ok") {
     throw new Error("Session title unavailable");
   }
-  const sessionKey = readNonBlankString(value.sessionKey);
-  const agentId = readNonBlankString(value.agentId);
-  if (!sessionKey || !agentId) {
-    throw new Error("Session title response was incomplete");
-  }
   return {
-    sessionKey,
-    agentId,
+    sessionKey: value.sessionKey,
+    agentId: value.agentId,
     namespace: "chat",
     title: readNonBlankString(value.title) ?? readNonBlankString(value.derivedTitle),
   };

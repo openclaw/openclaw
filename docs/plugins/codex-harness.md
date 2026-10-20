@@ -15,6 +15,11 @@ native compaction, and app-server execution. OpenClaw still owns chat
 channels, session files, model selection, OpenClaw dynamic tools, approvals,
 media delivery, and the visible transcript mirror.
 
+Turns without a routable source conversation, such as operator CLI turns, return
+their final response automatically to the caller. The `message` tool needs an
+explicit `target` for sends from these turns; it cannot post progress to a
+current conversation.
+
 Managed inference proxy restarts do not replace an otherwise reusable native
 thread. Thread identity uses the proxy's upstream provider and routing policy, not
 its temporary loopback address. Upstream, authentication-profile, and creation-time

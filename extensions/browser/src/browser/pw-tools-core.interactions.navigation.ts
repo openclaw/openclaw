@@ -119,6 +119,28 @@ export function throwIfInteractionAborted(signal?: AbortSignal): void {
   }
 }
 
+export async function runGuardedPageInteraction<T>(
+  page: Page,
+  opts: GuardedInteractionOptions,
+  action: () => Promise<T>,
+): Promise<T> {
+  // Keep the navigation guard alive after foreground interruption until the
+  // underlying native operation settles.
+  return await awaitNavigationGuardedInteraction(
+    {
+      action,
+      cdpUrl: opts.cdpUrl,
+      page,
+      ...interactionNavigationPolicy(opts),
+      targetId: opts.targetId,
+      assertCurrent: opts.assertCurrent,
+    },
+    opts.signal,
+    opts.signal,
+    () => reconcileRemoteDialogAfterActionSettled(page, opts.signal),
+  );
+}
+
 export async function runCancellablePageInteraction<T>(
   page: Page,
   opts: GuardedInteractionOptions,
@@ -395,7 +417,7 @@ export async function awaitActionWithAbort<T>(
   }
 }
 
-export async function awaitNavigationGuardedInteraction<T>(
+async function awaitNavigationGuardedInteraction<T>(
   opts: {
     action: () => Promise<T>;
     cdpUrl: string;

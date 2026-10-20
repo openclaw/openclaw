@@ -14,8 +14,6 @@ import {
   normalizeAgentToolResultMiddlewareRuntimeIds,
   normalizeAgentToolResultMiddlewareRuntimes,
 } from "./agent-tool-result-middleware.js";
-import { CODEX_APP_SERVER_EXTENSION_RUNTIME_ID } from "./codex-app-server-extension-factory.js";
-import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import {
   resolveConversationAccessAllowed,
   resolvePromptInjectionAllowed,
@@ -76,55 +74,6 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
     reportRegistrationWarning,
   } = state;
   const declaredToolNames = new WeakMap<PluginRecord, ReadonlySet<string>>();
-
-  const registerCodexAppServerExtensionFactory = (
-    record: PluginRecord,
-    factory: Parameters<OpenClawPluginApi["registerCodexAppServerExtensionFactory"]>[0],
-  ) => {
-    if (record.origin !== "bundled") {
-      reportRegistrationError(
-        record,
-        "only bundled plugins can register Codex app-server extension factories",
-      );
-      return;
-    }
-    if (
-      !(record.contracts?.embeddedExtensionFactories ?? []).includes(
-        CODEX_APP_SERVER_EXTENSION_RUNTIME_ID,
-      )
-    ) {
-      reportRegistrationError(
-        record,
-        'plugin must declare contracts.embeddedExtensionFactories: ["codex-app-server"] to register Codex app-server extension factories',
-      );
-      return;
-    }
-    if (typeof factory !== "function") {
-      reportRegistrationError(record, "codex app-server extension factory must be a function");
-      return;
-    }
-    if (
-      registry.codexAppServerExtensionFactories.some(
-        (entry) => entry.pluginId === record.id && entry.rawFactory === factory,
-      )
-    ) {
-      return;
-    }
-    const safeFactory: CodexAppServerExtensionFactory = async (codex) => {
-      try {
-        await factory(codex);
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        registryParams.logger.warn(
-          `[plugins] codex app-server extension factory failed for ${record.id}: ${detail}`,
-        );
-      }
-    };
-    registry.codexAppServerExtensionFactories.push({
-      ...createRegistration(record, { factory: safeFactory }),
-      rawFactory: factory,
-    });
-  };
 
   const registerAgentToolResultMiddleware = (
     record: PluginRecord,
@@ -439,7 +388,6 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
   };
 
   return {
-    registerCodexAppServerExtensionFactory,
     registerAgentToolResultMiddleware,
     registerTool,
     registerHook,

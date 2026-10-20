@@ -1,8 +1,6 @@
 /** Waits for asynchronous tool tasks before final reply delivery. */
 const DEFAULT_PENDING_TOOL_DRAIN_IDLE_TIMEOUT_MS = 30_000;
 
-type PendingToolTaskDrainResult = { kind: "settled" } | { kind: "timeout"; remaining: number };
-
 type DrainOptions = {
   tasks: Set<Promise<void>>;
   idleTimeoutMs?: number;
@@ -23,12 +21,12 @@ export async function drainPendingToolTasks({
   tasks,
   idleTimeoutMs = DEFAULT_PENDING_TOOL_DRAIN_IDLE_TIMEOUT_MS,
   onTimeout,
-}: DrainOptions): Promise<PendingToolTaskDrainResult> {
+}: DrainOptions): Promise<void> {
   if (tasks.size === 0) {
-    return { kind: "settled" };
+    return;
   }
   if (idleTimeoutMs <= 0) {
-    return { kind: "timeout", remaining: tasks.size };
+    return;
   }
 
   const observed = new WeakSet<Promise<void>>();
@@ -66,8 +64,5 @@ export async function drainPendingToolTasks({
     onTimeout?.(
       `pending tool tasks made no progress within ${idleTimeoutMs}ms; proceeding with ${remaining} task(s) still pending to avoid session deadlock`,
     );
-    return { kind: "timeout", remaining };
   }
-
-  return { kind: "settled" };
 }

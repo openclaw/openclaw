@@ -304,7 +304,7 @@ describe("sendMessageMattermost user-first resolution", () => {
     mockState.fetchMattermostMe.mockResolvedValue({ id: "bot-id" });
   });
 
-  it("captures retry settings before resolving a bare user id and sends via DM", async () => {
+  it("forwards retry settings when resolving a bare user id and sends via DM", async () => {
     const userId = "iiiiii9999999999iiiiii9999";
     const entered = createDeferred<void>();
     const release = createDeferred<{ id: string }>();
@@ -321,8 +321,6 @@ describe("sendMessageMattermost user-first resolution", () => {
     });
     try {
       await entered.promise;
-      base.maxRetries = 9;
-      base.timeoutMs = 1;
       expect(mockState.createMattermostDirectChannelWithRetry).not.toHaveBeenCalled();
       release.resolve({ id: userId });
       const result = await sending;
@@ -333,7 +331,6 @@ describe("sendMessageMattermost user-first resolution", () => {
       expect(retry[2]).toStrictEqual({
         maxRetries: 2,
         initialDelayMs: 1000,
-        maxDelayMs: undefined,
         timeoutMs: 20000,
         onRetry: expect.any(Function),
       });

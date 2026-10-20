@@ -46,6 +46,42 @@ subpaths, including older published `@openclaw/discord` packages. Upgrade affect
 plugins before upgrading the host. Not every export has a path-only replacement;
 see the [per-surface mappings](/plugins/sdk-migration/import-paths#removed-command-and-channel-facades).
 
+### Codex app-server extension factories
+
+The unused bundled-only `api.registerCodexAppServerExtensionFactory(...)` method
+and `contracts.embeddedExtensionFactories` manifest family have been removed.
+Register tool-result transforms with `api.registerAgentToolResultMiddleware(...)`
+and declare `contracts.agentToolResultMiddleware: ["codex"]` for Codex-only
+middleware. The supported middleware also covers `openclaw` and `agentsapi`.
+
+The standalone `createCodexAppServerToolResultExtensionRunner` export remains
+available from `agent-harness` and `agent-harness-runtime`, together with its
+`CodexAppServer*` types. Published `@openclaw/codex@2026.10.4` still imports and
+calls this helper. Explicit factory arrays retain their ordered initialization;
+omitting factories returns tool output unchanged. No removal date is set for
+these exports; their published consumers must migrate first.
+
+### Hosted media, global transforms, and executor controllers
+
+The following registration methods were removed with explicit maintainer approval
+on October 19, 2026, without a new deprecation window. Public ClawHub and bundled
+source inventories found no direct consumers; incomplete inventories and private
+plugins mean this is not proof of universal absence.
+
+| Removed method                             | Migration                                                                                                                                  |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `api.registerHostedMediaResolver(...)`     | No generic replacement. Pass a directly loadable media URL or an allowed local path. Built-in Canvas document URLs still resolve normally. |
+| `api.registerTextTransforms(...)`          | Declare `textTransforms` on your own provider or CLI backend. This does not replace an overlay across other plugins' backends.             |
+| `api.registerAgentExecutorController(...)` | No replacement registrar. Use AgentsAPI `openai_hosted` or an externally managed `self_hosted` environment.                                |
+
+The named `resolveAgentExecutorController` export and its types remain importable
+for published plugins, but lookup throws `PLUGIN_CAPABILITY_REMOVED`. Existing
+controller-owned AgentsAPI bindings and `executorController` configuration are
+rejected rather than silently reassigned or deleted. Before upgrading a host
+that uses this capability, retire or migrate those sessions with the previous
+host and controller. See [AgentsAPI](/plugins/agentsapi) for the supported
+externally managed setup.
+
 ### Retroactively recorded shipped exports
 
 The following exports shipped in `v2026.9.8` and were removed without a

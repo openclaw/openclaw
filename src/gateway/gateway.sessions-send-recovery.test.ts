@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { createServer, type ServerResponse } from "node:http";
+import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
@@ -18,6 +19,11 @@ import {
   readProviderBody,
   writeToolCall,
 } from "./gateway-provider-fixture.test-support.js";
+import {
+  printRecoveryFailureDiagnostics,
+  RECOVERY_PROBE_ID,
+  writeRecoveryDiagnosticProbe,
+} from "./gateway.sessions-send-recovery.diagnostics.test-support.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 // Real public chat.send/sessions_send, provider socket, and cold Gateway process restarts.
@@ -68,17 +74,19 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
           providerRequests.push({
             hold,
             userIndex,
-            selected: text.slice(0, 3000),
-            frames: input.map((item, index) => ({
-              index,
-              role: item.role,
-              type: item.type,
-              markers: JSON.stringify(item).match(
-                /(?:SEND_)?(?:PEER_UPDATE_[0-9]+|CHAT_UPDATE_[0-9]+|STEER_UPDATE)|HOLD_TARGET|HOLD_STEER/gu,
-              ),
-            })),
+            frames: input
+              .map((item, index) => ({
+                i: index,
+                markers: JSON.stringify(item)
+                  .match(
+                    /(?:SEND_)?(?:PEER_UPDATE_[0-9]+|CHAT_UPDATE_[0-9]+|STEER_UPDATE)|HOLD_TARGET|HOLD_STEER/gu,
+                  )
+                  ?.slice(0, 2),
+              }))
+              .filter((frame) => frame.markers)
+              .slice(-4),
           });
-          if (providerRequests.length > 24) {
+          if (providerRequests.length > 6) {
             providerRequests.shift();
           }
 
@@ -274,6 +282,8 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
         );
       const archivedSource = "agent:main:dashboard:archived-source";
       try {
+        const diagnosticPlugin = gateway.state.path("recovery-proof");
+        await writeRecoveryDiagnosticProbe(diagnosticPlugin);
         const provider = buildMockOpenAiResponsesProvider(baseUrl);
         const config = {
           diagnostics: { enabled: true },
@@ -316,7 +326,11 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
             toolSearch: false,
             sessions: { visibility: "all" },
           },
-          plugins: { slots: { memory: "none" } },
+          plugins: {
+            slots: { memory: "none" },
+            load: { paths: [diagnosticPlugin] },
+            entries: { [RECOVERY_PROBE_ID]: { enabled: true } },
+          },
         } satisfies OpenClawConfig;
         await gateway.state.writeConfig(config);
         await gateway.startGateway();
@@ -543,6 +557,15 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
         expect(finalHistory).not.toContain(`From ${archivedSource}`);
         expect(gateway.logs()).not.toContain('"archived":true');
         expect(observed, JSON.stringify(providerRequests)).toEqual(expectedDelivery);
+      } catch (error) {
+        await printRecoveryFailureDiagnostics({
+          client,
+          databasePath: path.join(gateway.state.agentDir("main"), "openclaw-agent.sqlite"),
+          sessionKey: target,
+          runId: chatRequests[4]?.idempotencyKey,
+          frames: providerRequests,
+        }).catch(() => console.error("[session-recovery-failure] diagnostics unavailable"));
+        throw error;
       } finally {
         await client?.stopAndWait();
         await gateway.cleanup();

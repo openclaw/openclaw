@@ -93,10 +93,10 @@ beforeAll(async () => {
   inferenceMocks.sharedVerifiedInference = sharedFixture.binding;
 });
 
-function createVerifiedRunOptions(deps: SystemAgentCommandDeps = {}, revalidate = false) {
+function createVerifiedRunOptions(deps: SystemAgentCommandDeps = {}) {
   const fixture = sharedFixture;
   return {
-    verifiedInference: revalidate ? { ...fixture.binding } : fixture.binding,
+    verifiedInference: fixture.binding,
     deps: {
       readConfigFileSnapshot: vi.fn(async () => configSnapshot(verifiedConfig)) as never,
       ...deps,
@@ -278,20 +278,21 @@ describe("runSystemAgent", () => {
 
   it("does not print a reply-only plan after its inference owner drifts", async () => {
     const { runtime, lines } = createSystemAgentTestRuntime();
-    let currentConfig: OpenClawConfig = verifiedConfig;
-    const verified = createVerifiedRunOptions(
-      {
-        readConfigFileSnapshot: vi.fn(async () => configSnapshot(currentConfig)) as never,
-      },
-      true,
+    const snapshot = configFixture.snapshot;
+    const fixture = await createSystemAgentVerifiedInferenceTestFixture(
+      snapshot.runtimeConfig ?? snapshot.config,
+      snapshot,
     );
-    const run = runner(runtime, verified);
+    const run = runner(runtime, {
+      verifiedInference: fixture.binding,
+      deps: { readConfigFileSnapshot: vi.mocked(configModule.readConfigFileSnapshot) },
+    });
 
     await expect(
       run({
         message: "explain the current setup",
         planWithAssistant: async () => {
-          currentConfig = changedConfig;
+          await configFixture.write(changedConfig);
           return { reply: "stale reply" };
         },
       }),

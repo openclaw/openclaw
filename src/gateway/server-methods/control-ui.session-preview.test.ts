@@ -25,7 +25,7 @@ import {
 import * as sessionRows from "../session-row-projection-record.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
 import { createControlUiRequestOptions } from "./control-ui-request.test-support.js";
-import { controlUiHandlers, createControlUiHandlers } from "./control-ui.js";
+import { controlUiHandlers } from "./control-ui.js";
 import { identifiedClient } from "./sessions-sharing.test-support.js";
 import type { RespondFn } from "./types.js";
 
@@ -217,7 +217,7 @@ describe("controlUi.sessionPreview", () => {
         .mockReturnValueOnce(prepared.promise);
       const respond = vi.fn<RespondFn>();
       const pending = expectDefined(
-        createControlUiHandlers()["controlUi.sessionPreview"],
+        controlUiHandlers["controlUi.sessionPreview"],
         "session preview handler",
       )(
         requestOptions({ sessionKey }, respond, {
@@ -262,7 +262,7 @@ describe("controlUi.sessionPreview", () => {
         });
       }
       const handler = expectDefined(
-        createControlUiHandlers()["controlUi.sessionPreview"],
+        controlUiHandlers["controlUi.sessionPreview"],
         "session preview handler",
       );
       const publications = new Map([

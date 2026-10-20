@@ -6,6 +6,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { i18n } from "../../i18n/index.ts";
+import { projectCallbackOwner } from "../../lib/reactive/callback-owner.ts";
 import { SESSION_FACE_PREFERENCE_PARAM } from "../../lib/sessions/route-navigation.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -108,7 +109,8 @@ function createWorktreesPage(request?: Request, initial: ModelState = {}) {
   const [context, setContext] = createSignal(
     contextWithGateway(request ? requestGateway(request) : gatewayWithSnapshot(null, false)),
   );
-  const model = new WorktreesModel(context);
+  let publish: (() => void) | undefined;
+  const model = new WorktreesModel(context, () => publish?.());
   model.update(initial);
   const element = document.createElement("div");
   let dispose: (() => void) | undefined;
@@ -131,7 +133,19 @@ function createWorktreesPage(request?: Request, initial: ModelState = {}) {
     mount() {
       flush();
       document.body.append(element);
-      dispose = mountSolid(() => renderWorktreesView(model), { container: element }).unmount;
+      dispose = mountSolid(
+        () => {
+          const { view } = projectCallbackOwner(
+            (notify) => {
+              publish = notify;
+              return model;
+            },
+            (owner) => owner,
+          );
+          return renderWorktreesView(model, view.read);
+        },
+        { container: element },
+      ).unmount;
       return page;
     },
     unmount() {

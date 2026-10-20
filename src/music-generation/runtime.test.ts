@@ -2,16 +2,25 @@ import { beforeEach, expect, it, vi } from "vitest";
 import type { AgentToolModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { GenerateMusicParams } from "./runtime-types.js";
-import { generateMusic, listRuntimeMusicGenerationProviders } from "./runtime.js";
+import { generateMusic } from "./runtime.js";
 import type { MusicGenerationProvider, MusicGenerationRequest } from "./types.js";
 
 let providers: MusicGenerationProvider[] = [];
-let warnings: string[] = [];
+const warn = vi.hoisted(() => vi.fn());
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => ({
+      ...actual.createSubsystemLogger(subsystem),
+      ...(subsystem === "music-generation" ? { warn } : {}),
+    }),
+  };
+});
 const listProviders = vi.fn((_config?: OpenClawConfig) => providers);
 const runtimeDeps: NonNullable<Parameters<typeof generateMusic>[1]> = {
   getProvider: (id) => providers.find((provider) => provider.id === id),
   listProviders,
-  log: { debug: () => {}, warn: (message) => warnings.push(message) },
 };
 function runGenerateMusic({
   model = { primary: "music/track-v1" },
@@ -62,7 +71,7 @@ async function checkOverrides(
 }
 beforeEach(() => {
   providers = [createProvider()];
-  warnings = [];
+  warn.mockClear();
   listProviders.mockClear();
 });
 
@@ -97,7 +106,7 @@ it("falls back between detected providers and logs the failure", async () => {
   const result = await runGenerateMusic({ cfg: {} });
   expect(result).toMatchObject({ provider: "minimax", model: "model-b" });
   expect(result.attempts).toEqual([failure]);
-  expect(warnings).toContain(
+  expect(warn).toHaveBeenCalledWith(
     `music-generation candidate failed: ${failure.provider}/${failure.model}: ${failure.error}`,
   );
 });
@@ -120,12 +129,6 @@ it("rejects empty audio from every candidate", async () => {
   ).rejects.toThrow(
     "All music generation models failed (2): empty-primary/track-v1: Music generation provider returned an empty track buffer at index 0. | empty-fallback/track-v2: Music generation provider returned an empty track buffer at index 0.",
   );
-});
-
-it("lists providers through the registry", () => {
-  const config: OpenClawConfig = {};
-  expect(listRuntimeMusicGenerationProviders({ config }, runtimeDeps)).toEqual(providers);
-  expect(listProviders).toHaveBeenCalledExactlyOnceWith(config);
 });
 
 it.each(["generate", "edit"] as const)("normalizes optional overrides in %s mode", async (mode) => {

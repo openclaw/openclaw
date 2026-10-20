@@ -302,10 +302,6 @@ export function sanitizeToolUseResultPairingForModel(
 type ToolUseRepairReport = {
   messages: AgentMessage[];
   added: Array<Extract<AgentMessage, { role: "toolResult" }>>;
-  discarded: AgentMessage[];
-  droppedDuplicateCount: number;
-  droppedOrphanCount: number;
-  moved: boolean;
 };
 
 export function repairToolUseResultPairing(
@@ -321,28 +317,19 @@ export function repairToolUseResultPairing(
   // Provider ids are opaque and can legitimately repeat on later assistant turns.
   const added: Array<Extract<AgentMessage, { role: "toolResult" }>> = [];
   const preserveUnframed = options?.preserveUnframedToolResults === true;
-  const pairing = classifyToolUseResultPairing(messages, {
+  const frames = classifyToolUseResultPairing(messages, {
     preserveUnframedToolResults: preserveUnframed,
   });
-  const { frames } = pairing;
-  const droppedDuplicateCount = pairing.droppedDuplicateCount;
-  let droppedOrphanCount = pairing.droppedOrphanCount;
-  const discarded: Array<{ message: AgentMessage; index: number }> = pairing.droppedResults.map(
-    ({ message, index }) => ({ message, index }),
-  );
 
   const out: AgentMessage[] = [];
   let cursor = 0;
   const pushUnframedRange = (endIndex: number) => {
     for (; cursor < endIndex; cursor += 1) {
-      const sourceIndex = cursor;
       const message = messages[cursor];
       if (!message || typeof message !== "object") {
         continue;
       }
       if (message.role === "toolResult" && !preserveUnframed) {
-        droppedOrphanCount += 1;
-        discarded.push({ message, index: sourceIndex });
         continue;
       }
       out.push(message);
@@ -356,26 +343,19 @@ export function repairToolUseResultPairing(
     const dropFailed = frame.failed && options?.erroredAssistantResultPolicy === "drop";
     if (!dropFailed) {
       out.push(frame.assistant);
-    }
-    for (const occurrence of frame.occurrences) {
-      if (dropFailed) {
-        if (occurrence.sourceResult) {
-          discarded.push({
-            message: occurrence.sourceResult,
-            index: occurrence.sourceResultIndex ?? messages.indexOf(occurrence.sourceResult),
+      for (const occurrence of frame.occurrences) {
+        if (occurrence.result) {
+          out.push(occurrence.result);
+        } else if (!frame.failed) {
+          const missing = makeMissingToolResult({
+            toolCallId: occurrence.id,
+            toolName: occurrence.name,
+            text: options?.missingToolResultText,
           });
+          occurrence.result = missing;
+          added.push(missing);
+          out.push(missing);
         }
-      } else if (occurrence.result) {
-        out.push(occurrence.result);
-      } else if (!frame.failed) {
-        const missing = makeMissingToolResult({
-          toolCallId: occurrence.id,
-          toolName: occurrence.name,
-          text: options?.missingToolResultText,
-        });
-        occurrence.result = missing;
-        added.push(missing);
-        out.push(missing);
       }
     }
     out.push(...frame.remainder);
@@ -384,13 +364,8 @@ export function repairToolUseResultPairing(
 
   const changed =
     out.length !== messages.length || out.some((message, index) => message !== messages[index]);
-  discarded.sort((left, right) => left.index - right.index);
   return {
     messages: changed ? out : messages,
     added,
-    discarded: discarded.map(({ message }) => message),
-    droppedDuplicateCount,
-    droppedOrphanCount,
-    moved: changed,
   };
 }

@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import {
   createServer,
   type IncomingHttpHeaders,
@@ -44,14 +45,12 @@ type MatrixQaFaultProxyForwardedResponse = {
   status: number;
 };
 
-export type MatrixQaFaultProxyExchange = {
-  context?: unknown;
+type MatrixQaFaultProxyExchange = {
   request: MatrixQaFaultProxyRequest;
   response: MatrixQaFaultProxyForwardedResponse;
 };
 
 export type MatrixQaFaultProxyObserver = {
-  createExchangeContext?: (request: MatrixQaFaultProxyRequest) => unknown;
   onExchange?: (exchange: MatrixQaFaultProxyExchange) => Promise<void> | void;
 };
 
@@ -163,56 +162,27 @@ async function readRequestBody(req: IncomingMessage, maxBytes: number) {
     }
   }
 
-  return await new Promise<Buffer>((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let total = 0;
-
-    const cleanup = () => {
-      req.off("data", onData);
-      req.off("end", onEnd);
-      req.off("error", onError);
-      req.off("aborted", onAborted);
-      req.off("close", onClose);
-    };
-    const settleReject = (error: Error, options?: { drain?: boolean }) => {
-      cleanup();
-      if (options?.drain) {
-        drainRejectedRequestBody(req);
-      }
-      reject(error);
-    };
-    const onData = (chunk: string | Buffer) => {
-      const buffer = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
-      const nextTotal = total + buffer.byteLength;
-      if (nextTotal > maxBytes) {
-        settleReject(rejectOversizedRequestBody(maxBytes, nextTotal), { drain: true });
-        return;
+  const chunks: Buffer[] = [];
+  let total = 0;
+  try {
+    // Keep the socket open so an oversized upload can receive its 413 response.
+    for await (const chunk of req.iterator({ destroyOnReturn: false })) {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      total += buffer.byteLength;
+      if (total > maxBytes) {
+        throw rejectOversizedRequestBody(maxBytes, total);
       }
       chunks.push(buffer);
-      total = nextTotal;
-    };
-    const onEnd = () => {
-      cleanup();
-      resolve(Buffer.concat(chunks, total));
-    };
-    const onError = (error: Error) => settleReject(error);
-    const onAborted = () => {
-      settleReject(rejectAbortedRequestBody());
-    };
-    const onClose = () => {
-      if (!req.complete) {
-        settleReject(rejectAbortedRequestBody());
-        return;
-      }
-      cleanup();
-    };
-
-    req.on("data", onData);
-    req.once("end", onEnd);
-    req.once("error", onError);
-    req.once("aborted", onAborted);
-    req.once("close", onClose);
-  });
+    }
+  } catch (error) {
+    if (error instanceof MatrixQaFaultProxyHttpError) {
+      drainRejectedRequestBody(req);
+    } else if (req.aborted) {
+      throw rejectAbortedRequestBody();
+    }
+    throw error;
+  }
+  return Buffer.concat(chunks, total);
 }
 
 function bufferToArrayBuffer(buffer: Buffer) {
@@ -321,19 +291,16 @@ export async function startMatrixQaFaultProxy(
     activeAbortControllers.add(abortController);
     void (async () => {
       let observedRequest: MatrixQaFaultProxyRequest | undefined;
-      let observedContext: unknown;
       let observerNotified = false;
       const observeExchange = async (
         request: MatrixQaFaultProxyRequest,
         response: MatrixQaFaultProxyForwardedResponse,
-        context?: unknown,
       ) => {
         if (!params.onExchange) {
           return;
         }
         observerNotified = true;
         await params.onExchange({
-          ...(context !== undefined ? { context } : {}),
           request,
           response,
         });
@@ -367,8 +334,6 @@ export async function startMatrixQaFaultProxy(
           search: requestUrl.search,
         };
         observedRequest = request;
-        const context = params.createExchangeContext?.(request);
-        observedContext = context;
         const registeredRule = registeredRules.find((candidate) => candidate.rule.match(request));
         const rule = registeredRule?.rule;
         if (rule && registeredRule) {
@@ -381,7 +346,7 @@ export async function startMatrixQaFaultProxy(
           registeredRule.hits.push(hit);
           if (rule.response) {
             const response = normalizeJsonResponse(rule.response(request));
-            await observeExchange(request, response, context);
+            await observeExchange(request, response);
             writeForwardedResponse(res, response);
             return;
           }
@@ -400,7 +365,7 @@ export async function startMatrixQaFaultProxy(
                 response: forwarded,
               })
             : forwarded;
-        await observeExchange(request, response, context);
+        await observeExchange(request, response);
         writeForwardedResponse(res, response);
       } catch (error) {
         const httpError = error instanceof MatrixQaFaultProxyHttpError ? error : undefined;
@@ -415,7 +380,7 @@ export async function startMatrixQaFaultProxy(
         });
         if (observedRequest && !observerNotified) {
           try {
-            await observeExchange(observedRequest, response, observedContext);
+            await observeExchange(observedRequest, response);
           } catch {
             // Capture is diagnostic; its failure must not strand the original HTTP response.
           }
@@ -429,13 +394,7 @@ export async function startMatrixQaFaultProxy(
     })();
   });
 
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
+  await once(server.listen(0, "127.0.0.1"), "listening");
 
   const address = server.address();
   if (!address || typeof address === "string") {

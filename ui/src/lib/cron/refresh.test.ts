@@ -3,7 +3,7 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createStateWithRequest } from "./cron.test-support.ts";
-import { getCronRunsViewState, loadCronRuns, loadMoreCronRuns } from "./runs.ts";
+import { getCronRunsViewState, loadCronRuns } from "./runs.ts";
 import { loadCronStatus } from "./state.ts";
 import type { CronState } from "./types.ts";
 
@@ -158,7 +158,7 @@ it("requires a successful replacement page before appending after a failed refre
   expect(getCronRunsViewState(harness.state)).toBe("failed");
   expect(harness.revision()).toBe(1);
   expect(harness.error()).toBe("History unavailable");
-  const append = loadMoreCronRuns(harness.state);
+  const append = loadCronRuns(harness.state, { append: true });
   expect(harness.request).toHaveBeenCalledTimes(2);
   await append;
 
@@ -173,7 +173,7 @@ it("requires a successful replacement page before appending after a failed refre
   expect(harness.revision()).toBe(2);
   expect(harness.error()).toBeNull();
   expect(harness.state.cronError).toBe("History unavailable");
-  const nextPage = loadMoreCronRuns(harness.state);
+  const nextPage = loadCronRuns(harness.state, { append: true });
   expect(harness.request).toHaveBeenLastCalledWith(
     "cron.runs",
     expect.objectContaining({

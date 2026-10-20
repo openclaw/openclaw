@@ -11,7 +11,6 @@ import {
 import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { hasRestartSentinel } from "../infra/restart-sentinel.js";
-import type { createGatewayUpdateCheck } from "../infra/update-startup.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-gateway.types.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
@@ -37,7 +36,6 @@ import {
 } from "./server-sidecar-startup-mode.js";
 import { waitForAcpRuntimeBackendReady } from "./server-startup-acp.js";
 import { scheduleGatewayPrewarm } from "./server-startup-handler-prewarm.js";
-import type { logGatewayStartup } from "./server-startup-log.js";
 import {
   hydrateConfiguredExternalCliAuth,
   publishConfiguredModelRuntimeSnapshots,
@@ -62,12 +60,8 @@ import {
 import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
 import { scheduleTranscriptsSidecar } from "./server-startup-transcripts.js";
 import { createDeferredGatewayUpdateCheck } from "./server-startup-update-check.js";
-import type { prepareLatestUpdateRestartSentinel } from "./server-update-sentinel.js";
 import type { ReadinessChecker } from "./server/readiness.js";
-import {
-  beginMacOSSystemCaWarmupOnce,
-  type warmMacOSSystemCaOffMainThread,
-} from "./system-ca-warmup.js";
+import { beginMacOSSystemCaWarmupOnce } from "./system-ca-warmup.js";
 type Awaitable<T> = T | Promise<T>;
 
 const loadMainSessionRestartRecoveryModule = createLazyRuntimeModule(
@@ -430,107 +424,74 @@ export async function startGatewaySidecars(
   return postReadySidecars.length;
 }
 
-type GatewayPostAttachRuntimeDeps = Pick<
-  Parameters<typeof runGatewayStartupObservers>[0],
-  "createHookRunner" | "loadSubagentRegistryActivation"
-> & {
-  logGatewayStartup: (params: Parameters<typeof logGatewayStartup>[0]) => Awaitable<void>;
-  refreshLatestUpdateRestartSentinel: (
-    env?: NodeJS.ProcessEnv,
-  ) => Awaitable<ReturnType<typeof prepareLatestUpdateRestartSentinel>>;
-  createGatewayUpdateCheck: (
-    ...args: Parameters<typeof createGatewayUpdateCheck>
-  ) => Awaitable<ReturnType<typeof createGatewayUpdateCheck>>;
-  startGatewaySidecars: typeof startGatewaySidecars;
-  warmSystemCa: typeof warmMacOSSystemCaOffMainThread;
-};
-
-const defaultGatewayPostAttachRuntimeDeps: GatewayPostAttachRuntimeDeps = {
-  createHookRunner: async (...args) =>
-    (await import("../plugins/hooks.js")).createHookRunner(...args),
-  logGatewayStartup: async (params) =>
-    (await import("./server-startup-log.js")).logGatewayStartup(params),
-  refreshLatestUpdateRestartSentinel: async (env) =>
-    (await import("./server-update-sentinel.js")).prepareLatestUpdateRestartSentinel(env),
-  createGatewayUpdateCheck: async (...args) =>
-    (await import("../infra/update-startup.js")).createGatewayUpdateCheck(...args),
-  startGatewaySidecars,
-  warmSystemCa: beginMacOSSystemCaWarmupOnce,
-  loadSubagentRegistryActivation: async () =>
-    (await import("../agents/subagents/registry/subagent-registry.js")).activateSubagentRegistry,
-};
-
 /** Start work that depends on the HTTP server being attached and visible. */
-export async function startGatewayPostAttachRuntime(
-  params: {
-    scheduler: GatewayScheduler;
-    minimalTestGateway: boolean;
-    updateCanary?: boolean;
-    cfgAtStart: OpenClawConfig;
-    getConfig: () => OpenClawConfig;
-    port: number;
-    log: {
-      info: (msg: string) => void;
-      warn: (msg: string) => void;
-    };
-    isNixMode: boolean;
-    startupStartedAt?: number;
-    broadcastToConnIds: GatewayBroadcastToConnIdsFn;
-    broadcast?: GatewayBroadcastFn;
-    getClientConnIds: (filter?: (client: GatewayClient) => boolean) => ReadonlySet<string>;
-    broadcastPluginEvent?: import("./server-broadcast-types.js").GatewayPluginEventBroadcastFn;
-    controlUiRootLifecycle?: GatewayControlUiRootLifecycle;
-    gatewayPluginConfigAtStart: OpenClawConfig;
-    activationSourceConfig: OpenClawConfig;
-    pluginManifestRecords: readonly PluginManifestRecord[];
-    pluginMetadataSnapshot?: PluginMetadataSnapshot;
-    ambientEnvTriggers?: AmbientEnvTriggerPolicy;
+export async function startGatewayPostAttachRuntime(params: {
+  scheduler: GatewayScheduler;
+  minimalTestGateway: boolean;
+  updateCanary?: boolean;
+  cfgAtStart: OpenClawConfig;
+  getConfig: () => OpenClawConfig;
+  port: number;
+  log: {
+    info: (msg: string) => void;
+    warn: (msg: string) => void;
+  };
+  isNixMode: boolean;
+  startupStartedAt?: number;
+  broadcastToConnIds: GatewayBroadcastToConnIdsFn;
+  broadcast?: GatewayBroadcastFn;
+  getClientConnIds: (filter?: (client: GatewayClient) => boolean) => ReadonlySet<string>;
+  broadcastPluginEvent?: import("./server-broadcast-types.js").GatewayPluginEventBroadcastFn;
+  controlUiRootLifecycle?: GatewayControlUiRootLifecycle;
+  gatewayPluginConfigAtStart: OpenClawConfig;
+  activationSourceConfig: OpenClawConfig;
+  pluginManifestRecords: readonly PluginManifestRecord[];
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
+  pluginRegistry: PluginRegistry;
+  defaultWorkspaceDir: string;
+  deps: CliDeps;
+  startChannels: () => Promise<void>;
+  refreshChatMetadata?: () => Promise<void>;
+  recoveryRuntime: GatewayRecoveryRuntime;
+  mainSessionRecoveryStartupCheckedStorePaths: Set<string>;
+  resolveGatewayContext: GatewayContextResolver;
+  logHooks: {
+    info: (msg: string) => void;
+    warn: (msg: string) => void;
+    error: (msg: string) => void;
+  };
+  logChannels: { info: (msg: string) => void; error: (msg: string) => void };
+  unlockStartupMethods: (options?: { keepChatSendUnavailable?: boolean }) => void;
+  loadStartupPlugins?: () => Awaitable<{
     pluginRegistry: PluginRegistry;
-    defaultWorkspaceDir: string;
-    deps: CliDeps;
-    startChannels: () => Promise<void>;
-    refreshChatMetadata?: () => Promise<void>;
-    recoveryRuntime: GatewayRecoveryRuntime;
-    mainSessionRecoveryStartupCheckedStorePaths: Set<string>;
-    resolveGatewayContext: GatewayContextResolver;
-    logHooks: {
-      info: (msg: string) => void;
-      warn: (msg: string) => void;
-      error: (msg: string) => void;
-    };
-    logChannels: { info: (msg: string) => void; error: (msg: string) => void };
-    unlockStartupMethods: (options?: { keepChatSendUnavailable?: boolean }) => void;
-    loadStartupPlugins?: () => Awaitable<{
-      pluginRegistry: PluginRegistry;
-      gatewayMethods: string[];
-      retireGatewayRuntimeBindings?: () => void;
-    }>;
-    onStartupPluginsLoading?: () => void;
-    onStartupPluginsLoaded?: (result: {
-      pluginRegistry: PluginRegistry;
-      gatewayMethods: string[];
-      retireGatewayRuntimeBindings?: () => void;
-    }) => Awaitable<boolean>;
-    getCurrentPluginRegistry?: () => PluginRegistry;
-    shouldStartPluginServices?: () => boolean;
-    getCronService?: () => PluginServiceCronHost | null | undefined;
-    onChannelsStarted?: () => Awaitable<void>;
-    onPluginServices?: (pluginServices: PluginServicesHandle | null) => void;
-    onPostReadySidecars: (...sidecars: GatewayPostReadySidecarHandle[]) => void;
-    onGatewayLifetimeSidecars: (...sidecars: GatewayPostReadySidecarHandle[]) => void;
-    unregisterConnectionDependentSidecar: (sidecar: GatewayPostReadySidecarHandle) => void;
-    trackStartupWork: <T>(run: (signal: AbortSignal) => Promise<T>) => Promise<T>;
-    startWorkerEnvironmentRuntime?: () => Awaitable<GatewayPostReadySidecarHandle | null>;
-    onSidecarsReady?: () => void;
-    getReadiness: ReadinessChecker;
-    isClosing?: () => boolean;
-    startupTrace?: GatewayStartupTrace;
-    sidecarStartup?: GatewaySidecarStartupMode;
-    waitForPostReadyWork?: () => Promise<void>;
-    activeWorkInspectors?: Partial<GatewayActiveWorkInspectors>;
-  },
-  runtimeDeps: GatewayPostAttachRuntimeDeps = defaultGatewayPostAttachRuntimeDeps,
-) {
+    gatewayMethods: string[];
+    retireGatewayRuntimeBindings?: () => void;
+  }>;
+  onStartupPluginsLoading?: () => void;
+  onStartupPluginsLoaded?: (result: {
+    pluginRegistry: PluginRegistry;
+    gatewayMethods: string[];
+    retireGatewayRuntimeBindings?: () => void;
+  }) => Awaitable<boolean>;
+  getCurrentPluginRegistry?: () => PluginRegistry;
+  shouldStartPluginServices?: () => boolean;
+  getCronService?: () => PluginServiceCronHost | null | undefined;
+  onChannelsStarted?: () => Awaitable<void>;
+  onPluginServices?: (pluginServices: PluginServicesHandle | null) => void;
+  onPostReadySidecars: (...sidecars: GatewayPostReadySidecarHandle[]) => void;
+  onGatewayLifetimeSidecars: (...sidecars: GatewayPostReadySidecarHandle[]) => void;
+  unregisterConnectionDependentSidecar: (sidecar: GatewayPostReadySidecarHandle) => void;
+  trackStartupWork: <T>(run: (signal: AbortSignal) => Promise<T>) => Promise<T>;
+  startWorkerEnvironmentRuntime?: () => Awaitable<GatewayPostReadySidecarHandle | null>;
+  onSidecarsReady?: () => void;
+  getReadiness: ReadinessChecker;
+  isClosing?: () => boolean;
+  startupTrace?: GatewayStartupTrace;
+  sidecarStartup?: GatewaySidecarStartupMode;
+  waitForPostReadyWork?: () => Promise<void>;
+  activeWorkInspectors?: Partial<GatewayActiveWorkInspectors>;
+}) {
   const restartSentinelContext = captureDeliveryQueueStateContext();
   // The CLI's hidden capability flag supplies this typed internal handoff.
   // Rehearsal loads plugins without resuming copied jobs, services, or notices.
@@ -558,7 +519,7 @@ export async function startGatewayPostAttachRuntime(
     // The HTTP server is already attached, so keep health probes responsive while the worker
     // resolves Node's effective default CA set before any plugin or worker provider can use TLS.
     await measureStartup(params.startupTrace, "post-attach.system-ca", () =>
-      runtimeDeps.warmSystemCa({ log: params.log }),
+      beginMacOSSystemCaWarmupOnce({ log: params.log }),
     );
   }
 
@@ -635,8 +596,8 @@ export async function startGatewayPostAttachRuntime(
     }
     // Sidecar failure can settle public readiness before this producer finishes.
     startupLogPromise = params.trackStartupWork(() =>
-      measureStartup(params.startupTrace, "post-attach.log", () =>
-        runtimeDeps.logGatewayStartup({
+      measureStartup(params.startupTrace, "post-attach.log", async () =>
+        (await import("./server-startup-log.js")).logGatewayStartup({
           cfg: params.cfgAtStart,
           activationSourceConfig: params.activationSourceConfig,
           env: process.env,
@@ -660,7 +621,6 @@ export async function startGatewayPostAttachRuntime(
   const updateCheck = createDeferredGatewayUpdateCheck({
     scheduler: params.scheduler,
     startupTrace: params.startupTrace,
-    createUpdateCheck: runtimeDeps.createGatewayUpdateCheck,
     getConfig: params.getConfig,
     getPluginRegistry: () => params.getCurrentPluginRegistry?.() ?? pluginRegistry,
     log: params.log,
@@ -726,7 +686,7 @@ export async function startGatewayPostAttachRuntime(
           const postReadySidecarCount = await (async () => {
             try {
               return await measureStartup(params.startupTrace, "sidecars.total", () =>
-                runtimeDeps.startGatewaySidecars({
+                startGatewaySidecars({
                   scheduler: params.scheduler,
                   restartSentinelContext,
                   cfg: params.gatewayPluginConfigAtStart,
@@ -866,7 +826,9 @@ export async function startGatewayPostAttachRuntime(
         registry: sidecarRegistry,
         signal,
         resolveGatewayContext: params.resolveGatewayContext,
-        loadSubagentRegistryActivation: runtimeDeps.loadSubagentRegistryActivation,
+        loadSubagentRegistryActivation: async () =>
+          (await import("../agents/subagents/registry/subagent-registry.js"))
+            .activateSubagentRegistry,
         port: params.port,
         config: params.gatewayPluginConfigAtStart,
         workspaceDir: params.defaultWorkspaceDir,
@@ -881,9 +843,10 @@ export async function startGatewayPostAttachRuntime(
         startupTrace: params.startupTrace,
         log: params.log,
         logHooks: params.logHooks,
-        createHookRunner: runtimeDeps.createHookRunner,
-        refreshLatestUpdateRestartSentinel: () =>
-          runtimeDeps.refreshLatestUpdateRestartSentinel(
+        createHookRunner: async (...args) =>
+          (await import("../plugins/hooks.js")).createHookRunner(...args),
+        refreshLatestUpdateRestartSentinel: async () =>
+          (await import("./server-update-sentinel.js")).prepareLatestUpdateRestartSentinel(
             restartSentinelContext.workerContext.environment,
           ),
       });

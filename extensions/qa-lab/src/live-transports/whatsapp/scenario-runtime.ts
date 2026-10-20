@@ -53,7 +53,6 @@ async function runWhatsAppScenarioAttempt(params: {
     const approval = await runWhatsAppApprovalScenario({
       driver,
       gateway: params.environment.gateway as never,
-      observedMessages: params.environment.observedMessages,
       run: scenarioRun,
       scenario,
       sutAccountId: params.environment.sutAccountId,
@@ -103,17 +102,8 @@ async function runWhatsAppScenarioAttempt(params: {
     gateway: params.environment.gateway as never,
     gatewayTarget: targets?.gatewayTarget ?? runtimeEnv.driverPhoneE164,
     gatewayWorkspaceDir: params.environment.gateway.workspaceDir,
-    recordObservedMessage: (message) => {
-      params.environment.observedMessages.push({
-        ...message,
-        matchedScenario: true,
-        scenarioId: scenario.id,
-        scenarioTitle: scenario.title,
-      });
-    },
     requestStartedAt,
     scenarioId: scenario.id,
-    scenarioTitle: scenario.title,
     sent,
     sutAccountId: params.environment.sutAccountId,
     sutPhoneE164: runtimeEnv.sutPhoneE164,
@@ -146,7 +136,6 @@ async function runWhatsAppScenarioAttempt(params: {
   scenarioRun.verify?.(reply, scenarioContext);
   const afterReplyDetails = await scenarioRun.afterReply?.(reply, scenarioContext);
   const batchDetails = await assertWhatsAppScenarioMessageBatch({
-    alreadyRecordedMessageIds: new Set(reply.messageId ? [reply.messageId] : []),
     context: scenarioContext,
     observedAfter: requestStartedAt,
     run: scenarioRun,

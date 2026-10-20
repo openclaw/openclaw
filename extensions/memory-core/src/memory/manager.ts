@@ -308,7 +308,6 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       this.runInBackgroundContext(() => {
         this.ensureWatcher();
         this.ensureSessionListener();
-        this.ensureIntervalSync();
         void this.runInBackgroundContext(() => this.ensureSessionStartupCatchup()).catch(
           (err: unknown) => {
             log.warn("memory session startup catch-up failed: " + String(err));

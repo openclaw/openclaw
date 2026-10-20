@@ -1,6 +1,5 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   clearGeneratedMediaTaskActivity,
   createMediaGenerationOperation,
@@ -55,15 +54,20 @@ function wait(params: Partial<Parameters<typeof waitForCompletionRequiredAsyncTa
     sessionKey,
     getToolMetas: () => [],
     getDeadlineAtMs: () => undefined,
-    now: () => 0,
     pollIntervalMs: 500,
     ...params,
   });
 }
 
 describe("waitForCompletionRequiredAsyncTasks", () => {
-  beforeEach(() => resetGeneratedMediaTaskActivityForTests());
-  afterEach(() => resetGeneratedMediaTaskActivityForTests());
+  beforeEach(() => {
+    vi.useFakeTimers();
+    resetGeneratedMediaTaskActivityForTests();
+  });
+  afterEach(() => {
+    resetGeneratedMediaTaskActivityForTests();
+    vi.useRealTimers();
+  });
 
   it.each([true, false])("waits before yieldDetected=%s", (yieldDetected) => {
     const task = startTask();
@@ -78,8 +82,10 @@ describe("waitForCompletionRequiredAsyncTasks", () => {
 
   it("waits for active cron tasks discovered from native media operations", async () => {
     const task = startTask();
-    const result = await wait({ sleep: async () => completeTask(task.taskId, 2) });
-    expect(result).toMatchObject({
+    const result = wait({});
+    completeTask(task.taskId, 2);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(await result).toMatchObject({
       waitedRunIds: [task.runId],
       timedOutRunIds: [],
       terminalTasks: [terminalTask(task.taskId)],
@@ -89,13 +95,10 @@ describe("waitForCompletionRequiredAsyncTasks", () => {
   it.each(["image", "music", "video"])("releases durably queued %s completion", async (kind) => {
     const task = startTask(kind);
     const toolMetas = [{ asyncStarted: true, asyncTaskRunId: task.runId }];
-    const result = await wait({
-      getToolMetas: () => toolMetas,
-      sleep: async () => {
-        updateMediaGenerationOperation(task.taskId, { completionDelivery: "queued" });
-      },
-    });
-    expect(result).toEqual({ ...emptyResult, waitedRunIds: [task.runId] });
+    const result = wait({ getToolMetas: () => toolMetas });
+    updateMediaGenerationOperation(task.taskId, { completionDelivery: "queued" });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(await result).toEqual({ ...emptyResult, waitedRunIds: [task.runId] });
     expect(findMediaGenerationOperation(task.taskId)?.status).toBe("running");
     expect(requiresCompletionRequiredAsyncTaskWait({ sessionKey, toolMetas })).toBe(false);
     expect(await wait({ getToolMetas: () => toolMetas, getDeadlineAtMs: () => 0 })).toEqual(
@@ -114,25 +117,19 @@ describe("waitForCompletionRequiredAsyncTasks", () => {
     const metas = [taskMeta(first)];
     // Registry admission prunes completed records against the real epoch.
     const startedAt = Date.now();
-    let now = startedAt;
-    let polls = 0;
-    const result = await wait({
+    setTimeout(() => {
+      completeTask(first.taskId, Date.now());
+      metas.push(taskMeta(startTask("music")));
+    }, 2);
+    setTimeout(() => completeTask("tool:music_generate:run-123", Date.now()), 4);
+    const result = wait({
       sessionKey: undefined,
       getToolMetas: () => metas,
       getDeadlineAtMs: () => startedAt + 19,
-      now: () => now,
       pollIntervalMs: 2,
-      sleep: async (ms) => {
-        now += ms;
-        if (++polls === 1) {
-          completeTask(first.taskId, now);
-          metas.push(taskMeta(startTask("music")));
-        } else {
-          completeTask("tool:music_generate:run-123", now);
-        }
-      },
     });
-    expect(result).toMatchObject({
+    await vi.advanceTimersByTimeAsync(4);
+    expect(await result).toMatchObject({
       waitedRunIds: [first.runId, "tool:music_generate:run-123"],
       timedOutRunIds: [],
       terminalTasks: [
@@ -140,34 +137,30 @@ describe("waitForCompletionRequiredAsyncTasks", () => {
         { taskId: "tool:music_generate:run-123", status: "succeeded" },
       ],
     });
-    expect(polls).toBe(2);
+    expect(Date.now()).toBe(startedAt + 4);
   });
 
   it("rereads paused and resumed deadlines beyond the former finite sentinel", async () => {
     const task = startTask();
     const startedAt = MAX_TIMER_TIMEOUT_MS + 1;
-    let now = startedAt;
-    let deadlineAtMs: number | undefined = now + 750;
-    const expectedSleeps = [500, 500, 500, 250];
-    let polls = 0;
+    vi.setSystemTime(startedAt);
+    let deadlineAtMs: number | undefined = startedAt + 750;
+    setTimeout(() => {
+      deadlineAtMs = undefined;
+    }, 500);
+    setTimeout(() => {
+      deadlineAtMs = Date.now() + 250;
+    }, 1_500);
     const getDeadlineAtMs = vi.fn(() => deadlineAtMs);
-    const result = await wait({
+    const result = wait({
       getDeadlineAtMs,
-      now: () => now,
-      sleep: async (ms) => {
-        expect(ms).toBe(expectedSleeps[polls]);
-        now += ms;
-        polls += 1;
-        if (polls === 1) {
-          deadlineAtMs = undefined;
-        } else if (polls === 3) {
-          deadlineAtMs = now + 250;
-        }
-      },
     });
-    expect(result).toMatchObject({ waitedRunIds: [task.runId], timedOutRunIds: [task.runId] });
-    expect(now).toBe(startedAt + 1_750);
-    expect(polls).toBe(expectedSleeps.length);
+    await vi.advanceTimersByTimeAsync(1_750);
+    expect(await result).toMatchObject({
+      waitedRunIds: [task.runId],
+      timedOutRunIds: [task.runId],
+    });
+    expect(Date.now()).toBe(startedAt + 1_750);
     expect(getDeadlineAtMs).toHaveBeenCalledTimes(5);
   });
 
@@ -175,21 +168,9 @@ describe("waitForCompletionRequiredAsyncTasks", () => {
     startTask();
     const controller = new AbortController();
     const reason = new Error("run cancelled during task poll");
-    const sleeping = createDeferred();
-    try {
-      await expect(
-        wait({
-          abortSignal: controller.signal,
-          sleep: async (ms) => {
-            expect(ms).toBe(500);
-            controller.abort(reason);
-            await sleeping.promise;
-          },
-        }),
-      ).rejects.toMatchObject({ name: "AbortError", cause: reason });
-    } finally {
-      sleeping.resolve();
-      await sleeping.promise;
-    }
+    const result = wait({ abortSignal: controller.signal });
+    controller.abort(reason);
+    await expect(result).rejects.toMatchObject({ name: "AbortError", cause: reason });
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

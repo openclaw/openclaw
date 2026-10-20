@@ -1,6 +1,5 @@
 // Curated policies above the schema-backed security and approvals editor.
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
-import { createMemo } from "@solidjs/signals";
 import type { JSX } from "@solidjs/web";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
@@ -16,16 +15,9 @@ import {
 import { PROFILE_OPTIONS } from "../../lib/agents/tool-catalog.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 
-export type SecurityOverview = {
-  gatewayAuth: string;
-  execPolicy: string;
-  browserEnabled: boolean;
-  browserEnabledOverridden: boolean;
-  toolProfile: string;
-  toolProfileOverridden: boolean;
-};
+type SecurityOverview = ReturnType<typeof extractQuickSettingsSecurity>;
 
-export function extractQuickSettingsSecurity(root: Record<string, unknown>): SecurityOverview {
+export function extractQuickSettingsSecurity(root: Record<string, unknown>) {
   const gateway = asConfigRecord(root.gateway);
   const auth = asConfigRecord(gateway?.auth);
   const tools = asConfigRecord(root.tools);
@@ -69,7 +61,7 @@ export type SecurityViewProps = {
 
 function SecurityOverviewSection(props: SecurityViewProps) {
   const profile = () => props.security.toolProfile.trim();
-  const profileOptions = createMemo(() => {
+  const profileOptions = () => {
     const options: Array<{ value: string; label: string }> = PROFILE_OPTIONS.map((item) => ({
       value: item.id,
       label: t(item.labelKey),
@@ -78,7 +70,7 @@ function SecurityOverviewSection(props: SecurityViewProps) {
       options.push({ value: profile(), label: profile() });
     }
     return options;
-  });
+  };
   return (
     <SettingsSection title={t("quickSettings.security.title")}>
       <SettingsRow

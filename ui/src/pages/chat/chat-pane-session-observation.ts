@@ -84,12 +84,12 @@ function applyObservedChatSessionRow(
   state: ChatPageHost,
   row: GatewaySessionRow | null,
   observedSessionId: string | null = null,
-) {
+): void {
   const selectedAgentId = resolveChatAgentId(state);
   if (!row) {
     const result = state.sessionsResult;
     if (!result || state.sessionsResultAgentId !== selectedAgentId) {
-      return false;
+      return;
     }
     const sessions = result.sessions.filter(
       (candidate) =>
@@ -97,13 +97,13 @@ function applyObservedChatSessionRow(
         (observedSessionId !== null && candidate.sessionId !== observedSessionId),
     );
     if (sessions.length === result.sessions.length) {
-      return false;
+      return;
     }
     state.sessionsResult = { ...result, sessions, count: sessions.length };
-    return true;
+    return;
   }
   if (!visibleSessionMatches(state, row.key, row.agentId ?? selectedAgentId)) {
-    return false;
+    return;
   }
   const current = state.sessionsResultAgentId === selectedAgentId ? state.sessionsResult : null;
   const existing = row.sessionId
@@ -146,21 +146,19 @@ function applyObservedChatSessionRow(
       stopChatRealtimeTalk(state, { preserveConversation: true });
     }
   }
-  if (result === state.sessionsResult && state.sessionsResultAgentId === selectedAgentId) {
-    return false;
-  }
   state.sessionsResult = result;
   state.sessionsResultAgentId = selectedAgentId;
-  return true;
 }
 
 export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation {
-  private readonly parentRowListeners = new Set<() => void>();
+  private publishParentRow?: () => void;
   readonly parentSession = {
     read: () => this.observedParentSessionRow(),
     subscribe: (listener: () => void) => {
-      this.parentRowListeners.add(listener);
-      return () => this.parentRowListeners.delete(listener);
+      this.publishParentRow = listener;
+      return () => {
+        this.publishParentRow = undefined;
+      };
     },
   };
 
@@ -188,7 +186,7 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
     this.parentSessionObservation = null;
     previous?.observation?.dispose();
     if (previous) {
-      this.parentRowListeners.forEach((listener) => listener());
+      this.publishParentRow?.();
     }
   }
 
@@ -243,7 +241,7 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
         if (!current()) {
           return;
         }
-        this.parentRowListeners.forEach((listener) => listener());
+        this.publishParentRow?.();
         if (
           !notification?.eventPending &&
           binding.observation &&
@@ -264,7 +262,7 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
     if (!current()) {
       binding.observation.dispose();
     } else {
-      this.parentRowListeners.forEach((listener) => listener());
+      this.publishParentRow?.();
       refresh.refresh();
     }
   }

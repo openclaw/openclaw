@@ -46,7 +46,6 @@ import {
   type ResolvedOpenAICompletionsCompat,
 } from "./openai-completions-compat.js";
 import { isAzureOpenAICompatibleHost } from "./openai-completions-host.js";
-import { applyCompletionsReasoningAndRouting } from "./openai-completions-policy.js";
 import {
   applyCompletionsReplay,
   COMPLETIONS_REASONING_REPLAY_FIELDS,
@@ -81,20 +80,6 @@ function isKnownOpenAICompletionsEndpoint(model: Pick<Model, "baseUrl">): boolea
   }
   const endpoint = URL.parse(model.baseUrl);
   return endpoint !== null && isAzureOpenAICompatibleHost(endpoint.hostname.toLowerCase());
-}
-
-function resolveOpenAICompletionsMaxTokens(
-  model: OpenAIModeModel,
-  options: OpenAICompletionsOptions | undefined,
-): { maxTokens: number | undefined; clampToModelMaxTokens: boolean } {
-  if (options?.maxTokens) {
-    return { maxTokens: options.maxTokens, clampToModelMaxTokens: true };
-  }
-  const paramsMaxTokens = resolveMaxTokensParam(model.params);
-  if (paramsMaxTokens) {
-    return { maxTokens: paramsMaxTokens, clampToModelMaxTokens: false };
-  }
-  return { maxTokens: model.maxTokens, clampToModelMaxTokens: false };
 }
 
 const OPENAI_COMPLETIONS_INPUT_TOKEN_SAFETY_MARGIN = 1.25;
@@ -478,17 +463,18 @@ export function buildOpenAICompletionsRequest(
   const thinkingExplicit =
     options?.openclawThinkingExplicit ??
     (options?.reasoningEffort !== undefined || options?.reasoning !== undefined);
-  const reasoning = {
-    ...resolveOpenAIRequestReasoning(model, requestedEffort, compat.reasoningEffortForOff),
-    thinkingExplicit,
-  };
-  const { effort, thinkingEnabled } = reasoning;
+  const { effort, thinkingEnabled } = resolveOpenAIRequestReasoning(
+    model,
+    requestedEffort,
+    compat.reasoningEffortForOff,
+  );
+  const direct = policy.mode === "direct";
   {
-    const maxTokenBudget =
-      policy.mode === "direct"
-        ? { maxTokens: options?.maxTokens, clampToModelMaxTokens: true }
-        : resolveOpenAICompletionsMaxTokens(model, options);
-    const effectiveMaxTokens = maxTokenBudget.maxTokens;
+    let effectiveMaxTokens = options?.maxTokens;
+    const clampToModelMaxTokens = direct || Boolean(effectiveMaxTokens);
+    if (!direct && !effectiveMaxTokens) {
+      effectiveMaxTokens = resolveMaxTokensParam(model.params) || model.maxTokens;
+    }
     const effectiveContextTokens =
       asPositiveFiniteNumber((model as { contextTokens?: number }).contextTokens) ??
       asPositiveFiniteNumber(model.contextWindow);
@@ -497,7 +483,7 @@ export function buildOpenAICompletionsRequest(
     const modelMaxTokens =
       modelOutputLimit === undefined ? undefined : Math.floor(modelOutputLimit);
     if (
-      maxTokenBudget.clampToModelMaxTokens &&
+      clampToModelMaxTokens &&
       clampedMaxTokens !== undefined &&
       modelMaxTokens !== undefined &&
       clampedMaxTokens > modelMaxTokens
@@ -562,7 +548,67 @@ export function buildOpenAICompletionsRequest(
       params.reasoning = { effort };
     }
   }
-  applyCompletionsReasoningAndRouting(params, model, reasoning, compat, policy.mode);
+  const nativeEffort = compat.thinkingFormat === "openrouter" ? undefined : effort;
+  const enabled = thinkingEnabled ?? false;
+  if (
+    model.reasoning &&
+    (!compat.thinkingOffControlUndeclared || thinkingEnabled !== undefined || !thinkingExplicit)
+  ) {
+    let allowScalarEffort = true;
+    if (direct && compat.thinkingFormat === "zai") {
+      params.thinking = enabled ? { type: "enabled", clear_thinking: false } : { type: "disabled" };
+      allowScalarEffort = false;
+    } else if (compat.thinkingFormat === "qwen") {
+      params.enable_thinking = enabled;
+      allowScalarEffort = false;
+    } else if (compat.thinkingFormat === "qwen-chat-template") {
+      const chatTemplateReasoningEffort =
+        enabled && thinkingExplicit && model.compat?.supportedReasoningEfforts?.length
+          ? effort
+          : undefined;
+      params.chat_template_kwargs = {
+        enable_thinking: enabled,
+        ...(direct ? { preserve_thinking: true } : {}),
+        ...(chatTemplateReasoningEffort ? { reasoning_effort: chatTemplateReasoningEffort } : {}),
+      };
+      allowScalarEffort = false;
+    } else if (
+      compat.thinkingFormat === "together" ||
+      (direct && compat.thinkingFormat === "deepseek")
+    ) {
+      if (compat.thinkingFormat === "deepseek") {
+        params.thinking = { type: enabled ? "enabled" : "disabled" };
+      } else {
+        params.reasoning = { enabled };
+      }
+      allowScalarEffort = enabled;
+    }
+    if (
+      allowScalarEffort &&
+      compat.supportsReasoningEffort &&
+      (direct ? nativeEffort !== undefined : nativeEffort)
+    ) {
+      params.reasoning_effort = nativeEffort;
+    }
+  }
+  if (direct) {
+    if (compat.openRouterRouting) {
+      params.provider = compat.openRouterRouting;
+    }
+    if (model.baseUrl.includes("ai-gateway.vercel.sh") && model.compat?.vercelGatewayRouting) {
+      const routing = model.compat.vercelGatewayRouting;
+      if (routing.only || routing.order) {
+        const gatewayOptions: Record<string, string[]> = {};
+        if (routing.only) {
+          gatewayOptions.only = routing.only;
+        }
+        if (routing.order) {
+          gatewayOptions.order = routing.order;
+        }
+        params.providerOptions = { gateway: gatewayOptions };
+      }
+    }
+  }
   if (policy.mode === "managed" && compat.cacheControlFormat === "anthropic") {
     applyCompletionsAnthropicCacheControl(
       params,

@@ -1,6 +1,6 @@
 import { createMemo, Show } from "solid-js";
 import { localEditorFilePath } from "../../../app/native-editor-locality.runtime.ts";
-import "../../../components/mcp-app-catalog.tsx";
+import { McpAppCatalog } from "../../../components/mcp-app-catalog.tsx";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import "../../../components/tooltip.ts";
@@ -166,13 +166,11 @@ export function SidebarFile(props: {
             {props.content.path}
           </span>
           <FileCopyButton action="path" controls={props.controls} />
-          <openclaw-mcp-app-catalog
+          <McpAppCatalog
             surface="file"
-            prop:sessionKey={
-              props.runtime?.sessionKey ?? props.content.draftContext?.sessionKey ?? ""
-            }
-            prop:agentId={props.runtime?.agentId ?? ""}
-            prop:filePath={props.content.path}
+            sessionKey={props.runtime?.sessionKey ?? props.content.draftContext?.sessionKey ?? ""}
+            agentId={props.runtime?.agentId ?? ""}
+            filePath={props.content.path}
           />
         </div>
         <Show when={props.controls}>

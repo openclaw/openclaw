@@ -243,24 +243,22 @@ function applyDefaultOpenAIGptRuntimeParams(
 }
 
 export function resolveAgentTransportOverride(params: {
-  settingsManager: Pick<SettingsManager, "getGlobalSettings" | "getProjectSettings">;
+  settingsManager: Pick<SettingsManager, "getGlobalSettings">;
   effectiveExtraParams: Record<string, unknown> | undefined;
 }): AgentRuntimeTransport | undefined {
   const globalSettings = params.settingsManager.getGlobalSettings();
-  const projectSettings = params.settingsManager.getProjectSettings();
-  if (Object.hasOwn(globalSettings, "transport") || Object.hasOwn(projectSettings, "transport")) {
+  if (Object.hasOwn(globalSettings, "transport")) {
     return undefined;
   }
   return resolveSupportedTransport(params.effectiveExtraParams?.transport);
 }
 
 export function resolveExplicitSettingsTransport(params: {
-  settingsManager: Pick<SettingsManager, "getGlobalSettings" | "getProjectSettings">;
+  settingsManager: Pick<SettingsManager, "getGlobalSettings">;
   sessionTransport: unknown;
 }): AgentRuntimeTransport | undefined {
   const globalSettings = params.settingsManager.getGlobalSettings();
-  const projectSettings = params.settingsManager.getProjectSettings();
-  if (!Object.hasOwn(globalSettings, "transport") && !Object.hasOwn(projectSettings, "transport")) {
+  if (!Object.hasOwn(globalSettings, "transport")) {
     return undefined;
   }
   return resolveSupportedTransport(params.sessionTransport);

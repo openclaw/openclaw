@@ -5,6 +5,7 @@ import { Command } from "commander";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { VoiceCallRuntime } from "./runtime-entry.js";
+import { normalizeVoiceCallConfig } from "./src/config.js";
 import type { CallRecord } from "./src/types.js";
 
 let runtimeStub: VoiceCallRuntime;
@@ -47,10 +48,10 @@ type RespondCall = [
 function createRuntimeStub(callId = "call-1"): VoiceCallRuntime {
   const call = createCallRecord({ callId });
   return {
-    config: {
+    config: normalizeVoiceCallConfig({
       toNumber: "+15550001234",
       realtime: { enabled: false },
-    } as VoiceCallRuntime["config"],
+    }),
     provider: {} as VoiceCallRuntime["provider"],
     manager: {
       initiateCall: vi.fn(async () => ({ callId, success: true })),
@@ -623,6 +624,7 @@ it("starts and polls delegated gateway continue operations", async () => {
 });
 
 it("gateway continue operations return pending, completed, and failed results", async () => {
+  runtimeStub.config.transcriptTimeoutMs = 120000;
   const continuation = createDeferred<{ success: true; transcript: string }>();
   runtimeStub.manager.continueCall = vi.fn(
     async () => await continuation.promise,

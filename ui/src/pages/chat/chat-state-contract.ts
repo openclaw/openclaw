@@ -38,7 +38,6 @@ export type ChatState = StreamCausalBoundaryState & {
   connected: boolean;
   chatSubmissions?: ApplicationChatSubmissions;
   hasPendingInitialTurn?: (sessionKey: string) => boolean;
-  isRouteSessionPending?: () => boolean;
   /** Monotonic owner epoch; reconnects can reuse the same client object. */
   connectionEpoch: number;
   /** Config changes retire preview tickets even when session permissions stay inherited. */
@@ -54,7 +53,6 @@ export type ChatState = StreamCausalBoundaryState & {
   chatHistoryCursor?: ChatHistoryCursor;
   /** Active leaf of the history snapshot currently rendered by this pane. */
   chatDisplayedLeafEntryId?: string | null;
-  chatThinkingLevel: string | null;
   chatVerboseLevel: string | null;
   /** Pane-owned explicit session queue override from the latest history response. */
   chatQueueModeOverride?: GatewaySessionRow["queueMode"];

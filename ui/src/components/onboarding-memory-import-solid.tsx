@@ -130,7 +130,6 @@ function OnboardingMemoryImportContent(props: Props, host: OnboardingMemoryImpor
               agentsListRequest = undefined;
             } else if (context && agentsListRequest !== context.agents) {
               const agents = context.agents;
-              // Hold the latch through the owner's loading and failure notifications.
               agentsListRequest = agents;
               void agents
                 .ensureList()
@@ -142,6 +141,7 @@ function OnboardingMemoryImportContent(props: Props, host: OnboardingMemoryImpor
                 });
             }
           };
+          // Keep list admission latched through the owner's loading and failure notifications.
           const stop = source.subscribe(requestList);
           requestList();
           return stop;

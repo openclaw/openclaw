@@ -5,10 +5,9 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import {
-  SQLITE_WORKER_MAX_MESSAGE_BYTES,
-  SqliteWorkerError,
-} from "../../infra/sqlite-worker-contract.js";
+import { formatErrorMessageWithCode } from "../../infra/errors.js";
+import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
+import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "../../infra/sqlite-worker-contract.js";
 import * as admissions from "../../infra/sqlite-worker-operation-admission.js";
 import { removeSessionWorktree } from "../../sessions/session-worktree-lifecycle.js";
 import { withExistingOpenClawStateSchema } from "../../state/openclaw-state-db-schema-policy.js";
@@ -21,6 +20,7 @@ import {
   observeMainThreadReads,
   observeMainThreadSql,
 } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import { renderAssistantRequestFailureCopy } from "../failover/assistant-request-failure-copy.js";
 import {
   SessionWorktreeLifecycleError,
   SessionWorktreeSourceChangedError,
@@ -424,12 +424,15 @@ it("preserves committed bytes after reply loss, rolls back refused commits, and 
     content: "090807",
   });
 
-  const uncertain = new SqliteWorkerError("Synthetic lost native settlement", "outcome-unknown");
+  const uncertain = Object.assign(new Error("database or disk is full"), { code: "SQLITE_FULL" });
+  const replyFailure = new Error("Worktree write reply was lost");
   let unknownWrites = 0;
   interceptWorktreeWorkerOperation(
     (execute) => async (command, executeOptions) => {
       if (command.type === "worktrees.writeProvisionedSnapshot") {
         unknownWrites += 1;
+        await execute(command, executeOptions);
+        throw replyFailure;
       }
       return execute(command, executeOptions);
     },
@@ -451,7 +454,16 @@ it("preserves committed bytes after reply loss, rolls back refused commits, and 
     const runContext = captureOpenClawStateWorkerContext({ env });
     const accept = captureGuard(runContext, "exact-owner");
     const assertCurrent = accept(await readWorktree(runContext, "synthetic"));
-    await expect(chunk(1)).rejects.toMatchObject({ code: "outcome-unknown" });
+    await expect(chunk(1)).rejects.toSatisfy((error: unknown) => {
+      expect(error).toMatchObject({ code: "outcome-unknown" });
+      expect(formatErrorMessageWithCode(error)).toContain(replyFailure.message);
+      expect(
+        renderAssistantRequestFailureCopy({
+          storageFailure: classifyGatewayStorageFailure(error),
+        }),
+      ).toContain("disk is full. Free up space");
+      return true;
+    });
     expect(assertCurrent).toThrow("owner or lifecycle changed");
     await expect(Promise.resolve().then(() => clear())).rejects.toMatchObject({
       code: "outcome-unknown",

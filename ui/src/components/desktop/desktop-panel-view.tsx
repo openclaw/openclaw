@@ -13,12 +13,9 @@ import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
 import type { DesktopSizingMode } from "./desktop-client.ts";
 import type { DesktopPanelState } from "./desktop-panel-state.ts";
 import { desktopSourceForEnvironment } from "./desktop-source.ts";
+import { hostDesktopSetupCopy, type DesktopHostSetup } from "./host-desktop-setup.ts";
 
 registerEnglishCatalog(registerDesktopEnglish);
-
-export function DesktopLoading(props: { label: string; overlay?: boolean }) {
-  return <PanelLoadingSkeleton variant="desktop" label={props.label} overlay={props.overlay} />;
-}
 
 export function DesktopPanelView(props: {
   embedded: boolean;
@@ -133,16 +130,86 @@ export function DesktopPanelContent(props: {
   );
 }
 
+// Systems hints sit under the selected machine's row; the panel names the Gateway host instead.
+const HOST_SETUP_HINTS: Record<string, string> = {
+  "systems.desktopSetupEnableHint": "desktop.hostDesktopEnableHint",
+  "systems.screenSharingSetupHint": "desktop.hostScreenSharingSetupHint",
+  "systems.desktopServerSetupHint": "desktop.hostDesktopServerSetupHint",
+};
+
+function DesktopHostSetupNotice(props: { setup: DesktopHostSetup; loading: boolean }) {
+  const state = () => props.setup.environment.desktopSetup?.state;
+  const ready = () => state() === "ready" || state() === "managed";
+  const mac = () => props.setup.environment.platform === "darwin";
+  const copy = () => hostDesktopSetupCopy(state(), mac(), false);
+  return (
+    <div class="desktop-status" role="status">
+      <div>{t("desktop.hostDesktopOff")}</div>
+      <h2>{t(copy().title)}</h2>
+      <div>{t(HOST_SETUP_HINTS[copy().hint] ?? copy().hint)}</div>
+      {state() === "needs-server" || state() === "ready" ? (
+        <div>{t(mac() ? "desktop.screenSharingNetwork" : "desktop.desktopServerNetwork")}</div>
+      ) : null}
+      {state() === "ready" ? (
+        <div>
+          {t(mac() ? "desktop.hostScreenSharingAccount" : "desktop.hostDesktopServerAccount")}
+        </div>
+      ) : null}
+      {state() === "unsupported" && props.setup.environment.desktopSetup?.detail ? (
+        <div>{props.setup.environment.desktopSetup.detail}</div>
+      ) : null}
+      {props.setup.error ? (
+        <div class="desktop-note--error" role="alert">
+          {props.setup.error}
+        </div>
+      ) : null}
+      {ready() ? (
+        <>
+          <button
+            class="desktop-button desktop-button--primary"
+            type="button"
+            disabled={!props.setup.canEnable || props.setup.busy}
+            onClick={props.setup.onEnable}
+          >
+            {t(props.setup.busy ? "systems.desktopSetupEnabling" : "systems.enableDesktopAccess")}
+          </button>
+          <div>
+            {t(
+              props.setup.canEnable
+                ? "systems.desktopSetupApplyHint"
+                : "systems.desktopSetupAdminHint",
+            )}
+          </div>
+        </>
+      ) : null}
+      {/* Systems polls; the panel retests on request whenever it cannot enable here. */}
+      {!ready() || !props.setup.canEnable ? (
+        <button
+          class="desktop-button"
+          type="button"
+          disabled={props.loading}
+          onClick={props.setup.onCheckAgain}
+        >
+          {t(props.loading ? "desktop.refreshing" : "systems.desktopSetupCheckAgain")}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 export function DesktopPicker(props: {
   automatic: boolean;
   environments: EnvironmentSummary[];
+  hostSetup?: DesktopHostSetup | null;
   loading: boolean;
   onConnect: (environmentId: string) => void;
   onRefresh: () => void;
 }) {
   return (
     <>
-      {props.automatic ? (
+      {props.automatic && props.hostSetup ? (
+        <DesktopHostSetupNotice setup={props.hostSetup} loading={props.loading} />
+      ) : props.automatic ? (
         <div class="desktop-status" role="status">
           <button class="desktop-button" type="button" onClick={props.onRefresh}>
             {t("common.retry")}
@@ -164,7 +231,7 @@ export function DesktopPicker(props: {
           </div>
           <div class="desktop-picker">
             {props.loading && props.environments.length === 0 ? (
-              <DesktopLoading label={t("desktop.loading")} />
+              <PanelLoadingSkeleton variant="desktop" label={t("desktop.loading")} />
             ) : props.environments.length === 0 ? (
               <div class="desktop-status">{t("desktop.empty")}</div>
             ) : (
@@ -350,7 +417,9 @@ function DesktopConnection(props: {
             onClick={props.onTakeControl}
           />
         )}
-        {props.state === "connecting" && <DesktopLoading label={t("desktop.connecting")} overlay />}
+        {props.state === "connecting" && (
+          <PanelLoadingSkeleton variant="desktop" label={t("desktop.connecting")} overlay />
+        )}
       </div>
     </>
   );

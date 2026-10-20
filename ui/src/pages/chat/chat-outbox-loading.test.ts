@@ -1,11 +1,10 @@
-// @vitest-environment node
+// @vitest-environment jsdom
 import { createEffect, createRoot, flush } from "@solidjs/signals";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import { projectChatErrors } from "./chat-error-projection.ts";
-import { createChatErrorState } from "./chat-error-state.ts";
 import { makeChatHost, makeRequestMock } from "./chat-host.test-support.ts";
+import { createTestPageState } from "./chat-page-state.test-support.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import { listStoredChatOutboxes } from "./composer-persistence.ts";
@@ -24,8 +23,7 @@ it.each([
   "load failure after reconnect",
 ] as const)("retains outbox ownership across recovery module loading (%s)", async (scenario) => {
   const sessionKey = "agent:main:outbox-loading";
-  const host = Object.assign(
-    createChatErrorState(),
+  const host = createTestPageState(
     makeChatHost({
       sessionKey,
       currentSessionId: "outbox-session",
@@ -54,9 +52,8 @@ it.each([
   expect(host.chatQueue).toHaveLength(1);
   const renderedErrors: Array<string | null | undefined> = [];
   const dispose = createRoot((stop) => {
-    const errors = projectChatErrors(host);
     createEffect(
-      () => errors.chatError,
+      () => host.chatError,
       (value) => {
         renderedErrors.push(value);
       },

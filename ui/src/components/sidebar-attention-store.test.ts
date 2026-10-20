@@ -13,7 +13,7 @@ import { captureChatOutboxAdmission } from "../lib/chat/outbox-store.ts";
 import { invalidateModelAuthStatusRequests } from "../lib/model-auth-request-state.ts";
 import {
   admitStoredChatComposerQueueItem,
-  removeStoredChatComposerQueueItem,
+  updateStoredChatComposerQueueItems,
 } from "../pages/chat/composer-persistence.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
@@ -693,23 +693,16 @@ describe("sidebar attention source publication", () => {
     expect(authCalls).toBe(2);
   });
 
-  it.each<{ name: string; row?: Record<string, unknown>; disabled?: boolean }>([
+  it.each<{ name: string; disabled?: boolean }>([
     { name: "request failure" },
-    { name: "missing identity", row: { id: undefined } },
-    { name: "missing runtime status", row: { lastRunStatus: undefined } },
-    { name: "invalid active run", row: { runningAtMs: "0" } },
-    { name: "invalid scheduler disablement", row: { autoDisabled: {} } },
     { name: "disabled scheduler status failure", disabled: true },
-  ])("preserves loaded attention and dismissals after $name", async ({ row, disabled }) => {
+  ])("preserves loaded attention and dismissals after $name", async ({ disabled }) => {
     vi.stubGlobal("localStorage", createStorageMock());
     const page = cronPage("overdue");
     Object.assign(page.jobs[0]!, { lastRunStatus: "ok", nextRunAtMs: 1 });
     let failing = false;
     const request = vi.fn(async (method: string) => {
       if (failing && method === (disabled ? "cron.status" : "cron.list")) {
-        if (row) {
-          return { ...page, jobs: [{ ...page.jobs[0], ...row }] };
-        }
         throw new Error("temporarily unavailable");
       }
       if (method === "cron.list") {
@@ -899,7 +892,9 @@ describe("sidebar attention source publication", () => {
     expect(request.mock.calls).toHaveLength(calls);
     harness.update({ phase: "connected", hello });
     expect(store.entries.some((entry) => entry.type === "outbox")).toBe(false);
-    expect(removeStoredChatComposerQueueItem(host, host.sessionKey, row.id, row)).toBe(true);
+    expect(
+      updateStoredChatComposerQueueItems(host, host.sessionKey, [{ expected: row, next: null }]),
+    ).toBe(true);
     expect(store.entries.map((entry) => entry.type)).toEqual(["attention"]);
   });
 });

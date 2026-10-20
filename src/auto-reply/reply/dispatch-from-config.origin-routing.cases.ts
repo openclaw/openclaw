@@ -87,6 +87,7 @@ export function registerOriginRoutingCases() {
         originatingTo: "telegram:999",
       }),
       expect.any(Object),
+      expect.any(Function),
     ]);
   });
 
@@ -151,6 +152,7 @@ export function registerOriginRoutingCases() {
         originatingChatType: "channel",
       }),
       expect.any(Object),
+      expect.any(Function),
     ]);
   });
 }

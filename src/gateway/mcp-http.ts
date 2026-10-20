@@ -30,7 +30,7 @@ import {
   isAgentHarnessSessionKey,
   isAgentHarnessSessionStoreEntryProtected,
 } from "../sessions/agent-harness-session-key.js";
-import { runWithTrackedCancellation } from "../shared/async-work-scope.js";
+import { runWithTrackedCancellation } from "../shared/async-work-resources.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import {
   registerMcpLoopbackClientGrantRevocationListener,

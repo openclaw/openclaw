@@ -401,6 +401,8 @@ and one `owner.sqlite` token holding its native lifetime lease. Gateway
 metadata and its source captures retain the same process-local instance; a
 concurrent CLI process owns a separate instance. Releasing one capture cannot
 retire another capture or a still-running metadata owner.
+During updates with an explicit `TMPDIR`, source captures use that temporary volume
+instead. Their native custody and invocation cleanup remain unchanged.
 Gateway metadata supplies its scheduler for hourly cleanup; executable CLI
 commands own maintenance through their invocation scope. Capturing source alone
 does not create a timer. Cleanup does not retain the first command's invocation context.

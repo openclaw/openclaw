@@ -45,6 +45,10 @@ using that generation through finalization, rollback, and CLI cleanup, even when
 the new build has different chunk filenames. The new Gateway starts from the
 activated build.
 
+Managed update helpers route diagnostic logs to stderr so debug logging cannot
+interrupt their control handshake. This applies to the installed updater; a newer
+candidate cannot change an older updater's pre-activation handshake.
+
 If native service inspection becomes unavailable after admission, the updater
 refuses activation before stopping the Gateway or replacing its package. When
 inspection is unavailable initially, a live or unverified Gateway state owner
@@ -131,6 +135,22 @@ Retained plugin databases, including plugin shared-state stores, are not checked
 against the agent schema. Their plugin owns migration; they remain in the
 snapshot and rollback inventory even when the plugin is disabled. The primary
 shared-state database is checked against the shared-state schema.
+
+The local client credential cutover preserves private identities and cached tokens
+in `client/credentials.sqlite`, separate from shared Gateway state. The preparatory
+release does not create that file. Earlier SQLite drivers capture the shared
+credential tables before the cutover and restore them on automatic rollback; the
+old version ignores the remaining local file. Credentials issued between upgrade
+and rollback are lost, and those clients must pair again. A later upgrade rebuilds
+that stale local file from restored shared state instead of merging it. PostgreSQL
+installations use an engine-aware driver with local-family capture support, so
+rollback restores the shared and local stores together. See
+[credential migration and recovery](/reference/database-schemas/versioning#local-client-credentials).
+
+Independent native credential sources remain unchanged during import and remain
+readable by the previous app after rollback. Reusing the same source preserves
+local refreshes; a changed or restored source rebuilds its local copy while
+retaining consumed legacy-JSON claims.
 
 OpenClaw.app runs plugin convergence through the selected runtime's Doctor while
 the app owns Gateway activation. This aligns managed official npm plugins with the new
@@ -621,6 +641,8 @@ This lets validation run while the serving Gateway keeps its configured ports.
 It preserves non-secret Gateway auth settings such as `gateway.auth.rateLimit`
 for policy checks, while using a temporary token and disabling Tailscale identity
 authentication.
+Doctor omits the onboarding URL warning derived from that temporary loopback
+binding during rehearsal; other findings remain visible.
 The activated Gateway retains your normal listener settings. Candidate startup
 progress is emitted only when the driving updater announces support, so older
 updaters, including 2026.9.5 and 2026.9.6, retain actual startup errors instead of
@@ -658,10 +680,20 @@ Cancellation may use up to the same allowance to settle accepted work before
 releasing its ownership.
 Update-history writes retry a timed-out commit admission at most three times,
 releasing the SQLite writer between attempts. Ordinary progress that still cannot
-be recorded produces a warning and validation continues. Required recovery and
+be recorded, including a worker queue-capacity refusal before dispatch, produces
+a warning and validation continues. Snapshot progress keeps one write in flight
+and coalesces pending observations to the latest progress. Required recovery and
 terminal records report a failure instead of retrying forever. These limits apply
 when the newer installed updater runs; staging it cannot change an older driver's
 already-running progress writer.
+
+If the `2026.10.4` updater stops with `candidate-snapshot-failed` and
+`SQLite worker queue capacity reached`, staging a newer candidate does not replace
+that progress writer. Preserve a verified state backup and follow the
+[manual package-manager procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)
+to install a release containing the fix, stopping and starting the Gateway through
+its actual service owner. Keep the same account, installation prefix, profile,
+and state paths; do not delete databases or disable consistency checks.
 
 Runtime retention looks for hoisted dependencies within the package manager's
 owning installation. Missing optional peers do not cause it to copy unrelated
@@ -1317,6 +1349,11 @@ openclaw doctor
 ```
 
 Migrates config, audits DM policies, and checks gateway health. Doctor also compares active official plugins with the OpenClaw package the managed service will load after restart. Resolve any plugin restart-readiness warning before continuing. Details: [Doctor](/gateway/doctor)
+
+On Linux, `openclaw doctor --fix` can reclaim abandoned updater runtimes even
+after a systemd user-manager re-exec. The manager's `--deserialize` argument and
+its protected `(sd-pam)` child do not count as runtime holders. Actual runtime
+references and unverified processes still preserve the affected artifacts.
 
 On Windows, `openclaw doctor --fix` can also retry abandoned backup scratch
 cleanup after an older release reported `EPERM` while renaming to an

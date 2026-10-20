@@ -43,6 +43,18 @@ export const OPENAI_RESPONSES_APIS: ReadonlySet<Api> = new Set([
   "openclaw-openai-chatgpt-responses-transport",
   "openclaw-azure-openai-responses-transport",
 ]);
+export const OPENAI_RESPONSES_TOOL_CALL_PROVIDERS: ReadonlySet<string> = new Set([
+  "openai",
+  "opencode",
+  "azure-openai-responses",
+  "github-copilot",
+]);
+
+export function isResponsesTerminalEventType(value: unknown): boolean {
+  return (
+    value === "response.completed" || value === "response.incomplete" || value === "response.failed"
+  );
+}
 
 export class OpenAIResponsesWebSocketPreDispatchError extends Error {
   constructor(cause: unknown) {

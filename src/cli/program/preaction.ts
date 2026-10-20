@@ -162,7 +162,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     let allowInvalid =
       commandPath[0] === "update" ||
       resolvePluginInstallInvalidConfigPolicy(
-        resolvePluginInstallPreactionRequest({ actionCommand, commandPath, argv: process.argv }),
+        resolvePluginInstallPreactionRequest({ actionCommand, commandPath }),
       ) === "allow-plugin-recovery";
     const isGatewayRun =
       commandPath[0] === "gateway" &&

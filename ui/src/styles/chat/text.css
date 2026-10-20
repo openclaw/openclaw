@@ -1272,7 +1272,8 @@
 }
 
 .chat-text :where(pre code.markdown-block-art),
-.chat-group.user .chat-text :where(pre code.markdown-block-art) {
+.chat-group.user .chat-text :where(pre code.markdown-block-art),
+.chat-tool-card__block-content code.markdown-block-art {
   display: block;
   min-width: 100%;
   width: max-content;

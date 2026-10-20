@@ -12,6 +12,7 @@ function createGate() {
 }
 function request(index = 0) {
   return {
+    kind: "transcript" as const,
     publicationKey: `publication-${index}`,
     sessionKey: `agent:main:public-${index}`,
     requestKey: `page-${index}`,
@@ -109,6 +110,37 @@ describe("public reader admission", () => {
     sessionChanges.emit({ sessionKey: request().sessionKey });
     release.resolve("Revoked content");
     expect(await pending).toEqual({ kind: "unavailable" });
+  });
+
+  it("keeps transcript builds current across run updates without sharing live card work", async () => {
+    const gate = createGate();
+    const transcript = createDeferred<string>();
+    const card = createDeferred<string>();
+    const transcriptWork = vi.fn(() => transcript.promise);
+    const cardWork = vi.fn(() => card.promise);
+    const page = gate.run({ ...request(), work: transcriptWork });
+    const preview = gate.run({ ...request(), kind: "card", work: cardWork });
+    await Promise.resolve();
+    expect(transcriptWork).toHaveBeenCalledTimes(1);
+    expect(cardWork).toHaveBeenCalledTimes(1);
+    sessionChanges.emit({ sessionKey: request().sessionKey, scope: "runtime" });
+    transcript.resolve("Published transcript");
+    card.resolve("Outdated live status");
+    expect(await page).toMatchObject({ kind: "ok", value: { body: "Published transcript" } });
+    expect(await preview).toEqual({ kind: "unavailable" });
+    const currentCard = await gate.run({ ...request(), kind: "card", work: cardWork });
+    expect(currentCard.kind).toBe("ok");
+    expect(cardWork).toHaveBeenCalledTimes(2);
+    sessionChanges.emit({ all: true, scope: "subagent-runs" });
+    expect(await gate.run({ ...request(), work: transcriptWork })).toMatchObject({
+      kind: "ok",
+      value: { body: "Published transcript" },
+    });
+    expect(transcriptWork).toHaveBeenCalledTimes(1);
+    if (currentCard.kind !== "ok" || !currentCard.value) {
+      throw new Error("Public card did not return its representation");
+    }
+    expect(currentCard.value.isCurrent()).toBe(false);
   });
 
   it("retains a late completion under byte pressure and evicts the least-recent result", async () => {

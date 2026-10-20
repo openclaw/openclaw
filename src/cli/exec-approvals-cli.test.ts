@@ -17,6 +17,7 @@ const {
   resetExecApprovalsCliMocks,
   runApprovalsCommand,
   runtimeErrors,
+  setLocalSocket,
 } = await import("./exec-approvals-cli.test-support.js");
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -142,9 +143,9 @@ describe("exec approvals CLI", () => {
 
   it("sanitizes stored allowlist patterns in human output without changing JSON", async () => {
     const pattern = "/tmp/safe\u001b[31mred\u001b[0m\u001b]0;pwned\u0007\nnext\trow\rback\bspace🦞";
+    setLocalSocket("/tmp/local-exec-approvals.sock", "fixture-token");
     localSnapshot.file = {
       version: 1,
-      socket: { path: "/tmp/local-exec-approvals.sock", token: "fixture-token" },
       agents: { "*": { allowlist: [{ pattern }] } },
     };
 
@@ -176,9 +177,9 @@ describe("exec approvals CLI", () => {
   });
 
   it("redacts the socket token from local write JSON while preserving its path", async () => {
+    setLocalSocket("/tmp/local-exec-approvals.sock", "fixture-token");
     localSnapshot.file = {
       version: 1,
-      socket: { path: "/tmp/local-exec-approvals.sock", token: "fixture-token" },
       agents: {},
     };
 
@@ -189,6 +190,8 @@ describe("exec approvals CLI", () => {
     expect(file.socket).toEqual({ path: "/tmp/local-exec-approvals.sock" });
     expect(output.raw).toBeUndefined();
     expect(JSON.stringify(output)).not.toContain('"token"');
+    expect(localSnapshot.file.socket).toBeUndefined();
+    expect(localSnapshot.raw).not.toContain("fixture-token");
     expect(defaultRuntime.writeJson).toHaveBeenCalledTimes(1);
     expect(loggedOutput()).not.toContain("Writing approvals for this state root.");
   });
@@ -621,9 +624,9 @@ describe("exec approvals allowlist JSON no-ops", () => {
     async (_target, args, method) => {
       for (const operation of ["add", "remove"] as const) {
         const socketPath = "/tmp/noop-exec-approvals.sock";
+        setLocalSocket(socketPath, "fixture-noop-token");
         localSnapshot.file = {
           version: 1,
-          socket: { path: socketPath, token: "fixture-noop-token" },
           ...(operation === "add"
             ? { agents: { "*": { allowlist: [{ pattern: "/usr/bin/uptime", lastUsedAt: 123 }] } } }
             : {}),
@@ -632,7 +635,10 @@ describe("exec approvals allowlist JSON no-ops", () => {
           path: localSnapshot.path,
           exists: localSnapshot.exists,
           hash: localSnapshot.hash,
-          file: localSnapshot.file,
+          file: {
+            ...localSnapshot.file,
+            socket: { path: socketPath, token: "fixture-noop-token" },
+          },
         };
         const before = structuredClone(snapshot);
         const updateExecApprovals = vi.mocked(execApprovals.updateExecApprovals);

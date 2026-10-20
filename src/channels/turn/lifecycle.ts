@@ -41,6 +41,7 @@ import { copyChannelParticipantAdmissionEvidence } from "../message-access/admis
 import { resolveMessageReceiptPrimaryId } from "../message/receipt.js";
 import { createChannelReplyPipeline } from "../message/reply-pipeline.js";
 import { recordInboundSession } from "../session.js";
+import { bindChannelDeliveryOwner } from "./delivery-owner.js";
 import {
   createSuppressedChannelDeliveryResult,
   isChannelPartialDeliveryError,
@@ -380,12 +381,10 @@ async function dispatchChannelTurnWithDeliveryOwner(
   const [params, ownership] = args;
   const replyPipeline = resolveAssembledReplyPipeline(params);
   const adoption = params.turnAdoptionLifecycle ?? params.replyOptions?.turnAdoptionLifecycle;
-  // Observe-only turns still run the agent, but transport delivery must remain impossible for
-  // every assembled-turn entry point, including direct SDK dispatch.
   const delivery: AnyChannelDeliveryAdapter =
     params.admission?.kind === "observeOnly"
       ? { deliver: async () => ({ visibleReplySent: false }) }
-      : params.delivery;
+      : bindChannelDeliveryOwner(params.delivery);
   const pendingAttempts: PendingChannelDeliveryAttempt[] = [];
   const suppressedAttempts: PendingChannelDeliveryAttempt[] = [];
   let agentRun: [runId?: string, executionIdentityToken?: ExecutionToken] = [];

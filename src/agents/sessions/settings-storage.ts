@@ -50,7 +50,7 @@ interface MarkdownSettings {
   codeBlockIndent?: string; // default: "  "
 }
 
-export interface WarningSettings {
+interface WarningSettings {
   anthropicExtraUsage?: boolean; // default: true
 }
 
@@ -61,7 +61,7 @@ export type TransportSetting = Transport;
  * - String form: load all resources from the package
  * - Object form: filter which resources to load
  */
-export type PackageSource =
+type PackageSource =
   | string
   | {
       source: string;
@@ -113,17 +113,10 @@ export interface Settings {
 
 export type SettingsScope = "global" | "project";
 
-export const SETTINGS_SCOPES: SettingsScope[] = ["global", "project"];
-
-export interface SettingsStorage {
+interface SettingsStorage {
   /** Pure scope reads; existing custom backends may serve reads through withLock. */
   readSettingsScope?(scope: SettingsScope): string | undefined;
   withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void;
-}
-
-export interface SettingsError {
-  scope: SettingsScope;
-  error: Error;
 }
 
 /** Read one scope without applying runtime-specific settings validation or defaults. */
@@ -210,20 +203,6 @@ export class FileSettingsStorage implements SettingsStorage {
       }
     } finally {
       release();
-    }
-  }
-}
-
-export class InMemorySettingsStorage implements SettingsStorage {
-  private values: Record<SettingsScope, string | undefined> = {
-    global: undefined,
-    project: undefined,
-  };
-
-  withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void {
-    const next = fn(this.values[scope]);
-    if (next !== undefined) {
-      this.values[scope] = next;
     }
   }
 }

@@ -1,3 +1,9 @@
+import {
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import * as sessionStore from "openclaw/plugin-sdk/session-store-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
 import type { WorkboardStore } from "./store.js";
@@ -50,6 +56,57 @@ describe("dispatchAndStartWorkboardCards", () => {
     expectRejected(await dispatch(run, options, worktrees), card.id, error, run);
     return card;
   };
+  it.each(["assigned", "unassigned"] as const)(
+    "rejects an archived %s worker before claim without spending retries",
+    async (assignment) => {
+      const previousConfig = getRuntimeConfigSnapshot();
+      setRuntimeConfigSnapshot({ agents: { entries: { worker: {} } } });
+      try {
+        const card = await createCard({
+          title: "Archived worker",
+          ...(assignment === "assigned" ? { agentId: "worker" } : {}),
+          workspaceAccess: { unrestricted: true },
+          maxRetries: 1,
+          metadata: { failureCount: 1 },
+        });
+        const sessionKey = `${assignment === "assigned" ? "agent:worker:" : ""}subagent:workboard-default-${card.id}`;
+        using read = vi.spyOn(sessionStore, "getSessionEntryAsync").mockResolvedValue({
+          sessionId: "archived-worker",
+          updatedAt: 1,
+          archivedAt: 1,
+        });
+        using claim = vi.spyOn(store, "claim");
+        const run = vi.fn().mockResolvedValue({ runId: "recovered-worker" });
+        const recovery = `openclaw sessions delete ${sessionKey}`;
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const result = await dispatch(run, { maxStarts: 1 });
+          expectRejected(result, card.id, expect.stringContaining(recovery), run);
+        }
+        expect(claim).not.toHaveBeenCalled();
+        expect(read).toHaveBeenCalledWith(
+          expect.objectContaining({ sessionKey, agentId: "worker" }),
+        );
+        const current = await store.get(card.id);
+        expect(current).toMatchObject({ status: "ready", metadata: { failureCount: 1 } });
+        expect(current?.metadata?.claim).toBeUndefined();
+        expect(current?.metadata?.workerLogs).toContainEqual(
+          expect.objectContaining({ level: "warning", message: expect.stringContaining(recovery) }),
+        );
+        read.mockResolvedValue(
+          assignment === "assigned" ? undefined : { sessionId: "restored-worker", updatedAt: 2 },
+        );
+        expect((await dispatch(run, { maxStarts: 1 })).started).toHaveLength(1);
+        expect(run).toHaveBeenCalledOnce();
+      } finally {
+        if (previousConfig) {
+          setRuntimeConfigSnapshot(previousConfig);
+        } else {
+          clearRuntimeConfigSnapshot();
+        }
+      }
+    },
+  );
+
   it("does not let an implicit target agent workspace widen caller access", async () => {
     const card = await rejectCard(
       {

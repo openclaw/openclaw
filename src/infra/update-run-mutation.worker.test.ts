@@ -1,4 +1,7 @@
+import { EventEmitter } from "node:events";
+import { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
@@ -38,6 +41,75 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     cleanup();
   }),
 );
+
+it("warns when the real broker refuses optional progress but preserves required receipts", async () => {
+  const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("update-progress-capacity-") } };
+  const run = await createUpdateRunAsync({ trigger: "cli" }, options);
+  const held = createDeferred();
+  let release = () => {};
+  const messages = vi.spyOn(Worker.prototype, "emit").mockImplementation(function (
+    this: Worker,
+    event: string | symbol,
+    ...args: unknown[]
+  ) {
+    if (event === "message") {
+      messages.mockRestore();
+      release = () => {
+        EventEmitter.prototype.emit.call(this, event, ...args);
+      };
+      held.resolve();
+      return true;
+    }
+    return EventEmitter.prototype.emit.call(this, event, ...args);
+  });
+  const step = { step: "candidate-state-snapshot", status: "in_progress" as const };
+  const accepted = Promise.allSettled(
+    Array.from({ length: 128 }, () => recordUpdateRunStepAsync(run.runId, step, options)),
+  );
+  const waiting = createDeferred();
+  const expirations: Array<() => void> = [];
+  const schedule = globalThis.setTimeout;
+  vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, ms, ...args) => {
+    const timer = schedule(callback, ms, ...args);
+    if (ms === 10_000) {
+      expirations.push(() => {
+        clearTimeout(timer);
+        callback(...args);
+      });
+      if (expirations.length === 2) {
+        waiting.resolve();
+      }
+    }
+    return timer;
+  });
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    await held.promise;
+    const optional = recordUpdateRunStepAsync(run.runId, step, options);
+    const required = recordUpdateRunStepAsync(
+      run.runId,
+      { step: "finalize:checkpoint", status: "completed" },
+      options,
+    );
+    const outcomes = Promise.allSettled([optional, required]);
+    await waiting.promise;
+    for (const expire of expirations) {
+      expire();
+    }
+    expect(await outcomes).toMatchObject([
+      { status: "fulfilled", value: undefined },
+      { status: "rejected", reason: { code: "overloaded" } },
+    ]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("The update will continue"));
+  } finally {
+    vi.restoreAllMocks();
+    release();
+    expect((await accepted).every((result) => result.status === "fulfilled")).toBe(true);
+  }
+  expect((await finishUpdateRunAsync(run.runId, { status: "succeeded" }, options)).status).toBe(
+    "succeeded",
+  );
+});
 
 it("warns on exhausted progress admission and keeps the real worker usable", async () => {
   const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("update-progress-admission-") } };

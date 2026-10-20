@@ -16,6 +16,7 @@ import {
   cacheChatSessionSnapshot,
   observeChatCache,
   type ChatMessageCache,
+  type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
 import {
   CHAT_SNAPSHOT_DB_NAME as DB,
@@ -31,7 +32,6 @@ import {
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import { prewarmChatSnapshot } from "./session-snapshot-prewarm.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
-import type { ChatSessionSnapshot } from "./session-snapshot-types.ts";
 
 const snapshotHost = {
   settings: { gatewayUrl: "wss://cache.example" },

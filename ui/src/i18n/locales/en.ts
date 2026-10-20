@@ -4,6 +4,15 @@ import type { TranslationMap } from "../lib/types.ts";
 import * as agentEn from "./en-agents.ts";
 
 export const en: TranslationMap & {
+  logbook: TranslationMap;
+  gatewayLogs: TranslationMap;
+  standingGrants: TranslationMap;
+  approvalHistory: TranslationMap;
+  secretsStore: TranslationMap &
+    Record<
+      "allowedHosts" | "allowedHostsPlaceholder" | "protectedSecret" | "agentReadable" | "hint",
+      string
+    >;
   pluginsPage: TranslationMap & Record<"installed" | "official" | "install", string>;
   mcpApp: TranslationMap;
   linkReader: TranslationMap;
@@ -1746,77 +1755,13 @@ export const en: TranslationMap & {
       done: "Done",
     },
   },
-  gatewayLogs: {
-    title: "Logs",
-    subtitle: "Gateway file logs (JSONL).",
-    exportButton: "Export {label}",
-    exportLabels: {
-      filtered: "filtered",
-      visible: "visible",
-    },
-    filter: "Filter",
-    searchPlaceholder: "Search logs",
-    autoFollow: "Auto-follow",
-    file: "File: {file}",
-    truncated: "Log output truncated; showing latest chunk.",
-    empty: "No log entries.",
-  },
+  gatewayLogs: {},
   pluginTabs: {
     unavailableTitle: "Plugin panel unavailable",
     unavailableSubtitle:
       "The plugin that owns this tab is not active on the connected gateway, or it did not provide a panel.",
   },
-  logbook: {
-    nav: {
-      previousDay: "Previous day",
-      nextDay: "Next day",
-      today: "Today",
-    },
-    status: {
-      capturing: "Capturing every {seconds}s",
-      paused: "Capture paused",
-      disabled: "Capture off",
-      nodeHelp: "Device providing screen snapshots.",
-      pending: "{count} frames queued",
-      pendingHelp: "Snapshots waiting for the next analysis batch.",
-      analyzing: "Analyzing…",
-      captureError: "Capture error",
-      batchError: "Analysis error",
-      modelMissing: "No vision model",
-      modelMissingHelp:
-        "Set plugins.entries.logbook.config.visionModel or configure tools.media models.",
-    },
-    actions: {
-      pause: "Pause",
-      resume: "Resume",
-      analyzeNow: "Analyze now",
-    },
-    empty: {
-      title: "Nothing on the timeline yet.",
-      subtitle:
-        "Logbook is collecting snapshots; cards appear after the first analysis batch completes.",
-    },
-    card: {
-      keyframeAlt: "Screen snapshot from this activity",
-      distractions: "Distractions",
-    },
-    stats: {
-      title: "Day at a glance",
-      focus: "{pct}% focus",
-      tracked: "{duration} tracked",
-    },
-    standup: {
-      title: "Daily standup",
-      generate: "Generate",
-      refresh: "Regenerate",
-      empty: "Turn today's timeline into a ready-to-paste standup update.",
-    },
-    ask: {
-      title: "Ask your day",
-      placeholder: "When did I review the gateway PR?",
-      submit: "Ask",
-    },
-  },
+  logbook: {},
   board: {
     label: "Session dashboard",
     tabsLabel: "Dashboard tabs",
@@ -1917,6 +1862,9 @@ export const en: TranslationMap & {
     suspended: "Suspended",
     retryNow: "Retry now",
     queued: "{count} queued",
+    offlineChangesDiscarded: "Offline changes discarded: {count}",
+    offlineChangesReloadBlocked:
+      "Offline changes are waiting to reconnect. Reloading would discard them.",
     sessionMoveRefreshFailed: "The session move was saved, but refreshing the list failed: {error}",
     sessionMoveUncertain:
       "The session move could not be confirmed. Refresh and check its group before retrying. {error}",
@@ -1952,72 +1900,8 @@ export const en: TranslationMap & {
   attention: {
     issues: "Inbox",
   },
-  standingGrants: {
-    title: "Standing grants",
-    description:
-      "Allow-always on an automation approval mints a standing grant for that exact command. Revoking one makes the next occurrence ask again.",
-    historyTitle: "Approval history",
-    empty: "No standing grants. Answer an automation approval with Always allow to mint one.",
-    stateUntilRevoked: "Until revoked",
-    stateExpiresIn: "Expires in {count}d",
-    stateExpired: "Expired",
-    stateRevoked: "Revoked",
-    revoke: "Revoke",
-    revoking: "Revoking…",
-    columns: {
-      automation: "Automation",
-      command: "Command",
-      uses: "Uses",
-      state: "State",
-    },
-  },
-  approvalHistory: {
-    description:
-      "Terminal exec, plugin, and system-agent approvals recorded by this gateway, newest first.",
-    loading: "Loading approval history…",
-    loadingMore: "Loading…",
-    loadMore: "Load more",
-    empty: "No resolved approvals in the rolling 30-day window.",
-    retention: "Approval history is a rolling 30-day window.",
-    offline: "Connect to the gateway to load approval history.",
-    invalidResponse: "The gateway returned an invalid approval history response.",
-    unknown: "Unknown",
-    notApplicable: "N/A",
-    columns: {
-      resolved: "Resolved",
-      kind: "Kind",
-      request: "Request",
-      decision: "Decision",
-      reason: "Resolution reason",
-      source: "Source agent / session",
-      resolver: "Resolver",
-    },
-    kinds: {
-      exec: "Exec",
-      plugin: "Plugin",
-      systemAgent: "System agent",
-    },
-    statuses: {
-      allowed: "Allowed",
-      denied: "Denied",
-      expired: "Expired",
-      cancelled: "Cancelled",
-    },
-    decisions: {
-      allowOnce: "Allow once",
-      allowAlways: "Always allow",
-      deny: "Deny",
-    },
-    reasons: {
-      user: "User decision",
-      timeout: "Timed out",
-      malformedVerdict: "Malformed verdict",
-      noRoute: "No route",
-      runAborted: "Run aborted",
-      gatewayRestart: "Gateway restart",
-      storageCorrupt: "Storage corrupt",
-    },
-  },
+  standingGrants: {},
+  approvalHistory: {},
   commandPalette: {},
   palette: {
     placeholder: "Search or start a task…",
@@ -2248,6 +2132,12 @@ export const en: TranslationMap & {
       online: "Online",
       offline: "Offline",
       unavailable: "Could not load people. Try again.",
+      accessDenied:
+        "You cannot mention people here. Sign in with a verified profile or ask an administrator to check your access.",
+      profileUnavailable:
+        "Your profile could not be verified. Reconnect, or ask an administrator for help.",
+      rejected:
+        "Mention search was rejected for this conversation. Check your access or choose another conversation.",
       limit: "You can mention up to 10 people per message.",
       selectedLabel: "Will notify",
       selected: "Will notify: {names}",
@@ -2275,6 +2165,19 @@ export const en: TranslationMap & {
     errorStartSummary: "Couldn't start this conversation. Open Settings → Logs for details.",
     checkStatus: "Check status",
     details: "Details",
+    usageLimit: {
+      title: "ChatGPT usage limit reached",
+      businessBody:
+        "You’ve reached your workspace's limit for using your ChatGPT plan in other apps. Copy a message below to ask your workspace admin for increased usage limits.",
+      consumerBody: "Review your usage settings in ChatGPT.",
+      request:
+        "I’ve reached the limit for using my ChatGPT plan in OpenClaw. Could you increase our workspace’s usage limits so I can continue?\n\nGo to admin.openai.com → Workspace → Usage limits. Thank you!",
+      copy: "Copy request for admin",
+      copied: "Request copied. Send it to your workspace admin.",
+      copyFailed:
+        "Couldn't copy the request. Select and copy the text below, then send it to your workspace admin.",
+      manage: "Manage usage",
+    },
     copyError: "Copy error",
     providerAccessRemoved:
       "This reply stopped because the provider was signed out. Sign in again or choose another model.",
@@ -3046,11 +2949,6 @@ export const en: TranslationMap & {
       checksPending: "{count} running",
       finished: "Finished {time}",
       empty: "Answers come from this session's transcript and its project files.",
-      starters: {
-        changed: "What changed?",
-        stopped: "Why did it stop?",
-        remaining: "What's left?",
-      },
       askLabel: "Ask in side chat",
       askPlaceholder: "Ask a question",
       askImageQuestion: "What does this image show?",
@@ -3064,7 +2962,7 @@ export const en: TranslationMap & {
       askMissing: "This session is no longer available.",
       askModelUnavailable: "No utility model is configured for this session.",
       askImageUnsupported:
-        "This Side chat model cannot read images. Choose an image-capable utility model, then retry.",
+        "This Side chat model cannot read images. Choose an image-capable model, then retry.",
       askRateLimited: "Side chat reached its question limit. Try again shortly.",
       askUnavailable: "Side chat cannot answer right now.",
       askRetry: "Retry",
@@ -3697,47 +3595,13 @@ export const en: TranslationMap & {
     ru: "Русский (Russian)",
     sv: "Svenska (Swedish)",
   },
+  // Navigation and in-chat secret requests render before the Secrets page loads.
   secretsStore: {
-    name: "Name",
-    access: "Access",
-    accessMode: "Access mode",
-    value: "Value",
     allowedHosts: "Allowed hosts",
     allowedHostsPlaceholder: "api.example.com",
-    allowedHostsHint:
-      "Exact hostnames only, one per line or comma-separated. No wildcards or ports.",
-    noAllowedHosts: "None",
-    updated: "Last updated",
-    by: "{time} by {name}",
-    actions: "Actions",
-    add: "Add",
-    edit: "Edit",
-    bulk: "Bulk Add",
     protectedSecret: "Protected secret",
-    protectedSecretHint:
-      "Hidden after save and inert unless referenced by a SecretRef or used through enabled destination-bound Gateway egress. It is never directly readable.",
     agentReadable: "Agent-readable environment",
-    agentReadableHint:
-      "High risk: visible to admins and plaintext to Gateway-hosted agent commands. The agent can print, transmit, or persist it. Applies from the next run.",
     hint: "Choose protected, write-only secrets or intentionally agent-readable Gateway environment values.",
-    required: "Enter a value.",
-    detect: "Protect credential-like names automatically",
-    detected: "{count} protected secrets detected",
-    detectedOne: "{count} protected secret detected",
-    unavail: "Gateway/admin required.",
-    badName: "Use SERVICE_API_KEY.",
-    tooLarge: "Max 64 KiB.",
-    savedProtected:
-      "Saved {name} as Protected secret. Add a SecretRef or enable destination-bound Gateway egress to use it.",
-    savedReadable:
-      "Saved {name} as Agent-readable environment. It is available to Gateway-hosted agent commands from the next run.",
-    savedMany:
-      "Saved {count} entries ({protected} protected, {readable} agent-readable). Protected secrets need a SecretRef or enabled destination-bound Gateway egress; agent-readable environment values reach Gateway-hosted agent commands from the next run.",
-    warnings: "{count} runtime warnings.",
-    partial: "{saved}/{total}: {error}",
-    confirmDelete: "Delete {name}?",
-    deleted: "Deleted {name}.",
-    deleteFailed: "The secret was not deleted. Reload the list and try again.",
   },
   cron: {
     adminRequired: "Browsing only. Automation changes require operator.admin access.",

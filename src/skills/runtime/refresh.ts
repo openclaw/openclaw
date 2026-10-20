@@ -237,7 +237,6 @@ function scanDirtySources(): Promise<void> {
       for (const source of recovered) {
         notifySkillsWatchAvailable({
           workspaceDir: source.workspaceDir,
-          sourceScope: { executionWorkspaceDir: source.selection.request.executionWorkspaceDir },
         });
       }
     }

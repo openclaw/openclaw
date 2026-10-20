@@ -280,18 +280,6 @@ export class ClientVoiceMutationDigestOwner<TContext> {
     }
   }
 
-  snapshot(): {
-    active: number;
-    pending: number;
-    retained: number;
-  } {
-    return {
-      active: this.activeAttempts.size,
-      pending: this.pendingKeys.size,
-      retained: this.intents.size,
-    };
-  }
-
   clear(): void {
     for (const attempt of this.activeAttempts.values()) {
       attempt.abort(new Error("voice mutation digest delivery owner reset"));

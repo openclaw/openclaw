@@ -17,6 +17,7 @@ import {
   resolveTargetSqlitePath,
   type ExistingAgentDatabaseTarget,
 } from "../infra/session-sqlite-migration-readers.js";
+import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import {
   DEFAULT_AGENT_ID,
   normalizeAgentId,
@@ -174,17 +175,13 @@ export function collectCanonicalSessionRepairGroups(
 ): CanonicalSessionRepairGroup[] {
   const candidates = collectCanonicalSessionCandidateFacts(params, stores);
   const isSameDatabasePath = createOpenClawAgentDatabasePathMatcher();
-  const byCanonicalKey = new Map<string, CanonicalSessionCandidateFact[]>();
-  for (const candidate of candidates) {
+  const byCanonicalKey = groupRecords(candidates, (candidate) => {
     const sentinelOwner =
       candidate.canonicalKey === "global" || candidate.canonicalKey === "unknown"
         ? candidate.agentId
         : "";
-    const groupKey = `${candidate.canonicalKey}\0${sentinelOwner}`;
-    const group = byCanonicalKey.get(groupKey) ?? [];
-    group.push(candidate);
-    byCanonicalKey.set(groupKey, group);
-  }
+    return `${candidate.canonicalKey}\0${sentinelOwner}`;
+  });
   return [...byCanonicalKey.values()].flatMap((group) => {
     const first = group[0]!;
     const destination = resolveCanonicalSessionDestination({

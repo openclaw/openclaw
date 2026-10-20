@@ -178,7 +178,6 @@ export abstract class MemoryManagerSyncBase {
   protected sessionWatchTimer: NodeJS.Timeout | null = null;
   protected sessionUnsubscribe: (() => void) | null = null;
   protected fallbackReason?: string;
-  protected intervalTimer: NodeJS.Timeout | null = null;
   protected dirty = false;
   protected memoryWatchGeneration = 0;
   // A success clears only the failure visible when it started. This keeps a

@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { projectToolResultDetails } from "../../../../../src/gateway/chat-display-projection.canvas.js";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
@@ -10,21 +11,76 @@ import type { BrowserTabTarget } from "../../../components/browser/browser-targe
 import { BROWSER_PANEL_TOGGLE_EVENT } from "../../../components/panel-toggle-contract.ts";
 import { latestBrowserTabCards } from "../../../lib/chat/browser-tab-preview.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
-import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { ApplicationProvider } from "../../../lib/reactive/context.ts";
+import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
+import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { createInitializationContext } from "../chat-pane.test-support.ts";
 import { groupMessages } from "../chat-thread-grouping.ts";
 import { BrowserTabCardHost } from "./browser-tab-card.tsx";
-import { createActivityGroupHarness } from "./chat-message-native.test-support.tsx";
+import { ActivityGroup } from "./chat-message-group-view.tsx";
 
 const hosts: HTMLElement[] = [];
-const activityGroups = new Map<HTMLElement, ReturnType<typeof createActivityGroupHarness>>();
-
-function activityGroup(host: HTMLElement) {
-  let view = activityGroups.get(host);
-  if (!view) {
-    view = createActivityGroupHarness(host);
-    activityGroups.set(host, view);
+type ActivityProps = Parameters<typeof ActivityGroup>[0];
+const activityGroups = new Map<HTMLElement, (props: ActivityProps) => void>();
+type CardProps = Parameters<typeof BrowserTabCardHost>[0];
+const cards = new Map<
+  HTMLElement,
+  {
+    props: CardProps;
+    update: (props: CardProps) => void;
+    unmount: () => void;
   }
-  return view;
+>();
+
+function drawGroup(host: HTMLElement, props: ActivityProps, context?: ApplicationContext) {
+  const update = activityGroups.get(host);
+  if (update) {
+    update(props);
+  } else {
+    mountSolid(
+      () => {
+        const [current, setCurrent] = createSignal(props);
+        activityGroups.set(host, setCurrent);
+        return context ? (
+          <ApplicationProvider value={context}>
+            <ActivityGroup {...current()} />
+          </ApplicationProvider>
+        ) : (
+          <ActivityGroup {...current()} />
+        );
+      },
+      { container: host },
+    );
+  }
+  flush();
+}
+
+function updateCard(element: HTMLElement, patch: Partial<CardProps>) {
+  const mounted = cards.get(element)!;
+  mounted.props = { ...mounted.props, ...patch };
+  mounted.update(mounted.props);
+}
+
+function updatePreview(element: HTMLElement, patch: { url?: string; title?: string }) {
+  updateCard(element, { preview: { ...cards.get(element)!.props.preview!, ...patch } });
+}
+
+function openedTargets(elements: HTMLElement[]) {
+  return elements.map((element) => {
+    let targetId: string | undefined;
+    element.addEventListener(
+      BROWSER_PANEL_TOGGLE_EVENT,
+      (event) => {
+        // SAFETY: This handler receives the card's browser-panel event contract.
+        targetId = (event as CustomEvent<{ browserTab: BrowserTabTarget }>).detail.browserTab
+          .targetId;
+      },
+      { once: true },
+    );
+    element.querySelector<HTMLButtonElement>(".actions button")!.click();
+    return targetId;
+  });
 }
 
 function messageEntries(messages: Array<{ toolCallId: string }>): MessageGroup["messages"] {
@@ -34,7 +90,9 @@ function messageEntries(messages: Array<{ toolCallId: string }>): MessageGroup["
 }
 
 afterEach(() => {
+  cleanupSolid();
   activityGroups.clear();
+  cards.clear();
   for (const host of hosts.splice(0)) {
     host.remove();
   }
@@ -51,36 +109,44 @@ function gatewayContext(
   const request = vi.fn().mockResolvedValue({ path: "/tmp/tab.png" });
   const listeners = new Set<() => void>();
   const themeListeners = new Set<() => void>();
-  const snapshot = {
+  const base = createInitializationContext();
+  const snapshot: ApplicationGatewaySnapshot = {
+    ...base.gateway.snapshot,
     client: { request, connected: true } as unknown as GatewayBrowserClient,
     phase: "connected",
-    hello: { features: { methods }, auth: { role: "operator", scopes } },
-  } as ApplicationGatewaySnapshot;
-  const context = {
+    hello: gatewayHelloForMethods(methods, scopes),
+  };
+  const context: ApplicationContext = {
+    ...base,
     resourceBasePath: "/gateway",
     theme: {
-      settings: { openLinksExternally: false },
+      ...base.theme,
+      settings: { ...base.theme.settings, openLinksExternally: false },
       subscribe: (listener: () => void) => {
         themeListeners.add(listener);
         return () => themeListeners.delete(listener);
       },
     },
     config: {
-      current: { automaticallyFetchFavicons },
-      subscribe: (listener: () => void) => {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
+      ...base.config,
+      current: { ...base.config.current, automaticallyFetchFavicons },
+      subscribe: (listener) => {
+        const changed = () => listener(context.config.current);
+        listeners.add(changed);
+        return () => listeners.delete(changed);
       },
     },
     gateway: {
+      ...base.gateway,
       snapshot,
-      connection: { token: "", password: "" },
-      subscribe: (listener: () => void) => {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
+      connection: { ...base.gateway.connection, token: "", password: "" },
+      subscribe: (listener) => {
+        const changed = () => listener(snapshot);
+        listeners.add(changed);
+        return () => listeners.delete(changed);
       },
     },
-  } as unknown as ApplicationContext;
+  };
   const fetchMock = vi.fn<typeof fetch>().mockImplementation(
     async () =>
       ({
@@ -132,16 +198,20 @@ async function drawActivity(
     timestamp: 1,
     messages: messageEntries(messages),
   };
-  activityGroup(host).render([group], {
-    showReasoning: false,
-    latestBrowserTabs: latestBrowserTabCards(messages, []),
-    isToolMessageExpanded: () => expanded,
-  });
-  const elements = [...host.querySelectorAll("openclaw-browser-tab-card")];
-  for (const element of elements) {
-    element.context = context;
-    await element.updateComplete;
-  }
+  drawGroup(
+    host,
+    {
+      groups: [group],
+      options: {
+        showReasoning: false,
+        latestBrowserTabs: latestBrowserTabCards(messages, []),
+        isToolMessageExpanded: () => expanded,
+      },
+      presentation: "standalone",
+    },
+    context,
+  );
+  const elements = [...host.querySelectorAll<HTMLElement>("openclaw-browser-tab-card")];
   return elements;
 }
 
@@ -150,13 +220,24 @@ async function card(
   latest = true,
   tab: BrowserTabTarget = { target: "host", profile: "managed", targetId: "tab-1" },
 ) {
-  const element = new BrowserTabCardHost.Element();
-  element.preview = { kind: "browser-tab", ...tab, url: "https://example.com/page" };
-  element.revision = "one";
-  element.latest = latest;
-  element.context = context;
-  container().append(element);
-  await element.updateComplete;
+  const props = {
+    preview: { kind: "browser-tab", ...tab, url: "https://example.com/page" },
+    revision: "one",
+    latest,
+    context,
+  } satisfies CardProps;
+  let update!: (props: CardProps) => void;
+  const view = mountSolid(
+    () => {
+      const [current, setCurrent] = createSignal<CardProps>(props);
+      update = setCurrent;
+      return <BrowserTabCardHost {...current()} />;
+    },
+    { container: container() },
+  );
+  flush();
+  const element = view.container.querySelector<HTMLElement>("openclaw-browser-tab-card")!;
+  cards.set(element, { props, update, unmount: view.unmount });
   return element;
 }
 
@@ -166,14 +247,13 @@ describe("browser tab card", () => {
     const gateway = gatewayContext([], ["operator.read"], true);
     gateway.request.mockResolvedValue({ title: "OpenClaw (@openclaw) on X" });
     const element = await card(gateway.context, false);
-    element.preview = {
-      ...element.preview!,
+    updatePreview(element, {
       url: "https://x.com/openclaw/status/123",
       title: 'OpenClaw on X: "Text from the browser title" / X',
-    };
-    await element.updateComplete;
+    });
+    flush();
     await vi.runAllTimersAsync();
-    await element.updateComplete;
+    flush();
     expect(element.querySelector(".tweet-author")?.textContent).toBe("OpenClaw");
     expect(element.querySelector(".tweet-handle")?.textContent).toBe("@openclaw");
     expect(element.querySelector(".tweet-text")?.textContent).toBe("Text from the browser title");
@@ -218,8 +298,8 @@ describe("browser tab card", () => {
   ])("keeps an honest tweet fallback for $url", async ({ url, title, author, handle, text }) => {
     const gateway = gatewayContext([], ["operator.read"], false);
     const element = await card(gateway.context, false);
-    element.preview = { ...element.preview!, url, title };
-    await element.updateComplete;
+    updatePreview(element, { url, title });
+    flush();
     expect(element.querySelector(".tweet-author")?.textContent).toBe(author);
     expect(element.querySelector(".tweet-handle")?.textContent).toBe(handle);
     expect(element.querySelector(".tweet-text")?.textContent).toBe(text);
@@ -236,8 +316,8 @@ describe("browser tab card", () => {
   ])("does not style a non-post URL as a tweet: %s", async (url) => {
     const gateway = gatewayContext([], ["operator.read"], false);
     const element = await card(gateway.context, false);
-    element.preview = { ...element.preview!, url };
-    await element.updateComplete;
+    updatePreview(element, { url });
+    flush();
     expect(element.querySelector(".tweet")).toBeNull();
     expect(element.querySelector(".url")?.textContent).toBe(url);
   });
@@ -248,15 +328,15 @@ describe("browser tab card", () => {
     const text = '"<img src=x onerror=alert(1)> & **not markdown**"';
     gateway.request.mockResolvedValue({ title: "OpenClaw (@openclaw)", description: text });
     const element = await card(gateway.context, false);
-    element.preview = { ...element.preview!, url: "https://x.com/openclaw/status/123" };
-    await element.updateComplete;
+    updatePreview(element, { url: "https://x.com/openclaw/status/123" });
+    flush();
     await vi.runAllTimersAsync();
-    await element.updateComplete;
+    flush();
     expect(element.querySelector(".tweet-text")?.textContent).toBe(text);
     expect(element.querySelector(".tweet-text img")).toBeNull();
     gateway.context.config.current.automaticallyFetchFavicons = false;
     gateway.notify();
-    await element.updateComplete;
+    flush();
     expect(element.querySelector(".tweet-text")).toBeNull();
     expect(element.querySelector(".tweet-author")?.textContent).toBe("Post on X");
   });
@@ -269,7 +349,7 @@ describe("browser tab card", () => {
       gateway.request.mockResolvedValue({ imageDataUrl: "data:image/png;base64,c29jaWFs" });
       const element = await card(gateway.context, false);
       await vi.runAllTimersAsync();
-      await element.updateComplete;
+      flush();
       expect(element.querySelector(".shot")).not.toBeNull();
       const openWindow = vi.spyOn(window, "open").mockReturnValue(null);
       const postMessage = vi.fn();
@@ -289,7 +369,7 @@ describe("browser tab card", () => {
 
       gateway.context.theme.settings.openLinksExternally = true;
       gateway.notifyTheme();
-      await element.updateComplete;
+      flush();
       for (const selector of [".shot", ".actions button"]) {
         element.querySelector<HTMLButtonElement>(selector)!.click();
       }
@@ -322,7 +402,7 @@ describe("browser tab card", () => {
 
       gateway.context.theme.settings.openLinksExternally = false;
       gateway.notifyTheme();
-      await element.updateComplete;
+      flush();
       expect(menu().textContent).toContain("Open in new tab");
       expect(menu().querySelector('[value="open-within-openclaw"]')).toBeNull();
       element.querySelector<HTMLButtonElement>(".shot")!.click();
@@ -364,7 +444,7 @@ describe("browser tab card", () => {
     );
     element.querySelector(".icon img")?.dispatchEvent(new Event("error"));
     element.querySelector(".shot img")?.dispatchEvent(new Event("error"));
-    await element.updateComplete;
+    flush();
     expect(element.querySelector("img")).toBeNull();
     expect(element.querySelector(".icon svg")).not.toBeNull();
     expect(element.querySelector(".url")?.textContent).toBe("https://example.com/page");
@@ -376,8 +456,8 @@ describe("browser tab card", () => {
     gateway.request.mockReturnValueOnce(pending.promise).mockResolvedValue({ title: "New page" });
     const element = await card(gateway.context, false);
     await vi.waitFor(() => expect(gateway.request).toHaveBeenCalledOnce());
-    element.preview = { ...element.preview!, url: "https://example.com/new" };
-    await element.updateComplete;
+    updatePreview(element, { url: "https://example.com/new" });
+    flush();
     await vi.waitFor(() => expect(element.querySelector(".title")?.textContent).toBe("New page"));
     pending.resolve({ title: "Old page", imageDataUrl: "data:image/png;base64,b2xk" });
     await new Promise<void>((resolve) => {
@@ -387,7 +467,7 @@ describe("browser tab card", () => {
     expect(element.querySelector(".title")?.textContent).toBe("New page");
     gateway.context.config.current.automaticallyFetchFavicons = false;
     gateway.notify();
-    await element.updateComplete;
+    flush();
     expect(element.querySelector(".title")?.textContent).toBe("example.com");
     expect(gateway.request).toHaveBeenCalledTimes(2);
   });
@@ -430,15 +510,15 @@ describe("browser tab card", () => {
     expect(first.request).toHaveBeenCalledOnce();
     const second = gatewayContext([], ["operator.read"], true);
     second.request.mockResolvedValue({ title: "Second gateway" });
-    duplicate.context = second.context;
-    await duplicate.updateComplete;
+    updateCard(duplicate, { context: second.context });
+    flush();
     await vi.waitFor(() =>
       expect(duplicate.querySelector(".title")?.textContent).toBe("Second gateway"),
     );
     expect(second.request).toHaveBeenCalledOnce();
     second.snapshot.phase = "offline";
     second.notify();
-    await duplicate.updateComplete;
+    flush();
     expect(duplicate.querySelector(".title")?.textContent).toBe("example.com");
   });
 
@@ -453,14 +533,14 @@ describe("browser tab card", () => {
     await vi.waitFor(() => expect(gateway.request).toHaveBeenCalledOnce());
     gateway.snapshot.phase = "offline";
     gateway.notify();
-    await element.updateComplete;
+    flush();
     pending.reject(new Error("gateway closed"));
     await new Promise<void>((resolve) => {
       setTimeout(resolve, 0);
     });
     gateway.snapshot.phase = "connected";
     gateway.notify();
-    await element.updateComplete;
+    flush();
     await vi.waitFor(() =>
       expect(element.querySelector(".title")?.textContent).toBe("Recovered preview"),
     );
@@ -524,9 +604,9 @@ describe("browser tab card", () => {
     expect(older.querySelector("img")).toBeNull();
     expect(gateway.request).toHaveBeenCalledOnce();
     expect(gateway.fetchMock).toHaveBeenCalledOnce();
-    first.remove();
-    duplicate.remove();
-    older.remove();
+    cards.get(first)!.unmount();
+    cards.get(duplicate)!.unmount();
+    cards.get(older)!.unmount();
     await Promise.resolve();
     expect(gateway.listeners.size).toBe(0);
     const remounted = await card(gateway.context);
@@ -624,10 +704,14 @@ describe("browser tab card", () => {
       timestamp: 1,
       messages: messageEntries(messages),
     };
-    activityGroup(host).render([group], { showReasoning: false });
-    const elements = [...host.querySelectorAll("openclaw-browser-tab-card")];
+    drawGroup(host, {
+      groups: [group],
+      options: { showReasoning: false },
+      presentation: "standalone",
+    });
+    const elements = [...host.querySelectorAll<HTMLElement>("openclaw-browser-tab-card")];
     expect(elements).toHaveLength(2);
-    expect(elements.map((element) => element.preview?.targetId)).toEqual(["first", "second"]);
+    expect(openedTargets(elements)).toEqual(["first", "second"]);
   });
 
   it.each(
@@ -662,12 +746,16 @@ describe("browser tab card", () => {
         messages: messageEntries(messages),
       };
       const host = container();
-      activityGroup(host).render([group], { showReasoning: false });
-      const elements = [...host.querySelectorAll("openclaw-browser-tab-card")];
-      expect(elements.map((element) => element.preview?.targetId)).toEqual(
-        length === 2_046 ? ["second"] : ["first", "second"],
-      );
-      expect(elements.every((element) => element.preview?.url.length === length)).toBe(true);
+      drawGroup(host, {
+        groups: [group],
+        options: { showReasoning: false },
+        presentation: "standalone",
+      });
+      const elements = [...host.querySelectorAll<HTMLElement>("openclaw-browser-tab-card")];
+      expect(openedTargets(elements)).toEqual(length === 2_046 ? ["second"] : ["first", "second"]);
+      expect(
+        elements.every((element) => element.querySelector(".url")?.textContent?.length === length),
+      ).toBe(true);
     },
   );
 
@@ -679,7 +767,7 @@ describe("browser tab card", () => {
     await vi.waitFor(() => expect(gateway.request).toHaveBeenCalledOnce());
     gateway.snapshot.phase = "offline";
     gateway.notify();
-    await element.updateComplete;
+    flush();
     pending.resolve({ path: "/tmp/tab.png" });
     await vi.waitFor(() => expect(gateway.fetchMock).toHaveBeenCalledOnce());
     await new Promise<void>((resolve) => {

@@ -1,6 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
+import { wrapSqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -66,7 +66,7 @@ export async function recoverSessionEntryFromRestartTombstone(
           (error: unknown) => ({ ok: false as const, error }),
         );
         if (admitted) {
-          await admitted.retained.settled;
+          const settlement = await admitted.retained.settled;
           const facts = admitted.admission.committed?.facts;
           let receipt = outcome.ok ? outcome.value.publication : undefined;
           if (isRecord(facts) && facts.kind === "session-entry-replacements") {
@@ -89,12 +89,12 @@ export async function recoverSessionEntryFromRestartTombstone(
             );
           }
           if (unknown) {
-            const error = new SqliteWorkerError(
+            throw wrapSqliteWorkerError(
               "Session recovery has no confirmed native completion and commit receipt",
               "outcome-unknown",
+              outcome.ok ? undefined : outcome.error,
+              settlement.kind !== "completed" ? settlement.error : undefined,
             );
-            error.cause = outcome.ok ? undefined : outcome.error;
-            throw error;
           }
           if (receipt) {
             try {

@@ -246,11 +246,6 @@ export async function resolveNpmSpecMetadata(params: {
   }
 }
 
-export type NpmIntegrityDrift = {
-  expectedIntegrity: string;
-  actualIntegrity: string;
-};
-
 /** Runs a callback in a private temp directory and removes it afterward. */
 export async function withInstallWorkspace<T>(
   prefix: string,

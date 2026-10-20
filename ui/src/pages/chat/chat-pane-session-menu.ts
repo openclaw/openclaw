@@ -1,4 +1,3 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   SessionsFilesRevealResult,
   WorktreesBranchesResult,
@@ -16,7 +15,12 @@ import type {
 import { hasModalSurface } from "../../components/overlay-registry.ts";
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
 import type { SessionMenuData } from "../../components/session-menu-actions.ts";
+import { sessionMenuDataFromRow } from "../../components/session-menu-data.ts";
 import { hasSessionArchiveDescendants } from "../../components/session-menu-descendants.ts";
+import {
+  captureSessionMutationScope,
+  isSessionMutationScopeCurrent,
+} from "../../components/session-mutation-scope.ts";
 import type * as SessionOperations from "../../components/session-organizer-operations.runtime.ts";
 import { sessionPlacementAction } from "../../components/session-placement-action.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
@@ -145,26 +149,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
         row.icon,
         row.color,
       ],
-      () => ({
-        label,
-        placementAction: sessionPlacementAction(row),
-        target: { key: row.key, agentId: row.agentId },
-        sessionId: row.sessionId ?? null,
-        isChild,
-        pinned,
-        pinnable,
-        snoozedUntil: row.snoozedUntil ?? null,
-        unread: row.unread === true,
-        hiddenFromInvolvingMe: row.hiddenFromInvolvingMe,
-        communication: row.communication,
-        effectiveCommunication: row.effectiveCommunication,
-        archived: row.archived === true,
-        archiving,
-        category: normalizeOptionalString(row.category) ?? null,
-        icon: normalizeOptionalString(row.icon) ?? null,
-        color: normalizeOptionalString(row.color) ?? null,
-        categoryClearReturnsToGroups: false,
-      }),
+      () => sessionMenuDataFromRow(row, { label, isChild, pinned, pinnable, archiving }),
     );
   }
 
@@ -269,7 +254,12 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       });
       return;
     }
-    const scope = this.captureHeaderSessionActionScope();
+    const scope = this.captureHeaderSessionActionScope(
+      action.kind === "set-icon" ||
+        action.kind === "set-color" ||
+        action.kind === "reset-appearance" ||
+        action.kind === "move-to-group",
+    );
     if (!scope) {
       this.publishHeaderError(t("sessionsView.actionRequiresConnection"));
       return;
@@ -501,35 +491,19 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     return result.command;
   }
 
-  private captureHeaderSessionActionScope():
-    | (SidebarSessionMutationScope & { signal: AbortSignal })
-    | null {
-    const gateway = this.context.gateway;
-    const client = gateway.snapshot.client;
-    if (gateway.snapshot.phase !== "connected" || !client) {
-      return null;
-    }
-    return {
+  private captureHeaderSessionActionScope(
+    allowDeferred = false,
+  ): (SidebarSessionMutationScope & { signal: AbortSignal }) | null {
+    return captureSessionMutationScope(this.context, {
       epoch: this.connectionGeneration,
-      context: this.context,
-      gateway,
-      sessions: this.context.sessions,
-      client,
+      allowDeferred,
       selectedAgentId: this.context.agentSelection.state.selectedId ?? "main",
       signal: this.headerSessionMutationAbortController.signal,
-    };
+    });
   }
 
   private isHeaderSessionActionCurrent(scope: SidebarSessionMutationScope, owner: string): boolean {
-    return (
-      this.ownsHeaderOutcome(owner) &&
-      this.isConnected &&
-      this.context === scope.context &&
-      this.context.gateway === scope.gateway &&
-      this.context.sessions === scope.sessions &&
-      scope.gateway.snapshot.phase === "connected" &&
-      scope.gateway.snapshot.client === scope.client
-    );
+    return this.ownsHeaderOutcome(owner) && isSessionMutationScopeCurrent(this.context, scope);
   }
 
   protected beginHeaderRename(row: GatewaySessionRow): void {
@@ -539,6 +513,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       params: { key: row.key, label: null },
       sessionScope: true,
       session: row,
+      allowDeferred: true,
     });
     if (!access.allowed) {
       this.publishHeaderError(access.reason);
@@ -560,7 +535,8 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     if (!session) {
       return;
     }
-    if (this.context.gateway.snapshot.phase !== "connected") {
+    const snapshot = this.context.gateway.snapshot;
+    if (snapshot.phase !== "connected" && !snapshot.hello) {
       return;
     }
     const patch = resolveSessionRenamePatch(
@@ -577,6 +553,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       method: "sessions.patch",
       params: { key: session.key, ...patch },
       sessionScope: true,
+      allowDeferred: true,
       session: state.sessionsResult?.sessions.find(
         (row) =>
           areUiSessionKeysEquivalent(row.key, session.key) && row.sessionId === session.sessionId,
@@ -677,34 +654,29 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     await Promise.all(loads);
   }
 
-  protected showHeaderCopied(action: ChatPaneHeaderAction): void {
-    this.headerPresentation.copiedAction = action;
-    if (this.headerCopiedTimer !== null) {
-      window.clearTimeout(this.headerCopiedTimer);
-    }
-    this.headerCopiedTimer = window.setTimeout(() => {
-      this.headerPresentation.copiedAction = null;
-      this.headerCopiedTimer = null;
-    }, 1_500);
-  }
-
   protected handleHeaderMenuAction(
     action: ChatPaneHeaderAction,
     row: GatewaySessionRow,
     workspaceRoot: string | null,
     branch: string | null,
-    copy: (value: string) => Promise<boolean> = copyToClipboard,
   ): void {
     const copiedValue =
       action === "copy-path" ? workspaceRoot : action === "copy-branch" ? branch : null;
     if (copiedValue) {
       const owner = this.headerOutcomeOwner;
-      void copy(copiedValue).then((copied) => {
+      void copyToClipboard(copiedValue).then((copied) => {
         if (!this.ownsHeaderOutcome(owner)) {
           return;
         }
         if (copied) {
-          this.showHeaderCopied(action);
+          this.headerPresentation.copiedAction = action;
+          if (this.headerCopiedTimer !== null) {
+            window.clearTimeout(this.headerCopiedTimer);
+          }
+          this.headerCopiedTimer = window.setTimeout(() => {
+            this.headerPresentation.copiedAction = null;
+            this.headerCopiedTimer = null;
+          }, 1_500);
         } else {
           this.publishHeaderError(t("common.copyFailed"), owner);
         }

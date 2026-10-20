@@ -46,13 +46,10 @@ export function createLinkReaderPanel(
   host: HTMLElement & LinkReaderPanelProps,
   scheduleAfterRender: (callback: () => void) => void,
   elements: (activeId: string | null) => LinkReaderPanelElements,
+  notify: () => void,
 ) {
   const props = host;
-  const lifecycle = createLinkReaderPanelLifecycle(props, scheduleAfterRender, (previous) => {
-    sync(previous);
-    const { address, content } = elements(state.activeId);
-    afterRender(address, content);
-  });
+  const lifecycle = createLinkReaderPanelLifecycle(props, scheduleAfterRender, afterRender, notify);
   const publish = lifecycle.publish;
   let hostedSignature = "";
 
@@ -230,10 +227,9 @@ export function createLinkReaderPanel(
       }
     }
   }
-  function afterRender(
-    address: HTMLInputElement | undefined,
-    content: HTMLElement | undefined,
-  ): void {
+  function afterRender(previous: LinkReaderPanelProps | undefined): void {
+    sync(previous);
+    const { address, content } = elements(state.activeId);
     const signature = JSON.stringify([
       state.activeId,
       props.available,
@@ -690,6 +686,7 @@ export function createLinkReaderPanel(
     connect() {
       dockLayout.connect();
       lifecycle.connect();
+      publish();
     },
     inputsChanged: publish,
     get updateComplete() {
@@ -710,7 +707,6 @@ export function createLinkReaderPanel(
       state.invalidUrl = false;
       publish();
     },
-    subscribe: lifecycle.subscribe,
   };
 }
 export type LinkReaderPanelOwner = ReturnType<typeof createLinkReaderPanel>;

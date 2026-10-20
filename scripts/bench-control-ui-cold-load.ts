@@ -225,11 +225,13 @@ const { values } = parseArgs({
     "cpu-profile-compare": { type: "string" },
     "warm-reload": { type: "boolean", default: false },
     "large-snapshot": { type: "boolean", default: false },
+    "transcript-messages": { type: "string" },
     "overlay-probe": { type: "boolean", default: false },
     untraced: { type: "boolean", default: false },
     "probe-dir": { type: "string" },
     "live-events": { type: "boolean", default: false },
     "streaming-reply": { type: "boolean", default: false },
+    "session-switch": { type: "boolean", default: false },
     "init-script": { type: "string", multiple: true, default: [] },
     "sidebar-list-churn": { type: "boolean", default: false },
     "sidebar-live-churn": { type: "boolean", default: false },
@@ -292,6 +294,7 @@ const baselineCpu = values["cpu-profile-compare"]
       "reload",
       ...(values["live-events"] ? ["live"] : []),
       ...(values["streaming-reply"] ? ["streaming"] : []),
+      ...(values["session-switch"] ? ["session-switch"] : []),
     ])
   : undefined;
 const cpuRuns: Record<string, ColdLoadCpuTables[]> = {};
@@ -318,6 +321,8 @@ if (face !== "chat" && face !== "dashboard") {
 }
 const frameGapMs = Number(values["frame-gap-ms"]);
 const captureMs = Number(values["capture-ms"]);
+const transcriptMessages =
+  values["transcript-messages"] === undefined ? undefined : Number(values["transcript-messages"]);
 const sessionEventDurationMs = Number(values["session-event-duration-ms"]);
 const fixtureNowMs =
   values["fixture-now-ms"] === undefined ? undefined : Number(values["fixture-now-ms"]);
@@ -349,6 +354,8 @@ if (
   frameGapMs < 0 ||
   !Number.isFinite(captureMs) ||
   captureMs < 0 ||
+  (transcriptMessages !== undefined &&
+    (!Number.isSafeInteger(transcriptMessages) || transcriptMessages < 1)) ||
   !Number.isSafeInteger(sessionEventDurationMs) ||
   sessionEventDurationMs < 250 ||
   sessionEventDurationMs % 125 !== 0 ||
@@ -357,7 +364,7 @@ if (
   )
 ) {
   throw new Error(
-    "Expected a bounded run count, nonnegative wire delays/timestamps, and session duration in 125ms steps (at least 250ms)",
+    "Expected a bounded run count, positive transcript size, nonnegative wire delays/timestamps, and session duration in 125ms steps (at least 250ms)",
   );
 }
 if (
@@ -431,6 +438,7 @@ const fixture = createControlUiTeamScaleFixture({
   duplicateBootReads: values["duplicate-boot-reads"],
   closedMenuMembers: values["closed-menu-members"],
   largeSnapshot: values["large-snapshot"],
+  transcriptMessages,
 });
 const streamingReply = values["streaming-reply"] ? createControlUiStreamingReply() : undefined;
 const extraInitScripts = await Promise.all(
@@ -1175,6 +1183,64 @@ try {
             : undefined,
         )
       : undefined;
+    let sessionSwitch;
+    if (values["session-switch"]) {
+      if (sidebarView !== "sessions") {
+        await page.locator('[data-navigation-view="sessions"]').click();
+      }
+      const target = fixture.scenario.sessions![1]!;
+      const link = page.locator(
+        `.sidebar-recent-session[data-session-key="${target.key}"] a.sidebar-recent-session__link`,
+      );
+      await link.waitFor({ state: "visible" });
+      const rpcOffset = await page.evaluate(
+        () => Reflect.get(window, "__coldLoad").read().rpcs.length,
+      );
+      await cdp.send("Performance.enable");
+      const cpuBefore = (await cdp.send("Performance.getMetrics")).metrics;
+      if (cpuProfile) {
+        await cdp.send("Profiler.start");
+      }
+      const started = await page.evaluate(() => performance.now());
+      await link.click();
+      await page.waitForFunction(
+        (key) =>
+          [...document.querySelectorAll("openclaw-chat-pane")].some(
+            (pane) => Reflect.get(pane, "sessionKey") === key,
+          ),
+        target.key,
+      );
+      await page.locator(".chat-tool-card__preview-frame").last().waitFor({ state: "visible" });
+      await page.waitForFunction(() => {
+        const state = Reflect.get(window, "__coldLoad").read();
+        return !state.pending && !state.queued && state.idleMs > 750;
+      });
+      const elapsedMs = await page.evaluate((start) => performance.now() - start, started);
+      const cpuAfter = (await cdp.send("Performance.getMetrics")).metrics;
+      if (cpuProfile) {
+        await recordCpu("session-switch", (await cdp.send("Profiler.stop")).profile);
+      }
+      sessionSwitch = {
+        from: fixture.selectedSessionKey,
+        to: target.key,
+        elapsedMs,
+        milliseconds: Object.fromEntries(
+          ["TaskDuration", "ScriptDuration", "LayoutDuration", "RecalcStyleDuration"].map(
+            (name) => [
+              name,
+              1000 *
+                (cpuAfter.find((metric) => metric.name === name)!.value -
+                  cpuBefore.find((metric) => metric.name === name)!.value),
+            ],
+          ),
+        ),
+        rpcs: await page.evaluate(
+          (offset) => Reflect.get(window, "__coldLoad").read().rpcs.slice(offset),
+          rpcOffset,
+        ),
+      };
+      await page.screenshot({ path: path.join(artifactDir, `run-${run + 1}.session-switch.png`) });
+    }
     await cdp.detach();
     const result = {
       run: run + 1,
@@ -1192,6 +1258,7 @@ try {
       visual,
       live,
       streaming,
+      sessionSwitch,
       warmReload,
       snapshotSave,
       overlays,
@@ -1255,6 +1322,7 @@ try {
         fixture: fixture.counts,
         sidebarView,
         streamingReply: values["streaming-reply"],
+        sessionSwitch: values["session-switch"],
         sidebarListChurn: values["sidebar-list-churn"],
         sidebarLiveChurn: fixture.sidebarLiveChurn,
         duplicateBootReads: values["duplicate-boot-reads"],

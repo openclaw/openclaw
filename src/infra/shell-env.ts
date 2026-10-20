@@ -264,7 +264,8 @@ function probeLoginShellEnv(
   }
 
   const { request, cacheKey } = prepareLoginShellEnvProbe(params);
-  const cached = loginShellEnvProbeCache.get(cacheKey);
+  const cache = params.purpose === "environment-import" ? loginShellEnvProbeCache : undefined;
+  const cached = cache?.get(cacheKey);
   if (cached) {
     return { ok: true, shellEnv: new Map(cached) };
   }
@@ -274,7 +275,7 @@ function probeLoginShellEnv(
     const stdout = execFileSync(spec.shell, spec.args, spec.options);
     const shellEnv = parseShellEnv(stdout);
     // Failed startup can recover on the next lookup; retain only successful probes.
-    loginShellEnvProbeCache.set(cacheKey, [...shellEnv.entries()]);
+    cache?.set(cacheKey, [...shellEnv.entries()]);
     return { ok: true, shellEnv };
   } catch (err) {
     return { ok: false, error: formatErrorMessage(err) };
@@ -393,13 +394,9 @@ export function prepareShellPathFromLoginShell(
   if (pending) {
     return pending;
   }
-  const cached = loginShellEnvProbeCache.peek(cacheKey);
-  const probe = cached
-    ? Promise.resolve(new Map(cached))
-    : execLoginShellEnvZeroAsync(request).then(parseShellEnv);
+  const probe = execLoginShellEnvZeroAsync(request).then(parseShellEnv);
   const result = probe
     .then((shellEnv) => {
-      loginShellEnvProbeCache.set(cacheKey, [...shellEnv.entries()]);
       // A synchronous cold caller may have completed while this probe was in flight.
       if (cachedShellPath === undefined) {
         cachedShellPath = shellEnv.get("PATH")?.trim() || null;

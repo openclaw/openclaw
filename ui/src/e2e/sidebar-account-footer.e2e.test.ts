@@ -2,6 +2,7 @@ import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { ControlUiBuildInfo } from "../build-info.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import {
   captureUnionProof,
   createSidebarFooterProofSuite,
@@ -286,7 +287,12 @@ suite.define(() => {
         await gateway.emitGatewayEvent("gateway.suspension", { phase: "prepared" });
         await expectRailConnectionStatus(footer, "suspended", "Suspended");
 
+        await page.clock.install();
+        await pauseVirtualClock(page);
         await gateway.setOnline(false);
+        await page.clock.runFor(2_001);
+        // Offline mock sockets stay connecting until their attempt explicitly fails.
+        await gateway.closeLatest(1006, "synthetic failed attempt");
         await expectRailConnectionStatus(footer, "reconnecting", "Reconnecting…");
         await connectionStatus
           .getByRole("button", { name: "Reconnecting… — Retry now", exact: true })
@@ -308,6 +314,7 @@ suite.define(() => {
           .toBeGreaterThan(socketCount);
 
         await gateway.setOnline(true);
+        await page.clock.resume();
         await expectRailConnectionStatus(footer, "suspended", "Suspended");
         await gateway.emitGatewayEvent("gateway.suspension", { phase: "accepting" });
         await expect

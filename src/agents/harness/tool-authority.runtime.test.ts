@@ -8,6 +8,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.js";
+import { resolveVisibleActiveSessionRunState } from "../../gateway/server-methods/session-active-runs.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import type { ReplyToolAuthorityOverlay } from "../../sessions/session-controller.contracts.js";
 import {
@@ -17,7 +18,6 @@ import {
 } from "../../sessions/session-controller.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import { captureCurrentReplyMessageInjectionTarget } from "../../sessions/session-controller.message-injection.js";
-import { resolveSessionRunProgressState } from "../../sessions/session-controller.queries.js";
 import { testing as replyTesting } from "../../sessions/session-controller.test-support.js";
 import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
 import {
@@ -360,7 +360,10 @@ describe("host-prepared embedded tool authority", () => {
     };
     const handle = createEmbeddedRunHandle({ runId: params.runId });
     const state = (agentId: string) =>
-      resolveSessionRunProgressState(params.sessionId, {
+      resolveVisibleActiveSessionRunState({
+        requestedKey: params.sessionKey,
+        canonicalKey: params.sessionKey,
+        sessionId: params.sessionId,
         agentId,
         defaultAgentId: "main",
       });
@@ -378,7 +381,7 @@ describe("host-prepared embedded tool authority", () => {
         expect(() =>
           publishActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile),
         ).toThrow(SessionControllerAdmissionRequiredError);
-        expect(state("ops")).toBeUndefined();
+        expect(state("ops").active).toBe(false);
       });
       clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
       const admittedRunContext = await admission.admit("embedded", "authority-test");
@@ -389,12 +392,14 @@ describe("host-prepared embedded tool authority", () => {
         async (prepared) => {
           handle.toolAuthorityFingerprint = prepared.toolAuthorityFingerprint;
           publishActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
-          expect(state("ops")).toBe("running");
-          expect(state("main")).toBeUndefined();
+          const visible = state("ops");
+          expect(visible.active).toBe(true);
+          expect(visible.status).toBeUndefined();
+          expect(state("main").active).toBe(false);
         },
       );
-      expect(state("ops")).toBeUndefined();
-      expect(state("main")).toBeUndefined();
+      expect(state("ops").active).toBe(false);
+      expect(state("main").active).toBe(false);
     } finally {
       clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
       admission.close();

@@ -394,7 +394,7 @@ async function downloadAttachment(
   if (!resourceName) {
     return null;
   }
-  const maxBytes = Math.max(1, mediaMaxMb) * 1024 * 1024;
+  const maxBytes = mediaMaxMb * 1024 * 1024;
   const downloaded = await downloadGoogleChatMedia({ account, resourceName, maxBytes });
   const saved = await core.channel.media.saveMediaBuffer(
     downloaded.buffer,

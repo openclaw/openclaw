@@ -1,16 +1,17 @@
 /* @vitest-environment jsdom */
 
+import { createComponent, createStore, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
-import type { SettingsSaveIndicatorProps } from "./settings-save-indicator.tsx";
-import "./settings-save-indicator.tsx";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import {
+  SettingsSaveIndicator,
+  type SettingsSaveIndicatorProps,
+} from "./settings-save-indicator.tsx";
 
-type SettingsSaveIndicatorElement = HTMLElement & {
-  props?: SettingsSaveIndicatorProps;
-  updateComplete: Promise<boolean>;
-};
-
-let indicator: SettingsSaveIndicatorElement;
+let indicator: HTMLElement;
+let view: ReturnType<typeof mountSolid>;
+let setProps: (next: SettingsSaveIndicatorProps) => void;
 
 function props(overrides: Partial<SettingsSaveIndicatorProps> = {}): SettingsSaveIndicatorProps {
   return {
@@ -28,8 +29,8 @@ function props(overrides: Partial<SettingsSaveIndicatorProps> = {}): SettingsSav
 }
 
 async function update(next: SettingsSaveIndicatorProps): Promise<void> {
-  indicator.props = next;
-  await indicator.updateComplete;
+  setProps(next);
+  flush();
 }
 
 function button(label: string): HTMLButtonElement | undefined {
@@ -40,14 +41,14 @@ function button(label: string): HTMLButtonElement | undefined {
 
 beforeEach(async () => {
   await i18n.setLocale("en");
-  indicator = document.createElement(
-    "openclaw-settings-save-indicator",
-  ) as SettingsSaveIndicatorElement;
-  document.body.append(indicator);
+  const [state, setState] = createStore(props());
+  setProps = (next) => setState((draft) => Object.assign(draft, next));
+  view = mountSolid(() => createComponent(SettingsSaveIndicator, state));
+  indicator = view.container;
 });
 
 afterEach(() => {
-  indicator.remove();
+  view.unmount();
   vi.useRealTimers();
 });
 
@@ -88,7 +89,7 @@ describe("settings save indicator", () => {
     await vi.advanceTimersByTimeAsync(1_999);
     expect(indicator.textContent).toContain("Saved");
     await vi.advanceTimersByTimeAsync(1);
-    await indicator.updateComplete;
+    flush();
     expect(indicator.textContent?.trim()).toBe("Apply changes");
   });
 
@@ -156,14 +157,14 @@ describe("settings save indicator", () => {
     expect(button("Apply changes")).toBeUndefined();
   });
 
-  it("cleans the saved timer when disconnected", async () => {
+  it("cleans the saved timer when unmounted", async () => {
     vi.useFakeTimers();
     await update(props({ status: "saving" }));
     expect(vi.getTimerCount()).toBe(0);
     await update(props({ status: "saved" }));
     expect(vi.getTimerCount()).toBe(1);
 
-    indicator.remove();
+    view.unmount();
     await Promise.resolve();
 
     expect(vi.getTimerCount()).toBe(0);

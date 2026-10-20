@@ -59,7 +59,6 @@ const {
   readRecord,
   closeVoice,
   recoverStale,
-  expectRetained,
   recordEffect,
 } = harness;
 
@@ -102,7 +101,6 @@ it("records a missing conversation instead of silently completing its digest", a
   await closing.drain();
   expect(warning).toHaveBeenCalledWith(expect.stringContaining("conversation not found"));
   expect(sendDurableMessageBatch).not.toHaveBeenCalled();
-  expectRetained();
 });
 
 it("does not retry an unknown digest marker when writer cleanup also fails", async () => {
@@ -489,7 +487,6 @@ it.each(["different path", "same path replacement"] as const)(
       using _ = fakeTimers();
       await closeVoice(voiceSessionId, { sessionKey });
       await settleDigestAttempts();
-      expectRetained();
       if (replacement === "same path replacement") {
         await closeOpenClawAgentDatabasesAsync(harness.stateDir);
         await fs.rename(originalPath, archivedPath);
@@ -501,7 +498,6 @@ it.each(["different path", "same path replacement"] as const)(
       expect(await recoverStale({ now: 6 * 60 * 60_000 + 2 })).toBe(1);
       await settleDigestAttempts();
       expect(readRecord(stale)?.status).toBe("closed");
-      expectRetained();
       expect(sendDurableMessageBatch).toHaveBeenCalledOnce();
 
       await createVoiceSession({ sessionKey, voiceSessionId });
@@ -545,21 +541,15 @@ it("recovers current stale calls after shared storage retires a failed digest co
       failed.resolve();
     }
   });
-  void warning;
   await closeVoice(retired, target);
   await withinTest(failed.promise, signal);
   await settleDigestAttempts();
-  expect(clientVoiceSessionTesting.digestDeliverySnapshot()).toMatchObject({
-    pending: 0,
-    retained: 1,
-  });
   expect(sendDurableMessageBatch).toHaveBeenCalledOnce();
   const agentPath = resolveOpenClawAgentSqlitePath(target);
   const identity = readDatabasePathIdentitySync(agentPath);
 
   // Retain the digest owner and agent file while replacing only shared-store admission.
   await closeOpenClawStateDatabaseAsync();
-  expectRetained();
   openOpenClawStateDatabase();
   const stale = await createVoiceSession({ now: 1 });
   expect(readDatabasePathIdentitySync(agentPath)).toEqual(identity);
@@ -568,11 +558,12 @@ it("recovers current stale calls after shared storage retires a failed digest co
   expect(readRecord(stale)?.status).toBe("closed");
   expect(readRecord(retired)?.digestDeliveredAt).toBeUndefined();
   expect(sendDurableMessageBatch).toHaveBeenCalledOnce();
-  expectRetained(0);
   await vi.advanceTimersByTimeAsync(
     clientVoiceSessionTesting.digestDeliveryPolicy.failureRetentionMs + 1,
   );
-  expect(clientVoiceSessionTesting.digestDeliverySnapshot().retained).toBe(0);
+  expect(warning).toHaveBeenCalledWith(
+    expect.stringContaining("voice mutation digest dropped after retry retention expired"),
+  );
   expect(sendDurableMessageBatch).toHaveBeenCalledOnce();
 });
 

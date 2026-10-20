@@ -19,6 +19,14 @@ enum ScreenshotFixtureMode {
         ProcessInfo.processInfo.arguments.contains("--openclaw-progress-bar-fixture")
     }
 
+    static var modelSignInScenario: String? {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let index = arguments.firstIndex(of: "--openclaw-model-sign-in-fixture"),
+              arguments.indices.contains(index + 1)
+        else { return nil }
+        return arguments[index + 1]
+    }
+
     static let gatewayName = "OpenClaw Gateway"
     static let gatewayAddress = "Gateway on local network"
     static let gatewayID = "screenshot-fixture-gateway"
@@ -147,7 +155,7 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
     {
         OpenClawChatComposerCapabilityCatalog(
             sessionSettingsAvailable: true,
-            modelMutationAvailable: true,
+            modelMutationAvailable: ScreenshotFixtureMode.modelSignInScenario != "read-only",
             effortMutationAvailable: true,
             webSearchBaseEnabled: true,
             webSearchAvailable: true,
@@ -291,7 +299,21 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
             })
     }
 
+    func acquireModelSignInContext(agentID: String?) async -> OpenClawChatModelSignInContext? {
+        guard self.fixture.sessionIDPrefix == "screenshot-fixture",
+              ScreenshotFixtureMode.modelSignInScenario != nil
+        else { return nil }
+        return OpenClawChatModelSignInContext(
+            agentID: agentID ?? self.fixture.defaultAgentID,
+            request: { method, _ in
+                guard method == "models.authStatus" else { throw CancellationError() }
+                return Data(#"{"providers":[],"providerCapabilities":[]}"#.utf8)
+            },
+            isCurrent: { true })
+    }
+
     func listModels(agentID _: String?) async throws -> [OpenClawChatModelChoice] {
+        if ScreenshotFixtureMode.modelSignInScenario == "empty" { return [] }
         if ProcessInfo.processInfo.arguments.contains("--openclaw-unavailable-model-fixture") {
             return try OpenClawChatGatewayPayloadCodec.decodeModelChoices(Data(#"""
             {"models":[

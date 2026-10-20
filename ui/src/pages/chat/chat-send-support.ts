@@ -80,9 +80,6 @@ export function chatSendAdmissionHoldReason(
   sessionKey: string,
   agentId?: string,
 ): string | null {
-  if (sessionKey === host.sessionKey && host.isRouteSessionPending?.()) {
-    return t("chat.thread.loading");
-  }
   if (isExpiredIncognitoSession(host, sessionKey)) {
     return t("chat.incognitoExpiredTitle");
   }

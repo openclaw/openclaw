@@ -11,7 +11,7 @@ import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import * as schemaVersions from "../state/openclaw-schema-versions.js";
-import { hasErrnoCode } from "./errors.js";
+import { ignoreMissingPath } from "./errno.js";
 import { readPackageVersion } from "./package-json.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveSqliteInspectionBudget } from "./sqlite-readonly-worker.js";
@@ -223,9 +223,7 @@ export async function validateUpdateCandidateCanary(params: {
     try {
       await fs.lstat(continuationEntry);
     } catch (error) {
-      if (!hasErrnoCode(error, "ENOENT")) {
-        throw error;
-      }
+      ignoreMissingPath(error);
       if (params.migrationPolicy === "startup-only") {
         throw new Error(
           "The candidate lacks the runtime required to prove preserved-input startup",

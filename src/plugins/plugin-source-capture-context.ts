@@ -21,7 +21,12 @@ export function resolvePluginSourceCaptureStorage(
   const inherited = stateDir === undefined ? getPluginSourceCaptureStorage() : undefined;
   return Object.freeze({
     stateDir: path.resolve(stateDir ?? inherited?.stateDir ?? resolveStateDir()),
-    placement: placement ?? inherited?.placement ?? "state",
+    placement:
+      placement ??
+      inherited?.placement ??
+      (process.env.OPENCLAW_UPDATE_IN_PROGRESS === "1" && process.env.TMPDIR?.trim()
+        ? "temporary"
+        : "state"),
   });
 }
 

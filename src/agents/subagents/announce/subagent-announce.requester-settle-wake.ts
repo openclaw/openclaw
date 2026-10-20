@@ -68,6 +68,7 @@ import { createRequesterSettleReceiptAdmission } from "./subagent-announce.reque
 import {
   readSharedBatchState,
   REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS,
+  needsRequesterSettleFindings,
   resolveRequesterSettleRetryState,
   captureRequesterRunOwner,
   isRequesterSettleDeliveryClosed,
@@ -340,16 +341,11 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     await completeBatch(settledBatch, selectedState);
     return false;
   }
-  // A frozen batch closed by cancellation retires above; otherwise it waits for its tree.
-  if (waitForDescendants(initialDescendants)) {
-    return false;
-  }
   const interruptedContinuations = settledBatch.filter(isQuietSubagentRestartContinuation);
   const requiredSettled = settledBatch.filter(
     (entry) => entry.expectsCompletionMessage === true || interruptedContinuations.includes(entry),
   );
   // A yielded batch owns a rearm generation even when its child settles later.
-  // Otherwise a delivered single child clears the batch before its requester wakes.
   const requesterYieldedAfterDelivery =
     selectedState.afterRequesterYield === true ||
     (selectedState.requesterYieldBatch === true && selectedState.rearmGeneration !== undefined);
@@ -361,16 +357,19 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
   // Ordinary nested waves remain owned by the descendant-settle path.
   if (
     !pauseNotice &&
-    (requiredSettled.length === 0 ||
-      (requiredSettled.length < 2 &&
-        !requiredSettled.some((entry) => entry.delivery?.status !== "delivered") &&
-        !requesterYieldedAfterDelivery) ||
+    ((requiredSettled.every((entry) => !needsRequesterSettleFindings(entry)) &&
+      (requiredSettled.length === 0 || !requesterYieldedAfterDelivery)) ||
       (!requesterYieldedAfterDelivery &&
         interruptedContinuations.length === 0 &&
         !hasRequesterCompletionCohort(currentSettledEntry) &&
         requesterDepth >= 1))
   ) {
     await completeBatch(settledBatch, selectedState);
+    return false;
+  }
+  // Only an owed continuation waits for descendants. An entirely delivered
+  // wave must not retain its redundant wake behind unrelated running siblings.
+  if (waitForDescendants(initialDescendants)) {
     return false;
   }
 
@@ -420,7 +419,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     }
     const preparedFindings = pauseNotice
       ? { text: pauseNotice.acknowledgment, isCurrent: () => true }
-      : await readChildCompletionFindings(completionRows);
+      : await readChildCompletionFindings(completionRows.filter(needsRequesterSettleFindings));
     if (await retireReplacedStore()) {
       return false;
     }

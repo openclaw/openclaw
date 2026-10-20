@@ -77,7 +77,7 @@ export function McpServersCard(props: McpServersCardProps) {
   });
   onSettled(() => {
     let hello = context.gateway.snapshot.hello;
-    // Retire sign-in with its transport, before the next interaction can reuse it.
+    // Retire sign-in with its transport or agent selection before the next interaction can reuse it.
     const stopGateway = context.gateway.subscribe((snapshot) => {
       if (snapshot.hello !== hello) {
         hello = snapshot.hello;

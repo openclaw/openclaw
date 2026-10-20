@@ -142,7 +142,7 @@ it.skipIf(process.platform === "win32")(
       async ({ createTempDir }) => {
         const root = await realpath(createTempDir("required-native-same-session-"));
         const identity = loadOrCreateDeviceIdentity({
-          path: path.join(root, "node-identity.sqlite"),
+          env: { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "node-state") },
         });
         await mkdir(path.join(root, "node-state", "node-host"), { recursive: true, mode: 0o700 });
         const remoteAgentWorkspace = path.join(root, "remote-agent-workspace");

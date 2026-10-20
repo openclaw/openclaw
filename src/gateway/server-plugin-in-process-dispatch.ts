@@ -435,6 +435,7 @@ export async function dispatchGatewayMethodInProcess<T>(
             cancelOnDeadline: options?.cancelOnDeadline,
             expectFinal: options?.expectFinal,
             onAccepted: options?.onAccepted,
+            onStartOwner: options?.onStartOwner,
             onExecutionStarted: options?.onExecutionStarted,
             onSignalAbort: options?.onSignalAbort,
             signal: options?.signal,

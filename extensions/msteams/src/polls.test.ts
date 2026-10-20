@@ -15,6 +15,7 @@ import {
   type MSTeamsPollStore,
 } from "./polls.js";
 import { setMSTeamsRuntime } from "./runtime.js";
+import { resolveMSTeamsAccountStateNamespace } from "./sqlite-state.js";
 import { msteamsRuntimeStub } from "./test-support/runtime.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -32,6 +33,21 @@ const pollStateKey = (id: string) => crypto.createHash("sha256").update(id).dige
 
 function pluginStore<T>(namespace: string, maxEntries: number, env: NodeJS.ProcessEnv) {
   return createPluginStateKeyedStoreForTests<T>("msteams", { namespace, maxEntries, env });
+}
+
+async function storedVotes(pollId: string, accountId?: string) {
+  const buckets = pluginStore<{ pollId: string; votes: Poll["votes"] }>(
+    resolveMSTeamsAccountStateNamespace("poll-vote-buckets", accountId),
+    32_032,
+    process.env,
+  );
+  const votes: Poll["votes"] = {};
+  for (const row of await buckets.entries()) {
+    if (row.value.pollId === pollId) {
+      Object.assign(votes, row.value.votes);
+    }
+  }
+  return votes;
 }
 
 function poll(overrides: Partial<Poll>): Poll {
@@ -58,13 +74,26 @@ beforeEach(() => {
 });
 
 describe("msteams polls", () => {
-  it("builds poll cards with fallback text", () => {
+  it("builds poll cards with the question and selectable options", () => {
     const card = buildMSTeamsPollCard({ question: "Lunch?", options: ["Pizza", "Sushi"] });
 
     expect(card.pollId).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
     );
-    expect(card.fallbackText).toBe("Poll: Lunch?\n1. Pizza\n2. Sushi");
+    expect(card.card).toMatchObject({
+      type: "AdaptiveCard",
+      body: [
+        { type: "TextBlock", text: "Lunch?" },
+        {
+          type: "Input.ChoiceSet",
+          choices: [
+            { title: "Pizza", value: "0" },
+            { title: "Sushi", value: "1" },
+          ],
+        },
+        { type: "TextBlock", text: "Select one option." },
+      ],
+    });
   });
 
   it("extracts poll votes from activity values", () => {
@@ -77,7 +106,7 @@ describe("msteams polls", () => {
     const store = stateStore();
     await store.createPoll(poll({ options: ["A", "B", "C"], maxSelections: 2 }));
     await store.recordVote({ pollId: "poll-1", voterId: "user-1", selections: ["0", "0", "1"] });
-    expect((await store.getPoll("poll-1"))?.votes["user-1"]).toEqual(["0", "1"]);
+    expect((await storedVotes("poll-1"))["user-1"]).toEqual(["0", "1"]);
   });
   it("hashes external poll ids before using plugin-state keys", async () => {
     const store = stateStore();
@@ -111,8 +140,8 @@ describe("msteams polls", () => {
     ] as const) {
       expect(await createMSTeamsPollStoreState({ accountId }).getPoll("poll-1")).toMatchObject({
         question,
-        votes,
       });
+      expect(await storedVotes("poll-1", accountId)).toEqual(votes);
     }
   });
 
@@ -125,8 +154,9 @@ describe("msteams polls", () => {
       store.recordVote({ pollId: "poll-race", voterId: "user-b", selections: ["1"] }),
     ]);
 
-    await expect(store.getPoll("poll-race")).resolves.toMatchObject({
-      votes: { "user-a": ["0"], "user-b": ["1"] },
+    await expect(storedVotes("poll-race")).resolves.toEqual({
+      "user-a": ["0"],
+      "user-b": ["1"],
     });
   });
 
@@ -142,9 +172,9 @@ describe("msteams polls", () => {
     await store.createPoll(poll({ id: "poll-large", votes }));
     await store.recordVote({ pollId: "poll-large", voterId: "user-new", selections: ["1"] });
 
-    const stored = await store.getPoll("poll-large");
-    expect(Object.keys(stored?.votes ?? {})).toHaveLength(501);
-    expect(stored?.votes["user-new"]).toEqual(["1"]);
+    const stored = await storedVotes("poll-large");
+    expect(Object.keys(stored)).toHaveLength(501);
+    expect(stored["user-new"]).toEqual(["1"]);
   });
 
   it("bounds vote bucket scans while pruning 1003 existing polls", async () => {

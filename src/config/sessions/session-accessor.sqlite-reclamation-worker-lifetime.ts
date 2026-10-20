@@ -80,6 +80,7 @@ type MutationRunParams<Result> = {
   withWriteAdmission: SqliteWorkerWriteAdmission<Result>;
 };
 const log = createSubsystemLogger("session-sqlite");
+const memoryPressure = channel("openclaw.memory.critical");
 
 /** Retains only the admitted connection; each caller owns its plan, claim and commit gate. */
 export class SqliteReclamationWorker {
@@ -473,7 +474,7 @@ export class SqliteReclamationWorker {
     });
     // Only ordinary retained Workers use pressure retirement; validation scopes own their close.
     if (this.onRetired) {
-      channel("openclaw.memory.critical").subscribe(this.onMemoryPressure);
+      memoryPressure.subscribe(this.onMemoryPressure);
     }
     return transport;
   }
@@ -576,7 +577,7 @@ export class SqliteReclamationWorker {
         });
       }
       this.retired = true;
-      channel("openclaw.memory.critical").unsubscribe(this.onMemoryPressure);
+      memoryPressure.unsubscribe(this.onMemoryPressure);
       this.unregisterAgent();
       this.unregisterState();
       process.off("beforeExit", this.beforeExit);

@@ -339,9 +339,7 @@ describe("readGatewayServiceState", () => {
           expect(result.serviceMutationSkipMessage).toContain(
             "No supported service manager detected",
           );
-          expect(result.serviceMutationSkipMessage).toContain(
-            "Restart the Gateway you launched manually after the update.",
-          );
+          expect(result.serviceMutationSkipMessage).toContain("Stop the Gateway through its owner");
           expect(result.serviceEnv === undefined).toBe(true);
           expect(result.serviceDefinitionEnv === undefined).toBe(true);
           expect(result.serviceNodeRunner === undefined).toBe(true);
