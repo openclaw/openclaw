@@ -102,12 +102,10 @@ it("settles queued heartbeat cron work before joining its shutdown drain", async
     return result;
   });
   await queued.promise;
-  // The real wake is pending at the zero-drain restart admission fence, not
-  // an embedded model run that reply cancellation could already settle.
+  // Fence a real queued wake, not an embedded run already settled by reply cancellation.
   markGatewayRestartDraining();
   await vi.advanceTimersByTimeAsync(0);
-  // The CLI joins process activity before server close can stop the runner.
-  // Only the executing sibling may still hold that boundary.
+  // CLI activity joins precede runner stop; only the executing sibling may remain.
   const heartbeatSettledBeforeClose = heartbeatSettled;
   const beforeClose = await waitForGatewayActiveWork(0);
   const drainEntered = createDeferredCore();
@@ -136,8 +134,7 @@ it("settles queued heartbeat cron work before joining its shutdown drain", async
     await drainEntered.promise;
     expect(heartbeatSettledBeforeClose).toBe(true);
     expect(beforeClose.snapshot.counts.cronRuns).toBe(1);
-    // Preserve the real 10s cron drain. A queued wake must not consume it
-    // waiting for a heartbeat stop that close has placed after its own join.
+    // Keep the real 10s grace: queued wakes cannot wait for the later heartbeat stop.
     await vi.advanceTimersByTimeAsync(9_999);
     expect(heartbeatSettled).toBe(true);
     expect(closed).toBe(false);
@@ -147,8 +144,7 @@ it("settles queued heartbeat cron work before joining its shutdown drain", async
       status: "skipped",
       error: "heartbeat skipped: gateway-draining",
     });
-    // Cancellation may project a result, but the admitted sibling's actual
-    // core must still join before shared resources close.
+    // A cancellation result does not release the admitted sibling's actual work.
     await expect(waitForActiveCronTaskRuns(0)).resolves.toEqual({ drained: false, active: 1 });
     releaseSibling.resolve();
     expect((await closing).warnings).toEqual([]);

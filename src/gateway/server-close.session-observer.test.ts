@@ -81,11 +81,7 @@ it("settles an accepted observer digest across the close prelude before closing 
       data: { kind: "preamble", progressText: headline },
     };
     handling = observer.handleEventAsync(event);
-    await gate(
-      persistEntered.promise,
-      handling,
-      "Observer event settled without accepting its digest write",
-    );
+    await gate(persistEntered.promise, handling, "Observer skipped digest persistence");
     await withinTest(handling, signal);
     const dispose = observer.disposeAsync.bind(observer);
     const disposeSpy = vi.spyOn(observer, "disposeAsync").mockImplementation(() => {
@@ -107,10 +103,7 @@ it("settles an accepted observer digest across the close prelude before closing 
       observer.handleEventAsync({
         ...event,
         seq: 2,
-        data: {
-          kind: "preamble",
-          progressText: "Refused after shutdown",
-        },
+        data: { kind: "preamble", progressText: "Refused after shutdown" },
       }),
     ).rejects.toThrow("Session observer is closed");
 

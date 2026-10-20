@@ -43,12 +43,8 @@ it("settles an accepted system-agent turn before Gateway close retires its audit
       answerWizard: async () => ({ text: "", action: "none" }),
       cancelWizard: async () => ({ text: "", action: "none" }),
       decorateRejoinReply: (reply) => reply,
-      noteAssistantMessage: (text) => {
-        history.push({ role: "assistant", text });
-      },
-      seedHistory: (turns) => {
-        history.push(...turns);
-      },
+      noteAssistantMessage: (text) => void history.push({ role: "assistant", text }),
+      seedHistory: (turns) => void history.push(...turns),
       historyLength: () => history.length,
       historySince: (index) => history.slice(index),
       getPendingOperatorProposal: () => null,
@@ -77,18 +73,12 @@ it("settles an accepted system-agent turn before Gateway close retires its audit
       context: kernel.gatewayRequestContext,
       methodRegistry: kernel.getAttachedGatewayMethodRegistry(),
     };
-    turning = dispatchGatewayRequestInProcess(
-      "openclaw.chat",
-      { sessionId, message: "Accepted question" },
-      dispatchOptions,
-    );
+    const chat = (message: string) =>
+      dispatchGatewayRequestInProcess("openclaw.chat", { sessionId, message }, dispatchOptions);
+    turning = chat("Accepted question");
     // Shutdown may revoke the reply; the accepted logbook still has to settle.
     void turning.catch(() => undefined);
-    await gate(
-      recordingEntered.promise,
-      turning,
-      "Turn returned before audit persistence entered its worker owner",
-    );
+    await gate(recordingEntered.promise, turning, "Turn skipped audit persistence");
     kernel.scheduler.signal.addEventListener("abort", () => preludeEntered.resolve(), {
       once: true,
     });
@@ -99,13 +89,7 @@ it("settles an accepted system-agent turn before Gateway close retires its audit
     await gate(preludeEntered.promise, closing, "Gateway skipped its close prelude");
     expect(closed).toBe(false);
     expect(shared.isOpen).toBe(true);
-    await expect(
-      dispatchGatewayRequestInProcess(
-        "openclaw.chat",
-        { sessionId, message: "Too late" },
-        dispatchOptions,
-      ),
-    ).rejects.toThrow("Gateway request entry is closed");
+    await expect(chat("Too late")).rejects.toThrow("Gateway request entry is closed");
     releaseRecording.resolve();
     await withinTest(Promise.all([turning.catch(() => undefined), closing]), signal);
     expect(shared.isOpen).toBe(false);

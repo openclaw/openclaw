@@ -42,9 +42,7 @@ it("settles accepted writes and all cleanup before Gateway close resolves", asyn
     stopGmailWatcher: async () => {},
     disposeAllCodeModeRuns: async () => {},
     closeProviderTransportDispatcherPool: async () => {},
-    drainRetainedEmbeddingProviders: async () => {
-      runtimesDrained.resolve();
-    },
+    drainRetainedEmbeddingProviders: async () => runtimesDrained.resolve(),
   });
   const params = createDeps({
     channelIds: ["telegram"],
@@ -53,10 +51,7 @@ it("settles accepted writes and all cleanup before Gateway close resolves", asyn
       await terminalOwner.drain();
       terminalDrained.resolve();
     },
-    preparePluginRegistryClose: async () => {
-      await releaseMemory.promise;
-      return [];
-    },
+    preparePluginRegistryClose: async () => releaseMemory.promise.then(() => []),
     stopScheduler: vi.fn(async () => {
       schedulerStopping.resolve();
       await releaseScheduler.promise;
@@ -68,7 +63,6 @@ it("settles accepted writes and all cleanup before Gateway close resolves", asyn
   let boardWrite: ReturnType<SqliteBoardStore["putWidget"]> | undefined;
   let closing: Promise<unknown> | undefined;
   try {
-    const options = { agentId: "main", env: state.env };
     const sessionKey = "agent:main:natural-close";
     const event = {
       runId: "natural-close-run",
@@ -85,7 +79,7 @@ it("settles accepted writes and all cleanup before Gateway close resolves", asyn
       startedAt: 1_000,
       updatedAt: 1_000,
     });
-    const agent = openOpenClawAgentDatabase(options);
+    const agent = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
     heldWriter = patchSessionEntryCore(
       target,
       async () => {
@@ -112,11 +106,7 @@ it("settles accepted writes and all cleanup before Gateway close resolves", asyn
       restartExpectedMs: 1_500,
       drainTimeoutMs: 0,
     }).then((preparation) => completeGatewayClose(params, preparation));
-    await gate(
-      terminalDraining.promise,
-      closing,
-      "Gateway skipped accepted terminal persistence before close",
-    );
+    await gate(terminalDraining.promise, closing, "Close skipped terminal persistence");
     expect(shutdownHook).toHaveBeenCalledTimes(1);
     expect(preRestartHook).toHaveBeenCalledTimes(1);
     expect(params.stopChannel).toHaveBeenCalledWith("telegram");
@@ -131,19 +121,11 @@ it("settles accepted writes and all cleanup before Gateway close resolves", asyn
       resolvedWidgetName: "accepted",
       widgets: [{ name: "accepted" }],
     });
-    await gate(
-      runtimesDrained.promise,
-      closing,
-      "Gateway skipped runtime cleanup before retiring memory",
-    );
+    await gate(runtimesDrained.promise, closing, "Close skipped runtime cleanup");
     expect(params.stopScheduler).not.toHaveBeenCalled();
     expect(agent.db.isOpen).toBe(true);
     releaseMemory.resolve();
-    await gate(
-      schedulerStopping.promise,
-      closing,
-      "Gateway skipped scheduler settlement before database close",
-    );
+    await gate(schedulerStopping.promise, closing, "Close skipped scheduler settlement");
     expect(agent.db.isOpen).toBe(true);
     releaseScheduler.resolve();
     await withinTest(closing, signal);

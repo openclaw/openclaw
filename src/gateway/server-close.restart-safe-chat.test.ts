@@ -125,9 +125,7 @@ it("joins accepted restart-safe terminal persistence after the real close prelud
     expect(late).not.toHaveBeenCalled();
     sql = observeHostDataSql();
     release.resolve();
-    expect(await gate(settled.promise, job, "Accepted terminal persistence did not settle")).toBe(
-      true,
-    );
+    expect(await gate(settled.promise, job, "Terminal persistence did not settle")).toBe(true);
     expect(sql.queries).toEqual([]);
     settlementAuthority.abort(new Error("Terminal settlement completed"));
     sql.restore();
