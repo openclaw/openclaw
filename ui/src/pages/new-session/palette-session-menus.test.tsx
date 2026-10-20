@@ -17,6 +17,11 @@ function pressArrow(target: HTMLElement, key: "ArrowDown" | "ArrowUp") {
   target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
 }
 
+function expectArrow(target: HTMLElement, key: "ArrowDown" | "ArrowUp", destination: HTMLElement) {
+  pressArrow(target, key);
+  expect(document.activeElement).toBe(destination);
+}
+
 function get<T extends HTMLElement = HTMLElement>(
   root: Pick<ParentNode, "querySelector">,
   selector: string,
@@ -65,16 +70,14 @@ describe("palette settings menus", () => {
     const trigger = get(host, ".agent-select__trigger");
     const remember = get<HTMLInputElement>(host, ".palette-session-settings__remember input");
     expect(remember.disabled).toBe(true);
-    pressArrow(workspace, "ArrowDown");
-    expect(document.activeElement).toBe(trigger);
+    expectArrow(workspace, "ArrowDown", trigger);
 
     trigger.click();
     const menu = get(host, ".agent-select__menu");
     await waitForSolid(() => expect(menu.matches(":popover-open")).toBe(true));
     const first = get(menu, '[data-value="option:main"]');
     const last = get(menu, '[data-value="option:other"]');
-    pressArrow(workspace, "ArrowUp");
-    expect(document.activeElement).toBe(last);
+    expectArrow(workspace, "ArrowUp", last);
     pressArrow(last, "ArrowDown");
     await waitForSolid(() => expect(document.activeElement).toBe(first));
     expect(menu.matches(":popover-open")).toBe(true);
@@ -109,8 +112,7 @@ describe("palette settings menus", () => {
     const placementRetry = get(host, "[data-required-placement] button");
     const preferenceRetry = get(host, ".palette-session-settings__error button");
     const trigger = get(host, ".agent-select__trigger");
-    pressArrow(placementRetry, "ArrowDown");
-    expect(document.activeElement).toBe(preferenceRetry);
+    expectArrow(placementRetry, "ArrowDown", preferenceRetry);
 
     available = true;
     await context.agents.refreshList();
@@ -123,14 +125,12 @@ describe("palette settings menus", () => {
       expect(host.querySelector("[data-required-placement] button")).not.toBeNull(),
     );
     const replacementRetry = get(host, "[data-required-placement] button");
-    pressArrow(replacementRetry, "ArrowDown");
-    expect(document.activeElement).toBe(preferenceRetry);
+    expectArrow(replacementRetry, "ArrowDown", preferenceRetry);
 
     options.preferences.failed = false;
     options.onChange();
     await host.updateComplete;
-    pressArrow(replacementRetry, "ArrowDown");
-    expect(document.activeElement).toBe(trigger);
+    expectArrow(replacementRetry, "ArrowDown", trigger);
     required = false;
     await context.agents.refreshList();
     await waitForSolid(() =>
@@ -199,27 +199,20 @@ describe("palette settings menus", () => {
     const beta = get(content, '[data-machine="local"][data-project="beta"]');
     expect(unavailable.getAttribute("aria-disabled")).toBe("true");
     expect(unavailable.disabled).toBe(false);
-    pressArrow(search, "ArrowDown");
-    expect(document.activeElement).toBe(unavailable);
-    pressArrow(alpha, "ArrowDown");
-    expect(document.activeElement).toBe(beta);
-    pressArrow(beta, "ArrowDown");
-    expect(document.activeElement).toBe(connect);
-    pressArrow(connect, "ArrowDown");
-    expect(document.activeElement).toBe(retry);
-    pressArrow(retry, "ArrowDown");
-    expect(document.activeElement).toBe(back);
+    expectArrow(search, "ArrowDown", unavailable);
+    expectArrow(alpha, "ArrowDown", beta);
+    expectArrow(beta, "ArrowDown", connect);
+    expectArrow(connect, "ArrowDown", retry);
+    expectArrow(retry, "ArrowDown", back);
 
     search.value = "Beta";
     search.dispatchEvent(new Event("input", { bubbles: true }));
     await host.updateComplete;
-    pressArrow(search, "ArrowDown");
-    expect(document.activeElement).toBe(beta);
+    expectArrow(search, "ArrowDown", beta);
     search.value = "";
     search.dispatchEvent(new Event("input", { bubbles: true }));
     await host.updateComplete;
     const restoredAlpha = get(content, '[data-machine="local"][data-project="alpha"]');
-    pressArrow(beta, "ArrowUp");
-    expect(document.activeElement).toBe(restoredAlpha);
+    expectArrow(beta, "ArrowUp", restoredAlpha);
   });
 });

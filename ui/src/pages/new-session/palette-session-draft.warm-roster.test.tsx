@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { AgentsListResult } from "../../api/types.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
@@ -25,88 +25,84 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("palette live roster authority", () => {
-  it.each(["removed-agent", "refresh-failure"] as const)(
-    "waits for current defaults and preserves %s intent in the create request",
-    async (choice) => {
-      const fresh = createDeferred<AgentsListResult>();
-      const retry = createDeferred<AgentsListResult>();
-      let requested = false;
-      const { context } = createDraftFixture({
-        request: (method) => {
-          if (method === "environments.list") {
-            return Promise.resolve({ profiles: [], environments: [] });
-          }
-          if (method !== "agents.list") {
-            return Promise.resolve({ repositoryStatus: "not_git", branches: [] });
-          }
-          const result = requested ? retry.promise : fresh.promise;
-          requested = true;
-          return result;
-        },
-      });
-      const agents = createAgentCapability(context.gateway);
-      Object.assign(context, { agents });
-      Object.assign(context.sessions, { subscribe: () => () => {} });
-      Object.assign(context.config, { subscribe: () => () => {} });
-      Object.assign(context, {
-        agentIdentity: {
-          subscribe: () => () => {},
-          ensure: vi.fn(async () => {}),
-          get: () => undefined,
-        },
-        navigate: vi.fn(),
-      });
-      vi.mocked(context.sessions.createResult).mockResolvedValue({
-        key: "agent:main:dashboard:warm-roster",
-        initialRun: { status: "idle" },
-      });
-      let read = agents.ensureList();
-      const host = new PaletteDraftHost(context);
-      host.draft.open();
-      await waitForSolid(() =>
-        expect(host.querySelector(".palette-session-settings__workspace")).not.toBeNull(),
-      );
-      try {
-        host.draft.setMessage("Keep this draft while defaults refresh");
-        expect(host.draft.canSubmit).toBe(false);
-        expect(host.draft.disabledReason).toBe("Refreshing agent defaults…");
-        await host.draft.submit();
-        expect(context.sessions.createResult).not.toHaveBeenCalled();
-
-        const id = choice === "removed-agent" ? "replacement" : "main";
-        if (choice === "refresh-failure") {
-          fresh.reject(new Error("roster temporarily unavailable"));
-          await read;
-          await host.updateComplete;
-          expect(host.draft.canSubmit).toBe(false);
-          expect(host.draft.disabledReason).toBe(
-            "Could not refresh agent defaults. Reload to try again.",
-          );
-          await host.draft.submit();
-          expect(context.sessions.createResult).not.toHaveBeenCalled();
-          read = agents.ensureList();
-          retry.resolve(roster(id, "/workspace-b"));
-        } else {
-          fresh.resolve(roster(id, "/workspace-b"));
+it.each(["removed-agent", "refresh-failure"] as const)(
+  "waits for current defaults and preserves %s intent in the create request",
+  async (choice) => {
+    const fresh = createDeferred<AgentsListResult>();
+    const retry = createDeferred<AgentsListResult>();
+    let requested = false;
+    const { context } = createDraftFixture({
+      request: (method) => {
+        if (method === "environments.list") {
+          return Promise.resolve({ profiles: [], environments: [] });
         }
+        if (method !== "agents.list") {
+          return Promise.resolve({ repositoryStatus: "not_git", branches: [] });
+        }
+        const result = requested ? retry.promise : fresh.promise;
+        requested = true;
+        return result;
+      },
+    });
+    const agents = createAgentCapability(context.gateway);
+    Object.assign(context, { agents });
+    Object.assign(context, {
+      agentIdentity: {
+        subscribe: () => () => {},
+        ensure: vi.fn(async () => {}),
+        get: () => undefined,
+      },
+      navigate: vi.fn(),
+    });
+    vi.mocked(context.sessions.createResult).mockResolvedValue({
+      key: "agent:main:dashboard:warm-roster",
+      initialRun: { status: "idle" },
+    });
+    let read = agents.ensureList();
+    const host = new PaletteDraftHost(context);
+    host.draft.open();
+    await waitForSolid(() =>
+      expect(host.querySelector(".palette-session-settings__workspace")).not.toBeNull(),
+    );
+    try {
+      host.draft.setMessage("Keep this draft while defaults refresh");
+      expect(host.draft.canSubmit).toBe(false);
+      expect(host.draft.disabledReason).toBe("Refreshing agent defaults…");
+      await host.draft.submit();
+      expect(context.sessions.createResult).not.toHaveBeenCalled();
+
+      const id = choice === "removed-agent" ? "replacement" : "main";
+      if (choice === "refresh-failure") {
+        fresh.reject(new Error("roster temporarily unavailable"));
         await read;
         await host.updateComplete;
-        await host.updateComplete;
-        expect(host.draft.message).toBe("Keep this draft while defaults refresh");
-        expect(host.draft.canSubmit).toBe(true);
+        expect(host.draft.canSubmit).toBe(false);
+        expect(host.draft.disabledReason).toBe(
+          "Could not refresh agent defaults. Reload to try again.",
+        );
         await host.draft.submit();
-        expect(context.sessions.createResult).toHaveBeenCalledOnce();
-        const params = vi.mocked(context.sessions.createResult).mock.calls[0]?.[0];
-        expect(params).toMatchObject({
-          agentId: id,
-          message: "Keep this draft while defaults refresh",
-        });
-        expect(params).not.toHaveProperty("cwd");
-      } finally {
-        host.remove();
-        agents.dispose();
+        expect(context.sessions.createResult).not.toHaveBeenCalled();
+        read = agents.ensureList();
+        retry.resolve(roster(id, "/workspace-b"));
+      } else {
+        fresh.resolve(roster(id, "/workspace-b"));
       }
-    },
-  );
-});
+      await read;
+      await host.updateComplete;
+      await host.updateComplete;
+      expect(host.draft.message).toBe("Keep this draft while defaults refresh");
+      expect(host.draft.canSubmit).toBe(true);
+      await host.draft.submit();
+      expect(context.sessions.createResult).toHaveBeenCalledOnce();
+      const params = vi.mocked(context.sessions.createResult).mock.calls[0]?.[0];
+      expect(params).toMatchObject({
+        agentId: id,
+        message: "Keep this draft while defaults refresh",
+      });
+      expect(params).not.toHaveProperty("cwd");
+    } finally {
+      host.remove();
+      agents.dispose();
+    }
+  },
+);

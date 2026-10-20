@@ -274,12 +274,13 @@ describe("new session draft route ownership", () => {
     }
     const keys = ["x", " ", "Enter", "ArrowDown", "Escape"] as const;
     type Destination = "composer" | "element" | "overlay" | "nothing";
-    type Surface = [
-      name: string,
-      targets: HTMLElement[],
-      expected: readonly Destination[],
-      overlay?: "menu" | "dialog",
-    ];
+    type Surface = {
+      name: string;
+      targets: HTMLElement[];
+      expected: readonly Destination[];
+      openDialog?: boolean;
+      openMenu?: boolean;
+    };
     const append = <T extends HTMLElement>(element: T): T => page.appendChild(element);
     const main = append(document.createElement("main"));
     main.tabIndex = -1;
@@ -309,37 +310,56 @@ describe("new session draft route ownership", () => {
     editable.tabIndex = 0;
     const element = ["element", "element", "element", "element", "element"] as const;
     const overlay = ["overlay", "overlay", "overlay", "overlay", "overlay"] as const;
-    const typingOnly = ["composer", "element", "element", "nothing", "nothing"] as const;
-    const menuKeys = ["composer", "overlay", "overlay", "overlay", "overlay"] as const;
     const routing: Surface[] = [
-      ["main", [main], ["composer", "composer", "nothing", "nothing", "nothing"]],
-      ["composer", [textarea], element],
-      ["button/link", [button, link], typingOnly],
-      ["menuitem", [menuItem], menuKeys, "menu"],
-      ["open native menu", [main], menuKeys, "menu"],
-      ["dialog", [dialogButton], overlay, "dialog"],
-      ["details/summary", [summary], typingOnly],
-      ["input/contenteditable", [input, editable], element],
+      {
+        name: "main",
+        targets: [main],
+        expected: ["composer", "composer", "nothing", "nothing", "nothing"],
+      },
+      { name: "composer", targets: [textarea], expected: element },
+      {
+        name: "button/link",
+        targets: [button, link],
+        expected: ["composer", "element", "element", "nothing", "nothing"],
+      },
+      {
+        name: "menuitem",
+        targets: [menuItem],
+        expected: ["composer", "overlay", "overlay", "overlay", "overlay"],
+        openMenu: true,
+      },
+      {
+        name: "open native menu",
+        targets: [main],
+        expected: ["composer", "overlay", "overlay", "overlay", "overlay"],
+        openMenu: true,
+      },
+      { name: "dialog", targets: [dialogButton], expected: overlay, openDialog: true },
+      {
+        name: "details/summary",
+        targets: [summary],
+        expected: ["composer", "element", "element", "nothing", "nothing"],
+      },
+      { name: "input/contenteditable", targets: [input, editable], expected: element },
     ];
 
     try {
-      for (const [name, targets, expected, openOverlay] of routing) {
-        for (const target of targets) {
+      for (const row of routing) {
+        for (const target of row.targets) {
           for (const [index, key] of keys.entries()) {
-            menuOwner.request(openOverlay === "menu");
-            dialog.open = openOverlay === "dialog";
+            menuOwner.request(row.openMenu === true);
+            dialog.open = row.openDialog === true;
             target.focus();
             target.dispatchEvent(
               new KeyboardEvent("keydown", { key, bubbles: true, composed: true }),
             );
-            const destination = expected[index];
-            const label = `${name} / ${key} -> ${destination}`;
+            const destination = row.expected[index];
             if (destination === "composer") {
-              expect(document.activeElement, label).toBe(textarea);
+              expect(document.activeElement, `${row.name} / ${key} -> composer`).toBe(textarea);
             } else if (destination === "overlay") {
-              expect(document.activeElement, label).not.toBe(textarea);
+              expect(document.activeElement, `${row.name} / ${key} -> overlay`).not.toBe(textarea);
             } else {
-              expect(document.activeElement, label).toBe(target);
+              expect(document.activeElement, `${row.name} / ${key} -> ${destination}`).toBe(target);
             }
           }
         }

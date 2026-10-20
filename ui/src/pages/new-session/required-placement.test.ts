@@ -27,6 +27,18 @@ const profile = {
 };
 const catalog = { requiredProfile: profile.id, profiles: [profile], environments: [] };
 const optionalCatalog = { profiles: [], environments: [] };
+const model = () => ({
+  id: "default",
+  provider: "openai",
+  name: "Default",
+  available: false,
+  unavailableReason: "missing-auth",
+  agentRuntime: runtime,
+  runtimeChoices: [
+    hostedRuntime,
+    { ...runtime, id: "external-runtime", cloudPlacementExecutionMode: "remote-exec" },
+  ].map((agentRuntime) => ({ agentRuntime, available: true })),
+});
 function fixture(
   request: (method: string) => Promise<unknown> = async () => catalog,
   modelSelectionPolicy?: { restricted: true; defaultModel: string | null },
@@ -47,27 +59,7 @@ function fixture(
       await modelReady;
       return {
         ...(modelSelectionPolicy ? { modelSelectionPolicy } : {}),
-        models: [
-          {
-            id: "default",
-            provider: "openai",
-            name: "Default",
-            available: false,
-            unavailableReason: "missing-auth",
-            agentRuntime: runtime,
-            runtimeChoices: [
-              { agentRuntime: hostedRuntime, available: true },
-              {
-                available: true,
-                agentRuntime: {
-                  ...runtime,
-                  id: "external-runtime",
-                  cloudPlacementExecutionMode: "remote-exec",
-                },
-              },
-            ],
-          },
-        ],
+        models: [model()],
       };
     },
     placementPolicy: async () => {
@@ -104,30 +96,47 @@ function expectRecovery(f: ReturnType<typeof fixture>, recovery: Record<string, 
     expect.objectContaining({ recovery: expect.objectContaining(recovery) }),
   );
 }
+
+async function expectBlocked(f: ReturnType<typeof fixture>) {
+  expect(f.flow.canSubmit()).toBe(false);
+  await f.flow.submit();
+  expect(f.context.sessions.createResult).not.toHaveBeenCalled();
+}
 afterEach(() => {
   vi.restoreAllMocks();
   sessionStorage.clear();
   localStorage.clear();
 });
 
-it("starts a required worker for a non-admin without manual placement or workspace choices", async () => {
-  const f = await ready();
-  expect(f.place.cloudProfileId).toBe(profile.id);
-  expect(f.place.freshWorkspace).toBe(true);
-  expect(f.flow.canSubmit()).toBe(true);
-  f.context.placementStartup.start = vi.fn();
-  vi.mocked(f.context.sessions.createResult).mockResolvedValue({
-    key: "agent:main:required",
-    initialRun: { status: "idle" },
-  });
-  await f.flow.submit(undefined, true);
-  expect(f.context.sessions.createResult).toHaveBeenCalledWith(
-    expect.objectContaining({ message: "", worktree: true, worktreeSource: "empty" }),
-    expect.anything(),
-  );
-  expectRecovery(f, { target: { kind: "profile", profileId: profile.id, required: true } });
-  expect(f.request).not.toHaveBeenCalledWith("sessions.dispatch", expect.anything());
-});
+it.each(["idle", "rejected"] as const)(
+  "retains required worker startup outcome: %s",
+  async (status) => {
+    const f = await ready();
+    const key = "agent:main:required";
+    const error = "Required worker is offline";
+    expect(f.place).toMatchObject({ cloudProfileId: profile.id, freshWorkspace: true });
+    expect(f.flow.canSubmit()).toBe(true);
+    f.context.placementStartup.start = vi.fn();
+    vi.mocked(f.context.sessions.createResult).mockResolvedValue({
+      key,
+      initialRun: status === "idle" ? { status } : { status, error },
+    });
+    await f.flow.submit(undefined, true);
+    expect(f.context.sessions.createResult).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "", worktree: true, worktreeSource: "empty" }),
+      expect.anything(),
+    );
+    expect(f.context.sessions.createResult).toHaveBeenCalledOnce();
+    expectRecovery(
+      f,
+      status === "idle"
+        ? { target: { kind: "profile", profileId: profile.id, required: true } }
+        : { sessionKey: key, phase: "paused", reason: "not-sent", error },
+    );
+    expect(f.request).not.toHaveBeenCalledWith("sessions.dispatch", expect.anything());
+    expect(f.request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(0);
+  },
+);
 
 it("waits for initial policy and never falls back when its required profile is missing", async () => {
   const pending = createDeferred<unknown>();
@@ -138,9 +147,7 @@ it("waits for initial policy and never falls back when its required profile is m
   pending.resolve({ ...catalog, profiles: [] });
   await read;
   expect(f.place.cloudProfileId).toBe(profile.id);
-  expect(f.flow.canSubmit()).toBe(false);
-  await f.flow.submit();
-  expect(f.context.sessions.createResult).not.toHaveBeenCalled();
+  await expectBlocked(f);
 });
 
 it("projects the latest policy over cached placement without persisting that policy as a preference", async () => {
@@ -157,21 +164,21 @@ it("projects the latest policy over cached placement without persisting that pol
   expect(f.place.cloudProfileId).toBe("replacement");
   current = optionalCatalog;
   await f.gateway.retryRequiredPlacement();
-  expect(f.place.cloudProfileId).toBe("");
-  expect(f.place.remotePlacement).toBe(false);
+  expect(f.place).toMatchObject({ cloudProfileId: "", remotePlacement: false });
 });
 
 it("rejects direct hosted placement and blocks hosted model changes under required placement", async () => {
   const f = await ready();
   f.place.selectHostedEnvironment("agentsapi");
   expect(f.place.modelControl.agentRuntime).toBeUndefined();
-  expect(f.place.cloudProfileId).toBe(profile.id);
-  expect(f.place.worktree).toBe(true);
+  expect(f.place).toMatchObject({ cloudProfileId: profile.id, worktree: true });
 
   f.place.modelControl.selectModel("openai/default", "agentsapi");
-  expect(f.place.hostedEnvironment).toBeUndefined();
-  expect(f.place.remotePlacement).toBe(true);
-  expect(f.place.worktree).toBe(true);
+  expect(f.place).toMatchObject({
+    hostedEnvironment: undefined,
+    remotePlacement: true,
+    worktree: true,
+  });
   expect(f.flow.submitBlock()?.gate).toBe("cloud");
   await f.flow.submit();
   expect(f.context.sessions.createResult).not.toHaveBeenCalled();
@@ -191,14 +198,14 @@ it("applies a newly required profile over an open hosted draft without advertisi
   f.place.restorePreferenceSelections();
   f.place.restorePreferenceSelections();
   expect(close).toHaveBeenCalledOnce();
-  expect(f.place.hostedEnvironment).toBeUndefined();
   expect(f.place.modelControl.modelDefaultsPolicy).toBe("configured");
   expect(f.place.browser.popoverOpen("where")).toBe(false);
-  expect(f.place.cloudProfileId).toBe(profile.id);
-  expect(f.place.worktree).toBe(true);
-  expect(f.flow.canSubmit()).toBe(false);
-  await f.flow.submit();
-  expect(f.context.sessions.createResult).not.toHaveBeenCalled();
+  expect(f.place).toMatchObject({
+    hostedEnvironment: undefined,
+    cloudProfileId: profile.id,
+    worktree: true,
+  });
+  await expectBlocked(f);
 
   current = optionalCatalog;
   await f.gateway.retryRequiredPlacement();
@@ -287,24 +294,6 @@ it("keeps an initial failed catalog closed and allows its existing refresh owner
     f.gateway.disconnect();
     vi.useRealTimers();
   }
-});
-
-it("keeps a server startup failure with the created session for Retry rather than sending or creating again", async () => {
-  const f = await ready();
-  f.context.placementStartup.start = vi.fn();
-  vi.mocked(f.context.sessions.createResult).mockResolvedValue({
-    key: "agent:main:failed-required",
-    initialRun: { status: "rejected", error: "Required worker is offline" },
-  });
-  await f.flow.submit(undefined, true);
-  expect(f.context.sessions.createResult).toHaveBeenCalledOnce();
-  expectRecovery(f, {
-    sessionKey: "agent:main:failed-required",
-    phase: "paused",
-    reason: "not-sent",
-    error: "Required worker is offline",
-  });
-  expect(f.request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(0);
 });
 
 it("keeps a cold required-worker draft on configured defaults across asynchronous catalogs", async () => {
