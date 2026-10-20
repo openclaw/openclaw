@@ -1,8 +1,8 @@
 // @vitest-environment node
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { SessionsListResult } from "../../api/types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import {
   createGatewayHarness,
   createTestSessionCapability,
@@ -10,19 +10,28 @@ import {
 } from "./session-capability.test-support.ts";
 
 const key = "agent:main:unread-contract";
+const sessionId = `${key}:session`;
+const receipt = (entry: Partial<GatewaySessionRow> = { updatedAt: 3, lastReadAt: 3 }) => ({
+  ok: true,
+  key,
+  path: "",
+  entry: { sessionId, ...entry },
+});
+function ownSessions(gateway: Parameters<typeof createTestSessionCapability>[0]) {
+  const sessions = createTestSessionCapability(gateway);
+  onTestFinished(() => sessions.dispose());
+  return sessions;
+}
 
 function rowUnread(result: SessionsListResult | null): boolean {
   return result?.sessions.find((row) => row.key === key)?.unread === true;
 }
 
-function unreadHarness(options: {
-  patchResponse: () => Promise<unknown>;
-  serverUnread: () => boolean;
-}) {
+function unreadHarness(patchResponse: Promise<unknown>, serverUnread = () => true) {
   let listTs = 0;
   const request = vi.fn(async (method: string) => {
     if (method === "sessions.patch") {
-      return await options.patchResponse();
+      return await patchResponse;
     }
     if (method === "sessions.list") {
       listTs += 1;
@@ -30,11 +39,11 @@ function unreadHarness(options: {
         [
           {
             key,
-            sessionId: `${key}:session`,
+            sessionId,
             kind: "direct",
             updatedAt: 1,
-            unread: options.serverUnread(),
-            agentStatus: options.serverUnread()
+            unread: serverUnread(),
+            agentStatus: serverUnread()
               ? { note: "Synthetic attention", expiresAt: Number.MAX_SAFE_INTEGER }
               : undefined,
           },
@@ -47,54 +56,37 @@ function unreadHarness(options: {
     }
     throw new Error(`Unexpected request: ${method}`);
   });
-  return { ...createGatewayHarness({ request } as unknown as GatewayBrowserClient), request };
+  const harness = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+  return { ...harness, sessions: ownSessions(harness.gateway), request };
 }
 
 describe("session unread mutation capability", () => {
   it.each([
-    {
-      name: "automatic acknowledgement",
-      options: { expectedMarkedUnreadAt: 42 },
-      expected: { expectedMarkedUnreadAt: 42 },
-    },
-    {
-      name: "explicit read",
-      options: {},
-      expected: {},
-    },
-  ])("sends the current payload for $name", async ({ expected, options }) => {
+    ["automatic acknowledgement", { expectedMarkedUnreadAt: 42 }],
+    ["explicit read", {}],
+  ] as const)("sends the current payload for %s", async (_name, expected) => {
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.patch") {
-        return {
-          ok: true,
-          path: "",
-          key,
-          entry: { sessionId: `${key}:session`, updatedAt: 3, lastReadAt: 3 },
-        };
+        return receipt();
       }
       throw new Error(`Unexpected request: ${method}`);
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { gateway } = createGatewayHarness(client, ["sessions.patch"]);
-    const sessions = createTestSessionCapability(gateway);
+    const sessions = ownSessions(gateway);
 
-    await sessions.patch(key, { unread: false }, { ...options, deferListRefresh: true });
+    await sessions.patch(key, { unread: false }, { ...expected, deferListRefresh: true });
 
     expect(request).toHaveBeenCalledWith("sessions.patch", {
       key,
       unread: false,
       ...expected,
     });
-    sessions.dispose();
   });
 
   it("clears unread before the request settles and rolls a rejection back", async () => {
     const rejected = createDeferred<unknown>();
-    const { gateway } = unreadHarness({
-      patchResponse: () => rejected.promise,
-      serverUnread: () => true,
-    });
-    const sessions = createTestSessionCapability(gateway);
+    const { sessions } = unreadHarness(rejected.promise);
 
     await sessions.refresh({ force: true });
     const operation = sessions.patch(key, { unread: false }, { deferListRefresh: true });
@@ -104,17 +96,12 @@ describe("session unread mutation capability", () => {
     await expect(operation).rejects.toThrow("read rejected");
     expect(unreadWhilePending).toBe(false);
     expect(rowUnread(sessions.state.result)).toBe(true);
-    sessions.dispose();
   });
 
   it("settles a read receipt without reloading and retains it through stale events and reads", async () => {
     const committed = createDeferred<unknown>();
     let serverUnread = true;
-    const { gateway, emitEvent, request } = unreadHarness({
-      patchResponse: () => committed.promise,
-      serverUnread: () => serverUnread,
-    });
-    const sessions = createTestSessionCapability(gateway);
+    const { sessions, emitEvent, request } = unreadHarness(committed.promise, () => serverUnread);
 
     await sessions.refresh({ force: true });
     const operation = sessions.patch(key, { unread: false });
@@ -125,7 +112,7 @@ describe("session unread mutation capability", () => {
       event: "sessions.changed",
       payload: {
         key,
-        sessionId: `${key}:session`,
+        sessionId,
         kind: "direct",
         reason: "send",
         sessionKey: key,
@@ -139,17 +126,11 @@ describe("session unread mutation capability", () => {
     expect(rowUnread(sessions.state.result)).toBe(false);
 
     serverUnread = false;
-    committed.resolve({
-      ok: true,
-      key,
-      path: "",
-      entry: { sessionId: `${key}:session`, updatedAt: 3, lastReadAt: 3 },
-    });
+    committed.resolve(receipt());
     await expect(operation).resolves.toBeTruthy();
     expect(rowUnread(sessions.state.result)).toBe(false);
     expect(sessions.state.result?.sessions[0]?.agentStatus).toBeUndefined();
     expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(2);
-    sessions.dispose();
   });
 
   it.each([
@@ -167,11 +148,7 @@ describe("session unread mutation capability", () => {
     },
   ])("restores unread after a stale acknowledgement: $name", async ({ entry }) => {
     const committed = createDeferred<unknown>();
-    const { gateway } = unreadHarness({
-      patchResponse: () => committed.promise,
-      serverUnread: () => true,
-    });
-    const sessions = createTestSessionCapability(gateway);
+    const { sessions } = unreadHarness(committed.promise);
 
     await sessions.refresh({ force: true });
     const operation = sessions.patch(
@@ -182,15 +159,9 @@ describe("session unread mutation capability", () => {
     expect(rowUnread(sessions.state.result)).toBe(false);
 
     // A mismatched marker returns the current entry without applying or broadcasting.
-    committed.resolve({
-      ok: true,
-      key,
-      path: "",
-      entry: { sessionId: `${key}:session`, ...entry },
-    });
+    committed.resolve(receipt(entry));
     await expect(operation).resolves.toBeTruthy();
     expect(rowUnread(sessions.state.result)).toBe(true);
     expect(sessions.state.result?.sessions[0]?.agentStatus).toEqual(entry.agentStatus);
-    sessions.dispose();
   });
 });

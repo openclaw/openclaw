@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
+import type { SessionToolOverrides } from "./patch.ts";
 import {
   countSessionToolOverrides,
   nextBooleanToolOverrides,
@@ -8,6 +9,15 @@ import {
   resolveToolOverrideState,
   resolveWebSearchToolOverrideState,
 } from "./tool-overrides.ts";
+
+const siblings = {
+  skills: { docs: true },
+  mcpServers: { github: false },
+  mcpToolsDeny: { notion: ["delete_page"] },
+};
+const withDenials = (github: string[], notion = true): SessionToolOverrides => ({
+  mcpToolsDeny: { github, ...(notion ? { notion: ["delete_page"] } : {}) },
+});
 
 describe("session tool overrides", () => {
   it("resolves sparse booleans against their base state", () => {
@@ -28,23 +38,20 @@ describe("session tool overrides", () => {
 
   it("adds and removes named overrides without disturbing sibling groups", () => {
     const current = {
-      mcpServers: { github: false },
-      mcpToolsDeny: { notion: ["delete_page"] },
+      mcpServers: siblings.mcpServers,
+      mcpToolsDeny: siblings.mcpToolsDeny,
       webSearch: false,
     };
+    const original = structuredClone(current);
     expect(nextBooleanToolOverrides(current, "skills", "release", false, true)).toEqual({
       ...current,
       skills: { release: false },
     });
     expect(nextBooleanToolOverrides(current, "mcpServers", "github", true, true)).toEqual({
-      mcpToolsDeny: { notion: ["delete_page"] },
+      mcpToolsDeny: siblings.mcpToolsDeny,
       webSearch: false,
     });
-    expect(current).toEqual({
-      mcpServers: { github: false },
-      mcpToolsDeny: { notion: ["delete_page"] },
-      webSearch: false,
-    });
+    expect(current).toEqual(original);
   });
 
   it("restores default-on web search by removing the key", () => {
@@ -60,11 +67,6 @@ describe("session tool overrides", () => {
   ])(
     "preserves $name intent and sibling overrides while global web search is off",
     ({ current, expected }) => {
-      const siblings = {
-        skills: { docs: true },
-        mcpServers: { github: false },
-        mcpToolsDeny: { notion: ["delete_page"] },
-      };
       const overrides = { ...siblings, ...current };
       const original = structuredClone(overrides);
       for (const nextEnabled of [false, true]) {
@@ -80,35 +82,25 @@ describe("session tool overrides", () => {
 
   it("adds sorted MCP tool denials without mutating sibling overrides", () => {
     const current = {
-      mcpToolsDeny: { github: ["zebra"], notion: ["delete_page"] },
+      ...withDenials(["zebra"]),
       webSearch: false,
     };
     expect(nextMcpToolsDenyOverrides(current, "github", "alpha", true)).toEqual({
-      mcpToolsDeny: { github: ["alpha", "zebra"], notion: ["delete_page"] },
+      ...withDenials(["alpha", "zebra"]),
       webSearch: false,
     });
-    expect(current.mcpToolsDeny.github).toEqual(["zebra"]);
+    expect(current.mcpToolsDeny?.github).toEqual(["zebra"]);
   });
 
   it("removes MCP tool denials and keeps the map sparse", () => {
     expect(
-      nextMcpToolsDenyOverrides(
-        { mcpToolsDeny: { github: ["read", "write"], notion: ["delete_page"] } },
-        "github",
-        "read",
-        false,
-      ),
-    ).toEqual({ mcpToolsDeny: { github: ["write"], notion: ["delete_page"] } });
+      nextMcpToolsDenyOverrides(withDenials(["read", "write"]), "github", "read", false),
+    ).toEqual(withDenials(["write"]));
+    expect(nextMcpToolsDenyOverrides(withDenials(["write"]), "github", "write", false)).toEqual({
+      mcpToolsDeny: siblings.mcpToolsDeny,
+    });
     expect(
-      nextMcpToolsDenyOverrides(
-        { mcpToolsDeny: { github: ["write"], notion: ["delete_page"] } },
-        "github",
-        "write",
-        false,
-      ),
-    ).toEqual({ mcpToolsDeny: { notion: ["delete_page"] } });
-    expect(
-      nextMcpToolsDenyOverrides({ mcpToolsDeny: { github: ["write"] } }, "github", "write", false),
+      nextMcpToolsDenyOverrides(withDenials(["write"], false), "github", "write", false),
     ).toEqual({});
   });
 

@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { afterEach, assert, expect, it, vi } from "vitest";
+import { afterEach, assert, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createGatewayConnectionLifecycle } from "../gateway-connection-lifecycle.ts";
@@ -19,40 +19,49 @@ function result(sessions: GatewaySessionRow[]): SessionsListResult {
   };
 }
 
-it("keeps a valid descriptor when an invalid replacement is observed", () => {
+function fixture(readResult: () => SessionsListResult | null = () => null) {
   const connection = createGatewayConnectionLifecycle({
     phase: "connected",
     client: createTestGatewayClient(async () => ({})),
   });
+  onTestFinished(() => connection.dispose());
+  const lists = new Map<string, ObservedSessionList>();
   const observations = createSessionRosterObservations(
     {
       connection,
       observerError: () => null,
-      readState: () => ({ result: null, agentId: "main" }),
+      readState: () => ({ result: readResult(), agentId: "main" }),
       decorate: (value) => value,
     },
-    new Map(),
+    lists,
   );
+  return {
+    connection,
+    lists,
+    observations,
+    stage: (row: GatewaySessionRow, revision: number) =>
+      observations.stageObservedRows([row], connection.capture(), "main", revision)(),
+    register: (key: string, isValid: (sessionId: string) => boolean = () => true) =>
+      observations.registerRow({ key, agentId: "main" }, () => {}, {
+        isValid,
+        decorate: (value) => value,
+      }),
+  };
+}
+
+it("keeps a valid descriptor when an invalid replacement is observed", () => {
+  const { stage, register } = fixture();
   const row: GatewaySessionRow = {
     key: "agent:main:valid",
     kind: "direct",
     sessionId: "current",
     updatedAt: 1,
   };
-  const registered = observations.registerRow({ key: row.key, agentId: "main" }, () => {}, {
-    isValid: (sessionId) => sessionId === "current",
-    decorate: (value) => value,
-  });
-  observations.stageObservedRows([row], connection.capture(), "main", 1)();
-  observations.stageObservedRows(
-    [{ ...row, sessionId: "rejected", updatedAt: 2 }],
-    connection.capture(),
-    "main",
-    2,
-  )();
+  const registered = register(row.key, (sessionId) => sessionId === "current");
+  stage(row, 1);
+  stage({ ...row, sessionId: "rejected", updatedAt: 2 }, 2);
   expect(registered.isCurrent()).toBe(true);
   expect(registered.current()).toEqual(row);
-  connection.dispose();
 });
 
 it.each(["main", "global"])(
@@ -60,22 +69,15 @@ it.each(["main", "global"])(
   (key) => {
     const provenance = rowProvenance.createSessionRowProvenance();
     const identity = vi.spyOn(provenance, "identity");
+    const expectSelectedIdentity = () => {
+      expect(identity.mock.calls.every(([candidate]) => candidate.sessionId === " selected ")).toBe(
+        true,
+      );
+      identity.mockClear();
+    };
     vi.spyOn(rowProvenance, "createSessionRowProvenance").mockReturnValue(provenance);
-    const connection = createGatewayConnectionLifecycle({
-      phase: "connected",
-      client: createTestGatewayClient(async () => ({})),
-    });
-    const lists = new Map<string, ObservedSessionList>();
     let primary: SessionsListResult | null = null;
-    const observations = createSessionRosterObservations(
-      {
-        connection,
-        observerError: () => null,
-        readState: () => ({ result: primary, agentId: "main" }),
-        decorate: (value) => value,
-      },
-      lists,
-    );
+    const { connection, lists, observations, stage, register } = fixture(() => primary);
     const row: GatewaySessionRow = {
       key,
       sessionId: " selected ",
@@ -90,11 +92,8 @@ it.each(["main", "global"])(
       providerReview: undefined,
     };
     provenance.observeReadRow(descriptor, 2, "main");
-    observations.registerRow({ key, agentId: "main" }, () => {}, {
-      isValid: () => true,
-      decorate: (value) => value,
-    });
-    observations.stageObservedRows([descriptor], connection.capture(), "main", 2)();
+    register(key);
+    stage(descriptor, 2);
     const unrelated = Array.from({ length: 300 }, (_, index) => ({
       ...row,
       key: `agent:main:unrelated-${index}`,
@@ -104,11 +103,8 @@ it.each(["main", "global"])(
     assert(unrelatedRow);
     const validUnrelated = vi.fn(() => true);
     provenance.observeReadRow(unrelatedRow, 1, "main");
-    observations.registerRow({ key: unrelatedRow.key, agentId: "main" }, () => {}, {
-      isValid: validUnrelated,
-      decorate: (value) => value,
-    });
-    observations.stageObservedRows([unrelatedRow], connection.capture(), "main", 1)();
+    register(unrelatedRow.key, validUnrelated);
+    stage(unrelatedRow, 1);
     provenance.observeReadRow(row, 1, "main");
     primary = result([row, ...unrelated]);
     const fresh = {
@@ -149,25 +145,16 @@ it.each(["main", "global"])(
     assert(projected);
     expect(projected).toEqual({ ...fresh, key });
     expect(validUnrelated).toHaveBeenCalled();
-    expect(identity.mock.calls.every(([candidate]) => candidate.sessionId === row.sessionId)).toBe(
-      true,
-    );
-    identity.mockClear();
+    expectSelectedIdentity();
     expect(observations.projectFields(row, "main")).toEqual(projected);
-    expect(identity.mock.calls.every(([candidate]) => candidate.sessionId === row.sessionId)).toBe(
-      true,
-    );
-    identity.mockClear();
+    expectSelectedIdentity();
     expect(observations.currentRow(row, "main")).toEqual({ ...fresh, key });
-    expect(identity.mock.calls.every(([candidate]) => candidate.sessionId === row.sessionId)).toBe(
-      true,
-    );
+    expectSelectedIdentity();
     expect(observations.currentRow({ ...row, sessionId: "missing" }, "main")).toBeUndefined();
     expect(observations.prepareProjection().projectRows([row])[0]).toEqual(projected);
     expect(observations.projectRows(primary.sessions)[0]).toEqual(projected);
     expect(observations.projectRows([row, { ...row, sessionId: " " }])[1]?.label).toBe("Primary");
     primary = null;
     expect(observations.currentRow(row, "main")).toEqual(fresh);
-    connection.dispose();
   },
 );
