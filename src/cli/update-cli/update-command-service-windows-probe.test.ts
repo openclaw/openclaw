@@ -1,6 +1,5 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
-import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { buildTaskScript, readScheduledTaskCommand } from "../../daemon/schtasks-layout.js";
 import { readScheduledTaskRuntime } from "../../daemon/schtasks-runtime.js";
@@ -10,6 +9,10 @@ import {
   mockSystemAccountHome,
 } from "../../daemon/service.test-helpers.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
+import {
+  gatewayCommand,
+  maintenanceDefaults,
+} from "./update-command-service-fixtures.test-support.js";
 import { withServiceHome } from "./update-command-service-home.test-support.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-service-maintenance.js";
 
@@ -41,13 +44,7 @@ it.each([
     withServiceHome(async (home) => {
       mockProcessPlatform("win32");
       const scriptPath = "C:\\Registered Service\\gateway.cmd";
-      const programArguments = [
-        process.execPath,
-        path.join(process.cwd(), "openclaw.mjs"),
-        "gateway",
-        "--port",
-        "18789",
-      ];
+      const programArguments = [...gatewayCommand(home).programArguments, "--port", "18789"];
       const script = Buffer.from(
         buildTaskScript({ programArguments, environment: { HOME: home } }),
       );
@@ -102,11 +99,8 @@ it.each([
       });
       mocks.service.mockReturnValue(service);
       const inspected = await maybeStopManagedServiceBeforeMutableUpdate({
-        root: process.cwd(),
-        updateInstallKind: "package",
-        shouldRestart: true,
+        ...maintenanceDefaults,
         phase: "inspect",
-        jsonMode: true,
         timeoutMs: 47_000,
       });
       expect(inspected.serviceUpdateVerdict?.kind).toBe(recovered ? "owned" : "unavailable");

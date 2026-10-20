@@ -69,11 +69,8 @@ export function createUpdateExecTransportFixture(params: {
       if (result.stdout.trim() || result.stderr.trim()) {
         return result;
       }
-      const isBun =
-        path.win32
-          .basename(command)
-          .toLowerCase()
-          .replace(/\.exe$/u, "") === "bun";
+      const executable = path.win32.basename(command).toLowerCase();
+      const isBun = executable === "bun" || executable === "bun.exe";
       return {
         stdout: JSON.stringify({
           nodeVersion: process.versions.node,

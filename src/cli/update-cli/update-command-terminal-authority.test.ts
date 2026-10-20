@@ -30,6 +30,7 @@ import {
   withUpdateCommandExecutor as withExecutor,
   withUpdateCommandExecutorChild as withChild,
 } from "./update-command-executor.js";
+import { verificationFixture } from "./update-command-fixtures.test-support.js";
 import { updateResult } from "./update-command-maintenance-fixtures.test-support.js";
 import {
   finishSuccessfulPackageSwitch,
@@ -246,19 +247,9 @@ it.skipIf(process.platform === "win32").each([
           expectPublication(anchor);
           expect(transaction).toBeDefined();
           if (captured) {
-            ledger.recordUpdateRunVerification(
-              run.runId,
-              {
-                serviceRunning: true,
-                versionMatch: true,
-                channelsReady: true,
-                readyz: true,
-                settled: true,
-                runningVersion: "2.0.0",
-                pluginErrors: [],
-              },
-              { env: run.env },
-            );
+            ledger.recordUpdateRunVerification(run.runId, verificationFixture("2.0.0"), {
+              env: run.env,
+            });
             ledger.finishUpdateRun(
               run.runId,
               { status: "succeeded", after: { version: "2.0.0" } },

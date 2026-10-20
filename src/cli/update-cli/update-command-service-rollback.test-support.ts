@@ -20,11 +20,13 @@ import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import { createCommandResult as commandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { VERSION } from "../../version.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
+import { updateResult, updateStep } from "./update-command-maintenance-fixtures.test-support.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
 import type {
   PreManagedServiceStop,
   UpdateServiceDefinitionRecovery,
 } from "./update-command-service-context-types.js";
+import { maintenanceDefaults } from "./update-command-service-fixtures.test-support.js";
 import type { InstallRootTransitionFixture } from "./update-command-service-transition.test-support.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-service.js";
 
@@ -174,10 +176,8 @@ export function registerPackageRootRollbackTests(
       packageName: "openclaw",
       beforeActivate: async () => {
         before = await maybeStopManagedServiceBeforeMutableUpdate({
+          ...maintenanceDefaults,
           root: previousRoot,
-          updateInstallKind: "package",
-          shouldRestart: true,
-          jsonMode: true,
           updateRun: run,
           recordPhase,
         });
@@ -300,7 +300,7 @@ export function registerPackageRootRollbackTests(
       );
     }
     const { result, rolledBack } = await rollbackFailedUpdate({
-      result: {
+      result: updateResult({
         status: "error",
         reason: "doctor-failed",
         mode: "pnpm",
@@ -308,16 +308,13 @@ export function registerPackageRootRollbackTests(
         before: { version: previousPackageVersion },
         after: { version: "9999.1.1" },
         steps: [
-          {
-            name: "openclaw doctor",
+          updateStep("openclaw doctor", {
             command: "doctor",
             cwd: candidateRoot,
-            durationMs: 1,
             exitCode: 73,
-          },
+          }),
         ],
-        durationMs: 1,
-      },
+      }),
       previousRoot,
       packageTransaction: transaction,
       schemaVersions,
@@ -352,8 +349,17 @@ export function registerPackageRootRollbackTests(
     expect(result.reason).toBe(
       refused || changesAfterRestore ? "service-revalidation-failed" : "doctor-failed",
     );
-    if (!succeeded) {
-      expect(mocks.child).not.toHaveBeenCalled();
+    expect(mocks.child).toHaveBeenCalledTimes(succeeded ? 1 : 0);
+    if (restored) {
+      expect(result).toMatchObject({
+        root: previousRoot,
+        recovery: { packageRollbackVerified: true },
+      });
+    }
+    if (!refused) {
+      expect(mocks.running).toBe(
+        succeeded || (backupScenario && scenario !== "backup restore failed"),
+      );
     }
     if (succeeded || scenario === "backup restore failed") {
       expect(await readDefinition()).toBe(previousDefinition);
@@ -363,12 +369,10 @@ export function registerPackageRootRollbackTests(
     }
     if (scenario === "backup restore failed") {
       expect(result).toMatchObject({
-        root: previousRoot,
-        recovery: { packageRollbackVerified: true, serviceRestartSafe: false },
+        recovery: { serviceRestartSafe: false },
         rollbackOutcome: { status: "failed" },
       });
       expect(result).not.toHaveProperty("recovery.dataAtRisk");
-      expect(mocks.running).toBe(false);
     } else if (backupScenario && !backupRestored) {
       expect(await fs.readFile(definitionPath)).toEqual(definitionBeforeRollback);
       expect(result).not.toHaveProperty("recovery.dataAtRisk");
@@ -390,15 +394,9 @@ export function registerPackageRootRollbackTests(
           }),
         );
       }
-      expect(mocks.running).toBe(true);
       expectEvents("native stop", 1);
     } else if (changesAfterRestore) {
-      expect(result).toMatchObject({
-        root: previousRoot,
-        recovery: { packageRollbackVerified: true },
-      });
       await expect(fs.stat(candidateRoot)).rejects.toMatchObject({ code: "ENOENT" });
-      expect(mocks.running).toBe(false);
       expectEvents("native stop", 2);
     } else if (refused) {
       if (scenario === "changed command" || scenario === "changed manager") {
@@ -412,15 +410,12 @@ export function registerPackageRootRollbackTests(
     } else {
       expect(result).toMatchObject({
         status: "error",
-        root: previousRoot,
         before: { version: previousPackageVersion },
         after: { version: previousPackageVersion },
-        recovery: { packageRollbackVerified: true, service: "healthy", version: VERSION },
+        recovery: { service: "healthy", version: VERSION },
         rollbackOutcome: { status: "succeeded" },
       });
-      expect(mocks.running).toBe(true);
       expectEvents("native stop", scenario === "running original" || backupScenario ? 2 : 1);
-      expect(mocks.child).toHaveBeenCalledOnce();
       if (installationDrift) {
         await expectPackageVersion(serviceRoot, VERSION);
         expect(mocks.health).toHaveBeenCalledWith(

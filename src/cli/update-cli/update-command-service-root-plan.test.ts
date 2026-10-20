@@ -35,7 +35,7 @@ afterEach(() => {
   vi.mocked(resolvePinnedDaemonRuntimePath).mockClear();
 });
 
-async function fixture() {
+async function fixture(runtime = "node", definition = "empty", includeEnvironment = true) {
   const root = tempDirs.make("service-root-plan-");
   const serviceRoot = path.join(root, "service");
   const invokingRoot = path.join(root, "invoking");
@@ -45,18 +45,32 @@ async function fixture() {
     path.join(serviceRoot, "package.json"),
     JSON.stringify({ name: "openclaw", version: "2026.9.4" }),
   );
-  const nodeRunner = path.join(root, "bin", "node");
+  const nodeRunner = path.join(root, "bin", runtime);
   service.readDefinitionMutationCapability.mockResolvedValue({ kind: "writable" });
   const entrypoint = path.join(serviceRoot, "dist", "index.js");
-  return {
-    serviceRoot,
-    invokingRoot,
-    nodeRunner,
-    entrypoint,
-    command: (runtime: string) => ({
-      programArguments: [path.join(root, "bin", runtime), entrypoint, "gateway"],
-    }),
+  const environment =
+    runtime === "bun"
+      ? { OPENCLAW_SQLITE_LIBRARY: "/fixture/sqlite.dylib" }
+      : { NODE_OPTIONS: "--max-old-space-size=4096" };
+  const command = {
+    programArguments: [nodeRunner, entrypoint, "gateway"],
+    ...(definition === "plain"
+      ? { sourcePath: path.join(root, "gateway.cmd") }
+      : definition === "empty" && (runtime === "node" || !includeEnvironment)
+        ? {}
+        : { environment }),
   };
+  service.readCommand.mockResolvedValue({
+    ...command,
+    ...(definition === "managedDefinition" || definition === "empty"
+      ? { managedDefinition: command }
+      : {}),
+    ...(definition === "managedOverrides"
+      ? { managedOverrides: { environment: { keys: ["NODE_OPTIONS"] } } }
+      : {}),
+    ...(definition === "empty" ? { managedOverrides: {} } : {}),
+  });
+  return { serviceRoot, invokingRoot, nodeRunner, entrypoint, environment };
 }
 
 it("does not inspect or redirect a service when management admission refuses", async () => {
@@ -79,31 +93,8 @@ it.each([
 ] as const)(
   "plans $platform $runtime service roots with $definition definitions (same=$sameRoot)",
   async ({ platform, definition, runtime, sameRoot }) => {
-    const f = await fixture();
+    const f = await fixture(runtime, definition);
     vi.stubGlobal("process", { ...process, platform });
-    const nodeRunner = path.join(path.dirname(f.nodeRunner), runtime);
-    const environment =
-      runtime === "bun"
-        ? { OPENCLAW_SQLITE_LIBRARY: "/fixture/sqlite.dylib" }
-        : { NODE_OPTIONS: "--max-old-space-size=4096" };
-    const command = {
-      ...f.command(runtime),
-      ...(definition === "plain"
-        ? { sourcePath: path.join(path.dirname(f.serviceRoot), "gateway.cmd") }
-        : definition === "empty" && runtime === "node"
-          ? {}
-          : { environment }),
-    };
-    service.readCommand.mockResolvedValue({
-      ...command,
-      ...(definition === "managedDefinition" || definition === "empty"
-        ? { managedDefinition: command }
-        : {}),
-      ...(definition === "managedOverrides"
-        ? { managedOverrides: { environment: { keys: ["NODE_OPTIONS"] } } }
-        : {}),
-      ...(definition === "empty" ? { managedOverrides: {} } : {}),
-    });
     const rebind = platform === "linux" && definition === "empty" && runtime === "node";
     expect(
       await resolveManagedServicePackageUpdatePlan({
@@ -113,7 +104,7 @@ it.each([
       rootRedirect:
         sameRoot || rebind ? null : { root: f.serviceRoot, previousRoot: f.invokingRoot },
       ...(rebind ? { serviceRoot: f.serviceRoot } : {}),
-      nodeRunner,
+      nodeRunner: f.nodeRunner,
       serviceUnitTarget: f.entrypoint,
     });
     expect(service.readDefinitionMutationCapability).toHaveBeenCalledOnce();
@@ -125,9 +116,9 @@ it.each([
     }
     if (runtime === "bun") {
       expect(resolvePinnedDaemonRuntimePath).toHaveBeenCalledWith(
-        nodeRunner,
+        f.nodeRunner,
         "bun",
-        expect.objectContaining(environment),
+        expect.objectContaining(f.environment),
       );
     }
   },
@@ -135,14 +126,8 @@ it.each([
 it.each(["node", "bun"])(
   "refuses app-owned %s services before split-root redirection or runtime probing",
   async (runtime) => {
-    const f = await fixture();
+    const f = await fixture(runtime, "empty", false);
     vi.stubGlobal("process", { ...process, platform: "linux" });
-    const command = f.command(runtime);
-    service.readCommand.mockResolvedValue({
-      ...command,
-      managedDefinition: command,
-      managedOverrides: {},
-    });
     await fs.writeFile(
       path.join(f.serviceRoot, "openclaw-install-owner.json"),
       JSON.stringify({

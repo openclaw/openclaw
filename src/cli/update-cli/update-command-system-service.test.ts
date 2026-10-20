@@ -13,6 +13,10 @@ import { defaultRuntime } from "../../runtime.js";
 import { classifyUpdateOutcome } from "../../shared/update-outcome.js";
 import { updateResult } from "./update-command-maintenance-fixtures.test-support.js";
 import { withUpdateInProgressEnv } from "./update-command-service-env.js";
+import {
+  gatewayCommand,
+  maintenanceDefaults,
+} from "./update-command-service-fixtures.test-support.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-service-maintenance.js";
 import { maybeRestartService } from "./update-command-service.js";
 
@@ -60,10 +64,7 @@ it.runIf(process.platform === "linux").each([
         loadState: { status: "loaded" },
         running: true,
         env: { HOME: home },
-        command: {
-          programArguments: [process.execPath, path.join(root, "openclaw.mjs"), "gateway"],
-          environment: { HOME: home },
-        },
+        command: gatewayCommand(home, root),
         runtime: { status: "running", pid: fixtureGatewayPid, systemd: { managerUid: 0 } },
         systemdInstallation,
       });
@@ -78,11 +79,9 @@ it.runIf(process.platform === "linux").each([
       }
       const prepare = () =>
         maybeStopManagedServiceBeforeMutableUpdate({
+          ...maintenanceDefaults,
           root,
-          updateInstallKind: "package",
-          shouldRestart: true,
           phase: "prepare",
-          jsonMode: true,
         });
       const preparation = update ? withUpdateInProgressEnv(undefined, prepare) : prepare();
       if (!update) {
