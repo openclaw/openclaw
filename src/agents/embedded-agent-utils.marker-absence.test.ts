@@ -23,20 +23,24 @@ afterAll(() => {
   reasoning.mockRestore();
   final.mockRestore();
 });
+function characters(calls: ReadonlyArray<readonly [string, ...unknown[]]>) {
+  return calls.reduce((sum, [text]) => sum + text.length, 0);
+}
+function appendChunks(stream: ReturnType<typeof createTextProjection>, text: string, size: number) {
+  for (let offset = 0; offset < text.length; offset += size) {
+    stream.append(text.slice(offset, offset + size));
+  }
+}
 
 it.each([undefined, "final_answer"] as const)(
   "bounds reasoning and final transform input for ordinary streamed markup (%s)",
   (phase) => {
     const source = "<article>Array<string>: a < b and c > d.</article>\n".repeat(96) + "Done.";
     const stream = createAssistantVisibleStreamText(phase);
-    for (let offset = 0; offset < source.length; offset += 4) {
-      stream.append(source.slice(offset, offset + 4));
-    }
-    const reasoningCharacters = reasoning.mock.calls.reduce((sum, [text]) => sum + text.length, 0);
-    const finalCharacters = final.mock.calls.reduce((sum, [text]) => sum + text.length, 0);
+    appendChunks(stream, source, 4);
     expect(stream.text).toBe(source);
-    expect(reasoningCharacters).toBeLessThan(source.length * 2);
-    expect(finalCharacters).toBeLessThan(source.length * 2);
+    expect(characters(reasoning.mock.calls)).toBeLessThan(source.length * 2);
+    expect(characters(final.mock.calls)).toBeLessThan(source.length * 2);
   },
 );
 
@@ -47,14 +51,9 @@ it.each([
   const prefix = "<article>Array<string>: a < b.</article>\n".repeat(96);
   const source = prefix + marker;
   const stream = createAssistantVisibleStreamText();
-  for (let offset = 0; offset < prefix.length; offset += 4) {
-    stream.append(prefix.slice(offset, offset + 4));
-  }
+  appendChunks(stream, prefix, 4);
   stream.append(marker);
-  const processedCharacters = [...reasoning.mock.calls, ...final.mock.calls].reduce(
-    (sum, [text]) => sum + text.length,
-    0,
-  );
+  const processedCharacters = characters([...reasoning.mock.calls, ...final.mock.calls]);
   expect(stream.text).toBe(prefix + "Done.");
   expect(processedCharacters).toBeGreaterThan(0);
   expect(processedCharacters).toBeLessThan(source.length * 8);
@@ -74,33 +73,23 @@ it("keeps marker probes and checkpoint deltas bounded after stripping a trace", 
       const result = stream.append(chunk);
       delivered = result.delta === null ? result.text : delivered + result.delta;
     }
-    comparedCharacters = comparisons.mock.calls.reduce((sum, [text]) => sum + text.length, 0);
+    comparedCharacters = characters(comparisons.mock.calls);
   } finally {
     comparisons.mockRestore();
   }
-  const processedCharacters = [...reasoning.mock.calls, ...final.mock.calls].reduce(
-    (sum, [text]) => sum + text.length,
-    0,
-  );
   expect(stream.text).toBe(answer);
   expect(delivered).toBe(answer);
   expect(comparedCharacters).toBeGreaterThan(0);
   expect(comparedCharacters).toBeLessThan(source.length * 64);
-  expect(processedCharacters).toBeLessThan(source.length * 4);
+  expect(characters([...reasoning.mock.calls, ...final.mock.calls])).toBeLessThan(
+    source.length * 4,
+  );
 });
 
 describe("streamed marker projection", () => {
   it.each([
-    [
-      "ordinary markup",
-      "<div>Array<string>: a < b and c > d.</div>",
-      "<div>Array<string>: a < b and c > d.</div>",
-    ],
-    [
-      "lookalike names",
-      "<thinking-about>literal</thinking-about><finalizing>literal</finalizing>",
-      "<thinking-about>literal</thinking-about><finalizing>literal</finalizing>",
-    ],
+    ["ordinary markup", "<div>Array<string>: a < b and c > d.</div>"],
+    ["lookalike names", "<thinking-about>literal</thinking-about><finalizing>literal</finalizing>"],
     ["spaced provider tags", "< \u00a0AnTmL:ThiNking >secret< / antml:thinking >Answer", "Answer"],
     ["another provider", "<mm:thought>secret</mm:thought>Answer", "Answer"],
     ["private tags", "<internal>secret</internal>Answer", "Answer"],
@@ -111,12 +100,8 @@ describe("streamed marker projection", () => {
       '<thinking x="',
     ],
     ["late final tags", "<div>Visible</div><final> Tail</final>", "<div>Visible</div> Tail"],
-    ["malformed final attributes", '<final reason="a>b">visible', '<final reason="a>b">visible'],
-    [
-      "code-owned tags",
-      "```xml\n<think>literal</think>\n<final>literal</final>\n```\nDone.",
-      "```xml\n<think>literal</think>\n<final>literal</final>\n```\nDone.",
-    ],
+    ["malformed final attributes", '<final reason="a>b">visible'],
+    ["code-owned tags", "```xml\n<think>literal</think>\n<final>literal</final>\n```\nDone."],
     ["unbounded head spacing", `<${" ".repeat(128)}/${"\t".repeat(128)}ThiNKing>Answer`, "Answer"],
   ])("preserves every prefix and final output for %s", (_name, source, expected) => {
     for (const size of [1, 3, 7]) {
@@ -131,7 +116,7 @@ describe("streamed marker projection", () => {
         expect(result.text).toBe(visible);
         expect(result.delta === null ? result.text : previous + result.delta).toBe(visible);
       }
-      expect(stream.text).toBe(expected);
+      expect(stream.text).toBe(expected ?? source);
     }
   });
 

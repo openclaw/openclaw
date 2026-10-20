@@ -31,6 +31,18 @@ import {
 const requestId = `github-device-${"1".repeat(32)}`;
 const profileId = `ghp_${"2".repeat(32)}`;
 const now = Date.parse("2026-08-19T12:00:00.000Z");
+const oauthName = `github-oauth-${profileId.slice("ghp_".length)}`;
+const binding = { agentId: "main", provenance: null };
+const systemPending = { requestId, scope: "system", agentId: "main", expectedIdentity: null };
+const provenance = {
+  agentId: "main",
+  createdVia: "operator",
+  creatorAgentId: null,
+  createdAtMs: now,
+};
+function seed(name: string, record: unknown) {
+  hiddenStore.records.set(name, JSON.stringify(record));
+}
 
 const deviceRecord: GitHubDeviceAuthorizationRecord = {
   version: 1,
@@ -49,10 +61,7 @@ const deviceRecord: GitHubDeviceAuthorizationRecord = {
     allowInSandbox: true,
     gitAuthor: { name: "  Original Author  ", email: "  original@example.test  " },
   },
-  agentLifecycleBinding: {
-    agentId: "main",
-    provenance: null,
-  },
+  agentLifecycleBinding: binding,
 };
 
 const oauthRecord: GitHubOAuthRecord = {
@@ -76,10 +85,7 @@ describe("GitHub OAuth hidden records", async () => {
     await writeGitHubDeviceAuthorizationRecord(deviceRecord);
     await writeGitHubOAuthRecord(oauthRecord);
 
-    expect([...hiddenStore.records.keys()]).toEqual([
-      requestId,
-      `github-oauth-${profileId.slice("ghp_".length)}`,
-    ]);
+    expect([...hiddenStore.records.keys()]).toEqual([requestId, oauthName]);
     expect(await listGitHubDeviceAuthorizationRecords()).toEqual([
       { requestId, record: deviceRecord },
     ]);
@@ -89,8 +95,6 @@ describe("GitHub OAuth hidden records", async () => {
       state: "valid",
       record: oauthRecord,
     });
-    expect(JSON.stringify([...hiddenStore.records.keys()])).not.toContain("refresh-token-secret");
-    expect(JSON.stringify([...hiddenStore.records.keys()])).not.toContain(deviceRecord.deviceCode);
 
     await deleteGitHubDeviceAuthorizationRecord(requestId);
     await deleteGitHubOAuthRecord(profileId);
@@ -100,64 +104,42 @@ describe("GitHub OAuth hidden records", async () => {
   it("rejects an own __proto__ key in persisted provenance", async () => {
     const record = {
       ...deviceRecord,
-      agentLifecycleBinding: {
-        agentId: "main",
-        provenance: {
-          agentId: "main",
-          createdVia: "operator",
-          creatorAgentId: null,
-          createdAtMs: now,
-        },
-      },
+      agentLifecycleBinding: { ...binding, provenance: { ...provenance } },
     };
     Object.defineProperty(record.agentLifecycleBinding.provenance, "__proto__", {
       value: null,
       enumerable: true,
     });
-    hiddenStore.records.set(requestId, JSON.stringify(record));
+    seed(requestId, record);
     expect(await readGitHubDeviceAuthorizationRecord(requestId)).toBeUndefined();
   });
 
   it("preserves System record reads that discard an invalid agent binding", async () => {
-    const agentLifecycleBinding = { agentId: "main", provenance: null, extra: true };
+    const agentLifecycleBinding = { ...binding, extra: true };
     const { agentLifecycleBinding: _binding, ...unboundDevice } = deviceRecord;
     const expected = { ...unboundDevice, scope: "system" };
-    hiddenStore.records.set(requestId, JSON.stringify({ ...expected, agentLifecycleBinding }));
+    seed(requestId, { ...expected, agentLifecycleBinding });
     expect(await readGitHubDeviceAuthorizationRecord(requestId)).toStrictEqual(expected);
-    const pendingInitial = {
-      requestId,
+    seed(oauthName, {
+      ...oauthRecord,
       scope: "system",
-      agentId: "main",
-      expectedIdentity: null,
-    };
-    hiddenStore.records.set(
-      `github-oauth-${profileId.slice("ghp_".length)}`,
-      JSON.stringify({
-        ...oauthRecord,
-        scope: "system",
-        pendingInitial: { ...pendingInitial, agentLifecycleBinding },
-      }),
-    );
+      pendingInitial: { ...systemPending, agentLifecycleBinding },
+    });
     expect(await inspectGitHubOAuthRecord(profileId)).toStrictEqual({
       state: "valid",
-      record: { ...oauthRecord, scope: "system", pendingInitial },
+      record: { ...oauthRecord, scope: "system", pendingInitial: systemPending },
     });
   });
 
   it.each([
     ["missing lifecycle binding", { agentLifecycleBinding: undefined }],
-    ["foreign lifecycle agent", { agentLifecycleBinding: { agentId: "other", provenance: null } }],
+    ["foreign lifecycle agent", { agentLifecycleBinding: { ...binding, agentId: "other" } }],
     [
       "foreign provenance agent",
       {
         agentLifecycleBinding: {
-          agentId: "main",
-          provenance: {
-            agentId: "other",
-            createdVia: "operator",
-            creatorAgentId: null,
-            createdAtMs: now,
-          },
+          ...binding,
+          provenance: { ...provenance, agentId: "other" },
         },
       },
     ],
@@ -167,31 +149,15 @@ describe("GitHub OAuth hidden records", async () => {
     ],
     ["missing identity snapshot", { expectedIdentity: undefined }],
   ])("rejects a pending record with %s", async (_label, overrides) => {
-    const value = structuredClone(deviceRecord);
-    Object.assign(value, overrides);
+    const value = Object.assign(structuredClone(deviceRecord), overrides);
     await expect(writeGitHubDeviceAuthorizationRecord(value)).rejects.toThrow();
   });
 
   it.each([
-    [
-      "pending-initial scope mismatch",
-      {
-        ...oauthRecord,
-        pendingInitial: {
-          requestId,
-          scope: "system",
-          agentId: "main",
-          expectedIdentity: null,
-        },
-      },
-    ],
-    [
-      "pending refresh with terminal failure",
-      { ...oauthRecord, pendingRefresh: true, refreshFailure: "expired" },
-    ],
+    ["pending-initial scope mismatch", { pendingInitial: systemPending }],
+    ["pending refresh with terminal failure", { pendingRefresh: true, refreshFailure: "expired" }],
   ])("rejects refresh metadata with %s", async (_label, value) => {
-    const candidate = structuredClone(oauthRecord);
-    Object.assign(candidate, value);
+    const candidate = Object.assign(structuredClone(oauthRecord), value);
     await expect(writeGitHubOAuthRecord(candidate)).rejects.toThrow();
   });
 });

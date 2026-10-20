@@ -17,6 +17,14 @@ const key = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.expor
 });
 const host = "engineering.ghe.com";
 const apiBaseUrl = "https://api.engineering.ghe.com";
+const permissions = { contents: "write", metadata: "read" } as const;
+const installation = {
+  id: 202,
+  app_id: 101,
+  account: { id: 303 },
+  suspended_at: null,
+  permissions,
+};
 function selection(): GitHubAppSelection {
   return {
     profileId: "ghp_00000000000000000000000000000001",
@@ -26,11 +34,22 @@ function selection(): GitHubAppSelection {
       installationId: 202,
       accountId: 303,
       repositories: [{ id: 404, fullName: "example/project" }],
-      permissions: { contents: "write", metadata: "read" },
+      permissions,
       privateKey: key,
       keyVersion: "synthetic-v1",
     },
   };
+}
+function prepare(assertCurrent = () => {}) {
+  return prepareGitHubAppInstallation({ selection: selection(), host, apiBaseUrl, assertCurrent });
+}
+function configure(selected = selection()): OpenClawConfig {
+  const config: OpenClawConfig = {
+    gateway: { github: { host, apiBaseUrl } },
+    tools: { github: selected },
+  };
+  setRuntimeConfigSnapshot(config);
+  return config;
 }
 let tokenNumber = 0;
 let overrides: Record<string, unknown>;
@@ -46,14 +65,8 @@ beforeEach(() => {
     const path = url.slice(apiBaseUrl.length);
     onRequest?.(path);
     const bodies: Record<string, unknown> = {
-      "/app": { id: 101, slug: "factory", permissions: { contents: "write", metadata: "read" } },
-      "/app/installations/202": {
-        id: 202,
-        app_id: 101,
-        account: { id: 303 },
-        suspended_at: null,
-        permissions: { contents: "write", metadata: "read" },
-      },
+      "/app": { id: 101, slug: "factory", permissions },
+      "/app/installations/202": installation,
       "/users/factory%5Bbot%5D": { id: 9001, login: "factory[bot]", type: "Bot", avatar_url: null },
       "/installation/repositories?per_page=100": {
         total_count: 1,
@@ -67,7 +80,7 @@ beforeEach(() => {
       ? {
           token: `synthetic-installation-${++tokenNumber}`,
           expires_at: new Date(Date.now() + 60 * 60_000).toISOString(),
-          permissions: { contents: "write", metadata: "read" },
+          permissions,
         }
       : bodies[path];
     if (!body) {
@@ -87,13 +100,7 @@ afterEach(() => {
 
 describe("selected GitHub App issuer", () => {
   it("issues exact repository permissions and bot identity and revokes the retained execution grant", async () => {
-    const selected = selection();
-    const issued = await prepareGitHubAppInstallation({
-      selection: selected,
-      host,
-      apiBaseUrl,
-      assertCurrent: () => {},
-    });
+    const issued = await prepare();
     expect(issued.account).toEqual({ accountId: 9001, login: "factory[bot]", avatarUrl: null });
     const body = fetcher.mock.calls.find(([url]) => url.endsWith("/access_tokens"))?.[1].body;
     if (typeof body !== "string") {
@@ -106,25 +113,17 @@ describe("selected GitHub App issuer", () => {
     expect(fetcher.mock.calls.some(([url]) => url === `${apiBaseUrl}/user`)).toBe(false);
     await issued.revoke();
     await expect(issued.readToken()).rejects.toThrow("changed");
-    expect(fetcher.mock.calls.at(-1)?.[0]).toBe(`${apiBaseUrl}/installation/token`);
-    expect(fetcher.mock.calls.at(-1)?.[1].method).toBe("DELETE");
+    expect(fetcher.mock.calls.at(-1)).toMatchObject([
+      `${apiBaseUrl}/installation/token`,
+      { method: "DELETE" },
+    ]);
   });
   it("rejects a suspended installation before minting and never reads human credentials", async () => {
     overrides["/app/installations/202"] = {
-      id: 202,
-      app_id: 101,
-      account: { id: 303 },
+      ...installation,
       suspended_at: "2026-10-10T09:00:00Z",
-      permissions: { contents: "write", metadata: "read" },
     };
-    await expect(
-      prepareGitHubAppInstallation({
-        selection: selection(),
-        host,
-        apiBaseUrl,
-        assertCurrent: () => {},
-      }),
-    ).rejects.toThrow();
+    await expect(prepare()).rejects.toThrow();
     expect(
       fetcher.mock.calls.some(([url]) => url.endsWith("/access_tokens") || url.endsWith("/user")),
     ).toBe(false);
@@ -132,12 +131,7 @@ describe("selected GitHub App issuer", () => {
   it.each([401, 500])(
     "settles invalid-token revocation while preserving live-token cleanup failure (%s)",
     async (status) => {
-      const issued = await prepareGitHubAppInstallation({
-        selection: selection(),
-        host,
-        apiBaseUrl,
-        assertCurrent: () => {},
-      });
+      const issued = await prepare();
       fetcher.mockResolvedValueOnce(new Response(null, { status }));
       if (status === 401) {
         await expect(issued.revoke()).resolves.toBeUndefined();
@@ -156,25 +150,16 @@ describe("selected GitHub App issuer", () => {
       }
     };
     await expect(
-      prepareGitHubAppInstallation({
-        selection: selection(),
-        host,
-        apiBaseUrl,
-        assertCurrent: () => {
-          if (!current) {
-            throw new Error("Execution revoked");
-          }
-        },
+      prepare(() => {
+        if (!current) {
+          throw new Error("Execution revoked");
+        }
       }),
     ).rejects.toThrow("Execution revoked");
     expect(fetcher.mock.calls.at(-1)?.[1].method).toBe("DELETE");
   });
   it("reports the selected App contract without minting an execution token during status", async () => {
-    const config: OpenClawConfig = {
-      gateway: { github: { host, apiBaseUrl } },
-      tools: { github: selection() },
-    };
-    setRuntimeConfigSnapshot(config);
+    const config = configure();
     expect(
       (await resolveGitHubToolIdentityStatus({ config, agentId: "main", selectedScope: "system" }))
         .effective,
@@ -193,11 +178,7 @@ describe("selected GitHub App issuer", () => {
     expect(fetcher).not.toHaveBeenCalled();
   });
   it("refuses unsupported App publication and shell preparation before credential lookup", async () => {
-    const config: OpenClawConfig = {
-      gateway: { github: { host, apiBaseUrl } },
-      tools: { github: selection() },
-    };
-    setRuntimeConfigSnapshot(config);
+    const config = configure();
     vi.stubEnv("FACTORY_AUTH_MODE", "github");
     await expect(prepareGitHubPublicationIdentity({ config, agentId: "main" })).rejects.toThrow(
       "unavailable",
@@ -209,11 +190,7 @@ describe("selected GitHub App issuer", () => {
   });
   it("retains request-owned App cleanup and retires reads when the selected App changes", async () => {
     const selected = selection();
-    let config: OpenClawConfig = {
-      gateway: { github: { host, apiBaseUrl } },
-      tools: { github: selected },
-    };
-    setRuntimeConfigSnapshot(config);
+    let config = configure(selected);
     vi.stubEnv("FACTORY_AUTH_MODE", "github");
     const admission = vi.fn(async () => undefined);
     const identity = await prepareGitHubReadIdentity({
@@ -238,11 +215,7 @@ describe("selected GitHub App issuer", () => {
   });
 
   it("refuses App reads without a cleanup owner before minting", async () => {
-    const config: OpenClawConfig = {
-      gateway: { github: { host, apiBaseUrl } },
-      tools: { github: selection() },
-    };
-    setRuntimeConfigSnapshot(config);
+    const config = configure();
     await expect(
       prepareGitHubReadIdentity({
         config,

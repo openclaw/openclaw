@@ -1,4 +1,3 @@
-// Covers config scanning for agent harness runtime requirements.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
@@ -28,6 +27,12 @@ function collectConfiguredAgentHarnessRuntimes(
     options,
   );
 }
+function collectDefaults(
+  defaults: unknown,
+  options?: Parameters<typeof collectConfiguredAgentHarnessRuntimesBase>[1],
+) {
+  return collectConfiguredAgentHarnessRuntimes({ agents: { defaults } }, options);
+}
 
 describe("collectConfiguredAgentHarnessRuntimes", () => {
   it("preloads explicit picker alternatives without changing an OpenClaw default", () => {
@@ -54,42 +59,25 @@ describe("collectConfiguredAgentHarnessRuntimes", () => {
   });
 
   it("requires Codex when OpenAI is only a default model fallback", () => {
-    const config = {
-      agents: {
-        defaults: {
-          model: { fallbacks: ["openai/gpt-5.5"] },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(collectConfiguredAgentHarnessRuntimes(config)).toEqual(["codex"]);
+    expect(collectDefaults({ model: { fallbacks: ["openai/gpt-5.5"] } })).toEqual(["codex"]);
   });
 
   it("can ignore implicit OpenAI Codex runtime preferences", () => {
-    const config = {
-      agents: {
-        defaults: {
+    expect(
+      collectDefaults(
+        {
           model: "openai/gpt-5.5",
           models: {
             "openai/gpt-5.4": {},
-            "anthropic/claude-opus-4-7": {
-              agentRuntime: { id: "codex" },
-            },
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "codex" } },
           },
         },
-      },
-    } as OpenClawConfig;
-
-    expect(
-      collectConfiguredAgentHarnessRuntimes(config, {
-        includeImplicitRuntimePreferences: false,
-      }),
+        { includeImplicitRuntimePreferences: false },
+      ),
     ).toEqual(["codex"]);
   });
 
   it("does not infer Codex for custom OpenAI-compatible base URLs", () => {
-    // OpenAI provider id alone is not enough: custom compatible endpoints may
-    // not support Codex runtime assumptions or model contracts.
     const config = {
       models: {
         providers: {
@@ -99,14 +87,8 @@ describe("collectConfiguredAgentHarnessRuntimes", () => {
           },
         },
       },
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.5": {},
-          },
-        },
-      },
-    } as OpenClawConfig;
+      agents: { defaults: { models: { "openai/gpt-5.5": {} } } },
+    };
 
     expect(collectConfiguredAgentHarnessRuntimes(config)).toEqual([]);
   });
@@ -123,15 +105,12 @@ describe("collectConfiguredAgentHarnessRuntimes", () => {
       }
       entries[`agent-${i}`] = { models };
     }
-    const config = {
+    const migrated = createCanonicalAgentConfigFixture({
       agents: {
         entries,
-        defaults: {
-          models: { "anthropic/claude-opus-4-7": {} } as Record<string, Record<string, never>>,
-        },
+        defaults: { models: { "anthropic/claude-opus-4-7": {} } },
       },
-    } as unknown as OpenClawConfig;
-    const migrated = createCanonicalAgentConfigFixture(config).config;
+    }).config;
     const rosterReads = countRosterReads(migrated);
 
     const runtimes = collectConfiguredAgentHarnessRuntimesBase(migrated);
@@ -141,8 +120,9 @@ describe("collectConfiguredAgentHarnessRuntimes", () => {
   });
 
   it("observes roster mutations made between collection batches (#135743)", () => {
-    const config = { agents: { entries: { main: {} } } } as unknown as OpenClawConfig;
-    const migrated = createCanonicalAgentConfigFixture(config).config;
+    const migrated = createCanonicalAgentConfigFixture({
+      agents: { entries: { main: {} } },
+    }).config;
 
     expect(collectConfiguredAgentHarnessRuntimesBase(migrated)).toEqual([]);
 
