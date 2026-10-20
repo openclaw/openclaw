@@ -37,11 +37,13 @@ async function resolveBranch(
   branch: GitResult = { code: 0, stdout: "feat/dev-branch-badge\n" },
   toplevel: GitResult = { code: 0, stdout: `${root}\n` },
 ): Promise<string | null> {
+  // mock-isolation: Resolve branches from synthetic Git responses without launching Git.
   vi.doMock("../process/exec.js", () => ({
     runCommandWithTimeout: makeRunCommand(
       packageRoot === null ? {} : { toplevel, ...(toplevel.code === 0 ? { branch } : {}) },
     ),
   }));
+  // mock-isolation: The package-root cases must not inspect the real checkout layout.
   vi.doMock("./openclaw-root.js", () => ({
     resolveOpenClawPackageRoot: vi.fn(async () => packageRoot),
   }));

@@ -12,6 +12,7 @@ const signalVerifiedGatewayPidSync = vi.fn();
 const readBestEffortConfig = vi.fn(async () => ({}));
 const probePortUsage = vi.fn(async () => "free" as const);
 
+// mock-isolation: Use fixture config instead of reading the operator's config and port.
 vi.mock("../../config/config.js", () => ({
   readBestEffortConfig: () => readBestEffortConfig(),
   resolveGatewayPort: () => 18_789,
@@ -19,6 +20,7 @@ vi.mock("../../config/config.js", () => ({
 vi.mock("../../config/io.js", () => ({
   createConfigIO: () => ({ readBestEffortConfig: () => readBestEffortConfig() }),
 }));
+// mock-isolation: Keep fallback probing on the fixture's loopback target.
 vi.mock("../../daemon/gateway-service-probe-hosts.js", () => ({
   resolveGatewayServiceProbeHosts: vi.fn(async () => ["127.0.0.1"]),
 }));
@@ -69,6 +71,7 @@ vi.mock("./lifecycle-safe-restart.js", () => ({
   resolveGatewayRestartIntentOptions: vi.fn(() => undefined),
   runSafeGatewayRestart: vi.fn(),
 }));
+// mock-isolation: Never signal a real unmanaged Gateway from fallback tests.
 vi.mock("./lifecycle-unmanaged.js", () => ({ signalGatewayRestart: vi.fn() }));
 vi.mock("./shared.js", () => ({ renderGatewayServiceStartHints: vi.fn(() => []) }));
 vi.mock("./start-repair.js", () => ({ repairLoadedGatewayServiceForStart: vi.fn() }));

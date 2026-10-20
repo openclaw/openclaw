@@ -8,17 +8,22 @@ const resolveGatewayServiceMutationError = vi.hoisted(() => vi.fn<() => Error | 
 const runtimeError = vi.hoisted(() => vi.fn());
 const runtimeWriteJson = vi.hoisted(() => vi.fn());
 
+// mock-isolation: Restart requests must use fixture RPC responses, not a live Gateway.
 vi.mock("../../gateway/call.js", () => ({ callGatewayCli }));
 
+// mock-isolation: Exercise metadata-cleanup outcomes without touching host services.
 vi.mock("../../daemon/systemd.js", () => ({ refreshLegacySystemdServiceMetadata }));
 
+// mock-isolation: Supervision eligibility is supplied per case, independent of the host.
 vi.mock("../../infra/gateway-supervision.js", () => ({ resolveGatewayServiceMutationError }));
 
+// mock-isolation: Capture restart diagnostics and JSON output instead of emitting CLI output.
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: { error: runtimeError, log: vi.fn(), writeJson: runtimeWriteJson },
   writeRuntimeJson: (_runtime: unknown, payload: unknown) => runtimeWriteJson(payload),
 }));
 
+// mock-isolation: Safe-restart tests must not append to the operator's lifecycle audit log.
 vi.mock("./lifecycle-audit.js", () => ({ appendGatewayLifecycleAudit: vi.fn() }));
 
 beforeEach(() => {

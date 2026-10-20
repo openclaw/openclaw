@@ -38,8 +38,8 @@ vi.mock("../process/spawn-utils.js", async (importOriginal) => {
   };
 });
 vi.mock("../process/terminal-pty.js", async (importOriginal) => {
-  const { spawnTerminalPty } = await importOriginal<typeof import("../process/terminal-pty.js")>();
-  return { spawnTerminalPty: trackLaunch(spawnTerminalPty) };
+  const actual = await importOriginal<typeof import("../process/terminal-pty.js")>();
+  return { ...actual, spawnTerminalPty: trackLaunch(actual.spawnTerminalPty) };
 });
 
 describe.runIf(process.platform !== "win32")("launch policy and construction authority", () => {
