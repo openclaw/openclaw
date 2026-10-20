@@ -14,6 +14,20 @@ const runtime = {
   exit: vi.fn(),
 } as never;
 
+function prepare(
+  plugin: ChannelPlugin,
+  input: unknown,
+  overrides: Partial<Parameters<typeof prepareChannelAccountConfiguration>[0]> = {},
+) {
+  return prepareChannelAccountConfiguration({
+    cfg: {},
+    plugin,
+    resolveInput: () => input,
+    runtime,
+    ...overrides,
+  });
+}
+
 describe("channel account config mutations", () => {
   it("prepares, validates, applies, and reports lifecycle changes in order", async () => {
     const callOrder: string[] = [];
@@ -21,12 +35,7 @@ describe("channel account config mutations", () => {
       callOrder.push("authority");
     });
     const cfg = {
-      channels: {
-        "test-chat": {
-          enabled: true,
-          token: "old-token",
-        },
-      },
+      channels: { "test-chat": { enabled: true, token: "old-token" } },
     } satisfies OpenClawConfig;
     const plugin = {
       ...createChannelTestPluginBase({ id: "test-chat" }),
@@ -78,14 +87,15 @@ describe("channel account config mutations", () => {
       },
     } as ChannelPlugin;
 
-    const prepared = await prepareChannelAccountConfiguration({
-      cfg,
+    const prepared = await prepare(
       plugin,
-      requestedAccountId: "Work",
-      resolveInput: () => ({ token: "raw-token" }),
-      runtime,
-      beforePersistentEffect,
-    });
+      { token: "raw-token" },
+      {
+        cfg,
+        requestedAccountId: "Work",
+        beforePersistentEffect,
+      },
+    );
     expect(prepared.ok).toBe(true);
     if (!prepared.ok) {
       return;
@@ -126,19 +136,11 @@ describe("channel account config mutations", () => {
       }),
     } as ChannelPlugin;
 
-    const prepared = await prepareChannelAccountConfiguration({
-      cfg: {},
-      plugin,
-      resolveInput: () => ({ unknownOption: true }),
-      runtime,
-    });
+    const prepared = await prepare(plugin, { unknownOption: true });
 
     expect(prepared).toEqual({
       ok: false,
-      error: {
-        kind: "invalid-input",
-        message: "Unsupported setup option: unknownOption",
-      },
+      error: { kind: "invalid-input", message: "Unsupported setup option: unknownOption" },
     });
     expect(applyAccountConfig).not.toHaveBeenCalled();
   });
@@ -158,12 +160,7 @@ describe("channel account config mutations", () => {
       }),
     } as ChannelPlugin;
 
-    const prepared = await prepareChannelAccountConfiguration({
-      cfg: {},
-      plugin,
-      resolveInput: () => ({ useEnv: true }),
-      runtime,
-    });
+    const prepared = await prepare(plugin, { useEnv: true });
 
     expect(prepared.ok).toBe(true);
   });
@@ -174,17 +171,9 @@ describe("channel account config mutations", () => {
     });
     const plugin = createChannelTestPluginBase({ id: "read-only-chat" }) as ChannelPlugin;
 
-    const prepared = await prepareChannelAccountConfiguration({
-      cfg: {},
-      plugin,
-      resolveInput,
-      runtime,
-    });
+    const prepared = await prepare(plugin, undefined, { resolveInput });
 
-    expect(prepared).toEqual({
-      ok: false,
-      error: { kind: "unsupported" },
-    });
+    expect(prepared).toEqual({ ok: false, error: { kind: "unsupported" } });
     expect(resolveInput).not.toHaveBeenCalled();
   });
 });

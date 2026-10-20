@@ -22,6 +22,27 @@ const runtime = {
   },
 };
 
+const policy = () => ({
+  tenantId: "shared-tenant",
+  dmPolicy: "allowlist" as const,
+  allowFrom: ["owner"],
+  groupPolicy: "allowlist" as const,
+  webhook: { path: "/teams/messages" },
+});
+const storedAuth = {
+  appId: "stored-app",
+  appPassword: "stored-password",
+  tenantId: "stored-tenant",
+};
+function teamsConfig(
+  section: NonNullable<NonNullable<OpenClawConfig["channels"]>["msteams"]>,
+): OpenClawConfig {
+  return { channels: { msteams: section } };
+}
+function account(cfg: OpenClawConfig, id = "default") {
+  return msteamsSetupPlugin.config.resolveAccount(cfg, id);
+}
+
 async function configure(cfg: OpenClawConfig, accountId: string, input: unknown) {
   const prepared = await prepareChannelAccountConfiguration({
     cfg,
@@ -61,42 +82,30 @@ describe("Teams host account setup", () => {
   it.each([true, false])(
     "preserves root policy and enabled=%s through host promotion",
     async (enabled) => {
-      const cfg: OpenClawConfig = {
-        channels: {
-          msteams: {
-            enabled,
-            appId: "default-app",
-            appPassword: "default-secret",
-            tenantId: "shared-tenant",
-            dmPolicy: "allowlist",
-            allowFrom: ["owner"],
-            groupPolicy: "allowlist",
-            webhook: { path: "/teams/messages" },
-            legacyWebhook: { port: 3978 },
-          },
-        },
-      };
+      const cfg = teamsConfig({
+        ...policy(),
+        enabled,
+        appId: "default-app",
+        appPassword: "default-secret",
+        legacyWebhook: { port: 3978 },
+      });
       const next = await configure(cfg, "support", {
         appId: "support-app",
         appPassword: "support-secret",
       });
       expect(next.channels?.msteams).toMatchObject({
-        tenantId: "shared-tenant",
-        dmPolicy: "allowlist",
-        allowFrom: ["owner"],
-        groupPolicy: "allowlist",
-        webhook: { path: "/teams/messages" },
+        ...policy(),
         accounts: {
           default: { appId: "default-app", appPassword: "default-secret" },
           support: { appId: "support-app", appPassword: "support-secret" },
         },
       });
-      expect(msteamsSetupPlugin.config.resolveAccount(next, "default")).toMatchObject({
+      expect(account(next)).toMatchObject({
         enabled,
         config: { webhook: { path: "/teams/messages" } },
       });
-      const account = msteamsSetupPlugin.config.resolveAccount(next, "support");
-      expect(account).toMatchObject({
+      const support = account(next, "support");
+      expect(support).toMatchObject({
         enabled: true,
         config: {
           tenantId: "shared-tenant",
@@ -105,7 +114,7 @@ describe("Teams host account setup", () => {
           webhook: { path: "/teams/messages/support" },
         },
       });
-      expect(account).not.toHaveProperty("config.legacyWebhook");
+      expect(support).not.toHaveProperty("config.legacyWebhook");
     },
   );
 
@@ -114,33 +123,28 @@ describe("Teams host account setup", () => {
     vi.stubEnv("MSTEAMS_TENANT_ID", "environment-tenant");
     vi.stubEnv("MSTEAMS_AUTH_TYPE", "federated");
     vi.stubEnv("MSTEAMS_USE_MANAGED_IDENTITY", "true");
-    const cfg: OpenClawConfig = {
-      channels: {
-        msteams: {
-          appId: "stored-app",
-          appPassword: "stored-password",
-          tenantId: "shared-tenant",
-          authType: "secret",
-          webhook: { path: "/teams/messages" },
-          accounts: { sibling: { appId: "sibling-app", appPassword: "sibling-password" } },
-        },
-      },
-    };
+    const cfg = teamsConfig({
+      ...storedAuth,
+      tenantId: "shared-tenant",
+      authType: "secret",
+      webhook: { path: "/teams/messages" },
+      accounts: { sibling: { appId: "sibling-app", appPassword: "sibling-password" } },
+    });
     const next = await configure(cfg, "default", {
       useEnv: true,
       webhookPath: "/teams/environment",
     });
-    expect(msteamsSetupPlugin.config.resolveAccount(next, "default")).toMatchObject({
+    expect(account(next)).toMatchObject({
       configured: true,
       tokenStatus: "available",
       config: { webhook: { path: "/teams/environment" } },
     });
     vi.stubEnv("MSTEAMS_APP_ID", "");
-    expect(msteamsSetupPlugin.config.resolveAccount(next, "default")).toMatchObject({
+    expect(account(next)).toMatchObject({
       configured: false,
       tokenStatus: "missing",
     });
-    expect(msteamsSetupPlugin.config.resolveAccount(next, "sibling")).toMatchObject({
+    expect(account(next, "sibling")).toMatchObject({
       configured: true,
       tokenStatus: "available",
       config: {
@@ -155,21 +159,7 @@ describe("Teams host account setup", () => {
 
   it("rejects incomplete environment auth even when persisted credentials are complete", async () => {
     vi.stubEnv("MSTEAMS_APP_ID", "partial-env-app");
-    await expect(
-      configure(
-        {
-          channels: {
-            msteams: {
-              appId: "stored-app",
-              appPassword: "stored-password",
-              tenantId: "stored-tenant",
-            },
-          },
-        },
-        "default",
-        { useEnv: true },
-      ),
-    ).rejects.toThrow(
+    await expect(configure(teamsConfig(storedAuth), "default", { useEnv: true })).rejects.toThrow(
       "requires complete secret, certificate, or managed-identity environment credentials",
     );
   });
@@ -182,7 +172,7 @@ describe("Teams host account setup", () => {
       appPassword: "new-secret",
       tenantId: "new-tenant",
     });
-    expect(msteamsSetupPlugin.config.resolveAccount(next)).toMatchObject({
+    expect(account(next)).toMatchObject({
       configured: true,
       tokenStatus: "available",
       config: {

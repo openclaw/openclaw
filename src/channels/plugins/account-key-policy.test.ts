@@ -22,29 +22,25 @@ const accountKeyPolicy = { canonicalAliasesRequireOwnField: "token" };
 function createPolicyConfig(accounts: Record<string, Record<string, unknown>>): OpenClawConfig {
   useNoBundledPlugins();
   const pluginDir = makePluginLoaderTempDir();
-  fs.writeFileSync(
-    path.join(pluginDir, "package.json"),
-    JSON.stringify({
-      name: `@example/${channel}`,
-      version: "1.0.0",
-      openclaw: { extensions: ["./index.js"], channel: { id: channel } },
-    }),
-  );
-  fs.writeFileSync(
-    path.join(pluginDir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: channel,
-      channels: [channel],
-      configSchema: { type: "object", properties: {} },
-      channelAccountKeyPolicies: { [channel]: accountKeyPolicy },
-      channelConfigs: {
-        [channel]: {
-          schema: { type: "object", additionalProperties: true },
-          label: "Account policy fixture",
-        },
+  const writeJson = (name: string, value: unknown) =>
+    fs.writeFileSync(path.join(pluginDir, name), JSON.stringify(value));
+  writeJson("package.json", {
+    name: `@example/${channel}`,
+    version: "1.0.0",
+    openclaw: { extensions: ["./index.js"], channel: { id: channel } },
+  });
+  writeJson("openclaw.plugin.json", {
+    id: channel,
+    channels: [channel],
+    configSchema: { type: "object", properties: {} },
+    channelAccountKeyPolicies: { [channel]: accountKeyPolicy },
+    channelConfigs: {
+      [channel]: {
+        schema: { type: "object", additionalProperties: true },
+        label: "Account policy fixture",
       },
-    }),
-  );
+    },
+  });
   fs.writeFileSync(
     path.join(pluginDir, "index.js"),
     'throw new Error("runtime must stay unloaded");',
@@ -75,7 +71,7 @@ afterAll(() => cleanupPluginLoaderFixturesForTest());
 
 describe("prepared channel account policy entry points", () => {
   it.each([undefined, "named-token"])(
-    "channels.status manifest adapter retains its declared account rule outside metadata scope (token=%s)",
+    "manifest account policy outside metadata scope: token=%s",
     (token) => {
       const cfg = createPolicyConfig({ "Work Phone": { token, name: "Named", enabled: false } });
       expect(resolveManifestAccount(cfg)).toMatchObject({
@@ -86,29 +82,23 @@ describe("prepared channel account policy entry points", () => {
     },
   );
 
-  it.each([undefined, "named-token"])(
-    "Doctor binding repair honors its scoped account rule (token=%s)",
-    (token) => {
-      const cfg = createPolicyConfig({ "Work Phone": { token, enabled: false } });
-      const scope = createDoctorPluginMetadataSnapshotScope({});
-      const sourceConfigBeforeMigrations = {
-        agents: { list: [{ id: "ops" }, { id: "research" }] },
-      } satisfies OpenClawConfigWithLegacyRoster;
-      const repair = (config: OpenClawConfig) =>
-        scope.run({ config }, () =>
-          repairUnownedChannelAccountBindings({ config, sourceConfigBeforeMigrations }),
-        );
-      const repaired = repair(cfg);
-      const expectedBindings = token
-        ? cfg.bindings
-        : [
-            ...(cfg.bindings ?? []),
-            { agentId: "ops", match: { channel, accountId: "work-phone" } },
-          ];
-      expect(repaired.config.bindings).toEqual(expectedBindings);
-      expect(repair(repaired.config).changes).toEqual([]);
-    },
-  );
+  it.each([undefined, "named-token"])("Doctor scoped account policy: token=%s", (token) => {
+    const cfg = createPolicyConfig({ "Work Phone": { token, enabled: false } });
+    const scope = createDoctorPluginMetadataSnapshotScope({});
+    const sourceConfigBeforeMigrations = {
+      agents: { list: [{ id: "ops" }, { id: "research" }] },
+    } satisfies OpenClawConfigWithLegacyRoster;
+    const repair = (config: OpenClawConfig) =>
+      scope.run({ config }, () =>
+        repairUnownedChannelAccountBindings({ config, sourceConfigBeforeMigrations }),
+      );
+    const repaired = repair(cfg);
+    const expectedBindings = token
+      ? cfg.bindings
+      : [...(cfg.bindings ?? []), { agentId: "ops", match: { channel, accountId: "work-phone" } }];
+    expect(repaired.config.bindings).toEqual(expectedBindings);
+    expect(repair(repaired.config).changes).toEqual([]);
+  });
 
   it("outbound media limits select the canonical collision winner for a spaced alias", () => {
     const cfg = createPolicyConfig({
