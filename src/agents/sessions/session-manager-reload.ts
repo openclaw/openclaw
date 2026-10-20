@@ -7,7 +7,7 @@ import {
   loadTranscriptEventsFromDatabase,
 } from "../../config/sessions/session-accessor.sqlite-read.js";
 import { resolveSqliteTranscriptReadScope } from "../../config/sessions/session-accessor.sqlite-scope.js";
-import { readTranscriptContextVersionInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-state.js";
+import { readTranscriptContextVersionInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-state-read.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 import { findSessionTranscriptHeader } from "../../config/sessions/session-entry-codec.js";
 import { resolveSqliteSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";

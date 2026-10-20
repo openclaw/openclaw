@@ -4,7 +4,7 @@ import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-d
 import { SessionMetadataUnavailableError } from "../../state/session-metadata-unavailable-error.js";
 import { selectConversationRowsFromDatabase } from "./session-accessor.sqlite-conversation-read.js";
 import { readExactSessionEntryRowValidated } from "./session-accessor.sqlite-entry-read.js";
-import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
+import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state-read.js";
 import { createSessionEntryReadScope } from "./session-entry-cohort.worker.js";
 import type { SessionEntryPatchCommit } from "./session-entry-patch.types.js";
 import type {

@@ -29,7 +29,6 @@ import {
   prepareSqliteScope,
   resolveSqliteScope,
   resolveSqliteWriteAdmissionScope,
-  runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { prepareTranscriptMessageAppend } from "./session-accessor.sqlite-transcript-message-append.js";
@@ -44,6 +43,7 @@ import type {
 } from "./session-accessor.sqlite-transcript-reports.types.js";
 import type { TranscriptReportWorkerTarget } from "./session-accessor.sqlite-transcript-reports.worker.js";
 import { resolveTranscriptAppendRefusal } from "./session-accessor.sqlite-transcript-write-guard.js";
+import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-write-scope.js";
 import {
   captureSessionActorStorageOwner,
   withSessionActorStorage,

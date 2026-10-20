@@ -30,7 +30,7 @@ import {
 } from "./session-accessor.js";
 import { withWorkerSqliteIntegrityCounter } from "./session-accessor.sqlite-integrity-counter.test-support.js";
 import * as sessionWorker from "./session-accessor.sqlite-replacement-worker.js";
-import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
+import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-write-scope.js";
 
 const archiveHook = vi.hoisted(() => ({ afterMaterialize: undefined as (() => void) | undefined }));
 vi.mock("./session-accessor.sqlite-archive.js", async (importOriginal) => {

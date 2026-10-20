@@ -8,7 +8,7 @@ import {
   rejectPendingPreparedModelRuntimeReplacement,
 } from "../agents/prepared-model-runtime.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import { runExclusiveSqliteSessionWrite } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { runExclusiveSqliteSessionWrite } from "../config/sessions/session-accessor.sqlite-write-scope.js";
 import { onInternalDiagnosticEvent } from "../infra/diagnostic-events.js";
 import {
   getActiveDiagnosticTraceContext,

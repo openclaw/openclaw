@@ -35,6 +35,14 @@ export type OpenClawAgentDatabaseOptions = OpenClawStateDatabaseOptions & {
   agentId: string;
 };
 
+/** Read operations supplied by the existing writer lifecycle; observing does not create it. */
+export type OpenClawAgentDatabaseReadAccess = {
+  databases: ReadonlyMap<string, OpenClawAgentDatabase>;
+  failures: ReadonlyMap<string, unknown>;
+  refreshIdle: (database: OpenClawAgentDatabase) => void;
+  retain: (database: EngineConnection) => () => void;
+};
+
 /** Internal Doctor custody; never part of the plugin-facing database options. */
 export type OpenClawAgentDatabaseRepairAdmission = {
   /** Doctor's requested SQLite coverage; ordinary runtime admission retains FULL. */

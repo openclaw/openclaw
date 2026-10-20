@@ -29,7 +29,7 @@ import {
   assertSessionTranscriptContextAnchorInDatabase,
   type TranscriptSourceAuthority,
 } from "./session-accessor.sqlite-transcript-anchor.js";
-import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
+import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state-read.js";
 import type {
   SessionModelContextLimits,
   SessionTranscriptModelContext,

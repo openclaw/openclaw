@@ -25,8 +25,8 @@ import { readExactSessionEntryRowForCanonicalRepair } from "./session-accessor.s
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionOwnerInTransaction } from "./session-accessor.sqlite-owner.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
-import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptEventInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-write-scope.js";
 
 const race = vi.hoisted(() => ({
   beforeDelete: undefined as (() => void) | undefined,
@@ -34,8 +34,8 @@ const race = vi.hoisted(() => ({
   queued: undefined as ((pathname: string | undefined) => void) | undefined,
 }));
 
-vi.mock("./session-accessor.sqlite-scope.js", async (original) => {
-  const actual = await original<typeof import("./session-accessor.sqlite-scope.js")>();
+vi.mock("./session-accessor.sqlite-write-scope.js", async (original) => {
+  const actual = await original<typeof import("./session-accessor.sqlite-write-scope.js")>();
   return {
     ...actual,
     runExclusiveSqliteSessionWrite: (

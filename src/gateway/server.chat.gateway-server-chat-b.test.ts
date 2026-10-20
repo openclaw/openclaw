@@ -39,9 +39,9 @@ import {
 } from "../config/sessions/session-accessor.js";
 import {
   resolveSqliteTranscriptScope,
-  runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { runExclusiveSqliteSessionWrite } from "../config/sessions/session-accessor.sqlite-write-scope.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";

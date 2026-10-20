@@ -28,8 +28,8 @@ import * as pageReclamation from "./session-accessor.sqlite-page-reclamation.js"
 import {
   getSessionKysely,
   resolveSqliteTranscriptArchiveDirectory,
-  runExclusiveSqliteSessionWrite,
 } from "./session-accessor.sqlite-scope.js";
+import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-write-scope.js";
 import type {
   PublishedSessionTranscriptArchive,
   SessionArchivePruningOperations,

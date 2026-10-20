@@ -55,10 +55,10 @@ import {
   captureLifecycleDatabaseScope,
   resolveSqliteScope,
   resolveSqliteTranscriptArchiveDirectory,
-  runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { withSqliteMutationWorkerLifetime } from "./session-accessor.sqlite-worker-request.js";
+import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-write-scope.js";
 import {
   pruneAllSessionTranscriptArchivesToHighWater,
   reclaimSqliteFreePages,

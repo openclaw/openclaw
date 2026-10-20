@@ -17,11 +17,11 @@ import {
 import { runExclusiveSqliteTranscriptArchiveWorker } from "./session-accessor.sqlite-archive.js";
 import type { ReclamationDatabaseOptions } from "./session-accessor.sqlite-lifecycle-types.js";
 import { resolveSessionReclamationDatabaseOptions } from "./session-accessor.sqlite-reclamation.js";
+import { withSqliteMutationWorkerLifetime } from "./session-accessor.sqlite-worker-request.js";
 import {
   runExclusiveSqliteSessionWrite,
   withSqliteSessionDatabase,
-} from "./session-accessor.sqlite-scope.js";
-import { withSqliteMutationWorkerLifetime } from "./session-accessor.sqlite-worker-request.js";
+} from "./session-accessor.sqlite-write-scope.js";
 import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import {
   ARCHIVE_RETENTION_BATCH_SIZE,

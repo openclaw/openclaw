@@ -46,8 +46,8 @@ import {
   resolveSqliteScope,
   resolveSqliteTranscriptArchiveDirectory,
   toDatabaseOptions,
-  withSqliteSessionDatabase,
 } from "./session-accessor.sqlite-scope.js";
+import { withSqliteSessionDatabase } from "./session-accessor.sqlite-write-scope.js";
 import {
   commitSessionLifecycleProjectionInWorker,
   projectSessionEntryLifecycleMutationInWorker,

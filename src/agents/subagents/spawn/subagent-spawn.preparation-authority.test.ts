@@ -18,11 +18,9 @@ import {
   loadSessionEntry,
   loadTranscriptEvents,
 } from "../../../config/sessions/session-accessor.js";
-import {
-  resolveSqliteStoreScope,
-  runExclusiveSqliteSessionWrite,
-} from "../../../config/sessions/session-accessor.sqlite-scope.js";
+import { resolveSqliteStoreScope } from "../../../config/sessions/session-accessor.sqlite-scope.js";
 import { replaceTranscriptEvents } from "../../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { runExclusiveSqliteSessionWrite } from "../../../config/sessions/session-accessor.sqlite-write-scope.js";
 import { LegacyContextEngine } from "../../../context-engine/legacy.js";
 import { registerChatAbortController } from "../../../gateway/chat-abort.js";
 import {

@@ -82,6 +82,9 @@ vi.mock("./session-accessor.sqlite-normalize.js", () => ({}));
 vi.mock("./session-accessor.sqlite-scope.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-accessor.sqlite-scope.js")>()),
   resolveSqliteTranscriptArchiveDirectory: () => "/synthetic/archive",
+}));
+vi.mock("./session-accessor.sqlite-write-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-accessor.sqlite-write-scope.js")>()),
   runExclusiveSqliteSessionWrite: boundary.queue,
 }));
 vi.mock("./session-accessor.sqlite-status.js", () => ({}));

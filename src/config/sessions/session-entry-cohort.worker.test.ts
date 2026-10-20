@@ -17,7 +17,7 @@ import * as entryCache from "./session-accessor.sqlite-entry-cache.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
-import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
+import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state-read.js";
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import type { SessionEntryCohortRequest } from "./session-entry-read.types.js";
 import { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";

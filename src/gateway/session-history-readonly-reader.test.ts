@@ -10,8 +10,8 @@ import {
   replaceSessionEntry,
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.js";
-import { readActiveTranscriptEntryAnchor } from "../config/sessions/session-accessor.sqlite-transcript-anchor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { readActiveTranscriptEntryAnchor } from "../config/sessions/session-accessor.sqlite-write-scope.js";
 import { captureDurableSessionActor } from "../config/sessions/session-actor-durable.js";
 import { readSessionActorProjectionReceipt } from "../config/sessions/session-actor-replica.js";
 import {

@@ -3,10 +3,10 @@ import path from "node:path";
 import { afterAll, beforeEach, expect, it } from "vitest";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import {
-  runExclusiveSqliteSessionWrite,
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { runExclusiveSqliteSessionWrite } from "../config/sessions/session-accessor.sqlite-write-scope.js";
 import { SessionTranscriptReadFenceError } from "../config/sessions/session-transcript-read-fence.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
 import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";

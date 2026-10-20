@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
-import { runExclusiveSqliteSessionWrite as writeSession } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { runExclusiveSqliteSessionWrite as writeSession } from "../config/sessions/session-accessor.sqlite-write-scope.js";
 import { readAgentDeletionJournalStatusInWorker } from "../state/agent-deletion-journal.read.js";
 import {
   beginSessionEffect,

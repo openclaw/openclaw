@@ -2,6 +2,11 @@
 const currentModuleUrl = import.meta.url;
 
 export const agentDatabaseModuleIdentityEntrypoints = {
+  reader: {
+    currentModuleUrl,
+    sourceWorkerName: "openclaw-agent-db-module-identity-reader.test-support",
+    distWorkerPath: "state/openclaw-agent-db-module-identity-reader.test-support.js",
+  },
   host: {
     currentModuleUrl,
     sourceWorkerName: "openclaw-agent-db-module-identity-host.test-support",

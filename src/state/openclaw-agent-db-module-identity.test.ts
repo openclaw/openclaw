@@ -11,6 +11,7 @@ import { agentWorkerStoreFixtureEntrypoint } from "./openclaw-agent-worker-store
 
 it("shares agent ownership, worker publication, reclamation queues, and commit observers across native SDK imports from transformed plugins", async () => {
   const repo = process.cwd();
+  let readerUrl = resolveRuntimeWorkerUrl(agentDatabaseModuleIdentityEntrypoints.reader);
   let hostUrl = resolveRuntimeWorkerUrl(agentDatabaseModuleIdentityEntrypoints.host);
   let sdkUrl = resolveRuntimeWorkerUrl(agentDatabaseModuleIdentityEntrypoints.sdk);
   let publicationUrl = resolveRuntimeWorkerUrl(agentWorkerStoreFixtureEntrypoint);
@@ -31,6 +32,7 @@ it("shares agent ownership, worker publication, reclamation queues, and commit o
         config: false,
         cwd: repo,
         entry: {
+          reader: fileURLToPath(readerUrl),
           host: fileURLToPath(hostUrl),
           "sqlite-runtime": fileURLToPath(sdkUrl),
           ...Object.fromEntries(
@@ -65,6 +67,7 @@ it("shares agent ownership, worker publication, reclamation queues, and commit o
         fs.copyFileSync(path.join(repo, "src/state", schema), path.join(dist, schema));
       }
       hostUrl = pathToFileURL(path.join(dist, "host.js"));
+      readerUrl = pathToFileURL(path.join(dist, "reader.js"));
       sdkUrl = pathToFileURL(path.join(dist, "sqlite-runtime.js"));
       publicationUrl = pathToFileURL(
         path.join(dist, agentWorkerStoreFixtureEntrypoint.distWorkerPath),
@@ -112,9 +115,22 @@ it("shares agent ownership, worker publication, reclamation queues, and commit o
         let borrowed;
         const publicationClients = [];
         try {
+          const reader = await import(${JSON.stringify(readerUrl.href)});
+          assert.equal(reader.getOpenClawAgentDatabaseReadAccess(), undefined);
+          assert.deepEqual(reader.withOpenClawAgentDatabaseReadOnly(() => {
+            assert.fail("a missing store must not create a writer");
+          }, options), { found: false, reason: "database-missing" });
+          assert.equal(reader.getOpenClawAgentDatabaseReadAccess(), undefined);
           host = await import(${JSON.stringify(hostUrl.href)});
           const nativeSdk = await import(${JSON.stringify(sdkUrl.href)});
           const canonical = host.openOpenClawAgentDatabase(options);
+          assert.ok(reader.getOpenClawAgentDatabaseReadAccess());
+          const retained = reader.retainOpenClawAgentDatabaseReadOnly(options);
+          assert.equal(retained.found, true);
+          assert.equal(retained.database.db, canonical.db);
+          assert.equal(retained.claim.isCurrent(), true);
+          retained.claim.release();
+          assert.equal(canonical.db.isOpen, true);
           const nativeBorrow = nativeSdk.borrowOpenClawAgentDatabase(options);
           assert.equal(nativeBorrow.db, canonical.db);
           nativeBorrow.release();
@@ -126,6 +142,13 @@ it("shares agent ownership, worker publication, reclamation queues, and commit o
             aliasMap: { "openclaw/plugin-sdk/sqlite-runtime": ${JSON.stringify(fileURLToPath(sdkUrl))} },
           })(modulePath);
           assert.equal(plugin.openOpenClawAgentDatabase, nativeSdk.openOpenClawAgentDatabase);
+          for (const access of [reader, nativeSdk, plugin]) {
+            const result = access.withOpenClawAgentDatabaseReadOnly(database => {
+              assert.equal(database.db, canonical.db);
+              return "same-owner";
+            }, options);
+            assert.deepEqual(result, { found: true, value: "same-owner" });
+          }
           borrowed = plugin.borrowOpenClawAgentDatabase(options);
           assert.equal(physicalOpens, 1, "plugin borrowing must not physically reopen the agent database");
           assert.equal(integrityScans, 1, "plugin borrowing must not repeat integrity validation");

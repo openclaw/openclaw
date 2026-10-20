@@ -15,9 +15,9 @@ import {
 import { loadSessionEntry, patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import {
   resolveSqliteScope,
-  runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { runExclusiveSqliteSessionWrite } from "../config/sessions/session-accessor.sqlite-write-scope.js";
 import { isSessionMutationActive } from "../sessions/session-controller.lifecycle.js";
 import { listSessionStateEventsSince } from "../sessions/session-state-events.js";
 import { createDeferredCore } from "../shared/deferred.js";

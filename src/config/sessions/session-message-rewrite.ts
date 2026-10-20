@@ -8,11 +8,11 @@ import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-anchor.js";
 import {
   rewriteNativeAssistantTranscriptMessageForRun,
   rewriteNativeTranscriptMessageAtAnchor,
 } from "./session-accessor.sqlite-transcript-message-rewrite.js";
+import { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-write-scope.js";
 import type { SessionTranscriptAccessScope } from "./session-accessor.types.js";
 import {
   captureSessionActorStorageOwner,

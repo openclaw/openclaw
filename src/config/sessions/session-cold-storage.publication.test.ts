@@ -8,8 +8,8 @@ import { sessionChanges } from "../../sessions/session-row-changes.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db.js";
 import type { runSqliteTranscriptArchiveWorkerOperation as ArchiveWorker } from "./session-accessor.sqlite-archive.js";
 import type { withSqliteReclamationAuthorization as ReclamationAuthorization } from "./session-accessor.sqlite-reclamation-commit.js";
-import type { runExclusiveSqliteSessionWrite as ExclusiveWrite } from "./session-accessor.sqlite-scope.js";
 import type { withSqliteMutationWorkerLifetime as WorkerLifetime } from "./session-accessor.sqlite-worker-request.js";
+import type { runExclusiveSqliteSessionWrite as ExclusiveWrite } from "./session-accessor.sqlite-write-scope.js";
 import type { SessionColdReadPreparation } from "./session-cold-storage-read.js";
 import { restoreSessionColdTranscript } from "./session-cold-storage.js";
 import type { SessionColdMutationResult } from "./session-cold-storage.types.js";
@@ -46,6 +46,9 @@ vi.mock("./session-accessor.sqlite-scope.js", async () => ({
   toDatabaseOptions: (await import("./session-accessor.sqlite-scope-helpers.js")).toDatabaseOptions,
   prepareSqliteTranscriptReadScope: vi.fn(),
   resolveSqliteTranscriptReadScope: vi.fn(),
+}));
+// mock-isolation: exercise write admission without native SQLite.
+vi.mock("./session-accessor.sqlite-write-scope.js", () => ({
   runExclusiveSqliteSessionWrite: (async (
     _options,
     run,

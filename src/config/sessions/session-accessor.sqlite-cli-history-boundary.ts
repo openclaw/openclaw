@@ -6,7 +6,7 @@ import {
 } from "./cli-history-boundary.js";
 import { readSessionEntryRow, writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
-import { readTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
+import { readTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state-read.js";
 import type { InternalSessionEntry } from "./types.js";
 
 /** Advance only a contiguous prefix written by the exact prepared CLI account's live owner. */

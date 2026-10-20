@@ -18,10 +18,8 @@ import {
   readTranscriptStorageRows,
   type SqliteTranscriptSnapshotRow,
 } from "./session-accessor.sqlite-read.js";
-import {
-  readTranscriptGenerationInTransaction,
-  readTranscriptMutationStateInTransaction,
-} from "./session-accessor.sqlite-transcript-state.js";
+import { readTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state-read.js";
+import { readTranscriptMutationStateInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import {
   appendTranscriptEventInTransaction,
   appendTranscriptEventsInTransaction,

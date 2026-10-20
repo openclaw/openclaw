@@ -45,9 +45,9 @@ import {
   prepareSqliteScope,
   resolveSqliteTranscriptArchiveDirectory,
   toDatabaseOptions,
-  withSqliteSessionDatabase,
   type ResolvedSqliteScope,
 } from "./session-accessor.sqlite-scope.js";
+import { withSqliteSessionDatabase } from "./session-accessor.sqlite-write-scope.js";
 import type {
   SessionEntryCommitContext,
   SessionEntryCreateWithTranscriptOptions,

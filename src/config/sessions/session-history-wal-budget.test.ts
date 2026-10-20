@@ -31,8 +31,8 @@ import {
 import * as diskBudgetModule from "./disk-budget.js";
 import type { SqliteSessionArchivePruningDiagnostics } from "./session-accessor.sqlite-contract.js";
 import { replaceSessionEntry } from "./session-accessor.sqlite-entry.js";
-import { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-anchor.js";
 import { appendTranscriptMessage } from "./session-accessor.sqlite-transcript-write.js";
+import { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-write-scope.js";
 import { rewriteTranscriptMessageAtAnchor } from "./session-accessor.transcript.js";
 import * as archivePruningDiagnostics from "./session-history-archive-pruning-diagnostics.js";
 import { withSessionHistoryBudgetSweepsForTest } from "./session-history-budget.test-support.js";

@@ -15,7 +15,7 @@ import {
   rememberCommittedTranscriptMessageSequences as rememberSequences,
   rememberCommittedTranscriptMessageSequencesInTransaction as rememberCursor,
 } from "./session-accessor.sqlite-transcript-sequences.js";
-import { readTranscriptContextVersionInTransaction as readVersion } from "./session-accessor.sqlite-transcript-state.js";
+import { readTranscriptContextVersionInTransaction as readVersion } from "./session-accessor.sqlite-transcript-state-read.js";
 import { runTranscriptWriteSnapshotSync as writeSnapshot } from "./session-accessor.sqlite-transcript-write-snapshot.js";
 import { appendTranscriptMessageSnapshotSync as appendSnapshot } from "./session-accessor.sqlite-transcript-write.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";

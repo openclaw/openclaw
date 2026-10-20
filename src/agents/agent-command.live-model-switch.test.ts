@@ -15,10 +15,8 @@ import type { SessionEntry } from "../config/sessions.js";
 import { resolveInternalSessionEffectsIdentity } from "../config/sessions/internal-session-key.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import * as sessionEntryRuntime from "../config/sessions/session-accessor.sqlite-entry.js";
-import {
-  resolveSqliteScope,
-  runExclusiveSqliteSessionWrite,
-} from "../config/sessions/session-accessor.sqlite-scope.js";
+import { resolveSqliteScope } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { runExclusiveSqliteSessionWrite } from "../config/sessions/session-accessor.sqlite-write-scope.js";
 import { reduceSessionEntryPatch } from "../config/sessions/session-entry-patch-operation.js";
 import { withInstallationTarget } from "../infra/installation-target-context.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";

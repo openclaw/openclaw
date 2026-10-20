@@ -3,7 +3,7 @@ import { expect, it } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { readTranscriptEventRows } from "../../config/sessions/session-accessor.sqlite-read.js";
-import { readTranscriptGenerationInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-state.js";
+import { readTranscriptGenerationInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-state-read.js";
 import { rewriteTranscriptEventRowsExact } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,

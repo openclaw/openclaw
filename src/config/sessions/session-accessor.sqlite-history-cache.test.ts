@@ -27,7 +27,7 @@ import {
   readSessionTranscriptHistoryEventCount,
   useHistoryEventScope,
 } from "./session-accessor.sqlite-history.test-support.js";
-import { readTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
+import { readTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state-read.js";
 import { rewriteTranscriptEventRowsExact } from "./session-accessor.sqlite-transcript-write.js";
 import {
   appendTranscriptEventSync,

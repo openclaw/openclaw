@@ -22,10 +22,10 @@ import type {
   SqliteSessionWriteDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
 import {
-  runExclusiveSqliteSessionWrite,
   resolveSqliteReadScope,
   prepareSqliteTranscriptReadScope,
 } from "./session-accessor.sqlite-scope.js";
+import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-write-scope.js";
 import { observeSessionArchivePruning } from "./session-history-archive-pruning-diagnostics.js";
 
 afterEach(() => vi.restoreAllMocks());

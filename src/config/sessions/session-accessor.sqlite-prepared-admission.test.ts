@@ -63,10 +63,10 @@ import {
 import {
   resolveSqliteScope,
   resolveSqliteTranscriptArchiveDirectory,
-  runExclusiveSqliteSessionWrite as exclusiveWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
+import { runExclusiveSqliteSessionWrite as exclusiveWrite } from "./session-accessor.sqlite-write-scope.js";
 import { prepareSessionMaintenancePreservation } from "./store-maintenance-preserve.js";
 
 const hooks = vi.hoisted((): PreparedAdmissionHooks => ({}));

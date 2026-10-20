@@ -22,7 +22,7 @@ import {
 } from "./session-accessor.sqlite-entry-read.js";
 import { prepareTranscriptEventReadQuery } from "./session-accessor.sqlite-read.js";
 import { toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
-import { readTranscriptContextStateInTransaction } from "./session-accessor.sqlite-transcript-state.js";
+import { readTranscriptContextStateInTransaction } from "./session-accessor.sqlite-transcript-state-read.js";
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import { sessionHistoryCleanupError } from "./session-history-worker-errors.js";
 import { SessionTranscriptStorageUnavailableError } from "./session-transcript-projection-error.js";

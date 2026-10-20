@@ -89,6 +89,22 @@ it("keeps lazy readers independent of unrelated runtime barrels", () => {
   ).toEqual([]);
 });
 
+it("keeps model-context reads independent of writable database bootstrap", () => {
+  expect(
+    findSourceImportBackedges(
+      [
+        "src/config/sessions/session-accessor.sqlite-model-context.ts",
+        "src/state/openclaw-agent-db-readonly.ts",
+      ],
+      [
+        "src/state/openclaw-agent-db.ts",
+        "src/state/openclaw-agent-db-lifecycle.ts",
+        "src/state/openclaw-state-db.ts",
+      ],
+    ),
+  ).toEqual([]);
+});
+
 const prewarm = vi.hoisted(() => ({
   read: vi.fn<(input: SessionTranscriptWorkerRequest) => Promise<unknown>>(),
   historyReader: vi.fn(),

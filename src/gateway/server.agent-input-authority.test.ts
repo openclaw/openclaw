@@ -24,10 +24,8 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import * as pendingInputs from "../config/sessions/session-accessor.pending-inputs.js";
 import { listSessionPendingInputs } from "../config/sessions/session-accessor.pending-inputs.js";
-import {
-  resolveSqliteStoreScope,
-  runExclusiveSqliteSessionWrite,
-} from "../config/sessions/session-accessor.sqlite-scope.js";
+import { resolveSqliteStoreScope } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { runExclusiveSqliteSessionWrite } from "../config/sessions/session-accessor.sqlite-write-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
 import { emitAgentEvent } from "../infra/agent-events.js";

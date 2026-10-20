@@ -14,13 +14,13 @@ import {
 import {
   getSessionKysely,
   resolveSqliteTranscriptScope,
-  runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
   transcriptWriteScopeIsCurrent,
   type ResolvedTranscriptScope,
 } from "./session-accessor.sqlite-scope.js";
-import { readTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
+import { readTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state-read.js";
 import { rewriteSqliteTranscriptEventRowsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-write-scope.js";
 import type { SessionTranscriptAccessScope } from "./session-accessor.types.js";
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import type { SessionLifecycleRevisionExpectation } from "./session-transcript-turn-lifecycle.types.js";

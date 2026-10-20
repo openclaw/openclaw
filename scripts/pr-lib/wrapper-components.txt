@@ -1863,6 +1863,7 @@ src/state/openclaw-agent-db-metadata.ts
 src/state/openclaw-agent-db-migration-required.ts
 src/state/openclaw-agent-db-permissions.ts
 src/state/openclaw-agent-db-read-error.ts
+src/state/openclaw-agent-db-read-access.ts
 src/state/openclaw-agent-db-readonly-companion.ts
 src/state/openclaw-agent-db-readonly-open.ts
 src/state/openclaw-agent-db-readonly-scope.ts
@@ -2158,6 +2159,7 @@ scripts/pr-lib/merge-prior-ci-security.mjs
 src/config/sessions/legacy-sqlite-marker.ts
 src/config/sessions/lifecycle-timestamps.ts
 src/config/sessions/session-accessor.sqlite-scope.ts
+src/config/sessions/session-accessor.sqlite-write-scope.ts
 src/config/sessions/session-accessor.sqlite-transcript-anchor.ts
 src/config/sessions/session-accessor.sqlite-transcript-incremental-read.ts
 src/config/sessions/session-accessor.sqlite-transcript-metadata-read.ts
@@ -2214,6 +2216,7 @@ src/config/sessions/session-accessor.sqlite-read.ts
 src/config/sessions/session-accessor.sqlite-sharing-acquisition.ts
 src/config/sessions/session-accessor.sqlite-transcript-parent.ts
 src/config/sessions/session-accessor.sqlite-transcript-state.ts
+src/config/sessions/session-accessor.sqlite-transcript-state-read.ts
 src/config/sessions/session-accessor.sqlite-transcript-state.queries.ts
 src/config/sessions/session-accessor.sqlite-transcript-stats.ts
 src/config/sessions/session-accessor.sqlite-transcript-watermark.ts

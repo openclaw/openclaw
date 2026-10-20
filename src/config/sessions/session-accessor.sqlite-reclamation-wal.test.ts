@@ -21,7 +21,7 @@ import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.
 import { withSqliteSessionPageReclamation } from "./session-accessor.sqlite-page-reclamation.js";
 import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
 import { createLifecycleArtifactReclamationPlan } from "./session-accessor.sqlite-reclamation.js";
-import * as sessionScope from "./session-accessor.sqlite-scope.js";
+import * as sessionScope from "./session-accessor.sqlite-write-scope.js";
 import {
   deferPhysicalBudgetForCheckpoint,
   getBudgetKickState,

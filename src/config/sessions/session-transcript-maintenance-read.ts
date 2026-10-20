@@ -12,7 +12,7 @@ import {
   readPreviousIndexedTranscriptEventSync,
 } from "./session-accessor.sqlite-suffix-read.js";
 import { resolveTranscriptMessageAppendParent } from "./session-accessor.sqlite-transcript-parent.js";
-import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
+import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state-read.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
 import { readWithCanonicalSessionAdmission } from "./session-canonical-key.js";
 import type {

@@ -21,7 +21,6 @@ import { invalidateSessionEntryMaintenanceAgeFact } from "./session-accessor.sql
 import {
   getSessionKysely,
   resolveSqliteScope,
-  runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import {
@@ -29,6 +28,7 @@ import {
   touchTranscriptMutationInTransaction,
 } from "./session-accessor.sqlite-transcript-state.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-write-scope.js";
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import { transcriptEventJsonSql } from "./transcript-payload.js";

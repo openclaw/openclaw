@@ -30,9 +30,9 @@ import {
   captureLifecycleDatabaseScope,
   resolveSqliteScope,
   resolveSqliteTranscriptArchiveDirectory,
-  runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-write-scope.js";
 import {
   commitSessionAgentPurgeInDatabase,
   prepareSessionAgentPurgeInDatabase,

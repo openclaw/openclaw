@@ -3,11 +3,9 @@ import {
   hasPreparedNativeSessionDeletion,
   withSqliteSessionDeletions,
 } from "./session-accessor.sqlite-deletion.js";
-import {
-  runExclusiveSqliteSessionWrite,
-  type ResolvedSqliteReadScope,
-} from "./session-accessor.sqlite-scope.js";
+import type { ResolvedSqliteReadScope } from "./session-accessor.sqlite-scope.js";
 import type { SqliteSessionWriteOperation } from "./session-accessor.sqlite-write-operation.js";
+import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-write-scope.js";
 import type { SessionEntryCreateWithTranscriptOptions } from "./session-accessor.types.js";
 import { composeSessionSourceAssertion } from "./session-source-authority.js";
 

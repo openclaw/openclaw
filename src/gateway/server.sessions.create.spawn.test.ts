@@ -14,10 +14,8 @@ import {
   onSessionIdentityMutation,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
-import {
-  resolveSqliteStoreScope,
-  runExclusiveSqliteSessionWrite,
-} from "../config/sessions/session-accessor.sqlite-scope.js";
+import { resolveSqliteStoreScope } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { runExclusiveSqliteSessionWrite } from "../config/sessions/session-accessor.sqlite-write-scope.js";
 import { runSessionMutation } from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";

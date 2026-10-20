@@ -27,8 +27,8 @@ import { writeSessionEntry as writeRow } from "./session-accessor.sqlite-entry-s
 import { loadSessionEntryReadOnly as readEntry } from "./session-accessor.sqlite-entry.js";
 import * as artifactPlanning from "./session-accessor.sqlite-lifecycle-artifacts.js";
 import { loadTranscriptEventsSync } from "./session-accessor.sqlite-read.js";
-import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
+import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-write-scope.js";
 import * as workerReaders from "./session-transcript-worker-readers.js";
 import type { SessionEntry } from "./types.js";
 

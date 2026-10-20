@@ -68,10 +68,10 @@ import {
   resolveSqliteAgentId,
   resolveSqliteStoreScope,
   resolveSqliteTranscriptArchiveDirectory,
-  runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
   type ResolvedSqliteScope,
 } from "./session-accessor.sqlite-scope.js";
+import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-write-scope.js";
 import { deleteSessionEntryInWorker } from "./session-entry-deletion.js";
 import { kickSessionHistoryDiskBudgetMaintenance } from "./session-history-eviction.js";
 import { resetSessionEntryInWorker } from "./session-reset.js";

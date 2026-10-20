@@ -22,10 +22,8 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { loadSessionEntryReadOnly, loadTranscriptEventsSync } from "./session-accessor.js";
 import { createWorkerSqliteIntegrityGate } from "./session-accessor.sqlite-integrity-counter.test-support.js";
-import {
-  getSessionKysely,
-  runExclusiveSqliteSessionWrite,
-} from "./session-accessor.sqlite-scope.js";
+import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-write-scope.js";
 import { createSessionHistoryBudgetFixture } from "./session-history-budget.test-support.js";
 import { enforceSqliteSessionHistoryDiskBudget } from "./session-history-eviction.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";

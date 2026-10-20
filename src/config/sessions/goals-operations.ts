@@ -32,9 +32,9 @@ import {
   captureLifecycleDatabaseScope,
   getSessionKysely,
   resolveSqliteScope,
-  runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-write-scope.js";
 import {
   captureSessionActorStorageOwner,
   withSessionActorStorage,

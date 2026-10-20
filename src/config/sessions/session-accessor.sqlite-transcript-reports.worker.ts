@@ -35,7 +35,7 @@ import type {
   TranscriptReportCommit,
   TranscriptReportWorkerOperations,
 } from "./session-accessor.sqlite-transcript-reports.types.js";
-import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
+import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state-read.js";
 import { resolveTranscriptAppendRefusal } from "./session-accessor.sqlite-transcript-write-guard.js";
 import { requestSessionEntryCurrentAdmission } from "./session-entry-current-admission.worker.js";
 import type { SessionEntryCurrentSource } from "./session-entry-current.types.js";

@@ -11,7 +11,7 @@ import {
   readCurrentProjectionSnapshot,
   type CurrentTranscriptProjection,
 } from "./session-accessor.sqlite-projection-read.js";
-import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
+import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state-read.js";
 import { createHarnessCompletionInputPredicate } from "./session-harness-completion-input.js";
 import type { HarnessCompletionSourceSnapshot } from "./session-harness-completion-source.types.js";
 import { encodeSessionTranscriptWorkerError } from "./session-history-worker-errors.js";

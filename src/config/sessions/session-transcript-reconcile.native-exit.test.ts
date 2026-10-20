@@ -15,7 +15,7 @@ import {
 import { withEnvAsync } from "../../test-utils/env.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { readSessionTranscriptMessageEvents } from "./session-accessor.js";
-import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
+import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-write-scope.js";
 import {
   markRebuild,
   projectionSnapshot,

@@ -31,12 +31,10 @@ import {
 import { appendTranscriptMessage } from "./session-accessor.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
-import {
-  resolveSqliteScope,
-  runExclusiveSqliteSessionWrite,
-} from "./session-accessor.sqlite-scope.js";
+import { resolveSqliteScope } from "./session-accessor.sqlite-scope.js";
 import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-header.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-write-scope.js";
 import { withSessionHistoryBudgetSweepsForTest } from "./session-history-budget.test-support.js";
 import { enforceSqliteSessionHistoryDiskBudget } from "./session-history-eviction.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";

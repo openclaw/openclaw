@@ -23,9 +23,9 @@ import {
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import {
   resolveSqliteScope,
-  runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import { runExclusiveSqliteSessionWrite } from "../../config/sessions/session-accessor.sqlite-write-scope.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import { readSessionColdTranscript } from "../../config/sessions/session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "../../config/sessions/session-cold-storage.js";

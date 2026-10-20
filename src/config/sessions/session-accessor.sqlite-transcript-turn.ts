@@ -28,11 +28,11 @@ import { resolveSessionPendingInputAppend } from "./session-accessor.sqlite-pend
 import {
   captureLifecycleDatabaseScope,
   resolveSqliteTranscriptScope,
-  runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-identity.js";
-import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
+import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state-read.js";
+import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-write-scope.js";
 import {
   captureSessionActorStorageOwner,
   getSessionActorStorageBinding,

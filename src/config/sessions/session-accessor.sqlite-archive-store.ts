@@ -17,11 +17,11 @@ import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamati
 import { resolveSessionReclamationDatabaseOptions } from "./session-accessor.sqlite-reclamation.js";
 import {
   resolveSqliteTranscriptArchiveDirectory,
-  runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
   type ResolvedSqliteReadScope,
 } from "./session-accessor.sqlite-scope.js";
 import { withSqliteMutationWorkerLifetime } from "./session-accessor.sqlite-worker-request.js";
+import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-write-scope.js";
 import {
   publishPreparedSessionStateArchives,
   publishSessionStateArchivesInWorker,

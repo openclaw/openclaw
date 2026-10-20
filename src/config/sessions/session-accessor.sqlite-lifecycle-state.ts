@@ -54,8 +54,9 @@ import {
   addRetainedWindowSessionReferences,
   collectSessionStateIdsForEntry,
 } from "./session-accessor.sqlite-references.js";
-import { getSessionKysely, withSqliteSessionDatabase } from "./session-accessor.sqlite-scope.js";
+import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { parseSessionEntryJson as parseSessionEntryRow } from "./session-accessor.sqlite-status.js";
+import { withSqliteSessionDatabase } from "./session-accessor.sqlite-write-scope.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
 import { shouldRemoveSessionEntry } from "./session-entry-lifecycle-removal.js";
 import { deleteSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";

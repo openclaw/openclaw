@@ -48,7 +48,7 @@ import {
 import {
   readTranscriptGenerationInTransaction,
   readTranscriptContextVersionInTransaction,
-} from "./session-accessor.sqlite-transcript-state.js";
+} from "./session-accessor.sqlite-transcript-state-read.js";
 import {
   appendTranscriptEventInTransaction,
   replaceSqliteTranscriptEventsInTransaction,

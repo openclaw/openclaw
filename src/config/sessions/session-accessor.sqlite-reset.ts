@@ -31,10 +31,10 @@ import {
   captureLifecycleDatabaseScope,
   getSessionKysely,
   resolveSqliteReadScope,
-  runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
+import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-write-scope.js";
 import { resolveSessionColdArchivePath } from "./session-cold-storage-codec.js";
 import { collectAdmissionProtectedSessionIds } from "./session-history-eviction.js";
 import { deleteSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";

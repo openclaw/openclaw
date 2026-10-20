@@ -25,7 +25,7 @@ import {
 } from "./session-accessor.sqlite-page-reclamation.js";
 import * as pageReclamation from "./session-accessor.sqlite-page-reclamation.js";
 import { resolveSessionReclamationDatabaseOptions } from "./session-accessor.sqlite-reclamation.js";
-import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
+import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-write-scope.js";
 import { pruneAllSessionTranscriptArchivesToHighWater } from "./session-history-archive-pruning.js";
 
 afterEach(() => vi.restoreAllMocks());

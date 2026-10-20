@@ -3,15 +3,10 @@ import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { getSqliteReadScopeRevision } from "../../infra/sqlite-schema-facts.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
-import {
-  openOpenClawAgentDatabase,
-  type OpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { CurrentTranscriptProjection } from "./session-accessor.sqlite-projection-read.js";
 import {
   getSessionKysely,
-  resolveSqliteTranscriptScope,
-  toDatabaseOptions,
   type ResolvedTranscriptReadScope,
   type ResolvedTranscriptScope,
 } from "./session-accessor.sqlite-scope.js";
@@ -325,22 +320,5 @@ export function createTranscriptEntryAnchor(params: {
     effectiveParentId: row.parent_id,
     activeMessagePosition: row.message_position,
     ...(idempotencyKey ? { idempotencyKey } : {}),
-  });
-}
-
-/** Reads one active message identity from the authoritative SQLite projection. */
-export function readActiveTranscriptEntryAnchor(params: {
-  agentId?: string;
-  sessionId: string;
-  sessionKey: string;
-  storePath?: string;
-  entryId: string;
-}): TranscriptEntryAnchor | undefined {
-  const resolved = resolveSqliteTranscriptScope(params);
-  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  return readActiveTranscriptEntryAnchorInTransaction({
-    database,
-    resolved,
-    entryId: params.entryId,
   });
 }

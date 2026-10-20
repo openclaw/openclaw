@@ -28,8 +28,8 @@ import {
   withSqliteReclamationWorker,
   type ClaimedReclamationWorkerUse,
 } from "./session-accessor.sqlite-reclamation-worker.js";
-import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
 import { withSqliteMutationWorkerLifetime } from "./session-accessor.sqlite-worker-request.js";
+import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-write-scope.js";
 
 const MAX_BATCH_ROWS = 128;
 const MAX_BATCH_BYTES = 1024 * 1024;

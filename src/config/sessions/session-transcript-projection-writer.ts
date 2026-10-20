@@ -20,11 +20,9 @@ import {
   openOpenClawAgentSqliteWorkerStore,
   type OpenClawAgentSqliteWorkerStore,
 } from "../../state/openclaw-agent-worker-store.js";
-import {
-  getSessionKysely,
-  runExclusiveSqliteSessionWrite,
-} from "./session-accessor.sqlite-scope.js";
+import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import type { SqliteSessionWriteOperation } from "./session-accessor.sqlite-write-operation.js";
+import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-write-scope.js";
 import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import {
   publishUnchangedSessionTranscriptAuthority,

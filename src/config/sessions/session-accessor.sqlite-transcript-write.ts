@@ -38,7 +38,6 @@ import {
   assertSqliteTranscriptWriteIdentity,
   withPreparedSqliteScope,
   resolveSqliteTranscriptScope,
-  runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import {
@@ -57,7 +56,7 @@ import {
 import {
   readTranscriptGenerationInTransaction,
   readTranscriptContextVersionInTransaction,
-} from "./session-accessor.sqlite-transcript-state.js";
+} from "./session-accessor.sqlite-transcript-state-read.js";
 import {
   appendTranscriptEventInTransaction,
   replaceSqliteTranscriptEventsInTransaction,
@@ -72,6 +71,7 @@ import {
   runTranscriptWriteSnapshotSync,
   type TranscriptWriteViewGuard,
 } from "./session-accessor.sqlite-transcript-write-snapshot.js";
+import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-write-scope.js";
 import type { SessionTranscriptWriteLockAccessorContext } from "./session-accessor.types.js";
 import {
   captureSessionActorStorageOwner,

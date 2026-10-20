@@ -11,7 +11,7 @@ import {
   toDatabaseOptions,
   transcriptWriteScopeIsCurrent,
 } from "./session-accessor.sqlite-scope.js";
-import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
+import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state-read.js";
 import { replaceSqliteTranscriptSuffixInTransaction } from "./session-accessor.sqlite-transcript-suffix.js";
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import {

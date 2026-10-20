@@ -18,8 +18,8 @@ import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-import { runExclusiveSqliteSessionWrite } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { runExclusiveSqliteSessionWrite } from "../config/sessions/session-accessor.sqlite-write-scope.js";
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { enqueueGitRefMutation } from "../infra/git-exec.js";
@@ -82,9 +82,11 @@ vi.mock("../infra/git-exec.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../config/sessions/session-accessor.sqlite-scope.js", async (importOriginal) => {
+vi.mock("../config/sessions/session-accessor.sqlite-write-scope.js", async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import("../config/sessions/session-accessor.sqlite-scope.js")>();
+    await importOriginal<
+      typeof import("../config/sessions/session-accessor.sqlite-write-scope.js")
+    >();
   return {
     ...actual,
     runExclusiveSqliteSessionWrite: <T>(

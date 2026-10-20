@@ -40,11 +40,9 @@ import {
 } from "./session-accessor.sqlite-entry.js";
 import { deleteSessionEntryLifecycle } from "./session-accessor.sqlite-lifecycle.js";
 import * as pageReclamation from "./session-accessor.sqlite-page-reclamation.js";
-import {
-  getSessionKysely,
-  runExclusiveSqliteSessionWrite,
-} from "./session-accessor.sqlite-scope.js";
+import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptMessage } from "./session-accessor.sqlite-transcript-write.js";
+import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-write-scope.js";
 import {
   pruneAllSessionTranscriptArchivesToHighWater,
   reclaimSqliteFreePages,

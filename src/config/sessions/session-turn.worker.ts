@@ -30,7 +30,7 @@ import { readCommittedTranscriptMessageSequence } from "./session-accessor.sqlit
 import {
   readTranscriptContextStateInTransaction,
   readTranscriptContextVersionInTransaction,
-} from "./session-accessor.sqlite-transcript-state.js";
+} from "./session-accessor.sqlite-transcript-state-read.js";
 import type { ResolvedSessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
 import type { SessionActorStoredState } from "./session-actor-hydration.types.js";
 import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worker.js";

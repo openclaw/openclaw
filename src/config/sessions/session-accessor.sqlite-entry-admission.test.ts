@@ -39,11 +39,8 @@ import {
   replaceSessionEntrySync,
 } from "./session-accessor.sqlite-entry.js";
 import { createWorkerSqliteIntegrityGate } from "./session-accessor.sqlite-integrity-counter.test-support.js";
-import {
-  resolveSqliteScope,
-  runExclusiveSqliteSessionWrite,
-  toDatabaseOptions,
-} from "./session-accessor.sqlite-scope.js";
+import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
+import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-write-scope.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 
 const roots = createTempDirTracker();

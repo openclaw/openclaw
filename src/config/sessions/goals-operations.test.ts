@@ -30,11 +30,8 @@ import {
   replaceSessionEntry,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
-import {
-  resolveSqliteScope,
-  runExclusiveSqliteSessionWrite,
-  toDatabaseOptions,
-} from "./session-accessor.sqlite-scope.js";
+import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
+import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-write-scope.js";
 import { hasPendingCanonicalSessionValidation } from "./session-canonical-validation.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 

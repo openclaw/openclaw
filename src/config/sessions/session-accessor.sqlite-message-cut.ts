@@ -24,12 +24,12 @@ import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-ide
 import { loadTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
 import {
   resolveSqliteScope,
-  runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
   type ResolvedSqliteScope,
 } from "./session-accessor.sqlite-scope.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-write-scope.js";
 import type {
   SessionBranchSwitchMutationParams,
   SessionBranchSwitchMutationResult,

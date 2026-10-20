@@ -10,12 +10,12 @@ import type {
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import {
   resolveSqliteTranscriptScope,
-  runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
   transcriptWriteScopeIsCurrent,
 } from "./session-accessor.sqlite-scope.js";
 import { replaceSqliteTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { appendTranscriptEventSnapshotSync } from "./session-accessor.sqlite-transcript-write.js";
+import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-write-scope.js";
 import {
   assertOwnedTranscriptWriteCommit,
   SessionTranscriptWriterClaimReboundError,

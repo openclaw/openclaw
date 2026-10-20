@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import * as nativeAnchor from "../../config/sessions/session-accessor.sqlite-transcript-anchor.js";
+import * as nativeAnchor from "../../config/sessions/session-accessor.sqlite-write-scope.js";
 import * as transcriptAnchor from "../../config/sessions/session-transcript-anchor-read.js";
 import {
   runWithoutOwnedSessionTranscriptWrites,

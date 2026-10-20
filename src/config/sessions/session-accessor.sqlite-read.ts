@@ -46,10 +46,8 @@ import {
   readTranscriptHeaderFromDatabase,
 } from "./session-accessor.sqlite-transcript-metadata-read.js";
 import { canRebasePreparedAssistantInTransaction } from "./session-accessor.sqlite-transcript-parent.js";
-import {
-  readTranscriptContextVersionInTransaction,
-  readTranscriptMutationStateInTransaction,
-} from "./session-accessor.sqlite-transcript-state.js";
+import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state-read.js";
+import { readTranscriptMutationStateInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import {
   readTranscriptStatsBatchFromDatabase,
   readTranscriptStatsFromDatabase,

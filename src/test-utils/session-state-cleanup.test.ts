@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { closeAuthProfileReadPool } from "../agents/auth-profiles/sqlite-read-pool.js";
 import { readPersistedAuthProfileStoreRaw } from "../agents/auth-profiles/sqlite.js";
-import { runExclusiveSqliteSessionWrite } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { runExclusiveSqliteSessionWrite } from "../config/sessions/session-accessor.sqlite-write-scope.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";

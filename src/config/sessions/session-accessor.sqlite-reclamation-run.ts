@@ -48,15 +48,17 @@ import {
 } from "./session-accessor.sqlite-reclamation.js";
 import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-worker.js";
 import {
-  runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
-  withSqliteSessionDatabase,
   type resolveSqliteStoreScope,
 } from "./session-accessor.sqlite-scope.js";
 import {
   withSqliteMutationWorkerLifetime,
   type SqliteMutationWorkerValidationOwner,
 } from "./session-accessor.sqlite-worker-request.js";
+import {
+  runExclusiveSqliteSessionWrite,
+  withSqliteSessionDatabase,
+} from "./session-accessor.sqlite-write-scope.js";
 import { publishSessionLifecycleWorkerEffects } from "./session-lifecycle-worker-publication.js";
 import type { SessionMaintenancePreservationPlan } from "./store-maintenance-preserve-snapshot.types.js";
 

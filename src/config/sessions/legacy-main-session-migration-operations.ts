@@ -52,10 +52,8 @@ import { deleteSessionEntryLifecycle } from "./session-accessor.sqlite-lifecycle
 import { invalidateSessionEntryMaintenanceAgeFact } from "./session-accessor.sqlite-maintenance-age.js";
 import { copySessionNodeArtifactsForRepair } from "./session-accessor.sqlite-node-artifacts.js";
 import { replaceSessionOwnerInTransaction } from "./session-accessor.sqlite-owner.js";
-import {
-  getSessionKysely,
-  runExclusiveSqliteSessionWrite,
-} from "./session-accessor.sqlite-scope.js";
+import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-write-scope.js";
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import type { SessionEntry } from "./types.js";

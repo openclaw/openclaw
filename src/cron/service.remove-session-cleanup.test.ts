@@ -7,10 +7,8 @@ import {
   loadExactSessionEntry,
   replaceSessionEntry as replaceSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-import {
-  resolveSqliteScope,
-  runExclusiveSqliteSessionWrite,
-} from "../config/sessions/session-accessor.sqlite-scope.js";
+import { resolveSqliteScope } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { runExclusiveSqliteSessionWrite } from "../config/sessions/session-accessor.sqlite-write-scope.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { listOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.test-support.js";

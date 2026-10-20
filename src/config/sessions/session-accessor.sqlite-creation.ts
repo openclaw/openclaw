@@ -24,12 +24,12 @@ import {
   prepareSessionEntryReplacementDatabase,
 } from "./session-accessor.sqlite-replacement-worker.js";
 import {
-  runExclusiveSqliteSessionWrite,
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
   type ResolvedSqliteScope,
 } from "./session-accessor.sqlite-scope.js";
 import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-header.js";
+import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-write-scope.js";
 import type {
   SessionEntryCreateWithTranscriptContext,
   SessionEntryCreateWithTranscriptOptions,

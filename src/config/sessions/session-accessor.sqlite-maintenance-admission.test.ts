@@ -5,8 +5,8 @@ import { runExclusiveSqliteTranscriptArchiveWorker as runArchive } from "./sessi
 import type { SqliteSessionReclamationResult } from "./session-accessor.sqlite-lifecycle-types.js";
 import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
 import type * as reclamationWorker from "./session-accessor.sqlite-reclamation-worker.js";
-import { runExclusiveSqliteSessionWrite as runWrite } from "./session-accessor.sqlite-scope.js";
 import { runSqliteMutationWorkerRequest } from "./session-accessor.sqlite-worker-request.js";
+import { runExclusiveSqliteSessionWrite as runWrite } from "./session-accessor.sqlite-write-scope.js";
 
 type WorkerOwner = Parameters<
   Parameters<typeof reclamationWorker.withSqliteReclamationWorker>[2]

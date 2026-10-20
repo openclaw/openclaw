@@ -35,8 +35,8 @@ import {
   readSessionTranscriptHistoryAnchorPage as anchorPage,
   readSessionTranscriptHistoryEventById as messageById,
 } from "./session-accessor.sqlite-history.test-support.js";
-import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-write-scope.js";
 import { runWithSessionTranscriptReadFence as withReadFence } from "./session-transcript-read-fence.js";
 import {
   closeSessionTranscriptReconcileWorkerPool,

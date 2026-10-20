@@ -37,15 +37,12 @@ import {
 } from "./session-accessor.pending-inputs.js";
 import { copySessionNodeArtifactsForRepair } from "./session-accessor.sqlite-node-artifacts.js";
 import { withSessionPendingInputRelocation } from "./session-accessor.sqlite-pending-inputs.js";
-import {
-  resolveSqliteScope,
-  runExclusiveSqliteSessionWrite,
-  toDatabaseOptions,
-} from "./session-accessor.sqlite-scope.js";
+import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import {
   appendTranscriptEventSync,
   replaceTranscriptEvents,
 } from "./session-accessor.sqlite-transcript-write.test-support.js";
+import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-write-scope.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
 import { readSessionPendingInputReceiptsInWorker as listSessionPendingInputReceipts } from "./session-pending-input-receipts.js";
 import {

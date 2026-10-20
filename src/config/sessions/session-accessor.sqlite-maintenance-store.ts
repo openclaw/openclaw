@@ -33,7 +33,7 @@ import {
 } from "./session-accessor.sqlite-maintenance-candidates.js";
 import { SqliteReclamationInputsChangedError } from "./session-accessor.sqlite-reclamation-worker-diagnostics.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
-import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
+import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state-read.js";
 import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";

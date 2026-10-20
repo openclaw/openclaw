@@ -33,12 +33,12 @@ import {
   readIdempotencyKeyOwner,
   readTranscriptEventIdentity,
 } from "./session-accessor.sqlite-transcript-identity.js";
+import { readTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state-read.js";
 import {
   deleteTranscriptEventsInTransaction,
   ensureTranscriptGenerationInTransaction,
   ensureTranscriptSessionRoot,
   pruneTranscriptReactionsInTransaction,
-  readTranscriptGenerationInTransaction,
   readTranscriptMutationStateInTransaction,
   readNextTranscriptSeq,
   readTranscriptAppendStateInTransaction,

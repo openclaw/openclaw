@@ -6,10 +6,8 @@ import * as modelRuntime from "../auto-reply/reply/model-runtime-normalization.j
 import { persistReplySessionEntry } from "../auto-reply/reply/session-entry-persistence.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { loadSessionEntry, replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
-import {
-  resolveSqliteStoreScope,
-  runExclusiveSqliteSessionWrite,
-} from "../config/sessions/session-accessor.sqlite-scope.js";
+import { resolveSqliteStoreScope } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { runExclusiveSqliteSessionWrite } from "../config/sessions/session-accessor.sqlite-write-scope.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { createGatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
 import { beginSessionEffect } from "../sessions/session-controller.lifecycle.js";

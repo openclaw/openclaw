@@ -26,10 +26,8 @@ import {
 import { readTranscriptRawDelta } from "./session-accessor.sqlite-delta.js";
 import { readCurrentProjectionSnapshot } from "./session-accessor.sqlite-projection-read.js";
 import { resolveSqliteTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
-import {
-  readTranscriptContextVersionInTransaction,
-  rotateTranscriptGenerationInTransaction,
-} from "./session-accessor.sqlite-transcript-state.js";
+import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state-read.js";
+import { rotateTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { readSessionTranscriptHotWatermark } from "./session-accessor.sqlite-transcript-watermark-read.js";
 import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";

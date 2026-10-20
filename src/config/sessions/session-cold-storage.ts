@@ -33,10 +33,10 @@ import { withSqliteReclamationAuthorization } from "./session-accessor.sqlite-re
 import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-worker.js";
 import {
   prepareSqliteTranscriptReadScope,
-  runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { withSqliteMutationWorkerLifetime } from "./session-accessor.sqlite-worker-request.js";
+import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-write-scope.js";
 import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import type { SessionColdRestorationGuard } from "./session-cold-storage-guard.types.js";
 import type { SessionColdReadPreparation } from "./session-cold-storage-read.js";

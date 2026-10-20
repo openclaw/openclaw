@@ -29,7 +29,8 @@ import type {
   LifecycleArtifactCleanupPlan,
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
-import { getSessionKysely, withSqliteSessionDatabase } from "./session-accessor.sqlite-scope.js";
+import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { withSqliteSessionDatabase } from "./session-accessor.sqlite-write-scope.js";
 import {
   assertCanonicalSqliteSessionKeysCurrent,
   readWithCanonicalSessionReaderContinuation,

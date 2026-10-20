@@ -36,11 +36,13 @@ import { createFallbackSessionEntry } from "./session-accessor.sqlite-normalize.
 import {
   resolveSqliteScope,
   resolveSqliteTranscriptArchiveDirectory,
-  runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
   type ResolvedSqliteScope,
 } from "./session-accessor.sqlite-scope.js";
-import { withPreparedSqliteWriteScope } from "./session-accessor.sqlite-write-scope.js";
+import {
+  runExclusiveSqliteSessionWrite,
+  withPreparedSqliteWriteScope,
+} from "./session-accessor.sqlite-write-scope.js";
 import type { SessionEntryListScope } from "./session-accessor.types.js";
 import { patchSessionActorEntryInScope } from "./session-actor-entry-adapter.js";
 import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";

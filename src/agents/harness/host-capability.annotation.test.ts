@@ -18,11 +18,9 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
-import {
-  resolveSqliteTranscriptScope,
-  runExclusiveSqliteSessionWrite,
-} from "../../config/sessions/session-accessor.sqlite-scope.js";
+import { resolveSqliteTranscriptScope } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { runExclusiveSqliteSessionWrite } from "../../config/sessions/session-accessor.sqlite-write-scope.js";
 import { readClosedTranscriptTurnInDatabase } from "../../config/sessions/session-accessor.transcript-range.worker.js";
 import * as sessionMessageRewrite from "../../config/sessions/session-message-rewrite.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";

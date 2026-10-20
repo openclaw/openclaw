@@ -35,9 +35,9 @@ import {
   createLifecycleArtifactReclamationPlan,
   resolveSessionReclamationDatabaseOptions,
 } from "./session-accessor.sqlite-reclamation.js";
-import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import type { SqliteWorkerWriteAdmission } from "./session-accessor.sqlite-worker-request.js";
+import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-write-scope.js";
 import { reclaimSqliteFreePages } from "./session-history-archive-pruning.js";
 
 const executionContext = { pid: process.pid, threadId, isMainThread };

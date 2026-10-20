@@ -14,7 +14,7 @@ import { emitUserProfilesChanged } from "../../state/user-profile-events.js";
 import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
-import { readTranscriptContextVersionInTransaction as readVersion } from "./session-accessor.sqlite-transcript-state.js";
+import { readTranscriptContextVersionInTransaction as readVersion } from "./session-accessor.sqlite-transcript-state-read.js";
 import {
   readPreparedSessionTranscriptChange,
   publishUnchangedSessionTranscriptAuthority,

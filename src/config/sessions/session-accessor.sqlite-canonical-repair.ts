@@ -25,12 +25,12 @@ import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-refere
 import {
   getSessionKysely,
   resolveSqliteStoreScope,
-  runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { bindSessionWindowEntryProjection } from "./session-accessor.sqlite-session-row.js";
 import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import { ensureTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
+import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-write-scope.js";
 import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-key.js";
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import { attachSessionEntrySnapshots } from "./session-entry-snapshot-values.js";
