@@ -1229,17 +1229,7 @@ export class RealtimeCallHandler {
         }
         return Promise.resolve();
       };
-      let pending: Promise<void>;
-      try {
-        pending = Promise.resolve(session.close());
-      } catch (error) {
-        pending = Promise.reject(
-          error instanceof Error
-            ? error
-            : new Error("Realtime provider close failed", { cause: error }),
-        );
-      }
-      bindingClosePromise = pending.then(finishClose, async (error: unknown) => {
+      bindingClosePromise = session.close().then(finishClose, async (error: unknown) => {
         console.warn(
           `[voice-call] Failed to close realtime bridge ${callSid}: ${formatErrorMessage(error)}`,
         );

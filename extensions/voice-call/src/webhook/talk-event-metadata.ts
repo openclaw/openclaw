@@ -30,8 +30,6 @@ export function appendRecentTalkEventMetadata(
       };
   return {
     ...previous,
-    lastTalkEventAt: event.timestamp,
-    lastTalkEventType: event.type,
     recentTalkEvents: [...retained, next].slice(streaming ? -10 : -12),
   };
 }

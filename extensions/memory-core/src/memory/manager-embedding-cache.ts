@@ -282,12 +282,7 @@ export function upsertMemoryEmbeddingCache(params: {
     lastRows.set(entry.hash, row++);
   }
   const uniqueRows = [...lastRows].toSorted((left, right) => left[1] - right[1]);
-  const maxEntries =
-    typeof params.maxEntries === "number" &&
-    Number.isFinite(params.maxEntries) &&
-    params.maxEntries > 0
-      ? Math.floor(params.maxEntries)
-      : undefined;
+  const maxEntries = params.maxEntries;
   const retainedRows = maxEntries === undefined ? uniqueRows : uniqueRows.slice(-maxEntries);
   if (retainedRows.length === 0) {
     return cacheSize;
