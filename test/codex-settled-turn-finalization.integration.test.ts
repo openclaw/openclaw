@@ -34,12 +34,7 @@ describe("registered Codex finalizer host silence contract", () => {
 
   afterEach(() => admission.close());
 
-  async function createInput(
-    options: {
-      failedTool?: boolean;
-      timedOut?: boolean;
-    } = {},
-  ) {
+  async function createInput(options: { failedTool?: boolean; timedOut?: boolean } = {}) {
     fixture = await createCodexSettledFinalizerTestFixture(options);
     const { attempt, params } = fixture;
     expect(attempt.terminal.kind).toBe("failed");
@@ -138,10 +133,7 @@ describe("registered Codex finalizer host silence contract", () => {
         error: { message: expect.stringContaining("Provider overloaded"), fallbackSafe: false },
       });
       expect(resolved.result.payloads).toEqual([
-        expect.objectContaining({
-          text: expect.stringMatching(/try again/i),
-          isError: true,
-        }),
+        expect.objectContaining({ text: expect.stringMatching(/try again/i), isError: true }),
       ]);
       expect(resolved.result.payloads?.[0]?.text).toContain(
         "some tool actions may have already been executed",
@@ -190,10 +182,7 @@ describe("registered Codex finalizer host silence contract", () => {
     expect(runAttempt).not.toHaveBeenCalled();
     expect(fixture.mirror).toHaveBeenCalledOnce();
     expect(fixture.mirror.mock.calls[0]?.[0].messages).toEqual([
-      expect.objectContaining({
-        role: "assistant",
-        content: [{ type: "text", text }],
-      }),
+      expect.objectContaining({ role: "assistant", content: [{ type: "text", text }] }),
     ]);
   });
 
