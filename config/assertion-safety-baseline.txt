@@ -499,7 +499,7 @@ extensions/memory-wiki/src/gateway.ts	3
 extensions/memory-wiki/src/log.ts	1
 extensions/memory-wiki/src/mutation-coordinator.ts	1
 extensions/memory-wiki/src/tool.ts	2
-extensions/microsoft-foundry/cli.ts	7
+extensions/microsoft-foundry/cli.ts	5
 extensions/microsoft-foundry/onboard.ts	2
 extensions/microsoft-foundry/provider.ts	1
 extensions/migrate-hermes/apply.ts	1
