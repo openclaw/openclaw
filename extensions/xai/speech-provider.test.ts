@@ -4,16 +4,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildXaiSpeechProvider } from "./speech-provider.js";
 import type { xaiTTS, xaiTTSStream } from "./tts.js";
 
+const provider = buildXaiSpeechProvider();
+
 const mocks = vi.hoisted(() => ({
   tts: vi.fn<typeof xaiTTS>(async () => Buffer.from("audio-bytes")),
   voices: vi.fn(async () => [{ id: "altair", name: "Altair" }]),
   stream: vi.fn<typeof xaiTTSStream>(async () => ({
-    audioStream: new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new Uint8Array([1, 2, 3]));
-        controller.close();
-      },
-    }),
+    audioStream: new ReadableStream<Uint8Array>({ start: (controller) => controller.close() }),
     release: vi.fn(async () => {}),
   })),
   configured: vi.fn(async () => false),
@@ -63,7 +60,7 @@ describe("xai speech provider", () => {
   });
 
   it("streams alaw when requested by a compatible caller", async () => {
-    const result = await buildXaiSpeechProvider().streamSynthesize?.(
+    const result = await provider.streamSynthesize?.(
       request({ providerConfig: { apiKey: "xai-key", responseFormat: "alaw" } }),
     );
     expect(result?.outputFormat).toBe("alaw");
@@ -72,7 +69,7 @@ describe("xai speech provider", () => {
   });
 
   it("honors voice, language, and speed overrides for telephony output", async () => {
-    const result = await buildXaiSpeechProvider().synthesizeTelephony?.(
+    const result = await provider.synthesizeTelephony?.(
       request({
         providerConfig: {
           apiKey: "xai-key",
@@ -98,7 +95,7 @@ describe("xai speech provider", () => {
   });
 
   it("drops malformed speed values before synthesis", async () => {
-    await buildXaiSpeechProvider().synthesize(
+    await provider.synthesize(
       request({
         providerConfig: { apiKey: "xai-key", speed: 2 },
         providerOverrides: { speed: 0.5 },
@@ -109,7 +106,6 @@ describe("xai speech provider", () => {
 
   it("treats blank direct credentials as absent across readiness and requests", async () => {
     process.env.XAI_API_KEY = "   ";
-    const provider = buildXaiSpeechProvider();
     const providerConfig = { apiKey: "   " };
     expect(await provider.isConfiguredAsync?.({ cfg: {}, providerConfig, timeoutMs: 5_000 })).toBe(
       false,
@@ -127,7 +123,7 @@ describe("xai speech provider", () => {
   it("uses cfg-scoped profile auth for voice discovery", async () => {
     mocks.resolveKey.mockResolvedValue({ apiKey: "oauth-bearer" });
     const cfg = { agents: { defaults: {} } };
-    await buildXaiSpeechProvider().listVoices?.({ providerConfig: {}, cfg });
+    await provider.listVoices?.({ providerConfig: {}, cfg });
     expect(mocks.resolveKey).toHaveBeenCalledWith({ provider: "xai", cfg });
     expect(mocks.voices).toHaveBeenCalledWith({
       apiKey: "oauth-bearer",
@@ -138,9 +134,7 @@ describe("xai speech provider", () => {
   it("threads cfg into the OAuth fallback resolver when no direct apiKey is available", async () => {
     mocks.resolveKey.mockResolvedValueOnce({ apiKey: "oauth-bearer" });
     const cfg = { agents: { defaults: {} } };
-    await buildXaiSpeechProvider().synthesize(
-      request({ cfg, providerConfig: {}, target: "voice-note" }),
-    );
+    await provider.synthesize(request({ cfg, providerConfig: {}, target: "voice-note" }));
     expect(mocks.resolveKey).toHaveBeenCalledWith({ provider: "xai", cfg });
     expect(requireLastTtsCall().apiKey).toBe("oauth-bearer");
   });

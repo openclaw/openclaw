@@ -14,10 +14,7 @@ beforeEach(() => {
   clearLiveCatalogCacheForTests();
   vi.stubEnv("XAI_API_KEY", "");
 });
-afterEach(() => {
-  vi.unstubAllGlobals();
-  vi.unstubAllEnvs();
-});
+afterEach(() => vi.unstubAllEnvs());
 
 const oauthProvider: ModelProviderConfig = {
   api: "openai-responses",
@@ -27,16 +24,15 @@ const oauthProvider: ModelProviderConfig = {
 };
 
 it("preserves the existing primary during OAuth setup", () => {
-  const original: OpenClawConfig = {
-    agents: {
-      defaults: { model: { primary: "openai/retained-model", fallbacks: ["xai/grok-4.3"] } },
-    },
-  };
-  const config = applyXaiOAuthConfig(original, oauthProvider);
-  expect(config.agents?.defaults?.model).toEqual({
+  const model = {
     primary: "openai/retained-model",
     fallbacks: ["xai/grok-4.3"],
-  });
+  };
+  const config = applyXaiOAuthConfig(
+    { agents: { defaults: { model: structuredClone(model) } } },
+    oauthProvider,
+  );
+  expect(config.agents?.defaults?.model).toEqual(model);
 });
 
 const proxyUrl = "https://cli-chat-proxy.grok.com/v1";
@@ -80,17 +76,13 @@ it.each([
   if (!method?.runNonInteractive) {
     throw new Error("expected the registered non-interactive xAI API-key method");
   }
-  const config: OpenClawConfig = {
-    agents: {
-      defaults: {
-        model: {
-          ...(primary ? { primary } : {}),
-          fallbacks: ["xai/grok-4.3", "xai/grok-build-0.1"],
-        },
-        models: { "xai/grok-4.5": { alias: "Pinned", params: { temperature: 0.7 } } },
-      },
-    },
+  const fallbacks = ["xai/grok-4.3", "xai/grok-build-0.1"];
+  const pinned = { alias: "Pinned", params: { temperature: 0.7 } };
+  const defaults = {
+    model: { ...(primary ? { primary } : {}), fallbacks: [...fallbacks] },
+    models: { "xai/grok-4.5": structuredClone(pinned) },
   };
+  const config: OpenClawConfig = { agents: { defaults } };
   const result = await method.runNonInteractive({
     authChoice: "xai-api-key",
     config,
@@ -108,12 +100,6 @@ it.each([
       throw new Error("Existing profile must not be rewritten");
     },
   });
-  expect(result?.agents?.defaults?.model).toEqual({
-    primary: expected,
-    fallbacks: ["xai/grok-4.3", "xai/grok-build-0.1"],
-  });
-  expect(result?.agents?.defaults?.models?.["xai/grok-4.5"]).toEqual({
-    alias: "Pinned",
-    params: { temperature: 0.7 },
-  });
+  expect(result?.agents?.defaults?.model).toEqual({ primary: expected, fallbacks });
+  expect(result?.agents?.defaults?.models?.["xai/grok-4.5"]).toEqual(pinned);
 });

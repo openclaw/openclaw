@@ -66,28 +66,7 @@ describe("xai code_execution tool", () => {
     expect(firstAuthorizationHeader(mockFetch)).toBe("Bearer xai-profile-key");
   });
 
-  it("uses the xAI Responses code_interpreter tool", async () => {
-    const mockFetch = installCodeExecutionFetch();
-    const tool = configuredTool({ maxTurns: 2, timeoutSeconds: 45 });
-
-    const result = await tool?.execute?.("code-execution:1", {
-      task: "Calculate the mean of [40, 42, 44]",
-    });
-
-    expect(mockFetch).toHaveBeenCalled();
-    expect(firstFetchUrl(mockFetch)).toContain("api.x.ai/v1/responses");
-    const body = parseFirstRequestBody(mockFetch);
-    expect(body).toMatchObject({
-      model: "grok-4.7",
-      store: false,
-      max_turns: 2,
-    });
-    expect(body.reasoning).toEqual({ effort: "low" });
-    expect(body.tools).toEqual([{ type: "code_interpreter" }]);
-    expect(result?.details).toMatchObject({ usedCodeExecution: true });
-  });
-
-  it("returns every response answer and citation from the code execution HTTP boundary", async () => {
+  it("requests code_interpreter and returns every answer and citation", async () => {
     const mockFetch = installCodeExecutionFetch({
       output: [
         { type: "code_interpreter_call" },
@@ -104,13 +83,17 @@ describe("xai code_execution tool", () => {
         },
       ],
     });
-    const tool = configuredTool();
+    const tool = configuredTool({ maxTurns: 2, timeoutSeconds: 45 });
 
     const result = await tool?.execute?.("code-execution:multi-block", {
       task: "Calculate and verify the mean.",
     });
 
     expect(firstFetchUrl(mockFetch)).toContain("api.x.ai/v1/responses");
+    const body = parseFirstRequestBody(mockFetch);
+    expect(body).toMatchObject({ model: "grok-4.7", store: false, max_turns: 2 });
+    expect(body.reasoning).toEqual({ effort: "low" });
+    expect(body.tools).toEqual([{ type: "code_interpreter" }]);
     expect(result?.details).toMatchObject({
       content: "Mean: 42. Verified.",
       citations: ["https://example.com/input.csv", "https://example.com/result.csv"],

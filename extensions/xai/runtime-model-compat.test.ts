@@ -17,14 +17,8 @@ function expectReasoning(
     supportsReasoningEffort: true,
     supportedReasoningEfforts: efforts,
   });
-  expect(model.thinkingLevelMap).toEqual(
-    Object.fromEntries(
-      ["off", "minimal", "low", "medium", "high", "xhigh"].map((level, index) => [
-        level,
-        levels[index],
-      ]),
-    ),
-  );
+  const [off, minimal, low, medium, high, xhigh] = levels;
+  expect(model.thinkingLevelMap).toEqual({ off, minimal, low, medium, high, xhigh });
 }
 
 const unsupportedLevels = {
