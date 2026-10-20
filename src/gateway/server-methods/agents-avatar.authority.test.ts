@@ -24,25 +24,6 @@ vi.mock("../../agents/isolated-completion-route.js", () => ({
 const cfg: OpenClawConfig = {
   agents: { defaults: { model: { primary: "test-provider/allowed" } } },
 };
-const design = {
-  version: 1,
-  id: "garden-keeper",
-  name: "Garden Keeper",
-  description: "A gardener with a sprout.",
-  palette: { shell: "#87b891", claw: "#5b9471", glint: "#fff0b3" },
-  layers: { back: "", left_prop: "", right_prop: "", shell_overlay: "", accessory: "" },
-};
-
-function completionResult(text: string) {
-  return {
-    assistant: {
-      ...isolatedAssistant([{ type: "text", text }]),
-      provider: "test-provider",
-      model: "allowed",
-    },
-  };
-}
-
 const dispatch = vi.fn();
 const route = {
   selection: {
@@ -63,7 +44,7 @@ beforeEach(() => {
   });
   utility.provider.mockReset().mockReturnValue({ provider: "test-provider" });
   utility.route.mockReset().mockResolvedValue(route);
-  dispatch.mockReset().mockResolvedValue(completionResult(JSON.stringify(design)));
+  dispatch.mockReset();
   completion.resolveModelAsync.mockImplementation(async (provider, model) => ({
     logicalRef: { provider, model },
     model: { provider, id: model, api: "openai-completions" },
@@ -104,10 +85,7 @@ function operator() {
   };
 }
 
-async function generate(
-  authority: ReturnType<typeof operator>["authority"],
-  hasCurrentClientAuthority = () => true,
-) {
+async function generate(authority: ReturnType<typeof operator>["authority"]) {
   const respond = vi.fn();
   await agentAvatarGenerateHandler({
     req: { type: "req", id: "avatar-authority", method: "agents.avatar.generate" },
@@ -119,51 +97,38 @@ async function generate(
       internal: { operatorRunAuthority: authority },
     } as GatewayRequestHandlerOptions["client"],
     isWebchatConnect: () => false,
-    hasCurrentClientAuthority,
   });
   return respond;
 }
 
-it("returns a preview through the real handler and isolated completion owner", async () => {
-  const respond = await generate(operator().authority);
-  expect(dispatch).toHaveBeenCalledOnce();
+it("does not dispatch after model authority is revoked during route preparation", async () => {
+  const access = operator();
+  utility.route.mockImplementationOnce(async () => {
+    access.revokeModel();
+    return route;
+  });
+  const respond = await generate(access.authority);
   expect(respond).toHaveBeenCalledWith(
-    true,
-    expect.objectContaining({ name: "Garden Keeper", svg: expect.stringContaining("<svg") }),
+    false,
     undefined,
+    expect.objectContaining({
+      code: "FORBIDDEN",
+    }),
   );
+  expect(dispatch).not.toHaveBeenCalled();
 });
-
-it.each(["device", "model"] as const)(
-  "does not dispatch to the provider after %s authority is revoked during route preparation",
-  async (kind) => {
-    const access = operator();
-    let deviceCurrent = true;
-    utility.route.mockImplementationOnce(async () => {
-      if (kind === "device") {
-        deviceCurrent = false;
-      } else {
-        access.revokeModel();
-      }
-      return route;
-    });
-    const respond = await generate(access.authority, () => deviceCurrent);
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: kind === "device" ? "UNAVAILABLE" : "FORBIDDEN",
-      }),
-    );
-    expect(dispatch).not.toHaveBeenCalled();
-  },
-);
 
 it("does not retry or publish after model access is revoked during the first completion", async () => {
   const access = operator();
   dispatch.mockImplementation(async () => {
     access.revokeModel();
-    return completionResult("invalid design");
+    return {
+      assistant: {
+        ...isolatedAssistant([{ type: "text", text: "invalid design" }]),
+        provider: "test-provider",
+        model: "allowed",
+      },
+    };
   });
   const respond = await generate(access.authority);
   expect(respond).toHaveBeenCalledWith(

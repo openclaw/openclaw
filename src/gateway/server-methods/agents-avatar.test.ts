@@ -1,9 +1,8 @@
 import { beforeEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import { BlobsterUnsupportedRuntimeError } from "../../agents/blobster-generation-errors.js";
 import { createLlmOperatorAuthorizationError } from "../../plugins/runtime/runtime-llm-error.js";
 import { agentAvatarGenerateHandler } from "./agents-avatar.js";
-import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
+import type { GatewayRequestContext } from "./types.js";
 
 const generation = vi.hoisted(() => vi.fn());
 const capture = vi.hoisted(() => vi.fn());
@@ -20,10 +19,10 @@ const preview = {
 const cfg = { agents: { defaults: { model: { primary: "ollama/qwen3:4b-instruct" } } } };
 const operator = { profileId: "owner" };
 const release = vi.fn();
+let current = true;
 
 async function generate(
   params: Record<string, unknown> = { agentId: "garden", prompt: "A gardener" },
-  authority: Pick<GatewayRequestHandlerOptions, "hasCurrentClientAuthority" | "signal"> = {},
 ) {
   const respond = vi.fn();
   await agentAvatarGenerateHandler({
@@ -33,7 +32,7 @@ async function generate(
     context: { getRuntimeConfig: () => cfg } as GatewayRequestContext,
     client: null,
     isWebchatConnect: () => false,
-    ...authority,
+    hasCurrentClientAuthority: () => current,
   });
   return respond;
 }
@@ -46,6 +45,7 @@ function expectError(
 }
 
 beforeEach(() => {
+  current = true;
   generation.mockReset().mockResolvedValue(preview);
   capture.mockReset().mockResolvedValue({ authority: operator, release });
   release.mockReset();
@@ -83,22 +83,17 @@ it("requires an authenticated operator before model inference", async () => {
   expect(generation).not.toHaveBeenCalled();
 });
 
-it("does not publish a result after device authority is revoked", async () => {
-  const pending = createDeferred<typeof preview>();
-  generation.mockReturnValue(pending.promise);
-  let current = true;
-  const response = generate(undefined, { hasCurrentClientAuthority: () => current });
-  await vi.waitFor(() => expect(generation).toHaveBeenCalledOnce());
-  current = false;
-  pending.resolve(preview);
-  expectError(await response, {
-    code: "UNAVAILABLE",
-    message: "Avatar generation access changed. Reconnect and try again.",
-  });
-  expect(release).toHaveBeenCalledOnce();
-});
-
 it.each([
+  [
+    "revoked device",
+    () =>
+      generation.mockImplementation(async () => {
+        current = false;
+        return preview;
+      }),
+    "UNAVAILABLE",
+    "Avatar generation access changed. Reconnect and try again.",
+  ],
   [
     "invalid provider output",
     () => generation.mockResolvedValue({ ...preview, svg: "x".repeat(128_001) }),
@@ -122,5 +117,6 @@ it.each([
   async (_label, prepare, code, message) => {
     prepare();
     expectError(await generate(), { code, message });
+    expect(release).toHaveBeenCalledOnce();
   },
 );

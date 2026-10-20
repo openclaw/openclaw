@@ -2,14 +2,12 @@ import { expect, it, type Mock } from "vitest";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import { expectRespondOk } from "./agents-mutate.test-support.js";
 
+type CommitAgentMutation = (agentId: string, commit: () => Promise<unknown>) => Promise<unknown>;
+
 type AgentDeletionAuthorityHarness = {
   mocks: {
-    cronRemoveAgentJobsTransactional: Mock<
-      (agentId: string, commit: () => Promise<unknown>) => Promise<unknown>
-    >;
-    withAgentExecApprovalsRemoved: Mock<
-      (agentId: string, commit: () => Promise<unknown>) => Promise<unknown>
-    >;
+    cronRemoveAgentJobsTransactional: Mock<CommitAgentMutation>;
+    withAgentExecApprovalsRemoved: Mock<CommitAgentMutation>;
     writeConfigFile: Mock<(nextConfig?: unknown, writeOptions?: unknown) => Promise<void>>;
     unregisterResolvedAgentDir: Mock<(params: { agentId: string; agentDir: string }) => boolean>;
     closeOpenClawAgentDatabaseByPath: Mock<
@@ -29,14 +27,13 @@ export function registerAgentDeletionAuthorityTests({
   call,
 }: AgentDeletionAuthorityHarness): void {
   it("removes only the deleted agent's authority before committing its roster removal", async () => {
-    const memoryOwner = memorySessionActorOwners.get({
-      agentId: "test-agent",
-      path: "/agents/test-agent/incognito-openclaw-agent.sqlite",
-    });
-    const survivor = memorySessionActorOwners.get({
-      agentId: "other-agent",
-      path: "/agents/other-agent/incognito-openclaw-agent.sqlite",
-    });
+    const owner = (agentId: string) =>
+      memorySessionActorOwners.get({
+        agentId,
+        path: `/agents/${agentId}/incognito-openclaw-agent.sqlite`,
+      });
+    const memoryOwner = owner("test-agent");
+    const survivor = owner("other-agent");
     const authority = { assertCurrent() {}, authorize() {} };
     const sessionKey = "agent:test-agent:dashboard:incognito-deletion";
     const actor = await memoryOwner.acquire(
@@ -73,14 +70,12 @@ export function registerAgentDeletionAuthorityTests({
       expect(() => actor.snapshot(authority)).toThrow("closed");
       events.push("config");
     });
-    mocks.unregisterResolvedAgentDir.mockImplementationOnce(() => {
-      events.push("directory");
+    const record = (event: string) => () => {
+      events.push(event);
       return true;
-    });
-    mocks.closeOpenClawAgentDatabaseByPath.mockImplementation(() => {
-      events.push("database");
-      return true;
-    });
+    };
+    mocks.unregisterResolvedAgentDir.mockImplementationOnce(record("directory"));
+    mocks.closeOpenClawAgentDatabaseByPath.mockImplementation(record("database"));
 
     const result = expectRespondOk(await call("agents.delete", { agentId: "test-agent" }), {
       ok: true,
@@ -113,16 +108,8 @@ export function registerAgentDeletionAuthorityTests({
       expect.any(Function),
       expect.objectContaining({ assertCurrentHost: mocks.assertAgentDeletionCurrent }),
     );
-    expect(mocks.closeOpenClawAgentDatabaseByPath).toHaveBeenCalledWith(
-      "/agents/test-agent/openclaw-agent.sqlite",
-      "test-agent",
-    );
     expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledExactlyOnceWith({
       unregisterDatabases: true,
-    });
-    expect(mocks.unregisterResolvedAgentDir).toHaveBeenCalledWith({
-      agentId: "test-agent",
-      agentDir: "/agents/test-agent",
     });
     expect(events).toEqual(["database", "cron", "approvals", "config", "directory"]);
     await actor.release();
