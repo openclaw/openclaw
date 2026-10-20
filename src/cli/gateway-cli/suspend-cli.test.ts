@@ -9,8 +9,6 @@ const readyResult = {
   status: "ready" as const,
   suspensionId: "suspension-1",
   expiresAtMs: Date.parse("2026-08-11T12:00:00.000Z"),
-  activeCount: 0,
-  blockers: [],
 };
 
 const busyResult = {
@@ -18,7 +16,7 @@ const busyResult = {
   reason: "active-work" as const,
   retryAfterMs: 200,
   activeCount: 1,
-  blockers: [{ kind: "root-request" as const, count: 1, message: "1 active request" }],
+  blockers: [{ message: "1 active request" }],
 };
 
 describe("gateway suspend CLI", () => {
@@ -70,21 +68,24 @@ describe("gateway suspend CLI", () => {
   it.each([
     ["", "openclaw --profile work gateway resume suspension-1 --port 18999"],
     ["demo", "openclaw --container demo gateway resume suspension-1 --port 18999"],
-  ])(
-    "scopes the resume hint for the work profile with container='%s'",
-    async (container, command) => {
-      vi.stubEnv("OPENCLAW_PROFILE", "work");
-      vi.stubEnv("OPENCLAW_CONTAINER_HINT", container);
-      await suspend({ rpcOpts: { localPortOverride: 18999 } });
+  ])("scopes the resume hint for work, container='%s'", async (container, command) => {
+    vi.stubEnv("OPENCLAW_PROFILE", "work");
+    vi.stubEnv("OPENCLAW_CONTAINER_HINT", container);
+    await suspend({ rpcOpts: { localPortOverride: 18999 } });
 
-      expect(runtime.log).toHaveBeenCalledWith(`Resume with: ${command}`);
-    },
-  );
+    expect(runtime.log).toHaveBeenCalledWith(`Resume with: ${command}`);
+  });
 
-  it("reports blockers without polling when --wait is omitted", async () => {
+  it.each([
+    [undefined, "Retry later or use --wait <seconds>."],
+    ["0.2", "Timed out waiting for the Gateway to become idle."],
+  ] as const)("reports busy wait=%s without another prepare", async (waitSeconds, hint) => {
+    if (waitSeconds !== undefined) {
+      mockClock(() => 10_000);
+    }
     callGateway.mockResolvedValue(busyResult);
-    await expect(suspend({ requestId: "host-operation" })).rejects.toThrow(
-      "Gateway suspension is busy (active-work; 1 active).\nBlockers:\n- 1 active request\nRetry later or use --wait <seconds>.",
+    await expect(suspend({ requestId: "host-operation", waitSeconds })).rejects.toThrow(
+      `Gateway suspension is busy (active-work; 1 active).\nBlockers:\n- 1 active request\n${hint}`,
     );
     expect(callGateway).toHaveBeenCalledOnce();
   });
@@ -113,29 +114,18 @@ describe("gateway suspend CLI", () => {
     });
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
-
-  it("never issues another prepare after a sleep overshoots the deadline", async () => {
-    mockClock(() => 10_000);
-    callGateway.mockResolvedValue(busyResult);
-
-    await expect(suspend({ requestId: "host-operation", waitSeconds: "0.2" })).rejects.toThrow(
-      "Gateway suspension is busy (active-work; 1 active).\nBlockers:\n- 1 active request\nTimed out waiting for the Gateway to become idle.",
-    );
-    expect(callGateway).toHaveBeenCalledOnce();
-  });
 });
 
 describe("gateway resume CLI", () => {
   it.each([
-    { resumed: true, message: "Gateway resumed." },
-    {
-      resumed: false,
-      message:
-        "No matching suspension was held (lease already expired or resumed); gateway is running.",
-    },
-  ])("prints the resumed=$resumed outcome", async ({ resumed, message }) => {
+    [true, "Gateway resumed."],
+    [
+      false,
+      "No matching suspension was held (lease already expired or resumed); gateway is running.",
+    ],
+  ] as const)("prints the resumed=%s outcome", async (resumed, message) => {
     const runtime = createNonExitingRuntimeEnv();
-    const callGateway = vi.fn(async () => ({ ok: true, status: "running", resumed }));
+    const callGateway = vi.fn(async () => ({ resumed }));
 
     await runGatewayResume({ rpcOpts: {}, suspensionId: "suspension-1" }, { callGateway, runtime });
 

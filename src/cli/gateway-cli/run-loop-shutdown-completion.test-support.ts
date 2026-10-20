@@ -14,8 +14,10 @@ import {
   createLifecycleGate,
   expectRestartCloseCall,
   createGatewayServer,
+  expectStopCloseCall,
+  expectUncalled,
+  advanceWithoutCalls,
   setPlatform,
-  withIsolatedSignals,
   type UpdateRespawnFixtures,
 } from "./run-loop.test-support.js";
 
@@ -35,39 +37,17 @@ async function withHostLifeline(run: (input: PassThrough) => Promise<void>) {
   }
 }
 
-export function registerGracefulGatewayShutdownTests({
-  restartGatewayProcessWithFreshPid,
-  respawnGatewayProcessForUpdate,
-  waitForGatewayActiveWork,
-  acquireGatewayLock,
-  createSignaledLoopHarness,
-  hasManagedProviderLocalServices,
-  stopManagedProviderLocalServices,
-  gatewayLog,
-  flushLogger,
-  requestGatewayRestartWithSignalAdmission,
-  armShutdownHardExitWatchdog,
-  abortEmbeddedAgentRun,
-  abortActiveCronTaskRuns,
-}: UpdateRespawnFixtures): void {
-  registerTimedOutGatewayStopTests({
-    createSignaledLoopHarness,
-    waitForGatewayActiveWork,
-    gatewayLog,
-    abortEmbeddedAgentRun,
-    abortActiveCronTaskRuns,
-  });
+export function registerGracefulGatewayShutdownTests(f: UpdateRespawnFixtures): void {
+  registerTimedOutGatewayStopTests(f);
 
   it("exits 0 on SIGTERM after graceful close", async () => {
     const gatewayStateOwner = { release: vi.fn(async () => {}) };
-    acquireGatewayLock.mockResolvedValueOnce(gatewayStateOwner);
+    f.acquireGatewayLock.mockResolvedValueOnce(gatewayStateOwner);
 
-    await withIsolatedSignals(async ({ captureSignal }) => {
-      const { close, start, runtime, exited } = await createSignaledLoopHarness();
+    await f.withRunningGateway(async ({ captureSignal, close, start, runtime, exited }) => {
       const localServiceStop = createLifecycleGate();
-      stopManagedProviderLocalServices.mockImplementationOnce(localServiceStop.wait);
-      hasManagedProviderLocalServices.mockReturnValueOnce(true);
-      const sigterm = captureSignal("SIGTERM");
+      f.stopManagedProviderLocalServices.mockImplementationOnce(localServiceStop.wait);
+      f.hasManagedProviderLocalServices.mockReturnValueOnce(true);
       const { emitDiagnosticsTimelineEvent, flushDiagnosticsTimeline } =
         await import("../../infra/diagnostics-timeline.js");
       const tempDirs = createTempDirTracker();
@@ -84,7 +64,7 @@ export function registerGracefulGatewayShutdownTests({
           },
         );
       });
-      flushLogger.mockImplementationOnce(async () => {
+      f.flushLogger.mockImplementationOnce(async () => {
         expect(runtime.exit).not.toHaveBeenCalled();
         timelineAtLogFlush = existsSync(timelinePath)
           ? readFileSync(timelinePath, "utf8")
@@ -92,31 +72,26 @@ export function registerGracefulGatewayShutdownTests({
       });
 
       try {
-        sigterm();
+        captureSignal("SIGTERM")();
         await localServiceStop.entered;
 
-        expect(close).toHaveBeenCalledWith({
-          retainSharedState: true,
-          reason: "gateway stopping",
-          restartExpectedMs: null,
-        });
-        expect(runtime.exit).not.toHaveBeenCalled();
-        expect(flushLogger).not.toHaveBeenCalled();
+        expectStopCloseCall(close);
+        expectUncalled(runtime.exit, f.flushLogger);
         localServiceStop.release();
 
         await expect(exited).resolves.toBe(0);
         expect(start).toHaveBeenCalledWith({
           processStartedAt: expect.any(Number),
           startupStartedAt: expect.any(Number),
-          requestHotReloadRecovery: requestGatewayRestartWithSignalAdmission,
+          requestHotReloadRecovery: f.requestGatewayRestartWithSignalAdmission,
           hostLifecycle: expect.objectContaining({ request: expect.any(Function) }),
           startupOperation: expect.any(Function),
           gatewayStateOwner,
         });
-        expect(stopManagedProviderLocalServices).toHaveBeenCalledOnce();
-        expect(flushLogger).toHaveBeenCalledOnce();
+        expect(f.stopManagedProviderLocalServices).toHaveBeenCalledOnce();
+        expect(f.flushLogger).toHaveBeenCalledOnce();
         expect(timelineAtLogFlush).toContain('"name":"gateway.stop"');
-        expect(armShutdownHardExitWatchdog).not.toHaveBeenCalled();
+        expect(f.armShutdownHardExitWatchdog).not.toHaveBeenCalled();
       } finally {
         flushDiagnosticsTimeline();
         tempDirs.cleanup();
@@ -127,11 +102,7 @@ export function registerGracefulGatewayShutdownTests({
     await withHostLifeline(async (input) => {
       const closing = createLifecycleGate();
       try {
-        await withIsolatedSignals(async ({ captureSignal }) => {
-          const { close, runtime, exited, start } = await createSignaledLoopHarness(
-            undefined,
-            true,
-          );
+        await f.withRunningGateway(async ({ captureSignal, close, runtime, exited, start }) => {
           close.mockImplementationOnce(closing.wait);
           captureSignal("SIGUSR2")();
           await closing.entered;
@@ -143,11 +114,12 @@ export function registerGracefulGatewayShutdownTests({
           await expect(exited).resolves.toBe(0);
           expect(runtime.exit).toHaveBeenCalledOnce();
           expect(start).toHaveBeenCalledOnce();
-          expect((await acquireGatewayLock.mock.results[0]?.value)?.release).toHaveBeenCalledOnce();
-          expect(flushLogger).toHaveBeenCalledOnce();
-          expect(restartGatewayProcessWithFreshPid).not.toHaveBeenCalled();
-          expect(respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
-        });
+          expect(
+            (await f.acquireGatewayLock.mock.results[0]?.value)?.release,
+          ).toHaveBeenCalledOnce();
+          expect(f.flushLogger).toHaveBeenCalledOnce();
+          expectUncalled(f.restartGatewayProcessWithFreshPid, f.respawnGatewayProcessForUpdate);
+        }, true);
       } finally {
         closing.release();
       }
@@ -173,11 +145,7 @@ export function registerGracefulGatewayShutdownTests({
         const { captureConsoleSnapshot, restoreConsoleSnapshot } =
           await import("../../logging/test-helpers/console-snapshot.js");
         const consoleSnapshot = captureConsoleSnapshot();
-        const captureState = {
-          consolePatched: loggingState.consolePatched,
-          streamErrorHandlersInstalled: loggingState.streamErrorHandlersInstalled,
-          rawConsole: loggingState.rawConsole,
-        };
+        const { consolePatched, streamErrorHandlersInstalled, rawConsole } = loggingState;
         const streams = [process.stdout, process.stderr].map((stream) => ({
           stream,
           listeners: new Set(stream.listeners("error")),
@@ -187,11 +155,7 @@ export function registerGracefulGatewayShutdownTests({
         enableConsoleCapture();
         let finishLoop: Promise<number> | undefined;
         try {
-          await withIsolatedSignals(async ({ captureSignal }) => {
-            const { close, runtime, exited, start } = await createSignaledLoopHarness(
-              undefined,
-              true,
-            );
+          await f.withRunningGateway(async ({ captureSignal, close, runtime, exited, start }) => {
             finishLoop = exited;
             if (restart) {
               const restarted = createDeferredCore();
@@ -208,7 +172,7 @@ export function registerGracefulGatewayShutdownTests({
                 throw new Error("Gateway cleanup failed");
               }
             });
-            flushLogger.mockImplementationOnce(flushing.wait);
+            f.flushLogger.mockImplementationOnce(flushing.wait);
             const failOutput = () => {
               process.exitCode = code;
               for (const { stream } of streams) {
@@ -224,25 +188,23 @@ export function registerGracefulGatewayShutdownTests({
             if (phase === "during close") {
               failOutput();
             }
-            expect(runtime.exit).not.toHaveBeenCalled();
-            expect(exit).not.toHaveBeenCalled();
+            expectUncalled(runtime.exit, exit);
             closing.release();
             await flushing.entered;
             if (phase === "during flush") {
               failOutput();
             }
-            expect(runtime.exit).not.toHaveBeenCalled();
-            expect(exit).not.toHaveBeenCalled();
+            expectUncalled(runtime.exit, exit);
             flushing.release();
             await expect(exited).resolves.toBe(failed ? 1 : code);
             expect(runtime.exit).toHaveBeenCalledOnce();
             expect(close).toHaveBeenCalledTimes(restart ? 2 : 1);
             expect(start).toHaveBeenCalledTimes(restart ? 2 : 1);
             expect(
-              (await acquireGatewayLock.mock.results.at(-1)?.value)?.release,
+              (await f.acquireGatewayLock.mock.results.at(-1)?.value)?.release,
             ).toHaveBeenCalledOnce();
             expect(exit).not.toHaveBeenCalled();
-          });
+          }, true);
         } finally {
           closing.release();
           flushing.release();
@@ -255,7 +217,7 @@ export function registerGracefulGatewayShutdownTests({
               }
             }
           }
-          Object.assign(loggingState, captureState);
+          Object.assign(loggingState, { consolePatched, streamErrorHandlersInstalled, rawConsole });
           restoreConsoleSnapshot(consoleSnapshot);
           exit.mockRestore();
           process.exitCode = previousExitCode;
@@ -264,81 +226,48 @@ export function registerGracefulGatewayShutdownTests({
   );
 
   it("still closes and exits when the direct-shutdown active-work drain fails", async () => {
-    await withIsolatedSignals(async ({ captureSignal }) => {
-      waitForGatewayActiveWork.mockRejectedValueOnce(new Error("active-work drain unavailable"));
-      const { close, exited } = await createSignaledLoopHarness();
-
+    f.waitForGatewayActiveWork.mockRejectedValueOnce(new Error("active-work drain unavailable"));
+    await f.withRunningGateway(async ({ captureSignal, close, exited }) => {
       captureSignal("SIGTERM")();
 
       await expect(exited).resolves.toBe(0);
-      expect(waitForGatewayActiveWork).toHaveBeenCalledWith(20_000, {
+      expect(f.waitForGatewayActiveWork).toHaveBeenCalledWith(20_000, {
         onSnapshot: expect.any(Function),
       });
-      expect(close).toHaveBeenCalledWith({
-        retainSharedState: true,
-        reason: "gateway stopping",
-        restartExpectedMs: null,
-      });
+      expectStopCloseCall(close);
     });
   });
 }
 
-export function registerShutdownCompletionTests({
-  consumeGatewayRestartIntentPayload,
-  createGatewayActiveWorkSnapshot,
-  waitForGatewayActiveWork,
-  idleActiveWorkSnapshot,
-  abortEmbeddedAgentRun,
-  hasManagedProviderLocalServices,
-  stopManagedProviderLocalServices,
-  createSignaledLoopHarness,
-  consumeGatewayRestartIntent,
-  managedUpdateSuccessorOwner,
-  cancelManagedServiceUpdateHandoff,
-  commitManagedServiceUpdateHandoff,
-  requestManagedServiceUpdateHandoffPark,
-  flushLogger,
-  restartGatewayProcessWithFreshPid,
-  gatewayLog,
-  armShutdownHardExitWatchdog,
-  cancelShutdownHardExitWatchdog,
-  writeDiagnosticStabilityBundleForFailureSync,
-}: UpdateRespawnFixtures): void {
+export function registerShutdownCompletionTests(f: UpdateRespawnFixtures): void {
+  const delay = (ms: number) =>
+    new Promise<void>((resolve) => {
+      setTimeout(resolve, ms);
+    });
   async function withShutdownClock(
-    run: (
-      context: Awaited<ReturnType<typeof createSignaledLoopHarness>> &
-        Parameters<Parameters<typeof withIsolatedSignals>[0]>[0],
-    ) => Promise<void>,
+    run: Parameters<typeof f.withRunningGateway>[0],
     ownsProcessLifecycle = false,
   ) {
-    await withIsolatedSignals(async (signals) => {
-      const harness = await createSignaledLoopHarness(undefined, ownsProcessLifecycle);
+    await f.withRunningGateway(async (harness) => {
       vi.useFakeTimers();
       try {
-        await run({ ...harness, ...signals });
+        await run(harness);
       } finally {
         vi.clearAllTimers();
         vi.useRealTimers();
       }
-    });
+    }, ownsProcessLifecycle);
   }
 
   it("reports launchd cleanup timeout after server close fails", async () => {
     const deadlineMs = LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS * 1_000 - 5_000;
     process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
     setPlatform("darwin");
-    hasManagedProviderLocalServices.mockReturnValue(true);
-    stopManagedProviderLocalServices.mockImplementation(
-      () =>
-        new Promise<void>((resolve) => {
-          setTimeout(resolve, 2_000);
-        }),
-    );
+    f.hasManagedProviderLocalServices.mockReturnValue(true);
+    f.stopManagedProviderLocalServices.mockImplementation(() => delay(2_000));
     await withShutdownClock(async ({ captureSignal, close, runtime }) => {
       close.mockImplementationOnce(async () => {
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, deadlineMs - 1_000);
-        });
+        await delay(deadlineMs - 1_000);
         throw new Error("close owner failed");
       });
       const clock = vi.spyOn(performance, "now").mockImplementation(() => Date.now());
@@ -346,13 +275,12 @@ export function registerShutdownCompletionTests({
         captureSignal("SIGTERM")();
         await vi.advanceTimersByTimeAsync(deadlineMs - 1);
         expect(close).toHaveBeenCalledOnce();
-        expect(stopManagedProviderLocalServices).toHaveBeenCalledOnce();
+        expect(f.stopManagedProviderLocalServices).toHaveBeenCalledOnce();
         expect(runtime.exit).not.toHaveBeenCalled();
-        await vi.advanceTimersByTimeAsync(1);
-        expect(runtime.exit).not.toHaveBeenCalled();
+        await advanceWithoutCalls(1, runtime.exit);
         await vi.advanceTimersByTimeAsync(2_000);
         expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
-        expect(writeDiagnosticStabilityBundleForFailureSync).toHaveBeenLastCalledWith(
+        expect(f.writeDiagnosticStabilityBundleForFailureSync).toHaveBeenLastCalledWith(
           "gateway.stop_shutdown_timeout",
           expect.objectContaining({ message: "close owner failed" }),
           { shutdownStep: "gateway-server-close" },
@@ -366,37 +294,36 @@ export function registerShutdownCompletionTests({
   it("bounds abandoned cleanup after a zero-drain request and managed parking", async () => {
     process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
     setPlatform("linux");
-    consumeGatewayRestartIntent.mockReturnValueOnce({
+    f.consumeGatewayRestartIntent.mockReturnValueOnce({
       force: true,
       waitMs: 0,
       reason: "update.run",
-      successorOwner: managedUpdateSuccessorOwner,
+      successorOwner: f.managedUpdateSuccessorOwner,
     });
-    cancelManagedServiceUpdateHandoff
+    f.cancelManagedServiceUpdateHandoff
       .mockResolvedValueOnce("restart-after-exit")
       .mockResolvedValue("restored-in-process");
-    commitManagedServiceUpdateHandoff.mockResolvedValueOnce(true);
+    f.commitManagedServiceUpdateHandoff.mockResolvedValueOnce(true);
     await withShutdownClock(async ({ captureSignal, close, start, runtime }) => {
       const cleanup = createDeferredCore();
       close.mockReturnValue(cleanup.promise);
       captureSignal("SIGUSR2")();
       await vi.advanceTimersByTimeAsync(9_999);
-      expect(requestManagedServiceUpdateHandoffPark).toHaveBeenCalledWith(
-        managedUpdateSuccessorOwner,
+      expect(f.requestManagedServiceUpdateHandoffPark).toHaveBeenCalledWith(
+        f.managedUpdateSuccessorOwner,
       );
       expect(close).toHaveBeenCalledOnce();
       expect(runtime.exit).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(1);
-      expect(runtime.exit).not.toHaveBeenCalled();
+      await advanceWithoutCalls(1, runtime.exit);
       cleanup.resolve();
       await vi.advanceTimersByTimeAsync(0);
       expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(0);
       expect(start).toHaveBeenCalledOnce();
-      expect(commitManagedServiceUpdateHandoff).toHaveBeenCalledWith(
-        managedUpdateSuccessorOwner,
+      expect(f.commitManagedServiceUpdateHandoff).toHaveBeenCalledWith(
+        f.managedUpdateSuccessorOwner,
         "restore",
       );
-      expect(writeDiagnosticStabilityBundleForFailureSync).toHaveBeenCalledWith(
+      expect(f.writeDiagnosticStabilityBundleForFailureSync).toHaveBeenCalledWith(
         "gateway.restart_shutdown_timeout",
         undefined,
       );
@@ -407,14 +334,12 @@ export function registerShutdownCompletionTests({
     await withShutdownClock(async ({ captureSignal, close, runtime, exited }) => {
       close.mockRejectedValueOnce(new Error("close owner failed"));
       const flushed = createDeferredCore();
-      flushLogger.mockReturnValueOnce(flushed.promise);
+      f.flushLogger.mockReturnValueOnce(flushed.promise);
       try {
         captureSignal("SIGUSR2")();
-        await vi.advanceTimersByTimeAsync(999);
-        expect(runtime.exit).not.toHaveBeenCalled();
-        await vi.advanceTimersByTimeAsync(1);
-        expect(runtime.exit).not.toHaveBeenCalled();
-        expect(gatewayLog.warn).toHaveBeenCalledWith(
+        await advanceWithoutCalls(999, runtime.exit);
+        await advanceWithoutCalls(1, runtime.exit);
+        expect(f.gatewayLog.warn).toHaveBeenCalledWith(
           "log flush did not settle within 1000ms; waiting for accepted writes",
         );
       } finally {
@@ -427,45 +352,44 @@ export function registerShutdownCompletionTests({
 
   it("retains the deadline after owned log cleanup fails", async () => {
     process.env.OPENCLAW_SUPERVISOR_MODE = "external";
-    consumeGatewayRestartIntent.mockReturnValueOnce({ force: true, waitMs: 0 });
-    restartGatewayProcessWithFreshPid.mockReturnValueOnce({ mode: "supervised" });
+    f.consumeGatewayRestartIntent.mockReturnValueOnce({ force: true, waitMs: 0 });
+    f.restartGatewayProcessWithFreshPid.mockReturnValueOnce({ mode: "supervised" });
     await withShutdownClock(async ({ captureSignal, close, runtime, exited }) => {
-      flushLogger.mockRejectedValueOnce(new Error("shutdown cleanup failed"));
+      f.flushLogger.mockRejectedValueOnce(new Error("shutdown cleanup failed"));
       captureSignal("SIGUSR2")();
       await vi.advanceTimersByTimeAsync(0);
       expect(close).toHaveBeenCalledOnce();
-      expect(gatewayLog.error).toHaveBeenCalledWith(
+      expect(f.gatewayLog.error).toHaveBeenCalledWith(
         "gateway lifecycle completion failed: shutdown cleanup failed",
       );
       expect(runtime.exit).not.toHaveBeenCalled();
-      expect(armShutdownHardExitWatchdog).toHaveBeenCalledOnce();
-      expect(cancelShutdownHardExitWatchdog).not.toHaveBeenCalled();
+      expect(f.armShutdownHardExitWatchdog).toHaveBeenCalledOnce();
+      expect(f.cancelShutdownHardExitWatchdog).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(10_000);
       await expect(exited).resolves.toBe(1);
     }, true);
   });
 
   it("waits for the drain before handing recovery ownership to server close", async () => {
-    consumeGatewayRestartIntentPayload.mockResolvedValueOnce({ waitMs: 0 });
-    createGatewayActiveWorkSnapshot.mockReturnValueOnce(
+    f.consumeGatewayRestartIntentPayload.mockResolvedValueOnce({ waitMs: 0 });
+    f.createGatewayActiveWorkSnapshot.mockReturnValueOnce(
       createActiveWorkSnapshot({ embeddedRuns: 2 }, [
         { kind: "embedded-run", count: 2, message: "2 active embedded run(s)" },
       ]),
     );
     const draining = createLifecycleGate();
-    waitForGatewayActiveWork.mockImplementationOnce(async () => {
+    f.waitForGatewayActiveWork.mockImplementationOnce(async () => {
       await draining.wait();
-      return { drained: true, snapshot: idleActiveWorkSnapshot };
+      return { drained: true, snapshot: f.idleActiveWorkSnapshot };
     });
-    await withIsolatedSignals(async ({ captureSignal }) => {
-      const { close, start, exited } = await createSignaledLoopHarness();
+    await f.withRunningGateway(async ({ captureSignal, close, start, exited }) => {
       const cleanupSignal = gatewayWorkAdmissionActual.getGatewayShutdownCleanupSignal();
       close.mockImplementationOnce(async () => {
         expect(cleanupSignal.aborted).toBe(true);
       });
       captureSignal("SIGTERM")();
       await draining.entered;
-      expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, {
+      expect(f.abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, {
         mode: "compacting",
         reason: "restart",
       });
@@ -473,7 +397,7 @@ export function registerShutdownCompletionTests({
       expect(cleanupSignal.aborted).toBe(false);
       draining.release();
       await expect(exited).resolves.toBe(0);
-      expect(waitForGatewayActiveWork).toHaveBeenCalledExactlyOnceWith(
+      expect(f.waitForGatewayActiveWork).toHaveBeenCalledExactlyOnceWith(
         undefined,
         expect.any(Object),
       );

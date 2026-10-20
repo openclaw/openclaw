@@ -1,101 +1,75 @@
-import { expect, it, vi } from "vitest";
+import { once } from "node:events";
+import { expect, it, vi, type MockInstance } from "vitest";
 import { withTimeout } from "../../infra/fs-safe.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
+  expectUncalled,
   waitForLoopCondition,
   withIsolatedSignals,
   type UpdateRespawnFixtures,
 } from "./run-loop.test-support.js";
 
-export function registerHostedUpdateStopTests({
-  captureForegroundUpdateHandoffStop,
-  isForegroundUpdateHandoff,
-  completeForegroundUpdateHandoffAfterClose,
-  hostedStopPrepare,
-  hostedStopExecute,
-  hostedStopDispose,
-  consumeGatewayRestartIntentPayload,
-  createSignaledLoopHarness,
-  managedUpdateSuccessorOwner,
-  respawnGatewayProcessForUpdate,
-  isGatewayWorkAdmissionClosed,
-}: UpdateRespawnFixtures) {
+export function registerHostedUpdateStopTests(f: UpdateRespawnFixtures) {
   it("joins the accepted hosted Stop through overlapping foreground update parking and settlement", async () => {
+    const waitForCall = (mock: MockInstance) =>
+      waitForLoopCondition(() => mock.mock.calls.length === 1, "hosted Stop lifecycle stalled");
     const joined = createDeferredCore<boolean>();
     const disposed = createDeferredCore();
     const settle = vi.fn(() => joined.promise);
-    let onPark: ((identity: typeof managedUpdateSuccessorOwner) => void) | undefined;
+    let onPark: ((identity: typeof f.managedUpdateSuccessorOwner) => void) | undefined;
     let parkReady = false;
-    captureForegroundUpdateHandoffStop.mockImplementationOnce((callbacks) => {
+    f.captureForegroundUpdateHandoffStop.mockImplementationOnce((callbacks) => {
       onPark = callbacks.onPark;
       return { settle, canPark: () => parkReady };
     });
-    isForegroundUpdateHandoff.mockReturnValue(true);
-    completeForegroundUpdateHandoffAfterClose.mockImplementationOnce(async () => {
+    f.isForegroundUpdateHandoff.mockReturnValue(true);
+    f.completeForegroundUpdateHandoffAfterClose.mockImplementationOnce(async () => {
       await joined.promise;
       return { respawn: false };
     });
-    hostedStopPrepare.mockImplementationOnce(async (_owner, assertCurrent, signal) => {
+    f.hostedStopPrepare.mockImplementationOnce(async (_owner, assertCurrent, signal) => {
       assertCurrent();
-      hostedStopExecute.mockImplementationOnce(
-        (assertStopCurrent) =>
-          new Promise((_resolve, reject) => {
-            assertStopCurrent();
-            signal.addEventListener(
-              "abort",
-              () => reject(new Error("native stop interrupted", { cause: signal.reason })),
-              { once: true },
-            );
-          }),
-      );
-      return { execute: hostedStopExecute, dispose: hostedStopDispose };
+      f.hostedStopExecute.mockImplementationOnce(async (assertStopCurrent) => {
+        assertStopCurrent();
+        await once(signal, "abort");
+        throw new Error("native stop interrupted", { cause: signal.reason });
+      });
+      return { execute: f.hostedStopExecute, dispose: f.hostedStopDispose };
     });
-    hostedStopDispose.mockImplementationOnce(() => disposed.promise);
+    f.hostedStopDispose.mockImplementationOnce(() => disposed.promise);
     await withIsolatedSignals(async ({ captureSignal }) => {
-      const { close, start, runtime, exited } = await createSignaledLoopHarness(undefined, true);
+      const { close, start, runtime, exited } = await f.createSignaledLoopHarness(undefined, true);
       const host = start.mock.calls[0]?.[0]?.hostLifecycle;
       try {
         await expect(host!.request("stop", () => {})).resolves.toMatchObject({ ok: true });
         expect(settle).toHaveBeenCalledOnce();
-        expect(isGatewayWorkAdmissionClosed()).toBe(true);
-        expect(close).not.toHaveBeenCalled();
-        expect(hostedStopExecute).not.toHaveBeenCalled();
-        expect(hostedStopDispose).not.toHaveBeenCalled();
+        expect(f.isGatewayWorkAdmissionClosed()).toBe(true);
+        expectUncalled(close, f.hostedStopExecute, f.hostedStopDispose);
         await expect(host!.request("stop", () => {})).resolves.toMatchObject({ ok: false });
-        expect(hostedStopPrepare).toHaveBeenCalledOnce();
+        expect(f.hostedStopPrepare).toHaveBeenCalledOnce();
         parkReady = true;
-        onPark!(managedUpdateSuccessorOwner);
-        await waitForLoopCondition(
-          () => completeForegroundUpdateHandoffAfterClose.mock.calls.length === 1,
-          "captured updater did not finish parking",
-        );
+        onPark!(f.managedUpdateSuccessorOwner);
+        await waitForCall(f.completeForegroundUpdateHandoffAfterClose);
         expect(close).toHaveBeenCalledOnce();
-        expect(hostedStopExecute).not.toHaveBeenCalled();
-        expect(hostedStopDispose).not.toHaveBeenCalled();
+        expectUncalled(f.hostedStopExecute, f.hostedStopDispose);
         captureSignal("SIGINT")();
         expect(settle).toHaveBeenCalledOnce();
         expect(runtime.exit).not.toHaveBeenCalled();
         joined.resolve(true);
-        await waitForLoopCondition(
-          () => hostedStopExecute.mock.calls.length === 1,
-          "accepted hosted Stop did not execute after helper settlement",
-        );
+        await waitForCall(f.hostedStopExecute);
         captureSignal("SIGTERM")();
-        await waitForLoopCondition(
-          () => hostedStopDispose.mock.calls.length === 1,
-          "accepted hosted Stop did not join native disposal",
-        );
-        expect(hostedStopExecute).toHaveBeenCalledOnce();
+        await waitForCall(f.hostedStopDispose);
+        expect(f.hostedStopExecute).toHaveBeenCalledOnce();
         expect(runtime.exit).not.toHaveBeenCalled();
-        const intentReads = consumeGatewayRestartIntentPayload.mock.calls.length;
+        const intentReads = f.consumeGatewayRestartIntentPayload.mock.calls.length;
         captureSignal("SIGTERM")();
-        expect(consumeGatewayRestartIntentPayload).toHaveBeenCalledTimes(intentReads);
+        expect(f.consumeGatewayRestartIntentPayload).toHaveBeenCalledTimes(intentReads);
         disposed.resolve();
         await expect(withTimeout(exited, 4_000)).resolves.toBe(0);
         expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(0);
         expect(close).toHaveBeenCalledOnce();
         expect(start).toHaveBeenCalledOnce();
-        expect(respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
+        expect(f.respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
       } finally {
         joined.resolve(true);
         disposed.resolve();
