@@ -22,6 +22,7 @@ import {
 import { getQueueSize } from "../process/command-queue.js";
 import {
   getActiveGatewayRootWorkCount,
+  isGatewayRestartDrainError,
   isGatewayWorkAdmissionClosed,
   runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
@@ -94,9 +95,11 @@ export function startGatewayCronWithLogging(params: {
         // admission fence; restart and suspension cannot race past this point.
         params.onStartError?.(err);
       }
-    }, "runtime:cron-start").catch((err: unknown) =>
-      params.logCron.error(`failed to enter start root: ${String(err)}`),
-    ),
+    }, "runtime:cron-start").catch((err: unknown) => {
+      if (!isGatewayRestartDrainError(err)) {
+        params.logCron.error(`failed to enter start root: ${String(err)}`);
+      }
+    }),
   );
 }
 
@@ -494,7 +497,7 @@ function startPendingSessionDeliveryRuntime(params: {
         const ownedCancellation =
           signal.aborted &&
           (err === signal.reason || (err instanceof Error && err.cause === signal.reason));
-        if (!ownedCancellation) {
+        if (!ownedCancellation && !isGatewayRestartDrainError(err)) {
           params.log.error(`Session delivery recovery failed: ${String(err)}`);
         }
       }),
