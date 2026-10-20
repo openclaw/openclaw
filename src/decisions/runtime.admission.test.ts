@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { evaluateAttemptDecisionToolPrefilter } from "../agents/embedded-agent-runner/run/attempt-decision-prefilter.js";
 import { createDecisionTool } from "../agents/tools/decision-tool.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -65,82 +64,6 @@ describe("registered decision consumer admission", () => {
       }
     },
   );
-
-  it("reserves the fourth physical slot for requested work until optional callbacks settle", async () => {
-    const selected = {
-      agents: {
-        defaults: {
-          decisionModel: "fixture/fixture-v1",
-          experimental: { decisionAssistance: true },
-        },
-      },
-    };
-    setRuntimeConfigSnapshot(selected);
-    const started = Array.from({ length: 3 }, () => createDeferredCore());
-    const release = Array.from({ length: 3 }, () => createDeferredCore());
-    const cancelled = new AbortController();
-    let calls = 0;
-    const host = registered(async () => {
-      const index = calls++;
-      if (index < release.length) {
-        started[index]!.resolve();
-        // An abort-ignoring provider retains its physical slot until cleanup settles.
-        await release[index]!.promise;
-      }
-      return answer;
-    });
-    const providerHost = host.registry.decisionProviders[0]!.host;
-    const pending: ReturnType<typeof host.run>[] = [];
-    const prefilter = () =>
-      evaluateAttemptDecisionToolPrefilter({
-        config: selected,
-        agentId: "main",
-        supportsTurnScopedToolRestrictions: true,
-        assertActive: () => {},
-        userMessage: "Hello",
-        signal: new AbortController().signal,
-      });
-    try {
-      for (const [index, priority] of (["optional", "requested", "optional"] as const).entries()) {
-        const request = host.run(
-          { ...options(), priority, ...(index === 0 ? { signal: cancelled.signal } : {}) },
-          selected,
-        );
-        pending.push(request);
-        await Promise.race([started[index]!.promise, request]);
-        expect(calls).toBe(index + 1);
-      }
-      expect(await prefilter()).toMatchObject({
-        shouldPruneTools: false,
-        status: "unavailable",
-      });
-      expect(calls).toBe(3);
-      // Purpose is diagnostic text, not the source of admission priority.
-      await expect(
-        host.run({ ...options(), purpose: "tool-prefilter.semantic-gate" }, selected),
-      ).resolves.toMatchObject({ status: "ok" });
-      expect(calls).toBe(4);
-
-      const reason = new Error("optional consumer cancelled");
-      const rejected = expect(pending[0]!).rejects.toBe(reason);
-      cancelled.abort(reason);
-      expect(providerHost.inspect(selected).activeRequests).toBe(3);
-      expect(await prefilter()).toMatchObject({ status: "unavailable", shouldPruneTools: false });
-      expect(calls).toBe(4);
-      release[0]!.resolve();
-      await rejected;
-      await expect(
-        host.run({ ...options(), priority: "optional" }, selected),
-      ).resolves.toMatchObject({ status: "ok" });
-      expect(calls).toBe(5);
-    } finally {
-      for (const callback of release) {
-        callback.resolve();
-      }
-      await Promise.allSettled(pending);
-    }
-    expect(providerHost.inspect(selected).activeRequests).toBe(0);
-  });
 
   it("rejects an invalid priority before provider dispatch", async () => {
     const call = vi.fn(async () => answer);

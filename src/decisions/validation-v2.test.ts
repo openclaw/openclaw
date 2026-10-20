@@ -13,19 +13,14 @@ const batch: DecisionBatchV2 = {
     rank: { type: "score", criteria: ["low", "middle", "high"] },
   },
 };
-function result() {
+function result(answers: Record<string, unknown> = {}) {
   return {
     model: "synthetic-model",
     answers: {
       truth: { type: "boolean", probabilityTrue: 0.9, answer: null },
-      pick: {
-        type: "choice",
-        choice: null,
-        probabilities: { yes: 0, no: 0 },
-        probability: null,
-        confidence: null,
-      },
+      pick: { ...choice(null, { yes: 0, no: 0 }), probability: null, confidence: null },
       rank: { type: "score", score: 1.25, metadata: { reasoning: ["reported", { detail: true }] } },
+      ...answers,
     },
     usage: {
       inputTokens: 0,
@@ -36,6 +31,23 @@ function result() {
     },
     metadata: { route: "synthetic" },
   };
+}
+function expectResult(
+  value: unknown,
+  valid = true,
+  input = batch,
+  capabilities?: ModelDecisionCapabilities,
+) {
+  expect(validateDecisionResultV2(input, value, capabilities)).toBe(valid);
+}
+function expectState(state: unknown, valid = true, input = batch) {
+  expect(validateDecisionBatchV2({ ...input, state })).toBe(valid);
+}
+function expectAnswers(answers: Record<string, unknown>, valid = true) {
+  expectResult(result(answers), valid);
+}
+function choice(selected: unknown, probabilities: unknown) {
+  return { type: "choice", choice: selected, probabilities };
 }
 const listBatch: DecisionBatchV2 = {
   state: {
@@ -78,7 +90,7 @@ describe("V2 decision admission", () => {
       answers: { target: { type: "box", box: value, confidence: 0.91 } },
     });
     expect(validateDecisionBatchV2(imageBatch)).toBe(true);
-    expect(validateDecisionResultV2(imageBatch, answer(box))).toBe(true);
+    expectResult(answer(box), true, imageBatch);
     for (const invalid of [
       { ...box, left: -0.1 },
       { ...box, right: 1.1 },
@@ -88,7 +100,7 @@ describe("V2 decision admission", () => {
       { top: 0, bottom: 1, left: 0 },
       { ...box, width: 0.51 },
     ]) {
-      expect(validateDecisionResultV2(imageBatch, answer(invalid))).toBe(false);
+      expectResult(answer(invalid), false, imageBatch);
     }
     for (const invalid of [
       { ...imageBatch, state: { type: "text", text: "no image" } },
@@ -129,25 +141,20 @@ describe("V2 decision admission", () => {
         model: "native",
         answers: {
           truth: { type: "boolean", probabilityTrue: 0.95, answer: false },
-          pick: { type: "choice", choice: "no", probabilities: { yes: 0.8, no: 0.19 } },
+          pick: choice("no", { yes: 0.8, no: 0.19 }),
           rank: { type: "score", score: 1.25, probabilities: [0.33, 0.33, 0.33] },
         },
       };
       const before = structuredClone(value);
-      expect(validateDecisionResultV2(batch, value, capabilities)).toBe(true);
+      expectResult(value, true, batch, capabilities);
       expect(value).toEqual(before);
       // Choice/Score categorical distributions require positive mass, including
       // rounded TypeSafe-style reports. Independent abstention does not.
       for (const answers of [
-        {
-          ...value.answers,
-          pick: { type: "choice", choice: null, probabilities: { yes: 0, no: 0 } },
-        },
+        { ...value.answers, pick: choice(null, { yes: 0, no: 0 }) },
         { ...value.answers, rank: { type: "score", score: 1.25, probabilities: [0, 0, 0] } },
       ]) {
-        expect(validateDecisionResultV2(batch, { ...value, answers }, capabilities)).toBe(
-          semantics !== "categorical",
-        );
+        expectResult({ ...value, answers }, semantics !== "categorical", batch, capabilities);
       }
     },
   );
@@ -157,13 +164,11 @@ describe("V2 decision admission", () => {
       protocol: "fixture-native",
       input: ["text"],
     };
-    expect(validateDecisionResultV2(batch, result(), capabilities)).toBe(true);
-    expect(
-      validateDecisionResultV2(batch, result(), {
-        ...capabilities,
-        questions: { boolean: { probabilities: "boolean", abstention: true } },
-      }),
-    ).toBe(false);
+    expectResult(result(), true, batch, capabilities);
+    expectResult(result(), false, batch, {
+      ...capabilities,
+      questions: { boolean: { probabilities: "boolean", abstention: true } },
+    });
   });
 
   it("rejects confidence reports when the route declares no confidence metric", () => {
@@ -188,7 +193,7 @@ describe("V2 decision admission", () => {
     ];
     for (const { input, answers } of cases) {
       const value = { model: "fixture", answers };
-      expect(validateDecisionResultV2(input, value, capabilities)).toBe(true);
+      expectResult(value, true, input, capabilities);
       for (const [key, answer] of Object.entries(answers)) {
         if (answer.type === "boolean") {
           continue;
@@ -198,13 +203,8 @@ describe("V2 decision admission", () => {
             ...value,
             answers: { ...answers, [key]: { ...answer, confidence } },
           };
-          expect(validateDecisionResultV2(input, reported, capabilities)).toBe(false);
-          expect(
-            validateDecisionResultV2(input, reported, {
-              ...capabilities,
-              confidence: "provider-specific",
-            }),
-          ).toBe(true);
+          expectResult(reported, false, input, capabilities);
+          expectResult(reported, true, input, { ...capabilities, confidence: "provider-specific" });
         }
       }
     }
@@ -230,20 +230,19 @@ describe("V2 decision admission", () => {
       model: "native",
       answers: { truth: { type: "boolean", answer: null }, scale: { type: "score", score: 2.5 } },
     };
-    expect(validateDecisionResultV2(scaleBatch, value, capabilities)).toBe(true);
-    expect(
-      validateDecisionResultV2(
-        scaleBatch,
-        { ...value, usage: { costUsd: 0, units: { unit: "requests", amount: 1 } } },
-        capabilities,
-      ),
-    ).toBe(true);
+    expectResult(value, true, scaleBatch, capabilities);
+    expectResult(
+      { ...value, usage: { costUsd: 0, units: { unit: "requests", amount: 1 } } },
+      true,
+      scaleBatch,
+      capabilities,
+    );
     for (const answers of [
       { ...value.answers, truth: { type: "boolean", answer: null, probabilityTrue: 0 } },
       { ...value.answers, scale: { type: "score", score: 2.5, probabilities: [0, 0, 0, 0, 0] } },
       { ...value.answers, scale: { type: "score", score: 4.01 } },
     ]) {
-      expect(validateDecisionResultV2(scaleBatch, { ...value, answers }, capabilities)).toBe(false);
+      expectResult({ ...value, answers }, false, scaleBatch, capabilities);
     }
   });
 
@@ -269,7 +268,7 @@ describe("V2 decision admission", () => {
         },
       },
     };
-    expect(validateDecisionResultV2(listBatch, value, capabilities)).toBe(true);
+    expectResult(value, true, listBatch, capabilities);
     for (const tags of [
       [
         { id: "red", applies: null },
@@ -280,13 +279,12 @@ describe("V2 decision admission", () => {
         { id: "blue", applies: true },
       ],
     ]) {
-      expect(
-        validateDecisionResultV2(
-          listBatch,
-          { ...value, answers: { ...value.answers, tags: { type: "tags", tags } } },
-          capabilities,
-        ),
-      ).toBe(false);
+      expectResult(
+        { ...value, answers: { ...value.answers, tags: { type: "tags", tags } } },
+        false,
+        listBatch,
+        capabilities,
+      );
     }
   });
 
@@ -299,64 +297,33 @@ describe("V2 decision admission", () => {
         rank: { type: "score", score: 1.5 },
       },
     };
-    expect(validateDecisionResultV2(batch, value)).toBe(true);
-    expect(
-      validateDecisionResultV2(batch, {
-        ...value,
-        answers: { ...value.answers, truth: { type: "boolean" } },
-      }),
-    ).toBe(false);
+    expectResult(value);
+    expectResult({ ...value, answers: { ...value.answers, truth: { type: "boolean" } } }, false);
   });
   it("preserves abstention, independent estimates, fractional scores and reported accounting without mutation", () => {
     const value = result();
     const before = structuredClone(value);
     expect(validateDecisionBatchV2(batch)).toBe(true);
-    expect(validateDecisionResultV2(batch, value)).toBe(true);
+    expectResult(value);
     expect(value).toEqual(before);
     expect(value.answers.rank).not.toHaveProperty("probabilities");
-    expect(
-      validateDecisionResultV2(batch, {
-        ...value,
-        answers: { ...value.answers, truth: { type: "boolean", probabilityTrue: 0.9 } },
-      }),
-    ).toBe(true);
-    expect(
-      validateDecisionResultV2(batch, {
-        ...value,
-        answers: {
-          ...value.answers,
-          pick: {
-            type: "choice",
-            choice: "no",
-            probabilities: { yes: 0.9, no: 0.1 },
-            probability: 0.2,
-            confidence: -2,
-          },
-        },
-      }),
-    ).toBe(true);
+    expectAnswers({ truth: { type: "boolean", probabilityTrue: 0.9 } });
+    expectAnswers({
+      pick: { ...choice("no", { yes: 0.9, no: 0.1 }), probability: 0.2, confidence: -2 },
+    });
   });
 
   it("retains per-question errors alongside usable answers", () => {
-    const value = result();
-    expect(
-      validateDecisionResultV2(batch, {
-        ...value,
-        answers: {
-          ...value.answers,
-          pick: { type: "error", code: "provider-error", providerCode: "x".repeat(128) },
-        },
-      }),
-    ).toBe(true);
+    expectAnswers({
+      pick: { type: "error", code: "provider-error", providerCode: "x".repeat(128) },
+    });
     for (const error of [
       { type: "error", code: "bad" },
       { type: "error", code: ["provider-error"] },
       { type: "error", code: "provider-error", providerCode: "x".repeat(129) },
       { type: "error", code: "provider-error", metadata: {} },
     ]) {
-      expect(
-        validateDecisionResultV2(batch, { ...value, answers: { ...value.answers, pick: error } }),
-      ).toBe(false);
+      expectAnswers({ pick: error }, false);
     }
   });
 
@@ -374,62 +341,33 @@ describe("V2 decision admission", () => {
       { ...value, usage: { units: { unit: "requests", amount: Infinity } } },
       { ...value, usage: { ignored: 2 } },
       { ...value, usage: { raw: undefined } },
-      {
-        ...value,
-        answers: {
-          ...value.answers,
-          truth: { type: "boolean", probabilityTrue: 0.5, confidence: 1 },
-        },
-      },
-      {
-        ...value,
-        answers: {
-          ...value.answers,
-          pick: { type: "choice", choice: "missing", probabilities: { yes: 0, no: 0 } },
-        },
-      },
-      {
-        ...value,
-        answers: {
-          ...value.answers,
-          pick: { type: "choice", choice: null, probabilities: { yes: 0 } },
-        },
-      },
-      { ...value, answers: { ...value.answers, rank: { type: "score", score: 2.1 } } },
-      {
-        ...value,
-        answers: { ...value.answers, rank: { type: "score", score: 1, probabilities: [0.5, 0.5] } },
-      },
+      result({ truth: { type: "boolean", probabilityTrue: 0.5, confidence: 1 } }),
+      result({ pick: choice("missing", { yes: 0, no: 0 }) }),
+      result({ pick: choice(null, { yes: 0 }) }),
+      result({ rank: { type: "score", score: 2.1 } }),
+      result({ rank: { type: "score", score: 1, probabilities: [0.5, 0.5] } }),
     ]) {
-      expect(validateDecisionResultV2(batch, invalid)).toBe(false);
+      expectResult(invalid, false);
     }
     for (const n of [-0.01, 1.01, Number.NaN, Infinity]) {
-      expect(
-        validateDecisionResultV2(batch, {
-          ...value,
-          answers: { ...value.answers, truth: { type: "boolean", probabilityTrue: n } },
-        }),
-      ).toBe(false);
+      expectAnswers({ truth: { type: "boolean", probabilityTrue: n } }, false);
     }
   });
 
   it("validates native sort and tags identities without sorting or thresholding", () => {
     const value = listResult();
     expect(validateDecisionBatchV2(listBatch)).toBe(true);
-    expect(
-      validateDecisionBatchV2({
-        state: { type: "list", items: [] },
-        questions: { sort: { type: "sort" } },
-      }),
-    ).toBe(true);
-    expect(validateDecisionResultV2(listBatch, value)).toBe(true);
+    expectState({ type: "list", items: [] }, true, {
+      ...listBatch,
+      questions: { sort: { type: "sort" } },
+    });
+    expectResult(value, true, listBatch);
     for (const order of [["a", "a"], ["a"], ["a", "c"], ["a", "b", "c"]]) {
-      expect(
-        validateDecisionResultV2(listBatch, {
-          ...value,
-          answers: { ...value.answers, sort: { type: "sort", order } },
-        }),
-      ).toBe(false);
+      expectResult(
+        { ...value, answers: { ...value.answers, sort: { type: "sort", order } } },
+        false,
+        listBatch,
+      );
     }
     for (const tags of [
       [{ id: "red", probability: 1, applies: true }],
@@ -446,12 +384,11 @@ describe("V2 decision admission", () => {
         { id: "blue", probability: 0 },
       ],
     ]) {
-      expect(
-        validateDecisionResultV2(listBatch, {
-          ...value,
-          answers: { ...value.answers, tags: { type: "tags", tags } },
-        }),
-      ).toBe(false);
+      expectResult(
+        { ...value, answers: { ...value.answers, tags: { type: "tags", tags } } },
+        false,
+        listBatch,
+      );
     }
   });
 
@@ -482,7 +419,7 @@ describe("V2 decision admission", () => {
       expect(() => validateDecisionBatchV2(invalid)).toThrow(DecisionContractError);
     }
     for (const value of [null, true, 1.5, "explicit json", [1, false], { value: 2 }]) {
-      expect(validateDecisionBatchV2({ ...batch, state: { type: "json", value } })).toBe(true);
+      expectState({ type: "json", value });
     }
   });
 
@@ -514,23 +451,13 @@ describe("V2 decision admission", () => {
       expect(() => validateDecisionBatchV2({ ...batch, state: { type: "json", value } })).toThrow(
         DecisionContractError,
       );
-      expect(validateDecisionResultV2(batch, { ...result(), metadata: value })).toBe(false);
+      expectResult({ ...result(), metadata: value }, false);
     }
     expect(getter).not.toHaveBeenCalled();
     expect(trap).not.toHaveBeenCalled();
     const shared = { value: 1 };
-    expect(
-      validateDecisionBatchV2({
-        ...batch,
-        state: { type: "json", value: { left: shared, right: shared } },
-      }),
-    ).toBe(true);
-    expect(
-      validateDecisionBatchV2({
-        ...batch,
-        state: { type: "json", value: Object.assign(Object.create(null), { value: 1 }) },
-      }),
-    ).toBe(true);
+    expectState({ type: "json", value: { left: shared, right: shared } });
+    expectState({ type: "json", value: Object.assign(Object.create(null), { value: 1 }) });
   });
 
   it("enforces finite JSON, question and list resource bounds", () => {
@@ -542,47 +469,31 @@ describe("V2 decision admission", () => {
       type: "list",
       items: Array.from({ length: n }, (_, i) => ({ id: String(i), content: null })),
     });
-    expect(validateDecisionBatchV2({ ...listBatch, state: list(120) })).toBe(true);
-    expect(validateDecisionBatchV2({ ...listBatch, state: list(121) })).toBe(false);
-    const empty = { state: { type: "text", text: "" }, questions: { q: { type: "boolean" } } };
+    expectState(list(120), true, listBatch);
+    expectState(list(121), false, listBatch);
+    const empty: DecisionBatchV2 = {
+      state: { type: "text", text: "" },
+      questions: { q: { type: "boolean" } },
+    };
     const remaining = 1_048_576 - Buffer.byteLength(JSON.stringify({ ...empty, state: "" }));
-    expect(
-      validateDecisionBatchV2({ ...empty, state: { type: "text", text: "x".repeat(remaining) } }),
-    ).toBe(true);
-    expect(
-      validateDecisionBatchV2({
-        ...empty,
-        state: { type: "text", text: "x".repeat(remaining + 1) },
-      }),
-    ).toBe(false);
-    expect(
-      validateDecisionBatchV2({
-        ...batch,
-        state: { type: "json", value: Array.from({ length: 20_001 }, () => null) },
-      }),
-    ).toBe(false);
+    expectState({ type: "text", text: "x".repeat(remaining) }, true, empty);
+    expectState({ type: "text", text: "x".repeat(remaining + 1) }, false, empty);
+    expectState({ type: "json", value: Array.from({ length: 20_001 }, () => null) }, false);
     let deep: unknown = null;
     for (let i = 0; i < 34; i++) {
       deep = { nested: deep };
     }
-    expect(validateDecisionBatchV2({ ...batch, state: { type: "json", value: deep } })).toBe(false);
-    expect(
-      validateDecisionResultV2(batch, { ...result(), metadata: { text: "x".repeat(1_048_576) } }),
-    ).toBe(false);
+    expectState({ type: "json", value: deep }, false);
+    expectResult({ ...result(), metadata: { text: "x".repeat(1_048_576) } }, false);
   });
 
   it("admits only canonical PNG/JPEG/WebP data URIs with a 4 MiB decoded ceiling", () => {
     for (const mime of ["png", "jpeg", "webp"]) {
-      expect(
-        validateDecisionBatchV2({
-          ...batch,
-          state: {
-            type: "image",
-            dataUri: "data:image/" + mime + ";base64,AA==",
-            text: "explicit",
-          },
-        }),
-      ).toBe(true);
+      expectState({
+        type: "image",
+        dataUri: "data:image/" + mime + ";base64,AA==",
+        text: "explicit",
+      });
     }
     for (const dataUri of [
       "https://example.invalid/image.png",
@@ -602,21 +513,9 @@ describe("V2 decision admission", () => {
       ).toThrow(DecisionContractError);
     }
     const dataUri = "data:image/png;base64," + Buffer.alloc(4 * 1_048_576).toString("base64");
-    expect(
-      validateDecisionBatchV2({
-        ...batch,
-        state: { type: "image", dataUri, text: "x".repeat(1000) },
-      }),
-    ).toBe(true);
+    expectState({ type: "image", dataUri, text: "x".repeat(1000) });
     const oversized = "data:image/png;base64," + Buffer.alloc(4 * 1_048_576 + 1).toString("base64");
-    expect(
-      validateDecisionBatchV2({ ...batch, state: { type: "image", dataUri: oversized } }),
-    ).toBe(false);
-    expect(
-      validateDecisionBatchV2({
-        ...batch,
-        state: { type: "image", dataUri, text: "x".repeat(1_048_576) },
-      }),
-    ).toBe(false);
+    expectState({ type: "image", dataUri: oversized }, false);
+    expectState({ type: "image", dataUri, text: "x".repeat(1_048_576) }, false);
   });
 });

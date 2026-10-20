@@ -5,6 +5,8 @@ import {
   setRuntimeConfigSnapshot,
   clearRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginEntryConfig } from "../config/types.plugins.js";
 import {
   onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -51,6 +53,20 @@ vi.mock("../agents/decision-inference.js", () => ({
 }));
 
 const richer = decisionBatchV1ToV2(batch)!;
+const assistanceConfig: OpenClawConfig = {
+  agents: {
+    defaults: { decisionModel: "fixture/fixture-v1", experimental: { decisionAssistance: true } },
+  },
+};
+const prefilter = () =>
+  evaluateAttemptDecisionToolPrefilter({
+    config: assistanceConfig,
+    agentId: "main",
+    supportsTurnScopedToolRestrictions: true,
+    assertActive: () => {},
+    userMessage: "Hello",
+    signal: new AbortController().signal,
+  });
 afterEach(() => {
   resetDiagnosticEventsForTest();
   resetPluginRuntimeStateForTest();
@@ -87,20 +103,27 @@ function native(evaluate: DecisionProviderV2["evaluate"]) {
     prepareDecisionProviderReload(builder.registry, new Set([record.id]));
     await getPluginInstance(record)?.dispose();
   });
-  return { ...builder, record, api };
+  return {
+    ...builder,
+    record,
+    api,
+    evaluate,
+    run: (opts = options()) => api.runtime.decisions.evaluateV2(richer, opts),
+  };
+}
+function mockNative() {
+  const evaluate = vi.fn<DecisionProviderV2["evaluate"]>(async () => answer);
+  return { ...native(evaluate), evaluate };
+}
+
+function selectOwner(agents: OpenClawConfig["agents"], llm: PluginEntryConfig["llm"]) {
+  setRuntimeConfigSnapshot({ agents, plugins: { entries: { owner: { llm } } } });
 }
 
 it.each([1, 2] as const)(
   "prefilters through a registered V%d provider without narrowing native result facts",
   async (version) => {
-    const selected = {
-      agents: {
-        defaults: {
-          decisionModel: "fixture/fixture-v1",
-          experimental: { decisionAssistance: true },
-        },
-      },
-    };
+    const selected = assistanceConfig;
     const evaluate = vi.fn(async () => ({
       status: "ok" as const,
       result: {
@@ -134,14 +157,7 @@ it.each([1, 2] as const)(
     );
     onTestFinished(stop);
     setRuntimeConfigSnapshot(selected);
-    const result = await evaluateAttemptDecisionToolPrefilter({
-      config: selected,
-      agentId: "main",
-      supportsTurnScopedToolRestrictions: true,
-      assertActive: () => {},
-      userMessage: "Hello",
-      signal: new AbortController().signal,
-    });
+    const result = await prefilter();
     expect(evaluate).toHaveBeenCalledOnce();
     expect(events).toEqual([
       expect.objectContaining({
@@ -178,7 +194,7 @@ it.each([1, 2] as const)(
       return answer;
     };
     const host = providerVersion === 1 ? registered(callback) : native(callback);
-    setRuntimeConfigSnapshot(config);
+    setRuntimeConfigSnapshot(assistanceConfig);
     const providerHost = host.registry.decisionProviders[0]!.host;
     const evaluate = (version: 1 | 2, requestOptions: DecisionEvaluateOptionsV2) =>
       version === 1
@@ -186,6 +202,11 @@ it.each([1, 2] as const)(
         : host.api.runtime.decisions.evaluateV2(richer, requestOptions);
     const pending: ReturnType<typeof evaluate>[] = [];
     const overloaded = { status: "unavailable", reason: "overloaded" };
+    const expectOverloaded = async (priority: "optional" | "requested" = "requested") => {
+      for (const version of [1, 2] as const) {
+        await expect(evaluate(version, { ...options(), priority })).resolves.toEqual(overloaded);
+      }
+    };
     try {
       for (const [index, priority] of (["optional", "requested", "optional"] as const).entries()) {
         const request = evaluate(index === 1 ? 1 : 2, {
@@ -197,33 +218,30 @@ it.each([1, 2] as const)(
         await Promise.race([started[index]!.promise, request]);
         expect(calls).toBe(index + 1);
       }
-      for (const version of [1, 2] as const) {
-        await expect(evaluate(version, { ...options(), priority: "optional" })).resolves.toEqual(
-          overloaded,
-        );
-      }
+      await expectOverloaded("optional");
+      expect(await prefilter()).toMatchObject({ status: "unavailable", shouldPruneTools: false });
       expect(calls).toBe(3);
-      const fourth = evaluate(providerVersion, options());
+      // Purpose text must not turn requested work into optional admission.
+      const fourth = evaluate(providerVersion, {
+        ...options(),
+        purpose: "tool-prefilter.semantic-gate",
+      });
       pending.push(fourth);
       await Promise.race([started[3]!.promise, fourth]);
       expect(calls).toBe(4);
-      for (const version of [1, 2] as const) {
-        await expect(evaluate(version, options())).resolves.toEqual(overloaded);
-      }
+      await expectOverloaded();
 
       const reason = new Error("V2 caller cancelled");
       const rejected = expect(pending[0]!).rejects.toBe(reason);
       cancelled.abort(reason);
       expect(providerHost.inspect(config).activeRequests).toBe(4);
+      expect(await prefilter()).toMatchObject({ status: "unavailable", shouldPruneTools: false });
+      expect(calls).toBe(4);
       await expect(evaluate(2, options())).resolves.toEqual(overloaded);
       release[0]!.resolve();
       await rejected;
       expect(providerHost.inspect(config).activeRequests).toBe(3);
-      for (const version of [1, 2] as const) {
-        await expect(evaluate(version, { ...options(), priority: "optional" })).resolves.toEqual(
-          overloaded,
-        );
-      }
+      await expectOverloaded("optional");
       expect(calls).toBe(4);
       release[1]!.resolve();
       await pending[1];
@@ -244,25 +262,19 @@ it.each([1, 2] as const)(
 );
 
 it("rejects invalid V2 priority before provider dispatch", async () => {
-  const evaluate = vi.fn<DecisionProviderV2["evaluate"]>(async () => answer);
-  const host = native(evaluate);
+  const { evaluate, ...host } = mockNative();
   const requestOptions = options();
   Reflect.set(requestOptions, "priority", "urgent");
-  await expect(host.api.runtime.decisions.evaluateV2(richer, requestOptions)).rejects.toThrow(
-    "Invalid decision contract",
-  );
+  await expect(host.run(requestOptions)).rejects.toThrow("Invalid decision contract");
   expect(evaluate).not.toHaveBeenCalled();
 });
 
 it("leaves V2 credential admission to preparation without a global readiness claim", async () => {
-  const evaluate = vi.fn<DecisionProviderV2["evaluate"]>(async () => answer);
-  const host = native(evaluate);
+  const { evaluate, ...host } = mockNative();
   const status = host.registry.decisionProviders[0]!.host.inspect(config);
   expect(status).not.toHaveProperty("credentialReady");
   expect(status.callable).toBe(true);
-  await expect(host.api.runtime.decisions.evaluateV2(richer, options())).resolves.toMatchObject({
-    status: "ok",
-  });
+  await expect(host.run()).resolves.toMatchObject({ status: "ok" });
   expect(evaluate).toHaveBeenCalledOnce();
   const providerHost = host.registry.decisionProviders[0]!.host;
   providerHost.retire();
@@ -274,26 +286,18 @@ it("leaves V2 credential admission to preparation without a global readiness cla
 it.each([undefined, false, true])(
   "preserves the explicit V2 owner independently of LLM override permission (%j)",
   async (allowAgentIdOverride) => {
-    const evaluate = vi.fn<DecisionProviderV2["evaluate"]>(async () => answer);
-    const host = native(evaluate);
-    setRuntimeConfigSnapshot({
-      agents: {
+    const { evaluate, ...host } = mockNative();
+    selectOwner(
+      {
         defaults: { model: "fixture/primary" },
         entries: { specialist: { decisionModel: "fixture/specialist-v2" } },
       },
-      plugins: {
-        entries: {
-          owner: {
-            llm: { allowAgentIdOverride, allowedCompletionModels: ["fixture/specialist-v2"] },
-          },
-        },
-      },
-    });
+      { allowAgentIdOverride, allowedCompletionModels: ["fixture/specialist-v2"] },
+    );
     await expect(
       withGatewayToolCallerIdentity(
         { agentId: "ambient", sessionKey: "agent:ambient:fixture" },
-        () =>
-          host.api.runtime.decisions.evaluateV2(richer, { ...options(), agentId: "specialist" }),
+        () => host.run({ ...options(), agentId: "specialist" }),
       ),
     ).resolves.toMatchObject({ status: "ok" });
     expect(evaluate).toHaveBeenCalledOnce();
@@ -307,22 +311,14 @@ it.each([undefined, false, true])(
 it.each(["specialist-v2", "other"])(
   "authorizes the bare model while retaining an explicit credential profile (%s)",
   async (model) => {
-    const evaluate = vi.fn<DecisionProviderV2["evaluate"]>(async () => answer);
-    const host = native(evaluate);
-    setRuntimeConfigSnapshot({
-      agents: {
+    const { evaluate, ...host } = mockNative();
+    selectOwner(
+      {
         entries: { specialist: { decisionModel: `fixture/${model}@fixture:agent` } },
       },
-      plugins: {
-        entries: {
-          owner: { llm: { allowedCompletionModels: ["fixture/specialist-v2"] } },
-        },
-      },
-    });
-    const pending = host.api.runtime.decisions.evaluateV2(richer, {
-      ...options(),
-      agentId: "specialist",
-    });
+      { allowedCompletionModels: ["fixture/specialist-v2"] },
+    );
+    const pending = host.run({ ...options(), agentId: "specialist" });
     if (model === "other") {
       await expect(pending).rejects.toThrow(/not allowlisted/);
       expect(evaluate).not.toHaveBeenCalled();
@@ -345,15 +341,9 @@ it.each([
 ])(
   "enforces the consumer completion allowlist before V2 dispatch (%j)",
   async ({ allowedCompletionModels }) => {
-    const evaluate = vi.fn<DecisionProviderV2["evaluate"]>(async () => answer);
-    const host = native(evaluate);
-    setRuntimeConfigSnapshot({
-      ...config,
-      plugins: { entries: { owner: { llm: { allowedCompletionModels } } } },
-    });
-    await expect(host.api.runtime.decisions.evaluateV2(richer, options())).rejects.toThrow(
-      /not allowlisted|no valid models/,
-    );
+    const { evaluate, ...host } = mockNative();
+    selectOwner(config.agents, { allowedCompletionModels });
+    await expect(host.run()).rejects.toThrow(/not allowlisted|no valid models/);
     expect(evaluate).not.toHaveBeenCalled();
   },
 );
@@ -411,7 +401,7 @@ it("preserves native abstention in V2 and refuses lossy V1 narrowing", async () 
       },
     },
   }));
-  await expect(host.api.runtime.decisions.evaluateV2(richer, options())).resolves.toMatchObject({
+  await expect(host.run()).resolves.toMatchObject({
     status: "ok",
     result: { answers: { truth: { answer: null } } },
   });

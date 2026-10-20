@@ -204,18 +204,11 @@ describe("explicit decision version conversion", () => {
 
   it("refuses to drop abstention, explicit decisions, errors, missing distributions or metadata", () => {
     const answers: DecisionBatchResultV2["answers"][] = [
-      { ...result.answers, boolean: { type: "boolean", probabilityTrue: 0.99, answer: null } },
-      { ...result.answers, boolean: { type: "boolean", probabilityTrue: 0.99, answer: false } },
+      { boolean: { type: "boolean", probabilityTrue: 0.99, answer: null } },
+      { boolean: { type: "boolean", probabilityTrue: 0.99, answer: false } },
+      { choice: { type: "choice", choice: null, probabilities: { yes: 0, no: 0 } } },
+      { choice: { type: "choice", choice: "no", probabilities: { yes: 0, no: 0 } } },
       {
-        ...result.answers,
-        choice: { type: "choice", choice: null, probabilities: { yes: 0, no: 0 } },
-      },
-      {
-        ...result.answers,
-        choice: { type: "choice", choice: "no", probabilities: { yes: 0, no: 0 } },
-      },
-      {
-        ...result.answers,
         choice: {
           type: "choice",
           choice: "no",
@@ -224,7 +217,6 @@ describe("explicit decision version conversion", () => {
         },
       },
       {
-        ...result.answers,
         choice: {
           type: "choice",
           choice: "no",
@@ -232,19 +224,20 @@ describe("explicit decision version conversion", () => {
           confidence: null,
         },
       },
-      { ...result.answers, score: { type: "score", score: 1.3 } },
-      { ...result.answers, score: { type: "score", score: 1.3, probabilities: [0, 0, 0] } },
+      { score: { type: "score", score: 1.3 } },
+      { score: { type: "score", score: 1.3, probabilities: [0, 0, 0] } },
       {
-        ...result.answers,
         boolean: { type: "boolean", probabilityTrue: 0.99, metadata: { reasoning: "reported" } },
       },
-      {
-        ...result.answers,
-        boolean: { type: "error", code: "provider-error", providerCode: "synthetic" },
-      },
+      { boolean: { type: "error", code: "provider-error", providerCode: "synthetic" } },
     ];
     for (const answer of answers) {
-      expect(decisionResultV2ToV1(v2Batch, { ...result, answers: answer })).toBeUndefined();
+      expect(
+        decisionResultV2ToV1(v2Batch, {
+          ...result,
+          answers: { ...result.answers, ...answer },
+        }),
+      ).toBeUndefined();
     }
     for (const extra of [
       { metadata: { route: "reported" } },
@@ -259,21 +252,17 @@ describe("explicit decision version conversion", () => {
   it("retains the legacy guard semantics after shared-primitives extraction", () => {
     expect(validateDecisionBatch(batch)).toBe(true);
     expect(validateDecisionResult(batch, result)).toBe(true);
-    expect(
-      validateDecisionResult(batch, {
-        ...result,
-        answers: {
-          ...result.answers,
-          choice: { type: "choice", choice: "no", probabilities: { yes: 0, no: 0 } },
-        },
-      }),
-    ).toBe(false);
-    expect(
-      validateDecisionResult(batch, {
-        ...result,
-        answers: { ...result.answers, score: { type: "score", score: 1.3 } },
-      }),
-    ).toBe(false);
+    for (const answer of [
+      { choice: { type: "choice", choice: "no", probabilities: { yes: 0, no: 0 } } },
+      { score: { type: "score", score: 1.3 } },
+    ]) {
+      expect(
+        validateDecisionResult(batch, {
+          ...result,
+          answers: { ...result.answers, ...answer },
+        }),
+      ).toBe(false);
+    }
     expect(validateDecisionResult(batch, { ...result, usage: { costUsd: 1 } })).toBe(false);
     expect(validateDecisionBatch({ ...batch, state: "x".repeat(1_048_576) })).toBe(false);
     expect(decisionBatchV1ToV2({ ...batch, state: "x".repeat(1_048_576) })).toBeUndefined();
