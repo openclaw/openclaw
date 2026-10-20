@@ -35,41 +35,14 @@ afterEach(() => {
 });
 
 it.each([
-  {
-    name: "foreign capture under root",
-    uid: 0,
-    peerUid: 501,
-    captureUid: 501,
-    changed: false,
-    removed: false,
-  },
-  {
-    name: "owner changes before removal",
-    uid: 0,
-    peerUid: 501,
-    captureUid: 0,
-    changed: true,
-    removed: false,
-  },
-  {
-    name: "current user scratch",
-    uid: 501,
-    peerUid: 0,
-    captureUid: 501,
-    changed: false,
-    removed: true,
-  },
-  {
-    name: "root-owned scratch",
-    uid: 0,
-    peerUid: 501,
-    captureUid: 0,
-    changed: false,
-    removed: true,
-  },
-])(
-  "automatic sweep respects legacy custody: $name",
-  async ({ uid, peerUid, captureUid, changed, removed }) => {
+  // name, current uid, peer uid, capture uid, owner changes, removed
+  ["foreign capture under root", 0, 501, 501, false, false],
+  ["owner changes before removal", 0, 501, 0, true, false],
+  ["current user scratch", 501, 0, 501, false, true],
+  ["root-owned scratch", 0, 501, 0, false, true],
+] as const)(
+  "automatic sweep respects legacy custody: %s",
+  async (_name, uid, peerUid, captureUid, changed, removed) => {
     Object.defineProperty(process, "getuid", { configurable: true, value: () => uid });
     const roots = [
       path.join(temporary, "openclaw-plugin-build-retained"),

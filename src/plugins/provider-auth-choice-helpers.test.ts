@@ -1,4 +1,3 @@
-/** Verifies provider auth choice helper defaults, sorting, and config matching. */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
@@ -8,6 +7,19 @@ import type { ProviderAuthResult } from "./provider-authentication.types.js";
 
 const providerConfigNormalizer = ({ providerConfig }: { providerConfig: ModelProviderConfig }) =>
   providerConfig;
+const providerPatch = <T>(providers: T) => ({ models: { providers } });
+const model = (
+  overrides: Partial<ModelProviderConfig["models"][number]> = {},
+): ModelProviderConfig["models"][number] => ({
+  id: "google/gemini-3-pro-preview",
+  name: "Gemini 3 Pro Preview",
+  input: ["text", "image"],
+  reasoning: true,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 1_048_576,
+  maxTokens: 65_536,
+  ...overrides,
+});
 
 describe("applyProviderAuthConfigPatchWithNormalization", () => {
   const base = {
@@ -73,31 +85,23 @@ describe("applyProviderAuthConfigPatchWithNormalization", () => {
   });
 
   it("deletes provider auth fields marked undefined by auth patches", () => {
-    const baseLocal = {
-      models: {
-        providers: {
-          "microsoft-foundry": {
-            baseUrl: "https://example.services.ai.azure.com/openai/v1",
-            api: "anthropic-messages",
-            authHeader: false,
-            apiKey: "FOUNDRY_API_KEY",
-            headers: { "api-key": "FOUNDRY_API_KEY" },
-            models: [],
-          },
-        },
+    const baseLocal = providerPatch({
+      "microsoft-foundry": {
+        baseUrl: "https://example.services.ai.azure.com/openai/v1",
+        api: "anthropic-messages",
+        authHeader: false,
+        apiKey: "FOUNDRY_API_KEY",
+        headers: { "api-key": "FOUNDRY_API_KEY" },
+        models: [],
       },
-    } satisfies OpenClawConfig;
-    const patch = {
-      models: {
-        providers: {
-          "microsoft-foundry": {
-            authHeader: true,
-            apiKey: undefined,
-            headers: undefined,
-          },
-        },
+    } satisfies Record<string, ModelProviderConfig>);
+    const patch = providerPatch({
+      "microsoft-foundry": {
+        authHeader: true,
+        apiKey: undefined,
+        headers: undefined,
       },
-    };
+    });
 
     const next = applyProviderAuthConfigPatchWithNormalization(baseLocal, patch, {
       providerConfigNormalizer,
@@ -118,18 +122,14 @@ describe("applyProviderAuthConfigPatchWithNormalization", () => {
       request: { headers: { "X-Custom-Auth": "old-key", "X-Route": "keep" } },
       models: [],
     };
-    const patch: ProviderAuthResult["configPatch"] = {
-      models: {
-        providers: {
-          fixture: {
-            ...provider,
-            headers: { Authorization: undefined },
-            request: { headers: { "X-Custom-Auth": undefined } },
-          },
-        },
+    const patch: ProviderAuthResult["configPatch"] = providerPatch({
+      fixture: {
+        ...provider,
+        headers: { Authorization: undefined },
+        request: { headers: { "X-Custom-Auth": undefined } },
       },
-    };
-    const next = applySdkAuthPatch({ models: { providers: { fixture: provider } } }, patch);
+    });
+    const next = applySdkAuthPatch(providerPatch({ fixture: provider }), patch);
     expect(next.models?.providers?.fixture).toMatchObject({
       headers: { "X-Deployment": "keep" },
       request: { headers: { "X-Route": "keep" } },
@@ -141,21 +141,20 @@ describe("applyProviderAuthConfigPatchWithNormalization", () => {
   it.each(["litellm", "LiteLLM"] as const)(
     "preserves fresh %s fields and canonical unchanged fields from a whole-config auth result",
     (updatedKey) => {
-      const model: ModelProviderConfig["models"][number] = {
+      const localModel = model({
         id: "local-model",
         name: "Local model",
         reasoning: false,
         input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 8192,
         maxTokens: 2048,
-      };
+      });
       const canonical: ModelProviderConfig = {
         baseUrl: "https://canonical.example/v1",
         apiKey: "canonical-key",
         headers: { "x-old": "remove" },
         params: { canonicalKeep: true, shared: "canonical" },
-        models: [{ ...model, params: { canonicalValue: null, shared: "canonical" } }],
+        models: [{ ...localModel, params: { canonicalValue: null, shared: "canonical" } }],
       };
       const alias: ModelProviderConfig = {
         baseUrl: "https://alias.example/v1",
@@ -164,38 +163,34 @@ describe("applyProviderAuthConfigPatchWithNormalization", () => {
         request: { headers: { "x-route": "keep" } },
         models: [
           {
-            ...model,
+            ...localModel,
             params: { aliasValue: null, shared: "alias", rows: [{ id: "same", stale: true }] },
           },
         ],
       };
-      const baseLocal = { models: { providers: { litellm: canonical, LiteLLM: alias } } };
+      const baseLocal = providerPatch({ litellm: canonical, LiteLLM: alias });
       const sourceRow = baseLocal.models.providers[updatedKey];
       // Auth plugins may return the whole config, including unchanged duplicate rows.
-      const patch = {
-        models: {
-          providers: {
-            ...baseLocal.models.providers,
-            [updatedKey]: {
-              ...sourceRow,
-              baseUrl: "https://selected.example/v1",
-              apiKey: "selected-key",
-              headers: undefined,
-              params: { ...sourceRow.params, selected: true },
-              models: [
-                {
-                  ...model,
-                  params: {
-                    ...sourceRow.models[0]?.params,
-                    selectedValue: null,
-                    rows: [{ id: "same", selected: true }],
-                  },
-                },
-              ],
+      const patch = providerPatch({
+        ...baseLocal.models.providers,
+        [updatedKey]: {
+          ...sourceRow,
+          baseUrl: "https://selected.example/v1",
+          apiKey: "selected-key",
+          headers: undefined,
+          params: { ...sourceRow.params, selected: true },
+          models: [
+            {
+              ...localModel,
+              params: {
+                ...sourceRow.models[0]?.params,
+                selectedValue: null,
+                rows: [{ id: "same", selected: true }],
+              },
             },
-          },
+          ],
         },
-      };
+      });
 
       const next = applyProviderAuthConfigPatchWithNormalization(baseLocal, patch, {
         providerConfigNormalizer,
@@ -209,7 +204,7 @@ describe("applyProviderAuthConfigPatchWithNormalization", () => {
           request: alias.request,
           models: [
             {
-              ...model,
+              ...localModel,
               params: {
                 canonicalValue: null,
                 aliasValue: null,
@@ -256,66 +251,27 @@ describe("applyProviderAuthConfigPatchWithNormalization", () => {
     });
   });
 
-  it("normalizes retired Google Gemini provider catalog rows from provider config patches", () => {
-    const patch = {
-      models: {
-        providers: {
-          google: {
-            baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-            api: "openai-completions",
-            apiKey: "GOOGLE_API_KEY",
-            models: [
-              {
-                id: "google/gemini-3-pro-preview",
-                name: "Gemini 3 Pro Preview",
-                input: ["text", "image"],
-                reasoning: true,
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 1_048_576,
-                maxTokens: 65_536,
-              },
-            ],
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    const next = applyProviderAuthConfigPatchWithNormalization({}, patch, {
-      providerConfigNormalizer,
-    });
-
-    expect(next.models?.providers?.google?.models?.[0]?.id).toBe("google/gemini-3.1-pro-preview");
-    expect(next.models?.providers?.google?.api).toBe("openai-completions");
-  });
-
-  it("normalizes nested retired Gemini provider catalog rows from proxy config patches", () => {
-    const patch = {
-      models: {
-        providers: {
-          kilocode: {
-            baseUrl: "https://proxy.example/v1",
-            api: "openai-completions",
-            apiKey: "KILOCODE_API_KEY",
-            models: [
-              {
-                id: "google/gemini-3-pro-preview",
-                name: "Gemini via Kilo",
-                input: ["text", "image"],
-                reasoning: true,
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 1_048_576,
-                maxTokens: 65_536,
-              },
-            ],
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    const next = applyProviderAuthConfigPatchWithNormalization({}, patch, {
-      providerConfigNormalizer,
-    });
-
-    expect(next.models?.providers?.kilocode?.models?.[0]?.id).toBe("google/gemini-3.1-pro-preview");
-  });
+  it.each([
+    [
+      "google",
+      "https://generativelanguage.googleapis.com/v1beta/openai",
+      "GOOGLE_API_KEY",
+      "Gemini 3 Pro Preview",
+    ],
+    ["kilocode", "https://proxy.example/v1", "KILOCODE_API_KEY", "Gemini via Kilo"],
+  ])(
+    "normalizes retired Gemini catalog rows from %s config patches",
+    (provider, baseUrl, apiKey, name) => {
+      const patch = providerPatch({
+        [provider]: { baseUrl, api: "openai-completions", apiKey, models: [model({ name })] },
+      } satisfies Record<string, ModelProviderConfig>);
+      const next = applyProviderAuthConfigPatchWithNormalization({}, patch, {
+        providerConfigNormalizer,
+      });
+      expect(next.models?.providers?.[provider]?.models?.[0]?.id).toBe(
+        "google/gemini-3.1-pro-preview",
+      );
+      expect(next.models?.providers?.[provider]?.api).toBe("openai-completions");
+    },
+  );
 });

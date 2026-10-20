@@ -28,6 +28,22 @@ const environment = captureEnv([
   "OPENCLAW_BUNDLED_PLUGINS_DIR",
 ]);
 
+function writeManifest(directory: string, managesOwnAvailability: unknown) {
+  fs.writeFileSync(
+    path.join(directory, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: "installed",
+      providers: ["local"],
+      managesOwnAvailability,
+      configSchema: { type: "object" },
+    }),
+  );
+}
+
+function within<T>(snapshot: Parameters<typeof withPluginMetadataSnapshotScope>[0], run: () => T) {
+  return withPluginMetadataSnapshotScope(snapshot, run, { trustConfigIdentity: true });
+}
+
 beforeEach(() => {
   clearRuntimeConfigSnapshot();
   clearPluginMetadataLifecycleCaches();
@@ -54,15 +70,7 @@ describe("static provider availability ownership", () => {
 
   it.each([true, false, "true", 1, null])("accepts only the boolean declaration %s", (value) => {
     const dir = tempDirs.make("openclaw-provider-availability-");
-    fs.writeFileSync(
-      path.join(dir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: "installed",
-        providers: ["local"],
-        managesOwnAvailability: value,
-        configSchema: { type: "object" },
-      }),
-    );
+    writeManifest(dir, value);
     const loaded = loadPluginManifest(dir, false);
     expect(loaded.ok).toBe(true);
     if (loaded.ok) {
@@ -78,15 +86,7 @@ describe("static provider availability ownership", () => {
       path.join(pluginDir, "index.js"),
       "throw new Error('provider runtime must remain cold');\n",
     );
-    fs.writeFileSync(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: "installed",
-        providers: ["local"],
-        managesOwnAvailability: true,
-        configSchema: { type: "object" },
-      }),
-    );
+    writeManifest(pluginDir, true);
     const index = createIndex(pluginDir);
     await writePersistedInstalledPluginIndex(index, { stateDir });
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
@@ -106,21 +106,9 @@ describe("static provider availability ownership", () => {
     expect(resolveProviderManagesOwnAvailability("LOCAL")).toBe(true);
     expect(resolveProviderManagesOwnAvailability("unrelated")).toBe(false);
     const snapshot = loadPluginMetadataSnapshot({ config, env: process.env });
-    expect(
-      withPluginMetadataSnapshotScope(
-        snapshot,
-        () => resolveProviderManagesOwnAvailability("local"),
-        {
-          trustConfigIdentity: true,
-        },
-      ),
-    ).toBe(true);
+    expect(within(snapshot, () => resolveProviderManagesOwnAvailability("local"))).toBe(true);
     const empty = projectPluginMetadataSnapshot(snapshot, []);
-    expect(
-      withPluginMetadataSnapshotScope(empty, () => resolveProviderManagesOwnAvailability("local"), {
-        trustConfigIdentity: true,
-      }),
-    ).toBe(false);
+    expect(within(empty, () => resolveProviderManagesOwnAvailability("local"))).toBe(false);
   });
 
   it("preserves literal owner precedence and excludes disabled declarations", () => {
@@ -144,14 +132,10 @@ describe("static provider availability ownership", () => {
       },
       snapshot.manifestRegistry,
     );
-    withPluginMetadataSnapshotScope(
-      prepared,
-      () => {
-        expect(resolveProviderManagesOwnAvailability("shared")).toBe(false);
-        expect(resolveProviderManagesOwnAvailability("local")).toBe(true);
-        expect(resolveProviderManagesOwnAvailability("disabled-local")).toBe(false);
-      },
-      { trustConfigIdentity: true },
-    );
+    within(prepared, () => {
+      expect(resolveProviderManagesOwnAvailability("shared")).toBe(false);
+      expect(resolveProviderManagesOwnAvailability("local")).toBe(true);
+      expect(resolveProviderManagesOwnAvailability("disabled-local")).toBe(false);
+    });
   });
 });

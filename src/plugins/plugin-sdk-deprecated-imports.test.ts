@@ -15,6 +15,8 @@ function write(root: string, relative: string, content: string): string {
   fs.writeFileSync(filename, content);
   return filename;
 }
+const writeJson = (root: string, relative: string, content: unknown) =>
+  write(root, relative, JSON.stringify(content));
 
 it("records a real deprecated member only when the loaded plugin calls it", async () => {
   const root = fs.realpathSync(temp.make("plugin-deprecated-member-"));
@@ -48,33 +50,25 @@ it.each([false, true])(
       compilerOptions: { paths: Record<string, string[]> };
     };
     // Keep workspace imports while allowing the synthetic host to own its SDK self-imports.
-    const tsconfig = write(
-      root,
-      "tsconfig.json",
-      JSON.stringify({
-        extends: path.resolve("tsconfig.json"),
-        compilerOptions: {
-          paths: Object.fromEntries(
-            Object.entries(config.compilerOptions.paths)
-              .filter(([name]) => !name.startsWith("openclaw/"))
-              .map(([name, targets]) => [name, targets.map((target) => path.resolve(target))]),
-          ),
-        },
-      }),
-    );
-    write(
-      host,
-      "package.json",
-      JSON.stringify({
-        name: "openclaw",
-        type: "module",
-        bin: { openclaw: "./openclaw.mjs" },
-        exports: {
-          "./plugin-sdk/agent-runtime": "./dist/plugin-sdk/agent-runtime.js",
-          "./plugin-sdk/command-auth-native": "./dist/plugin-sdk/command-auth-native.js",
-        },
-      }),
-    );
+    const tsconfig = writeJson(root, "tsconfig.json", {
+      extends: path.resolve("tsconfig.json"),
+      compilerOptions: {
+        paths: Object.fromEntries(
+          Object.entries(config.compilerOptions.paths)
+            .filter(([name]) => !name.startsWith("openclaw/"))
+            .map(([name, targets]) => [name, targets.map((target) => path.resolve(target))]),
+        ),
+      },
+    });
+    writeJson(host, "package.json", {
+      name: "openclaw",
+      type: "module",
+      bin: { openclaw: "./openclaw.mjs" },
+      exports: {
+        "./plugin-sdk/agent-runtime": "./dist/plugin-sdk/agent-runtime.js",
+        "./plugin-sdk/command-auth-native": "./dist/plugin-sdk/command-auth-native.js",
+      },
+    });
     write(host, "dist/plugin-sdk/agent-runtime.js", "export const value = 'deprecated';");
     write(
       host,
@@ -83,29 +77,29 @@ it.each([false, true])(
        export const value = hostLegacyValue === 'deprecated' ? 'active' : 'broken';`,
     );
     const entries = [
-      {
-        id: "synthetic-source",
-        source: "index.ts",
-        body: "export { value } from 'openclaw/plugin-sdk/agent-runtime';",
-      },
-      {
-        id: "synthetic-commonjs",
-        source: "index.cjs",
-        body: "module.exports = require('openclaw/plugin-sdk/agent-runtime');",
-      },
-      {
-        id: "synthetic-deferred",
-        source: "index.ts",
-        body: "export const read = () => import('openclaw/plugin-sdk/agent-runtime');",
-      },
-      {
-        id: "synthetic-active",
-        source: "index.ts",
-        body: "export { value } from 'openclaw/plugin-sdk/command-auth-native';",
-      },
-    ].map(({ id, source, body }) => {
+      [
+        "synthetic-source",
+        "index.ts",
+        "export { value } from 'openclaw/plugin-sdk/agent-runtime';",
+      ],
+      [
+        "synthetic-commonjs",
+        "index.cjs",
+        "module.exports = require('openclaw/plugin-sdk/agent-runtime');",
+      ],
+      [
+        "synthetic-deferred",
+        "index.ts",
+        "export const read = () => import('openclaw/plugin-sdk/agent-runtime');",
+      ],
+      [
+        "synthetic-active",
+        "index.ts",
+        "export { value } from 'openclaw/plugin-sdk/command-auth-native';",
+      ],
+    ].map(([id, source, body]) => {
       const directory = path.join(root, id);
-      write(directory, "package.json", JSON.stringify({ name: id, type: "module" }));
+      writeJson(directory, "package.json", { name: id, type: "module" });
       return { id, directory, entry: write(directory, source, body) };
     });
     const moduleUrl = (relative: string) => pathToFileURL(path.resolve(relative)).href;
