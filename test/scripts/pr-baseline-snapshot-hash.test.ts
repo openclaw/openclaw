@@ -20,6 +20,9 @@ let env: NodeJS.ProcessEnv;
 const authorityPath = ".local/correction-review.json";
 const oid = (bytes: Buffer) =>
   createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
+const expectClean = () =>
+  expect(readdirSync(scratch).filter((name) => name.startsWith("openclaw-pr-hash-"))).toEqual([]);
+const gitRun = (...args: string[]) => spawnSync(git, args, { cwd: root, env, encoding: "utf8" });
 
 function invocation(bytes: Buffer) {
   writeFileSync(join(root, authorityPath), bytes);
@@ -43,19 +46,19 @@ function invocation(bytes: Buffer) {
 // No fixture pretends that hashing alone grants transition authority.
 function run(bytes: Buffer, overrides: NodeJS.ProcessEnv = {}, limitedWrite = false) {
   const { args, input } = invocation(bytes);
-  const result = spawnSync(
-    limitedWrite ? "python3" : node,
-    limitedWrite
-      ? [
-          "-c",
-          "import os,resource,signal,sys; signal.signal(signal.SIGXFSZ,signal.SIG_IGN); resource.setrlimit(resource.RLIMIT_FSIZE,(1024,1024)); os.execv(sys.argv[1],sys.argv[1:])",
-          node,
-          ...args,
-        ]
-      : args,
-    { cwd: root, env: { ...env, ...overrides }, input, encoding: "utf8" },
-  );
-  expect(readdirSync(scratch).filter((name) => name.startsWith("openclaw-pr-hash-"))).toEqual([]);
+  const limitedArgs = [
+    "-c",
+    "import os,resource,signal,sys; signal.signal(signal.SIGXFSZ,signal.SIG_IGN); resource.setrlimit(resource.RLIMIT_FSIZE,(1024,1024)); os.execv(sys.argv[1],sys.argv[1:])",
+    node,
+    ...args,
+  ];
+  const result = spawnSync(limitedWrite ? "python3" : node, limitedWrite ? limitedArgs : args, {
+    cwd: root,
+    env: { ...env, ...overrides },
+    input,
+    encoding: "utf8",
+  });
+  expectClean();
   return result;
 }
 
@@ -79,16 +82,12 @@ describePosix("captured baseline hash stdin", () => {
       ["config", "core.hooksPath", "/dev/null"],
       ["config", "commit.gpgSign", "false"],
     ]) {
-      expect(spawnSync(git, args, { cwd: root, env }).status).toBe(0);
+      expect(gitRun(...args).status).toBe(0);
     }
     writeFileSync(join(root, ".gitignore"), ".local/\n");
-    expect(spawnSync(git, ["add", ".gitignore"], { cwd: root, env }).status).toBe(0);
-    expect(spawnSync(git, ["commit", "-qm", "fixture"], { cwd: root, env }).status).toBe(0);
-    head = spawnSync(git, ["rev-parse", "HEAD"], {
-      cwd: root,
-      env,
-      encoding: "utf8",
-    }).stdout.trim();
+    expect(gitRun("add", ".gitignore").status).toBe(0);
+    expect(gitRun("commit", "-qm", "fixture").status).toBe(0);
+    head = gitRun("rev-parse", "HEAD").stdout.trim();
     probe = join(root, ".local/git-probe");
     writeFileSync(
       probe,
@@ -183,16 +182,12 @@ os.execv(${JSON.stringify(git)},[${JSON.stringify(git)},*args])
         }),
       ]);
       await once(socket, "data");
-      expect(readdirSync(scratch).filter((name) => name.startsWith("openclaw-pr-hash-"))).toEqual(
-        [],
-      );
+      expectClean();
       child.kill("SIGTERM");
       socket.destroy();
       const [code] = await closed;
       expect(code).toBe(143);
-      expect(readdirSync(scratch).filter((name) => name.startsWith("openclaw-pr-hash-"))).toEqual(
-        [],
-      );
+      expectClean();
     } finally {
       if (child.exitCode === null && child.signalCode === null) {
         child.kill("SIGTERM");

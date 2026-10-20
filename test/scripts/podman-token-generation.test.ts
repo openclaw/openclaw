@@ -28,18 +28,7 @@ function createFixture(backend: (typeof backends)[number], generatorExit: number
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.copyFileSync(path.resolve(relative), target);
   }
-  for (const name of [
-    "awk",
-    "cat",
-    "chmod",
-    "dirname",
-    "install",
-    "mkdir",
-    "mktemp",
-    "mv",
-    "rm",
-    "tr",
-  ]) {
+  for (const name of "awk cat chmod dirname install mkdir mktemp mv rm tr".split(" ")) {
     const executable = ["/usr/bin", "/bin"].map((dir) => path.join(dir, name)).find(fs.existsSync);
     if (!executable) {
       throw new Error(`Missing shell fixture tool: ${name}`);
@@ -58,20 +47,16 @@ function createFixture(backend: (typeof backends)[number], generatorExit: number
   command("uname", 'printf "Linux\\n"');
   command("podman", 'printf "%s\\n" "$*" >> "$PODMAN_CALLS"');
   const emitted = backend === "od" ? `${" ab".repeat(32)}\n` : `${fixtureToken}\n`;
+  // Python also normalizes config after success; that operation may decline.
   command(
     backend,
-    [
-      // Python is also an optional config-normalization helper after success;
-      // that separate operation may decline without preventing startup.
-      ...(backend === "python3" ? ['[[ "$#" -eq 1 ]] || exit 0'] : []),
-      'if [[ "$GENERATOR_EXIT" -ne 0 ]]; then',
-      '  printf "fixture random source failed\\n" >&2',
-      '  exit "$GENERATOR_EXIT"',
-      "fi",
-      `printf '%s' '${emitted}'`,
-    ].join("\n"),
+    `${backend === "python3" ? '[[ "$#" -eq 1 ]] || exit 0\n' : ""}if [[ "$GENERATOR_EXIT" -ne 0 ]]; then
+  printf "fixture random source failed\\n" >&2
+  exit "$GENERATOR_EXIT"
+fi
+printf '%s' '${emitted}'`,
   );
-  const env: NodeJS.ProcessEnv = {
+  const env = {
     HOME: home,
     PATH: bin,
     OPENCLAW_REPO_PATH: root,
@@ -81,17 +66,19 @@ function createFixture(backend: (typeof backends)[number], generatorExit: number
     GENERATOR_EXIT: String(generatorExit),
     PODMAN_CALLS: calls,
   };
-  return { root, config, calls, env };
+  return {
+    config,
+    calls,
+    run: (entrypoint: string) =>
+      spawnSync("/bin/bash", [path.join(root, entrypoint)], { env, encoding: "utf8" }),
+  };
 }
 
 describe("Podman generated gateway tokens", () => {
   for (const entrypoint of entrypoints) {
     it.each(backends)(`${entrypoint} persists a successful %s token`, (backend) => {
       const fixture = createFixture(backend, 0);
-      const result = spawnSync("/bin/bash", [path.join(fixture.root, entrypoint)], {
-        env: fixture.env,
-        encoding: "utf8",
-      });
+      const result = fixture.run(entrypoint);
       expect(result.status, result.stderr).toBe(0);
       expect(fs.readFileSync(path.join(fixture.config, ".env"), "utf8")).toContain(
         `OPENCLAW_GATEWAY_TOKEN=${fixtureToken}\n`,
@@ -101,10 +88,7 @@ describe("Podman generated gateway tokens", () => {
 
     it.each(backends)(`${entrypoint} stops when %s token generation fails`, (backend) => {
       const fixture = createFixture(backend, 7);
-      const result = spawnSync("/bin/bash", [path.join(fixture.root, entrypoint)], {
-        env: fixture.env,
-        encoding: "utf8",
-      });
+      const result = fixture.run(entrypoint);
       expect(result.stderr).toContain("fixture random source failed");
       expect(result.status).toBe(7);
       expect(fs.existsSync(path.join(fixture.config, ".env"))).toBe(false);

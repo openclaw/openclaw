@@ -19,25 +19,23 @@ it("keeps installed compiler inputs unchanged when another checkout imports the 
   const root = tempDirs.make("pnpm-install-isolation-");
   const home = path.join(root, "home");
   const packageRoot = path.join(root, "package");
-  fs.mkdirSync(home);
-  fs.mkdirSync(packageRoot);
+  const write = (dir: string, name: string, value: string) =>
+    fs.writeFileSync(path.join(dir, name), value);
+  const writeJson = (dir: string, value: object) =>
+    write(dir, "package.json", JSON.stringify(value));
+  const repoFile = (name: string) =>
+    fs.readFileSync(new URL(`../../${name}`, import.meta.url), "utf8");
+  for (const dir of [home, packageRoot]) {
+    fs.mkdirSync(dir);
+  }
   const source = "export const value = 1;\n";
-  fs.writeFileSync(path.join(packageRoot, "index.js"), source);
-  fs.writeFileSync(
-    path.join(packageRoot, "package.json"),
-    JSON.stringify({ name: "isolation-fixture", version: "1.0.0", type: "module" }),
-  );
+  write(packageRoot, "index.js", source);
+  writeJson(packageRoot, { name: "isolation-fixture", version: "1.0.0", type: "module" });
   const archive = path.join(root, "fixture.tgz");
   await tar.c({ file: archive, gzip: true, cwd: root }, ["package"]);
-  const { packageManager } = JSON.parse(
-    fs.readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
-  );
-  const { nodeLinker, packageImportMethod } = parse(
-    fs.readFileSync(new URL("../../pnpm-workspace.yaml", import.meta.url), "utf8"),
-  );
-  const { environment } = pnpmLockfileDocuments(
-    fs.readFileSync(new URL("../../pnpm-lock.yaml", import.meta.url), "utf8"),
-  );
+  const { packageManager } = JSON.parse(repoFile("package.json"));
+  const { nodeLinker, packageImportMethod } = parse(repoFile("pnpm-workspace.yaml"));
+  const { environment } = pnpmLockfileDocuments(repoFile("pnpm-lock.yaml"));
   expect(environment).not.toBeNull();
   const env = {
     ...Object.fromEntries(
@@ -60,22 +58,21 @@ it("keeps installed compiler inputs unchanged when another checkout imports the 
   const install = (name: string) => {
     const cwd = path.join(root, name);
     fs.mkdirSync(cwd);
-    fs.writeFileSync(
-      path.join(cwd, "package.json"),
-      JSON.stringify({
-        name,
-        private: true,
-        packageManager,
-        dependencies: { "isolation-fixture": `file:${archive.replaceAll("\\", "/")}` },
-      }),
-    );
-    fs.writeFileSync(
-      path.join(cwd, "pnpm-workspace.yaml"),
+    writeJson(cwd, {
+      name,
+      private: true,
+      packageManager,
+      dependencies: { "isolation-fixture": `file:${archive.replaceAll("\\", "/")}` },
+    });
+    write(
+      cwd,
+      "pnpm-workspace.yaml",
       stringify({ packages: ["."], nodeLinker, packageImportMethod }),
     );
     // pnpm 12 resolves its own integrity pin even when the selected binary matches.
-    fs.writeFileSync(
-      path.join(cwd, "pnpm-lock.yaml"),
+    write(
+      cwd,
+      "pnpm-lock.yaml",
       `---\n${environment}\n---\nlockfileVersion: '9.0'\nimporters: {}\n`,
     );
     const spec = createPnpmRunnerSpawnSpec({
