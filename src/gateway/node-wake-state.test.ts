@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { NodeWakeAttempt } from "./node-wake-state-store.js";
 import {
   captureNodeWakeLifecycle,
@@ -21,13 +22,20 @@ const sentWake: NodeWakeAttempt = {
   durationMs: 1,
 };
 
-beforeEach(() => {
-  resetNodeWakeStateForTest();
-});
+function wake(nodeId: string, force = false) {
+  return runNodeWakeAttempt({
+    nodeId,
+    force,
+    throttleMs: 1_000,
+    attempt: async (markAttempted) => {
+      markAttempted();
+      return sentWake;
+    },
+  });
+}
 
-afterEach(() => {
-  vi.restoreAllMocks();
-});
+beforeEach(resetNodeWakeStateForTest);
+afterEach(() => vi.restoreAllMocks());
 
 describe("node wake lifecycle ownership", () => {
   it("isolates generations and invalidates every generation for a removed node", () => {
@@ -40,10 +48,10 @@ describe("node wake lifecycle ownership", () => {
 
     invalidateNodeWakeState("node-1");
 
-    expect(generationOne.aborted).toBe(true);
-    expect(generationTwo.aborted).toBe(true);
-    expect(getNodeWakeStateSnapshot("node-1", "generation-1")).toBeUndefined();
-    expect(getNodeWakeStateSnapshot("node-1", "generation-2")).toBeUndefined();
+    expect([generationOne.aborted, generationTwo.aborted]).toEqual([true, true]);
+    expect(
+      ["generation-1", "generation-2"].map((g) => getNodeWakeStateSnapshot("node-1", g)),
+    ).toEqual([undefined, undefined]);
   });
 
   it("releases an idle lifecycle without retaining owner state", () => {
@@ -57,15 +65,7 @@ describe("node wake lifecycle ownership", () => {
 
   it("clears throttle state without aborting an active lifecycle", async () => {
     const lifecycle = captureNodeWakeLifecycle("node-active");
-    await runNodeWakeAttempt({
-      nodeId: "node-active",
-      force: true,
-      throttleMs: 1_000,
-      attempt: async (markAttempted) => {
-        markAttempted();
-        return sentWake;
-      },
-    });
+    await wake("node-active", true);
 
     clearNodeWakeState("node-active");
 
@@ -82,16 +82,6 @@ describe("node wake coordination", () => {
       let elapsed = 0;
       vi.spyOn(performance, "now").mockImplementation(() => elapsed);
       const wallClock = vi.spyOn(Date, "now").mockReturnValue(10_000_000);
-      const wake = () =>
-        runNodeWakeAttempt({
-          nodeId: "clock-node",
-          force: false,
-          throttleMs: 1_000,
-          attempt: async (markAttempted) => {
-            markAttempted();
-            return sentWake;
-          },
-        });
       const nudge = () =>
         runNodeWakeNudgeAttempt({
           nodeId: "clock-node",
@@ -100,11 +90,11 @@ describe("node wake coordination", () => {
           attempt: async () => ({ sent: true, throttled: false, reason: "sent", durationMs: 0 }),
         });
 
-      expect((await wake()).path).toBe("sent");
+      expect((await wake("clock-node")).path).toBe("sent");
       expect((await nudge()).reason).toBe("sent");
       wallClock.mockReturnValue(10_000_000 + clockChange);
       elapsed = 999;
-      expect(await wake()).toEqual({
+      expect(await wake("clock-node")).toEqual({
         available: true,
         throttled: true,
         path: "throttled",
@@ -112,19 +102,14 @@ describe("node wake coordination", () => {
       });
       expect((await nudge()).reason).toBe("throttled");
       elapsed = 1_000;
-      expect((await wake()).path).toBe("sent");
+      expect((await wake("clock-node")).path).toBe("sent");
       expect((await nudge()).reason).toBe("sent");
     },
   );
 
   it("deduplicates concurrent wake attempts for one generation", async () => {
-    let finish: ((attempt: NodeWakeAttempt) => void) | undefined;
-    const attempt = vi.fn(
-      () =>
-        new Promise<NodeWakeAttempt>((resolve) => {
-          finish = resolve;
-        }),
-    );
+    const pending = createDeferred<NodeWakeAttempt>();
+    const attempt = vi.fn(() => pending.promise);
     const params = {
       nodeId: "node-1",
       pairingGeneration: "generation-1",
@@ -136,7 +121,7 @@ describe("node wake coordination", () => {
     const first = runNodeWakeAttempt(params);
     const second = runNodeWakeAttempt(params);
     expect(attempt).toHaveBeenCalledOnce();
-    finish?.(sentWake);
+    pending.resolve(sentWake);
 
     await expect(first).resolves.toEqual(sentWake);
     await expect(second).resolves.toEqual(sentWake);
