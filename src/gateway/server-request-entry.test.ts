@@ -110,6 +110,21 @@ describe("Gateway request entry lifetime", { concurrent: false }, () => {
     track(harness.awaitResponseFrame(id));
     return track(harness.dispatcher.dispatch({ type: "req", id, method, params: {} }, client));
   };
+  const request = (
+    method: string,
+    options: Partial<Parameters<typeof dispatchGatewayRequestInProcessRaw>[2]> = {},
+    params: unknown = {},
+  ) =>
+    dispatchGatewayRequestInProcessRaw(method, params, {
+      context: kernel.gatewayRequestContext,
+      client: createOperatorWsClient(),
+      ...options,
+    });
+  const settled = <T>(work: Promise<T>) =>
+    work.then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
 
   beforeAll(async () => {
     fixture = await createKernelFixture("gateway-request-entry", {
@@ -169,10 +184,10 @@ describe("Gateway request entry lifetime", { concurrent: false }, () => {
         client.authenticatedGitHubIdentitySync = profileSync(client, pause);
       }
       const harness = createHarness({ extraHandlers: lazy });
-      let closeSettled = false;
+      const closed = vi.fn();
       const lateEffects: unknown[] = [];
       const recordLate = (value: unknown) => {
-        if (closeSettled) {
+        if (closed.mock.calls.length) {
           lateEffects.push(value);
         }
       };
@@ -183,13 +198,9 @@ describe("Gateway request entry lifetime", { concurrent: false }, () => {
       harness.logGateway.error.mockImplementation(recordLate);
       const dispatched = dispatch(harness, "held", "test.entry", client);
       await reached.promise;
-      const closing = track(
-        kernel.prepareClose().then(() => {
-          closeSettled = true;
-        }),
-      );
+      const closing = track(kernel.prepareClose().then(closed));
       await nextTurn();
-      expect.soft(closeSettled).toBe(false);
+      expect.soft(closed).not.toHaveBeenCalled();
       held.resolve();
       const response = await harness.awaitResponseFrame("held");
       if (boundary !== "family rejection") {
@@ -206,15 +217,13 @@ describe("Gateway request entry lifetime", { concurrent: false }, () => {
     "refuses credential-barrier waiter %s before joining close without draining its predecessor",
     async (method) => {
       const { reached, pause } = createEntryBarrier();
-      const finished = createDeferredCore();
-      let mutationFinished = false;
+      const mutationFinished = vi.fn();
       const mutation = vi.fn<GatewayRequestHandler>(async ({ respond }) => {
         try {
           await pause();
           respond(true, { mutated: true });
         } finally {
-          mutationFinished = true;
-          finished.resolve();
+          mutationFinished();
         }
       });
       const waiter = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true));
@@ -228,7 +237,6 @@ describe("Gateway request entry lifetime", { concurrent: false }, () => {
         return { kind: "sent" };
       });
       dispatch(harness, "mutation", "device.token.revoke", client);
-      track(finished.promise);
       await reached.promise;
       dispatch(harness, "waiting", method, client);
       await nextTurn();
@@ -250,7 +258,7 @@ describe("Gateway request entry lifetime", { concurrent: false }, () => {
       );
       expect(harness.close).not.toHaveBeenCalled();
       expect(waiter).not.toHaveBeenCalled();
-      expect(mutationFinished).toBe(false);
+      expect(mutationFinished).not.toHaveBeenCalled();
       expect(mutation.mock.calls[0]?.[0].signal).toBeUndefined();
     },
   );
@@ -276,18 +284,12 @@ describe("Gateway request entry lifetime", { concurrent: false }, () => {
   });
 
   it("hands execution off before a handler initiates close", async () => {
-    const result = await dispatchGatewayRequestInProcessRaw(
-      "test.close",
-      {},
-      {
-        context: kernel.gatewayRequestContext,
-        client: createOperatorWsClient(),
-        methodRegistry: entryMethods("test.close", async ({ respond }) => {
-          await kernel.prepareClose();
-          respond(true, { closed: true });
-        }),
-      },
-    );
+    const result = await request("test.close", {
+      methodRegistry: entryMethods("test.close", async ({ respond }) => {
+        await kernel.prepareClose();
+        respond(true, { closed: true });
+      }),
+    });
     expect(result).toMatchObject({ ok: true, payload: { closed: true } });
   });
 
@@ -319,22 +321,19 @@ describe("Gateway request entry lifetime", { concurrent: false }, () => {
       isDispatchAuthorized: () => true,
       onDispatchReady: ready.resolve,
     });
-    const settled = invoked.then(
-      (value) => ({ value }),
-      (error: unknown) => ({ error }),
-    );
+    const outcome = settled(invoked);
     try {
-      const id = await awaitGateBeforeSettlement(ready.promise, settled, "invoke did not dispatch");
-      const response = await dispatchGatewayRequestInProcessRaw(
+      const id = await awaitGateBeforeSettlement(ready.promise, outcome, "invoke did not dispatch");
+      const response = await request(
         "node.invoke.result",
-        { id, nodeId: "entry-node", ok: true },
         { context, client: node },
+        { id, nodeId: "entry-node", ok: true },
       );
       expect(response).toMatchObject({ ok: true });
-      expect(await settled).toMatchObject({ value: { ok: true } });
+      expect(await outcome).toMatchObject({ value: { ok: true } });
     } finally {
       registry.unregister(node.connId);
-      await settled;
+      await outcome;
       resetGatewayWorkAdmission();
     }
   });
@@ -346,17 +345,11 @@ describe("Gateway request entry lifetime", { concurrent: false }, () => {
     const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { entered: true }));
     const methodRegistry = entryMethods("test.entry", handler);
     const options = { client: createOperatorWsClient(), methodRegistry };
-    await expect(
-      dispatchGatewayRequestInProcessRaw("test.entry", {}, { ...options, context: retired }),
-    ).rejects.toThrow(/closed|closing/);
+    await expect(request("test.entry", { ...options, context: retired })).rejects.toThrow(
+      /closed|closing/,
+    );
     expect(handler).not.toHaveBeenCalled();
-    await expect(
-      dispatchGatewayRequestInProcessRaw(
-        "test.entry",
-        {},
-        { ...options, context: kernel.gatewayRequestContext },
-      ),
-    ).resolves.toMatchObject({ ok: true });
+    await expect(request("test.entry", options)).resolves.toMatchObject({ ok: true });
   });
 
   it("joins typed authorization before allowing its service to start", async () => {
@@ -369,23 +362,14 @@ describe("Gateway request entry lifetime", { concurrent: false }, () => {
     });
     kernel.dedupe.set("agent:entry-typed", { ts: Date.now(), ok: true, payload: { cached: true } });
     const result = facade.dispatchRaw({ message: "cached", idempotencyKey: "entry-typed" });
-    const settled = track(
-      result.then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      ),
-    );
-    let closeSettled = false;
+    const outcome = track(settled(result));
+    const closed = vi.fn();
     await reached.promise;
-    const closing = track(
-      kernel.prepareClose().then(() => {
-        closeSettled = true;
-      }),
-    );
+    const closing = track(kernel.prepareClose().then(closed));
     await nextTurn();
-    expect.soft(closeSettled).toBe(false);
+    expect.soft(closed).not.toHaveBeenCalled();
     held.resolve();
-    expect(await settled).toMatchObject({
+    expect(await outcome).toMatchObject({
       error: expect.objectContaining({ message: expect.stringMatching(/closed|closing/) }),
     });
     await closing;

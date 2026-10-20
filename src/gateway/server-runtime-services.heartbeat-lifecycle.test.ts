@@ -11,12 +11,7 @@ import {
   runtimeServiceMocks,
 } from "./server-runtime-services.test-harness.js";
 
-const cfg: OpenClawConfig = {
-  agents: {
-    entries: { main: {} },
-    defaults: { heartbeat: { every: "30m" } },
-  },
-};
+const cfg: OpenClawConfig = {};
 const { runHeartbeatOnce, startHeartbeatRunner } = runtimeServiceMocks;
 const heartbeatModule = { runHeartbeatOnce };
 const disabled = { status: "skipped", reason: "disabled" } as const;

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { GatewayRecoveryRuntime } from "./server-instance-runtime.types.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
@@ -24,14 +24,6 @@ function createRecoveryRuntime(result: string) {
   };
   return { dispatchAgent, runtime };
 }
-
-let active: ReturnType<typeof createRecoveryRuntime>;
-let releaseActive: () => void;
-beforeEach(() => {
-  active = createRecoveryRuntime("active");
-  releaseActive = registerGatewayRecoveryRuntime(active.runtime);
-});
-afterEach(() => releaseActive());
 
 it.each(["before", "during"] as const)(
   "keeps a wait observation retryable when its Gateway retires %s dispatch",
@@ -63,6 +55,8 @@ it.each(["before", "during"] as const)(
 it.each(["exact", "stale"] as const)(
   "never falls back from a %s Gateway resolver",
   async (binding) => {
+    const active = createRecoveryRuntime("active");
+    onTestFinished(registerGatewayRecoveryRuntime(active.runtime));
     const exact = createRecoveryRuntime("exact");
     const params = { message: "completion", idempotencyKey: "completion-1" };
     const result = dispatchGatewayLifecycleMethod("agent", params, {
