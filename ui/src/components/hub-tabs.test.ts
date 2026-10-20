@@ -5,19 +5,22 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { HubTabs, type HubTabsProps } from "./solid/hub-tabs.tsx";
 
-function mountTabs(
-  props: Partial<HubTabsProps<string>>,
-  container = document.createElement("div"),
-) {
+const tabs = (...values: string[]) =>
+  values.map((value) => ({
+    value,
+    label: value[0]!.toUpperCase() + value.slice(1),
+    disabled: value === "disabled",
+  }));
+
+function mountTabs(props: Partial<HubTabsProps<string>>, dir = "ltr") {
+  const container = document.body.appendChild(document.createElement("div"));
+  container.dir = dir;
   mountSolid(
     () =>
       createComponent(HubTabs, {
         id: "example",
         active: "first",
-        tabs: [
-          { value: "first", label: "First" },
-          { value: "second", label: "Second" },
-        ],
+        tabs: tabs("first", "second"),
         ariaLabel: "Example sections",
         panelId: "example-panel",
         onSelect: vi.fn(),
@@ -40,17 +43,14 @@ afterEach(() => {
 
 describe("HubTabs", () => {
   it("renders a named sub tablist with counts and badges", async () => {
-    const container = mountTabs(
-      {
-        active: "files",
-        tabs: [
-          { value: "files", label: "Files", count: 3 },
-          { value: "memory", label: "Memory", badge: "New" },
-        ],
-        variant: "sub",
-      },
-      document.body.appendChild(document.createElement("div")),
-    );
+    const container = mountTabs({
+      active: "files",
+      tabs: [
+        { value: "files", label: "Files", count: 3 },
+        { value: "memory", label: "Memory", badge: "New" },
+      ],
+      variant: "sub",
+    });
     expect(container.querySelector('[role="tablist"]')?.classList).toContain("hub-tabs--sub");
     expect(container.querySelector("#example-tab-files")?.hasAttribute("active")).toBe(true);
     expect(container.querySelector(".hub-tab__badge--count")?.textContent).toBe("3");
@@ -65,11 +65,7 @@ describe("HubTabs", () => {
     const onSelect = vi.fn();
     const onActivate = vi.fn();
     const container = mountTabs({
-      tabs: [
-        { value: "first", label: "First" },
-        { value: "second", label: "Second" },
-        { value: "disabled", label: "Disabled", disabled: true },
-      ],
+      tabs: tabs("first", "second", "disabled"),
       onSelect,
       onActivate,
     });
@@ -105,23 +101,16 @@ describe("HubTabs", () => {
     { dir: "rtl", next: "last" },
   ])("moves focus without activating routes in $dir", async ({ dir, next }) => {
     const onSelect = vi.fn();
-    const host = document.body.appendChild(document.createElement("div"));
-    host.dir = dir;
     const container = mountTabs(
       {
         id: "keyboard",
         active: "first",
-        tabs: [
-          { value: "first", label: "First" },
-          { value: "middle", label: "Middle" },
-          { value: "disabled", label: "Disabled", disabled: true },
-          { value: "last", label: "Last" },
-        ],
+        tabs: tabs("first", "middle", "disabled", "last"),
         ariaLabel: "Routes",
         panelId: "route-panel",
         onSelect,
       },
-      host,
+      dir,
     );
     await Promise.resolve();
     const first = container.querySelector<HTMLElement>("#keyboard-tab-first")!;

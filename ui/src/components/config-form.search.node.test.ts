@@ -44,10 +44,7 @@ describe("config form search", () => {
         items: {
           type: "object",
           properties: {
-            source: {
-              type: "string",
-              description: "Credential source for outgoing requests",
-            },
+            source: { type: "string", description: "Credential source for outgoing requests" },
           },
         },
       },
@@ -97,20 +94,12 @@ describe("config form search", () => {
         type: "object",
         additionalProperties: {
           type: "object",
-          properties: {
-            url: {
-              type: "string",
-            },
-          },
+          properties: { url: { type: "string" } },
         },
       },
       value: {},
       path: ["servers"],
-      hints: {
-        "servers.*.url": {
-          help: "Endpoint used by the remote service",
-        },
-      },
+      hints: { "servers.*.url": { help: "Endpoint used by the remote service" } },
     });
 
     expect(matched).toBe(true);

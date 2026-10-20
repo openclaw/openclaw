@@ -1,5 +1,5 @@
 import { createRoot, createSignal } from "solid-js";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import { getRenderedModalDialog } from "../test-helpers/modal-dialog.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
@@ -7,19 +7,14 @@ import { showConfirmChoiceDialog, showConfirmDialog } from "./confirm-dialog.ts"
 import { showInputDialog } from "./input-dialog.ts";
 import "../styles.css";
 
-const owners: AbortController[] = [];
-function owner() {
-  const controller = new AbortController();
-  owners.push(controller);
-  return controller.signal;
-}
-function opener() {
-  const trigger = document.createElement("button");
+let controller: AbortController;
+let trigger: HTMLButtonElement;
+beforeEach(() => {
+  controller = new AbortController();
+  trigger = document.body.appendChild(document.createElement("button"));
   trigger.textContent = "Edit synthetic session";
-  document.body.append(trigger);
   trigger.focus();
-  return trigger;
-}
+});
 function button(label: string) {
   const result = [...document.querySelectorAll("openclaw-modal-dialog button")].find(
     (candidate) => candidate.textContent?.trim() === label,
@@ -31,9 +26,7 @@ function button(label: string) {
 }
 
 afterEach(async () => {
-  for (const controller of owners.splice(0)) {
-    controller.abort();
-  }
+  controller.abort();
   await Promise.resolve();
   document.body.replaceChildren();
 });
@@ -47,20 +40,19 @@ describe("promise dialog native focus and dismissal", () => {
         return { connected, setConnected, dispose };
       });
       try {
-        opener();
         const result =
           kind === "input"
             ? showInputDialog({
                 title: "Rename synthetic device",
                 defaultValue: "Retained device draft",
                 canSubmit: live.connected,
-                signal: owner(),
+                signal: controller.signal,
               })
             : showConfirmDialog({
                 title: "Remove synthetic device?",
                 message: "Synthetic confirmation",
                 canConfirm: live.connected,
-                signal: owner(),
+                signal: controller.signal,
               });
         const { dialog, modal } = await getRenderedModalDialog(document.body);
         const submit = button(kind === "input" ? "Save" : "Confirm");
@@ -90,13 +82,12 @@ describe("promise dialog native focus and dismissal", () => {
   );
 
   it("keeps Cancel focused in a three-way choice and restores its opener", async () => {
-    const trigger = opener();
     const pending = showConfirmChoiceDialog({
       title: "Archive session?",
       message: '"Synthetic session" has a nested session.',
       confirmLabel: "Archive this session",
       alternativeLabel: "Archive 2 sessions",
-      signal: owner(),
+      signal: controller.signal,
     });
     await getRenderedModalDialog(document.body);
     expect(document.activeElement).toBe(button("Cancel"));
@@ -106,7 +97,6 @@ describe("promise dialog native focus and dismissal", () => {
   });
 
   it("focuses the safe confirmation action, requires acknowledgement, and restores focus synchronously", async () => {
-    const trigger = opener();
     const result = showConfirmDialog({
       title: "Delete synthetic session?",
       message: "This removes the synthetic session from your list.",
@@ -114,7 +104,7 @@ describe("promise dialog native focus and dismissal", () => {
       requiredAcknowledgement: "I understand this cannot be undone",
       danger: true,
       confirmLabel: "Delete",
-      signal: owner(),
+      signal: controller.signal,
     });
     const { dialog } = await getRenderedModalDialog(document.body);
     expect(dialog.open).toBe(true);
@@ -130,13 +120,12 @@ describe("promise dialog native focus and dismissal", () => {
   });
 
   it("keeps a pending input operation visible through native cancellation and preserves its text after rejection", async () => {
-    const trigger = opener();
     const pending = createDeferred<string | null>();
     const result = showInputDialog({
       title: "Rename synthetic session",
       defaultValue: "Synthetic session",
       requireChange: true,
-      signal: owner(),
+      signal: controller.signal,
       submit: () => pending.promise,
     });
     const { dialog, modal } = await getRenderedModalDialog(document.body);

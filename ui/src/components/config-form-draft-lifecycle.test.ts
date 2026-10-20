@@ -9,11 +9,7 @@ import {
 import { flush } from "../test-helpers/solid-settle.ts";
 
 function input(container: Element, selector: string): HTMLInputElement {
-  const element = container.querySelector<HTMLInputElement>(selector);
-  if (!element) {
-    throw new Error(`Missing input: ${selector}`);
-  }
-  return element;
+  return container.querySelector<HTMLInputElement>(selector)!;
 }
 
 function fill(element: HTMLInputElement, value: string) {
@@ -35,25 +31,15 @@ describe("config form draft lifetimes", () => {
     "preserves an invalid %s draft on an equal acknowledgment and applies its replacement policy",
     (kind) => {
       const onPatch = vi.fn();
-      const render = (replaced: boolean) => {
-        if (kind === "scalar") {
-          renderTextInputFixture(container, {
-            schema: { type: "string", minLength: 3 },
-            value: replaced ? "remote" : "local",
-            sourceIdentity: {},
-            path: ["value"],
-            inputType: "text",
-            onPatch,
-          });
-        } else {
-          renderJsonTextareaFixture(container, {
-            schema: { type: "object" },
-            value: { enabled: !replaced },
-            path: ["value"],
-            onPatch,
-          });
-        }
-      };
+      const render = (replaced: boolean) =>
+        (kind === "scalar" ? renderTextInputFixture : renderJsonTextareaFixture)(container, {
+          schema: kind === "scalar" ? { type: "string", minLength: 3 } : { type: "object" },
+          value: kind === "scalar" ? (replaced ? "remote" : "local") : { enabled: !replaced },
+          sourceIdentity: kind === "scalar" ? {} : undefined,
+          path: ["value"],
+          inputType: "text",
+          onPatch,
+        });
       render(false);
       const field = container.querySelector<HTMLInputElement | HTMLTextAreaElement>(
         "input, textarea",
@@ -69,8 +55,7 @@ describe("config form draft lifetimes", () => {
 
       render(false);
       expect(container.querySelector("input, textarea")).toBe(field);
-      expect(field.value).toBe(invalid);
-      expect(field.selectionStart).toBe(1);
+      expect(field).toMatchObject({ value: invalid, selectionStart: 1 });
       expect(field.checkValidity()).toBe(false);
       expect(container.querySelector<HTMLElement>(".cfg-field__error")?.hidden).toBe(false);
 
