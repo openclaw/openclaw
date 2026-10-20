@@ -1,23 +1,23 @@
 import { createComponent, createSignal } from "solid-js";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { ActivityGroup, MessageGroup as NativeMessageGroup } from "./chat-message-group-view.tsx";
-import { createActivityGroupHarness } from "./chat-message-native.test-support.tsx";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 
-let container: HTMLDivElement | undefined;
+let container: HTMLDivElement;
 let root: { unmount(): void } | undefined;
+beforeEach(() => {
+  container = document.body.appendChild(document.createElement("div"));
+  container.style.width = "760px";
+});
 afterEach(() => {
-  if (container) {
-    root?.unmount();
-    container.remove();
-    container = undefined;
-    root = undefined;
-  }
+  root?.unmount();
+  container.remove();
+  root = undefined;
 });
 
 function messageGroup(key: string, role: string, messages: unknown[]): MessageGroup {
@@ -36,117 +36,115 @@ function messageGroup(key: string, role: string, messages: unknown[]): MessageGr
   };
 }
 
-function call(id: string, name: string, args: unknown, runId: string, parentToolCallId?: string) {
+function call(id: string, name: string, args: unknown, parentToolCallId?: string) {
   return {
     type: "toolCall",
     id,
     name,
-    runId,
+    runId: "activity-layout",
     arguments: args,
     ...(parentToolCallId ? { parentToolCallId } : {}),
   };
 }
 
-function result(toolCallId: string, toolName: string, text: string) {
-  return { type: "toolResult", toolCallId, toolName, content: [{ type: "text", text }] };
-}
-
-function createContainer() {
-  const host = document.body.appendChild(document.createElement("div"));
-  host.style.width = "760px";
-  return host;
+function child(
+  index: number,
+  name: string,
+  args: unknown,
+  parent: string,
+  text = "Source contents",
+): { role: string; content: unknown[]; timestamp: number } {
+  const id = "child-" + index;
+  return {
+    role: "custom",
+    content: [
+      call(id, name, args, parent),
+      {
+        type: "toolResult",
+        toolCallId: id,
+        toolName: name,
+        content: [{ type: "text", text }],
+      },
+    ],
+    timestamp: 1000 + index,
+  };
 }
 
 function activityFixture(note = "") {
-  const runId = "activity-layout";
   const messages: unknown[] = Array.from({ length: 4 }, (_, index) => ({
     role: "assistant",
-    content: [
-      call(
-        "batch-" + index,
-        "exec",
-        { title: "Batch " + (index + 1), code: "// Read project files" },
-        runId,
-      ),
-    ],
+    content: [call("batch-" + index, "exec", { title: `Batch ${index + 1}`, code: "// Read" })],
     timestamp: 1000,
   }));
   for (let index = 0; index < 40; index++) {
-    const id = "child-" + index;
-    messages.push({
-      role: "custom",
-      content: [
-        call(
-          id,
-          "read",
-          { path: "/workspace/source-" + index + ".ts" },
-          runId,
-          "batch-" + Math.floor(index / 10),
-        ),
-        result(id, "read", "Source contents"),
-        ...(index === 0 && note ? [{ type: "text", text: note }] : []),
-      ],
-      timestamp: 1000 + index,
-    });
+    const message = child(
+      index,
+      "read",
+      { path: `/${index}.ts` },
+      "batch-" + Math.floor(index / 10),
+    );
+    if (index === 0 && note) {
+      message.content.push({ type: "text", text: note });
+    }
+    messages.push(message);
   }
   return messageGroup("activity", "tool", messages);
 }
 
+function mountActivity(group: MessageGroup, inline = false, expandMessages = true) {
+  const expanded = new Set<string>();
+  root = mountSolid(
+    () => {
+      const [revision, setRevision] = createSignal(0);
+      const options = () => {
+        revision();
+        return {
+          showReasoning: false,
+          ...(expandMessages ? { isToolMessageExpanded: () => true } : {}),
+          isToolExpanded: (id: string) => expanded.has(id),
+          onToggleToolExpanded: (id: string) => {
+            if (expanded.has(id)) {
+              expanded.delete(id);
+            } else {
+              expanded.add(id);
+            }
+            setRevision((value) => value + 1);
+            flush();
+          },
+        };
+      };
+      const activity = createComponent(ActivityGroup, {
+        groups: [group],
+        get options() {
+          return options();
+        },
+        presentation: inline ? "continuation" : "standalone",
+      });
+      return inline
+        ? createComponent(NativeMessageGroup, {
+            group: messageGroup("frame", "assistant", [
+              { role: "assistant", content: "Finished." },
+            ]),
+            get options() {
+              return { ...options(), frameContent: [activity] };
+            },
+          })
+        : activity;
+    },
+    { container },
+  );
+  return settleToolBridges(container);
+}
+
+const bodyElement = () => container.querySelector<HTMLElement>(".chat-activity-group__body")!;
+const cappedHeight = () => Math.min(420, window.innerHeight * 0.58);
+
 describe.runIf("__vitest_browser__" in globalThis)("activity group sizing", () => {
   it.each(["standalone", "inline"] as const)(
-    "fits visible rows, caps expanded content, and shrinks after collapse (%s)",
+    "fits, caps and collapses rows (%s)",
     async (presentation) => {
-      container = createContainer();
-      const group = activityFixture();
-      const expanded = new Set<string>();
-      const opts = {
-        showReasoning: false,
-        isToolMessageExpanded: () => true,
-        isToolExpanded: (id: string) => expanded.has(id),
-        onToggleToolExpanded: (id: string) => {
-          if (expanded.has(id)) {
-            expanded.delete(id);
-          } else {
-            expanded.add(id);
-          }
-          draw();
-        },
-      };
-      let refresh: () => void;
-      const draw = () => {
-        refresh();
-        flush();
-      };
-      root = mountSolid(
-        () => {
-          const [revision, setRevision] = createSignal(0);
-          refresh = () => setRevision((value) => value + 1);
-          const options = () => {
-            revision();
-            return { ...opts };
-          };
-          const activity = createComponent(ActivityGroup, {
-            groups: [group],
-            get options() {
-              return options();
-            },
-            presentation: presentation === "inline" ? "continuation" : "standalone",
-          });
-          return presentation === "inline"
-            ? createComponent(NativeMessageGroup, {
-                group: messageGroup("frame", "assistant", [
-                  { role: "assistant", content: "Finished." },
-                ]),
-                get options() {
-                  return { ...options(), frameContent: [activity] };
-                },
-              })
-            : activity;
-        },
-        { container },
-      );
-      await settleToolBridges(container);
-      const body = container.querySelector<HTMLElement>(".chat-activity-group__body")!;
+      await mountActivity(activityFixture(), presentation === "inline");
+      const body = bodyElement();
       const compactHeight = body.getBoundingClientRect().height;
       expect(body.querySelectorAll(":scope > .chat-bubble")).toHaveLength(4);
       expect(body.querySelectorAll(".chat-tool-row")).toHaveLength(4);
@@ -158,10 +156,7 @@ describe.runIf("__vitest_browser__" in globalThis)("activity group sizing", () =
       toggle();
       await settleToolBridges(container);
       expect(body.querySelectorAll(".chat-tool-row")).toHaveLength(14);
-      expect(body.getBoundingClientRect().height).toBeCloseTo(
-        Math.min(420, window.innerHeight * 0.58),
-        0,
-      );
+      expect(body.getBoundingClientRect().height).toBeCloseTo(cappedHeight(), 0);
       expect(body.scrollHeight).toBeGreaterThan(body.clientHeight);
       body.scrollTop = body.scrollHeight;
       expect(body.scrollTop).toBeGreaterThan(0);
@@ -169,20 +164,15 @@ describe.runIf("__vitest_browser__" in globalThis)("activity group sizing", () =
       toggle();
       await settleToolBridges(container);
       expect(body.getBoundingClientRect().height).toBe(compactHeight);
-      expect(body.scrollHeight).toBe(body.clientHeight);
-      expect(body.scrollTop).toBe(0);
+      expect(body).toMatchObject({ scrollHeight: body.clientHeight, scrollTop: 0 });
     },
   );
 
   it("caps an opened lone step whose nested calls are all routine", async () => {
-    container = createContainer();
-    const runId = "lone-step";
     const group = messageGroup("step", "tool", [
       {
         role: "assistant",
-        content: [
-          call("step", "exec", { title: "Watch the build", code: "// Poll until done" }, runId),
-        ],
+        content: [call("step", "exec", { title: "Build", code: "// Poll" })],
         activity: [
           {
             itemId: "tool:step",
@@ -198,31 +188,14 @@ describe.runIf("__vitest_browser__" in globalThis)("activity group sizing", () =
         timestamp: 1000,
       },
       ...Array.from({ length: 40 }, (_, index) => ({
-        role: "custom",
-        content: [
-          call("poll-" + index, "process", { action: "poll" }, runId, "step"),
-          result("poll-" + index, "process", "running"),
-        ],
+        ...child(index, "process", { action: "poll" }, "step", "running"),
         activity: [],
         timestamp: 1001 + index,
       })),
     ]);
-    const expanded = new Set<string>();
-    const activity = createActivityGroupHarness(container);
-    root = activity;
-    const draw = () =>
-      activity.render([group], {
-        showReasoning: false,
-        isToolExpanded: (id: string) => expanded.has(id),
-        onToggleToolExpanded: (id: string) => {
-          expanded.add(id);
-          draw();
-        },
-      });
-    draw();
-    await settleToolBridges(container);
+    await mountActivity(group, false, false);
     expect(container.querySelector(".chat-activity-group__summary")).toBeNull();
-    const body = container.querySelector<HTMLElement>(".chat-activity-group__body")!;
+    const body = bodyElement();
     const chevronOpacity = (row: number) =>
       getComputedStyle(body.querySelectorAll(".chat-tool-row__chevron")[row]!).opacity;
     expect(body.querySelectorAll(".chat-tool-row")).toHaveLength(1);
@@ -234,23 +207,13 @@ describe.runIf("__vitest_browser__" in globalThis)("activity group sizing", () =
     await settleToolBridges(container);
     expect(body.querySelectorAll(".chat-tool-row")).toHaveLength(41);
     expect(chevronOpacity(1)).toBe("0");
-    expect(body.getBoundingClientRect().height).toBeCloseTo(
-      Math.min(420, window.innerHeight * 0.58),
-      0,
-    );
+    expect(body.getBoundingClientRect().height).toBeCloseTo(cappedHeight(), 0);
     expect(body.scrollHeight).toBeGreaterThan(body.clientHeight);
   });
 
   it("preserves non-tool text beside a card moved under its parent", async () => {
-    container = document.body.appendChild(document.createElement("div"));
     const note = "Keep this explanation visible.";
-    const activity = createActivityGroupHarness(container);
-    root = activity;
-    activity.render([activityFixture(note)], {
-      showReasoning: false,
-      isToolMessageExpanded: () => true,
-    });
-    await settleToolBridges(container);
+    await mountActivity(activityFixture(note));
     expect(container.querySelectorAll(".chat-tool-row")).toHaveLength(4);
     expect(container.querySelectorAll(".chat-activity-group__body > .chat-bubble")).toHaveLength(5);
     expect(container.querySelector(".chat-text")?.textContent).toContain(note);

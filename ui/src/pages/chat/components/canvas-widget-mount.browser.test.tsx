@@ -4,7 +4,6 @@ import { createSignal, Show } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { ApplicationContext } from "../../../app/context.ts";
-import type { OpenClawCanvasWidgetView } from "../../../components/canvas-widget-view.tsx";
 import "../../../components/canvas-widget-view.tsx";
 import { ApplicationProvider } from "../../../lib/reactive/context.ts";
 import { createSessionScopedOperations } from "../../../lib/sessions/session-scoped-operations.ts";
@@ -70,10 +69,7 @@ it.each(["commit", "retirement"])(
       reportError: () => {},
     });
     // SAFETY: The widget consumes only these two application capabilities.
-    const context = {
-      gateway: gateway.gateway,
-      sessions,
-    } as unknown as ApplicationContext;
+    const context = { gateway: gateway.gateway, sessions } as unknown as ApplicationContext;
     const paneSubscription = await sessions.subscribeMessages(key);
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const [row, setRow] = createSignal("pending");
@@ -100,9 +96,7 @@ it.each(["commit", "retirement"])(
       { container },
     );
     flush();
-    const widget = root.container.querySelector<OpenClawCanvasWidgetView>(
-      "openclaw-canvas-widget-view",
-    )!;
+    const widget = root.container.querySelector("openclaw-canvas-widget-view")!;
     expect(onElement).toHaveBeenLastCalledWith(widget);
     await vi.advanceTimersByTimeAsync(0);
     flush();
@@ -110,8 +104,7 @@ it.each(["commit", "retirement"])(
     setRow("");
     flush();
     expect(onElement).toHaveBeenLastCalledWith(undefined);
-    expect(widget.isConnected).toBe(true);
-    expect(widget.presentationActive).toBe(false);
+    expect(widget).toMatchObject({ isConnected: true, presentationActive: false });
     await sessions.unsubscribeMessages(paneSubscription);
     expect(subscriptions.size).toBe(1);
     if (outcome === "retirement") {
@@ -148,14 +141,13 @@ it.each(["commit", "retirement"])(
     );
     frame.style.width = "100%";
     frame.style.boxSizing = "border-box";
-    const bounds = frame.getBoundingClientRect();
-    expect(bounds.width).toBeGreaterThan(0);
-    expect(bounds.height).toBeGreaterThan(0);
+    const { width, height } = frame.getBoundingClientRect();
+    expect(width).toBeGreaterThan(0);
+    expect(height).toBeGreaterThan(0);
     root.unmount();
     expect(onElement).toHaveBeenLastCalledWith(undefined);
     expect(frame.isConnected).toBe(true);
-    expect(frame.getBoundingClientRect().width).toBe(bounds.width);
-    expect(frame.getBoundingClientRect().height).toBe(bounds.height);
+    expect(frame.getBoundingClientRect()).toMatchObject({ width, height });
     vi.advanceTimersByTime(1_001);
     expect(frame.isConnected).toBe(false);
     sessions.dispose();
